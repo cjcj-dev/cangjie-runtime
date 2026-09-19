@@ -31,18 +31,29 @@ echo "# pinned runner sha256=$RUNNER_SHA256 path=kkk2:/root/diff_harness_708/kkk
 managed_json_ok() { # 新形态：必须有 arms 键；旧单臂 JSON 当缺失
   local lane=$1
   bash "$B" kkk2 "python3 -c 'import json,pathlib,sys; p=pathlib.Path(\"/root/$lane/managed-runs/kkk2_managed.json\");
-sys.exit(0 if p.is_file() and isinstance(json.loads(p.read_text()).get(\"arms\"), dict) else 1)'" >/dev/null 2>&1
+d=json.loads(p.read_text()) if p.is_file() else {};
+n=d.get(\"n\",0); arms=d.get(\"arms\",{});
+ok=isinstance(arms,dict) and isinstance(d.get(\"failed\"),list) and isinstance(n,int) and n>=3;
+ok=ok and all(isinstance(arms.get(a,{}).get(\"runs\",{}).get(t),list) and len(arms[a][\"runs\"][t])==n and all(isinstance(rc,int) and rc not in (126,127,-1) for rc in arms[a][\"runs\"][t]) for a in (\"h48\",\"stained\") for t in (\"finalizer\",\"segmented\",\"phase\"));
+sys.exit(0 if ok else 1)'" >/dev/null 2>&1
 }
 
 run_managed() {
   local sha=$1; local lane=$2
+  # Unit-cache cleanup can remove managed inputs. Restore this side's source,
+  # while keeping the candidate runner pinned for both sides.
+  local inputs="$SCR/$lane.managed-inputs.tar"
+  git -C "$REPO" archive "$sha" runtime tools > "$inputs" || return 1
+  bash "$B" kkk2 --put "$inputs" "/root/$lane/managed-inputs.tar" || return 1
+  rm -f "$inputs"
+  bash "$B" kkk2 "tar -xf /root/$lane/managed-inputs.tar -C /root/$lane/default && rm /root/$lane/managed-inputs.tar" || return 1
   bash "$WF" sh "$lane" "ulimit -c 0; mkdir -p /root/$lane/harness /root/$lane/managed-runs /root/$lane/tools-bundle /root/$lane/default/tools; cp -a /root/diff_harness_708/kkk2_managed.sh /root/$lane/harness/kkk2_managed.sh; cp -a /root/diff_harness_708/zstat_pillars.py /root/$lane/tools-bundle/zstat_pillars.py; cp -a /root/diff_harness_708/zstat_pillars.py /root/$lane/default/tools/zstat_pillars.py; /usr/bin/grep -q 'Two target arms' /root/$lane/harness/kkk2_managed.sh || { echo '⛔ lane harness not two-host'; exit 2; }; export LANE=/root/$lane SRCROOT=/root/$lane/default OUT=/root/$lane/managed-runs N=3 CANGJIE_HOME=/root/sdkdepot/945fe3e8f023-fa13e8d5c17b; bash /root/$lane/harness/kkk2_managed.sh $sha"
 }
 
 run_arm() { # run_arm <sha> ：若 kkk2 无缓存则建+三臂；rc 0=可用
   local sha=$1; local s12=${sha:0:12}; local lane="diff_$s12"; local wt="$SCR/diff_$s12"
   local unit_ok=0 managed_ok=0
-  if [ "$FORCE" = 0 ] && bash "$B" kkk2 "test -s /root/$lane/unit-default/run.rc -a -s /root/$lane/unit-filler/run.rc -a -s /root/$lane/unit-testable/run.rc" >/dev/null 2>&1; then unit_ok=1; fi
+  if [ "$FORCE" = 0 ] && bash "$B" kkk2 "test -s /root/$lane/unit-default/run.rc -a -s /root/$lane/unit-filler/run.rc -a -s /root/$lane/unit-testable/run.rc -a -s /root/$lane/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so -a -s /root/$lane/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so" >/dev/null 2>&1; then unit_ok=1; fi
   if [ "$FORCE" = 0 ] && managed_json_ok "$lane"; then managed_ok=1; fi
   if [ "$unit_ok" = 1 ] && [ "$managed_ok" = 1 ]; then echo "# $lane: 命中缓存"; return 0; fi
   if [ "$unit_ok" = 0 ]; then
@@ -64,7 +75,7 @@ run_arm() { # run_arm <sha> ：若 kkk2 无缓存则建+三臂；rc 0=可用
   local a t=0
   if [ "$unit_ok" = 0 ]; then
     while [ $t -lt 2400 ]; do
-      if bash "$B" kkk2 "test -s /root/$lane/unit-default/run.rc -a -s /root/$lane/unit-filler/run.rc -a -s /root/$lane/unit-testable/run.rc" >/dev/null 2>&1 && managed_json_ok "$lane"; then break; fi
+      if bash "$B" kkk2 "test -s /root/$lane/unit-default/run.rc -a -s /root/$lane/unit-filler/run.rc -a -s /root/$lane/unit-testable/run.rc" >/dev/null 2>&1; then break; fi
       sleep 30; t=$((t+30))
     done
   fi
@@ -89,7 +100,9 @@ for who in cand base; do sha=$CS; [ $who = base ] && sha=$BS; lane="diff_${sha:0
   bash "$B" kkk2 "cd /root/$lane && for a in default filler testable; do echo \"== \$a rc=\$(cat unit-\$a/run.rc 2>/dev/null)\"; grep -E '^\\[ *(FAILED|INCOMPLETE) *\\] [A-Za-z]' unit-\$a/run.log 2>/dev/null | sed -E 's/^\\[ *(FAILED|INCOMPLETE) *\\] +//; s/ .*//' | sort -u; echo \"== total \$(grep -E '^\[==========\] [0-9]+ tests' unit-\$a/run.log | tail -1)\"; done; python3 -c 'import json,pathlib; p=pathlib.Path(\"managed-runs/kkk2_managed.json\");
 ok=p.exists();
 d=json.loads(p.read_text()) if ok else {};
-shape=isinstance(d.get(\"arms\"), dict);
+n=d.get(\"n\",0); arms=d.get(\"arms\",{});
+shape=isinstance(arms,dict) and isinstance(d.get(\"failed\"),list) and isinstance(n,int) and n>=3;
+shape=shape and all(isinstance(arms.get(a,{}).get(\"runs\",{}).get(t),list) and len(arms[a][\"runs\"][t])==n and all(isinstance(rc,int) and rc not in (126,127,-1) for rc in arms[a][\"runs\"][t]) for a in (\"h48\",\"stained\") for t in (\"finalizer\",\"segmented\",\"phase\"));
 print(\"== managed rc=\" + (\"0\" if shape else \"NA\"));
 fails=list(d.get(\"failed\") or []) if shape else [\"managed/SHAPE\"];
 print(\"== total tests 6\");
@@ -131,7 +144,7 @@ for a in ('default','filler','testable','managed'):
     def broken(x):  # rc 不是 0/1（如 123=编译失败、124=超时）或跑了却没有 gtest 总数行 ⇒ 该臂不可判
         return x['rc'] not in ('0','1') or not x['total']
     if ca['rc'] in ('','NA') or ba['rc'] in ('','NA'):
-        res['arms'][a]['status']='NOT_RUN'; res['positive_control'][a]='NOT_RUN（臂未跑，⛔ 不得据此宣称独红为 0）'
+        res['arms'][a]['cand_only']=None; res['arms'][a]['base_only']=None; res['arms'][a]['status']='NOT_RUN'; res['positive_control'][a]='NOT_RUN（臂未跑，⛔ 不得据此宣称独红为 0）'
     elif broken(ca) or broken(ba):
         res['arms'][a]['status']=f"BROKEN(cand_rc={ca['rc']},base_rc={ba['rc']})"; res['positive_control'][a]='BROKEN（构建/运行未完成，failed=0 是假的，⛔ 不得据此宣称独红为 0）'
     else:
@@ -147,9 +160,9 @@ md=[f"# DIFF {cs[:12]} vs {bs[:12]}","",
 not_run=[a for a,v in res['arms'].items() if v.get('status')!='ran']
 if not_run: md.append(f"⛔ 未跑/未完成的臂: {[(a,res['arms'][a]['status']) for a in not_run]} ⇒ 本 DIFF 对这些臂不可作为验收证据（0917 实撞：P09 testable 编译失败 rc=123 被读成 CAND-ONLY=0 放行）")
 for a,v in res['arms'].items():
-    md.append(f"## {a}: status={v['status']} · cand rc={v['cand_rc']} failed={v['cand_failed_n']} · base rc={v['base_rc']} failed={v['base_failed_n']} · common={v['common']} · CAND-ONLY={len(v['cand_only'])} BASE-ONLY={len(v['base_only'])} · 阳性对照={res['positive_control'][a]}")
-    for t in v['cand_only']: md.append(f"- CAND-ONLY {t}")
-    for t in v['base_only'][:20]: md.append(f"- base-only {t}")
+    md.append(f"## {a}: status={v['status']} · cand rc={v['cand_rc']} failed={v['cand_failed_n']} · base rc={v['base_rc']} failed={v['base_failed_n']} · common={v['common']} · CAND-ONLY={len(v['cand_only']) if v['cand_only'] is not None else 'NOT_COMPUTED'} BASE-ONLY={len(v['base_only']) if v['base_only'] is not None else 'NOT_COMPUTED'} · 阳性对照={res['positive_control'][a]}")
+    for t in v['cand_only'] or []: md.append(f"- CAND-ONLY {t}")
+    for t in (v['base_only'] or [])[:20]: md.append(f"- base-only {t}")
 open(f'{out}/DIFF.md','w').write('\n'.join(md)+'\n')
 print('\n'.join(md[:40]))
 sys.exit(3 if not_run else 0)
