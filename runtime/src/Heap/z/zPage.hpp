@@ -507,11 +507,6 @@ public:
 
     ZGenerationId generation_id() const;
 
-    template<Generation G>
-    void PublishFromPageMetadata();
-
-    template<Generation G>
-    __attribute__((always_inline)) inline void PublishForwardingCarrier();
 
     // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
     // Public for reffix parallel window assert + positive-control inject.

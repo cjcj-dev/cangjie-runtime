@@ -1633,7 +1633,7 @@ void RegionManager::CompactRegion(ZPage* region)
     }
     // ZGC zRelocate.cpp:862-896: establish the to-page age before publishing
     // any in-place forwarding entry. The descriptor stays in the page table,
-    // so promotion publishes its old identity here. PublishFromPageMetadata
+    // so promotion publishes its old identity here. Forwarding allocation
     // already saved the source generation, livemap and birth sequence in
     // the forwarding carrier; ForEachLiveObjectStart consumes that snapshot,
     // not the new destination livemap allocated by PromoteYoungRegion.

@@ -1451,6 +1451,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
     }
     ZRelocationSetIterator rs_iter(&_relocation_set);
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
+        forwarding->page()->SetRegionRole(ZPageRole::From);
         _forwarding_table.insert(forwarding);
     }
 }

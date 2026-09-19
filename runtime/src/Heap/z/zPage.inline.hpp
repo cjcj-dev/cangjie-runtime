@@ -626,24 +626,6 @@ inline bool ZPage::IsCompactRouteDestination(MAddress address) const
 
 
 
-    template<Generation G>
-inline void ZPage::PublishFromPageMetadata()
-    {
-        const RegionLifeId life = GetRegionLifeId();
-        ZForwarding* forwarding = forwarding_for_page(this);
-        CHECK_DETAIL(forwarding != nullptr, "forwarding carrier missing at from-page publication region=%p", this);
-        forwarding->publish_from_page_view(&livemap(), GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
-            static_cast<uint8_t>(G),
-            static_cast<uint8_t>(IsLargeRegion() && is_marked() && is_live_bit_set(to_zaddress(GetRegionStart()))),
-            life);
-    }
-
-    template<Generation G>
-inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
-    {
-        PublishFromPageMetadata<G>();
-    }
-
 inline bool ZPage::RetainForwarding()
     {
         auto owner = forwarding_for_page(this);

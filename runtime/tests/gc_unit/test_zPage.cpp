@@ -139,3 +139,73 @@ GC_OTHER_VM_TEST(ZPageGranule, MutatorAllocatesThreePageSizes)
     GC_EXPECT_TRUE(result.sameSmallPage);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+namespace {
+struct ForwardingSelectionResult {
+    size_t roots{0};
+    size_t published{0};
+    size_t prepared{0};
+    size_t retained{0};
+};
+void* SelectRealLivePages(void* context)
+{
+    auto& result = *static_cast<ForwardingSelectionResult*>(context);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
+    std::memset(storage, 0, sizeof(storage));
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    uintptr_t starts[3]{};
+    U64 roots[3]{};
+    ZPage* previous = nullptr;
+    for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && result.roots < 3; ++i) {
+        const ObjRef object = MCC_NewObject(type, 4096);
+        if (object == nullptr) { return nullptr; }
+        ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(object));
+        if (page != previous) {
+            starts[result.roots] = reinterpret_cast<uintptr_t>(object);
+            roots[result.roots] = Heap::GetHeap().RegisterExportRoot(object);
+            ++result.roots;
+            previous = page;
+        }
+    }
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    // Live objects in three real small pages force a non-empty relocation set.
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    for (size_t i = 0; i < result.roots; ++i) {
+        ZForwarding* forwarding = Heap::GetHeap().young().forwarding_table().get(starts[i]);
+        if (forwarding != nullptr) {
+            ++result.published;
+            const auto* view = forwarding->from_page_snapshot();
+            result.prepared += view != nullptr && view->livemap != nullptr &&
+                               view->topAtStart > starts[i];
+        }
+        result.retained += Heap::GetHeap().GetExportObject(roots[i]) != nullptr;
+        Heap::GetHeap().RemoveExportObject(roots[i]);
+    }
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+}
+
+GC_OTHER_VM_TEST(ZForwardingPublication, SelectionPublishesPreparedForwardingOnce)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "FORWARDING_SELECTION_TARGET roots=%zu published=%zu prepared=%zu retained=%zu\n",
+                 result.roots, result.published, result.prepared, result.retained);
+    GC_EXPECT_TRUE(result.published > 0);
+    GC_EXPECT_EQ(result.prepared, result.published);
+    GC_EXPECT_EQ(result.retained, 3u);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}

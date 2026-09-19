@@ -128,17 +128,7 @@ private:
 
     void install(ZForwarding* forwarding, size_t index)
     {
-        ZPage* const page = forwarding->page();
-        page->ClearRelocationResiduals();
-        // zGeneration.cpp:205-221: relocation-set membership is the from-space
-        // identity; the page stays in the page table the selector iterated.
-        page->SetRegionRole(ZPageRole::From);
-        _relocation_set->generation()->forwarding_table().insert(forwarding);
-        if (page->GetOwnerGeneration() == Generation::Young) {
-            page->PublishForwardingCarrier<Generation::Young>();
-        } else {
-            page->PublishForwardingCarrier<Generation::Old>();
-        }
+        MRT_ASSERT(index < _nforwardings, "Invalid index");
         _forwardings[index] = forwarding;
     }
 
