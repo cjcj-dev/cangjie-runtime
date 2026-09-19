@@ -11,6 +11,8 @@
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zPageType.hpp"
 #include "gc_unittest.hpp"
+#include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/MObject.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -249,7 +251,8 @@ void* SelectRealLivePages(void* context)
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(byteStorage), sizeof(byteStorage));
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(arrayStorage), sizeof(arrayStorage));
         for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && result.reused == 0; ++i) {
-            const ObjRef object = result.verifyPin ? MCC_NewArray8(arrayType, 4096) : MCC_NewObject(type, 4096);
+            BaseObject* object = result.verifyPin ? static_cast<BaseObject*>(MCC_NewArray8(arrayType, 4096))
+                                                 : static_cast<BaseObject*>(MCC_NewObject(type, 4096));
             const uintptr_t address = reinterpret_cast<uintptr_t>(object);
             for (size_t j = 0; j < result.roots; ++j) {
                 result.reused += (address >> ZGranuleSizeShift) == (starts[j] >> ZGranuleSizeShift);
