@@ -34,6 +34,7 @@ managed_json_ok() { # 新形态：必须有 arms 键；旧单臂 JSON 当缺失
 d=json.loads(p.read_text()) if p.is_file() else {};
 n=d.get(\"n\",0); arms=d.get(\"arms\",{});
 ok=isinstance(arms,dict) and isinstance(d.get(\"failed\"),list) and isinstance(n,int) and n>=3;
+ok=ok and d.get(\"runner_sha256\")==\"$RUNNER_SHA256\";
 ok=ok and all(isinstance(arms.get(a,{}).get(\"runs\",{}).get(t),list) and len(arms[a][\"runs\"][t])==n and all(isinstance(rc,int) and rc not in (126,127,-1) for rc in arms[a][\"runs\"][t]) for a in (\"h48\",\"stained\") for t in (\"finalizer\",\"segmented\",\"phase\"));
 sys.exit(0 if ok else 1)'" >/dev/null 2>&1
 }
@@ -102,11 +103,13 @@ ok=p.exists();
 d=json.loads(p.read_text()) if ok else {};
 n=d.get(\"n\",0); arms=d.get(\"arms\",{});
 shape=isinstance(arms,dict) and isinstance(d.get(\"failed\"),list) and isinstance(n,int) and n>=3;
+shape=shape and d.get(\"runner_sha256\")==\"$RUNNER_SHA256\";
 shape=shape and all(isinstance(arms.get(a,{}).get(\"runs\",{}).get(t),list) and len(arms[a][\"runs\"][t])==n and all(isinstance(rc,int) and rc not in (126,127,-1) for rc in arms[a][\"runs\"][t]) for a in (\"h48\",\"stained\") for t in (\"finalizer\",\"segmented\",\"phase\"));
 print(\"== managed rc=\" + (\"0\" if shape else \"NA\"));
 fails=list(d.get(\"failed\") or []) if shape else [\"managed/SHAPE\"];
 print(\"== total tests 6\");
 [print(x) for x in fails];
+print(\"== ident runner_sha256=\" + str(d.get(\"runner_sha256\",\"\")));
 print(\"== ident cangjie_home=\" + str(d.get(\"cangjie_home\",\"\")));
 print(\"== ident h48_rt=\" + str(d.get(\"h48_rt\",\"\")));
 print(\"== ident stained_rt=\" + str(d.get(\"stained_rt\",\"\")))'; echo '== so'; cat default-so.sha256 testable-so.sha256 2>/dev/null | sed -E 's#/root/[^ ]*/build/#build/#'" > "$OUT/$who.txt" 2>/dev/null
@@ -121,7 +124,7 @@ def parse(p):
         m=re.match(r'^== (default|filler|testable|managed) rc=(\S*)',line)
         if m: cur=m.group(1); arms[cur]={'rc':m.group(2),'failed':set(),'total':''}; continue
         if line.startswith('== total'): arms[cur]['total']=line[9:].strip(); continue
-        mi=re.match(r'^== ident (cangjie_home|h48_rt|stained_rt)=(.*)$',line)
+        mi=re.match(r'^== ident (runner_sha256|cangjie_home|h48_rt|stained_rt)=(.*)$',line)
         if mi: ident[mi.group(1)]=mi.group(2); continue
         if line=='== so': cur='so'; continue
         if cur=='so': so.append(line); continue
@@ -131,6 +134,8 @@ c,cso,cident=parse(f'{out}/cand.txt'); b,bso,bident=parse(f'{out}/base.txt')
 res={'candidate':cs,'base':bs,'arms':{},'positive_control':{},
      'managed_runner':{
          'sha256':runner_sha,
+         'cand_runner_sha256':cident.get('runner_sha256',''),
+         'base_runner_sha256':bident.get('runner_sha256',''),
          'path':'kkk2:/root/diff_harness_708/kkk2_managed.sh',
          'cangjie_home':cident.get('cangjie_home') or bident.get('cangjie_home') or '',
          'h48_rt':cident.get('h48_rt') or bident.get('h48_rt') or '',
@@ -154,6 +159,7 @@ json.dump(res,open(f'{out}/DIFF.json','w'),ensure_ascii=False,indent=1)
 mr=res['managed_runner']
 md=[f"# DIFF {cs[:12]} vs {bs[:12]}","",
     f"runner_sha256={mr['sha256']} path={mr['path']}",
+    f"cand_runner_sha256={mr['cand_runner_sha256']} base_runner_sha256={mr['base_runner_sha256']}",
     f"CANGJIE_HOME={mr['cangjie_home']}",
     f"H48={mr['h48_rt']}",
     f"stained={mr['stained_rt']}",""]
