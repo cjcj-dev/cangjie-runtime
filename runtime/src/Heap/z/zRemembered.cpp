@@ -90,9 +90,9 @@ void ZRemembered::FoundOld::ensure()
     if (_allocated_bitmap_0) {
         return;
     }
-    CHECK(_bits != 0);
-    _allocated_bitmap_0.reset(new CHeapBitMap(_bits, true));
-    _allocated_bitmap_1.reset(new CHeapBitMap(_bits, true));
+    const BitMap::idx_t bits = _bits != 0 ? _bits : static_cast<BitMap::idx_t>(ZAddressOffsetMax >> ZGranuleSizeShift);
+    _allocated_bitmap_0.reset(new CHeapBitMap(bits, true));
+    _allocated_bitmap_1.reset(new CHeapBitMap(bits, true));
     _bitmaps[0] = _allocated_bitmap_0.get();
     _bitmaps[1] = _allocated_bitmap_1.get();
 }
@@ -150,7 +150,8 @@ void ZRemembered::clear_found_old_previous_set()
 void ZRemembered::register_found_old(ZPage* page)
 {
     CHECK(!page->IsYoungRegion());
-    const size_t index = static_cast<size_t>(untype(page->start())) / _page_table->map().granule();
+    const size_t granule = _page_table != nullptr ? _page_table->map().granule() : (size_t{1} << ZGranuleSizeShift);
+    const size_t index = static_cast<size_t>(untype(page->start())) / granule;
     _found_old.register_page(index);
 }
 

@@ -55,6 +55,15 @@ RefField<>& Slot(BaseObject* object, unsigned index = 0)
 {
     return HeapSlotAt<>(reinterpret_cast<MAddress>(object) + sizeof(uintptr_t) * (index + 1));
 }
+void AgePinnedToOld(BaseObject* object)
+{
+    // Cangjie AllocPinned creates young pages; ZGC old-field barriers require an
+    // old holder (zBarrier.inline.hpp:626). Age the live page after real stores.
+    auto* page = Heap::page(reinterpret_cast<MAddress>(object));
+    if (page != nullptr && page->IsYoungRegion()) {
+        page->reset(PageAge::old);
+    }
+}
 }
 
 // The compiler-generated managed caller owns runtime startup. Inputs use real
@@ -100,6 +109,13 @@ extern "C" int p2FieldBarrierExercise()
     // Advance a real young epoch before overwriting the old slot. Its previous
     // non-null word must go through the store barrier and remember the slot.
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    AgePinnedToOld(holder);
+    AgePinnedToOld(oldChild);
+    if (finalHolder != nullptr) {
+        AgePinnedToOld(finalHolder);
+        AgePinnedToOld(finalOld);
+        AgePinnedToOld(upgraded);
+    }
     auto* child = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
     auto* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     auto* oldViaYoung = MObject::NewPinnedObject(leafType, 16);
@@ -575,6 +591,10 @@ extern "C" int p2SlowFieldInputExercise()
     NativeSlot* roots[] = { &strongRoot };
     heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    AgePinnedToOld(strongHolder);
+    AgePinnedToOld(finalHolder);
+    AgePinnedToOld(oldChild);
+    AgePinnedToOld(finalChild);
     auto* young = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
     auto* youngSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     ZBarrier::WriteReference(young, Slot(young), youngSentinel);
