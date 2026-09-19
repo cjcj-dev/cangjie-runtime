@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build ELF once per host arm, run finalizer/segmented/phase_entry N times, emit JSON.
-# Two HOST_RT arms: H48 (compiler host) and stained (candidate staging runtime).
-# CANGJIE_HOME is the pinned colored SDK in sdkdepot (not /root/sdks or .cjv).
+# Two target arms: H48 runtime vs candidate stained staging.
+# cjc itself always uses H48 host (0904); CANGJIE_HOME is sdkdepot colored SDK.
 # Usage: kkk2_managed.sh <runtime-sha>
 set -euo pipefail
 ulimit -c 0
@@ -15,7 +15,8 @@ COLORED_SDK=${COLORED_SDK:-/root/sdkdepot/945fe3e8f023-fa13e8d5c17b}
 H48_RT=${H48_RT:-/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative}
 STAINED_RT=${STAINED_RT:-$SRCROOT/build/runtime-staging/lib/x86_64_Release}
 export CANGJIE_HOME=${CANGJIE_HOME:-$COLORED_SDK}
-export GCV2_RUNTIME_LIB_DIR=${GCV2_RUNTIME_LIB_DIR:-$STAINED_RT}
+export GC_UNIT_CJC_RUNTIME_LIB_DIR="$H48_RT"
+export HOST_RT="$H48_RT"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
@@ -79,10 +80,9 @@ run_one() {
 
 run_arm() {
   local arm="$1"
-  local host_rt="$2"
-  export GC_UNIT_CJC_RUNTIME_LIB_DIR="$host_rt"
-  export HOST_RT="$host_rt"
-  echo "kkk2_managed arm=$arm HOST_RT=$host_rt CANGJIE_HOME=$CANGJIE_HOME GCV2=$GCV2_RUNTIME_LIB_DIR"
+  local target_rt="$2"
+  export GCV2_RUNTIME_LIB_DIR="$target_rt"
+  echo "kkk2_managed arm=$arm compile_HOST_RT=$H48_RT target=$target_rt CANGJIE_HOME=$CANGJIE_HOME"
   local GC_UNIT="$SRCROOT/runtime/tests/gc_unit"
   if [[ ! -d "$GC_UNIT" ]]; then
     GC_UNIT="$HERE"
