@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# Build ELF once, run finalizer/segmented/phase_entry N times, emit JSON.
-# Sync analyzer tools into SRCROOT (kkk2 extract is runtime/-only).
+# Build ELF once per host arm, run finalizer/segmented/phase_entry N times, emit JSON.
+# Two target arms: H48 runtime vs candidate stained staging.
+# cjc itself always uses H48 host (0904); CANGJIE_HOME is sdkdepot colored SDK.
 # Usage: kkk2_managed.sh <runtime-sha>
 set -euo pipefail
 ulimit -c 0
 
 SHA=${1:?runtime-sha}
-LANE=${LANE:-/root/sym_cangjie_runtime_593_implement_r5700751289}
+LANE=${LANE:-/root/sym_cangjie_runtime_708_implement_r5740357995}
 N=${N:-3}
 SRCROOT=${SRCROOT:-$LANE/default}
 OUT=${OUT:-$LANE/managed-runs}
-HOST_RT=${GC_UNIT_CJC_RUNTIME_LIB_DIR:-${HOST_RT:-/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative}}
-export CANGJIE_HOME=${CANGJIE_HOME:-$LANE/cangjie-home}
-export GCV2_RUNTIME_LIB_DIR=${GCV2_RUNTIME_LIB_DIR:-$SRCROOT/build/runtime-staging/lib/x86_64_Release}
-export GC_UNIT_CJC_RUNTIME_LIB_DIR="$HOST_RT"
+COLORED_SDK=${COLORED_SDK:-/root/sdkdepot/945fe3e8f023-fa13e8d5c17b}
+H48_RT=${H48_RT:-/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative}
+STAINED_RT=${STAINED_RT:-$SRCROOT/build/runtime-staging/lib/x86_64_Release}
+export CANGJIE_HOME=${CANGJIE_HOME:-$COLORED_SDK}
+export GC_UNIT_CJC_RUNTIME_LIB_DIR="$H48_RT"
+export HOST_RT="$H48_RT"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
@@ -47,16 +50,22 @@ sync_analyzer_tools() {
 
 sync_analyzer_tools
 
+if [[ ! -x "$CANGJIE_HOME/bin/cjc" ]]; then
+  echo "kkk2_managed FAIL: CANGJIE_HOME=$CANGJIE_HOME missing bin/cjc (pin sdkdepot first)" >&2
+  exit 2
+fi
+
 mkdir -p "$OUT"
 JSON="$OUT/kkk2_managed.json"
-echo "kkk2_managed sha=$SHA n=$N srcroot=$SRCROOT out=$OUT"
+echo "kkk2_managed sha=$SHA n=$N srcroot=$SRCROOT out=$OUT home=$CANGJIE_HOME"
 
 run_one() {
-  local name="$1"
-  local script="$2"
+  local arm="$1"
+  local name="$2"
+  local script="$3"
   local i=1
   while [[ $i -le $N ]]; do
-    local rundir="$OUT/${name}_n$i"
+    local rundir="$OUT/${arm}_${name}_n$i"
     mkdir -p "$rundir"
     export GC_UNIT_OUT="$rundir"
     set +e
@@ -64,29 +73,59 @@ run_one() {
     local rc=$?
     set -e
     echo "$rc" >"$rundir/rc"
-    echo "${name}_n$i rc=$rc"
+    echo "${arm}_${name}_n$i rc=$rc"
     i=$((i + 1))
   done
 }
 
-GC_UNIT="$SRCROOT/runtime/tests/gc_unit"
-run_one finalizer "$GC_UNIT/run_finalizer_trigger.sh"
-run_one segmented "$GC_UNIT/run_segmented_array_managed.sh"
-run_one phase "$GC_UNIT/run_phase_entry_trigger.sh"
+run_arm() {
+  local arm="$1"
+  local target_rt="$2"
+  export GCV2_RUNTIME_LIB_DIR="$target_rt"
+  echo "kkk2_managed arm=$arm compile_HOST_RT=$H48_RT target=$target_rt CANGJIE_HOME=$CANGJIE_HOME"
+  local GC_UNIT="$SRCROOT/runtime/tests/gc_unit"
+  if [[ ! -d "$GC_UNIT" ]]; then
+    GC_UNIT="$HERE"
+  fi
+  run_one "$arm" finalizer "$GC_UNIT/run_finalizer_trigger.sh"
+  run_one "$arm" segmented "$GC_UNIT/run_segmented_array_managed.sh"
+  run_one "$arm" phase "$GC_UNIT/run_phase_entry_trigger.sh"
+}
+
+run_arm h48 "$H48_RT"
+run_arm stained "$STAINED_RT"
 
 python3 - <<PY
-import json, os, pathlib
+import json, pathlib
 out = pathlib.Path("$OUT")
 n = int("$N")
 names = ["finalizer", "segmented", "phase"]
-result = {"runtime_sha": "$SHA", "n": n, "out": str(out), "runs": {}}
-for name in names:
-    rcs = []
-    for i in range(1, n + 1):
-        p = out / f"{name}_n{i}" / "rc"
-        rcs.append(int(p.read_text().strip()) if p.exists() else -1)
-    result["runs"][name] = rcs
-    result[f"{name}_all_zero"] = all(rc == 0 for rc in rcs)
+arms = ["h48", "stained"]
+result = {
+    "runtime_sha": "$SHA",
+    "n": n,
+    "out": str(out),
+    "cangjie_home": "$CANGJIE_HOME",
+    "h48_rt": "$H48_RT",
+    "stained_rt": "$STAINED_RT",
+    "arms": {},
+    "failed": [],
+}
+for arm in arms:
+    result["arms"][arm] = {"runs": {}}
+    for name in names:
+        rcs = []
+        for i in range(1, n + 1):
+            p = out / f"{arm}_{name}_n{i}" / "rc"
+            rcs.append(int(p.read_text().strip()) if p.exists() else -1)
+        result["arms"][arm]["runs"][name] = rcs
+        ok = all(rc == 0 for rc in rcs)
+        result["arms"][arm][f"{name}_all_zero"] = ok
+        if not ok:
+            result["failed"].append(f"{arm}/{name}")
+    result["arms"][arm]["all_zero"] = all(
+        result["arms"][arm][f"{name}_all_zero"] for name in names
+    )
 path = out / "kkk2_managed.json"
 path.write_text(json.dumps(result, indent=2) + "\n")
 print(path.read_text())

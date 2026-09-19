@@ -1,4 +1,6 @@
 #include "Heap/z/zReferenceProcessor.hpp"
+#include "Heap/z/zStat.hpp"
+#include "Heap/z/zWorkers.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -78,7 +80,9 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
-    FinalizerProcessor fp;
+    ZStatWorkers stats;
+    ZWorkers pool(ZGenerationId::old, 1, &stats);
+    FinalizerProcessor fp(&pool);
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
@@ -103,7 +107,9 @@ GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
-    FinalizerProcessor fp;
+    ZStatWorkers stats;
+    ZWorkers pool(ZGenerationId::old, 1, &stats);
+    FinalizerProcessor fp(&pool);
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     fp.RegisterFinalizer(fx.obj0);
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
