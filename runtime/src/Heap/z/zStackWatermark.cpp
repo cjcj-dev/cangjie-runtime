@@ -76,7 +76,9 @@ void StackWatermark::process_head(Mutator& mutator, void* context, const RootVis
     (void)context;
     mutator.VisitExceptionRoots(visitor);
     mutator.VisitNativeFrameRoots(visitor);
-    mutator.VisitRawObjects(invisibleRootVisitor);
+    // ZGC zStackWatermark.cpp:164-174: the invisible slot is processed once,
+    // below, with the saved head color. VisitRawObjects names that same slot.
+    (void)invisibleRootVisitor;
     zaddress_unsafe* invisible = mutator.GetGCData().invisibleRoot;
     if (invisible != nullptr) {
         const uintptr_t color = mutator.GetGCData().loadGoodMask != 0 ? mutator.GetGCData().loadGoodMask
