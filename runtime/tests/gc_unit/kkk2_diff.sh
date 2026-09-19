@@ -15,24 +15,50 @@ if [ -z "$BASE" ]; then BS=$(git -C "$REPO" merge-base "$CS" cjcjdev/main); else
 C12=${CS:0:12}; B12=${BS:0:12}
 echo "# kkk2_diff cand=$CS base=$BS $(date -Iseconds)"
 
+# #708：两侧必须用【候选树】同一份两宿主 kkk2_managed.sh，禁止跑基线 sha 自带的旧单臂脚本（否则 failed 形态差会假 CAND-ONLY）
+mkdir -p "$SCR/diff_harness"
+git -C "$REPO" show "$CS:runtime/tests/gc_unit/kkk2_managed.sh" > "$SCR/diff_harness/kkk2_managed.sh" || { echo "⛔ 候选无 kkk2_managed.sh"; exit 2; }
+bash "$B" kkk2 "mkdir -p /root/diff_harness"
+bash "$B" kkk2 --put "$SCR/diff_harness/kkk2_managed.sh" /root/diff_harness/kkk2_managed.sh
+chmod +x "$SCR/diff_harness/kkk2_managed.sh"
+
+managed_json_ok() { # 新形态：必须有 arms 键；旧单臂 JSON 当缺失
+  local lane=$1
+  bash "$B" kkk2 "python3 -c 'import json,pathlib,sys; p=pathlib.Path(\"/root/$lane/managed-runs/kkk2_managed.json\");
+sys.exit(0 if p.is_file() and isinstance(json.loads(p.read_text()).get(\"arms\"), dict) else 1)'" >/dev/null 2>&1
+}
+
+run_managed() {
+  local sha=$1; local lane=$2
+  bash "$WF" sh "$lane" "ulimit -c 0; mkdir -p /root/$lane/harness /root/$lane/managed-runs; cp -a /root/diff_harness/kkk2_managed.sh /root/$lane/harness/kkk2_managed.sh; export LANE=/root/$lane SRCROOT=/root/$lane/default OUT=/root/$lane/managed-runs N=3 CANGJIE_HOME=/root/sdkdepot/945fe3e8f023-fa13e8d5c17b; bash /root/$lane/harness/kkk2_managed.sh $sha"
+}
+
 run_arm() { # run_arm <sha> ：若 kkk2 无缓存则建+三臂；rc 0=可用
   local sha=$1; local s12=${sha:0:12}; local lane="diff_$s12"; local wt="$SCR/diff_$s12"
-  if [ "$FORCE" = 0 ] && bash "$B" kkk2 "test -s /root/$lane/unit-default/run.rc -a -s /root/$lane/unit-filler/run.rc -a -s /root/$lane/unit-testable/run.rc -a -s /root/$lane/managed-runs/kkk2_managed.json" >/dev/null 2>&1; then
-    echo "# $lane: 命中缓存"; return 0; fi
-  rm -rf "$wt"; git -C "$REPO" worktree add -q --detach "$wt" "$sha" || { echo "⛔ worktree add 失败 $sha"; return 1; }
-  echo "# $lane: 构建两构型…"; bash "$WF" build "$wt" "$lane" 2>&1 | /usr/bin/grep -E "^== |⛔|first errors" | head -6
-  local brc; brc=$(bash "$B" kkk2 "cat /root/$lane/default-build.rc /root/$lane/testable-build.rc 2>/dev/null | tr '\n' ' '")
-  case "$brc" in "0 0 "*) ;; *) echo "⛔ $lane 构建 rc=[$brc]"; git -C "$REPO" worktree remove --force "$wt"; return 1;; esac
-  echo "# $lane: 三臂+managed 并行…"
-  bash "$WF" unit "$lane" default  > "$SCR/$lane.unit-default.log"  2>&1 &
-  bash "$WF" unit "$lane" filler   > "$SCR/$lane.unit-filler.log"   2>&1 &
-  bash "$WF" unit "$lane" testable > "$SCR/$lane.unit-testable.log" 2>&1 &
-  bash "$WF" sh "$lane" "ulimit -c 0; export LANE=/root/$lane SRCROOT=/root/$lane/default OUT=/root/$lane/managed-runs N=3 CANGJIE_HOME=/root/sdkdepot/945fe3e8f023-fa13e8d5c17b; bash /root/$lane/default/runtime/tests/gc_unit/kkk2_managed.sh $sha" > "$SCR/$lane.managed.log" 2>&1 &
-  wait
-  # ssh 会话可能先于远端跑完就断（ControlMaster 冲突时尤甚）⇒ 轮询 run.rc 最多 40 分钟，再对仍缺的臂串行补跑一次
+  local unit_ok=0 managed_ok=0
+  if [ "$FORCE" = 0 ] && bash "$B" kkk2 "test -s /root/$lane/unit-default/run.rc -a -s /root/$lane/unit-filler/run.rc -a -s /root/$lane/unit-testable/run.rc" >/dev/null 2>&1; then unit_ok=1; fi
+  if [ "$FORCE" = 0 ] && managed_json_ok "$lane"; then managed_ok=1; fi
+  if [ "$unit_ok" = 1 ] && [ "$managed_ok" = 1 ]; then echo "# $lane: 命中缓存"; return 0; fi
+  if [ "$unit_ok" = 0 ]; then
+    rm -rf "$wt"; git -C "$REPO" worktree add -q --detach "$wt" "$sha" || { echo "⛔ worktree add 失败 $sha"; return 1; }
+    echo "# $lane: 构建两构型…"; bash "$WF" build "$wt" "$lane" 2>&1 | /usr/bin/grep -E "^== |⛔|first errors" | head -6
+    local brc; brc=$(bash "$B" kkk2 "cat /root/$lane/default-build.rc /root/$lane/testable-build.rc 2>/dev/null | tr '\n' ' '")
+    case "$brc" in "0 0 "*) ;; *) echo "⛔ $lane 构建 rc=[$brc]"; git -C "$REPO" worktree remove --force "$wt"; return 1;; esac
+    echo "# $lane: 三臂+managed 并行…"
+    bash "$WF" unit "$lane" default  > "$SCR/$lane.unit-default.log"  2>&1 &
+    bash "$WF" unit "$lane" filler   > "$SCR/$lane.unit-filler.log"   2>&1 &
+    bash "$WF" unit "$lane" testable > "$SCR/$lane.unit-testable.log" 2>&1 &
+    run_managed "$sha" "$lane" > "$SCR/$lane.managed.log" 2>&1 &
+    wait
+    git -C "$REPO" worktree remove --force "$wt" 2>/dev/null
+  else
+    echo "# $lane: unit 缓存命中，只补跑 managed（候选两宿主脚本）"
+    run_managed "$sha" "$lane" > "$SCR/$lane.managed.log" 2>&1
+  fi
+  # ssh 会话可能先于远端跑完就断 ⇒ 轮询最多 40 分钟，再对仍缺的臂串行补跑一次
   local a t=0
   while [ $t -lt 2400 ]; do
-    if bash "$B" kkk2 "test -s /root/$lane/unit-default/run.rc -a -s /root/$lane/unit-filler/run.rc -a -s /root/$lane/unit-testable/run.rc -a -s /root/$lane/managed-runs/kkk2_managed.json" >/dev/null 2>&1; then break; fi
+    if bash "$B" kkk2 "test -s /root/$lane/unit-default/run.rc -a -s /root/$lane/unit-filler/run.rc -a -s /root/$lane/unit-testable/run.rc" >/dev/null 2>&1 && managed_json_ok "$lane"; then break; fi
     sleep 30; t=$((t+30))
   done
   for a in default filler testable; do
@@ -40,9 +66,12 @@ run_arm() { # run_arm <sha> ：若 kkk2 无缓存则建+三臂；rc 0=可用
       echo "# $lane: 臂 $a 40 分钟仍无 run.rc ⇒ 串行补跑一次"; bash "$WF" unit "$lane" "$a" > "$SCR/$lane.unit-$a.retry.log" 2>&1
     fi
   done
-  git -C "$REPO" worktree remove --force "$wt" 2>/dev/null
-  # 缓存只留结果：删构建树与 unit 中间物（保留 run.log/run.rc/*.sha256/*.txt），每个 sha 约省 3G
-  bash "$B" kkk2 "cd /root/$lane && rm -rf default/build testable/build default/runtime testable/runtime source.tar.gz unit-*/build_standalone unit-*/objects unit-*/test-logs unit-*/ohos_host_runroot 2>/dev/null; du -sh /root/$lane | cut -f1"
+  if ! managed_json_ok "$lane"; then
+    echo "# $lane: managed JSON 缺失或旧单臂形态 ⇒ 用候选两宿主脚本串行补跑"
+    run_managed "$sha" "$lane" > "$SCR/$lane.managed.retry.log" 2>&1
+  fi
+  # 保留 default/build/runtime-staging 与 gc_unit，供 managed 补跑/复核；只删大体积中间物
+  bash "$B" kkk2 "cd /root/$lane && rm -rf testable/build default/runtime/src testable/runtime source.tar.gz unit-*/build_standalone unit-*/objects unit-*/test-logs unit-*/ohos_host_runroot 2>/dev/null; du -sh /root/$lane | cut -f1"
   bash "$B" kkk2 "for a in default filler testable; do printf '%s rc=%s ' \$a \$(cat /root/$lane/unit-\$a/run.rc 2>/dev/null || echo NA); done; echo"
 }
 run_arm "$BS"; run_arm "$CS"
