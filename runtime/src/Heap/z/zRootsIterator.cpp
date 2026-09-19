@@ -191,18 +191,18 @@ void ZMark::MergeMutatorRoots(WorkStack& workStack)
     (void)Heap::GetHeap().old().Mark().Flush();
 }
 
-void ZMark::EnumAllExportRoots(RootSet &foreignRootsSet)
+void ZMark::EnumAllExportRoots(ValueRootList& exportOwners)
 {
-    Heap::GetHeap().VisitAllExportRoots([&foreignRootsSet](NativeSlot& root) {
+    Heap::GetHeap().VisitAllExportRoots([&exportOwners](NativeSlot& root) {
 
-        EnumRefFieldRoot(root, foreignRootsSet);
+        EnumRefFieldRoot(root, exportOwners);
     });
 }
-void ZMark::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
+void ZMark::DoEnumeration(WorkStack& workStack, ValueRootList& exportOwners)
 {
     EnumAllCommonRoots((*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()));
     MergeMutatorRoots(workStack);
-    EnumAllExportRoots(foreignRootsSet);
+    EnumAllExportRoots(exportOwners);
 }
 
 

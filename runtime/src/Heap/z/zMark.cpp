@@ -144,7 +144,7 @@ std::function<void(ZGenerationId, NativeSlot*)> ZMark::testColoredRootResult;
 std::function<void(Mutator&)> ZMark::testOldMarkThreadResult;
 #endif
 // RefFieldRoot is root in tagged pointer format.
-void ZMark::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet)
+void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
 {
     RefField<> oldField(field);
     CHECK_DETAIL(!Heap::IsHeapAddress(to_object(oldField.GetTargetObject())) ||
@@ -157,7 +157,8 @@ void ZMark::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet)
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
-    rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(latest))), true, true, true, false));
+    // Ownership state carries current identity and color, never GC work entries.
+    exportOwners.emplace_back(latest, ForwardingStage::IncomingNew);
 }
 
 

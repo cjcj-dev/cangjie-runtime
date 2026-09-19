@@ -1144,7 +1144,7 @@ bool ZGenerationOld::mark_end()
     }
     // Preserve export ownership discovery after the ordinary root closure,
     // while the mark-end pause excludes new mutator publication.
-    Heap::GetHeap().cross_vm().ProcessExportRoots(oldMarkForeignRoots);
+    Heap::GetHeap().cross_vm().ProcessExportRoots(oldExportOwners);
     // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
     // to the phase owner before verification or publishing mark completion.
     if (ZAbort::should_abort()) {
@@ -1193,11 +1193,10 @@ void ZGenerationOld::concurrent_mark()
 {
     ZBreakpoint::AtAfterMarkingStarted();
     oldMarkWorkStack.clear();
-    oldMarkForeignRoots.clear();
+    oldExportOwners.clear();
     WorkStack& workStack = oldMarkWorkStack;
-    WorkStack& foreignStack = oldMarkForeignRoots;
+    ValueRootList& exportOwners = oldExportOwners;
     MarkingStacks::VerifyEmpty(workStack.size());
-    MarkingStacks::VerifyEmpty(foreignStack.size());
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
     uint64_t stackScanEpoch = 0;
 
@@ -1223,9 +1222,9 @@ void ZGenerationOld::concurrent_mark()
                                             mutator.GetStackWatermark().IsDone(stackScanEpoch));
 #endif
             });
-            ZMark::DoEnumeration(workStack, foreignStack);
+            ZMark::DoEnumeration(workStack, exportOwners);
         } else {
-            ZMark::DoEnumeration(workStack, foreignStack);
+            ZMark::DoEnumeration(workStack, exportOwners);
         }
     }
 
@@ -1242,8 +1241,6 @@ void ZGenerationOld::concurrent_mark()
         }
 
         MarkingStacks::VerifyEmpty(workStack.size());
-        MarkingStacks::VerifyEmpty(foreignStack.size());
-
     }
 
 }

@@ -119,11 +119,11 @@ struct RelocationReceiptTestAccess {
 
     static void RunPostTrace(Heap& collector) { Heap::GetHeap().old().PostTrace(); }
 
-    static void RunExportMajorMark(Heap& collector)
+    static void RunExportMajorMark(Heap& collector, bool prepared = false)
     {
         // The major-roots young prelude already began and prepared old marking
         // (zGeneration.cpp:118-124). Do not select/restart that active cycle.
-        PrepareMajorRoots(collector);
+        if (!prepared) PrepareMajorRoots(collector);
         auto& old = Heap::GetHeap().old();
         old.concurrent_mark();
         while (!old.pause_mark_end()) old.concurrent_mark_continue();
@@ -804,7 +804,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     (void)route;
 }
 
-void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
+void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool afterYoungRoots = false)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager mutatorManager;
@@ -829,6 +829,9 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(graph.owner);
     space.GetRegionManager().AddRawPointerObject(graph.foreign);
+    // Register after the major-roots young prelude so only the old export
+    // root task can publish this owner. Do not seed a mark entry in the test.
+    if (afterYoungRoots) RelocationReceiptTestAccess::PrepareMajorRoots(collector);
     const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(graph.root);
 
     const U64 secondHandle = sharedCycle ? Heap::GetHeap().RegisterExportRoot(secondRoot) : 0;
@@ -877,7 +880,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
         ZCrossVM::testExportOwnershipResult = nullptr;
         driverCompleted = !Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old).active;
     } else {
-        RelocationReceiptTestAccess::RunExportMajorMark(collector);
+        RelocationReceiptTestAccess::RunExportMajorMark(collector, afterYoungRoots);
         producerCarrier =
             RelocationReceiptTestAccess::DiscoveredCarrierEquals(collector, graph.root, graph.foreign, owners) &&
             (!sharedCycle || RelocationReceiptTestAccess::DiscoveredCarrierEquals(
@@ -917,6 +920,11 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
     }
 }
 
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, ExportRootBarrierOwnsLiveness)
+{
+    RunMajorExportOwnership(false, false, true);
+}
 
 GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBeforeMark)
 {

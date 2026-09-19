@@ -71,12 +71,12 @@ public:
                               const std::function<void(Mutator&)>& threadVisitor);
     static void DiscoverWeakReference(BaseObject* reference, WorkStack& workStack);
     static void EnumAllCommonRoots(ZWorkers& workers);
-    static void EnumAllExportRoots(RootSet& foreignRootsSet);
+    static void EnumAllExportRoots(ValueRootList& exportOwners);
     static void DiscoverFinalizableRoot(NativeSlot& slot);
     static void MergeMutatorRoots(WorkStack& workStack);
-    static void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
+    static void DoEnumeration(WorkStack& workStack, ValueRootList& exportOwners);
     static void VisitStaticRoots(const NativeSlotVisitor& visitor);
-    static void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet);
+    static void EnumRefFieldRoot(RefField<>& ref, ValueRootList& exportOwners);
     static void ProcessFinalizers();
     static void VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                              uint64_t stackScanEpoch = 0);

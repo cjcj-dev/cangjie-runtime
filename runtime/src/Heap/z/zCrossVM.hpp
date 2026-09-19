@@ -51,7 +51,7 @@ public:
     void MergeResurrectExportObjects(Generation generation);
     void ResolveCycleRef();
     void PostResolveCycleTask();
-    void ProcessExportRoots(WorkStack& foreignRootsSet);
+    void ProcessExportRoots(ValueRootList& exportOwners);
     void FindUselessExternObjects();
     void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
     void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
