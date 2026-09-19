@@ -228,7 +228,7 @@ void ZRelocationSet::install_from_regions(RegionList& regions)
     install(&selector);
 }
 
-static void destroy_and_clear(ZPageAllocator* page_allocator, ZArray<ZPage*>* array)
+static void destroy_and_clear(RegionManager* page_allocator, ZArray<ZPage*>* array)
 {
     for (int i = 0; i < array->length(); ++i) {
         ZPage* const page = array->at(i);
@@ -239,7 +239,7 @@ static void destroy_and_clear(ZPageAllocator* page_allocator, ZArray<ZPage*>* ar
     array->clear();
 }
 
-void ZRelocationSet::reset(ZPageAllocator* page_allocator)
+void ZRelocationSet::reset(RegionManager* page_allocator)
 {
     ZRelocationSetIterator iter(this);
     for (ZForwarding* forwarding; iter.next(&forwarding);) {

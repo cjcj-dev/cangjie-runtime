@@ -12,7 +12,7 @@ namespace MapleRuntime {
 class ZForwarding;
 class ZGeneration;
 class ZPage;
-class ZPageAllocator;
+class RegionManager;
 class ZRelocationSetSelector;
 class ZWorkers;
 class RegionList;
@@ -41,7 +41,7 @@ public:
 
     void install(const ZRelocationSetSelector* selector);
     void install_from_regions(RegionList& regions);
-    void reset(ZPageAllocator* page_allocator);
+    void reset(RegionManager* page_allocator);
     ZGeneration* generation() const { return _generation; }
     ZArray<ZPage*>* flip_promoted_pages() { return &_flip_promoted_pages; }
     ZArray<ZPage*>* relocate_promoted_pages() { return &_relocate_promoted_pages; }
