@@ -387,9 +387,17 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
     };
     MarkYoungRootsTask task([&] {
         VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
-        Heap::GetHeap().cross_vm().VisitMinorValueRoots(visitor);
+        Heap::GetHeap().cross_vm().VisitMinorValueRoots([&](BaseObject* object) {
+            if (Heap::IsHeapAddress(object)) {
+                ZBarrier::Mark<false, false, true, false>(from_object(object));
+            }
+            visitor(object);
+        });
         gMinorRootOrigin = "export";
-        Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) { visitor(ZBarrier::ReadStaticRef(slot)); });
+        Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) {
+            ZBarrier::MarkBarrierOnOopField(slot, false);
+            visitor(to_object(slot.GetTargetObject()));
+        });
         gMinorRootOrigin = "unknown";
     }, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
     SuspendibleThreadSetJoiner joiner;
