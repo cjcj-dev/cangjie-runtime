@@ -18,6 +18,8 @@
 
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zVerify.hpp"
+#include "Heap/z/concurrentGCBreakpoints.hpp"
+#include "ObjectModel/MObject.h"
 #include "ObjectModel/RefField.inline.h"
 
 using namespace MapleRuntime;
@@ -297,5 +299,69 @@ GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsUnallocatedRootBeforeMark)
         root->StoreColoured(ZAddress::store_good(static_cast<zaddress>(bad)));
         std::fprintf(stderr, "VERIFY_RUNTIME_REQUEST root=%p address=%#zx\n", root, bad);
         heap.RequestGC(GC_REASON_USER, false);
+    });
+}
+
+// ZGC's existing concurrent-GC breakpoint holds the real collector after
+// following roots. Corrupt liveness there, then resume its actual mark-end.
+GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsLostLivenessAfterMark)
+{
+    if (!ZVerifyObjects) {
+        GC_EXPECT_EQ(setenv("ZVerifyObjects", "1", 1), 0);
+        RunInOtherVm("ZVerify.RuntimeRejectsLostLivenessAfterMark");
+        return;
+    }
+    ExpectSceneAbort("Object verification failed", [&] {
+        RuntimeParam param{};
+        param.coParam.processorNum = 1;
+        param.heapParam.heapSize = 32 * 1024;
+        if (InitCJRuntime(&param) != E_OK) { _exit(121); }
+        alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+        auto* type = reinterpret_cast<TypeInfo*>(storage);
+        type->SetType(TypeKind::TYPE_KIND_CLASS);
+        type->SetInstanceSize(sizeof(uintptr_t));
+        auto* object = MObject::NewPinnedObject(type, 2 * sizeof(uintptr_t));
+        if (object == nullptr) { _exit(122); }
+        auto& heap = Heap::GetHeap();
+        NativeSlot* root = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
+        if (root == nullptr) { _exit(123); }
+        root->StoreColoured(StoreGoodPointer(object));
+        ConcurrentGCBreakpoints::AcquireControl();
+        if (!ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED")) { _exit(124); }
+        ZPage* page = Heap::page(reinterpret_cast<MAddress>(object));
+        if (!page->is_object_live(from_object(object))) { _exit(125); }
+        std::fprintf(stderr, "VERIFY_RUNTIME_MARK_END live_before=1 object=%p\n", object);
+        page->reset_livemap();
+        ConcurrentGCBreakpoints::RunToIdle();
+        ConcurrentGCBreakpoints::ReleaseControl();
+    });
+}
+
+// zMark.cpp:1022-1035: a fresh mark cycle cannot inherit published work.
+// The breakpoint controller starts the real driver while retaining its pause.
+GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsStaleMarkStackAtStart)
+{
+    if (!ZVerifyMarking) {
+        GC_EXPECT_EQ(setenv("ZVerifyMarking", "1", 1), 0);
+        RunInOtherVm("ZVerify.RuntimeRejectsStaleMarkStackAtStart");
+        return;
+    }
+    ExpectSceneAbort("Shared marking stripes are not empty", [&] {
+        RuntimeParam param{};
+        param.coParam.processorNum = 1;
+        param.heapParam.heapSize = 32 * 1024;
+        if (InitCJRuntime(&param) != E_OK) { _exit(121); }
+        ConcurrentGCBreakpoints::AcquireControl();
+        auto& stripes = Heap::GetHeap().old().Mark().Stripes();
+        auto* stack = MarkStripeStack::Create(true);
+        if (stack == nullptr) { _exit(122); }
+        stack->Push(MarkStackEntry(uintptr_t(0x1000), true, true, true, false));
+        stripes.At(0).PublishStack(stack, true);
+        if (stripes.Population() != 1) { _exit(123); }
+        std::fprintf(stderr, "VERIFY_RUNTIME_MARK_START published_stacks=1\n");
+        // A broken start returns here before any worker consumes the deliberately
+        // stale entry. Exit with the normal control result while GC is held.
+        (void)ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
+        _exit(0);
     });
 }

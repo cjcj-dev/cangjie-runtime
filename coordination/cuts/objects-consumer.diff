@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp
+index 304d17400..32f0dea84 100644
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -1037,7 +1037,7 @@ bool ZGenerationOld::mark_end()
+     // zGeneration.cpp:1275-1278: old mark-end sample.
+     statHeap.AtMarkEnd(
+         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+-    ZVerify::AfterMark();
++    // Controlled disconnection of mark-end verification.
+     ZResurrection::block();
+ 
+     return true;
