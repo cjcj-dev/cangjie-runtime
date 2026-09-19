@@ -267,8 +267,9 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
     Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     thread->SetManagedContext(false);
     (void)thread->EnterSaferegion(false);
-    ObjectRef* youngRoot = thread->AddNativeFrameRoot(fx.obj0);
-    ObjectRef* oldRoot = thread->AddNativeFrameRoot(fx.obj1);
+    const size_t rootMark = thread->NativeFrameRootCount();
+    (void)thread->AddNativeFrameRoot(fx.obj0);
+    (void)thread->AddNativeFrameRoot(fx.obj1);
     const bool scanned = thread->GcPhaseEnum(false);
     marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
         GC_EXPECT_TRUE(object == fx.obj0);
@@ -280,10 +281,14 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
         GC_EXPECT_TRUE(follow);
         ++old;
     });
-    const bool slotsCurrent = to_object(safe(youngRoot->LoadPlain())) == fx.obj0 &&
-                              to_object(safe(oldRoot->LoadPlain())) == fx.obj1;
-    thread->RemoveNativeFrameRoot(youngRoot);
-    thread->RemoveNativeFrameRoot(oldRoot);
+    bool youngCurrent = false;
+    bool oldCurrent = false;
+    thread->VisitMutatorRoots([&](ObjectRef& root) {
+        youngCurrent |= to_object(safe(root.LoadPlain())) == fx.obj0;
+        oldCurrent |= to_object(safe(root.LoadPlain())) == fx.obj1;
+    });
+    const bool slotsCurrent = youngCurrent && oldCurrent;
+    thread->PopNativeFrameRootsTo(rootMark);
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     std::fprintf(stderr, "ROOT_TARGET_GEN_ASSERT executed=1 scanned=%u current=%u young=%zu old=%zu\n",
                  unsigned(scanned), unsigned(slotsCurrent), young, old);
