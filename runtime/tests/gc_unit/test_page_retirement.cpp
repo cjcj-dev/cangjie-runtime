@@ -44,6 +44,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         heapHolder.reset(new ZTestRegionHeap(4, manager, heapParam, 0.5));
         ZTestRegionHeap& heap = *heapHolder;
         (void)heap;
+        BindFixturePageTable(manager, 4);
         // ReleaseRetiredRegion clears the product remembered set before
         // returning the page. Its address space must exist as after heap init.
         const auto role = ZPageType::small;

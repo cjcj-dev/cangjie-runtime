@@ -51,6 +51,11 @@ inline void PublishAllocatedPage(ZPage* page)
     }
 }
 
+inline void BindFixturePageTable(RegionManager& manager, size_t units)
+{
+    Heap::GetHeap().install_page_table(manager.GetRegionHeapStart(), units * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
+}
+
 class ZAddressOffsetMaxSetter {
   friend class ZTest;
 
