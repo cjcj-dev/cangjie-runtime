@@ -118,7 +118,7 @@ inline RememberedSet& HeapTestRemset()
 }
 
 
-inline bool InitFwdTables(MAddress, size_t, size_t)
+inline bool InitFwdTables()
 {
     generation_forwarding_table(Generation::Young).initialize();
     generation_forwarding_table(Generation::Old).initialize();
@@ -137,7 +137,17 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
         }
         selector.add_selected_small(page, ZForwarding::nentries(page));
     }
-    (*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old()))).relocation_set().install(&selector);
+    auto& gen = *(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young())
+                                                 : static_cast<ZGeneration*>(ZGeneration::old()));
+    gen.relocation_set().install(&selector);
+    // Explicit fixture input for isolated barrier/table cases. This helper is
+    // not evidence for the generation entry; SelectionPublishesPreparedForwardingOnce
+    // exercises that entry through real allocation and RequestGC.
+    ZRelocationSetIterator iterator(&gen.relocation_set());
+    for (ZForwarding* forwarding; iterator.next(&forwarding);) {
+        forwarding->page()->SetRegionRole(ZPageRole::From);
+        gen.forwarding_table().insert(forwarding);
+    }
     return true;
 }
 
@@ -309,7 +319,7 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.
         AdvanceGeneration(Generation::Old);
         AdvanceGeneration(Generation::Young);
-        InitFwdTables(heapStart, kUnits * ZGranuleSize, ZGranuleSize);
+        InitFwdTables();
 
         std::memset(typeInfoStorage, 0, sizeof(typeInfoStorage));
         typeInfo = reinterpret_cast<TypeInfo*>(typeInfoStorage);
