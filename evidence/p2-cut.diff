@@ -1,4 +1,5 @@
 diff --git a/runtime/src/Heap/z/zBarrier.cpp b/runtime/src/Heap/z/zBarrier.cpp
+index 0000000..0000000 100644
 --- a/runtime/src/Heap/z/zBarrier.cpp
 +++ b/runtime/src/Heap/z/zBarrier.cpp
 @@ -293,7 +293,7 @@ void ZBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObjec
@@ -11,6 +12,7 @@ diff --git a/runtime/src/Heap/z/zBarrier.cpp b/runtime/src/Heap/z/zBarrier.cpp
  }
  
 diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp
+index 0000000..0000000 100644
 --- a/runtime/src/Heap/z/zGeneration.cpp
 +++ b/runtime/src/Heap/z/zGeneration.cpp
 @@ -588,7 +588,7 @@ void ZGenerationYoung::concurrent_mark()
@@ -18,7 +20,7 @@ diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration
      {
          ZStatTimerYoung zstatTimer(PYoungRemsetRescan);
 -        Heap::GetHeap().remembered().scan_and_follow(Heap::GetHeap().young().MarkPtr());
-+        /* P2 cut remset consumer */
++        // P2 cut: omit real remset consumer.
      }
  #if defined(MRT_TESTABLE_INTERNALS)
      // Deterministic T1->T2 export-root window: root enumeration has returned,

@@ -4,13 +4,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
-#include "Heap/z/zMark.hpp"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
-#include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/MArray.h"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MObject.h"
@@ -55,6 +57,7 @@ RefField<>& Slot(BaseObject* object, unsigned index = 0)
 {
     return HeapSlotAt<>(reinterpret_cast<MAddress>(object) + sizeof(uintptr_t) * (index + 1));
 }
+
 }
 
 // The compiler-generated managed caller owns runtime startup. Inputs use real
@@ -71,38 +74,74 @@ extern "C" int p2FieldBarrierExercise()
     finalType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
     auto& heap = Heap::GetHeap();
     auto& collector = heap;
-    auto* holder = MObject::NewPinnedObject(holderType, 24);
-    auto* oldChild = MObject::NewPinnedObject(leafType, 16);
-    const U64 root = heap.RegisterExportRoot(holder);
+    BaseObject* holder = MObject::NewObject(holderType, 24, AllocType::MOVEABLE_OBJECT);
+    BaseObject* oldChild = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    NativeSlot holderRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(holderRoot, holder);
+    NativeSlot* holderRoots[] = { &holderRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(holderRoots), 1);
     ZBarrier::WriteReference(holder, Slot(holder), oldChild);
     ZBarrier::WriteReference(holder, Slot(holder, 1), oldChild);
     const bool finalizableCase = std::getenv("P2_FINALIZABLE") != nullptr;
     BaseObject* finalHolder = nullptr;
     BaseObject* finalOld = nullptr;
     BaseObject* upgraded = nullptr;
-    U64 upgradeRoot = 0;
+    NativeSlot upgradeRoot(zpointer::null);
+    NativeSlot* upgradeRoots[] = { &upgradeRoot };
     auto& references = heap.GetFinalizerProcessor().GetReferenceProcessor();
     const auto discoveredBefore = references.Discovered(ReferenceType::FINAL);
     const auto enqueuedBefore = references.Enqueued(ReferenceType::FINAL);
     if (finalizableCase) {
-        finalHolder = MObject::NewPinnedObject(finalType, 24);
-        finalOld = MObject::NewPinnedObject(edgeType, 24);
-        auto* finalSentinel = MObject::NewPinnedObject(leafType, 16);
+        finalHolder = MObject::NewObject(finalType, 24, AllocType::MOVEABLE_OBJECT);
+        finalOld = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
+        auto* finalSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
         ZBarrier::WriteReference(finalOld, Slot(finalOld), finalSentinel);
         ZBarrier::WriteReference(finalHolder, Slot(finalHolder), oldChild);
         ZBarrier::WriteReference(finalHolder, Slot(finalHolder, 1), finalOld);
-        finalHolder->OnFinalizerCreated();
-        upgraded = MObject::NewPinnedObject(finalType, 24);
+        upgraded = MObject::NewObject(finalType, 24, AllocType::MOVEABLE_OBJECT);
         ZBarrier::WriteReference(upgraded, Slot(upgraded), oldChild);
-        upgraded->OnFinalizerCreated();
-        upgradeRoot = heap.RegisterExportRoot(upgraded);
+        ZBarrier::WriteStaticRef(upgradeRoot, upgraded);
+        heap.RegisterStaticRoots(reinterpret_cast<Uptr>(upgradeRoots), 1);
     }
+    // Full GC's preclean promotes these genuinely rooted movable objects through
+    // the product selector/flip/remset path (ZGC zDriver.cpp:416-436).
+    // Register finalizers only after this setup cycle, to avoid classifying them
+    // before the field scenario starts.
+    BaseObject* oldViaYoung = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    NativeSlot oldViaRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(oldViaRoot, oldViaYoung);
+    NativeSlot* oldViaRoots[] = { &oldViaRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(oldViaRoots), 1);
+    NativeSlot finalSetupRoot(zpointer::null);
+    NativeSlot* setupRoots[] = { &finalSetupRoot };
+    if (finalizableCase) {
+        ZBarrier::WriteStaticRef(finalSetupRoot, finalHolder);
+        heap.RegisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+    }
+    heap.RequestGC(GC_REASON_USER, false);
+    holder = ZBarrier::ReadStaticRef(holderRoot);
+    oldChild = ZBarrier::ReadReference(holder, Slot(holder, 1));
+    oldViaYoung = ZBarrier::ReadStaticRef(oldViaRoot);
+    if (finalizableCase) {
+        finalHolder = ZBarrier::ReadStaticRef(finalSetupRoot);
+        finalOld = ZBarrier::ReadReference(finalHolder, Slot(finalHolder, 1));
+        upgraded = ZBarrier::ReadStaticRef(upgradeRoot);
+    }
+    if (finalizableCase) {
+        heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+        finalHolder->OnFinalizerCreated();
+        upgraded->OnFinalizerCreated();
+    }
+
     // Advance a real young epoch before overwriting the old slot. Its previous
     // non-null word must go through the store barrier and remember the slot.
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    holder = ZBarrier::ReadStaticRef(holderRoot);
+    oldChild = ZBarrier::ReadReference(holder, Slot(holder, 1));
+    oldViaYoung = ZBarrier::ReadStaticRef(oldViaRoot);
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(oldViaRoots), 1);
     auto* child = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
     auto* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
-    auto* oldViaYoung = MObject::NewPinnedObject(leafType, 16);
     ZBarrier::WriteReference(child, Slot(child), sentinel);
     ZBarrier::WriteReference(child, Slot(child, 1), oldViaYoung);
     ZBarrier::WriteReference(holder, Slot(holder), child);
@@ -114,6 +153,9 @@ extern "C" int p2FieldBarrierExercise()
     unsigned finalOldOld = 0, finalOldYoung = 0, finalFollow = 0, finalYoungFast = 0;
     unsigned remsetChild = 0, oldOld = 0, oldYoung = 0, youngFollow = 0, oldYoungFast = 0;
     unsigned youngOldMajor = 0, youngOldMinor = 0;
+    // A minor cycle preserves old mark bits from the preceding major. Compare
+    // with the actual pre-cycle value, not an assumed zero (ZGC zBarrier.cpp:158-183).
+    const bool oldBeforeMinor = Heap::page(reinterpret_cast<MAddress>(oldViaYoung))->is_strong_bit_set(from_object(oldViaYoung));
     BaseObject* currentChild = child;
     ZBarrier::testFieldMarkResult = [&](ZBarrier::FieldMarkKind kind, RefField<>& field,
                                       zpointer observed, zaddress result) {
@@ -184,7 +226,8 @@ extern "C" int p2FieldBarrierExercise()
             Expect(to_object(result) == oldViaYoung, "young_old_returns_current");
             auto* page = Heap::page(reinterpret_cast<MAddress>(oldViaYoung));
             const bool marked = page->is_strong_bit_set(from_object(oldViaYoung));
-            Expect(marked == major, major ? "young_old_major_marks" : "young_old_minor_does_not_mark");
+            Expect(major ? marked : marked == oldBeforeMinor,
+                   major ? "young_old_major_marks" : "young_old_minor_preserves_old_mark");
             Expect(ZPointer::is_store_good(field.GetFieldValue()), "young_old_heals_store_good");
         }
         if (currentChild != nullptr && &field == &Slot(currentChild) && kind == ZBarrier::FieldMarkKind::Young) {
@@ -213,7 +256,7 @@ extern "C" int p2FieldBarrierExercise()
         // The target state has been observed. Do not dereference an object
         // that the faulty product has just classified as unreachable.
         ZBarrier::testFieldMarkResult = nullptr;
-        heap.RemoveExportObject(root);
+        heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(holderRoots), 1);
         heap.RemoveExportObject(controlRoot);
         std::printf("P2_FAST old_young=%u finalizable_young=%u\n", oldYoungFast, finalYoungFast);
         std::printf("P2_RESULT failures=%u target_stage=first_cycle\n", failures.load());
@@ -254,12 +297,15 @@ extern "C" int p2FieldBarrierExercise()
         Expect(finalOldOld != 0, "real_finalizable_old_control_reached");
         Expect(finalOldYoung + finalYoungFast != 0, "real_finalizable_young_field_reached");
         Expect(finalFollow != 0, "real_finalizable_follow_reached");
+        std::printf("P2_FINALIZABLE discovered_delta=%llu enqueued_delta=%llu\n",
+                    static_cast<unsigned long long>(references.Discovered(ReferenceType::FINAL) - discoveredBefore),
+                    static_cast<unsigned long long>(references.Enqueued(ReferenceType::FINAL) - enqueuedBefore));
         Expect(references.Discovered(ReferenceType::FINAL) - discoveredBefore == 2, "finalizable_discovered_once_each");
         Expect(references.Enqueued(ReferenceType::FINAL) - enqueuedBefore == 1, "finalizable_only_unupgraded_enqueued");
         auto* page = Heap::page(reinterpret_cast<MAddress>(upgraded));
         Expect(page->is_strong_bit_set(from_object(upgraded)), "finalizable_upgraded_to_strong");
         Expect(!IsFinalizable(upgraded), "finalizable_upgraded_not_pending");
-        heap.RemoveExportObject(upgradeRoot);
+        heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(upgradeRoots), 1);
     }
     Expect(remsetChild != 0, "real_remset_consumer_reached");
     Expect(youngFollow != 0, "real_young_follow_reached");
@@ -272,7 +318,7 @@ extern "C" int p2FieldBarrierExercise()
     std::printf("P2_FAST old_young=%u finalizable_young=%u\n", oldYoungFast, finalYoungFast);
     std::printf("P2_RESULT failures=%u remset=%u follow=%u old_old=%u old_young=%u\n",
                 failures.load(), remsetChild, youngFollow, oldOld, oldYoung);
-    heap.RemoveExportObject(root);
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(holderRoots), 1);
     if (minorOnly) heap.RemoveExportObject(controlRoot);
     return failures.load();
 }
@@ -290,7 +336,7 @@ extern "C" int p2FinalizerRegistrationExercise()
     auto& heap = Heap::GetHeap();
     auto& collector = heap;
     auto& references = heap.GetFinalizerProcessor().GetReferenceProcessor();
-    auto* delayedOld = MObject::NewPinnedObject(smallType, 16);
+    BaseObject* delayedOld = MObject::NewObject(smallType, 16, AllocType::MOVEABLE_OBJECT);
     NativeSlot oldRoot(zpointer::null);
     ZBarrier::WriteStaticRef(oldRoot, delayedOld);
     NativeSlot* roots[] = { &oldRoot };
@@ -299,6 +345,7 @@ extern "C" int p2FinalizerRegistrationExercise()
     const size_t enqueued = references.Enqueued(ReferenceType::FINAL);
     ConcurrentGCBreakpoints::AcquireControl();
     Expect(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"), "late_registration_product_breakpoint");
+    delayedOld = ZBarrier::ReadStaticRef(oldRoot);
     auto* small = MObject::NewObject(smallType, 16, AllocType::MOVEABLE_OBJECT);
     auto* large = MObject::NewObject(largeType, largeType->GetInstanceSize() + sizeof(uintptr_t),
                                      AllocType::MOVEABLE_OBJECT);
@@ -399,20 +446,32 @@ extern "C" int p2FinalizerClosureExercise()
     edgeType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
     auto& heap = Heap::GetHeap();
     auto& references = heap.GetFinalizerProcessor().GetReferenceProcessor();
-    auto* holder = MObject::NewPinnedObject(edgeType, 16);
-    auto* child = MObject::NewPinnedObject(edgeType, 16);
-    auto* sentinel = MObject::NewPinnedObject(leafType, 16);
-    auto* upgraded = MObject::NewPinnedObject(edgeType, 16);
-    auto* control = MObject::NewPinnedObject(leafType, 16);
+    BaseObject* holder = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* child = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* upgraded = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* control = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     ZBarrier::WriteReference(holder, Slot(holder), child);
     ZBarrier::WriteReference(child, Slot(child), sentinel);
     ZBarrier::WriteReference(upgraded, Slot(upgraded), control);
-    holder->OnFinalizerCreated();
-    upgraded->OnFinalizerCreated();
     NativeSlot strongRoot(zpointer::null);
     ZBarrier::WriteStaticRef(strongRoot, upgraded);
     NativeSlot* roots[] = { &strongRoot };
     heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    NativeSlot setupRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(setupRoot, holder);
+    NativeSlot* setupRoots[] = { &setupRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+    heap.RequestGC(GC_REASON_USER, false);
+    holder = ZBarrier::ReadStaticRef(setupRoot);
+    child = ZBarrier::ReadReference(holder, Slot(holder));
+    sentinel = ZBarrier::ReadReference(child, Slot(child));
+    upgraded = ZBarrier::ReadStaticRef(strongRoot);
+    control = ZBarrier::ReadReference(upgraded, Slot(upgraded));
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+    holder->OnFinalizerCreated();
+    upgraded->OnFinalizerCreated();
+
     const size_t discovered = references.Discovered(ReferenceType::FINAL);
     const size_t enqueued = references.Enqueued(ReferenceType::FINAL);
     ConcurrentGCBreakpoints::AcquireControl();
@@ -461,17 +520,15 @@ extern "C" int p2ArrayFieldExercise()
     auto& heap = Heap::GetHeap();
     auto& collector = heap;
     const bool finalizable = std::getenv("P2_ARRAY_FINALIZABLE") != nullptr;
-    auto* first = MObject::NewPinnedObject(leafType, 16);
-    auto* last = MObject::NewPinnedObject(leafType, 16);
-    auto* control = MObject::NewPinnedObject(leafType, 16);
-    auto* holder = MObject::NewPinnedObject(holderType, 16);
+    BaseObject* first = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* last = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* control = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* holder = MObject::NewObject(holderType, 16, AllocType::MOVEABLE_OBJECT);
     ZBarrier::WriteReference(holder, Slot(holder), control);
-    if (finalizable) holder->OnFinalizerCreated();
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     const size_t length = 2 * MarkPartialArray::MIN_LENGTH + 17;
     const size_t fieldCount = length * (structArray ? 2 : 1);
     MArray* array = structArray ? MCC_NewArray(arrayType, length) : MCC_NewObjArray(arrayType, length);
-    auto* elements = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
+    auto* elements = reinterpret_cast<RefField<>*>(reinterpret_cast<uint8_t*>(array) + sizeof(MArray));
     for (size_t index = 0; index < fieldCount; ++index) {
         ZBarrier::WriteReference(array, elements[index], index % 2 == 0 ? first : last);
     }
@@ -480,7 +537,24 @@ extern "C" int p2ArrayFieldExercise()
     ZBarrier::WriteStaticRef(arrayRoot, array);
     ZBarrier::WriteStaticRef(controlRoot, control);
     NativeSlot* roots[] = { &controlRoot, &arrayRoot };
-    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), finalizable ? 1 : 2);
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
+    NativeSlot holderRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(holderRoot, holder);
+    NativeSlot* holderRoots[] = { &holderRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(holderRoots), 1);
+    heap.RequestGC(GC_REASON_USER, false);
+    holder = ZBarrier::ReadStaticRef(holderRoot);
+    array = static_cast<MArray*>(ZBarrier::ReadStaticRef(arrayRoot));
+    elements = reinterpret_cast<RefField<>*>(reinterpret_cast<uint8_t*>(array) + sizeof(MArray));
+    first = ZBarrier::ReadReference(array, elements[0]);
+    last = ZBarrier::ReadReference(array, elements[1]);
+    control = ZBarrier::ReadStaticRef(controlRoot);
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(holderRoots), 1);
+    if (finalizable) {
+        heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
+        heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+        holder->OnFinalizerCreated();
+    }
     std::atomic<size_t> fields{0};
     std::atomic<bool> rangeTarget{false};
     auto arrayAddress = [&] {
@@ -490,7 +564,7 @@ extern "C" int p2ArrayFieldExercise()
         const auto expected = finalizable ? ZBarrier::FieldMarkKind::Finalizable : ZBarrier::FieldMarkKind::Old;
         if (kind != expected) return;
         auto* current = reinterpret_cast<MArray*>(arrayAddress());
-        const MAddress begin = reinterpret_cast<MAddress>(current->ConvertToCArray());
+        const MAddress begin = reinterpret_cast<MAddress>(reinterpret_cast<uint8_t*>(current) + sizeof(MArray));
         const MAddress address = reinterpret_cast<MAddress>(&field);
         if (address >= begin && address < begin + fieldCount * sizeof(uintptr_t)) {
             ++fields;
@@ -542,8 +616,9 @@ private:
 };
 }
 
-// Advisor 175006Z: field API input layer. The existing young-mark-start
-// observation pauses after real old mark-start and before remset scanning.
+// Field API input layer. Pause at old mark-start Complete: the combined
+// pause starts young FIRST, old SECOND (zGeneration.cpp VM_ZMarkStartYoungAndOld).
+// This point observes both real colour flips before remset scanning.
 // Every word is from a real store; no masks, phases or mark results are seeded.
 extern "C" int p2SlowFieldInputExercise()
 {
@@ -554,52 +629,74 @@ extern "C" int p2SlowFieldInputExercise()
     auto* leafType = Type(types[2], false, 1);
     auto& heap = Heap::GetHeap();
     auto& collector = static_cast<Heap&>(heap);
-    auto* strongHolder = MObject::NewPinnedObject(holderType, 24);
-    auto* finalHolder = MObject::NewPinnedObject(holderType, 24);
-    auto* oldChild = MObject::NewPinnedObject(edgeType, 16);
-    auto* oldSentinel = MObject::NewPinnedObject(leafType, 16);
-    auto* finalChild = MObject::NewPinnedObject(edgeType, 16);
-    auto* finalSentinel = MObject::NewPinnedObject(leafType, 16);
+    BaseObject* strongHolder = MObject::NewObject(holderType, 24, AllocType::MOVEABLE_OBJECT);
+    BaseObject* finalHolder = MObject::NewObject(holderType, 24, AllocType::MOVEABLE_OBJECT);
+    BaseObject* oldChild = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* oldSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* finalChild = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* finalSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     ZBarrier::WriteReference(oldChild, Slot(oldChild), oldSentinel);
     ZBarrier::WriteReference(finalChild, Slot(finalChild), finalSentinel);
     ZBarrier::WriteReference(strongHolder, Slot(strongHolder), oldChild);
     ZBarrier::WriteReference(strongHolder, Slot(strongHolder, 1), oldChild);
     ZBarrier::WriteReference(finalHolder, Slot(finalHolder), finalChild);
     ZBarrier::WriteReference(finalHolder, Slot(finalHolder, 1), finalChild);
-    finalHolder->OnFinalizerCreated();
     NativeSlot strongRoot(zpointer::null);
     ZBarrier::WriteStaticRef(strongRoot, strongHolder);
     NativeSlot* roots[] = { &strongRoot };
     heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    NativeSlot finalSetupRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(finalSetupRoot, finalHolder);
+    NativeSlot* setupRoots[] = { &finalSetupRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+    heap.RequestGC(GC_REASON_USER, false);
+    strongHolder = ZBarrier::ReadStaticRef(strongRoot);
+    finalHolder = ZBarrier::ReadStaticRef(finalSetupRoot);
+    oldChild = ZBarrier::ReadReference(strongHolder, Slot(strongHolder, 1));
+    oldSentinel = ZBarrier::ReadReference(oldChild, Slot(oldChild));
+    finalChild = ZBarrier::ReadReference(finalHolder, Slot(finalHolder, 1));
+    finalSentinel = ZBarrier::ReadReference(finalChild, Slot(finalChild));
+
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+    finalHolder->OnFinalizerCreated();
+    Expect(!Heap::page(reinterpret_cast<MAddress>(strongHolder))->IsYoungRegion(), "slow_real_strong_holder_promoted");
+    Expect(!Heap::page(reinterpret_cast<MAddress>(finalHolder))->IsYoungRegion(), "slow_real_final_holder_promoted");
     auto* young = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
     auto* youngSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     ZBarrier::WriteReference(young, Slot(young), youngSentinel);
-    ZBarrier::WriteReference(strongHolder, Slot(strongHolder), young);
-    ZBarrier::WriteReference(finalHolder, Slot(finalHolder), young);
-    const zpointer stored = Slot(strongHolder).GetFieldValue();
+    RefField<>& strongYoungSlot = Slot(strongHolder);
+    RefField<>& finalYoungSlot = Slot(finalHolder);
+    RefField<>& strongOldSlot = Slot(strongHolder, 1);
+    RefField<>& finalOldSlot = Slot(finalHolder, 1);
+    ZBarrier::WriteReference(strongHolder, strongYoungSlot, young);
+    ZBarrier::WriteReference(finalHolder, finalYoungSlot, young);
+    const zpointer stored = strongYoungSlot.GetFieldValue();
     std::atomic<unsigned> strongSlow{0}, finalSlow{0}, strongFast{0}, finalFast{0};
     std::atomic<unsigned> strongFollow{0}, finalFollow{0};
     std::atomic<bool> inputTask{false};
     ZBarrier::testFieldMarkResult = [&](ZBarrier::FieldMarkKind kind, RefField<>& field, zpointer observed, zaddress result) {
         if (inputTask.load()) {
-            if (&field == &Slot(strongHolder)) {
+            if (&field == &strongYoungSlot) {
                 ++strongSlow;
                 Expect(!ZPointer::is_mark_good(observed), "strong_young_slow_input_selected");
                 Expect(is_null(result), "strong_young_slow_no_object_result");
                 Expect(field.GetFieldValue() == observed, "strong_young_slow_does_not_heal");
-            } else if (&field == &Slot(finalHolder)) {
+            } else if (&field == &finalYoungSlot) {
+                const bool finalFastPath = ZPointer::is_load_good(observed) && ZPointer::is_marked_any_old(observed);
+                std::printf("P2_FINAL_SLOW_OBS load_good=%d marked_any_old=%d mark_good=%d result_null=%d kind=%d\n",
+                            ZPointer::is_load_good(observed), ZPointer::is_marked_any_old(observed),
+                            ZPointer::is_mark_good(observed), is_null(result), static_cast<int>(kind));
+                Expect(!finalFastPath, "final_young_slow_input_selected");
                 ++finalSlow;
-                Expect(!(ZPointer::is_load_good(observed) && ZPointer::is_marked_any_old(observed)), "final_young_slow_input_selected");
                 Expect(is_null(result), "final_young_slow_no_object_result");
                 Expect(field.GetFieldValue() == observed, "final_young_slow_does_not_heal");
-            } else if (&field == &Slot(strongHolder, 1)) {
+            } else if (&field == &strongOldSlot) {
                 Expect(to_object(result) == oldChild, "strong_old_slow_current_control");
                 if (ZPointer::is_mark_good(observed)) {
                     ++strongFast;
                     Expect(field.GetFieldValue() == observed, "strong_old_fast_unchanged");
                 }
-            } else if (&field == &Slot(finalHolder, 1)) {
+            } else if (&field == &finalOldSlot) {
                 Expect(to_object(result) == finalChild, "final_old_slow_current_control");
                 if (ZPointer::is_load_good(observed) && ZPointer::is_marked_any_old(observed)) {
                     ++finalFast;
@@ -607,12 +704,28 @@ extern "C" int p2SlowFieldInputExercise()
                 }
             }
         }
-        if (&field == &Slot(oldChild) && kind == ZBarrier::FieldMarkKind::Old) ++strongFollow;
-        if (&field == &Slot(finalChild) && kind == ZBarrier::FieldMarkKind::Finalizable) ++finalFollow;
+        if (&field == &Slot(oldChild) && kind == ZBarrier::FieldMarkKind::Old) {
+            ++strongFollow;
+            Expect(to_object(result) == oldSentinel &&
+                   Heap::page(raw(result))->is_strong_bit_set(result),
+                   "slow_old_strong_control_followed_by_product");
+        }
+        if (&field == &Slot(finalChild) && kind == ZBarrier::FieldMarkKind::Finalizable) {
+            ++finalFollow;
+            // Inspect the mark result here, before non-strong processing and
+            // relocation can reset the page's livemap (ZGC zPage.cpp:115-117).
+            std::printf("P2_FINAL_CONTROL same=%d live=%d strong=%d observed=%#zx result=%#zx\n",
+                        to_object(result) == finalSentinel,
+                        Heap::page(raw(result))->is_live_bit_set(result),
+                        Heap::page(raw(result))->is_strong_bit_set(result), raw(observed), raw(result));
+            Expect(to_object(result) == finalSentinel && IsFinalizable(finalSentinel),
+                   "slow_old_final_control_followed_by_product");
+        }
     };
     unsigned started = 0;
-    ZGeneration::testYoungMarkStarted = [&] {
-        if (!Heap::GetHeap().GetZGeneration(ZGenerationId::young).IsMajorRoots()) return;
+    ZGeneration::testMarkStartState = [&](ZGenerationId generation, MarkStartPoint point, const ZMark*) {
+        if (generation != ZGenerationId::old || point != MarkStartPoint::Complete) return;
+        if (!heap.young().IsMajorRoots()) return;
         ++started;
         Expect(Slot(strongHolder).GetFieldValue() == stored, "slow_input_original_store_word_preserved");
         auto* page = Heap::page(reinterpret_cast<MAddress>(young));
@@ -623,21 +736,24 @@ extern "C" int p2SlowFieldInputExercise()
         P2FieldInputTask task(collector, [&] {
             auto& youngStacks = Heap::GetHeap().young().MarkPtr()->Stacks();
             const size_t youngBefore = youngStacks.Population();
-            const size_t oldBefore = Heap::GetHeap().old().MarkPtr()->Stacks().Population();
             inputTask = true;
-            ZBarrier::MarkBarrierOnOldOopField(strongHolder, Slot(strongHolder), false);
-            ZBarrier::MarkBarrierOnOldOopField(finalHolder, Slot(finalHolder), true);
-            ZBarrier::MarkBarrierOnOldOopField(strongHolder, Slot(strongHolder, 1), false);
-            ZBarrier::MarkBarrierOnOldOopField(finalHolder, Slot(finalHolder, 1), true);
-            ZBarrier::MarkBarrierOnOldOopField(strongHolder, Slot(strongHolder, 1), false);
-            ZBarrier::MarkBarrierOnOldOopField(finalHolder, Slot(finalHolder, 1), true);
+            ZBarrier::MarkBarrierOnOldOopField(strongHolder, strongYoungSlot, false);
+            ZBarrier::MarkBarrierOnOldOopField(finalHolder, finalYoungSlot, true);
+            ZBarrier::MarkBarrierOnOldOopField(strongHolder, strongOldSlot, false);
+            ZBarrier::MarkBarrierOnOldOopField(finalHolder, finalOldSlot, true);
+            ZBarrier::MarkBarrierOnOldOopField(strongHolder, strongOldSlot, false);
+            ZBarrier::MarkBarrierOnOldOopField(finalHolder, finalOldSlot, true);
             inputTask = false;
             Expect(youngStacks.Population() == youngBefore, "slow_old_fields_do_not_publish_young_entries");
-            Expect(Heap::GetHeap().old().MarkPtr()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
         });
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()->run(&task);
         Expect(bit() == before, "slow_old_fields_do_not_write_young_bitmap");
-        Expect(strongSlow == 1 && finalSlow == 1, "slow_input_both_field_entries_reached");
+        // zMark.inline.hpp:16-47 (ZGC zMark.inline.hpp:48-87): mark_object
+        // early-returns when the target is already marked, so a mark-stack
+        // population assertion is not a valid invariant here. Real slow-path
+        // processing is proven by the slow counters and the follow checks below.
+        Expect(strongSlow == 1, "slow_input_strong_field_entry_reached");
+        Expect(finalSlow == 1, "slow_input_final_field_entry_reached");
         Expect(strongFast == 1 && finalFast == 1, "slow_input_legal_fast_controls_reached");
         if (failures.load() != 0) {
             std::printf("P2_SLOW_RESULT failures=%u target_stage=field_result\n", failures.load());
@@ -646,17 +762,129 @@ extern "C" int p2SlowFieldInputExercise()
         }
     };
     Heap::GetHeap().RequestGC(GC_REASON_HEU_SYNC, false);
-    ZGeneration::testYoungMarkStarted = nullptr;
+    ZGeneration::testMarkStartState = nullptr;
     ZBarrier::testFieldMarkResult = nullptr;
     Expect(started == 1, "slow_input_real_major_roots_phase_reached");
-    auto* strongPage = Heap::page(reinterpret_cast<MAddress>(oldSentinel));
-    auto* finalPage = Heap::page(reinterpret_cast<MAddress>(finalSentinel));
-    Expect(strongFollow != 0 && strongPage->is_strong_bit_set(from_object(oldSentinel)),
-           "slow_old_strong_control_followed_by_product");
-    Expect(finalFollow != 0 && IsFinalizable(finalSentinel),
-           "slow_old_final_control_followed_by_product");
+    Expect(strongFollow != 0, "slow_strong_control_result_observed");
+    Expect(finalFollow != 0, "slow_final_control_result_observed");
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::printf("P2_SLOW_RESULT failures=%u strong=%u final=%u strong_follow=%u final_follow=%u\n",
                 failures.load(), strongSlow.load(), finalSlow.load(), strongFollow.load(), finalFollow.load());
+    return failures.load();
+}
+
+// A real minor while the major driver is paused gives the nonmajor field an
+// unmarked old target. Comparing an already-marked target alone would miss a
+// spurious old mark (ZGC zBarrier.cpp:158-183). Hooks schedule; they seed no state.
+extern "C" int p2MinorDuringOldMarkExercise()
+{
+    alignas(TypeInfo) static unsigned char types[2][sizeof(TypeInfo)]{};
+    auto* edgeType = Type(types[0], true, 2);
+    auto* leafType = Type(types[1], false, 1);
+    auto& heap = Heap::GetHeap();
+    BaseObject* holder = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
+    BaseObject* target = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    BaseObject* control = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    ZBarrier::WriteReference(holder, Slot(holder), target);
+    ZBarrier::WriteReference(holder, Slot(holder, 1), control);
+    NativeSlot setup(zpointer::null);
+    ZBarrier::WriteStaticRef(setup, holder);
+    NativeSlot* setupRoots[] = { &setup };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+    heap.RequestGC(GC_REASON_USER, false);
+    holder = ZBarrier::ReadStaticRef(setup);
+    target = ZBarrier::ReadReference(holder, Slot(holder));
+    control = ZBarrier::ReadReference(holder, Slot(holder, 1));
+
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+    ConcurrentGCBreakpoints::AcquireControl();
+    Expect(ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"), "minor_during_old_product_breakpoint");
+    auto* child = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
+    ZBarrier::WriteReference(child, Slot(child), target);
+    NativeSlot childRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(childRoot, child);
+    NativeSlot* roots[] = { &childRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    unsigned selected = 0;
+    auto marked = [&](BaseObject* object) {
+        return Heap::page(reinterpret_cast<MAddress>(object))->is_strong_bit_set(from_object(object));
+    };
+    ZGeneration::testYoungMarkStarted = [&] {
+        Expect(!heap.young().IsMajorRoots() &&
+               heap.GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::Mark, "minor_during_old_real_phase_axis");
+        Expect(!Heap::page(reinterpret_cast<MAddress>(target))->IsYoungRegion(), "minor_during_old_real_old_target");
+        Expect(!marked(target) && !marked(control), "minor_during_old_unmarked_inputs");
+        bool observing = true;
+        ZBarrier::testFieldMarkResult = [&](ZBarrier::FieldMarkKind kind, RefField<>& field,
+                                          zpointer observed, zaddress result) {
+            if (observing && kind == ZBarrier::FieldMarkKind::Young && &field == &Slot(child)) {
+                ++selected;
+                Expect(!ZPointer::is_store_good(observed), "minor_during_old_slow_selected");
+                Expect(to_object(result) == target, "minor_during_old_returns_current");
+                Expect(!marked(target), "minor_during_old_does_not_mark_old");
+                Expect(ZPointer::is_store_good(field.GetFieldValue()), "minor_during_old_heals_store_good");
+            }
+        };
+        P2FieldInputTask task(heap, [&] {
+            ZBarrier::MarkBarrierOnYoungOopField(Slot(child));
+            ZBarrier::MarkBarrierOnOldOopField(holder, Slot(holder, 1), false);
+            Expect(marked(control), "minor_during_old_strong_positive_control");
+            // Retain the negative target before resuming the major, through the
+            // normal old field entry, after the nonmajor assertion has read it.
+            ZBarrier::MarkBarrierOnOldOopField(holder, Slot(holder), false);
+        });
+        heap.old().Workers()->run(&task);
+        observing = false;
+        ZBarrier::testFieldMarkResult = nullptr;
+    };
+    heap.RequestGC(GC_REASON_YOUNG, false);
+    ZGeneration::testYoungMarkStarted = nullptr;
+    Expect(selected == 1, "minor_during_old_field_result_observed");
+    std::printf("P2_MINOR_RESULT failures=%u selected=%u\n", failures.load(), selected);
+    std::fflush(stdout);
+    if (failures.load() != 0) std::_Exit(failures.load());
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    return failures.load();
+}
+
+// Advisor 105847Z: binding qualification is separate from the remset liveness
+// test. The negative child calls the same product registration with no binding.
+extern "C" int p2RemsetBindingExercise()
+{
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = Type(storage, false, 1);
+    auto& heap = Heap::GetHeap();
+    NativeSlot root(zpointer::null);
+    ZBarrier::WriteStaticRef(root, MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT));
+    NativeSlot* roots[] = { &root };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    heap.RequestGC(GC_REASON_USER, false);
+    auto* page = Heap::page(reinterpret_cast<MAddress>(ZBarrier::ReadStaticRef(root)));
+    Expect(!page->IsYoungRegion(), "binding_real_old_page");
+    if (failures.load() != 0) return failures.load();
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    Expect(child >= 0, "binding_negative_child_started");
+    if (child == 0) {
+        ZRemembered unbound;
+        unbound.register_found_old(page);
+        std::_Exit(0);
+    }
+    if (child > 0) {
+        int status = 0;
+        Expect(waitpid(child, &status, 0) == child, "binding_negative_child_waited");
+        Expect(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+               "binding_unbound_registration_rejected");
+    }
+    ZRemembered bound;
+    bound.bind(&Heap::page_table(), &generation_forwarding_table(Generation::Old), &heap.page_allocator());
+    bound.register_found_old(page);
+    ZRemsetTableIterator iter(&bound, false);
+    ZRemsetTableEntry entry{};
+    Expect(iter.next(&entry) && entry._page == page, "binding_registered_page_reaches_iterator");
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    std::printf("P2_BINDING_RESULT failures=%u\n", failures.load());
     return failures.load();
 }

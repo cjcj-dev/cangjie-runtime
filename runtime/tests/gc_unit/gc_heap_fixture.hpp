@@ -120,8 +120,8 @@ inline RememberedSet& HeapTestRemset()
 
 inline bool InitFwdTables(MAddress start, size_t size, size_t unit)
 {
-    Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().initialize(size, start, unit);
-    Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().initialize(size, start, unit);
+    generation_forwarding_table(Generation::Young).initialize(size, start, unit);
+    generation_forwarding_table(Generation::Old).initialize(size, start, unit);
     return true;
 }
 
@@ -137,7 +137,7 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
         }
         selector.add_selected_small(page, ZForwarding::nentries(page));
     }
-    Heap::GetHeap().GetZGeneration(generation).relocation_set().install(&selector);
+    (*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old()))).relocation_set().install(&selector);
     return true;
 }
 
@@ -264,7 +264,9 @@ struct GcHeapFixture {
     // initialize and use region0/region1 only.
     static void AdvanceGeneration(Generation generation)
     {
-        auto& cycle = Heap::GetHeap().GetZGeneration(generation);
+        // Construct the Heap before reading the generation singleton pointers.
+        (void)Heap::GetHeap();
+        auto& cycle = (*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old())));
         if (cycle.Snapshot().active) {
             cycle.End();
         }
@@ -294,11 +296,12 @@ struct GcHeapFixture {
         // ZHeap::is_in queries the allocated heap ranges, not the address envelope.
         Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * ZPage::UNIT_SIZE}});
 for (Generation generation : {Generation::Young, Generation::Old}) {
-            if (Heap::GetHeap().GetZGeneration(generation).Sequence() == 0) {
+            if ((*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old()))).Sequence() == 0) {
                 AdvanceGeneration(generation);
             }
         }
         ZPage::Initialize(kUnits, heapStart);
+        BindFixtureRemembered(Heap::GetHeap().page_allocator());
         region0 = ZPage::InitRegion(0, 1, role);
         region1 = ZPage::InitRegion(1, 1, ZPageType::small);
         PublishAllocatedPage(region0);
@@ -335,9 +338,9 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         // ZPage's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
         if (ZPage::heapStartAddress == heapStart &&
-            Heap::GetHeap().GetZGeneration(ZGenerationId::young).Snapshot().active) {
-            Heap::GetHeap().GetZGeneration(Generation::Young).reset_relocation_set();
-            Heap::GetHeap().GetZGeneration(Generation::Old).reset_relocation_set();
+            (*ZGeneration::young()).Snapshot().active) {
+            (*ZGeneration::young()).reset_relocation_set();
+            (*ZGeneration::old()).reset_relocation_set();
         }
         // ~ZPage: the page livemaps go with the synthetic heap.
         for (ZPage* region : {region0, region1}) {
@@ -425,6 +428,7 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         return marked;
     }
 
+    ZFixtureRememberedScope rememberedScope;
     std::unique_ptr<ZTestHeapMapping> heapMapping;
     void* mapping = nullptr;
     size_t mappedSize = 0;

@@ -41,10 +41,11 @@ private:
         int _current;
 
         FoundOld();
+        void initialize(size_t bits);
         void ensure();
         void flip();
         void clear_previous();
-        void register_page(ZPage* page);
+        void register_page(size_t index);
         CHeapBitMap* current_bitmap();
         CHeapBitMap* previous_bitmap();
     } _found_old;

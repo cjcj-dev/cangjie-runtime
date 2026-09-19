@@ -28,6 +28,7 @@
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include <vector>
 
 namespace MapleRuntime {
@@ -49,10 +50,50 @@ inline void PublishAllocatedPage(ZPage* page)
     Heap::alloc_page(page);
 }
 
+// Preserve the generation-owned remset and its indexing tables together.
+// A fixture must establish the same binding as Heap::Init before publishing
+// old pages (ZGC zRemembered.cpp:385-387, zPageTable.cpp:67-76).
+class ZFixtureRememberedScope {
+public:
+    ZFixtureRememberedScope()
+        : _allocator(&Heap::GetHeap().page_allocator()),
+          _pages(std::move(Heap::page_table())),
+          _young(std::move(generation_forwarding_table(Generation::Young))),
+          _old(std::move(generation_forwarding_table(Generation::Old))),
+          _remembered(std::move(Heap::GetHeap().remembered())) {}
+
+    ~ZFixtureRememberedScope()
+    {
+        Heap::page_table() = std::move(_pages);
+        generation_forwarding_table(Generation::Young) = std::move(_young);
+        generation_forwarding_table(Generation::Old) = std::move(_old);
+        Heap::GetHeap().remembered() = std::move(_remembered);
+        Heap::bind_test_page_allocator(_allocator);
+    }
+
+private:
+    RegionManager* _allocator;
+    ZPageTable _pages;
+    ZForwardingTable _young;
+    ZForwardingTable _old;
+    ZRemembered _remembered;
+};
+
+inline void BindFixtureRemembered(RegionManager& manager)
+{
+    auto& heap = Heap::GetHeap();
+    const auto& map = Heap::page_table().map();
+    const size_t size = map.size() * map.granule();
+    generation_forwarding_table(Generation::Young).initialize(size, map.base(), map.granule());
+    generation_forwarding_table(Generation::Old).initialize(size, map.base(), map.granule());
+    heap.remembered().bind(&Heap::page_table(), &generation_forwarding_table(Generation::Old), &manager);
+}
+
 inline void BindFixturePageTable(RegionManager& manager, size_t units)
 {
     Heap::GetHeap().install_page_table(manager.GetRegionHeapStart(), units * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
     Heap::bind_test_page_allocator(&manager);
+    BindFixtureRemembered(manager);
 }
 
 class ZAddressOffsetMaxSetter {
@@ -256,6 +297,7 @@ public:
   uintptr_t metadata() const { return reinterpret_cast<uintptr_t>(_metadata); }
 
 private:
+  ZFixtureRememberedScope _rememberedScope;
   ZTest::ZBackingLimitSetter _backingLimits;
   ZAddressOffsetMaxSetter _offsetMax;
   std::unique_ptr<ZVirtualMemoryManager> _virtual;

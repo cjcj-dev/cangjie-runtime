@@ -1,0 +1,92 @@
+scope=HEAD runtime/src; git grep -n -E WriteReference\(|StoreBarrier\(|on_new_phase_remember|register_with_remset|register_found_old|scan_and_follow|scan_field\(|RemsetBarrierOnOopField|MarkBarrierOnOldOopField|MarkBarrierOnYoungOopField|DiscoverFinalizableRoot|FollowPartialReferences|FollowObjectReferences|flip_promote; rc=0
+HEAD:runtime/src/CommonAlias.h:23:extern "C" MRT_EXPORT void CJ_MCC_AtomicWriteReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
+HEAD:runtime/src/CompilerCalls.cpp:332:        ZBarrier::WriteReference(plainObj, *plainField, plainRef);
+HEAD:runtime/src/CompilerCalls.cpp:424:extern "C" void MCC_AtomicWriteReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
+HEAD:runtime/src/CompilerCalls.cpp:427:    ZBarrier::AtomicWriteReference(obj, *field, ref, order);
+HEAD:runtime/src/CompilerCalls.cpp:1237:    ZBarrier::WriteReference(obj, obj->GetRefField(TYPEINFO_PTR_SIZE), static_cast<BaseObject*>(rawArrayObj));
+HEAD:runtime/src/CompilerCalls.cpp:1737:    ZBarrier::WriteReference(
+HEAD:runtime/src/CompilerCalls.h:40:extern "C" void MCC_AtomicWriteReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
+HEAD:runtime/src/Heap/z/zBarrier.cpp:262:void ZBarrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
+HEAD:runtime/src/Heap/z/zBarrier.cpp:292:void ZBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref)
+HEAD:runtime/src/Heap/z/zBarrier.cpp:296:    StoreBarrier(obj, field, false, weakReferent ? ReferenceStrength::Weak : ReferenceStrength::Strong);
+HEAD:runtime/src/Heap/z/zBarrier.cpp:329:void ZBarrier::NativeStoreBarrier(RefField<atomic>& field, bool heal)
+HEAD:runtime/src/Heap/z/zBarrier.cpp:348:    NativeStoreBarrier(field, false);
+HEAD:runtime/src/Heap/z/zBarrier.cpp:542:void ZBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order)
+HEAD:runtime/src/Heap/z/zBarrier.cpp:545:        NativeStoreBarrier(field, true);
+HEAD:runtime/src/Heap/z/zBarrier.cpp:549:    StoreBarrier(obj, field, true);
+HEAD:runtime/src/Heap/z/zBarrier.cpp:562:        NativeStoreBarrier(field, true);
+HEAD:runtime/src/Heap/z/zBarrier.cpp:565:    StoreBarrier(obj, field, true);
+HEAD:runtime/src/Heap/z/zBarrier.cpp:586:        NativeStoreBarrier(field, true);
+HEAD:runtime/src/Heap/z/zBarrier.cpp:589:    StoreBarrier(obj, field, true);
+HEAD:runtime/src/Heap/z/zBarrier.hpp:70:    static void MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable);
+HEAD:runtime/src/Heap/z/zBarrier.hpp:71:    static void MarkBarrierOnYoungOopField(RefField<>& field);
+HEAD:runtime/src/Heap/z/zBarrier.hpp:72:    static zaddress RemsetBarrierOnOopField(RefField<>& field);
+HEAD:runtime/src/Heap/z/zBarrier.hpp:78:    static void WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref);
+HEAD:runtime/src/Heap/z/zBarrier.hpp:92:    static void AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order);
+HEAD:runtime/src/Heap/z/zBarrier.hpp:184:    static void NativeStoreBarrier(RefField<atomic>& field, bool heal);
+HEAD:runtime/src/Heap/z/zBarrier.hpp:189:    static void StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
+HEAD:runtime/src/Heap/z/zBarrier.inline.hpp:122:inline void ZBarrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable)
+HEAD:runtime/src/Heap/z/zBarrier.inline.hpp:142:inline void ZBarrier::MarkBarrierOnYoungOopField(RefField<>& field)
+HEAD:runtime/src/Heap/z/zBarrier.inline.hpp:155:inline zaddress ZBarrier::RemsetBarrierOnOopField(RefField<>& field)
+HEAD:runtime/src/Heap/z/zGeneration.cpp:591:        Heap::GetHeap().remembered().scan_and_follow(Heap::GetHeap().young().MarkPtr());
+HEAD:runtime/src/Heap/z/zGeneration.cpp:772:    // In non-concurrent FYS, remset consume is scan_and_follow;
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1357:void ZGenerationYoung::flip_promote(ZPage* from_page, ZPage* to_page)
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1375:void ZGenerationYoung::register_flip_promoted(const ZArray<ZPage*>& pages)
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1377:    _relocation_set.register_flip_promoted(pages);
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1403:    ZRelocate::barrier_promoted_pages(*w, _relocation_set.flip_promoted_pages(),
+HEAD:runtime/src/Heap/z/zGeneration.hpp:147:    void register_with_remset(ZPage* page) { _remembered.register_found_old(page); }
+HEAD:runtime/src/Heap/z/zGeneration.hpp:237:    void flip_promote(ZPage* from_page, ZPage* to_page);
+HEAD:runtime/src/Heap/z/zGeneration.hpp:239:    void register_flip_promoted(const ZArray<ZPage*>& pages);
+HEAD:runtime/src/Heap/z/zMark.cpp:265:void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
+HEAD:runtime/src/Heap/z/zMark.cpp:299:        ZBarrier::MarkBarrierOnOldOopField(nullptr, slot, false);
+HEAD:runtime/src/Heap/z/zMark.cpp:370:                         [](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
+HEAD:runtime/src/Heap/z/zMark.cpp:1132:            ZBarrier::MarkBarrierOnYoungOopField(field);
+HEAD:runtime/src/Heap/z/zMark.cpp:1150:            MarkPartialArray::FollowPartialReferences(entry, visitSlot, publish);
+HEAD:runtime/src/Heap/z/zMark.cpp:1174:        MarkPartialArray::FollowObjectReferences(object, entry.finalizable(), visitSlot, publish);
+HEAD:runtime/src/Heap/z/zMark.cpp:1193:        MarkPartialArray::FollowPartialReferences(entry, [&entry](MAddress slot) {
+HEAD:runtime/src/Heap/z/zMark.cpp:1195:            ZBarrier::MarkBarrierOnOldOopField(nullptr, field, entry.finalizable());
+HEAD:runtime/src/Heap/z/zMark.cpp:1216:            ZBarrier::MarkBarrierOnOldOopField(obj, field, entry.finalizable());
+HEAD:runtime/src/Heap/z/zMark.cpp:1218:        MarkPartialArray::FollowObjectReferences(obj, entry.finalizable(), visitSlot, publish);
+HEAD:runtime/src/Heap/z/zMark.cpp:1536:void FollowObjectReferences(BaseObject* object, bool finalizable,
+HEAD:runtime/src/Heap/z/zMark.cpp:1554:void FollowPartialReferences(const MarkStackEntry& entry,
+HEAD:runtime/src/Heap/z/zMark.hpp:76:    static void DiscoverFinalizableRoot(NativeSlot& slot);
+HEAD:runtime/src/Heap/z/zMarkPartialArray.hpp:42:void FollowObjectReferences(BaseObject* object, bool finalizable,
+HEAD:runtime/src/Heap/z/zMarkPartialArray.hpp:44:void FollowPartialReferences(const MarkStackEntry& entry,
+HEAD:runtime/src/Heap/z/zPageAllocator.hpp:609:    // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
+HEAD:runtime/src/Heap/z/zPageTable.cpp:51:        Heap::GetHeap().GetZGeneration(ZGenerationId::young).register_with_remset(page);
+HEAD:runtime/src/Heap/z/zPageTable.cpp:70:        Heap::GetHeap().GetZGeneration(ZGenerationId::young).register_with_remset(new_page);
+HEAD:runtime/src/Heap/z/zRelocate.cpp:746:                                .relocation_set().flip_promoted_pages();
+HEAD:runtime/src/Heap/z/zRelocate.cpp:1943:        // is constructed over flip_promoted_pages() only (zRelocate.cpp:1304), the pages
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2364:                    // relocation set's _flip_promoted_pages (zRelocate.cpp:1355-1363
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2368:                    // flip_promote; the list keeps one member with the same
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2371:                    // change. flip_promote itself does no list work
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2374:                    // to newPage at the single promotion fork, before flip_promote.
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2378:                    ZGeneration::young()->flip_promote(prev, newPage);
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2383:            ZGeneration::young()->register_flip_promoted(promoted);
+HEAD:runtime/src/Heap/z/zRelocationSet.cpp:229:    destroy_and_clear(page_allocator, &_flip_promoted_pages);
+HEAD:runtime/src/Heap/z/zRelocationSet.cpp:233:void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)
+HEAD:runtime/src/Heap/z/zRelocationSet.cpp:238:        CHECK(!_flip_promoted_pages.contains(pages.at(i)));
+HEAD:runtime/src/Heap/z/zRelocationSet.cpp:239:        _flip_promoted_pages.push(pages.at(i));
+HEAD:runtime/src/Heap/z/zRelocationSet.hpp:30:    ZArray<ZPage*> _flip_promoted_pages;
+HEAD:runtime/src/Heap/z/zRelocationSet.hpp:44:    ZArray<ZPage*>* flip_promoted_pages() { return &_flip_promoted_pages; }
+HEAD:runtime/src/Heap/z/zRelocationSet.hpp:47:    void register_flip_promoted(const ZArray<ZPage*>& pages);
+HEAD:runtime/src/Heap/z/zRemembered.cpp:154:void ZRemembered::register_found_old(ZPage* page)
+HEAD:runtime/src/Heap/z/zRemembered.cpp:209:        page->oops_do_remembered([&](volatile zpointer* p) { result |= scan_field(p); });
+HEAD:runtime/src/Heap/z/zRemembered.cpp:211:        page->oops_do_remembered_in_live([&](volatile zpointer* p) { result |= scan_field(p); });
+HEAD:runtime/src/Heap/z/zRemembered.cpp:241:            result |= scan_field(p);
+HEAD:runtime/src/Heap/z/zRemembered.cpp:245:            result |= scan_field(reinterpret_cast<volatile zpointer*>(field));
+HEAD:runtime/src/Heap/z/zRemembered.cpp:307:bool ZRemembered::scan_field(volatile zpointer* p) const
+HEAD:runtime/src/Heap/z/zRemembered.cpp:310:    const zaddress addr = ZBarrier::RemsetBarrierOnOopField(field);
+HEAD:runtime/src/Heap/z/zRemembered.cpp:372:                _remembered->register_found_old(page);
+HEAD:runtime/src/Heap/z/zRemembered.cpp:395:void ZRemembered::scan_and_follow(ZMark* mark)
+HEAD:runtime/src/Heap/z/zRemembered.hpp:68:    void scan_and_follow(ZMark* mark);
+HEAD:runtime/src/Heap/z/zRemembered.hpp:70:    bool scan_field(volatile zpointer* p) const;
+HEAD:runtime/src/Heap/z/zRemembered.hpp:72:    void register_found_old(ZPage* page);
+HEAD:runtime/src/Heap/z/zStoreBarrierBuffer.cpp:104:void StoreBarrierBuffer::on_new_phase_remember(size_t i)
+HEAD:runtime/src/Heap/z/zStoreBarrierBuffer.cpp:112:        (void)ZBarrier::RemsetBarrierOnOopField(HeapSlotAt<>(p));
+HEAD:runtime/src/Heap/z/zStoreBarrierBuffer.cpp:151:        on_new_phase_remember(i);
+HEAD:runtime/src/Heap/z/zStoreBarrierBuffer.hpp:50:    void on_new_phase_remember(size_t i);
+HEAD:runtime/src/MacAlias.h:23:extern "C" MRT_EXPORT void CJ_MCC_AtomicWriteReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
+HEAD:runtime/src/ObjectModel/FieldInfo.cpp:106:        ZBarrier::WriteReference(instanceObj,
+HEAD:runtime/src/ObjectModel/MArray.inline.h:68:    ZBarrier::WriteReference(this, ref, mObj);
+HEAD:runtime/src/ObjectModel/MObject.inline.h:78:    ZBarrier::WriteReference(this, ref, value);
