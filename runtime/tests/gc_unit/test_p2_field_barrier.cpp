@@ -63,7 +63,7 @@ void AgePinnedToOld(BaseObject* object)
     if (page != nullptr && page->IsYoungRegion()) {
         page->reset(PageAge::old);
         page->remset_alloc();
-        Heap::GetHeap().old().register_with_remset(page);
+        Heap::GetHeap().young().register_with_remset(page);
     }
 }
 }
