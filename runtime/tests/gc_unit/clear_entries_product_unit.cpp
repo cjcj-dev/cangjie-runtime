@@ -2789,8 +2789,15 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     auto& collector = Heap::GetHeap();
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Young);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
+    std::fprintf(stderr, "PAGE579 before clone young=%u table=%p region=%p\n",
+                 static_cast<unsigned>(region->IsYoungRegion()),
+                 static_cast<void*>(Heap::page(region->GetRegionStart())),
+                 static_cast<void*>(region));
     ZPage* promoted = region->clone_for_promotion();
+    std::fprintf(stderr, "PAGE579 cloned to=%p\n", static_cast<void*>(promoted));
     ZGeneration::young()->flip_promote(region, promoted);
+    std::fprintf(stderr, "PAGE579 after flip table=%p\n",
+                 static_cast<void*>(Heap::page(region->GetRegionStart())));
     fixture.region0 = promoted;
     const Generation current = Heap::GetHeap().ObjectGeneration(fixture.obj0);
     std::fprintf(stderr, "PAGE579 promotion current=%u id=%u\n",
