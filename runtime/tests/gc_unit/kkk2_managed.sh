@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build ELF once per host arm, run finalizer/segmented/phase_entry N times, emit JSON.
-# Two target arms: H48 runtime vs candidate stained staging.
+# Build and run finalizer/segmented/phase_entry N times per host arm, emit JSON.
+# Target arm: stained; cjc compiler host: official/H48 runtime.
 # cjc itself always uses H48 host (0904); CANGJIE_HOME is sdkdepot colored SDK.
 # Usage: kkk2_managed.sh <runtime-sha>
 set -euo pipefail
@@ -12,7 +12,7 @@ LANE=${LANE:-/root/sym_cangjie_runtime_708_implement_r5740357995}
 N=${N:-3}
 SRCROOT=${SRCROOT:-$LANE/default}
 OUT=${OUT:-$LANE/managed-runs}
-COLORED_SDK=${COLORED_SDK:-/root/sdkdepot/945fe3e8f023-fa13e8d5c17b}
+COLORED_SDK=${COLORED_SDK:-/root/sdkdepot/90a09c15ba02-fa13e8d5c17b}
 H48_RT=${H48_RT:-/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative}
 STAINED_RT=${STAINED_RT:-$SRCROOT/build/runtime-staging/lib/x86_64_Release}
 export CANGJIE_HOME=${CANGJIE_HOME:-$COLORED_SDK}
@@ -60,6 +60,20 @@ mkdir -p "$OUT"
 JSON="$OUT/kkk2_managed.json"
 echo "kkk2_managed sha=$SHA n=$N srcroot=$SRCROOT out=$OUT home=$CANGJIE_HOME"
 
+# Keep compiler status separate from the wrapper's runtime/assertion status.
+# The proxy is inherited by all three existing wrappers through their CJC input.
+export MANAGED_REAL_CJC=${CJC:-$CANGJIE_HOME/bin/cjc}
+export CJC="$OUT/cjc-record-status"
+cat > "$CJC" <<'COMPILER'
+#!/usr/bin/env bash
+set +e
+"$MANAGED_REAL_CJC" "$@"
+rc=$?
+printf '%s\n' "$rc" >> "$GC_UNIT_OUT/compile.rc"
+exit "$rc"
+COMPILER
+chmod +x "$CJC"
+
 run_one() {
   local arm="$1"
   local name="$2"
@@ -67,6 +81,11 @@ run_one() {
   local i=1
   while [[ $i -le $N ]]; do
     local rundir="$OUT/${arm}_${name}_n$i"
+    # Each attempt starts without stale executables or status from an earlier run.
+    # Keep old evidence in its own directory when OUT is reused.
+    if [[ -e "$rundir" ]]; then
+      mv "$rundir" "$(mktemp -d "$OUT/${arm}_${name}_n$i.previous.XXXXXX")/run"
+    fi
     mkdir -p "$rundir"
     export GC_UNIT_OUT="$rundir"
     set +e
@@ -88,12 +107,15 @@ run_arm() {
   if [[ ! -d "$GC_UNIT" ]]; then
     GC_UNIT="$HERE"
   fi
-  run_one "$arm" finalizer "$GC_UNIT/run_finalizer_trigger.sh"
-  run_one "$arm" segmented "$GC_UNIT/run_segmented_array_managed.sh"
-  run_one "$arm" phase "$GC_UNIT/run_phase_entry_trigger.sh"
+  run_one "$arm" finalizer "$GC_UNIT/run_finalizer_trigger.sh" &
+  local finalizer_pid=$!
+  run_one "$arm" segmented "$GC_UNIT/run_segmented_array_managed.sh" &
+  local segmented_pid=$!
+  run_one "$arm" phase "$GC_UNIT/run_phase_entry_trigger.sh" &
+  local phase_pid=$!
+  wait "$finalizer_pid" "$segmented_pid" "$phase_pid"
 }
 
-run_arm h48 "$H48_RT"
 run_arm stained "$STAINED_RT"
 
 python3 - <<PY
@@ -101,7 +123,7 @@ import json, pathlib
 out = pathlib.Path("$OUT")
 n = int("$N")
 names = ["finalizer", "segmented", "phase"]
-arms = ["h48", "stained"]
+arms = ["stained"]
 result = {
     "runtime_sha": "$SHA",
     "runner_sha256": "$RUNNER_SHA256",
@@ -112,18 +134,47 @@ result = {
     "stained_rt": "$STAINED_RT",
     "arms": {},
     "failed": [],
+    "build_fail": [],
 }
+executables = {
+    "finalizer": ["finalizer_trigger"],
+    "segmented": ["segmented_array_managed"],
+    "phase": ["phase_entry_minor", "phase_entry_major"],
+}
+def is_elf(path):
+    if not path.is_file():
+        return False
+    with path.open("rb") as stream:
+        return stream.read(4) == b"\x7fELF"
+
 for arm in arms:
-    result["arms"][arm] = {"runs": {}}
+    result["arms"][arm] = {"runs": {}, "build_fail": []}
     for name in names:
         rcs = []
         for i in range(1, n + 1):
-            p = out / f"{arm}_{name}_n{i}" / "rc"
+            run = out / f"{arm}_{name}_n{i}"
+            p = run / "rc"
+            compile_status = run / "compile.rc"
+            compile_rcs = ([int(line) for line in compile_status.read_text().splitlines()]
+                           if compile_status.exists() else [])
+            missing = [binary for binary in executables[name] if not is_elf(run / binary)]
+            if any(rc != 0 for rc in compile_rcs):
+                build_failed = True
+            else:
+                build_failed = bool(missing)
+            if build_failed:
+                failure = {"arm": arm, "name": name, "iteration": i,
+                           "compile_rc": compile_rcs, "missing_elf": missing,
+                           "wrapper_rc": int(p.read_text().strip()) if p.exists() else None,
+                           "log": str(run / "wrapper.log")}
+                result["build_fail"].append(failure)
+                result["arms"][arm]["build_fail"].append(failure)
+                continue
             rcs.append(int(p.read_text().strip()) if p.exists() else -1)
         result["arms"][arm]["runs"][name] = rcs
-        ok = all(rc == 0 for rc in rcs)
+        ok = len(rcs) == n and all(rc == 0 for rc in rcs)
         result["arms"][arm][f"{name}_all_zero"] = ok
-        if not ok:
+        if any(rc != 0 for rc in rcs):
             result["failed"].append(f"{arm}/{name}")
     result["arms"][arm]["all_zero"] = all(
         result["arms"][arm][f"{name}_all_zero"] for name in names
