@@ -2790,7 +2790,6 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
     GC_EXPECT_TRUE(promoted->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
-    ZPage::RetireDescriptor(region);
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
 }
 
