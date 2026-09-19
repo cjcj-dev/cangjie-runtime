@@ -254,7 +254,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 
 }
 namespace {
-void CheckSavedRootColor(bool invisible)
+void CheckSavedRootColor(bool invisible, bool watermark = true)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
@@ -294,7 +294,7 @@ void CheckSavedRootColor(bool invisible)
     page->MarkForwardingDone();
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
-    const bool scanned = thread->GcPhaseEnum(false, StackWatermark::epoch_id());
+    const bool scanned = thread->GcPhaseEnum(false, watermark ? StackWatermark::epoch_id() : 0);
     const uintptr_t observed = raw(slot->LoadPlain());
     std::fprintf(stderr,
         "SAVED_ROOT_COLOR_TARGET invisible=%u scanned=%u saved=%#lx current=%#lx from=%p observed=%#lx expected=%#lx\n",
@@ -309,6 +309,8 @@ void CheckSavedRootColor(bool invisible)
 }
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorNativeFrameRoot) { CheckSavedRootColor(false); }
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorInvisibleRoot) { CheckSavedRootColor(true); }
+GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectNativeFrameRoot) { CheckSavedRootColor(false, false); }
+GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectInvisibleRoot) { CheckSavedRootColor(true, false); }
 
 GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
 {
