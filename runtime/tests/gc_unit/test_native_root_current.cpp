@@ -253,6 +253,63 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 }
 
 }
+namespace {
+void CheckSavedRootColor(bool invisible)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    RelocationReceiptTestAccess::BindNativeRootFixture(heap);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    ZPage* page = fx.region0;
+    page->reset(PageAge::eden);
+    heap.young().SetTenuringThresholdForTest(1);
+    BaseObject* dead = fx.PlaceObject(page->GetRegionStart());
+    BaseObject* from = fx.PlaceObject(page->GetRegionStart() + dead->GetSize());
+    BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(from) + from->GetSize());
+    page->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
+    Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    thread->SetManagedContext(false);
+    (void)thread->EnterSaferegion(false);
+    const size_t roots = thread->NativeFrameRootCount();
+    RootSlot* slot;
+    if (invisible) {
+        thread->PublishInvisibleRoot(from);
+        slot = reinterpret_cast<RootSlot*>(thread->GetGCData().invisibleRoot);
+    } else {
+        slot = thread->AddNativeFrameRoot(from);
+    }
+    const uintptr_t savedColor = thread->GetGCData().loadGoodMask;
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page}));
+    heap.young().set_phase(ZGenerationPhase::Relocate);
+    RelocationReceiptTestAccess::FlipNativeRootYoung(heap);
+    // Compact via the product implementation. Keep another live object at the
+    // old address so a color cut reaches the address assertion, not an invalid
+    // header. Neither the forwarding value nor the root result is fabricated.
+    auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
+    manager.CompactRegion(page);
+    page->MarkForwardingDone();
+    const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
+    const bool scanned = thread->GcPhaseEnum(false, StackWatermark::epoch_id());
+    const uintptr_t observed = raw(slot->LoadPlain());
+    std::fprintf(stderr,
+        "SAVED_ROOT_COLOR_TARGET invisible=%u scanned=%u saved=%#lx current=%#lx from=%p observed=%#lx expected=%#lx\n",
+        unsigned(invisible), unsigned(scanned), savedColor, ZPointerLoadGoodMask, from, observed, expected);
+    // Evaluate the product result before cleanup can consume it again.
+    GC_EXPECT_EQ(observed, expected);
+    GC_EXPECT_TRUE(scanned);
+    if (invisible) { thread->WithdrawInvisibleRoot(); }
+    thread->PopNativeFrameRootsTo(roots);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+}
+GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorNativeFrameRoot) { CheckSavedRootColor(false); }
+GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorInvisibleRoot) { CheckSavedRootColor(true); }
+
 GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
 {
     B09RuntimeFixture runtime;
