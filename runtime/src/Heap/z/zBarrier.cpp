@@ -355,6 +355,27 @@ BaseObject* ZBarrier::ReadStaticRef(NativeSlot& field)
     return LoadBarrier(nullptr, field, observed, ReferenceStrength::Strong);
 }
 
+// ZBarrier::mark, zBarrier.inline.hpp:742-751.
+template<bool resurrect, bool gcThread, bool follow, bool finalizable>
+void ZBarrier::Mark(zaddress addr)
+{
+    BaseObject* object = to_object(addr);
+    if (!Heap::IsHeapAddress(object)) {
+        return;
+    }
+    if (!Heap::page(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
+        Heap::GetHeap().old().MarkObjectIfActive<resurrect, gcThread, follow, finalizable>(addr);
+    } else {
+        Heap::GetHeap().young().MarkObjectIfActive<resurrect, gcThread, follow, false>(addr);
+    }
+}
+
+template void ZBarrier::Mark<false, false, true, false>(zaddress);
+template void ZBarrier::Mark<false, false, false, false>(zaddress);
+template void ZBarrier::Mark<true, false, true, false>(zaddress);
+template void ZBarrier::Mark<false, true, true, false>(zaddress);
+template void ZBarrier::Mark<false, true, false, false>(zaddress);
+
 // ZZBarrier::mark_slow_path, zBarrier.cpp:146-156.
 zaddress ZBarrier::MarkSlowPath(zaddress address)
 {

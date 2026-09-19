@@ -16,7 +16,6 @@
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zHeap.hpp"
-#include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zPage.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "securec.h"
@@ -120,21 +119,6 @@ inline void ZBarrier::MarkFinalizableBarrierOnRoot(NativeSlot& field)
 }
 
 // ZZBarrier::mark_barrier_on_old_oop_field, zBarrier.inline.hpp:626-660.
-// ZBarrier::mark, zBarrier.inline.hpp:742-751.
-template<bool resurrect, bool gcThread, bool follow, bool finalizable>
-inline void ZBarrier::Mark(zaddress addr)
-{
-    BaseObject* object = to_object(addr);
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    if (!Heap::page(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
-        Heap::GetHeap().old().MarkObjectIfActive<resurrect, gcThread, follow, finalizable>(addr);
-    } else {
-        Heap::GetHeap().young().MarkObjectIfActive<resurrect, gcThread, follow, false>(addr);
-    }
-}
-
 // ZBarrier::mark_barrier_on_oop_field, zBarrier.inline.hpp:591-623.
 inline void ZBarrier::MarkBarrierOnOopField(RefField<>& field, bool finalizable)
 {

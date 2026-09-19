@@ -252,6 +252,33 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 }
 
 }
+GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::eden);
+    fx.region1->reset(PageAge::old);
+    RelocationReceiptTestAccess::BindNativeRootFixture(Heap::GetHeap());
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+    Heap::GetHeap().old().Mark().Start();
+    Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
+    Heap::GetHeap().young().Mark().Start();
+    const size_t oldBefore = Heap::GetHeap().old().Mark().Stripes().Population();
+    const size_t youngBefore = Heap::GetHeap().young().Mark().Stripes().Population();
+    ZMark::PublishThreadRoot(fx.obj0, false, true);
+    ZMark::PublishThreadRoot(fx.obj1, true, true);
+    (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().old().Mark());
+    (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().young().Mark());
+    const size_t oldAfter = Heap::GetHeap().old().Mark().Stripes().Population();
+    const size_t youngAfter = Heap::GetHeap().young().Mark().Stripes().Population();
+    std::fprintf(stderr, "ROOT_TARGET_GEN_ASSERT young=%zu old=%zu\n",
+                 youngAfter - youngBefore, oldAfter - oldBefore);
+    GC_EXPECT_TRUE(youngAfter > youngBefore);
+    GC_EXPECT_TRUE(oldAfter > oldBefore);
+}
+
 GC_OTHER_VM_TEST(NativeRootCurrent, MinorPublication) { CheckNativeRoot(true); }
 GC_OTHER_VM_TEST(NativeRootCurrent, MajorSeed) { CheckNativeRoot(false); }
 GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)

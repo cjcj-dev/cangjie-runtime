@@ -718,6 +718,8 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
 {
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     GcHeapFixture heap;
+    heap.region0->reset(PageAge::eden);
+    heap.region1->reset(PageAge::old);
     MarkPublicationFixture marking;
     std::thread owner([&] {
         ThreadLocal::SetAllocBuffer(nullptr);
