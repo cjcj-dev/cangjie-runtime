@@ -154,14 +154,16 @@ void* AllocateThroughCycle(void*)
         return reinterpret_cast<void*>(2);
     }
     const size_t actual = buffer->GetRegion()->GetRegionSize();
-    const bool valid = computed > initial && computed <= maximum && actual == computed;
+    // #727 removes variable unit-sized backing pages; #730 owns sub-page TLAB resizing.
+    const bool valid = initial == ZPageSizeSmall && computed == ZPageSizeSmall &&
+                       actual == ZPageSizeSmall && computed <= maximum;
     std::fprintf(stderr, "TLAB_CYCLE initial=%zu computed=%zu refill=%zu maximum=%zu valid=%u\n",
                  initial, computed, actual, maximum, static_cast<unsigned>(valid));
     return reinterpret_cast<void*>(valid ? 0 : 3);
 }
 }
 
-GC_OTHER_VM_TEST(TLABUsage, AllocationCycleResizesNextRefill)
+GC_OTHER_VM_TEST(TLABUsage, AllocationCycleKeepsGranuleBacking)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;

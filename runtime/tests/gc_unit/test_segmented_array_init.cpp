@@ -436,7 +436,7 @@ uint32_t RequiredPhaseRootVisits(YieldGc gc, bool watermarkDone)
 }
 
 constexpr MIndex kLargeRefLength = static_cast<MIndex>(
-    (ZObjectSizeLimitSmall + MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
+    (ZPageSizeSmall * 2 + MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
 
 bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx)
 {
@@ -670,7 +670,10 @@ void* RunTwoGcReferenceCase(void*)
     size_t status = ctx.failures;
     status += ctx.gcRequests == 2 ? 0 : 1;
     status += ctx.firstSegmentYieldCount == 2 ? 0 : 1;
-    status += ctx.yieldCount == 4 ? 0 : 1;
+    const size_t segments = (kLargeRefLength * sizeof(void*) + MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE - 1) /
+                            MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE;
+    // Every payload segment yields once; only the first segment repeats after GC.
+    status += ctx.yieldCount == segments + 1 ? 0 : 1;
     status += ctx.publishCount == 1 && ctx.withdrawCount == 1 ? 0 : 1;
     status += array != nullptr && array == ctx.withdrawnArray &&
         !array->IsInvisibleObject() && AllSlotsAreRawNull(array) ? 0 : 1;
@@ -1158,7 +1161,7 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
     if (child == 0) {
         (void)setenv("cjProcessorNum", processorCount == 1 ? "1" : "2", 1);
         RuntimeParam param {};
-        param.heapParam.heapSize = 32 * 1024;
+        param.heapParam.heapSize = 512 * 1024;
         param.coParam.processorNum = processorCount;
         if (InitCJRuntime(&param) != E_OK) {
             _exit(100);
