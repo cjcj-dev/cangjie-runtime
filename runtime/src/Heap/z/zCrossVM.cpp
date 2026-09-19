@@ -92,7 +92,7 @@ CrossRefHandler ZCrossVM::GetCrossRefHandler(BaseObject *foreignProxy)
 
 void ZCrossVM::ResolveCycleRef()
 {
-#if defined (__OHOS__) || 0
+#if defined (__OHOS__)
     // Leave saferegion before acquiring either owner. The resolver owner is not
     // used by GC; it preserves the former single-resolver property while the
     // root-carrier owner is released around every managed callback.

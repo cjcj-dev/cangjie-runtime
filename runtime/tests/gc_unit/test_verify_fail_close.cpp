@@ -147,6 +147,37 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     ZVerify::BeforeRelocation(owner);
 }
 
+// zVerify.cpp:610-634: the real relocation-page entry checks the inactive
+// remembered face before copying any object. This is a phase-entry unit.
+GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
+{
+    if (!ZVerifyRemembered) {
+        GC_EXPECT_EQ(setenv("ZVerifyRemembered", "1", 1), 0);
+        RunInOtherVm("ZVerify.RelocationEntryRejectsInactiveRemset");
+        return;
+    }
+    GcVerifyFixture fixture;
+    fixture.PrepareOldSource();
+    auto* owner = forwarding_for_page(fixture.region0);
+    GC_EXPECT_TRUE(owner != nullptr);
+    fixture.region0->SetRegionRole(ZPageRole::From);
+    RememberedSet& remset = HeapTestRemset();
+    remset.Initialize(fixture.heapStart, 2 * ZPage::UNIT_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
+    // ZGC zVerify.cpp:549-553: both remembered bits mean intentionally unremembered.
+    HeapSlotAt<>(slot).StoreColoured(to_zpointer(raw(StoreGoodPointer(nullptr)) | ZPointerRememberedMask));
+    // Empty is the positive control; then place one real field in the inactive face.
+    ZVerify::BeforeRelocation(owner);
+    remset.Record(slot);
+    const bool currentActive = Heap::GetHeap().OldActiveRemsetIsCurrent();
+    if (currentActive) { remset.FlipForMinor(); }
+    ExpectSceneAbort(currentActive ? "previous remset bits should be cleared" :
+                                    "current remset bits should be cleared", [&] {
+        RegionManager manager;
+        manager.ForwardRegion<Generation::Old>(fixture.region0);
+    });
+}
+
 // zVerify.cpp:131-138 distinguishes raw null from metadata-bearing null.
 GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
 {

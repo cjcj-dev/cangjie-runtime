@@ -40,6 +40,11 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
     DLOG(REGION, "alloc pinned region @[0x%zx+%zu, 0x%zx) unit idx %zu type %u", region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetUnitIdx(), 0u);
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testPinnedPageAcquired != nullptr) {
+        testPinnedPageAcquired(region);
+    }
+#endif
     LockPageMutexInSaferegion(regionListMutex);
     addr = AllocPinnedLocked(size);
     if (addr == 0) {
@@ -89,7 +94,6 @@ inline void RegionManager::EnlistFullThreadLocalRegion(ZPage* region) noexcept
     // IsTraceRegion() is always false (zPage.hpp): the deleted trace-cache arm
     // was dead; the page becomes an ordinary full region.
     region->SetRegionRole(ZPageRole::RecentFull);
-
 }
 
 inline void RegionManager::RemoveThreadLocalRegion(ZPage* region) noexcept

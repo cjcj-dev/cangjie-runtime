@@ -59,6 +59,10 @@
 
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+std::function<void()> ZGeneration::testOldMarkStarted;
+std::function<void()> ZGeneration::testYoungMarkCompleted;
+#endif
 
 static const ZStatSubPhase PCollectLargeGarbage("Collect large garbage", ZGenerationId::old);
 static const ZStatSubPhase PEnumRootsUpdateOldPointersWithin("enum roots & update old pointers within", ZGenerationId::old);
@@ -542,6 +546,9 @@ bool ZGenerationYoung::mark_end()
     WorkStack& workStack = youngWorkStack;
     const bool markEndSucceeded = ZMark::TryEndYoungMark(workStack, &youngConcWindow);
     if (markEndSucceeded) {
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (ZGeneration::testYoungMarkCompleted) { ZGeneration::testYoungMarkCompleted(); }
+#endif
 
 
         Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
@@ -1106,6 +1113,9 @@ void ZGenerationOld::concurrent_mark()
     {
         ZStatTimerOld zstatTimer(PTraceLiveObjectsUpdateOldPointersInRefFields);
         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (ZGeneration::testOldMarkStarted) ZGeneration::testOldMarkStarted();
+#endif
         Mark().MarkFollow(false);
         ZBreakpoint::AtBeforeMarkingCompleted();
         if (ZAbort::should_abort()) {
