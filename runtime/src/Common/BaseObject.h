@@ -87,6 +87,7 @@ public:
     }
 
 protected:
+    friend class ZObjArrayAllocator;
     // SetClassInfo turns a managed address into a valid "BaseObject"
     // can only be invoked when object initialised in order to avoid competetion.
     // caller should ensure that address is valid (not doing null check here)

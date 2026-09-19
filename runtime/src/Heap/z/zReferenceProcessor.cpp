@@ -20,7 +20,7 @@
 #include "Heap/z/zUncommitter.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -685,7 +685,7 @@ bool FinalizerProcessor::EnqueueFinalizableReference(BaseObject* candidate)
     auto it = finalizers.begin();
     while (it != finalizers.end()) {
         BaseObject* obj = LoadFinalizerGood(*it);
-        if (obj == nullptr || HeapFiller::IsFiller(obj)) {
+        if (obj == nullptr || CollectedHeap::is_filler_object(obj)) {
             weakStorage.Release(&*it);
             it = finalizers.erase(it);
             continue;
@@ -757,7 +757,7 @@ void FinalizerProcessor::ProcessFinalizableList()
         ScopedObjectAccess soa;
         CHECK_DETAIL(ExceptionManager::GetPendingException() == nullptr, "should not exist pending exception");
         BaseObject* finalizeObjAddr = LoadFinalizerGood(*itor);
-        if (finalizeObjAddr == nullptr || HeapFiller::IsFiller(finalizeObjAddr)) {
+        if (finalizeObjAddr == nullptr || CollectedHeap::is_filler_object(finalizeObjAddr)) {
             std::lock_guard<std::mutex> l(listLock);
             strongStorage.Release(&*itor);
             itor = workingFinalizables.erase(itor);

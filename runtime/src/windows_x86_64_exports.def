@@ -1551,8 +1551,6 @@ EXPORTS
     _ZN12MapleRuntime17ScopedAllocBufferD1Ev @1827
     _ZN12MapleRuntime17ScopedAllocBufferD2Ev @1828
     _ZN12MapleRuntime17TYPEINFO_PTR_SIZEE @1848 DATA
-    _ZN12MapleRuntime18AggregateAllocator10DeallocateEPvy @1850
-    _ZN12MapleRuntime18AggregateAllocator8InstanceENS_13AllocationTagE @1851
     _ZN12MapleRuntime18AllocBufferManager17RemoveAllocBufferERNS_11AllocBufferE @1852
     _ZN12MapleRuntime18AllocBufferManagerD2Ev @1853
     _ZN12MapleRuntime18FinalizerProcessor11WaitStartedEv @1872
@@ -1850,11 +1848,6 @@ EXPORTS
     _ZN12MapleRuntime8TypeInfo9IsSubTypeEPS0_ @2254
     _ZN12MapleRuntime8WriteLogEbNS_7LogTypeEPKcz @2255
     _ZN12MapleRuntime8WriteStrEiPKcb @2256
-    _ZN12MapleRuntime9Allocator12NewAllocatorEv @2257
-    _ZN12MapleRuntime9Allocator18InitAyncAllocationEv @2258
-    _ZN12MapleRuntime9AllocatorC2Ev @2259
-    _ZN12MapleRuntime9AllocatorD0Ev @2260
-    _ZN12MapleRuntime9AllocatorD2Ev @2261
     _ZN12MapleRuntime9FrameInfo15ResolveProcInfoEv @2282
     _ZN12MapleRuntime9FrameInfoD0Ev @2283
     _ZN12MapleRuntime9FrameInfoD2Ev @2284
@@ -2513,7 +2506,6 @@ EXPORTS
     _ZTVN12MapleRuntime8BaseFileE @3190 DATA
     _ZTVN12MapleRuntime8RegTableE @3192 DATA
     _ZTVN12MapleRuntime8TableAPIE @3193 DATA
-    _ZTVN12MapleRuntime9AllocatorE @3194 DATA
     _ZTVN12MapleRuntime9FrameInfoE @3196 DATA
     _ZTVN12MapleRuntime9MethodMapE @3197 DATA
     _ZTVN12MapleRuntime9SlotTableE @3198 DATA

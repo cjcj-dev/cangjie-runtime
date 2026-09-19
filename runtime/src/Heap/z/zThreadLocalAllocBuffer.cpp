@@ -3,7 +3,7 @@
 // with Runtime Library Exception.
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Mutator/Mutator.h"
 namespace MapleRuntime {
 AllocBuffer* AllocBuffer::GetOrCreateAllocBuffer()
@@ -79,7 +79,7 @@ void AllocBuffer::RetireTLAB(bool gcWaste)
 {
     if (tlab.start == 0) { return; }
     const size_t waste = tlab.end - tlab.top;
-    HeapFiller::ZeroAndFill(tlab.top, waste);
+    CollectedHeap::fill_with_dummy_object(tlab.top, tlab.top + waste, true);
     if (gcWaste) { tlabStatistics.gcWaste += waste; }
     else { tlabStatistics.refillWaste += waste; }
     tlab = TLAB{};

@@ -65,7 +65,7 @@
 #include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zRootsIterator.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -263,7 +263,7 @@ void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
 
 OopStorage& Heap::GetExportRootStorage() { return exportRootsTable->RootStorage(); }
 
-Allocator& Heap::GetAllocator() { return *_allocation_adapter; }
+RegionSpace& Heap::GetAllocator() { return *_allocation_adapter; }
 
 size_t Heap::GetMaxCapacity() const { return _page_allocator.GetHeapCapacity(); }
 

@@ -38,7 +38,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -231,6 +231,23 @@ size_t FreeRegionManager::ReleaseMarkQuarantineToDirty()
     return count;
 }
 
+// ZGC zPageAllocator.cpp:764-785: no virtual-memory or physical-memory work.
+bool FreeRegionManager::ZPartition::claim_capacity_fast_medium(PageMemory& memory)
+{
+    CHECK(ZPageSizeMediumEnabled);
+    const ZVirtualMemory vmem = cache.remove_contiguous_power_of_2(ZPageSizeMediumMin, ZPageSizeMediumMax);
+    if (vmem.is_null()) { return false; }
+    memory.index = FreeRegionManager::IndexOf(vmem);
+    memory.size = vmem.size();
+    memory.partition = numaId;
+    memory.committed = true;
+    memory.partialMappings.clear();
+    memory.virtualClaimed = true;
+    memory.harvestedBytes = 0;
+    used += memory.size;
+    return true;
+}
+
 // ZPartition::claim_capacity / claim_from_cache_or_increase_capacity,
 // zPageAllocator.cpp:702-762.
 bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory, ZAllocationFlags flags)
@@ -241,21 +258,8 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory, ZAllocat
     for (size_t visited = 0; visited < partitions.size(); ++visited) {
         const size_t selected = (nextPartition + visited) % partitions.size();
         Partition& partition = *partitions[selected];
-        // ZPartition::claim_capacity_fast_medium, zPageAllocator.cpp:764-785.
-        // Only mapped cache memory is eligible; never increase capacity here.
         if (flags.fast_medium()) {
-            CHECK(ZPageSizeMediumEnabled);
-            const ZVirtualMemory vmem = partition.cache.remove_contiguous_power_of_2(
-                ZPageSizeMediumMin, ZPageSizeMediumMax);
-            if (vmem.is_null()) { continue; }
-            memory.index = IndexOf(vmem);
-            memory.size = vmem.size();
-            memory.partition = static_cast<uint32_t>(selected);
-            memory.committed = true;
-            memory.partialMappings.clear();
-            memory.virtualClaimed = true;
-            memory.harvestedBytes = 0;
-            partition.used += memory.size;
+            if (!partition.claim_capacity_fast_medium(memory)) { continue; }
             nextPartition = (selected + 1) % partitions.size();
             return true;
         }
@@ -646,17 +650,7 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
     if (requestGc) {
         bool anotherWave = false;
         do {
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-            if (allocationStallBeforeWaveTestHook) {
-                allocationStallBeforeWaveTestHook(*this);
-            }
-#endif
             const uint64_t waveBoundary = allocationStallQueue.CaptureWaveBoundary();
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-            if (allocationStallGcTestHook) {
-                allocationStallGcTestHook(*this);
-            } else
-#endif
             {
                 Heap::GetHeap().RequestGC(GC_REASON_OOM, false);
             }
@@ -668,11 +662,6 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
     // zFuture.inline.hpp:47-53: a Java thread waits with a safepoint check;
     // here the mutator enters its saferegion before ZFuture::get (I3/I4).
     ScopedEnterSaferegion enterSaferegion(false);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    if (allocationStallBeforeWaitTestHook) {
-        allocationStallBeforeWaitTestHook(*this);
-    }
-#endif
     const bool satisfied = request.Wait();
     // Pair with the posting owner before the caller destroys its request.
     // zPageAllocator.cpp:1454-1464.

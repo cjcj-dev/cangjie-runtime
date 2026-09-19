@@ -321,6 +321,7 @@ private:
         size_t currentMaxCapacity{ 0 };
         explicit ZPartition(uint32_t id) : numaId(id) {}
         size_t available() const { return currentMaxCapacity - used - claimed; }
+        bool claim_capacity_fast_medium(PageMemory& memory);
     };
     using Partition = ZPartition;
     void InsertCommitted(Partition& partition, size_t index, size_t count);
@@ -529,9 +530,6 @@ public:
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
     // P14: the handshake pause must serialize pinned installation with retirement/seqnum.
     std::mutex& PinnedAllocationMutex() { return pinnedAllocationMutex; }
-#if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT static void (*testPinnedPageAcquired)(ZPage*);
-#endif
 
     // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
     // independent of the thread-local requested bytes and retirement waste.
@@ -558,10 +556,6 @@ public:
     void SatisfyStalledAllocations();
     bool IsAllocationStalling() const { return allocationStallQueue.IsStalling(); }
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    using AllocationStallTestHook = std::function<void(RegionManager&)>;
-    MRT_EXPORT void SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
-                                                AllocationStallTestHook requestGc,
-                                                AllocationStallTestHook beforeWait);
     MRT_EXPORT size_t PendingStalledAllocations() const;
     MRT_EXPORT size_t EnqueuedStalledAllocations() const;
     MRT_EXPORT size_t DequeuedStalledAllocations() const;
@@ -905,9 +899,6 @@ private:
     AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
     size_t pageAllocatorUsed{ 0 };
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    AllocationStallTestHook allocationStallBeforeWaveTestHook;
-    AllocationStallTestHook allocationStallGcTestHook;
-    AllocationStallTestHook allocationStallBeforeWaitTestHook;
 #endif
     uintptr_t regionHeapStart = 0; // the address of first region to allocate object
     uintptr_t regionHeapEnd = 0;

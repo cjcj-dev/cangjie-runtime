@@ -52,3 +52,15 @@ bool RegionSpace::IsHeapObject(MAddress addr) const
 
 
 } // namespace MapleRuntime
+
+#include "Base/ImmortalWrapper.h"
+namespace MapleRuntime {
+// PagePool
+PagePool& PagePool::Instance() noexcept
+{
+    static ImmortalWrapper<PagePool> instance("PagePool");
+    return *instance;
+}
+
+
+}

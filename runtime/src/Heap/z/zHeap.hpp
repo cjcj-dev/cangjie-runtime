@@ -49,7 +49,6 @@ class ZPageTable;
 class OopStorage;
 class ObjectClosure;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
-class Allocator;
 class RegionSpace;
 class AllocBuffer;
 class FinalizerProcessor;
@@ -92,7 +91,7 @@ public:
     void DumpBeforeGC();
     void DumpAfterGC();
 #endif
-    Allocator& GetAllocator();
+    RegionSpace& GetAllocator();
     RegionManager& page_allocator();
     const RegionManager& page_allocator() const;
     static void bind_test_page_allocator(RegionManager* manager);

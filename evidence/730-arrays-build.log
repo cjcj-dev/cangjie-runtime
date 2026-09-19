@@ -1,0 +1,14 @@
+# kkk2_build_two lane=sym_cangjie_runtime_730_implement_r5746042754-arrays head=12bb2293ea90e37bb19933936870c39d347257fa dirty_files=62 source_sha256=897971cc11a01e34…
+== default configure_rc=0 build_rc=2 wall=19s
+-- first errors (default):
+default-build.log:3910:../../../../runtime/src/Heap/z/zObjArrayAllocator.cpp:33:59: error: 'SetClassInfo' is a protected member of 'MapleRuntime::BaseObject'
+-- SO (default):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+== testable configure_rc=0 build_rc=2 wall=19s
+-- first errors (testable):
+testable-build.log:3218:../../../../runtime/src/Heap/z/zObjArrayAllocator.cpp:33:59: error: 'SetClassInfo' is a protected member of 'MapleRuntime::BaseObject'
+-- SO (testable):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+-- logs: /root/sym_cangjie_runtime_730_implement_r5746042754-arrays/{default,testable}-{configure,build}.log

@@ -13,6 +13,7 @@
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include <atomic>
+#include "Heap/shared/collectedHeap.hpp"
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;
@@ -21,7 +22,7 @@ class ZDriverMajor;
 class ZDriverMinor;
 class ZStat;
 
-class ZCollectedHeap {
+class ZCollectedHeap : public CollectedHeap {
 public:
     static ZCollectedHeap* heap();
     ZCollectedHeap();
