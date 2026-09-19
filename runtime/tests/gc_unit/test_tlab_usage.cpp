@@ -86,21 +86,25 @@ GC_TEST(TLABUsage, NativeFrameDerivedScan)
 }
 #endif
 
-// ZPageAllocator::increase_used_generation/decrease_used_generation:
-// occupancy changes by the page extent, independently of the TLAB maximum.
+// zPageAllocator.cpp:1375-1393: occupancy is increase/decrease_used_generation
+// and promote_used, not ZPage::reset()'s youngRegionBytes side counter.
 GC_OTHER_VM_TEST(TLABUsage, YoungOccupancyUsesActualExtent)
 {
-    GcHeapFixture fixture;
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    ZPage* twoUnits = ZPage::InitRegion(2, 2, ZPageType::small);
-    const size_t before = manager.GetYoungAllocatedSize();
-    fixture.region0->reset(PageAge::eden);
-    twoUnits->reset(PageAge::eden);
-    GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - before, 3 * ZPage::UNIT_SIZE);
-    twoUnits->reset(PageAge::old);
-    GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - before, ZPage::UNIT_SIZE);
-    fixture.region0->reset(PageAge::old);
-    GC_EXPECT_EQ(manager.GetYoungAllocatedSize(), before);
+    const size_t beforeYoung = manager.used_generation(ZGenerationId::young);
+    const size_t beforeOld = manager.used_generation(ZGenerationId::old);
+    const size_t small = ZPage::UNIT_SIZE;
+    const size_t two = 2 * ZPage::UNIT_SIZE;
+    manager.increase_used_generation(ZGenerationId::young, small + two);
+    GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - beforeYoung, small + two);
+    manager.decrease_used_generation(ZGenerationId::young, two);
+    manager.increase_used_generation(ZGenerationId::old, two);
+    GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - beforeYoung, small);
+    GC_EXPECT_EQ(manager.used_generation(ZGenerationId::old) - beforeOld, two);
+    manager.decrease_used_generation(ZGenerationId::young, small);
+    manager.decrease_used_generation(ZGenerationId::old, two);
+    GC_EXPECT_EQ(manager.GetYoungAllocatedSize(), beforeYoung);
+    GC_EXPECT_EQ(manager.used_generation(ZGenerationId::old), beforeOld);
 }
 
 #if defined(__linux__)
