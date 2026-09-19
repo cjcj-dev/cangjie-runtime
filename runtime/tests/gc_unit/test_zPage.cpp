@@ -64,6 +64,9 @@ GC_TEST(ZPage, AllocObjectRespectsAlignment)
 
 namespace MapleRuntime {
 extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
+extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems);
+extern "C" void* MCC_AcquireRawData(ArrayRef array, bool* isCopy);
+extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr);
 }
 namespace {
 struct GranuleAllocationResult {
@@ -149,6 +152,10 @@ struct ForwardingSelectionResult {
     size_t retired{0};
     size_t receipts{0};
     bool verifyRetirement{false};
+    bool verifyPin{false};
+    uintptr_t pinExpected{0};
+    uintptr_t pinObserved{0};
+    bool pinCopied{true};
     size_t usedBefore{0};
     size_t usedAfter{0};
     size_t mappedBefore{0};
@@ -231,11 +238,28 @@ void* SelectRealLivePages(void* context)
         snapshot(result.usedAfter, result.mappedAfter, result.generationAfter, result.mappedGenerationAfter);
         // Real mutator allocation must be able to consume the returned source
         // range. Read forwarding results above before reusing that range.
+        alignas(TypeInfo) static unsigned char byteStorage[sizeof(TypeInfo)]{};
+        alignas(TypeInfo) static unsigned char arrayStorage[sizeof(TypeInfo)]{};
+        auto* byteType = reinterpret_cast<TypeInfo*>(byteStorage);
+        auto* arrayType = reinterpret_cast<TypeInfo*>(arrayStorage);
+        byteType->SetType(TypeKind::TYPE_KIND_UINT8);
+        byteType->SetInstanceSize(1);
+        arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+        arrayType->SetComponentTypeInfo(byteType);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(byteStorage), sizeof(byteStorage));
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(arrayStorage), sizeof(arrayStorage));
         for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && result.reused == 0; ++i) {
-            const ObjRef object = MCC_NewObject(type, 4096);
+            const ObjRef object = result.verifyPin ? MCC_NewArray8(arrayType, 4096) : MCC_NewObject(type, 4096);
             const uintptr_t address = reinterpret_cast<uintptr_t>(object);
             for (size_t j = 0; j < result.roots; ++j) {
                 result.reused += (address >> ZGranuleSizeShift) == (starts[j] >> ZGranuleSizeShift);
+            }
+            if (result.verifyPin && result.reused != 0) {
+                auto* array = static_cast<MArray*>(object);
+                result.pinExpected = reinterpret_cast<uintptr_t>(array->ConvertToCArray());
+                void* raw = MCC_AcquireRawData(array, &result.pinCopied);
+                result.pinObserved = reinterpret_cast<uintptr_t>(raw);
+                MCC_ReleaseRawData(array, raw);
             }
         }
     }
@@ -334,5 +358,29 @@ GC_OTHER_VM_TEST(ZGenerationPhases, OldCycleFlipsRemapMaskOnce)
                  result.before, result.after, result.before ^ ZPointerRemappedMask, result.relocate);
     GC_EXPECT_EQ(result.after, result.before ^ ZPointerRemappedMask);
     GC_EXPECT_TRUE(result.relocate);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// ZGC jni.cpp:2868-2886 resolves before pinning. The real allocator reuses a
+// retired source range while its forwarding remains published for old colours.
+GC_OTHER_VM_TEST(ZJNICritical, NewArrayOnReusedSourceKeepsDecodedAddress)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    result.verifyRetirement = true;
+    result.verifyPin = true;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "PIN_DECODED_TARGET expected=%#lx observed=%#lx reused=%zu copied=%d\n",
+                 result.pinExpected, result.pinObserved, result.reused, result.pinCopied);
+    GC_EXPECT_EQ(result.pinObserved, result.pinExpected);
+    GC_EXPECT_TRUE(result.pinExpected != 0 && result.reused > 0);
+    GC_EXPECT_FALSE(result.pinCopied);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
