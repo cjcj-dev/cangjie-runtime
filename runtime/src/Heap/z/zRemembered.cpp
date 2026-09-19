@@ -156,14 +156,12 @@ void ZRemembered::clear_found_old_previous_set()
 void ZRemembered::register_found_old(ZPage* page)
 {
     CHECK(!page->IsYoungRegion());
-    if (_page_table == nullptr) {
-        _page_table = &Heap::page_table();
-        if (_page_table->map().Ready()) {
-            _found_old.initialize(_page_table->map().size());
-        }
-    }
-    CHECK(_page_table != nullptr);
+    _page_table = &Heap::page_table();
     const auto& map = _page_table->map();
+    CHECK(map.Ready());
+    if (_found_old._bits != map.size()) {
+        _found_old.initialize(map.size());
+    }
     zoffset offset;
     CHECK(map.offset_for_address(page->GetRegionStart(), &offset));
     _found_old.register_page(static_cast<size_t>(untype(offset)) / map.granule());
