@@ -370,7 +370,6 @@ private:
 #include "Heap/z/zValue.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zRelocate.hpp"
-#include "Heap/Allocator/RegionList.h"
 #include "securec.h"
 #include "Heap/Allocator/SlotList.h"
 
@@ -527,7 +526,7 @@ public:
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
     // P14: the handshake pause must serialize pinned installation with retirement/seqnum.
-    std::mutex& PinnedAllocationMutex() { return recentPinnedRegionList.GetListMutex(); }
+    std::mutex& PinnedAllocationMutex() { return pinnedAllocationMutex; }
 #if defined(MRT_TESTABLE_INTERNALS)
     MRT_EXPORT static void (*testPinnedPageAcquired)(ZPage*);
 #endif
@@ -618,7 +617,7 @@ public:
     // already have moved the region to recent-full; never steal its links.
     void EnlistCompactedRegionForAllocator(ZPage* region);
     // Put a region the forward path finished with in place back where a collection-set builder
-    // will find it; CompactRegion leaves it on tlRegionList, which no builder walks.
+    // will find it; CompactRegion leaves it thread-local, which no builder walks.
     void RehomeCompactedInPlaceRegion(ZPage* region);
     void CompactRegion(ZPage* region);
 
@@ -686,10 +685,7 @@ public:
     void AssemblePinnedGarbageCandidates(bool collectAll);
     YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor);
 
-    void MergeRawPointerPinnedRegions()
-    {
-        oldPinnedRegionList.MergeRegionList(rawPointerPinnedRegionList);
-    }
+    void MergeRawPointerPinnedRegions();
 
     void CollectFromSpaceGarbage();
 
@@ -723,7 +719,6 @@ public:
     // can be reclaimed.
     size_t ExemptFromRegions();
     // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).
-    void ReassembleFromSpace();
 
     void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
                           bool skipKnownEmptyRegions = false) const;
@@ -731,23 +726,16 @@ public:
 
     size_t GetUsedRegionSize() const { return GetUsedUnitCount() * ZPage::UNIT_SIZE; }
 
-    size_t GetRecentAllocatedSize() const;
-
-    size_t GetSurvivedSize() const;
-
     size_t GetUsedUnitCount() const;
 
     size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
-    size_t GetGarbageUnitCount() const { return garbageRegionList.GetUnitCount(); }
     // Address space not yet backed by committed capacity (ZGC: current_max_capacity - capacity).
     size_t GetInactiveUnitCount() const { return (GetHeapCapacity() - GetCommittedCapacity()) / ZPage::UNIT_SIZE; }
 
     size_t GetActiveUnitCount() const { return GetCommittedCapacity() / ZPage::UNIT_SIZE; }
 
-    inline size_t GetLargeObjectSize() const
-    {
-        return oldLargeRegionList.GetAllocatedSize() + recentLargeRegionList.GetAllocatedSize();
-    }
+    // Diagnostic total over large pages, from the page table (no page list).
+    size_t GetLargeObjectSize() const;
 
     size_t GetAllocatedSize() const;
 
@@ -773,13 +761,6 @@ public:
         return usedPerGeneration[id == ZGenerationId::young ? 0 : 1].load(std::memory_order_relaxed);
     }
 
-    inline size_t GetFromSpaceSize() const { return fromRegionList.GetAllocatedSize(); }
-
-    inline size_t GetPinnedSpaceSize() const
-    {
-        return oldPinnedRegionList.GetAllocatedSize() + recentPinnedRegionList.GetAllocatedSize();
-    }
-
     size_t GetLargeObjectThreshold() const { return largeObjectThreshold; }
 
     void ClearFreePinnedSlots() { freePinnedSlotLists.Clear(); }
@@ -795,7 +776,7 @@ public:
         lastCollectionRate.store(rate, std::memory_order_release);
     }
 
-    void MergeRawPointerRegions(RegionList& smallSizeRegionList, RegionList& largeSizeRegionList);
+    void MergeRawPointerRegions(std::vector<ZPage*>& smallSizeRegions, std::vector<ZPage*>& largeSizeRegions);
 
     void SetMaxUnitCountForRegion(size_t regionSize);
     void SetMaxUnitCountForPinnedRegion(size_t regionSize);
@@ -803,11 +784,10 @@ public:
     void SetGarbageThreshold(double garbageThreshold);
 
     void HandleTraceRegions();
+    // Stamps `role` on the page when the matching trace cache is active.
+    bool TryStampTraceRegion(ZPage* region, ZPageRole role);
 
     void PrepareTrace();
-
-    // twoflags: walk live region lists and clear notRelocatableThisCycle.
-    void ClearNotRelocatableThisCycleFlags();
 
 
     bool RelocateClaimedPage(ZPage* region);
@@ -815,9 +795,6 @@ public:
 
 
 
-
-    template<Generation G>
-    void PrepareFromRegionList();
 
     // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
     // Concurrent mark (TRACE+CLEAR_SATB) has finished; plain strong refs into quarantined
@@ -855,9 +832,9 @@ private:
     // (Mutator.h:172-186, Mutator.cpp:229-280) and the collector would then wait for that mutex
     // forever. Wait in try-lock rounds so every saferegion transition happens unlocked, exactly
     // as FreeRegionManager::TakeRegion() does for the free unit trees (FreeRegionManager.h:45-92).
-    static void LockRegionListInSaferegion(std::mutex& listMutex);
+    static void LockPageMutexInSaferegion(std::mutex& listMutex);
 
-    // caller must own recentPinnedRegionList's list mutex, and must not release it in between.
+    // caller must own the pinned allocation mutex, and must not release it in between.
     uintptr_t AllocPinnedLocked(size_t size);
 
     static const size_t MAX_UNIT_COUNT_PER_REGION;
@@ -880,24 +857,18 @@ private:
     std::unique_ptr<ZPhysicalMemoryManager> physicalMemory;
     FreeRegionManager freeRegionManager;
 
-    // region lists actually represent life cycle of regions.
-    // each region must belong to only one list at any time.
-
-    // regions for movable (small-sized) objects.
-    // regions for thread-local allocation.
-    // regions in this list are already used for allocation but not full yet, i.e. local regions.
-    RegionList tlRegionList;
-
-    // recentFullRegionList is a list of regions which is already full, thus escape current gc.
-    RegionList recentFullRegionList;
-
-    // if region is allocated during gc trace phase, it is called a trace-region, it is recorded here when it is full.
-    RegionCache fullTraceRegions;
-
-    // fromRegionList is a list of full regions waiting to be collected (i.e. for forwarding).
-    // region type must be FROM_REGION.
-    RegionList fromRegionList;
+    // #710: page lifecycle identity lives in ZPage's role word and the page
+    // table (zPageTable.hpp:57-77); there are no page lists. The relocation
+    // set (zRelocationSet.hpp) is the from-space work source.
     ZRelocateQueue relocateQueue;
+    // Serializes pinned-page installation with retirement/seqnum (P14), and
+    // pinned TLAB staging handoff.
+    std::mutex pinnedAllocationMutex;
+    // RegionCache activations (PrepareTrace/HandleTraceRegions): while active,
+    // freshly filled pages are stamped FullTrace/LargeTrace instead of
+    // RecentFull/RecentLarge.
+    bool fullTraceCacheActive{ false };
+    bool largeTraceCacheActive{ false };
     ZWorkers* relocationWorkers{ nullptr };
     bool relocationStarted{ false };
     bool relocationDrained{ false };
@@ -931,35 +902,6 @@ private:
     AllocationStallTestHook allocationStallGcTestHook;
     AllocationStallTestHook allocationStallBeforeWaitTestHook;
 #endif
-    RegionList ghostFromRegionList;
-
-    // regions exempted by ExemptFromRegions, which will not be moved during current GC.
-    RegionList unmovableFromRegionList;
-
-    // cache for fromRegionList after forwarding.
-    RegionList garbageRegionList;
-
-    // regions for pinned (small-sized) objects.
-    // region lists for small-sized pinned objects which are not be moved during concurrent gc, but
-    // may be moved during compaction.
-    RegionList recentPinnedRegionList;
-    RegionList oldPinnedRegionList;
-
-    // region lists for small-sized raw-pointer objects (i.e. future, monitor)
-    // which can not be moved ever (even during compaction).
-    RegionList rawPointerPinnedRegionList;
-
-    // regions for large-sized objects.
-    // large region is recorded here after large object is allocated.
-    RegionList oldLargeRegionList;
-
-    // if large region is allocated when gc is not running, it is recorded here.
-    RegionList recentLargeRegionList;
-
-    // if large region is allocated during gc trace phase, it is called a trace-region,
-    // it is recorded here when it is full.
-    RegionCache largeTraceRegions;
-
     uintptr_t regionHeapStart = 0; // the address of first region to allocate object
     uintptr_t regionHeapEnd = 0;
 

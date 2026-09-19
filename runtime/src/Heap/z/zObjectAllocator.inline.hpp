@@ -17,9 +17,9 @@ inline uintptr_t RegionManager::AllocPinnedLocked(size_t size)
 
 inline uintptr_t RegionManager::AllocPinned(size_t size)
 {
-    std::mutex& regionListMutex = recentPinnedRegionList.GetListMutex();
+    std::mutex& regionListMutex = pinnedAllocationMutex;
 
-    LockRegionListInSaferegion(regionListMutex);
+    LockPageMutexInSaferegion(regionListMutex);
     uintptr_t addr = AllocPinnedLocked(size);
     regionListMutex.unlock();
     if (addr != 0) {
@@ -45,13 +45,15 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
         testPinnedPageAcquired(region);
     }
 #endif
-    LockRegionListInSaferegion(regionListMutex);
+    LockPageMutexInSaferegion(regionListMutex);
     addr = AllocPinnedLocked(size);
     if (addr == 0) {
         // Acquisition may handshake; refresh this empty page under the same
         // mutex that spans old retirement and sequence advancement.
         region->ResetPageSequence();
-        recentPinnedRegionList.PrependRegionLocked(region);
+        // zObjectAllocator.hpp: the pinned allocation page is a per-allocator
+        // pointer, not a list member; the role word carries the lifecycle.
+        region->SetRegionRole(ZPageRole::RecentPinned);
         Heap::GetHeap().object_allocator().allocator(PageAge::old)->pinnedPage.store(
             region, std::memory_order_release);
         addr = region->Alloc(size);
@@ -78,9 +80,9 @@ inline uintptr_t RegionManager::AllocLarge(size_t size, bool clearPayload)
          region->GetRegionSize(), region->GetRegionEnd(), region->GetUnitIdx(), 0u);
     uintptr_t addr = region->Alloc(size);
 
-    if (largeTraceRegions.TryPrependRegion(region)) {
+    if (TryStampTraceRegion(region, ZPageRole::LargeTrace)) {
     } else {
-        recentLargeRegionList.PrependRegion(region);
+        region->SetRegionRole(ZPageRole::RecentLarge);
     }
 
     return addr;
@@ -89,22 +91,16 @@ inline uintptr_t RegionManager::AllocLarge(size_t size, bool clearPayload)
 inline void RegionManager::EnlistFullThreadLocalRegion(ZPage* region) noexcept
 {
     MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
-    if (region->IsTraceRegion()) {
-        if (!fullTraceRegions.TryPrependRegion(region)) {
-            recentFullRegionList.PrependRegion(region);
-            RecentFullAccounting::Enqueue(1, region->GetUnitCount());
-            (void)region;
-        }
-        return;
-    }
-    recentFullRegionList.PrependRegion(region);
+    // IsTraceRegion() is always false (zPage.hpp): the deleted trace-cache arm
+    // was dead; the page becomes an ordinary full region.
+    region->SetRegionRole(ZPageRole::RecentFull);
     RecentFullAccounting::Enqueue(1, region->GetUnitCount());
 }
 
 inline void RegionManager::RemoveThreadLocalRegion(ZPage* region) noexcept
 {
     MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
-    tlRegionList.DeleteRegion(region);
+    region->SetRegionRole(ZPageRole::None);
 }
 } // namespace MapleRuntime
 #endif

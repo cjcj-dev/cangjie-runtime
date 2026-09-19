@@ -50,7 +50,7 @@ inline size_t RegionManager::CollectRegion(ZPage* region)
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd(), 0u);
         region->LockWriteRegion();
-        garbageRegionList.PrependRegion(region);
+        region->SetRegionRole(ZPageRole::Garbage);
         region->UnlockWriteRegion();
 
         if (region->IsLargeRegion()) {
@@ -75,63 +75,61 @@ inline void RegionManager::ReclaimGarbageRegions()
         SatisfyStalledAllocations();
     }
 
-inline size_t RegionManager::GetRecentAllocatedSize() const
-    {
-        return recentFullRegionList.GetAllocatedSize() + recentLargeRegionList.GetAllocatedSize() +
-            recentPinnedRegionList.GetAllocatedSize();
-    }
-
-inline size_t RegionManager::GetSurvivedSize() const
-    {
-        return fromRegionList.GetAllocatedSize() + oldPinnedRegionList.GetAllocatedSize() +
-            oldLargeRegionList.GetAllocatedSize();
-    }
-
 inline size_t RegionManager::GetUsedUnitCount() const
     {
-        return
-            fromRegionList.GetUnitCount() + unmovableFromRegionList.GetUnitCount() +
-            recentFullRegionList.GetUnitCount() + oldLargeRegionList.GetUnitCount() +
-            recentLargeRegionList.GetUnitCount() + oldPinnedRegionList.GetUnitCount() +
-            recentPinnedRegionList.GetUnitCount() + rawPointerPinnedRegionList.GetUnitCount() +
-            largeTraceRegions.GetUnitCount() + fullTraceRegions.GetUnitCount() +
-            tlRegionList.GetUnitCount();
+        // zPageAllocator.cpp:1311: used is the allocator's page-granular
+        // counter, not a list sum.
+        return pageAllocatorUsed / ZPage::UNIT_SIZE;
     }
 
 
 
-inline void RegionManager::MergeRawPointerRegions(RegionList& smallSizeRegionList, RegionList& largeSizeRegionList)
+inline void RegionManager::MergeRawPointerRegions(std::vector<ZPage*>& smallSizeRegions,
+                                                      std::vector<ZPage*>& largeSizeRegions)
     {
-        const size_t smallRegions = smallSizeRegionList.GetRegionCount();
-        const size_t smallUnits = smallSizeRegionList.GetUnitCount();
-        recentFullRegionList.MergeRegionList(smallSizeRegionList);
-        RecentFullAccounting::Enqueue(smallRegions, smallUnits);
-        recentLargeRegionList.MergeRegionList(largeSizeRegionList);
+        size_t smallUnits = 0;
+        for (ZPage* region : smallSizeRegions) {
+            region->SetRegionRole(ZPageRole::RecentFull);
+            smallUnits += region->GetUnitCount();
+        }
+        RecentFullAccounting::Enqueue(smallSizeRegions.size(), smallUnits);
+        smallSizeRegions.clear();
+        for (ZPage* region : largeSizeRegions) {
+            region->SetRegionRole(ZPageRole::RecentLarge);
+        }
+        largeSizeRegions.clear();
     }
 
 inline void RegionManager::HandleTraceRegions()
     {
-        fullTraceRegions.DeactivateRegionCache();
-        const size_t traceRegions = fullTraceRegions.GetRegionCount();
-        const size_t traceUnits = fullTraceRegions.GetUnitCount();
-        recentFullRegionList.MergeRegionList(fullTraceRegions);
+        // #710: trace-stamped pages become ordinary full/large pages; the
+        // stamp is a role word, so the merge is a page-table walk
+        // (zPageTable.hpp:57-77), not a list splice.
+        fullTraceCacheActive = false;
+        largeTraceCacheActive = false;
+        size_t traceRegions = 0;
+        size_t traceUnits = 0;
+        ZPage::SafeDestroyScope scope;
+        ZPageTableIterator iter(&ZPageTable::heap_table());
+        for (ZPage* region; iter.next(&region);) {
+            const ZPageRole role = region->GetRegionRole();
+            if (role == ZPageRole::FullTrace) {
+                region->SetRegionRole(ZPageRole::RecentFull);
+                ++traceRegions;
+                traceUnits += region->GetUnitCount();
+            } else if (role == ZPageRole::LargeTrace) {
+                region->SetRegionRole(ZPageRole::RecentLarge);
+            }
+        }
         RecentFullAccounting::Enqueue(traceRegions, traceUnits);
-
-        largeTraceRegions.DeactivateRegionCache();
-        recentLargeRegionList.MergeRegionList(largeTraceRegions);
-
-        tlRegionList.ClearTraceRegionFlag();
-        recentPinnedRegionList.ClearTraceRegionFlag();
-        oldPinnedRegionList.ClearTraceRegionFlag();
     }
 
 inline void RegionManager::PrepareTrace()
     {
-        fullTraceRegions.ActivateRegionCache();
-        largeTraceRegions.ActivateRegionCache();
-        // twoflags: Assemble just filtered previous-cycle stamps; clear so this TRACE
-        // re-stamps only regions that allocate after this mark start.
-        ClearNotRelocatableThisCycleFlags();
+        fullTraceCacheActive = true;
+        largeTraceCacheActive = true;
+        // twoflags: notRelocatableThisCycle stamps do not exist as list state;
+        // is_allocating (zPage.inline.hpp:180-186) is the only filter.
     }
 
 inline void RegionManager::ReleaseMarkQuarantine()
@@ -152,77 +150,54 @@ inline void RegionManager::ReleaseMarkQuarantine()
     template <typename F>
 inline void RegionManager::VisitAllManagedRegionsForProbe(F&& visitor)
     {
-        auto walk = [&visitor](const char* name, RegionList& list) {
-            list.VisitAllRegions([&visitor, name](ZPage* region) { visitor(region, name); });
-        };
-        walk("tlRegionList", tlRegionList);
-        walk("recentFullRegionList", recentFullRegionList);
-        walk("fromRegionList", fromRegionList);
-        ghostFromRegionList.VisitAllGhostRegions(
-            [&visitor](ZPage* region) { visitor(region, "ghostFromRegionList"); });
-        walk("unmovableFromRegionList", unmovableFromRegionList);
-        walk("garbageRegionList", garbageRegionList);
-        walk("recentPinnedRegionList", recentPinnedRegionList);
-        walk("oldPinnedRegionList", oldPinnedRegionList);
-        walk("rawPointerPinnedRegionList", rawPointerPinnedRegionList);
-        walk("oldLargeRegionList", oldLargeRegionList);
-        walk("recentLargeRegionList", recentLargeRegionList);
-        walk("fullTraceRegions", fullTraceRegions);
-        walk("largeTraceRegions", largeTraceRegions);
+        // #710: managed pages are the page table's non-free pages; the probe
+        // names the role word instead of the deleted list.
+        ZPage::SafeDestroyScope scope;
+        ZPageTableIterator iter(&ZPageTable::heap_table());
+        for (ZPage* region; iter.next(&region);) {
+            visitor(region, RegionRoleName(region->GetRegionRole()));
+        }
     }
 
 inline ZPage* RegionManager::TakeReclaimableGarbageRegion(size_t* gatedBytes)
     {
-        std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
+        // #710: garbage pages are page-table entries with the Garbage role.
+        // The claim is a role CAS (zPageTable.hpp:57-77 walk); the routedest
+        // defence-in-depth raw-pointer check is unchanged.
         ZPage* candidate = nullptr;
-        size_t bytes = 0;
-        for (ZPage* region = garbageRegionList.GetHeadRegion(); region != nullptr;
-             region = region->GetNextRegion()) {
-            if (candidate == nullptr && region->GetRawPointerObjectCount() == 0) {
-                // routedest: defence in depth. A held region should never have reached
-                // garbageRegionList — the two Assemble gates and the two young gates refuse
-                // it first — so a non-zero count at this site means one of those was
-                // bypassed. This one chokepoint covers both reclaim schedules that are not
-                // phase-driven at once: the mutator garbage fast path (TakeRegion) and the
-                // finalizer, whose ReclaimGarbageRegions loops on this function.
+        ZPage::SafeDestroyScope scope;
+        ZPageTableIterator iter(&ZPageTable::heap_table());
+        for (ZPage* region; iter.next(&region);) {
+            if (region->GetRegionRole() != ZPageRole::Garbage || region->GetRawPointerObjectCount() != 0) {
+                continue;
+            }
+            ZPageRole expect = ZPageRole::Garbage;
+            if (region->CASRegionRole(expect, ZPageRole::None)) {
                 candidate = region;
+                break;
             }
         }
-        if (candidate != nullptr) {
-            RemoveRegionLocked(&garbageRegionList, candidate);
-        }
         if (gatedBytes != nullptr) {
-            *gatedBytes = bytes;
+            *gatedBytes = 0;
         }
         return candidate;
     }
 
 inline bool RegionManager::TryTakeGarbageRegionAfterDispel(ZPage* target)
     {
-        std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
-        for (ZPage* region = garbageRegionList.GetHeadRegion(); region != nullptr;
-             region = region->GetNextRegion()) {
-            if (region == target) {
-                CHECK_DETAIL(region->IsGarbageRegion(),
-                             "TryTakeGarbageRegionAfterDispel region=%p type=%u "
-                             "(garbage list still names a non-GARBAGE region)",
-                             region, static_cast<unsigned>(0u));
-                // routedest: refuse a held region here too, so it is neither quarantined nor
-                // reclaimed. Same defence-in-depth role as TakeReclaimableGarbageRegion.
-                if (region->GetRawPointerObjectCount() > 0) {
-                    return false;
-                }
-                RemoveRegionLocked(&garbageRegionList, region);
-                return true;
-            }
+        CHECK_DETAIL(target == nullptr || target->IsGarbageRegion(),
+                     "TryTakeGarbageRegionAfterDispel region=%p type=%u "
+                     "(garbage role still names a non-GARBAGE region)",
+                     target, static_cast<unsigned>(0u));
+        if (target == nullptr || target->GetRawPointerObjectCount() > 0) {
+            return false;
         }
-        return false;
+        ZPageRole expect = ZPageRole::Garbage;
+        return target->CASRegionRole(expect, ZPageRole::None);
     }
 
 inline size_t RegionManager::GetGatedGarbageBytes()
     {
-        std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
-        (void)garbageRegionList;
         return 0;
     }
 
@@ -249,15 +224,19 @@ namespace detail {
 // A single algorithm body serves both compile-time shapes below.  The default
 // product inlines it through ForwardTask::Execute; the testable shape calls it
 // from the exported out-of-line Execute instantiated in RegionManager.cpp.
+// #710: ordinary work comes from the relocation set's parallel iterator
+// (zRelocate.cpp:1088-1153 ZRelocate::relocate shape), not a page list.
 template<Generation G>
-inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromRegionList)
+inline void ExecuteForwardTask(RegionManager& regionManager, ZRelocationSet* relocationSet)
 {
+    ZRelocationSetParallelIterator iter(relocationSet);
     while (true) {
         // zRelocate.cpp:1193-1203: serve a mutator's requested receipt
         // before advancing the ordinary relocation iterator.
         ZRelocateQueue::Selection selected =
-            regionManager.GetZRelocateQueue().SelectBeforeOrdinary([&fromRegionList]() -> void* {
-                return fromRegionList.TakeHeadRegion();
+            regionManager.GetZRelocateQueue().SelectBeforeOrdinary([&iter]() -> void* {
+                ZForwarding* forwarding = nullptr;
+                return iter.next(&forwarding) ? static_cast<void*>(forwarding) : nullptr;
             });
         if (!selected) {
             selected = regionManager.GetZRelocateQueue().SynchronizePoll();
@@ -269,15 +248,14 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
             }
         }
         if (!selected.is_request()) {
-            ZPage* region = static_cast<ZPage*>(selected.ordinary);
-            regionManager.ForwardClaimedPage<G>(region, forwarding_for_page(region));
+            ZForwarding* forwarding = static_cast<ZForwarding*>(selected.ordinary);
+            regionManager.ForwardClaimedPage<G>(forwarding->page(), forwarding);
             continue;
         }
 
         ZPage* region = static_cast<ZPage*>(selected.owner());
-        // If an ordinary iterator already removed the page, its worker will
-        // lose the forwarding claim. This claimant still owns the page task.
-        (void)fromRegionList.TryDeleteRegion(region);
+        // The request claimant owns the page task even when an ordinary
+        // iterator already claimed the forwarding (the claim fails there).
         regionManager.ForwardClaimedPage<G>(region,
             forwarding_for_page(region), true);
     }
@@ -291,8 +269,8 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
 template<Generation G>
 class ForwardTask : public ZTask {
 public:
-    ForwardTask(RegionManager& manager, RegionList& fromSpace)
-        : ZTask("ZRelocateTask"), regionManager(manager), fromRegionList(fromSpace) {}
+    ForwardTask(RegionManager& manager, ZRelocationSet* relocationSet)
+        : ZTask("ZRelocateTask"), regionManager(manager), relocationSet(relocationSet) {}
 
     ~ForwardTask() override = default;
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -300,13 +278,13 @@ public:
 #else
     __attribute__((visibility("hidden"))) void work() override
     {
-        detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
+        detail::ExecuteForwardTask<G>(regionManager, relocationSet);
     }
 #endif
 
 private:
     RegionManager& regionManager;
-    RegionList& fromRegionList;
+    ZRelocationSet* relocationSet;
 };
 
 

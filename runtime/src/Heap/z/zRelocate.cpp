@@ -1274,7 +1274,7 @@ namespace MapleRuntime {
 template<Generation G>
 void ForwardTask<G>::work()
 {
-    detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
+    detail::ExecuteForwardTask<G>(regionManager, relocationSet);
 }
 #endif
 
@@ -1300,7 +1300,8 @@ void RegionManager::DrainForwardFromRegions()
         ForwardFromRegions<G>();
         return;
     }
-    ForwardTask<G> task(*this, fromRegionList);
+    ForwardTask<G> task(*this, &Heap::GetHeap().GetZGeneration(
+        G == Generation::Young ? ZGenerationId::young : ZGenerationId::old).relocation_set());
     relocationWorkers->run(&task);
 }
 
@@ -1326,7 +1327,7 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
     const ZGenerationId statId = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
     ZGeneration& statGeneration = Heap::GetHeap().GetZGeneration(statId);
     if (inPlace) {
-        (void)fromRegionList.TryDeleteRegion(region);
+        region->SetRegionRole(ZPageRole::None);
         owner->set_in_place();
         NoteInPlaceRelocated(region);
         CompactRegion(region);
@@ -1398,13 +1399,15 @@ void RegionManager::ParkUnmovableFromRegion(ZPage* region)
 {
     // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
     // would DecCounts a second time ("error count 1-0 16-0"). Only a GARBAGE node
-    // can still sit on garbageRegionList (the CHECK at
+    // can still carry the Garbage role (the CHECK at
     // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
     // rehome below so the garbage list cannot name a non-GARBAGE region.
-    if (region != nullptr && region->IsGarbageRegion()) {
-        garbageRegionList.TryDeleteRegion(region);
+    // #710: role transition replaces the list re-home; idempotent like the
+    // deleted list unlink under the list lock.
+    (void)region;
+    if (region != nullptr) {
+        region->SetRegionRole(ZPageRole::UnmovableFrom);
     }
-    unmovableFromRegionList.PrependRegion(region);
 }
 
 void RegionManager::ExemptFromRegion(ZPage* region)
@@ -1428,16 +1431,19 @@ bool IncompleteRouteUnpublished(ZPage* region)
 void RegionManager::FinishIncompleteFromRegions(ZGenerationId generation)
 {
     // zRelocate.cpp:1041-1047: relocate() does not return with a half-copied page.
+    // #710: cycle-end stragglers are found by page-table walk over the from /
+    // unmovable-from / garbage roles (zPageTable.hpp:57-77), not by list walks.
     std::vector<ZPage*> snap;
-    auto push = [&snap](ZPage* region) {
-        if (region != nullptr) {
-            snap.push_back(region);
+    {
+        ZPage::SafeDestroyScope scope;
+        ZPageTableIterator iter(&ZPageTable::heap_table());
+        for (ZPage* region; iter.next(&region);) {
+            const ZPageRole role = region->GetRegionRole();
+            if (role == ZPageRole::From || role == ZPageRole::UnmovableFrom || role == ZPageRole::Garbage) {
+                snap.push_back(region);
+            }
         }
-    };
-    ghostFromRegionList.VisitAllGhostRegions(push);
-    fromRegionList.VisitAllRegions(push);
-    unmovableFromRegionList.VisitAllRegions(push);
-    garbageRegionList.VisitAllRegions(push);
+    }
 
     std::sort(snap.begin(), snap.end());
     snap.erase(std::unique(snap.begin(), snap.end()), snap.end());
@@ -1457,14 +1463,14 @@ void RegionManager::FinishIncompleteFromRegions(ZGenerationId generation)
             continue;
         }
         if (region->IsGarbageRegion()) {
-            garbageRegionList.TryDeleteRegion(region);
+            region->SetRegionRole(ZPageRole::None);
             ExemptFromRegion(region);
             ++kept;
             continue;
         }
         const bool wasFrom = region->IsFromRegion();
         if (wasFrom) {
-            fromRegionList.TryDeleteRegion(region);
+            region->SetRegionRole(ZPageRole::None);
         }
         const bool canForward = region->IsLoneFromRegion() ||
             (region->IsThreadLocalRegion() && (region->IsRoutingState() || region->IsCompacted()));
@@ -1480,7 +1486,7 @@ void RegionManager::FinishIncompleteFromRegions(ZGenerationId generation)
             }
         }
         if (region->IsFromRegion()) {
-            fromRegionList.TryDeleteRegion(region);
+            region->SetRegionRole(ZPageRole::None);
         }
         if (region->IsLoneFromRegion() || region->IsFromRegion() || wasFrom) {
             ExemptFromRegion(region);
@@ -1521,8 +1527,20 @@ void RegionManager::CollectFromSpaceGarbage()
     // must not be merged into garbage. ZGC free_page never runs while the page
     // is in the relocation set (zGeneration.cpp:216-221).
     static std::atomic<size_t> g_fromGarbageSkip{ 0 };
-    ZPage* region = fromRegionList.TakeHeadRegion();
-    while (region != nullptr) {
+    // #710: forwarded from-pages are found by page-table walk over the From
+    // role (zPageTable.hpp:57-77); forwarding work itself comes from the
+    // relocation set, so nothing here feeds a work queue.
+    std::vector<ZPage*> fromPages;
+    {
+        ZPage::SafeDestroyScope scope;
+        ZPageTableIterator iter(&ZPageTable::heap_table());
+        for (ZPage* region; iter.next(&region);) {
+            if (region->GetRegionRole() == ZPageRole::From) {
+                fromPages.push_back(region);
+            }
+        }
+    }
+    for (ZPage* region : fromPages) {
         const bool complete = region->IsForwardingDone();
         if (!complete) {
             const size_t n = g_fromGarbageSkip.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -1535,9 +1553,8 @@ void RegionManager::CollectFromSpaceGarbage()
             }
             ExemptFromRegion(region);
         } else {
-            garbageRegionList.PrependRegion(region);
+            region->SetRegionRole(ZPageRole::Garbage);
         }
-        region = fromRegionList.TakeHeadRegion();
     }
 }
 
@@ -1545,9 +1562,11 @@ template<Generation G>
 void RegionManager::ForwardFromRegions()
 {
     ResetInPlaceRelocatedCounts();
-    detail::ExecuteForwardTask<G>(*this, fromRegionList);
+    ZRelocationSet& relocationSet = Heap::GetHeap().GetZGeneration(
+        G == Generation::Young ? ZGenerationId::young : ZGenerationId::old).relocation_set();
+    detail::ExecuteForwardTask<G>(*this, &relocationSet);
 
-    VLOG(REPORT, "forward %zu from-region units", fromRegionList.GetUnitCount());
+    VLOG(REPORT, "forward %zu from-region units", relocationSet.nforwardings());
 
     AllocBuffer* allocBuffer = AllocBuffer::GetAllocBuffer();
     if (LIKELY(allocBuffer != nullptr)) {
@@ -1686,23 +1705,26 @@ void RegionManager::EnlistCompactedRegionForAllocator(ZPage* region)
     if (region == nullptr) {
         return;
     }
+    // #710: claim = role CAS; re-home = role store.
     bool claimed = false;
     if (region->IsFromRegion()) {
-        claimed = fromRegionList.TryDeleteRegion(region);
+        ZPageRole expect = ZPageRole::From;
+        claimed = region->CASRegionRole(expect, ZPageRole::None);
     } else if (region->IsLoneFromRegion()) {
         claimed = true;
     } else if (region->IsGarbageRegion()) {
-        claimed = garbageRegionList.TryDeleteRegion(region);
+        ZPageRole expect = ZPageRole::Garbage;
+        claimed = region->CASRegionRole(expect, ZPageRole::None);
     } else if (region->IsThreadLocalRegion() || region->GetRegionRole() == ZPageRole::RecentFull) {
         return;
     }
     if (claimed) {
-        tlRegionList.PrependRegion(region);
+        region->SetRegionRole(ZPageRole::ThreadLocal);
     }
 }
 
 // A region the forward path finished with in place has to stay reachable by a collection-set
-// builder, and CompactRegion leaves it on tlRegionList, which no builder walks.
+// builder, and CompactRegion leaves it thread-local, which no builder walks.
 //
 // ZGC gets this structurally: a page is in _page_table from ZHeap::alloc_page (zHeap.cpp:257) until
 // ZHeap::free_page (:277), and select_relocation_set iterates that table
@@ -1713,8 +1735,8 @@ void RegionManager::EnlistCompactedRegionForAllocator(ZPage* region)
 //
 // The result is a region no path can reach again. It cannot be allocated from --
 // AllocateThreadLocalRegion always takes a fresh region -- and it cannot be collected, because
-// AssembleSmallGarbageCandidates and PrepareYoungGarbageCandidates walk fromRegionList,
-// recentFullRegionList and unmovableFromRegionList, and neither walks tlRegionList. It is simply
+// AssembleSmallGarbageCandidates and PrepareYoungGarbageCandidates walked the from /
+// recent-full / unmovable-from sets, and neither walked thread-local pages. It is simply
 // retained until the heap goes away.
 //
 // Same shape as the stay-young survivor that had to be re-homed earlier in this cycle: the work
@@ -1726,20 +1748,23 @@ void RegionManager::RehomeCompactedInPlaceRegion(ZPage* region)
     }
     bool claimed = false;
     if (region->IsFromRegion()) {
-        claimed = fromRegionList.TryDeleteRegion(region);
+        ZPageRole expect = ZPageRole::From;
+        claimed = region->CASRegionRole(expect, ZPageRole::None);
     } else if (region->IsLoneFromRegion()) {
         claimed = true;
     } else if (region->IsGarbageRegion()) {
-        claimed = garbageRegionList.TryDeleteRegion(region);
+        ZPageRole expect = ZPageRole::Garbage;
+        claimed = region->CASRegionRole(expect, ZPageRole::None);
     } else if (region->IsThreadLocalRegion()) {
-        claimed = tlRegionList.TryDeleteRegion(region);
+        ZPageRole expect = ZPageRole::ThreadLocal;
+        claimed = region->CASRegionRole(expect, ZPageRole::None);
     } else if (region->GetRegionRole() == ZPageRole::RecentFull) {
         return;
     }
     if (!claimed) {
         return;
     }
-    recentFullRegionList.PrependRegion(region);
+    region->SetRegionRole(ZPageRole::RecentFull);
     RecentFullAccounting::Enqueue(1, region->GetUnitCount());
 }
 
@@ -1781,26 +1806,27 @@ void RegionManager::FinishStayYoungInPlace(ZPage* region, bool advanceAge)
 void RegionManager::EnlistStayYoungSurvivor(ZPage* region, bool advanceAge)
 {
     FinishStayYoungInPlace(region, advanceAge);
-    // evac_finish calls this on FROM regions still linked in fromRegionList.
-    // PrependRegion overwrites next/prev without unlinking — later
-    // CollectFromSpaceGarbage MergeRegionList walks a chain that now points
-    // into recentFull, and DeleteRegionLocked SEGVs (r13=0, +0x14).
+    // evac_finish calls this on FROM regions. The claim is a role CAS;
+    // there is no link chain to corrupt (#710).
     bool claimed = false;
     if (region->IsFromRegion()) {
-        claimed = fromRegionList.TryDeleteRegion(region);
+        ZPageRole expect = ZPageRole::From;
+        claimed = region->CASRegionRole(expect, ZPageRole::None);
     } else if (region->IsLoneFromRegion()) {
         claimed = true;
     } else if (region->IsGarbageRegion()) {
-        claimed = garbageRegionList.TryDeleteRegion(region);
+        ZPageRole expect = ZPageRole::Garbage;
+        claimed = region->CASRegionRole(expect, ZPageRole::None);
     } else if (region->IsThreadLocalRegion()) {
-        claimed = tlRegionList.TryDeleteRegion(region);
+        ZPageRole expect = ZPageRole::ThreadLocal;
+        claimed = region->CASRegionRole(expect, ZPageRole::None);
     } else if (region->GetRegionRole() == ZPageRole::RecentFull) {
         return;
     }
     if (!claimed) {
         return;
     }
-    recentFullRegionList.PrependRegion(region);
+    region->SetRegionRole(ZPageRole::RecentFull);
     RecentFullAccounting::Enqueue(1, region->GetUnitCount());
 }
 
@@ -1924,7 +1950,7 @@ void RegionManager::ForwardRegion(ZPage* region)
             // ZGC frees such a page: select_relocation_set hands every relocatable page its
             // own mark did not mark to register_empty_page, and free_empty_pages returns it
             // to the page cache (zGeneration.cpp:216-221 / 169-176).  Keeping it homed on
-            // recentFullRegionList instead leaves a *young* region whose alloc pointer has
+            // the recent-full role instead leaves a *young* region whose alloc pointer has
             // been rewound to its start, and that has two measured consequences:
             //   - every stale pointer into its former contents still answers "my target is
             //     young" to the cross-gen edge walks, so a dead old object's field is
@@ -1934,12 +1960,12 @@ void RegionManager::ForwardRegion(ZPage* region)
             //   - the page is re-selected as an empty relocation candidate every cycle --
             //     the same page re-entered this arm a cycle later with entryAllocOff=0.
             // RehomeCompactedInPlaceRegion (RegionManager.cpp:3766) put it on
-            // recentFullRegionList, which is why CollectRegion's PrependRegion refused it
-            // (GetRegionListOwner() == nullptr).  Take it back off that list first; the
+            // recent-full role, which is why CollectRegion's role store refused it
+            // (role != None).  Clear the role first; the
             // ordinary empty-page arm above reaches CollectRegion the same way.
-            if (region->GetRegionListOwner() == &recentFullRegionList) {
+            if (region->GetRegionRole() == ZPageRole::RecentFull) {
                 const size_t units = region->GetUnitCount();
-                recentFullRegionList.DeleteRegion(region);
+                region->SetRegionRole(ZPageRole::None);
                 RecentFullAccounting::Dequeue(1, units);
             }
             CollectRegion<G>(region);
@@ -1981,7 +2007,7 @@ void RegionManager::ForwardRegion(ZPage* region)
         // cjpm coll_live: first young (cgen=0 fpath=2), then after that Exempt
         // old (cgen=1 fpath=2 route=5 ke=0 gh=1 reason=HEU). Exempt both; the
         // next Assemble/PrepareYoung re-enlists, ghost + entries stay until
-        // PrepareFromRegionList. Residuals are settled above before done.
+        // relocation-set install. Residuals are settled above before done.
         ExemptFromRegion(region);
         return;
     }
@@ -2337,16 +2363,18 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                     // After the flip the from_page is referenced only by the
                     // relocation set's _flip_promoted_pages (zRelocate.cpp:1355-1363
                     // pushes prev_page; zRelocationSet.cpp:208 asserts no
-                    // duplicates). Its intrusive RegionList slot is handed to
+                    // duplicates). Its lifecycle role is handed to
                     // newPage here, at the single promotion fork, before
                     // flip_promote; the list keeps one member with the same
                     // unit count, so RecentFullAccounting and the used/census
                     // readers (zPageAllocator.cpp:1031-1064,1362-1363) see no
                     // change. flip_promote itself does no list work
                     // (zGeneration.cpp:941-948).
-                    if (RegionList* list = prev->GetRegionListOwner()) {
-                        list->ReplaceRegion(prev, newPage);
-                    }
+                    // #710: the page lifecycle role (not a list slot) is handed
+                    // to newPage at the single promotion fork, before flip_promote.
+                    const ZPageRole role = prev->GetRegionRole();
+                    prev->SetRegionRole(ZPageRole::None);
+                    newPage->SetRegionRole(role);
                     ZGeneration::young()->flip_promote(prev, newPage);
                     promoted.append(prev);
                 }

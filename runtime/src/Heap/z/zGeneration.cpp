@@ -710,7 +710,7 @@ void ZGenerationYoung::concurrent_mark_free()
         // (RegionManager.h:726-727), and this is the young mark's post-trace point -- the
         // same place ZGenerationOld::PostTrace drains them for a major (RelocationSet.cpp:73-78).
         // Without this call the minor leaves the cache active forever, so every region a
-        // mutator fills afterwards is diverted off recentFullRegionList and is invisible to
+        // mutator fills afterwards was diverted off the recent-full set and was invisible to
         // both collection-set builders (PrepareYoungGarbageCandidates and
         // AssembleSmallGarbageCandidates) until the next major's PostTrace.  Measured on
         // NW256: 3744 regions / 245 MB parked in the cache at the end of the first minor,
@@ -1357,7 +1357,7 @@ namespace MapleRuntime {
 void ZGenerationYoung::flip_promote(ZPage* from_page, ZPage* to_page)
 {
     // zGeneration.cpp:941-948: replace + statistics only. The from_page's
-    // RegionList handoff happens at the flip fork (zRelocate.cpp
+    // role handoff happens at the flip fork (zRelocate.cpp
     // ZFlipAgePagesTask::work) before this call, not here.
     Heap::page_table().replace(from_page, to_page);
     Heap::GetHeap().page_allocator().promote_used(from_page, to_page);
@@ -1412,6 +1412,14 @@ void ZGeneration::select_relocation_set(bool promote_all)
         ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, nullptr);
         for (ZPage* page; pt_iter.next(&page);) {
             if (!page->is_relocatable()) {
+                continue;
+            }
+            // Host difference (no ZGC counterpart): raw-pointer pinned pages
+            // (Future/Mutex/Monitor) are never moved, and pinned allocation
+            // pages are excluded from candidacy. ZGC skips only
+            // !is_relocatable (zGeneration.cpp:211-213).
+            if (page->GetRawPointerObjectCount() > 0 || page->IsPinnedRegion() ||
+                page->GetRegionRole() == ZPageRole::RawPointerPinned) {
                 continue;
             }
             if (page->is_marked()) {
@@ -1640,10 +1648,10 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
         {
             ZStatTimerYoung zstatTimer(PYoungRefFixPrepare);
 
-            // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
+            // iorfix: the forwarding table is installed by select_relocation_set
+            // (zGeneration.cpp:254) so liveInfo0 snapshots the closed mark
             // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
             // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
-            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareFromSpace<Generation::Young>();
             // ZGenerationYoung::collect: last abortpoint after selection,
             // before relocate-start. Once flipped, finish every remaining page.
             if (ZAbort::should_abort()) {
@@ -1775,7 +1783,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
         // zGeneration.cpp:563: keep this set until the next young mark-end reset.
         // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
         manager.FinishIncompleteFromRegions(ZGenerationId::young);
-        manager.ReassembleFromSpace();
     }
 }
 #if defined(MRT_TESTABLE_INTERNALS)

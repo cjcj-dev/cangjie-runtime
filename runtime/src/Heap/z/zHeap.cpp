@@ -31,7 +31,6 @@
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.hpp"
-#include "Heap/Allocator/RegionList.h"
 
 #include <new>
 #include <algorithm>
@@ -541,9 +540,8 @@ size_t Heap::free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages)
         if (page == nullptr) {
             continue;
         }
-        if (RegionList* owner = page->GetRegionListOwner()) {
-            owner->DeleteRegion(page);
-        }
+        // #710: select_relocation_set owns candidacy; freeing clears the role.
+        page->SetRegionRole(ZPageRole::None);
         freed += page->size();
         free_page(page);
     }

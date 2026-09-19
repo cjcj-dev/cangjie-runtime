@@ -16,7 +16,6 @@
 #include "Common/MarkWorkStack.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zMarkStackEntry.hpp"
-#include "Heap/Allocator/RegionList.h"
 
 #include "Heap/z/zTLABUsage.hpp"
 namespace MapleRuntime {
@@ -24,8 +23,7 @@ namespace MapleRuntime {
 // use 1/n until the configured weight dominates.
 class AllocBuffer {
 public:
-    AllocBuffer() : tlRawPointerRegions("thread-local raw-pointer regions", ZPageRole::None),
-                    tlLargeRawPointerRegions("thread-local large raw-pointer regions", ZPageRole::None) {}
+    AllocBuffer() = default;
     ~AllocBuffer();
     void Init();
     void Fini();
@@ -34,8 +32,10 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType);
     ZPage* GetRegion() { return tlRegion; }
-    RegionList& GetTlRawPointerRegions() { return tlRawPointerRegions; }
-    RegionList& GetTlLargeRawPointerRegions() { return tlLargeRawPointerRegions; }
+    // zObjectAllocator.hpp per-thread current-page shape: staging is a
+    // vector of page pointers, committed to RecentFull/RecentLarge roles.
+    std::vector<ZPage*>& GetTlRawPointerRegions() { return tlRawPointerRegions; }
+    std::vector<ZPage*>& GetTlLargeRawPointerRegions() { return tlLargeRawPointerRegions; }
     ZPage* GetPreparedRegion() { return preparedRegion.load(std::memory_order_relaxed); }
     void SetRegion(ZPage* newRegion);
     void ClearRegion();
@@ -176,8 +176,8 @@ private:
     std::atomic<ZPage*> preparedRegion = { nullptr };
     // allocate objects which are exposed to runtime thus can not be moved.
     // allocation context is responsible to notify collector when these objects are safe to be collected.
-    RegionList tlRawPointerRegions;
-    RegionList tlLargeRawPointerRegions;
+    std::vector<ZPage*> tlRawPointerRegions;
+    std::vector<ZPage*> tlLargeRawPointerRegions;
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
     mutable std::mutex y2yDirtyLock;
     std::unordered_set<BaseObject*> y2yDirtyHolders;

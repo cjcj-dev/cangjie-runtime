@@ -54,19 +54,6 @@ namespace MapleRuntime {
 
 
 
-#ifdef MRT_DEBUG
-void RegionList::DumpRegionList(const char* msg)
-{
-    DLOG(REGION, "dump region list %s", msg);
-    std::lock_guard<std::mutex> lock(listMutex);
-    for (ZPage *region = listHead; region != nullptr; region = region->GetNextRegion()) {
-        DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) units [%zu+%zu, %zu) type %u prev %p next %p", region,
-            region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
-            region->GetUnitIdx(), region->GetUnitCount(), region->GetUnitIdx() + region->GetUnitCount(),
-            0u, region->GetPrevRegion(), region->GetNextRegion());
-    }
-}
-#endif
 void FreeRegionManager::Initialize(UnitCount regionCnt, ZVirtualMemoryManager& virtualMemoryManager,
                                    ZPhysicalMemoryManager& physicalMemoryManager, size_t maxCapacity)
 {
@@ -959,18 +946,26 @@ size_t RegionManager::CollectPinnedGarbage()
         freePinnedSlotLists.Clear();
     }
     size_t garbageSize = 0;
-    ZPage* region = oldPinnedRegionList.GetHeadRegion();
-    while (region != nullptr) {
+    // #710: pinned pages are page-table entries with a pinned role
+    // (zPageTable.hpp:57-77 walk), not a list.
+    std::vector<ZPage*> pinnedPages;
+    {
+        ZPage::SafeDestroyScope scope;
+        ZPageTableIterator iter(&ZPageTable::heap_table());
+        for (ZPage* region; iter.next(&region);) {
+            if (region->GetRegionRole() == ZPageRole::OldPinned) {
+                pinnedPages.push_back(region);
+            }
+        }
+    }
+    for (ZPage* region : pinnedPages) {
         // pinroot: whole-region reclaim also ignores pins; skip while any raw pointer holds.
         if (region->GetRawPointerObjectCount() > 0) {
-
-            region = region->GetNextRegion();
             continue;
         }
         if (region->IsKnownEmpty()) {
             ZPage* del = region;
-            region = region->GetNextRegion();
-            oldPinnedRegionList.DeleteRegion(del);
+            del->SetRegionRole(ZPageRole::None);
 
             auto fixToObj = [](BaseObject* obj) { ReleaseNativeResource(obj); };
             del->VisitAllObjects(fixToObj);
@@ -980,7 +975,6 @@ size_t RegionManager::CollectPinnedGarbage()
             continue;
         } else {
             garbageSize += CollectFreePinnedSlots(region);
-            region = region->GetNextRegion();
         }
     }
 
@@ -990,24 +984,30 @@ size_t RegionManager::CollectPinnedGarbage()
 size_t RegionManager::CollectLargeGarbage()
 {
     size_t garbageSize = 0;
-    ZPage* region = oldLargeRegionList.GetHeadRegion();
-    while (region != nullptr) {
+    std::vector<ZPage*> largePages;
+    {
+        ZPage::SafeDestroyScope scope;
+        ZPageTableIterator iter(&ZPageTable::heap_table());
+        for (ZPage* region; iter.next(&region);) {
+            if (region->GetRegionRole() == ZPageRole::OldLarge) {
+                largePages.push_back(region);
+            }
+        }
+    }
+    for (ZPage* region : largePages) {
         // for large region, the object is the page start (zPage.inline.hpp:254-256).
         if (!region->is_object_live(to_zaddress(region->GetRegionStart()))) {
             DLOG(REGION, "reclaim large region %p@[0x%zx+%zu, 0x%zx) type %u", region, region->GetRegionStart(),
                  region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
             ZPage* del = region;
-            region = region->GetNextRegion();
-            oldLargeRegionList.DeleteRegion(del);
+            del->SetRegionRole(ZPageRole::None);
             if (del->GetRegionSize() > ZPage::LARGE_OBJECT_RELEASE_THRESHOLD) {
                 garbageSize += ReleaseRegion(del);
             } else {
 
                 garbageSize += CollectRegion<Generation::Old>(del);
             }
-        } else {
-            region = region->GetNextRegion();
         }
     }
 
@@ -1023,76 +1023,89 @@ void RegionManager::DumpRegionStats(const char* msg) const
     size_t activeSize = GetActiveUnitCount() * ZPage::UNIT_SIZE;
     size_t activeUnits = activeSize / ZPage::UNIT_SIZE;
 
-    size_t tlRegions = tlRegionList.GetRegionCount();
-    size_t tlUnits = tlRegionList.GetUnitCount();
-    size_t tlSize = tlUnits * ZPage::UNIT_SIZE;
-    size_t allocTLSize = tlRegionList.GetAllocatedSize();
-
-    size_t fromRegions = fromRegionList.GetRegionCount();
-    size_t fromUnits = fromRegionList.GetUnitCount();
-    size_t fromSize = fromUnits * ZPage::UNIT_SIZE;
-    size_t allocFromSize = fromRegionList.GetAllocatedSize();
-
-    size_t unmovableRegions = unmovableFromRegionList.GetRegionCount();
-    size_t unmovableUnits = unmovableFromRegionList.GetUnitCount();
-    size_t unmovableSize = unmovableUnits * ZPage::UNIT_SIZE;
-    size_t allocUnmovableSize = unmovableFromRegionList.GetAllocatedSize();
-
+    // #710: census buckets are a page-table walk over the role word
+    // (zPageTable.hpp:57-77), not per-list sums. GetAllocatedSize() on a list
+    // was unit-granular (units * UNIT_SIZE), so alloc* mirrors the page size.
+    struct RoleBucket {
+        size_t regions = 0;
+        size_t units = 0;
+    };
+    RoleBucket buckets[static_cast<size_t>(ZPageRole::RawPointerStaging) + 1];
     size_t keptRegions = 0;
     size_t keptUnits = 0;
     size_t keptSize = 0;
     size_t keptLive = 0;
-    auto censusKept = [&keptRegions, &keptUnits, &keptSize, &keptLive](ZPage* region) {
-        if (region == nullptr || !region->IsForwardingDone()) {
-            return;
+    {
+        ZPage::SafeDestroyScope scope;
+        ZPageTableIterator iter(&ZPageTable::heap_table());
+        for (ZPage* region; iter.next(&region);) {
+            const ZPageRole role = region->GetRegionRole();
+            RoleBucket& b = buckets[static_cast<size_t>(role)];
+            ++b.regions;
+            b.units += region->GetUnitCount();
+            const bool keptWalk = role == ZPageRole::From || role == ZPageRole::UnmovableFrom ||
+                role == ZPageRole::RecentFull;
+            if (keptWalk && region->IsForwardingDone() && region->IsCompacted()) {
+                ++keptRegions;
+                keptUnits += region->GetUnitCount();
+                keptSize += region->GetRegionSize();
+                keptLive += region->is_marked() ? region->live_bytes() : 0;
+            }
         }
-        if (region->IsForwardingDone() && !region->IsCompacted()) {
-            return;
-        }
-        ++keptRegions;
-        keptUnits += region->GetUnitCount();
-        keptSize += region->GetRegionSize();
-        keptLive += region->is_marked() ? region->live_bytes() : 0;
-    };
-    fromRegionList.VisitAllRegions(censusKept);
-    unmovableFromRegionList.VisitAllRegions(censusKept);
-    recentFullRegionList.VisitAllRegions(censusKept);
+    }
+    auto unitsOf = [&buckets](ZPageRole role) { return buckets[static_cast<size_t>(role)].units; };
+    auto regionsOf = [&buckets](ZPageRole role) { return buckets[static_cast<size_t>(role)].regions; };
 
-    size_t recentFullRegions = recentFullRegionList.GetRegionCount();
-    size_t recentFullUnits = recentFullRegionList.GetUnitCount();
+    size_t tlRegions = regionsOf(ZPageRole::ThreadLocal);
+    size_t tlUnits = unitsOf(ZPageRole::ThreadLocal);
+    size_t tlSize = tlUnits * ZPage::UNIT_SIZE;
+    size_t allocTLSize = tlSize;
+
+    size_t fromRegions = regionsOf(ZPageRole::From);
+    size_t fromUnits = unitsOf(ZPageRole::From);
+    size_t fromSize = fromUnits * ZPage::UNIT_SIZE;
+    size_t allocFromSize = fromSize;
+
+    size_t unmovableRegions = regionsOf(ZPageRole::UnmovableFrom);
+    size_t unmovableUnits = unitsOf(ZPageRole::UnmovableFrom);
+    size_t unmovableSize = unmovableUnits * ZPage::UNIT_SIZE;
+    size_t allocUnmovableSize = unmovableSize;
+
+    size_t recentFullRegions = regionsOf(ZPageRole::RecentFull);
+    size_t recentFullUnits = unitsOf(ZPageRole::RecentFull);
     size_t recentFullSize = recentFullUnits * ZPage::UNIT_SIZE;
-    size_t allocRecentFullSize = recentFullRegionList.GetAllocatedSize();
+    size_t allocRecentFullSize = recentFullSize;
     RecentFullAccounting::Report(recentFullRegions, recentFullSize);
 
-    size_t garbageRegions = garbageRegionList.GetRegionCount();
-    size_t garbageUnits = garbageRegionList.GetUnitCount();
+    size_t garbageRegions = regionsOf(ZPageRole::Garbage);
+    size_t garbageUnits = unitsOf(ZPageRole::Garbage);
     size_t garbageSize = garbageUnits * ZPage::UNIT_SIZE;
-    size_t allocGarbageSize = garbageRegionList.GetAllocatedSize();
+    size_t allocGarbageSize = garbageSize;
 
-    size_t pinnedRegions = oldPinnedRegionList.GetRegionCount();
-    size_t pinnedUnits = oldPinnedRegionList.GetUnitCount();
+    size_t pinnedRegions = regionsOf(ZPageRole::OldPinned);
+    size_t pinnedUnits = unitsOf(ZPageRole::OldPinned);
     size_t pinnedSize = pinnedUnits * ZPage::UNIT_SIZE;
-    size_t allocPinnedSize = oldPinnedRegionList.GetAllocatedSize();
+    size_t allocPinnedSize = pinnedSize;
 
-    size_t recentPinnedRegions = recentPinnedRegionList.GetRegionCount();
-    size_t recentPinnedUnits = recentPinnedRegionList.GetUnitCount();
+    size_t recentPinnedRegions = regionsOf(ZPageRole::RecentPinned);
+    size_t recentPinnedUnits = unitsOf(ZPageRole::RecentPinned);
     size_t recentPinnedSize = recentPinnedUnits * ZPage::UNIT_SIZE;
-    size_t allocRecentPinnedSize = recentPinnedRegionList.GetAllocatedSize();
+    size_t allocRecentPinnedSize = recentPinnedSize;
 
-    size_t rawPointerPinnedRegions = rawPointerPinnedRegionList.GetRegionCount();
-    size_t rawPointerPinnedUnits = rawPointerPinnedRegionList.GetUnitCount();
+    size_t rawPointerPinnedRegions = regionsOf(ZPageRole::RawPointerPinned);
+    size_t rawPointerPinnedUnits = unitsOf(ZPageRole::RawPointerPinned);
     size_t rawPointerPinnedSize = rawPointerPinnedUnits * ZPage::UNIT_SIZE;
-    size_t allocRawPointerPinnedSize = rawPointerPinnedRegionList.GetAllocatedSize();
+    size_t allocRawPointerPinnedSize = rawPointerPinnedSize;
 
-    size_t largeRegions = oldLargeRegionList.GetRegionCount();
-    size_t largeUnits = oldLargeRegionList.GetUnitCount();
+    size_t largeRegions = regionsOf(ZPageRole::OldLarge);
+    size_t largeUnits = unitsOf(ZPageRole::OldLarge);
     size_t largeSize = largeUnits * ZPage::UNIT_SIZE;
-    size_t allocLargeSize = oldLargeRegionList.GetAllocatedSize();
+    size_t allocLargeSize = largeSize;
 
-    size_t recentlargeRegions = recentLargeRegionList.GetRegionCount();
-    size_t recentlargeUnits = recentLargeRegionList.GetUnitCount();
+    size_t recentlargeRegions = regionsOf(ZPageRole::RecentLarge);
+    size_t recentlargeUnits = unitsOf(ZPageRole::RecentLarge);
     size_t recentLargeSize = recentlargeUnits * ZPage::UNIT_SIZE;
-    size_t allocRecentLargeSize = recentLargeRegionList.GetAllocatedSize();
+    size_t allocRecentLargeSize = recentLargeSize;
 
     size_t allHeapSize = GetHeapCapacity();
     size_t allUnits = allHeapSize / ZPage::UNIT_SIZE;
@@ -1174,7 +1187,6 @@ void RegionManager::DumpRegionStats(const char* msg) const
 
 } // namespace MapleRuntime
 
-#include "Heap/Allocator/RegionList.inline.h"
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -1286,24 +1298,27 @@ void RegionManager::AddRawPointerObject(BaseObject* obj)
         ZPage* region = Heap::page(rawAddr);
         region->IncRawPointerObjectCount();
 
-        // CSet empty-free (ExemptFromRegions) TryDeletes FROM under the same
-        // list lock (zGeneration.cpp:211-221 register_empty_page). Inc first so
-        // a GC that already claimed GARBAGE still sees rawPtrCnt>0. Retry the
-        // unlisted window between TryDelete and Prepend.
+        // CSet empty-free (select_relocation_set) claims FROM under the same
+        // role word (zGeneration.cpp:211-221 register_empty_page). Inc first so
+        // a GC that already claimed GARBAGE still sees rawPtrCnt>0. The claim
+        // is a role CAS; a lost race leaves the page lone, which is the same
+        // skip as ZGC's !is_relocatable.
         for (;;) {
-            if (fromRegionList.TryDeleteRegion(region) ||
-                garbageRegionList.TryDeleteRegion(region)) {
-                ZGeneration* generation = region->IsYoungRegion() ? static_cast<ZGeneration*>(ZGeneration::young())
-                                                                  : static_cast<ZGeneration*>(ZGeneration::old());
-                CHECK(generation == nullptr || !generation->is_phase_relocate());
-                rawPointerPinnedRegionList.PrependRegion(region);
-                break;
+            ZPageRole role = region->GetRegionRole();
+            if (role == ZPageRole::From || role == ZPageRole::Garbage) {
+                ZPageRole expect = role;
+                if (region->CASRegionRole(expect, ZPageRole::RawPointerPinned)) {
+                    ZGeneration* generation = region->IsYoungRegion()
+                        ? static_cast<ZGeneration*>(ZGeneration::young())
+                        : static_cast<ZGeneration*>(ZGeneration::old());
+                    CHECK(generation == nullptr || !generation->is_phase_relocate());
+                    break;
+                }
+                std::this_thread::yield();
+                continue;
             }
-            if (!region->IsFromRegion() && !region->IsGarbageRegion()) {
-                CHECK(!region->IsLoneFromRegion());
-                break;
-            }
-            std::this_thread::yield();
+            CHECK(!region->IsLoneFromRegion());
+            break;
         }
     }
 
@@ -1349,22 +1364,11 @@ ZPageAllocatorStats RegionManager::UpdateAndStats(const ZGeneration* generation)
 
 size_t RegionManager::GetAllocatedSize() const
 {
-        size_t threadLocalSize = 0;
-        AllocBufferVisitor visitor = [&threadLocalSize](AllocBuffer& regionBuffer) {
-            ZPage* region = regionBuffer.GetRegion();
-            if (UNLIKELY(region == ZPage::NullRegion())) {
-                return;
-            }
-            threadLocalSize += region->GetRegionAllocatedSize();
-        };
-        Heap::GetHeap().GetAllocator().VisitAllocBuffers(visitor);
-        // exclude garbageRegionList for live object set.
-        return fromRegionList.GetAllocatedSize() + unmovableFromRegionList.GetAllocatedSize() +
-            recentFullRegionList.GetAllocatedSize() + oldLargeRegionList.GetAllocatedSize() +
-            recentLargeRegionList.GetAllocatedSize() + oldPinnedRegionList.GetAllocatedSize() +
-            recentPinnedRegionList.GetAllocatedSize() + rawPointerPinnedRegionList.GetAllocatedSize() +
-            largeTraceRegions.GetAllocatedSize() + fullTraceRegions.GetAllocatedSize() +
-            threadLocalSize;
+        // zPageAllocator.cpp:1311 ZPageAllocator::used: page-granular committed
+        // counter maintained at TakeRegion/ReturnPageMemory/reclaim, not a
+        // list sum. Garbage-pending pages count as used until reclaim, as
+        // ZGC's _used does until free_page.
+        return pageAllocatorUsed;
     }
 
 
@@ -1378,7 +1382,43 @@ void FreeRegionManager::AddMarkQuarantineUnits(UnitIndex idx, UnitCount num)
     }
 
 
-void RegionManager::LockRegionListInSaferegion(std::mutex& listMutex)
+void RegionManager::MergeRawPointerPinnedRegions()
+{
+    ZPage::SafeDestroyScope scope;
+    ZPageTableIterator iter(&ZPageTable::heap_table());
+    for (ZPage* region; iter.next(&region);) {
+        if (region->GetRegionRole() == ZPageRole::RawPointerPinned) {
+            region->SetRegionRole(ZPageRole::OldPinned);
+        }
+    }
+}
+
+size_t RegionManager::GetLargeObjectSize() const
+{
+    size_t bytes = 0;
+    ZPage::SafeDestroyScope scope;
+    ZPageTableIterator iter(&ZPageTable::heap_table());
+    for (ZPage* region; iter.next(&region);) {
+        const ZPageRole role = region->GetRegionRole();
+        if (role == ZPageRole::OldLarge || role == ZPageRole::RecentLarge || role == ZPageRole::LargeTrace) {
+            bytes += region->GetUnitCount() * ZPage::UNIT_SIZE;
+        }
+    }
+    return bytes;
+}
+
+bool RegionManager::TryStampTraceRegion(ZPage* region, ZPageRole role)
+{
+    std::lock_guard<std::mutex> lock(pinnedAllocationMutex);
+    const bool active = role == ZPageRole::FullTrace ? fullTraceCacheActive : largeTraceCacheActive;
+    if (!active) {
+        return false;
+    }
+    region->SetRegionRole(role);
+    return true;
+}
+
+void RegionManager::LockPageMutexInSaferegion(std::mutex& listMutex)
     {
         while (!listMutex.try_lock()) {
             ScopedEnterSaferegion enterSaferegion(true);

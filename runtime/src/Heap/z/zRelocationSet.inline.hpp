@@ -7,19 +7,9 @@
 #ifndef MRT_RELOCATION_SET_INLINE_H
 #define MRT_RELOCATION_SET_INLINE_H
 
-#include "Heap/z/zPageAllocator.hpp"
-#include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/z/zGeneration.hpp"
-#include "Heap/z/zHeap.hpp"
+// The from-list reinstall hook was deleted with the page lists (issue 710):
+// the relocation set is installed from the selector at
+// ZGeneration::select_relocation_set (zGeneration.cpp:254), never from a
+// page list (zRelocationSet.cpp:52-60).
 
-namespace MapleRuntime {
-    template<Generation G>
-inline void RegionManager::PrepareFromRegionList()
-    {
-        Heap::GetHeap().GetZGeneration(
-            G == Generation::Young ? ZGenerationId::young : ZGenerationId::old)
-            .relocation_set().install_from_regions(fromRegionList);
-    }
-
-} // namespace MapleRuntime
 #endif

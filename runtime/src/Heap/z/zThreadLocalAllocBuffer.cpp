@@ -194,7 +194,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     // Mirror pin path's "no reuse after POST_TRACE" rule (RegionManager.cpp free-list).
     // If tlRegion was reclassified to FROM while we still hold it, retire and slow-path.
     if (UNLIKELY(tlRegion != ZPage::NullRegion() && RegionIsInRelocationSet(tlRegion))) {
-        // FROM/LONE_FROM are already off tlRegionList — only drop the local shortcut.
+        // FROM/LONE_FROM already lost the thread-local role — only drop the local shortcut.
         // Still-THREAD_LOCAL but routing: flush to recentFull so it can be handled by GC lists.
         if (tlRegion->IsThreadLocalRegion()) {
             RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -315,7 +315,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
 
 MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
 {
-    ZPage* region = tlRawPointerRegions.GetHeadRegion();
+    ZPage* region = tlRawPointerRegions.empty() ? nullptr : tlRawPointerRegions.back();
     if (region != nullptr) {
         MAddress allocAddr = region->Alloc(totalSize);
         if (allocAddr != 0) {
@@ -329,13 +329,15 @@ MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
         if (region == nullptr) {
             return 0;
         }
-        tlRawPointerRegions.PrependRegion(region);
+        region->SetRegionRole(ZPageRole::RawPointerStaging);
+        tlRawPointerRegions.push_back(region);
     } else {
         region = Heap::alloc_page(needUnitNum, ZPageType::large);
         if (region == nullptr) {
             return 0;
         }
-        tlLargeRawPointerRegions.PrependRegion(region);
+        region->SetRegionRole(ZPageRole::RawPointerStaging);
+        tlLargeRawPointerRegions.push_back(region);
     }
 
     // region is enough for totalSize.

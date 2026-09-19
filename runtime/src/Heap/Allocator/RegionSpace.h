@@ -151,9 +151,6 @@ public:
 
 
 
-    template<Generation G>
-    void PrepareFromSpace() { GetRegionManager().PrepareFromRegionList<G>(); }
-
 
     template<Generation G>
     void ForwardFromSpace(ZWorkers& workers)
@@ -170,7 +167,6 @@ public:
     void CollectFromSpaceGarbage()
     {
         GetRegionManager().CollectFromSpaceGarbage();
-        GetRegionManager().ReassembleFromSpace();
     }
 
     void AssembleGarbageCandidates(bool collectAll = false)

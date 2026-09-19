@@ -14,7 +14,6 @@
 
 #include "Common/MarkWorkStack.h"
 #include "Heap/z/zMarkStackEntry.hpp"
-#include "Heap/Allocator/RegionList.h"
 
 namespace MapleRuntime {
 class TLABAllocationAverage {

@@ -134,12 +134,13 @@ ZPage* RegionManager::AllocateSharedPage(size_t units, ZPageType role,
     if (IsSmallEdenPage(page)) {
         tlabUsed.fetch_add(page->GetRegionSize(), std::memory_order_relaxed);
     }
-    // Register with the page lifecycle, never with tlRegionList. Registration
-    // precedes object allocation, as RegionList's byte accounting requires.
+    // zObjectAllocator.cpp:40-45: the shared page is a per-CPU/per-age
+    // pointer; the lifecycle role word records the page as recent
+    // (zPageAllocator.cpp:1518 accounting follows the role).
     if (role == ZPageType::large) {
-        recentLargeRegionList.PrependRegion(page);
+        page->SetRegionRole(ZPageRole::RecentLarge);
     } else {
-        recentFullRegionList.PrependRegion(page);
+        page->SetRegionRole(ZPageRole::RecentFull);
         RecentFullAccounting::Enqueue(1, page->GetUnitCount());
     }
     return page;
@@ -149,7 +150,7 @@ ZPage* RegionManager::AllocateSharedPage(size_t units, ZPageType role,
 // never used by a caller. Undo its page charge, not a TLAB's ownership.
 void RegionManager::UndoSharedPage(ZPage* page)
 {
-    recentFullRegionList.DeleteRegion(page);
+    page->SetRegionRole(ZPageRole::None);
     RecentFullAccounting::Dequeue(1, page->GetUnitCount());
     if (IsSmallEdenPage(page)) {
         tlabUsed.fetch_sub(page->GetRegionSize(), std::memory_order_relaxed);
@@ -251,7 +252,7 @@ ZPage* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysical
                 // prepared region is installed as a thread's current TLAB.
                 tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
             }
-            tlRegionList.PrependRegion(region);
+            region->SetRegionRole(ZPageRole::ThreadLocal);
             DLOG(REGION, "alloc tl-region %p @[0x%zx+%zu, 0x%zx) units[%zu+%zu, %zu) type %u",
                 region, region->GetRegionStart(), region->GetRegionSize(), region->GetRegionEnd(),
                 region->GetUnitIdx(), region->GetUnitCount(), region->GetUnitIdx() + region->GetUnitCount(),
@@ -386,19 +387,7 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
 
 namespace MapleRuntime {
 RegionManager::RegionManager()
-        : freeRegionManager(*this), tlRegionList("thread local regions", ZPageRole::ThreadLocal),
-          recentFullRegionList("recent full regions", ZPageRole::RecentFull),
-          fullTraceRegions("full trace regions", ZPageRole::FullTrace),
-          fromRegionList("from regions", ZPageRole::From),
-          ghostFromRegionList("ghost from regions", ZPageRole::None),
-          unmovableFromRegionList("escaped from regions", ZPageRole::UnmovableFrom),
-          garbageRegionList("garbage regions", ZPageRole::Garbage),
-          recentPinnedRegionList("recent pinned regions", ZPageRole::RecentPinned),
-          oldPinnedRegionList("old pinned regions", ZPageRole::OldPinned),
-          rawPointerPinnedRegionList("raw pointer pinned regions", ZPageRole::RawPointerPinned),
-          oldLargeRegionList("old large regions", ZPageRole::OldLarge),
-          recentLargeRegionList("recent large regions", ZPageRole::RecentLarge),
-          largeTraceRegions("large trace regions", ZPageRole::LargeTrace)
+        : freeRegionManager(*this)
     {
         tlabAllocatingThreads.Sample(1);
         tlabRequestedFraction.Sample(0.1);
