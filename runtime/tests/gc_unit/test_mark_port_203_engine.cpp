@@ -376,6 +376,22 @@ GC_TEST(RememberedWorkers719, MissingYoungPoolFailsAtDispatch)
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     std::fprintf(stderr, "REMEMBERED719 child_status=%d diagnostic=%s\n", status, diagnostic.c_str());
-    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
     GC_EXPECT_TRUE(diagnostic.find("ZRemembered::scan_and_follow requires young workers") != std::string::npos);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+GC_TEST(RememberedWorkers719, YoungPoolRunsFromNonWorkerThread)
+{
+    B09RuntimeFixture runtime;
+    GC_EXPECT_EQ(WorkerThread::worker_id(), UINT32_MAX);
+    auto& young = Heap::GetHeap().young();
+    young.InitializeWorkers(1);
+    ZMark& mark = young.Mark();
+    mark.Start();
+    ZRemembered remembered;
+    remembered.scan_and_follow(&mark);
+    GC_EXPECT_TRUE(mark.Stripes().IsEmpty());
+    GC_EXPECT_EQ(WorkerThread::worker_id(), UINT32_MAX);
+    std::fprintf(stderr, "REMEMBERED719 completed with empty mark stripes on non-worker caller\n");
+    young.StopWorkers();
 }
