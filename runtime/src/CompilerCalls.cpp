@@ -891,20 +891,11 @@ static ArrayRef PinArray(const ArrayRef array)
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
     CHECK_DETAIL(!mutator->InSaferegion(), "Mutator to be fini should not be in saferegion");
-    // The array argument is a plain address; pinning resolves it before native access.
-    // The pin may resolve a movable from-copy to its to-version (oracleblack face c):
-    // the caller must hand out the RESOLVED payload, and MCC_ReleaseRawData will Dec the
-    // same region the pin Inc'd.
-    Heap& heap = Heap::GetHeap();
-    BaseObject* current = array;
-    const MAddress addr = reinterpret_cast<MAddress>(current);
-    const ZGenerationId id =
-        heap.GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr
-            ? ZGenerationId::young
-            : ZGenerationId::old;
-    current = heap.relocate_or_remap_object(current, id);
+    // ZGC zCollectedHeap.cpp:275-277 / zJNICritical.cpp:132-140:
+    // the caller supplies a decoded object. A retained forwarding entry can
+    // cover a newly allocated page at the same address; it is not a colour.
     ZJNICritical::enter();
-    return static_cast<ArrayRef>(current);
+    return array;
 }
 
 // Return the raw pointer of input array object, isCopy records whether memory copy occurs.

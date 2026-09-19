@@ -1030,10 +1030,8 @@ EXPORTS
     _ZN12MapleRuntime10ZPage10MarkObjectEPKNS_10BaseObjectE @1031
     _ZN12MapleRuntime10ZPage10MarkObjectEPKNS_10BaseObjectEy @1032
     _ZN12MapleRuntime10ZPage10NullRegionEv @1033
-    _ZN12MapleRuntime10ZPage12ReleaseUnitsEyy @1034
     _ZN12MapleRuntime10ZPage13ClearLiveInfoEv @1035
     _ZN12MapleRuntime10ZPage13EnqueueObjectEPKNS_10BaseObjectEy @1036
-    _ZN12MapleRuntime10ZPage13InitFreeUnitsEv @1037
     _ZN12MapleRuntime10ZPage13tipInHeapHitsE @1038 DATA
     _ZN12MapleRuntime10ZPage14IsMarkedObjectEPKNS_10BaseObjectE @1040
     _ZN12MapleRuntime10ZPage15HasYoungRegionsEv @1042
@@ -1053,8 +1051,6 @@ EXPORTS
     _ZN12MapleRuntime10ZPage24IncRawPointerObjectCountEv @1060
     _ZN12MapleRuntime10ZPage26VisitLiveObjectsUntilFalseEOKNSt3__18functionIFbPNS_10BaseObjectEEEE @1064
     _ZN12MapleRuntime10ZPage27BindLiveInfo0FromLiveIfNullEv @1065
-    _ZN12MapleRuntime10ZPage30LARGE_OBJECT_DEFAULT_THRESHOLDE @1068 DATA
-    _ZN12MapleRuntime10ZPage9UNIT_SIZEE @1074 DATA
 
     _ZN12MapleRuntime10SampleTaskC2ERKS0_ @1082
     _ZN12MapleRuntime10SampleTaskC2EyyRNSt3__16vectorIyNS1_9allocatorIyEEEERNS2_INS_9FrameTypeENS3_IS7_EEEERNS2_IjNS3_IjEEEE @1083
@@ -1262,7 +1258,6 @@ EXPORTS
     _ZN12MapleRuntime13PageAllocator8InitPageERNS0_4PageE @1405
     _ZN12MapleRuntime13ParameterInfo14GetAnnotationsEPNS_8TypeInfoE @1406
     _ZN12MapleRuntime13ParameterInfo7SetNameEPKc @1407
-    _ZN12MapleRuntime13RegionManager10AllocLargeEy @1408
     _ZN12MapleRuntime13RegionManager10InitializeEyy @1409
     _ZN12MapleRuntime13RegionManager11AllocPinnedEy @1411
     _ZN12MapleRuntime13RegionManager13CollectRegionEPNS_10ZPageE @1413
@@ -1286,18 +1281,14 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager22CollectFreePinnedSlotsEPNS_10ZPageE @1435
     _ZN12MapleRuntime13RegionManager22RemoveRawPointerObjectEPNS_10BaseObjectE @1436
     _ZN12MapleRuntime13RegionManager23RemoveThreadLocalRegionEPNS_10ZPageE @1438
-    _ZN12MapleRuntime13RegionManager23SetLargeObjectThresholdEv @1439
     _ZN12MapleRuntime13RegionManager19RelocateClaimedPageEPNS_10ZPageE @1440
-    _ZN12MapleRuntime13RegionManager24SetMaxUnitCountForRegionEv @1441
     _ZN12MapleRuntime13RegionManager25AllocateThreadLocalRegionEbb @1442
-    _ZN12MapleRuntime13RegionManager25MAX_UNIT_COUNT_PER_REGIONE @1443 DATA
     _ZN12MapleRuntime13RegionManager27EnlistFullThreadLocalRegionEPNS_10ZPageE @1447
     _ZN12MapleRuntime13RegionManager28TakeReclaimableGarbageRegionEPy @1450
     _ZN12MapleRuntime13RegionManager29PrepareYoungGarbageCandidatesERKNSt3__18functionIFvPNS_10ZPageEEEE @1451
     _ZN12MapleRuntime13RegionManager29ReclaimRegionToMarkQuarantineEPNS_10ZPageE @1452
     _ZN12MapleRuntime13RegionManager30AssembleLargeGarbageCandidatesEv @1453
     _ZN12MapleRuntime13RegionManager30AssembleSmallGarbageCandidatesEv @1454
-    _ZN12MapleRuntime13RegionManager30SetMaxUnitCountForPinnedRegionEv @1455
     _ZN12MapleRuntime13RegionManager31AssemblePinnedGarbageCandidatesEb @1456
     _ZN12MapleRuntime13RegionManager31TryTakeGarbageRegionAfterDispelEPNS_10ZPageE @1457
     _ZN12MapleRuntime13RegionManager33ClearNotRelocatableThisCycleFlagsEv @1459
@@ -1554,9 +1545,6 @@ EXPORTS
     _ZN12MapleRuntime17ExceptionHandling14ProcessEHFrameERKNS_9FrameInfoERNSt3__16vectorINS4_10unique_ptrINS_12IEHFrameInfoENS4_14default_deleteIS7_EEEENS4_9allocatorISA_EEEE @1811
     _ZN12MapleRuntime17ExceptionHandling16BuildEHFrameInfoEv @1812
     _ZN12MapleRuntime17FreeRegionManager10InitializeEj @1813
-    _ZN12MapleRuntime17FreeRegionManager15AddGarbageUnitsEjj @1815
-    _ZN12MapleRuntime17FreeRegionManager15AddReleaseUnitsEjj @1816
-    _ZN12MapleRuntime17FreeRegionManager22AddMarkQuarantineUnitsEjj @1818
     _ZN12MapleRuntime17FreeRegionManager28ReleaseMarkQuarantineToDirtyEv @1819
     _ZN12MapleRuntime17FreeRegionManagerD0Ev @1820
     _ZN12MapleRuntime17FreeRegionManagerD2Ev @1821

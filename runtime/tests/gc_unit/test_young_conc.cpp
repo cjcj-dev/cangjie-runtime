@@ -479,7 +479,7 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -626,7 +626,7 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
-    BaseObject* incoming = fx.PlaceObject(fx.heapStart + ZPage::UNIT_SIZE + 128);
+    BaseObject* incoming = fx.PlaceObject(fx.heapStart + ZGranuleSize + 128);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     // ZBarrier::store_barrier_on_heap_oop_field reads prev before the store
     // (zBarrier.inline.hpp:695-705); stale mark colors force its slow path.
@@ -700,7 +700,7 @@ GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
     RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    remembered.Initialize(fx.heapStart, 2 * ZGranuleSize);
     StoreBarrierBuffer buffer;
     const MAddress slot = reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE;
     const zpointer previous = RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue();

@@ -11,6 +11,8 @@
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zPageType.hpp"
 #include "gc_unittest.hpp"
+#include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/MObject.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -54,3 +56,381 @@ GC_TEST(ZPage, AllocObjectRespectsAlignment)
     GC_EXPECT_EQ(addr % page->object_alignment(), 0u);
     GC_EXPECT_TRUE(page->undo_alloc_object(addr, 16));
 }
+
+// Real mutator entry -> object/page allocators -> page table. Values are copied
+// out by the mutator and asserted after joining, without constructing a page or
+// feeding an intermediate geometry into the consumer.
+#include "Cangjie.h"
+#include "TypeInfoManager.h"
+#include <cstring>
+
+namespace MapleRuntime {
+extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
+extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems);
+extern "C" void* MCC_AcquireRawData(ArrayRef array, bool* isCopy);
+extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr);
+}
+namespace {
+struct GranuleAllocationResult {
+    size_t requested[3]{};
+    size_t expected[3]{};
+    size_t actual[3]{};
+    unsigned type[3]{};
+    bool allocated[3]{};
+    bool firstMapped[3]{};
+    bool lastMapped[3]{};
+    bool sameSmallPage{false};
+    size_t tableSize{0};
+};
+void* AllocateGranulePages(void* context)
+{
+    auto& result = *static_cast<GranuleAllocationResult*>(context);
+    alignas(TypeInfo) static unsigned char types[3][sizeof(TypeInfo)];
+    result.requested[0] = 32;
+    result.requested[1] = ZObjectSizeLimitSmall + 16;
+    result.requested[2] = ZObjectSizeLimitMedium + ZGranuleSize + 16;
+    result.expected[0] = ZPageSizeSmall;
+    result.expected[1] = ZPageSizeMediumMin;
+    result.expected[2] = AlignUp(result.requested[2], ZGranuleSize);
+    ZPage* first = nullptr;
+    for (size_t i = 0; i < 3; ++i) {
+        std::memset(types[i], 0, sizeof(types[i]));
+        auto* type = reinterpret_cast<TypeInfo*>(types[i]);
+        type->SetType(TypeKind::TYPE_KIND_CLASS);
+        type->SetInstanceSize(result.requested[i] - TYPEINFO_PTR_SIZE);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(types[i]), sizeof(types[i]));
+        const ObjRef object = MCC_NewObject(type, result.requested[i]);
+        result.allocated[i] = object != nullptr;
+        ZPage* page = object == nullptr ? nullptr : Heap::page(reinterpret_cast<uintptr_t>(object));
+        result.firstMapped[i] = page != nullptr;
+        if (page != nullptr) {
+            result.actual[i] = page->size();
+            result.type[i] = static_cast<unsigned>(page->type());
+            result.lastMapped[i] = Heap::page(page->GetRegionEnd() - 1) == page;
+        }
+        if (i == 0) { first = page; }
+    }
+    const ObjRef smallAgain = MCC_NewObject(reinterpret_cast<TypeInfo*>(types[0]), result.requested[0]);
+    result.sameSmallPage = first != nullptr && Heap::page(reinterpret_cast<uintptr_t>(smallAgain)) == first;
+    result.tableSize = Heap::page_table().map().size();
+    return nullptr;
+}
+}
+
+GC_OTHER_VM_TEST(ZPageGranule, MutatorAllocatesThreePageSizes)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    GranuleAllocationResult result;
+    CJThreadHandle handle = RunCJTask(AllocateGranulePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "GRANULE_TARGET table=%zu expected=%zu shared_small=%d\n",
+                 result.tableSize, ZAddressOffsetMax >> ZGranuleSizeShift, result.sameSmallPage);
+    // No fatal page-existence assertion precedes the geometry assertions.
+    for (size_t i = 0; i < 3; ++i) {
+        std::fprintf(stderr, "GRANULE_TARGET class=%zu allocated=%d mapped=%d last=%d bytes=%zu expected=%zu type=%u\n",
+                     i, result.allocated[i], result.firstMapped[i], result.lastMapped[i],
+                     result.actual[i], result.expected[i], result.type[i]);
+        GC_EXPECT_EQ(result.actual[i], result.expected[i]);
+        GC_EXPECT_EQ(result.type[i], static_cast<unsigned>(i));
+        GC_EXPECT_TRUE(result.firstMapped[i] && result.lastMapped[i]);
+    }
+    GC_EXPECT_EQ(result.tableSize, ZAddressOffsetMax >> ZGranuleSizeShift);
+    GC_EXPECT_TRUE(result.sameSmallPage);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+namespace {
+struct ForwardingSelectionResult {
+    size_t roots{0};
+    size_t published{0};
+    size_t prepared{0};
+    size_t retained{0};
+    size_t retired{0};
+    size_t receipts{0};
+    bool verifyRetirement{false};
+    bool verifyPin{false};
+    uintptr_t pinExpected{0};
+    uintptr_t pinObserved{0};
+    bool pinCopied{true};
+    size_t usedBefore{0};
+    size_t usedAfter{0};
+    size_t mappedBefore{0};
+    size_t mappedAfter{0};
+    size_t generationBefore[2]{};
+    size_t generationAfter[2]{};
+    size_t mappedGenerationBefore[2]{};
+    size_t mappedGenerationAfter[2]{};
+    size_t reused{0};
+    size_t completed{0};
+    size_t pending{0};
+};
+void* SelectRealLivePages(void* context)
+{
+    auto& result = *static_cast<ForwardingSelectionResult*>(context);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
+    std::memset(storage, 0, sizeof(storage));
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
+    alignas(TypeInfo) static unsigned char sourceByteStorage[sizeof(TypeInfo)]{};
+    if (result.verifyPin) {
+        auto* byteType = reinterpret_cast<TypeInfo*>(sourceByteStorage);
+        byteType->SetType(TypeKind::TYPE_KIND_UINT8);
+        byteType->SetInstanceSize(1);
+        type->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+        type->SetComponentTypeInfo(byteType);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(sourceByteStorage), sizeof(sourceByteStorage));
+    }
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    uintptr_t starts[3]{};
+    U64 roots[3]{};
+    ZPage* previous = nullptr;
+    for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && result.roots < 3; ++i) {
+        BaseObject* object = result.verifyPin ? static_cast<BaseObject*>(MCC_NewArray8(type, 4096))
+                                             : static_cast<BaseObject*>(MCC_NewObject(type, 4096));
+        if (object == nullptr) { return nullptr; }
+        ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(object));
+        if (page != previous) {
+            starts[result.roots] = reinterpret_cast<uintptr_t>(object);
+            if (result.verifyPin) {
+                static_cast<MArray*>(object)->ConvertToCArray()[0] = result.roots + 1;
+            } else {
+                *reinterpret_cast<uint64_t*>(starts[result.roots] + TYPEINFO_PTR_SIZE) = result.roots + 1;
+            }
+            roots[result.roots] = Heap::GetHeap().RegisterExportRoot(reinterpret_cast<BaseObject*>(object));
+            ++result.roots;
+            previous = page;
+        }
+    }
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    auto snapshot = [](size_t& used, size_t& mapped, size_t* generations, size_t* mappedGenerations) {
+        auto& allocator = Heap::GetHeap().page_allocator();
+        used = allocator.GetUsedBytes();
+        generations[0] = allocator.used_generation(ZGenerationId::young);
+        generations[1] = allocator.used_generation(ZGenerationId::old);
+        ZPageTableIterator iter(&Heap::page_table());
+        for (ZPage* page; iter.next(&page);) {
+            mapped += page->size();
+            mappedGenerations[page->generation_id() == ZGenerationId::young ? 0 : 1] += page->size();
+        }
+    };
+    if (result.verifyRetirement) {
+        snapshot(result.usedBefore, result.mappedBefore, result.generationBefore, result.mappedGenerationBefore);
+    }
+    // Live objects in three real small pages force a non-empty relocation set.
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    for (size_t i = 0; i < result.roots; ++i) {
+        ZForwarding* forwarding = Heap::GetHeap().young().forwarding_table().get(starts[i]);
+        if (forwarding != nullptr) {
+            ++result.published;
+            result.completed += forwarding->is_done() && forwarding->ref_count().load() == 0 &&
+                forwarding->find(starts[i]) != 0;
+            result.retired += Heap::page(starts[i]) == nullptr;
+            if (result.verifyRetirement) {
+                // Observe the remap result before a second barrier consumes it.
+                // Otherwise a disconnected lookup fails in that barrier before
+                // the test can assert which product result was wrong.
+                BaseObject* resolved = ZGeneration::young()->relocate_or_remap_object(
+                    reinterpret_cast<BaseObject*>(starts[i]));
+                const MAddress target = reinterpret_cast<MAddress>(resolved);
+                result.receipts += target != starts[i] && Heap::page(target) != nullptr &&
+                    (result.verifyPin ? static_cast<MArray*>(resolved)->ConvertToCArray()[0] == i + 1 :
+                     *reinterpret_cast<uint64_t*>(target + TYPEINFO_PTR_SIZE) == i + 1);
+            }
+            const auto* view = forwarding->from_page_snapshot();
+            result.prepared += view != nullptr && view->livemap != nullptr &&
+                               view->topAtStart > starts[i];
+        }
+        if (!result.verifyRetirement) {
+            result.retained += Heap::GetHeap().GetExportObject(roots[i]) != nullptr;
+            Heap::GetHeap().RemoveExportObject(roots[i]);
+        }
+        // The retirement test leaves root cleanup to FiniCJRuntime, after its
+        // assertions. A failing remap must not be consumed by cleanup first.
+    }
+    result.pending = Heap::GetHeap().page_allocator().GetZRelocateQueue().PendingCount();
+    if (result.verifyRetirement) {
+        snapshot(result.usedAfter, result.mappedAfter, result.generationAfter, result.mappedGenerationAfter);
+        // Real mutator allocation must be able to consume the returned source
+        // range. Read forwarding results above before reusing that range.
+        alignas(TypeInfo) static unsigned char byteStorage[sizeof(TypeInfo)]{};
+        alignas(TypeInfo) static unsigned char arrayStorage[sizeof(TypeInfo)]{};
+        auto* byteType = reinterpret_cast<TypeInfo*>(byteStorage);
+        auto* arrayType = reinterpret_cast<TypeInfo*>(arrayStorage);
+        byteType->SetType(TypeKind::TYPE_KIND_UINT8);
+        byteType->SetInstanceSize(1);
+        arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+        arrayType->SetComponentTypeInfo(byteType);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(byteStorage), sizeof(byteStorage));
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(arrayStorage), sizeof(arrayStorage));
+        for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && result.reused == 0; ++i) {
+            BaseObject* object = result.verifyPin ? static_cast<BaseObject*>(MCC_NewArray8(arrayType, 4096))
+                                                 : static_cast<BaseObject*>(MCC_NewObject(type, 4096));
+            const uintptr_t address = reinterpret_cast<uintptr_t>(object);
+            for (size_t j = 0; j < result.roots; ++j) {
+                result.reused += (address >> ZGranuleSizeShift) == (starts[j] >> ZGranuleSizeShift);
+            }
+            if (result.verifyPin && result.reused != 0) {
+                auto* array = static_cast<MArray*>(object);
+                result.pinExpected = reinterpret_cast<uintptr_t>(array->ConvertToCArray());
+                void* raw = MCC_AcquireRawData(array, &result.pinCopied);
+                result.pinObserved = reinterpret_cast<uintptr_t>(raw);
+                MCC_ReleaseRawData(array, raw);
+            }
+        }
+    }
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+}
+
+GC_OTHER_VM_TEST(ZForwardingPublication, SelectionPublishesPreparedForwardingOnce)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "FORWARDING_SELECTION_TARGET roots=%zu published=%zu prepared=%zu retained=%zu\n",
+                 result.roots, result.published, result.prepared, result.retained);
+    GC_EXPECT_TRUE(result.published > 0);
+    GC_EXPECT_EQ(result.prepared, result.published);
+    GC_EXPECT_EQ(result.retained, 3u);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// The product mutator allocates and roots the objects; RequestGC owns selection,
+// copying, detach and retirement. No manually installed forwarding is involved.
+GC_OTHER_VM_TEST(ZRelocationRetirement, CopiedSourceLeavesPageTable)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    result.verifyRetirement = true;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "SOURCE_RETIREMENT_TARGET roots=%zu selected=%zu retired=%zu remapped_payloads=%zu\n",
+                 result.roots, result.published, result.retired, result.receipts);
+    GC_EXPECT_TRUE(result.published > 0);
+    GC_EXPECT_EQ(result.retired, result.published);
+    GC_EXPECT_EQ(result.receipts, result.published);
+    std::fprintf(stderr, "SOURCE_MEMORY_TARGET used_before=%zu used_after=%zu mapped_before=%zu mapped_after=%zu reused=%zu\n",
+                 result.usedBefore, result.usedAfter, result.mappedBefore, result.mappedAfter, result.reused);
+    GC_EXPECT_EQ(result.usedAfter + result.mappedBefore, result.usedBefore + result.mappedAfter);
+    for (size_t i = 0; i < 2; ++i) {
+        std::fprintf(stderr, "SOURCE_GENERATION_TARGET id=%zu before=%zu after=%zu mapped_before=%zu mapped_after=%zu\n",
+                     i, result.generationBefore[i], result.generationAfter[i],
+                     result.mappedGenerationBefore[i], result.mappedGenerationAfter[i]);
+        GC_EXPECT_EQ(result.generationAfter[i] + result.mappedGenerationBefore[i],
+                     result.generationBefore[i] + result.mappedGenerationAfter[i]);
+    }
+    GC_EXPECT_TRUE(result.reused > 0);
+    GC_EXPECT_EQ(result.roots, 3u);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+namespace {
+struct OldCyclePhaseResult {
+    uintptr_t before{0};
+    uintptr_t after{0};
+    bool relocate{false};
+};
+void* RunRealOldCycle(void* context)
+{
+    auto& result = *static_cast<OldCyclePhaseResult*>(context);
+    result.before = ZPointerRemappedOldMask;
+    Mutator::GetMutator()->SetManagedContext(false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    result.after = ZPointerRemappedOldMask;
+    result.relocate = Heap::GetHeap().old().is_phase_relocate();
+    Mutator::GetMutator()->SetManagedContext(true);
+    return nullptr;
+}
+}
+
+GC_OTHER_VM_TEST(ZGenerationPhases, OldCycleFlipsRemapMaskOnce)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    OldCyclePhaseResult result;
+    CJThreadHandle handle = RunCJTask(RunRealOldCycle, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "OLD_CYCLE_FLIP_TARGET before=%#lx after=%#lx expected=%#lx relocate=%d\n",
+                 result.before, result.after, result.before ^ ZPointerRemappedMask, result.relocate);
+    GC_EXPECT_EQ(result.after, result.before ^ ZPointerRemappedMask);
+    GC_EXPECT_TRUE(result.relocate);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// ZGC jni.cpp:2868-2886 resolves before pinning. The real allocator reuses a
+// retired source range while its forwarding remains published for old colours.
+GC_OTHER_VM_TEST(ZJNICritical, NewArrayOnReusedSourceKeepsDecodedAddress)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    result.verifyRetirement = true;
+    result.verifyPin = true;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "PIN_DECODED_TARGET expected=%#lx observed=%#lx reused=%zu copied=%d\n",
+                 result.pinExpected, result.pinObserved, result.reused, result.pinCopied);
+    GC_EXPECT_EQ(result.pinObserved, result.pinExpected);
+    GC_EXPECT_TRUE(result.pinExpected != 0 && result.reused > 0);
+    GC_EXPECT_FALSE(result.pinCopied);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+// ZGC zRelocate.cpp:1036-1047: a real worker owns detach/free/done.
+// Pages come from the product allocator and the driver runs the actual tasks.
+GC_OTHER_VM_TEST(RelocateWorkers, RuntimeCollectionCompletesSelectedPages)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    result.verifyRetirement = true;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "ACTUAL_FORWARD_TASK_TARGET selected=%zu completed=%zu pending=%zu receipts=%zu\n",
+                 result.published, result.completed, result.pending, result.receipts);
+    GC_EXPECT_EQ(result.completed, result.published);
+    GC_EXPECT_EQ(result.receipts, result.published);
+    GC_EXPECT_EQ(result.pending, 0u);
+    GC_EXPECT_TRUE(result.published > 0);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif

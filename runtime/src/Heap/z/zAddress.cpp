@@ -39,12 +39,6 @@ uintptr_t ZAddressOffsetMask;
 size_t ZAddressOffsetMax;
 size_t ZBackingOffsetMax;
 uint32_t ZBackingIndexMax;
-#ifdef _WIN64
-static size_t ZBackingGranuleSizeFromOs() { SYSTEM_INFO info; GetSystemInfo(&info); return info.dwPageSize; }
-#else
-static size_t ZBackingGranuleSizeFromOs() { return static_cast<size_t>(getpagesize()); }
-#endif
-const size_t ZBackingGranuleSize = ZBackingGranuleSizeFromOs();
 uintptr_t ZPointerRemapped;
 uintptr_t ZPointerRemappedYoungMask;
 uintptr_t ZPointerRemappedOldMask;

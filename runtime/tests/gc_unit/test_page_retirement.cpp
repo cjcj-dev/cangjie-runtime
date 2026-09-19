@@ -31,7 +31,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
     // This is a native fixture, not a scheduler-managed mutator thread.
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
-    const size_t unit = ZPage::UNIT_SIZE;
+    const size_t unit = ZGranuleSize;
     int result = 0;
     {
         // Destroyed in reverse order: the manager (mapped caches keep entries
@@ -46,10 +46,10 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         (void)heap;
         // ReleaseRetiredRegion clears the product remembered set before
         // returning the page. Its address space must exist as after heap init.
-        const auto role = ZPageType::small;
+        const auto role = ZPageType::large;
         BindFixturePageTable(manager, 4);
-        ZPage* first = manager.TakeRegion(2, role, false, false, false);
-        ZPage* second = manager.TakeRegion(2, role, false, false, false);
+        ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
+        ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
         if (first == nullptr || second == nullptr) {
             return 21;
         }
@@ -58,7 +58,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         const uintptr_t start = first->GetRegionStart();
         const uintptr_t end = first->GetRegionEnd();
         const auto life = first->GetRegionLifeId();
-        const auto index = first->GetUnitIdx();
+        const auto index = first->granule_index();
         const ZPageRole roleBefore = first->GetRegionRole();
         const size_t capacity = manager.GetCommittedCapacity();
         size_t retired = 0;
@@ -66,7 +66,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
             switch (path) {
                 case RetirementPath::RETURN:
-                    manager.ReturnPageMemory({ index, 2, 0, true });
+                    manager.ReturnPageMemory({ index, 2 * ZGranuleSize, 0, true });
                     break;
                 case RetirementPath::RECLAIM:
                     manager.ReclaimRegion(first);
@@ -98,12 +98,12 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             // Memory stays out of the cache and committed while an iterator
             // can still read the descriptor (ZGC free_page only after the
             // page table iteration ends).
-            if (manager.GetDirtyUnitCount() != 0 || manager.GetCommittedCapacity() != capacity) {
+            if ((manager.GetCachedBytes() / ZGranuleSize) != 0 || manager.GetCommittedCapacity() != capacity) {
                 result = 25;
             }
             // All capacity is owned; a retired page is not available for
             // cache allocation while either iterator can still read it.
-            if (manager.TakeRegion(1, role, false, false, false) != nullptr) {
+            if (manager.TakeRegion((1) * ZGranuleSize, role, false, false, false) != nullptr) {
                 result = 26;
             }
             if (Heap::page(second->GetRegionStart()) != second) {
@@ -138,10 +138,10 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         }
         // Every path hands the page's memory back to the mapped cache (ZGC
         // free_page); capacity is unchanged, only ZUncommitter uncommits.
-        if (manager.GetDirtyUnitCount() != 2 || manager.GetCommittedCapacity() != capacity) {
+        if ((manager.GetCachedBytes() / ZGranuleSize) != 2 || manager.GetCommittedCapacity() != capacity) {
             result = 30;
         }
-        ZPage* reused = manager.TakeRegion(2, role, false, false, false);
+        ZPage* reused = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
         PublishAllocatedPage(reused);
         if (reused == nullptr || reused->GetRegionStart() != start ||
             Heap::page(end - 1) != reused) {

@@ -10,16 +10,16 @@ namespace MapleRuntime {
 
 void ZForwardingTable::insert(ZForwarding* forwarding)
 {
-    zoffset offset;
-    CHECK(_map != nullptr && _map->offset_for_address(forwarding->start(), &offset));
+    const zoffset offset = ZAddress::offset(to_zaddress_unsafe(forwarding->start()));
+    CHECK(_map != nullptr);
     CHECK(_map->get(offset) == nullptr);
     _map->put(offset, forwarding->size(), forwarding);
 }
 
 void ZForwardingTable::remove(ZForwarding* forwarding)
 {
-    zoffset offset;
-    CHECK(_map != nullptr && _map->offset_for_address(forwarding->start(), &offset));
+    const zoffset offset = ZAddress::offset(to_zaddress_unsafe(forwarding->start()));
+    CHECK(_map != nullptr);
     CHECK(_map->get(offset) == forwarding);
     _map->put(offset, forwarding->size(), nullptr);
 }

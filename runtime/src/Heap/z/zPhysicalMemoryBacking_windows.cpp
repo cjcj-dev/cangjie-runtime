@@ -32,12 +32,12 @@ private:
   std::vector<HANDLE> _handles;
 
   size_t index_of(zbacking_offset offset) const {
-    return untype(offset) / ZGranuleSize;
+    return (untype(offset) >> ZGranuleSizeShift);
   }
 
 public:
   explicit ZPhysicalMemoryBackingSmallPages(size_t max_capacity)
-    : _handles(max_capacity / ZGranuleSize, 0) {}
+    : _handles((max_capacity >> ZGranuleSizeShift), 0) {}
 
   size_t commit(zbacking_offset offset, size_t size) override {
     for (size_t i = 0; i < size; i += ZGranuleSize) {
@@ -83,7 +83,7 @@ private:
 
 public:
   explicit ZPhysicalMemoryBackingLargePages(size_t max_capacity)
-    : _page_array(max_capacity / ZGranuleSize, 0) {}
+    : _page_array((max_capacity >> ZGranuleSizeShift), 0) {}
 
   size_t commit(zbacking_offset offset, size_t size) override {
     const size_t index = untype(offset) >> ZGranuleSizeShift;

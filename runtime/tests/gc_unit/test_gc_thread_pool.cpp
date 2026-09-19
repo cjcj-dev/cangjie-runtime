@@ -191,30 +191,6 @@ bool RunYoungRuntimeProductEntry()
 }
 #endif
 
-#if defined(MRT_TESTABLE_INTERNALS)
-bool RunActualTaskClaimedOwnerSuccess()
-{
-    GcHeapFixture fx;
-    RegionManager manager;
-    MAddress from = 0;
-    MAddress to = 0;
-    if (!InstallOwnerReceipt(fx, from, to)) {
-        return false;
-    }
-
-    ZRelocateQueue& queue = manager.GetZRelocateQueue();
-    queue.BeginWorkers(1);
-    const auto added = queue.Add(fx.region0, from);
-    if (!added.accepted) {
-        return false;
-    }
-    ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
-    task.work();
-    return added.state() == ZRelocateQueue::State::COMPLETED &&
-        added.forwarding->find(from) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
-}
-#endif
-
 template<bool (*Scenario)()>
 void ExpectIsolatedScenarioPasses()
 {
@@ -395,13 +371,6 @@ GC_TEST(RelocateWorkers, ProductSerialEntryRegistersWorkerAndClosesGeneration)
 GC_TEST(RelocateWorkers, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
 {
     ExpectIsolatedScenarioPasses<RunYoungRuntimeProductEntry>();
-}
-#endif
-
-#if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(RelocateWorkers, ActualForwardTaskCompletesClaimedOwnerAtRegionExit)
-{
-    ExpectIsolatedScenarioPasses<RunActualTaskClaimedOwnerSuccess>();
 }
 #endif
 

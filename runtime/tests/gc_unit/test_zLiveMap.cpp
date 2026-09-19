@@ -406,7 +406,7 @@ GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
                       ZPageType::small,
                       ZPageType::large}) {
         ZPage::RetirePage(region, [] {});
-        region = ZPage::InitRegion(0, 1, role);
+        region = ZPage::InitRegion(ZPage::GranuleIndex(fx.heapStart), (1) * ZGranuleSize, role);
         fx.region0 = region;
         PublishAllocatedPage(region);
         const uint32_t actual = ZLiveMapTest::segment_size(region->livemap());
@@ -548,14 +548,7 @@ void PausePartialClear(const volatile BitMap::bm_word_t*)
 void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
 {
     GcHeapFixture fx;
-    if (units == 2) {
-        ZPage::RetirePage(fx.region0, [] {});
-        ZPage::RetirePage(fx.region1, [] {});
-        fx.region1 = nullptr;
-        fx.region0 = ZPage::InitRegion(0, units, ZPageType::small);
-        PublishAllocatedPage(fx.region0);
-        GcHeapFixture::AdvanceGeneration(Generation::Old);
-    }
+    // A small page is now 2 MiB and contains both tested neighbour offsets.
     ZPage* region = fx.region0;
     const MAddress start = region->GetRegionStart();
     // Under the rejected geometry, 4KB has 16-bit segments and 8KB has

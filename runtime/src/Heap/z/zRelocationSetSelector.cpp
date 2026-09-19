@@ -256,7 +256,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             const ZPageRole role = region->GetRegionRole();
             if (role == ZPageRole::From) {
                 ++stats.fromVisited;
-                stats.fromVisitedUnits += region->GetUnitCount();
+                stats.fromVisitedBytes += region->GetRegionSize();
                 ParkUnmovableFromRegion(region);
                 continue;
             }
@@ -264,7 +264,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
                 continue;
             }
             ++stats.unmovableVisited;
-            stats.unmovableVisitedUnits += region->GetUnitCount();
+            stats.unmovableVisitedBytes += region->GetRegionSize();
             const uint64_t visitorStart = TimeUtil::NanoSeconds();
             visitor(region);
             stats.visitorNs += TimeUtil::NanoSeconds() - visitorStart;
@@ -289,7 +289,7 @@ size_t RegionManager::ExemptFromRegions()
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
         ZPage* page = forwarding->page();
         if (page != nullptr) {
-            bytes += page->GetUnitCount() * ZPage::UNIT_SIZE;
+            bytes += page->GetRegionSize();
         }
     }
     return bytes;

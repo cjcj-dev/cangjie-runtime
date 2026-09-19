@@ -33,7 +33,7 @@ static size_t reserve_memory_limit() {
 size_t ZAddressSpaceLimit::heap() {
   // Allow the heap to occupy 50% of the address space
   const size_t limit = reserve_memory_limit() / MaxVirtMemFraction;
-  return AlignUp(limit, ZBackingGranuleSize);
+  return AlignUp(limit, ZGranuleSize);
 }
 
 void ZAddressSpaceLimit::print_limits() {

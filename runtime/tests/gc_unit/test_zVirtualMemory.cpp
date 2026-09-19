@@ -6,7 +6,7 @@
 
 // Port of test/hotspot/gtest/gc/z/test_zVirtualMemory.cpp:28-146 (42
 // assertion sites). ZGC pins ZAddressOffsetMax to 16T for the max-area case;
-// the memory managers here index per ZBackingGranuleSize (one page) rather
+// the memory managers here index per ZGranuleSize (one page) rather
 // than per ZGranuleSize, so granule_count() fits an int only up to 2^42 bytes.
 
 #include "gc_unittest.hpp"
@@ -38,7 +38,7 @@ GC_TEST(ZVirtualMemory, accessors)
         GC_EXPECT_EQ(mem.start(), zoffset(0));
         GC_EXPECT_EQ(mem.end(), zoffset_end(ZGranuleSize));
         GC_EXPECT_EQ(mem.size(), ZGranuleSize);
-        GC_EXPECT_EQ(mem.granule_count(), static_cast<int>(ZGranuleSize / ZBackingGranuleSize));
+        GC_EXPECT_EQ(mem.granule_count(), static_cast<int>(ZGranuleSize / ZGranuleSize));
     }
 
     {
@@ -47,7 +47,7 @@ GC_TEST(ZVirtualMemory, accessors)
         GC_EXPECT_EQ(mem.start(), zoffset(ZGranuleSize));
         GC_EXPECT_EQ(mem.end(), zoffset_end(ZGranuleSize + ZGranuleSize));
         GC_EXPECT_EQ(mem.size(), ZGranuleSize);
-        GC_EXPECT_EQ(mem.granule_count(), static_cast<int>(ZGranuleSize / ZBackingGranuleSize));
+        GC_EXPECT_EQ(mem.granule_count(), static_cast<int>(ZGranuleSize / ZGranuleSize));
     }
 
     {
@@ -57,7 +57,7 @@ GC_TEST(ZVirtualMemory, accessors)
         GC_EXPECT_EQ(mem.start(), zoffset(0));
         GC_EXPECT_EQ(mem.end(), zoffset_end(ZAddressOffsetMax));
         GC_EXPECT_EQ(mem.size(), ZAddressOffsetMax);
-        GC_EXPECT_EQ(mem.granule_count(), static_cast<int>(ZAddressOffsetMax / ZBackingGranuleSize));
+        GC_EXPECT_EQ(mem.granule_count(), static_cast<int>(ZAddressOffsetMax / ZGranuleSize));
     }
 }
 

@@ -58,21 +58,21 @@ PrimitiveArrayTypeInfos& GetPrimitiveArrayTypeInfos()
 struct LargeArrayFixture {
     LargeArrayFixture()
     {
-        const size_t payload = ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD + ZPage::UNIT_SIZE;
-        const size_t arrayUnits = AlignUp(payload + 128, ZPage::UNIT_SIZE) / ZPage::UNIT_SIZE;
+        const size_t payload = ZObjectSizeLimitSmall + ZGranuleSize;
+        const size_t arrayUnits = AlignUp(payload + 128, ZGranuleSize) / ZGranuleSize;
         const size_t units = arrayUnits + 1;
-        const size_t metadata = RegionManager::GetMetadataSize(units);
-        mappedSize = metadata + units * ZPage::UNIT_SIZE;
+        const size_t metadata = RegionManager::GetMetadataSize();
+        mappedSize = metadata + units * ZGranuleSize;
         reservation.reset(new ZTestHeapMapping(mappedSize));
         mapping = reservation->base();
         GC_EXPECT_TRUE(mapping != MAP_FAILED);
         const MAddress start = reinterpret_cast<MAddress>(mapping) + metadata;
         Heap::OnHeapCreated(start);
-        Heap::OnHeapExtended(start + units * ZPage::UNIT_SIZE);
+        Heap::OnHeapExtended(start + units * ZGranuleSize);
         GcHeapFixture::AdvanceGeneration(Generation::Old);
-        ZPage::Initialize(units, start);
-        region0 = ZPage::InitRegion(0, 1, ZPageType::small);
-        region1 = ZPage::InitRegion(1, arrayUnits, ZPageType::large);
+        ZPage::Initialize(units * ZGranuleSize, start);
+        region0 = ZPage::InitRegion(ZPage::GranuleIndex(start), (1) * ZGranuleSize, ZPageType::small);
+        region1 = ZPage::InitRegion(ZPage::GranuleIndex(start) + 1, (arrayUnits) * ZGranuleSize, ZPageType::large);
         auto* holderType = reinterpret_cast<TypeInfo*>(holderStorage);
         holderType->SetType(TypeKind::TYPE_KIND_CLASS);
         holderType->SetFlagHasRefField();
@@ -126,7 +126,7 @@ GC_OTHER_VM_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
 
     GC_EXPECT_TRUE(bytes->IsPrimitiveArray());
     GC_EXPECT_FALSE(infos.array->HasRefField());
-    GC_EXPECT_TRUE(bytes->GetSize() > ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD);
+    GC_EXPECT_TRUE(bytes->GetSize() > ZObjectSizeLimitSmall);
 
     // Plant holder.bytes. The holder GCTib has bit 0 set, so the exact major
     // non-array walk (MarkPartialArray::FollowObjectReferences) must yield this slot.

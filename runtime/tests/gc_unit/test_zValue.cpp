@@ -93,7 +93,7 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     ZStat::Initialize();
     constexpr size_t units = 64;
     HeapParam params{};
-    params.regionSize = ZPage::UNIT_SIZE / KB;
+    params.regionSize = ZGranuleSize / KB;
     params.exemptionThreshold = 0.8;
     std::unique_ptr<ZTestRegionHeap> heap;
     RegionManager manager;

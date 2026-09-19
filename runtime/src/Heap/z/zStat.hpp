@@ -37,9 +37,9 @@ struct YoungCollectionStats {
     // skip reasons explicit so a long phase can be classified as "many entries" vs
     // "expensive per entry" without adding an object walk merely for measurement.
     size_t fromVisited = 0;
-    size_t fromVisitedUnits = 0;
+    size_t fromVisitedBytes = 0;
     size_t unmovableVisited = 0;
-    size_t unmovableVisitedUnits = 0;
+    size_t unmovableVisitedBytes = 0;
     size_t unmovableYoung = 0;
     size_t recentFullVisited = 0;
     size_t recentFullVisitedUnits = 0;

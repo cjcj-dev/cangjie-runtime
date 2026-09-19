@@ -65,7 +65,7 @@ public:
     static Heap* heap() { return _heap; }
     Heap();
     ~Heap();
-    void install_page_table(MAddress base, size_t heapSize, size_t granule);
+    void install_page_table();
     ZRemembered& remembered();
     void Init(const HeapParam& vmHeapParam);
     void Fini();
