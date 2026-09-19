@@ -58,16 +58,16 @@ public:
     ZFixtureRememberedScope()
         : _allocator(&Heap::GetHeap().page_allocator()),
           _pages(std::move(Heap::page_table())),
-          _young(std::move(Heap::GetHeap().young().forwarding_table())),
-          _old(std::move(Heap::GetHeap().old().forwarding_table())),
-          _remembered(std::move(*Heap::GetHeap().young().remembered())) {}
+          _young(std::move(generation_forwarding_table(Generation::Young))),
+          _old(std::move(generation_forwarding_table(Generation::Old))),
+          _remembered(std::move(Heap::GetHeap().remembered())) {}
 
     ~ZFixtureRememberedScope()
     {
         Heap::page_table() = std::move(_pages);
-        Heap::GetHeap().young().forwarding_table() = std::move(_young);
-        Heap::GetHeap().old().forwarding_table() = std::move(_old);
-        *Heap::GetHeap().young().remembered() = std::move(_remembered);
+        generation_forwarding_table(Generation::Young) = std::move(_young);
+        generation_forwarding_table(Generation::Old) = std::move(_old);
+        Heap::GetHeap().remembered() = std::move(_remembered);
         Heap::bind_test_page_allocator(_allocator);
     }
 
@@ -84,9 +84,9 @@ inline void BindFixtureRemembered(RegionManager& manager)
     auto& heap = Heap::GetHeap();
     const auto& map = Heap::page_table().map();
     const size_t size = map.size() * map.granule();
-    heap.young().forwarding_table().initialize(size, map.base(), map.granule());
-    heap.old().forwarding_table().initialize(size, map.base(), map.granule());
-    heap.young().remembered()->bind(&Heap::page_table(), &heap.old().forwarding_table(), &manager);
+    generation_forwarding_table(Generation::Young).initialize(size, map.base(), map.granule());
+    generation_forwarding_table(Generation::Old).initialize(size, map.base(), map.granule());
+    heap.remembered().bind(&Heap::page_table(), &generation_forwarding_table(Generation::Old), &manager);
 }
 
 inline void BindFixturePageTable(RegionManager& manager, size_t units)
