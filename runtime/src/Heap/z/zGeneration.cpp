@@ -1373,6 +1373,11 @@ void ZGenerationYoung::in_place_relocate_promote(ZPage* from_page, ZPage* to_pag
     Heap::GetHeap().page_allocator().promote_used(from_page, to_page);
 }
 
+void ZGenerationYoung::register_in_place_relocate_promoted(ZPage* page)
+{
+    _relocation_set.register_in_place_relocate_promoted(page);
+}
+
 void ZGenerationYoung::register_flip_promoted(const ZArray<ZPage*>& pages)
 {
     _relocation_set.register_flip_promoted(pages);

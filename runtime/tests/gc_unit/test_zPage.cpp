@@ -146,6 +146,8 @@ struct ForwardingSelectionResult {
     size_t published{0};
     size_t prepared{0};
     size_t retained{0};
+    size_t retired{0};
+    size_t receipts{0};
 };
 void* SelectRealLivePages(void* context)
 {
@@ -178,6 +180,9 @@ void* SelectRealLivePages(void* context)
         ZForwarding* forwarding = Heap::GetHeap().young().forwarding_table().get(starts[i]);
         if (forwarding != nullptr) {
             ++result.published;
+            result.retired += Heap::page(starts[i]) == nullptr;
+            result.receipts += forwarding->find(starts[i]) == reinterpret_cast<MAddress>(
+                Heap::GetHeap().GetExportObject(roots[i]));
             const auto* view = forwarding->from_page_snapshot();
             result.prepared += view != nullptr && view->livemap != nullptr &&
                                view->topAtStart > starts[i];
@@ -206,6 +211,29 @@ GC_OTHER_VM_TEST(ZForwardingPublication, SelectionPublishesPreparedForwardingOnc
                  result.roots, result.published, result.prepared, result.retained);
     GC_EXPECT_TRUE(result.published > 0);
     GC_EXPECT_EQ(result.prepared, result.published);
+    GC_EXPECT_EQ(result.retained, 3u);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// The product mutator allocates and roots the objects; RequestGC owns selection,
+// copying, detach and retirement. No manually installed forwarding is involved.
+GC_OTHER_VM_TEST(ZRelocationRetirement, CopiedSourceLeavesPageTable)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "SOURCE_RETIREMENT_TARGET selected=%zu retired=%zu receipts=%zu retained=%zu\n",
+                 result.published, result.retired, result.receipts, result.retained);
+    GC_EXPECT_TRUE(result.published > 0);
+    GC_EXPECT_EQ(result.retired, result.published);
+    GC_EXPECT_EQ(result.receipts, result.published);
     GC_EXPECT_EQ(result.retained, 3u);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

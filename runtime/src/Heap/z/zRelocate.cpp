@@ -1133,32 +1133,42 @@ BaseObject* ZRelocate::ForwardObjectExclusive(BaseObject* obj)
     return ZGeneration::generation(page->generation_id())->relocate().relocate_object_inner(obj, page);
 }
 
-void ZRelocate::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
+void ZRelocate::UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to)
 {
-    if (from == nullptr || to == nullptr || from == to) {
-        return;
-    }
-    ZPage* toRegion = Heap::page(reinterpret_cast<MAddress>(to));
-    if (toRegion == nullptr || toRegion->IsYoungRegion()) {
-        return;
-    }
-    ZPage* fromRegion = Heap::page(reinterpret_cast<MAddress>(from));
-    if (fromRegion == nullptr) {
-        fromRegion = Heap::page(reinterpret_cast<MAddress>(from));
-    }
-    if (fromRegion != nullptr && !fromRegion->IsYoungRegion()) {
-        const size_t sz = RegionSpace::GetAllocSize(*to);
-        const uintptr_t fromLocal = fromRegion->local_offset(reinterpret_cast<MAddress>(from));
-        auto iter = fromRegion->remset_iterator_limited_previous(fromLocal, sz);
-        BitMap::idx_t index;
-        while (iter.next(&index)) {
-            const uintptr_t fieldOff = ZRememberedSet::to_offset(index) - fromLocal;
-            toRegion->remember(reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(to) + fieldOff));
+    // ZGC zRelocate.cpp:652-738: the forwarding retains the source identity;
+    // the young sequence selects the face active when old relocation started.
+    ZPage* const fromPage = forwarding->page();
+    ZPage* const toPage = Heap::page(reinterpret_cast<MAddress>(to));
+    const uintptr_t fromLocal = fromPage->local_offset(reinterpret_cast<MAddress>(from));
+    const size_t size = RegionSpace::GetAllocSize(*to);
+    const bool iterateCurrent = Heap::GetHeap().OldActiveRemsetIsCurrent() && !forwarding->in_place();
+    auto iter = iterateCurrent
+        ? fromPage->remset_iterator_limited_current(fromLocal, size)
+        : fromPage->remset_iterator_limited_previous(fromLocal, size);
+    BitMap::idx_t index;
+    while (iter.next(&index)) {
+        const uintptr_t offset = ZRememberedSet::to_offset(index) - fromLocal;
+        const MAddress field = reinterpret_cast<MAddress>(to) + offset;
+        if (ZGeneration::young()->is_phase_mark()) {
+            forwarding->relocated_remembered_fields_register(field);
+        } else {
+            toPage->remember(reinterpret_cast<volatile zpointer*>(field));
         }
+    }
+}
+
+void ZRelocate::UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from, BaseObject* to)
+{
+    // ZGC zRelocate.cpp:801-815: use the immutable relocation plan, including
+    // when an in-place destination has already replaced the source page table entry.
+    if (forwarding->to_age() != PageAge::old) {
+        return;
+    }
+    if (forwarding->from_age() == PageAge::old) {
+        UpdateRemsetOldToOld(forwarding, from, to);
         return;
     }
     RegionManager::RememberPromotedObject(to);
-
 }
 
 BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
@@ -1166,13 +1176,12 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
     const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
     if (const MAddress hit = (forwarding_for_page(copyPage) != nullptr ? forwarding_for_page(copyPage)->find(fromAddr) : 0)) {
         BaseObject* to = reinterpret_cast<BaseObject*>(hit);
-        UpdateRemsetForFields(obj, to);
+        UpdateRemsetForFields(forwarding_for_page(copyPage), obj, to);
         return to;
     }
     const size_t size = RegionSpace::GetAllocSize(*obj);
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
-    const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, ZGeneration::young()->tenuring_threshold());
+    const PageAge toAge = forwarding_for_page(copyPage)->to_age();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc(size, toAge, true));
     if (toObj == nullptr) return nullptr;
@@ -1210,7 +1219,7 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
         }
     }
     if (result != nullptr) {
-        UpdateRemsetForFields(obj, result);
+        UpdateRemsetForFields(publication, obj, result);
     }
     return result;
 }
@@ -1283,12 +1292,19 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
         statGeneration.increase_compacted(region->GetRegionAllocatedSize());
     } else {
         ForwardRegion<G>(region);
-        statGeneration.increase_freed(region->GetRegionSize());
+        statGeneration.increase_freed(owner->size());
+    }
+    if (owner->from_age() == PageAge::old) {
+        owner->relocated_remembered_fields_after_relocate();
     }
     // All page metadata and legacy helper work is finished. A nested drain
     // may already have consumed the construction token; otherwise drop it now.
     if (owner->ref_count().load(std::memory_order_acquire) != 0) owner->release_page();
-    owner->detach_page();
+    ZPage* const fromPage = owner->detach_page();
+    if (!owner->in_place()) {
+        // ZGC zRelocate.cpp:1041-1047: never promote the copied source.
+        Heap::free_page(fromPage);
+    }
     owner->mark_done();
     // From here on only forwarding/queue state may be touched.
     (void)relocateQueue.Complete(owner);
@@ -1424,12 +1440,13 @@ void RegionManager::FinishIncompleteFromRegions(ZGenerationId generation)
         const bool canForward = region->IsLoneFromRegion() ||
             (region->IsThreadLocalRegion() && (region->IsRoutingState() || region->IsCompacted()));
         if (canForward) {
+            const MAddress start = region->GetRegionStart();
             if (young) {
-                ForwardRegion<Generation::Young>(region);
+                ForwardClaimedPage<Generation::Young>(region, forwarding_for_page(region));
             } else {
-                ForwardRegion<Generation::Old>(region);
+                ForwardClaimedPage<Generation::Old>(region, forwarding_for_page(region));
             }
-            if (!IncompleteRouteUnpublished(region)) {
+            if (Heap::page(start) != region || !IncompleteRouteUnpublished(region)) {
                 ++finished;
                 continue;
             }
@@ -1561,40 +1578,27 @@ void RegionManager::CompactRegion(ZPage* region)
         owner->in_place_relocation_claim_page();
     }
 
-    const bool fromYoung = region->IsYoungRegion();
-    const PageAge fromAge = fromYoung ? to_pageage(region->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, ZGeneration::young()->tenuring_threshold());
-    MAddress regionStart = region->GetRegionStart();
-    DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
-        (region->is_marked() ? region->live_bytes() : 0), region->GetRegionEnd(), 0u);
-    MAddress regionLimit = region->GetRegionAllocPtr();
-    ZForwarding* publication = forwarding_for_page(region);
-    CHECK_DETAIL(publication != nullptr,
-                 "compact forwarding table unavailable before copy region=%p range=[%#zx,%#zx)",
-                 region, static_cast<size_t>(regionStart), static_cast<size_t>(region->GetRegionEnd()));
-    region->SetRegionAllocPtr(regionStart);
-    // ZGC zRelocate.cpp:838-861 start_in_place_relocation_prepare_remset: this page is its own
-    // to-page, so its old remembered-set bits have to leave the face before the copy walk starts
-    // writing the new ones.  What the walk does not hand back is dropped, which is
-    // clear_remset_before_in_place_reuse (zRelocate.cpp:1027-1035).
-    if (!fromYoung) {
+    const bool fromYoung = owner->from_age() != PageAge::old;
+    const PageAge toAge = owner->to_age();
+    const MAddress regionStart = region->GetRegionStart();
+    const MAddress regionLimit = region->GetRegionAllocPtr();
+    ZForwarding* const publication = owner;
+    owner->in_place_relocation_start(regionStart);
+    // ZGC zRelocate.cpp:862-897: promotion clones the descriptor; the source
+    // stays young, while the old destination constructor allocates both remsets.
+    ZPage* const toPage = owner->is_promotion()
+        ? region->clone_for_promotion() : region->reset(toAge);
+    toPage->SetRegionAllocPtr(regionStart);
+    if (!fromYoung && Heap::GetHeap().OldActiveRemsetIsCurrent()) {
         region->swap_remset_bitmaps();
     }
-    // ZGC zRelocate.cpp:862-896: establish the to-page age before publishing
-    // any in-place forwarding entry. The descriptor stays in the page table,
-    // so promotion publishes its old identity here. Forwarding allocation
-    // already saved the source generation, livemap and birth sequence in
-    // the forwarding carrier; ForEachLiveObjectStart consumes that snapshot,
-    // not the new destination livemap allocated by PromoteYoungRegion.
-    if (fromYoung) {
-        if (toAge == PageAge::old) {
-            region->PromoteYoungRegion();
-        } else {
-            region->reset(toAge);
-        }
+    if (owner->is_promotion()) {
+        const ZPageRole role = region->GetRegionRole();
+        region->SetRegionRole(ZPageRole::None);
+        toPage->SetRegionRole(role);
+        ZGeneration::young()->in_place_relocate_promote(region, toPage);
+        ZGeneration::young()->register_in_place_relocate_promoted(region);
     }
-    // ZPage::reset(to_age): only the actual in-place destination is born anew.
-    region->ResetPageSequence();
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
         ZForwarding* liveFwd = forwarding_for_page(region);
@@ -1602,7 +1606,7 @@ void RegionManager::CompactRegion(ZPage* region)
             return;
         }
         size_t size = currentObj->GetSize();
-        MAddress toAddress = region->alloc_object(size);
+        MAddress toAddress = toPage->alloc_object(size);
         BaseObject* toObj = from_region_addr(toAddress);
         DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
         // zRelocate.cpp:634-639: in-place relocation copies conjoint when the
@@ -1617,28 +1621,16 @@ void RegionManager::CompactRegion(ZPage* region)
         std::atomic_thread_fence(std::memory_order_release);
         const MAddress receipt = publication->insert(currentPtr, toAddress);
 
-        // ZGC zRelocate.cpp:652-731 update_remset_old_to_old: the bits covering the from copy
-        // name field offsets inside this object, so they follow it to its new address.
-        if (fromYoung && toAge == PageAge::old) {
-            RememberPromotedObject(toObj);
-        } else if (!fromYoung) {
-            const uintptr_t fromLocal = region->local_offset(currentPtr);
-            auto iter = region->remset_iterator_limited_previous(fromLocal, size);
-            BitMap::idx_t index;
-            while (iter.next(&index)) {
-                const uintptr_t fieldOff = ZRememberedSet::to_offset(index) - fromLocal;
-                region->remember(reinterpret_cast<volatile zpointer*>(toAddress + fieldOff));
-            }
-        }
+        ZRelocate::UpdateRemsetForFields(publication, currentObj, toObj);
     });
 
-    MAddress cur = region->GetRegionAllocPtr();
+    MAddress cur = toPage->GetRegionAllocPtr();
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
         HeapFiller::ZeroAndFill(cur, reclaimSize);
     }
 
-    region->ResetCensusBoundary();
+    toPage->ResetCensusBoundary();
     VerifyRelocatedPage(region, "CompactRegion.whole");
     WaitCopiedObjectsUnlocked(region);
     region->MarkForwardingDone();
@@ -1646,7 +1638,8 @@ void RegionManager::CompactRegion(ZPage* region)
     // zForwarding.cpp:171-181 / zRelocate.cpp:1001-1047: the forwarding table
     // outlives page reuse. Do not put this page on the mutator TLAB list while
     // its table is live — RehomeCompactedInPlaceRegion keeps it collector-visible.
-    RehomeCompactedInPlaceRegion(region);
+    owner->in_place_relocation_finish();
+    RehomeCompactedInPlaceRegion(toPage);
 }
 
 void RegionManager::EnlistCompactedRegionForAllocator(ZPage* region)
@@ -1894,7 +1887,8 @@ void RegionManager::ForwardRegion(ZPage* region)
         // in-place relocated from page goes on _in_place_relocate_promoted_pages
         // (zRelocate.cpp:896), and that array is read exactly once -- by
         // ZRelocationSet::reset's destroy_and_clear (zRelocationSet.cpp:200).
-        if (region->GetRegionAllocPtr() <= region->GetRegionStart() &&
+        ZPage* const destination = Heap::page(region->GetRegionStart());
+        if (destination->GetRegionAllocPtr() <= destination->GetRegionStart() &&
             !(youngRegion && G == Generation::Old)) {
             // ZGC frees such a page: select_relocation_set hands every relocatable page its
             // own mark did not mark to register_empty_page, and free_empty_pages returns it
@@ -1931,11 +1925,7 @@ void RegionManager::ForwardRegion(ZPage* region)
     CHECK(rawPointerCount == 0);
     // RelocateClaimedPage already copied each object and called
     // UpdateRemsetForFields for the CAS winner; do not repeat either walk.
-    if (!youngRegion) {
-        if (ZForwarding* forwarding = generation_forwarding_table(Generation::Old).get(region->GetRegionStart())) {
-            forwarding->relocated_remembered_fields_after_relocate();
-        }
-    }
+
 
     {
         // zRelocate.cpp:1137-1152: the page worker finishes objects then
@@ -1943,21 +1933,8 @@ void RegionManager::ForwardRegion(ZPage* region)
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
         VerifyRelocatedPage(region, "ForwardRegion");
         region->MarkForwardingDone();
-        // ZGC reset_livemap (zForwarding.cpp:71-74 / zPage.cpp:115-117).
-        {
-            region->reset_livemap();
-            if (youngRegion) {
-                region->PromoteYoungRegion();
-            }
-        }
-        // After-copy Collect zeros the from payload while live holders still name
-        // it. ZGC free_page waits for detach (zRelocate.cpp:1041-1047) and keeps
-        // the forwarding table until the next cycle (zRelocationSet.cpp:91-96).
-        // cjpm coll_live: first young (cgen=0 fpath=2), then after that Exempt
-        // old (cgen=1 fpath=2 route=5 ke=0 gh=1 reason=HEU). Exempt both; the
-        // next Assemble/PrepareYoung re-enlists, ghost + entries stay until
-        // relocation-set install. Residuals are settled above before done.
-        ExemptFromRegion(region);
+        // The worker releases/detaches and frees the source after accounting,
+        // as in ZGC zRelocate.cpp:1009-1047. Keep its source identity intact.
         return;
     }
 }
