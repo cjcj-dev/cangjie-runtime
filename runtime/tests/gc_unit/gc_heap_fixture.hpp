@@ -44,6 +44,7 @@
 #include "Heap/z/zRelocationSet.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zRelocationSetSelector.inline.hpp"
+#include "Heap/z/zForwarding.hpp"
 
 namespace MapleRuntime {
 
@@ -143,7 +144,7 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
                 GenerationSequenceFixture::Advance(cycle);
             }
         }
-        selector.add_selected_small(page, 1);
+        selector.add_selected_small(page, ZForwarding::nentries(page));
     }
     Heap::GetHeap().GetZGeneration(generation).relocation_set().install(&selector);
     return true;
