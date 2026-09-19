@@ -1047,7 +1047,6 @@ EXPORTS
     _ZN12MapleRuntime10ZPage19GetYoungRegionCountEv @1052
     _ZN12MapleRuntime10ZPage19IsResurrectedObjectEPKNS_10BaseObjectE @1053
     _ZN12MapleRuntime10ZPage19StampCensusBoundaryEv @1054
-    _ZN12MapleRuntime10ZPage20GetGhostFromRegionAtEy @1055
     _ZN12MapleRuntime10ZPage20GetOrAllocMarkBitmapEv @1056
     _ZN12MapleRuntime10ZPage20youngRegionFlagMutexE @1057 DATA
 

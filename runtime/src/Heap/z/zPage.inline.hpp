@@ -466,8 +466,17 @@ inline void ZPage::RetirePage(ZPage* region, std::function<void()> retire)
         CHECK(ZPageTable::heap_table().get(region->GetRegionStart()) == region);
         ZPageTable::heap_table().remove(region);
         // zPageAllocator.cpp:2248-2250 safe_destroy_page: deferred while any
-        // page iterator is active, immediate otherwise.
-        safeDestroy.schedule_delete(new PageRetirement{ std::move(retire) });
+        // page iterator is active, immediate otherwise. The retire hook runs
+        // from ~ZPage when the deferred delete lands.
+        region->_retireHook = std::move(retire);
+        safeDestroy.schedule_delete(region);
+    }
+
+inline void ZPage::RetireDescriptor(ZPage* page)
+    {
+        CHECK(page != nullptr);
+        CHECK(ZPageTable::heap_table().get(page->GetRegionStart()) != page);
+        safeDestroy.schedule_delete(page);
     }
 
 inline void ZPage::EnableSafeDestroy()
@@ -563,16 +572,6 @@ inline void ZPage::VisitPageOwners(const std::function<void(ZPage*)>& visitor)
         }
     }
 
-inline ZPage* ZPage::GetZPage(uint32_t idx)
-{
-    return ZPageTable::heap_table().get(GetUnitAddress(idx));
-}
-
-inline ZPage* ZPage::GetGhostFromRegionAt(uintptr_t allocAddr)
-    {
-        return ZPageTable::heap_table().get(allocAddr);
-    }
-
 inline MAddress ZPage::GetUnitAddress(size_t idx)
     {
         CHECK(idx < totalUnitCount);
@@ -611,12 +610,6 @@ inline ZPage* ZPage::InitRegion(size_t unitIdx, size_t nUnit, ZPageType uclass, 
                                                            nUnit * UNIT_SIZE));
         region->InitRegion(nUnit, uclass, age);
         return region;
-    }
-
-inline ZPage* ZPage::InitRegionAt(uintptr_t addr, size_t nUnit, ZPageType uclass)
-    {
-        size_t idx = ZPage::GetUnitIdxAt(addr);
-        return InitRegion(idx, nUnit, uclass);
     }
 
 inline void ZPage::WaitCopiedBeforePayloadWipe(ZPage* region, const char* site)

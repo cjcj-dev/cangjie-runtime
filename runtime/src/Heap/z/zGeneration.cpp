@@ -1354,13 +1354,27 @@ YoungTypeSetter::~YoungTypeSetter()
 }
 
 namespace MapleRuntime {
-// ZGenerationYoung::flip_promote (ZGC zGeneration.cpp:941-943).
-// The Cangjie RegionList owns stable page descriptors, so flip promotion
-// resets the descriptor in place (from == to). Still publish via the page table:
-// its replace operation also registers the new old page with the young remset.
-void ZGenerationYoung::flip_promote(ZPage* from, ZPage* to)
+void ZGenerationYoung::flip_promote(ZPage* from_page, ZPage* to_page)
 {
-    Heap::page_table().replace(from, to);
+    // zGeneration.cpp:941-948: replace + statistics only. The from_page's
+    // RegionList handoff happens at the flip fork (zRelocate.cpp
+    // ZFlipAgePagesTask::work) before this call, not here.
+    Heap::page_table().replace(from_page, to_page);
+    Heap::GetHeap().page_allocator().promote_used(from_page, to_page);
+    increase_freed(from_page->size());
+    increase_promoted(from_page->live_bytes());
+}
+
+void ZGenerationYoung::in_place_relocate_promote(ZPage* from_page, ZPage* to_page)
+{
+    // zGeneration.cpp:950-955: replace + statistics only.
+    Heap::page_table().replace(from_page, to_page);
+    Heap::GetHeap().page_allocator().promote_used(from_page, to_page);
+}
+
+void ZGenerationYoung::register_flip_promoted(const ZArray<ZPage*>& pages)
+{
+    _relocation_set.register_flip_promoted(pages);
 }
 
 void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)
@@ -1737,11 +1751,10 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
                     }
                     continue;
                 }
-                // zGeneration.cpp:941-948: flip promotion leaves young
-                // (freed) and joins old (promoted) without a copy.
-                ZGeneration::young()->increase_freed(region->GetRegionSize());
-                ZGeneration::young()->increase_promoted(region->live_bytes());
-                manager.AddFlipPromotedPage(region);
+                // Past-tenure marked regions are promoted by this cycle's
+                // flip_age_pages when the selector registered them
+                // (zRelocate.cpp:1334-1363); a region the selector skipped is
+                // an ordinary candidate next cycle (zGeneration.cpp:206-218).
             }
         }
         }

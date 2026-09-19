@@ -28,6 +28,15 @@ public:
 
     const char* GetListName() const { return listName; }
 
+    void ReplaceRegion(ZPage* from, ZPage* to)
+    {
+        if (from == nullptr || to == nullptr || from == to) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(listMutex);
+        ReplaceRegionLocked(from, to);
+    }
+
     void DeleteRegion(ZPage* del)
     {
         if (del == nullptr) {
@@ -178,6 +187,7 @@ protected:
     const char* listName = nullptr;
 private:
     void DeleteRegionLocked(ZPage* del);
+    void ReplaceRegionLocked(ZPage* from, ZPage* to);
 
     void AssignWith(const RegionList& srcList)
     {

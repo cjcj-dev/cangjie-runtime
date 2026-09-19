@@ -114,6 +114,9 @@ private:
     ZLiveMap _livemap;
     ZRememberedSet _remembered_set;
     bool _relocate_promoted;
+    // RetirePage hook: run by ~ZPage so safeDestroy can stay ZSafeDelete<ZPage>
+    // (zPageAllocator.cpp:2248-2250 ZSafeDelete<ZPage> _safe_destroy).
+    std::function<void()> _retireHook;
 public:
     using Page = ZPage;
     // The table serializes publication/unbinding of this facade's owner.
@@ -200,6 +203,7 @@ public:
     static std::atomic<uint64_t>& EnrolAfterFlip();
 
     ZPage();
+    ~ZPage();
     static ZPage* NullRegion();
 
     ZLiveMap& livemap();
@@ -352,17 +356,10 @@ public:
 
     static std::vector<UnitSegment> unitSegments;
 
-    // zPageAllocator.hpp:166 ZSafeDelete<ZPage> _safe_destroy. The ABI keeps
-    // page descriptors in the unit array (I6, PLAN §5), so the object whose
-    // delete is deferred is a retirement record: its destructor reinitializes
-    // the descriptor and hands the memory back. P03's independent ZPage
-    // descriptor turns this into ZSafeDelete<ZPage> on the page allocator,
-    // next to the page table this static sits beside today.
-    struct PageRetirement {
-        std::function<void()> retire;
-        ~PageRetirement() { retire(); }
-    };
-    static ZSafeDelete<PageRetirement> safeDestroy;
+    // zPageAllocator.cpp:2248-2250 ZSafeDelete<ZPage> _safe_destroy: the
+    // deferred-deleted object is the ZPage descriptor itself. The RetirePage
+    // memory handback rides _retireHook, run from ~ZPage.
+    static ZSafeDelete<ZPage> safeDestroy;
 
     // zPageAllocator.cpp:2287-2293
     static void EnableSafeDestroy();
@@ -380,6 +377,7 @@ public:
     };
 
     static void RetirePage(ZPage* region, std::function<void()> retire);
+    static void RetireDescriptor(ZPage* page);
 
     static size_t IndexedUnitCount(const std::vector<ZVirtualMemory>& ranges);
     static size_t IndexedUnitCount(const std::vector<UnitSegment>& segments);
@@ -401,10 +399,6 @@ public:
 
     static void VisitPageOwners(const std::function<void(ZPage*)>& visitor);
 
-    static ZPage* GetZPage(uint32_t idx);
-
-    static ZPage* GetGhostFromRegionAt(uintptr_t allocAddr);
-
 #if defined(MRT_GC_UNIT_TESTS)
     using GhostLookupTestHook = void (*)(ZPage*);
     MRT_EXPORT static void SetGhostLookupTestHook(GhostLookupTestHook hook);
@@ -417,8 +411,6 @@ public:
 
     static ZPage* InitRegion(size_t unitIdx, size_t nUnit, ZPageType uclass,
                                   PageAge age = PageAge::old);
-
-    static ZPage* InitRegionAt(uintptr_t addr, size_t nUnit, ZPageType uclass);
 
     static void WaitCopiedBeforePayloadWipe(ZPage* region, const char* site);
 
@@ -604,24 +596,6 @@ public:
     // from-page carrier (parked in retiredLivemap); the new Old current metadata
     // starts with a fresh livemap.
     void PromoteYoungRegion();
-
-    // The original young ZPage left by ZPage::clone_for_promotion. The
-    // region slot becomes old; this object owns the original, un-copied map.
-    class PromotionPage {
-    public:
-        PromotionPage(ZLiveMap* live, MAddress start, MAddress top, uint8_t age, bool large)
-            : livemap(live), start(start), top(top), age(age), large(large) {}
-        void ObjectIterate(const std::function<void(BaseObject*)>& visitor) const;
-        uint8_t Age() const { return age; }
-    private:
-        ZLiveMap* livemap;
-        MAddress start;
-        MAddress top;
-        uint8_t age;
-        bool large;
-    };
-
-    std::unique_ptr<PromotionPage> CloneForPromotion();
 
     uint8_t GetYoungAge() const;
 

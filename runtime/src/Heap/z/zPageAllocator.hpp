@@ -608,9 +608,10 @@ public:
     // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
     static void RememberPromotedObject(BaseObject* object);
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
-    void AddFlipPromotedPage(ZPage* region);
     void RememberFlipPromotedPages(ZWorkers& workers);
     void ResetFlipPromotedPages();
+    void promote_used(const ZPage* from, const ZPage* to);
+    void safe_destroy_page(ZPage* page);
     void StampCensusBoundaries();
     void PromoteAllRegions();
     // CompactRegion's list-ownership tail. A concurrent stay-young path may
@@ -922,8 +923,6 @@ private:
     }
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
     friend class Uncommitter;
-    std::mutex flipPromotedMutex;
-    std::vector<std::unique_ptr<ZPage::PromotionPage>> flipPromotedPages;
     std::mutex pageAllocatorMutex;
     AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
     size_t pageAllocatorUsed{ 0 };
@@ -960,8 +959,6 @@ private:
     // if large region is allocated during gc trace phase, it is called a trace-region,
     // it is recorded here when it is full.
     RegionCache largeTraceRegions;
-
-    uintptr_t regionInfoStart = 0; // the address of first ZPage
 
     uintptr_t regionHeapStart = 0; // the address of first region to allocate object
     uintptr_t regionHeapEnd = 0;

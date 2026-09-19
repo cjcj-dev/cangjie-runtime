@@ -163,10 +163,7 @@ bool ZRelocate::IsUnmovableFromObject(BaseObject* obj)
     // concurrent outcome (ghost dispel), so re-resolve from authoritative state
     // instead of using a pointer that this race can leave null. Heap::page
     // itself CHECKs (early-stop) on a genuine no-owner invariant break.
-    ZPage* regionInfo = ZPage::GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj));
-    if (regionInfo == nullptr) {
-        regionInfo = Heap::page(reinterpret_cast<uintptr_t>(obj));
-    }
+    ZPage* regionInfo = Heap::page(reinterpret_cast<uintptr_t>(obj));
     return regionInfo->IsUnmovableFromRegion();
 }
 
@@ -419,10 +416,7 @@ bool ForceRootRouteDomainWhileForwardable(BaseObject* obj)
         return false;
     }
     EnsureRouteDomainMembership(obj);
-    ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-    if (region == nullptr) {
-        region = Heap::page(reinterpret_cast<MAddress>(obj));
-    }
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
     if (region == nullptr || !region->IsYoungRegion()) {
         return false;
     }
@@ -556,7 +550,7 @@ bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     // resolveto: Resolve already rewrote FROM→TO. TO sits in a Compacted ghost
     // (in-place pack). Forward/Admit indexes liveInfo0 by from-offset — feeding TO
     // misses → leave-alone. Keep the already-installed to.
-    ZPage* targetRegion = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+    ZPage* targetRegion = Heap::page(reinterpret_cast<MAddress>(target));
     const bool compactDestination = targetRegion != nullptr &&
         targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
     const bool alreadyTo = (target != oldObj) || compactDestination;
@@ -618,7 +612,7 @@ bool ZRelocate::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* 
     BaseObject* oldObj = to_object(to_zaddress(oldValue));
     // resolveto: Resolve already remapped FROM→TO. Do not Admit the to-address
     // against the from-offset bitmap (offpast same-target probe: sameObj=0).
-    ZPage* targetRegion = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+    ZPage* targetRegion = Heap::page(reinterpret_cast<MAddress>(target));
     const bool compactDestination = targetRegion != nullptr &&
         targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
     const bool alreadyTo = (target != oldObj) || compactDestination;
@@ -748,24 +742,16 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
 
 void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 {
-    // zRelocate.cpp:1257-1306. Producers have finished before the worker gang
-    // starts; pages and their livemaps stay alive until it joins.
-    std::vector<ZPage::PromotionPage*> pages;
-    {
-        std::lock_guard<std::mutex> lock(flipPromotedMutex);
-        for (const auto& page : flipPromotedPages) {
-            pages.push_back(page.get());
-        }
-    }
+    ZArray<ZPage*>* pages = Heap::GetHeap().GetZGeneration(ZGenerationId::young)
+                                .relocation_set().flip_promoted_pages();
     class PageTask final : public ZTask {
     public:
-        PageTask(const std::vector<ZPage::PromotionPage*>& pages, const std::function<void(RefField<>&)>& remember)
-            : ZTask("ZRelocateRemsetFlipPromotedPagesTask"), iter(pages.data(), pages.size()), remember(remember) {}
+        PageTask(ZArray<ZPage*>* pages, const std::function<void(RefField<>&)>& remember)
+            : ZTask("ZRelocateRemsetFlipPromotedPagesTask"), iter(pages), remember(remember) {}
         void work() override
         {
-            // zArray.hpp:104 ZArrayParallelIterator: workers claim promoted pages.
-            for (ZPage::PromotionPage* page; iter.next(&page);) {
-                page->ObjectIterate([&](BaseObject* object) {
+            for (ZPage* page; iter.next(&page);) {
+                page->object_iterate([&](BaseObject* object) {
                     RefFieldVisitor remapAndRemember = [&](RefField<>& field) {
                         const zpointer observed = field.GetFieldValue();
                         BaseObject* target = RemapPromotedField(field, observed);
@@ -782,7 +768,7 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
             }
         }
     private:
-        ZArrayParallelIterator<ZPage::PromotionPage*> iter;
+        ZArrayParallelIterator<ZPage*> iter;
         const std::function<void(RefField<>&)> remember;
     } task(pages, [](RefField<>& field) {
         ZPage* holder = Heap::page(reinterpret_cast<MAddress>(&field));
@@ -1018,7 +1004,7 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
             return current;
         }
         const MAddress currentAddr = reinterpret_cast<MAddress>(current);
-        ZPage* currentRegion = ZPage::GetGhostFromRegionAt(currentAddr);
+        ZPage* currentRegion = Heap::page(currentAddr);
         if (currentRegion != nullptr && currentRegion->IsCompactRouteDestination(currentAddr) &&
             ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
             // Dense in-place destinations share the from page's address range.
@@ -1146,7 +1132,7 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
             // relocate_or_remap; that is not a missing identity receipt.
             if (ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable &&
                 !current->IsForwarded() &&
-                ZPage::GetGhostFromRegionAt(currentAddr) == nullptr) {
+                Heap::page(currentAddr) == nullptr) {
                 return current;
             }
             ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.missing-identity", current, 0, provenance);
@@ -1166,7 +1152,7 @@ BaseObject* ZRelocate::ForwardObject(BaseObject* obj, Generation generation)
     // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
     if (IsFromObject(obj) && !IsUnmovableFromObject(obj)) {
-        ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
         BaseObject* waited = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate()
             .WaitForPageForwarding(obj, forwarding_for_page(region));
         if (waited != nullptr) {
@@ -1188,7 +1174,7 @@ BaseObject* ZRelocate::ForwardObject(BaseObject* obj, Generation generation)
 
 BaseObject* ZRelocate::ForwardObjectExclusive(BaseObject* obj)
 {
-    ZPage* page = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+    ZPage* page = Heap::page(reinterpret_cast<MAddress>(obj));
     if (page == nullptr) {
         page = Heap::page(reinterpret_cast<MAddress>(obj));
     }
@@ -1207,7 +1193,7 @@ void ZRelocate::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
     if (toRegion == nullptr || toRegion->IsYoungRegion()) {
         return;
     }
-    ZPage* fromRegion = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from));
+    ZPage* fromRegion = Heap::page(reinterpret_cast<MAddress>(from));
     if (fromRegion == nullptr) {
         fromRegion = Heap::page(reinterpret_cast<MAddress>(from));
     }
@@ -1910,9 +1896,10 @@ void RegionManager::ForwardRegion(ZPage* region)
             EnlistStayYoungSurvivor(region);
             return;
         }
-        if (youngRegion) {
-            AddFlipPromotedPage(region);
-        }
+        // No mid-cycle flip promotion here: ZGC ages/promotes only
+        // selector-registered pages in ZFlipAgePagesTask
+        // (zRelocate.cpp:1334-1363); a page the selector skipped is an
+        // ordinary candidate next cycle (zGeneration.cpp:206-218).
         ExemptFromRegion(region);
         return;
         }
@@ -2342,21 +2329,30 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                 const PageAge fromAge = prev->age();
                 const PageAge toAge = ZRelocate::compute_to_age(fromAge);
                 const bool promotion = toAge == PageAge::old;
-                // RegionList owns the live ZPage*. ZGC clone+page_table replace
-                // (zPage.cpp:64-71, zGeneration.cpp:941-943) cannot move the
-                // descriptor off its list. Flip age in place (reset) instead.
-                ZPage* const newPage = prev->reset(toAge);
-                if (promotion) {
-                    prev->remset_alloc();
-                }
+                ZPage* const newPage = promotion
+                    ? prev->clone_for_promotion()
+                    : prev->reset(toAge);
                 newPage->reset_livemap();
                 if (promotion) {
-                    Heap::GetHeap().young().flip_promote(prev, newPage);
+                    // After the flip the from_page is referenced only by the
+                    // relocation set's _flip_promoted_pages (zRelocate.cpp:1355-1363
+                    // pushes prev_page; zRelocationSet.cpp:208 asserts no
+                    // duplicates). Its intrusive RegionList slot is handed to
+                    // newPage here, at the single promotion fork, before
+                    // flip_promote; the list keeps one member with the same
+                    // unit count, so RecentFullAccounting and the used/census
+                    // readers (zPageAllocator.cpp:1031-1064,1362-1363) see no
+                    // change. flip_promote itself does no list work
+                    // (zGeneration.cpp:941-948).
+                    if (RegionList* list = prev->GetRegionListOwner()) {
+                        list->ReplaceRegion(prev, newPage);
+                    }
+                    ZGeneration::young()->flip_promote(prev, newPage);
                     promoted.append(prev);
                 }
             }
-            Heap::GetHeap().GetZGeneration(ZGenerationId::young)
-                .relocation_set().register_flip_promoted(promoted);
+            // zRelocate.cpp:1363: registration goes through the generation.
+            ZGeneration::young()->register_flip_promoted(promoted);
         }
     private:
         ZArrayParallelIterator<ZPage*> iter;
