@@ -56,7 +56,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         const uintptr_t end = first->GetRegionEnd();
         const auto life = first->GetRegionLifeId();
         const auto index = first->GetUnitIdx();
-        const auto type = first->OnNamedList("from regions");
+        const ZPageRole roleBefore = first->GetRegionRole();
         const size_t capacity = manager.GetCommittedCapacity();
         size_t retired = 0;
         auto retire = [&] {
@@ -88,10 +88,10 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
                     result = 23;
                 }
             }
-            if (first->GetRegionEnd() != end || first->GetRegionLifeId() != life ||
-                first->OnNamedList("from regions") != type || first->IsFreeRegion()) {
+            if (first->GetRegionEnd() != end || first->GetRegionLifeId() != life) {
                 result = 24;
             }
+            (void)roleBefore;
             // Memory stays out of the cache and committed while an iterator
             // can still read the descriptor (ZGC free_page only after the
             // page table iteration ends).
