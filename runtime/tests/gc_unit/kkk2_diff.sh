@@ -16,13 +16,15 @@ C12=${CS:0:12}; B12=${BS:0:12}
 echo "# kkk2_diff cand=$CS base=$BS $(date -Iseconds)"
 
 # #708：两侧必须用【候选树】同一份两宿主 kkk2_managed.sh，禁止跑基线 sha 自带的旧单臂脚本（否则 failed 形态差会假 CAND-ONLY）
-mkdir -p "$SCR/diff_harness"
-git -C "$REPO" show "$CS:runtime/tests/gc_unit/kkk2_managed.sh" > "$SCR/diff_harness/kkk2_managed.sh" || { echo "⛔ 候选无 kkk2_managed.sh"; exit 2; }
-git -C "$REPO" show "$CS:tools/zstat_pillars.py" > "$SCR/diff_harness/zstat_pillars.py" || { echo "⛔ 候选无 zstat_pillars.py"; exit 2; }
-bash "$B" kkk2 "mkdir -p /root/diff_harness"
-bash "$B" kkk2 --put "$SCR/diff_harness/kkk2_managed.sh" /root/diff_harness/kkk2_managed.sh
-bash "$B" kkk2 --put "$SCR/diff_harness/zstat_pillars.py" /root/diff_harness/zstat_pillars.py
-chmod +x "$SCR/diff_harness/kkk2_managed.sh"
+HARNET=/root/diff_harness_708
+mkdir -p "$SCR/diff_harness_708"
+git -C "$REPO" show "$CS:runtime/tests/gc_unit/kkk2_managed.sh" > "$SCR/diff_harness_708/kkk2_managed.sh" || { echo "⛔ 候选无 kkk2_managed.sh"; exit 2; }
+/usr/bin/grep -q "Two target arms" "$SCR/diff_harness_708/kkk2_managed.sh" || { echo "⛔ 抽出的 kkk2_managed.sh 不是两宿主形态"; head -5 "$SCR/diff_harness_708/kkk2_managed.sh"; exit 2; }
+git -C "$REPO" show "$CS:tools/zstat_pillars.py" > "$SCR/diff_harness_708/zstat_pillars.py" || { echo "⛔ 候选无 zstat_pillars.py"; exit 2; }
+bash "$B" kkk2 "mkdir -p $HARNET"
+bash "$B" kkk2 --put "$SCR/diff_harness_708/kkk2_managed.sh" $HARNET/kkk2_managed.sh
+bash "$B" kkk2 --put "$SCR/diff_harness_708/zstat_pillars.py" $HARNET/zstat_pillars.py
+chmod +x "$SCR/diff_harness_708/kkk2_managed.sh"
 
 managed_json_ok() { # 新形态：必须有 arms 键；旧单臂 JSON 当缺失
   local lane=$1
@@ -32,7 +34,7 @@ sys.exit(0 if p.is_file() and isinstance(json.loads(p.read_text()).get(\"arms\")
 
 run_managed() {
   local sha=$1; local lane=$2
-  bash "$WF" sh "$lane" "ulimit -c 0; mkdir -p /root/$lane/harness /root/$lane/managed-runs /root/$lane/tools-bundle /root/$lane/default/tools; cp -a /root/diff_harness/kkk2_managed.sh /root/$lane/harness/kkk2_managed.sh; cp -a /root/diff_harness/zstat_pillars.py /root/$lane/tools-bundle/zstat_pillars.py; cp -a /root/diff_harness/zstat_pillars.py /root/$lane/default/tools/zstat_pillars.py; export LANE=/root/$lane SRCROOT=/root/$lane/default OUT=/root/$lane/managed-runs N=3 CANGJIE_HOME=/root/sdkdepot/945fe3e8f023-fa13e8d5c17b; bash /root/$lane/harness/kkk2_managed.sh $sha"
+  bash "$WF" sh "$lane" "ulimit -c 0; mkdir -p /root/$lane/harness /root/$lane/managed-runs /root/$lane/tools-bundle /root/$lane/default/tools; cp -a /root/diff_harness_708/kkk2_managed.sh /root/$lane/harness/kkk2_managed.sh; cp -a /root/diff_harness_708/zstat_pillars.py /root/$lane/tools-bundle/zstat_pillars.py; cp -a /root/diff_harness_708/zstat_pillars.py /root/$lane/default/tools/zstat_pillars.py; /usr/bin/grep -q 'Two target arms' /root/$lane/harness/kkk2_managed.sh || { echo '⛔ lane harness not two-host'; exit 2; }; export LANE=/root/$lane SRCROOT=/root/$lane/default OUT=/root/$lane/managed-runs N=3 CANGJIE_HOME=/root/sdkdepot/945fe3e8f023-fa13e8d5c17b; bash /root/$lane/harness/kkk2_managed.sh $sha"
 }
 
 run_arm() { # run_arm <sha> ：若 kkk2 无缓存则建+三臂；rc 0=可用
