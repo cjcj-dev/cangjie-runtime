@@ -603,37 +603,48 @@ extern "C" int p2SlowFieldInputExercise()
     heap.RequestGC(GC_REASON_USER, false);
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
     finalHolder->OnFinalizerCreated();
+    NativeSlot finalKeepRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(finalKeepRoot, finalHolder);
+    NativeSlot* keepRoots[] = { &finalKeepRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(keepRoots), 1);
     Expect(!Heap::page(reinterpret_cast<MAddress>(strongHolder))->IsYoungRegion(), "slow_real_strong_holder_promoted");
     Expect(!Heap::page(reinterpret_cast<MAddress>(finalHolder))->IsYoungRegion(), "slow_real_final_holder_promoted");
     auto* young = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
     auto* youngSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     ZBarrier::WriteReference(young, Slot(young), youngSentinel);
-    ZBarrier::WriteReference(strongHolder, Slot(strongHolder), young);
-    ZBarrier::WriteReference(finalHolder, Slot(finalHolder), young);
-    const zpointer stored = Slot(strongHolder).GetFieldValue();
+    RefField<>& strongYoungSlot = Slot(strongHolder);
+    RefField<>& finalYoungSlot = Slot(finalHolder);
+    RefField<>& strongOldSlot = Slot(strongHolder, 1);
+    RefField<>& finalOldSlot = Slot(finalHolder, 1);
+    ZBarrier::WriteReference(strongHolder, strongYoungSlot, young);
+    ZBarrier::WriteReference(finalHolder, finalYoungSlot, young);
+    const zpointer stored = strongYoungSlot.GetFieldValue();
     std::atomic<unsigned> strongSlow{0}, finalSlow{0}, strongFast{0}, finalFast{0};
     std::atomic<unsigned> strongFollow{0}, finalFollow{0};
     std::atomic<bool> inputTask{false};
     ZBarrier::testFieldMarkResult = [&](ZBarrier::FieldMarkKind kind, RefField<>& field, zpointer observed, zaddress result) {
         if (inputTask.load()) {
-            if (&field == &Slot(strongHolder)) {
+            if (&field == &strongYoungSlot) {
                 ++strongSlow;
                 Expect(!ZPointer::is_mark_good(observed), "strong_young_slow_input_selected");
                 Expect(is_null(result), "strong_young_slow_no_object_result");
                 Expect(field.GetFieldValue() == observed, "strong_young_slow_does_not_heal");
-            } else if (&field == &Slot(finalHolder)) {
+            } else if (&field == &finalYoungSlot) {
+                const bool finalFastPath = ZPointer::is_load_good(observed) && ZPointer::is_marked_any_old(observed);
+                std::printf("P2_FINAL_SLOW_OBS load_good=%d marked_any_old=%d mark_good=%d result_null=%d kind=%d\n",
+                            ZPointer::is_load_good(observed), ZPointer::is_marked_any_old(observed),
+                            ZPointer::is_mark_good(observed), is_null(result), static_cast<int>(kind));
+                Expect(!finalFastPath, "final_young_slow_input_selected");
                 ++finalSlow;
-                Expect(!(ZPointer::is_load_good(observed) && ZPointer::is_marked_any_old(observed)),
-                       "final_young_slow_input_selected");
                 Expect(is_null(result), "final_young_slow_no_object_result");
                 Expect(field.GetFieldValue() == observed, "final_young_slow_does_not_heal");
-            } else if (&field == &Slot(strongHolder, 1)) {
+            } else if (&field == &strongOldSlot) {
                 Expect(to_object(result) == oldChild, "strong_old_slow_current_control");
                 if (ZPointer::is_mark_good(observed)) {
                     ++strongFast;
                     Expect(field.GetFieldValue() == observed, "strong_old_fast_unchanged");
                 }
-            } else if (&field == &Slot(finalHolder, 1)) {
+            } else if (&field == &finalOldSlot) {
                 Expect(to_object(result) == finalChild, "final_old_slow_current_control");
                 if (ZPointer::is_load_good(observed) && ZPointer::is_marked_any_old(observed)) {
                     ++finalFast;
@@ -674,12 +685,12 @@ extern "C" int p2SlowFieldInputExercise()
             auto& youngStacks = Heap::GetHeap().young().MarkPtr()->Stacks();
             const size_t youngBefore = youngStacks.Population();
             inputTask = true;
-            ZBarrier::MarkBarrierOnOldOopField(strongHolder, Slot(strongHolder), false);
-            ZBarrier::MarkBarrierOnOldOopField(finalHolder, Slot(finalHolder), true);
-            ZBarrier::MarkBarrierOnOldOopField(strongHolder, Slot(strongHolder, 1), false);
-            ZBarrier::MarkBarrierOnOldOopField(finalHolder, Slot(finalHolder, 1), true);
-            ZBarrier::MarkBarrierOnOldOopField(strongHolder, Slot(strongHolder, 1), false);
-            ZBarrier::MarkBarrierOnOldOopField(finalHolder, Slot(finalHolder, 1), true);
+            ZBarrier::MarkBarrierOnOldOopField(strongHolder, strongYoungSlot, false);
+            ZBarrier::MarkBarrierOnOldOopField(finalHolder, finalYoungSlot, true);
+            ZBarrier::MarkBarrierOnOldOopField(strongHolder, strongOldSlot, false);
+            ZBarrier::MarkBarrierOnOldOopField(finalHolder, finalOldSlot, true);
+            ZBarrier::MarkBarrierOnOldOopField(strongHolder, strongOldSlot, false);
+            ZBarrier::MarkBarrierOnOldOopField(finalHolder, finalOldSlot, true);
             inputTask = false;
             Expect(youngStacks.Population() == youngBefore, "slow_old_fields_do_not_publish_young_entries");
         });
@@ -705,6 +716,7 @@ extern "C" int p2SlowFieldInputExercise()
     Expect(strongFollow != 0, "slow_strong_control_result_observed");
     Expect(finalFollow != 0, "slow_final_control_result_observed");
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(keepRoots), 1);
     std::printf("P2_SLOW_RESULT failures=%u strong=%u final=%u strong_follow=%u final_follow=%u\n",
                 failures.load(), strongSlow.load(), finalSlow.load(), strongFollow.load(), finalFollow.load());
     return failures.load();
