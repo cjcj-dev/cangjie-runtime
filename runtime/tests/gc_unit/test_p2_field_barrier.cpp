@@ -4,6 +4,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
@@ -333,7 +336,7 @@ extern "C" int p2FinalizerRegistrationExercise()
     auto& heap = Heap::GetHeap();
     auto& collector = heap;
     auto& references = heap.GetFinalizerProcessor().GetReferenceProcessor();
-    auto* delayedOld = MObject::NewPinnedObject(smallType, 16);
+    BaseObject* delayedOld = MObject::NewObject(smallType, 16, AllocType::MOVEABLE_OBJECT);
     NativeSlot oldRoot(zpointer::null);
     ZBarrier::WriteStaticRef(oldRoot, delayedOld);
     NativeSlot* roots[] = { &oldRoot };
@@ -342,6 +345,7 @@ extern "C" int p2FinalizerRegistrationExercise()
     const size_t enqueued = references.Enqueued(ReferenceType::FINAL);
     ConcurrentGCBreakpoints::AcquireControl();
     Expect(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"), "late_registration_product_breakpoint");
+    delayedOld = ZBarrier::ReadStaticRef(oldRoot);
     auto* small = MObject::NewObject(smallType, 16, AllocType::MOVEABLE_OBJECT);
     auto* large = MObject::NewObject(largeType, largeType->GetInstanceSize() + sizeof(uintptr_t),
                                      AllocType::MOVEABLE_OBJECT);
@@ -842,5 +846,45 @@ extern "C" int p2MinorDuringOldMarkExercise()
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    return failures.load();
+}
+
+// Advisor 105847Z: binding qualification is separate from the remset liveness
+// test. The negative child calls the same product registration with no binding.
+extern "C" int p2RemsetBindingExercise()
+{
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = Type(storage, false, 1);
+    auto& heap = Heap::GetHeap();
+    NativeSlot root(zpointer::null);
+    ZBarrier::WriteStaticRef(root, MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT));
+    NativeSlot* roots[] = { &root };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    heap.RequestGC(GC_REASON_USER, false);
+    auto* page = Heap::page(reinterpret_cast<MAddress>(ZBarrier::ReadStaticRef(root)));
+    Expect(!page->IsYoungRegion(), "binding_real_old_page");
+    if (failures.load() != 0) return failures.load();
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    Expect(child >= 0, "binding_negative_child_started");
+    if (child == 0) {
+        ZRemembered unbound;
+        unbound.register_found_old(page);
+        std::_Exit(0);
+    }
+    if (child > 0) {
+        int status = 0;
+        Expect(waitpid(child, &status, 0) == child, "binding_negative_child_waited");
+        Expect(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+               "binding_unbound_registration_rejected");
+    }
+    ZRemembered bound;
+    bound.bind(&Heap::page_table(), &generation_forwarding_table(Generation::Old), &heap.page_allocator());
+    bound.register_found_old(page);
+    ZRemsetTableIterator iter(&bound, false);
+    ZRemsetTableEntry entry{};
+    Expect(iter.next(&entry) && entry._page == page, "binding_registered_page_reaches_iterator");
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    std::printf("P2_BINDING_RESULT failures=%u\n", failures.load());
     return failures.load();
 }

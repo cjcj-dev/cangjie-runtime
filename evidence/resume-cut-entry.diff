@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp
+index c30bc79d3..e47836b7e 100644
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -588,7 +588,7 @@ void ZGenerationYoung::concurrent_mark()
+     }
+     {
+         ZStatTimerYoung zstatTimer(PYoungRemsetRescan);
+-        Heap::GetHeap().remembered().scan_and_follow(Heap::GetHeap().young().MarkPtr());
++        // Cut real remset phase entry.
+     }
+ #if defined(MRT_TESTABLE_INTERNALS)
+     // Deterministic T1->T2 export-root window: root enumeration has returned,

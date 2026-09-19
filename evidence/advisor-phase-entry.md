@@ -1,0 +1,3 @@
+问题：按 105847Z 裁定的 concurrent_mark→scan_and_follow 真实相位切刀，在 entry_cut_check rc=1，仅缺相位入口登记；基线逐字/非新增/产品目录均通过。当前 PHASE_ENTRIES 仍列 DoYoungGarbageCollection，P14 后实际相位为 ZGenerationYoung::concurrent_mark（zGeneration.cpp:484/591），从 zDriver.cpp RunYoungCollection 调度。
+方案 A：协调面登记 runtime/src/Heap/z/zGeneration.cpp:concurrent_mark；本包原切刀重新校验。方案 B：额外切已登记 WriteReference->StoreBarrier（原生产端刀），与本次入口刀分列。倾向 A，准确登记当前真实相位，不为过表掩盖入口迁移。请求主控登记；预演 JSON 本树 evidence/resume-entry-cut-check.json。
+补充当前 cd925f409 的 movable Field/Slow/Minor/Closure/Array Strong和Finalizable均 rc0；仍原 pinned Registration 两断言红归 #721。default/filler 由于 fixture 校正后既有 forwarding 失败改成等待，正在遵守原600s超时完成三臂，不调长/不重跑取绿。
