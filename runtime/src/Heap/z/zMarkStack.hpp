@@ -158,6 +158,11 @@ private:
 
 // ZGC ZMarkCache analogue. Mark-bit claims remain atomic; only the page/region
 // live-object and aligned-byte additions are coalesced per worker.
+#if defined(MRT_TESTABLE_INTERNALS)
+using MarkClosureObserver = void (*)(const std::vector<BaseObject*>*);
+MRT_EXPORT void SetMarkClosureObserverForTest(MarkClosureObserver observer);
+void ObserveMarkClosureForTest(const std::vector<BaseObject*>* objects);
+#endif
 
 
 

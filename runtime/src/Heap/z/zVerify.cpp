@@ -340,62 +340,85 @@ void ZVerify::OnColorFlip()
     MutatorManager::Instance().VisitStoreBarrierBuffers([](MAddress slot) { bufferedStores.insert(slot); });
 }
 
-// zVerify.cpp:531-609. Source-page verification is old-to-old only.
+namespace {
+// ZGC zVerify.cpp:531-609: keep field routing in the oop closure.
+class ZVerifyRemsetBeforeOopClosure : public BasicOopIterateClosure {
+    ZForwarding* const forwarding;
+    MAddress from = 0;
+public:
+    explicit ZVerifyRemsetBeforeOopClosure(ZForwarding* value) : forwarding(value) {}
+    void set_from_addr(MAddress value) { from = value; }
+    void do_oop(RefField<>* pointer) override
+    {
+        RefField<>& field = *pointer;
+        const MAddress slot = reinterpret_cast<MAddress>(pointer);
+        ZPage* page = forwarding->page();
+        if (IntentionallyUnremembered(field.GetFieldValue())) { return; }
+        if (kBufferStoreBarriers && bufferedStores.count(slot) != 0) { return; }
+        if (forwarding->find(from) != 0) { return; }
+        CHECK_DETAIL(Heap::GetHeap().OldActiveRemsetIsCurrent()
+                         ? page->is_remembered(reinterpret_cast<volatile zpointer*>(slot))
+                         : page->was_remembered(reinterpret_cast<volatile zpointer*>(slot)),
+                     "Missing remembered field %p in source %p", &field, reinterpret_cast<BaseObject*>(from));
+
+    }
+};
+// ZGC zVerify.cpp:636-722: from/to identity stays with the field closure.
+class ZVerifyRemsetAfterOopClosure : public BasicOopIterateClosure {
+    ZForwarding* const forwarding;
+    MAddress from = 0;
+    MAddress to = 0;
+public:
+    explicit ZVerifyRemsetAfterOopClosure(ZForwarding* value) : forwarding(value) {}
+    void set_from_addr(MAddress value) { from = value; }
+    void set_to_addr(MAddress value) { to = value; }
+    void do_oop(RefField<>* pointer) override
+    {
+        RefField<>& field = *pointer;
+        const MAddress slot = reinterpret_cast<MAddress>(pointer);
+        const zpointer value = field.GetFieldValue(std::memory_order_acquire);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (IntentionallyUnremembered(value)) { return; }
+        if (ZPointer::is_store_good(value)) { return; }
+        if (kBufferStoreBarriers && bufferedStores.count(slot) != 0) { return; }
+        if (kBufferStoreBarriers && bufferedStores.count(from + slot - to) != 0) { return; }
+        ZPage* toPage = Heap::page(slot);
+        if (toPage != nullptr &&
+            (toPage->is_remembered(reinterpret_cast<volatile zpointer*>(slot)) ||
+             toPage->was_remembered(reinterpret_cast<volatile zpointer*>(slot)))) {
+            return;
+        }
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (field.GetFieldValue(std::memory_order_acquire) != value) { return; }
+        CHECK_DETAIL(ZForwarding::young_marking(), "Missing remembered field outside young marking: %p", &field);
+        CHECK_DETAIL(forwarding->relocated_remembered_fields_published_contains(slot),
+                     "Missing published remembered field %p in destination %p", &field, reinterpret_cast<BaseObject*>(to));
+
+    }
+};
+}
 void ZVerify::BeforeRelocation(ZForwarding* forwarding)
 {
-    if (!ZVerifyRemembered || forwarding == nullptr ||
-        forwarding->from_age() != PageAge::old) { return; }
+    if (!ZVerifyRemembered || forwarding == nullptr || forwarding->from_age() != PageAge::old) { return; }
     ZPage* page = forwarding->page();
-    if (page == nullptr) { return; }
-    const bool activeCurrent = Heap::GetHeap().OldActiveRemsetIsCurrent();
-    if (activeCurrent) {
-        page->verify_remset_cleared_previous();
-    } else {
-        page->verify_remset_cleared_current();
-    }
-    // zVerify.cpp:601 forwarding->object_iterate: the source page livemap.
+    if (Heap::GetHeap().OldActiveRemsetIsCurrent()) { page->verify_remset_cleared_previous(); }
+    else { page->verify_remset_cleared_current(); }
+    ZVerifyRemsetBeforeOopClosure closure(forwarding);
     page->object_iterate([&](BaseObject* object) {
-        const MAddress from = reinterpret_cast<MAddress>(object);
-        IterateVerifyFields(object, [&](RefField<>& field) {
-            const MAddress slot = reinterpret_cast<MAddress>(&field);
-            if (IntentionallyUnremembered(field.GetFieldValue()) || bufferedStores.count(slot) != 0 ||
-                forwarding->find(from) != 0) { return; }
-            CHECK_DETAIL(activeCurrent
-                             ? page->is_remembered(reinterpret_cast<volatile zpointer*>(slot))
-                             : page->was_remembered(reinterpret_cast<volatile zpointer*>(slot)),
-                         "Missing remembered field %p in source %p", &field, object);
-        });
+        closure.set_from_addr(reinterpret_cast<MAddress>(object));
+        IterateVerifyFields(object, [&](RefField<>& field) { closure.do_oop(&field); });
     });
 }
-
-// zVerify.cpp:610-738. Recheck the pointer after reading both bitmap faces;
-// a concurrent scanner may have self-healed the pointer and cleared the bit.
 void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
 {
+    ZVerifyRemsetAfterOopClosure closure(forwarding);
     forwarding->for_each_from([&](MAddress from) {
         ZGeneration* generation = forwarding->from_age() == PageAge::old
             ? static_cast<ZGeneration*>(ZGeneration::old()) : static_cast<ZGeneration*>(ZGeneration::young());
         BaseObject* object = generation->remap_object(reinterpret_cast<BaseObject*>(from));
-        IterateVerifyFields(object, [&](RefField<>& field) {
-            const MAddress slot = reinterpret_cast<MAddress>(&field);
-            const zpointer value = field.GetFieldValue(std::memory_order_acquire);
-            std::atomic_thread_fence(std::memory_order_acquire);
-            RefField<> preloaded(value);
-            if (IntentionallyUnremembered(value) || ZPointer::is_store_good(preloaded.GetFieldValue()) ||
-                bufferedStores.count(slot) != 0 ||
-                bufferedStores.count(from + slot - reinterpret_cast<MAddress>(object)) != 0) { return; }
-            ZPage* toPage = Heap::page(slot);
-            if (toPage != nullptr &&
-                (toPage->is_remembered(reinterpret_cast<volatile zpointer*>(slot)) ||
-                 toPage->was_remembered(reinterpret_cast<volatile zpointer*>(slot)))) {
-                return;
-            }
-            std::atomic_thread_fence(std::memory_order_acquire);
-            if (field.GetFieldValue(std::memory_order_acquire) != value) { return; }
-            CHECK_DETAIL(ZForwarding::young_marking(), "Missing remembered field outside young marking: %p", &field);
-            CHECK_DETAIL(forwarding->relocated_remembered_fields_published_contains(slot),
-                         "Missing published remembered field %p in destination %p", &field, object);
-        });
+        closure.set_from_addr(from);
+        closure.set_to_addr(reinterpret_cast<MAddress>(object));
+        IterateVerifyFields(object, [&](RefField<>& field) { closure.do_oop(&field); });
     });
 }
 void ZVerify::AfterRelocation(ZForwarding* forwarding)

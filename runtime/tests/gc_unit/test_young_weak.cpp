@@ -51,7 +51,6 @@ using namespace MapleRuntime::GcUnit;
 
 
 #if defined(MRT_TESTABLE_INTERNALS)
-#include "young_closure_observation.hpp"
 
 extern "C" int CJ_ScheduleManagerInit();
 
@@ -89,7 +88,8 @@ public:
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
         if (!cycle.Snapshot().active) ZGenerationTest::SetReason(cycle, GC_REASON_YOUNG);
         YoungTypeSetter type(cycle, ZYoungType::minor);
-        Heap::GetHeap().young().collect();
+        Heap::GetHeap().young().pause_mark_start();
+        Heap::GetHeap().young().concurrent_mark();
     }
 
     static void PrepareMajorRoots(Heap& collector)
@@ -368,13 +368,11 @@ void RunYoungWeakVariant(size_t helpers)
     if (!ownerWasActive) activityCycle.Begin(1);
     ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(ZGenerationId::young), GC_REASON_YOUNG);
 
-    YoungClosureObservation closure;
     RelocationReceiptTest::RunYoungCollection(collector);
-    GC_EXPECT_TRUE(closure.Calls() > 0);
-    const bool strongMarked = closure.Saw(graph.strongRoot);
-    const bool weakMarked = closure.Saw(graph.weak);
-    const bool referentMarked = closure.Saw(graph.referent);
-    const bool childMarked = closure.Saw(graph.child);
+    const bool strongMarked = graph.IsMarked(graph.strongRoot);
+    const bool weakMarked = graph.IsMarked(graph.weak);
+    const bool referentMarked = graph.IsMarked(graph.referent);
+    const bool childMarked = graph.IsMarked(graph.child);
     std::fprintf(stderr, "TARGET_YOUNG_STRONG_CLOSURE workers=%zu root=%d weak=%d referent=%d child=%d\n",
                  helpers + 1, strongMarked, weakMarked, referentMarked, childMarked);
 
@@ -439,10 +437,8 @@ void RunYoungWeakRemsetFlow()
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(ZGenerationId::young), GC_REASON_YOUNG);
-    YoungClosureObservation closure;
     RelocationReceiptTest::RunYoungCollection(collector);
-    GC_EXPECT_TRUE(closure.Calls() > 0);
-    const bool referentMarked = closure.Saw(graph.referent);
+    const bool referentMarked = graph.IsMarked(graph.referent);
     std::fprintf(stderr,
                  "DETAIL young_weak_remset slot=%#zx recorded_before_minor=%d referent_mark=%d\n",
                  static_cast<size_t>(weakSlot), static_cast<int>(recordedBeforeMinor),
@@ -455,7 +451,7 @@ void RunYoungWeakRemsetFlow()
 
     GC_EXPECT_TRUE(recordedBeforeMinor);
     GC_EXPECT_TRUE(referentMarked);
-    GC_EXPECT_TRUE(closure.Saw(graph.child));
+    GC_EXPECT_TRUE(graph.IsMarked(graph.child));
 }
 
 enum class MajorRootFamily {

@@ -88,12 +88,24 @@ thread_local const char* gMinorRootOrigin = "unknown";
 void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                                      uint64_t stackScanEpoch)
 {
+#if defined(MRT_GC_UNIT_TESTS)
+    RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
+        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_MARK,
+                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
+        invisibleRootVisitor(root);
+    };
+    RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
+#else
     RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
+#endif
     RootVisitor& visitedRawRootVisitor = rawRootVisitor;
     gMinorRootOrigin = "mutator_stack";
     VisitStrongPlainRoots(visitedRawRootVisitor, [&](Mutator& mutator) {
         bool watermarkDone =
             stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
+#if defined(MRT_GC_UNIT_TESTS)
+        NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MINOR_MARK, &mutator, watermarkDone);
+#endif
         if (watermarkDone) {
             return;
         }
@@ -427,6 +439,15 @@ void ZMark::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
                                    std::unordered_set<MAddress>& weakSlots,
                                    const std::unordered_set<MAddress>* reachableSlotDomain)
 {
+#if defined(MRT_TESTABLE_INTERNALS)
+    // Observe the completed closure result before the following GC phases
+    // can promote/reset its page. This has no product-build call or state.
+    struct ClosureObservation {
+        const std::vector<BaseObject*>& objects;
+        ~ClosureObservation() { ObserveMarkClosureForTest(&objects); }
+    } observation{reachableVec};
+
+#endif
     (void)Heap::GetHeap().young().Mark().Flush(ThreadLocal::GetThreadLocalData());
     if (workStack.empty() && Heap::GetHeap().young().Mark().Stripes().IsEmpty() &&
         Heap::GetHeap().young().Mark().Stacks().IsEmpty()) {
@@ -890,6 +911,12 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         if (entry.mark() && wasMarked) {
             return;
         }
+#if defined(MRT_TESTABLE_INTERNALS)
+        {
+            const std::vector<BaseObject*> observed{ object };
+            ObserveMarkClosureForTest(&observed);
+        }
+#endif
         if (!object->HasRefField() || !entry.follow()) {
             return;
         }

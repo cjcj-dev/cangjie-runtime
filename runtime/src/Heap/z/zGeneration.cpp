@@ -762,6 +762,9 @@ void ZGenerationOld::process_non_strong_references()
     ZResurrection::unblock();
     Heap::GetHeap().GetFinalizerProcessor().EnqueueReferences();
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    ObserveMarkClosureForTest(nullptr);
+#endif
 }
 
 
@@ -1089,6 +1092,10 @@ void ZGenerationOld::concurrent_mark()
                 if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
                     (void)mutator.GcPhaseEnum(false);
                 }
+#if defined(MRT_GC_UNIT_TESTS)
+                NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
+                                            mutator.GetStackWatermark().IsDone(stackScanEpoch));
+#endif
             });
             ZMark::DoEnumeration(workStack, foreignStack);
         } else {

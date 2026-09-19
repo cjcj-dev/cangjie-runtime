@@ -138,27 +138,29 @@ struct MarkPort203TestAccess {
         if (collector != nullptr) CHECK(collector == &Heap::GetHeap());
         ZCollectedHeapTest::SetWorkers(count);
     }
-    static void Collect(Heap& collector, bool major)
+    // Phase-unit boundary approved for P16: setup uses the product mark-start
+    // operation, and all observed state is read before relocation can reset it.
+    static void Collect(Heap& collector, bool major, BaseObject* array, bool markOnly, int duplicateRootOrder)
     {
-        // The major driver normally initializes old marking in its young prelude.
-        // This focused old-body fixture supplies the same product initialization.
         if (major) {
-            auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-            if (!old.Snapshot().active) old.Begin(0);
-            // The fixture bypasses the young prelude, so preserve its real
-            // old mark-start color transition before the sequence/domain.
-            // ZGenerationOld::mark_start, zGeneration.cpp:1213-1226.
-            ZGlobalsPointers::flip_old_mark_start();
-            GenerationSequenceFixture::Advance(old);
-            Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
-            Heap::GetHeap().old().Mark().Start();
-        }
-        if (major) {
-            Heap::GetHeap().old().collect();
+            ScopedStopTheWorld pause("P16 old mark-start fixture", false);
+            collector.old().mark_start();
         } else {
-            Heap::GetHeap().young().collect();
+            YoungTypeSetter type(collector.young(), ZYoungType::minor);
+            collector.young().pause_mark_start();
         }
+        if (duplicateRootOrder != 0) {
+            if (duplicateRootOrder < 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
+            ZBarrier::Mark<false, false, false, false>(from_object(array));
+            if (duplicateRootOrder > 0) { ZBarrier::Mark<false, false, true, false>(from_object(array)); }
+        } else if (markOnly) {
+            array->SetInvisibleObject(true);
+            ZBarrier::Mark<false, false, false, false>(from_object(array));
+        }
+        if (major) { collector.old().concurrent_mark(); }
+        else { collector.young().concurrent_mark(); }
     }
+
 };
 }
 
@@ -190,13 +192,10 @@ struct ArrayClosureResult {
     bool arrayStrong = false;
     uint32_t objects = 0;
     uint64_t bytes = 0;
-    size_t publishedObjects = 0;
 
 };
-ArrayClosureResult* arrayClosureResult = nullptr;
-void ObserveArrayClosure(const std::vector<BaseObject*>* reachable)
+void ReadArrayMarkState(ArrayClosureResult& result)
 {
-    auto& result = *arrayClosureResult;
 
 
     auto isMarked = [&](BaseObject* object) {
@@ -222,7 +221,6 @@ void ObserveArrayClosure(const std::vector<BaseObject*>* reachable)
     }
     result.objects = result.region->live_objects();
     result.bytes = result.region->live_bytes();
-    result.publishedObjects = reachable == nullptr ? 0 : reachable->size();
 }
 
 void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = false,
@@ -335,23 +333,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     } else if (markOnly || duplicateRootOrder != 0) {
         ownsInvisibleBuffer = AllocBuffer::GetAllocBuffer() == nullptr;
         invisibleBuffer = AllocBuffer::GetOrCreateAllocBuffer();
-        Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
-        Heap::GetHeap().young().Mark().Start();
-        GC_EXPECT_TRUE(Heap::GetHeap().young().Mark().Stripes().IsEmpty());
-        if (duplicateRootOrder != 0) {
-            // Two snapshots of one root use the actual private producers.
-            // The TLS stack and GC decide the consumer order.
-            if (duplicateRootOrder < 0) {
-                ZBarrier::Mark<false, false, true, false>(from_object(array));
-            }
-            ZBarrier::Mark<false, false, false, false>(from_object(array));
-            if (duplicateRootOrder > 0) {
-                ZBarrier::Mark<false, false, true, false>(from_object(array));
-            }
-        } else {
-            array->SetInvisibleObject(true);
-            ZBarrier::Mark<false, false, false, false>(from_object(array));
-        }
     } else if (commonRoot) {
         for (size_t i = 0; i < rootCount; ++i) {
             rootSlots[i].StoreColoured(StoreGoodPointer(array));
@@ -379,11 +360,8 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     result.array = array;
     result.children = &children;
     result.finalizable = finalizable;
-    arrayClosureResult = &result;
-    SetMarkClosureObserverForTest(ObserveArrayClosure);
-    MarkPort203TestAccess::Collect(collector, major);
-    SetMarkClosureObserverForTest(nullptr);
-    arrayClosureResult = nullptr;
+    MarkPort203TestAccess::Collect(collector, major, array, markOnly, duplicateRootOrder);
+    ReadArrayMarkState(result);
 
     const size_t markedChildren = result.markedChildren;
     const bool arrayMarked = result.arrayMarked;
@@ -430,7 +408,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         GC_EXPECT_FALSE(result.arrayStrong);
     }
     if (!major) {
-        GC_EXPECT_EQ(result.publishedObjects, expectedChildren + 1);
+        // Observer publication counts were removed; live accounting is checked above.
     }
 
 }

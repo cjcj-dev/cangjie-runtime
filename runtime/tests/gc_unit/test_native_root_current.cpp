@@ -343,7 +343,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Mark);
     Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
     Heap::GetHeap().young().Mark().Start();
-    MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
+    Heap::GetHeap().young().Mark().verify_all_stacks_empty();
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.
     NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
