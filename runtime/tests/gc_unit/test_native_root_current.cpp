@@ -266,7 +266,8 @@ void CheckSavedRootColor(bool invisible, bool watermark = true)
     page->reset(PageAge::eden);
     heap.young().SetTenuringThresholdForTest(1);
     BaseObject* dead = fx.PlaceObject(page->GetRegionStart());
-    BaseObject* from = fx.PlaceObject(page->GetRegionStart() + dead->GetSize());
+    BaseObject* earlier = fx.PlaceObject(page->GetRegionStart() + dead->GetSize());
+    BaseObject* from = fx.PlaceObject(reinterpret_cast<MAddress>(earlier) + earlier->GetSize());
     BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(from) + from->GetSize());
     page->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
     Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
@@ -281,6 +282,7 @@ void CheckSavedRootColor(bool invisible, bool watermark = true)
         slot = thread->AddNativeFrameRoot(from);
     }
     const uintptr_t savedColor = thread->GetGCData().loadGoodMask;
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page}));
@@ -288,7 +290,9 @@ void CheckSavedRootColor(bool invisible, bool watermark = true)
     RelocationReceiptTestAccess::FlipNativeRootYoung(heap);
     // Compact via the product implementation. Keep another live object at the
     // old address so a color cut reaches the address assertion, not an invalid
-    // header. Neither the forwarding value nor the root result is fabricated.
+    // header. The earlier live object also makes a duplicate remap return a
+    // valid but wrong object, exposing double consumption at that assertion.
+    // Neither the forwarding value nor the root result is fabricated.
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
     manager.CompactRegion(page);
     page->MarkForwardingDone();
