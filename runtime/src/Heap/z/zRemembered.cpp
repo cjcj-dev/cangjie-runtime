@@ -150,17 +150,12 @@ void ZRemembered::clear_found_old_previous_set()
 void ZRemembered::register_found_old(ZPage* page)
 {
     CHECK(!page->IsYoungRegion());
-    if (_page_table != nullptr) {
-        // The bitmap index is the page table map index: ZRemsetTableIterator
-        // hands it to ZPageTable::at / ZForwardingTable::at, whose granule map
-        // is based at the heap base (zGranuleMap.hpp offset_for_address).
-        zoffset offset;
-        CHECK(_page_table->map().offset_for_address(page->GetRegionStart(), &offset));
-        _found_old.register_page(static_cast<Uptr>(offset) / _page_table->map().granule());
-        return;
-    }
-    const size_t index = static_cast<size_t>(untype(page->start())) >> ZGranuleSizeShift;
-    _found_old.register_page(index);
+    // zRemembered.cpp:372-387: FoundOld::register_page uses page->start()
+    // shifted by the page-table granule (ZGC ZGranuleSizeShift; our map
+    // granule is the matching index space for ZPageTable::at).
+    const size_t granule = _page_table != nullptr ? _page_table->map().granule()
+                                                 : (size_t(1) << ZGranuleSizeShift);
+    _found_old.register_page(static_cast<size_t>(untype(page->start())) / granule);
 }
 
 template<typename Function>
