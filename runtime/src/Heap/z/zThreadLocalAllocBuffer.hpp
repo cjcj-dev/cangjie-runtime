@@ -72,11 +72,6 @@ public:
         decltype(y2yDirtyHolders) pending;
         {
             std::lock_guard<std::mutex> lock(y2yDirtyLock);
-#if defined(MRT_TESTABLE_INTERNALS)
-            if (y2yDirtyHolderMergeHook != nullptr) {
-                y2yDirtyHolderMergeHook(y2yDirtyHolderMergeHookContext);
-            }
-#endif
             pending.swap(y2yDirtyHolders);
         }
         for (BaseObject* obj : pending) {
@@ -135,27 +130,12 @@ public:
         return y2yDirtySlots.size();
     }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-    using Y2yDirtyHolderMergeHook = void (*)(void*);
-    void SetY2yDirtyHolderMergeHookForTest(Y2yDirtyHolderMergeHook hook, void* context);
-#endif
 
-#if defined(MRT_GC_UNIT_TESTS)
-    // gc_unit only.  Fires at the one instant the unsynchronised handoff has and
-    // a swap handoff does not: the consumer has determined the batch it will
-    // deliver, and has not yet retired that batch from the mutator-owned
-    // container.  A publication that lands in this interval is dropped by the
-    // following clear() and never reaches any batch.
-    using HandoffHook = void (*)(void*);
-#endif
 
     void FlushRegion();
     void RetireTLAB(bool gcWaste);
 
 private:
-#if defined(MRT_GC_UNIT_TESTS)
-    static void FireHandoffHook(HandoffHook hook, void* context);
-#endif
 
     // slow path
     MAddress TryAllocateOnce(size_t totalSize, AllocType allocType);
@@ -186,14 +166,6 @@ private:
     std::unordered_set<BaseObject*> y2yDirtyHolders;
     // Holder-independent peer for compiler ABI calls that carry only a heap slot.
     std::unordered_set<MAddress> y2yDirtySlots;
-#if defined(MRT_TESTABLE_INTERNALS)
-    Y2yDirtyHolderMergeHook y2yDirtyHolderMergeHook{ nullptr };
-    void* y2yDirtyHolderMergeHookContext{ nullptr };
-#endif
-#if defined(MRT_GC_UNIT_TESTS)
-    // Last, so tlRegion keeps offset 0 (RegionSpace.cpp:255 static_assert).
-#endif
 };
 } // namespace MapleRuntime
-#include "Heap/Allocator/AllocBuffer.h"
 #endif // MRT_ALLOC_BUFFER_H

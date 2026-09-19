@@ -9,9 +9,6 @@
 
 #include <atomic>
 #include "Common/BaseObject.h"
-#if defined(MRT_TESTABLE_INTERNALS)
-#include <functional>
-#endif
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGenerationId.hpp"
@@ -20,8 +17,6 @@
 #include "ObjectModel/MClass.h"
 
 namespace MapleRuntime {
-extern std::atomic<size_t> g_minorRefCasFail;
-extern std::atomic<size_t> g_minorRefCasOk;
 enum class ReferenceStrength : uint8_t { Strong, Weak, Phantom };
 struct ForwardingProvenance;
 enum class HandVerdict : uint8_t;
@@ -58,10 +53,6 @@ public:
     static void NoteStoreGoodOnBadTarget(BaseObject* target);
 
 
-#if defined(MRT_TESTABLE_INTERNALS)
-    enum class FieldMarkKind { Old, Finalizable, Young, Remset };
-    static std::function<void(FieldMarkKind, RefField<>&, zpointer, zaddress)> testFieldMarkResult;
-#endif
 
     static BaseObject* ReadReference(BaseObject* obj, RefField<false>& field);
     static BaseObject* ReadStaticRef(NativeSlot& field);

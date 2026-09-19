@@ -146,10 +146,6 @@ inline void ZBarrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& f
         result = MarkBarrier(IsMarkGoodFastPath, &ZBarrier::MarkFromOldSlowPath,
                              ColorMarkGood, field, observed, provenance);
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testFieldMarkResult) testFieldMarkResult(finalizable ? FieldMarkKind::Finalizable : FieldMarkKind::Old,
-                                                field, observed, result);
-#endif
     (void)result;
 }
 
@@ -160,9 +156,6 @@ inline void ZBarrier::MarkBarrierOnYoungOopField(RefField<>& field)
     const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, nullptr, &field };
     const zaddress result = MarkBarrier(IsStoreGoodOrNullAnyFastPath, &ZBarrier::MarkFromYoungSlowPath,
                                        ColorStoreGood, field, observed, provenance);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testFieldMarkResult) testFieldMarkResult(FieldMarkKind::Young, field, observed, result);
-#endif
     (void)result;
 }
 
@@ -173,9 +166,6 @@ inline zaddress ZBarrier::RemsetBarrierOnOopField(RefField<>& field)
     const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
     const zaddress result = MarkBarrier(IsMarkYoungGoodFastPath, &ZBarrier::MarkYoungSlowPath,
                                        ColorRemsetGood, field, observed, provenance);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testFieldMarkResult) testFieldMarkResult(FieldMarkKind::Remset, field, observed, result);
-#endif
     return result;
 }
 

@@ -621,10 +621,11 @@ void Heap::object_iterate(ObjectClosure* object_cl, bool visit_weaks)
     iter.object_iterate([&](BaseObject* object) { object_cl->do_object(object); }, 0);
 }
 
-void Heap::object_and_field_iterate_for_verify(ObjectClosure* object_cl, bool visit_weaks)
+void Heap::object_and_field_iterate_for_verify(ObjectClosure* object_cl, OopFieldClosure* field_cl, bool visit_weaks)
 {
     HeapIterator iter(visit_weaks, true, 1);
-    iter.object_and_field_iterate([&](BaseObject* object) { object_cl->do_object(object); }, {}, 0);
+    iter.object_and_field_iterate([&](BaseObject* object) { object_cl->do_object(object); },
+        [&](BaseObject* base, const void* slot, uintptr_t value) { field_cl->do_field(base, slot, value); }, 0);
 }
 }
 

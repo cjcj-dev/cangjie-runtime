@@ -32,19 +32,11 @@ struct ValueRootHash {
 using ValueRootSet = std::unordered_set<ValueRoot, ValueRootHash>;
 using ValueRootList = std::list<ValueRoot>;
 using ValueRootMap = std::unordered_map<ValueRoot, ValueRootList, ValueRootHash>;
-#if defined(MRT_TESTABLE_INTERNALS)
-struct ExportOwnershipTestObservation {
-    using Edge = std::pair<BaseObject*, BaseObject*>;
-    bool afterHandoff = false;
-    size_t discoveredOwners = 0;
-    size_t handoffOwners = 0;
-    std::vector<Edge> discovered;
-    std::vector<Edge> handoff;
-};
-#endif
 // Cangjie foreign-runtime ownership and managed cycle-resolution infrastructure.
 // This state has no ZGC collector hierarchy counterpart.
 class ZCrossVM {
+    friend class RelocationReceiptTest;
+    friend class ZGenerationRootTest;
 public:
     void ResurrectExportObject(BaseObject* obj);
     void PrepareCycleRef();
@@ -57,22 +49,8 @@ public:
     void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
     void PreforwardDiscoveredExternObjects(Generation generation);
     void PreforwardAllResurrectExportFromObjects(Generation generation);
-#if defined(MRT_TESTABLE_INTERNALS)
-    static std::function<void(const ExportOwnershipTestObservation&)> testExportOwnershipResult;
-    void ObserveExportOwnershipForTest(bool afterHandoff);
-#endif
-#if defined(MRT_GC_UNIT_TESTS)
-    void SetCycleRefHandlerForTest(CrossRefHandler handler) { cycleRefHandlerForTest = handler; }
-#endif
 private:
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct RelocationReceiptTestAccess;
-    friend struct ZGenerationRootTestAccess;
-#endif
     CrossRefHandler GetCrossRefHandler(BaseObject* foreignProxy);
-#if defined(MRT_GC_UNIT_TESTS)
-    CrossRefHandler cycleRefHandlerForTest = nullptr;
-#endif
     std::mutex externMtx;
     ValueRootMap discoveredExternObjects;
     // Resolver callbacks may enter managed code and therefore must not own the

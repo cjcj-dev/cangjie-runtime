@@ -34,8 +34,6 @@
 #include <vector>
 
 namespace MapleRuntime {
-std::atomic<size_t> g_minorRefCasFail{ 0 };
-std::atomic<size_t> g_minorRefCasOk{ 0 };
 
 template<bool forward>
 bool ZBarrier::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
@@ -116,10 +114,8 @@ bool ZBarrier::CasInstallResolvedTarget(RefField<>& field, MAddress expected, za
                         allowNull);
     const bool healed = true;
     if (healed) {
-        g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
-    g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
@@ -157,9 +153,6 @@ BaseObject* ZBarrier::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFiel
     return latest;
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-std::function<void(ZBarrier::FieldMarkKind, RefField<>&, zpointer, zaddress)> ZBarrier::testFieldMarkResult;
-#endif
 static_assert(!std::is_polymorphic<ZBarrier>::value, "ZBarrier must not regain virtual dispatch");
 
 // ZZBarrier::assert_transition_monotonicity, zBarrier.inline.hpp:40-70.

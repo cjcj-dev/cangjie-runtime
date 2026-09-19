@@ -24,18 +24,8 @@ namespace {
 constexpr size_t FIRST_STACK_CAPACITY = 128;
 constexpr size_t REGULAR_STACK_CAPACITY = 512;
 
-#if defined(MRT_TESTABLE_INTERNALS)
-std::atomic<MarkStripeStack::StorageObserver> storageObserver{nullptr};
-std::atomic<MarkClosureObserver> g_markClosureObserver{nullptr};
-#endif
 } // namespace
 
-#if defined(MRT_TESTABLE_INTERNALS)
-void MarkStripeStack::SetStorageObserver(StorageObserver observer)
-{
-    storageObserver.store(observer, std::memory_order_release);
-}
-#endif
 
 MarkStripeStack* MarkStripeStack::Create(bool firstStack)
 {
@@ -49,11 +39,6 @@ MarkStripeStack* MarkStripeStack::Create(bool firstStack)
         return nullptr;
     }
     auto* const stack = ::new (memory) MarkStripeStack(capacity);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (const auto observer = storageObserver.load(std::memory_order_acquire)) {
-        observer(stack, stack->entries(stack), capacity, true);
-    }
-#endif
     return stack;
 }
 
@@ -63,11 +48,6 @@ void MarkStripeStack::Destroy(MarkStripeStack* stack)
     if (stack == nullptr) {
         return;
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (const auto observer = storageObserver.load(std::memory_order_acquire)) {
-        observer(stack, stack->entries(stack), stack->Capacity(), false);
-    }
-#endif
     stack->~MarkStripeStack();
     AttachedArray::free(stack);
 }
@@ -295,19 +275,6 @@ size_t MarkStripe::Population() const { return published.Length() + overflowed.L
 
 size_t MarkStripeSet::NStripes() const { return nstripesMask.load(std::memory_order_relaxed) + 1; }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-void SetMarkClosureObserverForTest(MarkClosureObserver observer)
-{
-    g_markClosureObserver.store(observer, std::memory_order_release);
-}
-void ObserveMarkClosureForTest(const std::vector<BaseObject*>* objects)
-{
-    auto observer = g_markClosureObserver.load(std::memory_order_acquire);
-    if (observer != nullptr) {
-        observer(objects);
-    }
-}
-#endif
 
 } // namespace MapleRuntime
 

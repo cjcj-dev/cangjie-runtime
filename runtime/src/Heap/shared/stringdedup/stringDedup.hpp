@@ -26,9 +26,6 @@ public:
     void Clean(const std::function<bool(BaseObject*)>& isAlive);
 
 private:
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct StringDedupTestAccess;
-#endif
     struct WeakSlot {
         zpointer value;
     };

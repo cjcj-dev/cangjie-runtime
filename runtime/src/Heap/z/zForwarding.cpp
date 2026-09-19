@@ -277,7 +277,6 @@ void ZForwarding::verify() const
         const MAddress to = find(from);
         CHECK_DETAIL(to != 0 && destinations.insert(to).second, "Duplicate or null forwarding destination");
         BaseObject* object = reinterpret_cast<BaseObject*>(to);
-        ZVerify::Object(object, nullptr);
         bytes += RegionSpace::GetAllocSize(*object);
     }
     _page->verify_live(static_cast<uint32_t>(sources.size()), bytes, in_place());

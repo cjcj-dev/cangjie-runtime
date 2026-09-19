@@ -30,9 +30,6 @@ class BaseObject;
 // ZGC zMarkStack.hpp:35-54. A chunk is single-owner while it is being
 // filled/drained and becomes immutable while linked on a shared stripe.
 class MarkStripeStack {
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct RootPublicationSnapshot;
-#endif
 public:
     static MarkStripeStack* Create(bool firstStack);
     static void Destroy(MarkStripeStack* stack);
@@ -47,12 +44,6 @@ public:
     void Push(const MarkStackEntry& entry);
     MarkStackEntry Pop();
 
-#if defined(MRT_TESTABLE_INTERNALS)
-    // Install/remove only while mark workers are quiescent. The observer must
-    // not throw or call stack operations. Records identify the actual allocation.
-    using StorageObserver = void (*)(const MarkStripeStack*, const MarkStackEntry*, size_t, bool);
-    MRT_EXPORT static void SetStorageObserver(StorageObserver observer);
-#endif
 
 private:
     using AttachedArray = ZAttachedArray<MarkStripeStack, MarkStackEntry>;
@@ -81,9 +72,6 @@ private:
 
 
 class alignas(64) MarkStripeStackList {
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct RootPublicationSnapshot;
-#endif
 public:
     MarkStripeStackList() = default;
     MarkStripeStackList(const MarkStripeStackList&) = delete;
@@ -102,9 +90,6 @@ private:
 class MarkTerminate;
 
 class MarkStripe {
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct RootPublicationSnapshot;
-#endif
 public:
     bool IsEmpty() const;
     size_t Population() const;
@@ -173,11 +158,6 @@ private:
 
 // ZGC ZMarkCache analogue. Mark-bit claims remain atomic; only the page/region
 // live-object and aligned-byte additions are coalesced per worker.
-#if defined(MRT_TESTABLE_INTERNALS)
-using MarkClosureObserver = void (*)(const std::vector<BaseObject*>*);
-MRT_EXPORT void SetMarkClosureObserverForTest(MarkClosureObserver observer);
-void ObserveMarkClosureForTest(const std::vector<BaseObject*>* objects);
-#endif
 
 
 

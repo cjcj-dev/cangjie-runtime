@@ -168,44 +168,6 @@ public:
     static bool HasCallerPurgeProtection();
     static bool CallerProtectionHasPendingForImage(Uptr imageAddress);
     static void AssertReaderActive();
-#ifdef MRT_TESTABLE_INTERNALS
-    static Uptr ImageIdentityForTesting(Uptr address);
-    static bool IsImageIdentityLinkedForTesting(Uptr imageIdentity);
-    static bool IsUnloadPendingForTesting();
-    static U64 GcEntryCountForTesting();
-    static void ResetDirectOrderForTesting();
-    static void NoteDirectPreflightForTesting();
-    static bool DirectPreflightEnteredForTesting();
-    static void NoteDirectUnlinkForTesting();
-    static void NoteDirectHandshakeForTesting();
-    static void NoteDirectPurgeForTesting();
-    static bool DirectOrderValidForTesting();
-    static void EnableGcReaderPauseForTesting();
-    static bool GcReaderPausedForTesting();
-    static void ReleaseGcReaderPauseForTesting();
-    static void PauseGcReaderForTesting();
-    static void EnablePackageReaderPauseForTesting();
-    static bool PackageReaderPausedForTesting();
-    static void ReleasePackageReaderPauseForTesting();
-    static void PausePackageReaderForTesting();
-    static void EnableDirectPreflightPauseForTesting();
-    static bool DirectPreflightPausedForTesting();
-    static void ReleaseDirectPreflightPauseForTesting();
-    static void PauseDirectPreflightForTesting();
-    static void EnablePublicPlatformPauseForTesting();
-    static bool PublicPlatformPausedForTesting();
-    static void ReleasePublicPlatformPauseForTesting();
-    static void PausePublicPlatformForTesting();
-    static bool PublicPlatformWaitHoldsStwForTesting();
-    static bool PublicPlatformWaitHoldsAdmissionForTesting();
-    static void NotePublicPlatformWaitForTesting(bool holdsStw, bool holdsAdmission);
-    static void ForcePublicHoldAcrossPlatformForTesting(bool enable);
-    static bool PublicHoldAcrossPlatformForTesting();
-    static void SkipImageClosingForTesting(bool enable);
-    static bool ImageClosingSkippedForTesting();
-    static void FailNextPlatformUnloadForTesting(bool enable);
-    static bool ConsumeFailedPlatformUnloadForTesting();
-#endif
 
 private:
     static constexpr U64 WRITER_BIT = U64 { 1 } << 63;

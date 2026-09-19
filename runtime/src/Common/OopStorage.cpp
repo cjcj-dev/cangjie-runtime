@@ -175,16 +175,4 @@ void OopStorage::RemoveAllocationBlock(Block& block)
     block.allocationPrev = block.allocationNext = nullptr;
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-size_t OopStorage::BlockCountForTest() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return activeArray->blocks.size();
-}
-size_t OopStorage::ConcurrentIterationsForTest() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return concurrentIterationCount;
-}
-#endif
 } // namespace MapleRuntime

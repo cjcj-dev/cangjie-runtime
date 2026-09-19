@@ -201,9 +201,6 @@ public:
     void SyncMutexUnlock() noexcept { syncMutex.unlock(); }
 
     static bool ConcurrentStackScanEnabled();
-#if defined(MRT_TESTABLE_INTERNALS)
-    size_t RuntimeMutatorRegistrySizeForTest();
-#endif
 
     void TransitionAllMutatorsToCpuProfile();
 

@@ -46,6 +46,7 @@ template<typename T> class ZArray;
 class ZPageTable;
 class OopStorage;
 class ObjectClosure;
+class OopFieldClosure;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
 class Allocator;
 class RegionSpace;
@@ -195,7 +196,7 @@ public:
 
     void DumpHeap(HeapDumpKind kind);
     void object_iterate(ObjectClosure* object_cl, bool visit_weaks);
-    void object_and_field_iterate_for_verify(ObjectClosure* object_cl, bool visit_weaks);
+    void object_and_field_iterate_for_verify(ObjectClosure* object_cl, OopFieldClosure* field_cl, bool visit_weaks);
 
     bool ForEachObj(const std::function<void(BaseObject*)>&, bool safe) const;
 

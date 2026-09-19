@@ -671,17 +671,7 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
     if (requestGc) {
         bool anotherWave = false;
         do {
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-            if (allocationStallBeforeWaveTestHook) {
-                allocationStallBeforeWaveTestHook(*this);
-            }
-#endif
             const uint64_t waveBoundary = allocationStallQueue.CaptureWaveBoundary();
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-            if (allocationStallGcTestHook) {
-                allocationStallGcTestHook(*this);
-            } else
-#endif
             {
                 Heap::GetHeap().RequestGC(GC_REASON_OOM, false);
             }
@@ -693,11 +683,6 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
     // zFuture.inline.hpp:47-53: a Java thread waits with a safepoint check;
     // here the mutator enters its saferegion before ZFuture::get (I3/I4).
     ScopedEnterSaferegion enterSaferegion(false);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    if (allocationStallBeforeWaitTestHook) {
-        allocationStallBeforeWaitTestHook(*this);
-    }
-#endif
     const bool satisfied = request.Wait();
     // Pair with the posting owner before the caller destroys its request.
     // zPageAllocator.cpp:1454-1464.

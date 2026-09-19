@@ -128,7 +128,7 @@ inline void RegionManager::MergeRawPointerRegions(std::vector<ZPage*>& smallSize
             region->SetRegionRole(ZPageRole::RecentFull);
             smallUnits += region->GetUnitCount();
         }
-        RecentFullAccounting::Enqueue(smallSizeRegions.size(), smallUnits);
+
         smallSizeRegions.clear();
         for (ZPage* region : largeSizeRegions) {
             region->SetRegionRole(ZPageRole::RecentLarge);
@@ -157,7 +157,7 @@ inline void RegionManager::HandleTraceRegions()
                 region->SetRegionRole(ZPageRole::RecentLarge);
             }
         }
-        RecentFullAccounting::Enqueue(traceRegions, traceUnits);
+
     }
 
 inline void RegionManager::PrepareTrace()
@@ -309,14 +309,10 @@ public:
         : ZTask("ZRelocateTask"), regionManager(manager), relocationSet(relocationSet) {}
 
     ~ForwardTask() override = default;
-#if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT void work() override;
-#else
     __attribute__((visibility("hidden"))) void work() override
     {
         detail::ExecuteForwardTask<G>(regionManager, relocationSet);
     }
-#endif
 
 private:
     RegionManager& regionManager;

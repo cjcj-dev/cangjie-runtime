@@ -51,9 +51,6 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-void (*RegionManager::testPinnedPageAcquired)(ZPage*) = nullptr;
-#endif
 // ThreadLocalAllocBuffer::initial_desired_size (cpp:265): a new thread
 // starts with the published allocation fraction instead of a fixed extent.
 void RegionManager::InitializeTLAB(AllocBuffer& buffer)
@@ -141,7 +138,7 @@ ZPage* RegionManager::AllocateSharedPage(size_t units, ZPageType role,
         page->SetRegionRole(ZPageRole::RecentLarge);
     } else {
         page->SetRegionRole(ZPageRole::RecentFull);
-        RecentFullAccounting::Enqueue(1, page->GetUnitCount());
+
     }
     return page;
 }
@@ -151,7 +148,7 @@ ZPage* RegionManager::AllocateSharedPage(size_t units, ZPageType role,
 void RegionManager::UndoSharedPage(ZPage* page)
 {
     page->SetRegionRole(ZPageRole::None);
-    RecentFullAccounting::Dequeue(1, page->GetUnitCount());
+
     if (IsSmallEdenPage(page)) {
         tlabUsed.fetch_sub(page->GetRegionSize(), std::memory_order_relaxed);
     }

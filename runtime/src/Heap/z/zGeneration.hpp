@@ -60,13 +60,6 @@ public:
     ZGenerationId id() const;
     void PreGarbageCollection(bool isConcurrent, uint64_t gcIndex);
     void PostGarbageCollection(uint64_t gcIndex);
-#if defined(MRT_TESTABLE_INTERNALS)
-    static std::function<void()> testCyclePrepared;
-    static std::function<void()> testYoungMarkStarted;
-    static std::function<void()> testOldMarkStarted;
-    static std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> testMarkStartState;
-    static std::function<void()> testYoungMarkCompleted;
-#endif
     ZGenerationIdOptional id_optional() const;
     bool is_young() const;
     bool is_old() const;
@@ -153,6 +146,7 @@ public:
     ZRelocate& relocate() { return *_relocate; }
     ZForwarding* forwarding(MAddress addr) const { return addr == 0 ? nullptr : _forwarding_table.get(addr); }
     BaseObject* relocate_or_remap_object(BaseObject* object);
+    BaseObject* remap_object(BaseObject* object);
     BaseObject* relocate_or_remap_object(BaseObject* object, const ForwardingProvenance& provenance);
     void reset_relocation_set();
     void free_empty_pages(ZRelocationSetSelector* selector, int bulk);

@@ -75,10 +75,6 @@ public:
     private:
         BasicParState basicState;
     };
-#if defined(MRT_TESTABLE_INTERNALS)
-    size_t BlockCountForTest() const;
-    size_t ConcurrentIterationsForTest() const;
-#endif
 private:
     void AddAllocationBlock(Block& block);
     void RemoveAllocationBlock(Block& block);

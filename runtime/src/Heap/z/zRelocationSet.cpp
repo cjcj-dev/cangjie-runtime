@@ -64,13 +64,7 @@ void ZGenerationOld::PostTrace()
     // Value-only cycle roots still depend on the preceding relocation receipts.
     // Complete their owner handoff while that authority is queryable.
     // zGeneration.cpp:1261 mark_end does not reset forwarding.
-#if defined(MRT_TESTABLE_INTERNALS)
-    Heap::GetHeap().cross_vm().ObserveExportOwnershipForTest(false);
-#endif
     Heap::GetHeap().cross_vm().PrepareCycleRef();
-#if defined(MRT_TESTABLE_INTERNALS)
-    Heap::GetHeap().cross_vm().ObserveExportOwnershipForTest(true);
-#endif
     CollectLargeGarbage();
     CollectPinnedGarbage();
     // zGeneration.cpp:1042 / :1131-1133: reset previous set before select.

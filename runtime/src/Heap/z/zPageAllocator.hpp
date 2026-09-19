@@ -5,7 +5,6 @@
 #ifndef MRT_ALLOCATION_STALL_QUEUE_H
 #define MRT_ALLOCATION_STALL_QUEUE_H
 
-#include "Heap/Allocator/RegionManager.h"
 #include "Heap/z/zStat.hpp"
 #include <condition_variable>
 #include <cstddef>
@@ -18,9 +17,6 @@
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zArray.inline.hpp"
 
-#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
-#define MRT_ALLOCATION_STALL_OBSERVE 1
-#endif
 
 namespace MapleRuntime {
 
@@ -98,9 +94,6 @@ public:
         gcInProgress = true;
         request.sequence = ++lastSequence;
         requests.insert_last(&request);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-        ++enqueued;
-#endif
         return requestGc;
     }
 
@@ -134,10 +127,6 @@ public:
             requests.remove_first();
             request->Satisfy(true);
             ++satisfied;
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-            ++dequeued;
-            ++satisfiedCount;
-#endif
         }
         return satisfied;
     }
@@ -149,10 +138,6 @@ public:
             ZPageAllocation* request = requests.first();
             requests.remove_first();
             request->Satisfy(false);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-            ++dequeued;
-            ++failedCount;
-#endif
         }
         if (requests.is_empty()) {
             gcInProgress = false;
@@ -161,13 +146,6 @@ public:
         return true;
     }
 
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    size_t Pending() const;
-    size_t EnqueuedCount() const;
-    size_t DequeuedCount() const;
-    size_t SatisfiedCount() const;
-    size_t FailedCount() const;
-#endif
 
 private:
     std::mutex& mutex;
@@ -175,12 +153,6 @@ private:
     ZList<ZPageAllocation> requests;
     uint64_t lastSequence{ 0 };
     bool gcInProgress{ false };
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    size_t enqueued{ 0 };
-    size_t dequeued{ 0 };
-    size_t satisfiedCount{ 0 };
-    size_t failedCount{ 0 };
-#endif
 };
 
 } // namespace MapleRuntime
@@ -527,9 +499,6 @@ public:
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
     // P14: the handshake pause must serialize pinned installation with retirement/seqnum.
     std::mutex& PinnedAllocationMutex() { return pinnedAllocationMutex; }
-#if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT static void (*testPinnedPageAcquired)(ZPage*);
-#endif
 
     // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
     // independent of the thread-local requested bytes and retirement waste.
@@ -555,17 +524,6 @@ public:
     void ReturnPageMemory(const PageMemory& memory);
     void SatisfyStalledAllocations();
     bool IsAllocationStalling() const { return allocationStallQueue.IsStalling(); }
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    using AllocationStallTestHook = std::function<void(RegionManager&)>;
-    MRT_EXPORT void SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
-                                                AllocationStallTestHook requestGc,
-                                                AllocationStallTestHook beforeWait);
-    MRT_EXPORT size_t PendingStalledAllocations() const;
-    MRT_EXPORT size_t EnqueuedStalledAllocations() const;
-    MRT_EXPORT size_t DequeuedStalledAllocations() const;
-    MRT_EXPORT size_t SatisfiedStalledAllocations() const;
-    MRT_EXPORT size_t FailedStalledAllocations() const;
-#endif
     // In-place relocation account (feeds ZStatRelocation::AtRelocateEnd).
     // Not observation-gated: the relocation report reads it in every build.
     void ResetInPlaceRelocatedCounts()
@@ -590,11 +548,7 @@ public:
     // difference: the stall queue only counts under MRT_ALLOCATION_STALL_OBSERVE.
     size_t AllocationStallsNow() const
     {
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-        return allocationStallQueue.Pending();
-#else
         return 0;
-#endif
     }
     template<Generation G>
     void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
@@ -912,11 +866,6 @@ private:
     std::mutex pageAllocatorMutex;
     AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
     size_t pageAllocatorUsed{ 0 };
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    AllocationStallTestHook allocationStallBeforeWaveTestHook;
-    AllocationStallTestHook allocationStallGcTestHook;
-    AllocationStallTestHook allocationStallBeforeWaitTestHook;
-#endif
     uintptr_t regionHeapStart = 0; // the address of first region to allocate object
     uintptr_t regionHeapEnd = 0;
 

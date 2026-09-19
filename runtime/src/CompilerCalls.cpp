@@ -1191,9 +1191,6 @@ extern "C" void* MCC_LoadPackage(const char* path)
     }
     PackageInfo* snapshot = nullptr;
     bool found = loaderMgr->VisitPackageInfoByPath(path, [&snapshot](PackageInfo* packageInfo) {
-#ifdef MRT_TESTABLE_INTERNALS
-        ElfUnloadQuiescence::PausePackageReaderForTesting();
-#endif
         snapshot = PackageInfoSnapshotBuilder().Build(packageInfo);
     });
     return found && snapshot != nullptr ? static_cast<void*>(snapshot) : reinterpret_cast<void*>(LOAD_FAIL);

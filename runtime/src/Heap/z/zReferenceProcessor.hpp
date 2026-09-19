@@ -53,10 +53,6 @@ public:
     void process_references();
     void ProcessReferences(const IsStronglyLive& isStronglyLive);
     void EnqueueReferences(const EnqueueFinal& enqueueFinal);
-#if defined(MRT_TESTABLE_INTERNALS)
-    void ProcessReferences(const IsStronglyLive& isStronglyLive, const ObserveWeakFinal& observeWeakFinal);
-    static void SetBeforeWeakCleanCasForTest(std::function<void()> hook);
-#endif
     void verify_pending_references();
 
     size_t Encountered(ReferenceType type) const;
@@ -138,13 +134,6 @@ public:
     void ProcessReferences(const ReferenceProcessor::IsStronglyLive& isStronglyLive);
     void EnqueueReferences();
 
-#if defined(MRT_TESTABLE_INTERNALS)
-    using BeforeFinalizableIdleCheck = std::function<void()>;
-    void SetBeforeFinalizableIdleCheckForTest(BeforeFinalizableIdleCheck hook);
-    void EnqueueFinalizableForTest(BaseObject* obj);
-    void FinishFinalizableBatchForTest();
-    bool HasFinalizableJobForTest();
-#endif
 
     Mutator* GetMutator() const { return fpMutator; }
 

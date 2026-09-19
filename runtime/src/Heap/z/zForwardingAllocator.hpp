@@ -30,9 +30,6 @@ public:
     size_t capacity() const { return size(); }
     size_t used() const;
     void* allocate(size_t size) { return alloc(size); }
-#if defined(MRT_TESTABLE_INTERNALS)
-    bool contains_for_test(const void* address, size_t nbytes) const;
-#endif
 
 private:
     char* _start;

@@ -42,14 +42,5 @@ inline void* ZForwardingAllocator::alloc(size_t size)
     return addr;
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-inline bool ZForwardingAllocator::contains_for_test(const void* address, size_t nbytes) const
-{
-    const uintptr_t start = reinterpret_cast<uintptr_t>(_start);
-    const uintptr_t at = reinterpret_cast<uintptr_t>(address);
-    const size_t cap = size();
-    return at >= start && at - start <= cap && nbytes <= cap - (at - start);
-}
-#endif
 
 } // namespace MapleRuntime
