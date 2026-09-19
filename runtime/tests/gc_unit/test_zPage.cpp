@@ -181,8 +181,10 @@ void* SelectRealLivePages(void* context)
         if (forwarding != nullptr) {
             ++result.published;
             result.retired += Heap::page(starts[i]) == nullptr;
-            result.receipts += forwarding->find(starts[i]) == reinterpret_cast<MAddress>(
-                Heap::GetHeap().GetExportObject(roots[i]));
+            // Consume the retired source through the product remap entry;
+            // do not recompile the inline forwarding lookup into the test.
+            result.receipts += ZGeneration::young()->relocate_or_remap_object(
+                reinterpret_cast<BaseObject*>(starts[i])) == Heap::GetHeap().GetExportObject(roots[i]);
             const auto* view = forwarding->from_page_snapshot();
             result.prepared += view != nullptr && view->livemap != nullptr &&
                                view->topAtStart > starts[i];
