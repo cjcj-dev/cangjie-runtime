@@ -156,7 +156,7 @@ void ZRemembered::register_found_old(ZPage* page)
         // is based at the heap base (zGranuleMap.hpp offset_for_address).
         zoffset offset;
         CHECK(_page_table->map().offset_for_address(page->GetRegionStart(), &offset));
-        _found_old.register_page(offset / _page_table->map().granule());
+        _found_old.register_page(static_cast<Uptr>(offset) / _page_table->map().granule());
         return;
     }
     const size_t index = static_cast<size_t>(untype(page->start())) >> ZGranuleSizeShift;
