@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
 #include "b09_runtime_fixture.hpp"
+#include "mark_publication_fixture.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zBarrier.hpp"
@@ -258,25 +259,24 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
     GcHeapFixture fx;
     fx.region0->reset(PageAge::eden);
     fx.region1->reset(PageAge::old);
-    RelocationReceiptTestAccess::BindNativeRootFixture(Heap::GetHeap());
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Mark);
-    Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
-    Heap::GetHeap().old().Mark().Start();
-    Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
-    Heap::GetHeap().young().Mark().Start();
-    const size_t oldBefore = Heap::GetHeap().old().Mark().Stripes().Population();
-    const size_t youngBefore = Heap::GetHeap().young().Mark().Stripes().Population();
+    MarkPublicationFixture marking;
+    size_t young = 0;
+    size_t old = 0;
     ZMark::PublishThreadRoot(fx.obj0, false, true);
     ZMark::PublishThreadRoot(fx.obj1, true, true);
-    (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().old().Mark());
-    (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().young().Mark());
-    const size_t oldAfter = Heap::GetHeap().old().Mark().Stripes().Population();
-    const size_t youngAfter = Heap::GetHeap().young().Mark().Stripes().Population();
-    std::fprintf(stderr, "ROOT_TARGET_GEN_ASSERT young=%zu old=%zu\n",
-                 youngAfter - youngBefore, oldAfter - oldBefore);
-    GC_EXPECT_TRUE(youngAfter > youngBefore);
-    GC_EXPECT_TRUE(oldAfter > oldBefore);
+    marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
+        GC_EXPECT_TRUE(object == fx.obj0);
+        GC_EXPECT_TRUE(follow);
+        ++young;
+    });
+    marking.DrainOld([&](BaseObject* object, bool follow) {
+        GC_EXPECT_TRUE(object == fx.obj1);
+        GC_EXPECT_TRUE(follow);
+        ++old;
+    });
+    std::fprintf(stderr, "ROOT_TARGET_GEN_ASSERT young=%zu old=%zu\n", young, old);
+    GC_EXPECT_EQ(young, 1u);
+    GC_EXPECT_EQ(old, 1u);
 }
 
 GC_OTHER_VM_TEST(NativeRootCurrent, MinorPublication) { CheckNativeRoot(true); }
