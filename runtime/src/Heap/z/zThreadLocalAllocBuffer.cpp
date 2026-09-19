@@ -151,6 +151,7 @@ void AllocBuffer::RetireTLAB(bool gcWaste)
 void AllocBuffer::ClearRegion()
 {
     RetireTLAB(true);
+    tlRegion = ZPage::NullRegion();
 }
 
 // ThreadLocalAllocBuffer::compute_size (threadLocalAllocBuffer.inline.hpp:57).
