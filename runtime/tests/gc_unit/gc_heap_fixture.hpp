@@ -128,9 +128,22 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
 {
     ZRelocationSetSelector selector;
     for (ZPage* page : pages) {
-        if (page != nullptr) {
-            selector.add_selected_small(page, 1);
+        if (page == nullptr) {
+            continue;
         }
+        if (page->IsAllocating()) {
+            auto& cycle = Heap::GetHeap().GetZGeneration(page->GetOwnerGeneration());
+            if (cycle.Snapshot().active) {
+                cycle.End();
+            }
+            cycle.Begin(0);
+            if (page->GetOwnerGeneration() == Generation::Young) {
+                GenerationSequenceFixture::AdvanceYoung(cycle);
+            } else {
+                GenerationSequenceFixture::Advance(cycle);
+            }
+        }
+        selector.add_selected_small(page, 1);
     }
     Heap::GetHeap().GetZGeneration(generation).relocation_set().install(&selector);
     return true;
