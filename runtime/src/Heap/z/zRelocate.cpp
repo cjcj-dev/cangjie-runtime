@@ -1624,6 +1624,15 @@ void RegionManager::CompactRegion(ZPage* region)
                  "compact forwarding table unavailable before copy region=%p range=[%#zx,%#zx)",
                  region, static_cast<size_t>(regionStart), static_cast<size_t>(region->GetRegionEnd()));
     region->SetRegionAllocPtr(regionStart);
+    // ZGC zRelocate.cpp:877-886: verify the inactive bitmap after resetting
+    // the allocation top, before preparing remembered bits for in-place reuse.
+    if (!fromYoung) {
+        if (Heap::GetHeap().OldActiveRemsetIsCurrent()) {
+            region->verify_remset_cleared_previous();
+        } else {
+            region->verify_remset_cleared_current();
+        }
+    }
     // ZGC zRelocate.cpp:838-861 start_in_place_relocation_prepare_remset: this page is its own
     // to-page, so its old remembered-set bits have to leave the face before the copy walk starts
     // writing the new ones.  What the walk does not hand back is dropped, which is

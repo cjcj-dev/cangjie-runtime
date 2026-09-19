@@ -404,10 +404,6 @@ inline bool ZPage::is_remset_cleared_previous() const
     return _remembered_set.is_cleared_previous();
 }
 
-inline void ZPage::verify_remset_cleared_current() const {}
-
-inline void ZPage::verify_remset_cleared_previous() const {}
-
 inline void ZPage::clear_remset_previous()
 {
     _remembered_set.clear_previous();

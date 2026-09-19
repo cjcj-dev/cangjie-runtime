@@ -10,6 +10,7 @@
 #include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Mutator/Mutator.h"
+#include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zPage.hpp"
@@ -25,6 +26,19 @@
 #include "Heap/z/zForwarding.hpp"
 
 namespace MapleRuntime {
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+// Cangjie's rendezvous protocol uses the mutator safe-region state. GC and
+// worker threads carry GC_THREAD; mutators block rendezvous outside saferegions.
+// ZGC zVerify.cpp:63-110.
+void z_verify_safepoints_are_blocked()
+{
+    if (ThreadLocal::GetThreadType() == ThreadType::GC_THREAD) { return; }
+    Mutator* const mutator = ThreadLocal::GetMutator();
+    DCHECK(MutatorManager::Instance().WorldStopped() ||
+           (mutator != nullptr && !mutator->InSaferegion()));
+}
+#endif
+
 namespace {
 // VM adapter: the first WeakRef payload slot is outside Cangjie's ordinary
 // strong-field bitmap. HotSpot's reference Klass dispatch owns that layout.
@@ -282,12 +296,15 @@ void ZVerify::OnColorFlip()
 void ZVerify::BeforeRelocation(ZForwarding* forwarding)
 {
     if (!ZVerifyRemembered || forwarding == nullptr ||
-        forwarding->table_generation() != static_cast<uint8_t>(Generation::Old)) { return; }
+        forwarding->from_age() != PageAge::old) { return; }
     ZPage* page = forwarding->page();
     if (page == nullptr) { return; }
     const bool activeCurrent = Heap::GetHeap().OldActiveRemsetIsCurrent();
-    CHECK_DETAIL(activeCurrent ? page->is_remset_cleared_previous() : page->is_remset_cleared_current(),
-                 "Inactive remembered set is not empty for %p", page);
+    if (activeCurrent) {
+        page->verify_remset_cleared_previous();
+    } else {
+        page->verify_remset_cleared_current();
+    }
     // zVerify.cpp:601 forwarding->object_iterate: the source page livemap.
     page->object_iterate([&](BaseObject* object) {
         const MAddress from = reinterpret_cast<MAddress>(object);
@@ -339,6 +356,7 @@ void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
 void ZVerify::AfterRelocation(ZForwarding* forwarding)
 {
     if (!ZVerifyRemembered || forwarding == nullptr) { return; }
+    if (forwarding->to_age() != PageAge::old) { return; }
     if (ZForwarding::young_marking() && forwarding->relocated_remembered_fields_is_concurrently_scanned()) { return; }
     AfterRelocationInternal(forwarding);
 }

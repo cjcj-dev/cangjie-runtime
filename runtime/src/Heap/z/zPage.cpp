@@ -8,6 +8,7 @@
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zVerify.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -129,6 +130,21 @@ const size_t ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD = MapleRuntime::MRT_PAGE_SIZE
 const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntime::MRT_PAGE_SIZE;
 
 
+
+// ZGC zPage.cpp:153-163: the page owns both remembered-set checks.
+void ZPage::verify_remset_cleared_current() const
+{
+    if (ZVerifyRemembered) {
+        CHECK_DETAIL(is_remset_cleared_current(), "current remset bits should be cleared");
+    }
+}
+
+void ZPage::verify_remset_cleared_previous() const
+{
+    if (ZVerifyRemembered) {
+        CHECK_DETAIL(is_remset_cleared_previous(), "previous remset bits should be cleared");
+    }
+}
 
 // ZPage::verify_live (zPage.cpp:196-203). The forwarding owner holds the
 // original page livemap when this metadata facade already describes to-space.

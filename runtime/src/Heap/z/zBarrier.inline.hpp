@@ -11,6 +11,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Base/Log.h"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zVerify.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -335,6 +336,9 @@ template<typename SlowPath>
 inline zaddress ZBarrier::barrier(ZBarrierFastPath fast_path, SlowPath slow_path, ZBarrierColor color,
                                   volatile zpointer* p, zpointer o, bool allow_null)
 {
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+    z_verify_safepoints_are_blocked();
+#endif
     if (fast_path(o)) {
         return RefField<>(o).GetTargetObject();
     }
