@@ -73,15 +73,29 @@ bool SlotHeldByLiveObject(const void* slot)
 #endif
 
 ZRemembered::FoundOld::FoundOld()
-    : _allocated_bitmap_0(), _allocated_bitmap_1(), _bitmaps{ nullptr, nullptr }, _current(0)
+    : _allocated_bitmap_0(), _allocated_bitmap_1(), _bitmaps{ nullptr, nullptr }, _current(0), _bits(0)
 {}
+
+void ZRemembered::FoundOld::initialize(size_t bits)
+{
+    // ZGC zRemembered.cpp:372-375 uses start()>>ZGranuleSizeShift because the
+    // page table is indexed the same way. Our ZPageTable map granule is the
+    // region unit, so the bitmap length is map.size() and the index is
+    // (GetRegionStart-base)/granule — the same index ZPageTable::at uses.
+    _bits = bits;
+    _allocated_bitmap_0.reset(new CHeapBitMap(static_cast<BitMap::idx_t>(bits), true));
+    _allocated_bitmap_1.reset(new CHeapBitMap(static_cast<BitMap::idx_t>(bits), true));
+    _bitmaps[0] = _allocated_bitmap_0.get();
+    _bitmaps[1] = _allocated_bitmap_1.get();
+}
 
 void ZRemembered::FoundOld::ensure()
 {
     if (_allocated_bitmap_0) {
         return;
     }
-    const BitMap::idx_t bits = static_cast<BitMap::idx_t>(ZAddressOffsetMax >> ZGranuleSizeShift);
+    const BitMap::idx_t bits = _bits != 0 ? static_cast<BitMap::idx_t>(_bits)
+                                          : static_cast<BitMap::idx_t>(ZAddressOffsetMax >> ZGranuleSizeShift);
     _allocated_bitmap_0.reset(new CHeapBitMap(bits, true));
     _allocated_bitmap_1.reset(new CHeapBitMap(bits, true));
     _bitmaps[0] = _allocated_bitmap_0.get();
@@ -111,12 +125,13 @@ void ZRemembered::FoundOld::clear_previous()
     previous_bitmap()->clear_range(0, previous_bitmap()->size());
 }
 
-void ZRemembered::FoundOld::register_page(ZPage* page)
+void ZRemembered::FoundOld::register_page(size_t index)
 {
-    CHECK(!page->IsYoungRegion());
-    const BitMap::idx_t index =
-        static_cast<BitMap::idx_t>(untype(page->start()) >> ZGranuleSizeShift);
-    current_bitmap()->par_set_bit(index, std::memory_order_relaxed);
+    CHeapBitMap* bitmap = current_bitmap();
+    if (index >= bitmap->size()) {
+        return;
+    }
+    bitmap->par_set_bit(index, std::memory_order_relaxed);
 }
 
 ZRemembered::ZRemembered() : _page_table(nullptr), _old_forwarding_table(nullptr), _page_allocator(nullptr), _found_old()
@@ -128,6 +143,7 @@ void ZRemembered::bind(ZPageTable* page_table, const ZForwardingTable* old_forwa
     _page_table = page_table;
     _old_forwarding_table = old_forwarding_table;
     _page_allocator = page_allocator;
+    _found_old.initialize(page_table->map().size());
 }
 
 void ZRemembered::flip_found_old_sets()
@@ -143,7 +159,16 @@ void ZRemembered::clear_found_old_previous_set()
 void ZRemembered::register_found_old(ZPage* page)
 {
     CHECK(!page->IsYoungRegion());
-    _found_old.register_page(page);
+    // Same index ZPageTableParallelIterator uses (zPageTable.inline.hpp:24).
+    if (_page_table != nullptr) {
+        const auto& map = _page_table->map();
+        const MAddress start = page->GetRegionStart();
+        if (start >= map.base()) {
+            _found_old.register_page((start - map.base()) / map.granule());
+        }
+        return;
+    }
+    _found_old.register_page(static_cast<size_t>(untype(page->start())) >> ZGranuleSizeShift);
 }
 
 template<typename Function>

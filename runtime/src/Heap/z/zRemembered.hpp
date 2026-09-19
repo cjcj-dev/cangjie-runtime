@@ -39,12 +39,14 @@ private:
         std::unique_ptr<CHeapBitMap> _allocated_bitmap_1;
         CHeapBitMap* _bitmaps[2];
         int _current;
+        size_t _bits;
 
         FoundOld();
+        void initialize(size_t bits);
         void ensure();
         void flip();
         void clear_previous();
-        void register_page(ZPage* page);
+        void register_page(size_t index);
         CHeapBitMap* current_bitmap();
         CHeapBitMap* previous_bitmap();
     } _found_old;
