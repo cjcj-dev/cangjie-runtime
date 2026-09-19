@@ -363,14 +363,8 @@ public:
 void ReferenceProcessor::process_references()
 {
     ZStatTimerOld timer(ZSubPhaseConcurrentReferencesProcess);
-    if (workers == nullptr) {
-        workers = Heap::GetHeap().old().Workers();
-    }
-    CHECK(workers != nullptr);
     ZReferenceProcessorTask task(this);
-    if (workers != nullptr) {
-        workers->run(&task);
-    }
+    workers->run(&task);
     soft_reference_update_clock();
     collect_statistics();
 }

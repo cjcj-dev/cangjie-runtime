@@ -1065,6 +1065,7 @@ void ZGeneration::InitializeWorkers(uint32_t capacity)
     mark->BindWorkers(workers.get());
     if (_cycle == ZGenerationId::old) {
         weakRootsProcessor = std::make_unique<ZWeakRootsProcessor>(workers.get());
+        Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().set_workers(workers.get());
     }
 }
 
