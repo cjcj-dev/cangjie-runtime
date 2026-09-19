@@ -89,7 +89,7 @@ extern uint32_t  ZBackingIndexMax;
 // (2MB, zGlobals.hpp:33-34) because every page is a granule multiple. Our
 // page allocator still hands out MRT_PAGE_SIZE units (P03/P05 move pages onto
 // 2MB granules), so the managers index address space and backing per unit.
-extern const size_t ZBackingGranuleSize;
+
 
 // Layout of metadata bits in colored pointer / zpointer.
 //

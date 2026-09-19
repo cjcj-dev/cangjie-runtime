@@ -39,17 +39,14 @@ static_assert(!std::is_convertible<zaddress_unsafe, zoffset>::value);
 GC_TEST(ZGranuleMap, GetPutRemove)
 {
     constexpr MAddress kStart = 0x40000000;
-    constexpr size_t kSize = 0x1000;
-    ZGranuleMap<ZForwarding*> map(4 * kSize, kStart, kSize);
+    constexpr size_t kSize = ZGranuleSize;
+    ZGranuleMap<ZForwarding*> map(4 * kSize);
 
     ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
     GC_EXPECT_TRUE(fwd != nullptr);
-    zoffset start;
-    zoffset interior;
-    zoffset next;
-    GC_EXPECT_TRUE(map.offset_for_address(kStart, &start));
-    GC_EXPECT_TRUE(map.offset_for_address(kStart + 8, &interior));
-    GC_EXPECT_TRUE(map.offset_for_address(kStart + kSize, &next));
+    const zoffset start = static_cast<zoffset>(0);
+    const zoffset interior = static_cast<zoffset>(8);
+    const zoffset next = static_cast<zoffset>(kSize);
     map.put(start, kSize, fwd);
     GC_EXPECT_TRUE(map.get(start) == fwd);
     GC_EXPECT_TRUE(map.get(interior) == fwd);
@@ -60,20 +57,16 @@ GC_TEST(ZGranuleMap, GetPutRemove)
     fwd->Destroy();
 }
 
-GC_TEST(ZGranuleMap, OffsetBoundaryRejectsBeforeIndex)
+// The removed native-address adapter is replaced by the ZGC offset map.
+// zGranuleMap.inline.hpp:39,51: maximum offset determines the fixed extent.
+GC_TEST(ZGranuleMap, MaximumOffsetDeterminesExtent)
 {
-    constexpr MAddress kStart = 0x41000000;
-    constexpr size_t kGranule = 0x1000;
-    constexpr size_t kHeapSize = 4 * kGranule;
-    ZGranuleMap<ZForwarding*> map(kHeapSize, kStart, kGranule);
-
-    zoffset offset = zoffset::invalid;
-    GC_EXPECT_TRUE(map.offset_for_address(kStart, &offset));
-    GC_EXPECT_EQ(raw(offset), static_cast<Uptr>(0));
-    GC_EXPECT_TRUE(map.offset_for_address(kStart + kHeapSize - 1, &offset));
-    GC_EXPECT_EQ(raw(offset), static_cast<Uptr>(kHeapSize - 1));
-    GC_EXPECT_FALSE(map.offset_for_address(kStart - 1, &offset));
-    GC_EXPECT_FALSE(map.offset_for_address(kStart + kHeapSize, &offset));
+    ZGranuleMap<int*> map(4 * ZGranuleSize);
+    int value = 42;
+    map.put(static_cast<zoffset>(3 * ZGranuleSize), &value);
+    GC_EXPECT_EQ(map.size(), 4u);
+    GC_EXPECT_TRUE(map.get(static_cast<zoffset>(4 * ZGranuleSize - 1)) == &value);
+    GC_EXPECT_TRUE(map.at(2) == nullptr);
 }
 
 // ZGranuleMap::put/get (zGranuleMap.inline.hpp:62-84) and the highest-offset
@@ -81,16 +74,14 @@ GC_TEST(ZGranuleMap, OffsetBoundaryRejectsBeforeIndex)
 // address indices include it, so publishing either segment cannot alias it.
 GC_TEST(ZGranuleMap, DiscontiguousPagesLeaveHoleUnmapped)
 {
-    constexpr MAddress base = 0x42000000;
-    constexpr size_t granule = 0x1000;
-    ZGranuleMap<int*> map(5 * granule, base, granule);
+    constexpr size_t granule = ZGranuleSize;
+    ZGranuleMap<int*> map(5 * granule);
     int first = 1;
     int second = 2;
     map.put(static_cast<zoffset>(0), 2 * granule, &first);
     map.put(static_cast<zoffset>(3 * granule), 2 * granule, &second);
     for (size_t i = 0; i < 5; ++i) {
-        zoffset offset;
-        GC_EXPECT_TRUE(map.offset_for_address(base + i * granule + granule - 1, &offset));
+        const zoffset offset = static_cast<zoffset>(i * granule + granule - 1);
         GC_EXPECT_TRUE(map.get(offset) == (i < 2 ? &first : i == 2 ? nullptr : &second));
     }
     map.put(static_cast<zoffset>(0), 2 * granule, nullptr);
@@ -98,14 +89,15 @@ GC_TEST(ZGranuleMap, DiscontiguousPagesLeaveHoleUnmapped)
     GC_EXPECT_TRUE(map.get(static_cast<zoffset>(3 * granule)) == &second);
 }
 
-GC_TEST(ZGranuleMap, AddressExtentPreservesLow48Budget)
+GC_TEST(ZGranuleMap, MaximumAddressSpaceExtent)
 {
-    constexpr size_t granule = 0x1000;
-    ZGranuleMap<int*> map(granule, kPointerAddressLimit - granule, granule);
-    zoffset offset = zoffset::invalid;
-    GC_EXPECT_TRUE(map.offset_for_address(kPointerAddressLimit - 1, &offset));
-    GC_EXPECT_EQ(raw(offset), static_cast<Uptr>(granule - 1));
-    GC_EXPECT_FALSE(map.offset_for_address(kPointerAddressLimit, &offset));
+    EnsureZAddressDomain();
+    ZGranuleMap<int*> map(ZAddressOffsetMax);
+    int value = 1;
+    map.put(static_cast<zoffset>(ZAddressOffsetMax - ZGranuleSize), &value);
+    GC_EXPECT_EQ(map.size(), ZAddressOffsetMax >> ZGranuleSizeShift);
+    GC_EXPECT_TRUE(map.get(static_cast<zoffset>(ZAddressOffsetMax - 1)) == &value);
+    GC_EXPECT_TRUE(map.get(static_cast<zoffset>(0)) == nullptr);
 }
 
 GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
@@ -172,17 +164,15 @@ GC_TEST(ZForwardingTable, kZfwdTableConsumeOn)
 GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
 {
     constexpr MAddress kStart = 0x60000000;
-    constexpr size_t kSize = 0x1000;
-    ZGranuleMap<ZForwarding*> entries(4 * kSize, kStart, kSize);
+    constexpr size_t kSize = ZGranuleSize;
+    ZGranuleMap<ZForwarding*> entries(4 * kSize);
 
     ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
     GC_EXPECT_TRUE(fwd != nullptr);
     const MAddress from = kStart + 16;
     const MAddress to = 0x70000000;
-    zoffset start;
-    zoffset fromOffset;
-    GC_EXPECT_TRUE(entries.offset_for_address(kStart, &start));
-    GC_EXPECT_TRUE(entries.offset_for_address(from, &fromOffset));
+    const zoffset start = static_cast<zoffset>(0);
+    const zoffset fromOffset = static_cast<zoffset>(from - kStart);
     entries.put(start, kSize, fwd);
 
     fwd->release_page();

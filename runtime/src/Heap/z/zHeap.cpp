@@ -139,12 +139,8 @@ void Heap::Init(const HeapParam& param)
     old().StatHeap()->AtInitialize(0, _page_allocator.GetHeapCapacity());
     Heap::GetHeap().EnableGC(ZArguments::gc_enabled());
     {
-        const auto& heapMap = page_table().map();
-        const size_t heapSpan = heapMap.size() * heapMap.granule();
-        young().forwarding_table().initialize(
-            heapSpan, heapMap.base(), heapMap.granule());
-        old().forwarding_table().initialize(
-            heapSpan, heapMap.base(), heapMap.granule());
+        young().forwarding_table().initialize();
+        old().forwarding_table().initialize();
     }
     young().remembered()->bind(
         &page_table(),
@@ -303,9 +299,9 @@ Heap& Heap::GetHeap()
     return ZCollectedHeap::heap()->collected_heap();
 }
 
-void Heap::install_page_table(MAddress base, size_t heapSize, size_t granule)
+void Heap::install_page_table()
 {
-    _page_table = ZPageTable(heapSize, base, granule);
+    _page_table = ZPageTable(ZAddressOffsetMax);
 }
 
 ZRemembered& Heap::remembered()

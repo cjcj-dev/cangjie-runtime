@@ -23,6 +23,7 @@
 
 #pragma once
 #include "Heap/z/zAddress.hpp"
+#include "Heap/z/zGlobals.hpp"
 namespace MapleRuntime {
 constexpr Uptr raw(zpointer p) { return static_cast<Uptr>(p); }
 constexpr Uptr raw(zaddress p) { return static_cast<Uptr>(p); }
@@ -293,13 +294,13 @@ CREATE_ZOFFSET_OPERATORS(zbacking_index)
 
 inline zbacking_index to_zbacking_index(zbacking_offset offset) {
   const uintptr_t value = untype(offset);
-  assert(value % ZBackingGranuleSize == 0);
-  return to_zbacking_index(static_cast<uint32_t>(value / ZBackingGranuleSize));
+  assert(value % ZGranuleSize == 0);
+  return to_zbacking_index(static_cast<uint32_t>(value / ZGranuleSize));
 }
 
 inline zbacking_offset to_zbacking_offset(zbacking_index index) {
   const uintptr_t value = untype(index);
-  return to_zbacking_offset(value * ZBackingGranuleSize);
+  return to_zbacking_offset(value * ZGranuleSize);
 }
 
 // ZRange helper functions (ZGC zAddress.inline.hpp:298-314)

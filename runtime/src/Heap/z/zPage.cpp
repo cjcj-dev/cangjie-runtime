@@ -120,13 +120,13 @@ static size_t GetPageSize() noexcept
 const size_t MRT_PAGE_SIZE = GetPageSize();
 const size_t AllocatorUtils::ALLOC_PAGE_SIZE = MapleRuntime::MRT_PAGE_SIZE;
 // region unit size: same as system page size
-const size_t ZPage::UNIT_SIZE = MapleRuntime::MRT_PAGE_SIZE;
+const size_t ZPage::UNIT_SIZE = ZGranuleSize;
 // regarding a object as a large object when the size is greater than 32KB or one page size,
 // depending on the system page size.
 const size_t ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD = MapleRuntime::MRT_PAGE_SIZE > (32 * KB) ?
                                                             MapleRuntime::MRT_PAGE_SIZE : 32 * KB;
 // max size of per region is 128KB.
-const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntime::MRT_PAGE_SIZE;
+const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = 1;
 
 
 

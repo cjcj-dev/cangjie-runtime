@@ -27,8 +27,8 @@ template<typename T>
 inline void ZGranuleMap<T>::put(zoffset offset, size_t size, T value)
 {
         const size_t start = index_for_offset(offset);
-        assert(size % _granule == 0);
-        const size_t count = size / _granule;
+        assert(size % ZGranuleSize == 0);
+        const size_t count = size >> ZGranuleSizeShift;
         assert(start <= _size && count <= _size - start);
         for (size_t i = 0; i < count; ++i) {
             _map[start + i].store(value, std::memory_order_release);
@@ -59,18 +59,13 @@ inline void ZGranuleMap<T>::release_put(zoffset offset, size_t size, T value)
 {
         std::atomic_thread_fence(std::memory_order_release);
         const size_t start = index_for_offset(offset);
-        const size_t count = size / _granule;
+        const size_t count = size >> ZGranuleSizeShift;
         for (size_t i = 0; i < count; ++i) {
             _map[start + i].store(value, std::memory_order_relaxed);
         }
     }
 }
 
-namespace MapleRuntime {
-template<typename T>
-inline size_t ZGranuleMap<T>::granule() const
-{ return _granule; }
-}
 
 namespace MapleRuntime {
 template<typename T>
@@ -78,11 +73,6 @@ inline size_t ZGranuleMap<T>::size() const
 { return _size; }
 }
 
-namespace MapleRuntime {
-template<typename T>
-inline MAddress ZGranuleMap<T>::base() const
-{ return _base; }
-}
 
 namespace MapleRuntime {
 template<typename T>
@@ -99,7 +89,9 @@ namespace MapleRuntime {
 template<typename T>
 inline size_t ZGranuleMap<T>::index_for_offset(zoffset offset) const
 {
-        return static_cast<size_t>(raw(offset)) / _granule;
+        const size_t index = static_cast<size_t>(raw(offset)) >> ZGranuleSizeShift;
+        assert(index < _size);
+        return index;
     }
 }
 

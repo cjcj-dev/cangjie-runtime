@@ -138,7 +138,7 @@ void ZRemembered::bind(ZPageTable* page_table, const ZForwardingTable* old_forwa
     _page_table = page_table;
     _old_forwarding_table = old_forwarding_table;
     _page_allocator = page_allocator;
-    _found_old.initialize(page_table->map().size());
+    _found_old.initialize(ZAddressOffsetMax >> ZGranuleSizeShift);
 }
 
 void ZRemembered::flip_found_old_sets()
@@ -155,11 +155,7 @@ void ZRemembered::register_found_old(ZPage* page)
 {
     CHECK(!page->IsYoungRegion());
     CHECK(_page_table != nullptr);
-    const auto& map = _page_table->map();
-    CHECK(map.Ready());
-    zoffset offset;
-    CHECK(map.offset_for_address(page->GetRegionStart(), &offset));
-    _found_old.register_page(static_cast<size_t>(untype(offset)) / map.granule());
+    _found_old.register_page(untype(page->start()) >> ZGranuleSizeShift);
 }
 
 template<typename Function>

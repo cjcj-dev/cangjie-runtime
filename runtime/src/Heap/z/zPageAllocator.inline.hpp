@@ -41,7 +41,7 @@ inline __attribute__((visibility("hidden"))) size_t RegionManager::GetHeapUnitCo
 inline __attribute__((visibility("hidden"))) size_t RegionManager::GetMetadataSize(size_t num)
     {
         (void)num;
-        return MapleRuntime::MRT_PAGE_SIZE;
+        return ZGranuleSize;
     }
 
     template<Generation G>

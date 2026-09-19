@@ -534,8 +534,7 @@ inline void ZPage::InitializeSegments(uintptr_t metadataEnd, const std::vector<U
             unitSegments.push_back(UnitSegment{ range.start, range.size, index });
             index += range.size / UNIT_SIZE + 1;
         }
-        ZPageTable::install(segments.front().start,
-                            segments.back().End() - segments.front().start, UNIT_SIZE);
+        ZPageTable::install();
     }
 
 inline size_t ZPage::FindUnitIndex(uintptr_t address)

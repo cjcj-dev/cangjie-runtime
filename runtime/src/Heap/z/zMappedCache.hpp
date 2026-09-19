@@ -7,7 +7,7 @@
 // ZGC zMappedCache.hpp:35-142. Entries live inside the cached memory itself
 // (zMappedCache.cpp:92-119); the tree is the intrusive red-black tree
 // (utilities/rbTree.hpp) and the size class lists are ZList<>. Size classes
-// are keyed by the manager granule (ZBackingGranuleSize) rather than
+// are keyed by the manager granule (ZGranuleSize) rather than
 // ZGranuleSize until P03/P05 move pages onto 2MB granules; the list array is
 // sized for the smallest supported granule (4KB), classes above the runtime
 // MaxSizeClassShift stay unused.
@@ -78,7 +78,7 @@ private:
   // Maintain size class lists from 2 granules to 16GB
   static constexpr int MaxLongArraySizeClassShift = 3 /* 8 byte */ + 31 /* max length */;
   static constexpr int MinSizeClassShift = 1;
-  static constexpr int MinGranuleSizeShift = 12; // smallest supported ZBackingGranuleSize
+  static constexpr int MinGranuleSizeShift = 12; // smallest supported ZGranuleSize
   static constexpr int NumSizeClasses = MaxLongArraySizeClassShift - MinGranuleSizeShift - MinSizeClassShift + 1;
 
   Tree          _tree;

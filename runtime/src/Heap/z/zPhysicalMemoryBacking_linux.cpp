@@ -179,7 +179,7 @@ ZPhysicalMemoryBacking::ZPhysicalMemoryBacking(size_t max_capacity)
   }
 
   // Make sure the filesystem block size is compatible
-  if (ZBackingGranuleSize % _block_size != 0) {
+  if (ZGranuleSize % _block_size != 0) {
     LOG(RTLOG_ERROR, "Filesystem backing the heap has incompatible block size (%zu)",
         _block_size);
     return;
@@ -669,8 +669,8 @@ size_t ZPhysicalMemoryBacking::commit_default(zbacking_offset offset, size_t len
   zbacking_offset_end end = to_zbacking_offset_end(offset, length);
 
   for (;;) {
-    length = AlignDown((end - start) / 2, ZBackingGranuleSize);
-    if (length < ZBackingGranuleSize) {
+    length = AlignDown((end - start) / 2, ZGranuleSize);
+    if (length < ZGranuleSize) {
       // Done, don't commit more
       return start - offset;
     }

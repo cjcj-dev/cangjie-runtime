@@ -21,76 +21,41 @@
 #include "Common/ColourEncoding.h"
 
 #include "Heap/z/zIndexDistributor.hpp"
+#include "Heap/z/zGlobals.hpp"
 namespace MapleRuntime {
 
-// zGranuleMap.hpp:31-61 + zGranuleMap.inline.hpp:37-103
-// Indexed by (addr - base) / granule. T is a pointer type stored atomically.
-// ZGC ZGranuleMap(size_t max_offset) allocates in the constructor.
+// zGranuleMap.inline.hpp:37-103: one slot per ZGC granule.
 template <typename T>
 class ZGranuleMap {
 public:
-    ZGranuleMap() : _size(0), _map(nullptr), _base(0), _heapSize(0), _granule(0) {}
-
-    ZGranuleMap(size_t max_offset, MAddress base, size_t granule)
-        : _size(0), _map(nullptr), _base(base), _heapSize(max_offset), _granule(granule)
+    ZGranuleMap() : _size(0), _map(nullptr) {}
+    explicit ZGranuleMap(size_t max_offset)
+        : _size(max_offset >> ZGranuleSizeShift),
+          _map(static_cast<std::atomic<T>*>(std::calloc(_size, sizeof(std::atomic<T>))))
     {
-        CHECK(granule != 0 && max_offset != 0 && base % granule == 0 && max_offset % granule == 0);
-        CHECK(IsRepresentableLow48Range(base, max_offset));
-        const size_t n = max_offset / granule;
-        auto* map = static_cast<std::atomic<T>*>(std::calloc(n, sizeof(std::atomic<T>)));
-        CHECK(map != nullptr);
-        _map = map;
-        _size = n;
+        CHECK(max_offset != 0 && max_offset % ZGranuleSize == 0);
+        CHECK(_map != nullptr);
     }
-
     ZGranuleMap(const ZGranuleMap&) = delete;
     ZGranuleMap& operator=(const ZGranuleMap&) = delete;
-
-    ZGranuleMap(ZGranuleMap&& other) noexcept
-        : _size(other._size), _map(other._map), _base(other._base), _heapSize(other._heapSize),
-          _granule(other._granule)
+    ZGranuleMap(ZGranuleMap&& other) noexcept : _size(other._size), _map(other._map)
     {
-        other._map = nullptr;
         other._size = 0;
+        other._map = nullptr;
     }
-
     ZGranuleMap& operator=(ZGranuleMap&& other) noexcept
     {
         if (this != &other) {
             std::free(_map);
             _size = other._size;
             _map = other._map;
-            _base = other._base;
-            _heapSize = other._heapSize;
-            _granule = other._granule;
-            other._map = nullptr;
             other._size = 0;
+            other._map = nullptr;
         }
         return *this;
     }
-
-    ~ZGranuleMap()
-    {
-        std::free(_map);
-        _map = nullptr;
-    }
-
+    ~ZGranuleMap() { std::free(_map); }
     bool Ready() const { return _map != nullptr; }
-
-    bool offset_for_address(MAddress addr, zoffset* result) const
-    {
-        if (!Ready() || addr < _base) {
-            return false;
-        }
-        const MAddress offset = addr - _base;
-        if (offset >= _heapSize) {
-            return false;
-        }
-        if (result != nullptr) {
-            *result = static_cast<zoffset>(offset);
-        }
-        return true;
-    }
 
     T get(zoffset offset) const;
 
@@ -101,9 +66,7 @@ public:
     const T* addr(zoffset offset) const;
     T* addr(zoffset offset);
 
-    size_t granule() const;
     size_t size() const;
-    MAddress base() const;
 
     T at(size_t index) const;
 
@@ -116,9 +79,6 @@ private:
 
     size_t _size;
     std::atomic<T>* _map;
-    MAddress _base;
-    size_t _heapSize;
-    size_t _granule;
 };
 
 } // namespace MapleRuntime

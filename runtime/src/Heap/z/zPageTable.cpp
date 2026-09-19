@@ -13,9 +13,9 @@
 #include <memory>
 
 namespace MapleRuntime {
-void ZPageTable::install(MAddress base, size_t heapSize, size_t granule)
+void ZPageTable::install()
 {
-    Heap::GetHeap().install_page_table(base, heapSize, granule);
+    Heap::GetHeap().install_page_table();
 }
 
 ZPageTable& ZPageTable::heap_table()
@@ -36,14 +36,15 @@ int ZPageTable::count() const
 
 ZPage* ZPageTable::get(MAddress addr) const
 {
-    zoffset offset;
-    return _map.offset_for_address(addr, &offset) ? _map.get(offset) : nullptr;
+    if (!_map.Ready() || addr < ZAddressHeapBase || addr - ZAddressHeapBase >= ZAddressOffsetMax) {
+        return nullptr;
+    }
+    return _map.get(ZAddress::offset(to_zaddress_unsafe(addr)));
 }
 
 void ZPageTable::insert(ZPage* page)
 {
-    zoffset offset;
-    CHECK(_map.offset_for_address(page->GetRegionStart(), &offset));
+    const zoffset offset = page->start();
     CHECK(_map.get(offset) == nullptr);
     std::atomic_thread_fence(std::memory_order_release);
     _map.put(offset, page->GetRegionSize(), page);
@@ -54,16 +55,14 @@ void ZPageTable::insert(ZPage* page)
 
 void ZPageTable::remove(ZPage* page)
 {
-    zoffset offset;
-    CHECK(_map.offset_for_address(page->GetRegionStart(), &offset));
+    const zoffset offset = page->start();
     CHECK(_map.get(offset) == page);
     _map.put(offset, page->GetRegionSize(), nullptr);
 }
 
 void ZPageTable::replace(ZPage* old_page, ZPage* new_page)
 {
-    zoffset offset;
-    CHECK(_map.offset_for_address(old_page->GetRegionStart(), &offset));
+    const zoffset offset = old_page->start();
     CHECK(_map.get(offset) == old_page);
     _map.release_put(offset, old_page->GetRegionSize(), new_page);
     if (!new_page->IsYoungRegion()) {

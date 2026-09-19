@@ -27,16 +27,16 @@ namespace GcUnit {
 namespace {
 struct CacheFixture {
     static constexpr size_t kUnits = 16;
-    ZTestHeapMapping mapping{ kUnits * ZBackingGranuleSize };
+    ZTestHeapMapping mapping{ kUnits * ZGranuleSize };
     ZMappedCache cache;
 
     ZVirtualMemory vmem(size_t index, size_t count) const
     {
-        return ZVirtualMemory(mapping.offset() + index * ZBackingGranuleSize, count * ZBackingGranuleSize);
+        return ZVirtualMemory(mapping.offset() + index * ZGranuleSize, count * ZGranuleSize);
     }
-    size_t index(const ZVirtualMemory& v) const { return (v.start() - mapping.offset()) / ZBackingGranuleSize; }
-    size_t count(const ZVirtualMemory& v) const { return v.size() / ZBackingGranuleSize; }
-    size_t bytes(size_t count) const { return count * ZBackingGranuleSize; }
+    size_t index(const ZVirtualMemory& v) const { return (v.start() - mapping.offset()) / ZGranuleSize; }
+    size_t count(const ZVirtualMemory& v) const { return v.size() / ZGranuleSize; }
+    size_t bytes(size_t count) const { return count * ZGranuleSize; }
 };
 }
 
@@ -140,13 +140,13 @@ GC_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
 {
     EnsureZAddressDomain();
     constexpr size_t kUnits = 256;
-    ZTestHeapMapping mapping(kUnits * ZBackingGranuleSize);
+    ZTestHeapMapping mapping(kUnits * ZGranuleSize);
     ZMappedCache cache;
     std::vector<bool> cached(kUnits, false);
     uint64_t seed = 0x9e3779b97f4a7c15ULL;
     auto next = [&seed]() { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; return seed; };
     auto vmemOf = [&](size_t index, size_t count) {
-        return ZVirtualMemory(mapping.offset() + index * ZBackingGranuleSize, count * ZBackingGranuleSize);
+        return ZVirtualMemory(mapping.offset() + index * ZGranuleSize, count * ZGranuleSize);
     };
     size_t cachedUnits = 0;
     for (int round = 0; round < 4000; ++round) {
@@ -161,33 +161,33 @@ GC_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
             cachedUnits += count;
         } else if (cachedUnits != 0) {
             ZArray<ZVirtualMemory> out;
-            const size_t want = std::min(cachedUnits, count) * ZBackingGranuleSize;
+            const size_t want = std::min(cachedUnits, count) * ZGranuleSize;
             const size_t got = (next() % 2 == 0)
                 ? cache.remove_discontiguous(want, &out)
                 : cache.remove_for_uncommit(want, &out);
             GC_EXPECT_EQ(got, want);
             for (const ZVirtualMemory& v : out) {
-                const size_t start = (v.start() - mapping.offset()) / ZBackingGranuleSize;
-                for (size_t i = start; i < start + v.size() / ZBackingGranuleSize; ++i) {
+                const size_t start = (v.start() - mapping.offset()) / ZGranuleSize;
+                for (size_t i = start; i < start + v.size() / ZGranuleSize; ++i) {
                     GC_EXPECT_TRUE(cached[i]);
                     cached[i] = false;
                 }
-                cachedUnits -= v.size() / ZBackingGranuleSize;
+                cachedUnits -= v.size() / ZGranuleSize;
             }
         }
     }
     // Drain: everything cached comes back exactly once, lowest address first.
     ZArray<ZVirtualMemory> all;
-    GC_EXPECT_EQ(cache.remove_discontiguous(cachedUnits * ZBackingGranuleSize, &all), cachedUnits * ZBackingGranuleSize);
+    GC_EXPECT_EQ(cache.remove_discontiguous(cachedUnits * ZGranuleSize, &all), cachedUnits * ZGranuleSize);
     for (const ZVirtualMemory& v : all) {
-        const size_t start = (v.start() - mapping.offset()) / ZBackingGranuleSize;
-        for (size_t i = start; i < start + v.size() / ZBackingGranuleSize; ++i) {
+        const size_t start = (v.start() - mapping.offset()) / ZGranuleSize;
+        for (size_t i = start; i < start + v.size() / ZGranuleSize; ++i) {
             GC_EXPECT_TRUE(cached[i]);
             cached[i] = false;
         }
     }
     for (bool c : cached) { GC_EXPECT_FALSE(c); }
-    GC_EXPECT_TRUE(cache.remove_contiguous(ZBackingGranuleSize).is_null());
+    GC_EXPECT_TRUE(cache.remove_contiguous(ZGranuleSize).is_null());
 }
 
 #if defined(__linux__)
@@ -201,7 +201,7 @@ GC_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
     // Keep the granule map small: it covers [0, ZAddressOffsetMax).
     ZAddressOffsetMaxSetter offsetMax(64 * MB);
     ZTest::ZBackingLimitSetter backingLimits;
-    const size_t unit = ZBackingGranuleSize;
+    const size_t unit = ZGranuleSize;
     ZTest::ZAddressReserver reserver;
     reserver.SetUp(8 * unit);
     GC_EXPECT_TRUE(reserver.reserver()->reserved() == 8 * unit && reserver.registry()->is_contiguous());

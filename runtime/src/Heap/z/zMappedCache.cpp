@@ -88,8 +88,8 @@ static void* entry_address_for_zoffset_end(zoffset_end offset) {
   constexpr size_t aligned_entry_size = AlignUp(sizeof(ZMappedCacheEntry), ZCacheLineSize);
 
   // Do not use the last location
-  const size_t number_of_locations = ZBackingGranuleSize / aligned_entry_size - 1;
-  const size_t granule_index = untype(offset) / ZBackingGranuleSize;
+  const size_t number_of_locations = ZGranuleSize / aligned_entry_size - 1;
+  const size_t granule_index = untype(offset) / ZGranuleSize;
   const size_t index = granule_index % number_of_locations;
   const uintptr_t end_addr = untype(offset) + ZAddressHeapBase;
 
@@ -97,7 +97,7 @@ static void* entry_address_for_zoffset_end(zoffset_end offset) {
 }
 
 static ZMappedCacheEntry* create_entry(const ZVirtualMemory& vmem) {
-  assert(vmem.size() >= ZBackingGranuleSize);
+  assert(vmem.size() >= ZGranuleSize);
 
   void* placement_addr = entry_address_for_zoffset_end(vmem.end());
   ZMappedCacheEntry* entry = new (placement_addr) ZMappedCacheEntry(vmem);
@@ -243,7 +243,7 @@ static int log2i_ceil(size_t value) {
 }
 
 int ZMappedCache::granule_size_shift() {
-  static const int shift = log2i_graceful(ZBackingGranuleSize);
+  static const int shift = log2i_graceful(ZGranuleSize);
   assert(shift >= MinGranuleSizeShift);
   return shift;
 }
@@ -538,7 +538,7 @@ void ZMappedCache::scan_remove_vmem(SelectFunction select, ConsumeFunction consu
 template <ZMappedCache::RemovalStrategy strategy>
 size_t ZMappedCache::remove_discontiguous_with_strategy(size_t size, ZArray<ZVirtualMemory>* out) {
   assert(size > 0);
-  assert(size % ZBackingGranuleSize == 0);
+  assert(size % ZGranuleSize == 0);
 
   size_t remaining = size;
 
@@ -646,7 +646,7 @@ void ZMappedCache::insert(const ZVirtualMemory& vmem) {
 
 ZVirtualMemory ZMappedCache::remove_contiguous(size_t size) {
   assert(size > 0);
-  assert(size % ZBackingGranuleSize == 0);
+  assert(size % ZGranuleSize == 0);
 
   ZVirtualMemory result;
 
@@ -677,9 +677,9 @@ ZVirtualMemory ZMappedCache::remove_contiguous(size_t size) {
 }
 
 ZVirtualMemory ZMappedCache::remove_contiguous_power_of_2(size_t min_size, size_t max_size) {
-  assert(min_size % ZBackingGranuleSize == 0);
+  assert(min_size % ZGranuleSize == 0);
   assert((min_size & (min_size - 1)) == 0);
-  assert(max_size % ZBackingGranuleSize == 0);
+  assert(max_size % ZGranuleSize == 0);
   assert((max_size & (max_size - 1)) == 0);
   assert(min_size <= max_size);
 
@@ -752,7 +752,7 @@ void ZMappedCache::print_on() const {
   // Print the number of entries smaller than the min size class's size
   const size_t small_entry_size_count = entry_count - size_class_entry_count;
   if (small_entry_size_count != 0) {
-    VLOG(REPORT, "  size classes   %zuK (%zu)", ZBackingGranuleSize / KB, small_entry_size_count);
+    VLOG(REPORT, "  size classes   %zuK (%zu)", ZGranuleSize / KB, small_entry_size_count);
   }
 
   for (int index = 0; index < NumSizeClasses; ++index) {

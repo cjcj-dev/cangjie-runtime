@@ -82,16 +82,15 @@ private:
 inline void BindFixtureRemembered(RegionManager& manager)
 {
     auto& heap = Heap::GetHeap();
-    const auto& map = Heap::page_table().map();
-    const size_t size = map.size() * map.granule();
-    generation_forwarding_table(Generation::Young).initialize(size, map.base(), map.granule());
-    generation_forwarding_table(Generation::Old).initialize(size, map.base(), map.granule());
+    generation_forwarding_table(Generation::Young).initialize();
+    generation_forwarding_table(Generation::Old).initialize();
     heap.remembered().bind(&Heap::page_table(), &generation_forwarding_table(Generation::Old), &manager);
 }
 
 inline void BindFixturePageTable(RegionManager& manager, size_t units)
 {
-    Heap::GetHeap().install_page_table(manager.GetRegionHeapStart(), units * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
+    (void)units;
+    Heap::GetHeap().install_page_table();
     Heap::bind_test_page_allocator(&manager);
     BindFixtureRemembered(manager);
 }
@@ -171,7 +170,7 @@ public:
       size_t old_max = ZBackingOffsetMax;
 
       ZBackingOffsetMax = max_capacity;
-      ZBackingIndexMax = static_cast<uint32_t>(ZBackingOffsetMax / ZBackingGranuleSize);
+      ZBackingIndexMax = static_cast<uint32_t>(ZBackingOffsetMax / ZGranuleSize);
 
       return old_max;
     }

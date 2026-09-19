@@ -328,14 +328,15 @@ GC_TEST(ZIndexDistributorTest, shell_distributes_each_index_once)
 GC_TEST(ZIndexDistributorTest, page_table_parallel_iterator_emits_each_page_once)
 {
     struct Page {
-        MAddress start;
+        MAddress offset;
         size_t id;
-        MAddress GetRegionStart() const { return start; }
+        zoffset start_offset() const { return static_cast<zoffset>(offset); }
+        zoffset start() const { return start_offset(); }
     };
     constexpr size_t domain = 4096;
-    constexpr size_t granule = 4096;
-    constexpr MAddress base = 0x40000000;
-    ZGranuleMap<Page*> table(domain * granule, base, granule);
+    constexpr size_t granule = ZGranuleSize;
+    constexpr MAddress base = 0;
+    ZGranuleMap<Page*> table(domain * granule);
     Page pages[] = {{base, 0}, {base + (domain / 2) * granule, 1}, {base + (domain - 1) * granule, 2}};
     table.put(static_cast<zoffset>(0), 3 * granule, &pages[0]);
     table.put(static_cast<zoffset>((domain / 2) * granule), 2 * granule, &pages[1]);

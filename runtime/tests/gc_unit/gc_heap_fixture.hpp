@@ -118,10 +118,10 @@ inline RememberedSet& HeapTestRemset()
 }
 
 
-inline bool InitFwdTables(MAddress start, size_t size, size_t unit)
+inline bool InitFwdTables(MAddress, size_t, size_t)
 {
-    generation_forwarding_table(Generation::Young).initialize(size, start, unit);
-    generation_forwarding_table(Generation::Old).initialize(size, start, unit);
+    generation_forwarding_table(Generation::Young).initialize();
+    generation_forwarding_table(Generation::Old).initialize();
     return true;
 }
 

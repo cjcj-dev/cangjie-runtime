@@ -486,7 +486,8 @@ void FreeRegionManager::UncommitFlushed(size_t flushed)
 
 void RegionManager::SetMaxUnitCountForRegion(size_t regionSize)
 {
-    maxUnitCountPerRegion = regionSize * KB / ZPage::UNIT_SIZE;
+    maxUnitCountPerRegion = ZPageSizeSmall / ZGranuleSize;
+    (void)regionSize;
 }
 
 void RegionManager::SetMaxUnitCountForPinnedRegion(size_t regionSize)
@@ -500,7 +501,7 @@ void RegionManager::SetMaxUnitCountForPinnedRegion(size_t regionSize)
     // The minimum region size is system page size, measured in KB.
     size_t minSize = MapleRuntime::MRT_PAGE_SIZE / KB;
     if (size >= minSize && size <= regionSize) {
-        maxUnitCountPerPinnedRegion = size * KB / ZPage::UNIT_SIZE;
+        maxUnitCountPerPinnedRegion = ZPageSizeSmall / ZGranuleSize;
     } else {
         LOG(RTLOG_ERROR, "Unsupported cjPinnedRegionSize parameter. Valid cjPinnedRegionSize"
             "range is [%zuKB, %zuKB].\n", minSize, regionSize);
