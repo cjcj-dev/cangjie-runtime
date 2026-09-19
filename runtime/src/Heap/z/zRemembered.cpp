@@ -159,9 +159,6 @@ void ZRemembered::register_found_old(ZPage* page)
     ZPageTable* table = _page_table != nullptr ? _page_table : &Heap::page_table();
     const auto& map = table->map();
     CHECK(map.Ready());
-    if (_found_old._bits != map.size()) {
-        _found_old.initialize(map.size());
-    }
     zoffset offset;
     CHECK(map.offset_for_address(page->GetRegionStart(), &offset));
     _found_old.register_page(static_cast<size_t>(untype(offset)) / map.granule());
