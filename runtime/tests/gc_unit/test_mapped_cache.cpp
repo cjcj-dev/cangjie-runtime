@@ -293,8 +293,8 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     ProductHeapFixture fixture(8);
     RegionManager& manager = fixture.manager;
     const auto role = ZPageType::small;
-    ZPage* first = manager.TakeRegion(2, role, false, false, false);
     BindFixturePageTable(manager, 8);
+    ZPage* first = manager.TakeRegion(2, role, false, false, false);
     ZPage* second = manager.TakeRegion(2, role, false, false, false);
     ZPage* third = manager.TakeRegion(2, role, false, false, false);
     ZPage* fourth = manager.TakeRegion(2, role, false, false, false);
@@ -338,12 +338,10 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     ProductHeapFixture fixture(12);
     RegionManager& manager = fixture.manager;
     const auto role = ZPageType::small;
+    BindFixturePageTable(manager, 12);
     ZPage* regions[5];
     for (auto& region : regions) {
         region = manager.TakeRegion(2, role, false, false, false);
-        if (region == regions[0]) {
-            BindFixturePageTable(manager, 12);
-        }
         PublishAllocatedPage(region);
         GC_EXPECT_TRUE(region != nullptr);
     }

@@ -47,12 +47,12 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         // ReleaseRetiredRegion clears the product remembered set before
         // returning the page. Its address space must exist as after heap init.
         const auto role = ZPageType::small;
+        BindFixturePageTable(manager, 4);
         ZPage* first = manager.TakeRegion(2, role, false, false, false);
         ZPage* second = manager.TakeRegion(2, role, false, false, false);
         if (first == nullptr || second == nullptr) {
             return 21;
         }
-        BindFixturePageTable(manager, 4);
         PublishAllocatedPage(first);
         PublishAllocatedPage(second);
         const uintptr_t start = first->GetRegionStart();

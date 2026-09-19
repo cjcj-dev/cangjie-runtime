@@ -289,8 +289,8 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         ZPage::Initialize(kUnits, heapStart);
         region0 = ZPage::InitRegion(0, 1, role);
         region1 = ZPage::InitRegion(1, 1, ZPageType::small);
-        ZPageTable::heap_table().insert(region0);
-        ZPageTable::heap_table().insert(region1);
+        PublishAllocatedPage(region0);
+        PublishAllocatedPage(region1);
         // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.
         AdvanceGeneration(Generation::Old);
         AdvanceGeneration(Generation::Young);
