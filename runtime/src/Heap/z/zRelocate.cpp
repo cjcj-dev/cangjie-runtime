@@ -1896,9 +1896,10 @@ void RegionManager::ForwardRegion(ZPage* region)
             EnlistStayYoungSurvivor(region);
             return;
         }
-        if (youngRegion) {
-            AddFlipPromotedPage(region);
-        }
+        // No mid-cycle flip promotion here: ZGC ages/promotes only
+        // selector-registered pages in ZFlipAgePagesTask
+        // (zRelocate.cpp:1334-1363); a page the selector skipped is an
+        // ordinary candidate next cycle (zGeneration.cpp:206-218).
         ExemptFromRegion(region);
         return;
         }
@@ -2333,6 +2334,19 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                     : prev->reset(toAge);
                 newPage->reset_livemap();
                 if (promotion) {
+                    // After the flip the from_page is referenced only by the
+                    // relocation set's _flip_promoted_pages (zRelocate.cpp:1355-1363
+                    // pushes prev_page; zRelocationSet.cpp:208 asserts no
+                    // duplicates). Its intrusive RegionList slot is handed to
+                    // newPage here, at the single promotion fork, before
+                    // flip_promote; the list keeps one member with the same
+                    // unit count, so RecentFullAccounting and the used/census
+                    // readers (zPageAllocator.cpp:1031-1064,1362-1363) see no
+                    // change. flip_promote itself does no list work
+                    // (zGeneration.cpp:941-948).
+                    if (RegionList* list = prev->GetRegionListOwner()) {
+                        list->ReplaceRegion(prev, newPage);
+                    }
                     ZGeneration::young()->flip_promote(prev, newPage);
                     promoted.append(prev);
                 }

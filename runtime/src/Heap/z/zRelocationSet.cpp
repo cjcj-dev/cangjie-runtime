@@ -103,17 +103,6 @@ void ZGenerationOld::CollectSmallSpace()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-void RegionManager::AddFlipPromotedPage(ZPage* region)
-{
-    ZPage* const to = region->clone_for_promotion();
-    to->reset_livemap();
-    ZGeneration::young()->flip_promote(region, to);
-    ZArray<ZPage*> promoted;
-    promoted.append(region);
-    ZGeneration::young()->register_flip_promoted(promoted);
-}
-
-
 void RegionManager::ResetFlipPromotedPages()
 {
 }
@@ -256,6 +245,8 @@ void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)
 {
     std::lock_guard<std::mutex> locker(_promotion_lock);
     for (int i = 0; i < pages.length(); ++i) {
+        // zRelocationSet.cpp:208: no duplicates allowed.
+        CHECK(!_flip_promoted_pages.contains(pages.at(i)));
         _flip_promoted_pages.push(pages.at(i));
     }
 }

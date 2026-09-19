@@ -608,7 +608,6 @@ public:
     // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
     static void RememberPromotedObject(BaseObject* object);
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
-    void AddFlipPromotedPage(ZPage* region);
     void RememberFlipPromotedPages(ZWorkers& workers);
     void ResetFlipPromotedPages();
     void promote_used(const ZPage* from, const ZPage* to);

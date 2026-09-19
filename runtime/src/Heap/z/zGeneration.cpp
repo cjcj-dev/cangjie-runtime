@@ -1356,22 +1356,20 @@ YoungTypeSetter::~YoungTypeSetter()
 namespace MapleRuntime {
 void ZGenerationYoung::flip_promote(ZPage* from_page, ZPage* to_page)
 {
+    // zGeneration.cpp:941-948: replace + statistics only. The from_page's
+    // RegionList handoff happens at the flip fork (zRelocate.cpp
+    // ZFlipAgePagesTask::work) before this call, not here.
     Heap::page_table().replace(from_page, to_page);
     Heap::GetHeap().page_allocator().promote_used(from_page, to_page);
     increase_freed(from_page->size());
     increase_promoted(from_page->live_bytes());
-    if (RegionList* list = from_page->GetRegionListOwner()) {
-        list->ReplaceRegion(from_page, to_page);
-    }
 }
 
 void ZGenerationYoung::in_place_relocate_promote(ZPage* from_page, ZPage* to_page)
 {
+    // zGeneration.cpp:950-955: replace + statistics only.
     Heap::page_table().replace(from_page, to_page);
     Heap::GetHeap().page_allocator().promote_used(from_page, to_page);
-    if (RegionList* list = from_page->GetRegionListOwner()) {
-        list->ReplaceRegion(from_page, to_page);
-    }
 }
 
 void ZGenerationYoung::register_flip_promoted(const ZArray<ZPage*>& pages)
@@ -1753,7 +1751,10 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
                     }
                     continue;
                 }
-                manager.AddFlipPromotedPage(region);
+                // Past-tenure marked regions are promoted by this cycle's
+                // flip_age_pages when the selector registered them
+                // (zRelocate.cpp:1334-1363); a region the selector skipped is
+                // an ordinary candidate next cycle (zGeneration.cpp:206-218).
             }
         }
         }

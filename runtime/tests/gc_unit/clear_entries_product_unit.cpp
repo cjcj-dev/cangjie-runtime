@@ -2103,7 +2103,14 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
 
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(holderRegion, liveHolder));
     RegionManager manager;
-    manager.AddFlipPromotedPage(holderRegion);
+    // The single promotion fork after #707: clone + flip_promote + register
+    // through the generation (zRelocate.cpp:1347-1363).
+    ZPage* const promotedHolder = holderRegion->clone_for_promotion();
+    promotedHolder->reset_livemap();
+    ZGeneration::young()->flip_promote(holderRegion, promotedHolder);
+    ZArray<ZPage*> promotedPages;
+    promotedPages.append(holderRegion);
+    ZGeneration::young()->register_flip_promoted(promotedPages);
     holderRegion->reset(PageAge::old);
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
@@ -2204,7 +2211,14 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         if (flipPromoted) {
             GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(holderRegion, holder));
             RegionManager manager;
-            manager.AddFlipPromotedPage(holderRegion);
+            // The single promotion fork after #707: clone + flip_promote +
+            // register through the generation (zRelocate.cpp:1347-1363).
+            ZPage* const promotedHolder = holderRegion->clone_for_promotion();
+            promotedHolder->reset_livemap();
+            ZGeneration::young()->flip_promote(holderRegion, promotedHolder);
+            ZArray<ZPage*> promotedPages;
+            promotedPages.append(holderRegion);
+            ZGeneration::young()->register_flip_promoted(promotedPages);
             ZStatWorkers statWorkers;
             ZWorkers workers(ZGenerationId::young, 2, &statWorkers);
             workers.set_active();
@@ -2793,6 +2807,43 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     std::fprintf(stderr, "PAGE579 expect-ids-ok\n");
     fixture.region0 = promoted;
     std::fprintf(stderr, "PAGE579 body-done\n");
+}
+
+// ZFlipAgePagesTask promotion fork (zRelocate.cpp:1347-1363): after the flip
+// the from_page is referenced only by the relocation set's flip_promoted_pages;
+// its RegionList slot is handed to the promoted clone at the fork, so the list
+// keeps exactly one member and page_table maps the range to the clone.
+GC_TEST(PageGeneration579, FlipAgePagesHandsRegionListSlotToPromotedPage)
+{
+    RelocationReceiptTestAccess::BindCollector(nullptr);
+    GcHeapFixture fixture;
+    auto* region = fixture.region0;
+    fixture.obj0 = fixture.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(region->GetRegionStart() + fixture.obj0->GetSize());
+    region->reset(PageAge::eden);
+    RegionList list("flip handoff test");
+    list.PrependRegion(region);
+    ZGeneration::young()->SetTenuringThresholdForTest(0);
+    ZArray<ZPage*> pages;
+    pages.append(region);
+    ZStatWorkers statWorkers;
+    ZWorkers workers(ZGenerationId::young, 1, &statWorkers);
+    workers.set_active();
+    ZRelocate::flip_age_pages(workers, &pages);
+    workers.set_inactive();
+    ZPage* promoted = Heap::page(region->GetRegionStart());
+    GC_EXPECT_TRUE(promoted != nullptr);
+    GC_EXPECT_TRUE(promoted != region);
+    GC_EXPECT_TRUE(promoted->generation_id() == ZGenerationId::old);
+    GC_EXPECT_TRUE(region->GetRegionListOwner() == nullptr);
+    GC_EXPECT_TRUE(promoted->GetRegionListOwner() == &list);
+    GC_EXPECT_TRUE(list.GetHeadRegion() == promoted);
+    list.DeleteRegion(promoted);
+    fixture.region0 = promoted;
+    // The from-page is destroyed by the relocation set it registered with
+    // (zRelocationSet.cpp:200-202 destroy_and_clear), not by the test.
+    auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    ZGeneration::young()->relocation_set().reset(&manager);
 }
 
 GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
