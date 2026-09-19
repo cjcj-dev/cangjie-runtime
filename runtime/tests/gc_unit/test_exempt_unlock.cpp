@@ -23,25 +23,6 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-namespace MapleRuntime {
-
-struct ExemptUnlockTestAccess {
-    static bool OnUnmovable(RegionManager& manager, const ZPage* region)
-    {
-        bool found = false;
-        manager.unmovableFromRegionList.VisitAllRegions([&found, region](ZPage* r) {
-            if (r == region) {
-                found = true;
-            }
-        });
-        return found;
-    }
-};
-
-} // namespace MapleRuntime
-
-
-
 GC_TEST(ExemptLife, InPlaceCopyMustNotPaintNormalBeforeUnlock)
 {
     // Exclusive CopyObject(from, from) then SetStateCode(NORMAL) clears LOCKED

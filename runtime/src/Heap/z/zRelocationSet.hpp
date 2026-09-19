@@ -15,7 +15,6 @@ class ZPage;
 class RegionManager;
 class ZRelocationSetSelector;
 class ZWorkers;
-class RegionList;
 
 class ZRelocationSet {
     template <bool>
@@ -40,7 +39,6 @@ public:
     size_t nforwardings() const { return _nforwardings; }
 
     void install(const ZRelocationSetSelector* selector);
-    void install_from_regions(RegionList& regions);
     void reset(RegionManager* page_allocator);
     ZGeneration* generation() const { return _generation; }
     ZArray<ZPage*>* flip_promoted_pages() { return &_flip_promoted_pages; }

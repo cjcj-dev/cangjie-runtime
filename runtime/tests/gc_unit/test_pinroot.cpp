@@ -20,41 +20,26 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 struct PinRootTestAccess {
-    static void MakeOldPinned(RegionManager& manager, ZPage* region)
+    static void MakeOldPinned(RegionManager&, ZPage* region)
     {
-        manager.oldPinnedRegionList.PrependRegion(region);
+        region->SetRegionRole(ZPageRole::OldPinned);
     }
 
-    // Reuses the friendship this file already has rather than adding another one to the product
-    // header: the region lists are private, and a second friend declaration is a permanent change
-    // to RegionManager for the sake of one test.
-    static void ParkOnThreadLocal(RegionManager& manager, ZPage* region)
+    static void ParkOnThreadLocal(RegionManager&, ZPage* region)
     {
-        manager.tlRegionList.PrependRegion(region);
+        region->SetRegionRole(ZPageRole::ThreadLocal);
     }
-    static bool OnRecentFull(RegionManager& manager, const ZPage* region)
+    static bool OnRecentFull(RegionManager&, const ZPage* region)
     {
-        bool found = false;
-        manager.recentFullRegionList.VisitAllRegions([&found, region](ZPage* r) {
-            if (r == region) {
-                found = true;
-            }
-        });
-        return found;
+        return region->GetRegionRole() == ZPageRole::RecentFull;
     }
-    static size_t RecentFullCount(const RegionManager& manager)
+    static size_t RecentFullCount(const RegionManager&, const ZPage* region)
     {
-        return manager.recentFullRegionList.GetRegionCount();
+        return region->GetRegionRole() == ZPageRole::RecentFull ? 1u : 0u;
     }
-    static bool OnThreadLocal(RegionManager& manager, const ZPage* region)
+    static bool OnThreadLocal(RegionManager&, const ZPage* region)
     {
-        bool found = false;
-        manager.tlRegionList.VisitAllRegions([&found, region](ZPage* r) {
-            if (r == region) {
-                found = true;
-            }
-        });
-        return found;
+        return region->GetRegionRole() == ZPageRole::ThreadLocal;
     }
 };
 
@@ -175,10 +160,8 @@ GC_TEST(RegionRetirement, StayYoungAfterCompactInPlaceDoesNotRelinkRecentFull)
     manager.RehomeCompactedInPlaceRegion(region);
     manager.EnlistStayYoungSurvivor(region);
 
-    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager), 1u);
+    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager, region), 1u);
     GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
-    GC_EXPECT_TRUE(region->GetPrevRegion() == nullptr);
-    GC_EXPECT_TRUE(region->GetNextRegion() == nullptr);
 }
 
 // The opposite ordering is valid too: CompactRegion may finish linking the
@@ -195,11 +178,9 @@ GC_TEST(RegionRetirement, StayYoungTransfersCompletedCompactTailFromThreadLocal)
     PinRootTestAccess::ParkOnThreadLocal(manager, region);
     manager.EnlistStayYoungSurvivor(region);
 
-    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager), 1u);
+    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager, region), 1u);
     GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
     GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
-    GC_EXPECT_TRUE(region->GetPrevRegion() == nullptr);
-    GC_EXPECT_TRUE(region->GetNextRegion() == nullptr);
 }
 
 // GC-main may finish stay-young while a mutator is still returning from
@@ -215,9 +196,7 @@ GC_TEST(RegionRetirement, CompactTailDoesNotStealConcurrentRecentFullNode)
     manager.RehomeCompactedInPlaceRegion(region);
     manager.EnlistCompactedRegionForAllocator(region);
 
-    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager), 1u);
+    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager, region), 1u);
     GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
     GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
-    GC_EXPECT_TRUE(region->GetPrevRegion() == nullptr);
-    GC_EXPECT_TRUE(region->GetNextRegion() == nullptr);
 }

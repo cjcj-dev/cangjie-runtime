@@ -710,7 +710,6 @@ inline void ZPage::PublishFromPageMetadata()
 inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
     {
         PublishFromPageMetadata<G>();
-        _scratch.nextRegionIdx0 = _scratch.nextRegionIdx;
     }
 
 inline bool ZPage::RetainForwarding()
@@ -857,60 +856,14 @@ inline bool ZPage::UndoAllocObjectAtomic(uintptr_t addr, size_t size)
 
 inline bool ZPage::IsPinnedRegion() const
     {
-        return OnNamedList("old pinned regions") || OnNamedList("recent pinned regions");
-    }
-
-inline ZPage* ZPage::GetPrevRegion() const
-    {
-        if (UNLIKELY(_scratch.prevRegionIdx == NULLPTR_IDX)) {
-            return nullptr;
-        }
-        return ZPageTable::heap_table().get(GetUnitAddress(_scratch.prevRegionIdx));
-    }
-
-inline void ZPage::SetPrevRegion(const ZPage* r)
-    {
-        if (UNLIKELY(r == nullptr)) {
-            _scratch.prevRegionIdx = NULLPTR_IDX;
-            return;
-        }
-        size_t prevIdx = r->GetUnitIdx();
-        MRT_ASSERT(prevIdx < NULLPTR_IDX, "exceeds the maximum limit for region info");
-        _scratch.prevRegionIdx = static_cast<uint32_t>(prevIdx);
-    }
-
-inline ZPage* ZPage::GetNextRegion() const
-    {
-        if (UNLIKELY(_scratch.nextRegionIdx == NULLPTR_IDX)) {
-            return nullptr;
-        }
-        DCHECK(_scratch.nextRegionIdx < totalUnitCount);
-        return ZPageTable::heap_table().get(GetUnitAddress(_scratch.nextRegionIdx));
-    }
-
-inline ZPage* ZPage::GetNextGhostRegion() const
-    {
-        if (UNLIKELY(_scratch.nextRegionIdx0 == NULLPTR_IDX)) {
-            return nullptr;
-        }
-        DCHECK(_scratch.nextRegionIdx0 < totalUnitCount);
-        return ZPageTable::heap_table().get(GetUnitAddress(_scratch.nextRegionIdx0));
-    }
-
-inline void ZPage::SetNextRegion(const ZPage* r)
-    {
-        if (UNLIKELY(r == nullptr)) {
-            _scratch.nextRegionIdx = NULLPTR_IDX;
-            return;
-        }
-        size_t nextIdx = r->GetUnitIdx();
-        MRT_ASSERT(nextIdx < NULLPTR_IDX, "exceeds the maximum limit for region info");
-        _scratch.nextRegionIdx = static_cast<uint32_t>(nextIdx);
+        const ZPageRole role = GetRegionRole();
+        return role == ZPageRole::OldPinned || role == ZPageRole::RecentPinned;
     }
 
 inline bool ZPage::IsUnmovableFromRegion() const
     {
-        return OnNamedList("escaped from regions") || OnNamedList("raw pointer pinned regions");
+        const ZPageRole role = GetRegionRole();
+        return role == ZPageRole::UnmovableFrom || role == ZPageRole::RawPointerPinned;
     }
 
 inline bool ZPage::IsValidRegion() const
@@ -947,20 +900,6 @@ inline bool ZPage::IsSafeKnownYoungEmpty()
     {
         return IsKnownYoungEmpty();
     }
-inline void ZPage::RemoveFromList()
-    {
-        ZPage* prev = GetPrevRegion();
-        ZPage* next = GetNextRegion();
-        if (prev != nullptr) {
-            prev->SetNextRegion(next);
-        }
-        if (next != nullptr) {
-            next->SetPrevRegion(prev);
-        }
-        this->SetNextRegion(nullptr);
-        this->SetPrevRegion(nullptr);
-    }
-
 
 
 
@@ -993,7 +932,7 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
     {
         CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
         CHECK(ZPageTable::heap_table().get(GetRegionStart()) == nullptr);
-        CHECK_DETAIL(GetRegionListOwner() == nullptr, "reinitializing a region still owned by a list");
+        CHECK_DETAIL(GetRegionRole() == ZPageRole::None, "reinitializing a region still carrying a role");
 
         // Invalidate every old-life carrier before clearing any of its payload.
         // Readers either retain the old page (detachgate) or observe this bump and
@@ -1018,13 +957,7 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
         if (live) {
             reset_livemap();
         }
-        _scratch.prevRegionIdx = NULLPTR_IDX;
-        _scratch.nextRegionIdx = NULLPTR_IDX;
-        // Ghost walk (PrepareFromRegionList) follows nextRegionIdx0. A reused
-        // region that still named its previous-life successor kept a retired
-        // from-space chain alive across InitRegion (RegionManager.h:782).
-        _scratch.nextRegionIdx0 = NULLPTR_IDX;
-        _scratch.regionListOwner.store(nullptr, std::memory_order_relaxed);
+        _scratch.regionRole.store(ZPageRole::None, std::memory_order_relaxed);
         _scratch.censusBoundaryOffset = 0;
 
         // routedest: this is the reuse edge named in the defect. TakeRegion has already run
@@ -1034,8 +967,6 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
         // reuse. The hold is deliberately NOT cleared: reaching this point while held means
         // a reclaim gate was bypassed, and leaving the flag set keeps the region out of the
         // next collection set instead of silently papering over the escape.
-        SetRegionListOwner(nullptr);
-
         SetInGhostRegion(0);
         __atomic_store_n(&_scratch.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
         (void)uClass;

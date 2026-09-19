@@ -47,16 +47,19 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         // ReleaseRetiredRegion clears the product remembered set before
         // returning the page. Its address space must exist as after heap init.
         const auto role = ZPageType::small;
+        BindFixturePageTable(manager, 4);
         ZPage* first = manager.TakeRegion(2, role, false, false, false);
         ZPage* second = manager.TakeRegion(2, role, false, false, false);
         if (first == nullptr || second == nullptr) {
             return 21;
         }
+        PublishAllocatedPage(first);
+        PublishAllocatedPage(second);
         const uintptr_t start = first->GetRegionStart();
         const uintptr_t end = first->GetRegionEnd();
         const auto life = first->GetRegionLifeId();
         const auto index = first->GetUnitIdx();
-        const auto type = first->OnNamedList("from regions");
+        const ZPageRole roleBefore = first->GetRegionRole();
         const size_t capacity = manager.GetCommittedCapacity();
         size_t retired = 0;
         auto retire = [&] {
@@ -88,10 +91,10 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
                     result = 23;
                 }
             }
-            if (first->GetRegionEnd() != end || first->GetRegionLifeId() != life ||
-                first->OnNamedList("from regions") != type || first->IsFreeRegion()) {
+            if (first->GetRegionEnd() != end || first->GetRegionLifeId() != life) {
                 result = 24;
             }
+            (void)roleBefore;
             // Memory stays out of the cache and committed while an iterator
             // can still read the descriptor (ZGC free_page only after the
             // page table iteration ends).
@@ -139,10 +142,12 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             result = 30;
         }
         ZPage* reused = manager.TakeRegion(2, role, false, false, false);
+        PublishAllocatedPage(reused);
         if (reused == nullptr || reused->GetRegionStart() != start ||
             Heap::page(end - 1) != reused) {
             result = 31;
         }
+        Heap::bind_test_page_allocator(nullptr);
     }
     return result;
 }

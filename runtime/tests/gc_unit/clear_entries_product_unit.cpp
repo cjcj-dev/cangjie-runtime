@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "gc_heap_fixture.hpp"
+#include "zunittest.hpp"
 #include "Heap/z/zCrossVM.hpp"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
@@ -62,18 +63,13 @@ struct RelocationReceiptTestAccess {
     {
     }
 
-    static void ParkFrom(RegionManager& manager, ZPage* region)
+    static void ParkFrom(RegionManager&, ZPage* region)
     {
-        manager.fromRegionList.PrependRegion(region);
+        region->SetRegionRole(ZPageRole::From);
     }
 
-    static void ReleaseListOwnership(ZPage* region)
+    static void ReleaseListOwnership(ZPage*)
     {
-        RegionList* owner = region == nullptr ? nullptr : region->GetRegionListOwner();
-        if (owner != nullptr) {
-            owner->DeleteRegion(region);
-        }
-        GC_EXPECT_TRUE(region == nullptr || region->GetRegionListOwner() == nullptr);
     }
 
     static void BindCollector(Heap* collector)
@@ -475,7 +471,6 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
 {
     ZPage* previous = Heap::page(ZPage::GetUnitAddress(index));
     if (previous != nullptr) {
-        RelocationReceiptTestAccess::ReleaseListOwnership(previous);
         if (previous->IsYoungRegion()) {
             previous->reset(PageAge::old);
         }
@@ -485,7 +480,6 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
     }
     ZPage* region = ZPage::InitRegion(index, 1, ZPageType::small);
     GC_EXPECT_TRUE(region != nullptr);
-    region->SetRegionListOwner(nullptr);
     region->SetRegionAllocPtr(region->GetRegionStart());
     (void)fx;
     return region;
@@ -522,7 +516,6 @@ private:
 
 ZLiveMap* PrepareForwardable(GcHeapFixture& fx, ZPage* region, MAddress liveObject)
 {
-    region->SetRegionListOwner(nullptr);
     if (region->IsAllocating()) GcHeapFixture::AdvanceGeneration(region->GetOwnerGeneration());
     for (MAddress address = region->GetRegionStart(); address < liveObject;) {
         BaseObject* prefix = fx.PlaceObject(address);
@@ -536,10 +529,7 @@ ZLiveMap* PrepareForwardable(GcHeapFixture& fx, ZPage* region, MAddress liveObje
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, reinterpret_cast<BaseObject*>(liveObject)));
     // The product freezes the selected set before publishing any page view.
     if (generation_forwarding_table(generation).get(region->GetRegionStart()) == nullptr) {
-        RegionList selected("publication-fixture");
-        selected.PrependRegion(region);
-        GC_EXPECT_TRUE(BeginForwardingArena(generation, selected));
-        (void)selected.TakeHeadRegion();
+        GC_EXPECT_TRUE(BeginForwardingArena(generation, { region }));
     }
     if (generation == Generation::Young) {
         RelocationReceiptTestAccess::PrepareProductPage<Generation::Young>(region);
@@ -577,9 +567,7 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, Heap& collector,
     ZPage* region = ResetDeliveryUnit(fx, 5);
     ZPage* destination = ResetDeliveryUnit(fx, 2);
     GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
-    region->SetRegionListOwner(nullptr);
     if (generation == Generation::Young) region->reset(PageAge::eden);
-    destination->SetRegionListOwner(nullptr);
 
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     BaseObject* to = fx.PlaceObject(destination->GetRegionStart());
@@ -626,8 +614,6 @@ PartialCompactState PreparePartialCompact(GcHeapFixture& fx, Heap& collector, bo
     ZPage* region = ResetDeliveryUnit(fx, 1);
     ZPage* destination = ResetDeliveryUnit(fx, 2);
     GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
-    region->SetRegionListOwner(nullptr);
-    destination->SetRegionListOwner(nullptr);
 
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     const size_t objectSize = dead->GetSize();
@@ -642,7 +628,6 @@ PartialCompactState PreparePartialCompact(GcHeapFixture& fx, Heap& collector, bo
 
 void CleanupPartialCompact(GcHeapFixture& fx, PartialCompactState& state)
 {
-    RelocationReceiptTestAccess::ReleaseListOwnership(state.region);
     Heap::GetHeap().GetZGeneration(state.region->GetOwnerGeneration()).reset_relocation_set();
     (void)fx;
 }
@@ -887,7 +872,6 @@ GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
     GcHeapFixture& fx = ProductFixture();
     ZPage* region = fx.region0;
     BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
-    region->SetRegionListOwner(nullptr);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
@@ -938,10 +922,8 @@ GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
 GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTableGone)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
-    region->SetRegionListOwner(nullptr);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
     Heap& collector = Heap::GetHeap();
@@ -955,17 +937,14 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTa
     BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, liveObject);
     GC_EXPECT_TRUE(resolved == liveObject);
 
-    RelocationReceiptTestAccess::ReleaseListOwnership(region);
     RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsNotTlab)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
-    region->SetRegionListOwner(nullptr);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
     BaseObject* deadObject = fx.PlaceObject(region->GetRegionStart() + liveObject->GetSize());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(deadObject) + deadObject->GetSize());
@@ -994,7 +973,6 @@ GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsN
     GC_EXPECT_TRUE(0u != 1);
     GC_EXPECT_TRUE(0u == 0);
 
-    RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
             }
@@ -1304,8 +1282,6 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
                      produced, reinterpret_cast<MAddress>(state.to), completed);
         GC_EXPECT_TRUE(completed);
         GC_EXPECT_EQ(produced, reinterpret_cast<MAddress>(state.to));
-        RelocationReceiptTestAccess::ReleaseListOwnership(state.region);
-        state.region->SetRegionListOwner(nullptr);
         ForwardingCursor cursor = 0;
         GC_EXPECT_TRUE(owner->find(owner->index(fromAddr), &cursor).populated());
         owner->entries()[cursor].store(0, std::memory_order_release);
@@ -1443,10 +1419,8 @@ GC_TEST(ForwardingPublicationProduct, PreForwardDerivedRebasesFromRemappedBaseWi
 static void CheckForwardingWinner(bool identity)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
-    region->SetRegionListOwner(nullptr);
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     const MAddress fromAddr = reinterpret_cast<MAddress>(from);
     region->SetRegionAllocPtr(fromAddr + from->GetSize());
@@ -1500,10 +1474,8 @@ GC_TEST(ForwardingPublicationProduct, CompletedForwardingMissRejectsOriginalAddr
 {
     GcHeapFixture& fx = ProductFixture();
     AbortCapture captured = CaptureAbort([&]() {
-        RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
         ZPage* region = ResetDeliveryUnit(fx, 4);
         GC_EXPECT_TRUE(region != nullptr);
-        region->SetRegionListOwner(nullptr);
         BaseObject* from = fx.PlaceObject(region->GetRegionStart());
         const MAddress fromAddr = reinterpret_cast<MAddress>(from);
         region->SetRegionAllocPtr(fromAddr + from->GetSize());
@@ -1531,10 +1503,8 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
 {
 #if defined(__linux__)
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
-    region->SetRegionListOwner(nullptr);
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     Heap& collector = Heap::GetHeap();
@@ -1580,10 +1550,8 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
 GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
-    region->SetRegionListOwner(nullptr);
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     BaseObject* to = fx.PlaceObject(region->GetRegionStart() + 256);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
@@ -1604,7 +1572,6 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
     GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<MAddress>(to));
 
     publication = nullptr;
-    RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
             }
@@ -1615,10 +1582,8 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
 {
 #if defined(__linux__)
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
-    region->SetRegionListOwner(nullptr);
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     Heap& collector = Heap::GetHeap();
@@ -1630,7 +1595,6 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
         StorePlain(root, from_object(from));
         (void)RelocationReceiptTestAccess::ForwardUpdateRawRef(collector, root);
     });
-    RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
             }
@@ -1641,16 +1605,10 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
 GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestination)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(5)));
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(3)));
     ZPage* firstRegion = ResetDeliveryUnit(fx, 5);
     ZPage* secondRegion = ResetDeliveryUnit(fx, 4);
     ZPage* finalRegion = ResetDeliveryUnit(fx, 3);
     GC_EXPECT_TRUE(firstRegion != nullptr && secondRegion != nullptr && finalRegion != nullptr);
-    firstRegion->SetRegionListOwner(nullptr);
-    secondRegion->SetRegionListOwner(nullptr);
-    finalRegion->SetRegionListOwner(nullptr);
     BaseObject* first = fx.PlaceObject(firstRegion->GetRegionStart());
     BaseObject* second = fx.PlaceObject(secondRegion->GetRegionStart());
     BaseObject* final = fx.PlaceObject(finalRegion->GetRegionStart());
@@ -1660,11 +1618,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestinati
 
     Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
-    RegionList selected("forwarding-chain-fixture");
-    selected.PrependRegion(firstRegion);
-    selected.PrependRegion(secondRegion);
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
-    while (selected.TakeHeadRegion() != nullptr) {}
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, { firstRegion, secondRegion }));
     ZLiveMap* firstLive = PrepareForwardable(fx, firstRegion, reinterpret_cast<MAddress>(first));
     ZLiveMap* secondLive = PrepareForwardable(fx, secondRegion, reinterpret_cast<MAddress>(second));
     ZForwarding* firstPublication =
@@ -1773,14 +1727,10 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
 GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactReceipt)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(3)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     ZPage* routeDestination =
         ResetDeliveryUnit(fx, 3);
     GC_EXPECT_TRUE(region != nullptr && routeDestination != nullptr);
-    region->SetRegionListOwner(nullptr);
-    routeDestination->SetRegionListOwner(nullptr);
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     const size_t objectSize = dead->GetSize();
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + objectSize);
@@ -1796,7 +1746,6 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     (void)PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    routeDestination->SetRegionListOwner(nullptr);
     buffer->SetRegion(routeDestination);
     // Page work starts below; RouteRegion now waits for that work to finish.
     // The precondition is an installed, unfinished forwarding table.
@@ -1835,7 +1784,6 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
 
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindCollector(nullptr);
-    RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
             }
@@ -1846,14 +1794,10 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
 GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTable)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
-    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(3)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     ZPage* routeDestination =
         ResetDeliveryUnit(fx, 3);
     GC_EXPECT_TRUE(region != nullptr && routeDestination != nullptr);
-    region->SetRegionListOwner(nullptr);
-    routeDestination->SetRegionListOwner(nullptr);
     BaseObject* fromObject = fx.PlaceObject(region->GetRegionStart() + 64);
     const MAddress from = reinterpret_cast<MAddress>(fromObject);
     // The page task walks complete page layout; keep the unmarked prefix
@@ -1873,7 +1817,6 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     (void)PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    routeDestination->SetRegionListOwner(nullptr);
     buffer->SetRegion(routeDestination);
     DeliverySharedPageScope allocation(routeDestination);
     GC_EXPECT_TRUE(manager.RelocateClaimedPage(region));
@@ -1910,7 +1853,6 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
 
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindCollector(nullptr);
-    RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
             }
@@ -1966,7 +1908,6 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(resolved)->IsValidObject());
 
     RelocationReceiptTestAccess::BindCollector(nullptr);
-    RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
 }
 
@@ -1987,8 +1928,6 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     ZPage* region = ResetDeliveryUnit(fx, 0);
     ZPage* destination = ResetDeliveryUnit(fx, 1);
     GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
-    region->SetRegionListOwner(nullptr);
-    destination->SetRegionListOwner(nullptr);
     BaseObject* fromObject = fx.PlaceObject(region->GetRegionStart() + 64);
     BaseObject* toObject = fx.PlaceObject(destination->GetRegionStart() + 64);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(fromObject) + fromObject->GetSize());
@@ -2298,7 +2237,6 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     GC_EXPECT_TRUE(remembered.Contains(youngSlot));
 
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(holderRegion, holder));
-    holderRegion->SetRegionListOwner(nullptr);
     youngCarrier->reset(PageAge::eden);
 
     LateBackfillState forwarding = PrepareLateBackfill(fx, collector);
@@ -2388,7 +2326,6 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     GC_EXPECT_TRUE(remembered.Contains(farSlot));
 
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(holderRegion, holder));
-    holderRegion->SetRegionListOwner(nullptr);
     LateBackfillState forwarding = PrepareLateBackfill(fx, collector, Generation::Young);
     farField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
     // Model the prior young relocate-start that makes a current old-remset
@@ -2824,20 +2761,11 @@ GC_TEST(PageGeneration579, FlipAgePagesHandsRegionListSlotToPromotedPage)
     fixture.obj0 = fixture.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(region->GetRegionStart() + fixture.obj0->GetSize());
     region->reset(PageAge::eden);
-    RegionList list("flip handoff test");
-    list.PrependRegion(region);
     ZPage* promoted = region->clone_for_promotion();
     promoted->reset_livemap();
-    // Fork order: hand the list slot over first, then flip_promote
-    // (zGeneration.cpp:941-948 does no list work).
-    list.ReplaceRegion(region, promoted);
     ZGeneration::young()->flip_promote(region, promoted);
     GC_EXPECT_TRUE(Heap::page(region->GetRegionStart()) == promoted);
     GC_EXPECT_TRUE(promoted->generation_id() == ZGenerationId::old);
-    GC_EXPECT_TRUE(region->GetRegionListOwner() == nullptr);
-    GC_EXPECT_TRUE(promoted->GetRegionListOwner() == &list);
-    GC_EXPECT_TRUE(list.GetHeadRegion() == promoted);
-    list.DeleteRegion(promoted);
     fixture.region0 = promoted;
     ZPage::RetireDescriptor(region);
 }
@@ -2861,6 +2789,7 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
     const auto oldLife = region->GetRegionLifeId();
     ZPage::RetirePage(region, [region]() { region->InitFreeUnits(); });
     region = ZPage::InitRegion(0, 1, ZPageType::small);
+    PublishAllocatedPage(region);
     GC_EXPECT_TRUE(region->GetRegionLifeId() != oldLife);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);

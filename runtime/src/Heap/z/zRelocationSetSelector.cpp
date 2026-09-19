@@ -225,11 +225,6 @@ ZRelocationSetSelectorStats ZRelocationSetSelector::stats() const
     return stats;
 }
 
-void RegionManager::ReassembleFromSpace()
-{
-    fromRegionList.MergeRegionList(unmovableFromRegionList);
-}
-
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
@@ -240,170 +235,64 @@ void RegionManager::AssembleSmallGarbageCandidates() {}
 
 void RegionManager::AssembleLargeGarbageCandidates() {}
 
-void RegionManager::ClearNotRelocatableThisCycleFlags()
-{
-    auto clearList = [](RegionList& list) {
-        (void)list;
-    };
-    clearList(tlRegionList);
-    clearList(recentFullRegionList);
-    clearList(unmovableFromRegionList);
-    clearList(fromRegionList);
-    clearList(recentPinnedRegionList);
-    clearList(oldPinnedRegionList);
-    clearList(rawPointerPinnedRegionList);
-    clearList(recentLargeRegionList);
-    clearList(oldLargeRegionList);
-    // Region caches may hold stamped regions until HandleTraceRegions merges them.
-    clearList(fullTraceRegions);
-    clearList(largeTraceRegions);
-}
-
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
     (void)collectAll;
 }
 
+// zGeneration.cpp:205-221: candidates come from the page table. The previous
+// cycle's leftover from-pages are parked; every young non-thread-local page is
+// registered with the visitor, exactly as the deleted list walks did. The
+// selection itself (and the from-role assignment) happens in
+// ZGeneration::select_relocation_set via ZGenerationPagesIterator.
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor)
 {
     PublishTLABStatistics();
     YoungCollectionStats stats;
     uint64_t subStart = TimeUtil::NanoSeconds();
-    ZPage* oldRegion = fromRegionList.GetHeadRegion();
-    while (oldRegion != nullptr) {
-        ZPage* next = oldRegion->GetNextRegion();
-        ++stats.fromVisited;
-        stats.fromVisitedUnits += oldRegion->GetUnitCount();
-        fromRegionList.DeleteRegion(oldRegion);
-        ParkUnmovableFromRegion(oldRegion);
-        oldRegion = next;
-    }
-    stats.reparkNs = TimeUtil::NanoSeconds() - subStart;
-
-    subStart = TimeUtil::NanoSeconds();
-    ZPage* region = unmovableFromRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        ++stats.unmovableVisited;
-        stats.unmovableVisitedUnits += region->GetUnitCount();
-        if (!region->IsYoungRegion()) {
-            region = next;
-            continue;
-        }
-        ++stats.unmovableYoung;
-        // twoflags: notRelocatable is major-Assemble only. Young mark re-establishes
-        // liveness for POST_TRACE-stamped regions — do not skip minor CSet.
-        // routedest: that reasoning is about liveness and does not transfer. A route
-        // destination is excluded here on address ownership, not on whether its contents are
-        // reachable. This loop matters most of the four: every mutator thread-local region is
-        // young (RegionSpace.cpp takes the youngRegion = true default), and the destination
-        // recorded at RegionManager.cpp:1957 is exactly such a region — so before this gate a
-        // minor collected a live route's destination while honouring nothing.
-        const uint64_t visitorStart = TimeUtil::NanoSeconds();
-        visitor(region);
-        stats.visitorNs += TimeUtil::NanoSeconds() - visitorStart;
-        ++stats.candidateRegions;
-        stats.candidateBytes += region->GetRegionAllocatedSize();
-        if (region->GetRawPointerObjectCount() == 0) {
-            if (!region->is_relocatable()) {
-                region = next;
+    {
+        ZGenerationPagesIterator iter(&Heap::page_table(), ZGenerationId::young, nullptr);
+        for (ZPage* region; iter.next(&region);) {
+            const ZPageRole role = region->GetRegionRole();
+            if (role == ZPageRole::From) {
+                ++stats.fromVisited;
+                stats.fromVisitedUnits += region->GetUnitCount();
+                ParkUnmovableFromRegion(region);
                 continue;
             }
-            const uint64_t moveStart = TimeUtil::NanoSeconds();
-            unmovableFromRegionList.DeleteRegion(region);
-            fromRegionList.PrependRegion(region);
-            stats.listMoveNs += TimeUtil::NanoSeconds() - moveStart;
+            if (role == ZPageRole::ThreadLocal) {
+                continue;
+            }
+            ++stats.unmovableVisited;
+            stats.unmovableVisitedUnits += region->GetUnitCount();
+            const uint64_t visitorStart = TimeUtil::NanoSeconds();
+            visitor(region);
+            stats.visitorNs += TimeUtil::NanoSeconds() - visitorStart;
+            ++stats.candidateRegions;
+            stats.candidateBytes += region->GetRegionAllocatedSize();
         }
-        region = next;
     }
-    stats.unmovableNs = TimeUtil::NanoSeconds() - subStart;
-
-    subStart = TimeUtil::NanoSeconds();
-    region = recentFullRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        ++stats.recentFullVisited;
-        stats.recentFullVisitedUnits += region->GetUnitCount();
-        if (!region->IsYoungRegion()) {
-            region = next;
-            continue;
-        }
-        ++stats.recentFullYoung;
-        // routedest: same exclusion as the unmovable young loop above.
-        const uint64_t visitorStart = TimeUtil::NanoSeconds();
-        visitor(region);
-        stats.visitorNs += TimeUtil::NanoSeconds() - visitorStart;
-        ++stats.candidateRegions;
-        stats.candidateBytes += region->GetRegionAllocatedSize();
-        if (region->GetRawPointerObjectCount() != 0) {
-            region = next;
-            continue;
-        }
-        if (!region->is_relocatable()) {
-            region = next;
-            continue;
-        }
-        const size_t units = region->GetUnitCount();
-        const uint64_t moveStart = TimeUtil::NanoSeconds();
-        recentFullRegionList.DeleteRegion(region);
-        RecentFullAccounting::Dequeue(1, units);
-        fromRegionList.PrependRegion(region);
-        stats.listMoveNs += TimeUtil::NanoSeconds() - moveStart;
-        region = next;
-    }
-    stats.recentFullNs = TimeUtil::NanoSeconds() - subStart;
+    stats.reparkNs = TimeUtil::NanoSeconds() - subStart;
     return stats;
 }
 
-void RemoveRegionLocked(RegionList* regionList, ZPage* region)
-{
-    regionList->DeleteRegionLocked(region);
-}
-namespace {
-// Claim FROM under the from-list lock. AddRawPointerObject may retype to
-// PINNED after ExemptFromRegions snapshots the list (RegionManager.h:507;
-// CI face del->IsFromRegion at post_trace). ZGC skips !is_relocatable
-// (zGeneration.cpp:211-213); a lost claim is the same skip, not a relaxed CHECK.
-bool ClaimFromRegion(RegionList& fromList, ZPage* del, const char* site)
-{
-    if (fromList.TryDeleteRegion(del)) {
-        return true;
-    }
-    const unsigned t = 0u;
-    const unsigned rs = static_cast<unsigned>(del->RelocateObserve());
-    LOG(RTLOG_ERROR, "[GCV2][isfromreg] site=%s skip type=%u route=%u young=%u", site, t, rs,
-        static_cast<unsigned>(del->IsYoungRegion()));
-    CHECK_DETAIL(del->OnNamedList("raw pointer pinned regions") ||
-                     del->OnNamedList("escaped from regions") ||
-                     del->IsGarbageRegion(),
-                 "[isfromreg] site=%s unexpected type=%u route=%u", site, t, rs);
-    return false;
-}
-
-} // namespace
-
 // Cost-model CSet (ZRelocationSetSelector.cpp:114-196) after mark, before flip.
-// Semi-sort by per-page live fraction, then select the last profitable prefix.
+// zGeneration.cpp:205-269: the selector is fed by ZGenerationPagesIterator and
+// installed on the generation; selected pages carry the From role from
+// ZRelocationSet::install. No page list is rebuilt.
 size_t RegionManager::ExemptFromRegions()
 {
     auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     old.select_relocation_set(false);
+    size_t bytes = 0;
     ZRelocationSetIterator rs_iter(&old.relocation_set());
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
         ZPage* page = forwarding->page();
-        if (page == nullptr) {
-            continue;
+        if (page != nullptr) {
+            bytes += page->GetUnitCount() * ZPage::UNIT_SIZE;
         }
-        RegionList* owner = page->GetRegionListOwner();
-        if (owner == &fromRegionList) {
-            continue;
-        }
-        if (owner != nullptr) {
-            owner->DeleteRegion(page);
-        }
-        fromRegionList.PrependRegion(page);
     }
-    return fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
+    return bytes;
 }
 
 } // namespace MapleRuntime

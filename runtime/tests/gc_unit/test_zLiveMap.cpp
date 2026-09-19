@@ -17,6 +17,7 @@
 
 // gc_heap_fixture.hpp first: its access-unlocking window must see zPage.hpp.
 #include "gc_heap_fixture.hpp"
+#include "zunittest.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zLiveMap.inline.hpp"
@@ -407,6 +408,7 @@ GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
         ZPage::RetirePage(region, [] {});
         region = ZPage::InitRegion(0, 1, role);
         fx.region0 = region;
+        PublishAllocatedPage(region);
         const uint32_t actual = ZLiveMapTest::segment_size(region->livemap());
         const uint32_t expected = role == ZPageType::large ? 2u : smallSegment;
         std::fprintf(stderr, "P02_PAGE_GEOMETRY role=%u segment=%u expected=%u\n",
@@ -551,6 +553,7 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
         ZPage::RetirePage(fx.region1, [] {});
         fx.region1 = nullptr;
         fx.region0 = ZPage::InitRegion(0, units, ZPageType::small);
+        PublishAllocatedPage(fx.region0);
         GcHeapFixture::AdvanceGeneration(Generation::Old);
     }
     ZPage* region = fx.region0;
