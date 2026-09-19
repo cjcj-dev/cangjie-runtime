@@ -1,5 +1,5 @@
 diff --git a/runtime/src/Heap/z/zBarrier.cpp b/runtime/src/Heap/z/zBarrier.cpp
-index f412b6485..a3f729505 100644
+index 0000000..0000000 100644
 --- a/runtime/src/Heap/z/zBarrier.cpp
 +++ b/runtime/src/Heap/z/zBarrier.cpp
 @@ -293,7 +293,7 @@ void ZBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObjec
@@ -12,7 +12,7 @@ index f412b6485..a3f729505 100644
  }
  
 diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp
-index e49a9bef8..9628a1077 100644
+index 0000000..0000000 100644
 --- a/runtime/src/Heap/z/zGeneration.cpp
 +++ b/runtime/src/Heap/z/zGeneration.cpp
 @@ -588,7 +588,7 @@ void ZGenerationYoung::concurrent_mark()

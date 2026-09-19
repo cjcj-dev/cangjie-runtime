@@ -1,12 +1,12 @@
 {
- "repo": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_607_implement_r5738304930",
- "base": "2989c86fa3c1ed904495797c0d934b6253230a58",
- "head": "3098f7cef7d18e42a8b40f66ca52a837bc4b9a63",
+ "repo": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_607_implement_r5739597397",
+ "base": "e33c1094c2321e43811e56931a27546ae6cdfc1e",
+ "head": "6c5e5a3afb494fc7c9e8fbd9494cbd4eb828eedd",
  "mode": "product",
  "ok": true,
  "verdicts": [
   {
-   "cut": "evidence/cut.diff",
+   "cut": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_607_implement_r5739597397/evidence/p2-cut.diff",
    "file": "runtime/src/Heap/z/zBarrier.cpp",
    "checks": [
     {
@@ -17,7 +17,7 @@
     {
      "name": "文件在基线存在",
      "ok": true,
-     "detail": "2989c86fa3c1ed904495797c0d934b6253230a58:runtime/src/Heap/z/zBarrier.cpp"
+     "detail": "e33c1094c2321e43811e56931a27546ae6cdfc1e:runtime/src/Heap/z/zBarrier.cpp"
     },
     {
      "name": "被断开的行在基线逐字存在",
@@ -36,7 +36,7 @@
    "ok": true
   },
   {
-   "cut": "evidence/cut.diff",
+   "cut": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_607_implement_r5739597397/evidence/p2-cut.diff",
    "file": "runtime/src/Heap/z/zGeneration.cpp",
    "checks": [
     {
@@ -47,7 +47,7 @@
     {
      "name": "文件在基线存在",
      "ok": true,
-     "detail": "2989c86fa3c1ed904495797c0d934b6253230a58:runtime/src/Heap/z/zGeneration.cpp"
+     "detail": "e33c1094c2321e43811e56931a27546ae6cdfc1e:runtime/src/Heap/z/zGeneration.cpp"
     },
     {
      "name": "被断开的行在基线逐字存在",
