@@ -133,10 +133,7 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
             continue;
         }
         if (page->IsAllocating()) {
-            const uint64_t epoch = page->GetSnapshotEpoch();
-            if (epoch > 0) {
-                page->_seqnum = static_cast<uint32_t>(epoch - 1);
-            }
+            page->TestMakeRelocatable();
         }
         selector.add_selected_small(page, ZForwarding::nentries(page));
     }

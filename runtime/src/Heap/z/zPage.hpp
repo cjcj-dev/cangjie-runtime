@@ -188,6 +188,15 @@ public:
     bool IsRelocatable() const;
     bool is_allocating() const { return IsAllocating(); }
     bool is_relocatable() const { return IsRelocatable(); }
+#if defined(MRT_GC_UNIT_TESTS)
+    void TestMakeRelocatable()
+    {
+        const uint64_t epoch = GetSnapshotEpoch();
+        if (epoch > 0) {
+            _seqnum = static_cast<uint32_t>(epoch - 1);
+        }
+    }
+#endif
 
     ZPageType type() const { return _type; }
     PageAge age() const { return _age; }
