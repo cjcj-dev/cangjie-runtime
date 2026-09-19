@@ -74,7 +74,8 @@ extern "C" int p2FieldBarrierExercise()
     finalType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
     auto& heap = Heap::GetHeap();
     auto& collector = heap;
-    BaseObject* holder = MObject::NewObject(holderType, 24, AllocType::MOVEABLE_OBJECT);
+    BaseObject* holder = MObject::NewPinnedObject(holderType, 24);
+    BaseObject* const pinnedHolder = holder;
     BaseObject* oldChild = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     NativeSlot holderRoot(zpointer::null);
     ZBarrier::WriteStaticRef(holderRoot, holder);
@@ -103,7 +104,7 @@ extern "C" int p2FieldBarrierExercise()
         ZBarrier::WriteStaticRef(upgradeRoot, upgraded);
         heap.RegisterStaticRoots(reinterpret_cast<Uptr>(upgradeRoots), 1);
     }
-    // Full GC's preclean promotes these genuinely rooted movable objects through
+    // Full GC's preclean promotes these genuinely rooted objects through
     // the product selector/flip/remset path (ZGC zDriver.cpp:416-436).
     // Register finalizers only after this setup cycle, to avoid classifying them
     // before the field scenario starts.
@@ -149,6 +150,7 @@ extern "C" int p2FieldBarrierExercise()
     auto* rootedControl = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     const U64 controlRoot = heap.RegisterExportRoot(rootedControl);
     Expect(!Heap::page(reinterpret_cast<MAddress>(holder))->IsYoungRegion(), "real_holder_is_old");
+    Expect(holder == pinnedHolder, "real_pinned_holder_address_unchanged");
     Expect(Heap::page(reinterpret_cast<MAddress>(child))->IsYoungRegion(), "real_child_is_young");
     unsigned finalOldOld = 0, finalOldYoung = 0, finalFollow = 0, finalYoungFast = 0;
     unsigned remsetChild = 0, oldOld = 0, oldYoung = 0, youngFollow = 0, oldYoungFast = 0;

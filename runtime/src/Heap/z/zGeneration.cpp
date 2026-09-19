@@ -1415,14 +1415,6 @@ void ZGeneration::select_relocation_set(bool promote_all)
             if (!page->is_relocatable()) {
                 continue;
             }
-            // Host difference (no ZGC counterpart): raw-pointer pinned pages
-            // (Future/Mutex/Monitor) are never moved, and pinned allocation
-            // pages are excluded from candidacy. ZGC skips only
-            // !is_relocatable (zGeneration.cpp:211-213).
-            if (page->GetRawPointerObjectCount() > 0 || page->IsPinnedRegion() ||
-                page->GetRegionRole() == ZPageRole::RawPointerPinned) {
-                continue;
-            }
             if (page->is_marked()) {
                 selector.register_live_page(page);
             } else {
