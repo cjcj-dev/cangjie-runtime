@@ -269,7 +269,6 @@ struct ProductHeapFixture {
         parameters.regionSize = ZPage::UNIT_SIZE / 1024;
         parameters.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, parameters, 0.5));
-        BindFixturePageTable(manager, units);
     }
 };
 
@@ -295,6 +294,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     RegionManager& manager = fixture.manager;
     const auto role = ZPageType::small;
     ZPage* first = manager.TakeRegion(2, role, false, false, false);
+    BindFixturePageTable(manager, 8);
     ZPage* second = manager.TakeRegion(2, role, false, false, false);
     ZPage* third = manager.TakeRegion(2, role, false, false, false);
     ZPage* fourth = manager.TakeRegion(2, role, false, false, false);
@@ -341,6 +341,9 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     ZPage* regions[5];
     for (auto& region : regions) {
         region = manager.TakeRegion(2, role, false, false, false);
+        if (region == regions[0]) {
+            BindFixturePageTable(manager, 12);
+        }
         PublishAllocatedPage(region);
         GC_EXPECT_TRUE(region != nullptr);
     }
