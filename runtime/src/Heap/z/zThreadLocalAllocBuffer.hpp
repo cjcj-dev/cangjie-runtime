@@ -18,6 +18,8 @@
 #include "Heap/z/zMarkStackEntry.hpp"
 
 #include "Heap/z/zTLABUsage.hpp"
+#include "Heap/z/zPageFwd.hpp"
+#include "Base/Globals.h"
 namespace MapleRuntime {
 // HotSpot gcUtil.cpp:29-56, TLABAllocationWeight=35. Startup samples
 // use 1/n until the configured weight dominates.
@@ -161,13 +163,13 @@ private:
 
     // tlRegion in AllocBuffer is a shortcut for fast allocation.
     // we should handle failure in RegionManager
-    ZPage* tlRegion = ZPage::NullRegion();
+    ZPage* tlRegion = nullptr;
 
     // HotSpot ThreadLocalAllocBuffer: thread-owned statistics survive refills
     // and reset only at a young-cycle boundary. Async refill reads atomics only.
     TLABStatistics tlabStatistics;
     TLABAllocationAverage tlabAllocationFraction;
-    std::atomic<size_t> desiredTLABSize{ ZPage::UNIT_SIZE };
+    std::atomic<size_t> desiredTLABSize{ MRT_PAGE_SIZE };
     std::atomic<size_t> tlabRefills{ 0 };
 
     // Allocation work is handed to marking as an atomic batch.
