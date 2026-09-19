@@ -379,6 +379,9 @@ namespace {
 enum class VerifyFieldCase {
     OldGood,
     OldUnmarked,
+    OldRootGood,
+    OldRootUnmarked,
+    OldInvalidTarget,
     WeakUnmarked,
     WeakPreviousRemembered,
     WeakMissingRemembered,
@@ -416,7 +419,7 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     NativeSlot* root = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
     if (root == nullptr) { _exit(123); }
     root->StoreColoured(StoreGoodPointer(holder));
-    const bool afterWeak = mode != VerifyFieldCase::OldGood && mode != VerifyFieldCase::OldUnmarked;
+    const bool afterWeak = mode >= VerifyFieldCase::WeakUnmarked;
     ConcurrentGCBreakpoints::AcquireControl();
     const char* point = afterWeak ? "AFTER CONCURRENT REFERENCE PROCESSING STARTED" :
                                    "BEFORE MARKING COMPLETED";
@@ -431,7 +434,19 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
                  unsigned(mode), holder, target, value);
     switch (mode) {
         case VerifyFieldCase::OldGood:
+        case VerifyFieldCase::OldRootGood:
             break;
+        case VerifyFieldCase::OldRootUnmarked:
+            root->StoreColoured(to_zpointer(raw(root->GetFieldValue()) ^ ZPointerMarkedOldMask));
+            break;
+        case VerifyFieldCase::OldInvalidTarget: {
+            const MAddress top = targetPage->GetRegionAllocPtr();
+            if (Heap::is_in(top) || top >= targetPage->GetRegionEnd()) { _exit(130); }
+            value = raw(ZAddress::mark_good(static_cast<zaddress>(top), to_zpointer(value)));
+            if (!ZPointer::is_mark_good(to_zpointer(value))) { _exit(131); }
+            std::fprintf(stderr, "VERIFY_FIELD_UNALLOCATED_TARGET address=%#zx\n", top);
+            break;
+        }
         case VerifyFieldCase::OldUnmarked:
         case VerifyFieldCase::WeakUnmarked:
             value = (value ^ ZPointerMarkedOldMask) & ~ZPointerFinalizableMask;
@@ -480,6 +495,12 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
         }
     }
     field.StoreColoured(to_zpointer(value));
+    if (mode == VerifyFieldCase::OldRootUnmarked) {
+        // Stop before the later weak-pause root check can mask a disconnected
+        // mark-end consumer with the same diagnostic.
+        (void)ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED");
+        _exit(0);
+    }
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
     BaseObject* result = ZBarrier::ReadStaticRef(*root);
@@ -491,8 +512,10 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
 
 void CheckVerifyFieldCase(VerifyFieldCase mode, const char* testName, const char* diagnostic)
 {
-    if (!ZVerifyObjects) {
+    const bool rootCase = mode == VerifyFieldCase::OldRootGood || mode == VerifyFieldCase::OldRootUnmarked;
+    if (!ZVerifyObjects || (rootCase && !ZVerifyRoots)) {
         GC_EXPECT_EQ(setenv("ZVerifyObjects", "1", 1), 0);
+        if (rootCase) { GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0); }
         RunInOtherVm(testName);
         return;
     }
@@ -508,6 +531,21 @@ GC_OTHER_VM_TEST(ZVerify, OldFieldAcceptsMarkedOldTarget)
 GC_OTHER_VM_TEST(ZVerify, OldFieldRejectsUnmarkedOldTarget)
 {
     CheckVerifyFieldCase(VerifyFieldCase::OldUnmarked, "ZVerify.OldFieldRejectsUnmarkedOldTarget", "Unmarked old oop");
+}
+GC_OTHER_VM_TEST(ZVerify, RuntimeAcceptsMarkedOldRootAfterMark)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::OldRootGood,
+        "ZVerify.RuntimeAcceptsMarkedOldRootAfterMark", nullptr);
+}
+GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsUnmarkedOldRootAfterMark)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::OldRootUnmarked,
+        "ZVerify.RuntimeRejectsUnmarkedOldRootAfterMark", "Unmarked old root");
+}
+GC_OTHER_VM_TEST(ZVerify, OldFieldRejectsUnallocatedTarget)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::OldInvalidTarget,
+        "ZVerify.OldFieldRejectsUnallocatedTarget", "Bad object");
 }
 GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsUnmarkedOldTarget)
 {
