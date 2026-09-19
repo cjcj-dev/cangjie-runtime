@@ -164,7 +164,7 @@ void* AllocateThroughCycle(void*)
 GC_OTHER_VM_TEST(TLABUsage, AllocationCycleResizesNextRefill)
 {
     RuntimeParam param{};
-    param.heapParam.heapSize = 32 * 1024;
+    param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     CJThreadHandle handle = RunCJTask(AllocateThroughCycle, nullptr);

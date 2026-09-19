@@ -848,7 +848,7 @@ private:
 
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
-    ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, bool nonBlocking);
+    ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, bool nonBlocking, bool clearPayload = true);
     void UndoSharedPage(ZPage* page);
 
     MAddress reservedStart = 0;

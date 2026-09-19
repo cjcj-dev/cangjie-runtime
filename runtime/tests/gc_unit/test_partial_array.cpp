@@ -130,7 +130,7 @@ struct SlotBuf {
 
     explicit SlotBuf(size_t n)
     {
-        bytes = AlignUp((n + 8) * sizeof(Slot) + MarkPartialArray::MIN_SIZE, MarkPartialArray::MIN_SIZE);
+        bytes = AlignUp((n + 8) * sizeof(Slot) + MarkPartialArray::MIN_SIZE, ZGranuleSize);
         owner.reset(new ZTestHeapMapping(bytes));
         auto raw = reinterpret_cast<uintptr_t>(owner->base());
         slots = reinterpret_cast<Slot*>(AlignUp(raw, MarkPartialArray::MIN_SIZE));

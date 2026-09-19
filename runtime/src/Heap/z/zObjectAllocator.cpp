@@ -126,9 +126,9 @@ static bool IsSmallEdenPage(const ZPage* page)
 
 // ZObjectAllocator::PerAge::alloc_page, ZHeap::alloc_page/account_alloc_page.
 ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
-                                             PageAge age, bool nonBlocking)
+                                             PageAge age, bool nonBlocking, bool clearPayload)
 {
-    ZPage* page = Heap::alloc_page(size, role, false, !nonBlocking, true, age);
+    ZPage* page = Heap::alloc_page(size, role, false, !nonBlocking, clearPayload, age);
     if (page == nullptr) { return nullptr; }
     page->reset(age);
     if (IsSmallEdenPage(page)) {
@@ -165,7 +165,7 @@ void RegionManager::UndoSharedPage(ZPage* page)
     });
 }
 
-uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking)
+uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking, bool clearPayload)
 {
     CHECK(untype(age) < kPageAgeCount);
     RegionManager& manager = Heap::GetHeap().page_allocator();
@@ -194,7 +194,7 @@ uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking)
             }
         }
         const size_t pageBytes = AlignUp(size, ZGranuleSize);
-        ZPage* page = manager.AllocateSharedPage(pageBytes, ZPageType::large, allocator.age, nonBlocking);
+        ZPage* page = manager.AllocateSharedPage(pageBytes, ZPageType::large, allocator.age, nonBlocking, clearPayload);
         return page == nullptr ? 0 : page->alloc_object(size);
     }
     ZPage** const shared = allocator.shared_small_page_addr();
@@ -345,7 +345,8 @@ MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
         return GetRegionManager().AllocPinned(allocSize);
     }
     if (allocSize > ZObjectSizeLimitSmall) {
-        return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden);
+        return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden, false,
+            allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
     }
     AllocBuffer* allocBuffer = AllocBuffer::GetOrCreateAllocBuffer();
     return allocBuffer->Allocate(allocSize, allocType);

@@ -436,7 +436,7 @@ uint32_t RequiredPhaseRootVisits(YieldGc gc, bool watermarkDone)
 }
 
 constexpr MIndex kLargeRefLength = static_cast<MIndex>(
-    (MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
+    (ZObjectSizeLimitSmall + MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
 
 bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx)
 {
