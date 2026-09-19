@@ -363,24 +363,12 @@ public:
 void ReferenceProcessor::process_references()
 {
     ZStatTimerOld timer(ZSubPhaseConcurrentReferencesProcess);
+    if (workers == nullptr) {
+        workers = Heap::GetHeap().old().Workers();
+    }
+    CHECK(workers != nullptr);
     ZReferenceProcessorTask task(this);
-    // zReferenceProcessor.cpp:450-452: always _workers->run. The processor is
-    // constructed with the old generation workers in ZGC; here it may be
-    // created earlier, so rebind from the old generation when unset.
-    ZWorkers* runWorkers = workers;
-    if (runWorkers == nullptr) {
-        runWorkers = Heap::GetHeap().old().Workers();
-        if (runWorkers != nullptr) {
-            workers = runWorkers;
-        }
-    }
-    if (runWorkers != nullptr) {
-        runWorkers->run(&task);
-    } else {
-        CHECK(WorkerThread::worker_id() != UINT32_MAX);
-        CHECK(WorkerThread::worker_id() < ZPerWorkerStorage::count());
-        work();
-    }
+    workers->run(&task);
     soft_reference_update_clock();
     collect_statistics();
 }

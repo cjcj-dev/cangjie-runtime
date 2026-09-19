@@ -17,10 +17,20 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+namespace {
+struct BoundRefProc {
+    ZStatWorkers stats;
+    ZWorkers pool;
+    ReferenceProcessor processor;
+    BoundRefProc() : pool(ZGenerationId::old, 2, &stats), processor(&pool) {}
+};
+}
+
 GC_TEST(ReferenceProcessor, UnsupportedKindsFailClosed)
 {
     WorkerFixture worker(0);
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     alignas(8) unsigned char storage[16] = {};
     auto* object = reinterpret_cast<BaseObject*>(storage);
 
@@ -35,7 +45,8 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
 {
     WorkerFixture worker(0);
     GcHeapFixture fx;
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
 
@@ -57,7 +68,8 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryIsClaimedOnce)
 {
     WorkerFixture worker(0);
     GcHeapFixture fx;
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     (void)processor.DiscoverReference(fx.obj0, ReferenceType::FINAL);
     (void)processor.DiscoverReference(fx.obj0, ReferenceType::FINAL);
@@ -77,7 +89,8 @@ GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
 
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
     processor.ProcessReferences([](BaseObject*) { return false; });
     size_t enqueued = 0;
@@ -99,7 +112,8 @@ GC_TEST(ReferenceProcessor, StrongWeakReferentIsNotCleared)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([&](BaseObject* value) { return value == fx.obj1; });
     processor.EnqueueReferences([](BaseObject*) { return true; });
@@ -116,7 +130,8 @@ GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([](BaseObject*) { return false; });
     // Weak clearing precedes the rendezvous/unblock/enqueue boundary.
@@ -137,7 +152,8 @@ GC_TEST(ReferenceProcessor, ProcessConsumerReloadsWinningWeakCasValue)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     ReferenceProcessor::SetBeforeWeakCleanCasForTest([&] {
         referent.StoreColoured(GcUnit::StoreGoodPointer(replacement));
@@ -162,7 +178,8 @@ GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([](BaseObject*) { return false; });
@@ -198,7 +215,8 @@ GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
 {
     WorkerFixture worker(0);
     GcHeapFixture fx;
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     constexpr size_t kWorkers = 8;
     constexpr size_t kPerWorker = 4;
     std::vector<BaseObject*> objects;
