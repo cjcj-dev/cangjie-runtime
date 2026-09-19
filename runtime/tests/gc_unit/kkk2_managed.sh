@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build and run finalizer/segmented/phase_entry N times per host arm, emit JSON.
-# Two target arms: H48 runtime vs candidate stained staging.
+# Target arm: stained; cjc compiler host: official/H48 runtime.
 # cjc itself always uses H48 host (0904); CANGJIE_HOME is sdkdepot colored SDK.
 # Usage: kkk2_managed.sh <runtime-sha>
 set -euo pipefail
@@ -116,18 +116,14 @@ run_arm() {
   wait "$finalizer_pid" "$segmented_pid" "$phase_pid"
 }
 
-run_arm h48 "$H48_RT" &
-h48_pid=$!
-run_arm stained "$STAINED_RT" &
-stained_pid=$!
-wait "$h48_pid" "$stained_pid"
+run_arm stained "$STAINED_RT"
 
 python3 - <<PY
 import json, pathlib
 out = pathlib.Path("$OUT")
 n = int("$N")
 names = ["finalizer", "segmented", "phase"]
-arms = ["h48", "stained"]
+arms = ["stained"]
 result = {
     "runtime_sha": "$SHA",
     "runner_sha256": "$RUNNER_SHA256",

@@ -37,7 +37,7 @@ class ManagedBuildStatus(unittest.TestCase):
                                   f'"$GC_UNIT_OUT/{bins[0]}"\nexit {runtime_rc}\n')
             out = root / "out"
             if stale:
-                for arm in ('h48', 'stained'):
+                for arm in ('stained',):
                     for name, bins in zip(('finalizer', 'segmented', 'phase'), names.values()):
                         directory = out / f'{arm}_{name}_n1'
                         directory.mkdir(parents=True)
@@ -52,7 +52,7 @@ class ManagedBuildStatus(unittest.TestCase):
             return json.loads((out / 'kkk2_managed.json').read_text())
 
     def assert_build_fail(self, result):
-        self.assertEqual(len(result['build_fail']), 6)
+        self.assertEqual(len(result['build_fail']), 3)
         self.assertEqual(result['failed'], [])
         for arm in result['arms'].values():
             self.assertEqual(list(arm['runs'].values()), [[], [], []])
@@ -70,14 +70,14 @@ class ManagedBuildStatus(unittest.TestCase):
     def test_runtime_assertion_failure_stays_runtime_result(self):
         result = self.run_managed(runtime_rc=1)
         self.assertEqual(result['build_fail'], [])
-        self.assertEqual(len(result['failed']), 6)
+        self.assertEqual(len(result['failed']), 3)
         for arm in result['arms'].values():
             self.assertEqual(list(arm['runs'].values()), [[1], [1], [1]])
 
     def test_runtime_139_stays_runtime_result(self):
         result = self.run_managed(runtime_rc=139)
         self.assertEqual(result['build_fail'], [])
-        self.assertEqual(len(result['failed']), 6)
+        self.assertEqual(len(result['failed']), 3)
         for arm in result['arms'].values():
             self.assertEqual(list(arm['runs'].values()), [[139], [139], [139]])
 
@@ -85,6 +85,7 @@ class ManagedBuildStatus(unittest.TestCase):
         result = self.run_managed()
         self.assertEqual(result['build_fail'], [])
         self.assertEqual(result['failed'], [])
+        self.assertEqual(set(result['arms']), {'stained'})
         self.assertTrue(all(arm['all_zero'] for arm in result['arms'].values()))
 
     def test_diff_marks_each_build_failure_not_run(self):
@@ -103,7 +104,7 @@ class ManagedBuildStatus(unittest.TestCase):
                         if arm == 'managed':
                             lines += ['== build_fail ' + json.dumps([{'compile_rc': [139]}] if fail else [])]
                     (root / f'{who}.txt').write_text('\n'.join(lines) + '\n')
-                result = subprocess.run(['python3', '-', tmp, 'a'*40, 'b'*40, 'hash'],
+                result = subprocess.run(['python3', '-', tmp, 'a'*40, 'b'*40, 'hash', '/root/diff_harness_708/hash'],
                                         input=consumer, text=True, capture_output=True)
                 data = json.loads((root / 'DIFF.json').read_text())
                 for arm, value in data['arms'].items():
