@@ -167,6 +167,8 @@ struct ForwardingSelectionResult {
     size_t mappedGenerationBefore[2]{};
     size_t mappedGenerationAfter[2]{};
     size_t reused{0};
+    size_t completed{0};
+    size_t pending{0};
 };
 void* SelectRealLivePages(void* context)
 {
@@ -176,17 +178,32 @@ void* SelectRealLivePages(void* context)
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
+    alignas(TypeInfo) static unsigned char sourceByteStorage[sizeof(TypeInfo)]{};
+    if (result.verifyPin) {
+        auto* byteType = reinterpret_cast<TypeInfo*>(sourceByteStorage);
+        byteType->SetType(TypeKind::TYPE_KIND_UINT8);
+        byteType->SetInstanceSize(1);
+        type->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+        type->SetComponentTypeInfo(byteType);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(sourceByteStorage), sizeof(sourceByteStorage));
+    }
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     uintptr_t starts[3]{};
     U64 roots[3]{};
     ZPage* previous = nullptr;
     for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && result.roots < 3; ++i) {
-        const ObjRef object = MCC_NewObject(type, 4096);
+        BaseObject* object = result.verifyPin ? static_cast<BaseObject*>(MCC_NewArray8(type, 4096))
+                                             : static_cast<BaseObject*>(MCC_NewObject(type, 4096));
         if (object == nullptr) { return nullptr; }
         ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(object));
         if (page != previous) {
             starts[result.roots] = reinterpret_cast<uintptr_t>(object);
-            *reinterpret_cast<uint64_t*>(starts[result.roots] + TYPEINFO_PTR_SIZE) = result.roots + 1;
+            if (result.verifyPin) {
+                static_cast<MArray*>(object)->ConvertToCArray()[0] = result.roots + 1;
+            } else {
+                *reinterpret_cast<uint64_t*>(starts[result.roots] + TYPEINFO_PTR_SIZE) = result.roots + 1;
+            }
             roots[result.roots] = Heap::GetHeap().RegisterExportRoot(reinterpret_cast<BaseObject*>(object));
             ++result.roots;
             previous = page;
@@ -214,6 +231,8 @@ void* SelectRealLivePages(void* context)
         ZForwarding* forwarding = Heap::GetHeap().young().forwarding_table().get(starts[i]);
         if (forwarding != nullptr) {
             ++result.published;
+            result.completed += forwarding->is_done() && forwarding->ref_count().load() == 0 &&
+                forwarding->find(starts[i]) != 0;
             result.retired += Heap::page(starts[i]) == nullptr;
             if (result.verifyRetirement) {
                 // Observe the remap result before a second barrier consumes it.
@@ -223,7 +242,8 @@ void* SelectRealLivePages(void* context)
                     reinterpret_cast<BaseObject*>(starts[i]));
                 const MAddress target = reinterpret_cast<MAddress>(resolved);
                 result.receipts += target != starts[i] && Heap::page(target) != nullptr &&
-                    *reinterpret_cast<uint64_t*>(target + TYPEINFO_PTR_SIZE) == i + 1;
+                    (result.verifyPin ? static_cast<MArray*>(resolved)->ConvertToCArray()[0] == i + 1 :
+                     *reinterpret_cast<uint64_t*>(target + TYPEINFO_PTR_SIZE) == i + 1);
             }
             const auto* view = forwarding->from_page_snapshot();
             result.prepared += view != nullptr && view->livemap != nullptr &&
@@ -236,6 +256,7 @@ void* SelectRealLivePages(void* context)
         // The retirement test leaves root cleanup to FiniCJRuntime, after its
         // assertions. A failing remap must not be consumed by cleanup first.
     }
+    result.pending = Heap::GetHeap().page_allocator().GetZRelocateQueue().PendingCount();
     if (result.verifyRetirement) {
         snapshot(result.usedAfter, result.mappedAfter, result.generationAfter, result.mappedGenerationAfter);
         // Real mutator allocation must be able to consume the returned source
@@ -387,3 +408,29 @@ GC_OTHER_VM_TEST(ZJNICritical, NewArrayOnReusedSourceKeepsDecodedAddress)
     GC_EXPECT_FALSE(result.pinCopied);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+// ZGC zRelocate.cpp:1036-1047: a real worker owns detach/free/done.
+// Pages come from the product allocator and the driver runs the actual tasks.
+GC_OTHER_VM_TEST(RelocateWorkers, RuntimeCollectionCompletesSelectedPages)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    result.verifyRetirement = true;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "ACTUAL_FORWARD_TASK_TARGET selected=%zu completed=%zu pending=%zu receipts=%zu\n",
+                 result.published, result.completed, result.pending, result.receipts);
+    GC_EXPECT_EQ(result.completed, result.published);
+    GC_EXPECT_EQ(result.receipts, result.published);
+    GC_EXPECT_EQ(result.pending, 0u);
+    GC_EXPECT_TRUE(result.published > 0);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif
