@@ -1017,171 +1017,25 @@ size_t RegionManager::CollectLargeGarbage()
 
 void RegionManager::DumpRegionStats(const char* msg) const
 {
-    size_t totalSize = GetHeapCapacity();
-    VLOG(REPORT, "heap backing capacity %zu bytes", GetCommittedCapacity());
-    size_t totalUnits = totalSize / ZPage::UNIT_SIZE;
-    size_t activeSize = GetActiveUnitCount() * ZPage::UNIT_SIZE;
-    size_t activeUnits = activeSize / ZPage::UNIT_SIZE;
-
-    // #710: census buckets are a page-table walk over the role word
-    // (zPageTable.hpp:57-77), not per-list sums. GetAllocatedSize() on a list
-    // was unit-granular (units * UNIT_SIZE), so alloc* mirrors the page size.
-    struct RoleBucket {
-        size_t regions = 0;
-        size_t units = 0;
-    };
-    RoleBucket buckets[static_cast<size_t>(ZPageRole::RawPointerStaging) + 1];
-    size_t keptRegions = 0;
-    size_t keptUnits = 0;
-    size_t keptSize = 0;
-    size_t keptLive = 0;
-    {
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            const ZPageRole role = region->GetRegionRole();
-            RoleBucket& b = buckets[static_cast<size_t>(role)];
-            ++b.regions;
-            b.units += region->GetUnitCount();
-            const bool keptWalk = role == ZPageRole::From || role == ZPageRole::UnmovableFrom ||
-                role == ZPageRole::RecentFull;
-            if (keptWalk && region->IsForwardingDone() && region->IsCompacted()) {
-                ++keptRegions;
-                keptUnits += region->GetUnitCount();
-                keptSize += region->GetRegionSize();
-                keptLive += region->is_marked() ? region->live_bytes() : 0;
-            }
-        }
+    // zPageAllocator.cpp:1363-1366 stats(): census is the allocator counters,
+    // not a page-table walk over ZPageRole buckets.
+    VLOG(REPORT, "%s", msg);
+    VLOG(REPORT, "heap max_capacity %zu capacity %zu used %zu young %zu old %zu",
+         GetHeapCapacity(), GetCommittedCapacity(), GetAllocatedSize(),
+         used_generation(ZGenerationId::young), used_generation(ZGenerationId::old));
+    if (Heap::heap() != nullptr) {
+        const ZPageAllocatorStats young = Stats(&Heap::GetHeap().GetZGeneration(ZGenerationId::young));
+        const ZPageAllocatorStats old = Stats(&Heap::GetHeap().GetZGeneration(ZGenerationId::old));
+        VLOG(REPORT,
+             "stats young used=%zu used_generation=%zu used_high=%zu used_low=%zu freed=%zu promoted=%zu compacted=%zu stalls=%zu",
+             young.used(), young.used_generation(), young.used_high(), young.used_low(),
+             young.freed(), young.promoted(), young.compacted(), young.allocation_stalls());
+        VLOG(REPORT,
+             "stats old used=%zu used_generation=%zu used_high=%zu used_low=%zu freed=%zu promoted=%zu compacted=%zu stalls=%zu",
+             old.used(), old.used_generation(), old.used_high(), old.used_low(),
+             old.freed(), old.promoted(), old.compacted(), old.allocation_stalls());
     }
-    auto unitsOf = [&buckets](ZPageRole role) { return buckets[static_cast<size_t>(role)].units; };
-    auto regionsOf = [&buckets](ZPageRole role) { return buckets[static_cast<size_t>(role)].regions; };
-
-    size_t tlRegions = regionsOf(ZPageRole::ThreadLocal);
-    size_t tlUnits = unitsOf(ZPageRole::ThreadLocal);
-    size_t tlSize = tlUnits * ZPage::UNIT_SIZE;
-    size_t allocTLSize = tlSize;
-
-    size_t fromRegions = regionsOf(ZPageRole::From);
-    size_t fromUnits = unitsOf(ZPageRole::From);
-    size_t fromSize = fromUnits * ZPage::UNIT_SIZE;
-    size_t allocFromSize = fromSize;
-
-    size_t unmovableRegions = regionsOf(ZPageRole::UnmovableFrom);
-    size_t unmovableUnits = unitsOf(ZPageRole::UnmovableFrom);
-    size_t unmovableSize = unmovableUnits * ZPage::UNIT_SIZE;
-    size_t allocUnmovableSize = unmovableSize;
-
-    size_t recentFullRegions = regionsOf(ZPageRole::RecentFull);
-    size_t recentFullUnits = unitsOf(ZPageRole::RecentFull);
-    size_t recentFullSize = recentFullUnits * ZPage::UNIT_SIZE;
-    size_t allocRecentFullSize = recentFullSize;
-    RecentFullAccounting::Report(recentFullRegions, recentFullSize);
-
-    size_t garbageRegions = regionsOf(ZPageRole::Garbage);
-    size_t garbageUnits = unitsOf(ZPageRole::Garbage);
-    size_t garbageSize = garbageUnits * ZPage::UNIT_SIZE;
-    size_t allocGarbageSize = garbageSize;
-
-    size_t pinnedRegions = regionsOf(ZPageRole::OldPinned);
-    size_t pinnedUnits = unitsOf(ZPageRole::OldPinned);
-    size_t pinnedSize = pinnedUnits * ZPage::UNIT_SIZE;
-    size_t allocPinnedSize = pinnedSize;
-
-    size_t recentPinnedRegions = regionsOf(ZPageRole::RecentPinned);
-    size_t recentPinnedUnits = unitsOf(ZPageRole::RecentPinned);
-    size_t recentPinnedSize = recentPinnedUnits * ZPage::UNIT_SIZE;
-    size_t allocRecentPinnedSize = recentPinnedSize;
-
-    size_t rawPointerPinnedRegions = regionsOf(ZPageRole::RawPointerPinned);
-    size_t rawPointerPinnedUnits = unitsOf(ZPageRole::RawPointerPinned);
-    size_t rawPointerPinnedSize = rawPointerPinnedUnits * ZPage::UNIT_SIZE;
-    size_t allocRawPointerPinnedSize = rawPointerPinnedSize;
-
-    size_t largeRegions = regionsOf(ZPageRole::OldLarge);
-    size_t largeUnits = unitsOf(ZPageRole::OldLarge);
-    size_t largeSize = largeUnits * ZPage::UNIT_SIZE;
-    size_t allocLargeSize = largeSize;
-
-    size_t recentlargeRegions = regionsOf(ZPageRole::RecentLarge);
-    size_t recentlargeUnits = unitsOf(ZPageRole::RecentLarge);
-    size_t recentLargeSize = recentlargeUnits * ZPage::UNIT_SIZE;
-    size_t allocRecentLargeSize = recentLargeSize;
-
-    size_t allHeapSize = GetHeapCapacity();
-    size_t allUnits = allHeapSize / ZPage::UNIT_SIZE;
-    size_t inactiveUnits = GetInactiveUnitCount();
-
-    size_t usedUnitCount = GetUsedUnitCount();
-    size_t usedObjSize = GetAllocatedSize();
-    // ZGC has no free-virtual-space statistics; capacity headroom is the
-    // partition account (current_max_capacity - capacity).
-    size_t virtualUnits = GetInactiveUnitCount();
-    size_t dirtyUnits = freeRegionManager.GetDirtyUnitCount();
-    size_t dirtySize = dirtyUnits * ZPage::UNIT_SIZE;
-
-    size_t totalUnitCount = usedUnitCount + garbageUnits + dirtyUnits;
-    size_t totalObjSize = usedObjSize + garbageSize + dirtyUnits * ZPage::UNIT_SIZE;
-
-    double objectCapacity = (allHeapSize > 0) ? static_cast<double>(totalObjSize) / allHeapSize : 0.0;
-    double unitCapacity = (allUnits > 0) ? static_cast<double>(totalUnitCount) / allUnits : 0.0;
-    double usedObjectCapacity = (allHeapSize > 0) ? static_cast<double>(usedObjSize) / allHeapSize : 0.0;
-    double usedUnitCapacity = (allUnits > 0) ? static_cast<double>(usedUnitCount) / allUnits : 0.0;
-    double objFragRate = 1.0 - objectCapacity;
-    double unitFragRate = 1.0 - unitCapacity;
-    double usedObjFragRate = 1.0 - usedObjectCapacity;
-    double usedUnitFragRate = 1.0 - usedUnitCapacity;
-
-#define DUMP_REGION_STATS_LOG(format, ...) VLOG(REPORT, format, ##__VA_ARGS__)
-
-    DUMP_REGION_STATS_LOG("%s", msg);
-
-    DUMP_REGION_STATS_LOG("\ttotal units: %zu (%zu B)", totalUnits, totalSize);
-    DUMP_REGION_STATS_LOG("\tactive units: %zu (%zu B)", activeUnits, activeSize);
-    DUMP_REGION_STATS_LOG("\tinactive units: %zu (%zu B)", inactiveUnits, inactiveUnits * ZPage::UNIT_SIZE);
-
-    DUMP_REGION_STATS_LOG("\ttl-regions %zu: %zu units (%zu B, alloc %zu)", tlRegions,  tlUnits, tlSize, allocTLSize);
-    DUMP_REGION_STATS_LOG("\tfrom-regions %zu: %zu units (%zu B, alloc %zu)", fromRegions,  fromUnits, fromSize,
-                          allocFromSize);
-    DUMP_REGION_STATS_LOG("\tunmovable-from regions %zu: %zu units (%zu B, alloc %zu)", unmovableRegions,
-                          unmovableUnits, unmovableSize, allocUnmovableSize);
-    DUMP_REGION_STATS_LOG("\tkept-publish regions %zu: %zu units (%zu B, live %zu, hole %zu)", keptRegions, keptUnits,
-                          keptSize, keptLive, keptSize > keptLive ? keptSize - keptLive : 0);
-    DUMP_REGION_STATS_LOG("\trecent-full regions %zu: %zu units (%zu B, alloc %zu)",
-                          recentFullRegions, recentFullUnits, recentFullSize, allocRecentFullSize);
-    DUMP_REGION_STATS_LOG("\tgarbage regions %zu: %zu units (%zu B, alloc %zu)",
-                          garbageRegions, garbageUnits, garbageSize, allocGarbageSize);
-    DUMP_REGION_STATS_LOG("\tpinned regions %zu: %zu units (%zu B, alloc %zu)",
-                          pinnedRegions, pinnedUnits, pinnedSize, allocPinnedSize);
-    DUMP_REGION_STATS_LOG("\trecent pinned regions %zu: %zu units (%zu B, alloc %zu)",
-                          recentPinnedRegions, recentPinnedUnits, recentPinnedSize, allocRecentPinnedSize);
-    DUMP_REGION_STATS_LOG("\trawPointer pinned regions %zu: %zu units (%zu B, alloc %zu)",
-                          rawPointerPinnedRegions, rawPointerPinnedUnits, rawPointerPinnedSize,
-                          allocRawPointerPinnedSize);
-    DUMP_REGION_STATS_LOG("\tlarge-object regions %zu: %zu units (%zu B, alloc %zu)",
-                          largeRegions, largeUnits, largeSize, allocLargeSize);
-    DUMP_REGION_STATS_LOG("\trecent large-object regions %zu: %zu units (%zu B, alloc %zu)",
-                          recentlargeRegions, recentlargeUnits, recentLargeSize, allocRecentLargeSize);
-    DUMP_REGION_STATS_LOG("\tused summary: usedUnits %zu (%zu B), usedObjSize %zu B",
-                          usedUnitCount, usedUnitCount * ZPage::UNIT_SIZE, usedObjSize);
-
-    DUMP_REGION_STATS_LOG("\tuncommitted capacity: %zu units (%zu B)",
-                          virtualUnits, virtualUnits * ZPage::UNIT_SIZE);
-    DUMP_REGION_STATS_LOG("\tdirty units: %zu (%zu B)", dirtyUnits, dirtyUnits * ZPage::UNIT_SIZE);
     freeRegionManager.PrintCacheOn();
-
-    DUMP_REGION_STATS_LOG("\tgarbage+dirty summary: garbageUnits %zu (%zu B, allocObj %zu), dirtyUnits %zu (%zu B)",
-                          garbageUnits, garbageSize, allocGarbageSize, dirtyUnits, dirtySize);
-    DUMP_REGION_STATS_LOG("\tobjectCapacity: %.4f (totalObjSize %zu / allHeapSize %zu), objFragRate: %.4f",
-                          objectCapacity, totalObjSize, allHeapSize, objFragRate);
-    DUMP_REGION_STATS_LOG("\tunitCapacity: %.4f (totalUnitCount %zu / allUnits %zu), unitFragRate: %.4f",
-                          unitCapacity, totalUnitCount, allUnits, unitFragRate);
-    DUMP_REGION_STATS_LOG("\tusedObjectCapacity: %.4f (usedObjSize %zu / allHeapSize %zu), usedObjFragRate: %.4f",
-                          usedObjectCapacity, usedObjSize, allHeapSize, usedObjFragRate);
-    DUMP_REGION_STATS_LOG("\tusedUnitCapacity: %.4f (usedUnitCount %zu / allUnits %zu), usedUnitFragRate: %.4f",
-                          usedUnitCapacity, usedUnitCount, allUnits, usedUnitFragRate);
-#undef DUMP_REGION_STATS_LOG
-
-    [[maybe_unused]] constexpr size_t decimalPrecision = 10000;
 }
 
 

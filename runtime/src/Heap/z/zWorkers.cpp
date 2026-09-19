@@ -55,6 +55,10 @@ uint32_t ZWorkers::active_workers() const
 
 void ZWorkers::set_active_workers(uint32_t nworkers)
 {
+    const uint32_t max = _workers.max_workers();
+    if (nworkers > max) {
+        nworkers = max;
+    }
     VLOG(REPORT, "Using %u Workers for %s Generation", nworkers, _generation_name);
     std::lock_guard<std::mutex> locker(_resize_lock);
     _workers.set_active_workers(nworkers);

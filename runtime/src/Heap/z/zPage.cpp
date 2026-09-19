@@ -88,7 +88,7 @@ size_t ZPage::GetYoungRegionCount()
 
 size_t RegionManager::GetYoungAllocatedSize() const
 {
-    return youngRegionBytes.load(std::memory_order_acquire);
+    return used_generation(ZGenerationId::young);
 }
 
 bool ZPage::HasYoungRegions()
