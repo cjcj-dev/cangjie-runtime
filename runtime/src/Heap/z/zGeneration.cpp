@@ -249,10 +249,16 @@ public:
     bool do_operation() override { return ZGeneration::old()->mark_end(); }
 };
 
+static const ZStatPhasePause POldRelocateStart("old.relocate_start", ZGenerationId::old);
+
 class VM_ZRelocateStartOld : public VM_ZOperation {
 public:
     bool do_operation() override
     {
+        ZStatTimerOld timer(POldRelocateStart);
+        ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
+            data.storeBarrierBuffer->install_base_pointers();
+        });
         ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         ZGeneration::old()->set_phase(ZGeneration::Phase::Relocate);
@@ -260,6 +266,7 @@ public:
         ZGeneration::old()->StatHeap()->AtRelocateStart(
             static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(
                 ZGeneration::old()));
+        ZRelocate::StartRelocationTasks(ZGenerationId::old);
         return true;
     }
     bool block_jni_critical() const override { return true; }
@@ -1282,13 +1289,15 @@ void ZGenerationOld::pause_verify()
 
 void ZGenerationOld::concurrent_select_relocation_set() {}
 
-void ZGenerationOld::concurrent_remap_young_roots() {}
+void ZGenerationOld::concurrent_remap_young_roots()
+{
+    ZRelocate::RemapYoungRoots();
+}
 
 void ZGenerationOld::pause_relocate_start()
 {
     VM_ZRelocateStartOld op;
     (void)op.pause();
-    (void)ZRelocate::Preforward();
 }
 
 void ZGenerationOld::concurrent_relocate()

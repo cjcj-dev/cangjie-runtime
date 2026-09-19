@@ -155,7 +155,6 @@ public:
                                       const ScopedStopTheWorld* stw = nullptr);
     static void FixMinorRootSlots(const ScopedStopTheWorld* stw = nullptr);
     static void RemapYoungRoots();
-    static bool Preforward();
     static void StartRelocationTasks(ZGenerationId generation);
 
     // Raw historical carriers have no source color; preserve explicit provenance.

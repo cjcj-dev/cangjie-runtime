@@ -209,3 +209,41 @@ GC_OTHER_VM_TEST(ZForwardingPublication, SelectionPublishesPreparedForwardingOnc
     GC_EXPECT_EQ(result.retained, 3u);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+namespace {
+struct OldCyclePhaseResult {
+    uintptr_t before{0};
+    uintptr_t after{0};
+    bool relocate{false};
+};
+void* RunRealOldCycle(void* context)
+{
+    auto& result = *static_cast<OldCyclePhaseResult*>(context);
+    result.before = ZPointerRemappedOldMask;
+    Mutator::GetMutator()->SetManagedContext(false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    result.after = ZPointerRemappedOldMask;
+    result.relocate = Heap::GetHeap().old().is_phase_relocate();
+    Mutator::GetMutator()->SetManagedContext(true);
+    return nullptr;
+}
+}
+
+GC_OTHER_VM_TEST(ZGenerationPhases, OldCycleFlipsRemapMaskOnce)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    OldCyclePhaseResult result;
+    CJThreadHandle handle = RunCJTask(RunRealOldCycle, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "OLD_CYCLE_FLIP_TARGET before=%#lx after=%#lx expected=%#lx relocate=%d\n",
+                 result.before, result.after, result.before ^ ZPointerRemappedMask, result.relocate);
+    GC_EXPECT_EQ(result.after, result.before ^ ZPointerRemappedMask);
+    GC_EXPECT_TRUE(result.relocate);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}

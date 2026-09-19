@@ -104,8 +104,6 @@
 
 namespace MapleRuntime {
 
-static const ZStatPhasePause POldRelocateStart("old.relocate_start", ZGenerationId::old);
-static const ZStatSubPhase PPreforward("Preforward", ZGenerationId::old);
 static const ZStatSubPhase PRemapYoungRoots("RemapYoungRoots", ZGenerationId::old);
 
 void ZRelocate::ForwardFromSpace(ZGenerationId generation)
@@ -175,14 +173,20 @@ bool ZRelocate::IsUnmovableFromObject(BaseObject* obj)
 
 // this api untags current pointer as well as old pointer, caller should take care of this.
 
-void ZRelocate::RemapYoungRoots()
-{
-    SuspendibleThreadSetJoiner joiner;
-    ZStatTimerYoung zstatTimer(PRemapYoungRoots);
-    // zGeneration.cpp:1483-1523: remembered fields, all colored roots, then threads.
-    ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
-    Heap::GetHeap().remembered().remap_current(&remsetIter);
-    RootsIteratorAllColored().Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
+// zGeneration.cpp:1470-1527: shared iterators, one worker task, then restore
+// the old generation's active worker budget. Native stack/record expansion is
+// the Cangjie adapter for the ZGC uncolored-root closure.
+class ZRemapYoungRootsTask final : public ZTask {
+    ZRemsetTableIterator remset;
+    RootsIteratorAllColored colored;
+    RootsIteratorAllUncolored uncolored;
+public:
+    explicit ZRemapYoungRootsTask(unsigned workers)
+        : ZTask("ZRemapYoungRootsTask"), remset(&Heap::GetHeap().remembered(), false),
+          colored(workers, ZGenerationIdOptional::old), uncolored(ZGenerationIdOptional::old) {}
+    void work() override
+    {
+        colored.Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
     RootVisitor visitor = [](ObjectRef& root) {
         const zaddress_unsafe observed = root.LoadPlain();
         // ZGeneration::remap_object (zGeneration.inline.hpp:142-151): only
@@ -201,7 +205,8 @@ void ZRelocate::RemapYoungRoots()
         NoteRawRemapYoungRootsTestReceipt(root, raw(observed));
 #endif
     };
-    ZMark::VisitStrongPlainRoots(visitor, [&](Mutator& mutator) {
+        uncolored.Apply([&] { ZMark::VisitStrongPlainRoots(visitor, {}); });
+        uncolored.ApplyThreads([&](Mutator& mutator) {
         // Cangjie stack maps may name stack objects/headerless records. Expand
         // their plain fields before remapping, as verification and mark do.
         // ZGC zStackWatermark.cpp:164-214 processes each oop frame slot.
@@ -214,15 +219,24 @@ void ZRelocate::RemapYoungRoots()
                 __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE), &derived, frames)) {
             mutator.VisitHeapReferences(heapRoots, derived);
         }
-    });
+        });
+        Heap::GetHeap().remembered().remap_current(&remset);
+    }
+};
+
+void ZRelocate::RemapYoungRoots()
+{
+    ZStatTimerOld timer(PRemapYoungRoots);
+    ZWorkers& workers = *Heap::GetHeap().old().Workers();
+    const uint32_t previous = workers.active_workers();
+    const uint32_t requested = std::min(std::max(Heap::GetHeap().young().Workers()->active_workers() + previous,
+                                                    uint32_t{1}), ZOldGCThreads);
+    workers.set_active_workers(requested);
+    SuspendibleThreadSetJoiner joiner;
+    ZRemapYoungRootsTask task(workers.active_workers());
+    workers.run(&task);
+    workers.set_active_workers(previous);
 }
-
-
-
-
-
-
-
 
 void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 {
@@ -231,71 +245,6 @@ void ZRelocate::StartRelocationTasks(ZGenerationId generation)
     ZWorkers& workers = *Heap::GetHeap().GetZGeneration(generation).Workers();
     if (generation == ZGenerationId::young) manager.StartForwardFromRegions<Generation::Young>(workers);
     else manager.StartForwardFromRegions<Generation::Old>(workers);
-}
-
-bool ZRelocate::Preforward()
-{
-    ZStatTimerOld zstatTimer(PPreforward);
-    {
-        // Caller holds DriverLocker (ZGenerationOld::collect zGeneration.cpp:1054-1063).
-        RemapYoungRoots();
-        if (ZAbort::should_abort()) {
-            return false;
-        }
-        // OpenJDK zGeneration.cpp:1175-1200: isolate pause_relocate_start from the
-        // concurrent root-preforward work below. ScopedLightSync emits its matching
-        // rec=stw record, including rendezvous and held time.
-        ZJNICritical::block();
-        ScopedLightSync scopedLightSync("Preforward", false);
-        ZVerify::BeforeZOperation();
-        // GCLOG samples pause/concurrent kind when the timer is constructed, so enter
-        // ScopedLightSync first. Destruction order also closes this timer before mutators
-        // resume, keeping the whole phase in the pause account.
-        ZStatTimerOld zstatTimer(POldRelocateStart);
-        ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
-            data.storeBarrierBuffer->install_base_pointers();
-        });
-        ZGlobalsPointers::flip_old_relocate_start();
-        ZVerify::OnColorFlip();
-        StartRelocationTasks(ZGenerationId::old);
-        ZJNICritical::unblock();
-    }
-
-    RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    manager.DrainForwardFromRegions<Generation::Old>();
-    ZWorkers& workers = *Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers();
-    const std::function<void()> families[] = {
-        [&] { RootsIteratorAllColored().Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); }); },
-        [&] { ZMark::VisitStrongPlainRoots([](ObjectRef& root) {
-            const zaddress_unsafe observed = root.LoadPlain();
-            BaseObject* oldObj = to_object(safe(observed));
-            if (oldObj != nullptr && Heap::IsHeapAddress(oldObj)) {
-                (void)ZGeneration::old()->relocate_or_remap_object(oldObj);
-            }
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-        }, {}); },
-        [&] { Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Old); },
-        [&] { Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Old); }
-    };
-    // zArray.hpp:104 ZArrayParallelIterator: workers claim root families.
-    class RootsTask final : public ZTask {
-    public:
-        RootsTask(const std::function<void()>* families, size_t count)
-            : ZTask("ZRelocateRootsTask"), iter(families, count) {}
-        void work() override
-        {
-            for (std::function<void()> family; iter.next(&family);) {
-                family();
-            }
-        }
-    private:
-        ZArrayParallelIterator<std::function<void()>> iter;
-    } roots(families, sizeof(families) / sizeof(families[0]));
-    {
-        SuspendibleThreadSetJoiner joiner;
-        workers.run(&roots);
-    }
-    return true;
 }
 
 // N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.
