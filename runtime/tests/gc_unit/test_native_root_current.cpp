@@ -298,10 +298,13 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     GC_EXPECT_TRUE(root != nullptr);
     GC_EXPECT_TRUE(parked->InSaferegion());
 
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
-    Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
-    Heap::GetHeap().old().Mark().Start();
-    RelocationReceiptTest::RunOldRoots(collector);
+    // zGeneration.cpp:1212-1237, zMark.cpp:797-834: mark-start establishes
+    // the color/sequence before workers consume roots, then follow marks objects.
+    {
+        ScopedStopTheWorld stw("p10-root-mark-start", false);
+        heap.old().mark_start();
+    }
+    heap.old().concurrent_mark();
 
     const bool watermarkDone = parked->GetStackWatermark().IsDone(StackWatermark::epoch_id());
     const bool live = fx.region0->is_object_strongly_live(from_object(held));

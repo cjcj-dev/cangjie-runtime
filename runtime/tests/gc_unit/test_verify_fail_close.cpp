@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <string>
 #include <sys/wait.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <unordered_set>
 
@@ -23,6 +24,17 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace {
+
+// Test-side signal sampling observes the product allocation top at rejection.
+// It neither replaces a product call nor changes the collector's state.
+ZPage* rejectedPage = nullptr;
+volatile uintptr_t* rejectedTop = nullptr;
+void RecordRejectedTop(int)
+{
+    *rejectedTop = rejectedPage->GetRegionAllocPtr();
+    (void)signal(SIGABRT, SIG_DFL);
+    (void)raise(SIGABRT);
+}
 
 template <typename Fn>
 void ExpectSceneAbort(const char* expectedDiagnostic, Fn&& fn)
@@ -171,11 +183,25 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
     remset.Record(slot);
     const bool currentActive = Heap::GetHeap().OldActiveRemsetIsCurrent();
     if (currentActive) { remset.FlipForMinor(); }
+    const uintptr_t before = fixture.region0->GetRegionAllocPtr();
+    void* shared = mmap(nullptr, sizeof(uintptr_t), PROT_READ | PROT_WRITE,
+                        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    GC_EXPECT_TRUE(shared != MAP_FAILED);
+    auto* observed = static_cast<volatile uintptr_t*>(shared);
+    *observed = 0;
     ExpectSceneAbort(currentActive ? "previous remset bits should be cleared" :
                                     "current remset bits should be cleared", [&] {
+        rejectedPage = fixture.region0;
+        rejectedTop = observed;
+        (void)signal(SIGABRT, RecordRejectedTop);
         RegionManager manager;
         manager.ForwardRegion<Generation::Old>(fixture.region0);
     });
+    const uintptr_t after = *observed;
+    (void)munmap(shared, sizeof(uintptr_t));
+    std::fprintf(stderr, "REMSET_REJECT_BEFORE_RESET_ASSERT_EXECUTED before=%#zx after=%#zx\n", before, after);
+    // ZGC zRelocate.cpp:993-1008 verifies before do_forwarding mutates top.
+    GC_EXPECT_EQ(after, before);
 }
 
 // zVerify.cpp:131-138 distinguishes raw null from metadata-bearing null.
