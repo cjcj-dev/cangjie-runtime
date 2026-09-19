@@ -2791,6 +2791,7 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
     ZPage* promoted = region->clone_for_promotion();
     ZGeneration::young()->flip_promote(region, promoted);
+    fixture.region0 = promoted;
     const Generation current = Heap::GetHeap().ObjectGeneration(fixture.obj0);
     std::fprintf(stderr, "PAGE579 promotion current=%u id=%u\n",
                  static_cast<unsigned>(current), static_cast<unsigned>(promoted->generation_id()));
@@ -2800,7 +2801,8 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     const auto retained = LookupTo(from, current);
     std::fprintf(stderr, "PAGE579 retained to=%zx expected=%zx\n", retained.to, to);
     GC_EXPECT_EQ(retained.to, to);
-    UNUSED_ClearPageOwner(region);
+    UNUSED_ClearPageOwner(promoted);
+    ZPage::RetireDescriptor(region);
     const auto cleared = LookupTo(from, current);
     std::fprintf(stderr, "PAGE579 cleared answer=%u\n", static_cast<unsigned>(cleared.answer));
     GC_EXPECT_TRUE(cleared.answer == FwdLookup::Unarmed);

@@ -353,13 +353,14 @@ GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
         GC_EXPECT_TRUE(original != nullptr);
         GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, object));
         GC_EXPECT_TRUE(region->is_object_live(from_object(object)));
+        const uint8_t fromAge = region->GetYoungAge();
         ZPage* originalPage = region;
         ZPage* promoted = region->clone_for_promotion();
         ZGeneration::young()->flip_promote(region, promoted);
         GC_EXPECT_TRUE(Heap::page(reinterpret_cast<MAddress>(object)) == promoted);
         GC_EXPECT_TRUE(originalPage->IsYoungRegion());
         GC_EXPECT_FALSE(promoted->IsYoungRegion());
-        GC_EXPECT_EQ(originalPage->GetYoungAge(), 1u);
+        GC_EXPECT_EQ(originalPage->GetYoungAge(), fromAge);
         GC_EXPECT_FALSE(promoted->livemap().is_marked(ZGenerationId::old));
         std::vector<BaseObject*> visited;
         originalPage->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
@@ -369,6 +370,8 @@ GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
         visited.clear();
         originalPage->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
         GC_EXPECT_EQ(visited.size(), 0u);
+        fx.region0 = promoted;
+        ZPage::RetireDescriptor(originalPage);
     }
 }
 
