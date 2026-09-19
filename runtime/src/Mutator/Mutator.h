@@ -97,7 +97,6 @@ public:
     void ResetMutator();
 
     static Mutator* GetMutator() noexcept;
-    void SetStoreBarrierRememberedSetForTest(void*) {}
     void StackGuardExpand() const;
     void StackGuardRecover() const;
 

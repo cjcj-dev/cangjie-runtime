@@ -21,6 +21,7 @@
 #include "RuntimeConfig.h"
 namespace MapleRuntime {
 class CJFileLoader : public ILoader {
+    friend class CJFileLoaderTest;
 public:
     CJFileLoader()
     {

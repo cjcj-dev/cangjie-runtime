@@ -37,7 +37,6 @@ public:
     static constexpr size_t REFERENCE_TYPE_COUNT = static_cast<size_t>(ReferenceType::COUNT);
     using IsStronglyLive = std::function<bool(BaseObject*)>;
     using EnqueueFinal = std::function<bool(BaseObject*)>;
-    using ObserveWeakFinal = std::function<void(BaseObject*, BaseObject*)>;
 
     explicit ReferenceProcessor(ZWorkers* workers = nullptr);
     ~ReferenceProcessor();
@@ -96,11 +95,11 @@ private:
     ZContended<Node*> pending_list;
     Node* pending_list_tail;
     IsStronglyLive isStronglyLiveFn;
-    ObserveWeakFinal observeWeakFinalFn;
 };
 
 class Mutator;
 class FinalizerProcessor {
+    friend class FinalizerProcessorTest;
 public:
     explicit FinalizerProcessor(ZWorkers* workers = nullptr);
     ~FinalizerProcessor() = default;

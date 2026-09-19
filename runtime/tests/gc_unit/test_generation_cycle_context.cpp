@@ -44,7 +44,8 @@ namespace MapleRuntime {
 // public Allocate/Release (gtest test_oopStorage.cpp shape) and leave the
 // scheduling lists untouched, so the finalizer thread never sees a queue
 // whose predicate it did not set.
-struct ZGenerationRootTestAccess {
+class ZGenerationRootTest {
+public:
     inline static std::array<NativeSlot*, 2> strongSlots {};
     static void Install(Heap& collector, const std::array<BaseObject*, 6>& objects)
     {
@@ -197,7 +198,7 @@ void* Exercise(void*)
             Expect((::g_cjMarkBadMask & ZPointerMarkedOldMask) == preludeOldColor,
                    "old_body_keeps_prelude_color");
             for (size_t i = 0; i < handles.size(); ++i) witnesses[i] = Heap::GetHeap().GetExportObject(handles[i]);
-            ZGenerationRootTestAccess::Install(tracing, witnesses);
+            ZGenerationRootTest::Install(tracing, witnesses);
             Expect(storedPending == 1u, "store_buffer_old_color");
         }
         buffer.Flush();
@@ -241,7 +242,7 @@ void* Exercise(void*)
                         observed.count(witnesses[i]) != 0);
             Expect(observed.count(witnesses[i]) != 0, names[i]);
         }
-        ZGenerationRootTestAccess::Remove(tracing, witnesses);
+        ZGenerationRootTest::Remove(tracing, witnesses);
         ++rootResults;
         const auto old = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
         std::printf("ROOT_RESULT expected_static=%zu observed_objects=%zu old_active=%u old_phase=%u\n",

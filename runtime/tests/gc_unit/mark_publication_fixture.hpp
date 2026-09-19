@@ -33,7 +33,7 @@ struct MarkPublicationFixture {
         GenerationSequenceFixture::AdvanceYoung(young);
         Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
         Heap::GetHeap().young().Mark().Start();
-        MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
+        GC_EXPECT_TRUE(Heap::GetHeap().young().Mark().Stripes().IsEmpty());
         young.PublishPhase(ZGenerationPhase::Mark);
         old.SelectReason(GC_REASON_USER);
         old.Begin(2);

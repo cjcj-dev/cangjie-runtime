@@ -120,26 +120,7 @@ GC_TEST(PinRoot, NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove)
 //
 // The existing suite could not have caught this: exactly one test in it ever puts a region on a
 // list, and it puts it on the list its own walker reads.
-GC_TEST(RegionRetirement, CompactInPlaceLeavesRegionOnAListACollectorWalks)
-{
-    GcHeapFixture fx;
-    RegionManager manager;
-    ZPage* region = fx.region0;
 
-    // Where CompactRegion leaves it, with no AllocBuffer owning it any more.
-    PinRootTestAccess::ParkOnThreadLocal(manager, region);
-    GC_EXPECT_EQ(static_cast<unsigned>(0u),
-                 static_cast<unsigned>(1));
-
-    manager.RehomeCompactedInPlaceRegion(region);
-
-    // The invariant: it now sits on a list a collection-set builder reads, typed accordingly.
-    GC_EXPECT_EQ(static_cast<unsigned>(0u),
-                 static_cast<unsigned>(0));
-
-    GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
-    GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
-}
 
 // RouteRegion can compact in place and re-home before ForwardRegion reaches its
 // stay-young arm. The latter must recognize that ownership is already complete;

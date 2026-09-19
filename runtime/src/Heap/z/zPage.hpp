@@ -188,13 +188,7 @@ public:
     bool IsRelocatable() const;
     bool is_allocating() const { return IsAllocating(); }
     bool is_relocatable() const { return IsRelocatable(); }
-    void TestMakeRelocatable()
-    {
-        const uint64_t epoch = GetSnapshotEpoch();
-        if (epoch > 0 && BirthSequence() >= epoch) {
-            _seqnum = static_cast<uint32_t>(epoch - 1);
-        }
-    }
+    friend class ZPageTest;
 
     ZPageType type() const { return _type; }
     PageAge age() const { return _age; }
@@ -249,7 +243,6 @@ public:
     // to-version or wait for the page worker (zRelocate.cpp:382-415).
     //
     // GCPhase is the cheap witness: PREFORWARD/FORWARD mean the relocate-start flip has run.
-    static constexpr bool kEnrolTimeProbe = true;
     static std::atomic<uint64_t>& EnrolBeforeFlip();
     static std::atomic<uint64_t>& EnrolAfterFlip();
 

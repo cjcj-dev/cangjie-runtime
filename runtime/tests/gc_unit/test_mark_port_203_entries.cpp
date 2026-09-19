@@ -11,6 +11,10 @@
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zBarrier.hpp"
 
+
+#include "gc_generation_test.hpp"
+#include "gc_product_access_test.hpp"
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -132,7 +136,7 @@ struct MarkPort203TestAccess {
     static void Bind(Heap* collector, int32_t count = 1)
     {
         if (collector != nullptr) CHECK(collector == &Heap::GetHeap());
-        ZCollectedHeap::heap()->set_concurrent_gc_threads_for_test(count);
+        ZCollectedHeapTest::SetWorkers(count);
     }
     static void Collect(Heap& collector, bool major)
     {
@@ -315,8 +319,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
         Heap::GetHeap().GetZGeneration(generation).InitializeWorkers(helpers + 1);
     }
-    Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young)
-        .SetReasonForTest(major ? GC_REASON_USER : GC_REASON_YOUNG);
+    ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young), major ? GC_REASON_USER : GC_REASON_YOUNG);
     Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
@@ -334,7 +337,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         invisibleBuffer = AllocBuffer::GetOrCreateAllocBuffer();
         Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
         Heap::GetHeap().young().Mark().Start();
-        MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
+        GC_EXPECT_TRUE(Heap::GetHeap().young().Mark().Stripes().IsEmpty());
         if (duplicateRootOrder != 0) {
             // Two snapshots of one root use the actual private producers.
             // The TLS stack and GC decide the consumer order.
@@ -370,8 +373,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     auto& activityCycle = Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young)
-        .SetReasonForTest(major ? GC_REASON_USER : GC_REASON_YOUNG);
+    ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young), major ? GC_REASON_USER : GC_REASON_YOUNG);
     ArrayClosureResult result;
     result.region = fx.region1;
     result.array = array;
@@ -410,8 +412,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         Heap::GetHeap().RemoveExportObject(handle);
     }
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young)
-        .SetReasonForTest(oldReason);
+    ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young), oldReason);
 
     // Worker TLS cleanup must finish while the heap generation owns publication.
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {

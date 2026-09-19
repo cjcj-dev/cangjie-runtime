@@ -356,7 +356,6 @@ void ReferenceProcessor::process_references()
 void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive)
 {
     isStronglyLiveFn = isStronglyLive;
-    observeWeakFinalFn = {};
     process_references();
     isStronglyLiveFn = {};
 }

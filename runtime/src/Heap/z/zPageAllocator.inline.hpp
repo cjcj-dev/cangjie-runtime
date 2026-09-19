@@ -183,18 +183,6 @@ inline void RegionManager::ReleaseMarkQuarantine()
     }
 
 
-    template <typename F>
-inline void RegionManager::VisitAllManagedRegionsForProbe(F&& visitor)
-    {
-        // #710: managed pages are the page table's non-free pages; the probe
-        // names the role word instead of the deleted list.
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            visitor(region, RegionRoleName(region->GetRegionRole()));
-        }
-    }
-
 inline ZPage* RegionManager::TakeReclaimableGarbageRegion(size_t* gatedBytes)
     {
         // #710: garbage pages are page-table entries with the Garbage role.

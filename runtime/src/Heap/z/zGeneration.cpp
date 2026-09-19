@@ -155,8 +155,7 @@ double ZGeneration::FragmentationLimit() const
     return fragmentation_limit(_cycle);
 }
 
-void ResetSkippedStackMapCounts();
-void ReportSkippedStackMapCounts();
+
 
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
 // young sequence once for the whole old relocation, not once per forwarding.
@@ -458,14 +457,6 @@ void ZGenerationYoung::concurrent_mark()
     MinorObjectSet currentMinorRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
-    auto mergeY2yDirtyWork = [&](WorkStack& destination) {
-        Heap::GetHeap().GetAllocator().VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
-            buffer.MergeY2yDirtyHolders(destination);
-            buffer.MergeY2yDirtySlots([](MAddress slot) {
-                ZBarrier::MarkBarrierOnYoungOopField(HeapSlotAt<>(slot));
-            });
-        });
-    };
     // ZGC zGeneration.cpp:665-669: root production belongs to concurrent_mark.
     // Keep one producer (the existing owner-specific VisitMinorRoots/epoch path),
     // selecting only its phase boundary. MARK-only remains a diagnostic arm and
@@ -513,7 +504,6 @@ void ZGenerationYoung::concurrent_mark()
                      "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
-        mergeY2yDirtyWork(workStack);
         concWindowStartNs = TimeUtil::NanoSeconds();
         produceYoungRoots();
         VLOG(REPORT,
@@ -550,15 +540,6 @@ void ZGenerationYoung::concurrent_mark()
 bool ZGenerationYoung::mark_end()
 {
     WorkStack& workStack = youngWorkStack;
-    Heap::GetHeap().GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) {
-        (void)buffer;
-    });
-    Heap::GetHeap().GetAllocator().VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
-        buffer.MergeY2yDirtyHolders(workStack);
-        buffer.MergeY2yDirtySlots([](MAddress slot) {
-            ZBarrier::MarkBarrierOnYoungOopField(HeapSlotAt<>(slot));
-        });
-    });
     const bool markEndSucceeded = ZMark::TryEndYoungMark(workStack, &youngConcWindow);
     if (markEndSucceeded) {
 
@@ -1185,7 +1166,7 @@ void ZGeneration::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     if (!continuingPrelude) {
         Heap::GetHeap().GetZGeneration(generation).Begin(gcIndex);
     }
-    ResetSkippedStackMapCounts();
+
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s",
          g_gcRequests[Heap::GetHeap().GetCycleSnapshot(generation).reason].name,
          Pretty(Heap::GetHeap().GetAllocatedSize()).Str());
@@ -1356,13 +1337,13 @@ namespace MapleRuntime {
 #endif
 
 namespace MapleRuntime {
-void ReportSkippedStackMapCounts();
+
 void ZGeneration::PostGarbageCollection(uint64_t gcIndex)
 {
     const ZGenerationId generation = id();
     reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).DumpRegionStats("region statistics when gc ends");
     (*Workers()).set_inactive();
-    ReportSkippedStackMapCounts();
+
     PagePool::Instance().Trim();
     (void)gcIndex;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)

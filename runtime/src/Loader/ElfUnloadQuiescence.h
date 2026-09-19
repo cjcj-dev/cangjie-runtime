@@ -26,6 +26,7 @@ namespace MapleRuntime {
 // wait for the unload to finish and therefore can only observe the post-unlink
 // registries.
 class ElfUnloadQuiescence final {
+    friend class ElfUnloadQuiescenceTest;
 public:
     struct ImageAddressMap {
         struct Range { Uptr start; size_t size; bool executable; };

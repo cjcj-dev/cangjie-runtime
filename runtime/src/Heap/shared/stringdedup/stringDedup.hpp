@@ -16,6 +16,7 @@ namespace MapleRuntime {
 // L01s: weak runtime slots hold byte arrays, never language String values.
 // Neither requests nor table entries are enumerated as strong roots.
 class StringDedup {
+    friend class StringDedupTest;
 public:
     static StringDedup& Instance();
     void Start();

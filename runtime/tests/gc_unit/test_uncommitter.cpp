@@ -26,6 +26,8 @@
 extern "C" int CJ_ScheduleManagerInit();
 #include "gc_unittest.hpp"
 
+#include "gc_product_access_test.hpp"
+
 namespace MapleRuntime {
 struct UncommitterTestAccess {
     static void ResetCancel()
@@ -59,6 +61,7 @@ struct UncommitterTestAccess {
     static bool Wait(Uncommitter& worker, uint64_t deadline) { return worker.WaitUntil(deadline); }
 };
 }
+
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -128,17 +131,17 @@ GC_OTHER_VM_TEST(Uncommitter, PartitionWorkerParticipatesInSafepoints)
     auto& worker = Heap::GetHeap().GetAllocator().GetUncommitter();
     worker.Stop();
     auto& manager = MutatorManager::Instance();
-    const size_t before = manager.RuntimeMutatorRegistrySizeForTest();
+    const size_t before = MutatorManagerTest::RegistrySize(manager);
     worker.Start();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (manager.RuntimeMutatorRegistrySizeForTest() == before &&
+    while (MutatorManagerTest::RegistrySize(manager) == before &&
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
-    const size_t registered = manager.RuntimeMutatorRegistrySizeForTest();
+    const size_t registered = MutatorManagerTest::RegistrySize(manager);
     worker.Stop();
     GC_EXPECT_EQ(registered, before + 1);
-    GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), before);
+    GC_EXPECT_EQ(MutatorManagerTest::RegistrySize(manager), before);
 }
 
 #endif // MRT_TESTABLE_INTERNALS

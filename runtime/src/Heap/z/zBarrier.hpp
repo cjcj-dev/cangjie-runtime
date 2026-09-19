@@ -50,7 +50,6 @@ public:
     static RefField<> GetAndTryTagRefField(BaseObject* target);
     static RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* target,
                                                        const ForwardingProvenance& provenance);
-    static void NoteStoreGoodOnBadTarget(BaseObject* target);
 
 
 
@@ -195,9 +194,6 @@ public:
     static zaddress promote_slow_path(zaddress addr);
     static void promote_barrier_on_young_oop_field(volatile zpointer* p);
 private:
-    static constexpr bool kColourWhoProbe = true;
-    static std::atomic<uint64_t> colourWhoTotal;
-    static std::atomic<uint64_t> colourWhoBad;
 };
 
 } // namespace MapleRuntime

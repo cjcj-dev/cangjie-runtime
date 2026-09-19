@@ -169,20 +169,24 @@ void StoreBarrierBuffer::Flush()
     clear();
 }
 
-bool StoreBarrierBuffer::is_in(MAddress p) const
+bool StoreBarrierBuffer::is_in(MAddress p)
 {
-    const uintptr_t lastRemap = ZPointer::remap_bits(lastProcessedColor);
-    const bool needsRemap = lastRemap != ZPointerRemapped;
-    for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
-        MAddress entryP = buffer[i].p;
-        if (needsRemap && !is_null(basePointers[i])) {
-            entryP = RemapBufferedField(entryP, basePointers[i], lastProcessedColor);
+    if (!kBufferStoreBarriers) { return false; }
+    bool found = false;
+    // Cangjie's attached mutators are the Java-thread population in ZGC.
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
+        const StoreBarrierBuffer* buffer = mutator.GetGCData().storeBarrierBuffer;
+        const uintptr_t lastRemap = ZPointer::remap_bits(buffer->lastProcessedColor);
+        const bool needsRemap = lastRemap != ZPointerRemapped;
+        for (size_t i = buffer->current; i < kStoreBarrierBufferLength; ++i) {
+            MAddress entryP = buffer->buffer[i].p;
+            if (needsRemap && !is_null(buffer->basePointers[i])) {
+                entryP = RemapBufferedField(entryP, buffer->basePointers[i], buffer->lastProcessedColor);
+            }
+            if (entryP == p) { found = true; return; }
         }
-        if (entryP == p) {
-            return true;
-        }
-    }
-    return false;
+    });
+    return found;
 }
 
 } // namespace MapleRuntime

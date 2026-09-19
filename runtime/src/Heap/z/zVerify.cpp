@@ -104,37 +104,55 @@ void ZVerify::AfterWeakProcessing()
 namespace MapleRuntime {
 
 namespace {
+bool z_is_null_relaxed(zpointer value)
+{
+    return (raw(value) & ~(ZPointerAllMetadataMask | ZPointerReservedMask)) == 0;
+}
 void z_verify_oop_object(zaddress address, zpointer value, const void* slot);
 void z_verify_root_oop_object(zaddress address, const void* slot);
 // zVerify.cpp:206-256. Do not normalize raw roots before verifying them.
-void ColoredRoot(NativeSlot& root, bool afterOldMark)
-{
-    DCHECK(!Heap::IsHeapAddress(&root));
-    const zpointer value = root.GetFieldValue(std::memory_order_acquire);
-    if (!(!is_null_any(to_zpointer(raw(value))))) { return; }
-    CHECK_DETAIL(ClassifySlotWord(raw(value)) != SlotWordVerdict::kIllegal, "Bad colored root at %p", &root);
-    if (afterOldMark) {
-        CHECK_DETAIL(ZPointer::is_marked_old(to_zpointer(raw(value))),
-                     "Unmarked old root at %p", &root);
+class ZVerifyColoredRootClosure {
+    const bool afterOldMark;
+public:
+    explicit ZVerifyColoredRootClosure(bool afterOldMark) : afterOldMark(afterOldMark) {}
+    void do_oop(NativeSlot& root)
+    {
+        DCHECK(!Heap::IsHeapAddress(&root));
+        const zpointer value = root.GetFieldValue(std::memory_order_acquire);
+        if (z_is_null_relaxed(value)) { return; }
+        DCHECK(is_valid(value));
+        if (afterOldMark) {
+            CHECK_DETAIL(ZPointer::is_marked_old(value), "Unmarked old root at %p", &root);
+            const zaddress address = ZBarrier::load_barrier_on_oop_field_preloaded(nullptr, value);
+            z_verify_oop_object(address, value, &root);
+        } else if (is_valid(value)) {
+            const zaddress address = ZBarrier::load_barrier_on_oop_field_preloaded(nullptr, value);
+            z_verify_oop_object(address, value, &root);
+        }
     }
-    z_verify_root_oop_object(from_object(ZBarrier::ReadStaticRef(root)), &root);
+};
+class ZVerifyUncoloredRootClosure {
+public:
+    void do_oop(ObjectRef& root)
+    {
+        DCHECK(!Heap::IsHeapAddress(&root));
+        const uintptr_t value = raw(root.LoadPlain(std::memory_order_acquire));
+        if (value == 0) { return; }
+        z_verify_root_oop_object(static_cast<zaddress>(value), &root);
+    }
+};
 }
-void PlainRoot(ObjectRef& root)
-{
-    DCHECK(!Heap::IsHeapAddress(&root));
-    const uintptr_t value = raw(root.LoadPlain(std::memory_order_acquire));
-    if (value == 0) { return; }
-    // Object checks the uncolored address before it is dereferenced.
-    z_verify_root_oop_object(static_cast<zaddress>(value), &root);
-}
-}
+
 void ZVerify::RootsStrong(bool afterOldMark)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
-    RootsIteratorStrongColored().Apply([&](NativeSlot& root) { ColoredRoot(root, afterOldMark); });
-    ZMark::VisitStrongPlainRoots(PlainRoot, [](Mutator& mutator) {
+    ZVerifyColoredRootClosure colored(afterOldMark);
+    RootsIteratorStrongColored().Apply([&](NativeSlot& root) { colored.do_oop(root); });
+    ZVerifyUncoloredRootClosure uncolored;
+    RootVisitor plain = [&](ObjectRef& root) { uncolored.do_oop(root); };
+    ZMark::VisitStrongPlainRoots(plain, [&](Mutator& mutator) {
         mutator.VisitProcessedRoots([&](ObjectRef& root) {
-            mutator.VisitHeapRootSlots(root, PlainRoot);
+            mutator.VisitHeapRootSlots(root, plain);
         });
     });
 }
@@ -142,7 +160,8 @@ void ZVerify::RootsWeak()
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
     DCHECK(!ZResurrection::is_blocked());
-    RootsIteratorWeakColored().Apply([](NativeSlot& root) { ColoredRoot(root, true); });
+    ZVerifyColoredRootClosure colored(true);
+    RootsIteratorWeakColored().Apply([&](NativeSlot& root) { colored.do_oop(root); });
 }
 
 
@@ -172,7 +191,7 @@ void z_verify_old_oop(RefField<>* field)
         CHECK_DETAIL(Heap::page(reinterpret_cast<MAddress>(field))->IsAllocating(),
                      "Raw null requires allocating holder at %p", field);
     }
-    if (!is_null_any(value)) {
+    if (!z_is_null_relaxed(value)) {
         if (ZPointer::is_mark_good(value)) {
             z_verify_oop_object(ZPointer::uncolor(value), value, field);
         } else {
@@ -189,7 +208,7 @@ void z_verify_old_oop(RefField<>* field)
 void z_verify_possibly_weak_oop(RefField<>* field)
 {
     const zpointer value = field->GetFieldValue(std::memory_order_acquire);
-    if (is_null_any(value)) { return; }
+    if (z_is_null_relaxed(value)) { return; }
     CHECK_DETAIL(ZPointer::is_marked_any_old(value), "Bad possibly weak oop at %p", field);
     const zaddress address = ZBarrier::load_barrier_on_oop_field_preloaded(nullptr, value);
     const bool young = Heap::is_young(raw(address));
@@ -203,7 +222,7 @@ void z_verify_possibly_weak_oop(RefField<>* field)
     CHECK_DETAIL(remset == ZPointerRememberedMask ||
                  Heap::page(reinterpret_cast<MAddress>(field))->is_remembered(
                      reinterpret_cast<volatile zpointer*>(field)) ||
-                 MutatorManager::Instance().StoreBarrierBufferContains(reinterpret_cast<MAddress>(field)),
+                 StoreBarrierBuffer::is_in(reinterpret_cast<MAddress>(field)),
                  "Missing remembered field at %p", field);
 }
 }
@@ -229,6 +248,17 @@ void ZVerify::threads_start_processing()
 }
 
 namespace {
+class ZVerifyOldOopClosure : public BasicOopIterateClosure {
+    const bool verifyWeaks;
+public:
+    explicit ZVerifyOldOopClosure(bool verifyWeaks) : verifyWeaks(verifyWeaks) {}
+    void do_oop(RefField<>* field) override
+    {
+        if (verifyWeaks) { z_verify_possibly_weak_oop(field); }
+        else { z_verify_old_oop(field); }
+    }
+};
+
 class ZVerifyObjectClosure : public ObjectClosure, public OopFieldClosure {
     const bool verifyWeaks;
     BaseObject* visitedBase = nullptr;
@@ -251,14 +281,12 @@ public:
 
     void verify_live_object(BaseObject* object)
     {
+        ZVerifyOldOopClosure oopClosure(verifyWeaks);
         const MAddress referent = reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE;
-        if (object->IsWeakRef() && verifyWeaks) {
-            z_verify_possibly_weak_oop(&HeapSlotAt<>(referent));
-        }
+        if (object->IsWeakRef() && verifyWeaks) { oopClosure.do_oop(&HeapSlotAt<>(referent)); }
         RefFieldVisitor fields = [&](RefField<>& field) {
             if (!object->IsWeakRef() || reinterpret_cast<MAddress>(&field) != referent) {
-                if (verifyWeaks) { z_verify_possibly_weak_oop(&field); }
-                else { z_verify_old_oop(&field); }
+                oopClosure.do_oop(&field);
             }
         };
         ZBasicOopIterateClosure<RefFieldVisitor> closure(fields);

@@ -6,6 +6,7 @@
 
 #include "gc_verify_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Cangjie.h"
 
 #include <csignal>
 #include <cstdlib>
@@ -55,35 +56,29 @@ void ExpectSceneAbort(const char* expectedDiagnostic, Fn&& fn)
     std::fflush(stderr);
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
-    GC_EXPECT_TRUE(transcript.find(expectedDiagnostic) != std::string::npos);
+    const bool target = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find(expectedDiagnostic) != std::string::npos;
+    std::fprintf(stderr, "VERIFY_TARGET_ASSERT_EXECUTED diagnostic=%s status=%d matched=%d\n",
+                 expectedDiagnostic, status, target);
+    GC_EXPECT_TRUE(target);
 }
 
 } // namespace
 
-// zVerify.cpp:119-128 / zAddress.inline.hpp:505-522: illegal addresses are
-// rejected before metadata access; no region inventory or scene counters.
-GC_OTHER_VM_TEST(ZVerify, RejectsColoredAddressWithoutUncoloring)
+// Verification enters through a product phase, not a public test-only leaf.
+GC_OTHER_VM_TEST(ZVerify, BeforeOperationRejectsUnmanagedRoot)
 {
-    GcVerifyFixture fixture;
-    const uintptr_t colored = raw(ZAddress::store_good(from_object(fixture.obj0)));
-    ExpectSceneAbort("Bad object", [&] {
-        ZVerify::Object(reinterpret_cast<BaseObject*>(colored), &colored);
-    });
-    ZVerify::Object(fixture.obj0, &fixture.obj0);
-}
-
-GC_OTHER_VM_TEST(ZVerify, RejectsUnmanagedAddress)
-{
+    if (!ZVerifyRoots) {
+        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
+        RunInOtherVm("ZVerify.BeforeOperationRejectsUnmanagedRoot");
+        return;
+    }
     GcVerifyFixture fixture;
     ExpectSceneAbort("Bad object", [&] {
-        ZVerify::Object(reinterpret_cast<BaseObject*>(0x1000), nullptr);
+        fixture.VerifyRoot(reinterpret_cast<BaseObject*>(fixture.heapStart + 3 * ZPage::UNIT_SIZE));
     });
-    ZVerify::Object(fixture.obj0, &fixture.obj0);
+    fixture.VerifyRoot(fixture.obj0);
 }
-
-
 
 // zForwarding.inline.hpp:116-119 / zVerify.cpp:601: installing a forwarding
 // must leave the selected source object's start bit visible to iteration.
@@ -155,30 +150,43 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
 // zVerify.cpp:131-138 distinguishes raw null from metadata-bearing null.
 GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
 {
+    if (!ZVerifyObjects) {
+        GC_EXPECT_EQ(setenv("ZVerifyObjects", "1", 1), 0);
+        RunInOtherVm("ZVerify.RawNullRequiresYoungMarkComplete");
+        return;
+    }
     GcVerifyFixture fixture;
+    fixture.region0->reset(PageAge::old);
     auto& cycle = Heap::GetHeap().GetZGeneration(Generation::Young);
     cycle.PublishPhase(ZGenerationPhase::Mark);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
     ExpectSceneAbort("Raw null requires young mark complete", [&] {
-        ZVerify::Oop(fixture.obj0, field, false);
+        fixture.VerifyObject(fixture.obj0, false);
     });
     // Weak-inclusive nulls have no raw-null restriction in zVerify.
-    ZVerify::Oop(fixture.obj0, field, true);
+    fixture.VerifyObject(fixture.obj0, true);
     field.StoreColoured(to_zpointer(::g_cjStoreGoodMask));
-    ZVerify::Oop(fixture.obj0, field, false);
+    fixture.VerifyObject(fixture.obj0, false);
 }
 
 GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
 {
+    if (!ZVerifyObjects) {
+        GC_EXPECT_EQ(setenv("ZVerifyObjects", "1", 1), 0);
+        RunInOtherVm("ZVerify.RawNullRequiresAllocatingHolder");
+        return;
+    }
     GcVerifyFixture fixture;
+    fixture.region0->reset(PageAge::old);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
     auto& cycle = Heap::GetHeap().GetZGeneration(Generation::Young);
     cycle.PublishPhase(ZGenerationPhase::MarkComplete);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
     // A page from a previous owner cycle is relocatable.
     ExpectSceneAbort("Raw null requires allocating holder", [&] {
-        ZVerify::Oop(fixture.obj0, field, false);
+        fixture.VerifyObject(fixture.obj0, false);
     });
     // Reset establishes a new allocating page, independent of object offsets.
     fixture.region0->ResetPageSequence();
@@ -187,5 +195,31 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
     fixture.region0->SetRegionAllocPtr(next + 64);
     RefField<>& freshField = HeapSlotAt<>(next + TYPEINFO_PTR_SIZE);
     freshField.StoreColoured(zpointer::null);
-    ZVerify::Oop(fresh, freshField, false);
+    fixture.VerifyObject(fresh, false);
+}
+
+// Enter through the real collector request and VM operation. The invalid root
+// is installed before collection; the test never calls the verifier itself.
+GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsUnallocatedRootBeforeMark)
+{
+    if (!ZVerifyRoots) {
+        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
+        RunInOtherVm("ZVerify.RuntimeRejectsUnallocatedRootBeforeMark");
+        return;
+    }
+    ExpectSceneAbort("Bad object", [&] {
+        RuntimeParam param{};
+        param.coParam.processorNum = 1;
+        param.heapParam.heapSize = 32 * 1024;
+        if (InitCJRuntime(&param) != E_OK) { _exit(121); }
+        auto& heap = Heap::GetHeap();
+        const MAddress bad = heap.GetAllocator().GetSpaceEndAddress() - sizeof(void*);
+        // Existence qualification precedes the target check and has a distinct rc.
+        if (Heap::is_in(bad)) { _exit(122); }
+        NativeSlot* root = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
+        if (root == nullptr) { _exit(123); }
+        root->StoreColoured(ZAddress::store_good(static_cast<zaddress>(bad)));
+        std::fprintf(stderr, "VERIFY_RUNTIME_REQUEST root=%p address=%#zx\n", root, bad);
+        heap.RequestGC(GC_REASON_USER, false);
+    });
 }

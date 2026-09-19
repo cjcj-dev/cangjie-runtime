@@ -54,84 +54,6 @@ public:
     }
     void CommitRawPointerRegions();
 
-    // h3seed2: young→young write dirties the *holder object* (not the field slot).
-    // Minor root enum merges these into the product work stack so FYS closure reaches
-    // ArrayList/HashMap containers without recording every y2y field in remset.
-    // Dedup per mutator: unique objects, not per-field writes (y2yN is millions).
-    void PushY2yDirtyHolder(BaseObject* obj)
-    {
-        if (obj != nullptr) {
-            std::lock_guard<std::mutex> lock(y2yDirtyLock);
-            y2yDirtyHolders.insert(obj);
-        }
-    }
-
-    template<class WorkStack>
-    inline void MergeY2yDirtyHolders(WorkStack& workStack)
-    {
-        decltype(y2yDirtyHolders) pending;
-        {
-            std::lock_guard<std::mutex> lock(y2yDirtyLock);
-            pending.swap(y2yDirtyHolders);
-        }
-        for (BaseObject* obj : pending) {
-            PushDirtyHolder(workStack, obj);
-        }
-    }
-
-    // Mutator-side publication of a dirty holder (ZMark::mark_object with
-    // gc_thread = false, zMark.inline.hpp:82): mark + inc_live + follow.
-    static void PushDirtyHolder(MarkStack<MarkStackEntry>& workStack, BaseObject* obj)
-    {
-        workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, true, false));
-    }
-
-    template<class Container>
-    static void PushDirtyHolder(Container& container, BaseObject* obj)
-    {
-        container.push_back(obj);
-    }
-
-    size_t Y2yDirtyHolderCount() const
-    {
-        std::lock_guard<std::mutex> lock(y2yDirtyLock);
-        return y2yDirtyHolders.size();
-    }
-
-    // A compiler barrier may know that the destination is a heap slot without
-    // carrying a usable holder object.  Young slots are deliberately absent
-    // from the remembered set, so retain the exact slot as mark work instead.
-    // The young-mark owner consumes this list before relocation starts and
-    // resolves the current target from the product HeapSlot.
-    void PushY2yDirtySlot(MAddress slot)
-    {
-        if (slot != 0) {
-            std::lock_guard<std::mutex> lock(y2yDirtyLock);
-            y2yDirtySlots.insert(slot);
-        }
-    }
-
-    template<class Visitor>
-    inline void MergeY2yDirtySlots(Visitor&& visitor)
-    {
-        decltype(y2yDirtySlots) pending;
-        {
-            std::lock_guard<std::mutex> lock(y2yDirtyLock);
-            pending.swap(y2yDirtySlots);
-        }
-        for (MAddress slot : pending) {
-            visitor(slot);
-        }
-    }
-
-    size_t Y2yDirtySlotCount() const
-    {
-        std::lock_guard<std::mutex> lock(y2yDirtyLock);
-        return y2yDirtySlots.size();
-    }
-
-
-
     void FlushRegion();
     void RetireTLAB(bool gcWaste);
 
@@ -161,11 +83,7 @@ private:
     // allocation context is responsible to notify collector when these objects are safe to be collected.
     std::vector<ZPage*> tlRawPointerRegions;
     std::vector<ZPage*> tlLargeRawPointerRegions;
-    // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
-    mutable std::mutex y2yDirtyLock;
-    std::unordered_set<BaseObject*> y2yDirtyHolders;
-    // Holder-independent peer for compiler ABI calls that carry only a heap slot.
-    std::unordered_set<MAddress> y2yDirtySlots;
+
 };
 } // namespace MapleRuntime
 #endif // MRT_ALLOC_BUFFER_H

@@ -96,7 +96,6 @@ public:
     static bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
 
     static bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
-    static void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls);
     static bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);

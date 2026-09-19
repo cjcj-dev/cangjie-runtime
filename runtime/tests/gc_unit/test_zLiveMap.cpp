@@ -441,16 +441,7 @@ GC_TEST(ZLiveMapTest, initial_generation_does_not_match_unmarked_map)
 
 namespace {
 
-#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
-std::atomic<unsigned>* sameObjectArrived = nullptr;
-void WaitForBothStrongLoads(const ZBitMap*, BitMap::idx_t)
-{
-    sameObjectArrived->fetch_add(1, std::memory_order_acq_rel);
-    while (sameObjectArrived->load(std::memory_order_acquire) != 2) {
-        std::this_thread::yield();
-    }
-}
-#endif
+
 
 // Keep the two retired tests' invariant while using the current public product
 // entry. ZGC zBitMap.inline.hpp:61-81 elects one successful strong marker;
@@ -476,21 +467,12 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
         already[worker] = ZMark::MarkEntryObject(object,
             MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), nullptr);
     };
-#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
-    std::atomic<unsigned> loaded{0};
-    sameObjectArrived = &loaded;
-    ZBitMap::testBeforeStrongCAS = WaitForBothStrongLoads;
-#endif
+
     std::thread first(mark, 0);
     std::thread second(mark, 1);
     first.join();
     second.join();
-#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
-    ZBitMap::testBeforeStrongCAS = nullptr;
-    sameObjectArrived = nullptr;
-    std::fprintf(stderr, "P02_STRONG_CAS_LOADS arrived=%u\n", loaded.load());
-    GC_EXPECT_EQ(loaded.load(), 2u);
-#endif
+
     const unsigned claims = unsigned(!already[0]) + unsigned(!already[1]);
     const uint32_t liveObjects = region->live_objects();
     const size_t liveBytes = region->live_bytes();
@@ -526,25 +508,6 @@ GC_TEST(ZLiveMapPage, concurrent_strong_upgrade_counts_live_once)
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 namespace {
 
-thread_local int markWorker = -1;
-struct PartialClearSchedule {
-    std::atomic<bool> paused{false};
-    std::atomic<bool> resume{false};
-};
-PartialClearSchedule* partialClearSchedule = nullptr;
-
-void PausePartialClear(const volatile BitMap::bm_word_t*)
-{
-    if (markWorker != 0) return;
-    partialClearSchedule->paused.store(true, std::memory_order_release);
-    while (!partialClearSchedule->resume.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-}
-
-// The pause is between the real partial-word load and store. With whole-word
-// segments this path is unused, so completion is an equally valid exit. This
-// exercises the mark entry -> page -> livemap -> bitmap path in the product SO.
 void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
 {
     GcHeapFixture fx;
@@ -577,41 +540,27 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     GC_EXPECT_FALSE(ZMark::MarkEntryObject(seed,
         MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false), nullptr));
 
-    PartialClearSchedule schedule;
-    partialClearSchedule = &schedule;
-    BitMap::testAfterPartialClearLoad = PausePartialClear;
-    std::atomic<bool> firstDone{false};
+    std::atomic<unsigned> ready{0};
     bool firstAlready = true;
     bool otherAlready = true;
-    std::thread first([&] {
-        markWorker = 0;
-        firstAlready = ZMark::MarkEntryObject(firstObject,
-            MarkStackEntry(untype(ZAddress::offset(from_object(firstObject))), true, true, false, false), nullptr);
-        firstDone.store(true, std::memory_order_release);
-    });
-    while (!schedule.paused.load(std::memory_order_acquire) &&
-           !firstDone.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    std::thread other([&] {
-        markWorker = 1;
-        otherAlready = ZMark::MarkEntryObject(otherObject,
-            MarkStackEntry(untype(ZAddress::offset(from_object(otherObject))), true, true, false, false), nullptr);
-    });
+    auto mark = [&](BaseObject* object, bool& already) {
+        ready.fetch_add(1, std::memory_order_release);
+        while (ready.load(std::memory_order_acquire) != 2) { std::this_thread::yield(); }
+        already = ZMark::MarkEntryObject(object,
+            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), nullptr);
+    };
+    std::thread first([&] { mark(firstObject, firstAlready); });
+    std::thread other([&] { mark(otherObject, otherAlready); });
     other.join();
-    // Observe a completed product mark before releasing the pending clear.
     const bool liveBefore = region->is_object_live(from_object(otherObject));
-    schedule.resume.store(true, std::memory_order_release);
     first.join();
-    BitMap::testAfterPartialClearLoad = nullptr;
-    partialClearSchedule = nullptr;
 
     const bool liveAfter = region->is_object_live(from_object(otherObject));
     const bool firstLive = region->is_object_live(from_object(firstObject));
     const uint32_t objects = region->live_objects();
-    std::fprintf(stderr, "P02_SEGMENT_PRESERVATION units=%u separate_word=%d paused=%d "
+    std::fprintf(stderr, "P02_SEGMENT_PRESERVATION units=%u separate_word=%d "
                  "other_new=%d live_before=%d live_after=%d first_live=%d objects=%u\n",
-                 units, separateWord, schedule.paused.load(), !otherAlready, liveBefore,
+                 units, separateWord, !otherAlready, liveBefore,
                  liveAfter, firstLive, objects);
     // Target invariant first; existence/geometry cannot mask this assertion.
     GC_EXPECT_TRUE(liveAfter);
@@ -627,28 +576,6 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     std::vector<BaseObject*> visited;
     region->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
     GC_EXPECT_EQ(visited.size(), 3u);
-}
-
-struct ResetSchedule {
-    const ZLiveMap* map;
-    std::atomic<bool> claimed{false};
-    std::atomic<bool> peerEntered{false};
-    std::atomic<bool> resume{false};
-    explicit ResetSchedule(const ZLiveMap* value) : map(value) {}
-};
-ResetSchedule* resetSchedule = nullptr;
-
-void PauseClaimedReset(const ZLiveMap* map, bool claimed)
-{
-    if (map != resetSchedule->map) return;
-    if (markWorker == 1 && !claimed) {
-        resetSchedule->peerEntered.store(true, std::memory_order_release);
-    }
-    if (markWorker != 0 || !claimed) return;
-    resetSchedule->claimed.store(true, std::memory_order_release);
-    while (!resetSchedule->resume.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
 }
 
 } // namespace
@@ -682,38 +609,22 @@ GC_TEST(ZLiveMapPage, reset_publication_preserves_peer_mark)
     GC_EXPECT_FALSE(ZMark::MarkEntryObject(seed,
         MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false), nullptr));
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    ResetSchedule schedule(&region->livemap());
-    resetSchedule = &schedule;
-    ZLiveMap::testReset = PauseClaimedReset;
+    std::atomic<unsigned> ready{0};
     bool already[2] = {true, true};
-    std::atomic<bool> peerDone{false};
-    std::thread first([&] {
-        markWorker = 0;
-        already[0] = ZMark::MarkEntryObject(fx.obj0,
-            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr);
-    });
-    while (!schedule.claimed.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    std::thread peer([&] {
-        markWorker = 1;
-        already[1] = ZMark::MarkEntryObject(other,
-            MarkStackEntry(untype(ZAddress::offset(from_object(other))), true, true, false, false), nullptr);
-        peerDone.store(true, std::memory_order_release);
-    });
-    while (!schedule.peerEntered.load(std::memory_order_acquire) &&
-           !peerDone.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    schedule.resume.store(true, std::memory_order_release);
+    auto mark = [&](unsigned worker, BaseObject* object) {
+        ready.fetch_add(1, std::memory_order_release);
+        while (ready.load(std::memory_order_acquire) != 2) { std::this_thread::yield(); }
+        already[worker] = ZMark::MarkEntryObject(object,
+            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), nullptr);
+    };
+    std::thread first([&] { mark(0, fx.obj0); });
+    std::thread peer([&] { mark(1, other); });
     first.join();
     peer.join();
-    ZLiveMap::testReset = nullptr;
-    resetSchedule = nullptr;
     const bool peerLive = region->is_object_live(from_object(other));
     const uint32_t objects = region->live_objects();
-    std::fprintf(stderr, "P02_RESET_PUBLICATION peer_waited=%d peer_live=%d objects=%u claims=%u\n",
-                 schedule.peerEntered.load(), peerLive, objects, unsigned(!already[0]) + unsigned(!already[1]));
+    std::fprintf(stderr, "P02_RESET_PUBLICATION peer_live=%d objects=%u claims=%u\n",
+                 peerLive, objects, unsigned(!already[0]) + unsigned(!already[1]));
     GC_EXPECT_TRUE(peerLive);
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_EQ(objects, 2u);

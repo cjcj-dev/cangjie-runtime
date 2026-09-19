@@ -50,7 +50,6 @@ public:
         }
     }
     Iterator& iter() { return iter_; }
-    bool CompletedForTest() const { return completed; }
 };
 
 class OopStorageSetIteratorStrong {
@@ -72,7 +71,6 @@ public:
         : OopStorageSetIteratorWeak(workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
     void report_num_dead();
-    size_t NumDeadForTest() const { return numDead; }
 private:
     std::array<OopStorage::ParState<true>, 3> states;
     ZGenerationIdOptional generation;

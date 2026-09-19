@@ -22,6 +22,7 @@ class ZDriverMinor;
 class ZStat;
 
 class ZCollectedHeap {
+    friend class ZCollectedHeapTest;
 public:
     static ZCollectedHeap* heap();
     ZCollectedHeap();

@@ -55,6 +55,7 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData);
 using MutatorVisitor = std::function<void(Mutator&)>;
 
 class MutatorManager {
+    friend class MutatorManagerTest;
     friend class ZMark;
 public:
     MutatorManager() {}
@@ -147,7 +148,6 @@ public:
     bool AcknowledgeMarkFlushForCurrentThread();
     void VisitMarkingThreads(const std::function<void(const ThreadGCData*)>& visitor);
     void VisitStoreBarrierBuffers(const std::function<void(MAddress)>& visitor);
-    bool StoreBarrierBufferContains(MAddress slot);
     void RegisterMarkFlushThread(ThreadLocalData* tls);
     void UnregisterMarkFlushThread(ThreadLocalData* tls);
     bool TlsHasMarkFlushPending(ThreadLocalData* tls);

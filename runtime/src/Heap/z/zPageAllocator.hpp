@@ -157,7 +157,6 @@ private:
 
 } // namespace MapleRuntime
 
-#include "Heap/Allocator/AllocationStallQueue.h"
 #endif // MRT_ALLOCATION_STALL_QUEUE_H
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -545,7 +544,7 @@ public:
                  inPlaceMediumCount.load(std::memory_order_relaxed) };
     }
     // zPageAllocator.cpp:1362 stats field: currently stalled mutators. Host
-    // difference: the stall queue only counts under MRT_ALLOCATION_STALL_OBSERVE.
+    // difference: the current allocation adapter has no stalled-mutator census (#727).
     size_t AllocationStallsNow() const
     {
         return 0;
@@ -774,9 +773,6 @@ public:
     void ReleaseMarkQuarantine();
 
 
-    // Probe-only: visit every region on managed lists with its list name (tag-reuse scan).
-    template <typename F>
-    void VisitAllManagedRegionsForProbe(F&& visitor);
 
 private:
     // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the

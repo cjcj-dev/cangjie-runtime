@@ -25,10 +25,47 @@
 #include "Loader/CjFileLoader/CjFileLoader.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "Loader/PackageInit.h"
-#include "Loader/PackageInitTest.h"
+#include "loader_access_test.hpp"
 #include "LoaderManager.h"
 #include "schedule.h"
 #include "waitqueue.h"
+
+// The test executable replaces the external platform service, not any runtime
+// function. Product UnloadLibrary still owns preflight, STW and rollback.
+namespace {
+std::atomic<void*> platformHandle{nullptr};
+std::atomic<bool> platformPause{false}, platformEntered{false}, platformRelease{false};
+std::atomic<bool> platformStw{false}, platformAdmission{false}, platformFail{false};
+std::atomic<bool> directEntered{false}, directRelease{false};
+void HoldDirectFini() {
+    directEntered.store(true, std::memory_order_release);
+    while (!directRelease.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+}
+void ArmPlatform(void* handle) {
+    platformHandle.store(handle, std::memory_order_release);
+    platformEntered.store(false);
+    platformRelease.store(false);
+    platformPause.store(true, std::memory_order_release);
+}
+}
+extern "C" int dlclose(void* handle) noexcept
+{
+    using Close = int (*)(void*);
+    static Close realClose = reinterpret_cast<Close>(dlsym(RTLD_NEXT, "dlclose"));
+    if (realClose == nullptr) { return -1; }
+    if (platformFail.exchange(false, std::memory_order_acq_rel)) { return -1; }
+    if (platformPause.load(std::memory_order_acquire) && handle == platformHandle.load(std::memory_order_acquire)) {
+        platformStw.store(MapleRuntime::MutatorManager::Instance().WorldStopped());
+        bool admitted = false;
+        std::thread probe([&] { admitted = MapleRuntime::ElfUnloadQuiescenceTest::TrySharedAdmission(); });
+        probe.join();
+        platformAdmission.store(!admitted);
+        platformEntered.store(true, std::memory_order_release);
+        while (!platformRelease.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        platformPause.store(false, std::memory_order_release);
+    }
+    return realClose(handle);
+}
 
 using namespace MapleRuntime;
 namespace MapleRuntime {
@@ -638,10 +675,10 @@ GC_OTHER_VM_TEST(PackageInit, LibInitBodyDoesNotHoldGlobalReader)
         removed.store(true, std::memory_order_release);
     });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!ElfUnloadQuiescence::IsUnloadPendingForTesting() && std::chrono::steady_clock::now() < deadline) {
+    while (!ElfUnloadQuiescenceTest::UnloadPending() && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
-    Target("unrelated-unload-reached-drain", ElfUnloadQuiescence::IsUnloadPendingForTesting());
+    Target("unrelated-unload-reached-drain", ElfUnloadQuiescenceTest::UnloadPending());
     control.finish.store(true, std::memory_order_release);
     WaitqueueWakeAll(&control.release, nullptr, nullptr);
     reader.reset();
@@ -654,43 +691,7 @@ GC_OTHER_VM_TEST(PackageInit, LibInitBodyDoesNotHoldGlobalReader)
     WaitqueueDelete(&control.release);
 }
 #endif
-#ifdef MRT_TESTABLE_INTERNALS
-GC_OTHER_VM_TEST(PackageInit, CompletePauseUsesLogicalWaitAndExactIdentity)
-{
-    Init();
-    Target("complete-pause-arm", MRT_PackageInitArmCompletePause(P(), U(), 0));
-    std::atomic<bool> unrelatedDone { false };
-    Start([](void* argument) {
-        void* token = nullptr;
-        Target("pause-control-execute", Begin(P(), V(), 0, &token) == Code(Result::Execute));
-        MCC_PackageInitComplete(token);
-        static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
-    }, &unrelatedDone);
-    Target("pause-control-unaffected", Await(unrelatedDone) && !MRT_PackageInitCompletePauseReached());
-    Completion c;
-    c.finish.store(true, std::memory_order_release);
-    Start(Owner, &c);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!MRT_PackageInitCompletePauseReached() && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::yield();
-    }
-    Target("product-complete-reached-pause", MRT_PackageInitCompletePauseReached());
-    Start(Waiter, &c);
-    Target("pause-waiter-started", Await(c.waiterStarted));
-    const auto waiterDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!MRT_PackageInitHasWaitingCaller(P(), U(), 0) && !c.waiterDone.load(std::memory_order_acquire) &&
-           std::chrono::steady_clock::now() < waiterDeadline) { std::this_thread::yield(); }
-    Target("second-caller-in-product-wait-graph", MRT_PackageInitHasWaitingCaller(P(), U(), 0) &&
-           !MRT_PackageInitHasWaitingCaller(P(), V(), 0) && !MRT_PackageInitHasWaitingCaller(P(), U(), 1));
-    Start(Witness, &c);
-    Target("complete-pause-cooperates-with-gc", Await(c.witnessDone));
-    MRT_PackageInitReleaseCompletePause();
-    Target("complete-pause-release", Await(c.waiterDone) && c.waiterResult == Code(Result::Ready));
-    Target("product-wait-graph-cleared", !MRT_PackageInitHasWaitingCaller(P(), U(), 0));
-    Target("runtime-finish", FiniCJRuntime() == E_OK);
-    WaitqueueDelete(&c.release);
-}
-#endif
+
 
 namespace {
 void CheckTokenMisuse(bool nonOwner)
@@ -847,8 +848,10 @@ GC_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
     loader->RegisterLoadFile(fileU->GetFileMetaAddr());
     const Uptr uMeta = fileU->GetFileMetaAddr();
     armU([]() {});
-    ElfUnloadQuiescence::EnableDirectPreflightPauseForTesting();
-    ElfUnloadQuiescence::EnablePublicPlatformPauseForTesting();
+    directEntered.store(false);
+    directRelease.store(false);
+    armA(HoldDirectFini);
+    ArmPlatform(CJFileLoaderTest::Handle(*loader, uPath.c_str()));
     std::atomic<bool> aClosed { false };
     std::atomic<bool> uClosed { false };
     std::thread closerA([&]() {
@@ -856,26 +859,26 @@ GC_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
         aClosed.store(true, std::memory_order_release);
     });
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!ElfUnloadQuiescence::DirectPreflightPausedForTesting() &&
+    while (!directEntered.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < until) {
         std::this_thread::yield();
     }
-    Target("b0-direct-preflight-entered", ElfUnloadQuiescence::DirectPreflightPausedForTesting());
+    Target("b0-direct-preflight-entered", directEntered.load(std::memory_order_acquire));
     std::thread closerU([&]() {
         Target("b0-u-public-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
         uClosed.store(true, std::memory_order_release);
     });
-    while (!ElfUnloadQuiescence::PublicPlatformPausedForTesting() &&
+    while (!platformEntered.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < until) {
         std::this_thread::yield();
     }
-    Target("b0-public-platform-boundary", ElfUnloadQuiescence::PublicPlatformPausedForTesting());
+    Target("b0-public-platform-boundary", platformEntered.load(std::memory_order_acquire));
     Target("b0-u-closing", ElfUnloadQuiescence::IsImageClosing(uMeta));
     Target("b0-public-platform-without-stw",
-           !ElfUnloadQuiescence::PublicPlatformWaitHoldsStwForTesting() &&
-           !ElfUnloadQuiescence::PublicPlatformWaitHoldsAdmissionForTesting());
-    ElfUnloadQuiescence::ReleasePublicPlatformPauseForTesting();
-    ElfUnloadQuiescence::ReleaseDirectPreflightPauseForTesting();
+           !platformStw.load() &&
+           !platformAdmission.load());
+    platformRelease.store(true, std::memory_order_release);
+    directRelease.store(true, std::memory_order_release);
     Target("b0-a-completed", Await(aClosed));
     Target("b0-u-completed", Await(uClosed));
     closerA.join();
@@ -931,7 +934,7 @@ GC_OTHER_VM_TEST(PackageInit, PublicUnloadAllowsPendingOwnerAndIdleU)
         c.done.store(true, std::memory_order_release);
     }, &context);
     Target("b1-owner-started", Await(context.c.ownerStarted));
-    ElfUnloadQuiescence::EnablePublicPlatformPauseForTesting();
+    ArmPlatform(CJFileLoaderTest::Handle(*loader, uPath.c_str()));
     std::thread closerA([&]() {
         Target("b1-a-close", dlclose(imageA) == 0);
         context.closed.store(true, std::memory_order_release);
@@ -942,14 +945,14 @@ GC_OTHER_VM_TEST(PackageInit, PublicUnloadAllowsPendingOwnerAndIdleU)
         context.publicDone.store(true, std::memory_order_release);
     });
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!ElfUnloadQuiescence::PublicPlatformPausedForTesting() &&
+    while (!platformEntered.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < until) {
         std::this_thread::yield();
     }
     Target("b1-public-platform-without-stw",
-           ElfUnloadQuiescence::PublicPlatformPausedForTesting() &&
-           !ElfUnloadQuiescence::PublicPlatformWaitHoldsStwForTesting());
-    ElfUnloadQuiescence::ReleasePublicPlatformPauseForTesting();
+           platformEntered.load(std::memory_order_acquire) &&
+           !platformStw.load());
+    platformRelease.store(true, std::memory_order_release);
     context.c.finish.store(true, std::memory_order_release);
     WaitqueueWakeAll(&context.c.release, nullptr, nullptr);
     Target("b1-owner-done", Await(context.done));
@@ -975,21 +978,21 @@ GC_OTHER_VM_TEST(PackageInit, DuplicatePublicCloseIsBusy)
     loader->AddLoadedFiles(fileU);
     loader->RegisterLoadFile(fileU->GetFileMetaAddr());
     armU([]() {});
-    ElfUnloadQuiescence::EnablePublicPlatformPauseForTesting();
+    ArmPlatform(CJFileLoaderTest::Handle(*loader, uPath.c_str()));
     std::atomic<int> firstRc { 1 };
     std::atomic<int> secondRc { 0 };
     std::thread first([&]() {
         firstRc.store(UnloadCJLibrary(uPath.c_str()), std::memory_order_release);
     });
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!ElfUnloadQuiescence::PublicPlatformPausedForTesting() &&
+    while (!platformEntered.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < until) {
         std::this_thread::yield();
     }
-    Target("dup-first-reserved", ElfUnloadQuiescence::PublicPlatformPausedForTesting());
+    Target("dup-first-reserved", platformEntered.load(std::memory_order_acquire));
     secondRc.store(UnloadCJLibrary(uPath.c_str()), std::memory_order_release);
     Target("dup-second-busy", secondRc.load(std::memory_order_acquire) != E_OK);
-    ElfUnloadQuiescence::ReleasePublicPlatformPauseForTesting();
+    platformRelease.store(true, std::memory_order_release);
     first.join();
     Target("dup-first-ok", firstRc.load(std::memory_order_acquire) == E_OK);
     Target("runtime-finish", FiniCJRuntime() == E_OK);
@@ -1009,11 +1012,11 @@ GC_OTHER_VM_TEST(PackageInit, PlatformUnloadFailureRollsBack)
     loader->AddLoadedFiles(fileU);
     loader->RegisterLoadFile(fileU->GetFileMetaAddr());
     armU([]() {});
-    ElfUnloadQuiescence::FailNextPlatformUnloadForTesting(true);
+    platformFail.store(true, std::memory_order_release);
     Target("fail-injected-close", UnloadCJLibrary(uPath.c_str()) != E_OK);
-    Target("fail-handle-retained", loader->GetLibraryHandleForTesting(uPath.c_str()) != nullptr);
+    Target("fail-handle-retained", CJFileLoaderTest::Handle(*loader, uPath.c_str()) != nullptr);
     Target("fail-retry-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
-    Target("fail-handle-cleared", loader->GetLibraryHandleForTesting(uPath.c_str()) == nullptr);
+    Target("fail-handle-cleared", CJFileLoaderTest::Handle(*loader, uPath.c_str()) == nullptr);
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
 GC_TEST(PackageInit, PublicUnloadWithoutRuntimeInitErasesHandler)
@@ -1021,9 +1024,9 @@ GC_TEST(PackageInit, PublicUnloadWithoutRuntimeInitErasesHandler)
     const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
     auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
     Target("uninit-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
-    Target("uninit-handle-present", loader->GetLibraryHandleForTesting(uPath.c_str()) != nullptr);
+    Target("uninit-handle-present", CJFileLoaderTest::Handle(*loader, uPath.c_str()) != nullptr);
     Target("uninit-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
-    Target("uninit-handle-erased", loader->GetLibraryHandleForTesting(uPath.c_str()) == nullptr);
+    Target("uninit-handle-erased", CJFileLoaderTest::Handle(*loader, uPath.c_str()) == nullptr);
 }
 #endif
 GC_TEST(PackageInit, UnattachedNativeUnavailable)

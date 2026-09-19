@@ -1,7 +1,9 @@
+#include "marking_smr_test.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "gc_worker_fixture.hpp"
+#include "gc_verify_fixture.hpp"
 #include <csignal>
 #include <cstdlib>
 #include <limits>
@@ -32,7 +34,7 @@ GC_TEST(MarkingStacks, PopulationCountsEntriesAndPublishedChunks)
     MarkStripeStack* published = stripes.At(2).StealStack(smr, 0);
     GC_EXPECT_TRUE(published != nullptr);
     MarkStripeStack::Destroy(published);
-    MarkingSMRTestAccess::reclaim(smr);
+    MarkingSMRTest::reclaim(smr);
     GC_EXPECT_EQ(stripes.Population(), 0u);
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), std::numeric_limits<size_t>::max());
 }
@@ -46,7 +48,12 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
         RunInOtherVm("MarkingStacks.RejectsPublishedStackAndAcceptsDrainedStack");
         return;
     }
-    MarkStripeSet stripes(4);
+    GcVerifyFixture fixture;
+    auto& generation = Heap::GetHeap().old();
+    generation.InitializeWorkers(4);
+    ZMark& mark = generation.Mark();
+    mark.BindWorkers(generation.Workers());
+    MarkStripeSet& stripes = mark.Stripes();
     MarkThreadLocalStacks local(4);
     local.Push(stripes, 1, MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
     GC_EXPECT_TRUE(local.Flush(stripes, true));
@@ -55,7 +62,7 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
         signal(SIGABRT, SIG_DFL);
-        MarkingStacks::VerifyEmpty(stripes.Population());
+        mark.Start();
         _exit(0);
     }
     int status = 0;
@@ -67,7 +74,7 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
     MarkStripeStack* stack = stripes.At(1).StealStack(smr, 0);
     GC_EXPECT_TRUE(stack != nullptr);
     MarkStripeStack::Destroy(stack);
-    MarkingSMRTestAccess::reclaim(smr);
-    MarkingStacks::VerifyEmpty(stripes.Population());
+    MarkingSMRTest::reclaim(smr);
+    mark.Start();
     GC_EXPECT_EQ(stripes.Population(), 0u);
 }

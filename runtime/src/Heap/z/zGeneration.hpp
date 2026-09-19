@@ -125,7 +125,7 @@ public:
     void SelectReason(GCReason value, uint64_t index = 0);
     // GCStats.reason write counterpart: tests override the reason of an
     // already-active cycle without the !active constraint.
-    MRT_EXPORT void SetReasonForTest(GCReason value) { reason.store(value, std::memory_order_release); }
+    friend class ZGenerationTest;
     ZYoungType YoungType() const { return youngType.load(std::memory_order_acquire); }
     void SetYoungType(ZYoungType type);
     bool IsMajorRoots() const
@@ -228,7 +228,7 @@ public:
     // zGeneration.hpp:199,244-246 — tenuring threshold is young-generation
     // state, selected after select_relocation_set (zGeneration.cpp:250).
     uint32_t tenuring_threshold() { return _tenuring_threshold; }
-    MRT_EXPORT void SetTenuringThresholdForTest(uint32_t value) { _tenuring_threshold = value; }
+    friend class ZGenerationTest;
     void flip_promote(ZPage* from_page, ZPage* to_page);
     void in_place_relocate_promote(ZPage* from_page, ZPage* to_page);
     void register_flip_promoted(const ZArray<ZPage*>& pages);

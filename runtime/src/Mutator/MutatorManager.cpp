@@ -350,13 +350,6 @@ void MutatorManager::VisitStoreBarrierBuffers(const std::function<void(MAddress)
     });
 }
 
-bool MutatorManager::StoreBarrierBufferContains(MAddress slot)
-{
-    bool found = false;
-    VisitStoreBarrierBuffers([&](MAddress p) { found = found || p == slot; });
-    return found;
-}
-
 HandshakeState* MutatorManager::HandshakeStateForTls(ThreadLocalData* tls)
 {
     if (tls == nullptr) {

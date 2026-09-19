@@ -46,9 +46,6 @@
 namespace MapleRuntime {
 static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");
 
-void ReportForwardRaceCounts()
-{
-}
 
 
 

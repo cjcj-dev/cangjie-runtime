@@ -91,26 +91,14 @@ void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisi
     RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
     RootVisitor& visitedRawRootVisitor = rawRootVisitor;
     gMinorRootOrigin = "mutator_stack";
-    size_t concurrentDone = 0;
-    size_t stwFallback = 0;
     VisitStrongPlainRoots(visitedRawRootVisitor, [&](Mutator& mutator) {
         bool watermarkDone =
             stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
         if (watermarkDone) {
-            ++concurrentDone;
             return;
-        }
-        if (stackScanEpoch != 0) {
-            ++stwFallback;
         }
         mutator.VisitMutatorRoots(visitedRawRootVisitor, visitedInvisibleRootVisitor);
     });
-    if (stackScanEpoch != 0) {
-        LOG(RTLOG_ERROR,
-            "[GCV2][stack-scan-fallback] epoch=%llu concurrent_done=%zu stw_fallback=%zu "
-            "stack_scan=required",
-            static_cast<unsigned long long>(stackScanEpoch), concurrentDone, stwFallback);
-    }
     gMinorRootOrigin = "unknown";
 }
 
@@ -527,21 +515,6 @@ bool ZMark::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
     return published;
 }
 
-void ZMark::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young)
-{
-    if (buffer == nullptr) {
-        return;
-    }
-    if (!young) {
-        return;
-    }
-    buffer->MergeY2yDirtyHolders(work);
-    buffer->MergeY2yDirtySlots([&work](MAddress slot) {
-        ZBarrier::MarkBarrierOnYoungOopField(HeapSlotAt<>(slot));
-    });
-}
-
-
 bool ZMark::FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain)
 {
     return domain != nullptr && data.FlushMarkStacks(*domain);
@@ -564,11 +537,7 @@ bool ZMark::FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain)
     if (tls == nullptr || domain == nullptr) {
         return false;
     }
-    WorkStack work;
-    const bool young = domain->Generation() == MarkingStacks::MarkingGeneration::YOUNG;
-    ZMark::DrainAllocBufferMarkProducers(tls->buffer, work, young);
-    const bool published = ZMark::PublishHandshakeMarkWork(work, domain);
-    return ThreadLocal::FlushMarkStacks(tls, *domain) || published;
+    return ThreadLocal::FlushMarkStacks(tls, *domain);
 }
 } // namespace MapleRuntime
 
