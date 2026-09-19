@@ -1729,6 +1729,10 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     ZPage* routeDestination =
         ResetDeliveryUnit(fx, 3);
     GC_EXPECT_TRUE(region != nullptr && routeDestination != nullptr);
+    // ResetDeliveryUnit constructs descriptors only. ZGC zHeap.cpp:257-271
+    // publishes allocated pages before relocation can look up its destination.
+    Heap::alloc_page(region);
+    Heap::alloc_page(routeDestination);
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     const size_t objectSize = dead->GetSize();
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + objectSize);
