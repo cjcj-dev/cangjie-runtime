@@ -397,11 +397,8 @@ void ZRemembered::scan_and_follow(ZMark* mark)
     {
         ZRememberedScanMarkFollowTask task(this, mark);
         ZWorkers* workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers();
-        if (workers != nullptr) {
-            workers->run(&task);
-        } else {
-            task.work();
-        }
+        CHECK_DETAIL(workers != nullptr, "ZRemembered::scan_and_follow requires young workers");
+        workers->run(&task);
         if (mark->PollStop() || !mark->TryTerminateFlush()) {
             return;
         }
