@@ -233,7 +233,7 @@ size_t FreeRegionManager::ReleaseMarkQuarantineToDirty()
 
 // ZPartition::claim_capacity / claim_from_cache_or_increase_capacity,
 // zPageAllocator.cpp:702-762.
-bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
+bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory, ZAllocationFlags flags)
 {
     std::lock_guard<std::mutex> lock(cacheMutex);
     CHECK(num != 0 && num % ZGranuleSize == 0);
@@ -721,8 +721,8 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     const size_t size = request.GetSize();
     const size_t num = size;
     PageMemory& memory = request.Memory();
-    if (!freeRegionManager.ClaimPageMemory(num, memory)) { return false; }
-    pageAllocatorUsed += size;
+    if (!freeRegionManager.ClaimPageMemory(num, memory, request.Flags())) { return false; }
+    pageAllocatorUsed += memory.size;
     TrackUsedPeakLocked();
     return true;
 }
@@ -798,8 +798,9 @@ void RegionManager::PromoteAllRegions()
 }
 
 ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysicalMem,
-                                       bool allowSaferegion, bool clearPayload, PageAge age)
+                                       bool allowSaferegion, bool clearPayload, PageAge age, ZAllocationFlags flags)
 {
+    allowSaferegion = allowSaferegion && !flags.non_blocking();
     size_t size = num;
     if (allowSaferegion) {
         RequestForRegion(size);
@@ -816,7 +817,7 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
 #endif
 
 retry:
-    ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload);
+    ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload, flags);
     bool claimed = false;
     bool requestGc = false;
     {
@@ -830,6 +831,7 @@ retry:
         claimed = StallAllocation(request, requestGc);
     }
     if (claimed) {
+        size = request.Memory().size;
         size_t committedBytes = 0;
         ZPage* region = freeRegionManager.MaterializePageMemory(
             request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedBytes, age);

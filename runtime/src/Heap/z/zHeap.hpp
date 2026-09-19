@@ -41,6 +41,8 @@ extern uintptr_t g_cjHeapRangeCount;
 extern uintptr_t g_cjHeapRangeStart[];
 extern uintptr_t g_cjHeapRangeEnd[];
 }
+#include "Heap/z/zAllocationFlags.hpp"
+
 namespace MapleRuntime {
 template<typename T> class ZArray;
 class ZPageTable;
@@ -187,7 +189,7 @@ public:
     static ZPageTable& page_table();
     static ZPage* alloc_page(size_t num, ZPageType role, bool expectPhysicalMem = false,
                                   bool allowSaferegion = true, bool clearPayload = true,
-                                  PageAge age = PageAge::eden);
+                                  PageAge age = PageAge::eden, ZAllocationFlags flags = {});
     static ZPage* alloc_page(ZPage* page);
     static void free_page(ZPage* page);
     static size_t free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages);

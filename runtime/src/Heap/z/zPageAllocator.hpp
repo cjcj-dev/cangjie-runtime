@@ -22,6 +22,8 @@
 #define MRT_ALLOCATION_STALL_OBSERVE 1
 #endif
 
+#include "Heap/z/zAllocationFlags.hpp"
+
 namespace MapleRuntime {
 
 // ZVirtualMemory represented in heap granules; ownership travels with the
@@ -45,12 +47,13 @@ struct PageMemory {
 // answer is published.
 class ZPageAllocation {
 public:
-    ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear)
-        : size(size), role(role), physical(physical), clear(clear) {}
+    ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear, ZAllocationFlags flags = {})
+        : size(size), role(role), physical(physical), clear(clear), flags(flags) {}
     ZPageAllocation(const ZPageAllocation&) = delete;
     ZPageAllocation& operator=(const ZPageAllocation&) = delete;
 
     size_t GetSize() const { return size; }
+    ZAllocationFlags Flags() const { return flags; }
     uint8_t GetRole() const { return role; }
     bool ExpectsPhysicalMemory() const { return physical; }
     bool ClearsPayload() const { return clear; }
@@ -77,6 +80,7 @@ private:
     const uint8_t role;
     const bool physical;
     const bool clear;
+    const ZAllocationFlags flags;
     PageMemory memory;
     // zPageAllocator.cpp:420-421 ZPageAllocation: ZFuture<bool> _stall_result
     // and the ZListNode that links it on the allocator's stalled list.
@@ -224,7 +228,7 @@ public:
     // here consume the two managers the same way.
     void Initialize(ZVirtualMemoryManager& virtualMemory,
                     ZPhysicalMemoryManager& physicalMemory, size_t maxCapacity);
-    bool ClaimPageMemory(size_t num, PageMemory& memory);
+    bool ClaimPageMemory(size_t num, PageMemory& memory, ZAllocationFlags flags = {});
     bool PreparePageMemory(PageMemory& memory);
 
     // zPageAllocator.cpp:1470-1515 alloc_page_inner: consume the already-owned
@@ -664,7 +668,7 @@ public:
     // take a region with *num* units for allocation
     // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
     ZPage* TakeRegion(size_t num, ZPageType, bool expectPhysicalMem = false,
-                           bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old);
+                           bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old, ZAllocationFlags flags = {});
 
 
     uintptr_t AllocPinned(size_t size);
@@ -849,7 +853,7 @@ private:
 
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
-    ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, bool nonBlocking, bool clearPayload = true);
+    ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, ZAllocationFlags flags, bool clearPayload = true);
     void UndoSharedPage(ZPage* page);
 
     MAddress reservedStart = 0;

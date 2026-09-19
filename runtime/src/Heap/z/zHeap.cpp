@@ -529,12 +529,12 @@ ZPage* Heap::alloc_page(ZPage* page)
 }
 
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
-                             bool clearPayload, PageAge age)
+                             bool clearPayload, PageAge age, ZAllocationFlags flags)
 {
     RegionManager& manager = GetHeap().page_allocator();
     ZPage* page = g_prematerializedPage;
     if (page == nullptr && num > 0) {
-        page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
+        page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age, flags);
     }
     if (page != nullptr) {
         page_table().insert(page);

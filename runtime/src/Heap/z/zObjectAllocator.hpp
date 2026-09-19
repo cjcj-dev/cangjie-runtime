@@ -13,6 +13,8 @@
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageFwd.hpp"
 #include <atomic>
+#include "Heap/z/zAllocationFlags.hpp"
+#include "Heap/z/zPageType.hpp"
 
 namespace MapleRuntime {
 class ZObjectAllocator {
@@ -26,6 +28,15 @@ public:
         ZLock mediumPageAllocLock;
         std::atomic<ZPage*> pinnedPage{nullptr};
 
+        ZPage* alloc_page(ZPageType type, size_t size, ZAllocationFlags flags, bool clearPayload = true);
+        void undo_alloc_page(ZPage* page);
+        uintptr_t alloc_object_in_shared_page(ZPage** shared, ZPageType type, size_t pageSize,
+                                              size_t size, ZAllocationFlags flags);
+        uintptr_t alloc_object_in_medium_page(size_t size, ZAllocationFlags flags);
+        uintptr_t alloc_small_object(size_t size, ZAllocationFlags flags);
+        uintptr_t alloc_medium_object(size_t size, ZAllocationFlags flags);
+        uintptr_t alloc_large_object(size_t size, ZAllocationFlags flags, bool clearPayload);
+        uintptr_t alloc_object(size_t size, ZAllocationFlags flags, bool clearPayload);
         ZPage** shared_small_page_addr();
         ZPage* const* shared_small_page_addr() const;
         ZPage** shared_medium_page_addr();
@@ -45,12 +56,12 @@ private:
 // ZHeuristics::use_per_cpu_shared_small_pages belongs to the allocator package).
 inline ZPage** ZObjectAllocator::PerAge::shared_small_page_addr()
 {
-    return sharedSmallPage.addr();
+    return usePerCpuSharedSmallPages ? sharedSmallPage.addr() : sharedSmallPage.addr(0);
 }
 
 inline ZPage* const* ZObjectAllocator::PerAge::shared_small_page_addr() const
 {
-    return sharedSmallPage.addr();
+    return usePerCpuSharedSmallPages ? sharedSmallPage.addr() : sharedSmallPage.addr(0);
 }
 
 inline ZPage** ZObjectAllocator::PerAge::shared_medium_page_addr()
