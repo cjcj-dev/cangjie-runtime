@@ -25,7 +25,8 @@ class ZStat;
 class ZCollectedHeap {
 public:
     static ZCollectedHeap* heap();
-    ZCollectedHeap();
+    static void create(const HeapParam& param, double garbageThreshold);
+    ZCollectedHeap(const HeapParam& param, double garbageThreshold);
     ~ZCollectedHeap();
     static void stop();
     void initialize_gc_workers();
@@ -47,6 +48,7 @@ public:
 #endif
 
 private:
+    static ZCollectedHeap* _collected_heap;
     ZInitializer _initializer;
     Heap _heap;
     ZDriverMinor* _driver_minor;

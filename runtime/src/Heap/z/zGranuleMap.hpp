@@ -28,7 +28,6 @@ namespace MapleRuntime {
 template <typename T>
 class ZGranuleMap {
 public:
-    ZGranuleMap() : _size(0), _map(nullptr) {}
     explicit ZGranuleMap(size_t max_offset)
         : _size(max_offset >> ZGranuleSizeShift),
           _map(static_cast<T*>(std::calloc(_size, sizeof(T))))
@@ -55,7 +54,6 @@ public:
         return *this;
     }
     ~ZGranuleMap() { std::free(_map); }
-    bool Ready() const { return _map != nullptr; }
 
     T get(zoffset offset) const;
 

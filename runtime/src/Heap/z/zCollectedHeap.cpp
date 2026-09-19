@@ -42,19 +42,25 @@
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
+ZCollectedHeap* ZCollectedHeap::_collected_heap = nullptr;
+
 ZCollectedHeap* ZCollectedHeap::heap()
 {
-    // Universe::initialize_heap creates the collector after VM/platform
-    // initialization (universe.cpp:962-963, zArguments.cpp:243-245).
-    // A DSO constructor here would observe dynamic page-size globals before
-    // their initialization, depending on static archive link order.
-    static ImmortalWrapper<ZCollectedHeap> collected;
-    return &*collected;
+    CHECK(_collected_heap != nullptr);
+    return _collected_heap;
 }
 
-ZCollectedHeap::ZCollectedHeap()
+void ZCollectedHeap::create(const HeapParam& param, double garbageThreshold)
+{
+    // Arguments are finalized by the caller before constructing the allocator,
+    // page table and generations (ZGC zHeap.cpp:60-68).
+    static ImmortalWrapper<ZCollectedHeap> collected(param, garbageThreshold);
+    _collected_heap = &*collected;
+}
+
+ZCollectedHeap::ZCollectedHeap(const HeapParam& param, double garbageThreshold)
     : _initializer(nullptr),
-      _heap(),
+      _heap(param, garbageThreshold),
       _driver_minor(new ZDriverMinor()),
       _driver_major(new ZDriverMajor()),
       _director(new ZDirector()),

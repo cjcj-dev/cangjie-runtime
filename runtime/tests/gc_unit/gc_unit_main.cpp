@@ -16,6 +16,8 @@
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zCPU.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeuristics.hpp"
 
 int main(int argc, char** argv)
 {
@@ -44,6 +46,17 @@ int main(int argc, char** argv)
         }
         (void)setenv("GC_UNIT_FILTER", argv[i] + std::strlen(filterPrefix), 1);
     }
+    MapleRuntime::GcUnit::InitializeStandaloneHeap = [] {
+        using namespace MapleRuntime;
+        if (Heap::heap() == nullptr) {
+            HeapParam params{};
+            params.heapSize = 64 * ZGranuleSize / 1024;
+            params.regionSize = ZGranuleSize / 1024;
+            params.exemptionThreshold = 0.8;
+            ZHeuristics::set_max_heap_size(params.heapSize * 1024);
+            ZCollectedHeap::create(params, 0.5);
+        }
+    };
     const int result = MapleRuntime::GcUnit::RunAll();
     // Stop only an existing heap; listing/filtering must not construct one.
     if (MapleRuntime::Heap::heap() != nullptr) {

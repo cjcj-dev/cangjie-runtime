@@ -34,6 +34,7 @@ struct TestCase {
     const char* name;
     void (*fn)();
     bool otherVm;
+    bool constructsRuntime;
 };
 
 inline std::vector<TestCase>& Registry()
@@ -43,11 +44,15 @@ inline std::vector<TestCase>& Registry()
 }
 
 struct Registrar {
-    Registrar(const char* suite, const char* name, void (*fn)(), bool otherVm = false)
+    Registrar(const char* suite, const char* name, void (*fn)(), bool otherVm = false, bool constructsRuntime = false)
     {
-        Registry().push_back(TestCase{ suite, name, fn, otherVm });
+        Registry().push_back(TestCase{ suite, name, fn, otherVm, constructsRuntime });
     }
 };
+
+// The executable installs the shared standalone heap fixture. Runtime-entry
+// tests construct their own collector through InitCJRuntime instead.
+inline void (*InitializeStandaloneHeap)() = nullptr;
 
 struct AssertFailure : std::exception {
     explicit AssertFailure(std::string m) : msg(std::move(m)) {}
@@ -128,6 +133,16 @@ inline void Fail(const char* file, int line, const char* expr)
 #define GC_OTHER_VM_TEST(suite, name)                                                                                  \
     static void suite##_##name();                                                                                      \
     static ::MapleRuntime::GcUnit::Registrar suite##_##name##_reg(#suite, #name, &suite##_##name, true);               \
+    static void suite##_##name()
+
+#define GC_RUNTIME_OTHER_VM_TEST(suite, name) \
+    static void suite##_##name(); \
+    static ::MapleRuntime::GcUnit::Registrar suite##_##name##_reg(#suite, #name, &suite##_##name, true, true); \
+    static void suite##_##name()
+
+#define GC_RUNTIME_TEST(suite, name) \
+    static void suite##_##name(); \
+    static ::MapleRuntime::GcUnit::Registrar suite##_##name##_reg(#suite, #name, &suite##_##name, false, true); \
     static void suite##_##name()
 
 inline void RunInOtherVm(const std::string& fullName)
@@ -249,6 +264,9 @@ inline int RunAll()
             if (t.otherVm && !directOtherVmChild) {
                 RunInOtherVm(fullName);
             } else {
+                if (!t.constructsRuntime && InitializeStandaloneHeap != nullptr) {
+                    InitializeStandaloneHeap();
+                }
                 t.fn();
             }
             if (otherVmChild == nullptr) {

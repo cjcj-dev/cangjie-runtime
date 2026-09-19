@@ -92,13 +92,7 @@ GC_TEST(ZValue, per_worker_slot_count_follows_conc_gc_threads)
 GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
 {
     ZStat::Initialize();
-    constexpr size_t units = 64;
-    HeapParam params{};
-    params.regionSize = ZGranuleSize / KB;
-    params.heapSize = units * ZGranuleSize / KB;
-    params.exemptionThreshold = 0.8;
     B09RuntimeFixture runtime;
-    Heap::GetHeap().page_allocator().Init(params);
 
     auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::eden);
     GC_EXPECT_EQ(allocator.sharedSmallPage.count(), ZCPU::count());

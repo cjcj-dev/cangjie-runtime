@@ -120,8 +120,8 @@ inline RememberedSet& HeapTestRemset()
 
 inline bool InitFwdTables()
 {
-    generation_forwarding_table(Generation::Young).initialize();
-    generation_forwarding_table(Generation::Old).initialize();
+    generation_forwarding_table(Generation::Young) = ZForwardingTable();
+    generation_forwarding_table(Generation::Old) = ZForwardingTable();
     return true;
 }
 

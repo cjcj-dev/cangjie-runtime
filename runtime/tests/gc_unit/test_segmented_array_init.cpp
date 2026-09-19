@@ -1209,165 +1209,165 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
 } // namespace
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(MarkAllocation, LargeHolderAndNewTargetAreImplicitlyLive)
+GC_RUNTIME_OTHER_VM_TEST(MarkAllocation, LargeHolderAndNewTargetAreImplicitlyLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunMarkAllocationCase, 0), 0);
 }
-GC_OTHER_VM_TEST(MarkAllocation, LargeHolderKeepsRootedExistingTargetLive)
+GC_RUNTIME_OTHER_VM_TEST(MarkAllocation, LargeHolderKeepsRootedExistingTargetLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunMarkAllocationCase, 1), 0);
 }
 #endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
+GC_RUNTIME_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargeYoungClosureCase, 0), 0);
 }
 #endif
 
-GC_OTHER_VM_TEST(P1Mark, PinnedReclaimedSlotIsNotAllocationSource)
+GC_RUNTIME_OTHER_VM_TEST(P1Mark, PinnedReclaimedSlotIsNotAllocationSource)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunPinnedBirthCase, 0), 0);
 }
 
-GC_OTHER_VM_TEST(LargePageGeneration, ManagedAllocationPublishesYoungEden)
+GC_RUNTIME_OTHER_VM_TEST(LargePageGeneration, ManagedAllocationPublishesYoungEden)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePageIdentityCase, 0), 0);
 }
 
-GC_OTHER_VM_TEST(LargePageGeneration, NativeAllocationPublishesYoungEden)
+GC_RUNTIME_OTHER_VM_TEST(LargePageGeneration, NativeAllocationPublishesYoungEden)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePageIdentityCase, 1), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, YieldKeepsInvisibleRootAndPublishesBoundary)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, YieldKeepsInvisibleRootAndPublishesBoundary)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::NONE)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunVisibleArrayGraph, 0, 1, true), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, InvisibleRootIsExcludedFromHeapGraph)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, InvisibleRootIsExcludedFromHeapGraph)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunInvisibleArrayGraph, 0, 1, true), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedFirstInactiveExtentUsesSegmentedInitializer)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, ManagedFirstInactiveExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 static_cast<uintptr_t>(AllocationSource::INACTIVE)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedDirtyExtentUsesSegmentedInitializer)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, ManagedDirtyExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 static_cast<uintptr_t>(AllocationSource::DIRTY)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedReleasedExtentUsesSegmentedInitializer)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, ManagedReleasedExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 static_cast<uintptr_t>(AllocationSource::RELEASED)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedGarbageExtentUsesSegmentedInitializer)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, ManagedGarbageExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 static_cast<uintptr_t>(AllocationSource::GARBAGE)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, NativeFirstInactiveExtentUsesSegmentedInitializer)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, NativeFirstInactiveExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 0x100U | static_cast<uintptr_t>(AllocationSource::INACTIVE)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, NativeDirtyExtentUsesSegmentedInitializer)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, NativeDirtyExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 0x100U | static_cast<uintptr_t>(AllocationSource::DIRTY)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, NativeReleasedExtentUsesSegmentedInitializer)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, NativeReleasedExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 0x100U | static_cast<uintptr_t>(AllocationSource::RELEASED)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, NativeGarbageExtentUsesSegmentedInitializer)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, NativeGarbageExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 0x100U | static_cast<uintptr_t>(AllocationSource::GARBAGE)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::FULL)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlockParallel)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlockParallel)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::FULL), 2), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG), 2), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcWatermarkResidualFallbackIsUnreachable)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, YoungGcWatermarkResidualFallbackIsUnreachable)
 {
     constexpr uintptr_t requireWatermarkDone = 0x100U;
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase,
                                 requireWatermarkDone | static_cast<uintptr_t>(YieldGc::YOUNG)), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSmallReferenceCase, 0), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, NativeSmallReferenceArrayKeepsFastPath)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, NativeSmallReferenceArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSmallReferenceCase, 1), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, LargePrimitiveArrayUsesSegmentedClearing)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, LargePrimitiveArrayUsesSegmentedClearing)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 0), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, NativeLargePrimitiveArrayUsesSegmentedClearing)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, NativeLargePrimitiveArrayUsesSegmentedClearing)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 1), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, TwoGcReferenceInitializationRestartsOnlyOnce)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, TwoGcReferenceInitializationRestartsOnlyOnce)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunTwoGcReferenceCase, 0), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, TwoGcPrimitiveInitializationDoesNotRestart)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, TwoGcPrimitiveInitializationDoesNotRestart)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 2), 0);
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(P1Mark, PinnedPagePublicationAcrossMarkStart)
+GC_RUNTIME_OTHER_VM_TEST(P1Mark, PinnedPagePublicationAcrossMarkStart)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunPinnedPublicationCase, 0), 0);
 }
 
-GC_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
+GC_RUNTIME_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunPinnedMarkStartCase, 0), 0);
 }

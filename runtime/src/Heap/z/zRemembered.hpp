@@ -30,14 +30,14 @@ class ZRemembered {
     friend class ZRemsetTableIterator;
 
 private:
-    ZPageTable* _page_table;
-    const ZForwardingTable* _old_forwarding_table;
-    RegionManager* _page_allocator;
+    ZPageTable* const _page_table;
+    const ZForwardingTable* const _old_forwarding_table;
+    RegionManager* const _page_allocator;
 
     struct FoundOld {
         CHeapBitMap _allocated_bitmap_0;
         CHeapBitMap _allocated_bitmap_1;
-        CHeapBitMap* _bitmaps[2];
+        CHeapBitMap* const _bitmaps[2];
         int _current;
 
         FoundOld();
@@ -79,8 +79,8 @@ class ZRemsetTableIterator {
 private:
     ZRemembered* const _remembered;
     CHeapBitMap* _bm;
-    ZPageTable* _page_table;
-    const ZForwardingTable* _old_forwarding_table;
+    ZPageTable* const _page_table;
+    const ZForwardingTable* const _old_forwarding_table;
     volatile BitMap::idx_t _claimed;
 
 public:

@@ -63,7 +63,6 @@ public:
 
     }
 
-    void Init(const HeapParam&) override;
 
     MAddress Allocate(size_t size, AllocType allocType) override;
 

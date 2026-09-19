@@ -98,7 +98,9 @@ private:
     FILE* file = nullptr;
 };
 
-Heap::Heap() : _young(&_page_table, &_old.forwarding_table(), &_page_allocator)
+Heap::Heap(const HeapParam& param, double garbageThreshold)
+    : _page_allocator(param, garbageThreshold),
+      _young(&_page_table, &_old.forwarding_table(), &_page_allocator)
 {
     _heap = this;
     RunType::InitRunTypeMap();
@@ -127,11 +129,8 @@ bool Heap::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe
     return _allocation_adapter->ForEachObj(visitor, safe);
 }
 
-void Heap::Init(const HeapParam& param)
+void Heap::Init()
 {
-    ZArguments::initialize();
-    ZHeuristics::set_max_heap_size(param.heapSize * 1024);
-    _page_allocator.Init(param);
     // zHeap.cpp:89-90: capacity bounds open both generations' heap accounts.
     // Host difference: HeapParam has no min-heap-size, min reports 0.
     young().StatHeap()->AtInitialize(0, _page_allocator.GetHeapCapacity());
@@ -278,7 +277,8 @@ MAddress Heap::GetSpaceEndAddress() const { return _page_allocator.GetSpaceEndAd
 
 Heap& Heap::GetHeap()
 {
-    return ZCollectedHeap::heap()->collected_heap();
+    CHECK(_heap != nullptr);
+    return *_heap;
 }
 
 ZRemembered& Heap::remembered()

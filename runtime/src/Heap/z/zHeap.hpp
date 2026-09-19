@@ -63,10 +63,10 @@ class Heap {
 public:
     static Heap& GetHeap();
     static Heap* heap() { return _heap; }
-    Heap();
+    Heap(const HeapParam& param, double garbageThreshold);
     ~Heap();
     ZRemembered& remembered();
-    void Init(const HeapParam& vmHeapParam);
+    void Init();
     void Fini();
     bool IsSurvivedObject(const BaseObject*) const;
     bool IsGarbage(const BaseObject* obj) const { return !IsSurvivedObject(obj); }

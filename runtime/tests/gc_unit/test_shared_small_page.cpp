@@ -84,12 +84,7 @@ struct SharedPageFixture {
     {
         // Match CollectorResources::Init before allocation-rate sampling.
         ZStat::Initialize();
-        constexpr size_t units = 64;
-        HeapParam params{};
-        params.regionSize = ZGranuleSize / KB;
-        params.heapSize = units * ZGranuleSize / KB;
-        params.exemptionThreshold = 0.8;
-        manager.Init(params);
+
     }
 };
 

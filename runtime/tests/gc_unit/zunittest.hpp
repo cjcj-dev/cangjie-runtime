@@ -58,13 +58,15 @@ public:
     ZFixtureRememberedScope() : ZFixtureRememberedScope(Heap::GetHeap().page_allocator()) {}
 
     explicit ZFixtureRememberedScope(RegionManager& allocator)
-        : _pages(std::move(Heap::page_table())),
+        : _addressMax(ZAddressOffsetMax),
+          _pages(std::move(Heap::page_table())),
           _young(std::move(generation_forwarding_table(Generation::Young))),
           _old(std::move(generation_forwarding_table(Generation::Old)))
     {
+        ZAddressOffsetMax = uintptr_t(1) << ZAddressOffsetBits;
         Heap::page_table() = ZPageTable();
-        generation_forwarding_table(Generation::Young).initialize();
-        generation_forwarding_table(Generation::Old).initialize();
+        generation_forwarding_table(Generation::Young) = ZForwardingTable();
+        generation_forwarding_table(Generation::Old) = ZForwardingTable();
         _generation.reset(new ZGenerationYoung(&Heap::page_table(),
             &generation_forwarding_table(Generation::Old), &allocator));
     }
@@ -72,12 +74,14 @@ public:
     ~ZFixtureRememberedScope()
     {
         _generation.reset();
+        ZAddressOffsetMax = _addressMax;
         Heap::page_table() = std::move(_pages);
         generation_forwarding_table(Generation::Young) = std::move(_young);
         generation_forwarding_table(Generation::Old) = std::move(_old);
     }
 
 private:
+    size_t _addressMax;
     ZPageTable _pages;
     ZForwardingTable _young;
     ZForwardingTable _old;
