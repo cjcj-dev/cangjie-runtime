@@ -259,11 +259,19 @@ bool ZRemsetTableIterator::next(ZRemsetTableEntry* entry_addr)
             continue;
         }
         ZForwarding* forwarding = nullptr;
-        if (_old_forwarding_table != nullptr && ZGeneration::old() != nullptr &&
-            ZGeneration::old()->is_phase_relocate()) {
-            forwarding = _old_forwarding_table->at(page_index);
+        ZPage* page = nullptr;
+        if (_page_table != nullptr) {
+            // ZGC zRemembered.cpp:428-433: at(page_index) with the same granule
+            // as found_old (start()>>ZGranuleSizeShift). Our page table is
+            // region-granule, so reconstruct the address and get().
+            const MAddress addr = _page_table->map().base() +
+                (static_cast<MAddress>(page_index) << ZGranuleSizeShift);
+            page = _page_table->get(addr);
+            if (_old_forwarding_table != nullptr && ZGeneration::old() != nullptr &&
+                ZGeneration::old()->is_phase_relocate()) {
+                forwarding = _old_forwarding_table->get(addr);
+            }
         }
-        ZPage* page = _page_table != nullptr ? _page_table->at(page_index) : nullptr;
         if (page != nullptr && page->IsYoungRegion()) {
             page = nullptr;
         }
