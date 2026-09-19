@@ -382,8 +382,7 @@ GcHeapFixture& ProductFixture()
     EnsureDeliveryRuntime();
     static GcHeapFixture fixture;
     RelocationReceiptTestAccess::BindCollector(nullptr);
-    static const bool initialized = InitFwdTables(
-        fixture.heapStart, GcHeapFixture::kUnits * ZGranuleSize, ZGranuleSize);
+    static const bool initialized = InitFwdTables();
     // CompactRegion now carries remembered bits with an in-place copy.  This
     // independent product-test process does not run Heap::Init, so initialize
     // the Heap-owned remembered set alongside its forwarding table.

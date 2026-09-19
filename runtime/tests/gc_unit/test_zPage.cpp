@@ -165,7 +165,7 @@ void* SelectRealLivePages(void* context)
         ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(object));
         if (page != previous) {
             starts[result.roots] = reinterpret_cast<uintptr_t>(object);
-            roots[result.roots] = Heap::GetHeap().RegisterExportRoot(object);
+            roots[result.roots] = Heap::GetHeap().RegisterExportRoot(reinterpret_cast<BaseObject*>(object));
             ++result.roots;
             previous = page;
         }

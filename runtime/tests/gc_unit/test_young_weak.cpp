@@ -67,8 +67,7 @@ struct RelocationReceiptTestAccess {
             if (!remembered.IsInitialized()) {
                 remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZGranuleSize);
             }
-            InitFwdTables(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZGranuleSize,
-                          ZGranuleSize);
+            InitFwdTables();
         }
     }
 
