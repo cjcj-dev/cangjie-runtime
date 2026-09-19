@@ -299,6 +299,7 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
             }
         }
         ZPage::Initialize(kUnits, heapStart);
+        BindFixtureRemembered(Heap::GetHeap().page_allocator());
         region0 = ZPage::InitRegion(0, 1, role);
         region1 = ZPage::InitRegion(1, 1, ZPageType::small);
         PublishAllocatedPage(region0);
@@ -425,6 +426,7 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         return marked;
     }
 
+    ZFixtureRememberedScope rememberedScope;
     std::unique_ptr<ZTestHeapMapping> heapMapping;
     void* mapping = nullptr;
     size_t mappedSize = 0;

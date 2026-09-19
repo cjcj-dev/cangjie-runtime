@@ -154,12 +154,7 @@ void ZRemembered::clear_found_old_previous_set()
 void ZRemembered::register_found_old(ZPage* page)
 {
     CHECK(!page->IsYoungRegion());
-    // ZGC constructs ZRemembered with the page table (zRemembered.cpp:385-387).
-    // Bind is Heap::Init. GcHeapFixture replace() can run unbound; do not
-    // allocate found_old bitmaps or index a table we do not own.
-    if (_page_table == nullptr) {
-        return;
-    }
+    CHECK(_page_table != nullptr);
     const auto& map = _page_table->map();
     CHECK(map.Ready());
     zoffset offset;
