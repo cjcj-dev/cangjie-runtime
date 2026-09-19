@@ -130,6 +130,15 @@ void ZCollectedHeap::initialize_gc_workers()
 
 
 
+// ZGC zCollectedHeap.cpp:137-146. Cangjie allocation sizes are bytes.
+uintptr_t ZCollectedHeap::allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize)
+{
+    (void)minSize;
+    const uintptr_t addr = _heap.alloc_tlab(AlignUp(requestedSize, size_t{8}));
+    if (addr != 0) { *actualSize = requestedSize; }
+    return addr;
+}
+
 void ZCollectedHeap::collect(GCReason reason, bool async)
 {
     CHECK(reason < GC_REASON_MAX);

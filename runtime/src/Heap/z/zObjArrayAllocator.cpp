@@ -60,12 +60,17 @@ MArray* ZObjArrayAllocator::initialize()
     // collection; allocation, root publication and clearing stay product-owned.
     const char* gcMode = std::getenv("MRT_GC_UNIT_MANAGED_SEGMENTED");
     const bool requestYoung = gcMode != nullptr && std::strcmp(gcMode, "young") == 0;
-    const bool requestOld = gcMode != nullptr && std::strcmp(gcMode, "full") == 0;
-    bool requestedGc = false;
+    const bool requestOld = gcMode != nullptr && (std::strcmp(gcMode, "full") == 0 || std::strcmp(gcMode, "full2") == 0);
+    const size_t gcRequests = gcMode != nullptr && std::strcmp(gcMode, "full2") == 0 ? 2 : 1;
+    size_t requestedGc = 0;
+    size_t passes = 0;
 #endif
     // ZObjArrayAllocator::initialize (zObjArrayAllocator.cpp:140-200):
     // only the first pass can request a restart. Primitive payloads never do.
     auto initializeMemory = [&]() {
+#if defined(MRT_GC_UNIT_TESTS)
+        ++passes;
+#endif
         size_t segmentIndex = 0;
         for (size_t processed = 0; processed < contentSize; ++segmentIndex) {
             MArray* current = static_cast<MArray*>(mutator->LoadInvisibleRoot());
@@ -82,8 +87,8 @@ MArray* ZObjArrayAllocator::initialize()
                 // The root stays published throughout the whole interval.
                 yield_for_safepoint();
 #if defined(MRT_GC_UNIT_TESTS)
-                if (!requestedGc && (requestYoung || requestOld)) {
-                    requestedGc = true;
+                if (requestedGc < gcRequests && (requestYoung || requestOld)) {
+                    ++requestedGc;
                     ScopedEnterSaferegion testYield(true);
                     MArray* observed = static_cast<MArray*>(mutator->LoadInvisibleRoot());
                     CHECK(observed != nullptr && observed->IsInvisibleObject());
@@ -127,6 +132,15 @@ MArray* ZObjArrayAllocator::initialize()
         CHECK_DETAIL(complete, "array initialization must complete on the second pass");
     }
 
+#if defined(MRT_GC_UNIT_TESTS)
+    if (requestYoung || requestOld) {
+        const size_t expectedPasses = isRefArray ? 2 : 1;
+        std::fprintf(stderr, "SEGMENTED_PASSES_TARGET requested=%zu passes=%zu expected=%zu\n",
+                     requestedGc, passes, expectedPasses);
+        CHECK_DETAIL(requestedGc == gcRequests && passes == expectedPasses,
+                     "array restart count must be bounded independently of collection count");
+    }
+#endif
     MArray* complete = static_cast<MArray*>(mutator->WithdrawInvisibleRoot());
     complete->SetInvisibleObject(false);
     return complete;

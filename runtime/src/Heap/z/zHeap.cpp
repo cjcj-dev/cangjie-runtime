@@ -528,6 +528,14 @@ ZPage* Heap::alloc_page(ZPage* page)
     return published;
 }
 
+// ZGC zHeap.cpp:148-160; MinTLABSize is in bytes in this runtime.
+size_t Heap::unsafe_max_tlab_alloc() const
+{
+    size_t size = _object_allocator.fast_available(PageAge::eden);
+    if (size < 2 * 1024) { size = max_tlab_size(); }
+    return std::min(size, max_tlab_size());
+}
+
 // ZGC zHeap.inline.hpp:92-95: TLABs use the same object allocator.
 uintptr_t Heap::alloc_tlab(size_t size)
 {

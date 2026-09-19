@@ -250,6 +250,14 @@ uintptr_t ZObjectAllocator::PerAge::alloc_object(size_t size, ZAllocationFlags f
     }
 }
 
+// ZGC zObjectAllocator.cpp:228-239.
+size_t ZObjectAllocator::fast_available(PageAge age) const
+{
+    ZPage* const* shared = allocator(age)->shared_small_page_addr();
+    ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
+    return page == nullptr ? 0 : page->remaining();
+}
+
 uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking, bool clearPayload)
 {
     CHECK(untype(age) < kPageAgeCount);

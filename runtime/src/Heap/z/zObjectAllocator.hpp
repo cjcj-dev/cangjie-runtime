@@ -45,6 +45,8 @@ public:
 
     ZObjectAllocator();
     PerAge* allocator(PageAge age) { return objectAllocators[untype(age)].get(); }
+    const PerAge* allocator(PageAge age) const { return objectAllocators[untype(age)].get(); }
+    size_t fast_available(PageAge age) const;
     uintptr_t alloc(size_t size, PageAge age, bool nonBlocking = false, bool clearPayload = true);
     void retire_pages(PageAgeRange ages);
 

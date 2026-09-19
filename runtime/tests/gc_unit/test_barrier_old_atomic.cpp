@@ -67,7 +67,7 @@ public:
     {
         ThreadLocal::SetAllocBuffer(saved);
         if (replacement != nullptr) {
-            replacement->SetRegion(nullptr);
+            replacement->ClearRegion();
         }
     }
 

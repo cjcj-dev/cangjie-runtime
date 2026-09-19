@@ -96,6 +96,8 @@ public:
     const RegionManager& page_allocator() const;
     static void bind_test_page_allocator(RegionManager* manager);
     uintptr_t alloc_tlab(size_t size);
+    size_t max_tlab_size() const { return ZObjectSizeLimitSmall; }
+    size_t unsafe_max_tlab_alloc() const;
     ZObjectAllocator& object_allocator() { return _object_allocator; }
     ZCrossVM& cross_vm() { return _cross_vm; }
     const ZCrossVM& cross_vm() const { return _cross_vm; }

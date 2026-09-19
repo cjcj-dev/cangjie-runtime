@@ -32,6 +32,7 @@ public:
     void initialize_gc();
     void finalize_gc();
     void collect(GCReason reason, bool async);
+    uintptr_t allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize);
 
     Heap& collected_heap() { return _heap; }
     const Heap& collected_heap() const { return _heap; }

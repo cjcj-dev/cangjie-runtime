@@ -119,17 +119,18 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
 MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
 {
     (void)allocType;
-    const size_t tlabSize = ComputeTLABSize(totalSize, ZObjectSizeLimitSmall);
+    const size_t tlabSize = ComputeTLABSize(totalSize, Heap::GetHeap().unsafe_max_tlab_alloc());
     if (tlabSize == 0) {
         return Heap::GetHeap().object_allocator().alloc(totalSize, PageAge::eden);
     }
     RetireTLAB(false);
     // Cangjie tasks can migrate while page allocation enters a saferegion.
     CJThreadPreemptOffCntAdd();
-    const uintptr_t start = Heap::GetHeap().alloc_tlab(tlabSize);
+    size_t actualSize = 0;
+    const uintptr_t start = ZCollectedHeap::heap()->allocate_new_tlab(totalSize, tlabSize, &actualSize);
     CJThreadPreemptOffCntSub();
     if (start == 0) { return 0; }
-    FillTLAB(start, tlabSize);
+    FillTLAB(start, actualSize);
     return AllocateInTLAB(totalSize);
 }
 

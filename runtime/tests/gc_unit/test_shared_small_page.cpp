@@ -146,7 +146,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
         GC_EXPECT_EQ(page->OtherSequence(), Heap::GetHeap().GetCycleSnapshot(other).sequence);
         GC_EXPECT_EQ(page->IsYoungRegion(), age != PageAge::old);
         GC_EXPECT_EQ(page->GetYoungAge(), age == PageAge::old ? uint8_t{0} : static_cast<uint8_t>(untype(age)));
-        GC_EXPECT_TRUE(!page->IsThreadLocalRegion());
+        GC_EXPECT_TRUE(page->GetRegionRole() == ZPageRole::RecentFull);
         GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(16, age, true), address + 16);
         for (uint32_t previous = 0; previous < untype(age); ++previous) {
             GC_EXPECT_TRUE(pages[previous] != page);
