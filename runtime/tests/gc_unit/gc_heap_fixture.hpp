@@ -264,6 +264,8 @@ struct GcHeapFixture {
     // initialize and use region0/region1 only.
     static void AdvanceGeneration(Generation generation)
     {
+        // Construct the Heap before reading the generation singleton pointers.
+        (void)Heap::GetHeap();
         auto& cycle = (*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old())));
         if (cycle.Snapshot().active) {
             cycle.End();
