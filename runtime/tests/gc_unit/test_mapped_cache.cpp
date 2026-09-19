@@ -293,7 +293,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     ProductHeapFixture fixture(8);
     RegionManager& manager = fixture.manager;
     const auto role = ZPageType::large;
-    BindFixturePageTable(manager, 8);
+
     ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
     ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
     ZPage* third = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
@@ -326,7 +326,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     GC_EXPECT_EQ(Read(result->GetRegionStart() + 2 * unit), 0x3333U);
     GC_EXPECT_TRUE(Heap::page(fourthAddress) == fourth);
     GC_EXPECT_TRUE(Heap::page(heapStart) == nullptr);
-    Heap::bind_test_page_allocator(nullptr);
+
 }
 
 // TestMappedCacheHarvest.java / zPageAllocator.cpp:723-743: with growth room
@@ -339,7 +339,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     ProductHeapFixture fixture(12);
     RegionManager& manager = fixture.manager;
     const auto role = ZPageType::large;
-    BindFixturePageTable(manager, 12);
+
     ZPage* regions[5];
     for (auto& region : regions) {
         region = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
@@ -372,7 +372,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     GC_EXPECT_TRUE(cached != nullptr);
     GC_EXPECT_EQ(manager.GetCommittedCapacity(), 12 * unit);
     GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 2U);
-    Heap::bind_test_page_allocator(nullptr);
+
 }
 
 #endif

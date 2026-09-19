@@ -8,6 +8,7 @@
 #ifndef MRT_COLLECTOR_H
 #define MRT_COLLECTOR_H
 
+#include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRuntimeWorkers.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -46,6 +47,7 @@ public:
 #endif
 
 private:
+    ZInitializer _initializer;
     Heap _heap;
     ZDriverMinor* _driver_minor;
     ZDriverMajor* _driver_major;

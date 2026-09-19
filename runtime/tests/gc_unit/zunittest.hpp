@@ -50,50 +50,39 @@ inline void PublishAllocatedPage(ZPage* page)
     Heap::alloc_page(page);
 }
 
-// Preserve the generation-owned remset and its indexing tables together.
-// A fixture must establish the same binding as Heap::Init before publishing
-// old pages (ZGC zRemembered.cpp:385-387, zPageTable.cpp:67-76).
+// Shared fixture debt: page/forwarding tables still save and restore the
+// global test environment. Remembered state belongs to a real generation,
+// constructed with its dependencies (zGeneration.cpp:499-505).
 class ZFixtureRememberedScope {
 public:
-    ZFixtureRememberedScope()
-        : _allocator(&Heap::GetHeap().page_allocator()),
-          _pages(std::move(Heap::page_table())),
+    ZFixtureRememberedScope() : ZFixtureRememberedScope(Heap::GetHeap().page_allocator()) {}
+
+    explicit ZFixtureRememberedScope(RegionManager& allocator)
+        : _pages(std::move(Heap::page_table())),
           _young(std::move(generation_forwarding_table(Generation::Young))),
-          _old(std::move(generation_forwarding_table(Generation::Old))),
-          _remembered(std::move(Heap::GetHeap().remembered())) {}
+          _old(std::move(generation_forwarding_table(Generation::Old)))
+    {
+        Heap::page_table() = ZPageTable();
+        generation_forwarding_table(Generation::Young).initialize();
+        generation_forwarding_table(Generation::Old).initialize();
+        _generation.reset(new ZGenerationYoung(&Heap::page_table(),
+            &generation_forwarding_table(Generation::Old), &allocator));
+    }
 
     ~ZFixtureRememberedScope()
     {
+        _generation.reset();
         Heap::page_table() = std::move(_pages);
         generation_forwarding_table(Generation::Young) = std::move(_young);
         generation_forwarding_table(Generation::Old) = std::move(_old);
-        Heap::GetHeap().remembered() = std::move(_remembered);
-        Heap::bind_test_page_allocator(_allocator);
     }
 
 private:
-    RegionManager* _allocator;
     ZPageTable _pages;
     ZForwardingTable _young;
     ZForwardingTable _old;
-    ZRemembered _remembered;
+    std::unique_ptr<ZGenerationYoung> _generation;
 };
-
-inline void BindFixtureRemembered(RegionManager& manager)
-{
-    auto& heap = Heap::GetHeap();
-    generation_forwarding_table(Generation::Young).initialize();
-    generation_forwarding_table(Generation::Old).initialize();
-    heap.remembered().bind(&Heap::page_table(), &generation_forwarding_table(Generation::Old), &manager);
-}
-
-inline void BindFixturePageTable(RegionManager& manager, size_t units)
-{
-    (void)units;
-    Heap::GetHeap().install_page_table();
-    Heap::bind_test_page_allocator(&manager);
-    BindFixtureRemembered(manager);
-}
 
 class ZAddressOffsetMaxSetter {
   friend class ZTest;
@@ -269,7 +258,7 @@ private:
 class ZTestRegionHeap {
 public:
   ZTestRegionHeap(size_t units, RegionManager& manager, const HeapParam& params, double garbageThreshold)
-    : _offsetMax(ZAddressOffsetMax) {
+    : _rememberedScope(manager), _offsetMax(ZAddressOffsetMax) {
     EnsureZAddressDomain();
     const size_t maxCapacity = units * ZGranuleSize;
     _virtual.reset(new ZVirtualMemoryManager(maxCapacity));

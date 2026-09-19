@@ -311,7 +311,6 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
             }
         }
         ZPage::Initialize(kUnits * ZGranuleSize, heapStart);
-        BindFixtureRemembered(Heap::GetHeap().page_allocator());
         region0 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart), (1) * ZGranuleSize, role);
         region1 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart) + 1, (1) * ZGranuleSize, ZPageType::small);
         PublishAllocatedPage(region0);

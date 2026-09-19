@@ -53,7 +53,8 @@ ZCollectedHeap* ZCollectedHeap::heap()
 }
 
 ZCollectedHeap::ZCollectedHeap()
-    : _heap(),
+    : _initializer(nullptr),
+      _heap(),
       _driver_minor(new ZDriverMinor()),
       _driver_major(new ZDriverMajor()),
       _director(new ZDirector()),

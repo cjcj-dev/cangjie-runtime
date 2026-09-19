@@ -6,6 +6,7 @@
 
 #pragma once
 #include <functional>
+#include "Heap/z/zAddress.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zGranuleMap.hpp"
 #include "Heap/z/zIndexDistributor.hpp"
@@ -35,10 +36,9 @@ class ZPageTable {
     ZGranuleMap<ZPage*> _map;
 
 public:
-    ZPageTable() = default;
+    ZPageTable() : _map(ZAddressOffsetMax) {}
     explicit ZPageTable(size_t max_offset) : _map(max_offset) {}
 
-    static void install();
 
     int count() const;
     ZPage* get(MAddress addr) const;

@@ -35,14 +35,12 @@ private:
     RegionManager* _page_allocator;
 
     struct FoundOld {
-        std::unique_ptr<CHeapBitMap> _allocated_bitmap_0;
-        std::unique_ptr<CHeapBitMap> _allocated_bitmap_1;
+        CHeapBitMap _allocated_bitmap_0;
+        CHeapBitMap _allocated_bitmap_1;
         CHeapBitMap* _bitmaps[2];
         int _current;
 
         FoundOld();
-        void initialize(size_t bits);
-        void ensure();
         void flip();
         void clear_previous();
         void register_page(size_t index);
@@ -61,8 +59,7 @@ private:
     bool scan_forwarding(ZForwarding* forwarding, void* context) const;
 
 public:
-    ZRemembered();
-    void bind(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table, RegionManager* page_allocator);
+    ZRemembered(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table, RegionManager* page_allocator);
 
     void remember(volatile zpointer* p) const;
     void scan_and_follow(ZMark* mark);

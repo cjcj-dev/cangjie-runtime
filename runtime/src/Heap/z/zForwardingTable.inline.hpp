@@ -5,7 +5,8 @@
 
 namespace MapleRuntime {
 
-inline ZForwardingTable::ZForwardingTable() : _map() {}
+inline ZForwardingTable::ZForwardingTable()
+    : _map(new ZGranuleMap<ZForwarding*>(ZAddressOffsetMax)) {}
 
 inline void ZForwardingTable::initialize()
 {

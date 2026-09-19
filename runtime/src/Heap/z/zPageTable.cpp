@@ -13,11 +13,6 @@
 #include <memory>
 
 namespace MapleRuntime {
-void ZPageTable::install()
-{
-    Heap::GetHeap().install_page_table();
-}
-
 ZPageTable& ZPageTable::heap_table()
 {
     return Heap::GetHeap().page_table();
@@ -36,7 +31,7 @@ int ZPageTable::count() const
 
 ZPage* ZPageTable::get(MAddress addr) const
 {
-    if (!_map.Ready() || addr < ZAddressHeapBase || addr - ZAddressHeapBase >= ZAddressOffsetMax) {
+    if (addr < ZAddressHeapBase || addr - ZAddressHeapBase >= ZAddressOffsetMax) {
         return nullptr;
     }
     return _map.get(ZAddress::offset(to_zaddress_unsafe(addr)));
@@ -49,7 +44,7 @@ void ZPageTable::insert(ZPage* page)
     std::atomic_thread_fence(std::memory_order_release);
     _map.put(offset, page->GetRegionSize(), page);
     if (!page->IsYoungRegion()) {
-        Heap::GetHeap().GetZGeneration(ZGenerationId::young).register_with_remset(page);
+        ZGeneration::young()->register_with_remset(page);
     }
 }
 
@@ -66,7 +61,7 @@ void ZPageTable::replace(ZPage* old_page, ZPage* new_page)
     CHECK(_map.get(offset) == old_page);
     _map.release_put(offset, old_page->GetRegionSize(), new_page);
     if (!new_page->IsYoungRegion()) {
-        Heap::GetHeap().GetZGeneration(ZGenerationId::young).register_with_remset(new_page);
+        ZGeneration::young()->register_with_remset(new_page);
     }
 }
 

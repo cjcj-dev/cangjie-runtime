@@ -73,45 +73,23 @@ bool SlotHeldByLiveObject(const void* slot)
 #endif
 
 ZRemembered::FoundOld::FoundOld()
-    : _allocated_bitmap_0(), _allocated_bitmap_1(), _bitmaps{ nullptr, nullptr }, _current(0)
+    : _allocated_bitmap_0(ZAddressOffsetMax >> ZGranuleSizeShift, true),
+      _allocated_bitmap_1(ZAddressOffsetMax >> ZGranuleSizeShift, true),
+      _bitmaps{ &_allocated_bitmap_0, &_allocated_bitmap_1 }, _current(0)
 {}
-
-void ZRemembered::FoundOld::initialize(size_t bits)
-{
-    // zRemembered.cpp:351-374: one found-old bit per global granule index.
-    _allocated_bitmap_0.reset(new CHeapBitMap(static_cast<BitMap::idx_t>(bits), true));
-    _allocated_bitmap_1.reset(new CHeapBitMap(static_cast<BitMap::idx_t>(bits), true));
-    _bitmaps[0] = _allocated_bitmap_0.get();
-    _bitmaps[1] = _allocated_bitmap_1.get();
-}
-
-void ZRemembered::FoundOld::ensure()
-{
-    if (_allocated_bitmap_0) {
-        return;
-    }
-    const BitMap::idx_t bits = static_cast<BitMap::idx_t>(ZAddressOffsetMax >> ZGranuleSizeShift);
-    _allocated_bitmap_0.reset(new CHeapBitMap(bits, true));
-    _allocated_bitmap_1.reset(new CHeapBitMap(bits, true));
-    _bitmaps[0] = _allocated_bitmap_0.get();
-    _bitmaps[1] = _allocated_bitmap_1.get();
-}
 
 CHeapBitMap* ZRemembered::FoundOld::current_bitmap()
 {
-    ensure();
     return _bitmaps[_current];
 }
 
 CHeapBitMap* ZRemembered::FoundOld::previous_bitmap()
 {
-    ensure();
     return _bitmaps[_current ^ 1];
 }
 
 void ZRemembered::FoundOld::flip()
 {
-    ensure();
     _current ^= 1;
 }
 
@@ -127,17 +105,11 @@ void ZRemembered::FoundOld::register_page(size_t index)
     bitmap->par_set_bit(index, std::memory_order_relaxed);
 }
 
-ZRemembered::ZRemembered() : _page_table(nullptr), _old_forwarding_table(nullptr), _page_allocator(nullptr), _found_old()
+ZRemembered::ZRemembered(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table,
+                         RegionManager* page_allocator)
+    : _page_table(page_table), _old_forwarding_table(old_forwarding_table),
+      _page_allocator(page_allocator), _found_old()
 {}
-
-void ZRemembered::bind(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table,
-                       RegionManager* page_allocator)
-{
-    _page_table = page_table;
-    _old_forwarding_table = old_forwarding_table;
-    _page_allocator = page_allocator;
-    _found_old.initialize(ZAddressOffsetMax >> ZGranuleSizeShift);
-}
 
 void ZRemembered::flip_found_old_sets()
 {
@@ -269,11 +241,10 @@ bool ZRemsetTableIterator::next(ZRemsetTableEntry* entry_addr)
             continue;
         }
         ZForwarding* forwarding = nullptr;
-        if (_old_forwarding_table != nullptr && ZGeneration::old() != nullptr &&
-            ZGeneration::old()->is_phase_relocate()) {
+        if (ZGeneration::old()->is_phase_relocate()) {
             forwarding = _old_forwarding_table->at(page_index);
         }
-        ZPage* page = _page_table != nullptr ? _page_table->at(page_index) : nullptr;
+        ZPage* page = _page_table->at(page_index);
         if (page != nullptr && page->IsYoungRegion()) {
             page = nullptr;
         }
