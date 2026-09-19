@@ -133,6 +133,25 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
     owner->verify();
 }
 
+// zRelocate.cpp:1005-1008: verify actual forwarding output before releasing
+// source liveness metadata. Enter through the product page relocation path.
+GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsBadLiveAccounting)
+{
+    if (!ZVerifyForwarding) {
+        GC_EXPECT_EQ(setenv("ZVerifyForwarding", "1", 1), 0);
+        RunInOtherVm("ZVerify.RelocationEntryRejectsBadLiveAccounting");
+        return;
+    }
+    GcVerifyFixture fixture;
+    fixture.PrepareOldSource();
+    fixture.region0->SetRegionRole(ZPageRole::From);
+    ExpectSceneAbort("Invalid number of live objects", [&] {
+        fixture.region0->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
+        RegionManager manager;
+        manager.ForwardRegion<Generation::Old>(fixture.region0);
+    });
+}
+
 // zVerify.cpp:531-609: the source field must be represented in the active
 // remembered face. This exercises the actual verifier, not just bitmap reads.
 GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)

@@ -298,6 +298,7 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     GC_EXPECT_TRUE(root != nullptr);
     GC_EXPECT_TRUE(parked->InSaferegion());
 
+    heap.old().End();
     // zGeneration.cpp:1212-1237, zMark.cpp:797-834: mark-start establishes
     // the color/sequence before workers consume roots, then follow marks objects.
     {

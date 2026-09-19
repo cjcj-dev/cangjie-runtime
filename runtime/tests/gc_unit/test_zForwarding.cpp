@@ -271,15 +271,14 @@ GC_TEST(ZForwardingEntries, ConcurrentSameKeyReturnsInitializedWinner)
     MAddress returned[2] = {0, 0};
     uint64_t observed[2] = {0, 0};
     auto publish = [&](unsigned i) {
-        auto receipt = table->insert_receipt(from, reinterpret_cast<MAddress>(&targets[i]), [&] {
-            arrived.fetch_add(1, std::memory_order_relaxed);
-            while (arrived.load(std::memory_order_relaxed) != 2) {
-                std::this_thread::yield();
-            }
-            // Initialize after the rendezvous, so only the entry's release /
-            // acquire edge can publish this value to the competing reader.
-            targets[i] = 0x12340000 + i;
-        });
+        arrived.fetch_add(1, std::memory_order_relaxed);
+        while (arrived.load(std::memory_order_relaxed) != 2) {
+            std::this_thread::yield();
+        }
+        // Initialize after rendezvous; only product publication makes this
+        // value available to the competing reader. No forced first-CAS schedule.
+        targets[i] = 0x12340000 + i;
+        auto receipt = table->insert_receipt(from, reinterpret_cast<MAddress>(&targets[i]));
         returned[i] = receipt.address;
         observed[i] = *reinterpret_cast<const uint64_t*>(receipt.address);
     };

@@ -217,7 +217,6 @@ ForwardingStage ValueRoot::Stage() const
     const uintptr_t mask = generation == Generation::Young ? ZPointerRemappedYoungMask : ZPointerRemappedOldMask;
     return (ZPointer::remap_bits(color) & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
 }
-extern thread_local const char* gMinorRootOrigin;
 
 void ZCrossVM::ResurrectExportObject(BaseObject* obj)
     {
@@ -266,25 +265,21 @@ void ZCrossVM::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visi
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
         CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Young);
         CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Young);
-        gMinorRootOrigin = "value_export";
         for (BaseObject* object : resurrectedExportObjectes) {
             visitor(object);
         }
-        gMinorRootOrigin = "value_export_fwd";
         for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
             visitor(object);
         }
     }
     std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
     CurrentizeValueRootMap(cycleRefWorkStack, Generation::Young);
-    gMinorRootOrigin = "value_cycle";
     for (const auto& entry : cycleRefWorkStack) {
         visitor(entry.first);
         for (BaseObject* object : entry.second) {
             visitor(object);
         }
     }
-    gMinorRootOrigin = "unknown";
 }
 
 void ZCrossVM::FindUselessExternObjects()

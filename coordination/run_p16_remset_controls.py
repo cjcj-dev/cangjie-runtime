@@ -10,7 +10,7 @@ out=root/lane/os.environ.get('P16_CONTROL_OUT','remset-exact')
 out.mkdir(parents=True,exist_ok=False)
 (out/'tests.json').write_text(json.dumps(names,indent=2))
 subprocess.run(['uptime'],stdout=(out/'uptime-before.txt').open('w'),check=True)
-libs={'green':root/'diff_e0d865927fe7/default/build/runtime-staging/lib/x86_64_Release','cut':root/(lane+'-remset-cut/default/build/runtime-staging/lib/x86_64_Release'),'restored':root/(lane+'-remset-restored/default/build/runtime-staging/lib/x86_64_Release')}
+libs={'green':root/'diff_e0d865927fe7/default/build/runtime-staging/lib/x86_64_Release','cut':root/(lane+os.environ.get('P16_CUT_SUFFIX','-remset-cut')+'/default/build/runtime-staging/lib/x86_64_Release'),'restored':root/(lane+'-remset-restored/default/build/runtime-staging/lib/x86_64_Release')}
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 identities={arm:{p.name:sha(p) for p in [elf,*lib.glob('*.so')]} for arm,lib in libs.items()}
 (out/'identity.json').write_text(json.dumps(identities,indent=2))

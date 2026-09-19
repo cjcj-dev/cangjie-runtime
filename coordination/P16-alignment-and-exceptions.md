@@ -36,3 +36,13 @@ advisor绝对前缀：`/root/cj_build/ops/advisor/outbox/sym_cangjie_runtime_627
 - ReferenceProcessor CAS案例改为真实liveness回调更新referent并检查最终状态，不能外推为强制中途CAS竞争。
 - PackageInit观察来自测试侧dlclose平台边界及真实析构函数，保留卸载结果/互斥/根资格断言；纯CompletePause观测接口案例删除。
 - 标记数组/young weak closure用例按205557Z迁到真实mark_start/concurrent_mark相位，读取实际对象图mark位，未弱化图可达性断言；这类相位单测不代替RequestGC全链证据。
+
+## 后续落实（05:53）
+- #733裁决：删除两个依赖handler替换的cycleRef用例；保留CycleRootConsumerPublishesWorkStackRoots。ResolverParksBeforeCycleRootLock保留源代码并匹配真实__OHOS__产品分支，不再在Linux用测试宏开启产品OHOS路径。不是OHOS资格通过。
+- #730分段数组完整保留另外三项依赖：ZGeneration::testOldMarkStarted/testYoungMarkCompleted、RegionManager::testPinnedPageAcquired；逐行宏清单包含它们。共享callback仅剩明确保留的分段数组依赖。
+- 213742Z/214302Z：删四个旧receipt runner和forward_return_domain.md；其中ConcurrentSameKeyReturnsInitializedWinner/ColourAddress仍留主gc_unit。run_p1_mark_start.sh/test_p1_mark_start.cpp与run_p2_field_barrier.sh/test_p2_field_barrier.cpp按“覆盖由#608/#607当前包承担”删除，不能再称无构建消费者；旧sh确实是其独立构建入口。
+- 删除ZForwarding::insert_receipt的beforeFirstCas测试回调；唯一用例在insert调用前会合，保留唯一赢家与结果可读断言，不宣称全部线程到达首CAS。
+- 新增RelocationEntryRejectsInactiveRemset：通过真实ForwardRegion页入口；从测试侧信号采样得到产品top值，断开BeforeRelocation后晚检查仍拒绝但top已改变，目标顺序断言精确转红。第一次仅比较诊断的实验全绿，无效；第二次13项各N3，目标独红，恢复回绿，见remset-exact-top。
+- 新增RelocationEntryRejectsBadLiveAccounting：ForwardRegion真实页复制产物进入forwarding验证，切其调用的结果见forwarding-exact，尚须回读。
+- P10相位单测的live断言要求真实mark_start先flip/advance；fixture原Begin必须End后才能再进入mark_start。tests17真实运行此项通过。保留live与watermarkDone两条产品状态断言。
+- 四PackageInit桥冻结IR已回读：kkk2:/root/sym_cjcj_48_implement_r5685150408/library-reset-green/probe/libliteral_probe_IR/0_GenIncremental/{0,1,2}-literal_probe.ll；AS0 i8*/i8**与i32签名。当前产品full nm四组MCC/CJ_MCC均在，证据kkk2:/root/sym_cangjie_runtime_627_implement_r5744767112/bridge-inventory。没有修改LLVM报告名单，不把Linux证据外推Windows。

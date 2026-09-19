@@ -83,7 +83,6 @@ void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
 
 
 // Shared by mark roots and Cangjie foreign-root traversal.
-thread_local const char* gMinorRootOrigin = "unknown";
 
 void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                                      uint64_t stackScanEpoch)
@@ -99,7 +98,6 @@ void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisi
     RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
 #endif
     RootVisitor& visitedRawRootVisitor = rawRootVisitor;
-    gMinorRootOrigin = "mutator_stack";
     VisitStrongPlainRoots(visitedRawRootVisitor, [&](Mutator& mutator) {
         bool watermarkDone =
             stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
@@ -111,7 +109,6 @@ void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisi
         }
         mutator.VisitMutatorRoots(visitedRawRootVisitor, visitedInvisibleRootVisitor);
     });
-    gMinorRootOrigin = "unknown";
 }
 
 
@@ -275,12 +272,10 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
             }
             visitor(object);
         });
-        gMinorRootOrigin = "export";
         Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) {
             ZBarrier::MarkBarrierOnOopField(slot, false);
             visitor(to_object(slot.GetTargetObject()));
         });
-        gMinorRootOrigin = "unknown";
     }, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
     SuspendibleThreadSetJoiner joiner;
     (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).run(&task);
