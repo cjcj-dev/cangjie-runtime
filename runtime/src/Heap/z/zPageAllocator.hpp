@@ -747,19 +747,28 @@ public:
     ZPageAllocatorStats Stats(const ZGeneration* generation) const;
     ZPageAllocatorStats UpdateAndStats(const ZGeneration* generation);
     void UpdateCollectionStats(ZGenerationId id);
+    void increase_used_generation(ZGenerationId id, size_t size)
+    {
+        usedPerGeneration[id == ZGenerationId::young ? 0 : 1].fetch_add(size, std::memory_order_relaxed);
+    }
+    void decrease_used_generation(ZGenerationId id, size_t size)
+    {
+        usedPerGeneration[id == ZGenerationId::young ? 0 : 1].fetch_sub(size, std::memory_order_relaxed);
+    }
     void NoteUsedGenerationDelta(Generation generation, ssize_t delta)
     {
-        const size_t i = generation == Generation::Young ? 0 : 1;
+        const ZGenerationId id = generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
         if (delta >= 0) {
-            usedPerGeneration[i].fetch_add(static_cast<size_t>(delta), std::memory_order_relaxed);
+            increase_used_generation(id, static_cast<size_t>(delta));
         } else {
-            usedPerGeneration[i].fetch_sub(static_cast<size_t>(-delta), std::memory_order_relaxed);
+            decrease_used_generation(id, static_cast<size_t>(-delta));
         }
     }
-    size_t UsedGeneration(ZGenerationId id) const
+    size_t used_generation(ZGenerationId id) const
     {
         return usedPerGeneration[id == ZGenerationId::young ? 0 : 1].load(std::memory_order_relaxed);
     }
+    size_t UsedGeneration(ZGenerationId id) const { return used_generation(id); }
 
     size_t GetLargeObjectThreshold() const { return largeObjectThreshold; }
 

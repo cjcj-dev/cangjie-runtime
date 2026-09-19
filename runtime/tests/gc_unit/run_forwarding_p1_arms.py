@@ -27,10 +27,9 @@ PREFIX = 'runtime/src/'
 CUTS = {
     'entry': (PREFIX+'Heap/WCollector/WCollector.cpp',
               '        DoYoungGarbageCollection();', '        (void)0;'),
-    'arena_begin': (PREFIX+'Heap/z/zRelocationSet.inline.hpp',
-        '        CHECK_DETAIL(ForwardingTable::BeginForwardingArena(fromRegionList),\n'
-        '                     "forwarding arena budget allocation failed");',
-        '        (void)fromRegionList;'),
+    'arena_begin': (PREFIX+'Heap/z/zRelocationSet.cpp',
+        '    ZRelocationSetInstallTask task(this, selector);',
+        '    (void)selector;'),
     'arena_storage': (PREFIX+'Heap/z/zForwarding.hpp',
         'void* const addr = arena ? arena->allocate(size) : AttachedArray::alloc(n);',
         'void* const addr = AttachedArray::alloc(n);'),
