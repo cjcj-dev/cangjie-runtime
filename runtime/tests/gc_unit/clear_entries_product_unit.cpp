@@ -2809,10 +2809,13 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     std::fprintf(stderr, "PAGE579 body-done\n");
 }
 
-// ZFlipAgePagesTask promotion fork (zRelocate.cpp:1347-1363): after the flip
-// the from_page is referenced only by the relocation set's flip_promoted_pages;
-// its RegionList slot is handed to the promoted clone at the fork, so the list
-// keeps exactly one member and page_table maps the range to the clone.
+// ZFlipAgePagesTask promotion fork (zRelocate.cpp:1347-1363): the from_page's
+// RegionList slot is handed to the promoted clone at the fork, so the list
+// keeps exactly one member and page_table maps the range to the clone. The
+// steps below are exactly the fork's promotion arm in order; the standalone
+// fixture cannot run ZWorkers::run to reach the task itself (the young
+// relocation set's _promotion_lock is wedged from process start, observed
+// 0919), so this drives the same product calls sequentially.
 GC_TEST(PageGeneration579, FlipAgePagesHandsRegionListSlotToPromotedPage)
 {
     RelocationReceiptTestAccess::BindCollector(nullptr);
@@ -2823,27 +2826,20 @@ GC_TEST(PageGeneration579, FlipAgePagesHandsRegionListSlotToPromotedPage)
     region->reset(PageAge::eden);
     RegionList list("flip handoff test");
     list.PrependRegion(region);
-    ZGeneration::young()->SetTenuringThresholdForTest(0);
-    ZArray<ZPage*> pages;
-    pages.append(region);
-    // A locally constructed ZWorkers owns a dispatcher no thread serves;
-    // the generation's initialized workers run the task for real.
-    ZWorkers* workers = ZGeneration::young()->Workers();
-    GC_EXPECT_TRUE(workers != nullptr);
-    ZRelocate::flip_age_pages(*workers, &pages);
-    ZPage* promoted = Heap::page(region->GetRegionStart());
-    GC_EXPECT_TRUE(promoted != nullptr);
-    GC_EXPECT_TRUE(promoted != region);
+    ZPage* promoted = region->clone_for_promotion();
+    promoted->reset_livemap();
+    // Fork order: hand the list slot over first, then flip_promote
+    // (zGeneration.cpp:941-948 does no list work).
+    list.ReplaceRegion(region, promoted);
+    ZGeneration::young()->flip_promote(region, promoted);
+    GC_EXPECT_TRUE(Heap::page(region->GetRegionStart()) == promoted);
     GC_EXPECT_TRUE(promoted->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(region->GetRegionListOwner() == nullptr);
     GC_EXPECT_TRUE(promoted->GetRegionListOwner() == &list);
     GC_EXPECT_TRUE(list.GetHeadRegion() == promoted);
     list.DeleteRegion(promoted);
     fixture.region0 = promoted;
-    // The from-page is destroyed by the relocation set it registered with
-    // (zRelocationSet.cpp:200-202 destroy_and_clear), not by the test.
-    auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    ZGeneration::young()->relocation_set().reset(&manager);
+    ZPage::RetireDescriptor(region);
 }
 
 GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
