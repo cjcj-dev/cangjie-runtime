@@ -610,6 +610,7 @@ public:
     void ResetFlipPromotedPages();
     void promote_used(const ZPage* from, const ZPage* to);
     void safe_destroy_page(ZPage* page);
+    void free_page(ZPage* page);
     void StampCensusBoundaries();
     void PromoteAllRegions();
     // CompactRegion's list-ownership tail. A concurrent stay-young path may

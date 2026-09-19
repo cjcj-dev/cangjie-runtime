@@ -149,6 +149,15 @@ struct ForwardingSelectionResult {
     size_t retired{0};
     size_t receipts{0};
     bool verifyRetirement{false};
+    size_t usedBefore{0};
+    size_t usedAfter{0};
+    size_t mappedBefore{0};
+    size_t mappedAfter{0};
+    size_t generationBefore[2]{};
+    size_t generationAfter[2]{};
+    size_t mappedGenerationBefore[2]{};
+    size_t mappedGenerationAfter[2]{};
+    size_t reused{0};
 };
 void* SelectRealLivePages(void* context)
 {
@@ -176,6 +185,20 @@ void* SelectRealLivePages(void* context)
     }
     auto* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
+    auto snapshot = [](size_t& used, size_t& mapped, size_t* generations, size_t* mappedGenerations) {
+        auto& allocator = Heap::GetHeap().page_allocator();
+        used = allocator.GetUsedBytes();
+        generations[0] = allocator.used_generation(ZGenerationId::young);
+        generations[1] = allocator.used_generation(ZGenerationId::old);
+        ZPageTableIterator iter(&Heap::page_table());
+        for (ZPage* page; iter.next(&page);) {
+            mapped += page->size();
+            mappedGenerations[page->generation_id() == ZGenerationId::young ? 0 : 1] += page->size();
+        }
+    };
+    if (result.verifyRetirement) {
+        snapshot(result.usedBefore, result.mappedBefore, result.generationBefore, result.mappedGenerationBefore);
+    }
     // Live objects in three real small pages force a non-empty relocation set.
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     for (size_t i = 0; i < result.roots; ++i) {
@@ -203,6 +226,18 @@ void* SelectRealLivePages(void* context)
         }
         // The retirement test leaves root cleanup to FiniCJRuntime, after its
         // assertions. A failing remap must not be consumed by cleanup first.
+    }
+    if (result.verifyRetirement) {
+        snapshot(result.usedAfter, result.mappedAfter, result.generationAfter, result.mappedGenerationAfter);
+        // Real mutator allocation must be able to consume the returned source
+        // range. Read forwarding results above before reusing that range.
+        for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && result.reused == 0; ++i) {
+            const ObjRef object = MCC_NewObject(type, 4096);
+            const uintptr_t address = reinterpret_cast<uintptr_t>(object);
+            for (size_t j = 0; j < result.roots; ++j) {
+                result.reused += (address >> ZGranuleSizeShift) == (starts[j] >> ZGranuleSizeShift);
+            }
+        }
     }
     mutator->SetManagedContext(true);
     return nullptr;
@@ -249,6 +284,17 @@ GC_OTHER_VM_TEST(ZRelocationRetirement, CopiedSourceLeavesPageTable)
     GC_EXPECT_TRUE(result.published > 0);
     GC_EXPECT_EQ(result.retired, result.published);
     GC_EXPECT_EQ(result.receipts, result.published);
+    std::fprintf(stderr, "SOURCE_MEMORY_TARGET used_before=%zu used_after=%zu mapped_before=%zu mapped_after=%zu reused=%zu\n",
+                 result.usedBefore, result.usedAfter, result.mappedBefore, result.mappedAfter, result.reused);
+    GC_EXPECT_EQ(result.usedAfter + result.mappedBefore, result.usedBefore + result.mappedAfter);
+    for (size_t i = 0; i < 2; ++i) {
+        std::fprintf(stderr, "SOURCE_GENERATION_TARGET id=%zu before=%zu after=%zu mapped_before=%zu mapped_after=%zu\n",
+                     i, result.generationBefore[i], result.generationAfter[i],
+                     result.mappedGenerationBefore[i], result.mappedGenerationAfter[i]);
+        GC_EXPECT_EQ(result.generationAfter[i] + result.mappedGenerationBefore[i],
+                     result.generationBefore[i] + result.mappedGenerationAfter[i]);
+    }
+    GC_EXPECT_TRUE(result.reused > 0);
     GC_EXPECT_EQ(result.roots, 3u);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

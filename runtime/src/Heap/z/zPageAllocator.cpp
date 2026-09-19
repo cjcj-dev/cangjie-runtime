@@ -582,6 +582,18 @@ void RegionManager::safe_destroy_page(ZPage* page)
     ZPage::RetireDescriptor(page);
 }
 
+void RegionManager::free_page(ZPage* page)
+{
+    // ZGC zPageAllocator.cpp:2253-2266: extract ownership before destroying
+    // the descriptor. Forwarding remains owned by the relocation set.
+    const ZGenerationId id = page->generation_id();
+    const size_t size = page->size();
+    const PageMemory memory{page->granule_index(), size, 0, true};
+    safe_destroy_page(page);
+    decrease_used_generation(id, size);
+    ReturnRetiredPageMemory(memory);
+}
+
 void RegionManager::ReclaimRegion(ZPage* region)
 {
     // zPageAllocator.cpp:2263,2280: per-generation used, region-granular.

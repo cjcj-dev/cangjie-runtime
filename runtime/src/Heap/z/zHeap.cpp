@@ -547,7 +547,8 @@ void Heap::free_page(ZPage* page)
     if (page == nullptr) {
         return;
     }
-    ZPage::RetirePage(page, [] {});
+    page_table().remove(page);
+    GetHeap().page_allocator().free_page(page);
 }
 
 size_t Heap::free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages)
