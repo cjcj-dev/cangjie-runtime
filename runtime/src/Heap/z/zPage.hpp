@@ -602,7 +602,6 @@ public:
 
     // These interfaces are used to make sure the writing operations of value in C++ Bit Field will be atomic.
 
-    bool OnNamedList(const char* name) const;
     bool IsNotRelocatableThisCycle() const { return is_allocating(); }
     void SetInGhostRegion(uint8_t flag);
 
@@ -666,7 +665,7 @@ public:
 
     bool IsLargeRegion() const;
 
-    bool IsThreadLocalRegion() const { return OnNamedList("thread local regions"); }
+    bool IsThreadLocalRegion() const { return GetRegionRole() == ZPageRole::ThreadLocal; }
 
     bool IsPinnedRegion() const;
 
@@ -696,14 +695,14 @@ public:
 
     void SetNextRegion(const ZPage* r);
 
-    bool IsFromRegion() const { return OnNamedList("from regions"); }
-    bool IsLoneFromRegion() const { return GetRegionListOwner() == nullptr && is_relocatable(); }
+    bool IsFromRegion() const { return GetRegionRole() == ZPageRole::From; }
+    bool IsLoneFromRegion() const { return GetRegionRole() == ZPageRole::None && is_relocatable(); }
     bool IsUnmovableFromRegion() const;
 
     bool IsToRegion() const { return false; }
 
-    bool IsGarbageRegion() const { return OnNamedList("garbage regions"); }
-    bool IsFreeRegion() const { return GetRegionListOwner() == nullptr && !is_relocatable(); }
+    bool IsGarbageRegion() const { return GetRegionRole() == ZPageRole::Garbage; }
+    bool IsFreeRegion() const { return GetRegionRole() == ZPageRole::None && !is_relocatable(); }
 
     bool IsValidRegion() const;
     // zRelocationSetSelector.cpp / zGeneration.cpp:216-221: a relocatable page

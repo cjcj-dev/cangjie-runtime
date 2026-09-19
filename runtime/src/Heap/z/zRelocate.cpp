@@ -1693,7 +1693,7 @@ void RegionManager::EnlistCompactedRegionForAllocator(ZPage* region)
         claimed = true;
     } else if (region->IsGarbageRegion()) {
         claimed = garbageRegionList.TryDeleteRegion(region);
-    } else if (region->IsThreadLocalRegion() || region->OnNamedList("recent full regions")) {
+    } else if (region->IsThreadLocalRegion() || region->GetRegionRole() == ZPageRole::RecentFull) {
         return;
     }
     if (claimed) {
@@ -1733,7 +1733,7 @@ void RegionManager::RehomeCompactedInPlaceRegion(ZPage* region)
         claimed = garbageRegionList.TryDeleteRegion(region);
     } else if (region->IsThreadLocalRegion()) {
         claimed = tlRegionList.TryDeleteRegion(region);
-    } else if (region->OnNamedList("recent full regions")) {
+    } else if (region->GetRegionRole() == ZPageRole::RecentFull) {
         return;
     }
     if (!claimed) {
@@ -1794,7 +1794,7 @@ void RegionManager::EnlistStayYoungSurvivor(ZPage* region, bool advanceAge)
         claimed = garbageRegionList.TryDeleteRegion(region);
     } else if (region->IsThreadLocalRegion()) {
         claimed = tlRegionList.TryDeleteRegion(region);
-    } else if (region->OnNamedList("recent full regions")) {
+    } else if (region->GetRegionRole() == ZPageRole::RecentFull) {
         return;
     }
     if (!claimed) {

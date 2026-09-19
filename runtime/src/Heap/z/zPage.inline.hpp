@@ -857,7 +857,8 @@ inline bool ZPage::UndoAllocObjectAtomic(uintptr_t addr, size_t size)
 
 inline bool ZPage::IsPinnedRegion() const
     {
-        return OnNamedList("old pinned regions") || OnNamedList("recent pinned regions");
+        const ZPageRole role = GetRegionRole();
+        return role == ZPageRole::OldPinned || role == ZPageRole::RecentPinned;
     }
 
 inline ZPage* ZPage::GetPrevRegion() const
@@ -910,7 +911,8 @@ inline void ZPage::SetNextRegion(const ZPage* r)
 
 inline bool ZPage::IsUnmovableFromRegion() const
     {
-        return OnNamedList("escaped from regions") || OnNamedList("raw pointer pinned regions");
+        const ZPageRole role = GetRegionRole();
+        return role == ZPageRole::UnmovableFrom || role == ZPageRole::RawPointerPinned;
     }
 
 inline bool ZPage::IsValidRegion() const

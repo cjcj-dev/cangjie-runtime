@@ -373,8 +373,8 @@ bool ClaimFromRegion(RegionList& fromList, ZPage* del, const char* site)
     const unsigned rs = static_cast<unsigned>(del->RelocateObserve());
     LOG(RTLOG_ERROR, "[GCV2][isfromreg] site=%s skip type=%u route=%u young=%u", site, t, rs,
         static_cast<unsigned>(del->IsYoungRegion()));
-    CHECK_DETAIL(del->OnNamedList("raw pointer pinned regions") ||
-                     del->OnNamedList("escaped from regions") ||
+    CHECK_DETAIL(del->GetRegionRole() == ZPageRole::RawPointerPinned ||
+                     del->GetRegionRole() == ZPageRole::UnmovableFrom ||
                      del->IsGarbageRegion(),
                  "[isfromreg] site=%s unexpected type=%u route=%u", site, t, rs);
     return false;

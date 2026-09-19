@@ -1746,7 +1746,7 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
                     !ShouldPromoteAge(region->GetYoungAge(), ZGeneration::young()->tenuring_threshold())) {
                     if (region->IsLoneFromRegion() || region->IsFromRegion()) {
                         manager.EnlistStayYoungSurvivor(region);
-                    } else if (!(region->OnNamedList("recent full regions"))) {
+                    } else if (region->GetRegionRole() != ZPageRole::RecentFull) {
                         RegionManager::FinishStayYoungInPlace(region);
                     }
                     continue;
