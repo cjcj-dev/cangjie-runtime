@@ -535,19 +535,30 @@ const RegionManager& Heap::page_allocator() const
     return _page_allocator;
 }
 
+namespace {
+thread_local ZPage* g_prematerializedPage = nullptr;
+}
+
 ZPage* Heap::alloc_page(ZPage* page)
 {
-    if (page != nullptr) {
-        page_table().insert(page);
-    }
-    return page;
+    g_prematerializedPage = page;
+    ZPage* published = alloc_page(0, ZPageType::small, false, false, false);
+    g_prematerializedPage = nullptr;
+    return published;
 }
 
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
                              bool clearPayload, PageAge age)
 {
     RegionManager& manager = GetHeap().page_allocator();
-    return alloc_page(manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age));
+    ZPage* page = g_prematerializedPage;
+    if (page == nullptr && num > 0) {
+        page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
+    }
+    if (page != nullptr) {
+        page_table().insert(page);
+    }
+    return page;
 }
 
 void Heap::free_page(ZPage* page)
