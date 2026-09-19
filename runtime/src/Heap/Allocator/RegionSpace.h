@@ -73,7 +73,7 @@ public:
 
     MAddress GetSpaceEndAddress() const override { return GetRegionManager().GetSpaceEndAddress(); }
 
-    size_t GetCurrentCapacity() const override { return GetRegionManager().GetActiveUnitCount() * ZPage::UNIT_SIZE; }
+    size_t GetCurrentCapacity() const override { return GetRegionManager().GetCommittedBytes(); }
     size_t GetMaxCapacity() const override { return GetRegionManager().GetHeapCapacity(); }
 
     ZMemoryUsageInfo GetMemoryUsage() const
@@ -117,12 +117,12 @@ public:
 
     size_t ReclaimGarbageMemory(bool /* releaseAll */) override
     {
-        const size_t cachedBefore = GetRegionManager().GetDirtyUnitCount() * ZPage::UNIT_SIZE;
+        const size_t cachedBefore = GetRegionManager().GetCachedBytes();
         ZStatTimerWorker zstatTimer(PReclaimGarbageRegions);
         // zPageAllocator.cpp: free pages return to the mapped cache. Physical
         // uncommit belongs to zUncommitter.cpp:367-421, including OOM reclaim.
         GetRegionManager().ReclaimGarbageRegions();
-        const size_t cachedAfter = GetRegionManager().GetDirtyUnitCount() * ZPage::UNIT_SIZE;
+        const size_t cachedAfter = GetRegionManager().GetCachedBytes();
         return cachedAfter > cachedBefore ? cachedAfter - cachedBefore : 0;
     }
 #if defined(__EULER__)

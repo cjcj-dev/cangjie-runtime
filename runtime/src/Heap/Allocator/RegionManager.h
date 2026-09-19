@@ -9,8 +9,8 @@ namespace MapleRuntime {
 // recent-full is a lifecycle queue, not a liveness root. Account at ownership
 // transitions so retained inventory can be separated from ordinary heap growth.
 namespace RecentFullAccounting {
-void Enqueue(size_t regions, size_t units);
-void Dequeue(size_t regions, size_t units);
+void Enqueue(size_t regions, size_t bytes);
+void Dequeue(size_t regions, size_t bytes);
 void Report(size_t listRegions, size_t listBytes);
 }
 

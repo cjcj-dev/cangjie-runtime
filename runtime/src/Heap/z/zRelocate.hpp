@@ -142,6 +142,7 @@ public:
     static void RefineFromSpace();
     static BaseObject* ForwardObject(BaseObject* object, Generation generation);
     static BaseObject* ForwardObjectExclusive(BaseObject* object);
+    static void UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
     static bool IsFromObject(BaseObject* object);
     static bool IsUnmovableFromObject(BaseObject* object);
     static BaseObject* ResolveMinorReference(RefField<>& field,
@@ -155,7 +156,6 @@ public:
                                       const ScopedStopTheWorld* stw = nullptr);
     static void FixMinorRootSlots(const ScopedStopTheWorld* stw = nullptr);
     static void RemapYoungRoots();
-    static bool Preforward();
     static void StartRelocationTasks(ZGenerationId generation);
 
     // Raw historical carriers have no source color; preserve explicit provenance.
@@ -178,7 +178,7 @@ private:
     friend struct MutatorPublishTestAccess;
 #endif
     BaseObject* relocate_object_inner(BaseObject* obj, ZPage* copyPage);
-    static void UpdateRemsetForFields(BaseObject* from, BaseObject* to);
+    static void UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
     BaseObject* TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease);
     BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     ZGeneration* const generation;

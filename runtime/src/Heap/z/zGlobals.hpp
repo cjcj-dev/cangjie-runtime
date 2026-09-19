@@ -6,7 +6,7 @@
 
 #pragma once
 #include <cstdint>
-#include "Common/TypeDef.h"
+#include <cstddef>
 namespace MapleRuntime {
 }
 
@@ -16,7 +16,7 @@ namespace MarkPartialArray {
 // same as ZGC's oopSize with compressed oops off.
 constexpr size_t MIN_SIZE_SHIFT = 12; // 4K
 constexpr size_t MIN_SIZE = static_cast<size_t>(1) << MIN_SIZE_SHIFT;
-constexpr size_t MIN_LENGTH = MIN_SIZE / sizeof(MAddress);
+constexpr size_t MIN_LENGTH = MIN_SIZE / sizeof(uintptr_t);
 
 }
 }
@@ -48,7 +48,7 @@ constexpr size_t ZMarkStripesMax = 16;
 constexpr size_t ZMarkCacheSize = 1024;
 constexpr size_t ZMarkPartialArrayMinSizeShift = 12;
 constexpr size_t ZMarkPartialArrayMinSize = size_t(1) << ZMarkPartialArrayMinSizeShift;
-constexpr size_t ZMarkPartialArrayMinLength = ZMarkPartialArrayMinSize / sizeof(MAddress);
+constexpr size_t ZMarkPartialArrayMinLength = ZMarkPartialArrayMinSize / sizeof(uintptr_t);
 constexpr size_t ZMarkProactiveFlushMax = 10;
 constexpr uint64_t ZMarkCompleteTimeout = 200;
 // gc/shared/gc_globals.hpp ConcGCThreads; ZCollectedHeap::start_gc_threads

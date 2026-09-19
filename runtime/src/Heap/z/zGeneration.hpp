@@ -237,6 +237,7 @@ public:
     MRT_EXPORT void SetTenuringThresholdForTest(uint32_t value) { _tenuring_threshold = value; }
     void flip_promote(ZPage* from_page, ZPage* to_page);
     void in_place_relocate_promote(ZPage* from_page, ZPage* to_page);
+    void register_in_place_relocate_promoted(ZPage* page);
     void register_flip_promoted(const ZArray<ZPage*>& pages);
     void SelectTenuringThreshold(const TenuringInputs& inputs);
     void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,

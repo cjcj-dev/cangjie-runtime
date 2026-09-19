@@ -65,10 +65,9 @@ struct RelocationReceiptTestAccess {
             Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::MarkComplete);
             auto& remembered = HeapTestRemset();
             if (!remembered.IsInitialized()) {
-                remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+                remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZGranuleSize);
             }
-            InitFwdTables(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE,
-                          ZPage::UNIT_SIZE);
+            InitFwdTables();
         }
     }
 
@@ -95,7 +94,7 @@ struct RelocationReceiptTestAccess {
         oldCycle.SetReasonForTest(GC_REASON_USER);
         auto& remembered = HeapTestRemset();
         if (!remembered.IsInitialized()) {
-            remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+            remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZGranuleSize);
         }
         // ZDriver::gc_major runs the young roots collection before old marking.
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
@@ -477,7 +476,7 @@ void RunYoungWeakRemsetFlow()
     RelocationReceiptTestAccess::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RememberedSet& rememberedSet = HeapTestRemset();
-    rememberedSet.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rememberedSet.Initialize(fx.heapStart, 2 * ZGranuleSize);
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
     referentField.StoreColoured(to_zpointer(raw(StoreGoodPointer(graph.referent)) ^ ZPointerMarkedYoungMask));
     ZBarrier::WriteReference(graph.weak, referentField, graph.referent);

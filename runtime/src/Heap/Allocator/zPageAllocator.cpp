@@ -57,26 +57,24 @@ std::atomic<size_t> currentBytes{ 0 };
 std::atomic<size_t> peakBytes{ 0 };
 }
 
-void Enqueue(size_t regions, size_t units)
+void Enqueue(size_t regions, size_t bytes)
 {
     if (regions == 0) {
         return;
     }
     enqueuedRegions.fetch_add(regions, std::memory_order_relaxed);
-    const size_t bytes = units * ZPage::UNIT_SIZE;
     const size_t current = currentBytes.fetch_add(bytes, std::memory_order_relaxed) + bytes;
     size_t peak = peakBytes.load(std::memory_order_relaxed);
     while (peak < current &&
            !peakBytes.compare_exchange_weak(peak, current, std::memory_order_relaxed)) {}
 }
 
-void Dequeue(size_t regions, size_t units)
+void Dequeue(size_t regions, size_t bytes)
 {
     if (regions == 0) {
         return;
     }
     dequeuedRegions.fetch_add(regions, std::memory_order_relaxed);
-    const size_t bytes = units * ZPage::UNIT_SIZE;
     const size_t before = currentBytes.fetch_sub(bytes, std::memory_order_relaxed);
     CHECK_DETAIL(before >= bytes, "recent-full accounting underflow: before=%zu remove=%zu", before, bytes);
 }

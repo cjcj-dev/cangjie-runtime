@@ -59,9 +59,8 @@ ZPage* ZPage::NullRegion()
     return &nullRegion;
 }
 
-size_t ZPage::totalUnitCount = 0;
 uintptr_t ZPage::heapStartAddress = 0;
-std::vector<ZPage::UnitSegment> ZPage::unitSegments;
+std::vector<ZPage::ReservedSegment> ZPage::reservedSegments;
 ZSafeDelete<ZPage> ZPage::safeDestroy;
 
 ZPage::~ZPage()
@@ -119,17 +118,6 @@ static size_t GetPageSize() noexcept
 // System default page size
 const size_t MRT_PAGE_SIZE = GetPageSize();
 const size_t AllocatorUtils::ALLOC_PAGE_SIZE = MapleRuntime::MRT_PAGE_SIZE;
-// region unit size: same as system page size
-const size_t ZPage::UNIT_SIZE = MapleRuntime::MRT_PAGE_SIZE;
-// regarding a object as a large object when the size is greater than 32KB or one page size,
-// depending on the system page size.
-const size_t ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD = MapleRuntime::MRT_PAGE_SIZE > (32 * KB) ?
-                                                            MapleRuntime::MRT_PAGE_SIZE : 32 * KB;
-// max size of per region is 128KB.
-const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntime::MRT_PAGE_SIZE;
-
-
-
 // ZPage::verify_live (zPage.cpp:196-203). The forwarding owner holds the
 // original page livemap when this metadata facade already describes to-space.
 void ZPage::verify_live(uint32_t liveObjects, size_t liveBytes, bool inPlace) const
@@ -230,8 +218,6 @@ ZPage::ZPage()
        _remembered_set(),
        _relocate_promoted(false)
     {
-        _scratch.allocPtr = reinterpret_cast<uintptr_t>(nullptr);
-        _scratch.regionEnd = reinterpret_cast<uintptr_t>(nullptr);
     }
 
 ZPage::ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
@@ -247,8 +233,9 @@ ZPage::ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
        _remembered_set(),
        _relocate_promoted(false)
 {
-    _scratch.allocPtr = untype(ZOffset::address_unsafe(vmem.start()));
-    _scratch.regionEnd = _scratch.allocPtr + vmem.size();
+    MRT_ASSERT((type == ZPageType::small && size() == ZPageSizeSmall) ||
+               (type == ZPageType::medium && ZPageSizeMediumMin <= size() && size() <= ZPageSizeMediumMax) ||
+               (type == ZPageType::large && size() % ZGranuleSize == 0), "Page type/size mismatch");
     reset(age);
     if (age == PageAge::old) {
         remset_alloc();
@@ -302,8 +289,6 @@ ZPage* ZPage::clone_for_promotion() const
 {
     CHECK(IsYoungRegion());
     ZPage* page = new ZPage(_type, PageAge::old, _virtual);
-    page->_scratch.allocPtr = _scratch.allocPtr;
-    page->_scratch.regionEnd = _scratch.regionEnd;
     // Host difference from ZGC zPage.cpp:64-72: raw-pointer ownership stays
     // with the same objects when only the page metadata is replaced.
     page->_scratch.rawPointerObjectCount = GetRawPointerObjectCount();
@@ -311,34 +296,56 @@ ZPage* ZPage::clone_for_promotion() const
     return page;
 }
 
+// zPage.inline.hpp:428-522: one offset frontier, aligned byte allocation.
 uintptr_t ZPage::alloc_object(size_t size)
 {
-    CHECK(is_allocating());
+    MRT_ASSERT(is_allocating(), "Invalid state");
     const size_t aligned = AlignUp<size_t>(size, object_alignment());
-    return Alloc(aligned);
+    const zoffset_end addr = top();
+    zoffset_end newTop;
+    if (!to_zoffset_end(&newTop, addr, aligned) || newTop > end()) { return 0; }
+    _top = newTop;
+    return untype(ZOffset::address_unsafe(to_zoffset(addr)));
 }
 
 uintptr_t ZPage::alloc_object_atomic(size_t size)
 {
-    CHECK(is_allocating());
+    MRT_ASSERT(is_allocating(), "Invalid state");
     const size_t aligned = AlignUp<size_t>(size, object_alignment());
-    return AtomicAlloc(aligned);
+    zoffset_end addr = top();
+    for (;;) {
+        zoffset_end newTop;
+        if (!to_zoffset_end(&newTop, addr, aligned) || newTop > end()) { return 0; }
+        if (__atomic_compare_exchange(&_top, &addr, &newTop, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            return untype(ZOffset::address_unsafe(to_zoffset(addr)));
+        }
+    }
 }
 
 bool ZPage::undo_alloc_object(uintptr_t addr, size_t size)
 {
+    MRT_ASSERT(is_allocating(), "Invalid state");
+    const zoffset offset = ZAddress::offset(to_zaddress_unsafe(addr));
     const size_t aligned = AlignUp<size_t>(size, object_alignment());
-    if (GetRegionAllocPtr() != addr + aligned) {
-        return false;
-    }
-    SetRegionAllocPtr(addr);
+    const zoffset_end newTop = top() - aligned;
+    if (newTop != offset) { return false; }
+    _top = newTop;
     return true;
 }
 
 bool ZPage::undo_alloc_object_atomic(uintptr_t addr, size_t size)
 {
+    MRT_ASSERT(is_allocating(), "Invalid state");
+    const zoffset offset = ZAddress::offset(to_zaddress_unsafe(addr));
     const size_t aligned = AlignUp<size_t>(size, object_alignment());
-    return UndoAllocObjectAtomic(addr, aligned);
+    zoffset_end oldTop = top();
+    for (;;) {
+        zoffset_end newTop = oldTop - aligned;
+        if (newTop != offset) { return false; }
+        if (__atomic_compare_exchange(&_top, &oldTop, &newTop, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            return true;
+        }
+    }
 }
 
 ZForwarding* ZPage::GetFromPageCarrier() const
@@ -351,13 +358,13 @@ ZForwarding* ZPage::GetFromPageCarrier() const
         return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
     }
 
-void ZPage::ClearUnits(size_t idx, size_t cnt)
+void ZPage::ClearPageMemory(size_t idx, size_t cnt)
     {
-        uintptr_t unitAddress = ZPage::GetUnitAddress(idx);
-        size_t size = cnt * ZPage::UNIT_SIZE;
-        CHECK(ContainsUnitRange(unitAddress, size));
+        uintptr_t unitAddress = ZPage::GranuleAddress(idx);
+        size_t size = cnt;
+        CHECK(ContainsReservedRange(unitAddress, size));
         ZPage* wipeRegion = Heap::page(unitAddress);
-        WaitCopiedBeforePayloadWipe(wipeRegion, "ClearUnits");
+        WaitCopiedBeforePayloadWipe(wipeRegion, "ClearPageMemory");
 
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
              unitAddress + size);

@@ -27,16 +27,16 @@ namespace GcUnit {
 namespace {
 struct CacheFixture {
     static constexpr size_t kUnits = 16;
-    ZTestHeapMapping mapping{ kUnits * ZBackingGranuleSize };
+    ZTestHeapMapping mapping{ kUnits * ZGranuleSize };
     ZMappedCache cache;
 
     ZVirtualMemory vmem(size_t index, size_t count) const
     {
-        return ZVirtualMemory(mapping.offset() + index * ZBackingGranuleSize, count * ZBackingGranuleSize);
+        return ZVirtualMemory(mapping.offset() + index * ZGranuleSize, count * ZGranuleSize);
     }
-    size_t index(const ZVirtualMemory& v) const { return (v.start() - mapping.offset()) / ZBackingGranuleSize; }
-    size_t count(const ZVirtualMemory& v) const { return v.size() / ZBackingGranuleSize; }
-    size_t bytes(size_t count) const { return count * ZBackingGranuleSize; }
+    size_t index(const ZVirtualMemory& v) const { return (v.start() - mapping.offset()) / ZGranuleSize; }
+    size_t count(const ZVirtualMemory& v) const { return v.size() / ZGranuleSize; }
+    size_t bytes(size_t count) const { return count * ZGranuleSize; }
 };
 }
 
@@ -140,13 +140,13 @@ GC_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
 {
     EnsureZAddressDomain();
     constexpr size_t kUnits = 256;
-    ZTestHeapMapping mapping(kUnits * ZBackingGranuleSize);
+    ZTestHeapMapping mapping(kUnits * ZGranuleSize);
     ZMappedCache cache;
     std::vector<bool> cached(kUnits, false);
     uint64_t seed = 0x9e3779b97f4a7c15ULL;
     auto next = [&seed]() { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; return seed; };
     auto vmemOf = [&](size_t index, size_t count) {
-        return ZVirtualMemory(mapping.offset() + index * ZBackingGranuleSize, count * ZBackingGranuleSize);
+        return ZVirtualMemory(mapping.offset() + index * ZGranuleSize, count * ZGranuleSize);
     };
     size_t cachedUnits = 0;
     for (int round = 0; round < 4000; ++round) {
@@ -161,33 +161,33 @@ GC_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
             cachedUnits += count;
         } else if (cachedUnits != 0) {
             ZArray<ZVirtualMemory> out;
-            const size_t want = std::min(cachedUnits, count) * ZBackingGranuleSize;
+            const size_t want = std::min(cachedUnits, count) * ZGranuleSize;
             const size_t got = (next() % 2 == 0)
                 ? cache.remove_discontiguous(want, &out)
                 : cache.remove_for_uncommit(want, &out);
             GC_EXPECT_EQ(got, want);
             for (const ZVirtualMemory& v : out) {
-                const size_t start = (v.start() - mapping.offset()) / ZBackingGranuleSize;
-                for (size_t i = start; i < start + v.size() / ZBackingGranuleSize; ++i) {
+                const size_t start = (v.start() - mapping.offset()) / ZGranuleSize;
+                for (size_t i = start; i < start + v.size() / ZGranuleSize; ++i) {
                     GC_EXPECT_TRUE(cached[i]);
                     cached[i] = false;
                 }
-                cachedUnits -= v.size() / ZBackingGranuleSize;
+                cachedUnits -= v.size() / ZGranuleSize;
             }
         }
     }
     // Drain: everything cached comes back exactly once, lowest address first.
     ZArray<ZVirtualMemory> all;
-    GC_EXPECT_EQ(cache.remove_discontiguous(cachedUnits * ZBackingGranuleSize, &all), cachedUnits * ZBackingGranuleSize);
+    GC_EXPECT_EQ(cache.remove_discontiguous(cachedUnits * ZGranuleSize, &all), cachedUnits * ZGranuleSize);
     for (const ZVirtualMemory& v : all) {
-        const size_t start = (v.start() - mapping.offset()) / ZBackingGranuleSize;
-        for (size_t i = start; i < start + v.size() / ZBackingGranuleSize; ++i) {
+        const size_t start = (v.start() - mapping.offset()) / ZGranuleSize;
+        for (size_t i = start; i < start + v.size() / ZGranuleSize; ++i) {
             GC_EXPECT_TRUE(cached[i]);
             cached[i] = false;
         }
     }
     for (bool c : cached) { GC_EXPECT_FALSE(c); }
-    GC_EXPECT_TRUE(cache.remove_contiguous(ZBackingGranuleSize).is_null());
+    GC_EXPECT_TRUE(cache.remove_contiguous(ZGranuleSize).is_null());
 }
 
 #if defined(__linux__)
@@ -201,7 +201,7 @@ GC_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
     // Keep the granule map small: it covers [0, ZAddressOffsetMax).
     ZAddressOffsetMaxSetter offsetMax(64 * MB);
     ZTest::ZBackingLimitSetter backingLimits;
-    const size_t unit = ZBackingGranuleSize;
+    const size_t unit = ZGranuleSize;
     ZTest::ZAddressReserver reserver;
     reserver.SetUp(8 * unit);
     GC_EXPECT_TRUE(reserver.reserver()->reserved() == 8 * unit && reserver.registry()->is_contiguous());
@@ -266,7 +266,7 @@ struct ProductHeapFixture {
         // Match CollectorResources::Init before allocation-rate sampling.
         ZStat::Initialize();
         HeapParam parameters{};
-        parameters.regionSize = ZPage::UNIT_SIZE / 1024;
+        parameters.regionSize = ZGranuleSize / 1024;
         parameters.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, parameters, 0.5));
     }
@@ -289,15 +289,15 @@ uint64_t Read(uintptr_t address)
 // and maps the stashed backing there in backing-index order.
 GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
 {
-    const size_t unit = ZPage::UNIT_SIZE;
+    const size_t unit = ZGranuleSize;
     ProductHeapFixture fixture(8);
     RegionManager& manager = fixture.manager;
-    const auto role = ZPageType::small;
+    const auto role = ZPageType::large;
     BindFixturePageTable(manager, 8);
-    ZPage* first = manager.TakeRegion(2, role, false, false, false);
-    ZPage* second = manager.TakeRegion(2, role, false, false, false);
-    ZPage* third = manager.TakeRegion(2, role, false, false, false);
-    ZPage* fourth = manager.TakeRegion(2, role, false, false, false);
+    ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
+    ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
+    ZPage* third = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
+    ZPage* fourth = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
     PublishAllocatedPage(first);
     PublishAllocatedPage(second);
     PublishAllocatedPage(third);
@@ -311,15 +311,15 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     Stamp(third, 0x3333);
     manager.ReclaimRegion(first);
     manager.ReclaimRegion(third);
-    GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 4U);
+    GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 4U);
     // No growth room: capacity == max capacity, so the request must harvest.
-    ZPage* result = manager.TakeRegion(4, role, false, false, false);
+    ZPage* result = manager.TakeRegion((4) * ZGranuleSize, role, false, false, false);
     PublishAllocatedPage(result);
     GC_EXPECT_TRUE(result != nullptr);
-    GC_EXPECT_EQ(result->GetUnitCount(), 4U);
+    GC_EXPECT_EQ((result->GetRegionSize() / ZGranuleSize), 4U);
     // Lowest free virtual address after the 8 committed units.
     GC_EXPECT_EQ(result->GetRegionStart(), heapStart + 8 * unit);
-    GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 0U);
+    GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 0U);
     GC_EXPECT_EQ(manager.GetCommittedCapacity(), 8 * unit);
     // Backing of first (indices 0,1) precedes backing of third (indices 4,5).
     GC_EXPECT_EQ(Read(result->GetRegionStart()), 0x1111U);
@@ -335,14 +335,14 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
 // of the new vmem (commit_increased_capacity commits the last part).
 GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
 {
-    const size_t unit = ZPage::UNIT_SIZE;
+    const size_t unit = ZGranuleSize;
     ProductHeapFixture fixture(12);
     RegionManager& manager = fixture.manager;
-    const auto role = ZPageType::small;
+    const auto role = ZPageType::large;
     BindFixturePageTable(manager, 12);
     ZPage* regions[5];
     for (auto& region : regions) {
-        region = manager.TakeRegion(2, role, false, false, false);
+        region = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
         PublishAllocatedPage(region);
         GC_EXPECT_TRUE(region != nullptr);
     }
@@ -353,13 +353,13 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     manager.ReclaimRegion(regions[0]);
     manager.ReclaimRegion(regions[2]);
     manager.ReclaimRegion(regions[4]);
-    GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 6U);
-    ZPage* result = manager.TakeRegion(4, role, false, false, false);
+    GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 6U);
+    ZPage* result = manager.TakeRegion((4) * ZGranuleSize, role, false, false, false);
     PublishAllocatedPage(result);
     GC_EXPECT_TRUE(result != nullptr);
-    GC_EXPECT_EQ(result->GetUnitCount(), 4U);
+    GC_EXPECT_EQ((result->GetRegionSize() / ZGranuleSize), 4U);
     // Two units of growth plus two harvested units; the cache keeps four.
-    GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 4U);
+    GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 4U);
     GC_EXPECT_EQ(manager.GetCommittedCapacity(), 12 * unit);
     // insert_and_remove_from_low_exact_or_many: the harvested [8,10) merges
     // with the free virtual space above it, so the run starts at unit 8 and
@@ -367,11 +367,11 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     GC_EXPECT_EQ(result->GetRegionStart(), heapStart + 8 * unit);
     GC_EXPECT_EQ(Read(result->GetRegionStart()), 0x4444U);
     // Capacity is exhausted now: another request must be satisfied from the cache.
-    ZPage* cached = manager.TakeRegion(2, role, false, false, false);
+    ZPage* cached = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
     PublishAllocatedPage(cached);
     GC_EXPECT_TRUE(cached != nullptr);
     GC_EXPECT_EQ(manager.GetCommittedCapacity(), 12 * unit);
-    GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 2U);
+    GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 2U);
     Heap::bind_test_page_allocator(nullptr);
 }
 

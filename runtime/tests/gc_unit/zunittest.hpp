@@ -82,16 +82,15 @@ private:
 inline void BindFixtureRemembered(RegionManager& manager)
 {
     auto& heap = Heap::GetHeap();
-    const auto& map = Heap::page_table().map();
-    const size_t size = map.size() * map.granule();
-    generation_forwarding_table(Generation::Young).initialize(size, map.base(), map.granule());
-    generation_forwarding_table(Generation::Old).initialize(size, map.base(), map.granule());
+    generation_forwarding_table(Generation::Young).initialize();
+    generation_forwarding_table(Generation::Old).initialize();
     heap.remembered().bind(&Heap::page_table(), &generation_forwarding_table(Generation::Old), &manager);
 }
 
 inline void BindFixturePageTable(RegionManager& manager, size_t units)
 {
-    Heap::GetHeap().install_page_table(manager.GetRegionHeapStart(), units * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
+    (void)units;
+    Heap::GetHeap().install_page_table();
     Heap::bind_test_page_allocator(&manager);
     BindFixtureRemembered(manager);
 }
@@ -171,7 +170,7 @@ public:
       size_t old_max = ZBackingOffsetMax;
 
       ZBackingOffsetMax = max_capacity;
-      ZBackingIndexMax = static_cast<uint32_t>(ZBackingOffsetMax / ZBackingGranuleSize);
+      ZBackingIndexMax = static_cast<uint32_t>(ZBackingOffsetMax / ZGranuleSize);
 
       return old_max;
     }
@@ -272,16 +271,16 @@ public:
   ZTestRegionHeap(size_t units, RegionManager& manager, const HeapParam& params, double garbageThreshold)
     : _offsetMax(ZAddressOffsetMax) {
     EnsureZAddressDomain();
-    const size_t maxCapacity = units * ZPage::UNIT_SIZE;
+    const size_t maxCapacity = units * ZGranuleSize;
     _virtual.reset(new ZVirtualMemoryManager(maxCapacity));
     GC_EXPECT_TRUE(_virtual->is_initialized());
     _physical.reset(new ZPhysicalMemoryManager(maxCapacity));
     GC_EXPECT_TRUE(_physical->is_initialized());
-    const std::vector<ZPage::UnitSegment> segments = RegionManager::ReservedSegments(*_virtual);
-    _metadataSize = RegionManager::GetMetadataSize(ZPage::IndexedUnitCount(segments));
+    const std::vector<ZPage::ReservedSegment> segments = RegionManager::ReservedSegments(*_virtual);
+    _metadataSize = RegionManager::GetMetadataSize();
     _metadata = mmap(nullptr, _metadataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     GC_EXPECT_TRUE(_metadata != MAP_FAILED);
-    manager.Initialize(units, reinterpret_cast<uintptr_t>(_metadata), *_virtual, *_physical, params, garbageThreshold);
+    manager.Initialize(units * ZGranuleSize, reinterpret_cast<uintptr_t>(_metadata), *_virtual, *_physical, params, garbageThreshold);
   }
 
   ~ZTestRegionHeap() {

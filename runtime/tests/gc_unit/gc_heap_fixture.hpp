@@ -118,10 +118,10 @@ inline RememberedSet& HeapTestRemset()
 }
 
 
-inline bool InitFwdTables(MAddress start, size_t size, size_t unit)
+inline bool InitFwdTables()
 {
-    generation_forwarding_table(Generation::Young).initialize(size, start, unit);
-    generation_forwarding_table(Generation::Old).initialize(size, start, unit);
+    generation_forwarding_table(Generation::Young).initialize();
+    generation_forwarding_table(Generation::Old).initialize();
     return true;
 }
 
@@ -137,7 +137,17 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
         }
         selector.add_selected_small(page, ZForwarding::nentries(page));
     }
-    (*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old()))).relocation_set().install(&selector);
+    auto& gen = *(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young())
+                                                 : static_cast<ZGeneration*>(ZGeneration::old()));
+    gen.relocation_set().install(&selector);
+    // Explicit fixture input for isolated barrier/table cases. This helper is
+    // not evidence for the generation entry; SelectionPublishesPreparedForwardingOnce
+    // exercises that entry through real allocation and RequestGC.
+    ZRelocationSetIterator iterator(&gen.relocation_set());
+    for (ZForwarding* forwarding; iterator.next(&forwarding);) {
+        forwarding->page()->SetRegionRole(ZPageRole::From);
+        gen.forwarding_table().insert(forwarding);
+    }
     return true;
 }
 
@@ -285,8 +295,8 @@ struct GcHeapFixture {
         // ZInitialize initializes statistics before any allocation can sample.
         EnsureZAddressDomain();
         ZStat::Initialize();
-        const size_t metadataSize = RegionManager::GetMetadataSize(kUnits);
-        mappedSize = metadataSize + kUnits * ZPage::UNIT_SIZE;
+        const size_t metadataSize = RegionManager::GetMetadataSize();
+        mappedSize = metadataSize + kUnits * ZGranuleSize;
         // Reserve in the heap address domain and back it with a committed,
         // mapped backing file, as ZTest's address reserver and backing mocker do.
         heapMapping.reset(new ZTestHeapMapping(mappedSize));
@@ -294,22 +304,22 @@ struct GcHeapFixture {
         heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
         EnsureHeapRange(heapStart);
         // ZHeap::is_in queries the allocated heap ranges, not the address envelope.
-        Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * ZPage::UNIT_SIZE}});
+        Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * ZGranuleSize}});
 for (Generation generation : {Generation::Young, Generation::Old}) {
             if ((*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old()))).Sequence() == 0) {
                 AdvanceGeneration(generation);
             }
         }
-        ZPage::Initialize(kUnits, heapStart);
+        ZPage::Initialize(kUnits * ZGranuleSize, heapStart);
         BindFixtureRemembered(Heap::GetHeap().page_allocator());
-        region0 = ZPage::InitRegion(0, 1, role);
-        region1 = ZPage::InitRegion(1, 1, ZPageType::small);
+        region0 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart), (1) * ZGranuleSize, role);
+        region1 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart) + 1, (1) * ZGranuleSize, ZPageType::small);
         PublishAllocatedPage(region0);
         PublishAllocatedPage(region1);
         // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.
         AdvanceGeneration(Generation::Old);
         AdvanceGeneration(Generation::Young);
-        InitFwdTables(heapStart, kUnits * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
+        InitFwdTables();
 
         std::memset(typeInfoStorage, 0, sizeof(typeInfoStorage));
         typeInfo = reinterpret_cast<TypeInfo*>(typeInfoStorage);
@@ -324,7 +334,7 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
             reinterpret_cast<uintptr_t>(typeInfoStorage), sizeof(typeInfoStorage));
 
         obj0 = PlaceObject(heapStart + 64);
-        obj1 = PlaceObject(heapStart + ZPage::UNIT_SIZE + 64);
+        obj1 = PlaceObject(heapStart + ZGranuleSize + 64);
         region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + 64);
         region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + 64);
     }
@@ -380,7 +390,7 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         if (space.GetMaxCapacity() == 0) {
             constexpr size_t kFdmUnits = 64;
             Heap::GetHeap().page_allocator().reservedStart = heapStart;
-            Heap::GetHeap().page_allocator().reservedEnd = heapStart + kFdmUnits * ZPage::UNIT_SIZE;
+            Heap::GetHeap().page_allocator().reservedEnd = heapStart + kFdmUnits * ZGranuleSize;
         }
         ready = true;
     }
