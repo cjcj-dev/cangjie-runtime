@@ -724,8 +724,8 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
     std::thread owner([&] {
         ThreadLocal::SetAllocBuffer(nullptr);
         RegisterCurrentMarkFlushThread();
-        ZMark::PublishThreadRoot(heap.obj0, true, true);
-        ZMark::PublishThreadRoot(heap.obj1, false, false);
+        ZBarrier::Mark<false, false, true, false>(from_object(heap.obj0));
+        ZBarrier::Mark<false, false, false, false>(from_object(heap.obj1));
         MutatorManager::Instance().UnregisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
     });
     owner.join();

@@ -106,7 +106,6 @@ public:
 
     static bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
     static void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
-    static void PublishThreadRoot(BaseObject* object, bool young, bool follow);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls);
     static bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);

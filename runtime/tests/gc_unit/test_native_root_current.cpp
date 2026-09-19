@@ -262,8 +262,14 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
     MarkPublicationFixture marking;
     size_t young = 0;
     size_t old = 0;
-    ZMark::PublishThreadRoot(fx.obj0, false, true);
-    ZMark::PublishThreadRoot(fx.obj1, true, true);
+    // Real native-frame producers feed the product root phase. The old scan
+    // context must not select the domain for either current target.
+    Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    thread->SetManagedContext(false);
+    (void)thread->EnterSaferegion(false);
+    ObjectRef* youngRoot = thread->AddNativeFrameRoot(fx.obj0);
+    ObjectRef* oldRoot = thread->AddNativeFrameRoot(fx.obj1);
+    const bool scanned = thread->GcPhaseEnum(false);
     marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
         GC_EXPECT_TRUE(object == fx.obj0);
         GC_EXPECT_TRUE(follow);
@@ -274,7 +280,14 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
         GC_EXPECT_TRUE(follow);
         ++old;
     });
-    std::fprintf(stderr, "ROOT_TARGET_GEN_ASSERT young=%zu old=%zu\n", young, old);
+    const bool slotsCurrent = to_object(safe(youngRoot->LoadPlain())) == fx.obj0 &&
+                              to_object(safe(oldRoot->LoadPlain())) == fx.obj1;
+    thread->RemoveNativeFrameRoot(youngRoot);
+    thread->RemoveNativeFrameRoot(oldRoot);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    std::fprintf(stderr, "ROOT_TARGET_GEN_ASSERT executed=1 scanned=%u current=%u young=%zu old=%zu\n",
+                 unsigned(scanned), unsigned(slotsCurrent), young, old);
+    GC_EXPECT_TRUE(scanned && slotsCurrent);
     GC_EXPECT_EQ(young, 1u);
     GC_EXPECT_EQ(old, 1u);
 }

@@ -236,10 +236,6 @@ bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
     return ZMark::FlushThreadMarkProducers(tls);
 }
 
-void Heap::PublishThreadRoot(BaseObject* object, bool young, bool follow)
-{
-    ZMark::PublishThreadRoot(object, young, follow);
-}
 
 bool Heap::IsGhostFromObject(BaseObject* obj) const { return ZRelocate::IsFromObject(obj); }
 

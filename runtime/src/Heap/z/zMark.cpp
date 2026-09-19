@@ -713,18 +713,6 @@ void ZMark::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, 
     });
 }
 
-void ZMark::PublishThreadRoot(BaseObject* object, bool young, bool follow)
-{
-    (void)young;
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    if (follow) {
-        ZBarrier::Mark<false, false, true, false>(from_object(object));
-    } else {
-        ZBarrier::Mark<false, false, false, false>(from_object(object));
-    }
-}
 
 bool ZMark::FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain)
 {
