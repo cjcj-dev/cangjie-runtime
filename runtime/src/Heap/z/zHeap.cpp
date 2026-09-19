@@ -510,15 +510,48 @@ ZPage* Heap::page(MAddress addr) { return page_table().get(addr); }
 
 ZPageTable& Heap::page_table() { return GetHeap()._page_table; }
 
-ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
-                             bool clearPayload, PageAge age)
+#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
+RegionManager* Heap::_test_page_allocator = nullptr;
+
+void Heap::bind_test_page_allocator(RegionManager* manager)
 {
-    RegionManager& manager = GetHeap().page_allocator();
-    ZPage* page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
+    _test_page_allocator = manager;
+}
+#endif
+
+RegionManager& Heap::page_allocator()
+{
+#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
+    if (_test_page_allocator != nullptr) {
+        return *_test_page_allocator;
+    }
+#endif
+    return _page_allocator;
+}
+
+const RegionManager& Heap::page_allocator() const
+{
+#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
+    if (_test_page_allocator != nullptr) {
+        return *_test_page_allocator;
+    }
+#endif
+    return _page_allocator;
+}
+
+ZPage* Heap::alloc_page(ZPage* page)
+{
     if (page != nullptr) {
         page_table().insert(page);
     }
     return page;
+}
+
+ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
+                             bool clearPayload, PageAge age)
+{
+    RegionManager& manager = GetHeap().page_allocator();
+    return alloc_page(manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age));
 }
 
 void Heap::free_page(ZPage* page)

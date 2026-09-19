@@ -147,6 +147,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             Heap::page(end - 1) != reused) {
             result = 31;
         }
+        Heap::bind_test_page_allocator(nullptr);
     }
     return result;
 }

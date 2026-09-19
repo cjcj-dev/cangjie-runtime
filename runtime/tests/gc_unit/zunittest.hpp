@@ -43,18 +43,16 @@ inline void EnsureZAddressDomain() {
   }
 }
 
-// Same insert as Heap::alloc_page (ZGC zHeap.cpp:253-257). Local RegionManager
-// fixtures cannot call Heap::alloc_page (product allocator).
+// ZGC zHeap.cpp:253-257: pages enter the table only from ZHeap::alloc_page.
 inline void PublishAllocatedPage(ZPage* page)
 {
-    if (page != nullptr) {
-        Heap::page_table().insert(page);
-    }
+    Heap::alloc_page(page);
 }
 
 inline void BindFixturePageTable(RegionManager& manager, size_t units)
 {
     Heap::GetHeap().install_page_table(manager.GetRegionHeapStart(), units * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
+    Heap::bind_test_page_allocator(&manager);
 }
 
 class ZAddressOffsetMaxSetter {

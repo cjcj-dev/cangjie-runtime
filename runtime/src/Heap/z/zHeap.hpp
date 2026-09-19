@@ -92,8 +92,11 @@ public:
     void DumpAfterGC();
 #endif
     Allocator& GetAllocator();
-    RegionManager& page_allocator() { return _page_allocator; }
-    const RegionManager& page_allocator() const { return _page_allocator; }
+    RegionManager& page_allocator();
+    const RegionManager& page_allocator() const;
+#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
+    static void bind_test_page_allocator(RegionManager* manager);
+#endif
     ZObjectAllocator& object_allocator() { return _object_allocator; }
     ZCrossVM& cross_vm() { return _cross_vm; }
     const ZCrossVM& cross_vm() const { return _cross_vm; }
@@ -189,6 +192,7 @@ public:
     static ZPage* alloc_page(size_t num, ZPageType role, bool expectPhysicalMem = false,
                                   bool allowSaferegion = true, bool clearPayload = true,
                                   PageAge age = PageAge::eden);
+    static ZPage* alloc_page(ZPage* page);
     static void free_page(ZPage* page);
     static size_t free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages);
 
@@ -282,6 +286,9 @@ private:
     // zHeap.hpp:48-56: the heap directly owns the page allocator; its
     // mapped caches and backing resources outlive both generation members.
     RegionManager _page_allocator;
+#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
+    static RegionManager* _test_page_allocator;
+#endif
     // Object/TLAB adapter remains pending P16; it owns no page allocator.
     std::unique_ptr<RegionSpace> _allocation_adapter;
     ZPageTable _page_table;

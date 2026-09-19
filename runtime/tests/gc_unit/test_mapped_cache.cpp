@@ -326,6 +326,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     GC_EXPECT_EQ(Read(result->GetRegionStart() + 2 * unit), 0x3333U);
     GC_EXPECT_TRUE(Heap::page(fourthAddress) == fourth);
     GC_EXPECT_TRUE(Heap::page(heapStart) == nullptr);
+    Heap::bind_test_page_allocator(nullptr);
 }
 
 // TestMappedCacheHarvest.java / zPageAllocator.cpp:723-743: with growth room
@@ -371,6 +372,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     GC_EXPECT_TRUE(cached != nullptr);
     GC_EXPECT_EQ(manager.GetCommittedCapacity(), 12 * unit);
     GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 2U);
+    Heap::bind_test_page_allocator(nullptr);
 }
 
 #endif
