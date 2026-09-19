@@ -45,10 +45,10 @@ namespace {
 struct LoadFcFixture {
     LoadFcFixture()
     {
-        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
         auto& heapRemset = HeapTestRemset();
         if (!heapRemset.initialized) {
-            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
         }
         heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj0) + 128);
         heap.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj1) + 128);

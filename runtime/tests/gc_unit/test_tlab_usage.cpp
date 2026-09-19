@@ -35,7 +35,7 @@ GC_TEST(TLABUsage, BoundsAndDemand)
     std::fprintf(stderr, "TLAB_EMPTY_IDENTITY product=%p caller=%p\n",
                  static_cast<void*>(buffer.GetRegion()), static_cast<void*>(ZPage::NullRegion()));
     GC_EXPECT_TRUE(buffer.GetRegion() == ZPage::NullRegion());
-    const size_t unit = ZPage::UNIT_SIZE;
+    const size_t unit = ZGranuleSize;
     const size_t maximum = 32 * unit;
     GC_EXPECT_EQ(buffer.ComputeTLABSize(0, maximum), unit);
     GC_EXPECT_EQ(buffer.ComputeTLABSize(unit, maximum), 2 * unit);
@@ -93,8 +93,8 @@ GC_OTHER_VM_TEST(TLABUsage, YoungOccupancyUsesActualExtent)
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     const size_t beforeYoung = manager.used_generation(ZGenerationId::young);
     const size_t beforeOld = manager.used_generation(ZGenerationId::old);
-    const size_t small = ZPage::UNIT_SIZE;
-    const size_t two = 2 * ZPage::UNIT_SIZE;
+    const size_t small = ZGranuleSize;
+    const size_t two = 2 * ZGranuleSize;
     manager.increase_used_generation(ZGenerationId::young, small + two);
     GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - beforeYoung, small + two);
     manager.decrease_used_generation(ZGenerationId::young, two);
@@ -154,17 +154,19 @@ void* AllocateThroughCycle(void*)
         return reinterpret_cast<void*>(2);
     }
     const size_t actual = buffer->GetRegion()->GetRegionSize();
-    const bool valid = computed > initial && computed <= maximum && actual == computed;
+    // #727 removes variable unit-sized backing pages; #730 owns sub-page TLAB resizing.
+    const bool valid = initial == ZPageSizeSmall && computed == ZPageSizeSmall &&
+                       actual == ZPageSizeSmall && computed <= maximum;
     std::fprintf(stderr, "TLAB_CYCLE initial=%zu computed=%zu refill=%zu maximum=%zu valid=%u\n",
                  initial, computed, actual, maximum, static_cast<unsigned>(valid));
     return reinterpret_cast<void*>(valid ? 0 : 3);
 }
 }
 
-GC_OTHER_VM_TEST(TLABUsage, AllocationCycleResizesNextRefill)
+GC_OTHER_VM_TEST(TLABUsage, AllocationCycleKeepsGranuleBacking)
 {
     RuntimeParam param{};
-    param.heapParam.heapSize = 32 * 1024;
+    param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     CJThreadHandle handle = RunCJTask(AllocateThroughCycle, nullptr);

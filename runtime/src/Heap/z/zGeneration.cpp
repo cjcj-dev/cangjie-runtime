@@ -252,10 +252,16 @@ public:
     bool do_operation() override { return ZGeneration::old()->mark_end(); }
 };
 
+static const ZStatPhasePause POldRelocateStart("old.relocate_start", ZGenerationId::old);
+
 class VM_ZRelocateStartOld : public VM_ZOperation {
 public:
     bool do_operation() override
     {
+        ZStatTimerOld timer(POldRelocateStart);
+        ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
+            data.storeBarrierBuffer->install_base_pointers();
+        });
         ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         ZGeneration::old()->set_phase(ZGeneration::Phase::Relocate);
@@ -263,6 +269,7 @@ public:
         ZGeneration::old()->StatHeap()->AtRelocateStart(
             static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(
                 ZGeneration::old()));
+        ZRelocate::StartRelocationTasks(ZGenerationId::old);
         return true;
     }
     bool block_jni_critical() const override { return true; }
@@ -416,8 +423,8 @@ void ZGenerationYoung::mark_start()
          "recent_young=%zu "
          "objects_visited=%zu slots_visited=%zu repark_ns=%llu unmovable_ns=%llu recent_ns=%llu "
          "visitor_ns=%llu list_move_ns=%llu",
-         stats.candidateRegions, stats.candidateBytes, stats.fromVisited, stats.fromVisitedUnits,
-         stats.unmovableVisited, stats.unmovableVisitedUnits, stats.unmovableYoung,
+         stats.candidateRegions, stats.candidateBytes, stats.fromVisited, stats.fromVisitedBytes,
+         stats.unmovableVisited, stats.unmovableVisitedBytes, stats.unmovableYoung,
          stats.recentFullVisited, stats.recentFullVisitedUnits, stats.recentFullYoung,
          stats.objectVisits, stats.slotVisits,
          static_cast<unsigned long long>(stats.reparkNs), static_cast<unsigned long long>(stats.unmovableNs),
@@ -1154,13 +1161,15 @@ void ZGenerationOld::pause_verify()
 
 void ZGenerationOld::concurrent_select_relocation_set() {}
 
-void ZGenerationOld::concurrent_remap_young_roots() {}
+void ZGenerationOld::concurrent_remap_young_roots()
+{
+    ZRelocate::RemapYoungRoots();
+}
 
 void ZGenerationOld::pause_relocate_start()
 {
     VM_ZRelocateStartOld op;
     (void)op.pause();
-    (void)ZRelocate::Preforward();
 }
 
 void ZGenerationOld::concurrent_relocate()
@@ -1238,6 +1247,11 @@ void ZGenerationYoung::in_place_relocate_promote(ZPage* from_page, ZPage* to_pag
     // zGeneration.cpp:950-955: replace + statistics only.
     Heap::page_table().replace(from_page, to_page);
     Heap::GetHeap().page_allocator().promote_used(from_page, to_page);
+}
+
+void ZGenerationYoung::register_in_place_relocate_promoted(ZPage* page)
+{
+    _relocation_set.register_in_place_relocate_promoted(page);
 }
 
 void ZGenerationYoung::register_flip_promoted(const ZArray<ZPage*>& pages)
@@ -1318,6 +1332,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
     }
     ZRelocationSetIterator rs_iter(&_relocation_set);
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
+        forwarding->page()->SetRegionRole(ZPageRole::From);
         _forwarding_table.insert(forwarding);
     }
 }

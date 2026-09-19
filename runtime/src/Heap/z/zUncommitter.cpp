@@ -101,14 +101,10 @@ void Uncommitter::SetZUncommitDelay(size_t seconds)
 
 size_t Uncommitter::ChunkLimit(size_t maxCapacity)
 {
-    size_t granule = MRT_PAGE_SIZE == 0 ? 4096 : MRT_PAGE_SIZE;
-    size_t byCapacity = (maxCapacity >> 7);
-    if (byCapacity < granule) {
-        byCapacity = granule;
-    } else {
-        byCapacity = RoundUp(byCapacity, granule);
-    }
-    return std::min(byCapacity, kMaxUncommitChunk);
+    // zUncommitter.cpp:379-380: chunk limits are whole heap granules.
+    const size_t upper = std::max(ZGranuleSize,
+        AlignDown(kMaxUncommitChunk / ZPerNUMAStorage::count(), ZGranuleSize));
+    return std::min(AlignUp(maxCapacity >> 7, ZGranuleSize), upper);
 }
 
 size_t Uncommitter::MinCapacity(size_t liveBytes, size_t youngReserve)

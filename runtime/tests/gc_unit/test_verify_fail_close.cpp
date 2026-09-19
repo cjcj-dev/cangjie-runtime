@@ -97,7 +97,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeOperationRejectsUnmanagedRoot)
     }
     GcVerifyFixture fixture;
     ExpectSceneAbort("Bad object", [&] {
-        fixture.VerifyRoot(reinterpret_cast<BaseObject*>(fixture.heapStart + 3 * ZPage::UNIT_SIZE));
+        fixture.VerifyRoot(reinterpret_cast<BaseObject*>(fixture.heapStart + 3 * ZGranuleSize));
     });
     fixture.VerifyRoot(fixture.obj0);
 }
@@ -181,7 +181,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
     RememberedSet& remset = HeapTestRemset();
-    remset.Initialize(fixture.heapStart, 2 * ZPage::UNIT_SIZE);
+    remset.Initialize(fixture.heapStart, 2 * ZGranuleSize);
     ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner); });
     remset.Record(slot);
     if (!Heap::GetHeap().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
@@ -203,7 +203,7 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
     GC_EXPECT_TRUE(owner != nullptr);
     fixture.region0->SetRegionRole(ZPageRole::From);
     RememberedSet& remset = HeapTestRemset();
-    remset.Initialize(fixture.heapStart, 2 * ZPage::UNIT_SIZE);
+    remset.Initialize(fixture.heapStart, 2 * ZGranuleSize);
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     // ZGC zVerify.cpp:549-553: both remembered bits mean intentionally unremembered.
     HeapSlotAt<>(slot).StoreColoured(to_zpointer(raw(StoreGoodPointer(nullptr)) | ZPointerRememberedMask));

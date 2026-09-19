@@ -34,7 +34,7 @@ public:
 
     ZObjectAllocator();
     PerAge* allocator(PageAge age) { return objectAllocators[untype(age)].get(); }
-    uintptr_t alloc(size_t size, PageAge age, bool nonBlocking = false);
+    uintptr_t alloc(size_t size, PageAge age, bool nonBlocking = false, bool clearPayload = true);
     void retire_pages(PageAgeRange ages);
 
 private:

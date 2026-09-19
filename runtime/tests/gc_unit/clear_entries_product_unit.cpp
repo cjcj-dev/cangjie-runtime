@@ -383,8 +383,7 @@ GcHeapFixture& ProductFixture()
     EnsureDeliveryRuntime();
     static GcHeapFixture fixture;
     RelocationReceiptTest::BindCollector(nullptr);
-    static const bool initialized = InitFwdTables(
-        fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
+    static const bool initialized = InitFwdTables();
     // CompactRegion now carries remembered bits with an in-place copy.  This
     // independent product-test process does not run Heap::Init, so initialize
     // the Heap-owned remembered set alongside its forwarding table.
@@ -470,7 +469,8 @@ void PublishGenerationMarkComplete(Generation gen)
 
 ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
 {
-    ZPage* previous = Heap::page(ZPage::GetUnitAddress(index));
+    index += ZPage::GranuleIndex(fx.heapStart);
+    ZPage* previous = Heap::page(ZPage::GranuleAddress(index));
     if (previous != nullptr) {
         if (previous->IsYoungRegion()) {
             previous->reset(PageAge::old);
@@ -479,7 +479,7 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
     if (previous != nullptr && Heap::page(previous->GetRegionStart()) != nullptr) {
         ZPage::RetirePage(previous, []() {});
     }
-    ZPage* region = ZPage::InitRegion(index, 1, ZPageType::small);
+    ZPage* region = ZPage::InitRegion(index, (1) * ZGranuleSize, ZPageType::small);
     GC_EXPECT_TRUE(region != nullptr);
     region->SetRegionAllocPtr(region->GetRegionStart());
     (void)fx;
@@ -494,8 +494,6 @@ public:
     explicit DeliverySharedPageScope(ZPage* page)
         : manager(static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager())
     {
-        // Heap::Init normally supplies this limit. The synthetic heap has one-unit pages.
-        manager.SetLargeObjectThreshold(ZPage::UNIT_SIZE / KB);
         // zObjectAllocator.hpp:41 ZPerCPU<ZPage*>: every CPU slot names the page.
         auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::old);
         ZPerCPUIterator<ZPage*> slots(&allocator.sharedSmallPage);
@@ -1625,8 +1623,8 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
         GC_EXPECT_TRUE(region->generation_id() == expectedId);
     }
     const auto oldLife = region->GetRegionLifeId();
-    ZPage::RetirePage(region, [region]() { region->InitFreeUnits(); });
-    region = ZPage::InitRegion(0, 1, ZPageType::small);
+    ZPage::RetirePage(region, [region]() { region->RetirePageMemory(); });
+    region = ZPage::InitRegion(ZPage::GranuleIndex(fixture.heapStart), (1) * ZGranuleSize, ZPageType::small);
     PublishAllocatedPage(region);
     GC_EXPECT_TRUE(region->GetRegionLifeId() != oldLife);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);

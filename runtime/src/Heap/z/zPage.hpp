@@ -169,10 +169,8 @@ public:
 
     unsigned RelocateObserve() const;
 
-    static const size_t UNIT_SIZE; // same as system page size
 
     // regarding a object as a large object when the size is greater than 8 units.
-    static const size_t LARGE_OBJECT_DEFAULT_THRESHOLD;
 
     // release a large object when the size is greater than 4096KB.
     static constexpr size_t LARGE_OBJECT_RELEASE_THRESHOLD = 4096 * KB;
@@ -201,7 +199,12 @@ public:
     zoffset start() const { return _virtual.start(); }
     zoffset_end end() const { return _virtual.end(); }
     size_t size() const { return _virtual.size(); }
-    MAddress top() const { return GetRegionAllocPtr(); }
+    zoffset_end top() const
+    {
+        zoffset_end value;
+        __atomic_load(&_top, &value, __ATOMIC_ACQUIRE);
+        return value;
+    }
     size_t remaining() const
     {
         return GetRegionEnd() > GetRegionAllocPtr() ? GetRegionEnd() - GetRegionAllocPtr() : 0;
@@ -388,17 +391,15 @@ public:
 
 
 
-    // The reverse metadata array remains an ABI adapter. Its anchor need not
-    // be adjacent to payload reservations. Cache indices are dense within each
-    // segment, with an unused index between segments to prevent coalescing.
-    struct UnitSegment {
+    // Reservation boundaries for the compiler heap-slot address-domain ABI.
+    // Page and backing maps use global granule offsets, including holes.
+    struct ReservedSegment {
         uintptr_t start;
         size_t size;
-        size_t firstIndex;
         uintptr_t End() const { return start + size; }
     };
 
-    static std::vector<UnitSegment> unitSegments;
+    static std::vector<ReservedSegment> reservedSegments;
 
     // zPageAllocator.cpp:2248-2250 ZSafeDelete<ZPage> _safe_destroy: the
     // deferred-deleted object is the ZPage descriptor itself. The RetirePage
@@ -423,35 +424,32 @@ public:
     static void RetirePage(ZPage* region, std::function<void()> retire);
     static void RetireDescriptor(ZPage* page);
 
-    static size_t IndexedUnitCount(const std::vector<ZVirtualMemory>& ranges);
-    static size_t IndexedUnitCount(const std::vector<UnitSegment>& segments);
 
     // Metadata over one unit range at an arbitrary native address (fixtures
     // that build a heap outside the zoffset address domain).
-    static void Initialize(size_t nUnit, uintptr_t heapAddress)
+    static void Initialize(size_t pageSize, uintptr_t heapAddress)
     {
-        InitializeSegments(heapAddress, { UnitSegment{ heapAddress, nUnit * UNIT_SIZE, 0 } });
+        InitializeSegments(heapAddress, { ReservedSegment{ heapAddress, pageSize } });
     }
 
     // Metadata over the reserved heap address ranges (zoffset domain).
     static void InitializeSegments(uintptr_t metadataEnd, const std::vector<ZVirtualMemory>& ranges);
-    static void InitializeSegments(uintptr_t metadataEnd, const std::vector<UnitSegment>& segments);
+    static void InitializeSegments(uintptr_t metadataEnd, const std::vector<ReservedSegment>& segments);
 
-    static size_t FindUnitIndex(uintptr_t address);
+    static size_t GranuleIndex(uintptr_t address);
 
-    static bool ContainsUnitRange(uintptr_t start, size_t size);
+    static bool ContainsReservedRange(uintptr_t start, size_t size);
 
     static void VisitPageOwners(const std::function<void(ZPage*)>& visitor);
 
 
-    static void InitFreeRegion(size_t unitIdx, size_t nUnit);
 
-    static ZPage* InitRegion(size_t unitIdx, size_t nUnit, ZPageType uclass,
+    static ZPage* InitRegion(size_t granuleIndex, size_t pageSize, ZPageType uclass,
                                   PageAge age = PageAge::old);
 
     static void WaitCopiedBeforePayloadWipe(ZPage* region, const char* site);
 
-    static void ClearUnits(size_t idx, size_t cnt);
+    static void ClearPageMemory(size_t idx, size_t cnt);
 
     BaseObject* GetFirstObject() const { return from_region_addr(GetRegionStart()); }
 
@@ -464,11 +462,9 @@ public:
     // unit, so that case is one unit rather than an underflowed stale extent.
     size_t GetRegionSizeForDetachCheck() const;
 
-    size_t GetUnitCount() const { return GetRegionSize() / UNIT_SIZE; }
 
     size_t GetGhostRegionSize() const;
 
-    size_t GetGhostRegionUnitCount() const { return GetGhostRegionSize() / UNIT_SIZE; }
 
     size_t GetAvailableSize() const;
 
@@ -489,7 +485,7 @@ public:
     void ClearRelocationResiduals();
 
     // reset so that this region can be reused for allocation
-    void InitFreeUnits();
+    void RetirePageMemory();
 
 
 
@@ -497,11 +493,6 @@ public:
 
     ZGenerationId generation_id() const;
 
-    template<Generation G>
-    void PublishFromPageMetadata();
-
-    template<Generation G>
-    __attribute__((always_inline)) inline void PublishForwardingCarrier();
 
     // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
     // Public for reffix parallel window assert + positive-control inject.
@@ -633,13 +624,13 @@ public:
 
 
 
-    size_t GetUnitIdx() const { return FindUnitIndex(GetRegionStart()); }
+    size_t granule_index() const { return GranuleIndex(GetRegionStart()); }
 
     MAddress GetRegionStart() const;
 
     MAddress GetRegionEnd() const;
 
-    void SetRegionAllocPtr(MAddress addr) { _scratch.allocPtr = addr; }
+    void SetRegionAllocPtr(MAddress addr) { _top = to_zoffset_end(addr - ZAddressHeapBase); }
 
     MAddress GetRegionAllocPtr() const;
 
@@ -660,14 +651,11 @@ public:
 
     bool CompareAndSwapRawPointerObjectCount(int32_t expectVal, int32_t newVal);
 
-    uintptr_t Alloc(size_t size);
 
     // for regions shared by multithreads
-    uintptr_t AtomicAlloc(size_t size);
 
     // zHeap.cpp:298-311 undo_alloc_object_for_relocation / zPage undo_alloc_object_atomic:
     // rewind allocPtr only if this object is still the bump tip. Failure is allowed.
-    bool UndoAllocObjectAtomic(uintptr_t addr, size_t size);
 
     bool IsTraceRegion() const { return false; }
 
@@ -726,8 +714,6 @@ private:
     // P11/P05 scratch. ZGC has no analogue; not part of the ZPage ten-field set.
     struct ZPageRelocationScratch {
         struct {
-            uintptr_t allocPtr;
-            uintptr_t regionEnd;
 
             int32_t rawPointerObjectCount;
             uint32_t censusBoundaryOffset;
@@ -753,25 +739,24 @@ private:
 
 public:
     static uintptr_t heapStartAddress;
-    static size_t totalUnitCount;
     constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
 
-    ALWAYS_INLINE static size_t GetUnitIdxAt(uintptr_t allocAddr)
+    ALWAYS_INLINE static size_t GranuleIndexAt(uintptr_t allocAddr)
     {
-        const size_t idx = FindUnitIndex(allocAddr);
+        const size_t idx = GranuleIndex(allocAddr);
         CHECK_DETAIL(idx != INVALID_IDX, "address is outside heap reservations: %#zx", allocAddr);
         return idx;
     }
 
-    static MAddress GetUnitAddress(size_t idx);
+    static MAddress GranuleAddress(size_t idx);
 
     void BumpRegionLifeId();
 
     // Reinitialization consumes an already retired descriptor. The allocator
     // must remove the old page and finish safe retirement before reaching here.
-    void InitZPage(size_t nUnit, ZPageType uClass, PageAge age = PageAge::old, bool live = true);
+    void InitZPage(size_t pageSize, ZPageType uClass, PageAge age = PageAge::old, bool live = true);
 
-    void InitRegion(size_t nUnit, ZPageType uClass, PageAge age = PageAge::old);
+    void InitRegion(size_t pageSize, ZPageType uClass, PageAge age = PageAge::old);
 
     static constexpr uint32_t NULLPTR_IDX = INVALID_IDX;
     ZPageRelocationScratch _scratch;

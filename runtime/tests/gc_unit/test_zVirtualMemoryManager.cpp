@@ -322,7 +322,7 @@ GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTablePublishesEveryRange)
 {
     EnsureZAddressDomain();
     const uintptr_t domain = ZAddressHeapBase;
-    const size_t granule = ZBackingGranuleSize;
+    const size_t granule = ZGranuleSize;
     for (size_t count : {size_t(0), size_t(1), size_t(9), size_t(kCjHeapRangeCap)}) {
         std::vector<HeapSlotAddressRange> ranges;
         for (size_t i = 0; i < count; ++i) {
@@ -354,8 +354,8 @@ GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTableRejectsOversizedPublica
     if (child == 0) {
         std::vector<HeapSlotAddressRange> ranges;
         for (size_t i = 0; i <= kCjHeapRangeCap; ++i) {
-            ranges.push_back({ZAddressHeapBase + 2 * i * ZBackingGranuleSize,
-                              ZAddressHeapBase + (2 * i + 1) * ZBackingGranuleSize});
+            ranges.push_back({ZAddressHeapBase + 2 * i * ZGranuleSize,
+                              ZAddressHeapBase + (2 * i + 1) * ZGranuleSize});
         }
         Heap::OnHeapCreated(ZAddressHeapBase, ranges);
         _exit(0);

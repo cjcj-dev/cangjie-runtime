@@ -776,9 +776,9 @@ static BaseObject* PlainRootObject(zaddress_unsafe address)
 // Eager ZUncoloredRoot::barrier (zUncoloredRoot.inline.hpp:38-59).
 // The handshake owns the actual ABI slot. Keep its observed color through
 // resolution, publish the current object, and only then restore a plain word.
-// Plain roots were current when saved and are healed by the eager relocation
-// handshake before resumption; lazy frame-color history remains a separate port.
-static bool PushHeapRoot(RootSlot& root, bool young, bool follow = true)
+// The eager scan captures the saved thread color before the watermark installs
+// new masks; every root in that scan must keep using the captured color.
+static bool PushHeapRoot(RootSlot& root, bool young, uintptr_t color, bool follow = true)
 {
     (void)young;
     const zaddress_unsafe observed = root.LoadPlain();
@@ -788,21 +788,21 @@ static bool PushHeapRoot(RootSlot& root, bool young, bool follow = true)
     }
     zaddress_unsafe* slot = reinterpret_cast<zaddress_unsafe*>(&root);
     if (follow) {
-        ZUncoloredRoot::mark(slot, ZPointerLoadGoodMask);
+        ZUncoloredRoot::mark(slot, color);
     } else {
-        ZUncoloredRoot::process_invisible(slot, ZPointerLoadGoodMask);
+        ZUncoloredRoot::process_invisible(slot, color);
     }
     return Heap::IsHeapAddress(PlainRootObject(root.LoadPlain()));
 }
 
-static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool young)
+static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool young, uintptr_t color)
 {
     if (record == nullptr) {
         return false;
     }
     // This is record+0 itself, not a copy of the field or its decoded value.
     RootSlot& field = RootSlotAt(static_cast<void*>(record));
-    return PushHeapRoot(field, young);
+    return PushHeapRoot(field, young, color);
 }
 
 // Argument-form struct-live: `root` holds a pointer to a headerless record
@@ -838,13 +838,15 @@ bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFins);
     }
     MutatorUnlock();
-    RootVisitor visitor = [this, young](ObjectRef& root) {
-        VisitHeapRootSlots(root, [young](ObjectRef& slot) {
-            (void)PushHeapRoot(slot, young);
+    // ZGC zStackWatermark.cpp:155-173: preserve the root color in the closure.
+    const uintptr_t rootColor = GetGCData().loadGoodMask;
+    RootVisitor visitor = [this, young, rootColor](ObjectRef& root) {
+        VisitHeapRootSlots(root, [young, rootColor](ObjectRef& slot) {
+            (void)PushHeapRoot(slot, young, rootColor);
         });
     };
-    RootVisitor invisibleRootVisitor = [young](ObjectRef& root) {
-        (void)PushHeapRoot(root, young, false);
+    RootVisitor invisibleRootVisitor = [young, rootColor](ObjectRef& root) {
+        (void)PushHeapRoot(root, young, rootColor, false);
     };
     DerivedPtrVisitor derivedVisitor = MakeDerivedRootVisitor(visitor);
     if (stackScanEpoch == 0) {

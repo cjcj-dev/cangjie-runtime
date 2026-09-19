@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC zVirtualMemory.inline.hpp:35-55. The granule is ZBackingGranuleSize
+// ZGC zVirtualMemory.inline.hpp:35-55. The granule is ZGranuleSize
 // (one page-allocator unit) until P03/P05 move pages onto ZGranuleSize.
 
 #pragma once
@@ -24,15 +24,15 @@ inline ZVirtualMemory::ZVirtualMemory()
 inline ZVirtualMemory::ZVirtualMemory(zoffset start, size_t size)
   : ZRange(start, size) {
   // ZVirtualMemory is only used for granule multiple ranges
-  assert(untype(start) % ZBackingGranuleSize == 0);
-  assert(size % ZBackingGranuleSize == 0);
+  assert(untype(start) % ZGranuleSize == 0);
+  assert(size % ZGranuleSize == 0);
 }
 
 inline ZVirtualMemory::ZVirtualMemory(const ZRange<zoffset, zoffset_end>& range)
   : ZVirtualMemory(range.start(), range.size()) {}
 
 inline int ZVirtualMemory::granule_count() const {
-  const size_t granule_count = size() / ZBackingGranuleSize;
+  const size_t granule_count = (size() >> ZGranuleSizeShift);
 
   assert(granule_count <= static_cast<size_t>(std::numeric_limits<int>::max()));
 

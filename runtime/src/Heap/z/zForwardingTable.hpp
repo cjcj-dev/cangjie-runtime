@@ -18,7 +18,7 @@ class ZForwardingTable {
 public:
     ZForwardingTable();
 
-    void initialize(size_t max_offset, MAddress base, size_t granule);
+    void initialize();
 
     ZForwarding* at(size_t index) const;
     ZForwarding* get(MAddress addr) const;

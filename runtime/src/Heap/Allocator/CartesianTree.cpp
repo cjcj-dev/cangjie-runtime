@@ -127,7 +127,6 @@ void CartesianTree::Node::RefreshFreeZPage()
 {
     Index idx = GetIndex();
     Count cnt = GetCount();
-    ZPage::InitFreeRegion(idx, cnt);
 }
 
 size_t CartesianTree::GetNodeCount() const

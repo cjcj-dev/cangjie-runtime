@@ -16,6 +16,7 @@
 
 #include "Common/Runtime.h"
 #include "CjScheduler.h"
+#include "Cangjie.h"
 
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zCrossVM.hpp"
@@ -53,6 +54,7 @@ using namespace MapleRuntime::GcUnit;
 #if defined(MRT_TESTABLE_INTERNALS)
 
 extern "C" int CJ_ScheduleManagerInit();
+namespace MapleRuntime { extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize); }
 
 namespace MapleRuntime {
 
@@ -70,10 +72,9 @@ public:
             Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::MarkComplete);
             auto& remembered = HeapTestRemset();
             if (!remembered.IsInitialized()) {
-                remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+                remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZGranuleSize);
             }
-            InitFwdTables(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE,
-                          ZPage::UNIT_SIZE);
+            InitFwdTables();
         }
     }
 
@@ -101,7 +102,7 @@ public:
         ZGenerationTest::SetReason(oldCycle, GC_REASON_USER);
         auto& remembered = HeapTestRemset();
         if (!remembered.IsInitialized()) {
-            remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+            remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZGranuleSize);
         }
         // ZDriver::gc_major runs the young roots collection before old marking.
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
@@ -417,7 +418,7 @@ void RunYoungWeakRemsetFlow()
     RelocationReceiptTest::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RememberedSet& rememberedSet = HeapTestRemset();
-    rememberedSet.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rememberedSet.Initialize(fx.heapStart, 2 * ZGranuleSize);
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
     referentField.StoreColoured(to_zpointer(raw(StoreGoodPointer(graph.referent)) ^ ZPointerMarkedYoungMask));
     ZBarrier::WriteReference(graph.weak, referentField, graph.referent);

@@ -32,10 +32,10 @@ namespace {
 struct PayloadFixture {
     PayloadFixture()
     {
-        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
         auto& heapRemset = HeapTestRemset();
         if (!heapRemset.initialized) {
-            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
         }
         heap.typeInfo->SetFlag(0);
         heap.typeInfo->SetInstanceSize(sizeof(uint64_t));

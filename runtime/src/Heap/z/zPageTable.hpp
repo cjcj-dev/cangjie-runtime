@@ -36,9 +36,9 @@ class ZPageTable {
 
 public:
     ZPageTable() = default;
-    ZPageTable(size_t max_offset, MAddress base, size_t granule) : _map(max_offset, base, granule) {}
+    explicit ZPageTable(size_t max_offset) : _map(max_offset) {}
 
-    static void install(MAddress base, size_t heapSize, size_t granule);
+    static void install();
 
     int count() const;
     ZPage* get(MAddress addr) const;

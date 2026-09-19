@@ -485,70 +485,36 @@ inline void ZPage::DisableSafeDestroy()
         safeDestroy.disable_deferred_delete();
     }
 
-inline size_t ZPage::IndexedUnitCount(const std::vector<ZVirtualMemory>& ranges)
-    {
-        std::vector<UnitSegment> segments;
-        for (const ZVirtualMemory& range : ranges) {
-            segments.push_back(UnitSegment{ untype(ZOffset::address_unsafe(range.start())), range.size(), 0 });
-        }
-        return IndexedUnitCount(segments);
-    }
-
-inline size_t ZPage::IndexedUnitCount(const std::vector<UnitSegment>& segments)
-    {
-        CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
-        size_t count = 0;
-        uintptr_t previousEnd = 0;
-        for (const auto& range : segments) {
-            CHECK(range.size != 0 && IsRepresentableLow48Range(range.start, range.size));
-            CHECK(range.start >= previousEnd);
-            CHECK(range.start % UNIT_SIZE == 0 && range.size % UNIT_SIZE == 0);
-            CHECK(CheckedAddSize(count, range.size / UNIT_SIZE + 1, count));
-            previousEnd = range.End();
-        }
-        CHECK(count != 0 && count - 1 < std::numeric_limits<uint32_t>::max());
-        return count - 1;
-    }
-
 inline void ZPage::InitializeSegments(uintptr_t metadataEnd, const std::vector<ZVirtualMemory>& ranges)
     {
-        std::vector<UnitSegment> segments;
+        std::vector<ReservedSegment> segments;
         for (const ZVirtualMemory& range : ranges) {
-            segments.push_back(UnitSegment{ untype(ZOffset::address_unsafe(range.start())), range.size(), 0 });
+            segments.push_back(ReservedSegment{ untype(ZOffset::address_unsafe(range.start())), range.size() });
         }
         InitializeSegments(metadataEnd, segments);
     }
 
-inline void ZPage::InitializeSegments(uintptr_t metadataEnd, const std::vector<UnitSegment>& segments)
+inline void ZPage::InitializeSegments(uintptr_t metadataEnd, const std::vector<ReservedSegment>& segments)
     {
-        totalUnitCount = IndexedUnitCount(segments);
         heapStartAddress = metadataEnd;
-        unitSegments.clear();
-        size_t index = 0;
+        reservedSegments.clear();
         for (const auto& range : segments) {
             CHECK(IsRepresentableLow48Range(range.start, range.size));
-            unitSegments.push_back(UnitSegment{ range.start, range.size, index });
-            index += range.size / UNIT_SIZE + 1;
+            reservedSegments.push_back(ReservedSegment{ range.start, range.size });
         }
-        ZPageTable::install(segments.front().start,
-                            segments.back().End() - segments.front().start, UNIT_SIZE);
+        ZPageTable::install();
     }
 
-inline size_t ZPage::FindUnitIndex(uintptr_t address)
+inline size_t ZPage::GranuleIndex(uintptr_t address)
     {
-        auto next = std::upper_bound(unitSegments.begin(), unitSegments.end(), address,
-            [](uintptr_t addr, const UnitSegment& segment) { return addr < segment.start; });
-        if (next == unitSegments.begin()) {
-            return INVALID_IDX;
-        }
-        const auto& segment = *std::prev(next);
-        return address < segment.End()
-            ? segment.firstIndex + (address - segment.start) / UNIT_SIZE : INVALID_IDX;
+        return ContainsReservedRange(address, 1)
+            ? untype(ZAddress::offset(to_zaddress_unsafe(address))) >> ZGranuleSizeShift
+            : INVALID_IDX;
     }
 
-inline bool ZPage::ContainsUnitRange(uintptr_t start, size_t size)
+inline bool ZPage::ContainsReservedRange(uintptr_t start, size_t size)
     {
-        for (const auto& segment : unitSegments) {
+        for (const auto& segment : reservedSegments) {
             if (start >= segment.start && start < segment.End() && size <= segment.End() - start) {
                 return true;
             }
@@ -568,43 +534,19 @@ inline void ZPage::VisitPageOwners(const std::function<void(ZPage*)>& visitor)
         }
     }
 
-inline MAddress ZPage::GetUnitAddress(size_t idx)
+inline MAddress ZPage::GranuleAddress(size_t idx)
     {
-        CHECK(idx < totalUnitCount);
-        for (const auto& segment : unitSegments) {
-            if (idx >= segment.firstIndex && idx - segment.firstIndex < segment.size / UNIT_SIZE) {
-                return segment.start + (idx - segment.firstIndex) * UNIT_SIZE;
-            }
-        }
-        LOG(RTLOG_FATAL, "unit index denotes a reservation boundary: %zu", idx);
-        return 0;
+        CHECK(idx < (ZAddressOffsetMax >> ZGranuleSizeShift));
+        return untype(ZOffset::address_unsafe(static_cast<zoffset>(idx << ZGranuleSizeShift)));
     }
 
-inline void ZPage::InitFreeRegion(size_t unitIdx, size_t nUnit)
+inline ZPage* ZPage::InitRegion(size_t granuleIndex, size_t pageSize, ZPageType uclass, PageAge age)
     {
-        (void)unitIdx;
-        (void)nUnit;
-    }
-
-inline ZPageType ZPageTypeFor(size_t nUnit, ZPageType uclass)
-{
-    if (uclass == ZPageType::large) {
-        return ZPageType::large;
-    }
-    const size_t bytes = nUnit * ZPage::UNIT_SIZE;
-    if (ZPageSizeMediumEnabled && bytes >= ZPageSizeMediumMin && bytes <= ZPageSizeMediumMax) {
-        return ZPageType::medium;
-    }
-    return ZPageType::small;
-}
-
-inline ZPage* ZPage::InitRegion(size_t unitIdx, size_t nUnit, ZPageType uclass, PageAge age)
-    {
-        const MAddress start = GetUnitAddress(unitIdx);
-        ZPage* region = new ZPage(ZPageTypeFor(nUnit, uclass), age,
+        const MAddress start = GranuleAddress(granuleIndex);
+        ZPage* region = new ZPage(uclass, age,
                                             ZVirtualMemory(ZAddress::offset(to_zaddress_unsafe(start)),
-                                                           nUnit * UNIT_SIZE));
-        region->InitRegion(nUnit, uclass, age);
+                                                           pageSize));
+        region->InitRegion(pageSize, uclass, age);
         return region;
     }
 
@@ -625,19 +567,9 @@ inline bool ZPage::IsEmpty() const
         return GetRegionAllocPtr() == GetRegionStart();
     }
 
-inline size_t ZPage::GetRegionSize() const
-    {
-        MAddress regionStart = GetRegionStart();
-        DCHECK(_scratch.regionEnd > regionStart);
-        return _scratch.regionEnd - regionStart;
-    }
+inline size_t ZPage::GetRegionSize() const { return size(); }
 
-inline size_t ZPage::GetRegionSizeForDetachCheck() const
-    {
-        const MAddress start = GetRegionStart();
-        const MAddress end = _scratch.regionEnd;
-        return end > start && ContainsUnitRange(start, end - start) ? end - start : UNIT_SIZE;
-    }
+inline size_t ZPage::GetRegionSizeForDetachCheck() const { return size(); }
 
 inline size_t ZPage::GetGhostRegionSize() const
     {
@@ -654,9 +586,9 @@ inline size_t ZPage::GetAvailableSize() const
         return GetRegionEnd() - GetRegionAllocPtr();
     }
 
-inline void ZPage::InitFreeUnits()
+inline void ZPage::RetirePageMemory()
     {
-        InitZPage(GetUnitCount(), ZPageType::small, PageAge::old, false);
+        InitZPage(GetRegionSize(), ZPageType::small, PageAge::old, false);
     }
 
 
@@ -689,24 +621,6 @@ inline bool ZPage::IsCompactRouteDestination(MAddress address) const
 
 
 
-
-    template<Generation G>
-inline void ZPage::PublishFromPageMetadata()
-    {
-        const RegionLifeId life = GetRegionLifeId();
-        ZForwarding* forwarding = forwarding_for_page(this);
-        CHECK_DETAIL(forwarding != nullptr, "forwarding carrier missing at from-page publication region=%p", this);
-        forwarding->publish_from_page_view(&livemap(), GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
-            static_cast<uint8_t>(G),
-            static_cast<uint8_t>(IsLargeRegion() && is_marked() && is_live_bit_set(to_zaddress(GetRegionStart()))),
-            life);
-    }
-
-    template<Generation G>
-inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
-    {
-        PublishFromPageMetadata<G>();
-    }
 
 inline bool ZPage::RetainForwarding()
     {
@@ -813,43 +727,6 @@ inline bool ZPage::CompareAndSwapRawPointerObjectCount(int32_t expectVal, int32_
                                            __ATOMIC_ACQUIRE);
     }
 
-inline uintptr_t ZPage::Alloc(size_t size)
-    {
-        size_t limit = GetRegionEnd();
-        if (_scratch.allocPtr + size <= limit) {
-            uintptr_t addr = _scratch.allocPtr;
-            _scratch.allocPtr += size;
-            return addr;
-        } else {
-            return 0;
-        }
-    }
-
-inline uintptr_t ZPage::AtomicAlloc(size_t size)
-    {
-        // zPage.inline.hpp:451-479: reject an out-of-page top before CAS.
-        // Failed allocations must never move the published allocation frontier.
-        uintptr_t addr = __atomic_load_n(&_scratch.allocPtr, __ATOMIC_ACQUIRE);
-        const uintptr_t limit = GetRegionEnd();
-        for (;;) {
-            if (addr > limit || size > limit - addr) {
-                return 0;
-            }
-            const uintptr_t next = addr + size;
-            if (__atomic_compare_exchange_n(&_scratch.allocPtr, &addr, next, false,
-                                             __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-                return addr;
-            }
-        }
-    }
-
-inline bool ZPage::UndoAllocObjectAtomic(uintptr_t addr, size_t size)
-    {
-        uintptr_t expected = addr + size;
-        return __atomic_compare_exchange_n(&_scratch.allocPtr, &expected, addr, false, __ATOMIC_ACQ_REL,
-                                           __ATOMIC_ACQUIRE);
-    }
-
 inline bool ZPage::IsPinnedRegion() const
     {
         const ZPageRole role = GetRegionRole();
@@ -924,9 +801,9 @@ inline void ZPage::BumpRegionLifeId()
         }
     }
 
-inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool live)
+inline void ZPage::InitZPage(size_t pageSize, ZPageType uClass, PageAge age, bool live)
     {
-        CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
+        CHECK(ContainsReservedRange(GetRegionStart(), pageSize));
         CHECK(ZPageTable::heap_table().get(GetRegionStart()) == nullptr);
         CHECK_DETAIL(GetRegionRole() == ZPageRole::None, "reinitializing a region still carrying a role");
 
@@ -944,8 +821,7 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
         WaitCopiedBeforePayloadWipe(this, "InitZPage");
         delete _scratch.retiredLivemap;
         _scratch.retiredLivemap = nullptr;
-        _scratch.allocPtr = GetRegionStart();
-        _scratch.regionEnd = _scratch.allocPtr + nUnit * ZPage::UNIT_SIZE;
+        _top = to_zoffset_end(start());
         reset(age);
         if (age == PageAge::old && !_remembered_set.is_initialized()) {
             remset_alloc();
@@ -957,9 +833,9 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
         _scratch.censusBoundaryOffset = 0;
 
         // routedest: this is the reuse edge named in the defect. TakeRegion has already run
-        // ClearUnits over this payload; if a published route still names this region, the
+        // ClearPageMemory over this payload; if a published route still names this region, the
         // route now answers into zeroed (or freshly re-allocated) memory. Count it here
-        // rather than at ClearUnits because this is the one call that runs exactly once per
+        // rather than at ClearPageMemory because this is the one call that runs exactly once per
         // reuse. The hold is deliberately NOT cleared: reaching this point while held means
         // a reclaim gate was bypassed, and leaving the flag set keeps the region out of the
         // next collection set instead of silently papering over the escape.
@@ -969,10 +845,10 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
         (void)live;
     }
 
-inline void ZPage::InitRegion(size_t nUnit, ZPageType uClass, PageAge age)
+inline void ZPage::InitRegion(size_t pageSize, ZPageType uClass, PageAge age)
     {
-        InitZPage(nUnit, uClass, age, true);
-        (void)nUnit;
+        InitZPage(pageSize, uClass, age, true);
+        (void)pageSize;
     }
 
 inline ZGenerationId ZPage::generation_id() const
@@ -1026,12 +902,12 @@ inline MAddress ZPage::GetRegionStart() const
     if (!_virtual.is_null()) {
         return untype(ZOffset::address_unsafe(_virtual.start()));
     }
-    return _scratch.allocPtr;
+    return 0;
 }
 
-inline MAddress ZPage::GetRegionEnd() const { return _scratch.regionEnd; }
+inline MAddress ZPage::GetRegionEnd() const { return _virtual.is_null() ? 0 : ZAddressHeapBase + untype(end()); }
 
-inline MAddress ZPage::GetRegionAllocPtr() const { return _scratch.allocPtr; }
+inline MAddress ZPage::GetRegionAllocPtr() const { return _virtual.is_null() ? 0 : ZAddressHeapBase + untype(top()); }
 
 inline bool ZPage::IsSmallRegion() const { return is_small(); }
 

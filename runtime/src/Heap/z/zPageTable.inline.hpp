@@ -21,7 +21,7 @@ inline void ZPageTableParallelIterator<T>::do_pages(Function function)
     distributor.do_indices([&](int index) {
         T page = table.at(static_cast<size_t>(index));
         if (page != T()) {
-            const size_t startIndex = (page->GetRegionStart() - table.base()) / table.granule();
+            const size_t startIndex = untype(page->start()) >> ZGranuleSizeShift;
             if (static_cast<size_t>(index) == startIndex) {
                 return function(page);
             }

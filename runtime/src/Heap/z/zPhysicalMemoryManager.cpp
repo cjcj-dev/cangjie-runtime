@@ -35,15 +35,15 @@ namespace MapleRuntime {
 
 ZPhysicalMemoryManager::ZPhysicalMemoryManager(size_t max_capacity)
   : _backing(max_capacity),
-    _physical_mappings(ZAddressOffsetMax, 0, ZBackingGranuleSize) {
-  assert(max_capacity % ZBackingGranuleSize == 0);
+    _physical_mappings(ZAddressOffsetMax) {
+  assert(max_capacity % ZGranuleSize == 0);
 
   // Setup backing storage limits
   ZBackingOffsetMax = max_capacity;
-  ZBackingIndexMax = static_cast<uint32_t>(max_capacity / ZBackingGranuleSize);
+  ZBackingIndexMax = static_cast<uint32_t>((max_capacity >> ZGranuleSizeShift));
 
   // Install capacity into the registry
-  const size_t num_segments_total = max_capacity / ZBackingGranuleSize;
+  const size_t num_segments_total = (max_capacity >> ZGranuleSizeShift);
   zbacking_index_end next_index = zbacking_index_end::zero;
   uint32_t numa_id;
   ZPerNUMAIterator<ZBackingIndexRegistry> iter(&_partition_registries);
@@ -93,7 +93,7 @@ void ZPhysicalMemoryManager::try_enable_uncommit(size_t min_capacity, size_t max
 
   // Test if uncommit is supported by the operating system by committing
   // and then uncommitting a granule.
-  const ZVirtualMemory vmem(zoffset(0), ZBackingGranuleSize);
+  const ZVirtualMemory vmem(zoffset(0), ZGranuleSize);
   if (!commit(vmem, 0) || !uncommit(vmem)) {
     VLOG(REPORT, "Uncommit: Implicitly Disabled (Not supported by operating system)");
     Uncommitter::SetZUncommit(false);
@@ -113,10 +113,10 @@ void ZPhysicalMemoryManager::alloc(const ZVirtualMemory& vmem, uint32_t numa_id)
   zbacking_index* const pmem = _physical_mappings.addr(vmem.start());
   const size_t size = vmem.size();
 
-  assert(size % ZBackingGranuleSize == 0);
+  assert(size % ZGranuleSize == 0);
 
   size_t current_segment = 0;
-  size_t remaining_segments = size / ZBackingGranuleSize;
+  size_t remaining_segments = (size >> ZGranuleSizeShift);
 
   while (remaining_segments != 0) {
     // Allocate a range of backing segment indices
@@ -160,7 +160,7 @@ bool for_each_segment_apply(const zbacking_index* pmem, size_t size, Function fu
   IterateInvoker<decltype(function(zbacking_offset{}, size_t{}))> invoker;
 
   // Total number of segment indices
-  const size_t num_segments = size / ZBackingGranuleSize;
+  const size_t num_segments = (size >> ZGranuleSizeShift);
 
   // Apply the function over all zbacking_offset ranges consisting of consecutive indices
   for (size_t i = 0; i < num_segments; i++) {
@@ -176,7 +176,7 @@ bool for_each_segment_apply(const zbacking_index* pmem, size_t size, Function fu
     // [start_i, last_i] now forms a consecutive range of indicies in pmem
     const size_t num_indicies = last_i - start_i + 1;
     const zbacking_offset start = to_zbacking_offset(pmem[start_i]);
-    const size_t size = num_indicies * ZBackingGranuleSize;
+    const size_t size = num_indicies << ZGranuleSizeShift;
 
     // Invoke function on zbacking_offset Range [start, start + size[
     if (!invoker(function, start, size)) {
@@ -193,7 +193,7 @@ void ZPhysicalMemoryManager::free(const ZVirtualMemory& vmem, uint32_t numa_id) 
 
   // Free segments
   for_each_segment_apply(pmem, size, [&](zbacking_offset segment_start, size_t segment_size) {
-    const size_t num_segments = segment_size / ZBackingGranuleSize;
+    const size_t num_segments = (segment_size >> ZGranuleSizeShift);
     const zbacking_index index = to_zbacking_index(segment_start);
 
     // Insert the free segment indices

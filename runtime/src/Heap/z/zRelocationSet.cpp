@@ -12,6 +12,7 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRelocationSet.hpp"
+#include "Heap/z/zRelocate.hpp"
 
 #include <array>
 #include <atomic>
@@ -122,17 +123,7 @@ private:
 
     void install(ZForwarding* forwarding, size_t index)
     {
-        ZPage* const page = forwarding->page();
-        page->ClearRelocationResiduals();
-        // zGeneration.cpp:205-221: relocation-set membership is the from-space
-        // identity; the page stays in the page table the selector iterated.
-        page->SetRegionRole(ZPageRole::From);
-        _relocation_set->generation()->forwarding_table().insert(forwarding);
-        if (page->GetOwnerGeneration() == Generation::Young) {
-            page->PublishForwardingCarrier<Generation::Young>();
-        } else {
-            page->PublishForwardingCarrier<Generation::Old>();
-        }
+        MRT_ASSERT(index < _nforwardings, "Invalid index");
         _forwardings[index] = forwarding;
     }
 
@@ -163,7 +154,7 @@ public:
         ZArray<ZPage*> relocate_promoted;
         for (size_t page_index; _small_iter.next_index(&page_index);) {
             ZPage* page = _small->at(static_cast<int>(page_index));
-            ZForwarding* const forwarding = ZForwarding::alloc(_allocator, page, page->age());
+            ZForwarding* const forwarding = ZForwarding::alloc(_allocator, page, ZRelocate::compute_to_age(page->age()));
             install(forwarding, static_cast<size_t>(_medium->length()) + page_index);
             if (forwarding->is_promotion()) {
                 relocate_promoted.push(page);
@@ -171,7 +162,7 @@ public:
         }
         for (size_t page_index; _medium_iter.next_index(&page_index);) {
             ZPage* page = _medium->at(static_cast<int>(page_index));
-            ZForwarding* const forwarding = ZForwarding::alloc(_allocator, page, page->age());
+            ZForwarding* const forwarding = ZForwarding::alloc(_allocator, page, ZRelocate::compute_to_age(page->age()));
             install(forwarding, page_index);
             if (forwarding->is_promotion()) {
                 relocate_promoted.push(page);

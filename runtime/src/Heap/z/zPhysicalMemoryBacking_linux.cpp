@@ -179,7 +179,7 @@ ZPhysicalMemoryBacking::ZPhysicalMemoryBacking(size_t max_capacity)
   }
 
   // Make sure the filesystem block size is compatible
-  if (ZBackingGranuleSize % _block_size != 0) {
+  if (ZGranuleSize % _block_size != 0) {
     LOG(RTLOG_ERROR, "Filesystem backing the heap has incompatible block size (%zu)",
         _block_size);
     return;
@@ -359,7 +359,7 @@ void ZPhysicalMemoryBacking::warn_max_map_count(size_t max_capacity) const {
   // However, ZGC tends to create the most mappings and dominate the total count.
   // In the worst cases, ZGC will map each granule three times, i.e. once per heap view.
   // We speculate that we need another 20% to allow for non-ZGC subsystems to map memory.
-  const size_t required_max_map_count = static_cast<size_t>((max_capacity / ZGranuleSize) * 3 * 1.2);
+  const size_t required_max_map_count = static_cast<size_t>(((max_capacity >> ZGranuleSizeShift)) * 3 * 1.2);
   if (actual_max_map_count < required_max_map_count) {
     LOG(RTLOG_WARNING, "***** WARNING! INCORRECT SYSTEM CONFIGURATION DETECTED! *****");
     LOG(RTLOG_WARNING, "The system limit on number of memory mappings per process might be too low for the given");
@@ -669,8 +669,8 @@ size_t ZPhysicalMemoryBacking::commit_default(zbacking_offset offset, size_t len
   zbacking_offset_end end = to_zbacking_offset_end(offset, length);
 
   for (;;) {
-    length = AlignDown((end - start) / 2, ZBackingGranuleSize);
-    if (length < ZBackingGranuleSize) {
+    length = AlignDown((end - start) / 2, ZGranuleSize);
+    if (length < ZGranuleSize) {
       // Done, don't commit more
       return start - offset;
     }

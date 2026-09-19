@@ -75,7 +75,7 @@ size_t ZVirtualMemoryReserver::reserve_discontiguous(zoffset start, size_t size,
     return 0;
   }
 
-  assert(size % ZBackingGranuleSize == 0);
+  assert(size % ZGranuleSize == 0);
 
   if (reserve_contiguous(start, size)) {
     return size;
@@ -88,7 +88,7 @@ size_t ZVirtualMemoryReserver::reserve_discontiguous(zoffset start, size_t size,
   }
 
   // Divide and conquer
-  const size_t first_part = AlignDown(half, ZBackingGranuleSize);
+  const size_t first_part = AlignDown(half, ZGranuleSize);
   const size_t second_part = size - first_part;
   const size_t first_size = reserve_discontiguous(start, first_part, min_range);
   const size_t second_size = reserve_discontiguous(start + first_part, second_part, min_range);
@@ -99,7 +99,7 @@ size_t ZVirtualMemoryReserver::calculate_min_range(size_t size) {
   // Don't try to reserve address ranges smaller than 1% of the requested size.
   // This avoids an explosion of reservation attempts in case large parts of the
   // address space is already occupied.
-  return AlignUp(size / ZMaxVirtualReservations, ZBackingGranuleSize);
+  return AlignUp(size / ZMaxVirtualReservations, ZGranuleSize);
 }
 
 size_t ZVirtualMemoryReserver::reserve_discontiguous(size_t size) {
@@ -118,7 +118,7 @@ size_t ZVirtualMemoryReserver::reserve_discontiguous(size_t size) {
 }
 
 bool ZVirtualMemoryReserver::reserve_contiguous(zoffset start, size_t size) {
-  assert(size % ZBackingGranuleSize == 0);
+  assert(size % ZGranuleSize == 0);
 
   // Reserve address views
   const zaddress_unsafe addr = ZOffset::address_unsafe(start);
@@ -137,7 +137,7 @@ bool ZVirtualMemoryReserver::reserve_contiguous(zoffset start, size_t size) {
 bool ZVirtualMemoryReserver::reserve_contiguous(size_t size) {
   // Allow at most 8192 attempts spread evenly across [0, ZAddressOffsetMax)
   const size_t unused = ZAddressOffsetMax - size;
-  const size_t increment = std::max(AlignUp(unused / 8192, ZBackingGranuleSize), ZBackingGranuleSize);
+  const size_t increment = std::max(AlignUp(unused / 8192, ZGranuleSize), ZGranuleSize);
 
   for (uintptr_t start = 0; start + size <= ZAddressOffsetMax; start += increment) {
     if (reserve_contiguous(to_zoffset(start), size)) {
@@ -253,14 +253,14 @@ ZVirtualMemoryManager::~ZVirtualMemoryManager() {
 }
 
 void ZVirtualMemoryManager::initialize_partitions(ZVirtualMemoryReserver* reserver, size_t size_for_partitions) {
-  assert(size_for_partitions % ZBackingGranuleSize == 0);
+  assert(size_for_partitions % ZGranuleSize == 0);
 
   const uint32_t numa_count = _partition_registries.count();
 
   // If the capacity consist of less granules than the number of partitions
   // some partitions will be empty. Distribute these shares on the none empty
   // partitions.
-  const uint32_t first_empty_numa_id = std::min(static_cast<uint32_t>(size_for_partitions / ZBackingGranuleSize), numa_count);
+  const uint32_t first_empty_numa_id = std::min(static_cast<uint32_t>((size_for_partitions >> ZGranuleSizeShift)), numa_count);
   const uint32_t ignore_count = numa_count - first_empty_numa_id;
 
   // Install reserved memory into registry(s)
@@ -272,7 +272,7 @@ void ZVirtualMemoryManager::initialize_partitions(ZVirtualMemoryReserver* reserv
     }
 
     // Calculate how much reserved memory this partition gets
-    const size_t reserved_for_partition = NumaTopology::calculate_share(numa_id, size_for_partitions, ZBackingGranuleSize, ignore_count);
+    const size_t reserved_for_partition = NumaTopology::calculate_share(numa_id, size_for_partitions, ZGranuleSize, ignore_count);
 
     // Transfer reserved memory
     reserver->initialize_partition_registry(registry, reserved_for_partition);
