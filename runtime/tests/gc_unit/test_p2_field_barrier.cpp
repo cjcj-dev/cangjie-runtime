@@ -60,6 +60,28 @@ RefField<>& Slot(BaseObject* object, unsigned index = 0)
 
 }
 
+// Isolate the promotion invariant from subsequent field-barrier scenarios so
+// a failed promotion cannot hide the target behind a later phase assertion.
+extern "C" int p2PinnedPromotionExercise()
+{
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = Type(storage, false, 1);
+    auto& heap = Heap::GetHeap();
+    BaseObject* pinned = MObject::NewPinnedObject(type, 16);
+    NativeSlot root(zpointer::null);
+    ZBarrier::WriteStaticRef(root, pinned);
+    NativeSlot* roots[] = { &root };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    Expect(Heap::page(reinterpret_cast<MAddress>(pinned))->IsYoungRegion(), "real_pinned_holder_starts_young");
+    heap.RequestGC(GC_REASON_USER, false);
+    BaseObject* holder = ZBarrier::ReadStaticRef(root);
+    Expect(!Heap::page(reinterpret_cast<MAddress>(holder))->IsYoungRegion(), "real_holder_is_old");
+    Expect(holder == pinned, "real_pinned_holder_address_unchanged");
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    std::printf("P2_PINNED_RESULT failures=%u\n", failures.load());
+    return failures.load();
+}
+
 // The compiler-generated managed caller owns runtime startup. Inputs use real
 // allocation/store/export APIs; no phase, mark, forwarding or remset state is seeded.
 extern "C" int p2FieldBarrierExercise()
