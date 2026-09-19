@@ -8,12 +8,14 @@ root = Path('/root/sym_cangjie_runtime_723_implement_r5741705087')
 source = root / 'harness'
 evidence = root / 'evidence'
 cuts = {
-    'producer': ('kkk2_managed.sh', '    bash "$script" >"$rundir/wrapper.log" 2>&1',
-                 '    CJC="$MANAGED_REAL_CJC" bash "$script" >"$rundir/wrapper.log" 2>&1'),
+    'compiler': ('kkk2_managed.sh', '                build_failed = True',
+                 '                build_failed = False'),
+    'missing': ('kkk2_managed.sh', '                build_failed = bool(missing)',
+                 '                build_failed = False'),
     'consumer': ('kkk2_diff.sh', "if any(res['arms'][a]['build_fail'].values()) or ca['rc'] in ('','NA') or ba['rc'] in ('','NA'):",
                  "if ca['rc'] in ('','NA') or ba['rc'] in ('','NA'):")}
 processes = []
-for arm in ('producer', 'consumer', 'restored'):
+for arm in ('compiler', 'missing', 'consumer', 'restored'):
     tree = root / f'harness-{arm}'
     shutil.copytree(source, tree, dirs_exist_ok=True)
     if arm in cuts:

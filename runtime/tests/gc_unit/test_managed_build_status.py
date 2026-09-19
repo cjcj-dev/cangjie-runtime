@@ -58,17 +58,21 @@ class ManagedBuildStatus(unittest.TestCase):
             self.assertEqual(list(arm['runs'].values()), [[], [], []])
             self.assertFalse(arm['all_zero'])
 
-    def test_compiler_error_with_elf_is_build_fail(self):
-        result = self.run_managed(compiler_rc=139)
+    def test_compiler_ice_without_elf_is_build_fail(self):
+        result = self.run_managed(compiler_rc=139, emit=False)
         self.assert_build_fail(result)
         self.assertEqual(result['build_fail'][0]['compile_rc'], [139])
-        print('TARGET compiler_rc_nonzero_with_elf classified build_fail')
+        print('TARGET compiler_ice_without_elf classified build_fail')
 
     def test_missing_elf_with_success_rc_is_build_fail(self):
-        self.assert_build_fail(self.run_managed(emit=False))
-
-    def test_old_elf_cannot_hide_build_fail(self):
         self.assert_build_fail(self.run_managed(emit=False, stale=True))
+
+    def test_runtime_assertion_failure_stays_runtime_result(self):
+        result = self.run_managed(runtime_rc=1)
+        self.assertEqual(result['build_fail'], [])
+        self.assertEqual(len(result['failed']), 6)
+        for arm in result['arms'].values():
+            self.assertEqual(list(arm['runs'].values()), [[1], [1], [1]])
 
     def test_runtime_139_stays_runtime_result(self):
         result = self.run_managed(runtime_rc=139)
@@ -101,11 +105,11 @@ class ManagedBuildStatus(unittest.TestCase):
                     (root / f'{who}.txt').write_text('\n'.join(lines) + '\n')
                 result = subprocess.run(['python3', '-', tmp, 'a'*40, 'b'*40, 'hash'],
                                         input=consumer, text=True, capture_output=True)
-                self.assertEqual(result.returncode, 3 if target else 0, result.stderr)
                 data = json.loads((root / 'DIFF.json').read_text())
                 for arm, value in data['arms'].items():
                     self.assertEqual(value['status'], 'NOT_RUN' if arm == target else 'ran')
                     self.assertEqual(value['cand_only'], None if arm == target else [])
+                self.assertEqual(result.returncode, 3 if target else 0, result.stderr)
                 print(f'TARGET diff build_fail={target} status verified')
 
 

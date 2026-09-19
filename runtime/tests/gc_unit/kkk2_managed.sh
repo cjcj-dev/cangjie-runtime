@@ -162,7 +162,11 @@ for arm in arms:
             compile_rcs = ([int(line) for line in compile_status.read_text().splitlines()]
                            if compile_status.exists() else [])
             missing = [binary for binary in executables[name] if not is_elf(run / binary)]
-            if any(rc != 0 for rc in compile_rcs) or missing:
+            if any(rc != 0 for rc in compile_rcs):
+                build_failed = True
+            else:
+                build_failed = bool(missing)
+            if build_failed:
                 failure = {"arm": arm, "name": name, "iteration": i,
                            "compile_rc": compile_rcs, "missing_elf": missing,
                            "wrapper_rc": int(p.read_text().strip()) if p.exists() else None,
