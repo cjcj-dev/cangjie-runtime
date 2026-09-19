@@ -171,10 +171,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     const uintptr_t before = raw(slot.GetFieldValue());
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
-    RegionList selected("native-root-relocation");
-    selected.PrependRegion(region);
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
-    (void)selected.TakeHeadRegion();
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, { region }));
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::FlipNativeRootYoung(collector);
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();

@@ -10,7 +10,6 @@
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
 #include "Heap/z/zPageFwd.hpp"
-#include "Heap/Allocator/RegionListTypes.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -56,7 +55,52 @@
 #include "Heap/z/zLiveMap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 namespace MapleRuntime {
-class RegionList;
+
+// Page lifecycle role. ZGC keeps this identity in the page table plus the
+// relocation set (zPageTable.hpp:57-77, zGeneration.cpp:205-221); the host
+// runtime keeps raw-pointer pinning and deferred (async) reclaim, which have
+// no ZGC counterpart, so the role word also covers those states. The
+// intrusive page lists are retired in favour of this field (#710).
+enum class ZPageRole : uint8_t {
+    None = 0, // free, or a from-page claimed off its list ("lone")
+    ThreadLocal,
+    RecentFull,
+    FullTrace,
+    LargeTrace,
+    From,
+    UnmovableFrom,
+    Garbage,
+    RecentPinned,
+    OldPinned,
+    RawPointerPinned,
+    OldLarge,
+    RecentLarge,
+    // Per-thread raw-pointer allocation staging (Cangjie-specific; no ZGC
+    // counterpart). Matches the deleted tlRawPointerRegions membership: no
+    // lifecycle predicate is true for it.
+    RawPointerStaging,
+};
+
+inline const char* RegionRoleName(ZPageRole role)
+{
+    switch (role) {
+        case ZPageRole::None: return "none";
+        case ZPageRole::ThreadLocal: return "thread local regions";
+        case ZPageRole::RecentFull: return "recent full regions";
+        case ZPageRole::FullTrace: return "full trace regions";
+        case ZPageRole::LargeTrace: return "large trace regions";
+        case ZPageRole::From: return "from regions";
+        case ZPageRole::UnmovableFrom: return "escaped from regions";
+        case ZPageRole::Garbage: return "garbage regions";
+        case ZPageRole::RecentPinned: return "recent pinned regions";
+        case ZPageRole::OldPinned: return "old pinned regions";
+        case ZPageRole::RawPointerPinned: return "raw pointer pinned regions";
+        case ZPageRole::OldLarge: return "old large regions";
+        case ZPageRole::RecentLarge: return "recent large regions";
+        case ZPageRole::RawPointerStaging: return "thread-local raw-pointer regions";
+    }
+    return "unknown";
+}
 
 // Descriptor incarnation id used by the forwarding carrier / ghost walk
 // (page-descriptor package retires it with the reused slot).
@@ -144,6 +188,13 @@ public:
     bool IsRelocatable() const;
     bool is_allocating() const { return IsAllocating(); }
     bool is_relocatable() const { return IsRelocatable(); }
+    void TestMakeRelocatable()
+    {
+        const uint64_t epoch = GetSnapshotEpoch();
+        if (epoch > 0 && BirthSequence() >= epoch) {
+            _seqnum = static_cast<uint32_t>(epoch - 1);
+        }
+    }
 
     ZPageType type() const { return _type; }
     PageAge age() const { return _age; }
@@ -581,7 +632,6 @@ public:
 
     // These interfaces are used to make sure the writing operations of value in C++ Bit Field will be atomic.
 
-    bool OnNamedList(const char* name) const;
     bool IsNotRelocatableThisCycle() const { return is_allocating(); }
     void SetInGhostRegion(uint8_t flag);
 
@@ -645,34 +695,27 @@ public:
 
     bool IsLargeRegion() const;
 
-    bool IsThreadLocalRegion() const { return OnNamedList("thread local regions"); }
+    bool IsThreadLocalRegion() const { return GetRegionRole() == ZPageRole::ThreadLocal; }
 
     bool IsPinnedRegion() const;
 
-    ZPage* GetPrevRegion() const;
+    ZPageRole GetRegionRole() const { return _scratch.regionRole.load(std::memory_order_acquire); }
 
-    // Intrusive-list authority. A region has at most one owning RegionList;
-    // ghost snapshots intentionally do not modify this token.
-    RegionList* GetRegionListOwner() const { return _scratch.regionListOwner.load(std::memory_order_acquire); }
+    void SetRegionRole(ZPageRole role) { _scratch.regionRole.store(role, std::memory_order_release); }
 
-    void SetRegionListOwner(RegionList* owner) { _scratch.regionListOwner.store(owner, std::memory_order_release); }
-
-    void SetPrevRegion(const ZPage* r);
-
-    ZPage* GetNextRegion() const;
-
-    ZPage* GetNextGhostRegion() const;
-
-    void SetNextRegion(const ZPage* r);
-
-    bool IsFromRegion() const { return OnNamedList("from regions"); }
-    bool IsLoneFromRegion() const { return GetRegionListOwner() == nullptr && is_relocatable(); }
+    bool CASRegionRole(ZPageRole& expect, ZPageRole target)
+    {
+        return _scratch.regionRole.compare_exchange_strong(expect, target, std::memory_order_acq_rel,
+                                                           std::memory_order_acquire);
+    }
+    bool IsFromRegion() const { return GetRegionRole() == ZPageRole::From; }
+    bool IsLoneFromRegion() const { return GetRegionRole() == ZPageRole::None && is_relocatable(); }
     bool IsUnmovableFromRegion() const;
 
     bool IsToRegion() const { return false; }
 
-    bool IsGarbageRegion() const { return OnNamedList("garbage regions"); }
-    bool IsFreeRegion() const { return GetRegionListOwner() == nullptr && !is_relocatable(); }
+    bool IsGarbageRegion() const { return GetRegionRole() == ZPageRole::Garbage; }
+    bool IsFreeRegion() const { return GetRegionRole() == ZPageRole::None && !is_relocatable(); }
 
     bool IsValidRegion() const;
     // zRelocationSetSelector.cpp / zGeneration.cpp:216-221: a relocatable page
@@ -685,8 +728,6 @@ public:
     bool IsSafeKnownEmpty();
 
     bool IsSafeKnownYoungEmpty();
-
-    void RemoveFromList();
 
 private:
 
@@ -707,14 +748,11 @@ private:
             uintptr_t allocPtr;
             uintptr_t regionEnd;
 
-            uint32_t nextRegionIdx;
-            uint32_t prevRegionIdx;
-
             int32_t rawPointerObjectCount;
             uint32_t censusBoundaryOffset;
         };
 
-        std::atomic<RegionList*> regionListOwner{ nullptr };
+        std::atomic<ZPageRole> regionRole{ ZPageRole::None };
         std::atomic<RegionLifeId> regionLifeId{ 0 };
         ZLiveMap* retiredLivemap = nullptr;
         ZPage* ownerRegion = nullptr;
@@ -723,7 +761,6 @@ private:
         std::atomic<ZForwarding*> fwdOwner{ nullptr };
         std::atomic<int32_t> copyInflight{ 0 };
         alignas(8) char routeInfoPad[24]{};
-        uint32_t nextRegionIdx0;
         union {
             uint8_t unusedRegionStatePad;
             AtomicBitField<uint16_t> regionStateBitField;

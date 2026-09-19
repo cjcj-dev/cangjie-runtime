@@ -16,11 +16,11 @@ set(GC_UNIT_SOURCES
     test_zBitMap.cpp
     test_zRememberedSet.cpp
     test_zList.cpp
-    test_region_list.cpp
     test_zArray.cpp
     test_zIndexDistributor.cpp
     test_zValue.cpp
     test_zUtils.cpp
+    test_used_generation.cpp
     test_zstat.cpp
     test_zstat_heap.cpp
     test_zserviceability.cpp

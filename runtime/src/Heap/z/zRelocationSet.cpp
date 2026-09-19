@@ -7,7 +7,6 @@
 
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zMark.hpp"
-#include "Heap/Allocator/RegionList.h"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zGeneration.hpp"
@@ -80,7 +79,6 @@ void ZGenerationOld::PostTrace()
         return;
     }
     ZRelocate::RefineFromSpace();
-    space.PrepareFromSpace<Generation::Old>();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
     // INV-1 closed: concurrent mark can no longer follow plain edges into these ranges.
@@ -132,6 +130,9 @@ private:
     {
         ZPage* const page = forwarding->page();
         page->ClearRelocationResiduals();
+        // zGeneration.cpp:205-221: relocation-set membership is the from-space
+        // identity; the page stays in the page table the selector iterated.
+        page->SetRegionRole(ZPageRole::From);
         _relocation_set->generation()->forwarding_table().insert(forwarding);
         if (page->GetOwnerGeneration() == Generation::Young) {
             page->PublishForwardingCarrier<Generation::Young>();
@@ -203,18 +204,6 @@ void ZRelocationSet::install(const ZRelocationSetSelector* selector)
     if (_generation != nullptr) {
         _generation->StatRelocation()->AtInstallRelocationSet(_allocator.size());
     }
-}
-
-void ZRelocationSet::install_from_regions(RegionList& regions)
-{
-    if (_nforwardings != 0) {
-        return;
-    }
-    ZRelocationSetSelector selector;
-    regions.VisitAllRegions([&](ZPage* region) {
-        selector.add_selected_small(region, ZForwarding::nentries(region));
-    });
-    install(&selector);
 }
 
 static void destroy_and_clear(RegionManager* page_allocator, ZArray<ZPage*>* array)
