@@ -2337,8 +2337,8 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                     promoted.append(prev);
                 }
             }
-            Heap::GetHeap().GetZGeneration(ZGenerationId::young)
-                .relocation_set().register_flip_promoted(promoted);
+            // zRelocate.cpp:1363: registration goes through the generation.
+            ZGeneration::young()->register_flip_promoted(promoted);
         }
     private:
         ZArrayParallelIterator<ZPage*> iter;

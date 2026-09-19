@@ -466,15 +466,17 @@ inline void ZPage::RetirePage(ZPage* region, std::function<void()> retire)
         CHECK(ZPageTable::heap_table().get(region->GetRegionStart()) == region);
         ZPageTable::heap_table().remove(region);
         // zPageAllocator.cpp:2248-2250 safe_destroy_page: deferred while any
-        // page iterator is active, immediate otherwise.
-        safeDestroy.schedule_delete(new PageRetirement{ std::move(retire) });
+        // page iterator is active, immediate otherwise. The retire hook runs
+        // from ~ZPage when the deferred delete lands.
+        region->_retireHook = std::move(retire);
+        safeDestroy.schedule_delete(region);
     }
 
 inline void ZPage::RetireDescriptor(ZPage* page)
     {
         CHECK(page != nullptr);
         CHECK(ZPageTable::heap_table().get(page->GetRegionStart()) != page);
-        safeDestroy.schedule_delete(new PageRetirement{ [page] { delete page; } });
+        safeDestroy.schedule_delete(page);
     }
 
 inline void ZPage::EnableSafeDestroy()

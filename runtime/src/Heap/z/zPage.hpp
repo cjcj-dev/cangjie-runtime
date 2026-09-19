@@ -114,6 +114,9 @@ private:
     ZLiveMap _livemap;
     ZRememberedSet _remembered_set;
     bool _relocate_promoted;
+    // RetirePage hook: run by ~ZPage so safeDestroy can stay ZSafeDelete<ZPage>
+    // (zPageAllocator.cpp:2248-2250 ZSafeDelete<ZPage> _safe_destroy).
+    std::function<void()> _retireHook;
 public:
     using Page = ZPage;
     // The table serializes publication/unbinding of this facade's owner.
@@ -200,6 +203,7 @@ public:
     static std::atomic<uint64_t>& EnrolAfterFlip();
 
     ZPage();
+    ~ZPage();
     static ZPage* NullRegion();
 
     ZLiveMap& livemap();
@@ -352,17 +356,10 @@ public:
 
     static std::vector<UnitSegment> unitSegments;
 
-    // zPageAllocator.hpp:166 ZSafeDelete<ZPage> _safe_destroy. The ABI keeps
-    // page descriptors in the unit array (I6, PLAN §5), so the object whose
-    // delete is deferred is a retirement record: its destructor reinitializes
-    // the descriptor and hands the memory back. P03's independent ZPage
-    // descriptor turns this into ZSafeDelete<ZPage> on the page allocator,
-    // next to the page table this static sits beside today.
-    struct PageRetirement {
-        std::function<void()> retire;
-        ~PageRetirement() { retire(); }
-    };
-    static ZSafeDelete<PageRetirement> safeDestroy;
+    // zPageAllocator.cpp:2248-2250 ZSafeDelete<ZPage> _safe_destroy: the
+    // deferred-deleted object is the ZPage descriptor itself. The RetirePage
+    // memory handback rides _retireHook, run from ~ZPage.
+    static ZSafeDelete<ZPage> safeDestroy;
 
     // zPageAllocator.cpp:2287-2293
     static void EnableSafeDestroy();

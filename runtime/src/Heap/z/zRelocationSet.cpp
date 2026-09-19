@@ -231,13 +231,9 @@ void ZRelocationSet::install_from_regions(RegionList& regions)
 static void destroy_and_clear(RegionManager* page_allocator, ZArray<ZPage*>* array)
 {
     for (int i = 0; i < array->length(); ++i) {
+        // zRelocationSet.cpp:182-189: every registered page is destroyed, no
+        // skip arm; a page still mapped here means registration was wrong.
         ZPage* const page = array->at(i);
-        if (page == nullptr || page_allocator == nullptr) {
-            continue;
-        }
-        if (ZPageTable::heap_table().get(page->GetRegionStart()) == page) {
-            continue;
-        }
         page_allocator->safe_destroy_page(page);
     }
     array->clear();

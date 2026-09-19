@@ -68,7 +68,14 @@ ZPage* ZPage::NullRegion()
 size_t ZPage::totalUnitCount = 0;
 uintptr_t ZPage::heapStartAddress = 0;
 std::vector<ZPage::UnitSegment> ZPage::unitSegments;
-ZSafeDelete<ZPage::PageRetirement> ZPage::safeDestroy;
+ZSafeDelete<ZPage> ZPage::safeDestroy;
+
+ZPage::~ZPage()
+{
+    if (_retireHook) {
+        _retireHook();
+    }
+}
 
 std::atomic<size_t> ZPage::youngRegionCount { 0 };
 namespace {
