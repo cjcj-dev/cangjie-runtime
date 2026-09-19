@@ -12,7 +12,7 @@
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
-#include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/MArray.h"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MObject.h"
@@ -528,7 +528,7 @@ extern "C" int p2ArrayFieldExercise()
     const size_t length = 2 * MarkPartialArray::MIN_LENGTH + 17;
     const size_t fieldCount = length * (structArray ? 2 : 1);
     MArray* array = structArray ? MCC_NewArray(arrayType, length) : MCC_NewObjArray(arrayType, length);
-    auto* elements = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
+    auto* elements = reinterpret_cast<RefField<>*>(reinterpret_cast<uint8_t*>(array) + sizeof(MArray));
     for (size_t index = 0; index < fieldCount; ++index) {
         ZBarrier::WriteReference(array, elements[index], index % 2 == 0 ? first : last);
     }
@@ -545,7 +545,7 @@ extern "C" int p2ArrayFieldExercise()
     heap.RequestGC(GC_REASON_USER, false);
     holder = ZBarrier::ReadStaticRef(holderRoot);
     array = static_cast<MArray*>(ZBarrier::ReadStaticRef(arrayRoot));
-    elements = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
+    elements = reinterpret_cast<RefField<>*>(reinterpret_cast<uint8_t*>(array) + sizeof(MArray));
     first = ZBarrier::ReadReference(array, elements[0]);
     last = ZBarrier::ReadReference(array, elements[1]);
     control = ZBarrier::ReadStaticRef(controlRoot);
@@ -564,7 +564,7 @@ extern "C" int p2ArrayFieldExercise()
         const auto expected = finalizable ? ZBarrier::FieldMarkKind::Finalizable : ZBarrier::FieldMarkKind::Old;
         if (kind != expected) return;
         auto* current = reinterpret_cast<MArray*>(arrayAddress());
-        const MAddress begin = reinterpret_cast<MAddress>(current->ConvertToCArray());
+        const MAddress begin = reinterpret_cast<MAddress>(reinterpret_cast<uint8_t*>(current) + sizeof(MArray));
         const MAddress address = reinterpret_cast<MAddress>(&field);
         if (address >= begin && address < begin + fieldCount * sizeof(uintptr_t)) {
             ++fields;
