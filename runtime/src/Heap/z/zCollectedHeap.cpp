@@ -123,10 +123,8 @@ void ZCollectedHeap::initialize_gc_workers()
 
         _heap.young().InitializeWorkers(_concurrent_gc_threads);
         _heap.old().InitializeWorkers(_concurrent_gc_threads);
+        _finalizer_processor.GetReferenceProcessor().set_workers(_heap.old().Workers());
     }
-    // zGeneration.cpp:118-119: the old generation's reference processor is
-    // bound to the old workers unconditionally (ZGenerationOld::_workers).
-    _finalizer_processor.GetReferenceProcessor().set_workers(_heap.old().Workers());
 
 
 }
