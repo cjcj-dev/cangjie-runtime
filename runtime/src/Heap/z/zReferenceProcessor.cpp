@@ -368,7 +368,9 @@ void ReferenceProcessor::process_references()
     }
     CHECK(workers != nullptr);
     ZReferenceProcessorTask task(this);
-    workers->run(&task);
+    if (workers != nullptr) {
+        workers->run(&task);
+    }
     soft_reference_update_clock();
     collect_statistics();
 }
