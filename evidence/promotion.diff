@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp
+index e49a9bef8..df359a4a3 100644
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -1360,7 +1360,7 @@ namespace MapleRuntime {
+ // its replace operation also registers the new old page with the young remset.
+ void ZGenerationYoung::flip_promote(ZPage* from, ZPage* to)
+ {
+-    Heap::page_table().replace(from, to);
++    (void)from; (void)to;
+ }
+ 
+ void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)
