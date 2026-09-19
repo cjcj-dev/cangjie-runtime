@@ -22,43 +22,9 @@ Allocator::Allocator()
 {
     allocBufferManager = new (std::nothrow) AllocBufferManager();
     CHECK_DETAIL(allocBufferManager != nullptr, "new alloc buffer manager failed");
-    asyncAllocationInitSwitch = InitAyncAllocation();
-    isAsyncAllocationEnable.store(asyncAllocationInitSwitch);
 }
 
-bool Allocator::InitAyncAllocation()
-{
-    auto enableAsyncAllocation = std::getenv("cjEnableAsyncAllocation");
-    if (enableAsyncAllocation == nullptr) {
-#if defined(__OHOS__) || defined(__ANDROID__)
-        return true;
-#else
-        return false;
-#endif
-    }
-    if (strlen(enableAsyncAllocation) != 1) {
-        LOG(RTLOG_ERROR, "Unsupported cjEnableAsyncAllocation, cjEnableAsyncAllocation should be 0 or 1.\n");
-#if defined(__OHOS__) || defined(__ANDROID__)
-        return true;
-#else
-        return false;
-#endif
-    }
 
-    switch (enableAsyncAllocation[0]) {
-        case '0':
-            return false;
-        case '1':
-            return true;
-        default:
-            LOG(RTLOG_ERROR, "Unsupported cjEnableAsyncAllocation, cjEnableAsyncAllocation should be 0 or 1.\n");
-    }
-#if defined(__OHOS__) || defined(__ANDROID__)
-    return true;
-#else
-    return false;
-#endif
-}
 
 // PageAlllocator
 // the input parameter cat should be guaranteed in the range of value of enum type AllocationTag by

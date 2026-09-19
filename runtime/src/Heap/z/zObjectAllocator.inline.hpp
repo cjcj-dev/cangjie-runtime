@@ -64,19 +64,5 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
     return addr;
 }
 
-inline void RegionManager::EnlistFullThreadLocalRegion(ZPage* region) noexcept
-{
-    MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
-    // IsTraceRegion() is always false (zPage.hpp): the deleted trace-cache arm
-    // was dead; the page becomes an ordinary full region.
-    region->SetRegionRole(ZPageRole::RecentFull);
-    RecentFullAccounting::Enqueue(1, region->GetRegionSize());
-}
-
-inline void RegionManager::RemoveThreadLocalRegion(ZPage* region) noexcept
-{
-    MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
-    region->SetRegionRole(ZPageRole::None);
-}
 } // namespace MapleRuntime
 #endif

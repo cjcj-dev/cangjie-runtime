@@ -523,8 +523,7 @@ public:
     RegionManager& operator=(const RegionManager&) = delete;
 
     // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
-    ZPage* AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem = false, bool youngRegion = true,
-                                          bool allowSaferegion = true);
+
 
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
@@ -536,7 +535,7 @@ public:
 
     // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
     // independent of the thread-local requested bytes and retirement waste.
-    void UndoThreadLocalRegionAllocation(ZPage* region);
+
     // Stable cycle history: read under the statistics lock, at a safepoint,
     // or with managed access preventing the next young pause.
     size_t GetTLABUsed() const { return lastTLABUsed; }
@@ -675,9 +674,9 @@ public:
 
     // caller assures size is truely large (> region size)
 
-    void EnlistFullThreadLocalRegion(ZPage* region) noexcept;
 
-    void RemoveThreadLocalRegion(ZPage* region) noexcept;
+
+
 
     void RestoreToSpaceStateWords();
 
@@ -692,10 +691,6 @@ public:
 
     void CollectFromSpaceGarbage();
 
-    size_t GetThreadLocalRegionSize() const
-    {
-        return ZPageSizeSmall;
-    }
 
     size_t GetYoungAllocatedSize() const;
 

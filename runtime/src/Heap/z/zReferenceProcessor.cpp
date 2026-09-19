@@ -538,7 +538,6 @@ FinalizerProcessor::FinalizerProcessor(ZWorkers* workers)
     timeProcessUsed = 0;
     timeCurrentProcessBegin = 0;
     shouldReclaimHeapGarbage.store(false, std::memory_order_relaxed);
-    shouldFeedHungryBuffers.store(false, std::memory_order_relaxed);
 }
 
 void FinalizerProcessor::Run()
@@ -548,16 +547,13 @@ void FinalizerProcessor::Run()
     while (running.load(std::memory_order_acquire)) {
         bool hasPendingFinalizableJob = false;
         bool hasPendingReclaimHeapGarbage = false;
-        bool hasPendingFeedHungryBuffers = false;
         {
             ZStatTimer zstatTimer(PFinalizerProcessorWaittingTime);
             while (running.load(std::memory_order_acquire)) {
                 hasPendingFinalizableJob = HasFinalizableJob();
                 hasPendingReclaimHeapGarbage =
                     shouldReclaimHeapGarbage.exchange(false, std::memory_order_acq_rel);
-                hasPendingFeedHungryBuffers =
-                    shouldFeedHungryBuffers.exchange(false, std::memory_order_acq_rel);
-                if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers) {
+                if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage) {
                     break;
                 }
                 Wait(iterationWaitTime);
@@ -581,9 +577,6 @@ void FinalizerProcessor::Run()
 #endif
         }
 
-        if (hasPendingFeedHungryBuffers) {
-            FeedHungryBuffers();
-        }
 
         if (hasPendingReclaimHeapGarbage) {
             ReclaimHeapGarbage();
@@ -641,8 +634,7 @@ void FinalizerProcessor::Wait()
     std::unique_lock<std::mutex> lock(wakeLock);
     while (running.load(std::memory_order_acquire) &&
            !HasFinalizableJob() &&
-           !shouldReclaimHeapGarbage.load(std::memory_order_acquire) &&
-           !shouldFeedHungryBuffers.load(std::memory_order_acquire)) {
+           !shouldReclaimHeapGarbage.load(std::memory_order_acquire)) {
         lock.unlock();
         if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
             (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
@@ -651,8 +643,7 @@ void FinalizerProcessor::Wait()
         wakeCondition.wait_for(lock, std::chrono::milliseconds(1), [this] {
             return !running.load(std::memory_order_acquire) ||
                 HasFinalizableJob() ||
-                shouldReclaimHeapGarbage.load(std::memory_order_acquire) ||
-                shouldFeedHungryBuffers.load(std::memory_order_acquire);
+                shouldReclaimHeapGarbage.load(std::memory_order_acquire);
         });
     }
 }
@@ -918,9 +909,6 @@ void FinalizerProcessor::ReclaimHeapGarbage()
     Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(false);
 }
 
-void FinalizerProcessor::FeedHungryBuffers()
-{
-    Heap::GetHeap().GetAllocator().FeedHungryBuffers();
-}
+
 } // namespace MapleRuntime
 

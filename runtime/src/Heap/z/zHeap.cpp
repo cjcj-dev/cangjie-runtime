@@ -528,6 +528,13 @@ ZPage* Heap::alloc_page(ZPage* page)
     return published;
 }
 
+// ZGC zHeap.inline.hpp:92-95: TLABs use the same object allocator.
+uintptr_t Heap::alloc_tlab(size_t size)
+{
+    CHECK(size <= ZObjectSizeLimitSmall);
+    return object_allocator().alloc(size, PageAge::eden);
+}
+
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
                              bool clearPayload, PageAge age, ZAllocationFlags flags)
 {

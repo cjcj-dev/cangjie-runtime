@@ -634,7 +634,7 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
     stats.conc_gc_threads = static_cast<uint32_t>(std::max(concurrentGcThreadCount, 1));
     stats.collection_interval_sec =
         static_cast<double>(CangjieRuntime::GetGCParam().backupGCInterval) / SECOND_TO_NANO_SECOND;
-    stats.relocation_headroom = stats.conc_gc_threads * regions.GetThreadLocalRegionSize();
+    stats.relocation_headroom = stats.conc_gc_threads * ZPageSizeSmall;
     return stats;
 }
 

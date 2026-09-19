@@ -183,7 +183,6 @@ public:
     void CountLiveObject(const BaseObject* obj) { GetRegionManager().CountLiveObject(obj); }
 
     void PrepareTrace() { GetRegionManager().PrepareTrace(); }
-    void FeedHungryBuffers() override;
 
 
     // ZPage::mark_object + inc_live (zMark.cpp:405-425) for a caller without a

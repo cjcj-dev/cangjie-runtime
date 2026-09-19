@@ -241,6 +241,24 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory, ZAllocat
     for (size_t visited = 0; visited < partitions.size(); ++visited) {
         const size_t selected = (nextPartition + visited) % partitions.size();
         Partition& partition = *partitions[selected];
+        // ZPartition::claim_capacity_fast_medium, zPageAllocator.cpp:764-785.
+        // Only mapped cache memory is eligible; never increase capacity here.
+        if (flags.fast_medium()) {
+            CHECK(ZPageSizeMediumEnabled);
+            const ZVirtualMemory vmem = partition.cache.remove_contiguous_power_of_2(
+                ZPageSizeMediumMin, ZPageSizeMediumMax);
+            if (vmem.is_null()) { continue; }
+            memory.index = IndexOf(vmem);
+            memory.size = vmem.size();
+            memory.partition = static_cast<uint32_t>(selected);
+            memory.committed = true;
+            memory.partialMappings.clear();
+            memory.virtualClaimed = true;
+            memory.harvestedBytes = 0;
+            partition.used += memory.size;
+            nextPartition = (selected + 1) % partitions.size();
+            return true;
+        }
         if (partition.available() < size) {
             // Out of memory in this partition
             continue;

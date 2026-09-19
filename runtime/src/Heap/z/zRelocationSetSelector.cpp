@@ -260,9 +260,6 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
                 ParkUnmovableFromRegion(region);
                 continue;
             }
-            if (role == ZPageRole::ThreadLocal) {
-                continue;
-            }
             ++stats.unmovableVisited;
             stats.unmovableVisitedBytes += region->GetRegionSize();
             const uint64_t visitorStart = TimeUtil::NanoSeconds();

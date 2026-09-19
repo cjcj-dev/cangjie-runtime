@@ -31,7 +31,6 @@ public:
     virtual void TryReclaimGarbageMemory() = 0;
 #endif
     Uncommitter& GetUncommitter() { return uncommitter; }
-    virtual void FeedHungryBuffers() = 0;
 
     // returns the total size of live large objects, excluding alignment/roundup/header, ...
     // LargeObjects() is missing.
@@ -54,15 +53,9 @@ public:
     virtual size_t GetUsedPageSize() const = 0;
     virtual MAddress GetSpaceStartAddress() const = 0;
     virtual MAddress GetSpaceEndAddress() const = 0;
-    void EnableAsyncAllocation(bool enableAyncAlloc)
-    {
-        isAsyncAllocationEnable.store(enableAyncAlloc & asyncAllocationInitSwitch, std::memory_order_release);
-    }
 
-    bool IsAsyncAllocationEnable()
-    {
-        return isAsyncAllocationEnable.load(std::memory_order_acquire);
-    }
+
+
     // IsHeapAddress is a range-based check, used to quickly identify heap address,
     // non-heap address never falls into this address range.
     // for more accurate check, use IsHeapObject().
@@ -74,19 +67,13 @@ public:
 
     void VisitAllocBuffers(const AllocBufferVisitor& visitor) { allocBufferManager->VisitAllocBuffers(visitor); }
     size_t GetAllocBufersCount() { return allocBufferManager->GetAllocBufersCount(); }
-    void AddHungryBuffer(AllocBuffer& buffer) { allocBufferManager->AddHungryBuffer(buffer); }
-    void SwapHungryBuffers(AllocBufferManager::HungryBuffers &getBufferList)
-    {
-        allocBufferManager->SwapHungryBuffers(getBufferList);
-    }
+
+
 
 protected:
     AllocBufferManager* allocBufferManager;
-    std::atomic<bool> isAsyncAllocationEnable = { true };
 private:
     Uncommitter uncommitter{*this};
-    bool InitAyncAllocation();
-    bool asyncAllocationInitSwitch = true;
 };
 } // namespace MapleRuntime
 #endif // MRT_ALLOCATOR_H

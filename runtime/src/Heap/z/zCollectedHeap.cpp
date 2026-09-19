@@ -108,7 +108,7 @@ void ZCollectedHeap::initialize_gc_workers()
         activeProcessorCount = std::max(activeProcessorCount, 1U);
         const size_t maxHeap = _heap.GetMaxCapacity();
         const auto& regions = static_cast<RegionSpace&>(_heap.GetAllocator()).GetRegionManager();
-        const size_t regionBytes = regions.GetThreadLocalRegionSize();
+        const size_t regionBytes = ZPageSizeSmall;
         CHECK_DETAIL(regionBytes != 0, "worker region budget must be initialized");
         const size_t heapWorkers = maxHeap / 50 / regionBytes;
         const uint64_t cpus = activeProcessorCount;

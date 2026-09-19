@@ -22,7 +22,6 @@ class AllocBufferManager {
 public:
     using AllocBuffersSet = std::unordered_set<AllocBuffer*, std::hash<AllocBuffer*>, std::equal_to<AllocBuffer*>,
                                                StdContainerAllocator<AllocBuffer*, ALLOCATOR>>;
-    using HungryBuffers = AllocBuffersSet;
     AllocBufferManager() {}
     ~AllocBufferManager()
     {
@@ -59,16 +58,8 @@ public:
         allocBufferLock.Unlock();
     }
 
-    void AddHungryBuffer(AllocBuffer& buffer)
-    {
-        std::lock_guard<std::mutex> lg(hungryBuffersLock);
-        hungryBuffers.insert(&buffer);
-    }
-    void SwapHungryBuffers(HungryBuffers& getBufferSet)
-    {
-        std::lock_guard<std::mutex> lg(hungryBuffersLock);
-        hungryBuffers.swap(getBufferSet);
-    }
+
+
     size_t GetAllocBufersCount()
     {
         return allocBuffers.size();
@@ -76,8 +67,6 @@ public:
 
 private:
     AllocBuffersSet allocBuffers;
-    HungryBuffers hungryBuffers;
-    std::mutex hungryBuffersLock;
     AtomicSpinLock allocBufferLock;
 };
 } // namespace MapleRuntime

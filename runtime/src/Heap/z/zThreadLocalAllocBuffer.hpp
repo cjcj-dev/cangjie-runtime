@@ -34,24 +34,20 @@ public:
     static AllocBuffer* GetAllocBuffer();
 
     MAddress Allocate(size_t size, AllocType allocType);
-    ZPage* GetRegion() { return tlRegion; }
+    ZPage* GetRegion() const;
+    size_t TLABSize() const { return tlab.end - tlab.start; }
     // zObjectAllocator.hpp per-thread current-page shape: staging is a
     // vector of page pointers, committed to RecentFull/RecentLarge roles.
     std::vector<ZPage*>& GetTlRawPointerRegions() { return tlRawPointerRegions; }
     std::vector<ZPage*>& GetTlLargeRawPointerRegions() { return tlLargeRawPointerRegions; }
-    ZPage* GetPreparedRegion() { return preparedRegion.load(std::memory_order_relaxed); }
-    void SetRegion(ZPage* newRegion);
+    void FillTLAB(uintptr_t start, size_t size);
     void ClearRegion();
 
     size_t ComputeTLABSize(size_t objectSize, size_t maxSize) const;
     void AccumulateTLABStatistics(TLABStatistics& total, size_t used, size_t capacity);
     void ResizeTLAB(size_t capacity, double fallbackFraction, size_t maxSize);
 
-    bool SetPreparedRegion(ZPage* newPreparedRegion)
-    {
-        ZPage* expect = nullptr;
-        return preparedRegion.compare_exchange_strong(expect, newPreparedRegion, std::memory_order_release);
-    }
+
     void CommitRawPointerRegions();
 
     // h3seed2: young→young write dirties the *holder object* (not the field slot).
@@ -162,21 +158,28 @@ private:
     MAddress AllocateImpl(size_t totalSize, AllocType allocType);
     MAddress AllocateRawPointerObject(size_t totalSize);
 
-    // tlRegion in AllocBuffer is a shortcut for fast allocation.
-    // we should handle failure in RegionManager
-    ZPage* tlRegion = nullptr;
+    // Temporary compiler ABI indirection, owned by cjcj-llvm#7.
+    // The descriptor is not a ZPage: its bounds delimit a shared-page slice.
+    struct TLAB {
+        uintptr_t top = 0;
+        uintptr_t end = 0;
+        uintptr_t start = 0;
+    };
+    TLAB* tlabDescriptor = &tlab;
+    TLAB tlab;
+    static constexpr size_t MinTLABSize = 2 * 1024;
+    uintptr_t AllocateInTLAB(size_t size);
 
     // HotSpot ThreadLocalAllocBuffer: thread-owned statistics survive refills
-    // and reset only at a young-cycle boundary. Async refill reads atomics only.
+    // and reset only at a young-cycle boundary.
     TLABStatistics tlabStatistics;
     TLABAllocationAverage tlabAllocationFraction;
-    std::atomic<size_t> desiredTLABSize{ MRT_PAGE_SIZE };
+    std::atomic<size_t> desiredTLABSize{ MinTLABSize };
     std::atomic<size_t> tlabRefills{ 0 };
 
     // Allocation work is handed to marking as an atomic batch.
     mutable std::mutex handoffLock;
 
-    std::atomic<ZPage*> preparedRegion = { nullptr };
     // allocate objects which are exposed to runtime thus can not be moved.
     // allocation context is responsible to notify collector when these objects are safe to be collected.
     std::vector<ZPage*> tlRawPointerRegions;
@@ -191,7 +194,7 @@ private:
     void* y2yDirtyHolderMergeHookContext{ nullptr };
 #endif
 #if defined(MRT_GC_UNIT_TESTS)
-    // Last, so tlRegion keeps offset 0 (RegionSpace.cpp:255 static_assert).
+
 #endif
 };
 } // namespace MapleRuntime

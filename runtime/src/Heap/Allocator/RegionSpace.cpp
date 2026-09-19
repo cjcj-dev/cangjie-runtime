@@ -49,22 +49,6 @@ bool RegionSpace::IsHeapObject(MAddress addr) const
     return IsHeapAddress(addr);
 }
 #endif
-void RegionSpace::FeedHungryBuffers()
-{
-    ScopedObjectAccess soa;
-    AllocBufferManager::HungryBuffers hungryBuffers;
-    allocBufferManager->SwapHungryBuffers(hungryBuffers);
-    for (auto* buffer : hungryBuffers) {
-        if (buffer->GetPreparedRegion() != nullptr) { continue; }
-        ZPage* region = GetRegionManager().AllocateThreadLocalRegion(
-            buffer->ComputeTLABSize(0, GetRegionManager().GetThreadLocalRegionSize()), true);
-        if (region == nullptr) { return; }
-        if (!buffer->SetPreparedRegion(region)) {
-            // This extent was computed for this buffer's history. Return it
-            // instead of handing that thread's size to another buffer.
-            GetRegionManager().UndoThreadLocalRegionAllocation(region);
-        }
-    }
-}
+
 
 } // namespace MapleRuntime

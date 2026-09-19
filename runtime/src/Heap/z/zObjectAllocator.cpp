@@ -61,7 +61,7 @@ void RegionManager::InitializeTLAB(AllocBuffer& buffer)
     std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
     buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads,
-                      GetThreadLocalRegionSize());
+                      ZObjectSizeLimitSmall);
 }
 
 // ZTLABUsage::reset (zTLABUsage.cpp:41), called before retiring allocating
@@ -90,7 +90,7 @@ void RegionManager::PublishTLABStatistics()
     const double fallback = tlabRequestedFraction.Average() / threads;
     Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
         buffer.AccumulateTLABStatistics(total, GetTLABUsed(), capacity);
-        buffer.ResizeTLAB(capacity, fallback, GetThreadLocalRegionSize());
+        buffer.ResizeTLAB(capacity, fallback, ZObjectSizeLimitSmall);
     });
     if (total.Used() != 0) {
         tlabAllocatingThreads.Sample(total.allocatingThreads);
@@ -273,51 +273,6 @@ void ZObjectAllocator::retire_pages(PageAgeRange ages)
         perAge->sharedSmallPage.set_all(nullptr);
         perAge->sharedMediumPage.set(nullptr);
     }
-}
-
-ZPage* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem, bool youngRegion,
-                                                   bool allowSaferegion)
-{
-    // ZHeap::max_tlab_size / unsafe_max_tlab_alloc (zHeap.cpp:144-160):
-    // the caller computes the refill size; the allocator enforces its extent.
-    if (size == 0 || size > GetThreadLocalRegionSize()) {
-        return nullptr;
-    }
-    const size_t pageBytes = AlignUp(size, ZGranuleSize);
-    ZPage* region = Heap::alloc_page(pageBytes, ZPageType::small, expectPhysicalMem,
-                                    allowSaferegion, true, youngRegion ? PageAge::eden : PageAge::old);
-    if (region != nullptr) {
-        {
-            region->reset(youngRegion ? PageAge::eden : PageAge::old);
-            if (youngRegion) {
-                // zHeap.cpp:233: charge the backing extent even before a
-                // prepared region is installed as a thread's current TLAB.
-                tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
-            }
-            region->SetRegionRole(ZPageRole::ThreadLocal);
-            DLOG(REGION, "alloc tl-region %p @[0x%zx+%zu, 0x%zx) pageBytes[%zu+%zu, %zu) type %u",
-                region, region->GetRegionStart(), region->GetRegionSize(), region->GetRegionEnd(),
-                region->granule_index(), region->GetRegionSize(), region->granule_index() + region->GetRegionSize(),
-                0u);
-        }
-    }
-
-    return region;
-}
-
-// ZHeap::undo_alloc_page (zHeap.cpp:270): only a failed publication of
-// a newly allocated, unused backing region cancels its allocation charge.
-// GC retirement/reclamation is not an undo and must retain that cycle's usage.
-void RegionManager::UndoThreadLocalRegionAllocation(ZPage* region)
-{
-    CHECK(region != nullptr && region->IsEmpty() && region->IsThreadLocalRegion());
-    if (region->IsYoungRegion()) {
-        const size_t size = region->GetRegionSize();
-        const size_t previous = tlabUsed.fetch_sub(size, std::memory_order_relaxed);
-        CHECK(previous >= size);
-    }
-    RemoveThreadLocalRegion(region);
-    ReclaimRegion(region);
 }
 
 void RegionManager::RequestForRegion(size_t size)
