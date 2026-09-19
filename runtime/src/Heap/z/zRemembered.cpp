@@ -156,8 +156,8 @@ void ZRemembered::clear_found_old_previous_set()
 void ZRemembered::register_found_old(ZPage* page)
 {
     CHECK(!page->IsYoungRegion());
-    _page_table = &Heap::page_table();
-    const auto& map = _page_table->map();
+    ZPageTable* table = _page_table != nullptr ? _page_table : &Heap::page_table();
+    const auto& map = table->map();
     CHECK(map.Ready());
     if (_found_old._bits != map.size()) {
         _found_old.initialize(map.size());
