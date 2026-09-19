@@ -8,6 +8,9 @@ OUT="${P2_FIELD_OUT:?set P2_FIELD_OUT}"
 LIB="${GCV2_RUNTIME_LIB_DIR:?set product runtime/bounds pair}"
 SDK="${CANGJIE_HOME:?set matching compiler SDK}"
 HOST="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set compiler host runtime}"
+# Red/restored arms execute exactly the original ELF and observer DSO. Only
+# GCV2_RUNTIME_LIB_DIR changes; no recompilation is allowed in reuse mode.
+if [[ "${P2_REUSE_ARTIFACTS:-0}" != 1 ]]; then
 HEADERS=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" "$ROOT/runtime" "$LIB")
 mkdir -p "$OUT"
 "${CXX:-clang++}" -shared -fPIC -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
@@ -43,6 +46,8 @@ sed -i "s/p2FieldBarrierExercise/$ENTRY/g" "$OUT/p2_field_barrier.cj"
 LD_LIBRARY_PATH="$HOST:$SDK/tools/lib:$SDK/third_party/llvm/lib" \
   "${P2_CJC:-$SDK/bin/cjc}" "$OUT/p2_field_barrier.cj" -O0 --static-std -L "$LIB" -L "$OUT" \
   -lp2_field_barrier -o "$OUT/p2_field_barrier"
+fi
+[[ -x "$OUT/p2_field_barrier" && -f "$OUT/libp2_field_barrier.so" ]] || exit 2
 sha256sum "$OUT/p2_field_barrier" "$OUT/libp2_field_barrier.so" "$LIB/libcangjie-runtime.so" "$LIB/libboundscheck.so"
 LD_LIBRARY_PATH="$OUT:$LIB:$SDK/runtime/lib/linux_x86_64_cjnative${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   cjGCInterval=3600s timeout 60s "$OUT/p2_field_barrier"

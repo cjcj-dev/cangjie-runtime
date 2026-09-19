@@ -229,6 +229,7 @@ private:
 
 class ZGenerationYoung : public ZGeneration {
 public:
+    void flip_promote(ZPage* from, ZPage* to);
     ZGenerationYoung();
     // zGeneration.hpp:199,244-246 — tenuring threshold is young-generation
     // state, selected after select_relocation_set (zGeneration.cpp:250).

@@ -1354,6 +1354,15 @@ YoungTypeSetter::~YoungTypeSetter()
 }
 
 namespace MapleRuntime {
+// ZGenerationYoung::flip_promote (ZGC zGeneration.cpp:941-943).
+// The Cangjie RegionList owns stable page descriptors, so flip promotion
+// resets the descriptor in place (from == to). Still publish via the page table:
+// its replace operation also registers the new old page with the young remset.
+void ZGenerationYoung::flip_promote(ZPage* from, ZPage* to)
+{
+    Heap::page_table().replace(from, to);
+}
+
 void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)
 {
     // zGeneration.cpp:704-715: preclean promotes all, other types compute.

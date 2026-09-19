@@ -2351,6 +2351,7 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                 }
                 newPage->reset_livemap();
                 if (promotion) {
+                    Heap::GetHeap().young().flip_promote(prev, newPage);
                     promoted.append(prev);
                 }
             }
