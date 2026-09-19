@@ -42,7 +42,9 @@
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zRelocationSet.hpp"
-#include "Heap/Allocator/RegionList.h"
+#include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zRelocationSetSelector.inline.hpp"
+#include "Heap/z/zForwarding.hpp"
 
 namespace MapleRuntime {
 
@@ -123,9 +125,19 @@ inline bool InitFwdTables(MAddress start, size_t size, size_t unit)
     return true;
 }
 
-inline bool BeginForwardingArena(Generation generation, RegionList& regions)
+inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZPage*> pages)
 {
-    Heap::GetHeap().GetZGeneration(generation).relocation_set().install_from_regions(regions);
+    ZRelocationSetSelector selector;
+    for (ZPage* page : pages) {
+        if (page == nullptr) {
+            continue;
+        }
+        if (page->IsAllocating()) {
+            page->TestMakeRelocatable();
+        }
+        selector.add_selected_small(page, ZForwarding::nentries(page));
+    }
+    Heap::GetHeap().GetZGeneration(generation).relocation_set().install(&selector);
     return true;
 }
 
@@ -377,16 +389,10 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
     {
         if (region->_scratch.fwdOwner.load(std::memory_order_acquire) != nullptr) return;
         if (generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart()) == nullptr) {
-            RegionList selected("fixture-forwardings");
             const Generation generation = region->GetOwnerGeneration();
-            if (region0->GetOwnerGeneration() == generation) {
-                selected.PrependRegion(region0);
-            }
-            if (region1->GetOwnerGeneration() == generation) {
-                selected.PrependRegion(region1);
-            }
-            CHECK(BeginForwardingArena(generation, selected));
-            while (selected.TakeHeadRegion() != nullptr) {}
+            ZPage* first = region0->GetOwnerGeneration() == generation ? region0 : nullptr;
+            ZPage* second = region1->GetOwnerGeneration() == generation ? region1 : nullptr;
+            CHECK(BeginForwardingArena(generation, { first, second }));
         }
         ZForwarding* forwarding = forwarding_for_page(region);
         CHECK(forwarding != nullptr);

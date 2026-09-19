@@ -4,11 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// CI face: CHECK(del->IsFromRegion()) at CSet empty-free (RegionManager.cpp
-// ExemptFromRegions). Mutator AddRawPointerObject may retype FROM→PINNED after
-// the snapshot (RegionManager.h:AddRawPointerObject). Claim is TryDelete under
-// the from-list lock; a lost claim parks PINNED, never frees a native-held page.
-// ZGC: zGeneration.cpp:211-221 register_empty_page only if is_relocatable.
+// CI face: reclaim claim is a role CAS (#710). Mutator AddRawPointerObject
+// retypes FROM→RawPointerPinned. ZGC: zGeneration.cpp:211-221 register_empty_page
+// only if is_relocatable.
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -20,53 +18,35 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 struct IsFromRegTestAccess {
-    static void ParkFrom(RegionManager& manager, ZPage* region)
+    static void ParkFrom(RegionManager&, ZPage* region)
     {
-        manager.fromRegionList.PrependRegion(region);
+        region->SetRegionRole(ZPageRole::From);
     }
-    static void ParkGarbage(RegionManager& manager, ZPage* region)
+    static void ParkGarbage(RegionManager&, ZPage* region)
     {
-        manager.garbageRegionList.PrependRegion(region);
+        region->SetRegionRole(ZPageRole::Garbage);
     }
-    static bool OnFrom(RegionManager& manager, const ZPage* region)
+    static bool OnFrom(RegionManager&, const ZPage* region)
     {
-        bool found = false;
-        manager.fromRegionList.VisitAllRegions([&found, region](ZPage* r) {
-            if (r == region) {
-                found = true;
-            }
-        });
-        return found;
+        return region->GetRegionRole() == ZPageRole::From;
     }
-    static bool OnPinned(RegionManager& manager, const ZPage* region)
+    static bool OnPinned(RegionManager&, const ZPage* region)
     {
-        bool found = false;
-        manager.rawPointerPinnedRegionList.VisitAllRegions([&found, region](ZPage* r) {
-            if (r == region) {
-                found = true;
-            }
-        });
-        return found;
+        return region->GetRegionRole() == ZPageRole::RawPointerPinned;
     }
-    static bool OnGarbage(RegionManager& manager, const ZPage* region)
+    static bool OnGarbage(RegionManager&, const ZPage* region)
     {
-        bool found = false;
-        manager.garbageRegionList.VisitAllRegions([&found, region](ZPage* r) {
-            if (r == region) {
-                found = true;
-            }
-        });
-        return found;
+        return region->GetRegionRole() == ZPageRole::Garbage;
     }
-    static bool TryClaimFrom(RegionManager& manager, ZPage* region, int newType)
+    static bool TryClaimFrom(RegionManager&, ZPage* region, int)
     {
-        (void)newType;
-        return manager.fromRegionList.TryDeleteRegion(region);
+        ZPageRole expect = ZPageRole::From;
+        return region->CASRegionRole(expect, ZPageRole::None);
     }
-    static bool TryClaimGarbage(RegionManager& manager, ZPage* region, int newType)
+    static bool TryClaimGarbage(RegionManager&, ZPage* region, int)
     {
-        (void)newType;
-        return manager.garbageRegionList.TryDeleteRegion(region);
+        ZPageRole expect = ZPageRole::Garbage;
+        return region->CASRegionRole(expect, ZPageRole::None);
     }
 };
 
@@ -79,7 +59,7 @@ GC_TEST(IsFromReg, TryDeleteFromFailsAfterPinRetype)
     IsFromRegTestAccess::ParkFrom(manager, fx.region0);
     GC_EXPECT_TRUE(fx.region0->IsFromRegion());
     GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0, 0));
-    manager.rawPointerPinnedRegionList.PrependRegion(fx.region0);
+    fx.region0->SetRegionRole(ZPageRole::RawPointerPinned);
     GC_EXPECT_FALSE(fx.region0->IsFromRegion());
     GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0, 0));
     GC_EXPECT_FALSE(fx.region0->IsFromRegion());
@@ -96,7 +76,7 @@ GC_TEST(IsFromReg, UnlistedGarbageClaimIsRefusedUntilPrepend)
     GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0, 0));
     IsFromRegTestAccess::ParkGarbage(manager, fx.region0);
     GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0, 0));
-    manager.rawPointerPinnedRegionList.PrependRegion(fx.region0);
+    fx.region0->SetRegionRole(ZPageRole::RawPointerPinned);
     GC_EXPECT_TRUE(IsFromRegTestAccess::OnPinned(manager, fx.region0));
     GC_EXPECT_FALSE(IsFromRegTestAccess::OnGarbage(manager, fx.region0));
 }

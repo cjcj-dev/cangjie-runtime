@@ -31,7 +31,6 @@
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.hpp"
-#include "Heap/Allocator/RegionList.h"
 
 #include <new>
 #include <algorithm>
@@ -151,12 +150,10 @@ void Heap::Init(const HeapParam& param)
         &page_table(),
         &old().forwarding_table(),
         &_page_allocator);
-    if (young().Workers() == nullptr) {
-        young().InitializeWorkers(1);
-    }
-    if (old().Workers() == nullptr) {
-        old().InitializeWorkers(1);
-    }
+    // zCollectedHeap.cpp:initialize_gc_workers creates ZWorkers with the
+    // ConcGCThreads budget (zWorkers.cpp:45-65). Do not pre-create a max=1
+    // pool here: that made later set_active_workers(ConcGCThreads) fail the
+    // WorkerThreads 1-max check (workerThread.cpp:148).
     ZCollectedHeap::heap()->initialize_gc();
     _initialized = true;
 }
@@ -285,9 +282,8 @@ size_t Heap::GetMaxCapacity() const { return _page_allocator.GetHeapCapacity(); 
 
 ZMemoryUsageInfo Heap::GetMemoryUsage() const
 {
-    const size_t young = _page_allocator.GetYoungAllocatedSize();
-    const size_t used = _page_allocator.GetUsedRegionSize();
-    const size_t old = used - std::min(used, young);
+    const size_t young = _page_allocator.used_generation(ZGenerationId::young);
+    const size_t old = _page_allocator.used_generation(ZGenerationId::old);
     return ComputeMemoryUsageInfo(_page_allocator.GetCommittedCapacity(), GetMaxCapacity(), young, old);
 }
 
@@ -574,9 +570,8 @@ size_t Heap::free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages)
         if (page == nullptr) {
             continue;
         }
-        if (RegionList* owner = page->GetRegionListOwner()) {
-            owner->DeleteRegion(page);
-        }
+        // #710: select_relocation_set owns candidacy; freeing clears the role.
+        page->SetRegionRole(ZPageRole::None);
         freed += page->size();
         free_page(page);
     }

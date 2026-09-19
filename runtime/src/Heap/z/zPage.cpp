@@ -51,12 +51,6 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
-bool ZPage::OnNamedList(const char* name) const
-{
-    RegionList* owner = GetRegionListOwner();
-    return owner != nullptr && name != nullptr && std::strcmp(owner->GetListName(), name) == 0;
-}
-
 // Keep the empty allocation page identity in the product DSO. An inline
 // function-local object gives callers in another DSO a different sentinel.
 ZPage* ZPage::NullRegion()
@@ -94,7 +88,7 @@ size_t ZPage::GetYoungRegionCount()
 
 size_t RegionManager::GetYoungAllocatedSize() const
 {
-    return youngRegionBytes.load(std::memory_order_acquire);
+    return used_generation(ZGenerationId::young);
 }
 
 bool ZPage::HasYoungRegions()

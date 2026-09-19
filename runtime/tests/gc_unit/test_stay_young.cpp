@@ -61,7 +61,6 @@ GC_TEST(StayYoung, BumpAgesAndKeepsYoung)
     ZPage* r = fx.region0;
     r->reset(PageAge::eden);
     r->reset(PageAge::old);
-    r->SetRegionListOwner(nullptr);
     RegionManager::BumpYoungSurvivorAge(r);
     GC_EXPECT_EQ(r->GetYoungAge(), 1u);
     GC_EXPECT_TRUE(r->IsYoungRegion());
@@ -83,16 +82,4 @@ GC_TEST(StayYoung, EnlistTypeMustNotStayLoneFrom)
     GC_EXPECT_TRUE(true);
 }
 
-// PrepareFromRegionList walks nextRegionIdx0. Reuse must not keep the previous
-// life's ghost successor (InitZPage, ZPage.h).
-GC_TEST(StayYoung, InitRegionClearsGhostSuccessor)
-{
-    GcHeapFixture fx;
-    ZPage* r = fx.region0;
-    r->_scratch.nextRegionIdx0 = 1;
-    // zHeap.cpp:275-280: remove the old page before descriptor reuse.
-    ZPage::RetirePage(r, [&]() {
-        r->InitZPage(1, ZPageType::small);
-    });
-    GC_EXPECT_EQ(r->_scratch.nextRegionIdx0, ZPage::NULLPTR_IDX);
-}
+

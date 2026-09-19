@@ -21,7 +21,6 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
     GcHeapFixture fx;
     if (large) {
         (void)ZPageType::large;
-        fx.region0->SetRegionListOwner(nullptr);
         fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
         fx.region0->SetRegionAllocPtr(fx.region0->GetRegionStart() + fx.obj0->GetSize());
     }

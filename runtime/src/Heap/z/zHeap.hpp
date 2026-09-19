@@ -27,7 +27,6 @@
 #include <memory>
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
-#include "Heap/Allocator/RegionListTypes.hpp"
 #include "Heap/z/zPageFwd.hpp"
 #include "Common/BaseObject.h"
 #include "ObjectModel/RefField.h"

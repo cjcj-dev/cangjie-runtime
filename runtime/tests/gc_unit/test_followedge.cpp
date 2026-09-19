@@ -73,7 +73,6 @@ struct LargeArrayFixture {
         ZPage::Initialize(units, start);
         region0 = ZPage::InitRegion(0, 1, ZPageType::small);
         region1 = ZPage::InitRegion(1, arrayUnits, ZPageType::large);
-        region1->SetRegionListOwner(nullptr);
         auto* holderType = reinterpret_cast<TypeInfo*>(holderStorage);
         holderType->SetType(TypeKind::TYPE_KIND_CLASS);
         holderType->SetFlagHasRefField();
