@@ -19,8 +19,6 @@ struct GcVerifyFixture : GcHeapFixture {
         obj1 = PlaceObject(region1->GetRegionStart());
         region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + RegionSpace::GetAllocSize(*obj0));
         region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + RegionSpace::GetAllocSize(*obj1));
-        region0->SetRegionListOwner(nullptr);
-        region1->SetRegionListOwner(nullptr);
     }
 
     void PrepareOldSource()
@@ -32,11 +30,7 @@ struct GcVerifyFixture : GcHeapFixture {
             .PublishPhase(ZGenerationPhase::MarkComplete);
         // zRelocationSet.cpp:110-118: select pages and install the arena before
         // preparing a source page or verifying its forwarding entries.
-        region0->SetRegionListOwner(nullptr);
-        RegionList selected("verify-source");
-        selected.PrependRegion(region0);
-        CHECK(BeginForwardingArena(Generation::Old, selected));
-        (void)selected.TakeHeadRegion();
+        CHECK(BeginForwardingArena(Generation::Old, { region0 }));
     }
 };
 } // namespace MapleRuntime::GcUnit

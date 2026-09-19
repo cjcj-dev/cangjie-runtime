@@ -80,9 +80,8 @@ public:
     {
         // ZHeap::used_generation -> ZPageAllocator::used_generation. Use
         // page occupancy for both generations, never object bytes minus pages.
-        const size_t young = GetRegionManager().GetYoungAllocatedSize();
-        const size_t used = GetRegionManager().GetUsedRegionSize();
-        const size_t old = used - std::min(used, young);
+        const size_t young = GetRegionManager().used_generation(ZGenerationId::young);
+        const size_t old = GetRegionManager().used_generation(ZGenerationId::old);
         return ComputeMemoryUsageInfo(GetRegionManager().GetCommittedCapacity(), GetMaxCapacity(), young, old);
     }
 
@@ -151,9 +150,6 @@ public:
 
 
 
-    template<Generation G>
-    void PrepareFromSpace() { GetRegionManager().PrepareFromRegionList<G>(); }
-
 
     template<Generation G>
     void ForwardFromSpace(ZWorkers& workers)
@@ -170,7 +166,6 @@ public:
     void CollectFromSpaceGarbage()
     {
         GetRegionManager().CollectFromSpaceGarbage();
-        GetRegionManager().ReassembleFromSpace();
     }
 
     void AssembleGarbageCandidates(bool collectAll = false)

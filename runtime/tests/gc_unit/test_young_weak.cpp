@@ -276,12 +276,8 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
         route.destination->reset(PageAge::eden);
     }
 
-    route.source->SetRegionListOwner(nullptr);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(route.source, route.from));
-    RegionList selected("old-source-value-root");
-    selected.PrependRegion(route.source);
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
-    (void)selected.TakeHeadRegion();
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, { route.source }));
     route.from->SetStateCode(ObjectState::FORWARDED);
     ZForwarding* publication = forwarding_for_page(
         route.source, reinterpret_cast<MAddress>(route.from));

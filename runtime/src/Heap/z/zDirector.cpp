@@ -625,8 +625,8 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
         Heap::GetHeap().old().Workers());
     stats.young_stats.stat_heap = Heap::GetHeap().GetZGeneration(ZGenerationId::young).StatHeap()->Stats();
     stats.old_stats.stat_heap = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatHeap()->Stats();
-    stats.young_stats.general.used = regions.GetYoungAllocatedSize();
-    stats.old_stats.general.used = stats.heap.used - std::min(stats.heap.used, stats.young_stats.general.used);
+    stats.young_stats.general.used = regions.used_generation(ZGenerationId::young);
+    stats.old_stats.general.used = regions.used_generation(ZGenerationId::old);
     stats.old_stats.general.total_collections_at_start = Heap::GetHeap().old().total_collections_at_start();
     stats.minor_busy = minorBusy || ZCollectedHeap::heap()->driver_minor()->port().is_busy();
     stats.major_busy = majorBusy || ZCollectedHeap::heap()->driver_major()->port().is_busy();
