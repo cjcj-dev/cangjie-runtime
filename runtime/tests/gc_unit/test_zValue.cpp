@@ -18,6 +18,7 @@
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zValue.inline.hpp"
 #include "gc_unittest.hpp"
+#include "b09_runtime_fixture.hpp"
 #include "zunittest.hpp"
 
 using namespace MapleRuntime;
@@ -94,10 +95,10 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     constexpr size_t units = 64;
     HeapParam params{};
     params.regionSize = ZGranuleSize / KB;
+    params.heapSize = units * ZGranuleSize / KB;
     params.exemptionThreshold = 0.8;
-    std::unique_ptr<ZTestRegionHeap> heap;
-    RegionManager manager;
-    heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
+    B09RuntimeFixture runtime;
+    Heap::GetHeap().page_allocator().Init(params);
 
     auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::eden);
     GC_EXPECT_EQ(allocator.sharedSmallPage.count(), ZCPU::count());

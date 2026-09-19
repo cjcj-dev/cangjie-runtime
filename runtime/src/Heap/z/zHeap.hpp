@@ -117,10 +117,10 @@ public:
     bool IsGhostFromObject(BaseObject* obj) const;
     bool IsUnmovableFromObject(BaseObject* obj) const;
     BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation);
-    ZGenerationYoung& young() { return _young; }
-    const ZGenerationYoung& young() const { return _young; }
-    ZGenerationOld& old() { return _old; }
-    const ZGenerationOld& old() const { return _old; }
+    ZGenerationYoung& young() { return *ZGeneration::young(); }
+    const ZGenerationYoung& young() const { return *ZGeneration::young(); }
+    ZGenerationOld& old() { return *ZGeneration::old(); }
+    const ZGenerationOld& old() const { return *ZGeneration::old(); }
     // zGeneration.cpp:600,637 (ZCollectedHeap::increment_total_collections)
     uint32_t total_collections() const { return _total_collections.load(std::memory_order_acquire); }
     void increment_total_collections() { _total_collections.fetch_add(1, std::memory_order_release); }
@@ -128,16 +128,16 @@ public:
     ZGeneration& GetZGeneration(ZGenerationId generation)
     {
         if (generation == ZGenerationId::young) {
-            return _young;
+            return *ZGeneration::young();
         }
-        return _old;
+        return *ZGeneration::old();
     }
     const ZGeneration& GetZGeneration(ZGenerationId generation) const
     {
         if (generation == ZGenerationId::young) {
-            return _young;
+            return *ZGeneration::young();
         }
-        return _old;
+        return *ZGeneration::old();
     }
     ZGeneration& GetZGeneration(Generation generation)
     {

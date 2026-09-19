@@ -13,6 +13,7 @@
 #include <vector>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "b09_runtime_fixture.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
@@ -77,19 +78,18 @@ namespace {
 // A synthetic, single-caller heap, using the product page allocator and page
 // table. There are no registered mutators; retire_pages has a quiescent world.
 struct SharedPageFixture {
-    // The RegionManager (mapped caches keep entries in heap memory) must be
-    // destroyed before the mapping: declare it last.
-    std::unique_ptr<ZTestRegionHeap> heap;
-    RegionManager manager;
-    SharedPageFixture()
+    B09RuntimeFixture runtime;
+    RegionManager& manager;
+    SharedPageFixture() : manager(Heap::GetHeap().page_allocator())
     {
         // Match CollectorResources::Init before allocation-rate sampling.
         ZStat::Initialize();
         constexpr size_t units = 64;
         HeapParam params{};
         params.regionSize = ZGranuleSize / KB;
+        params.heapSize = units * ZGranuleSize / KB;
         params.exemptionThreshold = 0.8;
-        heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
+        manager.Init(params);
     }
 };
 
