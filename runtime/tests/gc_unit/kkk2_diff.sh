@@ -18,8 +18,10 @@ echo "# kkk2_diff cand=$CS base=$BS $(date -Iseconds)"
 # #708：两侧必须用【候选树】同一份两宿主 kkk2_managed.sh，禁止跑基线 sha 自带的旧单臂脚本（否则 failed 形态差会假 CAND-ONLY）
 mkdir -p "$SCR/diff_harness"
 git -C "$REPO" show "$CS:runtime/tests/gc_unit/kkk2_managed.sh" > "$SCR/diff_harness/kkk2_managed.sh" || { echo "⛔ 候选无 kkk2_managed.sh"; exit 2; }
+git -C "$REPO" show "$CS:tools/zstat_pillars.py" > "$SCR/diff_harness/zstat_pillars.py" || { echo "⛔ 候选无 zstat_pillars.py"; exit 2; }
 bash "$B" kkk2 "mkdir -p /root/diff_harness"
 bash "$B" kkk2 --put "$SCR/diff_harness/kkk2_managed.sh" /root/diff_harness/kkk2_managed.sh
+bash "$B" kkk2 --put "$SCR/diff_harness/zstat_pillars.py" /root/diff_harness/zstat_pillars.py
 chmod +x "$SCR/diff_harness/kkk2_managed.sh"
 
 managed_json_ok() { # 新形态：必须有 arms 键；旧单臂 JSON 当缺失
@@ -30,7 +32,7 @@ sys.exit(0 if p.is_file() and isinstance(json.loads(p.read_text()).get(\"arms\")
 
 run_managed() {
   local sha=$1; local lane=$2
-  bash "$WF" sh "$lane" "ulimit -c 0; mkdir -p /root/$lane/harness /root/$lane/managed-runs; cp -a /root/diff_harness/kkk2_managed.sh /root/$lane/harness/kkk2_managed.sh; export LANE=/root/$lane SRCROOT=/root/$lane/default OUT=/root/$lane/managed-runs N=3 CANGJIE_HOME=/root/sdkdepot/945fe3e8f023-fa13e8d5c17b; bash /root/$lane/harness/kkk2_managed.sh $sha"
+  bash "$WF" sh "$lane" "ulimit -c 0; mkdir -p /root/$lane/harness /root/$lane/managed-runs /root/$lane/tools-bundle /root/$lane/default/tools; cp -a /root/diff_harness/kkk2_managed.sh /root/$lane/harness/kkk2_managed.sh; cp -a /root/diff_harness/zstat_pillars.py /root/$lane/tools-bundle/zstat_pillars.py; cp -a /root/diff_harness/zstat_pillars.py /root/$lane/default/tools/zstat_pillars.py; export LANE=/root/$lane SRCROOT=/root/$lane/default OUT=/root/$lane/managed-runs N=3 CANGJIE_HOME=/root/sdkdepot/945fe3e8f023-fa13e8d5c17b; bash /root/$lane/harness/kkk2_managed.sh $sha"
 }
 
 run_arm() { # run_arm <sha> ：若 kkk2 无缓存则建+三臂；rc 0=可用
@@ -55,12 +57,13 @@ run_arm() { # run_arm <sha> ：若 kkk2 无缓存则建+三臂；rc 0=可用
     echo "# $lane: unit 缓存命中，只补跑 managed（候选两宿主脚本）"
     run_managed "$sha" "$lane" > "$SCR/$lane.managed.log" 2>&1
   fi
-  # ssh 会话可能先于远端跑完就断 ⇒ 轮询最多 40 分钟，再对仍缺的臂串行补跑一次
   local a t=0
-  while [ $t -lt 2400 ]; do
-    if bash "$B" kkk2 "test -s /root/$lane/unit-default/run.rc -a -s /root/$lane/unit-filler/run.rc -a -s /root/$lane/unit-testable/run.rc" >/dev/null 2>&1 && managed_json_ok "$lane"; then break; fi
-    sleep 30; t=$((t+30))
-  done
+  if [ "$unit_ok" = 0 ]; then
+    while [ $t -lt 2400 ]; do
+      if bash "$B" kkk2 "test -s /root/$lane/unit-default/run.rc -a -s /root/$lane/unit-filler/run.rc -a -s /root/$lane/unit-testable/run.rc" >/dev/null 2>&1 && managed_json_ok "$lane"; then break; fi
+      sleep 30; t=$((t+30))
+    done
+  fi
   for a in default filler testable; do
     if ! bash "$B" kkk2 "test -s /root/$lane/unit-$a/run.rc" >/dev/null 2>&1; then
       echo "# $lane: 臂 $a 40 分钟仍无 run.rc ⇒ 串行补跑一次"; bash "$WF" unit "$lane" "$a" > "$SCR/$lane.unit-$a.retry.log" 2>&1
@@ -81,9 +84,10 @@ mkdir -p "$SCR/diffout"; OUT="$SCR/diffout/$C12-vs-$B12"; rm -rf "$OUT"; mkdir -
 for who in cand base; do sha=$CS; [ $who = base ] && sha=$BS; lane="diff_${sha:0:12}"
   bash "$B" kkk2 "cd /root/$lane && for a in default filler testable; do echo \"== \$a rc=\$(cat unit-\$a/run.rc 2>/dev/null)\"; grep -E '^\\[ *(FAILED|INCOMPLETE) *\\] [A-Za-z]' unit-\$a/run.log 2>/dev/null | sed -E 's/^\\[ *(FAILED|INCOMPLETE) *\\] +//; s/ .*//' | sort -u; echo \"== total \$(grep -E '^\[==========\] [0-9]+ tests' unit-\$a/run.log | tail -1)\"; done; python3 -c 'import json,pathlib; p=pathlib.Path(\"managed-runs/kkk2_managed.json\");
 ok=p.exists();
-print(\"== managed rc=\" + (\"0\" if ok else \"NA\"));
-d=json.loads(p.read_text()) if ok else {\"failed\":[\"managed/MISSING\"]};
-fails=d.get(\"failed\") or [];
+d=json.loads(p.read_text()) if ok else {};
+shape=isinstance(d.get(\"arms\"), dict);
+print(\"== managed rc=\" + (\"0\" if shape else \"NA\"));
+fails=list(d.get(\"failed\") or []) if shape else [\"managed/SHAPE\"];
 print(\"== total tests 6\");
 [print(x) for x in fails]'; echo '== so'; cat default-so.sha256 testable-so.sha256 2>/dev/null | sed -E 's#/root/[^ ]*/build/#build/#'" > "$OUT/$who.txt" 2>/dev/null
 done
