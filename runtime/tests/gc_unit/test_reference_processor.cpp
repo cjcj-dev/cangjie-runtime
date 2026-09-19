@@ -7,6 +7,9 @@
 #include <vector>
 
 #include "Heap/z/zReferenceProcessor.hpp"
+#include "Heap/z/zStat.hpp"
+#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/workerThread.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -15,10 +18,20 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+namespace {
+struct BoundRefProc {
+    ZStatWorkers stats;
+    ZWorkers pool;
+    ReferenceProcessor processor;
+    BoundRefProc() : pool(ZGenerationId::old, 2, &stats), processor(&pool) {}
+};
+}
+
 GC_TEST(ReferenceProcessor, UnsupportedKindsFailClosed)
 {
     WorkerFixture worker(0);
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     alignas(8) unsigned char storage[16] = {};
     auto* object = reinterpret_cast<BaseObject*>(storage);
 
@@ -33,7 +46,8 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
 {
     WorkerFixture worker(0);
     GcHeapFixture fx;
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
 
@@ -55,7 +69,8 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryIsClaimedOnce)
 {
     WorkerFixture worker(0);
     GcHeapFixture fx;
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     (void)processor.DiscoverReference(fx.obj0, ReferenceType::FINAL);
     (void)processor.DiscoverReference(fx.obj0, ReferenceType::FINAL);
@@ -75,7 +90,8 @@ GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
 
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
     processor.ProcessReferences([](BaseObject*) { return false; });
     size_t enqueued = 0;
@@ -97,7 +113,8 @@ GC_TEST(ReferenceProcessor, StrongWeakReferentIsNotCleared)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([&](BaseObject* value) { return value == fx.obj1; });
     processor.EnqueueReferences([](BaseObject*) { return true; });
@@ -114,7 +131,8 @@ GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([](BaseObject*) { return false; });
     // Weak clearing precedes the rendezvous/unblock/enqueue boundary.
@@ -135,7 +153,8 @@ GC_TEST(ReferenceProcessor, ProcessConsumerReloadsWinningWeakCasValue)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     ReferenceProcessor::SetBeforeWeakCleanCasForTest([&] {
         referent.StoreColoured(GcUnit::StoreGoodPointer(replacement));
@@ -160,7 +179,8 @@ GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([](BaseObject*) { return false; });
@@ -171,11 +191,33 @@ GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
     GC_EXPECT_TRUE(processor.Empty());
 }
 
+GC_TEST(ReferenceProcessor, ProcessReferencesRunsOnBoundWorkers)
+{
+    ZStatWorkers stats;
+    ZWorkers pool(ZGenerationId::old, 2, &stats);
+    WorkerFixture worker(0);
+    GcHeapFixture fx;
+    ReferenceProcessor processor(&pool);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
+    processor.ProcessReferences([](BaseObject*) { return false; });
+    BaseObject* enqueued = nullptr;
+    processor.EnqueueReferences([&](BaseObject* value) {
+        enqueued = value;
+        return true;
+    });
+    std::fprintf(stderr, "REFPROC_BOUND_WORKERS enqueued=%p obj0=%p\n", enqueued, fx.obj0);
+    GC_EXPECT_TRUE(enqueued == fx.obj0);
+    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
+    GC_EXPECT_TRUE(processor.Empty());
+}
+
 GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
 {
     WorkerFixture worker(0);
     GcHeapFixture fx;
-    ReferenceProcessor processor;
+    BoundRefProc bound;
+    ReferenceProcessor& processor = bound.processor;
     constexpr size_t kWorkers = 8;
     constexpr size_t kPerWorker = 4;
     std::vector<BaseObject*> objects;
@@ -211,4 +253,26 @@ GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
     GC_EXPECT_EQ(count.load(std::memory_order_relaxed), kWorkers * kPerWorker);
     GC_EXPECT_EQ(processor.Discovered(ReferenceType::FINAL), kWorkers * kPerWorker);
     GC_EXPECT_TRUE(processor.Empty());
+}
+
+GC_TEST(ReferenceProcessor, ProcessReferencesFromNonWorkerCaller)
+{
+    BoundRefProc bound;
+    GcHeapFixture fx;
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    {
+        WorkerFixture discover(0);
+        GC_EXPECT_TRUE(bound.processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
+    }
+    GC_EXPECT_EQ(WorkerThread::worker_id(), UINT32_MAX);
+    bound.processor.ProcessReferences([](BaseObject*) { return false; });
+    BaseObject* enqueued = nullptr;
+    bound.processor.EnqueueReferences([&](BaseObject* value) {
+        enqueued = value;
+        return true;
+    });
+    std::fprintf(stderr, "REFPROC_NON_WORKER_CALLER enqueued=%p obj0=%p caller_id=%u\n",
+                 enqueued, fx.obj0, WorkerThread::worker_id());
+    GC_EXPECT_TRUE(enqueued == fx.obj0);
+    GC_EXPECT_EQ(bound.processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
 }
