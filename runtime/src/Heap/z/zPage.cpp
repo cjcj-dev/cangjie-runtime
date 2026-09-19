@@ -304,6 +304,9 @@ ZPage* ZPage::clone_for_promotion() const
     ZPage* page = new ZPage(_type, PageAge::old, _virtual);
     page->_scratch.allocPtr = _scratch.allocPtr;
     page->_scratch.regionEnd = _scratch.regionEnd;
+    // Host difference from ZGC zPage.cpp:64-72: raw-pointer ownership stays
+    // with the same objects when only the page metadata is replaced.
+    page->_scratch.rawPointerObjectCount = GetRawPointerObjectCount();
     page->_top = _top;
     return page;
 }

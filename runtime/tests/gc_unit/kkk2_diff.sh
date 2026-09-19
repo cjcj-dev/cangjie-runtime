@@ -61,7 +61,7 @@ run_arm() { # run_arm <sha> ：若 kkk2 无缓存则建+三臂；rc 0=可用
   if [ "$FORCE" = 0 ] && managed_json_ok "$lane"; then managed_ok=1; fi
   if [ "$unit_ok" = 1 ] && [ "$managed_ok" = 1 ]; then echo "# $lane: 命中缓存"; return 0; fi
   if [ "$unit_ok" = 0 ]; then
-    rm -rf "$wt"; git -C "$REPO" worktree add -q --detach "$wt" "$sha" || { echo "⛔ worktree add 失败 $sha"; return 1; }
+    rm -rf "$wt"; git -C "$REPO" worktree prune; git -C "$REPO" worktree add -q --detach "$wt" "$sha" || { echo "⛔ worktree add 失败 $sha"; return 1; }
     echo "# $lane: 构建两构型…"; bash "$WF" build "$wt" "$lane" 2>&1 | /usr/bin/grep -E "^== |⛔|first errors" | head -6
     local brc; brc=$(bash "$B" kkk2 "cat /root/$lane/default-build.rc /root/$lane/testable-build.rc 2>/dev/null | tr '\n' ' '")
     case "$brc" in "0 0 "*) ;; *) echo "⛔ $lane 构建 rc=[$brc]"; git -C "$REPO" worktree remove --force "$wt"; return 1;; esac
