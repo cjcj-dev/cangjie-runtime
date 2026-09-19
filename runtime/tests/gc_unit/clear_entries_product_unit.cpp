@@ -486,7 +486,6 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
     }
     ZPage* region = ZPage::InitRegion(index, 1, ZPageType::small);
     GC_EXPECT_TRUE(region != nullptr);
-    PublishAllocatedPage(region);
     region->SetRegionListOwner(nullptr);
     region->SetRegionAllocPtr(region->GetRegionStart());
     (void)fx;
