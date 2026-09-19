@@ -615,7 +615,6 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
     const std::vector<ZPage::UnitSegment> segments = ReservedSegments(virtualMemory);
     const size_t spanUnits = ZPage::IndexedUnitCount(segments);
     const size_t metadataSize = GetMetadataSize(spanUnits);
-    this->regionInfoStart = regionInfoAddr;
     this->regionHeapStart = segments.front().start;
     this->regionHeapEnd = segments.back().End();
     heapUnitCount = nUnit;
@@ -634,6 +633,21 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
     this->exemptedRegionThreshold = heapParam.exemptionThreshold;
     DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), unit count %zu", regionInfoAddr, metadataSize,
          regionHeapStart, regionHeapEnd, nUnit);
+}
+
+void RegionManager::promote_used(const ZPage* from, const ZPage* to)
+{
+    CHECK(from->start() == to->start());
+    CHECK(from->size() == to->size());
+    CHECK(from->age() != PageAge::old);
+    CHECK(to->age() == PageAge::old);
+    NoteUsedGenerationDelta(Generation::Young, -static_cast<ssize_t>(to->size()));
+    NoteUsedGenerationDelta(Generation::Old, static_cast<ssize_t>(to->size()));
+}
+
+void RegionManager::safe_destroy_page(ZPage* page)
+{
+    ZPage::RetireDescriptor(page);
 }
 
 void RegionManager::ReclaimRegion(ZPage* region)

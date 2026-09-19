@@ -110,4 +110,29 @@ void RegionList::DeleteRegionLocked(ZPage* del)
     }
 }
 
+void RegionList::ReplaceRegionLocked(ZPage* from, ZPage* to)
+{
+    CHECK_DETAIL(from != nullptr && to != nullptr && from != to, "replace needs distinct pages");
+    CHECK_DETAIL(from->GetRegionListOwner() == this, "from page is not on this list");
+    CHECK_DETAIL(to->GetRegionListOwner() == nullptr, "to page already belongs to a list");
+    ZPage* pre = from->GetPrevRegion();
+    ZPage* next = from->GetNextRegion();
+    to->SetPrevRegion(pre);
+    to->SetNextRegion(next);
+    to->SetRegionListOwner(this);
+    from->SetPrevRegion(nullptr);
+    from->SetNextRegion(nullptr);
+    from->SetRegionListOwner(nullptr);
+    if (pre != nullptr) {
+        pre->SetNextRegion(to);
+    } else {
+        listHead = to;
+    }
+    if (next != nullptr) {
+        next->SetPrevRegion(to);
+    } else {
+        listTail = to;
+    }
+}
+
 }

@@ -476,7 +476,7 @@ STANDALONE_SYMBOLS=(
   _ZN12MapleRuntime8ZLiveMap13reset_segmentEm
 )
 STANDALONE_FULL_SYMBOLS=(
-  _ZN12MapleRuntime5ZPage17CloneForPromotionEv
+  _ZNK12MapleRuntime5ZPage19clone_for_promotionEv
   _ZN12MapleRuntime5ZMark15MarkEntryObjectEPNS_10BaseObjectERKNS_14MarkStackEntryEPNS_13MarkLiveCacheE
   _ZN12MapleRuntime5ZMark21MarkOldObjectIfActiveEPNS_10BaseObjectEb
 )
