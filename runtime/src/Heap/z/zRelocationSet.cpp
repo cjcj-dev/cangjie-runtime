@@ -232,9 +232,13 @@ static void destroy_and_clear(RegionManager* page_allocator, ZArray<ZPage*>* arr
 {
     for (int i = 0; i < array->length(); ++i) {
         ZPage* const page = array->at(i);
-        if (page_allocator != nullptr) {
-            page_allocator->safe_destroy_page(page);
+        if (page == nullptr || page_allocator == nullptr) {
+            continue;
         }
+        if (ZPageTable::heap_table().get(page->GetRegionStart()) == page) {
+            continue;
+        }
+        page_allocator->safe_destroy_page(page);
     }
     array->clear();
 }

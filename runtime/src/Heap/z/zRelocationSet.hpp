@@ -62,11 +62,17 @@ public:
 
     bool next(ZForwarding** out)
     {
-        if (_i >= _n) {
+        if (_forwardings == nullptr) {
             return false;
         }
-        *out = _forwardings[_i++];
-        return true;
+        while (_i < _n) {
+            ZForwarding* candidate = _forwardings[_i++];
+            if (candidate != nullptr) {
+                *out = candidate;
+                return true;
+            }
+        }
+        return false;
     }
 
 private:
