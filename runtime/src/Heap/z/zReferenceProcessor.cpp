@@ -364,7 +364,7 @@ void ReferenceProcessor::process_references()
 {
     ZStatTimerOld timer(ZSubPhaseConcurrentReferencesProcess);
     ZReferenceProcessorTask task(this);
-    workers->run(&task);
+        workers->run(&task);
     soft_reference_update_clock();
     collect_statistics();
 }
