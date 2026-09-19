@@ -23,9 +23,9 @@ nm --defined-only "$LIB/libcangjie-runtime.so" > "$OUT/product-defined.txt"
 nm --defined-only "$ELF" > "$OUT/test-defined.txt"
 nm -u "$ELF" > "$OUT/test-imports.txt"
 /usr/bin/grep -Eq ' main$' "$OUT/test-defined.txt"
-/usr/bin/grep -Eq ' CJ_MCC_ReadStaticRef$' "$OUT/product-defined.txt"
-/usr/bin/grep -Eq ' CJ_MCC_ReadStaticRef$' "$OUT/test-imports.txt"
-if /usr/bin/grep -Eq ' CJ_MCC_ReadStaticRef$' "$OUT/test-defined.txt"; then exit 79; fi
+/usr/bin/grep -Eq ' CJ_MCC_ReadStaticRef(@[^[:space:]]+)?$' "$OUT/product-defined.txt"
+/usr/bin/grep -Eq ' CJ_MCC_ReadStaticRef(@[^[:space:]]+)?$' "$OUT/test-imports.txt"
+if /usr/bin/grep -Eq ' CJ_MCC_ReadStaticRef(@[^[:space:]]+)?$' "$OUT/test-defined.txt"; then exit 79; fi
 for mode in null valid invalid saferegion; do
   for n in 1 2 3; do (
     set +e
