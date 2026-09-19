@@ -13,6 +13,7 @@
 #include <mutex>
 #include <unordered_set>
 
+#include "Common/TypeDef.h"
 #include "Common/MarkWorkStack.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zMarkStackEntry.hpp"

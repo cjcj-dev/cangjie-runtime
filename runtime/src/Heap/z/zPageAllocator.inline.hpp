@@ -75,6 +75,42 @@ inline void RegionManager::ReclaimGarbageRegions()
         SatisfyStalledAllocations();
     }
 
+inline size_t RegionManager::SumAllocatedByRoles(std::initializer_list<ZPageRole> roles) const
+    {
+        size_t bytes = 0;
+        ZPage::SafeDestroyScope scope;
+        ZPageTableIterator iter(&ZPageTable::heap_table());
+        for (ZPage* region; iter.next(&region);) {
+            for (ZPageRole role : roles) {
+                if (region->GetRegionRole() == role) {
+                    bytes += region->GetUnitCount() * ZPage::UNIT_SIZE;
+                    break;
+                }
+            }
+        }
+        return bytes;
+    }
+
+inline size_t RegionManager::GetRecentAllocatedSize() const
+    {
+        return SumAllocatedByRoles({ ZPageRole::RecentFull, ZPageRole::RecentLarge, ZPageRole::RecentPinned });
+    }
+
+inline size_t RegionManager::GetSurvivedSize() const
+    {
+        return SumAllocatedByRoles({ ZPageRole::From, ZPageRole::OldPinned, ZPageRole::OldLarge });
+    }
+
+inline size_t RegionManager::GetFromSpaceSize() const
+    {
+        return SumAllocatedByRoles({ ZPageRole::From });
+    }
+
+inline size_t RegionManager::GetPinnedSpaceSize() const
+    {
+        return SumAllocatedByRoles({ ZPageRole::OldPinned, ZPageRole::RecentPinned, ZPageRole::RawPointerPinned });
+    }
+
 inline size_t RegionManager::GetUsedUnitCount() const
     {
         // zPageAllocator.cpp:1311: used is the allocator's page-granular

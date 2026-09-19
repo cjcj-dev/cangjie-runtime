@@ -726,6 +726,12 @@ public:
 
     size_t GetUsedRegionSize() const { return GetUsedUnitCount() * ZPage::UNIT_SIZE; }
 
+    size_t GetRecentAllocatedSize() const;
+    size_t GetSurvivedSize() const;
+    size_t GetFromSpaceSize() const;
+    size_t GetPinnedSpaceSize() const;
+    size_t SumAllocatedByRoles(std::initializer_list<ZPageRole> roles) const;
+
     size_t GetUsedUnitCount() const;
 
     size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
