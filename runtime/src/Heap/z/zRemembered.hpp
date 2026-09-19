@@ -39,7 +39,6 @@ private:
         std::unique_ptr<CHeapBitMap> _allocated_bitmap_1;
         CHeapBitMap* _bitmaps[2];
         int _current;
-        size_t _bits;
 
         FoundOld();
         void initialize(size_t bits);

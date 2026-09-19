@@ -73,7 +73,7 @@ bool SlotHeldByLiveObject(const void* slot)
 #endif
 
 ZRemembered::FoundOld::FoundOld()
-    : _allocated_bitmap_0(), _allocated_bitmap_1(), _bitmaps{ nullptr, nullptr }, _current(0), _bits(0)
+    : _allocated_bitmap_0(), _allocated_bitmap_1(), _bitmaps{ nullptr, nullptr }, _current(0)
 {}
 
 void ZRemembered::FoundOld::initialize(size_t bits)
@@ -81,7 +81,6 @@ void ZRemembered::FoundOld::initialize(size_t bits)
     // Same granule as the page table: register_page index == ZPageTable::at /
     // ZForwardingTable::at index (ZGC zRemembered.cpp:372 and :428-433 share
     // ZGranuleSize; our page table granule is the region unit).
-    _bits = bits;
     _allocated_bitmap_0.reset(new CHeapBitMap(static_cast<BitMap::idx_t>(bits), true));
     _allocated_bitmap_1.reset(new CHeapBitMap(static_cast<BitMap::idx_t>(bits), true));
     _bitmaps[0] = _allocated_bitmap_0.get();
@@ -93,8 +92,7 @@ void ZRemembered::FoundOld::ensure()
     if (_allocated_bitmap_0) {
         return;
     }
-    const BitMap::idx_t bits = _bits != 0 ? static_cast<BitMap::idx_t>(_bits)
-                                          : static_cast<BitMap::idx_t>(ZAddressOffsetMax >> ZGranuleSizeShift);
+    const BitMap::idx_t bits = static_cast<BitMap::idx_t>(ZAddressOffsetMax >> ZGranuleSizeShift);
     _allocated_bitmap_0.reset(new CHeapBitMap(bits, true));
     _allocated_bitmap_1.reset(new CHeapBitMap(bits, true));
     _bitmaps[0] = _allocated_bitmap_0.get();
