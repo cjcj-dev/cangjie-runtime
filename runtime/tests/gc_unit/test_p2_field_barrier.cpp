@@ -603,10 +603,6 @@ extern "C" int p2SlowFieldInputExercise()
     heap.RequestGC(GC_REASON_USER, false);
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
     finalHolder->OnFinalizerCreated();
-    NativeSlot finalKeepRoot(zpointer::null);
-    ZBarrier::WriteStaticRef(finalKeepRoot, finalHolder);
-    NativeSlot* keepRoots[] = { &finalKeepRoot };
-    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(keepRoots), 1);
     Expect(!Heap::page(reinterpret_cast<MAddress>(strongHolder))->IsYoungRegion(), "slow_real_strong_holder_promoted");
     Expect(!Heap::page(reinterpret_cast<MAddress>(finalHolder))->IsYoungRegion(), "slow_real_final_holder_promoted");
     auto* young = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
@@ -716,7 +712,6 @@ extern "C" int p2SlowFieldInputExercise()
     Expect(strongFollow != 0, "slow_strong_control_result_observed");
     Expect(finalFollow != 0, "slow_final_control_result_observed");
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
-    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(keepRoots), 1);
     std::printf("P2_SLOW_RESULT failures=%u strong=%u final=%u strong_follow=%u final_follow=%u\n",
                 failures.load(), strongSlow.load(), finalSlow.load(), strongFollow.load(), finalFollow.load());
     return failures.load();
