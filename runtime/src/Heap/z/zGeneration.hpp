@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <vector>
 #include "Common/MarkWorkStack.h"
+#include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Heap/z/zStat.hpp"
@@ -311,7 +312,7 @@ public:
 private:
     uint32_t _total_collections_at_start = 0;
     WorkStack oldMarkWorkStack;
-    WorkStack oldMarkForeignRoots;
+    ValueRootList oldExportOwners;
     ZGenerationOld* previousOld { nullptr };
 };
 

@@ -35,6 +35,7 @@
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -317,15 +318,15 @@ void ZCrossVM::FindUselessExternObjects()
     CurrentizeValueRootMap(discoveredExternObjects, Generation::Old);
 }
 
-void ZCrossVM::ProcessExportRoots(WorkStack& foreignRootsSet)
+void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
 {
-    while (!foreignRootsSet.empty()) {
+    while (!exportOwners.empty()) {
         if (ZAbort::should_abort()) {
             return;
         }
-        const MarkStackEntry entry = foreignRootsSet.back();
-        foreignRootsSet.pop_back();
-        BaseObject* exportObj = to_object(ZOffset::address(to_zoffset(entry.object_address())));
+        const ValueRoot owner = exportOwners.back();
+        BaseObject* exportObj = ResolveCurrentValueRoot(owner, &exportOwners, owner.generation, owner.Stage());
+        exportOwners.pop_back();
         if (exportObj == nullptr) {
             continue;
         }
@@ -336,22 +337,9 @@ void ZCrossVM::ProcessExportRoots(WorkStack& foreignRootsSet)
                 continue;
             }
         }
-        if (Heap::IsHeapAddress(exportObj)) {
-            Heap::GetHeap().old().MarkObjectIfActive<false, true, true, false>(from_object(exportObj));
-        }
-        ZMark& mark = Heap::GetHeap().old().Mark();
-        mark.BindWorkers(Heap::GetHeap().old().Workers());
-        (void)mark.Stacks().Flush(mark.Stripes(), true);
-        mark.MarkFollow();
-        if (!ZAbort::should_abort()) {
-            CHECK_DETAIL(mark.Stripes().IsEmpty(),
-                         "export closure returned without coordinated worker termination");
-        }
-
-        // ZMark::mark_and_follow (zMark.cpp:412-415) deduplicates GC liveness,
-        // not ownership. Cangjie's foreign-cycle handoff has no JNI equivalent:
-        // every export owner needs its own strong reachable foreign set, even
-        // when the young-roots prelude or another owner already marked it.
+        // GC liveness was published by the original root slot barrier and
+        // completed by the generation's normal mark termination. This walk
+        // records foreign ownership only; GC deduplication cannot replace it.
         std::unordered_set<BaseObject*> visited;
         std::vector<BaseObject*> pending{exportObj};
         while (!pending.empty()) {

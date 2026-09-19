@@ -718,12 +718,14 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
 {
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     GcHeapFixture heap;
+    heap.region0->reset(PageAge::eden);
+    heap.region1->reset(PageAge::old);
     MarkPublicationFixture marking;
     std::thread owner([&] {
         ThreadLocal::SetAllocBuffer(nullptr);
         RegisterCurrentMarkFlushThread();
-        ZMark::PublishThreadRoot(heap.obj0, true, true);
-        ZMark::PublishThreadRoot(heap.obj1, false, false);
+        ZBarrier::Mark<false, false, true, false>(from_object(heap.obj0));
+        ZBarrier::Mark<false, false, false, false>(from_object(heap.obj1));
         MutatorManager::Instance().UnregisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
     });
     owner.join();

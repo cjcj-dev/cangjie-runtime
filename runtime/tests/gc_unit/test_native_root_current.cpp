@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
 #include "b09_runtime_fixture.hpp"
+#include "mark_publication_fixture.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zBarrier.hpp"
@@ -252,6 +253,50 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 }
 
 }
+GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::eden);
+    fx.region1->reset(PageAge::old);
+    MarkPublicationFixture marking;
+    size_t young = 0;
+    size_t old = 0;
+    // Real native-frame producers feed the product root phase. The old scan
+    // context must not select the domain for either current target.
+    Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    thread->SetManagedContext(false);
+    (void)thread->EnterSaferegion(false);
+    const size_t rootMark = thread->NativeFrameRootCount();
+    (void)thread->AddNativeFrameRoot(fx.obj0);
+    (void)thread->AddNativeFrameRoot(fx.obj1);
+    const bool scanned = thread->GcPhaseEnum(false);
+    marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
+        GC_EXPECT_TRUE(object == fx.obj0);
+        GC_EXPECT_TRUE(follow);
+        ++young;
+    });
+    marking.DrainOld([&](BaseObject* object, bool follow) {
+        GC_EXPECT_TRUE(object == fx.obj1);
+        GC_EXPECT_TRUE(follow);
+        ++old;
+    });
+    bool youngCurrent = false;
+    bool oldCurrent = false;
+    thread->VisitMutatorRoots([&](ObjectRef& root) {
+        youngCurrent |= to_object(safe(root.LoadPlain())) == fx.obj0;
+        oldCurrent |= to_object(safe(root.LoadPlain())) == fx.obj1;
+    });
+    const bool slotsCurrent = youngCurrent && oldCurrent;
+    thread->PopNativeFrameRootsTo(rootMark);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    std::fprintf(stderr, "ROOT_TARGET_GEN_ASSERT executed=1 scanned=%u current=%u young=%zu old=%zu\n",
+                 unsigned(scanned), unsigned(slotsCurrent), young, old);
+    GC_EXPECT_TRUE(scanned && slotsCurrent);
+    GC_EXPECT_EQ(young, 1u);
+    GC_EXPECT_EQ(old, 1u);
+}
+
 GC_OTHER_VM_TEST(NativeRootCurrent, MinorPublication) { CheckNativeRoot(true); }
 GC_OTHER_VM_TEST(NativeRootCurrent, MajorSeed) { CheckNativeRoot(false); }
 GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)

@@ -70,14 +70,13 @@ public:
     static void VisitStrongPlainRoots(const RootVisitor& visitor,
                               const std::function<void(Mutator&)>& threadVisitor);
     static void DiscoverWeakReference(BaseObject* reference, WorkStack& workStack);
-    static void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false);
     static void EnumAllCommonRoots(ZWorkers& workers);
-    static void EnumAllExportRoots(RootSet& foreignRootsSet);
+    static void EnumAllExportRoots(ValueRootList& exportOwners);
     static void DiscoverFinalizableRoot(NativeSlot& slot);
     static void MergeMutatorRoots(WorkStack& workStack);
-    static void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
+    static void DoEnumeration(WorkStack& workStack, ValueRootList& exportOwners);
     static void VisitStaticRoots(const NativeSlotVisitor& visitor);
-    static void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet);
+    static void EnumRefFieldRoot(RefField<>& ref, ValueRootList& exportOwners);
     static void ProcessFinalizers();
     static void VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                              uint64_t stackScanEpoch = 0);
@@ -106,7 +105,6 @@ public:
 
     static bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
     static void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
-    static void PublishThreadRoot(BaseObject* object, bool young, bool follow);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls);
     static bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);

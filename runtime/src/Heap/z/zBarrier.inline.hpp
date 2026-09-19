@@ -119,6 +119,20 @@ inline void ZBarrier::MarkFinalizableBarrierOnRoot(NativeSlot& field)
 }
 
 // ZZBarrier::mark_barrier_on_old_oop_field, zBarrier.inline.hpp:626-660.
+// ZBarrier::mark_barrier_on_oop_field, zBarrier.inline.hpp:591-623.
+inline void ZBarrier::MarkBarrierOnOopField(RefField<>& field, bool finalizable)
+{
+    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
+    if (finalizable) {
+        (void)MarkBarrier(IsFinalizableGoodFastPath, &ZBarrier::MarkFinalizableSlowPath,
+                          ColorFinalizableGood, field, observed, provenance);
+    } else {
+        (void)MarkBarrier(IsMarkGoodFastPath, &ZBarrier::MarkSlowPath, ColorMarkGood, field, observed,
+                          provenance);
+    }
+}
+
 inline void ZBarrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable)
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);

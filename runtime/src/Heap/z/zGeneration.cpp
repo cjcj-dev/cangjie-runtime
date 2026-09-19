@@ -496,10 +496,8 @@ void ZGenerationYoung::concurrent_mark()
     auto mergeY2yDirtyWork = [&](WorkStack& destination) {
         Heap::GetHeap().GetAllocator().VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
             buffer.MergeY2yDirtyHolders(destination);
-            buffer.MergeY2yDirtySlots([this, &destination](MAddress slot) {
-                RefField<>& field = HeapSlotAt<>(slot);
-                BaseObject* target = ZRelocate::ResolveMinorReference(field);
-                ZMark::PushYoungObject(target, destination, "y2y_slot");
+            buffer.MergeY2yDirtySlots([](MAddress slot) {
+                ZBarrier::MarkBarrierOnYoungOopField(HeapSlotAt<>(slot));
             });
         });
     };
@@ -521,15 +519,14 @@ void ZGenerationYoung::concurrent_mark()
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         ZStatTimerYoung zstatTimer(PYoungRootEnum);
         (void)Heap::GetHeap().young().Mark().Flush();
-        ZMark::VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
+        ZMark::VisitMinorRoots([this, &currentMinorRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
                 if (region != nullptr && !region->IsYoungRegion()) {
                     currentMinorRoots.insert(object);
                 }
             }
-            ZMark::PushYoungObject(object, workStack, "minor_root");
-        }, [this, &workStack, &currentMinorRoots](BaseObject* object) {
+        }, [this, &currentMinorRoots](BaseObject* object) {
             if (!Heap::IsHeapAddress(object)) {
                 return;
             }
@@ -537,7 +534,6 @@ void ZGenerationYoung::concurrent_mark()
             if (region != nullptr && !region->IsYoungRegion()) {
                 currentMinorRoots.insert(object);
             }
-            ZMark::PushYoungObject(object, workStack, "minor_root");
         }, stackScanEpoch);
         // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().young().Mark());
@@ -629,10 +625,8 @@ bool ZGenerationYoung::mark_end()
     });
     Heap::GetHeap().GetAllocator().VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
         buffer.MergeY2yDirtyHolders(workStack);
-        buffer.MergeY2yDirtySlots([this, &workStack](MAddress slot) {
-            RefField<>& field = HeapSlotAt<>(slot);
-            BaseObject* target = ZRelocate::ResolveMinorReference(field);
-            ZMark::PushYoungObject(target, workStack, "y2y_slot");
+        buffer.MergeY2yDirtySlots([](MAddress slot) {
+            ZBarrier::MarkBarrierOnYoungOopField(HeapSlotAt<>(slot));
         });
     });
     const bool markEndSucceeded = ZMark::TryEndYoungMark(workStack, &youngConcWindow);
@@ -1150,7 +1144,7 @@ bool ZGenerationOld::mark_end()
     }
     // Preserve export ownership discovery after the ordinary root closure,
     // while the mark-end pause excludes new mutator publication.
-    Heap::GetHeap().cross_vm().ProcessExportRoots(oldMarkForeignRoots);
+    Heap::GetHeap().cross_vm().ProcessExportRoots(oldExportOwners);
     // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
     // to the phase owner before verification or publishing mark completion.
     if (ZAbort::should_abort()) {
@@ -1199,11 +1193,10 @@ void ZGenerationOld::concurrent_mark()
 {
     ZBreakpoint::AtAfterMarkingStarted();
     oldMarkWorkStack.clear();
-    oldMarkForeignRoots.clear();
+    oldExportOwners.clear();
     WorkStack& workStack = oldMarkWorkStack;
-    WorkStack& foreignStack = oldMarkForeignRoots;
+    ValueRootList& foreignStack = oldExportOwners;
     MarkingStacks::VerifyEmpty(workStack.size());
-    MarkingStacks::VerifyEmpty(foreignStack.size());
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
     uint64_t stackScanEpoch = 0;
 
@@ -1248,8 +1241,6 @@ void ZGenerationOld::concurrent_mark()
         }
 
         MarkingStacks::VerifyEmpty(workStack.size());
-        MarkingStacks::VerifyEmpty(foreignStack.size());
-
     }
 
 }
