@@ -7,6 +7,7 @@
 #include "gc_verify_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
 
 #include <csignal>
 #include <cstdlib>
@@ -373,6 +374,7 @@ GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsStaleMarkStackAtStart)
     });
 }
 
+
 namespace {
 enum class VerifyFieldCase {
     OldGood,
@@ -382,6 +384,9 @@ enum class VerifyFieldCase {
     WeakMissingRemembered,
     WeakExactRemembered,
     WeakFinalizable,
+    WeakYoungUnmarked,
+    WeakYoungMarked,
+    WeakNonLiveOld,
 };
 
 void RunVerifyFieldCycle(VerifyFieldCase mode)
@@ -446,6 +451,33 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
         case VerifyFieldCase::WeakFinalizable:
             value = (value & ~ZPointerMarkedOldMask) | ZPointerFinalizable | ZPointerRememberedMask;
             break;
+        case VerifyFieldCase::WeakYoungUnmarked:
+        case VerifyFieldCase::WeakYoungMarked: {
+            auto& manager = MutatorManager::Instance();
+            if (manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD) == nullptr) { _exit(127); }
+            {
+                ScopedObjectAccess access;
+                target = MObject::NewObject(targetType, 2 * sizeof(uintptr_t), AllocType::MOVEABLE_OBJECT);
+                if (target == nullptr || !Heap::is_young(reinterpret_cast<MAddress>(target))) { _exit(128); }
+                value = raw(StoreGoodPointer(target)) | ZPointerMarkedOld | ZPointerMarkedYoung |
+                        ZPointerRememberedMask;
+                if (mode == VerifyFieldCase::WeakYoungUnmarked) { value ^= ZPointerMarkedYoungMask; }
+            }
+            manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+            std::fprintf(stderr, "VERIFY_FIELD_YOUNG_TARGET target=%p word=%#zx\n", target, value);
+            break;
+        }
+        case VerifyFieldCase::WeakNonLiveOld: {
+            targetPage->reset_livemap();
+            bool incLive = false;
+            (void)holderPage->mark_object(from_object(holder), false, incLive);
+            if (incLive) { holderPage->inc_live(1, holder->GetSize()); }
+            if (!holderPage->is_object_live(from_object(holder)) ||
+                targetPage->is_object_live(from_object(target))) { _exit(129); }
+            value |= ZPointerRememberedMask;
+            std::fprintf(stderr, "VERIFY_FIELD_LIVENESS holder_live=1 target_live=0\n");
+            break;
+        }
     }
     field.StoreColoured(to_zpointer(value));
     ConcurrentGCBreakpoints::RunToIdle();
@@ -500,4 +532,20 @@ GC_OTHER_VM_TEST(ZVerify, WeakFieldAcceptsFinalizableColor)
 {
     CheckVerifyFieldCase(VerifyFieldCase::WeakFinalizable,
         "ZVerify.WeakFieldAcceptsFinalizableColor", nullptr);
+}
+
+GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsUnmarkedYoungTarget)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::WeakYoungUnmarked,
+        "ZVerify.WeakFieldRejectsUnmarkedYoungTarget", "Unmarked young oop");
+}
+GC_OTHER_VM_TEST(ZVerify, WeakFieldAcceptsMarkedYoungTarget)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::WeakYoungMarked,
+        "ZVerify.WeakFieldAcceptsMarkedYoungTarget", nullptr);
+}
+GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsNonLiveOldTarget)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::WeakNonLiveOld,
+        "ZVerify.WeakFieldRejectsNonLiveOldTarget", "Non-live old oop");
 }
