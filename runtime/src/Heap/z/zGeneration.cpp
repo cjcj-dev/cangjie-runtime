@@ -1121,6 +1121,7 @@ void ZGenerationOld::mark_start()
         ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
     }
 #endif
+    Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().set_workers(Workers());
     Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
     Mark().BindWorkers(Workers());
     Mark().Start();

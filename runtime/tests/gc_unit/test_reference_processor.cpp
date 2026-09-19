@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "Heap/z/zReferenceProcessor.hpp"
+#include "Heap/z/zStat.hpp"
+#include "Heap/z/zWorkers.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -168,6 +170,27 @@ GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
 
     GC_EXPECT_TRUE(is_null(referent.GetTargetObject()));
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::WEAK), static_cast<size_t>(1));
+    GC_EXPECT_TRUE(processor.Empty());
+}
+
+GC_TEST(ReferenceProcessor, ProcessReferencesRunsOnBoundWorkers)
+{
+    ZStatWorkers stats;
+    ZWorkers pool(ZGenerationId::old, 2, &stats);
+    WorkerFixture worker(0);
+    GcHeapFixture fx;
+    ReferenceProcessor processor(&pool);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
+    processor.ProcessReferences([](BaseObject*) { return false; });
+    BaseObject* enqueued = nullptr;
+    processor.EnqueueReferences([&](BaseObject* value) {
+        enqueued = value;
+        return true;
+    });
+    std::fprintf(stderr, "REFPROC_BOUND_WORKERS enqueued=%p obj0=%p\n", enqueued, fx.obj0);
+    GC_EXPECT_TRUE(enqueued == fx.obj0);
+    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
     GC_EXPECT_TRUE(processor.Empty());
 }
 

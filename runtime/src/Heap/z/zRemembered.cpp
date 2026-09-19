@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zRemembered.hpp"
+#include "Base/Panic.h"
 #include "Heap/z/zRemembered.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -381,11 +382,8 @@ void ZRemembered::scan_and_follow(ZMark* mark)
     {
         ZRememberedScanMarkFollowTask task(this, mark);
         ZWorkers* workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers();
-        if (workers != nullptr) {
-            workers->run(&task);
-        } else {
-            task.work();
-        }
+        CHECK_DETAIL(workers != nullptr, "young workers required for remset scan");
+        workers->run(&task);
         if (mark->PollStop() || !mark->TryTerminateFlush()) {
             return;
         }
