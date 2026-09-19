@@ -25,6 +25,8 @@ bash "$B" kkk2 "mkdir -p $HARNET"
 bash "$B" kkk2 --put "$SCR/diff_harness_708/kkk2_managed.sh" $HARNET/kkk2_managed.sh
 bash "$B" kkk2 --put "$SCR/diff_harness_708/zstat_pillars.py" $HARNET/zstat_pillars.py
 chmod +x "$SCR/diff_harness_708/kkk2_managed.sh"
+RUNNER_SHA256=$(sha256sum "$SCR/diff_harness_708/kkk2_managed.sh" | awk '{print $1}')
+echo "# pinned runner sha256=$RUNNER_SHA256 path=kkk2:/root/diff_harness_708/kkk2_managed.sh"
 
 managed_json_ok() { # 新形态：必须有 arms 键；旧单臂 JSON 当缺失
   local lane=$1
@@ -91,24 +93,36 @@ shape=isinstance(d.get(\"arms\"), dict);
 print(\"== managed rc=\" + (\"0\" if shape else \"NA\"));
 fails=list(d.get(\"failed\") or []) if shape else [\"managed/SHAPE\"];
 print(\"== total tests 6\");
-[print(x) for x in fails]'; echo '== so'; cat default-so.sha256 testable-so.sha256 2>/dev/null | sed -E 's#/root/[^ ]*/build/#build/#'" > "$OUT/$who.txt" 2>/dev/null
+[print(x) for x in fails];
+print(\"== ident cangjie_home=\" + str(d.get(\"cangjie_home\",\"\")));
+print(\"== ident h48_rt=\" + str(d.get(\"h48_rt\",\"\")));
+print(\"== ident stained_rt=\" + str(d.get(\"stained_rt\",\"\")))'; echo '== so'; cat default-so.sha256 testable-so.sha256 2>/dev/null | sed -E 's#/root/[^ ]*/build/#build/#'" > "$OUT/$who.txt" 2>/dev/null
 done
-python3 - "$OUT" "$CS" "$BS" <<'PY'
+python3 - "$OUT" "$CS" "$BS" "$RUNNER_SHA256" <<'PY'
 import sys,re,json,os
-out,cs,bs=sys.argv[1:4]
+out,cs,bs,runner_sha=sys.argv[1:5]
 def parse(p):
-    arms={}; cur=None; so=[]
+    arms={}; cur=None; so=[]; ident={}
     for line in open(p):
         line=line.rstrip('\n')
         m=re.match(r'^== (default|filler|testable|managed) rc=(\S*)',line)
         if m: cur=m.group(1); arms[cur]={'rc':m.group(2),'failed':set(),'total':''}; continue
         if line.startswith('== total'): arms[cur]['total']=line[9:].strip(); continue
+        mi=re.match(r'^== ident (cangjie_home|h48_rt|stained_rt)=(.*)$',line)
+        if mi: ident[mi.group(1)]=mi.group(2); continue
         if line=='== so': cur='so'; continue
         if cur=='so': so.append(line); continue
         if cur and line: arms[cur]['failed'].add(line)
-    return arms,so
-c,cso=parse(f'{out}/cand.txt'); b,bso=parse(f'{out}/base.txt')
-res={'candidate':cs,'base':bs,'arms':{},'positive_control':{}}
+    return arms,so,ident
+c,cso,cident=parse(f'{out}/cand.txt'); b,bso,bident=parse(f'{out}/base.txt')
+res={'candidate':cs,'base':bs,'arms':{},'positive_control':{},
+     'managed_runner':{
+         'sha256':runner_sha,
+         'path':'kkk2:/root/diff_harness_708/kkk2_managed.sh',
+         'cangjie_home':cident.get('cangjie_home') or bident.get('cangjie_home') or '',
+         'h48_rt':cident.get('h48_rt') or bident.get('h48_rt') or '',
+         'stained_rt':cident.get('stained_rt') or bident.get('stained_rt') or '',
+     }}
 for a in ('default','filler','testable','managed'):
     ca=c.get(a,{'rc':'NA','failed':set(),'total':''}); ba=b.get(a,{'rc':'NA','failed':set(),'total':''})
     res['arms'][a]={'cand_rc':ca['rc'],'base_rc':ba['rc'],'cand_total':ca['total'],'base_total':ba['total'],
@@ -124,7 +138,12 @@ for a in ('default','filler','testable','managed'):
         res['arms'][a]['status']='ran'; res['positive_control'][a]='sets differ' if ca['failed']!=ba['failed'] else ('identical sets' if ca['failed'] else 'both empty')
 res['cand_so']=cso; res['base_so']=bso
 json.dump(res,open(f'{out}/DIFF.json','w'),ensure_ascii=False,indent=1)
-md=[f"# DIFF {cs[:12]} vs {bs[:12]}",""]
+mr=res['managed_runner']
+md=[f"# DIFF {cs[:12]} vs {bs[:12]}","",
+    f"runner_sha256={mr['sha256']} path={mr['path']}",
+    f"CANGJIE_HOME={mr['cangjie_home']}",
+    f"H48={mr['h48_rt']}",
+    f"stained={mr['stained_rt']}",""]
 not_run=[a for a,v in res['arms'].items() if v.get('status')!='ran']
 if not_run: md.append(f"⛔ 未跑/未完成的臂: {[(a,res['arms'][a]['status']) for a in not_run]} ⇒ 本 DIFF 对这些臂不可作为验收证据（0917 实撞：P09 testable 编译失败 rc=123 被读成 CAND-ONLY=0 放行）")
 for a,v in res['arms'].items():
