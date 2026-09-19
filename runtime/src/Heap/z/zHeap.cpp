@@ -506,12 +506,50 @@ ZPage* Heap::page(MAddress addr) { return page_table().get(addr); }
 
 ZPageTable& Heap::page_table() { return GetHeap()._page_table; }
 
+RegionManager* Heap::_test_page_allocator = nullptr;
+
+void Heap::bind_test_page_allocator(RegionManager* manager)
+{
+    _test_page_allocator = manager;
+}
+
+RegionManager& Heap::page_allocator()
+{
+    if (_test_page_allocator != nullptr) {
+        return *_test_page_allocator;
+    }
+    return _page_allocator;
+}
+
+const RegionManager& Heap::page_allocator() const
+{
+    if (_test_page_allocator != nullptr) {
+        return *_test_page_allocator;
+    }
+    return _page_allocator;
+}
+
+namespace {
+thread_local ZPage* g_prematerializedPage = nullptr;
+}
+
+ZPage* Heap::alloc_page(ZPage* page)
+{
+    g_prematerializedPage = page;
+    ZPage* published = alloc_page(0, ZPageType::small, false, false, false);
+    g_prematerializedPage = nullptr;
+    return published;
+}
+
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
                              bool clearPayload, PageAge age)
 {
     RegionManager& manager = GetHeap().page_allocator();
-    ZPage* page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
-    if (page != nullptr && page_table().get(page->GetRegionStart()) != page) {
+    ZPage* page = g_prematerializedPage;
+    if (page == nullptr && num > 0) {
+        page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
+    }
+    if (page != nullptr) {
         page_table().insert(page);
     }
     return page;
