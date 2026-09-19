@@ -364,7 +364,7 @@ void ReferenceProcessor::process_references()
 {
     ZStatTimerOld timer(ZSubPhaseConcurrentReferencesProcess);
     ZReferenceProcessorTask task(this);
-        workers->run(&task);
+    workers->run(&task);
     soft_reference_update_clock();
     collect_statistics();
 }
@@ -528,7 +528,8 @@ void FinalizerProcessor::Stop()
     WaitStop();
 }
 
-FinalizerProcessor::FinalizerProcessor()
+FinalizerProcessor::FinalizerProcessor(ZWorkers* workers)
+    : referenceProcessor(workers)
 {
     started = false;
     running.store(false, std::memory_order_relaxed);

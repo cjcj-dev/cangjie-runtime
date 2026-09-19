@@ -451,7 +451,7 @@ bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx
         return true;
     }
 
-    ZPage* prepared = manager.TakeRegion(
+    ZPage* prepared = Heap::alloc_page(
         unitCount, ZPageType::large, false, true, true);
     if (prepared == nullptr) {
         return false;

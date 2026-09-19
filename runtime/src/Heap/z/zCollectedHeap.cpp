@@ -123,7 +123,6 @@ void ZCollectedHeap::initialize_gc_workers()
 
         _heap.young().InitializeWorkers(_concurrent_gc_threads);
         _heap.old().InitializeWorkers(_concurrent_gc_threads);
-        _finalizer_processor.GetReferenceProcessor().set_workers(_heap.old().Workers());
     }
 
 

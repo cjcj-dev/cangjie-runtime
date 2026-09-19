@@ -9,6 +9,7 @@
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/workerThread.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -252,4 +253,26 @@ GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
     GC_EXPECT_EQ(count.load(std::memory_order_relaxed), kWorkers * kPerWorker);
     GC_EXPECT_EQ(processor.Discovered(ReferenceType::FINAL), kWorkers * kPerWorker);
     GC_EXPECT_TRUE(processor.Empty());
+}
+
+GC_TEST(ReferenceProcessor, ProcessReferencesFromNonWorkerCaller)
+{
+    BoundRefProc bound;
+    GcHeapFixture fx;
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    {
+        WorkerFixture discover(0);
+        GC_EXPECT_TRUE(bound.processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
+    }
+    GC_EXPECT_EQ(WorkerThread::worker_id(), UINT32_MAX);
+    bound.processor.ProcessReferences([](BaseObject*) { return false; });
+    BaseObject* enqueued = nullptr;
+    bound.processor.EnqueueReferences([&](BaseObject* value) {
+        enqueued = value;
+        return true;
+    });
+    std::fprintf(stderr, "REFPROC_NON_WORKER_CALLER enqueued=%p obj0=%p caller_id=%u\n",
+                 enqueued, fx.obj0, WorkerThread::worker_id());
+    GC_EXPECT_TRUE(enqueued == fx.obj0);
+    GC_EXPECT_EQ(bound.processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
 }
