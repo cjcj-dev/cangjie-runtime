@@ -1190,9 +1190,9 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         }
     };
     if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
-        MarkPartialArray::FollowPartialReferences(entry, [](MAddress slot) {
+        MarkPartialArray::FollowPartialReferences(entry, [&entry](MAddress slot) {
             auto& field = HeapSlotAt<>(slot);
-            ZBarrier::MarkBarrierOnOldOopField(nullptr, field, false);
+            ZBarrier::MarkBarrierOnOldOopField(nullptr, field, entry.finalizable());
         }, publish);
         return;
     }
