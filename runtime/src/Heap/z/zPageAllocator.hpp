@@ -222,7 +222,7 @@ public:
     // ZPageAllocator(min/initial/max capacity) owns _virtual/_physical and one
     // ZPartition per NUMA id (zPageAllocator.cpp:1201-1260); the partitions
     // here consume the two managers the same way.
-    void Initialize(size_t regionCnt, ZVirtualMemoryManager& virtualMemory,
+    void Initialize(ZVirtualMemoryManager& virtualMemory,
                     ZPhysicalMemoryManager& physicalMemory, size_t maxCapacity);
     bool ClaimPageMemory(size_t num, PageMemory& memory);
     bool PreparePageMemory(PageMemory& memory);
@@ -261,7 +261,7 @@ public:
     void decrease_capacity(uint32_t partition_id, size_t size, bool set_max_capacity);
     size_t capacity() const;
 
-    // Unit index <-> ZVirtualMemory (ZPage metadata is indexed per unit).
+    // Global granule index plus byte extent <-> ZVirtualMemory.
     static ZVirtualMemory VirtualMemoryOf(size_t index, size_t count);
     static size_t IndexOf(const ZVirtualMemory& vmem);
     uint32_t PartitionIdOf(const ZVirtualMemory& vmem) const { return virtualMemory->lookup_partition_id(vmem); }
@@ -482,7 +482,7 @@ public:
 
     // get metadataSize by regionNum or unitNumber
     // page-table geometry, not a reverse metadata array
-    __attribute__((visibility("hidden"))) static size_t GetMetadataSize(size_t num);
+    __attribute__((visibility("hidden"))) static size_t GetMetadataSize();
 #if defined(__EULER__)
     void SetCacheRatio(double minSize, double maxSize, double defaultParam);
 #endif
@@ -490,7 +490,7 @@ public:
     // managers are constructed for max_capacity and consumed by the partitions.
     void Initialize(size_t regionNum, uintptr_t regionInfoStart, ZVirtualMemoryManager& virtualMemory,
                     ZPhysicalMemoryManager& physicalMemory, const HeapParam& heapParam, double garbageThreshold);
-    // Address span the per-unit metadata covers: [lowest reserved offset, ZAddressOffsetMax).
+    // Address envelope [lowest reserved offset, ZAddressOffsetMax).
     static ZVirtualMemory ReservedAddressSpan(const ZVirtualMemoryManager& virtualMemory);
     // P01 reverse-metadata ABI adapter; called only before runtime allocation.
     static std::vector<ZPage::ReservedSegment> ReservedSegments(ZVirtualMemoryManager& virtualMemory);

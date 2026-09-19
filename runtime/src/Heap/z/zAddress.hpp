@@ -85,12 +85,6 @@ extern size_t    ZBackingOffsetMax;
 // Describes the maximal granule index inside the backing storage.
 extern uint32_t  ZBackingIndexMax;
 
-// Granule of the virtual/physical memory managers. ZGC uses ZGranuleSize
-// (2MB, zGlobals.hpp:33-34) because every page is a granule multiple. Our
-// page allocator still hands out MRT_PAGE_SIZE units (P03/P05 move pages onto
-// 2MB granules), so the managers index address space and backing per unit.
-
-
 // Layout of metadata bits in colored pointer / zpointer.
 //
 // A zpointer is a combination of the address bits (heap base bit + offset)

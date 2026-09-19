@@ -292,7 +292,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     const size_t unit = ZGranuleSize;
     ProductHeapFixture fixture(8);
     RegionManager& manager = fixture.manager;
-    const auto role = ZPageType::small;
+    const auto role = ZPageType::large;
     BindFixturePageTable(manager, 8);
     ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
     ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
@@ -338,7 +338,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     const size_t unit = ZGranuleSize;
     ProductHeapFixture fixture(12);
     RegionManager& manager = fixture.manager;
-    const auto role = ZPageType::small;
+    const auto role = ZPageType::large;
     BindFixturePageTable(manager, 12);
     ZPage* regions[5];
     for (auto& region : regions) {

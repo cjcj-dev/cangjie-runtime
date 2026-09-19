@@ -78,9 +78,7 @@ ZRemembered::FoundOld::FoundOld()
 
 void ZRemembered::FoundOld::initialize(size_t bits)
 {
-    // Same granule as the page table: register_page index == ZPageTable::at /
-    // ZForwardingTable::at index (ZGC zRemembered.cpp:372 and :428-433 share
-    // ZGranuleSize; our page table granule is the region unit).
+    // zRemembered.cpp:351-374: one found-old bit per global granule index.
     _allocated_bitmap_0.reset(new CHeapBitMap(static_cast<BitMap::idx_t>(bits), true));
     _allocated_bitmap_1.reset(new CHeapBitMap(static_cast<BitMap::idx_t>(bits), true));
     _bitmaps[0] = _allocated_bitmap_0.get();

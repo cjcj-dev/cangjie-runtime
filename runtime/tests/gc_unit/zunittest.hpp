@@ -277,7 +277,7 @@ public:
     _physical.reset(new ZPhysicalMemoryManager(maxCapacity));
     GC_EXPECT_TRUE(_physical->is_initialized());
     const std::vector<ZPage::ReservedSegment> segments = RegionManager::ReservedSegments(*_virtual);
-    _metadataSize = RegionManager::GetMetadataSize(0);
+    _metadataSize = RegionManager::GetMetadataSize();
     _metadata = mmap(nullptr, _metadataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     GC_EXPECT_TRUE(_metadata != MAP_FAILED);
     manager.Initialize(units * ZGranuleSize, reinterpret_cast<uintptr_t>(_metadata), *_virtual, *_physical, params, garbageThreshold);

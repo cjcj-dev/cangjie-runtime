@@ -32,7 +32,7 @@ inline ZVirtualMemory::ZVirtualMemory(const ZRange<zoffset, zoffset_end>& range)
   : ZVirtualMemory(range.start(), range.size()) {}
 
 inline int ZVirtualMemory::granule_count() const {
-  const size_t granule_count = size() / ZGranuleSize;
+  const size_t granule_count = (size() >> ZGranuleSizeShift);
 
   assert(granule_count <= static_cast<size_t>(std::numeric_limits<int>::max()));
 

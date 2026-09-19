@@ -18,7 +18,7 @@ namespace MapleRuntime {
 template<typename T>
 inline void ZGranuleMap<T>::put(zoffset offset, T value)
 {
-        _map[index_for_offset(offset)].store(value, std::memory_order_release);
+        __atomic_store(_map + index_for_offset(offset), &value, __ATOMIC_RELAXED);
     }
 }
 
@@ -31,7 +31,7 @@ inline void ZGranuleMap<T>::put(zoffset offset, size_t size, T value)
         const size_t count = size >> ZGranuleSizeShift;
         assert(start <= _size && count <= _size - start);
         for (size_t i = 0; i < count; ++i) {
-            _map[start + i].store(value, std::memory_order_release);
+            __atomic_store(_map + start + i, &value, __ATOMIC_RELAXED);
         }
     }
 }
@@ -40,7 +40,9 @@ namespace MapleRuntime {
 template<typename T>
 inline T ZGranuleMap<T>::get_acquire(zoffset offset) const
 {
-        return _map[index_for_offset(offset)].load(std::memory_order_acquire);
+        T value;
+        __atomic_load(_map + index_for_offset(offset), &value, __ATOMIC_ACQUIRE);
+        return value;
     }
 }
 
@@ -48,8 +50,7 @@ namespace MapleRuntime {
 template<typename T>
 inline void ZGranuleMap<T>::release_put(zoffset offset, T value)
 {
-        std::atomic_thread_fence(std::memory_order_release);
-        _map[index_for_offset(offset)].store(value, std::memory_order_relaxed);
+        __atomic_store(_map + index_for_offset(offset), &value, __ATOMIC_RELEASE);
     }
 }
 
@@ -58,11 +59,7 @@ template<typename T>
 inline void ZGranuleMap<T>::release_put(zoffset offset, size_t size, T value)
 {
         std::atomic_thread_fence(std::memory_order_release);
-        const size_t start = index_for_offset(offset);
-        const size_t count = size >> ZGranuleSizeShift;
-        for (size_t i = 0; i < count; ++i) {
-            _map[start + i].store(value, std::memory_order_relaxed);
-        }
+        put(offset, size, value);
     }
 }
 
@@ -78,10 +75,10 @@ namespace MapleRuntime {
 template<typename T>
 inline T ZGranuleMap<T>::at(size_t index) const
 {
-        if (_map == nullptr || index >= _size) {
-            return T();
-        }
-        return _map[index].load(std::memory_order_acquire);
+        assert(index < _size);
+        T value;
+        __atomic_load(_map + index, &value, __ATOMIC_RELAXED);
+        return value;
     }
 }
 
@@ -99,14 +96,12 @@ namespace MapleRuntime {
 template<typename T>
 inline const T* ZGranuleMap<T>::addr(zoffset offset) const
 {
-        static_assert(sizeof(std::atomic<T>) == sizeof(T), "atomic slot must alias T");
-        return reinterpret_cast<const T*>(_map + index_for_offset(offset));
+        return _map + index_for_offset(offset);
     }
 
 template<typename T>
 inline T* ZGranuleMap<T>::addr(zoffset offset)
 {
-        static_assert(sizeof(std::atomic<T>) == sizeof(T), "atomic slot must alias T");
-        return reinterpret_cast<T*>(_map + index_for_offset(offset));
+        return _map + index_for_offset(offset);
     }
 }

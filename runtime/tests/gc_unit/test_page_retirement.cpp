@@ -46,7 +46,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         (void)heap;
         // ReleaseRetiredRegion clears the product remembered set before
         // returning the page. Its address space must exist as after heap init.
-        const auto role = ZPageType::small;
+        const auto role = ZPageType::large;
         BindFixturePageTable(manager, 4);
         ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
         ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
@@ -66,7 +66,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
             switch (path) {
                 case RetirementPath::RETURN:
-                    manager.ReturnPageMemory({ index, 2, 0, true });
+                    manager.ReturnPageMemory({ index, 2 * ZGranuleSize, 0, true });
                     break;
                 case RetirementPath::RECLAIM:
                     manager.ReclaimRegion(first);

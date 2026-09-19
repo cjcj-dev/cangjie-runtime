@@ -15,7 +15,7 @@ namespace MapleRuntime {
 inline __attribute__((visibility("hidden"))) size_t RegionManager::GetHeapMemorySize(size_t heapSize)
     {
         size_t alignedHeapSize = GetAlignedHeapSize(heapSize);
-        size_t metadataSize = GetMetadataSize(alignedHeapSize);
+        size_t metadataSize = GetMetadataSize();
         size_t roundedHeapSize = 0;
         CHECK_DETAIL(CheckedRoundUpSize(heapSize, ZGranuleSize, roundedHeapSize),
                      "heap size round-up overflows: heapSize=%zu unitSize=%zu", heapSize,
@@ -38,9 +38,8 @@ inline __attribute__((visibility("hidden"))) size_t RegionManager::GetAlignedHea
         return alignedHeapSize;
     }
 
-inline __attribute__((visibility("hidden"))) size_t RegionManager::GetMetadataSize(size_t num)
+inline __attribute__((visibility("hidden"))) size_t RegionManager::GetMetadataSize()
     {
-        (void)num;
         return ZGranuleSize;
     }
 
@@ -171,11 +170,10 @@ inline void RegionManager::PrepareTrace()
 inline void RegionManager::ReleaseMarkQuarantine()
     {
         size_t heldBefore = freeRegionManager.GetMarkQuarantineBytes();
-        size_t units = freeRegionManager.ReleaseMarkQuarantineToDirty();
-        size_t bytes = units;
+        size_t bytes = freeRegionManager.ReleaseMarkQuarantineToDirty();
         VLOG(REPORT,
-             "[MarkQuarantine] released_units=%zu released_bytes=%zu held_before=%zu held_after=%u",
-             units, bytes, heldBefore, freeRegionManager.GetMarkQuarantineBytes());
+             "[MarkQuarantine] released_bytes=%zu held_before=%zu held_after=%zu",
+             bytes, heldBefore, freeRegionManager.GetMarkQuarantineBytes());
         // Cost metric same family as ghostorder: peak retained bytes under mark-epoch gate.
         VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", heldBefore,
              heldBefore);

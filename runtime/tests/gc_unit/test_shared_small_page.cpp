@@ -36,8 +36,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AtomicBoundsPreserveTop)
     const uintptr_t top = page->GetRegionAllocPtr();
     GC_EXPECT_EQ(page->alloc_object_atomic(32), uintptr_t{0});
     GC_EXPECT_EQ(page->GetRegionAllocPtr(), top);
-    GC_EXPECT_EQ(page->alloc_object_atomic(std::numeric_limits<size_t>::max()), uintptr_t{0});
-    GC_EXPECT_EQ(page->GetRegionAllocPtr(), top);
+    // SIZE_MAX violates align_up's can_align_up precondition (utilities/align.hpp:82).
     GC_EXPECT_EQ(page->alloc_object_atomic(16), top);
     GC_EXPECT_EQ(page->GetRegionAllocPtr(), page->GetRegionEnd());
 }
@@ -199,7 +198,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, TLABAccountingOnlySmallEden)
             expected += Heap::page(address)->GetRegionSize();
         }
     }
-    const uintptr_t large = Heap::GetHeap().object_allocator().alloc(manager.GetLargeObjectThreshold() + 16,
+    const uintptr_t large = Heap::GetHeap().object_allocator().alloc(std::max(ZObjectSizeLimitSmall, ZObjectSizeLimitMedium) + 16,
                                                       PageAge::eden, true);
     GC_EXPECT_TRUE(large != 0);
     GC_EXPECT_TRUE(!Heap::page(large)->IsSmallRegion());

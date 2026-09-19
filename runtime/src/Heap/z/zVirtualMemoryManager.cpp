@@ -260,7 +260,7 @@ void ZVirtualMemoryManager::initialize_partitions(ZVirtualMemoryReserver* reserv
   // If the capacity consist of less granules than the number of partitions
   // some partitions will be empty. Distribute these shares on the none empty
   // partitions.
-  const uint32_t first_empty_numa_id = std::min(static_cast<uint32_t>(size_for_partitions / ZGranuleSize), numa_count);
+  const uint32_t first_empty_numa_id = std::min(static_cast<uint32_t>((size_for_partitions >> ZGranuleSizeShift)), numa_count);
   const uint32_t ignore_count = numa_count - first_empty_numa_id;
 
   // Install reserved memory into registry(s)

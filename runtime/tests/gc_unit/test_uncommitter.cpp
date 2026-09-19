@@ -219,7 +219,7 @@ struct ProbeHeap {
         GC_EXPECT_TRUE(physicalMemory->is_initialized());
         const std::vector<ZPage::ReservedSegment> segments = RegionManager::ReservedSegments(*virtualMemory);
         start = segments.front().start;
-        metadataSize = RegionManager::GetMetadataSize(0);
+        metadataSize = RegionManager::GetMetadataSize();
         metadata = mmap(nullptr, metadataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
         GC_EXPECT_TRUE(metadata != MAP_FAILED);
         ZPage::InitializeSegments(reinterpret_cast<uintptr_t>(metadata) + metadataSize, segments);
@@ -236,7 +236,7 @@ struct ProbeHeap {
 static void InitializeUncommitCache(FreeRegionManager& frm, ProbeHeap& heap)
 {
     const size_t bytes = heap.units * ZGranuleSize;
-    frm.Initialize(heap.units, *heap.virtualMemory, *heap.physicalMemory, bytes);
+    frm.Initialize(*heap.virtualMemory, *heap.physicalMemory, bytes);
     // Prime partition 0 with all of its capacity: claim, commit, map, cache.
     const size_t primed = frm.partitions.front()->currentMaxCapacity;
     const ZVirtualMemory vmem = frm.claim_virtual(primed, 0);

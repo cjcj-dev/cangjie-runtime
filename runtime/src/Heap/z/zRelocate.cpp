@@ -1566,7 +1566,7 @@ void RegionManager::ForwardFromRegions()
         G == Generation::Young ? ZGenerationId::young : ZGenerationId::old).relocation_set();
     detail::ExecuteForwardTask<G>(*this, &relocationSet);
 
-    VLOG(REPORT, "forward %zu from-region units", relocationSet.nforwardings());
+    VLOG(REPORT, "forward %zu from-region pageBytes", relocationSet.nforwardings());
 
     AllocBuffer* allocBuffer = AllocBuffer::GetAllocBuffer();
     if (LIKELY(allocBuffer != nullptr)) {
@@ -1964,9 +1964,9 @@ void RegionManager::ForwardRegion(ZPage* region)
             // (role != None).  Clear the role first; the
             // ordinary empty-page arm above reaches CollectRegion the same way.
             if (region->GetRegionRole() == ZPageRole::RecentFull) {
-                const size_t units = region->GetRegionSize();
+                const size_t pageBytes = region->GetRegionSize();
                 region->SetRegionRole(ZPageRole::None);
-                RecentFullAccounting::Dequeue(1, units);
+                RecentFullAccounting::Dequeue(1, pageBytes);
             }
             CollectRegion<G>(region);
             return;

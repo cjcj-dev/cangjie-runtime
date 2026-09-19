@@ -288,19 +288,17 @@ CREATE_ZOFFSET_OPERATORS(zbacking_index)
 #undef CREATE_ZOFFSET_OPERATORS
 
 // zbacking_offset <-> zbacking_index conversion functions (ZGC zAddress.inline.hpp:285-296).
-// The backing granule is ZGranuleSize once P03/P05 move pages onto 2MB
-// granules; until then our page allocator hands out MRT_PAGE_SIZE units, so
-// the physical manager indexes backing per MRT_PAGE_SIZE (see zVirtualMemory).
+// Backing storage and virtual addresses share the fixed ZGC granule.
 
 inline zbacking_index to_zbacking_index(zbacking_offset offset) {
   const uintptr_t value = untype(offset);
   assert(value % ZGranuleSize == 0);
-  return to_zbacking_index(static_cast<uint32_t>(value / ZGranuleSize));
+  return to_zbacking_index(static_cast<uint32_t>((value >> ZGranuleSizeShift)));
 }
 
 inline zbacking_offset to_zbacking_offset(zbacking_index index) {
   const uintptr_t value = untype(index);
-  return to_zbacking_offset(value * ZGranuleSize);
+  return to_zbacking_offset(value << ZGranuleSizeShift);
 }
 
 // ZRange helper functions (ZGC zAddress.inline.hpp:298-314)

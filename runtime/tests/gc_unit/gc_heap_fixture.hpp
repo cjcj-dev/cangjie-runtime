@@ -285,7 +285,7 @@ struct GcHeapFixture {
         // ZInitialize initializes statistics before any allocation can sample.
         EnsureZAddressDomain();
         ZStat::Initialize();
-        const size_t metadataSize = RegionManager::GetMetadataSize(kUnits);
+        const size_t metadataSize = RegionManager::GetMetadataSize();
         mappedSize = metadataSize + kUnits * ZGranuleSize;
         // Reserve in the heap address domain and back it with a committed,
         // mapped backing file, as ZTest's address reserver and backing mocker do.

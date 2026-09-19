@@ -233,6 +233,9 @@ ZPage::ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
        _remembered_set(),
        _relocate_promoted(false)
 {
+    MRT_ASSERT((type == ZPageType::small && size() == ZPageSizeSmall) ||
+               (type == ZPageType::medium && ZPageSizeMediumMin <= size() && size() <= ZPageSizeMediumMax) ||
+               (type == ZPageType::large && size() % ZGranuleSize == 0), "Page type/size mismatch");
     reset(age);
     if (age == PageAge::old) {
         remset_alloc();

@@ -31,7 +31,7 @@ public:
     ZGranuleMap() : _size(0), _map(nullptr) {}
     explicit ZGranuleMap(size_t max_offset)
         : _size(max_offset >> ZGranuleSizeShift),
-          _map(static_cast<std::atomic<T>*>(std::calloc(_size, sizeof(std::atomic<T>))))
+          _map(static_cast<T*>(std::calloc(_size, sizeof(T))))
     {
         CHECK(max_offset != 0 && max_offset % ZGranuleSize == 0);
         CHECK(_map != nullptr);
@@ -78,7 +78,7 @@ private:
     size_t index_for_offset(zoffset offset) const;
 
     size_t _size;
-    std::atomic<T>* _map;
+    T* _map;
 };
 
 } // namespace MapleRuntime

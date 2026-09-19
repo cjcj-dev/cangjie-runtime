@@ -544,22 +544,10 @@ inline MAddress ZPage::GranuleAddress(size_t idx)
         return untype(ZOffset::address_unsafe(static_cast<zoffset>(idx << ZGranuleSizeShift)));
     }
 
-inline ZPageType ZPageTypeFor(size_t pageSize, ZPageType uclass)
-{
-    if (uclass == ZPageType::large) {
-        return ZPageType::large;
-    }
-    const size_t bytes = pageSize;
-    if (ZPageSizeMediumEnabled && bytes >= ZPageSizeMediumMin && bytes <= ZPageSizeMediumMax) {
-        return ZPageType::medium;
-    }
-    return ZPageType::small;
-}
-
-inline ZPage* ZPage::InitRegion(size_t unitIdx, size_t pageSize, ZPageType uclass, PageAge age)
+inline ZPage* ZPage::InitRegion(size_t granuleIndex, size_t pageSize, ZPageType uclass, PageAge age)
     {
-        const MAddress start = GranuleAddress(unitIdx);
-        ZPage* region = new ZPage(ZPageTypeFor(pageSize, uclass), age,
+        const MAddress start = GranuleAddress(granuleIndex);
+        ZPage* region = new ZPage(uclass, age,
                                             ZVirtualMemory(ZAddress::offset(to_zaddress_unsafe(start)),
                                                            pageSize));
         region->InitRegion(pageSize, uclass, age);

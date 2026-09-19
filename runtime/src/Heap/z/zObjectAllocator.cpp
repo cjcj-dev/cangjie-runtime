@@ -158,10 +158,10 @@ void RegionManager::UndoSharedPage(ZPage* page)
     // ZHeap::undo_alloc_page: remove the unused page-table entry and return
     // the extent without suspending a caller holding an unpublished object.
     ZPage::RetirePage(page, [this, page] {
-        const size_t units = page->GetRegionSize();
+        const size_t pageBytes = page->GetRegionSize();
         const size_t index = page->granule_index();
         page->RetirePageMemory();
-        ReturnRetiredPageMemory(PageMemory{index, units, 0, true}, false);
+        ReturnRetiredPageMemory(PageMemory{index, pageBytes, 0, true}, false);
     });
 }
 
@@ -177,8 +177,8 @@ uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking)
             ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
             uintptr_t addr = page == nullptr ? 0 : page->alloc_object_atomic(size);
             if (addr != 0) { return addr; }
-            const size_t units = ZPageSizeMediumMin;
-            ZPage* fresh = manager.AllocateSharedPage(units, ZPageType::medium, allocator.age, nonBlocking);
+            const size_t pageBytes = ZPageSizeMediumMin;
+            ZPage* fresh = manager.AllocateSharedPage(pageBytes, ZPageType::medium, allocator.age, nonBlocking);
             if (fresh == nullptr) { return 0; }
             addr = fresh->alloc_object(size);
             CHECK(addr != 0);
@@ -193,8 +193,8 @@ uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking)
                 return previous;
             }
         }
-        const size_t units = AlignUp(size, ZGranuleSize);
-        ZPage* page = manager.AllocateSharedPage(units, ZPageType::large, allocator.age, nonBlocking);
+        const size_t pageBytes = AlignUp(size, ZGranuleSize);
+        ZPage* page = manager.AllocateSharedPage(pageBytes, ZPageType::large, allocator.age, nonBlocking);
         return page == nullptr ? 0 : page->alloc_object(size);
     }
     ZPage** const shared = allocator.shared_small_page_addr();
@@ -241,8 +241,8 @@ ZPage* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysical
     if (size == 0 || size > GetThreadLocalRegionSize()) {
         return nullptr;
     }
-    const size_t units = AlignUp(size, ZGranuleSize);
-    ZPage* region = Heap::alloc_page(units, ZPageType::small, expectPhysicalMem,
+    const size_t pageBytes = AlignUp(size, ZGranuleSize);
+    ZPage* region = Heap::alloc_page(pageBytes, ZPageType::small, expectPhysicalMem,
                                     allowSaferegion, true, youngRegion ? PageAge::eden : PageAge::old);
     if (region != nullptr) {
         {
@@ -253,7 +253,7 @@ ZPage* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysical
                 tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
             }
             region->SetRegionRole(ZPageRole::ThreadLocal);
-            DLOG(REGION, "alloc tl-region %p @[0x%zx+%zu, 0x%zx) units[%zu+%zu, %zu) type %u",
+            DLOG(REGION, "alloc tl-region %p @[0x%zx+%zu, 0x%zx) pageBytes[%zu+%zu, %zu) type %u",
                 region, region->GetRegionStart(), region->GetRegionSize(), region->GetRegionEnd(),
                 region->granule_index(), region->GetRegionSize(), region->granule_index() + region->GetRegionSize(),
                 0u);

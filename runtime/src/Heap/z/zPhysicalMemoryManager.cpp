@@ -40,10 +40,10 @@ ZPhysicalMemoryManager::ZPhysicalMemoryManager(size_t max_capacity)
 
   // Setup backing storage limits
   ZBackingOffsetMax = max_capacity;
-  ZBackingIndexMax = static_cast<uint32_t>(max_capacity / ZGranuleSize);
+  ZBackingIndexMax = static_cast<uint32_t>((max_capacity >> ZGranuleSizeShift));
 
   // Install capacity into the registry
-  const size_t num_segments_total = max_capacity / ZGranuleSize;
+  const size_t num_segments_total = (max_capacity >> ZGranuleSizeShift);
   zbacking_index_end next_index = zbacking_index_end::zero;
   uint32_t numa_id;
   ZPerNUMAIterator<ZBackingIndexRegistry> iter(&_partition_registries);
@@ -116,7 +116,7 @@ void ZPhysicalMemoryManager::alloc(const ZVirtualMemory& vmem, uint32_t numa_id)
   assert(size % ZGranuleSize == 0);
 
   size_t current_segment = 0;
-  size_t remaining_segments = size / ZGranuleSize;
+  size_t remaining_segments = (size >> ZGranuleSizeShift);
 
   while (remaining_segments != 0) {
     // Allocate a range of backing segment indices
@@ -160,7 +160,7 @@ bool for_each_segment_apply(const zbacking_index* pmem, size_t size, Function fu
   IterateInvoker<decltype(function(zbacking_offset{}, size_t{}))> invoker;
 
   // Total number of segment indices
-  const size_t num_segments = size / ZGranuleSize;
+  const size_t num_segments = (size >> ZGranuleSizeShift);
 
   // Apply the function over all zbacking_offset ranges consisting of consecutive indices
   for (size_t i = 0; i < num_segments; i++) {
@@ -176,7 +176,7 @@ bool for_each_segment_apply(const zbacking_index* pmem, size_t size, Function fu
     // [start_i, last_i] now forms a consecutive range of indicies in pmem
     const size_t num_indicies = last_i - start_i + 1;
     const zbacking_offset start = to_zbacking_offset(pmem[start_i]);
-    const size_t size = num_indicies * ZGranuleSize;
+    const size_t size = num_indicies << ZGranuleSizeShift;
 
     // Invoke function on zbacking_offset Range [start, start + size[
     if (!invoker(function, start, size)) {
@@ -193,7 +193,7 @@ void ZPhysicalMemoryManager::free(const ZVirtualMemory& vmem, uint32_t numa_id) 
 
   // Free segments
   for_each_segment_apply(pmem, size, [&](zbacking_offset segment_start, size_t segment_size) {
-    const size_t num_segments = segment_size / ZGranuleSize;
+    const size_t num_segments = (segment_size >> ZGranuleSizeShift);
     const zbacking_index index = to_zbacking_index(segment_start);
 
     // Insert the free segment indices

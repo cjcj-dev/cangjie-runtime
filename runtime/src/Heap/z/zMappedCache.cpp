@@ -89,7 +89,7 @@ static void* entry_address_for_zoffset_end(zoffset_end offset) {
 
   // Do not use the last location
   const size_t number_of_locations = ZGranuleSize / aligned_entry_size - 1;
-  const size_t granule_index = untype(offset) / ZGranuleSize;
+  const size_t granule_index = (untype(offset) >> ZGranuleSizeShift);
   const size_t index = granule_index % number_of_locations;
   const uintptr_t end_addr = untype(offset) + ZAddressHeapBase;
 
@@ -242,34 +242,24 @@ static int log2i_ceil(size_t value) {
   return (value & (value - 1)) == 0 ? floor : floor + 1;
 }
 
-int ZMappedCache::granule_size_shift() {
-  static const int shift = log2i_graceful(ZGranuleSize);
-  assert(shift >= MinGranuleSizeShift);
-  return shift;
-}
-
-int ZMappedCache::max_size_class_shift() {
-  return MaxLongArraySizeClassShift - granule_size_shift();
-}
-
 int ZMappedCache::size_class_index(size_t size) {
   // Returns the size class index of for size, or -1 if smaller than the smallest size class.
-  const int size_class_power = log2i_graceful(size) - granule_size_shift();
+  const int size_class_power = log2i_graceful(size) - static_cast<int>(ZGranuleSizeShift);
 
   if (size_class_power < MinSizeClassShift) {
     // Allocation is smaller than the smallest size class minimum size.
     return -1;
   }
 
-  return std::min(size_class_power, max_size_class_shift()) - MinSizeClassShift;
+  return std::min(size_class_power, MaxSizeClassShift) - MinSizeClassShift;
 }
 
 int ZMappedCache::guaranteed_size_class_index(size_t size) {
   // Returns the size class index of the smallest size class which can always
   // accommodate a size allocation, or -1 otherwise.
-  const int size_class_power = log2i_ceil(size) - granule_size_shift();
+  const int size_class_power = log2i_ceil(size) - static_cast<int>(ZGranuleSizeShift);
 
-  if (size_class_power > max_size_class_shift()) {
+  if (size_class_power > MaxSizeClassShift) {
     // Allocation is larger than the largest size class minimum size.
     return -1;
   }
@@ -758,7 +748,7 @@ void ZMappedCache::print_on() const {
   for (int index = 0; index < NumSizeClasses; ++index) {
     const ZList<ZSizeClassListNode>& list = _size_class_lists[index];
     if (!list.is_empty_error_reporter_safe()) {
-      const int shift = index + MinSizeClassShift + granule_size_shift();
+      const int shift = index + MinSizeClassShift + static_cast<int>(ZGranuleSizeShift);
       const size_t size = (size_t)1 << shift;
 
       VLOG(REPORT, "  size classes   %zuK (%zu)", size / KB, list.size_error_reporter_safe());

@@ -58,10 +58,10 @@ PrimitiveArrayTypeInfos& GetPrimitiveArrayTypeInfos()
 struct LargeArrayFixture {
     LargeArrayFixture()
     {
-        const size_t payload = ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD + ZGranuleSize;
+        const size_t payload = ZObjectSizeLimitSmall + ZGranuleSize;
         const size_t arrayUnits = AlignUp(payload + 128, ZGranuleSize) / ZGranuleSize;
         const size_t units = arrayUnits + 1;
-        const size_t metadata = RegionManager::GetMetadataSize(units);
+        const size_t metadata = RegionManager::GetMetadataSize();
         mappedSize = metadata + units * ZGranuleSize;
         reservation.reset(new ZTestHeapMapping(mappedSize));
         mapping = reservation->base();
@@ -126,7 +126,7 @@ GC_OTHER_VM_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
 
     GC_EXPECT_TRUE(bytes->IsPrimitiveArray());
     GC_EXPECT_FALSE(infos.array->HasRefField());
-    GC_EXPECT_TRUE(bytes->GetSize() > ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD);
+    GC_EXPECT_TRUE(bytes->GetSize() > ZObjectSizeLimitSmall);
 
     // Plant holder.bytes. The holder GCTib has bit 0 set, so the exact major
     // non-array walk (MarkPartialArray::FollowObjectReferences) must yield this slot.

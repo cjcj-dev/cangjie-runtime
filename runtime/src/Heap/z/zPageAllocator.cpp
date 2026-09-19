@@ -54,10 +54,9 @@ namespace MapleRuntime {
 
 
 
-void FreeRegionManager::Initialize(size_t regionCnt, ZVirtualMemoryManager& virtualMemoryManager,
+void FreeRegionManager::Initialize(ZVirtualMemoryManager& virtualMemoryManager,
                                    ZPhysicalMemoryManager& physicalMemoryManager, size_t maxCapacity)
 {
-    (void)regionCnt;
     markQuarantineMemory.clear();
     partitions.clear();
     nextPartition = 0;
@@ -194,8 +193,6 @@ size_t FreeRegionManager::capacity() const
 
 void FreeRegionManager::InsertCommitted(Partition& partition, size_t index, size_t count)
 {
-    // The reverse metadata array describes cached units as free (P05 keeps
-    // the descriptor state machine; ZGC destroys the ZPage instead).
     partition.cache.insert(VirtualMemoryOf(index, count));
 }
 
@@ -549,11 +546,10 @@ void RegionManager::Initialize(size_t pageSize, uintptr_t regionInfoAddr, ZVirtu
                                ZPhysicalMemoryManager& physicalMemory, const HeapParam& heapParam,
                                double garbageThreshold)
 {
-    // pageSize is the max capacity in units; the metadata spans the reserved
-    // address range (ZVirtualToPhysicalRatio times larger).
+    // The capacity is in bytes; reservation boundaries span the virtual heap.
     const ZVirtualMemory span = ReservedAddressSpan(virtualMemory);
     const std::vector<ZPage::ReservedSegment> segments = ReservedSegments(virtualMemory);
-    const size_t metadataSize = GetMetadataSize(0);
+    const size_t metadataSize = GetMetadataSize();
     this->regionHeapStart = segments.front().start;
     this->regionHeapEnd = segments.back().End();
     heapCapacity = pageSize;
@@ -565,9 +561,9 @@ void RegionManager::Initialize(size_t pageSize, uintptr_t regionInfoAddr, ZVirtu
 #endif
     // propagate region heap layout
     ZPage::InitializeSegments(regionInfoAddr + metadataSize, segments);
-    freeRegionManager.Initialize(pageSize, virtualMemory, physicalMemory, pageSize);
+    freeRegionManager.Initialize(virtualMemory, physicalMemory, pageSize);
     this->exemptedRegionThreshold = heapParam.exemptionThreshold;
-    DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), unit count %zu", regionInfoAddr, metadataSize,
+    DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), capacity bytes %zu", regionInfoAddr, metadataSize,
          regionHeapStart, regionHeapEnd, pageSize);
 }
 
@@ -662,12 +658,12 @@ void RegionManager::ReturnPageMemory(const PageMemory& memory)
         // Only materialized page geometry is retired. Its allocation-time
         // partial mappings have already been consumed; ZArray is non-copyable.
         const size_t index = memory.index;
-        const size_t units = memory.size;
+        const size_t pageBytes = memory.size;
         const uint32_t partition = memory.partition;
         const bool committed = memory.committed;
-        ZPage::RetirePage(region, [this, region, index, units, partition, committed] {
+        ZPage::RetirePage(region, [this, region, index, pageBytes, partition, committed] {
             region->RetirePageMemory();
-            ReturnRetiredPageMemory(PageMemory{index, units, partition, committed});
+            ReturnRetiredPageMemory(PageMemory{index, pageBytes, partition, committed});
         });
         return;
     }
@@ -1066,10 +1062,10 @@ void RegionManager::Init(const HeapParam& vmHeapParam)
 #endif
     // Metadata remains a contiguous reverse-indexed ABI array, independent of
     // the payload reservations (zPage metadata lives outside virtual memory).
-    // It is committed lazily by the kernel: only units that ever become pages
+    // It is committed lazily by the kernel: only pageBytes that ever become pages
     // touch their descriptor.
     const std::vector<ZPage::ReservedSegment> segments = RegionManager::ReservedSegments(*virtualMemory);
-    metadata.size = RegionManager::GetMetadataSize(0);
+    metadata.size = RegionManager::GetMetadataSize();
     void* const metadataBase =
         mmap(nullptr, metadata.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     CHECK_DETAIL(metadataBase != MAP_FAILED, "failed to map %zu bytes of region metadata", metadata.size);

@@ -458,7 +458,7 @@ public:
 #endif
 
 
-    static ZPage* InitRegion(size_t unitIdx, size_t pageSize, ZPageType uclass,
+    static ZPage* InitRegion(size_t granuleIndex, size_t pageSize, ZPageType uclass,
                                   PageAge age = PageAge::old);
 
     static void WaitCopiedBeforePayloadWipe(ZPage* region, const char* site);

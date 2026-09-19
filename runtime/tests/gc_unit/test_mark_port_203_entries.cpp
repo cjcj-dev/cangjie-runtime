@@ -236,12 +236,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     // Install the synthetic payload reservation before publishing GC roots.
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
-    // An actual multi-unit page keeps all array slots in the mapped heap;
-    // each subordinate unit resolves back to the same owning region.
-    // ZPageTable::remove/insert (zPageTable.cpp:44-65): retire before reuse.
-    ZPage::RetirePage(fx.region1, [] {});
-    fx.region1 = ZPage::InitRegion(ZPage::GranuleIndex(fx.heapStart) + 1, (4) * ZGranuleSize, ZPageType::small);
-    PublishAllocatedPage(fx.region1);
+    // The 2 MiB small page already covers the entire reference array.
     fx.region1->reset(major ? PageAge::old : PageAge::eden);
     fx.region1->reset(PageAge::eden);
     // The product allocates and owns this page's livemap (InitRegion ->

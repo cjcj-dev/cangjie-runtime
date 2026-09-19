@@ -494,8 +494,6 @@ public:
     explicit DeliverySharedPageScope(ZPage* page)
         : manager(static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager())
     {
-        // Heap::Init normally supplies this limit. The synthetic heap has one-unit pages.
-        manager.SetLargeObjectThreshold(ZGranuleSize / KB);
         // zObjectAllocator.hpp:41 ZPerCPU<ZPage*>: every CPU slot names the page.
         auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::old);
         ZPerCPUIterator<ZPage*> slots(&allocator.sharedSmallPage);
