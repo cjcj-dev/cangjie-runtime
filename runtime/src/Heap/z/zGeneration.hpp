@@ -231,6 +231,7 @@ public:
     // zGeneration.hpp:199,244-246 — tenuring threshold is young-generation
     // state, selected after select_relocation_set (zGeneration.cpp:250).
     uint32_t tenuring_threshold() { return _tenuring_threshold; }
+    bool is_remembered(volatile zpointer* p) const;
     friend class ZGenerationTest;
     void flip_promote(ZPage* from_page, ZPage* to_page);
     void in_place_relocate_promote(ZPage* from_page, ZPage* to_page);

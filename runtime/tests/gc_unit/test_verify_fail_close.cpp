@@ -52,6 +52,13 @@ void ExpectSceneAbort(const char* expectedDiagnostic, Fn&& fn)
         }
         close(childStderr[1]);
         (void)signal(SIGABRT, SIG_DFL);
+        if (FILE* maps = std::fopen("/proc/self/maps", "r")) {
+            char line[1024];
+            std::fputs("VERIFY_PRODUCT_MAPS_BEGIN\n", stderr);
+            while (std::fgets(line, sizeof(line), maps) != nullptr) { std::fputs(line, stderr); }
+            std::fclose(maps);
+            std::fputs("VERIFY_PRODUCT_MAPS_END\n", stderr);
+        }
         fn();
         _exit(0);
     }
@@ -364,4 +371,133 @@ GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsStaleMarkStackAtStart)
         (void)ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
         _exit(0);
     });
+}
+
+namespace {
+enum class VerifyFieldCase {
+    OldGood,
+    OldUnmarked,
+    WeakUnmarked,
+    WeakPreviousRemembered,
+    WeakMissingRemembered,
+    WeakExactRemembered,
+    WeakFinalizable,
+};
+
+void RunVerifyFieldCycle(VerifyFieldCase mode)
+{
+    RuntimeParam param{};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 32 * 1024;
+    if (InitCJRuntime(&param) != E_OK) { _exit(121); }
+    alignas(TypeInfo) unsigned char holderTypeStorage[sizeof(TypeInfo)]{};
+    alignas(TypeInfo) unsigned char targetTypeStorage[sizeof(TypeInfo)]{};
+    auto* holderType = reinterpret_cast<TypeInfo*>(holderTypeStorage);
+    auto* targetType = reinterpret_cast<TypeInfo*>(targetTypeStorage);
+    for (auto* type : {holderType, targetType}) {
+        type->SetType(TypeKind::TYPE_KIND_CLASS);
+        type->SetInstanceSize(sizeof(uintptr_t));
+    }
+    holderType->SetFlagHasRefField();
+    GCTib tib{};
+    tib.tag = SIGN_BIT | 1;
+    holderType->SetGCTib(tib);
+    auto* holder = MObject::NewPinnedObject(holderType, 2 * sizeof(uintptr_t));
+    auto* target = MObject::NewPinnedObject(targetType, 2 * sizeof(uintptr_t));
+    if (holder == nullptr || target == nullptr) { _exit(122); }
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreGoodPointer(target));
+    auto& heap = Heap::GetHeap();
+    NativeSlot* root = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
+    if (root == nullptr) { _exit(123); }
+    root->StoreColoured(StoreGoodPointer(holder));
+    const bool afterWeak = mode != VerifyFieldCase::OldGood && mode != VerifyFieldCase::OldUnmarked;
+    ConcurrentGCBreakpoints::AcquireControl();
+    const char* point = afterWeak ? "AFTER CONCURRENT REFERENCE PROCESSING STARTED" :
+                                   "BEFORE MARKING COMPLETED";
+    if (!ConcurrentGCBreakpoints::RunTo(point)) { _exit(124); }
+    ZPage* holderPage = Heap::page(reinterpret_cast<MAddress>(holder));
+    ZPage* targetPage = Heap::page(reinterpret_cast<MAddress>(target));
+    if (!holderPage->is_object_live(from_object(holder)) ||
+        !targetPage->is_object_live(from_object(target))) { _exit(125); }
+    uintptr_t value = raw(field.GetFieldValue());
+    if (!ZPointer::is_marked_old(to_zpointer(value))) { _exit(126); }
+    std::fprintf(stderr, "VERIFY_FIELD_QUALIFIED mode=%u holder=%p target=%p word=%#zx\n",
+                 unsigned(mode), holder, target, value);
+    switch (mode) {
+        case VerifyFieldCase::OldGood:
+            break;
+        case VerifyFieldCase::OldUnmarked:
+        case VerifyFieldCase::WeakUnmarked:
+            value = (value ^ ZPointerMarkedOldMask) & ~ZPointerFinalizableMask;
+            break;
+        case VerifyFieldCase::WeakPreviousRemembered:
+            value = (value & ~ZPointerRememberedMask) | (ZPointerRemembered ^ ZPointerRememberedMask);
+            break;
+        case VerifyFieldCase::WeakMissingRemembered:
+            value = (value & ~ZPointerRememberedMask) | ZPointerRemembered;
+            holderPage->clear_remset_bit_non_par_current(
+                reinterpret_cast<MAddress>(&field) - holderPage->GetRegionStart());
+            holderPage->clear_remset_previous();
+            break;
+        case VerifyFieldCase::WeakExactRemembered:
+            value |= ZPointerRememberedMask;
+            break;
+        case VerifyFieldCase::WeakFinalizable:
+            value = (value & ~ZPointerMarkedOldMask) | ZPointerFinalizable | ZPointerRememberedMask;
+            break;
+    }
+    field.StoreColoured(to_zpointer(value));
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    BaseObject* result = ZBarrier::ReadStaticRef(*root);
+    std::fprintf(stderr, "VERIFY_FIELD_CYCLE_COMPLETED mode=%u root=%p expected=%p\n",
+                 unsigned(mode), result, holder);
+    GC_EXPECT_TRUE(result == holder);
+    heap.GetFinalizerProcessor().StrongRootStorage().Release(root);
+}
+
+void CheckVerifyFieldCase(VerifyFieldCase mode, const char* testName, const char* diagnostic)
+{
+    if (!ZVerifyObjects) {
+        GC_EXPECT_EQ(setenv("ZVerifyObjects", "1", 1), 0);
+        RunInOtherVm(testName);
+        return;
+    }
+    if (diagnostic != nullptr) { ExpectSceneAbort(diagnostic, [=] { RunVerifyFieldCycle(mode); }); }
+    else { RunVerifyFieldCycle(mode); }
+}
+}
+
+GC_OTHER_VM_TEST(ZVerify, OldFieldAcceptsMarkedOldTarget)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::OldGood, "ZVerify.OldFieldAcceptsMarkedOldTarget", nullptr);
+}
+GC_OTHER_VM_TEST(ZVerify, OldFieldRejectsUnmarkedOldTarget)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::OldUnmarked, "ZVerify.OldFieldRejectsUnmarkedOldTarget", "Unmarked old oop");
+}
+GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsUnmarkedOldTarget)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::WeakUnmarked, "ZVerify.WeakFieldRejectsUnmarkedOldTarget", "Bad possibly weak oop");
+}
+GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsPreviousRememberedColor)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::WeakPreviousRemembered,
+        "ZVerify.WeakFieldRejectsPreviousRememberedColor", "Previous remembered color");
+}
+GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsMissingRememberedBit)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::WeakMissingRemembered,
+        "ZVerify.WeakFieldRejectsMissingRememberedBit", "Missing remembered field");
+}
+GC_OTHER_VM_TEST(ZVerify, WeakFieldAcceptsExactRememberedColor)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::WeakExactRemembered,
+        "ZVerify.WeakFieldAcceptsExactRememberedColor", nullptr);
+}
+GC_OTHER_VM_TEST(ZVerify, WeakFieldAcceptsFinalizableColor)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::WeakFinalizable,
+        "ZVerify.WeakFieldAcceptsFinalizableColor", nullptr);
 }

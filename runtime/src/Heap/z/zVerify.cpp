@@ -9,6 +9,7 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
@@ -209,19 +210,19 @@ void z_verify_possibly_weak_oop(RefField<>* field)
 {
     const zpointer value = field->GetFieldValue(std::memory_order_acquire);
     if (z_is_null_relaxed(value)) { return; }
-    CHECK_DETAIL(ZPointer::is_marked_any_old(value), "Bad possibly weak oop at %p", field);
+    CHECK_DETAIL(ZPointer::is_marked_old(value) || ZPointer::is_marked_finalizable(value),
+                 "Bad possibly weak oop at %p", field);
     const zaddress address = ZBarrier::load_barrier_on_oop_field_preloaded(nullptr, value);
-    const bool young = Heap::is_young(raw(address));
-    CHECK_DETAIL(!young || ZPointer::is_marked_young(value), "Unmarked young oop at %p", field);
-    CHECK_DETAIL(young || Heap::page(raw(address))->is_object_live(address),
+    CHECK_DETAIL(Heap::is_old(raw(address)) || ZPointer::is_marked_young(value),
+                 "Unmarked young oop at %p", field);
+    CHECK_DETAIL(Heap::is_young(raw(address)) || Heap::GetHeap().IsSurvivedObject(to_object(address)),
                  "Non-live old oop at %p", field);
     z_verify_oop_object(address, value, field);
     const uintptr_t remset = raw(value) & ZPointerRememberedMask;
-    const uintptr_t previous = (::g_cjStoreGoodMask & ZPointerRememberedMask) ^ ZPointerRememberedMask;
+    const uintptr_t previous = ZPointerRemembered ^ ZPointerRememberedMask;
     CHECK_DETAIL(remset != previous, "Previous remembered color at %p", field);
     CHECK_DETAIL(remset == ZPointerRememberedMask ||
-                 Heap::page(reinterpret_cast<MAddress>(field))->is_remembered(
-                     reinterpret_cast<volatile zpointer*>(field)) ||
+                 ZGeneration::young()->is_remembered(reinterpret_cast<volatile zpointer*>(field)) ||
                  StoreBarrierBuffer::is_in(reinterpret_cast<MAddress>(field)),
                  "Missing remembered field at %p", field);
 }
