@@ -5,6 +5,7 @@
 #include "gc_cycle_sequence_fixture.hpp"
 #include <memory>
 #include "gc_heap_fixture.hpp"
+#include "zunittest.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -241,6 +242,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     // ZPageTable::remove/insert (zPageTable.cpp:44-65): retire before reuse.
     ZPage::RetirePage(fx.region1, [] {});
     fx.region1 = ZPage::InitRegion(1, 4, ZPageType::small);
+    PublishAllocatedPage(fx.region1);
     fx.region1->reset(major ? PageAge::old : PageAge::eden);
     fx.region1->reset(PageAge::eden);
     // The product allocates and owns this page's livemap (InitRegion ->

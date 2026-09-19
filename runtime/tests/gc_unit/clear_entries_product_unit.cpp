@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "gc_heap_fixture.hpp"
+#include "zunittest.hpp"
 #include "Heap/z/zCrossVM.hpp"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
@@ -485,6 +486,7 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
     }
     ZPage* region = ZPage::InitRegion(index, 1, ZPageType::small);
     GC_EXPECT_TRUE(region != nullptr);
+    PublishAllocatedPage(region);
     region->SetRegionListOwner(nullptr);
     region->SetRegionAllocPtr(region->GetRegionStart());
     (void)fx;
@@ -2861,6 +2863,7 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
     const auto oldLife = region->GetRegionLifeId();
     ZPage::RetirePage(region, [region]() { region->InitFreeUnits(); });
     region = ZPage::InitRegion(0, 1, ZPageType::small);
+    PublishAllocatedPage(region);
     GC_EXPECT_TRUE(region->GetRegionLifeId() != oldLife);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);

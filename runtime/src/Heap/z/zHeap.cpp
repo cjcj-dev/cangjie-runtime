@@ -515,7 +515,7 @@ ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool
 {
     RegionManager& manager = GetHeap().page_allocator();
     ZPage* page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
-    if (page != nullptr && page_table().get(page->GetRegionStart()) != page) {
+    if (page != nullptr) {
         page_table().insert(page);
     }
     return page;

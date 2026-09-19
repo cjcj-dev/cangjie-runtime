@@ -72,6 +72,7 @@ public:
         heapParam.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
         capacity = manager.TakeRegion(1, ZPageType::small, false, false);
+        PublishAllocatedPage(capacity);
     }
 
     void PublishCapacity()

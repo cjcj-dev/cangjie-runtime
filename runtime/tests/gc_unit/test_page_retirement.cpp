@@ -52,6 +52,8 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         if (first == nullptr || second == nullptr) {
             return 21;
         }
+        PublishAllocatedPage(first);
+        PublishAllocatedPage(second);
         const uintptr_t start = first->GetRegionStart();
         const uintptr_t end = first->GetRegionEnd();
         const auto life = first->GetRegionLifeId();
@@ -139,6 +141,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             result = 30;
         }
         ZPage* reused = manager.TakeRegion(2, role, false, false, false);
+        PublishAllocatedPage(reused);
         if (reused == nullptr || reused->GetRegionStart() != start ||
             Heap::page(end - 1) != reused) {
             result = 31;

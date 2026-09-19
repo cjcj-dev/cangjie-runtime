@@ -26,6 +26,8 @@
 #include "Heap/z/zVirtualMemory.inline.hpp"
 #include "Heap/z/zVirtualMemoryManager.inline.hpp"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zPageTable.hpp"
+#include "Heap/z/zHeap.hpp"
 #include <vector>
 
 namespace MapleRuntime {
@@ -39,6 +41,14 @@ inline void EnsureZAddressDomain() {
   if (ZAddressHeapBase == 0) {
     ZGlobalsPointers::initialize();
   }
+}
+
+// Heap-layer publish (zHeap.cpp alloc_page / zHeap.cpp:253-257). Not TakeRegion.
+inline void PublishAllocatedPage(ZPage* page)
+{
+    if (page != nullptr) {
+        ZPageTable::heap_table().insert(page);
+    }
 }
 
 class ZAddressOffsetMaxSetter {
