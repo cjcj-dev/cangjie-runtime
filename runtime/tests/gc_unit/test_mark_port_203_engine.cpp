@@ -5,6 +5,13 @@
 #include "gc_worker_fixture.hpp"
 #include <atomic>
 #include <chrono>
+#include <csignal>
+#include <string>
+#include <sys/wait.h>
+#include <unistd.h>
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zRemembered.hpp"
 #include <memory>
 #include <thread>
 #include <vector>
@@ -335,4 +342,40 @@ GC_TEST(MarkPort203Engine, TryEndFalseWhenResurrectedOrUnflushed)
     GC_EXPECT_TRUE(!domain.TryEnd());
     domain.Terminate().SetResurrected(false);
     GC_EXPECT_TRUE(domain.TryEnd());
+}
+
+// ZGC zRemembered.cpp:561-565 dispatches through the young generation pool.
+// The invalid-input arm must fail at this boundary, before entering mark work.
+GC_TEST(RememberedWorkers719, MissingYoungPoolFailsAtDispatch)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        dup2(output[1], STDERR_FILENO);
+        dup2(output[1], STDOUT_FILENO);
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        ZMark mark(4, MarkingStacks::MarkingGeneration::YOUNG);
+        mark.PrepareWork(1);
+        if (Heap::GetHeap().young().Workers() != nullptr) _exit(91);
+        ZRemembered remembered;
+        remembered.scan_and_follow(&mark);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string diagnostic;
+    char buffer[1024];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) {
+        diagnostic.append(buffer, static_cast<size_t>(count));
+    }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "REMEMBERED719 child_status=%d diagnostic=%s\n", status, diagnostic.c_str());
+    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    GC_EXPECT_TRUE(diagnostic.find("ZRemembered::scan_and_follow requires young workers") != std::string::npos);
 }
