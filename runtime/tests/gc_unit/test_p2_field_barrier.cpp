@@ -80,7 +80,8 @@ extern "C" int p2FieldBarrierExercise()
     BaseObject* finalHolder = nullptr;
     BaseObject* finalOld = nullptr;
     BaseObject* upgraded = nullptr;
-    U64 upgradeRoot = 0;
+    NativeSlot upgradeRoot(zpointer::null);
+    NativeSlot* upgradeRoots[] = { &upgradeRoot };
     auto& references = heap.GetFinalizerProcessor().GetReferenceProcessor();
     const auto discoveredBefore = references.Discovered(ReferenceType::FINAL);
     const auto enqueuedBefore = references.Enqueued(ReferenceType::FINAL);
@@ -93,7 +94,8 @@ extern "C" int p2FieldBarrierExercise()
         ZBarrier::WriteReference(finalHolder, Slot(finalHolder, 1), finalOld);
         upgraded = MObject::NewPinnedObject(finalType, 24);
         ZBarrier::WriteReference(upgraded, Slot(upgraded), oldChild);
-        upgradeRoot = heap.RegisterExportRoot(upgraded);
+        ZBarrier::WriteStaticRef(upgradeRoot, upgraded);
+        heap.RegisterStaticRoots(reinterpret_cast<Uptr>(upgradeRoots), 1);
     }
     // Full GC's preclean promotes these genuinely rooted pinned objects through
     // the product selector/flip/remset path (ZGC zDriver.cpp:416-436).
@@ -101,10 +103,15 @@ extern "C" int p2FieldBarrierExercise()
     // before the field scenario starts.
     auto* oldViaYoung = MObject::NewPinnedObject(leafType, 16);
     const U64 oldViaRoot = heap.RegisterExportRoot(oldViaYoung);
-    const U64 finalSetupRoot = finalizableCase ? heap.RegisterExportRoot(finalHolder) : 0;
+    NativeSlot finalSetupRoot(zpointer::null);
+    NativeSlot* setupRoots[] = { &finalSetupRoot };
+    if (finalizableCase) {
+        ZBarrier::WriteStaticRef(finalSetupRoot, finalHolder);
+        heap.RegisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+    }
     heap.RequestGC(GC_REASON_USER, false);
     if (finalizableCase) {
-        heap.RemoveExportObject(finalSetupRoot);
+        heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
         finalHolder->OnFinalizerCreated();
         upgraded->OnFinalizerCreated();
     }
@@ -125,6 +132,9 @@ extern "C" int p2FieldBarrierExercise()
     unsigned finalOldOld = 0, finalOldYoung = 0, finalFollow = 0, finalYoungFast = 0;
     unsigned remsetChild = 0, oldOld = 0, oldYoung = 0, youngFollow = 0, oldYoungFast = 0;
     unsigned youngOldMajor = 0, youngOldMinor = 0;
+    // A minor cycle preserves old mark bits from the preceding major. Compare
+    // with the actual pre-cycle value, not an assumed zero (ZGC zBarrier.cpp:158-183).
+    const bool oldBeforeMinor = Heap::page(reinterpret_cast<MAddress>(oldViaYoung))->is_strong_bit_set(from_object(oldViaYoung));
     BaseObject* currentChild = child;
     ZBarrier::testFieldMarkResult = [&](ZBarrier::FieldMarkKind kind, RefField<>& field,
                                       zpointer observed, zaddress result) {
@@ -195,7 +205,8 @@ extern "C" int p2FieldBarrierExercise()
             Expect(to_object(result) == oldViaYoung, "young_old_returns_current");
             auto* page = Heap::page(reinterpret_cast<MAddress>(oldViaYoung));
             const bool marked = page->is_strong_bit_set(from_object(oldViaYoung));
-            Expect(marked == major, major ? "young_old_major_marks" : "young_old_minor_does_not_mark");
+            Expect(major ? marked : marked == oldBeforeMinor,
+                   major ? "young_old_major_marks" : "young_old_minor_preserves_old_mark");
             Expect(ZPointer::is_store_good(field.GetFieldValue()), "young_old_heals_store_good");
         }
         if (currentChild != nullptr && &field == &Slot(currentChild) && kind == ZBarrier::FieldMarkKind::Young) {
@@ -273,7 +284,7 @@ extern "C" int p2FieldBarrierExercise()
         auto* page = Heap::page(reinterpret_cast<MAddress>(upgraded));
         Expect(page->is_strong_bit_set(from_object(upgraded)), "finalizable_upgraded_to_strong");
         Expect(!IsFinalizable(upgraded), "finalizable_upgraded_not_pending");
-        heap.RemoveExportObject(upgradeRoot);
+        heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(upgradeRoots), 1);
     }
     Expect(remsetChild != 0, "real_remset_consumer_reached");
     Expect(youngFollow != 0, "real_young_follow_reached");
@@ -585,9 +596,12 @@ extern "C" int p2SlowFieldInputExercise()
     ZBarrier::WriteStaticRef(strongRoot, strongHolder);
     NativeSlot* roots[] = { &strongRoot };
     heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
-    const U64 finalSetupRoot = heap.RegisterExportRoot(finalHolder);
+    NativeSlot finalSetupRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(finalSetupRoot, finalHolder);
+    NativeSlot* setupRoots[] = { &finalSetupRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
     heap.RequestGC(GC_REASON_USER, false);
-    heap.RemoveExportObject(finalSetupRoot);
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
     finalHolder->OnFinalizerCreated();
     Expect(!Heap::page(reinterpret_cast<MAddress>(strongHolder))->IsYoungRegion(), "slow_real_strong_holder_promoted");
     Expect(!Heap::page(reinterpret_cast<MAddress>(finalHolder))->IsYoungRegion(), "slow_real_final_holder_promoted");
@@ -693,5 +707,77 @@ extern "C" int p2SlowFieldInputExercise()
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::printf("P2_SLOW_RESULT failures=%u strong=%u final=%u strong_follow=%u final_follow=%u\n",
                 failures.load(), strongSlow.load(), finalSlow.load(), strongFollow.load(), finalFollow.load());
+    return failures.load();
+}
+
+// A real minor while the major driver is paused gives the nonmajor field an
+// unmarked old target. Comparing an already-marked target alone would miss a
+// spurious old mark (ZGC zBarrier.cpp:158-183). Hooks schedule; they seed no state.
+extern "C" int p2MinorDuringOldMarkExercise()
+{
+    alignas(TypeInfo) static unsigned char types[2][sizeof(TypeInfo)]{};
+    auto* edgeType = Type(types[0], true, 2);
+    auto* leafType = Type(types[1], false, 1);
+    auto& heap = Heap::GetHeap();
+    auto* holder = MObject::NewPinnedObject(edgeType, 24);
+    auto* target = MObject::NewPinnedObject(leafType, 16);
+    auto* control = MObject::NewPinnedObject(leafType, 16);
+    ZBarrier::WriteReference(holder, Slot(holder), target);
+    ZBarrier::WriteReference(holder, Slot(holder, 1), control);
+    NativeSlot setup(zpointer::null);
+    ZBarrier::WriteStaticRef(setup, holder);
+    NativeSlot* setupRoots[] = { &setup };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+    heap.RequestGC(GC_REASON_USER, false);
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(setupRoots), 1);
+    ConcurrentGCBreakpoints::AcquireControl();
+    Expect(ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"), "minor_during_old_product_breakpoint");
+    auto* child = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
+    ZBarrier::WriteReference(child, Slot(child), target);
+    NativeSlot childRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(childRoot, child);
+    NativeSlot* roots[] = { &childRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    unsigned selected = 0;
+    auto marked = [&](BaseObject* object) {
+        return Heap::page(reinterpret_cast<MAddress>(object))->is_strong_bit_set(from_object(object));
+    };
+    ZGeneration::testYoungMarkStarted = [&] {
+        Expect(!heap.young().IsMajorRoots() &&
+               heap.GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::Mark, "minor_during_old_real_phase_axis");
+        Expect(!Heap::page(reinterpret_cast<MAddress>(target))->IsYoungRegion(), "minor_during_old_real_old_target");
+        Expect(!marked(target) && !marked(control), "minor_during_old_unmarked_inputs");
+        bool observing = true;
+        ZBarrier::testFieldMarkResult = [&](ZBarrier::FieldMarkKind kind, RefField<>& field,
+                                          zpointer observed, zaddress result) {
+            if (observing && kind == ZBarrier::FieldMarkKind::Young && &field == &Slot(child)) {
+                ++selected;
+                Expect(!ZPointer::is_store_good(observed), "minor_during_old_slow_selected");
+                Expect(to_object(result) == target, "minor_during_old_returns_current");
+                Expect(!marked(target), "minor_during_old_does_not_mark_old");
+                Expect(ZPointer::is_store_good(field.GetFieldValue()), "minor_during_old_heals_store_good");
+            }
+        };
+        P2FieldInputTask task(heap, [&] {
+            ZBarrier::MarkBarrierOnYoungOopField(Slot(child));
+            ZBarrier::MarkBarrierOnOldOopField(holder, Slot(holder, 1), false);
+            Expect(marked(control), "minor_during_old_strong_positive_control");
+            // Retain the negative target before resuming the major, through the
+            // normal old field entry, after the nonmajor assertion has read it.
+            ZBarrier::MarkBarrierOnOldOopField(holder, Slot(holder), false);
+        });
+        heap.old().Workers()->run(&task);
+        observing = false;
+        ZBarrier::testFieldMarkResult = nullptr;
+    };
+    heap.RequestGC(GC_REASON_YOUNG, false);
+    ZGeneration::testYoungMarkStarted = nullptr;
+    Expect(selected == 1, "minor_during_old_field_result_observed");
+    std::printf("P2_MINOR_RESULT failures=%u selected=%u\n", failures.load(), selected);
+    std::fflush(stdout);
+    if (failures.load() != 0) std::_Exit(failures.load());
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     return failures.load();
 }
