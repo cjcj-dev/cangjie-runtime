@@ -116,7 +116,6 @@ public:
     void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
     bool FlushGCDataMarkProducers(ThreadGCData& data);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
-    void PublishThreadRoot(BaseObject* object, bool young, bool follow);
     bool IsGhostFromObject(BaseObject* obj) const;
     bool IsUnmovableFromObject(BaseObject* obj) const;
     BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation);

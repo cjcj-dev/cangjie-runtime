@@ -144,70 +144,21 @@ std::function<void(ZGenerationId, NativeSlot*)> ZMark::testColoredRootResult;
 std::function<void(Mutator&)> ZMark::testOldMarkThreadResult;
 #endif
 // RefFieldRoot is root in tagged pointer format.
-void ZMark::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet)
+void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
 {
     RefField<> oldField(field);
-    // The major root iterator bypasses ReadStaticRef. Enforce the same
-    // colored-carrier contract before its mark-good shortcut or RootSet push
-    // (ZPointer::assert_is_valid, zAddress.inline.hpp:320-393).
-    // Non-heap ELF literals are not GC roots and keep the skip below.
     CHECK_DETAIL(!Heap::IsHeapAddress(to_object(oldField.GetTargetObject())) ||
                      (raw(oldField.GetFieldValue()) &
                       (ZPointerRemappedMask | ZPointerMarkedYoungMask | ZPointerMarkedOldMask)) != 0,
                  "NativeSlot requires colored value at EnumRefFieldRoot slot=%p word=%#zx",
                  &field, raw(oldField.GetFieldValue()));
-    // A mark-good root has passed this mark epoch and is necessarily load-good
-    // (OpenJDK zAddress.inline.hpp:658-664).
-    if (ZPointer::is_mark_good(oldField.GetFieldValue())) {
-        // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
-        BaseObject* target = to_object(oldField.GetTargetObject());
-        // Reject non-heap: do not call make_load_good (remap would touch non-heap).
-        if (!Heap::IsHeapAddress(target)) {
-            return;
-        }
-        CHECK_DETAIL(target->IsValidObject(), "Enum static root %p(%p) encounters invalid object", target, &field);
-        rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(target))), true, true, true, false));
-        return;
-    }
-
-    // tracecov: is the mark's field walk broad enough to be the thing that keeps colours fresh?
-    // The mark-good fast path above returns without healing, which is correct because mark-good
-    // implies load-good; a stale field is therefore mark-bad and reaches the code below, which does
-    // heal (CAS at the end of this function).  So "stale slots survive" reduces to "the mark
-    // never visited that field".  Counting how much this path actually runs is the cheapest way to
-    // tell a narrow walk from a broad one -- and unlike IsMarkedObject<Old>, a counter here is
-    // valid at any phase (the mark-bitmap query answered 0 for 4.2M live objects at barrier time,
-    // which is why that measurement was void).
-    {
-        static std::atomic<uint64_t> slowEnter{ 0 };
-        const uint64_t n = slowEnter.fetch_add(1, std::memory_order_relaxed) + 1;
-        if ((n & (n - 1)) == 0) {
-            LOG(RTLOG_ERROR, "[TRACECOV] slow_enter=%lu", n);
-        }
-    }
-
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
-    BaseObject* latest = to_object(ZBarrier::make_load_good(oldField.GetFieldValue(), provenance));
-
-    // target object could be null or non-heap for some static variable.
+    ZBarrier::MarkBarrierOnOopField(field, false);
+    BaseObject* latest = to_object(field.GetTargetObject());
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
-    CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
-    // static roots stay Phase-C coloured (writable statics need colour; rostatic skips non-heap CAS).
-    // plainroots only applies to stack/reg ObjectRef slots (RootSlotWriteback via !IsHeapAddress).
-    RefField<> newField = ZBarrier::GetAndTryTagRefField(latest);
-    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
-             latest->GetTypeInfo(), latest->GetSize());
-    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()),
-             raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
-    } else {
-        DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
-             latest->GetTypeInfo(), latest->GetSize());
-    }
-    rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(latest))), true, true, true, false));
+    // Ownership state carries current identity and color, never GC work entries.
+    exportOwners.emplace_back(latest, ForwardingStage::IncomingNew);
 }
 
 
@@ -291,14 +242,13 @@ void ZMark::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
 namespace {
 // ZMarkOopClosure (zMark.cpp:666-670). P08 owns the missing dedicated old
 // mark barrier; this adapter consumes the existing old publication producer.
-class MarkOopClosure {
-public:
-    void DoOop(NativeSlot& slot) const
-    {
-        BaseObject* object = ZBarrier::ReadStaticRef(slot);
-        ZBarrier::MarkBarrierOnOldOopField(nullptr, slot, false);
-    }
-};
+    class MarkOopClosure {
+    public:
+        void DoOop(NativeSlot& slot) const
+        {
+            ZBarrier::MarkBarrierOnOopField(slot, false);
+        }
+    };
 
 class MarkThreadClosure {
 public:
@@ -369,9 +319,13 @@ void ZMark::EnumAllCommonRoots(ZWorkers& workers)
     MarkOldRootsTask task(Heap::GetHeap().old().Mark(),
                          [](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
         VisitStrongPlainRoots([&](ObjectRef& root) {
-            MarkOldObjectIfActive(to_object(safe(root.LoadPlain())));
+            ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }, {});
-        Heap::GetHeap().cross_vm().VisitSurrectedExportRoots([&](BaseObject* object) { MarkOldObjectIfActive(object); });
+        Heap::GetHeap().cross_vm().VisitSurrectedExportRoots([](BaseObject* object) {
+            if (Heap::IsHeapAddress(object)) {
+                ZBarrier::Mark<false, false, true, false>(from_object(object));
+            }
+        });
     }, workers.active_workers());
     workers.run(&task);
 }
@@ -425,18 +379,26 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
                                  uint64_t stackScanEpoch)
 {
     RootVisitor rawRootVisitor = [&visitor](ObjectRef& root) {
-        BaseObject* obj = ZRelocate::ResolveMinorReference(root);
-        visitor(obj);
+        ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+        visitor(to_object(safe(root.LoadPlain())));
     };
     RootVisitor invisibleRootVisitor = [&invisibleVisitor](ObjectRef& root) {
-        BaseObject* obj = ZRelocate::ResolveMinorReference(root);
-        invisibleVisitor(obj);
+        ZUncoloredRoot::process_invisible(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+        invisibleVisitor(to_object(safe(root.LoadPlain())));
     };
     MarkYoungRootsTask task([&] {
         VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
-        Heap::GetHeap().cross_vm().VisitMinorValueRoots(visitor);
+        Heap::GetHeap().cross_vm().VisitMinorValueRoots([&](BaseObject* object) {
+            if (Heap::IsHeapAddress(object)) {
+                ZBarrier::Mark<false, false, true, false>(from_object(object));
+            }
+            visitor(object);
+        });
         gMinorRootOrigin = "export";
-        Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) { visitor(ZBarrier::ReadStaticRef(slot)); });
+        Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) {
+            ZBarrier::MarkBarrierOnOopField(slot, false);
+            visitor(to_object(slot.GetTargetObject()));
+        });
         gMinorRootOrigin = "unknown";
     }, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
     SuspendibleThreadSetJoiner joiner;
@@ -492,9 +454,6 @@ void ZMark::PushYoungObject(BaseObject* object, WorkStack& workStack, const char
     }
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
     if (!region->IsYoungRegion()) {
-        if (Heap::GetHeap().GetZGeneration(ZGenerationId::young).IsMajorRoots()) {
-            MarkOldObjectIfActive(object, true);
-        }
         return;
     }
     (void)workStack;
@@ -751,23 +710,10 @@ void ZMark::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, 
     }
     buffer->MergeY2yDirtyHolders(work);
     buffer->MergeY2yDirtySlots([&work](MAddress slot) {
-        RefField<>& field = HeapSlotAt<>(slot);
-        BaseObject* target = ZRelocate::ResolveMinorReference(field);
-        if (target != nullptr && Heap::IsHeapAddress(target)) {
-            work.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(target))), true, true, true, false));
-        }
+        ZBarrier::MarkBarrierOnYoungOopField(HeapSlotAt<>(slot));
     });
 }
 
-void ZMark::PublishThreadRoot(BaseObject* object, bool young, bool follow)
-{
-    ZMark* domain = young ? Heap::GetHeap().young().MarkPtr() : Heap::GetHeap().old().MarkPtr();
-    CHECK_DETAIL(domain != nullptr, "root publication requires an active mark domain");
-    MarkStripeSet& stripes = domain->Stripes();
-    ThreadLocal::GetMarkStacks(*domain).Push(stripes,
-        stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
-        MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, follow, false), true);
-}
 
 bool ZMark::FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain)
 {
@@ -848,21 +794,6 @@ namespace MapleRuntime {
 #include "ObjectModel/RefField.inline.h"
 
 
-namespace MapleRuntime {
-void ZMark::MarkOldObjectIfActive(BaseObject* object, bool gcThread)
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    auto& cycle = const_cast<ZGeneration&>(Heap::GetHeap().GetZGeneration(ZGenerationId::old));
-    if (gcThread) {
-        cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
-    } else {
-        cycle.MarkObjectIfActive<false, false, true, false>(from_object(object));
-    }
-}
-
-} // namespace MapleRuntime
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0

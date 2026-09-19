@@ -780,18 +780,19 @@ static BaseObject* PlainRootObject(zaddress_unsafe address)
 // handshake before resumption; lazy frame-color history remains a separate port.
 static bool PushHeapRoot(RootSlot& root, bool young, bool follow = true)
 {
+    (void)young;
     const zaddress_unsafe observed = root.LoadPlain();
     BaseObject* object = PlainRootObject(observed);
     if (!Heap::IsHeapAddress(object)) {
         return false;
     }
-    Heap& heap = Heap::GetHeap();
-    // The eager relocation handshake makes saved uncolored roots current
-    // before this mark pass (ZUncoloredRoot::make_load_good's current-color arm).
-    BaseObject* current = object;
-    heap.PublishThreadRoot(current, young, follow);
-    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-    return true;
+    zaddress_unsafe* slot = reinterpret_cast<zaddress_unsafe*>(&root);
+    if (follow) {
+        ZUncoloredRoot::mark(slot, ZPointerLoadGoodMask);
+    } else {
+        ZUncoloredRoot::process_invisible(slot, ZPointerLoadGoodMask);
+    }
+    return Heap::IsHeapAddress(PlainRootObject(root.LoadPlain()));
 }
 
 static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool young)

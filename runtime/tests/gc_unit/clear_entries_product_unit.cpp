@@ -240,7 +240,7 @@ struct RelocationReceiptTestAccess {
         return visited;
     }
 
-    // The product old-roots task feeds these objects to MarkOldObjectIfActive
+    // The product old-roots task routes these current objects through ZBarrier::Mark
     // (zMark.cpp mark_old_roots); observe the same visitor output.
     static std::vector<BaseObject*> EnumMajorValueRoots(Heap& collector)
     {

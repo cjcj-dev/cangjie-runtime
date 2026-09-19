@@ -173,8 +173,12 @@ public:
     static zpointer ColorMarkGood(zaddress address, zpointer previous);
     static zpointer ColorStoreGood(zaddress address, zpointer previous);
     static zpointer ColorRemsetGood(zaddress address, zpointer previous);
+    static zaddress MarkSlowPath(zaddress address);
     static zaddress MarkFromOldSlowPath(zaddress address);
     static zaddress MarkFromYoungSlowPath(zaddress address);
+    template<bool resurrect, bool gcThread, bool follow, bool finalizable>
+    static void Mark(zaddress addr);
+    static void MarkBarrierOnOopField(RefField<>& field, bool finalizable);
     static bool IsMarkYoungGoodFastPath(zpointer value);
     static zpointer ColorMarkYoungGood(zaddress address, zpointer previous);
     static zaddress MarkYoungSlowPath(zaddress address);

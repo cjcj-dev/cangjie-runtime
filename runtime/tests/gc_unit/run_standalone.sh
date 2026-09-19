@@ -478,9 +478,10 @@ STANDALONE_SYMBOLS=(
 STANDALONE_FULL_SYMBOLS=(
   _ZNK12MapleRuntime5ZPage19clone_for_promotionEv
   _ZN12MapleRuntime5ZMark15MarkEntryObjectEPNS_10BaseObjectERKNS_14MarkStackEntryEPNS_13MarkLiveCacheE
-  _ZN12MapleRuntime5ZMark21MarkOldObjectIfActiveEPNS_10BaseObjectEb
+  _ZN12MapleRuntime8ZBarrier4MarkILb0ELb0ELb1ELb0EEEvNS_8zaddressE
+  _ZN12MapleRuntime8ZBarrier4MarkILb0ELb0ELb0ELb0EEEvNS_8zaddressE
 )
-# ZPage::CloneForPromotion and ZMark entry/active marking are out-of-line
+# ZPage::clone_for_promotion, ZMark entry, and both ordinary-root mark modes are out-of-line
 # product functions. Full symbols exclude local copies as well as exports;
 # matching product definitions keep retired names from making the guard inert.
 STANDALONE_SYMBOL_DYN="$OUT/cj_gc_unit.dynamic-defined.txt"

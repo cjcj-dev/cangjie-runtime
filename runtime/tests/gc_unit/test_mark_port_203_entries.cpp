@@ -9,6 +9,7 @@
 #include "gc_unittest.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/z/zBarrier.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -117,6 +118,7 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zMark.hpp"
+#include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "ObjectModel/MArray.inline.h"
@@ -332,15 +334,15 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
             // Two snapshots of one root use the actual private producers.
             // The TLS stack and GC decide the consumer order.
             if (duplicateRootOrder < 0) {
-                ZMark::PublishThreadRoot(array, true, true);
+                ZBarrier::Mark<false, false, true, false>(from_object(array));
             }
-            ZMark::PublishThreadRoot(array, true, false);
+            ZBarrier::Mark<false, false, false, false>(from_object(array));
             if (duplicateRootOrder > 0) {
-                ZMark::PublishThreadRoot(array, true, true);
+                ZBarrier::Mark<false, false, true, false>(from_object(array));
             }
         } else {
             array->SetInvisibleObject(true);
-            ZMark::PublishThreadRoot(array, true, false);
+            ZBarrier::Mark<false, false, false, false>(from_object(array));
         }
     } else if (commonRoot) {
         for (size_t i = 0; i < rootCount; ++i) {

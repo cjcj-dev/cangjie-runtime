@@ -179,12 +179,7 @@ void Heap::MarkObjectIfActive(BaseObject* object)
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-    if (region->IsYoungRegion()) {
-        MarkYoungObjectIfActive(object);
-    } else {
-        old().MarkObjectIfActive<false, false, true, false>(from_object(object));
-    }
+    ZBarrier::Mark<false, false, true, false>(from_object(object));
 }
 
 void Heap::MarkYoungObjectIfActive(BaseObject* object)
@@ -237,10 +232,6 @@ bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
     return ZMark::FlushThreadMarkProducers(tls);
 }
 
-void Heap::PublishThreadRoot(BaseObject* object, bool young, bool follow)
-{
-    ZMark::PublishThreadRoot(object, young, follow);
-}
 
 bool Heap::IsGhostFromObject(BaseObject* obj) const { return ZRelocate::IsFromObject(obj); }
 
