@@ -158,7 +158,7 @@ void AllocBuffer::ClearRegion()
 // The page allocator returns whole units; its limit is also unit-aligned.
 size_t AllocBuffer::ComputeTLABSize(size_t objectSize, size_t maxSize) const
 {
-    if (objectSize > maxSize || maxSize < ZPage::UNIT_SIZE) {
+    if (objectSize > maxSize || maxSize < ZGranuleSize) {
         return 0;
     }
     constexpr size_t targetRefills = 50; // 100 / (2 * TLABWasteTargetPercent)
@@ -167,7 +167,7 @@ size_t AllocBuffer::ComputeTLABSize(size_t objectSize, size_t maxSize) const
     size_t desired = desiredTLABSize.load(std::memory_order_relaxed);
     desired = desired > (maxSize >> steps) ? maxSize : desired << steps;
     const size_t size = desired > maxSize - objectSize ? maxSize : desired + objectSize;
-    return AlignUp(std::max(size, ZPage::UNIT_SIZE), ZPage::UNIT_SIZE);
+    return AlignUp(std::max(size, ZGranuleSize), ZGranuleSize);
 }
 
 // ThreadLocalAllocBuffer::accumulate_and_reset_statistics (cpp:78).
@@ -179,8 +179,8 @@ void AllocBuffer::ResizeTLAB(size_t capacity, double fallbackFraction, size_t ma
         fraction = fallbackFraction;
     }
     const size_t allocation = static_cast<size_t>(fraction * capacity);
-    const size_t desired = std::min(std::max(allocation / targetRefills, ZPage::UNIT_SIZE), maxSize);
-    desiredTLABSize.store(AlignUp(desired, ZPage::UNIT_SIZE), std::memory_order_relaxed);
+    const size_t desired = std::min(std::max(allocation / targetRefills, ZGranuleSize), maxSize);
+    desiredTLABSize.store(AlignUp(desired, ZGranuleSize), std::memory_order_relaxed);
 }
 
 MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
@@ -207,7 +207,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     }
 
     if (LIKELY(tlRegion != ZPage::NullRegion())) {
-        addr = tlRegion->Alloc(totalSize);
+        addr = tlRegion->alloc_object(totalSize);
     }
 
     if (UNLIKELY(addr == 0)) {
@@ -249,7 +249,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
             }
             ClearRegion();
         } else {
-            MAddress addr = tlRegion->Alloc(totalSize);
+            MAddress addr = tlRegion->alloc_object(totalSize);
             if (addr != 0) {
                 return addr;
             }
@@ -282,7 +282,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
                 theAllocator.AddHungryBuffer(*this);
                 Heap::GetHeap().GetFinalizerProcessor().NotifyToFeedAllocBuffers();
             }
-            return r->Alloc(totalSize);
+            return r->alloc_object(totalSize);
         }
     }
     // AllocateThreadLocalRegion is a safepoint, in which cj thread rescheule may happen.
@@ -297,10 +297,10 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     // Null region means tlRegion is not set.
     if (tlRegion == ZPage::NullRegion()) {
         SetRegion(r);
-        return r->Alloc(totalSize);
+        return r->alloc_object(totalSize);
     }
     // tlRegion has been set in preforward phase.
-    MAddress addr = tlRegion->Alloc(totalSize);
+    MAddress addr = tlRegion->alloc_object(totalSize);
     if (addr != 0) {
         if (!SetPreparedRegion(r)) {
             manager.UndoThreadLocalRegionAllocation(r);
@@ -311,29 +311,29 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     manager.RemoveThreadLocalRegion(tlRegion);
     manager.EnlistFullThreadLocalRegion(tlRegion);
     SetRegion(r);
-    return r->Alloc(totalSize);
+    return r->alloc_object(totalSize);
 }
 
 MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
 {
     ZPage* region = tlRawPointerRegions.empty() ? nullptr : tlRawPointerRegions.back();
     if (region != nullptr) {
-        MAddress allocAddr = region->Alloc(totalSize);
+        MAddress allocAddr = region->alloc_object(totalSize);
         if (allocAddr != 0) {
             return allocAddr;
         }
     }
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    size_t needUnitNum = AlignUp(totalSize, ZPage::UNIT_SIZE) / ZPage::UNIT_SIZE;
+    size_t pageSize = AlignUp(totalSize, ZGranuleSize);
     if (totalSize <= manager.GetThreadLocalRegionSize()) {
-        region = Heap::alloc_page(needUnitNum, ZPageType::small);
+        region = Heap::alloc_page(pageSize, ZPageType::small);
         if (region == nullptr) {
             return 0;
         }
         region->SetRegionRole(ZPageRole::RawPointerStaging);
         tlRawPointerRegions.push_back(region);
     } else {
-        region = Heap::alloc_page(needUnitNum, ZPageType::large);
+        region = Heap::alloc_page(pageSize, ZPageType::large);
         if (region == nullptr) {
             return 0;
         }
@@ -342,7 +342,7 @@ MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
     }
 
     // region is enough for totalSize.
-    MAddress allocAddr = region->Alloc(totalSize);
+    MAddress allocAddr = region->alloc_object(totalSize);
     MRT_ASSERT(allocAddr != 0, "allocation failure");
     return allocAddr;
 }

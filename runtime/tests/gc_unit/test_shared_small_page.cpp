@@ -32,13 +32,13 @@ GC_OTHER_VM_TEST(SharedSmallPage, AtomicBoundsPreserveTop)
     const uintptr_t start = page->GetRegionStart();
     page->SetRegionAllocPtr(start);
     const size_t capacity = page->GetRegionSize();
-    GC_EXPECT_EQ(page->AtomicAlloc(capacity - 16), start);
+    GC_EXPECT_EQ(page->alloc_object_atomic(capacity - 16), start);
     const uintptr_t top = page->GetRegionAllocPtr();
-    GC_EXPECT_EQ(page->AtomicAlloc(32), uintptr_t{0});
+    GC_EXPECT_EQ(page->alloc_object_atomic(32), uintptr_t{0});
     GC_EXPECT_EQ(page->GetRegionAllocPtr(), top);
-    GC_EXPECT_EQ(page->AtomicAlloc(std::numeric_limits<size_t>::max()), uintptr_t{0});
+    GC_EXPECT_EQ(page->alloc_object_atomic(std::numeric_limits<size_t>::max()), uintptr_t{0});
     GC_EXPECT_EQ(page->GetRegionAllocPtr(), top);
-    GC_EXPECT_EQ(page->AtomicAlloc(16), top);
+    GC_EXPECT_EQ(page->alloc_object_atomic(16), top);
     GC_EXPECT_EQ(page->GetRegionAllocPtr(), page->GetRegionEnd());
 }
 
@@ -58,7 +58,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AtomicReservationsDoNotOverlap)
             ready.fetch_add(1);
             while (ready.load() != threads) { std::this_thread::yield(); }
             for (size_t index = 0; index < perThread; ++index) {
-                addresses[worker][index] = page->AtomicAlloc(bytes);
+                addresses[worker][index] = page->alloc_object_atomic(bytes);
             }
         });
     }
@@ -88,7 +88,7 @@ struct SharedPageFixture {
         ZStat::Initialize();
         constexpr size_t units = 64;
         HeapParam params{};
-        params.regionSize = ZPage::UNIT_SIZE / KB;
+        params.regionSize = ZGranuleSize / KB;
         params.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
     }

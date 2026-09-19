@@ -538,7 +538,7 @@ bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         return false;
     }
     // h3seed2/3 乙 residual: live holder field still points at a region that minor
-    // already CollectRegion'd (ClearUnits). Prefer silent null over UAF; CAS so
+    // already CollectRegion'd (ClearPageMemory). Prefer silent null over UAF; CAS so
     // concurrent fix peers can win. Pre-evac H3 samples the prior cycle's residue —
     // nulling here clears it before the next VERIFY_HEAP inventory.
     // Criterion: ZPage::IsFreeRegion|IsGarbageRegion at this Fix call (file:line).
@@ -1257,7 +1257,7 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
     }
     if (result != toObj) {
         if (ZPage* dest = Heap::page(reinterpret_cast<MAddress>(toObj))) {
-            (void)dest->UndoAllocObjectAtomic(reinterpret_cast<uintptr_t>(toObj), size);
+            (void)dest->undo_alloc_object_atomic(reinterpret_cast<uintptr_t>(toObj), size);
         }
     }
     if (result != nullptr) {
@@ -1653,7 +1653,7 @@ void RegionManager::CompactRegion(ZPage* region)
             return;
         }
         size_t size = currentObj->GetSize();
-        MAddress toAddress = region->Alloc(size);
+        MAddress toAddress = region->alloc_object(size);
         BaseObject* toObj = from_region_addr(toAddress);
         DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
         // zRelocate.cpp:634-639: in-place relocation copies conjoint when the
@@ -1765,7 +1765,7 @@ void RegionManager::RehomeCompactedInPlaceRegion(ZPage* region)
         return;
     }
     region->SetRegionRole(ZPageRole::RecentFull);
-    RecentFullAccounting::Enqueue(1, region->GetUnitCount());
+    RecentFullAccounting::Enqueue(1, region->GetRegionSize());
 }
 
 
@@ -1827,7 +1827,7 @@ void RegionManager::EnlistStayYoungSurvivor(ZPage* region, bool advanceAge)
         return;
     }
     region->SetRegionRole(ZPageRole::RecentFull);
-    RecentFullAccounting::Enqueue(1, region->GetUnitCount());
+    RecentFullAccounting::Enqueue(1, region->GetRegionSize());
 }
 
 template<Generation G>
@@ -1964,7 +1964,7 @@ void RegionManager::ForwardRegion(ZPage* region)
             // (role != None).  Clear the role first; the
             // ordinary empty-page arm above reaches CollectRegion the same way.
             if (region->GetRegionRole() == ZPageRole::RecentFull) {
-                const size_t units = region->GetUnitCount();
+                const size_t units = region->GetRegionSize();
                 region->SetRegionRole(ZPageRole::None);
                 RecentFullAccounting::Dequeue(1, units);
             }

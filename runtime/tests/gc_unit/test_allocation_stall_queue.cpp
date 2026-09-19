@@ -68,7 +68,7 @@ public:
         ZStat::Initialize();
         constexpr size_t units = 1;
         HeapParam heapParam {};
-        heapParam.regionSize = ZPage::UNIT_SIZE / 1024;
+        heapParam.regionSize = ZGranuleSize / 1024;
         heapParam.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
         BindFixturePageTable(manager, units);
@@ -118,7 +118,7 @@ void RunWaiter(RegionManager& manager, std::atomic<size_t>& claimed)
     mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     ThreadLocal::SetMutator(&mutator);
     ZPage* region = Heap::alloc_page(1, ZPageType::small, false, true);
-    claimed.store(region == nullptr ? 0 : region->GetUnitCount(), std::memory_order_release);
+    claimed.store(region == nullptr ? 0 : (region->GetRegionSize() / ZGranuleSize), std::memory_order_release);
     ThreadLocal::SetMutator(nullptr);
 }
 
@@ -202,7 +202,7 @@ GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
         [&](RegionManager& manager) {
             fixture.PublishCapacity();
             supplied = true;
-            competing = manager.TakeRegion(1, ZPageType::small, false, false);
+            competing = manager.TakeRegion((1) * ZGranuleSize, ZPageType::small, false, false);
         },
         {});
     std::atomic<size_t> allocated{ 0 };

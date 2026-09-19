@@ -1053,8 +1053,6 @@ EXPORTS
     _ZN12MapleRuntime10ZPage24IncRawPointerObjectCountEv @1060
     _ZN12MapleRuntime10ZPage26VisitLiveObjectsUntilFalseEOKNSt3__18functionIFbPNS_10BaseObjectEEEE @1064
     _ZN12MapleRuntime10ZPage27BindLiveInfo0FromLiveIfNullEv @1065
-    _ZN12MapleRuntime10ZPage30LARGE_OBJECT_DEFAULT_THRESHOLDE @1068 DATA
-    _ZN12MapleRuntime10ZPage9UNIT_SIZEE @1074 DATA
 
     _ZN12MapleRuntime10SampleTaskC2ERKS0_ @1082
     _ZN12MapleRuntime10SampleTaskC2EyyRNSt3__16vectorIyNS1_9allocatorIyEEEERNS2_INS_9FrameTypeENS3_IS7_EEEERNS2_IjNS3_IjEEEE @1083
@@ -1286,18 +1284,14 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager22CollectFreePinnedSlotsEPNS_10ZPageE @1435
     _ZN12MapleRuntime13RegionManager22RemoveRawPointerObjectEPNS_10BaseObjectE @1436
     _ZN12MapleRuntime13RegionManager23RemoveThreadLocalRegionEPNS_10ZPageE @1438
-    _ZN12MapleRuntime13RegionManager23SetLargeObjectThresholdEv @1439
     _ZN12MapleRuntime13RegionManager19RelocateClaimedPageEPNS_10ZPageE @1440
-    _ZN12MapleRuntime13RegionManager24SetMaxUnitCountForRegionEv @1441
     _ZN12MapleRuntime13RegionManager25AllocateThreadLocalRegionEbb @1442
-    _ZN12MapleRuntime13RegionManager25MAX_UNIT_COUNT_PER_REGIONE @1443 DATA
     _ZN12MapleRuntime13RegionManager27EnlistFullThreadLocalRegionEPNS_10ZPageE @1447
     _ZN12MapleRuntime13RegionManager28TakeReclaimableGarbageRegionEPy @1450
     _ZN12MapleRuntime13RegionManager29PrepareYoungGarbageCandidatesERKNSt3__18functionIFvPNS_10ZPageEEEE @1451
     _ZN12MapleRuntime13RegionManager29ReclaimRegionToMarkQuarantineEPNS_10ZPageE @1452
     _ZN12MapleRuntime13RegionManager30AssembleLargeGarbageCandidatesEv @1453
     _ZN12MapleRuntime13RegionManager30AssembleSmallGarbageCandidatesEv @1454
-    _ZN12MapleRuntime13RegionManager30SetMaxUnitCountForPinnedRegionEv @1455
     _ZN12MapleRuntime13RegionManager31AssemblePinnedGarbageCandidatesEb @1456
     _ZN12MapleRuntime13RegionManager31TryTakeGarbageRegionAfterDispelEPNS_10ZPageE @1457
     _ZN12MapleRuntime13RegionManager33ClearNotRelocatableThisCycleFlagsEv @1459

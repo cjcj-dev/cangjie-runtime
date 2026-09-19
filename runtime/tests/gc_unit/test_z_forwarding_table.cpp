@@ -191,7 +191,7 @@ GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
 GC_TEST(ZForwardingRemembered, PublishedFieldsConsumedOnce)
 {
     GcHeapFixture heap;
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
     const MAddress field = heap.heapStart + sizeof(void*);
     fwd->relocated_remembered_fields_register(field);
     fwd->relocated_remembered_fields_publish();
@@ -210,7 +210,7 @@ GC_TEST(ZForwardingRemembered, PublishedFieldsConsumedOnce)
 GC_TEST(ZForwardingRemembered, RetainedScanRejectsPublication)
 {
     GcHeapFixture heap;
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
     GC_EXPECT_TRUE(fwd->retain_page(&generation_relocate_queue()));
     fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
@@ -236,7 +236,7 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
             marking ? ZGenerationPhase::Mark : ZGenerationPhase::Relocate);
         Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old,
             marking ? ZGenerationPhase::Relocate : ZGenerationPhase::Mark);
-        auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
+        auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
         fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
         fwd->relocated_remembered_fields_after_relocate();
         fwd->release_page();
@@ -262,7 +262,7 @@ void RememberedWaitEntered(ZForwarding*)
 GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 {
     GcHeapFixture heap;
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
     GC_EXPECT_TRUE(fwd->claim());
     fwd->in_place_relocation_claim_page();
     rememberedWaitEntered.store(false);

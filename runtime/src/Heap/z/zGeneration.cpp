@@ -448,8 +448,8 @@ void ZGenerationYoung::mark_start()
          "recent_young=%zu "
          "objects_visited=%zu slots_visited=%zu repark_ns=%llu unmovable_ns=%llu recent_ns=%llu "
          "visitor_ns=%llu list_move_ns=%llu",
-         stats.candidateRegions, stats.candidateBytes, stats.fromVisited, stats.fromVisitedUnits,
-         stats.unmovableVisited, stats.unmovableVisitedUnits, stats.unmovableYoung,
+         stats.candidateRegions, stats.candidateBytes, stats.fromVisited, stats.fromVisitedBytes,
+         stats.unmovableVisited, stats.unmovableVisitedBytes, stats.unmovableYoung,
          stats.recentFullVisited, stats.recentFullVisitedUnits, stats.recentFullYoung,
          stats.objectVisits, stats.slotVisits,
          static_cast<unsigned long long>(stats.reparkNs), static_cast<unsigned long long>(stats.unmovableNs),

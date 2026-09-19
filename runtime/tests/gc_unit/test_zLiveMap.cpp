@@ -406,7 +406,7 @@ GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
                       ZPageType::small,
                       ZPageType::large}) {
         ZPage::RetirePage(region, [] {});
-        region = ZPage::InitRegion(0, 1, role);
+        region = ZPage::InitRegion(ZPage::GranuleIndex(fx.heapStart), (1) * ZGranuleSize, role);
         fx.region0 = region;
         PublishAllocatedPage(region);
         const uint32_t actual = ZLiveMapTest::segment_size(region->livemap());
@@ -552,7 +552,7 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
         ZPage::RetirePage(fx.region0, [] {});
         ZPage::RetirePage(fx.region1, [] {});
         fx.region1 = nullptr;
-        fx.region0 = ZPage::InitRegion(0, units, ZPageType::small);
+        fx.region0 = ZPage::InitRegion(ZPage::GranuleIndex(fx.heapStart), (units) * ZGranuleSize, ZPageType::small);
         PublishAllocatedPage(fx.region0);
         GcHeapFixture::AdvanceGeneration(Generation::Old);
     }

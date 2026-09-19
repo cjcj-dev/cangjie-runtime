@@ -268,7 +268,7 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
 
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -288,7 +288,7 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     GC_EXPECT_EQ(ClassifySlotWord(reinterpret_cast<uintptr_t>(fx.obj1)), SlotWordVerdict::kIllegal);
 
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
@@ -315,7 +315,7 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -355,7 +355,7 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    BaseObject* objectB = fx.PlaceObject(fx.heapStart + ZPage::UNIT_SIZE + 128);
+    BaseObject* objectB = fx.PlaceObject(fx.heapStart + ZGranuleSize + 128);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(objectB) + 64);
 
     RememberedSet& rs = HeapTestRemset();
@@ -451,7 +451,7 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    BaseObject* objectB = fx.PlaceObject(fx.heapStart + ZPage::UNIT_SIZE + 128);
+    BaseObject* objectB = fx.PlaceObject(fx.heapStart + ZGranuleSize + 128);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(objectB) + 64);
 
     RememberedSet& rs = HeapTestRemset();
@@ -509,7 +509,7 @@ GC_TEST(Remset, CompilerPostStoreSkipsGoodAndRecordsPreviousEpoch)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     GC_EXPECT_EQ(ClassifySlotWord(reinterpret_cast<uintptr_t>(fx.obj1)), SlotWordVerdict::kIllegal);
 
     const uintptr_t good = raw(GcUnit::StoreGoodPointer(fx.obj0));
@@ -533,7 +533,7 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj0);
@@ -558,7 +558,7 @@ GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
     ZBarrier::AtomicWriteReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
@@ -575,7 +575,7 @@ GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
     BaseObject* old = ZBarrier::AtomicSwapReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
@@ -593,7 +593,7 @@ GC_TEST(Remset, CompareAndSwapRemembersBeforeAttempt)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
     GC_EXPECT_FALSE(ZBarrier::CompareAndSwapReference(fx.obj0, *field, fx.obj1, fx.obj1,
@@ -635,7 +635,7 @@ GC_TEST(Remset, StaticRootNotRecorded)
 
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     NativeSlot root(zpointer::null);
 
     ZBarrier::WriteStaticRef(root, fx.obj1);
@@ -657,7 +657,7 @@ GC_TEST(Remset, YoungToYoungNotRecorded)
 
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -696,7 +696,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -737,7 +737,7 @@ GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -764,7 +764,7 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     Heap& collector = Heap::GetHeap();
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -796,7 +796,7 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
 GC_TEST(Remset, SparsePagesConsumeAndRearmAcrossFaces)
 {
     const MAddress start = 0x300000000ULL;
-    const size_t pageBytes = ZPage::UNIT_SIZE;
+    const size_t pageBytes = ZGranuleSize;
     RememberedSet rs;
     rs.Initialize(start, 130 * pageBytes);
     const MAddress first = start + pageBytes + sizeof(RefField<>);
@@ -1077,7 +1077,7 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
     size_t checked = 0;
     for (uint8_t initial = 0; initial != 2; ++initial) {
         for (size_t flips = 0; flips != 4; ++flips) {
-            rs.ClearRegion(heap.heapStart, heap.heapStart + 2 * ZPage::UNIT_SIZE);
+            rs.ClearRegion(heap.heapStart, heap.heapStart + 2 * ZGranuleSize);
             if (rs.activeBuffer.load() != initial) markStart();
             Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
             Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
@@ -1125,7 +1125,7 @@ GC_OTHER_VM_TEST(Remset, InPlacePreviousFieldsPublishDuringYoungMark)
     const MAddress to = heap.heapStart + 128;
     rs.Record(from + sizeof(void*));
     rs.FlipForMinor();
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
     fwd->set_in_place();
     const size_t moved = rs.TransferObjectSlots(from, to, 32, fwd);
     fwd->relocated_remembered_fields_after_relocate();

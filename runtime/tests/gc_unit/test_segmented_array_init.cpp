@@ -444,7 +444,7 @@ bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx
         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     const MIndex arraySize = CalculateArraySize(kLargeRefLength, RefField<>::GetSize());
     const size_t unitCount =
-        (static_cast<size_t>(arraySize) + ZPage::UNIT_SIZE - 1) / ZPage::UNIT_SIZE;
+        (static_cast<size_t>(arraySize) + ZGranuleSize - 1) / ZGranuleSize;
 
     if (source == AllocationSource::INACTIVE) {
         ctx.dirtyAddress = manager.GetInactiveZone();
@@ -452,7 +452,7 @@ bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx
     }
 
     ZPage* prepared = Heap::alloc_page(
-        unitCount, ZPageType::large, false, true, true);
+        unitCount * ZGranuleSize, ZPageType::large, false, true, true);
     if (prepared == nullptr) {
         return false;
     }
@@ -475,7 +475,7 @@ bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx
         // range (zMappedCache.cpp:92-119); dirtying cached memory must stay
         // clear of it. The yield check reads the first two segments only, so
         // dirty those (plus the array header that precedes the payload).
-        const size_t dirtyBytes = std::min(unitCount * ZPage::UNIT_SIZE,
+        const size_t dirtyBytes = std::min(unitCount * ZGranuleSize,
                                            2 * static_cast<size_t>(MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) + 64);
         std::memset(reinterpret_cast<void*>(ctx.dirtyAddress), ctx.dirtyByte, dirtyBytes);
     }

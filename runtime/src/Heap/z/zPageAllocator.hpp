@@ -29,14 +29,14 @@ namespace MapleRuntime {
 // selects the cache and virtual registry that own the complete allocation.
 struct PageMemory {
     size_t index{ 0 };
-    size_t units{ 0 };
+    size_t size{ 0 };
     uint32_t partition{ 0 };
     bool committed{ false };
     // ZMemoryAllocation::partial_vmems: these extents leave the mapped cache
     // under the allocator owner and travel with the allocation request.
     ZArray<ZVirtualMemory> partialMappings;
     bool virtualClaimed{ true };
-    size_t harvestedUnits{ 0 };
+    size_t harvestedBytes{ 0 };
 
 };
 
@@ -206,7 +206,6 @@ private:
 #include "Heap/z/zVirtualMemoryManager.inline.hpp"
 
 
-#include "Heap/Allocator/CartesianTree.h"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zUncommitter.hpp"
 
@@ -215,17 +214,15 @@ class RegionManager;
 
 // This class is and should be accessed only for region allocation. we do not rely on it to check region status.
 class FreeRegionManager {
-    using UnitIndex = CartesianTree::Index;
-    using UnitCount = CartesianTree::Count;
 
 public:
     explicit FreeRegionManager(RegionManager& manager) : regionManager(manager) {}
 
-    virtual ~FreeRegionManager() { markQuarantineTree.Fini(); }
+    virtual ~FreeRegionManager() = default;
     // ZPageAllocator(min/initial/max capacity) owns _virtual/_physical and one
     // ZPartition per NUMA id (zPageAllocator.cpp:1201-1260); the partitions
     // here consume the two managers the same way.
-    void Initialize(UnitCount regionCnt, ZVirtualMemoryManager& virtualMemory,
+    void Initialize(size_t regionCnt, ZVirtualMemoryManager& virtualMemory,
                     ZPhysicalMemoryManager& physicalMemory, size_t maxCapacity);
     bool ClaimPageMemory(size_t num, PageMemory& memory);
     bool PreparePageMemory(PageMemory& memory);
@@ -234,7 +231,7 @@ public:
     // vmem outside the allocator lock: claim_physical_for_increased_capacity →
     // commit_and_map (cleanup_failed_commit on a partial commit) → create_page.
     ZPage* MaterializePageMemory(PageMemory& memory, ZPageType role,
-                                     bool expectPhysicalMem, bool clearPayload, size_t& committedUnits,
+                                     bool expectPhysicalMem, bool clearPayload, size_t& committedBytes,
                                      PageAge age = PageAge::old);
     // ZPartition::free_memory_alloc_failed (zPageAllocator.cpp:1079-1101).
     // Requires the owning RegionManager page allocator lock.
@@ -265,28 +262,30 @@ public:
     size_t capacity() const;
 
     // Unit index <-> ZVirtualMemory (ZPage metadata is indexed per unit).
-    static ZVirtualMemory VirtualMemoryOf(UnitIndex index, UnitCount count);
-    static UnitIndex UnitIndexOf(const ZVirtualMemory& vmem);
+    static ZVirtualMemory VirtualMemoryOf(size_t index, size_t count);
+    static size_t IndexOf(const ZVirtualMemory& vmem);
     uint32_t PartitionIdOf(const ZVirtualMemory& vmem) const { return virtualMemory->lookup_partition_id(vmem); }
 
-    void AddGarbageUnits(UnitIndex idx, UnitCount num, bool allowSaferegion = true);
+    void AddGarbageMemory(size_t idx, size_t num, bool allowSaferegion = true);
 
     // mark-epoch quarantine: units reclaimed after from-page reclaim must not enter the dirty
-    // tree (mutator TakeRegion → ClearUnits) until the next major concurrent mark ends.
+    // tree (mutator TakeRegion → ClearPageMemory) until the next major concurrent mark ends.
     // INV: concurrent mark may still hold plain strong refs into this range (SATB).
-    void AddMarkQuarantineUnits(UnitIndex idx, UnitCount num);
+    void AddMarkQuarantineMemory(size_t idx, size_t num);
 
     // Release point = major PostTrace entry (TRACE+CLEAR_SATB done). Moves all quarantined
-    // units into the dirty tree so allocation may ClearUnits them again.
+    // units into the dirty tree so allocation may ClearPageMemory them again.
     size_t ReleaseMarkQuarantineToDirty();
 
-    UnitCount GetMarkQuarantineUnitCount() const
+    size_t GetMarkQuarantineBytes() const
     {
         std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
-        return markQuarantineTree.GetTotalCount();
+        size_t bytes = 0;
+        for (const auto& memory : markQuarantineMemory) { bytes += memory.size(); }
+        return bytes;
     }
 
-    UnitCount GetDirtyUnitCount() const;
+    size_t GetCachedBytes() const;
     // ZPartition::print_cache_on (zPageAllocator.cpp:1118-1121) for every partition.
     void PrintCacheOn() const;
     // zUncommitter.cpp:395-403: flush from the mapped cache under the page
@@ -298,10 +297,10 @@ public:
 
 private:
 
-    inline void PrehandleReleasedUnit(bool expectPhysicalMem, size_t idx, size_t num) const
+    inline void ClearReleasedMemory(bool expectPhysicalMem, size_t idx, size_t num) const
     {
         if (expectPhysicalMem) {
-            ZPage::ClearUnits(idx, num);
+            ZPage::ClearPageMemory(idx, num);
         }
     }
     RegionManager& regionManager;
@@ -320,17 +319,17 @@ private:
         size_t available() const { return currentMaxCapacity - used - claimed; }
     };
     using Partition = ZPartition;
-    void InsertCommitted(Partition& partition, UnitIndex index, UnitCount count);
-    void FreeMemory(UnitIndex index, UnitCount count);
+    void InsertCommitted(Partition& partition, size_t index, size_t count);
+    void FreeMemory(size_t index, size_t count);
     mutable std::mutex cacheMutex;
     std::vector<std::unique_ptr<Partition>> partitions;
     ZVirtualMemoryManager* virtualMemory{ nullptr };
     ZPhysicalMemoryManager* physicalMemory{ nullptr };
     size_t nextPartition{ 0 };
 
-    // Post-dispel units held until major mark ends (see AddMarkQuarantineUnits).
+    // Post-dispel units held until major mark ends (see AddMarkQuarantineMemory).
     mutable std::mutex markQuarantineTreeMutex;
-    CartesianTree markQuarantineTree;
+    std::vector<ZVirtualMemory> markQuarantineMemory;
 
 };
 } // namespace MapleRuntime
@@ -479,7 +478,7 @@ public:
     */
     __attribute__((visibility("hidden"))) static size_t GetHeapMemorySize(size_t heapSize);
 
-    __attribute__((visibility("hidden"))) static size_t GetHeapUnitCount(size_t heapSize);
+    __attribute__((visibility("hidden"))) static size_t GetAlignedHeapSize(size_t heapSize);
 
     // get metadataSize by regionNum or unitNumber
     // page-table geometry, not a reverse metadata array
@@ -494,7 +493,7 @@ public:
     // Address span the per-unit metadata covers: [lowest reserved offset, ZAddressOffsetMax).
     static ZVirtualMemory ReservedAddressSpan(const ZVirtualMemoryManager& virtualMemory);
     // P01 reverse-metadata ABI adapter; called only before runtime allocation.
-    static std::vector<ZPage::UnitSegment> ReservedSegments(ZVirtualMemoryManager& virtualMemory);
+    static std::vector<ZPage::ReservedSegment> ReservedSegments(ZVirtualMemoryManager& virtualMemory);
 
     void VisitPageOwners(const std::function<void(ZPage*)>& visitor) const
     {
@@ -504,7 +503,7 @@ public:
     // ZPageAllocator::capacity(): sum of ZPartition::_capacity.
     size_t GetCommittedCapacity() const { return freeRegionManager.capacity(); }
 
-    size_t GetHeapCapacity() const { return heapUnitCount * ZPage::UNIT_SIZE; }
+    size_t GetHeapCapacity() const { return heapCapacity; }
 
 
     // zPageAllocator.cpp:1201-1260: page resource ownership belongs to
@@ -670,7 +669,6 @@ public:
     uintptr_t AllocPinned(size_t size);
 
     // caller assures size is truely large (> region size)
-    uintptr_t AllocLarge(size_t size, bool clearPayload = true);
 
     void EnlistFullThreadLocalRegion(ZPage* region) noexcept;
 
@@ -691,7 +689,7 @@ public:
 
     size_t GetThreadLocalRegionSize() const
     {
-        return maxUnitCountPerRegion * ZPage::UNIT_SIZE;
+        return ZPageSizeSmall;
     }
 
     size_t GetYoungAllocatedSize() const;
@@ -724,7 +722,7 @@ public:
                           bool skipKnownEmptyRegions = false) const;
     void ForEachObjSafe(const std::function<void(BaseObject*)>& visitor) const;
 
-    size_t GetUsedRegionSize() const { return GetUsedUnitCount() * ZPage::UNIT_SIZE; }
+    size_t GetUsedRegionSize() const { return GetUsedBytes(); }
 
     size_t GetRecentAllocatedSize() const;
     size_t GetSurvivedSize() const;
@@ -732,13 +730,13 @@ public:
     size_t GetPinnedSpaceSize() const;
     size_t SumAllocatedByRoles(std::initializer_list<ZPageRole> roles) const;
 
-    size_t GetUsedUnitCount() const;
+    size_t GetUsedBytes() const;
 
-    size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
+    size_t GetCachedBytes() const { return freeRegionManager.GetCachedBytes(); }
     // Address space not yet backed by committed capacity (ZGC: current_max_capacity - capacity).
-    size_t GetInactiveUnitCount() const { return (GetHeapCapacity() - GetCommittedCapacity()) / ZPage::UNIT_SIZE; }
+    size_t GetUncommittedBytes() const { return GetHeapCapacity() - GetCommittedCapacity(); }
 
-    size_t GetActiveUnitCount() const { return GetCommittedCapacity() / ZPage::UNIT_SIZE; }
+    size_t GetCommittedBytes() const { return GetCommittedCapacity(); }
 
     // Diagnostic total over large pages, from the page table (no page list).
     size_t GetLargeObjectSize() const;
@@ -776,7 +774,6 @@ public:
     }
     size_t UsedGeneration(ZGenerationId id) const { return used_generation(id); }
 
-    size_t GetLargeObjectThreshold() const { return largeObjectThreshold; }
 
     void ClearFreePinnedSlots() { freePinnedSlotLists.Clear(); }
 
@@ -793,9 +790,6 @@ public:
 
     void MergeRawPointerRegions(std::vector<ZPage*>& smallSizeRegions, std::vector<ZPage*>& largeSizeRegions);
 
-    void SetMaxUnitCountForRegion(size_t regionSize);
-    void SetMaxUnitCountForPinnedRegion(size_t regionSize);
-    void SetLargeObjectThreshold(size_t regionSize);
     void SetGarbageThreshold(double garbageThreshold);
 
     void HandleTraceRegions();
@@ -813,7 +807,7 @@ public:
 
     // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
     // Concurrent mark (TRACE+CLEAR_SATB) has finished; plain strong refs into quarantined
-    // ranges are no longer traced. Safe to publish units to dirty tree for ClearUnits reuse.
+    // ranges are no longer traced. Safe to publish units to dirty tree for ClearPageMemory reuse.
     // Note: this major's just-installed quarantine (from PrepareForwardTable above) is also
     // released here — mark is already done, so no TRACE can race those units. Units held from
     // prior minor PrepareForwardTable are the ones that covered the TRACE window.
@@ -852,12 +846,10 @@ private:
     // caller must own the pinned allocation mutex, and must not release it in between.
     uintptr_t AllocPinnedLocked(size_t size);
 
-    static const size_t MAX_UNIT_COUNT_PER_REGION;
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
-    ZPage* AllocateSharedPage(size_t units, ZPageType role, PageAge age, bool nonBlocking);
+    ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, bool nonBlocking);
     void UndoSharedPage(ZPage* page);
-    size_t SharedPageUnitCount() const { return maxUnitCountPerRegion; }
 
     MAddress reservedStart = 0;
     MAddress reservedEnd = 0;
@@ -927,7 +919,7 @@ private:
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only
-    size_t heapUnitCount = 0;
+    size_t heapCapacity = 0;
     std::atomic<size_t> tlabUsed{ 0 };
     size_t lastTLABUsed = 0;
     double tlabCapacity = 0;
@@ -936,9 +928,6 @@ private:
     std::mutex tlabStatisticsLock;
     TLABStatistics retiredTLABStatistics;
 
-    size_t maxUnitCountPerRegion = MAX_UNIT_COUNT_PER_REGION;   // max units count for threadLocal buffer.
-    size_t maxUnitCountPerPinnedRegion = maxUnitCountPerRegion; // max units count for pinned region.
-    size_t largeObjectThreshold;
     double fromSpaceGarbageThreshold = 0.5; // 0.5: default garbage ratio.
     double exemptedRegionThreshold;
 #if defined(__EULER__)

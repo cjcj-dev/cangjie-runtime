@@ -284,7 +284,7 @@ ZMemoryUsageInfo Heap::GetMemoryUsage() const
 }
 
 
-size_t Heap::GetCurrentCapacity() const { return _page_allocator.GetActiveUnitCount() * ZPage::UNIT_SIZE; }
+size_t Heap::GetCurrentCapacity() const { return _page_allocator.GetCommittedBytes(); }
 
 size_t Heap::GetUsedPageSize() const { return _page_allocator.GetUsedRegionSize(); }
 

@@ -14,12 +14,12 @@ namespace MapleRuntime {
 
 inline __attribute__((visibility("hidden"))) size_t RegionManager::GetHeapMemorySize(size_t heapSize)
     {
-        size_t unitNum = GetHeapUnitCount(heapSize);
-        size_t metadataSize = GetMetadataSize(unitNum);
+        size_t alignedHeapSize = GetAlignedHeapSize(heapSize);
+        size_t metadataSize = GetMetadataSize(alignedHeapSize);
         size_t roundedHeapSize = 0;
-        CHECK_DETAIL(CheckedRoundUpSize(heapSize, ZPage::UNIT_SIZE, roundedHeapSize),
+        CHECK_DETAIL(CheckedRoundUpSize(heapSize, ZGranuleSize, roundedHeapSize),
                      "heap size round-up overflows: heapSize=%zu unitSize=%zu", heapSize,
-                     ZPage::UNIT_SIZE);
+                     ZGranuleSize);
         size_t totalSize = 0;
         CHECK_DETAIL(CheckedAddSize(metadataSize, roundedHeapSize, totalSize),
                      "heap reservation geometry overflows: metadataSize=%zu heapSize=%zu",
@@ -27,15 +27,15 @@ inline __attribute__((visibility("hidden"))) size_t RegionManager::GetHeapMemory
         return totalSize;
     }
 
-inline __attribute__((visibility("hidden"))) size_t RegionManager::GetHeapUnitCount(size_t heapSize)
+inline __attribute__((visibility("hidden"))) size_t RegionManager::GetAlignedHeapSize(size_t heapSize)
     {
         size_t roundedHeapSize = 0;
-        CHECK_DETAIL(CheckedRoundUpSize(heapSize, ZPage::UNIT_SIZE, roundedHeapSize),
+        CHECK_DETAIL(CheckedRoundUpSize(heapSize, ZGranuleSize, roundedHeapSize),
                      "heap unit geometry overflows: heapSize=%zu unitSize=%zu", heapSize,
-                     ZPage::UNIT_SIZE);
+                     ZGranuleSize);
         heapSize = roundedHeapSize;
-        size_t unitNum = heapSize / ZPage::UNIT_SIZE;
-        return unitNum;
+        size_t alignedHeapSize = heapSize;
+        return alignedHeapSize;
     }
 
 inline __attribute__((visibility("hidden"))) size_t RegionManager::GetMetadataSize(size_t num)
@@ -83,7 +83,7 @@ inline size_t RegionManager::SumAllocatedByRoles(std::initializer_list<ZPageRole
         for (ZPage* region; iter.next(&region);) {
             for (ZPageRole role : roles) {
                 if (region->GetRegionRole() == role) {
-                    bytes += region->GetUnitCount() * ZPage::UNIT_SIZE;
+                    bytes += region->GetRegionSize();
                     break;
                 }
             }
@@ -111,11 +111,11 @@ inline size_t RegionManager::GetPinnedSpaceSize() const
         return SumAllocatedByRoles({ ZPageRole::OldPinned, ZPageRole::RecentPinned, ZPageRole::RawPointerPinned });
     }
 
-inline size_t RegionManager::GetUsedUnitCount() const
+inline size_t RegionManager::GetUsedBytes() const
     {
         // zPageAllocator.cpp:1311: used is the allocator's page-granular
         // counter, not a list sum.
-        return pageAllocatorUsed / ZPage::UNIT_SIZE;
+        return pageAllocatorUsed;
     }
 
 
@@ -123,12 +123,12 @@ inline size_t RegionManager::GetUsedUnitCount() const
 inline void RegionManager::MergeRawPointerRegions(std::vector<ZPage*>& smallSizeRegions,
                                                       std::vector<ZPage*>& largeSizeRegions)
     {
-        size_t smallUnits = 0;
+        size_t smallBytes = 0;
         for (ZPage* region : smallSizeRegions) {
             region->SetRegionRole(ZPageRole::RecentFull);
-            smallUnits += region->GetUnitCount();
+            smallBytes += region->GetRegionSize();
         }
-        RecentFullAccounting::Enqueue(smallSizeRegions.size(), smallUnits);
+        RecentFullAccounting::Enqueue(smallSizeRegions.size(), smallBytes);
         smallSizeRegions.clear();
         for (ZPage* region : largeSizeRegions) {
             region->SetRegionRole(ZPageRole::RecentLarge);
@@ -144,7 +144,7 @@ inline void RegionManager::HandleTraceRegions()
         fullTraceCacheActive = false;
         largeTraceCacheActive = false;
         size_t traceRegions = 0;
-        size_t traceUnits = 0;
+        size_t traceBytes = 0;
         ZPage::SafeDestroyScope scope;
         ZPageTableIterator iter(&ZPageTable::heap_table());
         for (ZPage* region; iter.next(&region);) {
@@ -152,12 +152,12 @@ inline void RegionManager::HandleTraceRegions()
             if (role == ZPageRole::FullTrace) {
                 region->SetRegionRole(ZPageRole::RecentFull);
                 ++traceRegions;
-                traceUnits += region->GetUnitCount();
+                traceBytes += region->GetRegionSize();
             } else if (role == ZPageRole::LargeTrace) {
                 region->SetRegionRole(ZPageRole::RecentLarge);
             }
         }
-        RecentFullAccounting::Enqueue(traceRegions, traceUnits);
+        RecentFullAccounting::Enqueue(traceRegions, traceBytes);
     }
 
 inline void RegionManager::PrepareTrace()
@@ -170,15 +170,15 @@ inline void RegionManager::PrepareTrace()
 
 inline void RegionManager::ReleaseMarkQuarantine()
     {
-        size_t heldBefore = freeRegionManager.GetMarkQuarantineUnitCount();
+        size_t heldBefore = freeRegionManager.GetMarkQuarantineBytes();
         size_t units = freeRegionManager.ReleaseMarkQuarantineToDirty();
-        size_t bytes = units * ZPage::UNIT_SIZE;
+        size_t bytes = units;
         VLOG(REPORT,
              "[MarkQuarantine] released_units=%zu released_bytes=%zu held_before=%zu held_after=%u",
-             units, bytes, heldBefore, freeRegionManager.GetMarkQuarantineUnitCount());
+             units, bytes, heldBefore, freeRegionManager.GetMarkQuarantineBytes());
         // Cost metric same family as ghostorder: peak retained bytes under mark-epoch gate.
         VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", heldBefore,
-             heldBefore * ZPage::UNIT_SIZE);
+             heldBefore);
         SatisfyStalledAllocations();
     }
 

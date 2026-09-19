@@ -78,7 +78,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
     // reference processing operates on objects belonging to the installed heap.
     // This test owns the synthetic reservation only inside its child VM.
     Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
     ZStatWorkers stats;
     ZWorkers pool(ZGenerationId::old, 1, &stats);
@@ -105,7 +105,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
     // reference processing operates on objects belonging to the installed heap.
     // This test owns the synthetic reservation only inside its child VM.
     Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
     ZStatWorkers stats;
     ZWorkers pool(ZGenerationId::old, 1, &stats);
