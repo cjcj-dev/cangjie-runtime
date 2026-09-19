@@ -106,7 +106,7 @@ private:
 class Mutator;
 class FinalizerProcessor {
 public:
-    FinalizerProcessor();
+    explicit FinalizerProcessor(ZWorkers* workers = nullptr);
     ~FinalizerProcessor() = default;
 
     // zRootsIterator: strong queued/running roots and weak registrations
