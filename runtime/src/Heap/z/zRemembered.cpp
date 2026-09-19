@@ -153,9 +153,14 @@ void ZRemembered::register_found_old(ZPage* page)
     // zRemembered.cpp:372-387: FoundOld::register_page uses page->start()
     // shifted by the page-table granule (ZGC ZGranuleSizeShift; our map
     // granule is the matching index space for ZPageTable::at).
-    const size_t granule = _page_table != nullptr ? _page_table->map().granule()
-                                                 : (size_t(1) << ZGranuleSizeShift);
-    _found_old.register_page(static_cast<size_t>(untype(page->start())) / granule);
+    size_t index = static_cast<size_t>(untype(page->start())) >> ZGranuleSizeShift;
+    if (_page_table != nullptr) {
+        zoffset offset;
+        if (_page_table->map().offset_for_address(page->GetRegionStart(), &offset)) {
+            index = static_cast<size_t>(untype(offset)) / _page_table->map().granule();
+        }
+    }
+    _found_old.register_page(index);
 }
 
 template<typename Function>
