@@ -33,9 +33,9 @@ managed_json_ok() { # 新形态：必须有 arms 键；旧单臂 JSON 当缺失
   bash "$B" kkk2 "python3 -c 'import json,pathlib,sys; p=pathlib.Path(\"/root/$lane/managed-runs/kkk2_managed.json\");
 d=json.loads(p.read_text()) if p.is_file() else {};
 n=d.get(\"n\",0); arms=d.get(\"arms\",{});
-ok=isinstance(arms,dict) and isinstance(d.get(\"failed\"),list) and isinstance(n,int) and n>=3;
+ok=isinstance(arms,dict) and isinstance(d.get(\"failed\"),list) and isinstance(n,int) and n>=3 and isinstance(d.get(\"build_fail\"),list);
 ok=ok and d.get(\"runner_sha256\")==\"$RUNNER_SHA256\";
-ok=ok and all(isinstance(arms.get(a,{}).get(\"runs\",{}).get(t),list) and len(arms[a][\"runs\"][t])==n and all(isinstance(rc,int) and rc not in (126,127,-1) for rc in arms[a][\"runs\"][t]) for a in (\"h48\",\"stained\") for t in (\"finalizer\",\"segmented\",\"phase\"));
+ok=ok and all(isinstance(arms.get(a,{}).get(\"runs\",{}).get(t),list) and len(arms[a][\"runs\"][t])+sum(f.get(\"arm\")==a and f.get(\"name\")==t for f in d.get(\"build_fail\",[]))==n and all(isinstance(rc,int) and rc not in (126,127,-1) for rc in arms[a][\"runs\"][t]) for a in (\"h48\",\"stained\") for t in (\"finalizer\",\"segmented\",\"phase\"));
 sys.exit(0 if ok else 1)'" >/dev/null 2>&1
 }
 
@@ -48,7 +48,7 @@ run_managed() {
   bash "$B" kkk2 --put "$inputs" "/root/$lane/managed-inputs.tar" || return 1
   rm -f "$inputs"
   bash "$B" kkk2 "tar -xf /root/$lane/managed-inputs.tar -C /root/$lane/default && rm /root/$lane/managed-inputs.tar" || return 1
-  bash "$WF" sh "$lane" "ulimit -c 0; mkdir -p /root/$lane/harness /root/$lane/managed-runs /root/$lane/tools-bundle /root/$lane/default/tools; cp -a /root/diff_harness_708/kkk2_managed.sh /root/$lane/harness/kkk2_managed.sh; cp -a /root/diff_harness_708/zstat_pillars.py /root/$lane/tools-bundle/zstat_pillars.py; cp -a /root/diff_harness_708/zstat_pillars.py /root/$lane/default/tools/zstat_pillars.py; /usr/bin/grep -q 'Two target arms' /root/$lane/harness/kkk2_managed.sh || { echo '⛔ lane harness not two-host'; exit 2; }; export LANE=/root/$lane SRCROOT=/root/$lane/default OUT=/root/$lane/managed-runs N=3 CANGJIE_HOME=/root/sdkdepot/945fe3e8f023-fa13e8d5c17b; bash /root/$lane/harness/kkk2_managed.sh $sha"
+  bash "$WF" sh "$lane" "ulimit -c 0; mkdir -p /root/$lane/harness /root/$lane/managed-runs /root/$lane/tools-bundle /root/$lane/default/tools; cp -a /root/diff_harness_708/kkk2_managed.sh /root/$lane/harness/kkk2_managed.sh; cp -a /root/diff_harness_708/zstat_pillars.py /root/$lane/tools-bundle/zstat_pillars.py; cp -a /root/diff_harness_708/zstat_pillars.py /root/$lane/default/tools/zstat_pillars.py; /usr/bin/grep -q 'Two target arms' /root/$lane/harness/kkk2_managed.sh || { echo '⛔ lane harness not two-host'; exit 2; }; export LANE=/root/$lane SRCROOT=/root/$lane/default OUT=/root/$lane/managed-runs N=3; bash /root/$lane/harness/kkk2_managed.sh $sha"
 }
 
 run_arm() { # run_arm <sha> ：若 kkk2 无缓存则建+三臂；rc 0=可用
@@ -102,10 +102,11 @@ for who in cand base; do sha=$CS; [ $who = base ] && sha=$BS; lane="diff_${sha:0
 ok=p.exists();
 d=json.loads(p.read_text()) if ok else {};
 n=d.get(\"n\",0); arms=d.get(\"arms\",{});
-shape=isinstance(arms,dict) and isinstance(d.get(\"failed\"),list) and isinstance(n,int) and n>=3;
+shape=isinstance(arms,dict) and isinstance(d.get(\"failed\"),list) and isinstance(n,int) and n>=3 and isinstance(d.get(\"build_fail\"),list);
 shape=shape and d.get(\"runner_sha256\")==\"$RUNNER_SHA256\";
-shape=shape and all(isinstance(arms.get(a,{}).get(\"runs\",{}).get(t),list) and len(arms[a][\"runs\"][t])==n and all(isinstance(rc,int) and rc not in (126,127,-1) for rc in arms[a][\"runs\"][t]) for a in (\"h48\",\"stained\") for t in (\"finalizer\",\"segmented\",\"phase\"));
+shape=shape and all(isinstance(arms.get(a,{}).get(\"runs\",{}).get(t),list) and len(arms[a][\"runs\"][t])+sum(f.get(\"arm\")==a and f.get(\"name\")==t for f in d.get(\"build_fail\",[]))==n and all(isinstance(rc,int) and rc not in (126,127,-1) for rc in arms[a][\"runs\"][t]) for a in (\"h48\",\"stained\") for t in (\"finalizer\",\"segmented\",\"phase\"));
 print(\"== managed rc=\" + (\"0\" if shape else \"NA\"));
+print(\"== build_fail \" + json.dumps(d.get(\"build_fail\",[])));
 fails=list(d.get(\"failed\") or []) if shape else [\"managed/SHAPE\"];
 print(\"== total tests 6\");
 [print(x) for x in fails];
@@ -122,7 +123,8 @@ def parse(p):
     for line in open(p):
         line=line.rstrip('\n')
         m=re.match(r'^== (default|filler|testable|managed) rc=(\S*)',line)
-        if m: cur=m.group(1); arms[cur]={'rc':m.group(2),'failed':set(),'total':''}; continue
+        if m: cur=m.group(1); arms[cur]={'rc':m.group(2),'failed':set(),'total':'','build_fail':[]}; continue
+        if line.startswith('== build_fail '): arms[cur]['build_fail']=json.loads(line[len('== build_fail '):]); continue
         if line.startswith('== total'): arms[cur]['total']=line[9:].strip(); continue
         mi=re.match(r'^== ident (runner_sha256|cangjie_home|h48_rt|stained_rt)=(.*)$',line)
         if mi: ident[mi.group(1)]=mi.group(2); continue
@@ -145,10 +147,12 @@ for a in ('default','filler','testable','managed'):
     ca=c.get(a,{'rc':'NA','failed':set(),'total':''}); ba=b.get(a,{'rc':'NA','failed':set(),'total':''})
     res['arms'][a]={'cand_rc':ca['rc'],'base_rc':ba['rc'],'cand_total':ca['total'],'base_total':ba['total'],
         'cand_only':sorted(ca['failed']-ba['failed']),'base_only':sorted(ba['failed']-ca['failed']),'common':len(ca['failed']&ba['failed']),
-        'cand_failed_n':len(ca['failed']),'base_failed_n':len(ba['failed'])}
+        'cand_failed_n':len(ca['failed']),'base_failed_n':len(ba['failed']),
+        'build_fail': {'cand': ca.get('build_fail',[]) or (['unit build rc=123'] if ca['rc']=='123' else []),
+                       'base': ba.get('build_fail',[]) or (['unit build rc=123'] if ba['rc']=='123' else [])}}
     def broken(x):  # rc 不是 0/1（如 123=编译失败、124=超时）或跑了却没有 gtest 总数行 ⇒ 该臂不可判
         return x['rc'] not in ('0','1') or not x['total']
-    if ca['rc'] in ('','NA') or ba['rc'] in ('','NA'):
+    if any(res['arms'][a]['build_fail'].values()) or ca['rc'] in ('','NA') or ba['rc'] in ('','NA'):
         res['arms'][a]['cand_only']=None; res['arms'][a]['base_only']=None; res['arms'][a]['status']='NOT_RUN'; res['positive_control'][a]='NOT_RUN（臂未跑，⛔ 不得据此宣称独红为 0）'
     elif broken(ca) or broken(ba):
         res['arms'][a]['status']=f"BROKEN(cand_rc={ca['rc']},base_rc={ba['rc']})"; res['positive_control'][a]='BROKEN（构建/运行未完成，failed=0 是假的，⛔ 不得据此宣称独红为 0）'
