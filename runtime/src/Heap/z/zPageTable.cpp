@@ -48,7 +48,7 @@ void ZPageTable::insert(ZPage* page)
     std::atomic_thread_fence(std::memory_order_release);
     _map.put(offset, page->GetRegionSize(), page);
     if (!page->IsYoungRegion()) {
-        Heap::GetHeap().remembered().register_found_old(page);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::young).register_with_remset(page);
     }
 }
 
@@ -67,7 +67,7 @@ void ZPageTable::replace(ZPage* old_page, ZPage* new_page)
     CHECK(_map.get(offset) == old_page);
     _map.release_put(offset, old_page->GetRegionSize(), new_page);
     if (!new_page->IsYoungRegion()) {
-        Heap::GetHeap().remembered().register_found_old(new_page);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::young).register_with_remset(new_page);
     }
 }
 
