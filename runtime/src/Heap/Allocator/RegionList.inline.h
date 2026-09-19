@@ -12,7 +12,7 @@
 namespace MapleRuntime {
 void RegionList::MergeRegionList(RegionList& srcList)
 {
-    RegionList regionList("region list cache");
+    RegionList regionList("region list cache", ZPageRole::None);
     srcList.MoveTo(regionList);
     ZPage* head = regionList.GetHeadRegion();
     ZPage* tail = regionList.GetTailRegion();
@@ -31,6 +31,7 @@ void RegionList::MergeRegionList(RegionList& srcList)
     }
     for (ZPage* node = head; node != nullptr; node = node->GetNextRegion()) {
         node->SetRegionListOwner(this);
+        node->SetRegionRole(listRole);
     }
 }
 
@@ -47,12 +48,16 @@ void RegionList::PrependRegionLocked(ZPage* region)
     }
 
     CHECK_DETAIL(region->GetRegionListOwner() == nullptr, "region already belongs to a list");
+    if (listRole != ZPageRole::None) {
+        CHECK_DETAIL(region->GetRegionRole() == ZPageRole::None, "region already has a role");
+    }
 
     DLOG(REGION, "list %p (%zu, %zu)+(%zu, %zu) prepend region %p@[%#zx+%zu, %#zx)", this,
         regionCount, unitCount, 1llu, region->GetUnitCount(), region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd());
 
     region->SetRegionListOwner(this);
+    region->SetRegionRole(listRole);
     region->SetPrevRegion(nullptr);
     IncCounts(1, region->GetUnitCount());
     region->SetNextRegion(listHead);
@@ -76,6 +81,7 @@ void RegionList::DeleteRegionLocked(ZPage* del)
     del->SetNextRegion(nullptr);
     del->SetPrevRegion(nullptr);
     del->SetRegionListOwner(nullptr);
+    del->SetRegionRole(ZPageRole::None);
 
     DLOG(REGION, "list %p (%zu, %zu)-(%zu, %zu) delete region %p@[%#zx+%zu, %#zx) type %u", this,
         regionCount, unitCount, 1llu, del->GetUnitCount(),
@@ -120,9 +126,11 @@ void RegionList::ReplaceRegionLocked(ZPage* from, ZPage* to)
     to->SetPrevRegion(pre);
     to->SetNextRegion(next);
     to->SetRegionListOwner(this);
+    to->SetRegionRole(listRole);
     from->SetPrevRegion(nullptr);
     from->SetNextRegion(nullptr);
     from->SetRegionListOwner(nullptr);
+    from->SetRegionRole(ZPageRole::None);
     if (pre != nullptr) {
         pre->SetNextRegion(to);
     } else {

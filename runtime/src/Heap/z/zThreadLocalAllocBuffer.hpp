@@ -24,8 +24,8 @@ namespace MapleRuntime {
 // use 1/n until the configured weight dominates.
 class AllocBuffer {
 public:
-    AllocBuffer() : tlRawPointerRegions("thread-local raw-pointer regions"),
-                    tlLargeRawPointerRegions("thread-local large raw-pointer regions") {}
+    AllocBuffer() : tlRawPointerRegions("thread-local raw-pointer regions", ZPageRole::None),
+                    tlLargeRawPointerRegions("thread-local large raw-pointer regions", ZPageRole::None) {}
     ~AllocBuffer();
     void Init();
     void Fini();

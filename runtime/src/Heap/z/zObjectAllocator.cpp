@@ -386,13 +386,19 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
 
 namespace MapleRuntime {
 RegionManager::RegionManager()
-        : freeRegionManager(*this), tlRegionList("thread local regions"), recentFullRegionList("recent full regions"),
-          fullTraceRegions("full trace regions"), fromRegionList("from regions"),
-          ghostFromRegionList("ghost from regions"), unmovableFromRegionList("escaped from regions"),
-          garbageRegionList("garbage regions"), recentPinnedRegionList("recent pinned regions"),
-          oldPinnedRegionList("old pinned regions"), rawPointerPinnedRegionList("raw pointer pinned regions"),
-          oldLargeRegionList("old large regions"), recentLargeRegionList("recent large regions"),
-          largeTraceRegions("large trace regions")
+        : freeRegionManager(*this), tlRegionList("thread local regions", ZPageRole::ThreadLocal),
+          recentFullRegionList("recent full regions", ZPageRole::RecentFull),
+          fullTraceRegions("full trace regions", ZPageRole::FullTrace),
+          fromRegionList("from regions", ZPageRole::From),
+          ghostFromRegionList("ghost from regions", ZPageRole::None),
+          unmovableFromRegionList("escaped from regions", ZPageRole::UnmovableFrom),
+          garbageRegionList("garbage regions", ZPageRole::Garbage),
+          recentPinnedRegionList("recent pinned regions", ZPageRole::RecentPinned),
+          oldPinnedRegionList("old pinned regions", ZPageRole::OldPinned),
+          rawPointerPinnedRegionList("raw pointer pinned regions", ZPageRole::RawPointerPinned),
+          oldLargeRegionList("old large regions", ZPageRole::OldLarge),
+          recentLargeRegionList("recent large regions", ZPageRole::RecentLarge),
+          largeTraceRegions("large trace regions", ZPageRole::LargeTrace)
     {
         tlabAllocatingThreads.Sample(1);
         tlabRequestedFraction.Sample(0.1);

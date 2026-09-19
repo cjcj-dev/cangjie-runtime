@@ -1025,6 +1025,7 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
         // from-space chain alive across InitRegion (RegionManager.h:782).
         _scratch.nextRegionIdx0 = NULLPTR_IDX;
         _scratch.regionListOwner.store(nullptr, std::memory_order_relaxed);
+        _scratch.regionRole.store(ZPageRole::None, std::memory_order_relaxed);
         _scratch.censusBoundaryOffset = 0;
 
         // routedest: this is the reuse edge named in the defect. TakeRegion has already run

@@ -58,6 +58,27 @@
 namespace MapleRuntime {
 class RegionList;
 
+// Page lifecycle role. ZGC keeps this identity in the page table plus the
+// relocation set (zPageTable.hpp:57-77, zGeneration.cpp:205-221); the host
+// runtime keeps raw-pointer pinning and deferred (async) reclaim, which have
+// no ZGC counterpart, so the role word also covers those states. RegionList
+// membership is being retired in favour of this field (#710).
+enum class ZPageRole : uint8_t {
+    None = 0, // free, or a from-page claimed off its list ("lone")
+    ThreadLocal,
+    RecentFull,
+    FullTrace,
+    LargeTrace,
+    From,
+    UnmovableFrom,
+    Garbage,
+    RecentPinned,
+    OldPinned,
+    RawPointerPinned,
+    OldLarge,
+    RecentLarge,
+};
+
 // Descriptor incarnation id used by the forwarding carrier / ghost walk
 // (page-descriptor package retires it with the reused slot).
 using RegionLifeId = uint64_t;
@@ -657,6 +678,16 @@ public:
 
     void SetRegionListOwner(RegionList* owner) { _scratch.regionListOwner.store(owner, std::memory_order_release); }
 
+    ZPageRole GetRegionRole() const { return _scratch.regionRole.load(std::memory_order_acquire); }
+
+    void SetRegionRole(ZPageRole role) { _scratch.regionRole.store(role, std::memory_order_release); }
+
+    bool CASRegionRole(ZPageRole& expect, ZPageRole target)
+    {
+        return _scratch.regionRole.compare_exchange_strong(expect, target, std::memory_order_acq_rel,
+                                                           std::memory_order_acquire);
+    }
+
     void SetPrevRegion(const ZPage* r);
 
     ZPage* GetNextRegion() const;
@@ -715,6 +746,7 @@ private:
         };
 
         std::atomic<RegionList*> regionListOwner{ nullptr };
+        std::atomic<ZPageRole> regionRole{ ZPageRole::None };
         std::atomic<RegionLifeId> regionLifeId{ 0 };
         ZLiveMap* retiredLivemap = nullptr;
         ZPage* ownerRegion = nullptr;

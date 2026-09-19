@@ -19,7 +19,7 @@ namespace MapleRuntime {
 class RegionList {
 public:
     friend void RemoveRegionLocked(RegionList*, ZPage*);
-    RegionList(const char* name) : listName(name) {}
+    RegionList(const char* name, ZPageRole role) : listName(name), listRole(role) {}
 
     void PrependRegion(ZPage* region);
     void PrependRegionLocked(ZPage* region);
@@ -27,6 +27,8 @@ public:
     void MergeRegionList(RegionList& regionList);
 
     const char* GetListName() const { return listName; }
+
+    ZPageRole GetListRole() const { return listRole; }
 
     void ReplaceRegion(ZPage* from, ZPage* to)
     {
@@ -163,6 +165,7 @@ public:
         targetList.AssignWith(*this);
         for (ZPage* node = targetList.listHead; node != nullptr; node = node->GetNextRegion()) {
             node->SetRegionListOwner(&targetList);
+            node->SetRegionRole(targetList.listRole);
         }
         this->ClearList();
     }
@@ -185,6 +188,7 @@ protected:
     ZPage* listHead = nullptr; // the start region for iteration, i.e., the first region
     ZPage* listTail = nullptr; // help to merge region list
     const char* listName = nullptr;
+    ZPageRole listRole = ZPageRole::None;
 private:
     void DeleteRegionLocked(ZPage* del);
     void ReplaceRegionLocked(ZPage* from, ZPage* to);
@@ -227,7 +231,7 @@ private:
 
 class RegionCache : public RegionList {
 public:
-    RegionCache(const char* name) : RegionList(name) {}
+    RegionCache(const char* name, ZPageRole role) : RegionList(name, role) {}
 
     bool TryPrependRegion(ZPage *region)
     {
