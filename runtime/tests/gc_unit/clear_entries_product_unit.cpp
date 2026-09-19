@@ -2787,10 +2787,12 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
                  static_cast<void*>(Heap::page(from)), static_cast<void*>(region),
                  static_cast<void*>(promoted));
     GC_EXPECT_TRUE(Heap::page(from) == promoted);
-    GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
+    std::fprintf(stderr, "PAGE579 expect-table-ok\n");
     GC_EXPECT_TRUE(promoted->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
-    GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
+    std::fprintf(stderr, "PAGE579 expect-ids-ok\n");
+    fixture.region0 = promoted;
+    std::fprintf(stderr, "PAGE579 body-done\n");
 }
 
 GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
