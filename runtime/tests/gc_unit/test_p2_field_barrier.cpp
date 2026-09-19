@@ -83,6 +83,8 @@ extern "C" int p2FieldBarrierExercise()
     auto* holder = MObject::NewPinnedObject(holderType, 24);
     auto* oldChild = MObject::NewPinnedObject(leafType, 16);
     const U64 root = heap.RegisterExportRoot(holder);
+    AgePinnedToOld(holder);
+    AgePinnedToOld(oldChild);
     ZBarrier::WriteReference(holder, Slot(holder), oldChild);
     ZBarrier::WriteReference(holder, Slot(holder, 1), oldChild);
     const bool finalizableCase = std::getenv("P2_FINALIZABLE") != nullptr;
@@ -96,12 +98,15 @@ extern "C" int p2FieldBarrierExercise()
     if (finalizableCase) {
         finalHolder = MObject::NewPinnedObject(finalType, 24);
         finalOld = MObject::NewPinnedObject(edgeType, 24);
+        AgePinnedToOld(finalHolder);
+        AgePinnedToOld(finalOld);
         auto* finalSentinel = MObject::NewPinnedObject(leafType, 16);
         ZBarrier::WriteReference(finalOld, Slot(finalOld), finalSentinel);
         ZBarrier::WriteReference(finalHolder, Slot(finalHolder), oldChild);
         ZBarrier::WriteReference(finalHolder, Slot(finalHolder, 1), finalOld);
         finalHolder->OnFinalizerCreated();
         upgraded = MObject::NewPinnedObject(finalType, 24);
+        AgePinnedToOld(upgraded);
         ZBarrier::WriteReference(upgraded, Slot(upgraded), oldChild);
         upgraded->OnFinalizerCreated();
         upgradeRoot = heap.RegisterExportRoot(upgraded);
@@ -109,13 +114,6 @@ extern "C" int p2FieldBarrierExercise()
     // Advance a real young epoch before overwriting the old slot. Its previous
     // non-null word must go through the store barrier and remember the slot.
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
-    AgePinnedToOld(holder);
-    AgePinnedToOld(oldChild);
-    if (finalHolder != nullptr) {
-        AgePinnedToOld(finalHolder);
-        AgePinnedToOld(finalOld);
-        AgePinnedToOld(upgraded);
-    }
     auto* child = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
     auto* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     auto* oldViaYoung = MObject::NewPinnedObject(leafType, 16);
