@@ -1195,7 +1195,7 @@ void ZGenerationOld::concurrent_mark()
     oldMarkWorkStack.clear();
     oldExportOwners.clear();
     WorkStack& workStack = oldMarkWorkStack;
-    ValueRootList& exportOwners = oldExportOwners;
+    ValueRootList& foreignStack = oldExportOwners;
     MarkingStacks::VerifyEmpty(workStack.size());
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
     uint64_t stackScanEpoch = 0;
@@ -1222,9 +1222,9 @@ void ZGenerationOld::concurrent_mark()
                                             mutator.GetStackWatermark().IsDone(stackScanEpoch));
 #endif
             });
-            ZMark::DoEnumeration(workStack, exportOwners);
+            ZMark::DoEnumeration(workStack, foreignStack);
         } else {
-            ZMark::DoEnumeration(workStack, exportOwners);
+            ZMark::DoEnumeration(workStack, foreignStack);
         }
     }
 

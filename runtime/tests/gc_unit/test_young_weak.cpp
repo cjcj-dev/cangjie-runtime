@@ -119,12 +119,17 @@ struct RelocationReceiptTestAccess {
 
     static void RunPostTrace(Heap& collector) { Heap::GetHeap().old().PostTrace(); }
 
-    static void RunExportMajorMark(Heap& collector, bool prepared = false)
+    static void RunExportMajorMark(Heap& collector, bool oldRootsOnly = false)
     {
         // The major-roots young prelude already began and prepared old marking
         // (zGeneration.cpp:118-124). Do not select/restart that active cycle.
-        if (!prepared) PrepareMajorRoots(collector);
+        if (!oldRootsOnly) PrepareMajorRoots(collector);
         auto& old = Heap::GetHeap().old();
+        if (oldRootsOnly) {
+            if (old.Workers() == nullptr) old.InitializeWorkers(1);
+            if (old.Snapshot().active) old.End();
+            old.mark_start();
+        }
         old.concurrent_mark();
         while (!old.pause_mark_end()) old.concurrent_mark_continue();
         old.process_non_strong_references();
@@ -804,7 +809,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     (void)route;
 }
 
-void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool afterYoungRoots = false)
+void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool oldRootsOnly = false)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager mutatorManager;
@@ -829,9 +834,8 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool aft
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(graph.owner);
     space.GetRegionManager().AddRawPointerObject(graph.foreign);
-    // Register after the major-roots young prelude so only the old export
-    // root task can publish this owner. Do not seed a mark entry in the test.
-    if (afterYoungRoots) RelocationReceiptTestAccess::PrepareMajorRoots(collector);
+    // The old-roots-only case registers before the real old mark-start flip.
+    // It exercises the old phase entry without a young prelude premarking it.
     const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(graph.root);
 
     const U64 secondHandle = sharedCycle ? Heap::GetHeap().RegisterExportRoot(secondRoot) : 0;
@@ -880,7 +884,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool aft
         ZCrossVM::testExportOwnershipResult = nullptr;
         driverCompleted = !Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old).active;
     } else {
-        RelocationReceiptTestAccess::RunExportMajorMark(collector, afterYoungRoots);
+        RelocationReceiptTestAccess::RunExportMajorMark(collector, oldRootsOnly);
         producerCarrier =
             RelocationReceiptTestAccess::DiscoveredCarrierEquals(collector, graph.root, graph.foreign, owners) &&
             (!sharedCycle || RelocationReceiptTestAccess::DiscoveredCarrierEquals(
