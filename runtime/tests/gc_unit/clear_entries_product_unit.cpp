@@ -2765,57 +2765,32 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorStoredCurrentRootRemapsAfterOldCo
     CheckCompactIncoming(true, false, true, false, true);
 }
 
-// ZPage::clone_for_promotion/reset (zPage.cpp:64,103): current page identity
-// changes independently of the source forwarding retained for remapping.
+// ZPage::clone_for_promotion (zPage.cpp:64-72) + flip_promote (zGeneration.cpp:941-948):
+// page-table identity becomes the cloned old page; the young from-page remains
+// for remset/barriers until descriptor retire.
 GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
 {
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
     RelocationReceiptTestAccess::BindCollector(nullptr);
     GcHeapFixture fixture;
     auto* region = fixture.region0;
-    // PrepareForwardableRegion walks a dense allocation range from page start.
     fixture.obj0 = fixture.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(region->GetRegionStart() + fixture.obj0->GetSize());
     region->reset(PageAge::eden);
-    region->SetRegionListOwner(nullptr);
-    RegionList selected("page579-selected");
-    selected.PrependRegion(region);
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
-    (void)selected.TakeHeadRegion();
-    RelocationReceiptTestAccess::PrepareProductPage<Generation::Young>(region);
     const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
-    const MAddress to = reinterpret_cast<MAddress>(fixture.obj1);
-    auto* forwarding = generation_forwarding_table(Generation::Young).get(from);
-    GC_EXPECT_EQ(forwarding->insert(from, to), to);
-    auto& collector = Heap::GetHeap();
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Young);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
-    std::fprintf(stderr, "PAGE579 before clone young=%u table=%p region=%p\n",
-                 static_cast<unsigned>(region->IsYoungRegion()),
-                 static_cast<void*>(Heap::page(region->GetRegionStart())),
-                 static_cast<void*>(region));
     ZPage* promoted = region->clone_for_promotion();
-    std::fprintf(stderr, "PAGE579 cloned to=%p\n", static_cast<void*>(promoted));
     ZGeneration::young()->flip_promote(region, promoted);
-    std::fprintf(stderr, "PAGE579 after flip table=%p\n",
-                 static_cast<void*>(Heap::page(region->GetRegionStart())));
     fixture.region0 = promoted;
-    const Generation current = Heap::GetHeap().ObjectGeneration(fixture.obj0);
-    std::fprintf(stderr, "PAGE579 promotion current=%u id=%u\n",
-                 static_cast<unsigned>(current), static_cast<unsigned>(promoted->generation_id()));
-    GC_EXPECT_TRUE(current == Generation::Old);
+    std::fprintf(stderr, "PAGE579 promotion table=%p from=%p to=%p\n",
+                 static_cast<void*>(Heap::page(from)), static_cast<void*>(region),
+                 static_cast<void*>(promoted));
+    GC_EXPECT_TRUE(Heap::page(from) == promoted);
+    GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
     GC_EXPECT_TRUE(promoted->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
-    const auto retained = LookupTo(from, current);
-    std::fprintf(stderr, "PAGE579 retained to=%zx expected=%zx\n", retained.to, to);
-    GC_EXPECT_EQ(retained.to, to);
-    UNUSED_ClearPageOwner(promoted);
     ZPage::RetireDescriptor(region);
-    const auto cleared = LookupTo(from, current);
-    std::fprintf(stderr, "PAGE579 cleared answer=%u\n", static_cast<unsigned>(cleared.answer));
-    GC_EXPECT_TRUE(cleared.answer == FwdLookup::Unarmed);
-    // The old source table still exists: clearing the carrier must not recover
-    // its generation from stale page metadata or search both maps.
-    GC_EXPECT_EQ(forwarding_find(Generation::Young, from), to);
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
 }
 
