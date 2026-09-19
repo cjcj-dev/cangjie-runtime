@@ -35,6 +35,7 @@
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -337,7 +338,7 @@ void ZCrossVM::ProcessExportRoots(WorkStack& foreignRootsSet)
             }
         }
         if (Heap::IsHeapAddress(exportObj)) {
-            Heap::GetHeap().old().MarkObjectIfActive<false, true, true, false>(from_object(exportObj));
+            ZBarrier::Mark<false, false, true, false>(from_object(exportObj));
         }
         ZMark& mark = Heap::GetHeap().old().Mark();
         mark.BindWorkers(Heap::GetHeap().old().Workers());

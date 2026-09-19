@@ -183,12 +183,7 @@ void Heap::MarkObjectIfActive(BaseObject* object)
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-    if (region->IsYoungRegion()) {
-        MarkYoungObjectIfActive(object);
-    } else {
-        old().MarkObjectIfActive<false, false, true, false>(from_object(object));
-    }
+    ZBarrier::Mark<false, false, true, false>(from_object(object));
 }
 
 void Heap::MarkYoungObjectIfActive(BaseObject* object)

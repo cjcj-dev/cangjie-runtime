@@ -355,6 +355,16 @@ BaseObject* ZBarrier::ReadStaticRef(NativeSlot& field)
     return LoadBarrier(nullptr, field, observed, ReferenceStrength::Strong);
 }
 
+// ZZBarrier::mark_slow_path, zBarrier.cpp:146-156.
+zaddress ZBarrier::MarkSlowPath(zaddress address)
+{
+    if (is_null(address)) {
+        return address;
+    }
+    Mark<false, false, true, false>(address);
+    return address;
+}
+
 // ZZBarrier::mark_from_young_slow_path, zBarrier.cpp:158-183.
 zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
 {
