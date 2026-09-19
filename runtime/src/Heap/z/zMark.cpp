@@ -793,21 +793,6 @@ namespace MapleRuntime {
 #include "ObjectModel/RefField.inline.h"
 
 
-namespace MapleRuntime {
-void ZMark::MarkOldObjectIfActive(BaseObject* object, bool gcThread)
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    auto& cycle = const_cast<ZGeneration&>(Heap::GetHeap().GetZGeneration(ZGenerationId::old));
-    if (gcThread) {
-        cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
-    } else {
-        cycle.MarkObjectIfActive<false, false, true, false>(from_object(object));
-    }
-}
-
-} // namespace MapleRuntime
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0

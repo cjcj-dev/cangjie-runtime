@@ -70,7 +70,6 @@ public:
     static void VisitStrongPlainRoots(const RootVisitor& visitor,
                               const std::function<void(Mutator&)>& threadVisitor);
     static void DiscoverWeakReference(BaseObject* reference, WorkStack& workStack);
-    static void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false);
     static void EnumAllCommonRoots(ZWorkers& workers);
     static void EnumAllExportRoots(RootSet& foreignRootsSet);
     static void DiscoverFinalizableRoot(NativeSlot& slot);
