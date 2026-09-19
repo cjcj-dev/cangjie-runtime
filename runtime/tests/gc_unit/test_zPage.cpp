@@ -148,6 +148,7 @@ struct ForwardingSelectionResult {
     size_t retained{0};
     size_t retired{0};
     size_t receipts{0};
+    bool verifyRetirement{false};
 };
 void* SelectRealLivePages(void* context)
 {
@@ -167,6 +168,7 @@ void* SelectRealLivePages(void* context)
         ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(object));
         if (page != previous) {
             starts[result.roots] = reinterpret_cast<uintptr_t>(object);
+            *reinterpret_cast<uint64_t*>(starts[result.roots] + TYPEINFO_PTR_SIZE) = result.roots + 1;
             roots[result.roots] = Heap::GetHeap().RegisterExportRoot(reinterpret_cast<BaseObject*>(object));
             ++result.roots;
             previous = page;
@@ -181,16 +183,26 @@ void* SelectRealLivePages(void* context)
         if (forwarding != nullptr) {
             ++result.published;
             result.retired += Heap::page(starts[i]) == nullptr;
-            // Consume the retired source through the product remap entry;
-            // do not recompile the inline forwarding lookup into the test.
-            result.receipts += ZGeneration::young()->relocate_or_remap_object(
-                reinterpret_cast<BaseObject*>(starts[i])) == Heap::GetHeap().GetExportObject(roots[i]);
+            if (result.verifyRetirement) {
+                // Observe the remap result before a second barrier consumes it.
+                // Otherwise a disconnected lookup fails in that barrier before
+                // the test can assert which product result was wrong.
+                BaseObject* resolved = ZGeneration::young()->relocate_or_remap_object(
+                    reinterpret_cast<BaseObject*>(starts[i]));
+                const MAddress target = reinterpret_cast<MAddress>(resolved);
+                result.receipts += target != starts[i] && Heap::page(target) != nullptr &&
+                    *reinterpret_cast<uint64_t*>(target + TYPEINFO_PTR_SIZE) == i + 1;
+            }
             const auto* view = forwarding->from_page_snapshot();
             result.prepared += view != nullptr && view->livemap != nullptr &&
                                view->topAtStart > starts[i];
         }
-        result.retained += Heap::GetHeap().GetExportObject(roots[i]) != nullptr;
-        Heap::GetHeap().RemoveExportObject(roots[i]);
+        if (!result.verifyRetirement) {
+            result.retained += Heap::GetHeap().GetExportObject(roots[i]) != nullptr;
+            Heap::GetHeap().RemoveExportObject(roots[i]);
+        }
+        // The retirement test leaves root cleanup to FiniCJRuntime, after its
+        // assertions. A failing remap must not be consumed by cleanup first.
     }
     mutator->SetManagedContext(true);
     return nullptr;
@@ -226,17 +238,18 @@ GC_OTHER_VM_TEST(ZRelocationRetirement, CopiedSourceLeavesPageTable)
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     ForwardingSelectionResult result;
+    result.verifyRetirement = true;
     CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
     GC_EXPECT_TRUE(handle != nullptr);
     void* taskResult = nullptr;
     GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
     ReleaseHandle(handle);
-    std::fprintf(stderr, "SOURCE_RETIREMENT_TARGET selected=%zu retired=%zu receipts=%zu retained=%zu\n",
-                 result.published, result.retired, result.receipts, result.retained);
+    std::fprintf(stderr, "SOURCE_RETIREMENT_TARGET roots=%zu selected=%zu retired=%zu remapped_payloads=%zu\n",
+                 result.roots, result.published, result.retired, result.receipts);
     GC_EXPECT_TRUE(result.published > 0);
     GC_EXPECT_EQ(result.retired, result.published);
     GC_EXPECT_EQ(result.receipts, result.published);
-    GC_EXPECT_EQ(result.retained, 3u);
+    GC_EXPECT_EQ(result.roots, 3u);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
