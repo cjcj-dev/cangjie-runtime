@@ -6,6 +6,7 @@
 set -euo pipefail
 ulimit -c 0
 
+RUNNER_SHA256=$(sha256sum "${BASH_SOURCE[0]}" | awk '{print $1}')
 SHA=${1:?runtime-sha}
 LANE=${LANE:-/root/sym_cangjie_runtime_708_implement_r5740357995}
 N=${N:-3}
@@ -103,6 +104,7 @@ names = ["finalizer", "segmented", "phase"]
 arms = ["h48", "stained"]
 result = {
     "runtime_sha": "$SHA",
+    "runner_sha256": "$RUNNER_SHA256",
     "n": n,
     "out": str(out),
     "cangjie_home": "$CANGJIE_HOME",
