@@ -2826,11 +2826,11 @@ GC_TEST(PageGeneration579, FlipAgePagesHandsRegionListSlotToPromotedPage)
     ZGeneration::young()->SetTenuringThresholdForTest(0);
     ZArray<ZPage*> pages;
     pages.append(region);
-    ZStatWorkers statWorkers;
-    ZWorkers workers(ZGenerationId::young, 1, &statWorkers);
-    workers.set_active();
-    ZRelocate::flip_age_pages(workers, &pages);
-    workers.set_inactive();
+    // A locally constructed ZWorkers owns a dispatcher no thread serves;
+    // the generation's initialized workers run the task for real.
+    ZWorkers* workers = ZGeneration::young()->Workers();
+    GC_EXPECT_TRUE(workers != nullptr);
+    ZRelocate::flip_age_pages(*workers, &pages);
     ZPage* promoted = Heap::page(region->GetRegionStart());
     GC_EXPECT_TRUE(promoted != nullptr);
     GC_EXPECT_TRUE(promoted != region);
