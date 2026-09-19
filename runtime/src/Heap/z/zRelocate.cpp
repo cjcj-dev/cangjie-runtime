@@ -1249,6 +1249,9 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
 {
     if (!owner || (!claimed && !owner->claim())) return;
     ZForwarding::PageWorkScope work(owner);
+    // ZGC zRelocate.cpp:993-1008: one claimed-page verification boundary,
+    // shared by ordinary copying and the direct in-place branch.
+    ZVerify::BeforeRelocation(owner);
     // zRelocate.cpp:437-441,1010: relocation accounts on the owning
     // generation — freed for the from-page, compacted for in-place.
     const ZGenerationId statId = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
@@ -1258,9 +1261,14 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
         owner->set_in_place();
         NoteInPlaceRelocated(region);
         CompactRegion(region);
-        statGeneration.increase_compacted(region->GetRegionAllocatedSize());
     } else {
         ForwardRegion<G>(region);
+    }
+    ZVerify::AfterRelocation(owner);
+    if (ZVerifyForwarding) { owner->verify(); }
+    if (inPlace) {
+        statGeneration.increase_compacted(region->GetRegionAllocatedSize());
+    } else {
         statGeneration.increase_freed(owner->size());
     }
     if (owner->from_age() == PageAge::old) {
@@ -1309,24 +1317,6 @@ void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn
     });
 }
 
-// ZGC's relocate() marks a forwarding life done only after every survivor has
-// a forwarding receipt (zRelocate.cpp:1137-1153). Header state and compact
-// geometry are not receipts: kept/in-place survivors must have an explicit
-// from->from entry in the same active/retired table. Keep this check at the
-// producer boundary so a receipt-less publication fails loudly.
-bool VerifyRelocatedPage(ZPage* region, const char* site)
-{
-    // zRelocate.cpp:1006: verify before MarkForwardingDone/reset releases the
-    // source livemap. ForwardRegion's outer return is too late for this check.
-    if (ZVerifyForwarding && region != nullptr) {
-        auto forwarding = forwarding_for_page(region);
-        CHECK_DETAIL(static_cast<bool>(forwarding), "Missing forwarding at %s", site);
-        forwarding->verify();
-    }
-
-
-    return true;
-}
 } // namespace
 
 void RegionManager::ParkUnmovableFromRegion(ZPage* region)
@@ -1507,7 +1497,6 @@ bool RegionManager::RelocateClaimedPage(ZPage* region)
         CompactRegion(region);
         return false;
     }
-    VerifyRelocatedPage(region, "RelocateClaimedPage");
     return true;
 }
 
@@ -1582,7 +1571,6 @@ void RegionManager::CompactRegion(ZPage* region)
     }
 
     toPage->ResetCensusBoundary();
-    VerifyRelocatedPage(region, "CompactRegion.whole");
     WaitCopiedObjectsUnlocked(region);
     region->MarkForwardingDone();
 
@@ -1689,7 +1677,6 @@ void RegionManager::FinishStayYoungInPlace(ZPage* region, bool advanceAge)
         BumpYoungSurvivorAge(region);
     }
     WaitCopiedObjectsUnlocked(region);
-    VerifyRelocatedPage(region, "FinishStayYoungInPlace");
     region->MarkForwardingDone();
     // The selected-set carrier remains queryable after payload release.
     // The next selection/reset retires its ghost/source view; completing this
@@ -1726,18 +1713,6 @@ void RegionManager::EnlistStayYoungSurvivor(ZPage* region, bool advanceAge)
 template<Generation G>
 void RegionManager::ForwardRegion(ZPage* region)
 {
-    // zRelocate.cpp:993-1003. The owner outlives source-page retirement, so
-    // the after check reads the forwarding table and destination objects only.
-    auto verifyForwarding = forwarding_for_page(region);
-    ZVerify::BeforeRelocation(verifyForwarding);
-    struct VerifyAfterRelocation {
-        ZForwarding* forwarding;
-        ~VerifyAfterRelocation()
-        {
-            ZVerify::AfterRelocation(forwarding);
-        }
-    } verifyAfterRelocation { verifyForwarding };
-
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
         (region->IsRoutingState() || region->IsCompacted())), "region type %u", 0u);
 
@@ -1865,7 +1840,6 @@ void RegionManager::ForwardRegion(ZPage* region)
         // zRelocate.cpp:1137-1152: the page worker finishes objects then
         // mark_done last (ForwardClaimedPage). Do not wait for own done here.
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
-        VerifyRelocatedPage(region, "ForwardRegion");
         region->MarkForwardingDone();
         // The worker releases/detaches and frees the source after accounting,
         // as in ZGC zRelocate.cpp:1009-1047. Keep its source identity intact.

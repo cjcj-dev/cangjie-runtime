@@ -158,7 +158,8 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsBadLiveAccounting)
     ExpectSceneAbort("Invalid number of live objects", [&] {
         fixture.region0->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
         RegionManager manager;
-        manager.ForwardRegion<Generation::Old>(fixture.region0);
+        manager.GetZRelocateQueue().BeginWorkers(1);
+        manager.ForwardFromRegions<Generation::Old>();
     });
 }
 
@@ -224,7 +225,8 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
         rejectedTop = observed;
         (void)signal(SIGABRT, RecordRejectedTop);
         RegionManager manager;
-        manager.ForwardRegion<Generation::Old>(fixture.region0);
+        manager.GetZRelocateQueue().BeginWorkers(1);
+        manager.ForwardFromRegions<Generation::Old>();
     });
     const uintptr_t after = *observed;
     (void)munmap(shared, sizeof(uintptr_t));
