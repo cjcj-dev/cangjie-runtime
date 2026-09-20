@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
+#include "gc_generation_test.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "mark_publication_fixture.hpp"
 #include "Heap/z/zMark.hpp"
@@ -241,12 +242,12 @@ void CheckSavedRootColor(bool invisible, bool watermark = true)
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
-    RelocationReceiptTestAccess::BindNativeRootFixture(heap);
+    RelocationReceiptTest::BindNativeRootFixture(heap);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     ZPage* page = fx.region0;
     page->reset(PageAge::eden);
-    heap.young().SetTenuringThresholdForTest(1);
+    ZGenerationTest::SetTenuringThreshold(heap.young(), 1);
     BaseObject* dead = fx.PlaceObject(page->GetRegionStart());
     BaseObject* earlier = fx.PlaceObject(page->GetRegionStart() + dead->GetSize());
     BaseObject* from = fx.PlaceObject(reinterpret_cast<MAddress>(earlier) + earlier->GetSize());
@@ -269,7 +270,7 @@ void CheckSavedRootColor(bool invisible, bool watermark = true)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page}));
     heap.young().set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::FlipNativeRootYoung(heap);
+    RelocationReceiptTest::FlipNativeRootYoung(heap);
     // Compact via the product implementation. Keep another live object at the
     // old address so a color cut reaches the address assertion, not an invalid
     // header. The earlier live object also makes a duplicate remap return a

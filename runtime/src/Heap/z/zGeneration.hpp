@@ -52,10 +52,6 @@ protected:
     static ZGenerationOld* _old;
 
 public:
-#if defined(MRT_TESTABLE_INTERNALS)
-    static std::function<void()> testOldMarkStarted;
-    static std::function<void()> testYoungMarkCompleted;
-#endif
     explicit ZGeneration(ZGenerationId generation);
     ~ZGeneration();
     ZGeneration(const ZGeneration&) = delete;

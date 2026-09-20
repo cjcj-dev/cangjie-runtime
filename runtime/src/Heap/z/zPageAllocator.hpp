@@ -444,9 +444,6 @@ class RegionManager {
     friend struct IsFromRegTestAccess;
 
 public:
-#if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT static void (*testPinnedPageAcquired)(ZPage*);
-#endif
     /* region memory layout:
         1. region info for each region, part of heap metadata
         2. region space for allocation, i.e., the heap
