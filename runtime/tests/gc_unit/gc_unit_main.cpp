@@ -40,6 +40,9 @@ int main(int argc, char** argv)
     MapleRuntime::ThreadLocal::InitializeCleaner();
     // zInitialize.cpp:62: the CPU affinity table precedes any ZCPU::id() reader.
     MapleRuntime::ZCPU::initialize();
+    MapleRuntime::GcUnit::InitializeStandaloneHeap = [] {
+        MapleRuntime::GcUnit::CreateStandaloneHeap(256);
+    };
     constexpr const char* filterPrefix = "--gtest_filter=";
     constexpr const char* listTests = "--gtest_list_tests";
     if (argc > 2) {
