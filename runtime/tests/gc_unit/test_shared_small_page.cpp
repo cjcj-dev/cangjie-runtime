@@ -79,7 +79,7 @@ namespace {
 // table. There are no registered mutators; retire_pages has a quiescent world.
 struct SharedPageFixture {
     RegionManager& manager;
-    SharedPageFixture() : manager(Heap::GetHeap().page_allocator())
+    explicit SharedPageFixture(size_t = 0) : manager(Heap::GetHeap().page_allocator())
     {
         ZStat::Initialize();
     }
