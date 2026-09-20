@@ -264,6 +264,7 @@ public:
     size_t increase_capacity(uint32_t partition_id, size_t size);
     void decrease_capacity(uint32_t partition_id, size_t size, bool set_max_capacity);
     size_t capacity() const;
+    size_t current_max_capacity() const;
 
     // Global granule index plus byte extent <-> ZVirtualMemory.
     static ZVirtualMemory VirtualMemoryOf(size_t index, size_t count);
@@ -509,6 +510,7 @@ public:
     size_t GetCommittedCapacity() const { return freeRegionManager.capacity(); }
 
     size_t GetHeapCapacity() const { return heapCapacity; }
+    size_t soft_max_capacity() const;
 
 
     // zPageAllocator.cpp:1201-1260: page resource ownership belongs to

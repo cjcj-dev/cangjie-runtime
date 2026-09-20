@@ -615,10 +615,7 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
     ZDirectorStats stats;
     stats.mutator_alloc_rate = ZStatMutatorAllocRate::stats();
     stats.max_capacity = Heap::GetHeap().GetMaxCapacity();
-    stats.heap.soft_max_heap_size = ZStatMutatorAllocRate::soft_max_heap_size();
-    if (stats.heap.soft_max_heap_size == 0) {
-        stats.heap.soft_max_heap_size = stats.max_capacity;
-    }
+    stats.heap.soft_max_heap_size = Heap::GetHeap().soft_max_capacity();
     stats.heap.used = Heap::GetHeap().GetAllocator().AllocatedBytes();
     stats.heap.total_collections = Heap::GetHeap().total_collections();
     stats.young_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young).CycleStats().Stats(now);

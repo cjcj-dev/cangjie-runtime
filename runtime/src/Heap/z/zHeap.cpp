@@ -266,6 +266,7 @@ OopStorage& Heap::GetExportRootStorage() { return exportRootsTable->RootStorage(
 RegionSpace& Heap::GetAllocator() { return *_allocation_adapter; }
 
 size_t Heap::GetMaxCapacity() const { return _page_allocator.GetHeapCapacity(); }
+size_t Heap::soft_max_capacity() const { return _page_allocator.soft_max_capacity(); }
 
 ZMemoryUsageInfo Heap::GetMemoryUsage() const
 {
