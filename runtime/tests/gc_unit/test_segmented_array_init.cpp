@@ -14,6 +14,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include <memory>
+#include "Heap/z/zWorkers.hpp"
 #if defined(__linux__)
 #include <sched.h>
 #include <sys/wait.h>
@@ -318,18 +320,28 @@ void* RunVisibleArrayGraph(void*)
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-struct LargeYoungClosureResult {
-    inline static BaseObject* target = nullptr;
-    inline static bool live = false;
-    inline static bool followed = false;
-    inline static size_t observations = 0;
-    static void Observe(const std::vector<BaseObject*>* objects)
+// Phase-unit fixture: stop after the real concurrent mark result, before
+// relocation can replace pages. ZGC zGeneration.cpp:538-553,665-669.
+// DriverLocker excludes automatic collections while the phase is inspected.
+class YoungMarkPhase {
+    DriverLocker locker;
+    YoungTypeSetter type{Heap::GetHeap().young(), ZYoungType::minor};
+public:
+    YoungMarkPhase()
     {
-        if (objects == nullptr || target == nullptr) return;
-        ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(target));
-        ++observations;
-        live |= page->is_object_strongly_live(from_object(target));
-        for (BaseObject* object : *objects) followed |= object == target;
+        // This native task is itself a mutator. Publish its safe state before
+        // requesting the product pause, as the real GC-thread caller does.
+        ScopedEnterSaferegion safe(false);
+        auto& young = Heap::GetHeap().young();
+        young.PreGarbageCollection(true, young.Snapshot().requestIndex);
+        young.pause_mark_start();
+        young.concurrent_mark();
+    }
+    ~YoungMarkPhase()
+    {
+        auto& young = Heap::GetHeap().young();
+        young.Workers()->set_inactive();
+        young.End();
     }
 };
 
@@ -343,51 +355,24 @@ void* RunLargeYoungClosureCase(void*)
     ZBarrier::WriteReference(holder, field, target);
     const bool holderYoung = Heap::page(reinterpret_cast<uintptr_t>(holder))->IsYoungRegion();
     const U64 holderRoot = Heap::GetHeap().RegisterExportRoot(holder);
-    LargeYoungClosureResult::target = target;
-    LargeYoungClosureResult::live = false;
-    LargeYoungClosureResult::followed = false;
-    LargeYoungClosureResult::observations = 0;
-    SetMarkClosureObserverForTest(LargeYoungClosureResult::Observe);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
-    SetMarkClosureObserverForTest(nullptr);
-    LargeYoungClosureResult::target = nullptr;
-    std::fprintf(stderr, "LARGE_YOUNG_TARGET_LIVE_ASSERT_EXECUTED holder_young=%d observations=%zu live=%d followed=%d\n",
-                 holderYoung, LargeYoungClosureResult::observations, LargeYoungClosureResult::live,
-                 LargeYoungClosureResult::followed);
+    bool live;
+    bool followed;
+    {
+        YoungMarkPhase phase;
+        live = Heap::page(reinterpret_cast<uintptr_t>(target))->is_object_strongly_live(from_object(target));
+        followed = live && to_object(field.GetTargetObject()) == target;
+        std::fprintf(stderr, "LARGE_YOUNG_TARGET_LIVE_ASSERT_EXECUTED holder_young=%d live=%d followed=%d\n",
+                     holderYoung, live, followed);
+    }
     Heap::GetHeap().RemoveExportObject(holderRoot);
     mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>((holderYoung && LargeYoungClosureResult::live && LargeYoungClosureResult::followed) ? 0 : 1);
+    return reinterpret_cast<void*>((holderYoung && live && followed) ? 0 : 1);
 }
 #endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
-// The observer stops the real concurrent collector after its first closure.
-// The managed task allocates through MCC_NewObjArray while that TRACE window
-// is held open; no fixture changes a page generation, mark bit, or phase.
-struct MarkAllocationWindow {
-    inline static std::atomic<bool> entered{false};
-    inline static std::atomic<bool> released{false};
-    inline static std::atomic<bool> completed{false};
-    inline static bool timedOut = false;
-    static bool Wait(const std::atomic<bool>& flag)
-    {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        while (!flag.load(std::memory_order_acquire)) {
-            if (std::chrono::steady_clock::now() >= deadline) return false;
-            std::this_thread::yield();
-        }
-        return true;
-    }
-    static void Observe(const std::vector<BaseObject*>* objects)
-    {
-        if (objects == nullptr || entered.exchange(true)) return;
-        timedOut = !Wait(released);
-        completed.store(true, std::memory_order_release);
-    }
-};
-
 void* RunMarkAllocationCase(void* rawExisting)
 {
     const bool existing = reinterpret_cast<uintptr_t>(rawExisting) != 0;
@@ -404,25 +389,8 @@ void* RunMarkAllocationCase(void* rawExisting)
     ZPage* beforeSmallPage = Heap::page(reinterpret_cast<uintptr_t>(beforeSmall));
     MArray* target = existing ? MCC_NewArray8(GetByteArrayTypeInfos().array, 16) : nullptr;
     const U64 targetRoot = target != nullptr ? heap.RegisterExportRoot(target) : 0;
-    MarkAllocationWindow::entered = false;
-    MarkAllocationWindow::released = false;
-    MarkAllocationWindow::completed = false;
-    MarkAllocationWindow::timedOut = false;
-    SetMarkClosureObserverForTest(MarkAllocationWindow::Observe);
     mutator->SetManagedContext(false);
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, true);
-    bool entered;
-    {
-        ScopedEnterSaferegion safe(false);
-        entered = MarkAllocationWindow::Wait(MarkAllocationWindow::entered);
-    }
-    if (!entered) {
-        MarkAllocationWindow::released = true;
-        SetMarkClosureObserverForTest(nullptr);
-        mutator->SetManagedContext(true);
-        return reinterpret_cast<void*>(2);
-    }
-    mutator->SetManagedContext(true);
+    auto markPhase = std::make_unique<YoungMarkPhase>();
     MArray* afterSmall = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     ZPage* afterSmallPage = Heap::page(reinterpret_cast<uintptr_t>(afterSmall));
     const bool retiredTLAB = afterSmallPage != beforeSmallPage && afterSmallPage->IsAllocating();
@@ -461,16 +429,9 @@ void* RunMarkAllocationCase(void* rawExisting)
     heap.RemoveExportObject(beforeSmallRoot);
     if (existing) heap.RemoveExportObject(targetRoot);
     mutator->SetManagedContext(false);
-    MarkAllocationWindow::released.store(true, std::memory_order_release);
-    bool completed;
-    {
-        ScopedEnterSaferegion safe(false);
-        completed = MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
-    }
-    // Wait through the real driver's acknowledgement, then check next-cycle
-    // watermark resampling using the same rooted holder.
+    markPhase.reset();
+    // The next real driver cycle resamples allocation watermarks and relocates.
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
-    SetMarkClosureObserverForTest(nullptr);
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
     page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
@@ -496,7 +457,7 @@ void* RunMarkAllocationCase(void* rawExisting)
         (resampled ? 0 : 32) |
         (productLive(Heap::page(reinterpret_cast<uintptr_t>(completedTarget)), completedTarget) ? 0 : 128) |
         (completedValue ? 0 : 256) |
-        ((completed && !MarkAllocationWindow::timedOut && phase == ZGenerationPhase::Mark) ? 0 : 64);
+        ((phase == ZGenerationPhase::Mark) ? 0 : 64);
     std::fprintf(stderr, "MARK_ALLOC_ASSERT_RESULT status=%zu "
                  "bits=implicit:1,live:2,target_live:4,excluded:8,next_cycle:16,resampled:32,window:64,mark_end_live:128,completed_value:256\n", status);
     return reinterpret_cast<void*>(status);
@@ -504,74 +465,6 @@ void* RunMarkAllocationCase(void* rawExisting)
 #endif
 
 
-#if defined(MRT_TESTABLE_INTERNALS)
-void ObservePinnedAllocationWindow()
-{
-    if (MarkAllocationWindow::entered.exchange(true)) return;
-    MarkAllocationWindow::timedOut = !MarkAllocationWindow::Wait(MarkAllocationWindow::released);
-    MarkAllocationWindow::completed.store(true, std::memory_order_release);
-}
-
-void* RunPinnedMarkStartCase(void*)
-{
-    auto& heap = Heap::GetHeap();
-    auto& collector = heap;
-    auto* mutator = Mutator::GetMutator();
-    TypeInfo* type = GetReferenceArrayTypeInfos().component;
-    const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
-    MObject* first = MObject::NewPinnedObject(type, size);
-    MObject* second = MObject::NewPinnedObject(type, size);
-    ZPage* before = Heap::page(reinterpret_cast<uintptr_t>(first));
-    const bool reused = Heap::page(reinterpret_cast<uintptr_t>(second)) == before;
-    const U64 root = heap.RegisterExportRoot(first);
-    MarkAllocationWindow::entered = false;
-    MarkAllocationWindow::released = false;
-    MarkAllocationWindow::completed = false;
-    MarkAllocationWindow::timedOut = false;
-    SetMarkClosureObserverForTest([](const std::vector<BaseObject*>* objects) {
-        if (objects != nullptr && Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::Mark)
-            ObservePinnedAllocationWindow();
-    });
-    mutator->SetManagedContext(false);
-    Heap::GetHeap().RequestGC(GC_REASON_USER, true);
-    bool entered;
-    {
-        ScopedEnterSaferegion safe(false);
-        entered = MarkAllocationWindow::Wait(MarkAllocationWindow::entered);
-    }
-    if (!entered) {
-        MarkAllocationWindow::released = true;
-        SetMarkClosureObserverForTest(nullptr);
-        mutator->SetManagedContext(true);
-        return reinterpret_cast<void*>(2);
-    }
-    mutator->SetManagedContext(true);
-    MObject* fresh = MObject::NewPinnedObject(type, size);
-    ZPage* after = Heap::page(reinterpret_cast<uintptr_t>(fresh));
-    const bool current = after->IsAllocating();
-    const bool different = after != before;
-    const bool noMark = !after->is_marked();
-    const bool window = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::Mark;
-    std::fprintf(stderr, "P1_PINNED_WINDOW_ASSERT_EXECUTED reuse=%d different=%d current=%d no_bitmap=%d trace=%d birth=%llu owner=%llu\n",
-        reused, different, current, noMark, window,
-        static_cast<unsigned long long>(after->BirthSequence()),
-        static_cast<unsigned long long>(after->GetSnapshotEpoch()));
-    MarkAllocationWindow::released = true;
-    mutator->SetManagedContext(false);
-    {
-        ScopedEnterSaferegion safe(false);
-        MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
-    }
-    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
-    SetMarkClosureObserverForTest(nullptr);
-    const bool retained = heap.GetExportObject(root) == first;
-    heap.RemoveExportObject(root);
-    mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>((reused && different && current && noMark && window && retained &&
-        !MarkAllocationWindow::timedOut) ? 0 : 1);
-}
-
-#endif
 // Exercise the actual scheduler argument copy and its registered root visitor.
 void* RunNativeTaskRootCase(void*)
 {

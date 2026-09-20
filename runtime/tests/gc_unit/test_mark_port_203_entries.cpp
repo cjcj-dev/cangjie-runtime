@@ -143,6 +143,9 @@ struct MarkPort203TestAccess {
     static void Collect(Heap& collector, bool major, BaseObject* array, bool markOnly, int duplicateRootOrder)
     {
         if (major) {
+            // The heap fixture has an active synthetic epoch. The real old
+            // mark-start owns Begin (ZGC zGeneration.cpp:1212-1240).
+            if (collector.old().Snapshot().active) collector.old().End();
             ScopedStopTheWorld pause("P16 old mark-start fixture", false);
             collector.old().mark_start();
         } else {
@@ -242,7 +245,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     // The 2 MiB small page already covers the entire reference array.
     fx.region1->reset(major ? PageAge::old : PageAge::eden);
-    fx.region1->reset(PageAge::eden);
     // The product allocates and owns this page's livemap (InitRegion ->
     // InitializeLiveMap); promotion transfers that ownership
     // (ZPage::clone_for_promotion, zPage.cpp:64).

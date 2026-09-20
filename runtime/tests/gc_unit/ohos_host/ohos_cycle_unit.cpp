@@ -11,10 +11,12 @@
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/z/zObjectAllocator.hpp"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
-#include "root_publication_snapshot.hpp"
+#include "Heap/z/concurrentGCBreakpoints.hpp"
+#include "Heap/z/zPage.inline.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -22,7 +24,8 @@ using namespace MapleRuntime::GcUnit;
 extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
-struct ZGenerationRootTestAccess {
+class ZGenerationRootTest {
+public:
     static void Seed(Heap& collector, BaseObject* object)
     {
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
@@ -79,25 +82,27 @@ void* RunMajorCycle(void*)
     type->SetInstanceSize(sizeof(uint64_t));
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
-    auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(object);
-    ZGenerationRootTestAccess::Seed(collector, object);
-    // Read the product's published old mark stacks at the top of DoTracing
-    // (after the old root task returned, before follow). The export root
-    // keeping the object alive is not in this window (it feeds the driver's
-    // foreign stack), so the cycle-owner family scan is what publishes it.
-    ZGeneration::testOldMarkStarted = [handle, &collector]() {
-        BaseObject* current = Heap::GetHeap().GetExportObject(handle);
-        const bool found = RootPublicationSnapshot::Contains(*Heap::GetHeap().old().MarkPtr(), current);
-        gMajorRootObserved.store(found, std::memory_order_relaxed);
-        std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
-                    static_cast<void*>(current), static_cast<unsigned>(found));
-        std::fflush(stdout);
-    };
-    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
-    ZGeneration::testOldMarkStarted = nullptr;
-    ZGenerationRootTestAccess::Clear(collector);
-    Heap::GetHeap().RemoveExportObject(handle);
+    auto* object = reinterpret_cast<BaseObject*>(collector.object_allocator().alloc(16, PageAge::old));
+    object->SetClassInfo(type);
+    // The ZGC breakpoint exposes the completed root+follow result before
+    // mark-end and relocation (zGeneration.cpp:1086-1092).
+    ConcurrentGCBreakpoints::AcquireControl();
+    const bool started = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
+    ZGenerationRootTest::Seed(collector, object);
+    auto* page = Heap::page(reinterpret_cast<MAddress>(object));
+    std::printf("OHOS_HOST_ROOT_INPUT generation=%u allocating=%u marked_before=%u\n",
+                static_cast<unsigned>(page->generation_id()), page->IsAllocating(),
+                page->is_object_strongly_live(from_object(object)));
+    const bool reached = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED") && started;
+    BaseObject* current = object;
+    const bool found = reached && Heap::page(reinterpret_cast<MAddress>(current))->is_object_strongly_live(from_object(current));
+    gMajorRootObserved.store(found, std::memory_order_relaxed);
+    std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
+                static_cast<void*>(current), static_cast<unsigned>(found));
+    std::fflush(stdout);
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    ZGenerationRootTest::Clear(collector);
     return nullptr;
 }
 } // namespace
@@ -107,9 +112,9 @@ GC_TEST(OHOSCycle, PostResolvePostsProductTask)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
     Heap& collector = Heap::GetHeap();
-    ZGenerationRootTestAccess::Seed(collector, reinterpret_cast<BaseObject*>(uintptr_t{1}));
-    ZGenerationRootTestAccess::PostResolveCycleTask(collector);
-    ZGenerationRootTestAccess::Clear(collector);
+    ZGenerationRootTest::Seed(collector, reinterpret_cast<BaseObject*>(uintptr_t{1}));
+    ZGenerationRootTest::PostResolveCycleTask(collector);
+    ZGenerationRootTest::Clear(collector);
     ExpectPostState("OHOSCycle.PostResolvePostsProductTask", 1U);
 }
 
@@ -118,8 +123,8 @@ GC_TEST(OHOSCycle, EmptyWorkDoesNotPost)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
     Heap& collector = Heap::GetHeap();
-    ZGenerationRootTestAccess::Clear(collector);
-    ZGenerationRootTestAccess::PostResolveCycleTask(collector);
+    ZGenerationRootTest::Clear(collector);
+    ZGenerationRootTest::PostResolveCycleTask(collector);
     ExpectPostState("OHOSCycle.EmptyWorkDoesNotPost", 0U);
 }
 

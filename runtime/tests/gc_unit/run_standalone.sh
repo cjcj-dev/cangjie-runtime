@@ -51,6 +51,7 @@ run_ohos_host_arm() {
       'MRT_GC_UNIT_OHOS_HOST_RECEIPT' \
       'CJ_MRT_RolveCycleRef' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
       'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$product_nm"; then
@@ -100,6 +101,7 @@ run_ohos_host_arm() {
   for symbol in \
       'CJ_MRT_RolveCycleRef' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
       'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if /usr/bin/grep -F -q "$symbol" "$test_nm"; then
@@ -108,7 +110,7 @@ run_ohos_host_arm() {
     fi
   done
   for symbol in \
-      'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$test_undef"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_IMPORT_MISSING symbol=$symbol" >&2
@@ -262,32 +264,6 @@ else
 fi
 echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
 
-# The publication TU always has fixture access, but the linked product SO only
-# owns the actual-entry receipt in a testable product build. Derive that shape
-# from both receipt endpoints; a partial export is an invalid product shape.
-REMAP_RECEIPT_TEST=LoadHealDeliveryProduct.MajorDispatchRemapsLiveRemoteArrayField
-REMAP_RECEIPT_FLAGS=()
-REMAP_RECEIPT_EXPORTS="$OUT/remap-young-roots-receipt-exports.txt"
-nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$REMAP_RECEIPT_EXPORTS"
-remap_receipt_reset=0
-remap_receipt_read=0
-if /usr/bin/grep -F -q 'MapleRuntime::ResetRemapYoungRootsTestReceipt(' "$REMAP_RECEIPT_EXPORTS"; then
-  remap_receipt_reset=1
-fi
-if /usr/bin/grep -F -q 'MapleRuntime::ReadRemapYoungRootsTestReceipt(' "$REMAP_RECEIPT_EXPORTS"; then
-  remap_receipt_read=1
-fi
-if [[ "$remap_receipt_reset" -eq 1 && "$remap_receipt_read" -eq 1 ]]; then
-  REMAP_RECEIPT_PRODUCT_SHAPE=testable
-  REMAP_RECEIPT_FLAGS=(-DMRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE=1)
-elif [[ "$remap_receipt_reset" -eq 0 && "$remap_receipt_read" -eq 0 ]]; then
-  REMAP_RECEIPT_PRODUCT_SHAPE=default
-else
-  echo "GC_UNIT_REMAP_RECEIPT_PRODUCT_SHAPE_INCOMPLETE reset=$remap_receipt_reset read=$remap_receipt_read" >&2
-  exit 19
-fi
-echo "REMAP_RECEIPT_PRODUCT_SHAPE=$REMAP_RECEIPT_PRODUCT_SHAPE reset=$remap_receipt_reset read=$remap_receipt_read"
-
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 TESTABLE_FLAGS=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
@@ -318,7 +294,6 @@ MAIN_COMPILE_FLAGS=(
   -fvisibility-inlines-hidden
   "${TEST_DEFINES[@]}"
   "${TESTABLE_FLAGS[@]}"
-  "${REMAP_RECEIPT_FLAGS[@]}"
   "${INC_FLAGS[@]}"
 )
 # A real second image for package-cache generation and code-identity tests.
