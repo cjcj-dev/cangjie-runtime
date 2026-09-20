@@ -37,15 +37,15 @@ private:
     struct FoundOld {
         CHeapBitMap _allocated_bitmap_0;
         CHeapBitMap _allocated_bitmap_1;
-        CHeapBitMap* const _bitmaps[2];
+        BitMap* const _bitmaps[2];
         int _current;
 
         FoundOld();
         void flip();
         void clear_previous();
-        void register_page(size_t index);
-        CHeapBitMap* current_bitmap();
-        CHeapBitMap* previous_bitmap();
+        void register_page(ZPage* page);
+        BitMap* current_bitmap();
+        BitMap* previous_bitmap();
     } _found_old;
 
     void flip_found_old_sets();
@@ -78,7 +78,7 @@ struct ZRemsetTableEntry {
 class ZRemsetTableIterator {
 private:
     ZRemembered* const _remembered;
-    CHeapBitMap* _bm;
+    BitMap* _bm;
     ZPageTable* const _page_table;
     const ZForwardingTable* const _old_forwarding_table;
     volatile BitMap::idx_t _claimed;

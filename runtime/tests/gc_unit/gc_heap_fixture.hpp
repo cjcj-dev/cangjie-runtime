@@ -295,22 +295,15 @@ struct GcHeapFixture {
         // ZInitialize initializes statistics before any allocation can sample.
         EnsureZAddressDomain();
         ZStat::Initialize();
-        const size_t metadataSize = RegionManager::GetMetadataSize();
-        mappedSize = metadataSize + kUnits * ZGranuleSize;
-        // Reserve in the heap address domain and back it with a committed,
-        // mapped backing file, as ZTest's address reserver and backing mocker do.
-        heapMapping.reset(new ZTestHeapMapping(mappedSize));
+        mappedSize = kUnits * ZGranuleSize;
+        heapMapping.reset(new ZTestAllocatedMemory(mappedSize));
         mapping = heapMapping->base();
-        heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
-        EnsureHeapRange(heapStart);
-        // ZHeap::is_in queries the allocated heap ranges, not the address envelope.
-        Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * ZGranuleSize}});
-for (Generation generation : {Generation::Young, Generation::Old}) {
+        heapStart = reinterpret_cast<MAddress>(mapping);
+        for (Generation generation : {Generation::Young, Generation::Old}) {
             if ((*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old()))).Sequence() == 0) {
                 AdvanceGeneration(generation);
             }
         }
-        ZPage::Initialize(kUnits * ZGranuleSize, heapStart);
         region0 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart), (1) * ZGranuleSize, role);
         region1 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart) + 1, (1) * ZGranuleSize, ZPageType::small);
         PublishAllocatedPage(region0);
@@ -346,8 +339,7 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         // Some life-clock tests intentionally keep several fixtures alive.
         // ZPage's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
-        if (ZPage::heapStartAddress == heapStart &&
-            (*ZGeneration::young()).Snapshot().active) {
+        if ((*ZGeneration::young()).Snapshot().active) {
             (*ZGeneration::young()).reset_relocation_set();
             (*ZGeneration::old()).reset_relocation_set();
         }
@@ -375,23 +367,6 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         auto* obj = reinterpret_cast<BaseObject*>(addr);
         *reinterpret_cast<uint64_t*>(obj) = reinterpret_cast<uintptr_t>(typeInfo);
         return obj;
-    }
-
-    // Keep the synthetic heap's existing 64-unit envelope. Livemap storage is
-    // page-owned and no longer depends on a separately initialized fixed arena.
-    static void EnsureHeapRange(MAddress heapStart)
-    {
-        static bool ready = false;
-        if (ready) {
-            return;
-        }
-        auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-        if (space.GetMaxCapacity() == 0) {
-            constexpr size_t kFdmUnits = 64;
-            Heap::GetHeap().page_allocator().reservedStart = heapStart;
-            Heap::GetHeap().page_allocator().reservedEnd = heapStart + kFdmUnits * ZGranuleSize;
-        }
-        ready = true;
     }
 
     // Legacy focused tests used to set ZPage's done word directly.
@@ -438,7 +413,7 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
     }
 
     ZFixtureRememberedScope rememberedScope;
-    std::unique_ptr<ZTestHeapMapping> heapMapping;
+    std::unique_ptr<ZTestAllocatedMemory> heapMapping;
     void* mapping = nullptr;
     size_t mappedSize = 0;
     MAddress heapStart = 0;

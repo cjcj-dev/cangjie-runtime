@@ -254,6 +254,43 @@ private:
   size_t _size;
 };
 
+// Shared page fixtures borrow a contiguous extent from the product allocator.
+// Subpage descriptors are test objects; the allocator retains the original
+// extent's ownership. Global reservation/metadata state is never replaced.
+class ZTestAllocatedMemory {
+public:
+    explicit ZTestAllocatedMemory(size_t size)
+        : _owner(Heap::GetHeap().page_allocator().TakeRegion(size, ZPageType::large, false, false, true)),
+          _size(size)
+    {
+        GC_EXPECT_TRUE(_owner != nullptr);
+        _start = _owner->GetRegionStart();
+    }
+
+    ~ZTestAllocatedMemory()
+    {
+        for (size_t offset = 0; offset < _size;) {
+            ZPage* page = Heap::page(_start + offset);
+            if (page == nullptr) {
+                offset += ZGranuleSize;
+                continue;
+            }
+            const size_t bytes = page->size();
+            Heap::page_table().remove(page);
+            ZPage::RetireDescriptor(page);
+            offset += bytes;
+        }
+        Heap::GetHeap().page_allocator().free_page(_owner);
+    }
+
+    void* base() const { return reinterpret_cast<void*>(_start); }
+
+private:
+    ZPage* _owner;
+    size_t _size;
+    uintptr_t _start;
+};
+
 // A RegionManager over the two memory managers, the way RegionSpace::Init
 // builds the product heap (ZPageAllocator's constructor shape): managers for
 // `units` of max capacity, the per-unit metadata over the reserved span,

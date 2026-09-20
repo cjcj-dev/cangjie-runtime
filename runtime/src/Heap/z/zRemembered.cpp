@@ -78,12 +78,12 @@ ZRemembered::FoundOld::FoundOld()
       _bitmaps{ &_allocated_bitmap_0, &_allocated_bitmap_1 }, _current(0)
 {}
 
-CHeapBitMap* ZRemembered::FoundOld::current_bitmap()
+BitMap* ZRemembered::FoundOld::current_bitmap()
 {
     return _bitmaps[_current];
 }
 
-CHeapBitMap* ZRemembered::FoundOld::previous_bitmap()
+BitMap* ZRemembered::FoundOld::previous_bitmap()
 {
     return _bitmaps[_current ^ 1];
 }
@@ -95,12 +95,14 @@ void ZRemembered::FoundOld::flip()
 
 void ZRemembered::FoundOld::clear_previous()
 {
-    previous_bitmap()->clear_range(0, previous_bitmap()->size());
+    previous_bitmap()->clear_large_range(0, previous_bitmap()->size());
 }
 
-void ZRemembered::FoundOld::register_page(size_t index)
+void ZRemembered::FoundOld::register_page(ZPage* page)
 {
-    CHeapBitMap* bitmap = current_bitmap();
+    CHECK(!page->IsYoungRegion());
+    const size_t index = untype(page->start()) >> ZGranuleSizeShift;
+    BitMap* bitmap = current_bitmap();
     CHECK(index < bitmap->size());
     bitmap->par_set_bit(index, std::memory_order_relaxed);
 }
@@ -125,7 +127,7 @@ void ZRemembered::register_found_old(ZPage* page)
 {
     CHECK(!page->IsYoungRegion());
     CHECK(_page_table != nullptr);
-    _found_old.register_page(untype(page->start()) >> ZGranuleSizeShift);
+    _found_old.register_page(page);
 }
 
 template<typename Function>
