@@ -200,6 +200,7 @@ void* RunOldRelocationStatisticsCase(void* argument)
                  std::chrono::steady_clock::now() < deadline);
         directorInput = sample.serial > before && sample.oldSequence >= sequence && !sample.majorBusy &&
             sample.oldLive >= minimumLive && sample.oldLive == live &&
+            sample.softMaxCapacity == 128 * MB &&
             sample.softMaxCapacity == heap.soft_max_capacity() &&
             sample.relocationHeadroom == ZHeuristics::relocation_headroom();
         std::fprintf(stderr,
@@ -540,6 +541,9 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
     const pid_t child = fork();
     if (child == 0) {
         (void)setenv("cjProcessorNum", processorCount == 1 ? "1" : "2", 1);
+        if (task == RunOldRelocationStatisticsCase) {
+            (void)setenv("cjSoftMaxHeapSize", "128MB", 1);
+        }
         RuntimeParam param {};
         param.heapParam.heapSize = 512 * 1024;
         param.coParam.processorNum = processorCount;
