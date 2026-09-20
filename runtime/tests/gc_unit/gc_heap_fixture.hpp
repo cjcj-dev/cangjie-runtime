@@ -297,8 +297,8 @@ struct GcHeapFixture {
         ZStat::Initialize();
         (void)Heap::GetHeap();
         heapMapping.reset(new ZTestAllocatedMemory(kUnits * ZGranuleSize));
-        heapStart = heapMapping->address();
         mapping = heapMapping->base();
+        heapStart = reinterpret_cast<MAddress>(mapping);
         mappedSize = kUnits * ZGranuleSize;
         committedSpan = nullptr;
         region0 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart), ZGranuleSize, role);
