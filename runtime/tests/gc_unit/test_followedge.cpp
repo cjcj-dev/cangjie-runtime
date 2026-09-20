@@ -100,7 +100,6 @@ struct LargeArrayFixture {
         reservation.reset();
     }
     alignas(TypeInfo) unsigned char holderStorage[sizeof(TypeInfo)] {};
-    ZFixtureRememberedScope rememberedScope;
     std::unique_ptr<ZTestAllocatedMemory> reservation;
     void* mapping = nullptr;
     size_t mappedSize = 0;

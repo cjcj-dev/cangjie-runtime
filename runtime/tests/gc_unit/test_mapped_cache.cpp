@@ -255,20 +255,12 @@ GC_COMPONENT_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
 
 namespace {
 struct ProductHeapFixture {
-    // The RegionManager (and its mapped caches, whose entries live in heap
-    // memory) must be destroyed before the mapping: declare it last.
-    std::unique_ptr<ZTestRegionHeap> heap;
-    RegionManager manager;
+    RegionManager& manager;
     explicit ProductHeapFixture(size_t units)
+        : manager((MapleRuntime::GcUnit::CreateStandaloneHeap(units), Heap::GetHeap().page_allocator()))
     {
-        // This synthetic allocator runs on a runtime worker, not a CJ scheduler thread.
         ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
-        // Match CollectorResources::Init before allocation-rate sampling.
         ZStat::Initialize();
-        HeapParam parameters{};
-        parameters.regionSize = ZGranuleSize / 1024;
-        parameters.exemptionThreshold = 0.8;
-        heap.reset(new ZTestRegionHeap(units, manager, parameters, 0.5));
     }
 };
 
@@ -287,7 +279,7 @@ uint64_t Read(uintptr_t address)
 // with no capacity left to grow, a request larger than any cached run harvests
 // the cache, unmaps, shuffles the virtual memory to the lowest free address
 // and maps the stashed backing there in backing-index order.
-GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
+GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
 {
     const size_t unit = ZGranuleSize;
     ProductHeapFixture fixture(8);
@@ -333,7 +325,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
 // of two units, a four-unit request increases capacity by two and harvests
 // only the remaining two units; the harvested backing lands in the first part
 // of the new vmem (commit_increased_capacity commits the last part).
-GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
+GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
 {
     const size_t unit = ZGranuleSize;
     ProductHeapFixture fixture(12);

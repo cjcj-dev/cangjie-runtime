@@ -36,14 +36,8 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
     {
         // Destroyed in reverse order: the manager (mapped caches keep entries
         // in heap memory) goes before the mapping.
-        HeapParam heapParam{};
-        heapParam.regionSize = 64;
-        heapParam.exemptionThreshold = 0.8;
-        std::unique_ptr<ZTestRegionHeap> heapHolder;
-        RegionManager manager;
-        heapHolder.reset(new ZTestRegionHeap(4, manager, heapParam, 0.5));
-        ZTestRegionHeap& heap = *heapHolder;
-        (void)heap;
+        MapleRuntime::GcUnit::CreateStandaloneHeap(4);
+        RegionManager& manager = Heap::GetHeap().page_allocator();
         // ReleaseRetiredRegion clears the product remembered set before
         // returning the page. Its address space must exist as after heap init.
         const auto role = ZPageType::large;

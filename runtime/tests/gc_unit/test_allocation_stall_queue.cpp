@@ -59,18 +59,12 @@ private:
 public:
     // The RegionManager (mapped caches keep entries in heap memory) must be
     // destroyed before the mapping: declare it last.
-    std::unique_ptr<ZTestRegionHeap> heap;
-    RegionManager manager;
+    RegionManager& manager;
 
     OneUnitStallFixture()
+        : manager((MapleRuntime::GcUnit::CreateStandaloneHeap(1), Heap::GetHeap().page_allocator()))
     {
-        // ZInitialize: allocator sampling starts only after statistics initialization.
         ZStat::Initialize();
-        constexpr size_t units = 1;
-        HeapParam heapParam {};
-        heapParam.regionSize = ZGranuleSize / 1024;
-        heapParam.exemptionThreshold = 0.8;
-        heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
         capacity = manager.TakeRegion(ZPageSizeSmall, ZPageType::small, false, false, false);
         PublishAllocatedPage(capacity);
     }
@@ -177,7 +171,7 @@ TwoWaiterResult RunTwoWaiterCapacityScenario()
 
 } // namespace
 
-GC_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
 {
     const TwoWaiterResult result = RunTwoWaiterCapacityScenario();
     GC_EXPECT_TRUE(result.beforeWaveReady);
@@ -189,7 +183,7 @@ GC_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
 // ZGC zPageAllocator.cpp:1518 / 2167: a satisfied page is already removed
 // from the same supply ordinary allocation uses. Do not return it until the
 // stalled caller has consumed it.
-GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
 {
     OneUnitStallFixture fixture;
     ZPage* competing = nullptr;
@@ -210,7 +204,7 @@ GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
     GC_EXPECT_EQ(allocated.load(std::memory_order_acquire), static_cast<size_t>(1));
 }
 
-GC_OTHER_VM_TEST(AllocationStall, WaiterBlocksInSaferegion)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, WaiterBlocksInSaferegion)
 {
     const TwoWaiterResult result = RunTwoWaiterCapacityScenario();
     GC_EXPECT_TRUE(result.beforeWaveReady);
@@ -218,7 +212,7 @@ GC_OTHER_VM_TEST(AllocationStall, WaiterBlocksInSaferegion)
     GC_EXPECT_TRUE(result.saferegionChecks >= 1);
 }
 
-GC_OTHER_VM_TEST(AllocationStall, DequeueBeforeNotifyKeepsOneTerminalPerWaiter)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, DequeueBeforeNotifyKeepsOneTerminalPerWaiter)
 {
     const TwoWaiterResult result = RunTwoWaiterCapacityScenario();
     GC_EXPECT_TRUE(result.beforeWaveReady);
@@ -228,7 +222,7 @@ GC_OTHER_VM_TEST(AllocationStall, DequeueBeforeNotifyKeepsOneTerminalPerWaiter)
     GC_EXPECT_EQ(result.pending, static_cast<size_t>(0));
 }
 
-GC_OTHER_VM_TEST(AllocationStall, CompletedWaveDoesNotFailLateWaiter)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, CompletedWaveDoesNotFailLateWaiter)
 {
     OneUnitStallFixture fixture;
     WaitState waitState;

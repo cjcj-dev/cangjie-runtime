@@ -50,42 +50,12 @@ inline void PublishAllocatedPage(ZPage* page)
     Heap::alloc_page(page);
 }
 
-// Shared fixture debt: page/forwarding tables still save and restore the
-// global test environment. Remembered state belongs to a real generation,
-// constructed with its dependencies (zGeneration.cpp:499-505).
+// Heap already owns page_table/forwarding/remembered at construction
+// (zGeneration.cpp:499-505). Fixtures must not replace those members.
 class ZFixtureRememberedScope {
 public:
-    ZFixtureRememberedScope() : ZFixtureRememberedScope(Heap::GetHeap().page_allocator()) {}
-
-    explicit ZFixtureRememberedScope(RegionManager& allocator)
-        : _addressMax(ZAddressOffsetMax),
-          _pages(std::move(Heap::page_table())),
-          _young(std::move(generation_forwarding_table(Generation::Young))),
-          _old(std::move(generation_forwarding_table(Generation::Old)))
-    {
-        ZAddressOffsetMax = uintptr_t(1) << ZAddressOffsetBits;
-        Heap::page_table() = ZPageTable();
-        generation_forwarding_table(Generation::Young) = ZForwardingTable();
-        generation_forwarding_table(Generation::Old) = ZForwardingTable();
-        _generation.reset(new ZGenerationYoung(&Heap::page_table(),
-            &generation_forwarding_table(Generation::Old), &allocator));
-    }
-
-    ~ZFixtureRememberedScope()
-    {
-        _generation.reset();
-        ZAddressOffsetMax = _addressMax;
-        Heap::page_table() = std::move(_pages);
-        generation_forwarding_table(Generation::Young) = std::move(_young);
-        generation_forwarding_table(Generation::Old) = std::move(_old);
-    }
-
-private:
-    size_t _addressMax;
-    ZPageTable _pages;
-    ZForwardingTable _young;
-    ZForwardingTable _old;
-    std::unique_ptr<ZGenerationYoung> _generation;
+    ZFixtureRememberedScope() { (void)Heap::GetHeap(); }
+    explicit ZFixtureRememberedScope(RegionManager&) { (void)Heap::GetHeap(); }
 };
 
 class ZAddressOffsetMaxSetter {
@@ -299,7 +269,7 @@ private:
 class ZTestRegionHeap {
 public:
   ZTestRegionHeap(size_t units, RegionManager& manager, const HeapParam& params, double garbageThreshold)
-    : _rememberedScope(manager), _offsetMax(ZAddressOffsetMax) {
+    : _offsetMax(ZAddressOffsetMax) {
     EnsureZAddressDomain();
     const size_t maxCapacity = units * ZGranuleSize;
     _virtual.reset(new ZVirtualMemoryManager(maxCapacity));
@@ -326,7 +296,6 @@ public:
   uintptr_t metadata() const { return reinterpret_cast<uintptr_t>(_metadata); }
 
 private:
-  ZFixtureRememberedScope _rememberedScope;
   ZTest::ZBackingLimitSetter _backingLimits;
   ZAddressOffsetMaxSetter _offsetMax;
   std::unique_ptr<ZVirtualMemoryManager> _virtual;
