@@ -31,7 +31,6 @@ endif()
 list(APPEND SRC_LIST
     "z/zLiveMap.cpp"
 
-    "Allocator/Allocator.cpp"
     "z/zForwardingTable.cpp"
     "z/zForwardingAllocator.cpp"
     "z/zVirtualMemoryManager.cpp"
@@ -51,7 +50,6 @@ list(APPEND SRC_LIST
     "z/zRelocationSetSelector.cpp"
     "Allocator/CartesianTree.cpp"
     "z/zMappedCache.cpp"
-    "Allocator/HeapFiller.cpp"
 )
 
 # ZGC os/<os>/gc/z/: CMake selects the pd files. Do not list posix/linux
