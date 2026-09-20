@@ -281,7 +281,6 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     const bool returnedAfterRelease = completed.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
     fwd->mark_done();
     reader.join();
-    ZRelocateQueue::SetWaitEnterHook(nullptr);
     auto& queue = generation_relocate_queue(Generation::Old);
     (void)queue.Complete(fwd);
     fwd->Destroy();
