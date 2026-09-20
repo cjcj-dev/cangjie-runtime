@@ -235,8 +235,8 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     GC_EXPECT_EQ(ZCPU::id(), cpuA);
     const uintptr_t first = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(first != 0);
-    GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(static_cast<uint32_t>(cpuA)) ==
-                   Heap::page(first));
+    const bool firstPublished = Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(
+        static_cast<uint32_t>(cpuA)) == Heap::page(first);
 
     affinity.Select(cpuB);
     // Fast path: the affinity entry for cpuA still names this thread.
@@ -258,10 +258,11 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     GC_EXPECT_EQ(ZCPU::id(), cpuB);
     const uintptr_t second = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(second != 0);
-    std::fprintf(stderr, "CPU_MIGRATION_TARGET cpu_a=%zu cpu_b=%zu first=%p second=%p per_cpu=%d\n",
+    std::fprintf(stderr, "CPU_MIGRATION_TARGET cpu_a=%zu cpu_b=%zu first=%p second=%p per_cpu=%d first_slot=%d\n",
                  cpuA, cpuB, Heap::page(first), Heap::page(second),
-                 Heap::GetHeap().object_allocator().allocator(PageAge::eden)->usePerCpuSharedSmallPages);
+                 Heap::GetHeap().object_allocator().allocator(PageAge::eden)->usePerCpuSharedSmallPages, firstPublished);
     GC_EXPECT_TRUE(Heap::page(first) != Heap::page(second));
+    GC_EXPECT_TRUE(firstPublished);
     GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(static_cast<uint32_t>(cpuB)) ==
                    Heap::page(second));
 }
