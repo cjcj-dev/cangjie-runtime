@@ -408,17 +408,13 @@ void ZMark::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
     (void)reachableSlotDomain;
     (void)workStack;
     const size_t dispelAtEntry = ZPage::GetTdWindowCount();
-    ZWorkers& workersSet = (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers());
     ZMark& domain = Heap::GetHeap().young().Mark();
     (void)ZMark::PublishHandshakeMarkWork(workStack, &domain);
     (void)domain.Stacks().Flush(domain.Stripes(), true);
-    ZMarkTask task(&domain, false);
-    workersSet.run(&task);
-    if (!ZAbort::should_abort()) {
-
-        CHECK_DETAIL(domain.Stripes().IsEmpty(),
-                     "young striped closure returned without coordinated worker termination");
-    }
+    // ZGC zMark.cpp:944-952: concurrent follow includes termination flush.
+    // Mutators can publish after worker termination; only mark-end decides
+    // completion, so there is no concurrent stripes-empty assertion here.
+    domain.MarkFollow();
     const size_t dispelAtExit = ZPage::GetTdWindowCount();
     CHECK_DETAIL(dispelAtExit == dispelAtEntry,
                  "T-D ghost dispel during striped mark_closure window entry=%zu exit=%zu", dispelAtEntry,
@@ -1295,5 +1291,4 @@ namespace MapleRuntime {
 }
 
 #include "Heap/z/zMark.inline.hpp"
-
 
