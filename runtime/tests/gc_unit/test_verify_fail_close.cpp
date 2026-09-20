@@ -288,7 +288,7 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
 
 // Enter through the real collector request and VM operation. The invalid root
 // is installed before collection; the test never calls the verifier itself.
-GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsUnallocatedRootBeforeMark)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, RuntimeRejectsUnallocatedRootBeforeMark)
 {
     if (!ZVerifyRoots) {
         GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
@@ -314,7 +314,7 @@ GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsUnallocatedRootBeforeMark)
 
 // ZGC's existing concurrent-GC breakpoint holds the real collector after
 // following roots. Corrupt liveness there, then resume its actual mark-end.
-GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsLostLivenessAfterMark)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, RuntimeRejectsLostLivenessAfterMark)
 {
     if (!ZVerifyObjects) {
         GC_EXPECT_EQ(setenv("ZVerifyObjects", "1", 1), 0);
@@ -349,7 +349,7 @@ GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsLostLivenessAfterMark)
 
 // zMark.cpp:1022-1035: a fresh mark cycle cannot inherit published work.
 // The breakpoint controller starts the real driver while retaining its pause.
-GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsStaleMarkStackAtStart)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, RuntimeRejectsStaleMarkStackAtStart)
 {
     if (!ZVerifyMarking) {
         GC_EXPECT_EQ(setenv("ZVerifyMarking", "1", 1), 0);
@@ -535,65 +535,65 @@ void CheckVerifyFieldCase(VerifyFieldCase mode, const char* testName, const char
 }
 }
 
-GC_OTHER_VM_TEST(ZVerify, OldFieldAcceptsMarkedOldTarget)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, OldFieldAcceptsMarkedOldTarget)
 {
     CheckVerifyFieldCase(VerifyFieldCase::OldGood, "ZVerify.OldFieldAcceptsMarkedOldTarget", nullptr);
 }
-GC_OTHER_VM_TEST(ZVerify, OldFieldRejectsUnmarkedOldTarget)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, OldFieldRejectsUnmarkedOldTarget)
 {
     CheckVerifyFieldCase(VerifyFieldCase::OldUnmarked, "ZVerify.OldFieldRejectsUnmarkedOldTarget", "Unmarked old oop");
 }
-GC_OTHER_VM_TEST(ZVerify, RuntimeAcceptsMarkedOldRootAfterMark)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, RuntimeAcceptsMarkedOldRootAfterMark)
 {
     CheckVerifyFieldCase(VerifyFieldCase::OldRootGood,
         "ZVerify.RuntimeAcceptsMarkedOldRootAfterMark", nullptr);
 }
-GC_OTHER_VM_TEST(ZVerify, RuntimeRejectsUnmarkedOldRootAfterMark)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, RuntimeRejectsUnmarkedOldRootAfterMark)
 {
     CheckVerifyFieldCase(VerifyFieldCase::OldRootUnmarked,
         "ZVerify.RuntimeRejectsUnmarkedOldRootAfterMark", "Unmarked old root");
 }
-GC_OTHER_VM_TEST(ZVerify, OldFieldRejectsUnallocatedTarget)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, OldFieldRejectsUnallocatedTarget)
 {
     CheckVerifyFieldCase(VerifyFieldCase::OldInvalidTarget,
         "ZVerify.OldFieldRejectsUnallocatedTarget", "Bad object");
 }
-GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsUnmarkedOldTarget)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldRejectsUnmarkedOldTarget)
 {
     CheckVerifyFieldCase(VerifyFieldCase::WeakUnmarked, "ZVerify.WeakFieldRejectsUnmarkedOldTarget", "Bad possibly weak oop");
 }
-GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsPreviousRememberedColor)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldRejectsPreviousRememberedColor)
 {
     CheckVerifyFieldCase(VerifyFieldCase::WeakPreviousRemembered,
         "ZVerify.WeakFieldRejectsPreviousRememberedColor", "Previous remembered color");
 }
-GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsMissingRememberedBit)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldRejectsMissingRememberedBit)
 {
     CheckVerifyFieldCase(VerifyFieldCase::WeakMissingRemembered,
         "ZVerify.WeakFieldRejectsMissingRememberedBit", "Missing remembered field");
 }
-GC_OTHER_VM_TEST(ZVerify, WeakFieldAcceptsExactRememberedColor)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldAcceptsExactRememberedColor)
 {
     CheckVerifyFieldCase(VerifyFieldCase::WeakExactRemembered,
         "ZVerify.WeakFieldAcceptsExactRememberedColor", nullptr);
 }
-GC_OTHER_VM_TEST(ZVerify, WeakFieldAcceptsFinalizableColor)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldAcceptsFinalizableColor)
 {
     CheckVerifyFieldCase(VerifyFieldCase::WeakFinalizable,
         "ZVerify.WeakFieldAcceptsFinalizableColor", nullptr);
 }
 
-GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsUnmarkedYoungTarget)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldRejectsUnmarkedYoungTarget)
 {
     CheckVerifyFieldCase(VerifyFieldCase::WeakYoungUnmarked,
         "ZVerify.WeakFieldRejectsUnmarkedYoungTarget", "Unmarked young oop");
 }
-GC_OTHER_VM_TEST(ZVerify, WeakFieldAcceptsMarkedYoungTarget)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldAcceptsMarkedYoungTarget)
 {
     CheckVerifyFieldCase(VerifyFieldCase::WeakYoungMarked,
         "ZVerify.WeakFieldAcceptsMarkedYoungTarget", nullptr);
 }
-GC_OTHER_VM_TEST(ZVerify, WeakFieldRejectsNonLiveOldTarget)
+GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldRejectsNonLiveOldTarget)
 {
     CheckVerifyFieldCase(VerifyFieldCase::WeakNonLiveOld,
         "ZVerify.WeakFieldRejectsNonLiveOldTarget", "Non-live old oop");

@@ -1290,7 +1290,6 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     LoadHealDeliveryTestAccess::PublishColours(collector);
     LateBackfillState forwarding {};
     BaseObject* secondOld = nullptr;
-    ZPage* secondPage = nullptr;
     if (oldPending) {
         ZPage* region = ResetDeliveryUnit(fx, 5);
         BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
@@ -1302,7 +1301,6 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         // ZGC selects a set only when packing can release a page. Two sparse
         // pages are input to the real selector; a single page is exempted.
         ZPage* second = ResetDeliveryUnit(fx, 4);
-        secondPage = second;
         secondOld = fx.PlaceObject(second->GetRegionStart());
         second->SetRegionAllocPtr(reinterpret_cast<MAddress>(secondOld) + secondOld->GetSize());
         RelocationReceiptTest::ParkFrom(regionManager, second);
@@ -1321,13 +1319,8 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         forwarding.region->reset(PageAge::old);
     }
 
-    // ZTest publishes allocated pages before runtime entries query ZHeap's
-    // page table. ResetDeliveryUnit only constructs metadata after P03/P05.
-    PublishAllocatedPage(forwarding.region);
-    if (forwarding.destination != forwarding.region) PublishAllocatedPage(forwarding.destination);
-    if (secondOld != nullptr) {
-        PublishAllocatedPage(secondPage);
-    }
+    // ResetDeliveryUnit publishes each allocated page before returning it,
+    // matching ZHeap::alloc_page (zHeap.cpp:253-257). Do not register it twice.
     MutatorManager& manager = MutatorManager::Instance();
     Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     alignas(16) uintptr_t nestedStorage[8] {};
