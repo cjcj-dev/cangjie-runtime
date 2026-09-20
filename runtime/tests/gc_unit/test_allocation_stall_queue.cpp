@@ -14,6 +14,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zAbort.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include <cstring>
@@ -113,11 +114,11 @@ std::atomic<uint64_t> stallMarkSequence{0};
 std::atomic<bool> stallReleaseMark{false};
 std::atomic<bool> stallWindowTimeout{false};
 
-void ObserveStallMark(const std::vector<BaseObject*>* objects)
+void HoldStallMark()
 {
     auto& heap = Heap::GetHeap();
     const auto snapshot = heap.GetCycleSnapshot(ZGenerationId::old);
-    if (objects == nullptr || snapshot.phase != ZGenerationPhase::Mark) { return; }
+    if (snapshot.phase != ZGenerationPhase::Mark) { return; }
     uint64_t empty = 0;
     if (!stallMarkSequence.compare_exchange_strong(empty, snapshot.sequence)) { return; }
     const auto deadline = std::chrono::steady_clock::now() + kHangLimit;
@@ -125,6 +126,11 @@ void ObserveStallMark(const std::vector<BaseObject*>* objects)
         std::this_thread::yield();
     }
     stallWindowTimeout = !stallReleaseMark.load();
+}
+
+void ObserveStallMark(const std::vector<BaseObject*>* objects)
+{
+    if (objects != nullptr) { HoldStallMark(); }
 }
 }
 
@@ -153,7 +159,13 @@ void RunProductStallWaiters(bool stopping = false)
     stallMarkSequence = 0;
     stallReleaseMark = false;
     stallWindowTimeout = false;
-    SetMarkClosureObserverForTest(ObserveStallMark);
+    if (stopping) {
+        // This existing hook is in old concurrent_mark after the young scope
+        // has ended and old released the driver lock.
+        ZGeneration::testOldMarkStarted = HoldStallMark;
+    } else {
+        SetMarkClosureObserverForTest(ObserveStallMark);
+    }
     const size_t bytes = heap.GetMaxCapacity(); // the rooted object excludes a whole-heap claim
     ZPage* results[2]{};
     uint64_t completedSequence[2]{};
@@ -179,6 +191,10 @@ void RunProductStallWaiters(bool stopping = false)
         std::this_thread::yield();
     }
     const uint64_t firstMark = stallMarkSequence.load();
+    // Hold the product driver lock while the late request queues its minor GC.
+    // Releasing it only after shutdown published abort constructs the otherwise
+    // rare stop-versus-next-driver-cycle interleaving without changing GC state.
+    if (stopping) { ZDriver::lock(); }
     std::thread late(allocate, 1);
     deadline = std::chrono::steady_clock::now() + kHangLimit;
     while (heap.page_allocator().PendingStalledAllocations() != 2 && !done[1].load() &&
@@ -205,6 +221,7 @@ void RunProductStallWaiters(bool stopping = false)
             std::this_thread::yield();
         }
         abortObserved = ZAbort::should_abort();
+        ZDriver::unlock();
     }
     stallReleaseMark.store(true, std::memory_order_release);
     deadline = std::chrono::steady_clock::now() + kHangLimit;
@@ -226,6 +243,7 @@ void RunProductStallWaiters(bool stopping = false)
     first.join();
     late.join();
     if (stopper.joinable()) { stopper.join(); }
+    ZGeneration::testOldMarkStarted = nullptr;
     SetMarkClosureObserverForTest(nullptr);
     const bool retained = heap.GetExportObject(root) != nullptr;
     std::fprintf(stderr, "STALL_PRODUCT_LATE_TARGET queued=%zu first_mark=%llu first_done=%llu late_done=%llu "

@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zPageAllocator.cpp b/runtime/src/Heap/z/zPageAllocator.cpp
+index debb68628..cb6136bf8 100644
+--- a/runtime/src/Heap/z/zPageAllocator.cpp
++++ b/runtime/src/Heap/z/zPageAllocator.cpp
+@@ -677,7 +677,7 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request)
+     // Pair with the posting owner before the caller destroys its request.
+     // zPageAllocator.cpp:1454-1464.
+     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+-    return satisfied;
++    return false;
+ }
+ 
+ void RegionManager::ReturnPageMemory(const PageMemory& memory)
