@@ -663,5 +663,7 @@ GC_RUNTIME_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
 
 GC_RUNTIME_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
 {
+    // InitCJRuntime must construct the heap with this runtime's parameters.
+    GC_EXPECT_TRUE(ZCollectedHeap::heap() == nullptr);
     GC_EXPECT_EQ(RunRuntimeCase(RunNativeTaskRootCase, 0), 0);
 }
