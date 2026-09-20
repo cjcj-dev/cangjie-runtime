@@ -13,15 +13,13 @@
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
-namespace {
-CJRawArray* ReadArgumentArray(void* value)
+CJRawArray* CJArray::GetRawArray()
 {
-    auto* slot = &static_cast<CJArray*>(value)->rawPtr;
+    auto* slot = &rawPtr;
     BaseObject* array = Heap::IsHeapAddress(slot) ?
         ZBarrier::ReadReference(nullptr, HeapSlotAt<false>(slot)) :
         to_object(safe(RootSlotAt(slot).LoadPlain()));
     return reinterpret_cast<CJRawArray*>(array);
-}
 }
 
 ScopedAllocBuffer::~ScopedAllocBuffer()
@@ -254,7 +252,7 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
         if (genericArgsArray == nullptr) {
             return false;
         }
-        CJRawArray* genericRawArray = ReadArgumentArray(genericArgsArray);
+        CJRawArray* genericRawArray = static_cast<CJArray*>(genericArgsArray)->GetRawArray();
         if (genericRawArray == nullptr || genericRawArray->len < genericArgCnt) {
             return false;
         }
@@ -270,10 +268,7 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
         }
     }
 
-    HeapSlot<false>& actualRawPtrField = HeapSlotAt<false>(
-        &(static_cast<CJArray*>(actualArgsArray)->rawPtr));
-    CJRawArray* cjRawArray = reinterpret_cast<CJRawArray*>(
-        ZBarrier::ReadReference(nullptr, actualRawPtrField));
+    CJRawArray* cjRawArray = static_cast<CJArray*>(actualArgsArray)->GetRawArray();
     U64 actualArgCnt = cjRawArray->len;
     if (actualArgCnt != GetNumOfActualParameterInfos()) {
         return false;
@@ -341,7 +336,7 @@ TypeInfo* MethodInfo::GetReturnType()
 TypeInfo* MethodInfo::GetActualTypeFromGenericType(GenericTypeInfo* genericTi, void* genericArgs)
 {
     if (genericTi->IsGeneric() && genericArgs != nullptr) {
-        CJRawArray* genericRawArray = ReadArgumentArray(genericArgs);
+        CJRawArray* genericRawArray = static_cast<CJArray*>(genericArgs)->GetRawArray();
         if (genericRawArray == nullptr) {
             return nullptr;
         }
@@ -508,7 +503,7 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
     // Read rawPtr (ref to CJRawArray) through the GC read barrier instead of a raw
     // cast: if GC concurrently moves the CJRawArray, the raw read would return a
     // stale pointer and all downstream argObj reads would be garbage.
-    CJRawArray* cjRawArray = ReadArgumentArray(actualArgsArray);
+    CJRawArray* cjRawArray = static_cast<CJArray*>(actualArgsArray)->GetRawArray();
     U64 actualArgCnt = cjRawArray->len;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
     Handle arrayHandle(Mutator::GetMutator(), rawArray);
@@ -532,7 +527,7 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
 
 void MethodInfo::PrepareCJMethodGenericArgs(ArgValue* argValues, void* genericArgsArray)
 {
-    CJRawArray* genericRawArray = ReadArgumentArray(genericArgsArray);
+    CJRawArray* genericRawArray = static_cast<CJArray*>(genericArgsArray)->GetRawArray();
     Uptr base = reinterpret_cast<Uptr>(&(genericRawArray->data));
     U64 genericArgCnt = genericRawArray->len;
     for (U64 idx = 0; idx < genericArgCnt; ++idx) {
@@ -693,12 +688,12 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     CJArray genericSnapshot{};
     if (actualArgs != nullptr) {
         actualSnapshot = *static_cast<CJArray*>(actualArgs);
-        actualArray = Handle(Mutator::GetMutator(), reinterpret_cast<BaseObject*>(ReadArgumentArray(actualArgs)));
+        actualArray = Handle(Mutator::GetMutator(), reinterpret_cast<BaseObject*>(static_cast<CJArray*>(actualArgs)->GetRawArray()));
         actualArgs = &actualSnapshot;
     }
     if (genericArgs != nullptr) {
         genericSnapshot = *static_cast<CJArray*>(genericArgs);
-        genericArray = Handle(Mutator::GetMutator(), reinterpret_cast<BaseObject*>(ReadArgumentArray(genericArgs)));
+        genericArray = Handle(Mutator::GetMutator(), reinterpret_cast<BaseObject*>(static_cast<CJArray*>(genericArgs)->GetRawArray()));
         genericArgs = &genericSnapshot;
     }
     ScopedAllocBuffer scopedAllocBuffer;
@@ -856,13 +851,7 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
     HandleMark handleMark(*Mutator::GetMutator());
     ScopedAllocBuffer scopedAllocBuffer;
     ArgValue argValues;
-    CJRawArray* cjRawArray = nullptr;
-    if (!Heap::IsHeapAddress(argsArray)) {
-        cjRawArray = static_cast<CJArray*>(argsArray)->rawPtr;
-    } else {
-        RefField<false> oldField(reinterpret_cast<MAddress>(argsArray));
-        cjRawArray = reinterpret_cast<CJRawArray*>(ZBarrier::ReadReference(nullptr, oldField));
-    }
+    CJRawArray* cjRawArray = static_cast<CJArray*>(argsArray)->GetRawArray();
     U64 actualArgCount = cjRawArray->len;
     if (actualArgCount != parameterCount) {
         LOG(RTLOG_FATAL, "DynamicMethodInfo: actualArgCount %d != parameterCount %d", actualArgCount, parameterCount);

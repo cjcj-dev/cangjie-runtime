@@ -705,7 +705,7 @@ void* RunArguments(void* context)
         type[i] = reinterpret_cast<TypeInfo*>(types[i]);
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(types[i]), sizeof(TypeInfo));
     }
-    const size_t largeSize = 8 * 1024;
+    const size_t largeSize = ZObjectSizeLimitSmall - TYPEINFO_PTR_SIZE;
     for (unsigned i : {0u, 1u}) {
         type[i]->SetType(TypeKind::TYPE_KIND_STRUCT);
         type[i]->SetInstanceSize(i == 0 ? 16 : largeSize);
@@ -759,6 +759,7 @@ void* RunArguments(void* context)
     args.length = 2;
     r.sequenceBefore = heap.old().Sequence();
     heap.EnableGC(true);
+    std::fprintf(stderr, "ARGUMENT_ENTRY used=%zu max=%zu second=%zu\n", heap.page_allocator().GetUsedBytes(), heap.GetMaxCapacity(), largeSize);
     (void)MCC_ApplyCJStaticMethod(&method, &args, nullptr);
     heap.RemoveExportObject(r.sourceRoot);
     for (size_t i = 0; i < pageCount; ++i) { heap.RemoveExportObject(pageRoots[i]); }

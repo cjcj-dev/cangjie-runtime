@@ -52,6 +52,7 @@ struct CJRawArray {
 };
 
 struct CJArray {
+    CJRawArray* GetRawArray();
     CJRawArray* rawPtr;
     U64 start;
     U64 length;

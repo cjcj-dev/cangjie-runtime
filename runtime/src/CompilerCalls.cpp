@@ -1660,6 +1660,10 @@ extern "C" ObjRef MCC_NewAndInitEnumTupleObject(TypeInfo* ti, void* args)
     if (args == nullptr) {
         return nullptr;
     }
+    HandleMark handleMark(*Mutator::GetMutator());
+    Handle arguments(Mutator::GetMutator(),
+        reinterpret_cast<BaseObject*>(static_cast<CJArray*>(args)->GetRawArray()));
+    CJArray argumentValue = *static_cast<CJArray*>(args);
     MSize size = MRT_ALIGN(ti->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
     ObjRef obj = nullptr;
 
@@ -1683,8 +1687,10 @@ extern "C" ObjRef MCC_NewAndInitEnumTupleObject(TypeInfo* ti, void* args)
     }
 
     // Parse fields from args and store them into obj.
-    FieldInitializer::SetFieldFromArgs(obj, ti, args);
-    return obj;
+    Handle objectHandle(Mutator::GetMutator(), obj);
+    StorePlain(RootSlotAt(&argumentValue.rawPtr), from_object(arguments()));
+    FieldInitializer::SetFieldFromArgs(obj, ti, &argumentValue);
+    return static_cast<MObject*>(objectHandle());
 }
 
 extern "C" ObjRef MCC_GetAssociatedValues(ObjRef obj, TypeInfo* arrayTi)

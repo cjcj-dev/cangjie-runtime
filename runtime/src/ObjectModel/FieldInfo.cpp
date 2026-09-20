@@ -358,19 +358,14 @@ bool SetVArrayField(ObjRef obj, Uptr argAddr, TypeInfo* argType, ObjRef argObj)
 
 void SetFieldFromArgs(ObjRef obj, TypeInfo* ti, void* args)
 {
-    CJRawArray* cjRawArray = nullptr;
-    if (!Heap::IsHeapAddress(args)) {
-        cjRawArray = static_cast<CJArray*>(args)->rawPtr;
-    } else {
-        RefField<false> oldField(reinterpret_cast<MAddress>(args));
-        cjRawArray = reinterpret_cast<CJRawArray*>(ZBarrier::ReadReference(nullptr, oldField));
-    }
+    HandleMark handleMark(*Mutator::GetMutator());
+    Handle objectHandle(Mutator::GetMutator(), obj);
+    CJRawArray* cjRawArray = static_cast<CJArray*>(args)->GetRawArray();
     U64 argCnt = cjRawArray->len;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
+    Handle arrayHandle(Mutator::GetMutator(), rawArray);
 
     for (U64 idx = 0; idx < argCnt; ++idx) {
-        ObjRef argObj = static_cast<ObjRef>(ZBarrier::ReadReference(rawArray, *refField));
         TypeInfo* argType = ti->GetFieldType(idx);
         U32 offset = ti->GetFieldOffset(idx);
 
@@ -381,6 +376,10 @@ void SetFieldFromArgs(ObjRef obj, TypeInfo* ti, void* args)
             offset = ti->GetFieldOffset(idx + 1);
         }
 
+        obj = static_cast<MObject*>(objectHandle());
+        rawArray = static_cast<MObject*>(arrayHandle());
+        auto& refField = HeapSlotAt<false>(reinterpret_cast<Uptr>(rawArray) + offsetof(CJRawArray, data) + idx * sizeof(Uptr));
+        ObjRef argObj = static_cast<ObjRef>(ZBarrier::ReadReference(rawArray, refField));
         Uptr argAddr = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE + offset;
 
         bool success = true;
@@ -401,7 +400,6 @@ void SetFieldFromArgs(ObjRef obj, TypeInfo* ti, void* args)
             LOG(RTLOG_ERROR, "FieldInitializer: failed to set field at index %zu", idx);
         }
 
-        refField++;
     }
 }
 
