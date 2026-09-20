@@ -273,7 +273,6 @@ private:
     MinorInteriorBaseMap youngRemsetInteriorBases;
     YoungCollectionStats youngStats;
     uint64_t youngStartNs = 0;
-    size_t youngLiveBytes = 0;
     size_t youngLiveRememberedCount = 0;
     bool youngFullScan = false;
     WorkStack youngWorkStack;

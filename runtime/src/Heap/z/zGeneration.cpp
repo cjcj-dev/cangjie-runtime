@@ -689,21 +689,6 @@ void ZGenerationYoung::concurrent_mark_free()
          static_cast<unsigned long long>(youngConcWindow.windowNs), youngConcWindow.MarkedInWindow(),
          youngConcWindow.closureCalls, youngConcWindow.remsetSlots,
          youngConcWindow.reenters, youngConcWindow.markedAtEntry, youngReachableVec.size());
-    size_t liveBytes = 0;
-    TenuringInputs tenuringIn;
-    tenuringIn.softMaxCapacity = Heap::GetHeap().GetMaxCapacity();
-    tenuringIn.youngAllocated = youngStats.candidateBytes;
-    for (ZPage* region : minorCandidateRegions) {
-        const size_t live = region->is_marked() ? region->live_bytes() : 0;
-        liveBytes += live;
-        uint32_t age = region->GetYoungAge();
-        if (age >= kPageAgeCount) {
-            age = untype(PageAge::survivor14);
-        }
-        tenuringIn.liveByAge[age] += live;
-    }
-    tenuringIn.youngGarbage = youngStats.candidateBytes > liveBytes ? (youngStats.candidateBytes - liveBytes) : 0;
-    Heap::GetHeap().young().SelectTenuringThreshold(tenuringIn);
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         ZStatTimerYoung zstatTimer(PYoungPreEvacClear);
@@ -730,7 +715,6 @@ void ZGenerationYoung::concurrent_mark_free()
         });
     }
 
-    youngLiveBytes = liveBytes;
 }
 
 void ZGenerationYoung::concurrent_reset_relocation_set()
@@ -800,7 +784,7 @@ void ZGenerationYoung::concurrent_relocate()
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(youngFullScan),
          youngStats.candidateRegions, youngStats.candidateBytes,
-         youngLiveBytes, youngLiveRememberedCount, youngStats.reclaimedBytes,
+         statHeap.LiveAtMarkEnd(), youngLiveRememberedCount, youngStats.reclaimedBytes,
          pauseUs);
 }
 
@@ -1435,6 +1419,9 @@ void ZGeneration::select_relocation_set(bool promote_all)
     if (_cycle == ZGenerationId::young) {
         TenuringInputs inputs;
         inputs.promoteAll = promote_all;
+        inputs.youngGarbage = statHeap.GarbageAtMarkEnd();
+        inputs.youngAllocated = statHeap.AllocatedAtMarkEnd();
+        inputs.softMaxCapacity = Heap::GetHeap().soft_max_capacity();
         const ZRelocationSetSelectorStats st = selector.stats();
         for (PageAge age : kPageAgeRangeAll) {
             inputs.liveByAge[untype(age)] =
@@ -1442,10 +1429,6 @@ void ZGeneration::select_relocation_set(bool promote_all)
         }
         ZGeneration::young()->SelectTenuringThreshold(inputs);
     }
-    // zGeneration.cpp:268-269: the selector snapshot feeds both the
-    // relocation and the heap accounts before the set is installed.
-    statRelocation.AtSelectRelocationSet(selector.stats());
-    statHeap.AtSelectRelocationSet(selector.stats());
     _relocation_set.install(&selector);
     if (_cycle == ZGenerationId::young) {
         ZWorkers* w = Workers();
@@ -1460,6 +1443,9 @@ void ZGeneration::select_relocation_set(bool promote_all)
         forwarding->page()->SetRegionRole(ZPageRole::From);
         _forwarding_table.insert(forwarding);
     }
+    // ZGC zGeneration.cpp:268-269: publish after installing the set/table.
+    statRelocation.AtSelectRelocationSet(selector.stats());
+    statHeap.AtSelectRelocationSet(selector.stats());
 }
 }
 
