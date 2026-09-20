@@ -362,6 +362,15 @@ struct GcHeapFixture {
         if (region1 != nullptr && region1->IsYoungRegion()) {
             region1->reset(PageAge::old);
         }
+        for (ZPage* region : {region0, region1}) {
+            if (region != nullptr && Heap::page(region->GetRegionStart()) == region) {
+                Heap::page_table().remove(region);
+            }
+        }
+        if (committedSpan != nullptr) {
+            Heap::GetHeap().page_allocator().free_page(committedSpan);
+            committedSpan = nullptr;
+        }
     }
 
     BaseObject* PlaceObject(MAddress addr)
