@@ -1,0 +1,93 @@
+[
+  {
+    "symbol": "ForwardFromSpace",
+    "base": {
+      "rc": 0,
+      "output": "b6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/Allocator/RegionSpace.h:1\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zGeneration.cpp:2\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zRelocate.cpp:3\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zRelocate.hpp:1\n",
+      "count": 7
+    },
+    "head": {
+      "rc": 1,
+      "output": "",
+      "count": 0
+    }
+  },
+  {
+    "symbol": "ForwardFromRegions",
+    "base": {
+      "rc": 0,
+      "output": "b6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/Allocator/RegionSpace.cpp:2\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/Allocator/RegionSpace.h:5\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zPageAllocator.hpp:4\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zPageAllocator.inline.hpp:1\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zRelocate.cpp:17\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/windows_x86_64_exports.def:1\n",
+      "count": 30
+    },
+    "head": {
+      "rc": 1,
+      "output": "",
+      "count": 0
+    }
+  },
+  {
+    "symbol": "ExemptFromRegions",
+    "base": {
+      "rc": 0,
+      "output": "b6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/Allocator/RegionSpace.cpp:1\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/Allocator/RegionSpace.h:3\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zPageAllocator.hpp:1\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zRelocate.cpp:1\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zRelocationSetSelector.cpp:1\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/windows_x86_64_exports.def:1\n",
+      "count": 8
+    },
+    "head": {
+      "rc": 1,
+      "output": "",
+      "count": 0
+    }
+  },
+  {
+    "symbol": "RefineFromSpace",
+    "base": {
+      "rc": 0,
+      "output": "b6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/Allocator/RegionSpace.h:1\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zRelocate.cpp:2\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zRelocate.hpp:1\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zRelocationSet.cpp:1\n",
+      "count": 5
+    },
+    "head": {
+      "rc": 1,
+      "output": "",
+      "count": 0
+    }
+  },
+  {
+    "symbol": "youngLiveBytes",
+    "base": {
+      "rc": 0,
+      "output": "b6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zGeneration.cpp:2\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zGeneration.hpp:1\n",
+      "count": 3
+    },
+    "head": {
+      "rc": 1,
+      "output": "",
+      "count": 0
+    }
+  },
+  {
+    "symbol": "g_softMaxHeapSize",
+    "base": {
+      "rc": 0,
+      "output": "b6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zStat.cpp:3\n",
+      "count": 3
+    },
+    "head": {
+      "rc": 1,
+      "output": "",
+      "count": 0
+    }
+  },
+  {
+    "symbol": "ZStatMutatorAllocRate::soft_max_heap_size",
+    "base": {
+      "rc": 0,
+      "output": "b6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zDirector.cpp:1\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zPageAllocator.cpp:1\nb6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zStat.cpp:1\n",
+      "count": 3
+    },
+    "head": {
+      "rc": 1,
+      "output": "",
+      "count": 0
+    }
+  }
+]

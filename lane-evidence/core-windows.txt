@@ -1,0 +1,9 @@
+⭐ 已占窗口 0-15 · holder=sym_cangjie_runtime_739_implement_r5747765432-1 · claimed=2026-09-20T05:08:43.489Z · host=kkk2
+⭐ 已占窗口 16-31 · holder=sym_cangjie_runtime_739_implement_r5747765432-2 · claimed=2026-09-20T05:08:43.489Z · host=kkk2
+⭐ 已占窗口 32-47 · holder=sym604-causal-1 · claimed=2026-09-20T05:17:04.800Z · host=kkk2
+⭐ 已占窗口 48-63 · holder=sym_cangjie_runtime_717_implement_r5747761086-1 · claimed=2026-09-20T05:22:20.800Z · host=kkk2
+⭐ 已占窗口 80-95 · holder=sym_cangjie_runtime_627_implement_r5747848521-1 · claimed=2026-09-20T05:28:54.837Z · host=kkk2
+⭐ 已占窗口 96-127 · holder=sym_cangjie_runtime_720_implement_r5747849863-1 · claimed=2026-09-20T05:30:27.361Z · host=kkk2
+⭐ 已占：预约(未过期) 0-15,16-31,32-47,48-63,80-95,96-127 · 实测 无
+128-143
+144-159

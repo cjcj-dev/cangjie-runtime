@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -1450,7 +1450,7 @@
+     }
+     // ZGC zGeneration.cpp:268-269: publish after installing the set/table.
+     statRelocation.AtSelectRelocationSet(selector.stats());
+-    statHeap.AtSelectRelocationSet(selector.stats());
++    if (is_young()) statHeap.AtSelectRelocationSet(selector.stats());
+ }
+ }
+ 

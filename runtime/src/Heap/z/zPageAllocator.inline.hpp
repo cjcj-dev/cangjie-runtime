@@ -297,7 +297,7 @@ inline void ExecuteForwardTask(RegionManager& regionManager, ZRelocationSet* rel
 
 } // namespace detail
 
-// The relocation worker task submitted by DrainForwardFromRegions. Test builds
+// The relocation worker task submitted by ZRelocate::relocate. Test builds
 // export Work so the unit runner binds the product SO; default builds retain
 // the implicit inline virtual with no MRT_EXPORT and no dynamic export.
 template<Generation G>

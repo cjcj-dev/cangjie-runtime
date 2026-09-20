@@ -183,6 +183,16 @@ void FreeRegionManager::decrease_capacity(uint32_t partition_id, size_t size, bo
     }
 }
 
+size_t FreeRegionManager::current_max_capacity() const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    size_t total = 0;
+    for (const auto& partition : partitions) {
+        total += partition->currentMaxCapacity;
+    }
+    return total;
+}
+
 size_t FreeRegionManager::capacity() const
 {
     std::lock_guard<std::mutex> lock(cacheMutex);
@@ -564,6 +574,16 @@ std::vector<ZPage::ReservedSegment> RegionManager::ReservedSegments(ZVirtualMemo
     return segments;
 }
 
+// The host configures SoftMaxHeapSize through cjSoftMaxHeapSize, rather than
+// HotSpot's flag table. Capacity clamping belongs to the allocator in both.
+static std::atomic<size_t> softMaxHeapSize{0};
+
+size_t RegionManager::soft_max_capacity() const
+{
+    return std::min(softMaxHeapSize.load(std::memory_order_acquire),
+                    freeRegionManager.current_max_capacity());
+}
+
 void RegionManager::Initialize(size_t pageSize, uintptr_t regionInfoAddr, ZVirtualMemoryManager& virtualMemory,
                                ZPhysicalMemoryManager& physicalMemory, const HeapParam& heapParam,
                                double garbageThreshold)
@@ -575,6 +595,14 @@ void RegionManager::Initialize(size_t pageSize, uintptr_t regionInfoAddr, ZVirtu
     this->regionHeapStart = segments.front().start;
     this->regionHeapEnd = segments.back().End();
     heapCapacity = pageSize;
+    size_t soft = pageSize;
+    if (const char* env = std::getenv("cjSoftMaxHeapSize")) {
+        const size_t parsedKb = CString::ParseSizeFromEnv(env);
+        if (parsedKb > 0) {
+            soft = parsedKb * KB;
+        }
+    }
+    softMaxHeapSize.store(soft, std::memory_order_release);
     CHECK(pageSize <= span.size());
     this->inactiveZone = regionHeapStart;
     SetGarbageThreshold(garbageThreshold);
@@ -1163,7 +1191,7 @@ ZPageAllocatorStats RegionManager::Stats(const ZGeneration* generation) const
     const size_t i = id == ZGenerationId::young ? 0 : 1;
     return ZPageAllocatorStats(0 /* min_capacity: host HeapParam has no min-heap-size */,
                                GetHeapCapacity(),
-                               ZStatMutatorAllocRate::soft_max_heap_size(),
+                               soft_max_capacity(),
                                GetCommittedCapacity(),
                                GetAllocatedSize(),
                                collectionUsedHigh[i],

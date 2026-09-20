@@ -1,0 +1,32 @@
+HEAD:runtime/src/Heap/z/zDirector.cpp:642:    stats.heap.soft_max_heap_size = Heap::GetHeap().soft_max_capacity();
+HEAD:runtime/src/Heap/z/zDirector.cpp:664:    stats.relocation_headroom = ZHeuristics::relocation_headroom();
+HEAD:runtime/src/Heap/z/zGeneration.cpp:342:    concurrent_select_relocation_set();
+HEAD:runtime/src/Heap/z/zGeneration.cpp:727:void ZGenerationYoung::concurrent_select_relocation_set()
+HEAD:runtime/src/Heap/z/zGeneration.cpp:729:    select_relocation_set(YoungType() == ZYoungType::major_full_preclean);
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1172:    concurrent_select_relocation_set();
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1266:void ZGenerationOld::concurrent_select_relocation_set()
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1268:    select_relocation_set(false);
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1284:    relocate().relocate(&relocation_set());
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1403:void ZGeneration::select_relocation_set(bool promote_all)
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1429:        inputs.softMaxCapacity = Heap::GetHeap().soft_max_capacity();
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1452:    statRelocation.AtSelectRelocationSet(selector.stats());
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1453:    statHeap.AtSelectRelocationSet(selector.stats());
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1692:            relocate().relocate(&relocation_set());
+HEAD:runtime/src/Heap/z/zGeneration.hpp:160:    void select_relocation_set(bool promote_all);
+HEAD:runtime/src/Heap/z/zGeneration.hpp:258:    void concurrent_select_relocation_set();
+HEAD:runtime/src/Heap/z/zGeneration.hpp:308:    void concurrent_select_relocation_set();
+HEAD:runtime/src/Heap/z/zHeap.cpp:269:size_t Heap::soft_max_capacity() const { return _page_allocator.soft_max_capacity(); }
+HEAD:runtime/src/Heap/z/zHeap.hpp:166:    size_t soft_max_capacity() const;
+HEAD:runtime/src/Heap/z/zHeuristics.cpp:70:size_t ZHeuristics::relocation_headroom()
+HEAD:runtime/src/Heap/z/zHeuristics.hpp:14:    static size_t relocation_headroom();
+HEAD:runtime/src/Heap/z/zPageAllocator.cpp:581:size_t RegionManager::soft_max_capacity() const
+HEAD:runtime/src/Heap/z/zPageAllocator.cpp:1195:                               soft_max_capacity(),
+HEAD:runtime/src/Heap/z/zPageAllocator.hpp:447:    size_t soft_max_capacity() const { return _softMaxCapacity; }
+HEAD:runtime/src/Heap/z/zPageAllocator.hpp:513:    size_t soft_max_capacity() const;
+HEAD:runtime/src/Heap/z/zStat.cpp:617:    size_t softMax = Heap::GetHeap().soft_max_capacity();
+HEAD:runtime/src/Heap/z/zStat.cpp:754:    _atCollectionStart.softMaxCapacity = stats.soft_max_capacity();
+HEAD:runtime/src/Heap/z/zStat.cpp:764:    _atMarkStart.softMaxCapacity = stats.soft_max_capacity();
+HEAD:runtime/src/Heap/z/zStat.cpp:783:void ZStatHeap::AtSelectRelocationSet(const ZRelocationSetSelectorStats& stats)
+HEAD:runtime/src/Heap/z/zStat.cpp:1097:void ZStatRelocation::AtSelectRelocationSet(const ZRelocationSetSelectorStats& selectorStats)
+HEAD:runtime/src/Heap/z/zStat.hpp:492:    void AtSelectRelocationSet(const ZRelocationSetSelectorStats& stats);
+HEAD:runtime/src/Heap/z/zStat.hpp:671:    void AtSelectRelocationSet(const ZRelocationSetSelectorStats& selectorStats);

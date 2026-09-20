@@ -264,6 +264,7 @@ public:
     size_t increase_capacity(uint32_t partition_id, size_t size);
     void decrease_capacity(uint32_t partition_id, size_t size, bool set_max_capacity);
     size_t capacity() const;
+    size_t current_max_capacity() const;
 
     // Global granule index plus byte extent <-> ZVirtualMemory.
     static ZVirtualMemory VirtualMemoryOf(size_t index, size_t count);
@@ -509,6 +510,7 @@ public:
     size_t GetCommittedCapacity() const { return freeRegionManager.capacity(); }
 
     size_t GetHeapCapacity() const { return heapCapacity; }
+    size_t soft_max_capacity() const;
 
 
     // zPageAllocator.cpp:1201-1260: page resource ownership belongs to
@@ -543,10 +545,6 @@ public:
     void PublishTLABStatistics();
     void RetireTLABStatistics(AllocBuffer& buffer);
 
-    template<Generation G>
-    void ForwardFromRegions(ZWorkers& workers);
-    template<Generation G>
-    void ForwardFromRegions();
     template<Generation G>
     void ForwardRegion(ZPage* region);
     ZRelocateQueue& GetZRelocateQueue() { return relocateQueue; }
@@ -595,11 +593,6 @@ public:
     template<Generation G>
     void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
                             bool inPlace = false);
-    template<Generation G>
-    void StartForwardFromRegions(ZWorkers& workers);
-    template<Generation G>
-    void DrainForwardFromRegions();
-    bool RelocationStarted() const { return relocationStarted; }
     // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
     static void RememberPromotedObject(BaseObject* object);
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
@@ -679,7 +672,7 @@ public:
     void AssembleSmallGarbageCandidates();
     void AssembleLargeGarbageCandidates();
     void AssemblePinnedGarbageCandidates(bool collectAll);
-    YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor);
+    YoungCollectionStats PrepareYoungGarbageCandidates();
 
     void MergeRawPointerPinnedRegions();
 
@@ -709,7 +702,6 @@ public:
 
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
     // can be reclaimed.
-    size_t ExemptFromRegions();
     // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).
 
     void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
@@ -870,9 +862,6 @@ private:
     // RecentFull/RecentLarge.
     bool fullTraceCacheActive{ false };
     bool largeTraceCacheActive{ false };
-    ZWorkers* relocationWorkers{ nullptr };
-    bool relocationStarted{ false };
-    bool relocationDrained{ false };
     // zRelocate.cpp:1121 shape: in-place relocated page counts by size class,
     // accumulated while a from-space pass runs and read at its end. Host
     // difference: ZGC counts these on ZRelocateSmall/MediumAllocator; here the

@@ -241,11 +241,10 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 }
 
 // zGeneration.cpp:205-221: candidates come from the page table. The previous
-// cycle's leftover from-pages are parked; every young non-thread-local page is
-// registered with the visitor, exactly as the deleted list walks did. The
-// selection itself (and the from-role assignment) happens in
+// cycle's leftover from-pages are parked; young pages are counted without
+// retaining page pointers. The selection itself (and the from-role assignment) happens in
 // ZGeneration::select_relocation_set via ZGenerationPagesIterator.
-YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor)
+YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates()
 {
     PublishTLABStatistics();
     YoungCollectionStats stats;
@@ -262,34 +261,12 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             }
             ++stats.unmovableVisited;
             stats.unmovableVisitedBytes += region->GetRegionSize();
-            const uint64_t visitorStart = TimeUtil::NanoSeconds();
-            visitor(region);
-            stats.visitorNs += TimeUtil::NanoSeconds() - visitorStart;
             ++stats.candidateRegions;
             stats.candidateBytes += region->GetRegionAllocatedSize();
         }
     }
     stats.reparkNs = TimeUtil::NanoSeconds() - subStart;
     return stats;
-}
-
-// Cost-model CSet (ZRelocationSetSelector.cpp:114-196) after mark, before flip.
-// zGeneration.cpp:205-269: the selector is fed by ZGenerationPagesIterator and
-// installed on the generation; selected pages carry the From role from
-// ZRelocationSet::install. No page list is rebuilt.
-size_t RegionManager::ExemptFromRegions()
-{
-    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-    old.select_relocation_set(false);
-    size_t bytes = 0;
-    ZRelocationSetIterator rs_iter(&old.relocation_set());
-    for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
-        ZPage* page = forwarding->page();
-        if (page != nullptr) {
-            bytes += page->GetRegionSize();
-        }
-    }
-    return bytes;
 }
 
 } // namespace MapleRuntime

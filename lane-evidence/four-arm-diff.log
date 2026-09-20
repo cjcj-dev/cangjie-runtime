@@ -1,0 +1,23 @@
+# kkk2_diff cand=4230c90d2ee7f3cbb9e28b5d9aa11fd5a1eb3093 base=b6d62daa8f3557c8a9effbfa4709a4744e315497 2026-09-20T13:30:02+08:00
+# pinned runner sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08 path=kkk2:/root/diff_harness_708/4869bdf1370c/kkk2_managed.sh
+# diff_b6d62daa8f35: 命中缓存
+# diff_4230c90d2ee7: 构建两构型…
+== default configure_rc=0 build_rc=0 wall=19s
+== testable configure_rc=0 build_rc=0 wall=20s
+# diff_4230c90d2ee7: 三臂+managed 并行…
+336M
+default rc=1 filler rc=1 testable rc=123 
+# DIFF 4230c90d2ee7 vs b6d62daa8f35
+
+runner_sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08 path=kkk2:/root/diff_harness_708/4869bdf1370c/kkk2_managed.sh
+cand_runner_sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08 base_runner_sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08
+CANGJIE_HOME=/root/sdkdepot/90a09c15ba02-fa13e8d5c17b
+H48=/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative
+stained=/root/diff_4230c90d2ee7/default/build/runtime-staging/lib/x86_64_Release
+
+⛔ 未跑/未完成的臂: [('testable', 'NOT_RUN')] ⇒ 本 DIFF 对这些臂不可作为验收证据（0917 实撞：P09 testable 编译失败 rc=123 被读成 CAND-ONLY=0 放行）
+## default: status=ran · cand rc=1 failed=55 · base rc=1 failed=55 · common=55 · CAND-ONLY=0 BASE-ONLY=0 · 阳性对照=identical sets
+## filler: status=ran · cand rc=1 failed=55 · base rc=1 failed=55 · common=55 · CAND-ONLY=0 BASE-ONLY=0 · 阳性对照=identical sets
+## testable: status=NOT_RUN · cand rc=123 failed=0 · base rc=1 failed=89 · common=0 · CAND-ONLY=NOT_COMPUTED BASE-ONLY=NOT_COMPUTED · 阳性对照=NOT_RUN（臂未跑，⛔ 不得据此宣称独红为 0）
+## managed: status=ran · cand rc=0 failed=0 · base rc=0 failed=0 · common=0 · CAND-ONLY=0 BASE-ONLY=0 · 阳性对照=both empty
+# 产物: /root/cj_build/reports/DIFF-4230c90d2ee7-vs-b6d62daa8f35.{json,md}  原始名单: /root/cj_build/agent_scratch/diffout/4230c90d2ee7-vs-b6d62daa8f35/{cand,base}.txt  kkk2: /root/diff_4230c90d2ee7 /root/diff_b6d62daa8f35
