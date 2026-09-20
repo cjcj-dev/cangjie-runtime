@@ -289,7 +289,9 @@ void* Exercise(void*)
     const auto oldWorkerStats1 = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
     auto y1 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
     auto o1 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
-    Expect(y1.sequence == y0.sequence + 1, "major_prelude_young_sequence");
+    // Explicit user GC precleans young, then runs full roots: two young
+    // cycles (ZGC zDriver.cpp:270-279,416-428).
+    Expect(y1.sequence == y0.sequence + 2, "major_prelude_young_sequence");
     Expect(o1.sequence == o0.sequence + 1, "major_old_sequence");
     Expect(o1.reason == GC_REASON_USER && !o1.active, "major_reason_completion");
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
