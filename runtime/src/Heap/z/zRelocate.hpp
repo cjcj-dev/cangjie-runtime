@@ -21,7 +21,6 @@
 #include "Heap/z/zPageAge.hpp"
 
 namespace MapleRuntime {
-class FindToVersionResult;
 class ScopedStopTheWorld;
 
 // ZRelocateQueue (zRelocate.hpp:39-77; zRelocate.cpp:57-307).
@@ -158,7 +157,6 @@ public:
     static BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
                                          Generation generation);
     static bool IsAlreadyToStoreValue(BaseObject* target, Generation generation);
-    static FindToVersionResult FindToVersion(BaseObject* obj, Generation generation);
     explicit ZRelocate(ZGeneration* generation) : generation(generation) {}
     BaseObject* forward_object(ZForwarding* forwarding, BaseObject* object);
     BaseObject* relocate_object(ZForwarding* forwarding, BaseObject* object,

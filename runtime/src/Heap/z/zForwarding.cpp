@@ -35,18 +35,11 @@ ZForwarding* ZForwarding::alloc(ZForwardingAllocator* allocator, ZPage* page, Pa
 {
     const size_t nentries = ZForwarding::nentries(page);
     void* const addr = AttachedArray::alloc(allocator, nentries);
-    // Prepare the complete source-page view before the generation publishes
-    // the forwarding (zForwarding.inline.hpp constructor; zGeneration.cpp:261-265).
-    // Cangjie's header-state consumers additionally need the saved livemap/epoch.
+    // Retain the source page until relocation finishes (ZGC zForwarding.hpp:63).
     page->ClearRelocationResiduals();
     ZForwarding* forwarding = ::new (addr) ZForwarding(page, page->GetRegionStart(), ZAddressHeapBase,
         page->GetRegionSize(), nentries, page->GetRegionLifeId(), page->age(), to_age,
         static_cast<size_t>(page->object_alignment_shift()));
-    forwarding->publish_from_page_view(&page->livemap(), page->GetSnapshotEpoch(),
-        page->GetRegionAllocPtr(), page->BirthSequence(), static_cast<uint8_t>(page->GetOwnerGeneration()),
-        static_cast<uint8_t>(page->IsLargeRegion() && page->is_marked() &&
-                             page->is_live_bit_set(to_zaddress(page->GetRegionStart()))),
-        page->GetRegionLifeId());
     return forwarding;
 }
 

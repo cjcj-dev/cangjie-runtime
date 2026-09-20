@@ -128,11 +128,50 @@ run_ohos_host_arm() {
   fi
 
   sha256sum "$elf" "$so" "$bounds" >"$OUT/ohos_host_artifacts.sha256"
+  # Git metadata is optional in the build service's tar snapshots. Keep
+  # declarations separate from the identity captured in the linked product.
+  local git_head="" git_status="" git_state=absent status_rc=0
+  local source_commit="${SOURCE_COMMIT:-}" commit_origin=SOURCE_COMMIT
+  local product_identity product_declared
+  local provenance="$OUT/ohos_host_product.provenance.txt"
+  strings "$so" >"$provenance"
+  product_identity=$(sed -n 's/^CJRT-COMMIT://p' "$provenance")
+  product_declared=$(sed -n 's/^CJRT-DECLARED://p' "$provenance")
+  if [[ -e "$ROOT/.git" ]]; then
+    git_head=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null) || git_head=""
+    if [[ -n "$git_head" ]]; then
+      git_state=present
+      git_status=$(git -C "$ROOT" status --porcelain 2>/dev/null) || status_rc=$?
+    fi
+  fi
+  if [[ -z "$source_commit" ]]; then
+    source_commit="${CJ_RUNTIME_COMMIT:-}"
+    commit_origin=CJ_RUNTIME_COMMIT
+  fi
+  if [[ -z "$source_commit" && "$product_declared" != none ]]; then
+    source_commit="$product_declared"
+    commit_origin=product-declared
+  fi
+  if [[ -z "$source_commit" ]]; then
+    source_commit="${git_head:-unknown}"
+    commit_origin=git
+    [[ -n "$git_head" ]] || commit_origin=unknown
+  fi
   {
     echo "BUILD_CAPTURED_AT=$(date --iso-8601=seconds)"
-    echo "SOURCE_COMMIT=$(git -C "$ROOT" rev-parse HEAD)"
+    echo "SOURCE_COMMIT=$source_commit"
+    echo "SOURCE_COMMIT_ORIGIN=$commit_origin"
+    echo "SOURCE_PRODUCT_IDENTITY=${product_identity:-unknown}"
+    echo "SOURCE_PRODUCT_DECLARED=${product_declared:-unknown}"
+    echo "SOURCE_GIT=$git_state"
+    echo "SOURCE_GIT_HEAD=${git_head:-unknown}"
+    if [[ "$git_state" == absent ]]; then
+      echo "SOURCE_STATUS_RC=NOT_RUN"
+    else
+      echo "SOURCE_STATUS_RC=$status_rc"
+    fi
     echo "SOURCE_STATUS_BEGIN"
-    git -C "$ROOT" status --porcelain
+    printf '%s\n' "$git_status"
     echo "SOURCE_STATUS_END"
   } >"$OUT/ohos_host_lineage.txt"
 

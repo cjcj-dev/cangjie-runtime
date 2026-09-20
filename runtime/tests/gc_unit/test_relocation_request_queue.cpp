@@ -26,10 +26,6 @@ struct PageQueueFixture {
     {
         auto* page = heap.region0;
         heap.InstallPageOwner(page);
-        GC_EXPECT_TRUE(UNUSED_InstallPublication(
-            page->GetRegionStart(), page->GetRegionSize(), page, page->GetOwnerGeneration()));
-        GC_EXPECT_TRUE(UNUSED_PublishFromPageView(page, nullptr, 1, page->GetRegionAllocPtr(),
-            page->GetRegionStart(), 1, 0, page->GetRegionLifeId()));
         owner = forwarding_for_page(page);
         GC_EXPECT_TRUE(static_cast<bool>(owner));
     }
@@ -37,7 +33,7 @@ struct PageQueueFixture {
     {
         if (owner->ref_count().load(std::memory_order_acquire) != 0) owner->release_page();
         owner->mark_done();
-        UNUSED_ClearPageOwner(heap.region0);
+        heap.region0->_scratch.fwdOwner.store(nullptr, std::memory_order_release);
         owner = {};
     }
     void Publish()
@@ -45,7 +41,7 @@ struct PageQueueFixture {
         const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
         auto publication = forwarding_for_page(heap.region0, from);
         GC_EXPECT_TRUE(static_cast<bool>(publication));
-        GC_EXPECT_EQ(UNUSED_InsertMapping(publication, from,
+        GC_EXPECT_EQ(publication->insert(from,
                      reinterpret_cast<MAddress>(heap.obj1)), reinterpret_cast<MAddress>(heap.obj1));
     }
     void Complete()
@@ -192,10 +188,9 @@ GC_TEST(RelocationPageQueue, ReleasedPageStillHasItsImmutableEntry)
     f.Publish();
     f.owner->release_page();
     GC_EXPECT_FALSE(f.owner->retain_page(&f.queue));
-    const auto answer = LookupTo(
-        reinterpret_cast<MAddress>(f.heap.obj0), f.heap.region0->GetOwnerGeneration());
-    GC_EXPECT_TRUE(answer.answer == FwdLookup::ArmedHit);
-    GC_EXPECT_EQ(answer.to, reinterpret_cast<MAddress>(f.heap.obj1));
+    BaseObject* const answer = Heap::GetHeap().GetZGeneration(f.heap.region0->GetOwnerGeneration())
+        .remap_object(f.heap.obj0);
+    GC_EXPECT_EQ(answer, f.heap.obj1);
     GC_EXPECT_FALSE(f.owner->is_done());
 }
 

@@ -258,7 +258,6 @@ inline ZForwarding::ZForwarding(ZPage* page, MAddress start, MAddress heapBase, 
           _ref_lock(),
           _ref_count(1),
           _done(false),
-          _from_page(),
           _relocated_remembered_fields_state(ZPublishState::none),
           _relocated_remembered_fields_publish_young_seqnum(0)
     {}
