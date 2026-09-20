@@ -54,7 +54,6 @@ void ZIterator::oop_iterate_safe(BaseObject* object, TypeInfo* klass, OopClosure
         OopIteratorClosureDispatch::oop_oop_iterate(closure, object, klass);
     }
 }
-}
 
 template <typename OopClosureT>
 void ZIterator::oop_iterate(BaseObject* object, OopClosureT* closure)
