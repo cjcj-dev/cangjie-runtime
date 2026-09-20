@@ -4,7 +4,6 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zJNICritical.hpp"
-#include "Heap/z/zVMOperation.hpp"
 #include "gc_unittest.hpp"
 
 #include <atomic>

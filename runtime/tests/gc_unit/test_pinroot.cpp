@@ -2,10 +2,6 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
-// Raw-pointer pin regression: a native-held object without a major mark must not
-// be reclaimed from a pinned region.  The fixture uses product RegionManager
-// collection paths and Future-sized objects; only region/list setup is injected.
-
 #include <cstddef>
 #include <cstdio>
 
@@ -31,10 +27,6 @@ struct PinRootTestAccess {
 };
 
 } // namespace MapleRuntime
-
-namespace {
-
-} // namespace
 
 // ZGC zPageAllocator.cpp:2065: completed in-place pages remain page-table visible.
 GC_TEST(RegionRetirement, StayYoungAfterCompactInPlaceDoesNotRelinkRecentFull)
