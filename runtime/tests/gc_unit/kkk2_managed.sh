@@ -12,7 +12,15 @@ LANE=${LANE:-/root/sym_cangjie_runtime_708_implement_r5740357995}
 N=${N:-3}
 SRCROOT=${SRCROOT:-$LANE/default}
 OUT=${OUT:-$LANE/managed-runs}
-COLORED_SDK=${COLORED_SDK:-/root/sdkdepot/90a09c15ba02-fa13e8d5c17b}
+# Temporary ABI transition for cjcj-llvm#7. The same runner must pair the
+# pre-inline baseline with its old SDK; new TLAB sources require rebuilt std.
+# Remove this split when the next mainline health baseline is post-transition.
+case "$SHA" in
+  b6d62daa8f3557c8a9effbfa4709a4744e315497)
+    ABI_DEFAULT_SDK=/root/sdkdepot/90a09c15ba02-fa13e8d5c17b ;;
+  *) ABI_DEFAULT_SDK=/root/sdkdepot/b99430a618af-1ecb811801ca ;;
+esac
+COLORED_SDK=${COLORED_SDK:-$ABI_DEFAULT_SDK}
 H48_RT=${H48_RT:-/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative}
 STAINED_RT=${STAINED_RT:-$SRCROOT/build/runtime-staging/lib/x86_64_Release}
 export CANGJIE_HOME=${CANGJIE_HOME:-$COLORED_SDK}
@@ -132,10 +140,21 @@ result = {
     "cangjie_home": "$CANGJIE_HOME",
     "h48_rt": "$H48_RT",
     "stained_rt": "$STAINED_RT",
+    "sdk_manifest": {},
+    "runtime_so_sha256": "",
     "arms": {},
     "failed": [],
     "build_fail": [],
 }
+import hashlib
+manifest_path = pathlib.Path("$CANGJIE_HOME") / "MANIFEST"
+if manifest_path.is_file():
+    result["sdk_manifest"] = dict(line.split("=", 1) for line in manifest_path.read_text().splitlines() if "=" in line)
+    result["sdk_manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+runtime_so = pathlib.Path("$STAINED_RT") / "libcangjie-runtime.so"
+if runtime_so.is_file():
+    result["runtime_so_sha256"] = hashlib.sha256(runtime_so.read_bytes()).hexdigest()
+print("MANAGED_SDK_IDENTITY " + json.dumps({"sdk": result["cangjie_home"], "manifest": result["sdk_manifest"], "runtime_so_sha256": result["runtime_so_sha256"]}, sort_keys=True))
 executables = {
     "finalizer": ["finalizer_trigger"],
     "segmented": ["segmented_array_managed"],
