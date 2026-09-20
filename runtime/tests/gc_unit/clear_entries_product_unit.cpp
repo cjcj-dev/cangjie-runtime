@@ -1416,7 +1416,7 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
     RegionManager manager;
     RelocationReceiptTest::ParkFrom(manager, region);
-    auto& queue = manager.GetZRelocateQueue();
+    auto& queue = generation_relocate_queue(Generation::Old);
     queue.BeginWorkers(1);
     const auto request = queue.Add(region, reinterpret_cast<MAddress>(second));
     GC_EXPECT_TRUE(request.accepted);

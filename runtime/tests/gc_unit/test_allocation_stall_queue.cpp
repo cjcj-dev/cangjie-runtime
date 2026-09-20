@@ -270,14 +270,19 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     {
         ScopedObjectAccess access;
         occupiedRoot = heap.RegisterExportRoot(MObject::NewPinnedObject(occupiedType, 2 * sizeof(void*)));
-        // Reserve a real page without publishing an object on it. Returning
-        // that page later is the ordinary product capacity-supply entry.
-        capacity = Heap::alloc_page(occupiedBytes, ZPageType::large);
-        GC_EXPECT_TRUE(capacity != nullptr);
     }
     // RunTo requests the real driver collection and stops its old marking entry.
     ConcurrentGCBreakpoints::AcquireControl();
     const bool markStopped = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
+    {
+        ScopedObjectAccess access;
+        // ZGC zPage.inline.hpp:180-186: pages allocated after mark-start keep
+        // the current seqnum and are !is_relocatable, so select_relocation_set
+        // must not free them (zGeneration.cpp:211-214). Reserve after the
+        // breakpoint so the later free_page is still the unique owner.
+        capacity = Heap::alloc_page(occupiedBytes, ZPageType::large);
+        GC_EXPECT_TRUE(capacity != nullptr);
+    }
     auto deadline = std::chrono::steady_clock::now() + kHangLimit;
     BaseObject* results[2]{};
     U64 resultRoots[2]{};

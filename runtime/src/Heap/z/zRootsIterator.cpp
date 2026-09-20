@@ -14,6 +14,7 @@
 #include <algorithm>
 #include "Base/CString.h"
 #include "Common/Runtime.h"
+#include "Common/SuspendibleThreadSet.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
@@ -200,6 +201,10 @@ void ZMark::EnumAllExportRoots(ValueRootList& exportOwners)
 }
 void ZMark::DoEnumeration(WorkStack& workStack, ValueRootList& exportOwners)
 {
+    // ZGC zMark.cpp:939-942: keep the entire old root task inside the
+    // suspendible set. Its barriers must not color young roots across the
+    // young mark-start flip before the new mark domain is ready.
+    SuspendibleThreadSetJoiner joiner;
     EnumAllCommonRoots((*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()));
     MergeMutatorRoots(workStack);
     EnumAllExportRoots(exportOwners);

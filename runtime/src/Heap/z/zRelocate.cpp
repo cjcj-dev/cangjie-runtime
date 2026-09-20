@@ -112,7 +112,7 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set)
     CHECK(relocation_set->generation() == generation);
     auto& manager = Heap::GetHeap().page_allocator();
     ZWorkers& workers = *generation->Workers();
-    if (!manager.GetZRelocateQueue().IsActive()) {
+    if (!relocateQueue.IsActive()) {
         StartRelocationTasks(generation->id());
     }
     if (generation->is_young()) {
@@ -231,9 +231,10 @@ void ZRelocate::StartRelocationTasks(ZGenerationId generation)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = space.GetRegionManager();
     ZWorkers& workers = *Heap::GetHeap().GetZGeneration(generation).Workers();
-    CHECK(!manager.GetZRelocateQueue().IsActive());
+    auto& queue = *Heap::GetHeap().GetZGeneration(generation).relocate().queue();
+    CHECK(!queue.IsActive());
     manager.ResetInPlaceRelocatedCounts();
-    manager.GetZRelocateQueue().BeginWorkers(workers.active_workers());
+    queue.BeginWorkers(workers.active_workers());
 }
 
 // N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.
@@ -774,14 +775,14 @@ BaseObject* ZRelocate::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner
         // #498: without return barriers roots are completed eagerly. There is
         // no concurrent page worker in this pause; reuse its in-place task.
         ZPage* page = owner->page();
-        if (owner->table_generation() == static_cast<uint8_t>(Generation::Young)) {
+        if (owner->from_age() != PageAge::old) {
             manager.ForwardClaimedPage<Generation::Young>(page, owner, false, true);
         } else {
             manager.ForwardClaimedPage<Generation::Old>(page, owner, false, true);
         }
         if (const MAddress winner = owner->find(from)) return reinterpret_cast<BaseObject*>(winner);
     }
-    auto& queue = manager.GetZRelocateQueue();
+    auto& queue = generation_relocate_queue((owner->from_age() == PageAge::old ? Generation::Old : Generation::Young));
     const auto request = queue.Add(owner);
     CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
     queue.Wait(request.forwarding);
@@ -1124,6 +1125,13 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+template<Generation G>
+void ForwardTask<G>::work()
+{
+    detail::ExecuteForwardTask<G>(regionManager, relocationSet, iter);
+}
+#endif
 
 template<Generation G>
 void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed, bool inPlace)
@@ -1158,7 +1166,7 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
     }
     owner->mark_done();
     // From here on only forwarding/queue state may be touched.
-    (void)relocateQueue.Complete(owner);
+    (void)statGeneration.relocate().queue()->Complete(owner);
 }
 
 
@@ -2306,3 +2314,9 @@ namespace MapleRuntime {
 namespace MapleRuntime {
 
 }
+
+namespace MapleRuntime {
+// ZGC zRelocate.cpp:1412-1418.
+void ZRelocate::synchronize() { relocateQueue.synchronize(); }
+void ZRelocate::desynchronize() { relocateQueue.desynchronize(); }
+} // namespace MapleRuntime

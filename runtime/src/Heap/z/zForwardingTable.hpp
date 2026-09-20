@@ -28,7 +28,7 @@ private:
 
 class ZRelocateQueue;
 ZForwardingTable& generation_forwarding_table(Generation generation);
-ZRelocateQueue& generation_relocate_queue();
+ZRelocateQueue& generation_relocate_queue(Generation generation);
 ZForwarding* forwarding_for_page(const ZPage* page);
 inline ZForwarding* forwarding_for_page(const ZPage* page, MAddress) { return forwarding_for_page(page); }
 MAddress forwarding_find(Generation generation, MAddress from);

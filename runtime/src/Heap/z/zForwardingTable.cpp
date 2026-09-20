@@ -27,9 +27,9 @@ ZForwardingTable& generation_forwarding_table(Generation generation)
     return Heap::GetHeap().GetZGeneration(generation).forwarding_table();
 }
 
-ZRelocateQueue& generation_relocate_queue()
+ZRelocateQueue& generation_relocate_queue(Generation generation)
 {
-    return static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().GetZRelocateQueue();
+    return *Heap::GetHeap().GetZGeneration(generation).relocate().queue();
 }
 
 ZForwarding* forwarding_for_page(const ZPage* page)

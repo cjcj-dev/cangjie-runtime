@@ -259,8 +259,6 @@ public:
     bool is_promotion() const { return _from_age != PageAge::old && _to_age == PageAge::old; }
     ZPage* page() const;
     RegionLifeId page_life_id() const { return _page_life_id; }
-    uint8_t table_generation() const { return _table_generation; }
-    void set_table_generation(uint8_t generation) { _table_generation = generation; }
     bool page_life_current() const;
     void verify() const;
     size_t length() const { return _entries.length(); }
@@ -416,7 +414,6 @@ private:
     const RegionLifeId _page_life_id;
     // Monotonic per-region-span generation. Written before the table pointer is
     // published, then immutable for the table's lifetime.
-    uint8_t _table_generation;
     std::atomic<bool> _claimed;
     std::atomic<bool> _in_place;
     MAddress _in_place_top_at_start;

@@ -17,6 +17,7 @@
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Handshake.h"
 #include "Mutator.inline.h"
@@ -540,6 +541,11 @@ void MutatorManager::StopTheWorld()
     }
 #endif
     syncMutex.lock();
+    // ZGC safepoint.cpp:341: suspend GC workers before locking the thread
+    // list, since concurrent root workers can still be visiting that list.
+    if (ZCollectedHeap::heap() != nullptr) {
+        ZCollectedHeap::heap()->safepoint_synchronize_begin();
+    }
     syncTriggered.store(true);
 
     AcquireMutatorManagementWLock();
@@ -580,6 +586,9 @@ void MutatorManager::StartTheWorld() noexcept
 
     MutatorManagementWUnlock();
 
+    if (ZCollectedHeap::heap() != nullptr) {
+        ZCollectedHeap::heap()->safepoint_synchronize_end();
+    }
     // Release syncMutex to allow other thread call STW.
     syncMutex.unlock();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)

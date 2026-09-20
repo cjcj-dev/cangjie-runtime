@@ -229,38 +229,24 @@ namespace detail {
 // #710: ordinary work comes from the relocation set's parallel iterator
 // (zRelocate.cpp:1088-1153 ZRelocate::relocate shape), not a page list.
 template<Generation G>
-inline void ExecuteForwardTask(RegionManager& regionManager, ZRelocationSet* relocationSet)
+inline void ExecuteForwardTask(RegionManager& regionManager, ZRelocationSet* relocationSet,
+                               ZRelocationSetParallelIterator& iter)
 {
-    ZRelocationSetParallelIterator iter(relocationSet);
-    while (true) {
-        // zRelocate.cpp:1193-1203: serve a mutator's requested receipt
-        // before advancing the ordinary relocation iterator.
-        ZRelocateQueue::Selection selected =
-            regionManager.GetZRelocateQueue().SelectBeforeOrdinary([&iter]() -> void* {
-                ZForwarding* forwarding = nullptr;
-                return iter.next(&forwarding) ? static_cast<void*>(forwarding) : nullptr;
-            });
-        if (!selected) {
-            selected = regionManager.GetZRelocateQueue().SynchronizePoll();
-            if (selected.workersDone) {
-                break;
-            }
-            if (!selected) {
-                continue;
-            }
+    ZRelocateQueue& queue = *relocationSet->generation()->relocate().queue();
+    for (;;) {
+        // ZGC zGeneration.cpp:575-580: after relocate-start there is no abort
+        // early return; remaining selected pages still run through
+        // do_forwarding / abort_page inside this loop.
+        for (ZForwarding* forwarding; (forwarding = queue.synchronize_poll()) != nullptr;) {
+            regionManager.ForwardClaimedPage<G>(forwarding->page(), forwarding, true);
         }
-        if (!selected.is_request()) {
-            ZForwarding* forwarding = static_cast<ZForwarding*>(selected.ordinary);
-            regionManager.ForwardClaimedPage<G>(forwarding->page(), forwarding);
-            continue;
+        ZForwarding* forwarding = nullptr;
+        if (!iter.next(&forwarding)) {
+            break;
         }
-
-        ZPage* region = static_cast<ZPage*>(selected.owner());
-        // The request claimant owns the page task even when an ordinary
-        // iterator already claimed the forwarding (the claim fails there).
-        regionManager.ForwardClaimedPage<G>(region,
-            forwarding_for_page(region), true);
+        regionManager.ForwardClaimedPage<G>(forwarding->page(), forwarding);
     }
+    queue.leave();
 }
 
 } // namespace detail
@@ -272,17 +258,23 @@ template<Generation G>
 class ForwardTask : public ZTask {
 public:
     ForwardTask(RegionManager& manager, ZRelocationSet* relocationSet)
-        : ZTask("ZRelocateTask"), regionManager(manager), relocationSet(relocationSet) {}
+        : ZTask("ZRelocateTask"), regionManager(manager), relocationSet(relocationSet), iter(relocationSet) {}
 
-    ~ForwardTask() override = default;
+    // ZGC zRelocate.cpp:1124: deactivate after all workers have left.
+    ~ForwardTask() override { relocationSet->generation()->relocate().queue()->deactivate(); }
+#if defined(MRT_TESTABLE_INTERNALS)
+    MRT_EXPORT void work() override;
+#else
     __attribute__((visibility("hidden"))) void work() override
     {
-        detail::ExecuteForwardTask<G>(regionManager, relocationSet);
+        detail::ExecuteForwardTask<G>(regionManager, relocationSet, iter);
     }
+#endif
 
 private:
     RegionManager& regionManager;
     ZRelocationSet* relocationSet;
+    ZRelocationSetParallelIterator iter;
 };
 
 
