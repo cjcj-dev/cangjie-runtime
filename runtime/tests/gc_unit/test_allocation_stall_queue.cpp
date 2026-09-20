@@ -10,6 +10,12 @@
 #include <thread>
 
 #include "gc_unittest.hpp"
+#include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
+#include "Heap/z/zMarkStack.hpp"
+#include "ObjectModel/MObject.h"
+#include "TypeInfoManager.h"
+#include <cstring>
 #include "zunittest.hpp"
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
@@ -169,3 +175,95 @@ GC_TEST(AllocationStall, DequeueBeforeNotifyKeepsOneTerminalPerWaiter)
     GC_EXPECT_FALSE(second.Wait());
     GC_EXPECT_FALSE(queue.IsStalling());
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+std::atomic<uint64_t> stallMarkSequence{0};
+std::atomic<bool> stallReleaseMark{false};
+std::atomic<bool> stallWindowTimeout{false};
+
+void ObserveStallMark(const std::vector<BaseObject*>* objects)
+{
+    auto& heap = Heap::GetHeap();
+    const auto snapshot = heap.GetCycleSnapshot(ZGenerationId::old);
+    if (objects == nullptr || snapshot.phase != ZGenerationPhase::Mark) { return; }
+    uint64_t empty = 0;
+    if (!stallMarkSequence.compare_exchange_strong(empty, snapshot.sequence)) { return; }
+    const auto deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while (!stallReleaseMark.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    stallWindowTimeout = !stallReleaseMark.load();
+}
+}
+
+// zPageAllocator.cpp:2320-2362: a request arriving after old mark-start
+// cannot be failed by that collection; the remaining queue drives another GC.
+// Both waiters enter via Heap::alloc_page, not by constructing queue requests.
+GC_OTHER_VM_TEST(AllocationStall, ProductLateWaiterRequiresNextCollection)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(void*));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    U64 root;
+    {
+        ScopedObjectAccess access;
+        root = heap.RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
+    }
+    stallMarkSequence = 0;
+    stallReleaseMark = false;
+    stallWindowTimeout = false;
+    SetMarkClosureObserverForTest(ObserveStallMark);
+    const size_t bytes = heap.GetMaxCapacity(); // the rooted object excludes a whole-heap claim
+    ZPage* results[2]{};
+    uint64_t completedSequence[2]{};
+    std::atomic<bool> done[2]{};
+    auto allocate = [&](size_t index) {
+        manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        {
+            ScopedObjectAccess access;
+            results[index] = Heap::alloc_page(bytes, ZPageType::large);
+            completedSequence[index] = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+        }
+        done[index].store(true, std::memory_order_release);
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    };
+    std::thread first(allocate, 0);
+    auto deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while (stallMarkSequence.load() == 0 && !done[0].load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const uint64_t firstMark = stallMarkSequence.load();
+    std::thread late(allocate, 1);
+    deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while (heap.page_allocator().PendingStalledAllocations() != 2 && !done[1].load() &&
+           std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
+    const size_t queued = heap.page_allocator().PendingStalledAllocations();
+    stallReleaseMark.store(true, std::memory_order_release);
+    first.join();
+    late.join();
+    SetMarkClosureObserverForTest(nullptr);
+    const bool retained = heap.GetExportObject(root) != nullptr;
+    std::fprintf(stderr, "STALL_PRODUCT_LATE_TARGET queued=%zu first_mark=%llu first_done=%llu late_done=%llu "
+                 "first_null=%d late_null=%d retained=%d timeout=%d\n", queued,
+                 (unsigned long long)firstMark, (unsigned long long)completedSequence[0],
+                 (unsigned long long)completedSequence[1], results[0] == nullptr, results[1] == nullptr,
+                 retained, stallWindowTimeout.load());
+    heap.RemoveExportObject(root);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_EQ(queued, size_t{2});
+    GC_EXPECT_TRUE(firstMark != 0 && !stallWindowTimeout.load());
+    GC_EXPECT_TRUE(results[0] == nullptr && results[1] == nullptr && retained);
+    GC_EXPECT_TRUE(completedSequence[1] > firstMark);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif
