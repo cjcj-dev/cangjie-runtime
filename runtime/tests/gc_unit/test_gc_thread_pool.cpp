@@ -45,7 +45,8 @@ struct RelocationReceiptTestAccess {
     static void ForwardYoungFromRuntimeEntry(Heap& collector)
     {
         Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
-        ZRelocate::ForwardFromSpace(ZGenerationId::young);
+        auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+        young.relocate().relocate(&young.relocation_set());
     }
 #endif
 };
