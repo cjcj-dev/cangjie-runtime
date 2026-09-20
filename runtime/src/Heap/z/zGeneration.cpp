@@ -272,6 +272,27 @@ public:
     bool block_jni_critical() const override { return true; }
 };
 
+#if defined(MRT_GC_UNIT_TESTS)
+class VM_ZTestJniCriticalPause : public VM_ZOperation {
+public:
+    bool do_operation() override
+    {
+        testJniCriticalSawBlocked.store(ZJNICritical::count_snapshot() < 0, std::memory_order_release);
+        return true;
+    }
+    bool block_jni_critical() const override { return true; }
+    static std::atomic<bool> testJniCriticalSawBlocked;
+};
+std::atomic<bool> VM_ZTestJniCriticalPause::testJniCriticalSawBlocked{ false };
+
+bool ZGeneration::TestPauseJniCritical()
+{
+    VM_ZTestJniCriticalPause::testJniCriticalSawBlocked.store(false, std::memory_order_relaxed);
+    VM_ZTestJniCriticalPause op;
+    return op.pause() && VM_ZTestJniCriticalPause::testJniCriticalSawBlocked.load(std::memory_order_acquire);
+}
+#endif
+
 class VM_ZVerifyOld : public VM_ZOperation {
 public:
     bool do_operation() override

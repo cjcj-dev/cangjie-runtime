@@ -289,9 +289,6 @@ ZPage* ZPage::clone_for_promotion() const
 {
     CHECK(IsYoungRegion());
     ZPage* page = new ZPage(_type, PageAge::old, _virtual);
-    // Host difference from ZGC zPage.cpp:64-72: raw-pointer ownership stays
-    // with the same objects when only the page metadata is replaced.
-    page->_scratch.rawPointerObjectCount = GetRawPointerObjectCount();
     page->_top = _top;
     return page;
 }

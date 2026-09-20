@@ -109,9 +109,6 @@ void AllocBuffer::ResizeTLAB(size_t capacity, double fallbackFraction, size_t ma
 
 MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
 {
-    if (UNLIKELY(allocType == AllocType::RAW_POINTER_OBJECT)) {
-        return AllocateRawPointerObject(totalSize);
-    }
     const uintptr_t addr = AllocateInTLAB(totalSize);
     return addr != 0 ? addr : AllocateImpl(totalSize, allocType);
 }
@@ -134,40 +131,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     return AllocateInTLAB(totalSize);
 }
 
-MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
-{
-    ZPage* region = tlRawPointerRegions.empty() ? nullptr : tlRawPointerRegions.back();
-    if (region != nullptr) {
-        MAddress allocAddr = region->alloc_object(totalSize);
-        if (allocAddr != 0) {
-            return allocAddr;
-        }
-    }
-    size_t pageSize = AlignUp(totalSize, ZGranuleSize);
-    if (totalSize <= ZObjectSizeLimitSmall) {
-        region = Heap::alloc_page(pageSize, ZPageType::small);
-        if (region == nullptr) {
-            return 0;
-        }
-        region->SetRegionRole(ZPageRole::RawPointerStaging);
-        tlRawPointerRegions.push_back(region);
-    } else {
-        region = Heap::alloc_page(pageSize, ZPageType::large);
-        if (region == nullptr) {
-            return 0;
-        }
-        region->SetRegionRole(ZPageRole::RawPointerStaging);
-        tlLargeRawPointerRegions.push_back(region);
-    }
-
-    // region is enough for totalSize.
-    MAddress allocAddr = region->alloc_object(totalSize);
-    MRT_ASSERT(allocAddr != 0, "allocation failure");
-    return allocAddr;
-}
-
 void AllocBuffer::CommitRawPointerRegions()
 {
-    Heap::GetHeap().page_allocator().MergeRawPointerRegions(tlRawPointerRegions, tlLargeRawPointerRegions);
 }
 } // namespace MapleRuntime

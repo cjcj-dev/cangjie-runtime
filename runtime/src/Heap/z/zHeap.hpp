@@ -82,9 +82,6 @@ public:
 
     void RequestGC(GCReason reason, bool async);
     void ResolveCycleRef();
-    void AddRawPointerObject(BaseObject* obj);
-    BaseObject* PinRawPointerObject(BaseObject* obj);
-    void RemoveRawPointerObject(BaseObject* obj);
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     void DumpRoots(LogType logType);
     void DumpHeap(const CString& tag);

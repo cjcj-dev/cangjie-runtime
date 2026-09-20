@@ -374,7 +374,7 @@ void RunYoungWeakVariant(size_t helpers)
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
-    space.GetRegionManager().AddRawPointerObject(graph.child);
+    (void)Heap::GetHeap().RegisterExportRoot(graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
@@ -445,8 +445,8 @@ void RunYoungWeakRemsetFlow()
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
-    space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
-    space.GetRegionManager().AddRawPointerObject(graph.child);
+    (void)Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
+    (void)Heap::GetHeap().RegisterExportRoot(graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
@@ -503,11 +503,11 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     RelocationReceiptTestAccess::BindWorkerBudget(static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region0->SetRegionRole(ZPageRole::RecentFull);
-    space.GetRegionManager().AddRawPointerObject(graph.child);
+    (void)Heap::GetHeap().RegisterExportRoot(graph.child);
     if (runtimeEntry) {
-        space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
-        space.GetRegionManager().AddRawPointerObject(graph.weak);
-        space.GetRegionManager().AddRawPointerObject(graph.referent);
+        (void)Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
+        (void)Heap::GetHeap().RegisterExportRoot(graph.weak);
+        (void)Heap::GetHeap().RegisterExportRoot(graph.referent);
     }
 
     // MarkStack::size() counts 64-entry buffers. Seventeen buffers cross the
@@ -696,7 +696,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region0->SetRegionRole(ZPageRole::RecentFull);
-    space.GetRegionManager().AddRawPointerObject(graph.weak);
+    (void)Heap::GetHeap().RegisterExportRoot(graph.weak);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     RelocationReceiptTestAccess::RunMajorMark(collector);
@@ -818,7 +818,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool old
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     graph.owner->SetRegionRole(ZPageRole::RecentFull);
-    space.GetRegionManager().AddRawPointerObject(graph.foreign);
+    (void)Heap::GetHeap().RegisterExportRoot(graph.foreign);
     // The old-roots-only case registers before the real old mark-start flip.
     // It exercises the old phase entry without a young prelude premarking it.
     const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(graph.root);
@@ -834,8 +834,8 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool old
     bool driverCompleted = false;
     if (fullDriver) {
         // Pin the fixture objects while the real driver completes relocation.
-        space.GetRegionManager().AddRawPointerObject(graph.root);
-        if (secondRoot != nullptr) space.GetRegionManager().AddRawPointerObject(secondRoot);
+        (void)Heap::GetHeap().RegisterExportRoot(graph.root);
+        if (secondRoot != nullptr) (void)Heap::GetHeap().RegisterExportRoot(secondRoot);
         ZCrossVM::testExportOwnershipResult = [&](const ExportOwnershipTestObservation& observed) {
             const auto paired = [&](const std::vector<ExportOwnershipTestObservation::Edge>& edges) {
                 return edges.size() == owners &&

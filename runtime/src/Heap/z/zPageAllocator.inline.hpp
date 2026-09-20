@@ -107,7 +107,7 @@ inline size_t RegionManager::GetFromSpaceSize() const
 
 inline size_t RegionManager::GetPinnedSpaceSize() const
     {
-        return SumAllocatedByRoles({ ZPageRole::OldPinned, ZPageRole::RecentPinned, ZPageRole::RawPointerPinned });
+        return SumAllocatedByRoles({ ZPageRole::OldPinned, ZPageRole::RecentPinned });
     }
 
 inline size_t RegionManager::GetUsedBytes() const
@@ -202,7 +202,7 @@ inline ZPage* RegionManager::TakeReclaimableGarbageRegion(size_t* gatedBytes)
         ZPage::SafeDestroyScope scope;
         ZPageTableIterator iter(&ZPageTable::heap_table());
         for (ZPage* region; iter.next(&region);) {
-            if (region->GetRegionRole() != ZPageRole::Garbage || region->GetRawPointerObjectCount() != 0) {
+            if (region->GetRegionRole() != ZPageRole::Garbage) {
                 continue;
             }
             ZPageRole expect = ZPageRole::Garbage;
@@ -223,7 +223,7 @@ inline bool RegionManager::TryTakeGarbageRegionAfterDispel(ZPage* target)
                      "TryTakeGarbageRegionAfterDispel region=%p type=%u "
                      "(garbage role still names a non-GARBAGE region)",
                      target, static_cast<unsigned>(0u));
-        if (target == nullptr || target->GetRawPointerObjectCount() > 0) {
+        if (target == nullptr) {
             return false;
         }
         ZPageRole expect = ZPageRole::Garbage;

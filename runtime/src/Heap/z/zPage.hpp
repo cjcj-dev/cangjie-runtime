@@ -57,9 +57,7 @@
 namespace MapleRuntime {
 
 // Page lifecycle role. ZGC keeps this identity in the page table plus the
-// relocation set (zPageTable.hpp:57-77, zGeneration.cpp:205-221); the host
-// runtime keeps raw-pointer pinning and deferred (async) reclaim, which have
-// no ZGC counterpart, so the role word also covers those states. The
+// relocation set (zPageTable.hpp:57-77, zGeneration.cpp:205-221). The
 // intrusive page lists are retired in favour of this field (#710).
 enum class ZPageRole : uint8_t {
     None = 0, // free, or a from-page claimed off its list ("lone")
@@ -71,13 +69,8 @@ enum class ZPageRole : uint8_t {
     Garbage,
     RecentPinned,
     OldPinned,
-    RawPointerPinned,
     OldLarge,
     RecentLarge,
-    // Per-thread raw-pointer allocation staging (Cangjie-specific; no ZGC
-    // counterpart). Matches the deleted tlRawPointerRegions membership: no
-    // lifecycle predicate is true for it.
-    RawPointerStaging,
 };
 
 inline const char* RegionRoleName(ZPageRole role)
@@ -92,10 +85,8 @@ inline const char* RegionRoleName(ZPageRole role)
         case ZPageRole::Garbage: return "garbage regions";
         case ZPageRole::RecentPinned: return "recent pinned regions";
         case ZPageRole::OldPinned: return "old pinned regions";
-        case ZPageRole::RawPointerPinned: return "raw pointer pinned regions";
         case ZPageRole::OldLarge: return "old large regions";
         case ZPageRole::RecentLarge: return "recent large regions";
-        case ZPageRole::RawPointerStaging: return "thread-local raw-pointer regions";
     }
     return "unknown";
 }
@@ -657,18 +648,6 @@ public:
 
 
 
-    int32_t IncRawPointerObjectCount();
-
-    int32_t DecRawPointerObjectCount();
-
-    int32_t GetRawPointerObjectCount() const
-    {
-        return __atomic_load_n(&_scratch.rawPointerObjectCount, __ATOMIC_SEQ_CST);
-    }
-
-    bool CompareAndSwapRawPointerObjectCount(int32_t expectVal, int32_t newVal);
-
-
     // for regions shared by multithreads
 
     // zHeap.cpp:298-311 undo_alloc_object_for_relocation / zPage undo_alloc_object_atomic:
@@ -718,7 +697,6 @@ private:
 
     static std::atomic<size_t> youngRegionCount;
     static std::mutex youngRegionFlagMutex;
-    static constexpr int32_t MAX_RAW_POINTER_COUNT = std::numeric_limits<int32_t>::max();
     static constexpr int32_t BIT_LENGTH = 4;
     static constexpr uint8_t YOUNG_AGE_BIT_LENGTH = 6;
     static constexpr uint8_t YOUNG_STATE_BIT_LENGTH = 1 + YOUNG_AGE_BIT_LENGTH;
@@ -731,7 +709,6 @@ private:
     struct ZPageRelocationScratch {
         struct {
 
-            int32_t rawPointerObjectCount;
             uint32_t censusBoundaryOffset;
         };
 

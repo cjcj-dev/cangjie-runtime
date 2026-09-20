@@ -4,9 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// CI face: reclaim claim is a role CAS (#710). Mutator AddRawPointerObject
-// retypes FROM→RawPointerPinned. ZGC: zGeneration.cpp:211-221 register_empty_page
-// only if is_relocatable.
+// CI face: reclaim claim is a role CAS (#710).
+// ZGC: zGeneration.cpp:211-221 register_empty_page only if is_relocatable.
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -30,10 +29,6 @@ struct IsFromRegTestAccess {
     {
         return region->GetRegionRole() == ZPageRole::From;
     }
-    static bool OnPinned(RegionManager&, const ZPage* region)
-    {
-        return region->GetRegionRole() == ZPageRole::RawPointerPinned;
-    }
     static bool OnGarbage(RegionManager&, const ZPage* region)
     {
         return region->GetRegionRole() == ZPageRole::Garbage;
@@ -52,21 +47,6 @@ struct IsFromRegTestAccess {
 
 } // namespace MapleRuntime
 
-GC_TEST(IsFromReg, TryDeleteFromFailsAfterPinRetype)
-{
-    GcHeapFixture fx;
-    RegionManager manager;
-    IsFromRegTestAccess::ParkFrom(manager, fx.region0);
-    GC_EXPECT_TRUE(fx.region0->IsFromRegion());
-    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0, 0));
-    fx.region0->SetRegionRole(ZPageRole::RawPointerPinned);
-    GC_EXPECT_FALSE(fx.region0->IsFromRegion());
-    GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0, 0));
-    GC_EXPECT_FALSE(fx.region0->IsFromRegion());
-    GC_EXPECT_TRUE(IsFromRegTestAccess::OnPinned(manager, fx.region0));
-    GC_EXPECT_FALSE(IsFromRegTestAccess::OnFrom(manager, fx.region0));
-}
-
 GC_TEST(IsFromReg, UnlistedGarbageClaimIsRefusedUntilPrepend)
 {
     GcHeapFixture fx;
@@ -76,21 +56,5 @@ GC_TEST(IsFromReg, UnlistedGarbageClaimIsRefusedUntilPrepend)
     GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0, 0));
     IsFromRegTestAccess::ParkGarbage(manager, fx.region0);
     GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0, 0));
-    fx.region0->SetRegionRole(ZPageRole::RawPointerPinned);
-    GC_EXPECT_TRUE(IsFromRegTestAccess::OnPinned(manager, fx.region0));
     GC_EXPECT_FALSE(IsFromRegTestAccess::OnGarbage(manager, fx.region0));
-}
-
-GC_TEST(IsFromReg, TakeGarbageSkipsRawPointerHold)
-{
-    GcHeapFixture fx;
-    RegionManager manager;
-    fx.region0->IncRawPointerObjectCount();
-    IsFromRegTestAccess::ParkGarbage(manager, fx.region0);
-    ZPage* taken = manager.TakeReclaimableGarbageRegion();
-    GC_EXPECT_TRUE(taken == nullptr);
-    GC_EXPECT_TRUE(IsFromRegTestAccess::OnGarbage(manager, fx.region0));
-    fx.region0->DecRawPointerObjectCount();
-    taken = manager.TakeReclaimableGarbageRegion();
-    GC_EXPECT_TRUE(taken == fx.region0);
 }

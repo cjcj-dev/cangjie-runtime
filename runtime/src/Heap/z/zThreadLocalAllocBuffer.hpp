@@ -156,7 +156,6 @@ private:
     // slow path
     MAddress TryAllocateOnce(size_t totalSize, AllocType allocType);
     MAddress AllocateImpl(size_t totalSize, AllocType allocType);
-    MAddress AllocateRawPointerObject(size_t totalSize);
 
     // Temporary compiler ABI indirection, owned by cjcj-llvm#7.
     // The descriptor is not a ZPage: its bounds delimit a shared-page slice.

@@ -681,8 +681,6 @@ public:
     void AssemblePinnedGarbageCandidates(bool collectAll);
     YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor);
 
-    void MergeRawPointerPinnedRegions();
-
     void CollectFromSpaceGarbage();
 
 
@@ -690,10 +688,6 @@ public:
 
     template<Generation G>
     size_t CollectRegion(ZPage* region);
-
-    void AddRawPointerObject(BaseObject* obj);
-
-    void RemoveRawPointerObject(BaseObject* obj);
 
     void ReclaimRegion(ZPage* region);
     // Like ReclaimRegion but units enter mark-quarantine tree, not dirty tree.

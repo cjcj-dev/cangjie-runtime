@@ -641,49 +641,6 @@ void Heap::object_and_field_iterate_for_verify(ObjectClosure* object_cl, bool vi
 }
 
 namespace MapleRuntime {
-void Heap::AddRawPointerObject(BaseObject* obj)
-{
-    (void)PinRawPointerObject(obj);
-    // ⚠ Callers of this void form (Sync futures/mutexes) keep using the pointer they
-    // passed in. If that pointer was a movable from-copy resolved above, their later
-    // RemoveRawPointerObject would Dec the from region — same pairing hazard as
-    // oracleblack face c. Sync objects are pinned at creation (never from) today;
-    // adopting the resolved pointer there is a tracked follow-up, not done here.
-}
-
-BaseObject* Heap::PinRawPointerObject(BaseObject* obj)
-{
-    // oracle R4 / RegionManager.h:507: do not pin a movable from-copy
-    // during PREFORWARD/FORWARD (CHECK would fire). Resolve to `to` first;
-    // a true VisitLive hole is already Exempt-kept, TryDeleteRegion(FROM)
-    // fails and the else arm is taken. CHECK is not relaxed.
-    //
-    // oracleblack round 10, face c: the resolved pointer MUST flow back to the
-    // caller. Inc lands on region(to); MCC_ReleaseRawData Decs the region of the
-    // payload pointer the caller kept. Pinning to while handing out from both
-    // underflowed the from region's count and gave C a payload the young cycle
-    // was about to relocate.
-    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
-        const MAddress addr = reinterpret_cast<MAddress>(obj);
-        if (Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
-            Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr) {
-            const ForwardingProvenance provenance{
-                ForwardingHolderKind::HeapRef, this, &obj
-            };
-            obj = ZBarrier::ValidateCurrentValue(obj, provenance);
-        }
-    }
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.AddRawPointerObject(obj);
-    return obj;
-}
-
-void Heap::RemoveRawPointerObject(BaseObject* obj)
-{
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.RemoveRawPointerObject(obj);
-}
-
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
 void Heap::DumpHeap(const CString& tag)
 {
