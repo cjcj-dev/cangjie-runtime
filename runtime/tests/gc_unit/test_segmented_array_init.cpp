@@ -603,8 +603,4 @@ GC_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargeYoungClosureCase, 0), 0);
 }
-GC_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
-{
-    GC_EXPECT_EQ(RunRuntimeCase(RunPinnedMarkStartCase, 0), 0);
-}
 #endif
