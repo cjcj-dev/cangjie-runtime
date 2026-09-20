@@ -2,6 +2,12 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include <cstring>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "Cangjie.h"
 #include "gc_unittest.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -50,7 +56,7 @@ void* AllocateSizedObjects(void*)
     return nullptr;
 }
 }
-static void RunAllocatorCase(CJTaskFunc task)
+static void RunAllocatorCase(CJTaskFunc task, bool queuedCollectionAtShutdown = false)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -64,8 +70,60 @@ static void RunAllocatorCase(CJTaskFunc task)
     std::fprintf(stderr, "ALLOCATOR_PHASE after_get_task_ret\n");
     ReleaseHandle(handle);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(result), uintptr_t{0});
+#if defined(MRT_TESTABLE_INTERNALS)
+    std::atomic<bool> queued{false};
+    std::atomic<bool> finiCompleted{false};
+    bool abortObserved = false;
+    std::thread collection;
+    if (queuedCollectionAtShutdown) {
+        collection = std::thread([&] {
+            // ZGC zDriver.cpp:207-220: acquire the driver lock before testing abort.
+            // Queue a real collection while holding that same product lock;
+            // release it only after Fini has published its stop request.
+            ZDriver::lock();
+            ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, 0, 0));
+            queued.store(true, std::memory_order_release);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            while (!ZAbort::should_abort() && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+            abortObserved = ZAbort::should_abort();
+            std::fprintf(stderr, "MEDIUM_SHUTDOWN_RELEASE abort_observed=%d\n", abortObserved);
+            ZDriver::unlock();
+            const auto finishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            while (!finiCompleted.load(std::memory_order_acquire) &&
+                   std::chrono::steady_clock::now() < finishDeadline) {
+                std::this_thread::yield();
+            }
+            const bool completed = finiCompleted.load(std::memory_order_acquire);
+            std::fprintf(stderr, "MEDIUM_SHUTDOWN_COMPLETION_TARGET completed=%d abort_retained=%d\n",
+                         completed, ZAbort::should_abort());
+            if (!completed) {
+                try { GC_EXPECT_TRUE(completed); }
+                catch (const std::exception& error) {
+                    std::fprintf(stderr, "MEDIUM_SHUTDOWN_COMPLETION_ASSERTION %s\n", error.what());
+                    std::_Exit(1);
+                }
+            }
+        });
+        while (!queued.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    }
+#else
+    (void)queuedCollectionAtShutdown;
+#endif
     std::fprintf(stderr, "ALLOCATOR_PHASE before_fini\n");
-    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    const auto finiResult = FiniCJRuntime();
+#if defined(MRT_TESTABLE_INTERNALS)
+    finiCompleted.store(true, std::memory_order_release);
+    if (collection.joinable()) { collection.join(); }
+    if (queuedCollectionAtShutdown) {
+        const bool abortRetained = ZAbort::should_abort();
+        std::fprintf(stderr, "MEDIUM_SHUTDOWN_TARGET fini=%d observed=%d retained=%d\n",
+                     finiResult, abortObserved, abortRetained);
+        GC_EXPECT_TRUE(abortObserved && abortRetained);
+    }
+#endif
+    GC_EXPECT_EQ(finiResult, E_OK);
     std::fprintf(stderr, "ALLOCATOR_PHASE after_fini\n");
 }
 
@@ -216,3 +274,11 @@ GC_OTHER_VM_TEST(ObjectAllocatorPaths, NonBlockingCapacityDoesNotStartCollection
 
 GC_OTHER_VM_TEST(ObjectAllocatorPaths, MediumNonBlockingAllocatesAfterCacheMiss) { RunAllocatorCase(AllocateMediumNonBlocking); }
 GC_OTHER_VM_TEST(ObjectAllocatorPaths, MediumBlockingFailureAttemptsCollection) { RunAllocatorCase(AllocateMediumBlockingFailure); }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(ObjectAllocatorPaths, MediumBlockingFailureShutdownWithQueuedCollection)
+{
+    RunAllocatorCase(AllocateMediumBlockingFailure, true);
+}
+
+#endif
