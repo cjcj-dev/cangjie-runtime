@@ -482,6 +482,9 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
     ZPage* region = ZPage::InitRegion(index, (1) * ZGranuleSize, ZPageType::small);
     GC_EXPECT_TRUE(region != nullptr);
     region->SetRegionAllocPtr(region->GetRegionStart());
+    // ZHeap::alloc_page (zHeap.cpp:253-257) publishes before any page lookup
+    // or ZGenerationYoung::flip_promote replaces this descriptor.
+    PublishAllocatedPage(region);
     (void)fx;
     return region;
 }
@@ -656,10 +659,17 @@ private:
 
 void EmptyBothRememberedFaces(RememberedSet& remembered)
 {
-    std::unordered_set<MAddress> discarded;
-    remembered.DrainForMinor(discarded);
-    discarded.clear();
-    remembered.DrainForMinor(discarded);
+    // ZRememberedSet owns two per-page faces. The old global DrainForMinor
+    // adapter no longer consumes either bitmap.
+    for (int face = 0; face < 2; ++face) {
+        remembered.FlipForMinor();
+        ZPageTableIterator pages(&Heap::page_table());
+        for (ZPage* page; pages.next(&page);) {
+            if (page->_remembered_set.is_initialized()) {
+                page->_remembered_set.clear_previous();
+            }
+        }
+    }
 }
 
 LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, Heap& collector)
@@ -1633,10 +1643,20 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
         GC_EXPECT_TRUE(region->generation_id() == expectedId);
     }
     const auto oldLife = region->GetRegionLifeId();
-    ZPage::RetirePage(region, [region]() { region->RetirePageMemory(); });
+    RegionLifeId retiredLife = oldLife;
+    ZPage::RetirePage(region, [region, &retiredLife]() {
+        region->RetirePageMemory();
+        retiredLife = region->GetRegionLifeId();
+    });
+    // The scratch life counter belongs to one descriptor, not its address.
+    GC_EXPECT_TRUE(retiredLife != oldLife);
+    // ZPage::reset_seqnum/reset (zPage.cpp:90-112): a newly constructed page
+    // snapshots the current generation, even when its address is reused.
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
     region = ZPage::InitRegion(ZPage::GranuleIndex(fixture.heapStart), (1) * ZGranuleSize, ZPageType::small);
     PublishAllocatedPage(region);
-    GC_EXPECT_TRUE(region->GetRegionLifeId() != oldLife);
+    fixture.region0 = region;
+    GC_EXPECT_EQ(region->seqnum(), ZGeneration::old()->seqnum());
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
 }

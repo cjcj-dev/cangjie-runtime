@@ -584,80 +584,82 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
 } // namespace
 
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 2), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, SmallPrimitiveArrayKeepsFastPath)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, SmallPrimitiveArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 3), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, LargeReferenceArrayPublishesClearedPayload)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, LargeReferenceArrayPublishesClearedPayload)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 0), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, LargePrimitiveArrayUsesSegmentedClearing)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, LargePrimitiveArrayUsesSegmentedClearing)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 1), 0);
 }
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 8), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlockParallel)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlockParallel)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 8, 2), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 4), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 4, 2), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, TwoGcReferenceInitializationRestartsOnlyOnce)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, TwoGcReferenceInitializationRestartsOnlyOnce)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 24), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, TwoGcPrimitiveInitializationDoesNotRestart)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, TwoGcPrimitiveInitializationDoesNotRestart)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 25), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, PrimitivePayloadSurvivesFullGcWindow)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, PrimitivePayloadSurvivesFullGcWindow)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 9), 0);
 }
 #endif
-GC_OTHER_VM_TEST(LargePageGeneration, AllocationPublishesYoungEden)
+GC_RUNTIME_OTHER_VM_TEST(LargePageGeneration, AllocationPublishesYoungEden)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePageIdentityCase, 0), 0);
 }
-GC_OTHER_VM_TEST(P1Mark, PinnedReclaimedSlotIsNotAllocationSource)
+GC_RUNTIME_OTHER_VM_TEST(P1Mark, PinnedReclaimedSlotIsNotAllocationSource)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunPinnedBirthCase, 0), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunVisibleArrayGraph, 0, 1, true), 0);
 }
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(MarkAllocation, LargeHolderAndNewTargetAreImplicitlyLive)
+GC_RUNTIME_OTHER_VM_TEST(MarkAllocation, LargeHolderAndNewTargetAreImplicitlyLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunMarkAllocationCase, 0), 0);
 }
-GC_OTHER_VM_TEST(MarkAllocation, LargeHolderKeepsRootedExistingTargetLive)
+GC_RUNTIME_OTHER_VM_TEST(MarkAllocation, LargeHolderKeepsRootedExistingTargetLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunMarkAllocationCase, 1), 0);
 }
-GC_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
+GC_RUNTIME_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargeYoungClosureCase, 0), 0);
 }
 #endif
 
-GC_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
+GC_RUNTIME_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
 {
+    // InitCJRuntime must construct the heap with this runtime's parameters.
+    GC_EXPECT_TRUE(ZCollectedHeap::heap() == nullptr);
     GC_EXPECT_EQ(RunRuntimeCase(RunNativeTaskRootCase, 0), 0);
 }

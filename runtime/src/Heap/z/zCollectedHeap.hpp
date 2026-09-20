@@ -8,6 +8,7 @@
 #ifndef MRT_COLLECTOR_H
 #define MRT_COLLECTOR_H
 
+#include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRuntimeWorkers.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -26,7 +27,8 @@ class ZCollectedHeap : public CollectedHeap {
     friend class ZCollectedHeapTest;
 public:
     static ZCollectedHeap* heap();
-    ZCollectedHeap();
+    static void create(const HeapParam& param, double garbageThreshold);
+    ZCollectedHeap(const HeapParam& param, double garbageThreshold);
     ~ZCollectedHeap();
     static void stop();
     void initialize_gc_workers();
@@ -46,6 +48,8 @@ public:
     int32_t concurrent_gc_threads() const { return _concurrent_gc_threads; }
 
 private:
+    static ZCollectedHeap* _collected_heap;
+    ZInitializer _initializer;
     Heap _heap;
     ZDriverMinor* _driver_minor;
     ZDriverMajor* _driver_major;

@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zRemembered.cpp b/runtime/src/Heap/z/zRemembered.cpp
+index 8842e53ac..c52706440 100644
+--- a/runtime/src/Heap/z/zRemembered.cpp
++++ b/runtime/src/Heap/z/zRemembered.cpp
+@@ -125,7 +125,7 @@ void ZRemembered::register_found_old(ZPage* page)
+ {
+     CHECK(!page->IsYoungRegion());
+     CHECK(_page_table != nullptr);
+-    _found_old.register_page(untype(page->start()) >> ZGranuleSizeShift);
++    // Controlled consumer cut: omit found-old registration.
+ }
+ 
+ template<typename Function>

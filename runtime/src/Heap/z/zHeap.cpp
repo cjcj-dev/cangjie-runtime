@@ -98,7 +98,9 @@ private:
     FILE* file = nullptr;
 };
 
-Heap::Heap()
+Heap::Heap(const HeapParam& param, double garbageThreshold)
+    : _page_allocator(param, garbageThreshold),
+      _young(&_page_table, &_old.forwarding_table(), &_page_allocator)
 {
     _heap = this;
     RunType::InitRunTypeMap();
@@ -127,25 +129,13 @@ bool Heap::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe
     return _allocation_adapter->ForEachObj(visitor, safe);
 }
 
-void Heap::Init(const HeapParam& param)
+void Heap::Init()
 {
-    ZArguments::initialize();
-    ZHeuristics::set_max_heap_size(param.heapSize * 1024);
-    ZInitialize::initialize();
-    _page_allocator.Init(param);
     // zHeap.cpp:89-90: capacity bounds open both generations' heap accounts.
     // Host difference: HeapParam has no min-heap-size, min reports 0.
     young().StatHeap()->AtInitialize(0, _page_allocator.GetHeapCapacity());
     old().StatHeap()->AtInitialize(0, _page_allocator.GetHeapCapacity());
     Heap::GetHeap().EnableGC(ZArguments::gc_enabled());
-    {
-        young().forwarding_table().initialize();
-        old().forwarding_table().initialize();
-    }
-    young().remembered()->bind(
-        &page_table(),
-        &old().forwarding_table(),
-        &_page_allocator);
     // zCollectedHeap.cpp:initialize_gc_workers creates ZWorkers with the
     // ConcGCThreads budget (zWorkers.cpp:45-65). Do not pre-create a max=1
     // pool here: that made later set_active_workers(ConcGCThreads) fail the
@@ -290,14 +280,9 @@ Heap& Heap::GetHeap()
     return ZCollectedHeap::heap()->collected_heap();
 }
 
-void Heap::install_page_table()
-{
-    _page_table = ZPageTable(ZAddressOffsetMax);
-}
-
 ZRemembered& Heap::remembered()
 {
-    return *young().remembered();
+    return *ZGeneration::young()->remembered();
 }
 
 void Heap::RegisterStaticRoots(Uptr addr, U32 size)
@@ -493,28 +478,8 @@ ZPage* Heap::page(MAddress addr) { return page_table().get(addr); }
 
 ZPageTable& Heap::page_table() { return GetHeap()._page_table; }
 
-RegionManager* Heap::_test_page_allocator = nullptr;
-
-void Heap::bind_test_page_allocator(RegionManager* manager)
-{
-    _test_page_allocator = manager;
-}
-
-RegionManager& Heap::page_allocator()
-{
-    if (_test_page_allocator != nullptr) {
-        return *_test_page_allocator;
-    }
-    return _page_allocator;
-}
-
-const RegionManager& Heap::page_allocator() const
-{
-    if (_test_page_allocator != nullptr) {
-        return *_test_page_allocator;
-    }
-    return _page_allocator;
-}
+RegionManager& Heap::page_allocator() { return _page_allocator; }
+const RegionManager& Heap::page_allocator() const { return _page_allocator; }
 
 namespace {
 thread_local ZPage* g_prematerializedPage = nullptr;

@@ -399,11 +399,11 @@ void AdmissionWitness(void* p)
 }
 } // namespace
 
-GC_OTHER_VM_TEST(PackageInit, CompletionWaitsForBodyAndHandshake) { CompletionCase(false, false); }
-GC_OTHER_VM_TEST(PackageInit, CompletionWithTwoSchedulerWorkers) { CompletionCase(false, false, 2); }
-GC_OTHER_VM_TEST(PackageInit, FailureWakesAndRemainsSticky) { CompletionCase(true, false); }
-GC_OTHER_VM_TEST(PackageInit, OwnerExitWakesAndFails) { CompletionCase(false, true); }
-GC_OTHER_VM_TEST(PackageInit, PackagePhaseUnitAndReentry)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, CompletionWaitsForBodyAndHandshake) { CompletionCase(false, false); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, CompletionWithTwoSchedulerWorkers) { CompletionCase(false, false, 2); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, FailureWakesAndRemainsSticky) { CompletionCase(true, false); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, OwnerExitWakesAndFails) { CompletionCase(false, true); }
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, PackagePhaseUnitAndReentry)
 {
     Init();
     std::atomic<bool> done { false };
@@ -411,7 +411,7 @@ GC_OTHER_VM_TEST(PackageInit, PackagePhaseUnitAndReentry)
     Target("isolation-completed", Await(done));
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
-GC_OTHER_VM_TEST(PackageInit, CrossOwnerCycleHasTerminalResult)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, CrossOwnerCycleHasTerminalResult)
 {
     Init();
     Cycle c;
@@ -425,7 +425,7 @@ GC_OTHER_VM_TEST(PackageInit, CrossOwnerCycleHasTerminalResult)
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&c.release);
 }
-GC_OTHER_VM_TEST(PackageInit, RegisteredMainCodeAndImageGeneration)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredMainCodeAndImageGeneration)
 {
     Init();
     for (int generation = 0; generation != 2; ++generation) {
@@ -440,7 +440,7 @@ GC_OTHER_VM_TEST(PackageInit, RegisteredMainCodeAndImageGeneration)
     }
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
-GC_OTHER_VM_TEST(PackageInit, AggregateWaitsForLastUnit)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, AggregateWaitsForLastUnit)
 {
     Init();
     Completion c;
@@ -460,7 +460,7 @@ GC_OTHER_VM_TEST(PackageInit, AggregateWaitsForLastUnit)
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&c.release);
 }
-GC_OTHER_VM_TEST(PackageInit, DirectUnloadAllowsOwnerDependency)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, DirectUnloadAllowsOwnerDependency)
 {
     Init();
     UnloadRace race;
@@ -484,7 +484,7 @@ GC_OTHER_VM_TEST(PackageInit, DirectUnloadAllowsOwnerDependency)
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&race.c.release);
 }
-GC_OTHER_VM_TEST(PackageInit, AdmissionCompetitionParksAndRetries)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, AdmissionCompetitionParksAndRetries)
 {
     Init();
     AdmissionRace race;
@@ -498,7 +498,7 @@ GC_OTHER_VM_TEST(PackageInit, AdmissionCompetitionParksAndRetries)
     Target("admission-release-notified", Await(race.done));
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
-GC_OTHER_VM_TEST(PackageInit, ForeignCJThreadWaitsForCompletion)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, ForeignCJThreadWaitsForCompletion)
 {
     Init();
     Completion c;
@@ -533,7 +533,7 @@ GC_OTHER_VM_TEST(PackageInit, ForeignCJThreadWaitsForCompletion)
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&c.release);
 }
-GC_OTHER_VM_TEST(PackageInit, LibraryCodeUnloadReloadHasNewState)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryCodeUnloadReloadHasNewState)
 {
     Init();
     char executable[4096] {};
@@ -573,7 +573,7 @@ namespace {
 std::atomic<bool> nativeFiniEntered { false };
 void NativeFiniNotice() { nativeFiniEntered.store(true, std::memory_order_release); }
 }
-GC_OTHER_VM_TEST(PackageInit, NativeDlcloseAllowsDependency)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, NativeDlcloseAllowsDependency)
 {
     Init();
     char executable[4096] {};
@@ -641,7 +641,7 @@ void LibInitBody()
     MCC_PackageInitComplete(owner);
 }
 }
-GC_OTHER_VM_TEST(PackageInit, LibInitBodyDoesNotHoldGlobalReader)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibInitBodyDoesNotHoldGlobalReader)
 {
     Init();
     Completion control;
@@ -754,7 +754,7 @@ void CheckTokenMisuse(bool nonOwner)
 }
 GC_TEST(PackageInit, DuplicateTokenRejected) { CheckTokenMisuse(false); }
 GC_TEST(PackageInit, NonOwnerTokenRejected) { CheckTokenMisuse(true); }
-GC_OTHER_VM_TEST(PackageInit, MultipleMetadataOwnersRequireExactIdentity)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, MultipleMetadataOwnersRequireExactIdentity)
 {
     Init();
     // The second metadata owner shares the executable image, with P as its
@@ -796,7 +796,7 @@ void ManagedInitBody()
     managedInitBodyRan.store(true, std::memory_order_release);
 }
 }
-GC_OTHER_VM_TEST(PackageInit, LibInitTransitionsNativeCallerToManagedBody)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibInitTransitionsNativeCallerToManagedBody)
 {
     Init();
     packageBody = ManagedInitBody;
@@ -822,7 +822,7 @@ std::string FixtureBesideExecutable(const char* name)
     return path.substr(0, path.find_last_of('/') + 1) + name;
 }
 }
-GC_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
 {
     Init();
     const std::string aPath = FixtureBesideExecutable("libcj_package_init_fixture.so");
@@ -885,7 +885,7 @@ GC_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
     closerU.join();
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
-GC_OTHER_VM_TEST(PackageInit, PublicUnloadAllowsPendingOwnerAndIdleU)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, PublicUnloadAllowsPendingOwnerAndIdleU)
 {
     Init();
     const std::string aPath = FixtureBesideExecutable("libcj_package_init_fixture.so");
@@ -963,7 +963,7 @@ GC_OTHER_VM_TEST(PackageInit, PublicUnloadAllowsPendingOwnerAndIdleU)
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&context.c.release);
 }
-GC_OTHER_VM_TEST(PackageInit, DuplicatePublicCloseIsBusy)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, DuplicatePublicCloseIsBusy)
 {
     Init();
     const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
@@ -997,7 +997,7 @@ GC_OTHER_VM_TEST(PackageInit, DuplicatePublicCloseIsBusy)
     Target("dup-first-ok", firstRc.load(std::memory_order_acquire) == E_OK);
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
-GC_OTHER_VM_TEST(PackageInit, PlatformUnloadFailureRollsBack)
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, PlatformUnloadFailureRollsBack)
 {
     Init();
     const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
