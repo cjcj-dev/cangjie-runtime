@@ -1,0 +1,16 @@
+diff --git a/runtime/src/Mutator/Mutator.cpp b/runtime/src/Mutator/Mutator.cpp
+index 879669a90..10d2c30c0 100644
+--- a/runtime/src/Mutator/Mutator.cpp
++++ b/runtime/src/Mutator/Mutator.cpp
+@@ -839,7 +839,10 @@ bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size
+     const uintptr_t rootColor = GetGCData().loadGoodMask;
+     RootVisitor visitor = [this, young, rootColor](ObjectRef& root) {
+         VisitHeapRootSlots(root, [young, rootColor](ObjectRef& slot) {
+-            (void)PushHeapRoot(slot, young, rootColor);
++            // P16 control: preserve marking, omit the next relocation-epoch root scan.
++            if (Heap::GetHeap().old().is_phase_mark()) {
++                (void)PushHeapRoot(slot, young, rootColor);
++            }
+         });
+     };
+     RootVisitor invisibleRootVisitor = [young, rootColor](ObjectRef& root) {

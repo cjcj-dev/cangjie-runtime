@@ -1,0 +1,42 @@
+[
+  {
+    "name": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "rc": 0
+  },
+  {
+    "name": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "rc": 0
+  },
+  {
+    "name": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "rc": 0
+  },
+  {
+    "name": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "rc": 0
+  },
+  {
+    "name": "RawRemapYoungProduct.MajorKeepsOldPendingThenRelocatesRawRoot",
+    "rc": 1
+  },
+  {
+    "name": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "rc": 0
+  },
+  {
+    "name": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "rc": 0
+  },
+  {
+    "name": "RawRemapYoungProduct.MajorKeepsOldPendingThenRelocatesDerivedRoot",
+    "rc": 1
+  },
+  {
+    "name": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "rc": 0
+  },
+  {
+    "name": "RawRemapYoungProduct.MajorFallbackKeepsOldPendingThenRelocates",
+    "rc": 1
+  }
+]

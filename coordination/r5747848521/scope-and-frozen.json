@@ -1,0 +1,63 @@
+[
+  {
+    "cmd": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "rc": 0,
+    "stdout": "660d0bdb4ff9042178e0d74bebfc4df0770ccf84\n",
+    "stderr": ""
+  },
+  {
+    "cmd": [
+      "git",
+      "-C",
+      "/root/cj_build/cangjie_runtime",
+      "rev-parse",
+      "cjcjdev/main"
+    ],
+    "rc": 0,
+    "stdout": "e77f8aab1ebf029e55e9b1b982d590d08bea46b7\n",
+    "stderr": ""
+  },
+  {
+    "cmd": [
+      "git",
+      "diff",
+      "--exit-code",
+      "1a185f30814d37aedc864c379ccb6c3e992a6ae5",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "cmd": [
+      "git",
+      "diff",
+      "--name-only",
+      "b6d62daa8f3557c8a9effbfa4709a4744e315497",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "stdout": "runtime/src/Base/BitMap.h\nruntime/src/CangjieRuntime.cpp\nruntime/src/Common/OopStorage.cpp\nruntime/src/Common/OopStorage.h\nruntime/src/CompilerCalls.cpp\nruntime/src/Heap/Allocator/AllocBuffer.h\nruntime/src/Heap/Allocator/AllocationStallQueue.h\nruntime/src/Heap/Allocator/CartesianTree.cpp\nruntime/src/Heap/Allocator/RegionManager.h\nruntime/src/Heap/Barrier/CMakeLists.txt\nruntime/src/Heap/CMakeLists.txt\nruntime/src/Heap/Verify/CMakeLists.txt\nruntime/src/Heap/shared/stringdedup/stringDedup.hpp\nruntime/src/Heap/z/workerThread.cpp\nruntime/src/Heap/z/workerThread.hpp\nruntime/src/Heap/z/zBarrier.cpp\nruntime/src/Heap/z/zBarrier.hpp\nruntime/src/Heap/z/zBarrier.inline.hpp\nruntime/src/Heap/z/zBitMap.hpp\nruntime/src/Heap/z/zBitMap.inline.hpp\nruntime/src/Heap/z/zCollectedHeap.hpp\nruntime/src/Heap/z/zCrossVM.cpp\nruntime/src/Heap/z/zCrossVM.hpp\nruntime/src/Heap/z/zDriver.hpp\nruntime/src/Heap/z/zForwarding.cpp\nruntime/src/Heap/z/zForwarding.hpp\nruntime/src/Heap/z/zForwardingAllocator.hpp\nruntime/src/Heap/z/zForwardingAllocator.inline.hpp\nruntime/src/Heap/z/zGeneration.cpp\nruntime/src/Heap/z/zGeneration.hpp\nruntime/src/Heap/z/zGeneration.inline.hpp\nruntime/src/Heap/z/zHeap.cpp\nruntime/src/Heap/z/zHeap.hpp\nruntime/src/Heap/z/zIterator.hpp\nruntime/src/Heap/z/zIterator.inline.hpp\nruntime/src/Heap/z/zLiveMap.cpp\nruntime/src/Heap/z/zLiveMap.hpp\nruntime/src/Heap/z/zMappedCache.cpp\nruntime/src/Heap/z/zMark.cpp\nruntime/src/Heap/z/zMark.hpp\nruntime/src/Heap/z/zMarkStack.cpp\nruntime/src/Heap/z/zMarkStack.hpp\nruntime/src/Heap/z/zMarkTerminate.inline.hpp\nruntime/src/Heap/z/zMarkingSMR.hpp\nruntime/src/Heap/z/zObjectAllocator.cpp\nruntime/src/Heap/z/zPage.cpp\nruntime/src/Heap/z/zPage.hpp\nruntime/src/Heap/z/zPage.inline.hpp\nruntime/src/Heap/z/zPageAllocator.hpp\nruntime/src/Heap/z/zPageAllocator.inline.hpp\nruntime/src/Heap/z/zReferenceProcessor.cpp\nruntime/src/Heap/z/zReferenceProcessor.hpp\nruntime/src/Heap/z/zRelocate.cpp\nruntime/src/Heap/z/zRelocate.hpp\nruntime/src/Heap/z/zRelocationSet.cpp\nruntime/src/Heap/z/zRootsIterator.cpp\nruntime/src/Heap/z/zRootsIterator.hpp\nruntime/src/Heap/z/zStat.cpp\nruntime/src/Heap/z/zStoreBarrierBuffer.cpp\nruntime/src/Heap/z/zStoreBarrierBuffer.hpp\nruntime/src/Heap/z/zThreadLocalAllocBuffer.hpp\nruntime/src/Heap/z/zUncoloredRoot.inline.hpp\nruntime/src/Heap/z/zUncommitter.hpp\nruntime/src/Heap/z/zVerify.cpp\nruntime/src/Heap/z/zVerify.hpp\nruntime/src/Loader/CMakeLists.txt\nruntime/src/Loader/CjFileLoader/CMakeLists.txt\nruntime/src/Loader/CjFileLoader/CjFileLoader.cpp\nruntime/src/Loader/CjFileLoader/CjFileLoader.h\nruntime/src/Loader/ElfUnloadQuiescence.cpp\nruntime/src/Loader/ElfUnloadQuiescence.h\nruntime/src/Loader/ILoader.h\nruntime/src/Loader/PackageInit.cpp\nruntime/src/Loader/PackageInitTest.h\nruntime/src/Mutator/Mutator.cpp\nruntime/src/Mutator/Mutator.h\nruntime/src/Mutator/MutatorManager.cpp\nruntime/src/Mutator/MutatorManager.h\nruntime/src/ObjectModel/MArray.inline.h\nruntime/src/StackManager.cpp\nruntime/src/UnwindStack/StackFrameCursor.cpp\n",
+    "stderr": ""
+  },
+  {
+    "cmd": [
+      "git",
+      "diff",
+      "--name-only",
+      "1a185f30814d37aedc864c379ccb6c3e992a6ae5",
+      "--",
+      "runtime/tests/gc_unit"
+    ],
+    "rc": 0,
+    "stdout": "runtime/tests/gc_unit/clear_entries_product_unit.cpp\nruntime/tests/gc_unit/test_native_root_current.cpp\n",
+    "stderr": ""
+  }
+]

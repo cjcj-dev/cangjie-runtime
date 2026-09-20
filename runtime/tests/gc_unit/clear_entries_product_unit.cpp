@@ -1380,6 +1380,20 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         ? forwarding_find(Generation::Old, reinterpret_cast<uintptr_t>(forwarding.from))
         : reinterpret_cast<uintptr_t>(forwarding.to);
     const uintptr_t before = reinterpret_cast<uintptr_t>(forwarding.from);
+    if (oldPending) {
+        // ZGC zGeneration.cpp:1015-1071,1379-1404 does not eagerly heal raw
+        // slots at old relocate-start. Check that the driver produced a new
+        // target while the unprocessed native/derived roots retain old values.
+        const bool deferred = raw(root->LoadPlain()) == before && expected != 0 && expected != before &&
+            (!managed || (frame[0] == before && frame[1] == before + 8));
+        std::fprintf(stderr, "OLD_PENDING_TARGET_ASSERT before=%zx root=%zx winner=%zx base=%zx derived=%zx deferred=%u\n",
+            before, raw(root->LoadPlain()), expected, frame[0], frame[1], unsigned(deferred));
+        GC_EXPECT_TRUE(deferred);
+        // zUncoloredRoot.inline.hpp:35-64: the next real root processing
+        // makes this very slot load-good and writes it back. No winner is
+        // handed to this entry by the test.
+        (void)mutator->GcPhaseEnum(false);
+    }
     const uintptr_t observedRoot = nestedField == nullptr ? raw(root->LoadPlain()) : raw(nestedField->LoadPlain());
     const bool result = expected != 0 && (!oldPending || expected != before) &&
         (nestedField == nullptr ? observedRoot == expected :
@@ -1423,7 +1437,7 @@ GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkConsumesPromotedYoungSource
 {
     CheckMajorRawRemap(true, false);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorKeepsOldPendingThenRelocatesRawRoot)
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorKeepsOldRawRootUntilNextRootScan)
 {
     CheckMajorRawRemap(false, false, true);
 }
@@ -1436,7 +1450,7 @@ GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkRemapsDerivedPromotedSource
 {
     CheckMajorRawRemap(true, true);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorKeepsOldPendingThenRelocatesDerivedRoot)
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorKeepsOldDerivedRootUntilNextRootScan)
 {
     CheckMajorRawRemap(false, true, true);
 }
@@ -1444,7 +1458,7 @@ GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackRemapsDerivedPromotedSource)
 {
     CheckMajorRawRemap(true, true, false, true);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackKeepsOldPendingThenRelocates)
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackKeepsOldRootUntilNextRootScan)
 {
     CheckMajorRawRemap(false, true, true, true);
 }
