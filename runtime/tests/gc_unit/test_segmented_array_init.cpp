@@ -29,6 +29,8 @@ extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void*
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
+#include "Heap/z/zDirector.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zIterator.hpp"
@@ -160,6 +162,97 @@ void* RunLargePageIdentityCase(void*)
     const bool valid = page != nullptr && page->is_large() && page->age() == PageAge::eden;
     std::fprintf(stderr, "LARGE_PAGE_IDENTITY_TARGET eden_large=%d\n", valid);
     return reinterpret_cast<void*>(valid ? 0 : 1);
+}
+
+// ZGC zGeneration.cpp:216-258: empty pages leave the page table before
+// not-selected live pages are aged. Only the export root keeps the second
+// large page alive; native local values are not managed roots.
+void* RunYoungSelectionLifetimeCase(void*)
+{
+    auto& heap = Heap::GetHeap();
+    MArray* dead = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    MArray* live = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    if (dead == nullptr || live == nullptr) {
+        return reinterpret_cast<void*>(10);
+    }
+    const uintptr_t deadAddress = reinterpret_cast<uintptr_t>(dead);
+    const uintptr_t liveAddress = reinterpret_cast<uintptr_t>(live);
+    ZPage* const deadPage = Heap::page(deadAddress);
+    ZPage* const livePage = Heap::page(liveAddress);
+    const bool distinctYoungPages = deadPage != livePage && deadPage->IsYoungRegion() &&
+        livePage->IsYoungRegion() && deadPage->is_large() && livePage->is_large();
+    const PageAge beforeAge = livePage->age();
+    const U64 root = heap.RegisterExportRoot(live);
+    Mutator::GetMutator()->SetManagedContext(false);
+    heap.RequestGC(GC_REASON_YOUNG, false);
+    // Read through the page table, never through either saved descriptor.
+    const bool emptyReleased = Heap::page(deadAddress) == nullptr;
+    BaseObject* const survivor = heap.GetExportObject(root);
+    ZPage* const current = survivor == nullptr ? nullptr : Heap::page(reinterpret_cast<uintptr_t>(survivor));
+    const bool liveProcessed = current != nullptr && current->age() != beforeAge &&
+        reinterpret_cast<uintptr_t>(survivor) == liveAddress;
+    std::fprintf(stderr,
+        "YOUNG_SELECTION_LIFETIME_TARGET distinct_young_pages=%d empty_released=%d live_processed=%d\n",
+        distinctYoungPages, emptyReleased, liveProcessed);
+    heap.RemoveExportObject(root);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>((distinctYoungPages && emptyReleased && liveProcessed) ? 0 : 1);
+}
+
+// ZGC zGeneration.cpp:1058-1063 and zStat.cpp:1789-1798:
+// an old collection publishes selector liveness before relocation starts.
+void* RunOldRelocationStatisticsCase(void* argument)
+{
+    auto& heap = Heap::GetHeap();
+    auto* mutator = Mutator::GetMutator();
+    MArray* survivor = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    if (survivor == nullptr) {
+        return reinterpret_cast<void*>(10);
+    }
+    const size_t minimumLive = survivor->GetContentSize();
+    const U64 root = heap.RegisterExportRoot(survivor);
+    mutator->SetManagedContext(false);
+    heap.RequestGC(GC_REASON_USER, false);
+    auto* current = heap.GetExportObject(root);
+    const bool retainedOld = current != nullptr &&
+        !Heap::page(reinterpret_cast<uintptr_t>(current))->IsYoungRegion();
+    const auto input = ZGeneration::old()->StatHeap()->Stats();
+    const size_t live = input.liveAtMarkEnd;
+    // Report both independently: a setup check must not hide the live assertion.
+    const bool liveAccount = live >= minimumLive;
+    std::fprintf(stderr,
+        "OLD_RELOCATION_STATS_TARGET retained_old=%d live=%zu minimum_live=%zu live_account=%d\n",
+        retainedOld, live, minimumLive, liveAccount);
+    bool directorInput = true;
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (argument != nullptr) {
+        const uint64_t before = ZDirector::ReadSampleForTest().serial;
+        const uint64_t sequence = ZGeneration::old()->Sequence();
+        ZDirectorSampleForTest sample;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        do {
+            ZDirector::evaluate_rules();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            sample = ZDirector::ReadSampleForTest();
+        } while ((sample.serial <= before || sample.oldSequence < sequence || sample.majorBusy) &&
+                 std::chrono::steady_clock::now() < deadline);
+        directorInput = sample.serial > before && sample.oldSequence >= sequence && !sample.majorBusy &&
+            sample.oldLive >= minimumLive && sample.oldLive == live &&
+            sample.softMaxCapacity == 128 * MB &&
+            sample.softMaxCapacity == heap.soft_max_capacity() &&
+            sample.relocationHeadroom == ZHeuristics::relocation_headroom();
+        std::fprintf(stderr,
+            "OLD_DIRECTOR_INPUT_TARGET serial=%llu old_sequence=%llu old_live=%zu old_used=%zu "
+            "soft_max=%zu headroom=%zu input_account=%d\n",
+            (unsigned long long)sample.serial, (unsigned long long)sample.oldSequence,
+            sample.oldLive, sample.oldUsed, sample.softMaxCapacity, sample.relocationHeadroom, directorInput);
+    }
+#else
+    (void)argument;
+#endif
+    heap.RemoveExportObject(root);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>((retainedOld && liveAccount && directorInput) ? 0 : 1);
 }
 
 void* RunPinnedBirthCase(void*)
@@ -537,6 +630,9 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
     const pid_t child = fork();
     if (child == 0) {
         (void)setenv("cjProcessorNum", processorCount == 1 ? "1" : "2", 1);
+        if (task == RunOldRelocationStatisticsCase) {
+            (void)setenv("cjSoftMaxHeapSize", "128MB", 1);
+        }
         RuntimeParam param {};
         param.heapParam.heapSize = 512 * 1024;
         param.coParam.processorNum = processorCount;
@@ -661,9 +757,26 @@ GC_RUNTIME_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
 }
 #endif
 
+GC_RUNTIME_OTHER_VM_TEST(OldRelocationStatistics, FullCollectionPublishesLiveInput)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunOldRelocationStatisticsCase, 0, 1, true), 0);
+}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_RUNTIME_OTHER_VM_TEST(OldRelocationStatistics, DirectorConsumesOldSelection)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunOldRelocationStatisticsCase, 1, 1, true), 0);
+}
+#endif
 GC_RUNTIME_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
+
 {
     // InitCJRuntime must construct the heap with this runtime's parameters.
     GC_EXPECT_TRUE(ZCollectedHeap::heap() == nullptr);
     GC_EXPECT_EQ(RunRuntimeCase(RunNativeTaskRootCase, 0), 0);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(YoungSelectionLifetime, EmptyReleasedAndLivePageAged)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunYoungSelectionLifetimeCase, 0, 1, true), 0);
 }

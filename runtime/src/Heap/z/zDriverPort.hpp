@@ -29,6 +29,7 @@ enum GCReason : uint32_t {
     GC_REASON_YOUNG,
     GC_REASON_WB_BREAKPOINT,
     GC_REASON_WARMUP,
+    GC_REASON_ALLOCATION_STALL,
     GC_REASON_MAX,
     GC_REASON_INVALID = std::numeric_limits<uint32_t>::max(),
 };

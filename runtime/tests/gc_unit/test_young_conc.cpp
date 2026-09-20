@@ -29,6 +29,7 @@
 #include "CjScheduler.h"
 
 #include "gc_heap_fixture.hpp"
+#include "selection_cycle_fixture.hpp"
 #include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
 
@@ -392,7 +393,7 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
-    GcHeapFixture fx;
+    SelectionCycleFixture fx(PageAge::eden);
     MarkPublicationFixture markFixture;
     fx.region1->reset(PageAge::eden);
     fx.region1->reset(PageAge::eden);

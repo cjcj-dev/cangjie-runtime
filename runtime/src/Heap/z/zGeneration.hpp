@@ -261,20 +261,17 @@ public:
     void concurrent_relocate();
 private:
     using MinorObjectSet = std::unordered_set<BaseObject*>;
-    using MinorRegionSet = std::unordered_set<ZPage*>;
     using MinorSlotSet = std::unordered_set<MAddress>;
     using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint32_t _tenuring_threshold = 0;
     uint64_t minorTotalRuns = 0;
-    MinorRegionSet minorCandidateRegions;
     std::unique_ptr<ScopedStopTheWorld> youngStw;
     std::vector<BaseObject*> youngReachableVec;
     MinorSlotSet youngConsumedSlots;
     MinorInteriorBaseMap youngRemsetInteriorBases;
     YoungCollectionStats youngStats;
     uint64_t youngStartNs = 0;
-    size_t youngLiveBytes = 0;
     size_t youngLiveRememberedCount = 0;
     bool youngFullScan = false;
     WorkStack youngWorkStack;

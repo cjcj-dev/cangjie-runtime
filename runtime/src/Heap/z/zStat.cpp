@@ -608,14 +608,13 @@ std::atomic<size_t> g_allocatedSinceSample{ 0 };
 TruncatedSeq g_samplesTime(100);
 TruncatedSeq g_samplesBytes(100);
 TruncatedSeq g_rate(100);
-std::atomic<size_t> g_softMaxHeapSize{ 0 };
 } // namespace
 
 void ZStatMutatorAllocRate::update_sampling_granule()
 {
     // zStat.cpp:951-955 — sampling_heap_granules = 128, align_up to granule size.
     constexpr size_t samplingHeapGranules = 128;
-    size_t softMax = soft_max_heap_size();
+    size_t softMax = Heap::GetHeap().soft_max_capacity();
     if (softMax == 0) {
         softMax = 256 * MB;
     }
@@ -634,23 +633,6 @@ void ZStatMutatorAllocRate::initialize()
     // initialize only stamps the last sample time and the granule.
     g_lastSampleTimeNs = TimeUtil::NanoSeconds();
     g_allocatedSinceSample.store(0, std::memory_order_relaxed);
-    // zDirector.cpp:867 / zHeap.cpp:61 — SoftMaxHeapSize. Env missing or 0 ⇒ hard cap.
-    // ParseSizeFromEnv returns KB, same as cjHeapSize.
-    size_t hard = Heap::GetHeap().GetMaxCapacity();
-    size_t soft = hard;
-    const char* env = std::getenv("cjSoftMaxHeapSize");
-    if (env != nullptr) {
-        const size_t parsedKb = CString::ParseSizeFromEnv(env);
-        if (parsedKb > 0) {
-            const size_t parsed = parsedKb * KB;
-            if (hard == 0 || parsed <= hard) {
-                soft = parsed;
-            } else {
-                soft = hard;
-            }
-        }
-    }
-    g_softMaxHeapSize.store(soft, std::memory_order_release);
     update_sampling_granule();
 }
 
@@ -714,14 +696,6 @@ ZStatMutatorAllocRateStats ZStatMutatorAllocRate::stats()
 
 double ZStatNumberSeq::Sd() const { return std::sqrt(variance); }
 
-size_t ZStatMutatorAllocRate::soft_max_heap_size()
-{
-    size_t soft = g_softMaxHeapSize.load(std::memory_order_acquire);
-    if (soft != 0) {
-        return soft;
-    }
-    return Heap::GetHeap().GetMaxCapacity();
-}
 
 } // namespace MapleRuntime
 

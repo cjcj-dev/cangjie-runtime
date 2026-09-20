@@ -558,15 +558,15 @@ fi
 echo "GATE_OLDVALUE_PRODUCT_BINDING_OK rows=$oldvalue_rows elf=$OUT/cj_gc_unit"
 STALL_TEST_DEFINED=$(nm --defined-only "$OUT/cj_gc_unit" | /usr/bin/grep -c 'AllocationStall_' || true)
 echo "STALL_TEST_DEFINED=$STALL_TEST_DEFINED"
-# The migrated tests consume StallAllocation and real page capacity in both
-# product configurations; optional observer exports no longer define coverage.
+# The migrated tests enter Heap::alloc_page; StallAllocation is reached inside
+# the product, not called directly by a test-side queue. ZGC zHeap.cpp:491.
 if [[ "$STALL_TEST_DEFINED" -eq 0 ]]; then
   echo "GC_UNIT_GATE_FAIL: AllocationStall tests are missing" >&2
   exit 8
 fi
 nm -u "$OUT/cj_gc_unit" > "$OUT/stall-imports.txt"
-if ! /usr/bin/grep -q 'StallAllocation' "$OUT/stall-imports.txt"; then
-  echo "GC_UNIT_GATE_FAIL: missing product StallAllocation import" >&2
+if ! /usr/bin/grep -q 'alloc_page' "$OUT/stall-imports.txt"; then
+  echo "GC_UNIT_GATE_FAIL: missing product alloc_page import" >&2
   exit 8
 fi
 echo "STALL_SUITE=PRODUCT_BOTH_CONFIGURATIONS"

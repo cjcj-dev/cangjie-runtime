@@ -158,6 +158,7 @@ public:
      * so that inequality size <= capacity <= max capacity always holds.
      */
     size_t GetMaxCapacity() const;
+    size_t soft_max_capacity() const;
     ZMemoryUsageInfo GetMemoryUsage() const;
 
     // or current capacity: a continuous address space to help heap management such as GC.

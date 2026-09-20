@@ -1,0 +1,14 @@
+21
+GC_UNIT_OHOS_HOST_PRODUCT_SYMBOL_MISSING symbol=MRT_GC_UNIT_OHOS_HOST_RECEIPT
+2026-09-20 13:42:33.804835 3923686 I                Mark SOLD_RELOCATION_STATS_TARGET retained_old=1 live=8388624 minimum_live=8388608 live_account=1
+OLD_DIRECTOR_INPUT_TARGET serial=7 old_sequence=2 old_live=8388624 old_used=10485760 soft_max=134217728 headroom=25165824 input_account=1
+2026-09-20 13:42:33.806052 3923647 I                Mark StOLD_RELOCATION_STATS_TARGET retained_old=1 live=8388624 minimum_live=8388608 live_account=1
+2026-09-20 13:42:33.819869 3923786 I                MarkOLD_RELOCATION_STATS_TARGET retained_old=1 live=0 minimum_live=8388608 live_account=0
+OLD_DIRECTOR_INPUT_TARGET serial=8 old_sequence=2 old_live=0 old_used=10485760 soft_max=134217728 headroom=25165824 input_account=0
+2026-09-20 13:42:33.809927 3923769 I                Mark SOLD_RELOCATION_STATS_TARGET retained_old=1 live=0 minimum_live=8388608 live_account=0
+2026-09-20 13:42:33.822936 3923902 I                Mark StOLD_RELOCATION_STATS_TARGET retained_old=1 live=8388624 minimum_live=8388608 live_account=1
+OLD_DIRECTOR_INPUT_TARGET serial=7 old_sequence=2 old_live=0 old_used=10485760 soft_max=134217728 headroom=25165824 input_account=0
+2026-09-20 13:42:33.826604 3923888 I                Mark StOLD_RELOCATION_STATS_TARGET retained_old=1 live=8388624 minimum_live=8388608 live_account=1
+2026-09-20 13:42:33.845920 3924089 I                Mark SOLD_RELOCATION_STATS_TARGET retained_old=1 live=8388624 minimum_live=8388608 live_account=1
+OLD_DIRECTOR_INPUT_TARGET serial=8 old_sequence=2 old_live=8388624 old_used=10485760 soft_max=134217728 headroom=25165824 input_account=1
+2026-09-20 13:42:33.823322 3924036 I                Mark StarOLD_RELOCATION_STATS_TARGET retained_old=1 live=8388624 minimum_live=8388608 live_account=1

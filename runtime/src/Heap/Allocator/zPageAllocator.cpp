@@ -94,10 +94,25 @@ void Report(size_t listRegions, size_t listBytes)
 
 namespace MapleRuntime {
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
-size_t RegionManager::PendingStalledAllocations() const { return allocationStallQueue.Pending(); }
-size_t RegionManager::EnqueuedStalledAllocations() const { return allocationStallQueue.EnqueuedCount(); }
-size_t RegionManager::DequeuedStalledAllocations() const { return allocationStallQueue.DequeuedCount(); }
-size_t RegionManager::SatisfiedStalledAllocations() const { return allocationStallQueue.SatisfiedCount(); }
-size_t RegionManager::FailedStalledAllocations() const { return allocationStallQueue.FailedCount(); }
+size_t RegionManager::PendingStalledAllocations() const {
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    return stalled.size();
+}
+size_t RegionManager::EnqueuedStalledAllocations() const {
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    return stallEnqueued;
+}
+size_t RegionManager::DequeuedStalledAllocations() const {
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    return stallDequeued;
+}
+size_t RegionManager::SatisfiedStalledAllocations() const {
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    return stallSatisfied;
+}
+size_t RegionManager::FailedStalledAllocations() const {
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    return stallFailed;
+}
 #endif
 } // namespace MapleRuntime

@@ -49,7 +49,6 @@ struct YoungCollectionStats {
     uint64_t reparkNs = 0;
     uint64_t unmovableNs = 0;
     uint64_t recentFullNs = 0;
-    uint64_t visitorNs = 0;
     uint64_t listMoveNs = 0;
 };
 
@@ -463,7 +462,6 @@ public:
     static const ZStatUnsampledCounter& counter();
     // zDirector.cpp:867 / zHeap.cpp:61 — SoftMaxHeapSize. Trigger denominator
     // only; allocation failure still uses hard capacity.
-    static size_t soft_max_heap_size();
 
 private:
     static void update_sampling_granule();
