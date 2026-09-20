@@ -702,7 +702,6 @@ public:
 
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
     // can be reclaimed.
-    size_t ExemptFromRegions();
     // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).
 
     void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,

@@ -126,12 +126,6 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set)
     generation->StatRelocation()->AtRelocateEnd(inPlace.first, inPlace.second);
 }
 
-void ZRelocate::RefineFromSpace()
-{
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    ZGeneration::old()->increase_freed(space.RefineFromSpace());
-}
-
 bool ZRelocate::IsFromObject(BaseObject* obj)
     {
         if (!Heap::IsHeapAddress(obj)) {
@@ -1760,7 +1754,7 @@ void RegionManager::ForwardRegion(ZPage* region)
         const bool liveResidual = routeMarked && routeMap->live_bytes() > 0;
         // hangfloor: young neverExamined×keep fills the heap. Old from-pages
         // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
-        // live==0 after THIS cycle's mark is freed at ExemptFromRegions
+        // live==0 after THIS cycle's mark is freed during select_relocation_set
         // (zGeneration.cpp:216-221), before the page is FORWARDABLE. Do not
         // Collect here: VisitLive copies nothing then FORWARDED+Collect is
         // the NW 256MB keep-from UAF (pc=0x8aa8 reclaim_satb).

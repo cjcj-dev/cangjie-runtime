@@ -24,7 +24,6 @@
 #include "Mutator/Mutator.h"
 #include "Heap/z/zPageAllocator.hpp"
 namespace MapleRuntime {
-extern const ZStatSubPhase PExemptFromRegions;
 extern const ZStatCriticalPhase PReclaimGarbageRegions;
 }
 
@@ -147,16 +146,6 @@ public:
         }
         return true;
     }
-
-    // Return the garbage size of from space.
-    size_t RefineFromSpace()
-    {
-        ZStatTimerWorker zstatTimer(PExemptFromRegions);
-        return GetRegionManager().ExemptFromRegions();
-    }
-
-
-
 
     size_t CollectLargeGarbage() { return GetRegionManager().CollectLargeGarbage(); }
 

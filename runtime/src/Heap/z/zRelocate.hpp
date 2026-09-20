@@ -140,7 +140,6 @@ private:
 class ZRelocate {
 public:
     void relocate(ZRelocationSet* relocation_set);
-    static void RefineFromSpace();
     static BaseObject* ForwardObject(BaseObject* object, Generation generation);
     static BaseObject* ForwardObjectExclusive(BaseObject* object);
     static void UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from, BaseObject* to);

@@ -29,7 +29,6 @@
 
 namespace MapleRuntime {
 
-const ZStatSubPhase PExemptFromRegions("ExemptFromRegions", ZGenerationId::old);
 const ZStatCriticalPhase PReclaimGarbageRegions("ReclaimGarbageRegions");
 RegionManager& RegionSpace::GetRegionManager() const noexcept
 {

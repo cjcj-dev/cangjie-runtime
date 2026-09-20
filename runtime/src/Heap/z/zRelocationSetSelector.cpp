@@ -273,23 +273,4 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     return stats;
 }
 
-// Cost-model CSet (ZRelocationSetSelector.cpp:114-196) after mark, before flip.
-// zGeneration.cpp:205-269: the selector is fed by ZGenerationPagesIterator and
-// installed on the generation; selected pages carry the From role from
-// ZRelocationSet::install. No page list is rebuilt.
-size_t RegionManager::ExemptFromRegions()
-{
-    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-    old.select_relocation_set(false);
-    size_t bytes = 0;
-    ZRelocationSetIterator rs_iter(&old.relocation_set());
-    for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
-        ZPage* page = forwarding->page();
-        if (page != nullptr) {
-            bytes += page->GetRegionSize();
-        }
-    }
-    return bytes;
-}
-
 } // namespace MapleRuntime

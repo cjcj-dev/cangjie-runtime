@@ -1252,7 +1252,10 @@ void ZGenerationOld::concurrent_process_non_strong_references()
     PostTrace();
 }
 
-void ZGenerationOld::concurrent_reset_relocation_set() {}
+void ZGenerationOld::concurrent_reset_relocation_set()
+{
+    reset_relocation_set();
+}
 
 void ZGenerationOld::pause_verify()
 {
@@ -1378,6 +1381,8 @@ void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)
 void ZGeneration::free_empty_pages(ZRelocationSetSelector* selector, int bulk)
 {
     if (selector->should_free_empty_pages(bulk)) {
+        const size_t freed = Heap::free_empty_pages(id(), selector->empty_pages());
+        increase_freed(freed);
         selector->clear_empty_pages();
     }
 }

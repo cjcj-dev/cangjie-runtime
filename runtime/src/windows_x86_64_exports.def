@@ -1267,9 +1267,7 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager15CountLiveObjectEPKNS_10BaseObjectE @1419
     _ZN12MapleRuntime13RegionManager16ExemptFromRegionEPNS_10ZPageE @1420
     _ZN12MapleRuntime13RegionManager16RequestForRegionEy @1421
-    _ZN12MapleRuntime13RegionManager17ExemptFromRegionsEv @1422
     _ZN12MapleRuntime13RegionManager17PromoteAllRegionsEv @1423
-    _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEv @1425
     _ZN12MapleRuntime13RegionManager19AddRawPointerObjectEPNS_10BaseObjectE @1426
     _ZN12MapleRuntime13RegionManager19CollectLargeGarbageEv @1427
     _ZN12MapleRuntime13RegionManager19ReassembleFromSpaceEv @1428
