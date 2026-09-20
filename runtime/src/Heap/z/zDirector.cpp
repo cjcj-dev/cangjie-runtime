@@ -116,6 +116,29 @@ bool ZDirector::wait_for_tick()
     return !stopped;
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+std::mutex sampleForTestLock;
+ZDirectorSampleForTest sampleForTest;
+void observe_sample_for_test(const ZDirectorStats& stats)
+{
+    std::lock_guard<std::mutex> lock(sampleForTestLock);
+    ++sampleForTest.serial;
+    sampleForTest.oldSequence = ZGeneration::old()->Sequence();
+    sampleForTest.oldUsed = stats.old_stats.general.used;
+    sampleForTest.oldLive = stats.old_stats.stat_heap.liveAtMarkEnd;
+    sampleForTest.softMaxCapacity = stats.heap.soft_max_heap_size;
+    sampleForTest.relocationHeadroom = stats.relocation_headroom;
+    sampleForTest.majorBusy = stats.major_busy;
+}
+}
+ZDirectorSampleForTest ZDirector::ReadSampleForTest()
+{
+    std::lock_guard<std::mutex> lock(sampleForTestLock);
+    return sampleForTest;
+}
+#endif
+
 static uint32_t young_gc_threads(const ZDirectorStats&)
 {
     return ZYoungGCThreads == 0 ? 1 : ZYoungGCThreads;
@@ -651,6 +674,9 @@ void ZDirector::run_thread()
         }
         const ZDirectorStats stats = sample_stats(TimeUtil::NanoSeconds(),
             busy(true), busy(false), ZCollectedHeap::heap()->concurrent_gc_threads());
+#if defined(MRT_TESTABLE_INTERNALS)
+        observe_sample_for_test(stats);
+#endif
         if (!MapleRuntime::start_gc(stats)) {
             adjust_gc(stats);
         }
