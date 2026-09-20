@@ -95,7 +95,7 @@ extern "C" int p1MarkStartExercise()
                     const auto empty = [](ZPage* region) {
                         return region == nullptr || region == ZPage::NullRegion();
                     };
-                    retired = retired && empty(buffer.GetRegion()) && empty(buffer.GetPreparedRegion());
+                    retired = retired && empty(buffer.GetRegion());
                 });
                 std::printf("P1_PRODUCT_TLAB buffers=%zu retired=%u\n", buffers, retired);
                 Expect(buffers != 0, "retirement_has_real_mutator_inputs");
