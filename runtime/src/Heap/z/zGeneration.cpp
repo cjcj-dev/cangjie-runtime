@@ -272,7 +272,6 @@ public:
     bool block_jni_critical() const override { return true; }
 };
 
-#if defined(MRT_GC_UNIT_TESTS)
 class VM_ZTestJniCriticalPause : public VM_ZOperation {
 public:
     bool do_operation() override
@@ -291,7 +290,6 @@ bool ZGeneration::TestPauseJniCritical()
     VM_ZTestJniCriticalPause op;
     return op.pause() && VM_ZTestJniCriticalPause::testJniCriticalSawBlocked.load(std::memory_order_acquire);
 }
-#endif
 
 class VM_ZVerifyOld : public VM_ZOperation {
 public:
