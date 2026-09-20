@@ -208,14 +208,14 @@ TEST_DEFINES=()
 # suites into this executable so a partial product configuration fails at link.
 nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
 if /usr/bin/grep -Eq \
-    'CJ_MRT_SetLargeArrayInitTestHooks' \
+    'PendingStalledAllocations' \
     "$OUT/runtime-dynamic-symbols.txt"; then
   TEST_DEFINES+=(-DMRT_GC_UNIT_TESTS=1)
   echo "GC_UNIT_PRODUCT_CONFIGURATION=MRT_GC_UNIT_TESTS"
 else
   echo "GC_UNIT_PRODUCT_CONFIGURATION=DEFAULT"
 fi
-if /usr/bin/grep -Eq 'SetAllocationStallTestHooks|PendingStalledAllocations' \
+if /usr/bin/grep -Eq 'PendingStalledAllocations' \
     "$OUT/runtime-dynamic-symbols.txt"; then
   STALL_PRODUCT_OBSERVE=1
 else
@@ -324,6 +324,7 @@ MAIN_SOURCES=(
   "$SRC/test_young_conc.cpp"
   "$SRC/test_alloc_buffer_handoff.cpp"
   "$SRC/test_tlab_usage.cpp"
+  "$SRC/test_object_allocator_paths.cpp"
   "$SRC/test_shared_small_page.cpp"
   "$SRC/test_young_weak.cpp"
   "$SRC/test_native_root_current.cpp"
@@ -557,17 +558,18 @@ fi
 echo "GATE_OLDVALUE_PRODUCT_BINDING_OK rows=$oldvalue_rows elf=$OUT/cj_gc_unit"
 STALL_TEST_DEFINED=$(nm --defined-only "$OUT/cj_gc_unit" | /usr/bin/grep -c 'AllocationStall_' || true)
 echo "STALL_TEST_DEFINED=$STALL_TEST_DEFINED"
-if [[ "$STALL_PRODUCT_OBSERVE" -eq 1 && "$STALL_TEST_DEFINED" -eq 0 ]]; then
-  echo "GC_UNIT_GATE_FAIL: product SO exports stall observers but the test ELF registered no AllocationStall tests" >&2
+# The migrated tests consume StallAllocation and real page capacity in both
+# product configurations; optional observer exports no longer define coverage.
+if [[ "$STALL_TEST_DEFINED" -eq 0 ]]; then
+  echo "GC_UNIT_GATE_FAIL: AllocationStall tests are missing" >&2
   exit 8
 fi
-if [[ "$STALL_PRODUCT_OBSERVE" -eq 0 && "$STALL_TEST_DEFINED" -ne 0 ]]; then
-  echo "GC_UNIT_GATE_FAIL: stall tests compiled against a product SO with no stall observers" >&2
+nm -u "$OUT/cj_gc_unit" > "$OUT/stall-imports.txt"
+if ! /usr/bin/grep -q 'StallAllocation' "$OUT/stall-imports.txt"; then
+  echo "GC_UNIT_GATE_FAIL: missing product StallAllocation import" >&2
   exit 8
 fi
-if [[ "$STALL_PRODUCT_OBSERVE" -eq 0 ]]; then
-  echo "STALL_SUITE=SKIP_DEFAULT_SO"
-fi
+echo "STALL_SUITE=PRODUCT_BOTH_CONFIGURATIONS"
 
 # ReferenceProcessor is an independently replaceable product carrier. Guard
 # full symbols (not only the dynamic table) so no local/weak test copy can

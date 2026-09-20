@@ -172,8 +172,6 @@ void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisi
 {
 #if defined(MRT_GC_UNIT_TESTS)
     RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
-        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_MARK,
-                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
         invisibleRootVisitor(root);
     };
     RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
@@ -188,7 +186,6 @@ void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisi
         bool watermarkDone =
             stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
 #if defined(MRT_GC_UNIT_TESTS)
-        NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MINOR_MARK, &mutator, watermarkDone);
 #endif
         if (watermarkDone) {
             ++concurrentDone;

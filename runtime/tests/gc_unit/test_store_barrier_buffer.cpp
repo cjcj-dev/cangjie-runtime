@@ -75,7 +75,7 @@ public:
         ThreadLocal::SetAllocBuffer(saved);
         // The test TU and product SO each own an inline NullRegion sentinel.
         // Use the product destructor's other empty representation.
-        alloc.SetRegion(nullptr);
+        alloc.ClearRegion();
     }
 
 private:

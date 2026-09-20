@@ -17,6 +17,7 @@
 #include "HeapManager.inline.h"
 // module internal interfaces
 #include "MArray.h"
+#include "Heap/z/zObjArrayAllocator.hpp"
 #include "MClass.inline.h"
 
 namespace MapleRuntime {
@@ -133,16 +134,11 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
         (arrayClass.GetComponentTypeInfo()->IsPrimitiveType() ||
          (elemBytes == RefField<>::GetSize() && arrayClass.GetComponentTypeInfo()->IsRef()));
     MAddress address;
-#if defined(MRT_GC_UNIT_TESTS)
-    address = CJ_MRT_TestAllocateArrayStorage(
-        arraySize, useSegmentedClear ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
-#else
     address = HeapManager::Allocate(
         arraySize, useSegmentedClear ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
-#endif
     if (LIKELY(address != NULL_ADDRESS)) {
         if (UNLIKELY(useSegmentedClear)) {
-            return InitializeLargeArray(address, arraySize, nElems, arrayClass);
+            return ZObjArrayAllocator(address, arraySize, nElems, arrayClass).initialize();
         }
         MArray* newArray = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));
         newArray->SetLength(nElems);

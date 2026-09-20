@@ -42,6 +42,7 @@ set(GC_UNIT_SOURCES
     test_young_conc.cpp
     test_alloc_buffer_handoff.cpp
     test_tlab_usage.cpp
+    test_object_allocator_paths.cpp
     test_shared_small_page.cpp
     test_young_weak.cpp
     test_native_root_current.cpp

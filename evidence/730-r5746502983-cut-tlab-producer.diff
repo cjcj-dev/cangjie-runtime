@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zCollectedHeap.cpp
++++ b/runtime/src/Heap/z/zCollectedHeap.cpp
+@@ -134,7 +134,7 @@
+ uintptr_t ZCollectedHeap::allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize)
+ {
+     (void)minSize;
+-    const uintptr_t addr = _heap.alloc_tlab(AlignUp(requestedSize, size_t{8}));
++    const uintptr_t addr = _heap.alloc_tlab(AlignUp(requestedSize, size_t{8}) + 8);
+     if (addr != 0) { *actualSize = requestedSize; }
+     return addr;
+ }

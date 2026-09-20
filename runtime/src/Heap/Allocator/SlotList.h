@@ -9,7 +9,7 @@
 #define MRT_SLOT_LIST_H
 
 #include "Common/BaseObject.h"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 
 namespace MapleRuntime {
 struct ObjectSlot {
@@ -42,7 +42,7 @@ public:
         size_t size = slot->GetSize() - sizeof(ObjectSlot);
         if (size > 0) {
             MAddress start = reinterpret_cast<uintptr_t>(slot) + sizeof(ObjectSlot);
-            HeapFiller::ZeroAndFill(start, size);
+            CollectedHeap::fill_with_dummy_object(start, start + size, true);
         }
         return true;
     }

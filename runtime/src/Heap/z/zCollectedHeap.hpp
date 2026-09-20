@@ -14,6 +14,7 @@
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include <atomic>
+#include "Heap/shared/collectedHeap.hpp"
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;
@@ -22,7 +23,7 @@ class ZDriverMajor;
 class ZDriverMinor;
 class ZStat;
 
-class ZCollectedHeap {
+class ZCollectedHeap : public CollectedHeap {
 public:
     static ZCollectedHeap* heap();
     static void create(const HeapParam& param, double garbageThreshold);
@@ -33,6 +34,7 @@ public:
     void initialize_gc();
     void finalize_gc();
     void collect(GCReason reason, bool async);
+    uintptr_t allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize);
 
     Heap& collected_heap() { return _heap; }
     const Heap& collected_heap() const { return _heap; }

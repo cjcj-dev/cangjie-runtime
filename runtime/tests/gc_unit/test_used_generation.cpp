@@ -32,7 +32,7 @@ GC_TEST(UsedGeneration, CounterMatchesPageTableNonFreeSum)
 {
     GcHeapFixture fx;
     RegionManager& manager = Heap::GetHeap().page_allocator();
-    fx.region0->SetRegionRole(ZPageRole::ThreadLocal);
+    fx.region0->SetRegionRole(ZPageRole::RecentFull);
     const size_t young = manager.used_generation(ZGenerationId::young);
     const size_t table = PageTableUsed(ZGenerationId::young);
     std::printf("USED_GENERATION young_counter=%zu page_table=%zu region0_size=%zu\n",

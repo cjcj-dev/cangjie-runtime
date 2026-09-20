@@ -90,7 +90,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -1437,8 +1437,7 @@ void RegionManager::FinishIncompleteFromRegions(ZGenerationId generation)
         if (wasFrom) {
             region->SetRegionRole(ZPageRole::None);
         }
-        const bool canForward = region->IsLoneFromRegion() ||
-            (region->IsThreadLocalRegion() && (region->IsRoutingState() || region->IsCompacted()));
+        const bool canForward = region->IsLoneFromRegion();
         if (canForward) {
             const MAddress start = region->GetRegionStart();
             if (young) {
@@ -1627,7 +1626,7 @@ void RegionManager::CompactRegion(ZPage* region)
     MAddress cur = toPage->GetRegionAllocPtr();
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
-        HeapFiller::ZeroAndFill(cur, reclaimSize);
+        CollectedHeap::fill_with_dummy_object(cur, cur + reclaimSize, true);
     }
 
     toPage->ResetCensusBoundary();
@@ -1657,32 +1656,16 @@ void RegionManager::EnlistCompactedRegionForAllocator(ZPage* region)
     } else if (region->IsGarbageRegion()) {
         ZPageRole expect = ZPageRole::Garbage;
         claimed = region->CASRegionRole(expect, ZPageRole::None);
-    } else if (region->IsThreadLocalRegion() || region->GetRegionRole() == ZPageRole::RecentFull) {
+    } else if (region->GetRegionRole() == ZPageRole::RecentFull) {
         return;
     }
     if (claimed) {
-        region->SetRegionRole(ZPageRole::ThreadLocal);
+        region->SetRegionRole(ZPageRole::RecentFull);
+        RecentFullAccounting::Enqueue(1, region->GetRegionSize());
     }
 }
 
-// A region the forward path finished with in place has to stay reachable by a collection-set
-// builder, and CompactRegion leaves it thread-local, which no builder walks.
-//
-// ZGC gets this structurally: a page is in _page_table from ZHeap::alloc_page (zHeap.cpp:257) until
-// ZHeap::free_page (:277), and select_relocation_set iterates that table
-// (zGeneration.cpp:205-212), so allocator ownership and collection visibility are separate
-// questions. Ours ties them together through a list, and the compact-in-place arm drops the
-// allocator side without moving the region: AllocBuffer::ClearRegion (AllocBuffer.h:36-44) only
-// nulls tlRegion, it does not unlink anything.
-//
-// The result is a region no path can reach again. It cannot be allocated from --
-// AllocateThreadLocalRegion always takes a fresh region -- and it cannot be collected, because
-// AssembleSmallGarbageCandidates and PrepareYoungGarbageCandidates walked the from /
-// recent-full / unmovable-from sets, and neither walked thread-local pages. It is simply
-// retained until the heap goes away.
-//
-// Same shape as the stay-young survivor that had to be re-homed earlier in this cycle: the work
-// finished, and nothing put the region back where the next cycle looks.
+// Completed in-place pages remain visible in the page table (ZHeap::free_page).
 void RegionManager::RehomeCompactedInPlaceRegion(ZPage* region)
 {
     if (region == nullptr) {
@@ -1697,9 +1680,7 @@ void RegionManager::RehomeCompactedInPlaceRegion(ZPage* region)
     } else if (region->IsGarbageRegion()) {
         ZPageRole expect = ZPageRole::Garbage;
         claimed = region->CASRegionRole(expect, ZPageRole::None);
-    } else if (region->IsThreadLocalRegion()) {
-        ZPageRole expect = ZPageRole::ThreadLocal;
-        claimed = region->CASRegionRole(expect, ZPageRole::None);
+
     } else if (region->GetRegionRole() == ZPageRole::RecentFull) {
         return;
     }
@@ -1759,9 +1740,7 @@ void RegionManager::EnlistStayYoungSurvivor(ZPage* region, bool advanceAge)
     } else if (region->IsGarbageRegion()) {
         ZPageRole expect = ZPageRole::Garbage;
         claimed = region->CASRegionRole(expect, ZPageRole::None);
-    } else if (region->IsThreadLocalRegion()) {
-        ZPageRole expect = ZPageRole::ThreadLocal;
-        claimed = region->CASRegionRole(expect, ZPageRole::None);
+
     } else if (region->GetRegionRole() == ZPageRole::RecentFull) {
         return;
     }
@@ -1787,8 +1766,7 @@ void RegionManager::ForwardRegion(ZPage* region)
         }
     } verifyAfterRelocation { verifyForwarding };
 
-    CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
-        (region->IsRoutingState() || region->IsCompacted())), "region type %u", 0u);
+    CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion(), "region type %u", 0u);
 
     DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %zu",
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
@@ -2489,7 +2467,7 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -2669,7 +2647,7 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"

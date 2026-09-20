@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zHeap.cpp b/runtime/src/Heap/z/zHeap.cpp
+index 1cbabfe99..ec5ae8ac6 100644
+--- a/runtime/src/Heap/z/zHeap.cpp
++++ b/runtime/src/Heap/z/zHeap.cpp
+@@ -552,7 +552,7 @@ ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool
+         page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age, flags);
+     }
+     if (page != nullptr) {
+-        page_table().insert(page);
++        if (role != ZPageType::medium) { page_table().insert(page); }
+     }
+     return page;
+ }

@@ -373,7 +373,7 @@ void RunYoungWeakVariant(size_t helpers)
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    fx.region1->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
@@ -444,7 +444,7 @@ void RunYoungWeakRemsetFlow()
 
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    fx.region1->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
     space.GetRegionManager().AddRawPointerObject(graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
@@ -502,7 +502,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindWorkerBudget(static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
+    fx.region0->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(graph.child);
     if (runtimeEntry) {
         space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
@@ -695,7 +695,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
+    fx.region0->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(graph.weak);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
@@ -817,7 +817,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool old
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(graph.owner);
+    graph.owner->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(graph.foreign);
     // The old-roots-only case registers before the real old mark-start flip.
     // It exercises the old phase entry without a young prelude premarking it.

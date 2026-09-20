@@ -37,7 +37,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -94,15 +94,6 @@ void Report(size_t listRegions, size_t listBytes)
 
 namespace MapleRuntime {
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
-void RegionManager::SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
-                                                AllocationStallTestHook requestGc,
-                                                AllocationStallTestHook beforeWait)
-{
-    allocationStallBeforeWaveTestHook = std::move(beforeWave);
-    allocationStallGcTestHook = std::move(requestGc);
-    allocationStallBeforeWaitTestHook = std::move(beforeWait);
-}
-
 size_t RegionManager::PendingStalledAllocations() const { return allocationStallQueue.Pending(); }
 size_t RegionManager::EnqueuedStalledAllocations() const { return allocationStallQueue.EnqueuedCount(); }
 size_t RegionManager::DequeuedStalledAllocations() const { return allocationStallQueue.DequeuedCount(); }
