@@ -133,8 +133,7 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
         allocType == AllocType::MOVEABLE_OBJECT &&
         (arrayClass.GetComponentTypeInfo()->IsPrimitiveType() ||
          (elemBytes == RefField<>::GetSize() && arrayClass.GetComponentTypeInfo()->IsRef()));
-    MAddress address;
-    address = HeapManager::Allocate(
+    MAddress address = HeapManager::Allocate(
         arraySize, useSegmentedClear ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
     if (LIKELY(address != NULL_ADDRESS)) {
         if (UNLIKELY(useSegmentedClear)) {

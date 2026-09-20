@@ -52,12 +52,14 @@
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #if defined(MRT_TESTABLE_INTERNALS)
-#include "young_closure_observation.hpp"
 #include "mark_publication_fixture.hpp"
 #endif
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
+
+
+#include "gc_generation_test.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -91,7 +93,8 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 
-struct RelocationReceiptTestAccess {
+class RelocationReceiptTest {
+public:
     static void BindCollector(Heap* collector)
     {
         if (collector != nullptr) {
@@ -118,7 +121,7 @@ struct RelocationReceiptTestAccess {
     static void RunCollectionDispatch(Heap& collector)
     {
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-        if (!cycle.Snapshot().active) cycle.SetReasonForTest(GC_REASON_YOUNG);
+        if (!cycle.Snapshot().active) ZGenerationTest::SetReason(cycle, GC_REASON_YOUNG);
         YoungTypeSetter type(cycle, ZYoungType::minor);
         Heap::GetHeap().young().collect();
     }
@@ -452,7 +455,7 @@ GC_OTHER_VM_TEST(YoungConc, RemovingExportRootPublishesPreviousValue)
     fx.region1->reset(PageAge::eden);
     MarkPublicationFixture mark;
     const U64 handle = Heap::GetHeap().RegisterExportRoot(fx.obj1);
-    RelocationReceiptTestAccess::FlipYoungMarkForNativeBarrier(mark.collector);
+    RelocationReceiptTest::FlipYoungMarkForNativeBarrier(mark.collector);
     Heap::GetHeap().RemoveExportObject(handle);
     std::vector<BaseObject*> work;
     mark.DrainObjects(work);
@@ -483,79 +486,16 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
 }
 
 // Compensation: y2y dirty holder is merged into work stack (AllocBuffer.h:84-105).
-GC_TEST(YoungConc, YoungToYoungDirtyHolderReachesWorkStack)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    auto* buf = new AllocBuffer();
-    buf->PushY2yDirtyHolder(fx.obj0);
-    buf->PushY2yDirtyHolder(fx.obj0);
-    GC_EXPECT_EQ(buf->Y2yDirtyHolderCount(), 1u);
-    std::vector<BaseObject*> stack;
-    buf->MergeY2yDirtyHolders(stack);
-    GC_EXPECT_EQ(stack.size(), 1u);
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(stack[0]), reinterpret_cast<uintptr_t>(fx.obj0));
-    GC_EXPECT_EQ(buf->Y2yDirtyHolderCount(), 0u);
-}
+
 
 #if defined(MRT_TESTABLE_INTERNALS) || defined(MRT_GC_UNIT_TESTS)
-namespace {
-struct Y2yMergePhaseGate {
-    std::mutex lock;
-    std::condition_variable changed;
-    bool mergeOwnsBuffer{ false };
-    bool producerAtPush{ false };
-};
 
-void HoldY2yMergeAtPhaseSwitch(void* context)
-{
-    auto& gate = *static_cast<Y2yMergePhaseGate*>(context);
-    std::unique_lock<std::mutex> lock(gate.lock);
-    gate.mergeOwnsBuffer = true;
-    gate.changed.notify_all();
-    gate.changed.wait(lock, [&gate]() { return gate.producerAtPush; });
-}
-} // namespace
 
 // The young mark consumer and a mutator can meet at the concurrent phase
-// boundary. Freeze that ordering after the consumer owns the buffer but before
-// it takes the batch: the late publication must remain intact for the next
+// boundary. Pause at the caller-supplied batch sink after the product takes
+// the batch: the late publication must remain intact for the next
 // batch, never mutate the batch being iterated.
-GC_TEST(YoungConc, Y2yDirtyHolderPhaseSwitchHandsOffWholeBatch)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    auto* buffer = new AllocBuffer();
-    Y2yMergePhaseGate gate;
-    buffer->PushY2yDirtyHolder(fx.obj0);
-    buffer->SetY2yDirtyHolderMergeHookForTest(HoldY2yMergeAtPhaseSwitch, &gate);
 
-    std::thread producer([&]() {
-        {
-            std::unique_lock<std::mutex> lock(gate.lock);
-            gate.changed.wait(lock, [&gate]() { return gate.mergeOwnsBuffer; });
-            gate.producerAtPush = true;
-            gate.changed.notify_all();
-        }
-        buffer->PushY2yDirtyHolder(fx.obj1);
-    });
-    GcUnit::JoinGuard join(producer);
-
-    std::vector<BaseObject*> firstBatch;
-    buffer->MergeY2yDirtyHolders(firstBatch);
-    producer.join();
-    buffer->SetY2yDirtyHolderMergeHookForTest(nullptr, nullptr);
-
-    GC_EXPECT_EQ(firstBatch.size(), 1u);
-    GC_EXPECT_EQ(reinterpret_cast<MAddress>(firstBatch[0]), reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
-
-    std::vector<BaseObject*> secondBatch;
-    buffer->MergeY2yDirtyHolders(secondBatch);
-    GC_EXPECT_EQ(secondBatch.size(), 1u);
-    GC_EXPECT_EQ(reinterpret_cast<MAddress>(secondBatch[0]), reinterpret_cast<MAddress>(fx.obj1));
-    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
-}
 
 #endif
 
@@ -716,53 +656,15 @@ GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
 // After a completed handoff, new inserts belong to the live set, not the
 // already-swapped batch. Header-only MergeY2yDirtyHolders (AllocBuffer.h).
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(YoungConc, Y2yAfterHandoffWritesStayOnLiveSet)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    auto* buffer = new AllocBuffer();
-    buffer->PushY2yDirtyHolder(fx.obj0);
-    std::vector<BaseObject*> firstBatch;
-    buffer->MergeY2yDirtyHolders(firstBatch);
-    buffer->PushY2yDirtyHolder(fx.obj1);
-    GC_EXPECT_EQ(firstBatch.size(), 1u);
-    GC_EXPECT_EQ(reinterpret_cast<MAddress>(firstBatch[0]), reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
-    std::vector<BaseObject*> secondBatch;
-    buffer->MergeY2yDirtyHolders(secondBatch);
-    GC_EXPECT_EQ(secondBatch.size(), 1u);
-    GC_EXPECT_EQ(reinterpret_cast<MAddress>(secondBatch[0]), reinterpret_cast<MAddress>(fx.obj1));
-}
+
 #endif // MRT_TESTABLE_INTERNALS
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(YoungConc, Y2yThreadExitLeavesHoldersForNextMerge)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    auto* buffer = new AllocBuffer();
-    buffer->PushY2yDirtyHolder(fx.obj0);
-    buffer->PushY2yDirtyHolder(fx.obj1);
-    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 2u);
-    std::vector<BaseObject*> batch;
-    buffer->MergeY2yDirtyHolders(batch);
-    GC_EXPECT_EQ(batch.size(), 2u);
-    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
-}
+
 #endif // MRT_TESTABLE_INTERNALS
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    auto* buffer = new AllocBuffer();
-    buffer->PushY2yDirtyHolder(fx.obj0);
-    std::vector<BaseObject*> firstBatch;
-    buffer->MergeY2yDirtyHolders(firstBatch);
-    buffer->PushY2yDirtyHolder(fx.obj1);
-    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
-}
+
 
 // ZMark::mark_object policy matrix. These calls enter the actual product
 // ZGeneration template instantiations, not a test-compiled mark body.

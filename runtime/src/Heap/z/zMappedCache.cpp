@@ -23,6 +23,8 @@
 
 namespace MapleRuntime {
 
+constexpr int ZMappedCache::MinSizeClassShift;
+
 class ZMappedCacheEntry {
 private:
   ZVirtualMemory                  _vmem;

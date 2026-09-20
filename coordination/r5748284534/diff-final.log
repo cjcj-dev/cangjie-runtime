@@ -1,0 +1,50 @@
+# kkk2_diff cand=0a49b0f3fa5615e8a4b301b378f7b1972e1f0c58 base=eab957d9ff92d294eb1a234ebd0f03f522856608 2026-09-20T15:25:58+08:00
+# pinned runner sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08 path=kkk2:/root/diff_harness_708/4869bdf1370c/kkk2_managed.sh
+# diff_eab957d9ff92: 命中缓存
+# diff_0a49b0f3fa56: 构建两构型…
+== default configure_rc=0 build_rc=0 wall=12s
+== testable configure_rc=0 build_rc=0 wall=12s
+# diff_0a49b0f3fa56: 三臂+managed 并行…
+357M
+default rc=1 filler rc=1 testable rc=1 
+# DIFF 0a49b0f3fa56 vs eab957d9ff92
+
+runner_sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08 path=kkk2:/root/diff_harness_708/4869bdf1370c/kkk2_managed.sh
+cand_runner_sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08 base_runner_sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08
+CANGJIE_HOME=/root/sdkdepot/90a09c15ba02-fa13e8d5c17b
+H48=/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative
+stained=/root/diff_0a49b0f3fa56/default/build/runtime-staging/lib/x86_64_Release
+
+## default: status=ran · cand rc=1 failed=1 · base rc=1 failed=49 · common=1 · CAND-ONLY=0 BASE-ONLY=48 · 阳性对照=sets differ
+- base-only FindToPublicState.QueryableMissIsObservable
+- base-only ForwardingLookupWitness.ActiveHitIdentifiesPublisher
+- base-only ForwardingLookupWitness.ActiveMissKeepsCandidateIdentity
+- base-only ForwardingNoGeometry.ForwardImplTryLockCopiesWithoutPrebuiltMapping
+- base-only ForwardingPublicationProduct.BarrierResolvesForwardedFromThroughCollector
+- base-only ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab
+- base-only ForwardingPublicationProduct.CompactRequestReturnsReceiptBeforeFromClear
+- base-only ForwardingPublicationProduct.CompactedWithoutFwdDoneWaitsInProductSO
+- base-only ForwardingPublicationProduct.CompletedForwardingMissRejectsOriginalAddress
+- base-only ForwardingPublicationProduct.ExclusiveCopyPublishesProductReceipt
+- base-only ForwardingPublicationProduct.ForwardUpdateRawRefFailClosedWhenUnresolved
+- base-only ForwardingPublicationProduct.ForwardUpdateRawRefWritesBackMappedTo
+- base-only ForwardingPublicationProduct.ForwardingIdentityWinnerSurvivesDoneAndRelease
+- base-only ForwardingPublicationProduct.ForwardingMovedWinnerSurvivesDoneAndRelease
+- base-only ForwardingPublicationProduct.MutatorRuntimeEntryReachesCopyAdmission
+- base-only ForwardingPublicationProduct.PartialCompactFirstDestinationKeepsReceipt
+- base-only ForwardingPublicationProduct.PartialCompactSelfFallbackKeepsReceipt
+- base-only ForwardingPublicationProduct.PreForwardDerivedOrdinaryMovingBaseProducer
+- base-only ForwardingPublicationProduct.PreForwardDerivedRebasesFromRemappedBaseWithoutLookup
+- base-only ForwardingPublicationProduct.PreForwardDerivedTaggedMovingBaseProducer
+## filler: status=ran · cand rc=1 failed=1 · base rc=1 failed=49 · common=1 · CAND-ONLY=0 BASE-ONLY=48 · 阳性对照=sets differ
+- base-only FindToPublicState.QueryableMissIsObservable
+- base-only ForwardingLookupWitness.ActiveHitIdentifiesPublisher
+- base-only ForwardingLookupWitness.ActiveMissKeepsCandidateIdentity
+- base-only ForwardingNoGeometry.ForwardImplTryLockCopiesWithoutPrebuiltMapping
+- base-only ForwardingPublicationProduct.BarrierResolvesForwardedFromThroughCollector
+- base-only ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab
+- base-only ForwardingPublicationProduct.CompactRequestReturnsReceiptBeforeFromClear
+- base-only ForwardingPublicationProduct.CompactedWithoutFwdDoneWaitsInProductSO
+- base-only ForwardingPublicationProduct.CompletedForwardingMissRejectsOriginalAddress
+- base-only ForwardingPublicationProduct.ExclusiveCopyPublishesProductReceipt
+# 产物: /root/cj_build/reports/DIFF-0a49b0f3fa56-vs-eab957d9ff92.{json,md}  原始名单: /root/cj_build/agent_scratch/diffout/0a49b0f3fa56-vs-eab957d9ff92/{cand,base}.txt  kkk2: /root/diff_0a49b0f3fa56 /root/diff_eab957d9ff92

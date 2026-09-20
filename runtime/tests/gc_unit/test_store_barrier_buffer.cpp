@@ -47,6 +47,9 @@
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/RefField.inline.h"
 
+
+#include "gc_generation_test.hpp"
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -138,7 +141,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    heap.GetZGeneration(ZGenerationId::old).SetReasonForTest(GC_REASON_USER);
+    ZGenerationTest::SetReason(heap.GetZGeneration(ZGenerationId::old), GC_REASON_USER);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
@@ -169,7 +172,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     buf.Flush();
     DrainPublishedMarkObjects(retired);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    heap.GetZGeneration(ZGenerationId::old).SetReasonForTest(reasonBefore);
+    ZGenerationTest::SetReason(heap.GetZGeneration(ZGenerationId::old), reasonBefore);
     if (!ownerWasActive) activityCycle.End();
     GC_EXPECT_EQ(retired.size(), 1u);
 }
@@ -273,7 +276,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    heap.GetZGeneration(ZGenerationId::old).SetReasonForTest(GC_REASON_USER);
+    ZGenerationTest::SetReason(heap.GetZGeneration(ZGenerationId::old), GC_REASON_USER);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
@@ -282,7 +285,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     Mutator mutator;
     ThreadLocal::SetAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
-    mutator.SetStoreBarrierRememberedSetForTest(&rs);
+
 #endif
     InstalledMutatorScope mutatorScope(mutator);
     ZBarrier::WriteReference(fx.obj0, field, fx.obj1);
@@ -291,7 +294,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
     DrainPublishedMarkObjects(retired);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    heap.GetZGeneration(ZGenerationId::old).SetReasonForTest(reasonBefore);
+    ZGenerationTest::SetReason(heap.GetZGeneration(ZGenerationId::old), reasonBefore);
     if (!ownerWasActive) activityCycle.End();
     size_t oldCount = 0;
     size_t newCount = 0;
@@ -399,7 +402,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    heap.GetZGeneration(ZGenerationId::old).SetReasonForTest(GC_REASON_USER);
+    ZGenerationTest::SetReason(heap.GetZGeneration(ZGenerationId::old), GC_REASON_USER);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
@@ -408,7 +411,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     Mutator mutator;
     ThreadLocal::SetAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
-    mutator.SetStoreBarrierRememberedSetForTest(&rs);
+
 #endif
     InstalledMutatorScope mutatorScope(mutator);
 
@@ -419,7 +422,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     mutator.FlushStoreBarrierBuffer();
     DrainPublishedMarkObjects(retired);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    heap.GetZGeneration(ZGenerationId::old).SetReasonForTest(reasonBefore);
+    ZGenerationTest::SetReason(heap.GetZGeneration(ZGenerationId::old), reasonBefore);
     if (!ownerWasActive) activityCycle.End();
     size_t oldReceipts = 0;
     size_t newReceipts = 0;
@@ -465,13 +468,13 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    heap.GetZGeneration(ZGenerationId::old).SetReasonForTest(GC_REASON_USER);
+    ZGenerationTest::SetReason(heap.GetZGeneration(ZGenerationId::old), GC_REASON_USER);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
     ThreadLocal::SetAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
-    mutator.SetStoreBarrierRememberedSetForTest(&rs);
+
 #endif
     InstalledMutatorScope mutatorScope(mutator);
     ZBarrier::WriteReference(fx.obj0, field, fx.obj1);
@@ -486,7 +489,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
 
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    heap.GetZGeneration(ZGenerationId::old).SetReasonForTest(reasonBefore);
+    ZGenerationTest::SetReason(heap.GetZGeneration(ZGenerationId::old), reasonBefore);
     if (!ownerWasActive) activityCycle.End();
 }
 

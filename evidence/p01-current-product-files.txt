@@ -1,5 +1,5 @@
 runtime/src/CompilerCalls.cpp
-runtime/src/Heap/Allocator/SlotList.h
+runtime/src/Heap/z/SlotList.h
 runtime/src/Heap/CMakeLists.txt
 runtime/src/Heap/WCollector/WCollector.h
 runtime/src/Heap/z/zAddress.cpp

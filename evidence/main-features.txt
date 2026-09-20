@@ -35,12 +35,12 @@ rc=0 total=4
 comparison set_in_place: main=4 candidate=4
 
 $ git grep -c -F -e insert_receipt 8e1455a55012b2068c7a65b8e3f9cfb3437d086f -- runtime/src
-8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/Allocator/zForwardingTable.cpp:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zForwardingTable.cpp:1
 8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zForwarding.hpp:1
 8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zForwarding.inline.hpp:1
 rc=0 total=3
 $ git grep -c -F -e insert_receipt HEAD -- runtime/src
-HEAD:runtime/src/Heap/Allocator/zForwardingTable.cpp:1
+HEAD:runtime/src/Heap/z/zForwardingTable.cpp:1
 HEAD:runtime/src/Heap/z/zForwarding.hpp:1
 HEAD:runtime/src/Heap/z/zForwarding.inline.hpp:1
 rc=0 total=3

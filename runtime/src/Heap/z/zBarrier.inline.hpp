@@ -11,6 +11,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Base/Log.h"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zVerify.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -145,10 +146,6 @@ inline void ZBarrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& f
         result = MarkBarrier(IsMarkGoodFastPath, &ZBarrier::MarkFromOldSlowPath,
                              ColorMarkGood, field, observed, provenance);
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testFieldMarkResult) testFieldMarkResult(finalizable ? FieldMarkKind::Finalizable : FieldMarkKind::Old,
-                                                field, observed, result);
-#endif
     (void)result;
 }
 
@@ -159,9 +156,6 @@ inline void ZBarrier::MarkBarrierOnYoungOopField(RefField<>& field)
     const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, nullptr, &field };
     const zaddress result = MarkBarrier(IsStoreGoodOrNullAnyFastPath, &ZBarrier::MarkFromYoungSlowPath,
                                        ColorStoreGood, field, observed, provenance);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testFieldMarkResult) testFieldMarkResult(FieldMarkKind::Young, field, observed, result);
-#endif
     (void)result;
 }
 
@@ -172,9 +166,6 @@ inline zaddress ZBarrier::RemsetBarrierOnOopField(RefField<>& field)
     const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
     const zaddress result = MarkBarrier(IsMarkYoungGoodFastPath, &ZBarrier::MarkYoungSlowPath,
                                        ColorRemsetGood, field, observed, provenance);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testFieldMarkResult) testFieldMarkResult(FieldMarkKind::Remset, field, observed, result);
-#endif
     return result;
 }
 
@@ -335,6 +326,9 @@ template<typename SlowPath>
 inline zaddress ZBarrier::barrier(ZBarrierFastPath fast_path, SlowPath slow_path, ZBarrierColor color,
                                   volatile zpointer* p, zpointer o, bool allow_null)
 {
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+    z_verify_safepoints_are_blocked();
+#endif
     if (fast_path(o)) {
         return RefField<>(o).GetTargetObject();
     }

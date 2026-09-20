@@ -1,10 +1,13 @@
+#include "marking_smr_test.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "gc_worker_fixture.hpp"
+#include "gc_verify_fixture.hpp"
 #include <csignal>
 #include <cstdlib>
 #include <limits>
+#include <string>
 #include <sys/wait.h>
 #include <unistd.h>
 #include "Heap/z/zMarkStack.hpp"
@@ -32,7 +35,7 @@ GC_TEST(MarkingStacks, PopulationCountsEntriesAndPublishedChunks)
     MarkStripeStack* published = stripes.At(2).StealStack(smr, 0);
     GC_EXPECT_TRUE(published != nullptr);
     MarkStripeStack::Destroy(published);
-    MarkingSMRTestAccess::reclaim(smr);
+    MarkingSMRTest::reclaim(smr);
     GC_EXPECT_EQ(stripes.Population(), 0u);
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), std::numeric_limits<size_t>::max());
 }
@@ -46,28 +49,56 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
         RunInOtherVm("MarkingStacks.RejectsPublishedStackAndAcceptsDrainedStack");
         return;
     }
-    MarkStripeSet stripes(4);
-    MarkThreadLocalStacks local(4);
-    local.Push(stripes, 1, MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
-    GC_EXPECT_TRUE(local.Flush(stripes, true));
-    GC_EXPECT_EQ(stripes.Population(), 1u);
+    const auto runScene = [](bool reject) {
+        GcVerifyFixture fixture;
+        auto& generation = Heap::GetHeap().old();
+        generation.InitializeWorkers(4);
+        ZMark& mark = generation.Mark();
+        mark.BindWorkers(generation.Workers());
+        MarkStripeSet& stripes = mark.Stripes();
+        MarkThreadLocalStacks local(4);
+        local.Push(stripes, 1, MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
+        GC_EXPECT_TRUE(local.Flush(stripes, true));
+        GC_EXPECT_EQ(stripes.Population(), 1u);
+        if (!reject) {
+            MapleRuntime::GcUnit::WorkerFixture workerFixture;
+            MarkingSMR smr;
+            MarkStripeStack* stack = stripes.At(1).StealStack(smr, 0);
+            GC_EXPECT_TRUE(stack != nullptr);
+            MarkStripeStack::Destroy(stack);
+            MarkingSMRTest::reclaim(smr);
+        }
+        mark.Start();
+        GC_EXPECT_EQ(stripes.Population(), 0u);
+    };
+    // Fork before creating the worker pool. Its owner-registry locks must not
+    // be inherited from threads that do not exist in the child.
+    int diagnosticPipe[2];
+    GC_EXPECT_EQ(pipe(diagnosticPipe), 0);
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
+        close(diagnosticPipe[0]);
+        if (dup2(diagnosticPipe[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(diagnosticPipe[1]);
         signal(SIGABRT, SIG_DFL);
-        MarkingStacks::VerifyEmpty(stripes.Population());
+        runScene(true);
         _exit(0);
     }
+    close(diagnosticPipe[1]);
+    std::string diagnostic;
+    char buffer[512];
+    ssize_t length;
+    while ((length = read(diagnosticPipe[0], buffer, sizeof(buffer))) > 0) {
+        diagnostic.append(buffer, static_cast<size_t>(length));
+    }
+    close(diagnosticPipe[0]);
+    std::fwrite(diagnostic.data(), 1, diagnostic.size(), stderr);
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
-    MapleRuntime::GcUnit::WorkerFixture workerFixture;
-    MarkingSMR smr;
-    MarkStripeStack* stack = stripes.At(1).StealStack(smr, 0);
-    GC_EXPECT_TRUE(stack != nullptr);
-    MarkStripeStack::Destroy(stack);
-    MarkingSMRTestAccess::reclaim(smr);
-    MarkingStacks::VerifyEmpty(stripes.Population());
-    GC_EXPECT_EQ(stripes.Population(), 0u);
+    const bool target = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        diagnostic.find("Shared marking stripes are not empty") != std::string::npos;
+    std::fprintf(stderr, "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=%d matched=%d\n", status, target);
+    GC_EXPECT_TRUE(target);
+    runScene(false);
 }

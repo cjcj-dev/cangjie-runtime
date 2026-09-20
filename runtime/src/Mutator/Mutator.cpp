@@ -20,9 +20,6 @@
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "ObjectModel/RefField.inline.h"
-#if defined(MRT_GC_UNIT_TESTS)
-#include "ObjectModel/MArray.h"
-#endif
 #include "MutatorManager.h"
 #include "StackManager.h"
 #include "UnwindStack/StackFrameCursor.h"

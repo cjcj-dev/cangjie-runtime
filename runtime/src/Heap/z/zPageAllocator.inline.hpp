@@ -126,21 +126,17 @@ inline void RegionManager::HandleTraceRegions()
         // (zPageTable.hpp:57-77), not a list splice.
         fullTraceCacheActive = false;
         largeTraceCacheActive = false;
-        size_t traceRegions = 0;
-        size_t traceBytes = 0;
         ZPage::SafeDestroyScope scope;
         ZPageTableIterator iter(&ZPageTable::heap_table());
         for (ZPage* region; iter.next(&region);) {
             const ZPageRole role = region->GetRegionRole();
             if (role == ZPageRole::FullTrace) {
                 region->SetRegionRole(ZPageRole::RecentFull);
-                ++traceRegions;
-                traceBytes += region->GetRegionSize();
             } else if (role == ZPageRole::LargeTrace) {
                 region->SetRegionRole(ZPageRole::RecentLarge);
             }
         }
-        RecentFullAccounting::Enqueue(traceRegions, traceBytes);
+
     }
 
 inline void RegionManager::PrepareTrace()
@@ -164,18 +160,6 @@ inline void RegionManager::ReleaseMarkQuarantine()
         SatisfyStalledAllocations();
     }
 
-
-    template <typename F>
-inline void RegionManager::VisitAllManagedRegionsForProbe(F&& visitor)
-    {
-        // #710: managed pages are the page table's non-free pages; the probe
-        // names the role word instead of the deleted list.
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            visitor(region, RegionRoleName(region->GetRegionRole()));
-        }
-    }
 
 inline ZPage* RegionManager::TakeReclaimableGarbageRegion(size_t* gatedBytes)
     {
@@ -291,14 +275,10 @@ public:
         : ZTask("ZRelocateTask"), regionManager(manager), relocationSet(relocationSet) {}
 
     ~ForwardTask() override = default;
-#if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT void work() override;
-#else
     __attribute__((visibility("hidden"))) void work() override
     {
         detail::ExecuteForwardTask<G>(regionManager, relocationSet);
     }
-#endif
 
 private:
     RegionManager& regionManager;

@@ -318,8 +318,6 @@ public:
     }
 
 private:
-#if defined(MRT_GC_UNIT_TESTS)
-#endif
 
     static constexpr uint64_t DEFAULT_GC_TASK_INTERVAL_TIMEOUT_NS = 1000L * 1000 * 1000; // default 1s
     std::recursive_mutex taskQueueLock;

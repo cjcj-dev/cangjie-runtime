@@ -31,7 +31,8 @@ using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 
-struct RelocationReceiptTestAccess {
+class RelocationReceiptTest {
+public:
     static void ParkFrom(RegionManager&, ZPage* region)
     {
         region->SetRegionRole(ZPageRole::From);
@@ -123,7 +124,7 @@ bool RunParallelProductEntryClosesGeneration()
     PrepareOwnerRegion(fx);
 
     ZRelocateQueue& queue = manager.GetZRelocateQueue();
-    RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
+    RelocationReceiptTest::ParkFrom(manager, fx.region0);
     auto& old = Heap::GetHeap().old();
     if (old.Workers() == nullptr) old.InitializeWorkers(3);
     old.Workers()->set_active_workers(3);
@@ -141,7 +142,7 @@ bool RunSerialProductEntryClosesGeneration()
     PrepareOwnerRegion(fx);
 
     ZRelocateQueue& queue = manager.GetZRelocateQueue();
-    RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
+    RelocationReceiptTest::ParkFrom(manager, fx.region0);
     // ZRelocate uses the generation worker entry even with one participant.
     auto& old = Heap::GetHeap().old();
     if (old.Workers() == nullptr) old.InitializeWorkers(1);
@@ -184,11 +185,11 @@ bool RunYoungRuntimeProductEntry()
 
     Heap& collector = Heap::GetHeap();
 #if defined(MRT_TESTABLE_INTERNALS)
-    RelocationReceiptTestAccess::BindCollector(collector);
+    RelocationReceiptTest::BindCollector(collector);
 #endif
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
     ZStat::Initialize();
-    RelocationReceiptTestAccess::ForwardYoungFromRuntimeEntry(collector);
+    RelocationReceiptTest::ForwardYoungFromRuntimeEntry(collector);
 
     return !queue.IsActive() && queue.PendingCount() == 0;
 }

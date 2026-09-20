@@ -34,8 +34,6 @@
 #include <vector>
 
 namespace MapleRuntime {
-std::atomic<size_t> g_minorRefCasFail{ 0 };
-std::atomic<size_t> g_minorRefCasOk{ 0 };
 
 template<bool forward>
 bool ZBarrier::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
@@ -116,10 +114,8 @@ bool ZBarrier::CasInstallResolvedTarget(RefField<>& field, MAddress expected, za
                         allowNull);
     const bool healed = true;
     if (healed) {
-        g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
-    g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
@@ -157,9 +153,6 @@ BaseObject* ZBarrier::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFiel
     return latest;
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-std::function<void(ZBarrier::FieldMarkKind, RefField<>&, zpointer, zaddress)> ZBarrier::testFieldMarkResult;
-#endif
 static_assert(!std::is_polymorphic<ZBarrier>::value, "ZBarrier must not regain virtual dispatch");
 
 // ZZBarrier::assert_transition_monotonicity, zBarrier.inline.hpp:40-70.
@@ -1002,8 +995,6 @@ HandVerdict ClassifyRawHeader(uint64_t header)
     return HandVerdict::Usable;
 }
 }
-std::atomic<uint64_t> ZBarrier::colourWhoTotal{0};
-std::atomic<uint64_t> ZBarrier::colourWhoBad{0};
 
 RefField<> ZBarrier::GetAndTryTagRefField(BaseObject* target)
 {
@@ -1032,45 +1023,7 @@ RefField<> ZBarrier::GetAndTryTagRefFieldWithProvenance(BaseObject* target,
     CHECK_DETAIL(target != nullptr && Heap::IsHeapAddress(target),
                  "store-good requires a resolved heap address");
     ZBarrier::CheckStoreGoodTarget("GetAndTryTagRefField", target, provenance);
-    // colourwho: installed-slot checking sits after Barrier::WriteReference, so it only sees the
-    // mutator store path.  That path now measures ~0 while the read barrier still hands out
-    // load-good slots naming from-versions, which means the writer is on the *collector* side --
-    // preforward/ref_fix/self-heal all colour through here too.  This is the single funnel for
-    // every coloured value in the runtime, so the count belongs here.
-    //
-    // Fires when we are about to paint the current (load-good) colour on a target whose own
-    // header already says FORWARDED, or whose header is zeroed.  Both are the crash families.
-    if (kColourWhoProbe) {
-        ZBarrier::NoteStoreGoodOnBadTarget(target);
-    }
     return RefField<>(ZAddress::store_good(from_object(target)));
-}
-
-void ZBarrier::NoteStoreGoodOnBadTarget(BaseObject* target)
-{
-    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-        return;
-    }
-    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
-    const unsigned stateCode = static_cast<unsigned>((hdr >> 48) & 0x3u);
-    const uint64_t typeInfo = hdr & 0xffffffffffffull;
-    const uint64_t seen = colourWhoTotal.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (seen == 1) {
-        // Positive control: a zero below must not be readable as a dead probe.
-        LOG(RTLOG_ERROR, "[COLOURWHO] armed first sc=%u", stateCode);
-    }
-    if (stateCode == 0 && typeInfo != 0) {
-        return;
-    }
-    const uint64_t bad = colourWhoBad.fetch_add(1, std::memory_order_relaxed) + 1;
-    if ((bad & (bad - 1)) != 0) {
-        return;
-    }
-    const bool inFrom = ZRelocate::IsFromObject(target);
-    LOG(RTLOG_ERROR, "[COLOURWHO] bad=%lu of %lu target=%p sc=%u typeInfo=0x%lx isFrom=%d isGhost=%d phase=%d",
-        bad, seen, static_cast<void*>(target), stateCode, typeInfo, inFrom ? 1 : 0,
-        inFrom ? 1 : 0,
-        ZGeneration::old() != nullptr ? static_cast<int>(ZGeneration::old()->Snapshot().phase) : -1);
 }
 
 BaseObject* ZBarrier::ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance)

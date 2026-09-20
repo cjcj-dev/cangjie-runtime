@@ -3,7 +3,6 @@
 // with Runtime Library Exception.
 
 #include "Loader/PackageInit.h"
-#include "Loader/PackageInitTest.h"
 
 #include <atomic>
 #include <algorithm>
@@ -130,50 +129,6 @@ void Publish(PackageInitState& state, InitStatus status, uint32_t failure) noexc
     state.admission.reset();
 }
 
-#ifdef MRT_TESTABLE_INTERNALS
-struct CompletePause {
-    enum Stage { Idle, Armed, Paused, Released, Done, Configuring };
-    std::atomic<Stage> stage { Idle };
-    std::atomic<bool> reached { false };
-    const void* package { nullptr };
-    const void* unit { nullptr };
-    uint32_t phase { 0 };
-    Waitqueue waiters {};
-    CompletePause() { CHECK_DETAIL(WaitqueueNew(&waiters) == 0, "cache Complete test waitqueue creation failed"); }
-};
-CompletePause& CompletePauseGate()
-{
-    static ImmortalWrapper<CompletePause> gate;
-    return *gate;
-}
-bool CompletePauseReleased(void* argument)
-{
-    return static_cast<CompletePause*>(argument)->stage.load(std::memory_order_acquire) == CompletePause::Released;
-}
-void PauseBeforeComplete(void* token) noexcept
-{
-    auto& gate = CompletePauseGate();
-    if (gate.stage.load(std::memory_order_acquire) != CompletePause::Armed) { return; }
-    ScopedEnterSaferegion safe(false);
-    {
-        auto& graph = Coordinator();
-        std::lock_guard<std::mutex> lock(graph.mutex);
-        auto found = graph.tokens.find(reinterpret_cast<uintptr_t>(token));
-        CHECK_DETAIL(found != graph.tokens.end(), "package initializer token is not active");
-        const auto& state = *found->second;
-        CHECK_DETAIL(state.owner == CJThreadGetHandle(), "package initializer token belongs to another logical CJThread");
-        if (state.package != gate.package || state.unit != gate.unit || state.phase != gate.phase) { return; }
-        auto expected = CompletePause::Armed;
-        if (!gate.stage.compare_exchange_strong(expected, CompletePause::Paused, std::memory_order_acq_rel)) { return; }
-    }
-    gate.reached.store(true, std::memory_order_release);
-    while (!CompletePauseReleased(&gate)) {
-        const int rc = WaitqueuePark(&gate.waiters, LLONG_MAX, CompletePauseReleased, &gate, false);
-        CHECK_DETAIL(rc == 0 || rc == ERRNO_CALLBACK_RETURN_TRUE, "cache Complete test pause failed: %d", rc);
-    }
-    gate.stage.store(CompletePause::Done, std::memory_order_release);
-}
-#endif
 
 void FinishToken(void* token, InitStatus status, uint32_t failure) noexcept
 {
@@ -250,9 +205,6 @@ PackageInitResult PackageInitTable::Begin(const void* package, const void* unit,
 
 void PackageInitTable::Complete(void* token) noexcept
 {
-#ifdef MRT_TESTABLE_INTERNALS
-    PauseBeforeComplete(token);
-#endif
     FinishToken(token, InitStatus::Initialized, 0);
 }
 
@@ -325,54 +277,3 @@ extern "C" [[noreturn]] void MCC_PackageInitAbort(const void* packageEntry, cons
     std::_Exit(70);
 }
 } // namespace MapleRuntime
-
-#ifdef MRT_TESTABLE_INTERNALS
-extern "C" bool MRT_PackageInitArmCompletePause(const void* package, const void* unit, uint32_t phase) noexcept
-{
-    using namespace MapleRuntime;
-    if (package == nullptr || unit == nullptr || phase > 1) { return false; }
-    auto& gate = CompletePauseGate();
-    std::lock_guard<std::mutex> lock(Coordinator().mutex);
-    auto stage = gate.stage.load(std::memory_order_acquire);
-    if (stage != CompletePause::Idle && stage != CompletePause::Done) { return false; }
-    if (!gate.stage.compare_exchange_strong(stage, CompletePause::Configuring, std::memory_order_acq_rel)) { return false; }
-    gate.package = package;
-    gate.unit = unit;
-    gate.phase = phase;
-    gate.reached.store(false, std::memory_order_relaxed);
-    gate.stage.store(CompletePause::Armed, std::memory_order_release);
-    return true;
-}
-extern "C" bool MRT_PackageInitCompletePauseReached() noexcept
-{
-    return MapleRuntime::CompletePauseGate().reached.load(std::memory_order_acquire);
-}
-extern "C" void MRT_PackageInitReleaseCompletePause() noexcept
-{
-    using namespace MapleRuntime;
-    auto& gate = CompletePauseGate();
-    auto stage = gate.stage.load(std::memory_order_acquire);
-    for (;;) {
-        if (stage != CompletePause::Armed && stage != CompletePause::Paused) { return; }
-        const auto next = stage == CompletePause::Armed ? CompletePause::Done : CompletePause::Released;
-        if (gate.stage.compare_exchange_weak(stage, next, std::memory_order_acq_rel)) { break; }
-    }
-    const int rc = WaitqueueWakeAll(&gate.waiters, nullptr, nullptr);
-    CHECK_DETAIL(rc == 0 || rc == ERRNO_QUEUE_IS_EMPTY, "cache Complete test wake failed: %d", rc);
-}
-extern "C" bool MRT_PackageInitHasWaitingCaller(const void* package, const void* unit, uint32_t phase) noexcept
-{
-    using namespace MapleRuntime;
-    if (Runtime::CurrentRef() == nullptr) { return false; }
-    ScopedEnterSaferegion safe(false);
-    auto& graph = Coordinator();
-    std::lock_guard<std::mutex> lock(graph.mutex);
-    for (const auto& edge : graph.waitingOn) {
-        const auto& state = *edge.second;
-        if (state.package == package && state.unit == unit && state.phase == phase &&
-            state.status.load(std::memory_order_acquire) == InitStatus::Initializing) { return true; }
-    }
-    return false;
-}
-
-#endif

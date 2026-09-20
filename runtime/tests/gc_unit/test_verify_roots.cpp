@@ -16,7 +16,12 @@ void SetRootWord(RootSlot& slot, uintptr_t word) { std::memcpy(&slot, &word, siz
 GC_OTHER_VM_TEST(ZVerify, AcceptsActualObjectAddress)
 {
     GcVerifyFixture fixture;
-    ZVerify::Object(fixture.obj0, &fixture.obj0);
+    if (!ZVerifyRoots) {
+        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
+        RunInOtherVm("ZVerify.AcceptsActualObjectAddress");
+        return;
+    }
+    fixture.VerifyRoot(fixture.obj0);
     GC_EXPECT_TRUE(fixture.obj0->IsValidObject());
 }
 
@@ -41,7 +46,7 @@ GC_OTHER_VM_TEST(ZVerify, StackRootExpandsToActualHeapSlot)
         ++visits;
         GC_EXPECT_TRUE(&slot == &record);
         GC_EXPECT_EQ(raw(slot.LoadPlain()), reinterpret_cast<uintptr_t>(fixture.obj0));
-        ZVerify::Object(reinterpret_cast<BaseObject*>(raw(slot.LoadPlain())), &slot);
+        GC_EXPECT_TRUE(Heap::is_in(raw(slot.LoadPlain())));
     });
     GC_EXPECT_EQ(visits, size_t(1));
     std::fprintf(stderr, "STACK_HEAP_SLOT_ASSERT_EXECUTED visits=%zu\n", visits);

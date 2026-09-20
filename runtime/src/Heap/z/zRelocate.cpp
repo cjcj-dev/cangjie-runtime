@@ -136,20 +136,11 @@ bool ZRelocate::IsFromObject(BaseObject* obj)
                Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
     }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-void NoteRawRemapYoungRootsTestReceipt(ObjectRef& root, uintptr_t before);
-void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool healed,
-                                           bool storeGoodAfter);
-#endif
 
 
 
 // installdomain: positive control — how often Resolve/Fix would install a ghost-from that is
 // outside GetRoute's liveInfo0 survivor domain. Grant paints that bit before route geometry.
-std::atomic<size_t> g_installDomainGrant{ 0 };
-std::atomic<size_t> g_installDomainAlready{ 0 };
-std::atomic<size_t> g_installDomainTooLate{ 0 };
-std::atomic<size_t> g_installDomainSkip{ 0 };
 bool ZRelocate::IsUnmovableFromObject(BaseObject* obj)
 {
     // filter const string object.
@@ -201,9 +192,6 @@ public:
             (void)ZGeneration::generation(id)->relocate_or_remap_object(to_object(safe(observed)));
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }
-#if defined(MRT_TESTABLE_INTERNALS)
-        NoteRawRemapYoungRootsTestReceipt(root, raw(observed));
-#endif
     };
         uncolored.Apply([&] { ZMark::VisitStrongPlainRoots(visitor, {}); });
         uncolored.ApplyThreads([&](Mutator& mutator) {
@@ -281,26 +269,21 @@ static ZLiveMap* RouteLiveMap(ZPage* region, ZGenerationId& id)
 void EnsureRouteDomainMembership(BaseObject* obj)
 {
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     if (!obj->IsValidObject()) {
-        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     if (ZRelocate::IsUnmovableFromObject(obj)) {
-        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) {
-        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     const bool isGhost = ZRelocate::IsFromObject(obj);
     const bool isFrom = ZRelocate::IsFromObject(obj);
     if (!isGhost && !isFrom) {
-        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
@@ -315,13 +298,11 @@ void EnsureRouteDomainMembership(BaseObject* obj)
         alreadyInDomain = face != nullptr && face->get(id, region->bit_index(addr));
     }
     if (alreadyInDomain) {
-        g_installDomainAlready.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     if (isGhost) {
         // Only paint while FORWARDABLE: RelocateClaimedPage freezes liveByteCount.
         if (region->IsForwardingDone() || region->IsRoutingState()) {
-            g_installDomainTooLate.fetch_add(1, std::memory_order_relaxed);
             return;
         }
     }
@@ -347,13 +328,10 @@ void EnsureRouteDomainMembership(BaseObject* obj)
     ghost = region->FromPageLiveMap();
     if (isGhost) {
         if (ghost != nullptr && region->IsRouteSurvivedObject(offset)) {
-            g_installDomainGrant.fetch_add(1, std::memory_order_relaxed);
         } else {
-            g_installDomainTooLate.fetch_add(1, std::memory_order_relaxed);
         }
     } else {
         // pre-snapshot from: paint lands on the page livemap; PrepareForwardable will copy pointer.
-        g_installDomainGrant.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -538,11 +516,9 @@ bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         return false;
     }
     if (field.CompareExchange(to_zpointer(oldVal), to_zpointer(newVal))) {
-        g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
     // CAS fail: accept if current == desired or already a plain/newer install (major style).
-    g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
     MAddress cur = raw(field.GetFieldValue());
     if (cur == newVal) {
         return true;
@@ -1229,13 +1205,6 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-template<Generation G>
-void ForwardTask<G>::work()
-{
-    detail::ExecuteForwardTask<G>(regionManager, relocationSet);
-}
-#endif
 
 template<Generation G>
 void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed, bool inPlace)
@@ -1256,6 +1225,7 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
         ForwardRegion<G>(region);
         statGeneration.increase_freed(owner->size());
     }
+    if (ZVerifyForwarding) { owner->verify(); }
     if (owner->from_age() == PageAge::old) {
         owner->relocated_remembered_fields_after_relocate();
     }
@@ -1302,24 +1272,6 @@ void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn
     });
 }
 
-// ZGC's relocate() marks a forwarding life done only after every survivor has
-// a forwarding receipt (zRelocate.cpp:1137-1153). Header state and compact
-// geometry are not receipts: kept/in-place survivors must have an explicit
-// from->from entry in the same active/retired table. Keep this check at the
-// producer boundary so a receipt-less publication fails loudly.
-bool VerifyRelocatedPage(ZPage* region, const char* site)
-{
-    // zRelocate.cpp:1006: verify before MarkForwardingDone/reset releases the
-    // source livemap. ForwardRegion's outer return is too late for this check.
-    if (ZVerifyForwarding && region != nullptr) {
-        auto forwarding = forwarding_for_page(region);
-        CHECK_DETAIL(static_cast<bool>(forwarding), "Missing forwarding at %s", site);
-        forwarding->verify();
-    }
-
-
-    return true;
-}
 } // namespace
 
 void RegionManager::ParkUnmovableFromRegion(ZPage* region)
@@ -1376,23 +1328,19 @@ void RegionManager::FinishIncompleteFromRegions(ZGenerationId generation)
     snap.erase(std::unique(snap.begin(), snap.end()), snap.end());
 
     const bool young = generation == ZGenerationId::young;
-    static std::atomic<size_t> g_zombieFinished{ 0 };
-    static std::atomic<size_t> g_zombieKept{ 0 };
-    size_t finished = 0;
-    size_t kept = 0;
 
     for (ZPage* region : snap) {
         if (!IncompleteRouteUnpublished(region)) {
             continue;
         }
         if (region->IsUnmovableFromRegion()) {
-            ++kept;
+
             continue;
         }
         if (region->IsGarbageRegion()) {
             region->SetRegionRole(ZPageRole::None);
             ExemptFromRegion(region);
-            ++kept;
+
             continue;
         }
         const bool wasFrom = region->IsFromRegion();
@@ -1408,7 +1356,6 @@ void RegionManager::FinishIncompleteFromRegions(ZGenerationId generation)
                 ForwardClaimedPage<Generation::Old>(region, forwarding_for_page(region));
             }
             if (Heap::page(start) != region || !IncompleteRouteUnpublished(region)) {
-                ++finished;
                 continue;
             }
         }
@@ -1418,20 +1365,7 @@ void RegionManager::FinishIncompleteFromRegions(ZGenerationId generation)
         if (region->IsLoneFromRegion() || region->IsFromRegion() || wasFrom) {
             ExemptFromRegion(region);
         }
-        ++kept;
-    }
 
-    if (finished != 0) {
-        g_zombieFinished.fetch_add(finished, std::memory_order_relaxed);
-    }
-    if (kept != 0) {
-        g_zombieKept.fetch_add(kept, std::memory_order_relaxed);
-    }
-    const size_t finTot = g_zombieFinished.load(std::memory_order_relaxed);
-    const size_t keptTot = g_zombieKept.load(std::memory_order_relaxed);
-    if (finished != 0 || kept != 0 || finTot != 0 || keptTot != 0) {
-        LOG(RTLOG_ERROR, "[GCV2][zombie] finished=%zu kept=%zu tot_finished=%zu tot_kept=%zu", finished, kept, finTot,
-            keptTot);
     }
 
     for (ZPage* region : snap) {
@@ -1453,7 +1387,6 @@ void RegionManager::CollectFromSpaceGarbage()
     // in the relocation set (route ∉ {FORWARDED,COMPACTED} and not Exempt-kept)
     // must not be merged into garbage. ZGC free_page never runs while the page
     // is in the relocation set (zGeneration.cpp:216-221).
-    static std::atomic<size_t> g_fromGarbageSkip{ 0 };
     // #710: forwarded from-pages are found by page-table walk over the From
     // role (zPageTable.hpp:57-77); forwarding work itself comes from the
     // relocation set, so nothing here feeds a work queue.
@@ -1470,14 +1403,6 @@ void RegionManager::CollectFromSpaceGarbage()
     for (ZPage* region : fromPages) {
         const bool complete = region->IsForwardingDone();
         if (!complete) {
-            const size_t n = g_fromGarbageSkip.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (n <= 8 || (n & (n - 1)) == 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][from-garbage-skip] n=%zu region=%p start=%#zx route=%u done=%u live=%zu "
-                    "— skip CollectFromSpaceGarbage, Exempt",
-                    n, region, region->GetRegionStart(), region->IsForwardingDone() ? 1u : 0u,
-                    static_cast<unsigned>(region->IsForwardingDone()), (region->is_marked() ? region->live_bytes() : 0));
-            }
             ExemptFromRegion(region);
         } else {
             region->SetRegionRole(ZPageRole::Garbage);
@@ -1508,7 +1433,6 @@ bool RegionManager::RelocateClaimedPage(ZPage* region)
         CompactRegion(region);
         return false;
     }
-    VerifyRelocatedPage(region, "RelocateClaimedPage");
     return true;
 }
 
@@ -1532,6 +1456,15 @@ void RegionManager::CompactRegion(ZPage* region)
     ZPage* const toPage = owner->is_promotion()
         ? region->clone_for_promotion() : region->reset(toAge);
     toPage->SetRegionAllocPtr(regionStart);
+    // ZGC zRelocate.cpp:877-886: check the actual destination after top reset,
+    // before swapping remembered faces. Promotion retains the distinct source.
+    if (!fromYoung) {
+        if (Heap::GetHeap().OldActiveRemsetIsCurrent()) {
+            toPage->verify_remset_cleared_previous();
+        } else {
+            toPage->verify_remset_cleared_current();
+        }
+    }
     if (!fromYoung && Heap::GetHeap().OldActiveRemsetIsCurrent()) {
         region->swap_remset_bitmaps();
     }
@@ -1574,7 +1507,6 @@ void RegionManager::CompactRegion(ZPage* region)
     }
 
     toPage->ResetCensusBoundary();
-    VerifyRelocatedPage(region, "CompactRegion.whole");
     WaitCopiedObjectsUnlocked(region);
     region->MarkForwardingDone();
 
@@ -1605,7 +1537,6 @@ void RegionManager::EnlistCompactedRegionForAllocator(ZPage* region)
     }
     if (claimed) {
         region->SetRegionRole(ZPageRole::RecentFull);
-        RecentFullAccounting::Enqueue(1, region->GetRegionSize());
     }
 }
 
@@ -1632,7 +1563,7 @@ void RegionManager::RehomeCompactedInPlaceRegion(ZPage* region)
         return;
     }
     region->SetRegionRole(ZPageRole::RecentFull);
-    RecentFullAccounting::Enqueue(1, region->GetRegionSize());
+
 }
 
 
@@ -1663,7 +1594,6 @@ void RegionManager::FinishStayYoungInPlace(ZPage* region, bool advanceAge)
         BumpYoungSurvivorAge(region);
     }
     WaitCopiedObjectsUnlocked(region);
-    VerifyRelocatedPage(region, "FinishStayYoungInPlace");
     region->MarkForwardingDone();
     // The selected-set carrier remains queryable after payload release.
     // The next selection/reset retires its ghost/source view; completing this
@@ -1692,14 +1622,12 @@ void RegionManager::EnlistStayYoungSurvivor(ZPage* region, bool advanceAge)
         return;
     }
     region->SetRegionRole(ZPageRole::RecentFull);
-    RecentFullAccounting::Enqueue(1, region->GetRegionSize());
+
 }
 
 template<Generation G>
 void RegionManager::ForwardRegion(ZPage* region)
 {
-    // zRelocate.cpp:993-1003. The owner outlives source-page retirement, so
-    // the after check reads the forwarding table and destination objects only.
     auto verifyForwarding = forwarding_for_page(region);
     ZVerify::BeforeRelocation(verifyForwarding);
     struct VerifyAfterRelocation {
@@ -1773,23 +1701,6 @@ void RegionManager::ForwardRegion(ZPage* region)
         if (!routeMarked &&
             region->GetRegionAllocPtr() > region->GetRegionStart() &&
             (incompleteRoute || liveResidual || !youngRegion || G == Generation::Old)) {
-        static std::atomic<size_t> g_fwdUnmarkedKeep{ 0 };
-        size_t n = g_fwdUnmarkedKeep.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 8 || (n & (n - 1)) == 0) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][fwd-unmarked-keep] n=%zu region=%p start=%#zx alloc=%#zx "
-                "route=%u live=%zu — ExemptFromRegion (not marked this cycle)",
-                n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-                static_cast<unsigned>(region->RelocateObserve()), routeMarked ? routeMap->live_bytes() : 0);
-        }
-        if (youngRegion && StayYoungThisCycle(region)) {
-            EnlistStayYoungSurvivor(region);
-            return;
-        }
-        // No mid-cycle flip promotion here: ZGC ages/promotes only
-        // selector-registered pages in ZFlipAgePagesTask
-        // (zRelocate.cpp:1334-1363); a page the selector skipped is an
-        // ordinary candidate next cycle (zGeneration.cpp:206-218).
         ExemptFromRegion(region);
         return;
         }
@@ -1831,7 +1742,7 @@ void RegionManager::ForwardRegion(ZPage* region)
             if (region->GetRegionRole() == ZPageRole::RecentFull) {
                 const size_t pageBytes = region->GetRegionSize();
                 region->SetRegionRole(ZPageRole::None);
-                RecentFullAccounting::Dequeue(1, pageBytes);
+
             }
             CollectRegion<G>(region);
             return;
@@ -1851,7 +1762,6 @@ void RegionManager::ForwardRegion(ZPage* region)
         // zRelocate.cpp:1137-1152: the page worker finishes objects then
         // mark_done last (ForwardClaimedPage). Do not wait for own done here.
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
-        VerifyRelocatedPage(region, "ForwardRegion");
         region->MarkForwardingDone();
         // The worker releases/detaches and frees the source after accounting,
         // as in ZGC zRelocate.cpp:1009-1047. Keep its source identity intact.
@@ -1859,10 +1769,6 @@ void RegionManager::ForwardRegion(ZPage* region)
     }
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-template class ForwardTask<Generation::Young>;
-template class ForwardTask<Generation::Old>;
-#endif
 template void RegionManager::ForwardClaimedPage<Generation::Young>(ZPage*, ZForwarding*, bool, bool);
 template void RegionManager::ForwardClaimedPage<Generation::Old>(ZPage*, ZForwarding*, bool, bool);
 template void RegionManager::ForwardRegion<Generation::Young>(ZPage*);
@@ -1892,15 +1798,6 @@ template void RegionManager::ForwardRegion<Generation::Old>(ZPage*);
 
 namespace MapleRuntime {
 
-#if defined(MRT_TESTABLE_INTERNALS)
-namespace {
-std::atomic<ZRelocateQueue::WaitEnterHook> g_waitEnterHook{ nullptr };
-}
-void ZRelocateQueue::SetWaitEnterHook(WaitEnterHook hook)
-{
-    g_waitEnterHook.store(hook, std::memory_order_release);
-}
-#endif
 
 bool ZRelocateQueue::needs_attention() const
 {
@@ -1970,11 +1867,6 @@ void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
         inc_needs_attention();
         attention.notify_all();
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (WaitEnterHook hook = g_waitEnterHook.load(std::memory_order_acquire)) {
-        hook(forwarding);
-    }
-#endif
     while (!forwarding->is_done()) {
         attention.wait_for(guard, std::chrono::milliseconds(1));
     }
@@ -2203,9 +2095,8 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                     // pushes prev_page; zRelocationSet.cpp:208 asserts no
                     // duplicates). Its lifecycle role is handed to
                     // newPage here, at the single promotion fork, before
-                    // flip_promote; the list keeps one member with the same
-                    // unit count, so RecentFullAccounting and the used/census
-                    // readers (zPageAllocator.cpp:1031-1064,1362-1363) see no
+                    // flip_promote; the role transfer retains the same byte
+                    // charge, so the used/census readers see no
                     // change. flip_promote itself does no list work
                     // (zGeneration.cpp:941-948).
                     // #710: the page lifecycle role (not a list slot) is handed
@@ -2261,6 +2152,14 @@ void ZRelocate::barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* 
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
+// ZGC zRelocate.cpp:412-416: consume the already published forwarding.
+BaseObject* ZRelocate::forward_object(ZForwarding* forwarding, BaseObject* object)
+{
+    const MAddress to = forwarding->find(reinterpret_cast<MAddress>(object));
+    DCHECK(to != 0);
+    return reinterpret_cast<BaseObject*>(to);
+}
+
 // zRelocate.cpp:382-410: lookup, retain/copy/release, then wait/forward.
 BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* object,
                                       const ForwardingProvenance& provenance)
@@ -2298,29 +2197,6 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
 #include "Heap/z/zGeneration.hpp"
 
 namespace MapleRuntime {
-namespace {
-std::atomic<size_t> g_fwdToGateRefuse{ 0 };
-std::atomic<bool> g_fwdToGateAtexit{ false };
-
-} // namespace
-
-void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
-{
-    const size_t n = g_fwdToGateRefuse.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (!g_fwdToGateAtexit.exchange(true, std::memory_order_relaxed)) {
-        std::atexit([]() {
-            std::fprintf(stderr, "[GCV2][fwd-to-gate] atexit refuse=%zu\n",
-                         g_fwdToGateRefuse.load(std::memory_order_relaxed));
-            std::fflush(stderr);
-        });
-    }
-    if (n <= 8 || (n & (n - 1)) == 0) {
-        const char* phaseName = ZGeneration::old() != nullptr ? ZGeneration::old()->phase_to_string() : "none";
-        LOG(RTLOG_ERROR, "[GCV2][fwd-to-gate] refuse n=%zu site=%s to=%p phase=%s", n, site,
-            static_cast<void*>(toObj), phaseName);
-    }
-}
-
 } // namespace MapleRuntime
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -2414,93 +2290,6 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
 
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-namespace {
-std::atomic<uintptr_t> g_remapYoungRootsTargetSlot{ 0 };
-std::atomic<uintptr_t> g_remapYoungRootsBefore{ 0 };
-std::atomic<uintptr_t> g_remapYoungRootsAfter{ 0 };
-std::atomic<uintptr_t> g_remapYoungRootsResolvedAddress{ 0 };
-std::atomic<uint64_t> g_remapYoungRootsVisits{ 0 };
-std::atomic<uint64_t> g_remapYoungRootsHeals{ 0 };
-std::atomic<bool> g_remapYoungRootsStoreGoodAfter{ false };
-std::atomic<uint64_t> g_remapYoungRootsOldPendingVisits{ 0 };
-} // namespace
-
-void ResetRemapYoungRootsTestReceipt(uintptr_t targetSlot)
-{
-    g_remapYoungRootsTargetSlot.store(targetSlot, std::memory_order_relaxed);
-    g_remapYoungRootsBefore.store(0, std::memory_order_relaxed);
-    g_remapYoungRootsAfter.store(0, std::memory_order_relaxed);
-    g_remapYoungRootsResolvedAddress.store(0, std::memory_order_relaxed);
-    g_remapYoungRootsVisits.store(0, std::memory_order_relaxed);
-    g_remapYoungRootsHeals.store(0, std::memory_order_relaxed);
-    g_remapYoungRootsStoreGoodAfter.store(false, std::memory_order_relaxed);
-    g_remapYoungRootsOldPendingVisits.store(0, std::memory_order_relaxed);
-}
-
-RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt()
-{
-    return { g_remapYoungRootsTargetSlot.load(std::memory_order_relaxed),
-             g_remapYoungRootsBefore.load(std::memory_order_relaxed),
-             g_remapYoungRootsAfter.load(std::memory_order_relaxed),
-             g_remapYoungRootsResolvedAddress.load(std::memory_order_relaxed),
-             g_remapYoungRootsVisits.load(std::memory_order_relaxed),
-             g_remapYoungRootsHeals.load(std::memory_order_relaxed),
-             g_remapYoungRootsStoreGoodAfter.load(std::memory_order_relaxed),
-             g_remapYoungRootsOldPendingVisits.load(std::memory_order_relaxed) };
-}
-
-// Observe the product write-back; the receipt neither supplies roots nor
-// changes the forwarding decision. Share the existing one-shot slot selector.
-void NoteRawRemapYoungRootsTestReceipt(ObjectRef& root, uintptr_t before)
-{
-    const uintptr_t selector = g_remapYoungRootsTargetSlot.load(std::memory_order_relaxed);
-    // A source-address selector also observes derived visitors' temporary base
-    // slots, whose addresses are deliberately not exposed to the fixture.
-    if (selector == 0 || (reinterpret_cast<uintptr_t>(&root) != selector && before != selector)) {
-        return;
-    }
-    const uintptr_t after = raw(root.LoadPlain());
-    if (before == 0) {
-        g_remapYoungRootsBefore.store(before, std::memory_order_relaxed);
-        g_remapYoungRootsAfter.store(after, std::memory_order_relaxed);
-        g_remapYoungRootsResolvedAddress.store(after, std::memory_order_relaxed);
-        g_remapYoungRootsVisits.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-    ZForwarding* old = generation_forwarding_table(Generation::Old).get(before);
-    if (old != nullptr && !old->is_claimed() && !old->is_done() && old->find(before) == 0 &&
-        !(generation_forwarding_table(Generation::Young).get(before) != nullptr) &&
-        ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark_complete()) {
-        g_remapYoungRootsOldPendingVisits.fetch_add(1, std::memory_order_relaxed);
-    }
-    g_remapYoungRootsBefore.store(before, std::memory_order_relaxed);
-    g_remapYoungRootsAfter.store(after, std::memory_order_relaxed);
-    g_remapYoungRootsResolvedAddress.store(after, std::memory_order_relaxed);
-    g_remapYoungRootsVisits.fetch_add(1, std::memory_order_relaxed);
-    if (before != after) {
-        g_remapYoungRootsHeals.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool healed,
-                                           bool storeGoodAfter)
-{
-    const uintptr_t slot = reinterpret_cast<uintptr_t>(&field);
-    if (slot != g_remapYoungRootsTargetSlot.load(std::memory_order_relaxed)) {
-        return;
-    }
-    g_remapYoungRootsBefore.store(before, std::memory_order_relaxed);
-    g_remapYoungRootsAfter.store(raw(field.GetFieldValue()), std::memory_order_relaxed);
-    g_remapYoungRootsResolvedAddress.store(
-        reinterpret_cast<uintptr_t>(to_object(field.GetTargetObject())), std::memory_order_relaxed);
-    g_remapYoungRootsVisits.fetch_add(1, std::memory_order_relaxed);
-    if (healed) {
-        g_remapYoungRootsHeals.fetch_add(1, std::memory_order_relaxed);
-    }
-    g_remapYoungRootsStoreGoodAfter.store(storeGoodAfter, std::memory_order_relaxed);
-}
-#endif
 }
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.

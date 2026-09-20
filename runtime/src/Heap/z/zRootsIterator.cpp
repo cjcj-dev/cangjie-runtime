@@ -35,13 +35,6 @@ BaseObject* Handle::operator()() const
 HandleMark::HandleMark(Mutator& mutator) : mutator(mutator), mark(mutator.NativeFrameRootCount()) {}
 HandleMark::~HandleMark() { mutator.PopNativeFrameRootsTo(mark); }
 
-void ResetSkippedStackMapCounts();
-void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
-                       const Mutator& mutator);
-ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP,
-                                          uintptr_t frameIP);
-void ReportSkippedStackMapCounts();
-
 // Fill gc roots entry to buckets
 void StaticRootTable::RegisterRoots(StaticRootArray* addr, U32 size)
 {

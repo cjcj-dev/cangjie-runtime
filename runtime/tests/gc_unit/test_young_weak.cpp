@@ -1,3 +1,4 @@
+#include "marking_smr_test.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -42,20 +43,24 @@
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
 
+
+#include "gc_generation_test.hpp"
+#include "gc_product_access_test.hpp"
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 
 
 #if defined(MRT_TESTABLE_INTERNALS)
-#include "young_closure_observation.hpp"
 
 extern "C" int CJ_ScheduleManagerInit();
 namespace MapleRuntime { extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize); }
 
 namespace MapleRuntime {
 
-struct RelocationReceiptTestAccess {
+class RelocationReceiptTest {
+public:
     static void BindCollector(Heap* collector)
     {
         if (collector != nullptr) {
@@ -77,15 +82,16 @@ struct RelocationReceiptTestAccess {
     // zArguments: the concurrent worker budget the driver hands each request.
     static void BindWorkerBudget(int32_t threadCount = 1)
     {
-        ZCollectedHeap::heap()->set_concurrent_gc_threads_for_test(threadCount);
+        ZCollectedHeapTest::SetWorkers(threadCount);
     }
 
     static void RunYoungCollection(Heap& collector)
     {
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-        if (!cycle.Snapshot().active) cycle.SetReasonForTest(GC_REASON_YOUNG);
+        if (!cycle.Snapshot().active) ZGenerationTest::SetReason(cycle, GC_REASON_YOUNG);
         YoungTypeSetter type(cycle, ZYoungType::minor);
-        Heap::GetHeap().young().collect();
+        Heap::GetHeap().young().pause_mark_start();
+        Heap::GetHeap().young().concurrent_mark();
     }
 
     static void PrepareMajorRoots(Heap& collector)
@@ -94,7 +100,7 @@ struct RelocationReceiptTestAccess {
         if (young.Workers() == nullptr) young.InitializeWorkers(1);
         auto& oldCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         if (oldCycle.Snapshot().active) oldCycle.End();
-        oldCycle.SetReasonForTest(GC_REASON_USER);
+        ZGenerationTest::SetReason(oldCycle, GC_REASON_USER);
         auto& remembered = HeapTestRemset();
         if (!remembered.IsInitialized()) {
             remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZGranuleSize);
@@ -108,7 +114,7 @@ struct RelocationReceiptTestAccess {
     {
         PrepareMajorRoots(collector);
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-        if (!cycle.Snapshot().active) cycle.SetReasonForTest(GC_REASON_USER);
+        if (!cycle.Snapshot().active) ZGenerationTest::SetReason(cycle, GC_REASON_USER);
         if (!cycle.Snapshot().active) cycle.Begin(1);
         Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
         Heap::GetHeap().old().Mark().Start();
@@ -206,7 +212,7 @@ struct RelocationReceiptTestAccess {
     {
         PrepareMajorRoots(collector);
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-        if (!cycle.Snapshot().active) cycle.SetReasonForTest(GC_REASON_USER);
+        if (!cycle.Snapshot().active) ZGenerationTest::SetReason(cycle, GC_REASON_USER);
         Heap::GetHeap().old().collect();
     }
 };
@@ -240,27 +246,6 @@ private:
 
 // Observe the existing product closure boundary before promotion replaces its map.
 // ZGenerationYoung completes marking before selecting/relocating pages.
-class ValueRootMarkObservation {
-public:
-    explicit ValueRootMarkObservation(std::function<void()> observe) : observe(std::move(observe))
-    {
-        current = this;
-        SetMarkClosureObserverForTest([](const std::vector<BaseObject*>*) {
-            ++current->calls;
-            current->observe();
-        });
-    }
-    ~ValueRootMarkObservation()
-    {
-        SetMarkClosureObserverForTest(nullptr);
-        current = nullptr;
-    }
-    size_t calls = 0;
-private:
-    std::function<void()> observe;
-    inline static ValueRootMarkObservation* current = nullptr;
-};
-
 struct WeakGraph {
     template<typename Fixture>
     explicit WeakGraph(Fixture& fx, ZPage* region, ZPage* targetRegion = nullptr)
@@ -365,14 +350,14 @@ void RunYoungWeakVariant(size_t helpers)
 
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
     // zGeneration.cpp: each generation owns its worker pool before collection.
-    RelocationReceiptTestAccess::BindCollector(&collector);
+    RelocationReceiptTest::BindCollector(&collector);
     {
         auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
         if (young.Workers() == nullptr) young.InitializeWorkers(helpers + 1);
         else young.Workers()->set_active_workers(helpers + 1u);
     }
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
-    RelocationReceiptTestAccess::BindWorkerBudget();
+    RelocationReceiptTest::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
@@ -382,22 +367,20 @@ void RunYoungWeakVariant(size_t helpers)
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(GC_REASON_YOUNG);
+    ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(ZGenerationId::young), GC_REASON_YOUNG);
 
-    YoungClosureObservation closure;
-    RelocationReceiptTestAccess::RunYoungCollection(collector);
-    GC_EXPECT_TRUE(closure.Calls() > 0);
-    const bool strongMarked = closure.Saw(graph.strongRoot);
-    const bool weakMarked = closure.Saw(graph.weak);
-    const bool referentMarked = closure.Saw(graph.referent);
-    const bool childMarked = closure.Saw(graph.child);
+    RelocationReceiptTest::RunYoungCollection(collector);
+    const bool strongMarked = graph.IsMarked(graph.strongRoot);
+    const bool weakMarked = graph.IsMarked(graph.weak);
+    const bool referentMarked = graph.IsMarked(graph.referent);
+    const bool childMarked = graph.IsMarked(graph.child);
     std::fprintf(stderr, "TARGET_YOUNG_STRONG_CLOSURE workers=%zu root=%d weak=%d referent=%d child=%d\n",
                  helpers + 1, strongMarked, weakMarked, referentMarked, childMarked);
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(reasonBefore);
-    RelocationReceiptTestAccess::BindWorkerBudget();
+    ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(ZGenerationId::young), reasonBefore);
+    RelocationReceiptTest::BindWorkerBudget();
 
     // The producer-to-consumer bearing point must deliver the field closure.
     // Check that target before the individual root receipts can end the case.
@@ -432,7 +415,7 @@ void RunYoungWeakRemsetFlow()
     TypeInfoManager::GetTypeInfoManager().AddTypeInfo(fx.typeInfo);
 
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
-    RelocationReceiptTestAccess::BindCollector(&collector);
+    RelocationReceiptTest::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RememberedSet& rememberedSet = HeapTestRemset();
     rememberedSet.Initialize(fx.heapStart, 2 * ZGranuleSize);
@@ -442,7 +425,7 @@ void RunYoungWeakRemsetFlow()
     const MAddress weakSlot = reinterpret_cast<MAddress>(&referentField);
     const bool recordedBeforeMinor = rememberedSet.Contains(weakSlot);
 
-    RelocationReceiptTestAccess::BindWorkerBudget();
+    RelocationReceiptTest::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
@@ -452,11 +435,9 @@ void RunYoungWeakRemsetFlow()
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(GC_REASON_YOUNG);
-    YoungClosureObservation closure;
-    RelocationReceiptTestAccess::RunYoungCollection(collector);
-    GC_EXPECT_TRUE(closure.Calls() > 0);
-    const bool referentMarked = closure.Saw(graph.referent);
+    ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(ZGenerationId::young), GC_REASON_YOUNG);
+    RelocationReceiptTest::RunYoungCollection(collector);
+    const bool referentMarked = graph.IsMarked(graph.referent);
     std::fprintf(stderr,
                  "DETAIL young_weak_remset slot=%#zx recorded_before_minor=%d referent_mark=%d\n",
                  static_cast<size_t>(weakSlot), static_cast<int>(recordedBeforeMinor),
@@ -464,12 +445,12 @@ void RunYoungWeakRemsetFlow()
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(reasonBefore);
-    RelocationReceiptTestAccess::BindWorkerBudget();
+    ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(ZGenerationId::young), reasonBefore);
+    RelocationReceiptTest::BindWorkerBudget();
 
     GC_EXPECT_TRUE(recordedBeforeMinor);
     GC_EXPECT_TRUE(referentMarked);
-    GC_EXPECT_TRUE(closure.Saw(graph.child));
+    GC_EXPECT_TRUE(graph.IsMarked(graph.child));
 }
 
 enum class MajorRootFamily {
@@ -492,14 +473,14 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
 
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
     // zGeneration.cpp: each generation owns its worker pool before collection.
-    RelocationReceiptTestAccess::BindCollector(&collector);
+    RelocationReceiptTest::BindCollector(&collector);
     {
         auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         if (old.Workers() == nullptr) old.InitializeWorkers(helpers + 1);
         else old.Workers()->set_active_workers(helpers + 1u);
     }
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindWorkerBudget(static_cast<int32_t>(helpers + 1));
+    RelocationReceiptTest::BindWorkerBudget(static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region0->SetRegionRole(ZPageRole::RecentFull);
     if (runtimeEntry) {
@@ -538,9 +519,9 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     }
 
     if (runtimeEntry) {
-        RelocationReceiptTestAccess::RunMajorCollection(collector);
+        RelocationReceiptTest::RunMajorCollection(collector);
     } else {
-        RelocationReceiptTestAccess::RunMajorMark(collector);
+        RelocationReceiptTest::RunMajorMark(collector);
     }
     const size_t discovered =
         Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().Discovered(ReferenceType::WEAK);
@@ -561,7 +542,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     if (family == MajorRootFamily::EXPORT) {
         Heap::GetHeap().RemoveExportObject(exportHandle);
     }
-    RelocationReceiptTestAccess::BindWorkerBudget();
+    RelocationReceiptTest::BindWorkerBudget();
 
     if (runtimeEntry) {
         GC_EXPECT_FALSE(Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old).active);
@@ -630,12 +611,12 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
         GC_EXPECT_FALSE(stacks.IsEmpty());
         {
             ScopedStopTheWorld stw("mark stacks verification test", false);
-            MarkingStacks::VerifyAllEmpty(other);
+            other.verify_all_stacks_empty();
             const pid_t child = fork();
             GC_EXPECT_TRUE(child >= 0);
             if (child == 0) {
                 signal(SIGABRT, SIG_DFL);
-                MarkingStacks::VerifyAllEmpty(current);
+                current.verify_all_stacks_empty();
                 _exit(0);
             }
             int status = 0;
@@ -651,8 +632,8 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
             MarkStripeStack* published = current.Stripes().At(0).StealStack(smr, 0);
             GC_EXPECT_TRUE(published != nullptr);
             MarkStripeStack::Destroy(published);
-            MarkingSMRTestAccess::reclaim(smr);
-            MarkingStacks::VerifyAllEmpty(current);
+            MarkingSMRTest::reclaim(smr);
+            current.verify_all_stacks_empty();
         }
     }
 }
@@ -686,14 +667,14 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     WeakGraph::Field(graph.weak).StoreColoured(zpointer::null);
 
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
-    RelocationReceiptTestAccess::BindCollector(&collector);
+    RelocationReceiptTest::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindWorkerBudget();
+    RelocationReceiptTest::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region0->SetRegionRole(ZPageRole::RecentFull);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
-    RelocationReceiptTestAccess::RunMajorMark(collector);
+    RelocationReceiptTest::RunMajorMark(collector);
     const bool rootMarked = graph.IsMarked(graph.strongRoot);
     const bool childMarked = graph.IsMarked(graph.weak);
     std::fprintf(stderr,
@@ -701,7 +682,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
                  static_cast<int>(rootMarked), static_cast<int>(childMarked));
 
     Heap::GetHeap().RemoveExportObject(handle);
-    RelocationReceiptTestAccess::BindWorkerBudget();
+    RelocationReceiptTest::BindWorkerBudget();
     GC_EXPECT_TRUE(rootMarked);
     GC_EXPECT_TRUE(childMarked);
 }
@@ -932,7 +913,7 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
     GcHeapFixture fx;
     WeakGraph graph(fx, fx.region0);
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
-    RelocationReceiptTestAccess::BindCollector(&collector);
+    RelocationReceiptTest::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     NativeSlot root(StoreGoodPointer(graph.weak));
     NativeSlot* roots[] = { &root };
@@ -969,7 +950,7 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     GcHeapFixture fx;
     WeakGraph graph(fx, fx.region0);
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
-    RelocationReceiptTestAccess::BindCollector(&collector);
+    RelocationReceiptTest::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
     std::unordered_set<BaseObject*> strong;

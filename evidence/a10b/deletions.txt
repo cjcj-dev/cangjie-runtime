@@ -330,9 +330,9 @@ positive_control
 $ git grep -n -F 'GetGCPhase()' 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
 3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/CjScheduler.cpp:440:    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
 3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/CjScheduler.cpp:582:    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
-3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Allocator/RegionInfo.h:118:            GCPhase phase = Heap::GetHeap().GetGCPhase();
-3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Allocator/RegionInfo.h:138:        GCPhase phase = Heap::GetHeap().GetGCPhase();
-3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Allocator/zPage.cpp:61:    const GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/RegionInfo.h:118:            GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/RegionInfo.h:138:        GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zPage.cpp:61:    const GCPhase phase = Heap::GetHeap().GetGCPhase();
 3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/Collector.cpp:505:        ? static_cast<unsigned>(Heap::GetHeap().GetGCPhase())
 3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CollectorProxy.h:36:    GCPhase GetGCPhase() const override
 3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CollectorProxy.h:38:        return currentCollector != nullptr ? currentCollector->GetGCPhase() : GCPhase::GC_PHASE_UNDEF;

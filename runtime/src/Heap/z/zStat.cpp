@@ -20,6 +20,8 @@
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zRelocationSetSelector.inline.hpp"
 namespace MapleRuntime {
+
+constexpr size_t ZStatMMU::RingSize;
 // zStat.cpp:65-240: rolling ten-second, ten-minute and ten-hour windows.
 struct ZStatSamplerData {
     uint64_t nsamples = 0;

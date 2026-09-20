@@ -4,12 +4,16 @@
 #pragma once
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zVerify.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 
 namespace MapleRuntime {
 template<typename ObjectFunctionT>
 inline void ZUncoloredRoot::barrier(ObjectFunctionT function, zaddress_unsafe* p, uintptr_t color)
 {
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+    z_verify_safepoints_are_blocked();
+#endif
     const zaddress_unsafe addr = *p;
     if (is_null(addr)) {
         return;

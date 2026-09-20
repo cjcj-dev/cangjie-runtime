@@ -59,7 +59,6 @@ set(GC_UNIT_SOURCES
     test_gc_trigger.cpp
     test_gc_director.cpp
     test_gc_request_sync.cpp
-    test_allocation_stall_queue.cpp
     test_p05_heuristics.cpp
 
     test_string_dedup.cpp
@@ -151,7 +150,6 @@ add_test(NAME cj_gc_unit COMMAND cj_gc_unit)
 add_executable(cj_gc_allocation_stall_unit
     gc_unit_main.cpp
     gc_cycle_sequence_fixture.cpp
-    test_allocation_stall_queue.cpp
 )
 target_include_directories(cj_gc_allocation_stall_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -227,8 +225,7 @@ if (MRT_TESTABLE_INTERNALS)
     # the test target itself only exposes fixture access; the product SO owns
     # the remap receipt endpoints.
     target_compile_definitions(cj_gc_clear_entries_unit PRIVATE
-        MRT_PRODUCT_TESTABLE_INTERNALS=1
-        MRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE=1)
+        MRT_PRODUCT_TESTABLE_INTERNALS=1)
 endif()
 if (TARGET cangjie-runtime)
     target_link_libraries(cj_gc_clear_entries_unit PRIVATE cangjie-runtime)

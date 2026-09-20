@@ -208,7 +208,7 @@ TEST_DEFINES=()
 # suites into this executable so a partial product configuration fails at link.
 nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
 if /usr/bin/grep -Eq \
-    'PendingStalledAllocations' \
+    'CJ_MRT_SetLargeArrayInitTestHooks' \
     "$OUT/runtime-dynamic-symbols.txt"; then
   TEST_DEFINES+=(-DMRT_GC_UNIT_TESTS=1)
   echo "GC_UNIT_PRODUCT_CONFIGURATION=MRT_GC_UNIT_TESTS"
@@ -279,6 +279,7 @@ MAIN_COMPILE_FLAGS=(
   -fvisibility-inlines-hidden
   "${TEST_DEFINES[@]}"
   "${TESTABLE_FLAGS[@]}"
+  "${REMAP_RECEIPT_FLAGS[@]}"
   "${INC_FLAGS[@]}"
 )
 # A real second image for package-cache generation and code-identity tests.
@@ -384,7 +385,6 @@ PUBLICATION_COMPILE_FLAGS=(
   "${TEST_DEFINES[@]}"
   -DMRT_TESTABLE_INTERNALS=1
   "${TESTABLE_FLAGS[@]}"
-  "${REMAP_RECEIPT_FLAGS[@]}"
   "${INC_FLAGS[@]}"
 )
 PUBLICATION_SOURCES=(
@@ -605,8 +605,9 @@ echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   YOUNG_WEAK_PRODUCT_CONSUMERS=(
-    'MapleRuntime::ZGenerationYoung::collect()'
-    'MapleRuntime::ZGenerationOld::collect()'
+    'MapleRuntime::ZGenerationYoung::pause_mark_start()'
+    'MapleRuntime::ZGenerationYoung::concurrent_mark()'
+    'MapleRuntime::ZGenerationOld::mark_start()'
     'MapleRuntime::ZGenerationOld::concurrent_mark()'
     'MapleRuntime::ZGenerationOld::pause_mark_end()'
     'MapleRuntime::ZGenerationOld::process_non_strong_references()'
@@ -624,41 +625,7 @@ if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   echo "GATE_YOUNG_WEAK_PRODUCT_BINDING_OK elf=$OUT/cj_gc_unit"
 fi
 
-# Load-heal delivery tests bind four independently replaceable product
-# consumers.  The manifest is independent of the calls currently present in
-# the test source, so deleting a test or anchor shrinks neither guard silently.
-LOADHEAL_PRODUCT_CONSUMERS=(
-  'MapleRuntime::RegionManager::RememberFlipPromotedPages('
-  'MapleRuntime::RegionManager::RememberPromotedObject('
-  'MapleRuntime::ZRelocate::RemapYoungRoots('
-)
-if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
-  LOADHEAL_PRODUCT_CONSUMERS+=(
-    'MapleRuntime::ZDriver::RunGarbageCollection('
-    'MapleRuntime::ResetRemapYoungRootsTestReceipt('
-    'MapleRuntime::ReadRemapYoungRootsTestReceipt()'
-  )
-fi
-LOADHEAL_MANIFEST="$SRC/product_call_manifest_loadheal.tsv"
-loadheal_rows=0
-while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
-  if [[ "$test_name" == "test_name" ]]; then
-    continue
-  fi
-  [[ "$carrier" == "product_so" ]]
-  suite="${test_name%%.*}"
-  name="${test_name#*.}"
-  if ! /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/clear_entries_product_unit.cpp" &&
-     ! /usr/bin/grep -F -q "GC_OTHER_VM_TEST($suite, $name)" "$SRC/clear_entries_product_unit.cpp"; then
-    echo "GC_UNIT_LOADHEAL_TEST_REGISTRATION_MISSING test=$test_name" >&2
-    exit 10
-  fi
-  /usr/bin/grep -F -q "$consumer" "$SRC/clear_entries_product_unit.cpp"
-  /usr/bin/grep -R -F -q "${anchor##*::}" "$ROOT/runtime/src/Heap"
-  /usr/bin/grep -R -F -q "$cut_site" "$ROOT/runtime/src/Heap"
-  loadheal_rows=$((loadheal_rows + 1))
-done <"$LOADHEAL_MANIFEST"
-echo "GATE_LOADHEAL_PRODUCT_MANIFEST_OK rows=$loadheal_rows source=clear_entries_product_unit.cpp"
+# #711 D: LoadHealDeliveryProduct and its receipt manifest were removed with P16.
 
 # Pointer-colour barrier tests consume independently replaceable functions from
 # the product SO.  Full nm excludes even local/weak test copies; nm -u proves
@@ -719,47 +686,6 @@ for producer_name in "${EXPECTED_PTRCOLOUR_PRODUCERS[@]}"; do
 done
 echo "GATE_PTRCOLOUR_PRODUCER_MANIFEST_OK rows=$ptrcolour_producer_rows groups=4 old_group=marked_old_or_finalizable"
 
-LOADHEAL_FULL="$OUT/cj_gc_forwarding_publication_unit.full-defined.txt"
-LOADHEAL_UNDEFINED="$OUT/cj_gc_forwarding_publication_unit.undefined.txt"
-nm --defined-only "$OUT/cj_gc_forwarding_publication_unit" | c++filt >"$LOADHEAL_FULL"
-nm -u "$OUT/cj_gc_forwarding_publication_unit" | c++filt >"$LOADHEAL_UNDEFINED"
-if ! /usr/bin/grep -Eq '[[:space:]]main$' "$LOADHEAL_FULL"; then
-  echo "GC_UNIT_LOADHEAL_NM_POSITIVE_CONTROL_FAIL symbol=main" >&2
-  exit 8
-fi
-for consumer in "${LOADHEAL_PRODUCT_CONSUMERS[@]}"; do
-  if /usr/bin/grep -F -q "$consumer" "$LOADHEAL_FULL"; then
-    echo "GC_UNIT_LOADHEAL_LOCAL_DEFINITION symbol=$consumer" >&2
-    exit 9
-  fi
-  if ! /usr/bin/grep -F -q "$consumer" "$LOADHEAL_UNDEFINED"; then
-    echo "GC_UNIT_LOADHEAL_IMPORT_MISSING symbol=$consumer" >&2
-    exit 10
-  fi
-done
-MUTUALWAIT_SO_EXPORTS="$OUT/cj_gc_forwarding_publication_unit.so-exports.txt"
-nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$MUTUALWAIT_SO_EXPORTS"
-echo "GATE_LOADHEAL_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
-
-remap_receipt_symbol="${REMAP_RECEIPT_TEST#*.}"
-remap_receipt_registered=0
-if /usr/bin/grep -F -q "$remap_receipt_symbol" "$LOADHEAL_FULL"; then
-  remap_receipt_registered=1
-fi
-if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable && "$remap_receipt_registered" -ne 1 ]]; then
-  echo "GC_UNIT_REMAP_RECEIPT_TEST_NOT_REGISTERED test=$REMAP_RECEIPT_TEST" >&2
-  exit 20
-fi
-if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == default && "$remap_receipt_registered" -ne 0 ]]; then
-  echo "GC_UNIT_REMAP_RECEIPT_TEST_REGISTERED_FOR_DEFAULT test=$REMAP_RECEIPT_TEST" >&2
-  exit 21
-fi
-if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == default ]]; then
-  echo "NOT_RUN(default product shape) test=$REMAP_RECEIPT_TEST"
-else
-  echo "GC_UNIT_REMAP_RECEIPT_TEST_REGISTERED test=$REMAP_RECEIPT_TEST"
-fi
-
 echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
 echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"
 # Binding proof: undefined product symbols must resolve from libcangjie-runtime.
@@ -779,28 +705,4 @@ bash "$SRC/run_parallel_tests.sh" \
 runner_rc=$?
 set -e
 
-# Keep #63's product-shape checks after replacing its whole-ELF publication run
-# with per-case processes. Each publication case has an independent log, so the
-# same required RUN/PASS and I03 result tokens remain observable.
-publication_logs=("$OUT"/test-logs/*-publication.log)
-publication_contract_rc=0
-if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
-  if ! /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}" ||
-      ! /usr/bin/grep -F -q "[  PASS  ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}" ||
-      ! /usr/bin/grep -F -q 'TARGET_CURRENT_REMSET_ASSERT_EXECUTED' "${publication_logs[@]}"; then
-    echo "GC_UNIT_REMAP_RECEIPT_TEST_DID_NOT_PASS test=$REMAP_RECEIPT_TEST" >&2
-    publication_contract_rc=1
-  fi
-elif /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}"; then
-  echo "GC_UNIT_REMAP_RECEIPT_TEST_RAN_FOR_DEFAULT test=$REMAP_RECEIPT_TEST" >&2
-  publication_contract_rc=1
-fi
-if [[ $publication_contract_rc -ne 0 ]]; then
-  # The aggregate tally is completion evidence. Do not leave one consumable
-  # after a post-run product-shape contract fails.
-  if [[ -n "${GC_UNIT_TALLY_FILE:-}" ]]; then
-    rm -f "$GC_UNIT_TALLY_FILE"
-  fi
-  exit 1
-fi
 exit "$runner_rc"

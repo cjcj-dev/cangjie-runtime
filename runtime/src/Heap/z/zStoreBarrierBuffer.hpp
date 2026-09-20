@@ -37,7 +37,7 @@ public:
     void Flush();
     void install_base_pointers();
     void on_new_phase();
-    bool is_in(MAddress p) const;
+    static bool is_in(MAddress p);
 
     friend class MutatorManager;
     StoreBarrierEntry buffer[kStoreBarrierBufferLength] {};

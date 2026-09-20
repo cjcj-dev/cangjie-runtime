@@ -1,0 +1,64 @@
+[  PASS  ] WriteGeneric.PayloadSharesWriteStructStoreBarrier
+[========] 1 tests: 1 passed, 0 failed
+[==========] 597 tests from 118 test suites ran.
+[  PASSED  ] 582 tests.
+[  FAILED  ] 15 tests, listed below:
+[  FAILED  ] PageGeneration579.ResetAndReuseCurrentGeneration
+[  FAILED  ] NativeRootCurrent.MajorSeed
+[  FAILED  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+[========] 1 tests: 1 passed, 0 failed
+[==========] 597 tests from 118 test suites ran.
+[  PASSED  ] 582 tests.
+[  FAILED  ] 15 tests, listed below:
+[  FAILED  ] PageGeneration579.ResetAndReuseCurrentGeneration
+[  FAILED  ] NativeRootCurrent.MajorSeed
+[  FAILED  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+[  FAILED  ] ThreadRootCurrent.C1StackFieldHistoricalColor
+[==========] 597 tests from 118 test suites ran.
+[  PASSED  ] 582 tests.
+[  FAILED  ] 15 tests, listed below:
+[  FAILED  ] PageGeneration579.ResetAndReuseCurrentGeneration
+[  FAILED  ] NativeRootCurrent.MajorSeed
+[  FAILED  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+[  FAILED  ] ThreadRootCurrent.C1StackFieldHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C2ObjectRefHistoricalColor
+[  PASSED  ] 582 tests.
+[  FAILED  ] 15 tests, listed below:
+[  FAILED  ] PageGeneration579.ResetAndReuseCurrentGeneration
+[  FAILED  ] NativeRootCurrent.MajorSeed
+[  FAILED  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+[  FAILED  ] ThreadRootCurrent.C1StackFieldHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C2ObjectRefHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C3InvisibleHistoricalColor
+[  FAILED  ] 15 tests, listed below:
+[  FAILED  ] PageGeneration579.ResetAndReuseCurrentGeneration
+[  FAILED  ] NativeRootCurrent.MajorSeed
+[  FAILED  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+[  FAILED  ] ThreadRootCurrent.C1StackFieldHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C2ObjectRefHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C3InvisibleHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C4HeaderlessHistoricalColor
+[  FAILED  ] PageGeneration579.ResetAndReuseCurrentGeneration
+[  FAILED  ] NativeRootCurrent.MajorSeed
+[  FAILED  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+[  FAILED  ] ThreadRootCurrent.C1StackFieldHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C2ObjectRefHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C3InvisibleHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C4HeaderlessHistoricalColor
+[  FAILED  ] NativeRootCurrent.StrongFinalizerRootPublishesAndMarks
+[  FAILED  ] NativeRootCurrent.MajorSeed
+[  FAILED  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+[  FAILED  ] ThreadRootCurrent.C1StackFieldHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C2ObjectRefHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C3InvisibleHistoricalColor
+[  FAILED  ] ThreadRootCurrent.C4HeaderlessHistoricalColor
+[  FAILED  ] NativeRootCurrent.StrongFinalizerRootPublishesAndMarks
+[  FAILED  ] MarkPort203Entries.MajorSerialCollectionConsumesArrayTails
+[  FAILED  ] MarkPort203Entries.MajorSerialCollectionConsumesArrayTails
+[  FAILED  ] MarkPort203Entries.MajorParallelCollectionConsumesArrayTails
+[  FAILED  ] MarkPort203Entries.MajorExportCollectionConsumesArrayTails
+[  FAILED  ] MarkPort203Entries.FinalizableArrayClosureAccountsWithoutStrongUpgrade
+[  FAILED  ] PackageInit.PublicUnloadDropsStwBeforePlatform
+[  FAILED  ] PackageInit.PublicUnloadAllowsPendingOwnerAndIdleU
+[  FAILED  ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+[========] 597 tests: 582 passed, 15 failed

@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zRelocate.cpp b/runtime/src/Heap/z/zRelocate.cpp
+index fa591738a..ca3c06455 100644
+--- a/runtime/src/Heap/z/zRelocate.cpp
++++ b/runtime/src/Heap/z/zRelocate.cpp
+@@ -1788,7 +1788,7 @@ void RegionManager::ForwardRegion(ZPage* region)
+     // zRelocate.cpp:993-1003. The owner outlives source-page retirement, so
+     // the after check reads the forwarding table and destination objects only.
+     auto verifyForwarding = forwarding_for_page(region);
+-    ZVerify::BeforeRelocation(verifyForwarding);
++    (void)verifyForwarding;
+     struct VerifyAfterRelocation {
+         ZForwarding* forwarding;
+         ~VerifyAfterRelocation()

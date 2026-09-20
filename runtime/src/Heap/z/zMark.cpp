@@ -61,88 +61,6 @@
 namespace MapleRuntime {
 
 static const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
-// ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
-// "the pre-pause test was right every time" rather than "nobody is counting".
-std::atomic<size_t> g_markTerminateContinue{ 0 };
-std::atomic<size_t> g_markTerminatePauses{ 0 };
-std::atomic<size_t> g_markTerminateFlushed{ 0 };
-std::atomic<bool> g_markTerminateAtexitInstalled{ false };
-#if defined(MRT_TESTABLE_INTERNALS)
-std::atomic<uint64_t> g_markTerminateMaxPauseNs{ 0 };
-std::atomic<size_t> g_markTerminatePauseY2y{ 0 };
-std::atomic<size_t> g_markTerminateClosureDuringPause{ 0 };
-#endif
-
-void NoteMarkTerminatePause() { g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed); }
-
-void NoteMarkTerminateFlushed(size_t n)
-{
-    g_markTerminateFlushed.fetch_add(n, std::memory_order_relaxed);
-}
-
-void NoteMarkTerminateContinue(size_t stackSize)
-{
-    const size_t nContinue = g_markTerminateContinue.fetch_add(1, std::memory_order_relaxed) + 1;
-    LOG(RTLOG_ERROR, "[GCV2][markterm] pause found unflushed SATB work: ncontinue=%zu stack=%zu", nContinue,
-        stackSize);
-}
-
-void ReportMarkTerminateContinue()
-{
-    if (!g_markTerminateAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
-        (void)std::atexit([]() {
-            LOG(RTLOG_ERROR, "[GCV2][markterm] atexit pauses=%zu flushedInPause=%zu ncontinue=%zu",
-                g_markTerminatePauses.load(std::memory_order_relaxed),
-                g_markTerminateFlushed.load(std::memory_order_relaxed),
-                g_markTerminateContinue.load(std::memory_order_relaxed));
-        });
-    }
-}
-
-#if defined(MRT_TESTABLE_INTERNALS)
-void ResetMarkTerminateTestReceipt()
-{
-    g_markTerminateContinue.store(0, std::memory_order_relaxed);
-    g_markTerminatePauses.store(0, std::memory_order_relaxed);
-    g_markTerminateFlushed.store(0, std::memory_order_relaxed);
-    g_markTerminateMaxPauseNs.store(0, std::memory_order_relaxed);
-    g_markTerminatePauseY2y.store(0, std::memory_order_relaxed);
-    g_markTerminateClosureDuringPause.store(0, std::memory_order_relaxed);
-}
-
-MarkTerminateTestReceipt ReadMarkTerminateTestReceipt()
-{
-    return { g_markTerminatePauses.load(std::memory_order_relaxed),
-             g_markTerminateFlushed.load(std::memory_order_relaxed),
-             g_markTerminateContinue.load(std::memory_order_relaxed),
-             g_markTerminateMaxPauseNs.load(std::memory_order_relaxed),
-             g_markTerminatePauseY2y.load(std::memory_order_relaxed),
-             g_markTerminateClosureDuringPause.load(std::memory_order_relaxed) };
-}
-
-void NoteMarkTerminatePauseDuration(uint64_t pauseNs)
-{
-    uint64_t observed = g_markTerminateMaxPauseNs.load(std::memory_order_relaxed);
-    while (observed < pauseNs &&
-           !g_markTerminateMaxPauseNs.compare_exchange_weak(observed, pauseNs, std::memory_order_relaxed)) {}
-}
-
-void NoteMarkTerminatePauseProducers(size_t y2y)
-{
-    g_markTerminatePauseY2y.fetch_add(y2y, std::memory_order_relaxed);
-}
-
-void NoteTraceYoungClosureDuringPause()
-{
-    g_markTerminateClosureDuringPause.fetch_add(1, std::memory_order_relaxed);
-}
-#endif
-
-
-#if defined(MRT_TESTABLE_INTERNALS)
-std::function<void(ZGenerationId, NativeSlot*)> ZMark::testColoredRootResult;
-std::function<void(Mutator&)> ZMark::testOldMarkThreadResult;
-#endif
 // RefFieldRoot is root in tagged pointer format.
 void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
 {
@@ -165,7 +83,6 @@ void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
 
 
 // Shared by mark roots and Cangjie foreign-root traversal.
-thread_local const char* gMinorRootOrigin = "unknown";
 
 namespace {
 // ZGC zMark.cpp:703-708,827-828,883: both generations use this thread closure.
@@ -196,7 +113,6 @@ private:
 
 void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor)
 {
-    gMinorRootOrigin = "mutator_stack";
     RootVisitor plainRoot = [&](ObjectRef& root) {
         ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         rawRootVisitor(root);
@@ -204,7 +120,6 @@ void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisi
     MarkThreadClosure threadClosure(&rawRootVisitor);
     VisitStrongPlainRoots(plainRoot, [&](Mutator& mutator) { threadClosure.DoThread(mutator); });
     (void)invisibleRootVisitor; // The watermark owns the invisible slot and its saved color.
-    gMinorRootOrigin = "unknown";
 }
 
 
@@ -263,28 +178,15 @@ public:
         finalizerRoots.OopsDo(finalizable);
         rootsColored.Apply([&](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
-#if defined(MRT_TESTABLE_INTERNALS)
-            if (ZMark::testColoredRootResult) {
-                ZMark::testColoredRootResult(ZGenerationId::old, &slot);
-            }
-#endif
         });
         rootsUncolored.Apply(uncolored);
         rootsUncolored.ApplyThreads([&](Mutator& mutator) {
             threadClosure.DoThread(mutator);
-#if defined(MRT_TESTABLE_INTERNALS)
-            if (ZMark::testOldMarkThreadResult) ZMark::testOldMarkThreadResult(mutator);
-#endif
         });
         // zMark.cpp:830-834: flush and free worker stacks for both generations
         // here, since the set of workers executing during root scanning can be
         // different from the set of workers executing during mark.
         ThreadLocal::FlushCurrentThreadMarkStacks();
-#if defined(MRT_TESTABLE_INTERNALS)
-        if (ZMark::testColoredRootResult) {
-            ZMark::testColoredRootResult(ZGenerationId::old, nullptr);
-        }
-#endif
     }
 private:
     RootsIteratorStrongColored rootsColored;
@@ -336,20 +238,10 @@ public:
     {
         rootsColored.Apply([this](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
-#if defined(MRT_TESTABLE_INTERNALS)
-            if (ZMark::testColoredRootResult) {
-                ZMark::testColoredRootResult(ZGenerationId::young, &slot);
-            }
-#endif
         });
         rootsUncolored.Apply(uncolored);
         // zMark.cpp:887-891: flush and free worker stacks for both generations.
         ThreadLocal::FlushCurrentThreadMarkStacks();
-#if defined(MRT_TESTABLE_INTERNALS)
-        if (ZMark::testColoredRootResult) {
-            ZMark::testColoredRootResult(ZGenerationId::young, nullptr);
-        }
-#endif
     }
 private:
     RootsIteratorAllColored rootsColored;
@@ -376,12 +268,10 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
             }
             visitor(object);
         });
-        gMinorRootOrigin = "export";
         Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) {
             ZBarrier::MarkBarrierOnOopField(slot, false);
             visitor(to_object(slot.GetTargetObject()));
         });
-        gMinorRootOrigin = "unknown";
     }, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
     SuspendibleThreadSetJoiner joiner;
     (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).run(&task);
@@ -399,41 +289,8 @@ void ZMark::PushYoungObject(BaseObject* object, WorkStack& workStack, const char
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    if (!object->IsValidObject()) {
-        // Rich diagnosis before fail-closed abort: address looks like a heap range
-        // but object header is not a valid managed object (stack-ish residue, stale
-        // slot, or stackmap-mislabeled root). Printed once per process by default.
-        static std::atomic<size_t> g_invalidMinorRootPrinted{ 0 };
-        size_t n = g_invalidMinorRootPrinted.fetch_add(1, std::memory_order_relaxed);
-        // Prefer explicit non-generic origin; "minor_root" is a placeholder that
-        // should yield to the TLS tag set by VisitMinorRootSlots/ValueRoots.
-        const char* src = origin;
-        if (src == nullptr || std::strcmp(src, "unknown") == 0 || std::strcmp(src, "minor_root") == 0) {
-            if (gMinorRootOrigin != nullptr && std::strcmp(gMinorRootOrigin, "unknown") != 0) {
-                src = gMinorRootOrigin;
-            } else if (src == nullptr) {
-                src = "unknown";
-            }
-        }
-        if (n < 8) {
-            ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-            VLOG(REPORT,
-                 "[GCV2][invalid-minor-root] obj=%p origin=%s region=%p regionStart=%#zx young=%u pinned=%u "
-                 "large=%u free=%u garbage=%u neverExamined=%u "
-                 "(fail-closed next; AS1 relation: bad header on stack-live slot vs SKIPPED frame)",
-                 object, src, region,
-                 region == nullptr ? 0 : static_cast<size_t>(region->GetRegionStart()),
-                 region == nullptr ? 0u : static_cast<unsigned>(region->IsYoungRegion()),
-                 region == nullptr ? 0u : static_cast<unsigned>(region->IsPinnedRegion()),
-                 region == nullptr ? 0u : static_cast<unsigned>(region->IsLargeRegion()),
-                 region == nullptr ? 0u : static_cast<unsigned>(region->IsFreeRegion()),
-                 region == nullptr ? 0u : static_cast<unsigned>(region->IsGarbageRegion()),
-                 region == nullptr ? 0u
-                                   : static_cast<unsigned>(!region->is_marked() &&
-                                                          region->GetRegionAllocPtr() > region->GetRegionStart()));
-        }
-        CHECK_DETAIL(false, "minor root/reference %p is not a valid object origin=%s", object, src);
-    }
+    CHECK_DETAIL(object->IsValidObject(), "minor root/reference %p is not a valid object origin=%s",
+                 object, origin);
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
     if (!region->IsYoungRegion()) {
         return;
@@ -454,8 +311,6 @@ constexpr size_t kMarkStripeShift = 20;
 constexpr size_t kMarkStripeMultiplier = 4;
 constexpr size_t kMarkStripeMax = 64;
 
-std::atomic<size_t> g_markStripeArmed{ 0 };
-std::atomic<size_t> g_markStripeTurned{ 0 };
 
 // FYS raw workStack.push_back used to skip PushYoungObject recover + StartWho.
 // Admit the same host that FYS=0 would have pushed; never enqueue an interior.
@@ -552,17 +407,15 @@ void ZMark::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
     (void)weakSlots;
     (void)reachableSlotDomain;
     (void)workStack;
-    g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
     const size_t dispelAtEntry = ZPage::GetTdWindowCount();
     ZWorkers& workersSet = (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers());
-    g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
     ZMark& domain = Heap::GetHeap().young().Mark();
     (void)ZMark::PublishHandshakeMarkWork(workStack, &domain);
     (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, false);
     workersSet.run(&task);
     if (!ZAbort::should_abort()) {
-        MarkingStacks::VerifyEmpty(domain.Stripes().Population());
+
         CHECK_DETAIL(domain.Stripes().IsEmpty(),
                      "young striped closure returned without coordinated worker termination");
     }
@@ -575,20 +428,8 @@ void ZMark::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
 void ZMark::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
                                    std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
                                    std::unordered_set<MAddress>& weakSlots,
-                                   const std::unordered_set<MAddress>* reachableSlotDomain)
+                                    const std::unordered_set<MAddress>* reachableSlotDomain)
 {
-#if defined(MRT_TESTABLE_INTERNALS)
-    // Observe the completed closure result before the following GC phases
-    // can promote/reset its page. This has no product-build call or state.
-    struct ClosureObservation {
-        const std::vector<BaseObject*>& objects;
-        ~ClosureObservation() { ObserveMarkClosureForTest(&objects); }
-    } observation{reachableVec};
-
-    if (MutatorManager::Instance().WorldStopped()) {
-        NoteTraceYoungClosureDuringPause();
-    }
-#endif
     (void)Heap::GetHeap().young().Mark().Flush(ThreadLocal::GetThreadLocalData());
     if (workStack.empty() && Heap::GetHeap().young().Mark().Stripes().IsEmpty() &&
         Heap::GetHeap().young().Mark().Stacks().IsEmpty()) {
@@ -608,9 +449,6 @@ bool ZMark::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
 {
     ZStatTimerWorker zstatTimer(PYoungMarkFollow);
     // Follow explicit roots and allocation work; young has no SATB queue.
-#if defined(MRT_TESTABLE_INTERNALS)
-    PublishConcurrentYoungProducersTestReceipt();
-#endif
     (void)Heap::GetHeap().young().Mark().Flush();
     (void)Heap::GetHeap().young().Mark().Flush(ThreadLocal::GetThreadLocalData());
     (void)ZMark::PublishHandshakeMarkWork(workStack, &Heap::GetHeap().young().Mark());
@@ -632,16 +470,16 @@ bool ZMark::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
 bool ZMark::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats)
 {
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
-    NoteMarkTerminatePause();
-    const size_t before = Heap::GetHeap().young().Mark().Stripes().Population();
+
     (void)ZMark::PublishHandshakeMarkWork(workStack, &Heap::GetHeap().young().Mark());
     const bool ended = Heap::GetHeap().young().Mark().TryEnd();
-    const size_t after = Heap::GetHeap().young().Mark().Stripes().Population();
-    NoteMarkTerminateFlushed(after >= before ? after - before : 0);
+
     if (!ended) {
         return false;
     }
-    MarkingStacks::VerifyAllEmpty(Heap::GetHeap().young().Mark());
+#if defined(MRT_TESTABLE_INTERNALS)
+    ObserveMarkClosureForTest(nullptr);
+#endif
     return true;
 }
 
@@ -682,21 +520,6 @@ bool ZMark::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
     return published;
 }
 
-void ZMark::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young)
-{
-    if (buffer == nullptr) {
-        return;
-    }
-    if (!young) {
-        return;
-    }
-    buffer->MergeY2yDirtyHolders(work);
-    buffer->MergeY2yDirtySlots([&work](MAddress slot) {
-        ZBarrier::MarkBarrierOnYoungOopField(HeapSlotAt<>(slot));
-    });
-}
-
-
 bool ZMark::FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain)
 {
     return domain != nullptr && data.FlushMarkStacks(*domain);
@@ -719,11 +542,7 @@ bool ZMark::FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain)
     if (tls == nullptr || domain == nullptr) {
         return false;
     }
-    WorkStack work;
-    const bool young = domain->Generation() == MarkingStacks::MarkingGeneration::YOUNG;
-    ZMark::DrainAllocBufferMarkProducers(tls->buffer, work, young);
-    const bool published = ZMark::PublishHandshakeMarkWork(work, domain);
-    return ThreadLocal::FlushMarkStacks(tls, *domain) || published;
+    return ThreadLocal::FlushMarkStacks(tls, *domain);
 }
 } // namespace MapleRuntime
 
@@ -966,7 +785,8 @@ void ZMark::EnsureWorkers(size_t workers)
 
 void ZMark::Start()
 {
-    MarkingStacks::VerifyEmpty(stripes.Population());
+    if (ZVerifyMarking) { verify_all_stacks_empty(); }
+
     nproactiveflush = 0;
     nterminateflush = 0;
     ntrycomplete = 0;
@@ -1010,7 +830,7 @@ void ZMark::FollowWorkComplete(bool partial)
                      nullptr, nullptr, this);
     (void)local.Stacks().Flush(stripes, true);
     local.Cache().Flush();
-    MarkingStacks::VerifyEmpty(local.Stacks().Population());
+
     ThreadLocal::FlushCurrentThreadMarkStacks();
 }
 
@@ -1310,6 +1130,7 @@ bool ZMark::TryTerminateFlush()
 {
     terminate.SetResurrected(false);
     workNTerminateFlush.fetch_add(1, std::memory_order_relaxed);
+    if (ZVerifyMarking) { verify_worker_stacks_empty(); }
     (void)Flush();
     return !stripes.IsEmpty() || terminate.Resurrected();
 }
@@ -1329,6 +1150,7 @@ bool ZMark::TryEnd()
     if (!stripes.IsEmpty()) {
         return false;
     }
+    if (ZVerifyMarking) { verify_all_stacks_empty(); }
     // zMark.cpp:983-987: completed mark publishes its flush/continue counters.
     const ZGenerationId statId =
         generation == MarkingStacks::MarkingGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
@@ -1355,25 +1177,26 @@ void ZMark::Free()
 #include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"
 namespace MapleRuntime {
-namespace MarkingStacks {
-// zMark.cpp:1016-1028. Inspect the same per-generation containers used by
-// ThreadLocal::GetMarkStacks; verification must not flush or create a stack.
-void VerifyAllEmpty(ZMark& domain)
+// ZGC zMark.cpp:1022-1035. The coordinator inspects the containers owned
+// by each thread; verification neither flushes nor creates work.
+void ZMark::verify_all_stacks_empty() const
 {
-    if (!ZVerifyMarking) { return; }
-    const size_t index = domain.Generation() == MarkingGeneration::YOUNG ? 0 : 1;
+    const size_t index = generation == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
     MutatorManager::Instance().VisitMarkingThreads([&](const ThreadGCData* data) {
-        const auto& stacks = data->markStacks[index];
-        CHECK_DETAIL(stacks.IsEmpty(),
+        CHECK_DETAIL(data->markStacks[index].IsEmpty(),
                      "Thread marking stack is not empty: owner=%p generation=%zu", data, index);
     });
-    CHECK_DETAIL(domain.Stripes().IsEmpty(), "Shared marking stripes are not empty");
+    CHECK_DETAIL(stripes.IsEmpty(), "Shared marking stripes are not empty");
 }
 
-void VerifyEmpty(size_t pending)
+void ZMark::verify_worker_stacks_empty() const
 {
-    if (ZVerifyMarking) { CHECK_DETAIL(pending == 0, "Marking stack is not empty: %zu", pending); }
-}
+    const size_t index = generation == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
+    gcWorkers->threads_do([&](WorkerThread* worker) {
+        const ThreadGCData* data = worker->gc_data();
+        CHECK_DETAIL(data != nullptr && data->markStacks[index].IsEmpty(),
+                     "Worker marking stack is not empty: worker=%p generation=%zu", worker, index);
+    });
 }
 }
 

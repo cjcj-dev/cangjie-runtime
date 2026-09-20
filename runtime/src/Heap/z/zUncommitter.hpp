@@ -53,9 +53,6 @@ public:
     static void CancelCycleLocked();
 
 private:
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct UncommitterTestAccess;
-#endif
     static Uncommitter& Current();
     bool WaitUntil(uint64_t deadline);
     bool Activate();

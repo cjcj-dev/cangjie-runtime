@@ -1,0 +1,12 @@
+[  RUN   ] RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan
+[  RUN   ] RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan
+OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=0 derived=0 deferred=1
+RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00010 after=40000c00010 expected=40000c00000 base=0 derived=0 final_root=40000c00010 result=0
+[  FAIL  ] RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan
+  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result
+RAW_REMAP_OUTCOME_ASSERT promoted=0 managed=0 old=1 status=256 completed=0
+[  FAIL  ] RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan
+  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed
+[  FAIL  ] RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan
+  other-vm child did not exit cleanly with sentinel for RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan
+[========] 1 tests: 0 passed, 1 failed

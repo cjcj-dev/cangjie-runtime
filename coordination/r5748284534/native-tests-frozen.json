@@ -1,0 +1,21 @@
+[
+  "NativeRootCurrent.ColoredAndNullBoundary",
+  "NativeRootCurrent.MajorSeed",
+  "NativeRootCurrent.MinorPublication",
+  "NativeRootCurrent.StrongFinalizerRootPublishesAndMarks",
+  "NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat",
+  "P10OldMarkThread.ParkedMutatorStackRootConsumedByWorker",
+  "RootStorageLifetime.ReleaseAndGrowDuringYoungTask",
+  "RootStorageSegments.Export",
+  "RootStorageSegments.Strong",
+  "RootStorageSegments.WeakFinalizer",
+  "ThreadRootCurrent.C1StackFieldHistoricalColor",
+  "ThreadRootCurrent.C2ObjectRefHistoricalColor",
+  "ThreadRootCurrent.C3InvisibleHistoricalColor",
+  "ThreadRootCurrent.C4HeaderlessHistoricalColor",
+  "ThreadRootCurrent.OrdinaryRootRoutesByTargetGeneration",
+  "ThreadRootCurrent.SavedColorDirectInvisibleRoot",
+  "ThreadRootCurrent.SavedColorDirectNativeFrameRoot",
+  "ThreadRootCurrent.SavedColorInvisibleRoot",
+  "ThreadRootCurrent.SavedColorNativeFrameRoot"
+]

@@ -138,7 +138,7 @@ ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
         page->SetRegionRole(ZPageRole::RecentLarge);
     } else {
         page->SetRegionRole(ZPageRole::RecentFull);
-        RecentFullAccounting::Enqueue(1, page->GetRegionSize());
+
     }
     return page;
 }
@@ -148,7 +148,7 @@ ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
 void RegionManager::UndoSharedPage(ZPage* page)
 {
     page->SetRegionRole(ZPageRole::None);
-    RecentFullAccounting::Dequeue(1, page->GetRegionSize());
+
     if (IsSmallEdenPage(page)) {
         tlabUsed.fetch_sub(page->GetRegionSize(), std::memory_order_relaxed);
     }

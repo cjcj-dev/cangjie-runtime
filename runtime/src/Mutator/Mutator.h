@@ -98,7 +98,6 @@ public:
     void ResetMutator();
 
     static Mutator* GetMutator() noexcept;
-    void SetStoreBarrierRememberedSetForTest(void*) {}
     void StackGuardExpand() const;
     void StackGuardRecover() const;
 
@@ -334,9 +333,6 @@ public:
     ObjectRef* AddNativeFrameRoot(BaseObject* obj);
     size_t NativeFrameRootCount() const { return nativeFrameRoots.size(); }
     void PopNativeFrameRootsTo(size_t mark);
-#if defined(MRT_GC_UNIT_TESTS)
-    void VisitInvisibleRoot(const RootVisitor& visitor) { VisitRawObjects(visitor); }
-#endif
 
     void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                              bool young = false);

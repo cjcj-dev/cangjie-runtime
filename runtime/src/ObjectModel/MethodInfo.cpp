@@ -863,6 +863,7 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
         VLOG(REPORT, "ApplyCangjieMethod: new object failed and throw OutOfMemoryError");
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
     }
+    Handle retHandle(Mutator::GetMutator(), retObj);
 #if defined(__aarch64__)
 #else
     argValues.AddInt64(reinterpret_cast<I64>(&retObj));
@@ -900,6 +901,6 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
     if (ExceptionManager::HasPendingException()) {
         ExceptionManager::ThrowPendingException();
     }
-    return retObj;
+    return retHandle();
 }
 } // namespace MapleRuntime

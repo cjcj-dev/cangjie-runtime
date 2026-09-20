@@ -1,0 +1,12 @@
+[  RUN   ] RawRemapYoungProduct.MajorRemapsHeaderlessRecordField
+[  RUN   ] RawRemapYoungProduct.MajorRemapsHeaderlessRecordField
+RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffc08ac54b0 result=0
+NESTED_REMAP_TARGET kind=2 observed=40000c00000 expected=40000600000 result=0
+[  FAIL  ] RawRemapYoungProduct.MajorRemapsHeaderlessRecordField
+  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result
+RAW_REMAP_OUTCOME_ASSERT promoted=0 managed=0 old=0 status=256 completed=0
+[  FAIL  ] RawRemapYoungProduct.MajorRemapsHeaderlessRecordField
+  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed
+[  FAIL  ] RawRemapYoungProduct.MajorRemapsHeaderlessRecordField
+  other-vm child did not exit cleanly with sentinel for RawRemapYoungProduct.MajorRemapsHeaderlessRecordField
+[========] 1 tests: 0 passed, 1 failed

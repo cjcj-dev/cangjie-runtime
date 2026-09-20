@@ -1,3 +1,4 @@
+#include "marking_smr_test.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -117,16 +118,16 @@ GC_TEST(MarkStripe, SmrHazardPreventsAbaReuse)
     GC_EXPECT_TRUE(head.compare_exchange_strong(expected, tail, std::memory_order_relaxed));
     MapleRuntime::GcUnit::WorkerFixture reclaimWorker(1);
     smr.free_node(first);
-    MarkingSMRTestAccess::reclaim(smr);
-    GC_EXPECT_EQ(MarkingSMRTestAccess::pending_count(smr), static_cast<size_t>(1));
+    MarkingSMRTest::reclaim(smr);
+    GC_EXPECT_EQ(MarkingSMRTest::pending_count(smr), static_cast<size_t>(1));
 
     replacement->SetNext(tail);
     head.store(replacement, std::memory_order_release);
     GC_EXPECT_NE(reinterpret_cast<uintptr_t>(head.load(std::memory_order_acquire)),
                  reinterpret_cast<uintptr_t>(observed));
     hazard->store(nullptr, std::memory_order_release);
-    MarkingSMRTestAccess::reclaim(smr);
-    GC_EXPECT_EQ(MarkingSMRTestAccess::pending_count(smr), static_cast<size_t>(0));
+    MarkingSMRTest::reclaim(smr);
+    GC_EXPECT_EQ(MarkingSMRTest::pending_count(smr), static_cast<size_t>(0));
 
     delete replacement;
     delete tail;
@@ -282,7 +283,7 @@ GC_TEST(MarkingSMR, WorkerPopRetiresInCurrentSlot)
                 MarkStripeStack::Destroy(stack);
             }
             hazards[id] = smr.hazard_ptr();
-            pending[id] = MarkingSMRTestAccess::pending_count(smr);
+            pending[id] = MarkingSMRTest::pending_count(smr);
         }
     } task(smr, stripes);
     ZStatWorkers stats;

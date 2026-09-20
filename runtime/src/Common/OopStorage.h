@@ -17,6 +17,7 @@ namespace MapleRuntime {
 // gc/shared/oopStorage.inline.hpp:132-150: stable slots, allocation bitmap,
 // active block array and allocation list. Registry locks protect handles only.
 class OopStorage {
+    friend class OopStorageTest;
     static constexpr size_t SLOTS = sizeof(uintptr_t) * CHAR_BIT;
     struct Slot : NativeSlot { Slot() : NativeSlot(zpointer::null) {} };
     struct Block {
@@ -75,10 +76,6 @@ public:
     private:
         BasicParState basicState;
     };
-#if defined(MRT_TESTABLE_INTERNALS)
-    size_t BlockCountForTest() const;
-    size_t ConcurrentIterationsForTest() const;
-#endif
 private:
     void AddAllocationBlock(Block& block);
     void RemoveAllocationBlock(Block& block);
