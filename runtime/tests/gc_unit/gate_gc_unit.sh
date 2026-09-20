@@ -311,7 +311,7 @@ SO="$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so"
 # ELF versioned exports print as `name@@VERSION`; accept both that and the
 # unversioned form. An exact `$` anchor after the bare name misses the
 # versioned export and silently keeps SEGMENTED_MANAGED_CAN_RUN at 0.
-if nm -D "$SO" | /usr/bin/grep -E '[[:space:]]CJ_MRT_SetLargeArrayInitTestHooks(@@[^[:space:]]+)?$' >/dev/null; then
+if nm -D "$SO" | /usr/bin/grep -E 'PendingStalledAllocations' >/dev/null; then
   SEGMENTED_MANAGED_CAN_RUN=1
   if [[ ! -f "$SEGMENTED_MANAGED_SCRIPT" || ! -f "$SRC/segmented_array_managed.cj" ]]; then
     echo "GC_UNIT_GATE_FAIL: product SO exposes segmented-array test hooks but the managed test is missing" >&2
@@ -394,7 +394,7 @@ run_language_tests() {
     SEGMENTED_MANAGED_STATE=FAIL
     SEGMENTED_MANAGED_SOURCE=FRESH
     STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
-    if ! bash "$SEGMENTED_MANAGED_SCRIPT"; then
+    if ! bash "$SEGMENTED_MANAGED_SCRIPT" both; then
       echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
       return 1
     fi

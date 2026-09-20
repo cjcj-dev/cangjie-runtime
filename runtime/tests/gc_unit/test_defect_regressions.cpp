@@ -88,7 +88,7 @@ public:
     ~InstalledExportAllocBuffer()
     {
         ThreadLocal::SetAllocBuffer(previous);
-        alloc.SetRegion(nullptr);
+        alloc.ClearRegion();
     }
 
 private:

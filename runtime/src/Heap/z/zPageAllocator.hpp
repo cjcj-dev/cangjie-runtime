@@ -18,6 +18,8 @@
 #include "Heap/z/zArray.inline.hpp"
 
 
+#include "Heap/z/zAllocationFlags.hpp"
+
 namespace MapleRuntime {
 
 // ZVirtualMemory represented in heap granules; ownership travels with the
@@ -41,12 +43,13 @@ struct PageMemory {
 // answer is published.
 class ZPageAllocation {
 public:
-    ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear)
-        : size(size), role(role), physical(physical), clear(clear) {}
+    ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear, ZAllocationFlags flags = {})
+        : size(size), role(role), physical(physical), clear(clear), flags(flags) {}
     ZPageAllocation(const ZPageAllocation&) = delete;
     ZPageAllocation& operator=(const ZPageAllocation&) = delete;
 
     size_t GetSize() const { return size; }
+    ZAllocationFlags Flags() const { return flags; }
     uint8_t GetRole() const { return role; }
     bool ExpectsPhysicalMemory() const { return physical; }
     bool ClearsPayload() const { return clear; }
@@ -73,6 +76,7 @@ private:
     const uint8_t role;
     const bool physical;
     const bool clear;
+    const ZAllocationFlags flags;
     PageMemory memory;
     // zPageAllocator.cpp:420-421 ZPageAllocation: ZFuture<bool> _stall_result
     // and the ZListNode that links it on the allocator's stalled list.
@@ -196,7 +200,7 @@ public:
     // here consume the two managers the same way.
     void Initialize(ZVirtualMemoryManager& virtualMemory,
                     ZPhysicalMemoryManager& physicalMemory, size_t maxCapacity);
-    bool ClaimPageMemory(size_t num, PageMemory& memory);
+    bool ClaimPageMemory(size_t num, PageMemory& memory, ZAllocationFlags flags = {});
     bool PreparePageMemory(PageMemory& memory);
 
     // zPageAllocator.cpp:1470-1515 alloc_page_inner: consume the already-owned
@@ -289,6 +293,7 @@ private:
         size_t currentMaxCapacity{ 0 };
         explicit ZPartition(uint32_t id) : numaId(id) {}
         size_t available() const { return currentMaxCapacity - used - claimed; }
+        bool claim_capacity_fast_medium(PageMemory& memory);
     };
     using Partition = ZPartition;
     void InsertCommitted(Partition& partition, size_t index, size_t count);
@@ -491,20 +496,16 @@ public:
     RegionManager& operator=(const RegionManager&) = delete;
 
     // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
-    ZPage* AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem = false, bool youngRegion = true,
-                                          bool allowSaferegion = true);
+
 
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
     // P14: the handshake pause must serialize pinned installation with retirement/seqnum.
     std::mutex& PinnedAllocationMutex() { return pinnedAllocationMutex; }
-#if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT static void (*testPinnedPageAcquired)(ZPage*);
-#endif
 
     // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
     // independent of the thread-local requested bytes and retirement waste.
-    void UndoThreadLocalRegionAllocation(ZPage* region);
+
     // Stable cycle history: read under the statistics lock, at a safepoint,
     // or with managed access preventing the next young pause.
     size_t GetTLABUsed() const { return lastTLABUsed; }
@@ -526,6 +527,7 @@ public:
     void ReturnPageMemory(const PageMemory& memory);
     void SatisfyStalledAllocations();
     bool IsAllocationStalling() const { return allocationStallQueue.IsStalling(); }
+
     // In-place relocation account (feeds ZStatRelocation::AtRelocateEnd).
     // Not observation-gated: the relocation report reads it in every build.
     void ResetInPlaceRelocatedCounts()
@@ -621,16 +623,16 @@ public:
     // take a region with *num* units for allocation
     // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
     ZPage* TakeRegion(size_t num, ZPageType, bool expectPhysicalMem = false,
-                           bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old);
+                           bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old, ZAllocationFlags flags = {});
 
 
     uintptr_t AllocPinned(size_t size);
 
     // caller assures size is truely large (> region size)
 
-    void EnlistFullThreadLocalRegion(ZPage* region) noexcept;
 
-    void RemoveThreadLocalRegion(ZPage* region) noexcept;
+
+
 
     void RestoreToSpaceStateWords();
 
@@ -645,10 +647,6 @@ public:
 
     void CollectFromSpaceGarbage();
 
-    size_t GetThreadLocalRegionSize() const
-    {
-        return ZPageSizeSmall;
-    }
 
     size_t GetYoungAllocatedSize() const;
 
@@ -803,7 +801,7 @@ private:
 
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
-    ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, bool nonBlocking, bool clearPayload = true);
+    ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, ZAllocationFlags flags, bool clearPayload = true);
     void UndoSharedPage(ZPage* page);
 
     MAddress reservedStart = 0;
@@ -859,6 +857,7 @@ private:
     std::mutex pageAllocatorMutex;
     AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
     size_t pageAllocatorUsed{ 0 };
+
     uintptr_t regionHeapStart = 0; // the address of first region to allocate object
     uintptr_t regionHeapEnd = 0;
 

@@ -25,10 +25,7 @@ struct PinRootTestAccess {
         region->SetRegionRole(ZPageRole::OldPinned);
     }
 
-    static void ParkOnThreadLocal(RegionManager&, ZPage* region)
-    {
-        region->SetRegionRole(ZPageRole::ThreadLocal);
-    }
+
     static bool OnRecentFull(RegionManager&, const ZPage* region)
     {
         return region->GetRegionRole() == ZPageRole::RecentFull;
@@ -37,10 +34,7 @@ struct PinRootTestAccess {
     {
         return region->GetRegionRole() == ZPageRole::RecentFull ? 1u : 0u;
     }
-    static bool OnThreadLocal(RegionManager&, const ZPage* region)
-    {
-        return region->GetRegionRole() == ZPageRole::ThreadLocal;
-    }
+
 };
 
 } // namespace MapleRuntime
@@ -103,81 +97,29 @@ GC_TEST(PinRoot, NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove)
     GC_EXPECT_EQ(result.garbageAfterRemove, reclaimableBytes);
 }
 
-// A region the forward path finishes with in place must still be reachable by a collection-set
-// builder afterwards.
-//
-// ZGC separates the two questions. A page is in _page_table from ZHeap::alloc_page
-// (zHeap.cpp:257) until ZHeap::free_page (:277), and select_relocation_set iterates that table
-// (zGeneration.cpp:205-212), so whether an allocator currently points at a page has nothing to do
-// with whether the collector can still see it. Ours answers both with list membership, and
-// compact-in-place used to drop the allocator side without moving the region: CompactRegion ends by
-// prepending it to tlRegionList, and AllocBuffer::ClearRegion only nulls tlRegion.
-//
-// Neither collection-set builder walks tlRegionList -- AssembleSmallGarbageCandidates and
-// PrepareYoungGarbageCandidates walk fromRegionList, recentFullRegionList and
-// unmovableFromRegionList -- so such a region could never be collected, and never allocated from
-// either, since AllocateThreadLocalRegion always takes a fresh one. It was simply retained.
-//
-// The existing suite could not have caught this: exactly one test in it ever puts a region on a
-// list, and it puts it on the list its own walker reads.
-
-
-// RouteRegion can compact in place and re-home before ForwardRegion reaches its
-// stay-young arm. The latter must recognize that ownership is already complete;
-// prepending the same head again makes both next and prev point to itself.
+// ZGC zPageAllocator.cpp:2065: completed in-place pages remain page-table visible.
 GC_TEST(RegionRetirement, StayYoungAfterCompactInPlaceDoesNotRelinkRecentFull)
 {
     GcHeapFixture fx;
     RegionManager manager;
     ZPage* region = fx.region0;
     region->reset(PageAge::eden);
-    // Minimal ghost geometry normally installed by PrepareForwardableRegion;
-    // the unit fixture has no CollectorProxy, so plant only the state consumed
-    // by FinishStayYoungInPlace/DispelGhostFromRegion.
     region->SetInGhostRegion(1);
     region->MarkForwardingDone();
-
-    PinRootTestAccess::ParkOnThreadLocal(manager, region);
+    region->SetRegionRole(ZPageRole::From);
     manager.RehomeCompactedInPlaceRegion(region);
     manager.EnlistStayYoungSurvivor(region);
-
     GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager, region), 1u);
     GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
 }
-
-// The opposite ordering is valid too: CompactRegion may finish linking the
-// node on tlRegionList before the stay-young path takes ownership.
-GC_TEST(RegionRetirement, StayYoungTransfersCompletedCompactTailFromThreadLocal)
-{
-    GcHeapFixture fx;
-    RegionManager manager;
-    ZPage* region = fx.region0;
-    region->reset(PageAge::eden);
-    region->SetInGhostRegion(1);
-    region->MarkForwardingDone();
-
-    PinRootTestAccess::ParkOnThreadLocal(manager, region);
-    manager.EnlistStayYoungSurvivor(region);
-
-    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager, region), 1u);
-    GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
-    GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
-}
-
-// GC-main may finish stay-young while a mutator is still returning from
-// CompactRegion. If recent-full won, the compact tail must not overwrite that
-// list's links by unconditionally prepending the same node to tlRegionList.
 GC_TEST(RegionRetirement, CompactTailDoesNotStealConcurrentRecentFullNode)
 {
     GcHeapFixture fx;
     RegionManager manager;
     ZPage* region = fx.region0;
-
-    PinRootTestAccess::ParkOnThreadLocal(manager, region);
+    region->SetRegionRole(ZPageRole::From);
     manager.RehomeCompactedInPlaceRegion(region);
     manager.EnlistCompactedRegionForAllocator(region);
-
     GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager, region), 1u);
     GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
-    GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
 }

@@ -38,7 +38,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -231,9 +231,26 @@ size_t FreeRegionManager::ReleaseMarkQuarantineToDirty()
     return count;
 }
 
+// ZGC zPageAllocator.cpp:764-785: no virtual-memory or physical-memory work.
+bool FreeRegionManager::ZPartition::claim_capacity_fast_medium(PageMemory& memory)
+{
+    CHECK(ZPageSizeMediumEnabled);
+    const ZVirtualMemory vmem = cache.remove_contiguous_power_of_2(ZPageSizeMediumMin, ZPageSizeMediumMax);
+    if (vmem.is_null()) { return false; }
+    memory.index = FreeRegionManager::IndexOf(vmem);
+    memory.size = vmem.size();
+    memory.partition = numaId;
+    memory.committed = true;
+    memory.partialMappings.clear();
+    memory.virtualClaimed = true;
+    memory.harvestedBytes = 0;
+    used += memory.size;
+    return true;
+}
+
 // ZPartition::claim_capacity / claim_from_cache_or_increase_capacity,
 // zPageAllocator.cpp:702-762.
-bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
+bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory, ZAllocationFlags flags)
 {
     std::lock_guard<std::mutex> lock(cacheMutex);
     CHECK(num != 0 && num % ZGranuleSize == 0);
@@ -241,6 +258,11 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
     for (size_t visited = 0; visited < partitions.size(); ++visited) {
         const size_t selected = (nextPartition + visited) % partitions.size();
         Partition& partition = *partitions[selected];
+        if (flags.fast_medium()) {
+            if (!partition.claim_capacity_fast_medium(memory)) { continue; }
+            nextPartition = (selected + 1) % partitions.size();
+            return true;
+        }
         if (partition.available() < size) {
             // Out of memory in this partition
             continue;
@@ -706,8 +728,8 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     const size_t size = request.GetSize();
     const size_t num = size;
     PageMemory& memory = request.Memory();
-    if (!freeRegionManager.ClaimPageMemory(num, memory)) { return false; }
-    pageAllocatorUsed += size;
+    if (!freeRegionManager.ClaimPageMemory(num, memory, request.Flags())) { return false; }
+    pageAllocatorUsed += memory.size;
     TrackUsedPeakLocked();
     return true;
 }
@@ -783,8 +805,9 @@ void RegionManager::PromoteAllRegions()
 }
 
 ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysicalMem,
-                                       bool allowSaferegion, bool clearPayload, PageAge age)
+                                       bool allowSaferegion, bool clearPayload, PageAge age, ZAllocationFlags flags)
 {
+    allowSaferegion = allowSaferegion && !flags.non_blocking();
     size_t size = num;
     if (allowSaferegion) {
         RequestForRegion(size);
@@ -801,7 +824,7 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
 #endif
 
 retry:
-    ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload);
+    ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload, flags);
     bool claimed = false;
     bool requestGc = false;
     {
@@ -815,6 +838,7 @@ retry:
         claimed = StallAllocation(request, requestGc);
     }
     if (claimed) {
+        size = request.Memory().size;
         size_t committedBytes = 0;
         ZPage* region = freeRegionManager.MaterializePageMemory(
             request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedBytes, age);

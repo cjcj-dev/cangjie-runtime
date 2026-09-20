@@ -1,0 +1,108 @@
+{
+  "counts": {
+    "cpu-default": {
+      "total": 10,
+      "rc0": 7,
+      "rc1": 3,
+      "other": []
+    },
+    "cpu-testable": {
+      "total": 16,
+      "rc0": 13,
+      "rc1": 3,
+      "other": []
+    },
+    "green-default": {
+      "total": 10,
+      "rc0": 10,
+      "rc1": 0,
+      "other": []
+    },
+    "green-testable": {
+      "total": 16,
+      "rc0": 16,
+      "rc1": 0,
+      "other": []
+    },
+    "late-default": {
+      "total": 10,
+      "rc0": 10,
+      "rc1": 0,
+      "other": []
+    },
+    "late-testable": {
+      "total": 16,
+      "rc0": 13,
+      "rc1": 3,
+      "other": []
+    },
+    "pinned-default": {
+      "total": 10,
+      "rc0": 9,
+      "rc1": 1,
+      "other": []
+    },
+    "pinned-testable": {
+      "total": 16,
+      "rc0": 15,
+      "rc1": 1,
+      "other": []
+    },
+    "restored-default": {
+      "total": 10,
+      "rc0": 10,
+      "rc1": 0,
+      "other": []
+    },
+    "restored-testable": {
+      "total": 16,
+      "rc0": 16,
+      "rc1": 0,
+      "other": []
+    }
+  },
+  "identity_checks": {
+    "default": {
+      "green_equals_restored": true,
+      "cpu": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      },
+      "pinned": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      },
+      "late": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      }
+    },
+    "testable": {
+      "green_equals_restored": true,
+      "cpu": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      },
+      "pinned": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      },
+      "late": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      }
+    }
+  }
+}

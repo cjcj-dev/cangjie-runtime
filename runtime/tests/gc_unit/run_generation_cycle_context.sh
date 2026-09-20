@@ -41,7 +41,7 @@ else
   exit 19
 fi
 SO_GC_UNIT_TESTS=0
-if /usr/bin/grep -Eq 'CJ_MRT_SetLargeArrayInitTestHooks' "$OUT/runtime-dynamic-symbols.txt"; then
+if /usr/bin/grep -Eq 'PendingStalledAllocations' "$OUT/runtime-dynamic-symbols.txt"; then
   SO_GC_UNIT_TESTS=1
 fi
 if [[ -n "${GC_CYCLE_TESTABLE:-}" && "$GC_CYCLE_TESTABLE" != "$SO_TESTABLE" ]]; then

@@ -20,7 +20,7 @@
 #include "Heap/z/zUncommitter.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -501,7 +501,6 @@ FinalizerProcessor::FinalizerProcessor(ZWorkers* workers)
     timeProcessUsed = 0;
     timeCurrentProcessBegin = 0;
     shouldReclaimHeapGarbage.store(false, std::memory_order_relaxed);
-    shouldFeedHungryBuffers.store(false, std::memory_order_relaxed);
 }
 
 void FinalizerProcessor::Run()
@@ -511,16 +510,13 @@ void FinalizerProcessor::Run()
     while (running.load(std::memory_order_acquire)) {
         bool hasPendingFinalizableJob = false;
         bool hasPendingReclaimHeapGarbage = false;
-        bool hasPendingFeedHungryBuffers = false;
         {
             ZStatTimer zstatTimer(PFinalizerProcessorWaittingTime);
             while (running.load(std::memory_order_acquire)) {
                 hasPendingFinalizableJob = HasFinalizableJob();
                 hasPendingReclaimHeapGarbage =
                     shouldReclaimHeapGarbage.exchange(false, std::memory_order_acq_rel);
-                hasPendingFeedHungryBuffers =
-                    shouldFeedHungryBuffers.exchange(false, std::memory_order_acq_rel);
-                if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers) {
+                if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage) {
                     break;
                 }
                 Wait(iterationWaitTime);
@@ -544,9 +540,6 @@ void FinalizerProcessor::Run()
 #endif
         }
 
-        if (hasPendingFeedHungryBuffers) {
-            FeedHungryBuffers();
-        }
 
         if (hasPendingReclaimHeapGarbage) {
             ReclaimHeapGarbage();
@@ -604,8 +597,7 @@ void FinalizerProcessor::Wait()
     std::unique_lock<std::mutex> lock(wakeLock);
     while (running.load(std::memory_order_acquire) &&
            !HasFinalizableJob() &&
-           !shouldReclaimHeapGarbage.load(std::memory_order_acquire) &&
-           !shouldFeedHungryBuffers.load(std::memory_order_acquire)) {
+           !shouldReclaimHeapGarbage.load(std::memory_order_acquire)) {
         lock.unlock();
         if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
             (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
@@ -614,8 +606,7 @@ void FinalizerProcessor::Wait()
         wakeCondition.wait_for(lock, std::chrono::milliseconds(1), [this] {
             return !running.load(std::memory_order_acquire) ||
                 HasFinalizableJob() ||
-                shouldReclaimHeapGarbage.load(std::memory_order_acquire) ||
-                shouldFeedHungryBuffers.load(std::memory_order_acquire);
+                shouldReclaimHeapGarbage.load(std::memory_order_acquire);
         });
     }
 }
@@ -657,7 +648,7 @@ bool FinalizerProcessor::EnqueueFinalizableReference(BaseObject* candidate)
     auto it = finalizers.begin();
     while (it != finalizers.end()) {
         BaseObject* obj = LoadFinalizerGood(*it);
-        if (obj == nullptr || HeapFiller::IsFiller(obj)) {
+        if (obj == nullptr || CollectedHeap::is_filler_object(obj)) {
             weakStorage.Release(&*it);
             it = finalizers.erase(it);
             continue;
@@ -724,7 +715,7 @@ void FinalizerProcessor::ProcessFinalizableList()
         ScopedObjectAccess soa;
         CHECK_DETAIL(ExceptionManager::GetPendingException() == nullptr, "should not exist pending exception");
         BaseObject* finalizeObjAddr = LoadFinalizerGood(*itor);
-        if (finalizeObjAddr == nullptr || HeapFiller::IsFiller(finalizeObjAddr)) {
+        if (finalizeObjAddr == nullptr || CollectedHeap::is_filler_object(finalizeObjAddr)) {
             std::lock_guard<std::mutex> l(listLock);
             strongStorage.Release(&*itor);
             itor = workingFinalizables.erase(itor);
@@ -846,9 +837,6 @@ void FinalizerProcessor::ReclaimHeapGarbage()
     Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(false);
 }
 
-void FinalizerProcessor::FeedHungryBuffers()
-{
-    Heap::GetHeap().GetAllocator().FeedHungryBuffers();
-}
+
 } // namespace MapleRuntime
 

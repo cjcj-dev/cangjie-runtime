@@ -215,6 +215,40 @@ if /usr/bin/grep -Eq \
 else
   echo "GC_UNIT_PRODUCT_CONFIGURATION=DEFAULT"
 fi
+if /usr/bin/grep -Eq 'PendingStalledAllocations' \
+    "$OUT/runtime-dynamic-symbols.txt"; then
+  STALL_PRODUCT_OBSERVE=1
+else
+  STALL_PRODUCT_OBSERVE=0
+fi
+echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
+
+# The publication TU always has fixture access, but the linked product SO only
+# owns the actual-entry receipt in a testable product build. Derive that shape
+# from both receipt endpoints; a partial export is an invalid product shape.
+REMAP_RECEIPT_TEST=LoadHealDeliveryProduct.MajorDispatchRemapsLiveRemoteArrayField
+REMAP_RECEIPT_FLAGS=()
+REMAP_RECEIPT_EXPORTS="$OUT/remap-young-roots-receipt-exports.txt"
+nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$REMAP_RECEIPT_EXPORTS"
+remap_receipt_reset=0
+remap_receipt_read=0
+if /usr/bin/grep -F -q 'MapleRuntime::ResetRemapYoungRootsTestReceipt(' "$REMAP_RECEIPT_EXPORTS"; then
+  remap_receipt_reset=1
+fi
+if /usr/bin/grep -F -q 'MapleRuntime::ReadRemapYoungRootsTestReceipt(' "$REMAP_RECEIPT_EXPORTS"; then
+  remap_receipt_read=1
+fi
+if [[ "$remap_receipt_reset" -eq 1 && "$remap_receipt_read" -eq 1 ]]; then
+  REMAP_RECEIPT_PRODUCT_SHAPE=testable
+  REMAP_RECEIPT_FLAGS=(-DMRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE=1)
+elif [[ "$remap_receipt_reset" -eq 0 && "$remap_receipt_read" -eq 0 ]]; then
+  REMAP_RECEIPT_PRODUCT_SHAPE=default
+else
+  echo "GC_UNIT_REMAP_RECEIPT_PRODUCT_SHAPE_INCOMPLETE reset=$remap_receipt_reset read=$remap_receipt_read" >&2
+  exit 19
+fi
+echo "REMAP_RECEIPT_PRODUCT_SHAPE=$REMAP_RECEIPT_PRODUCT_SHAPE reset=$remap_receipt_reset read=$remap_receipt_read"
+
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 TESTABLE_FLAGS=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
@@ -245,6 +279,7 @@ MAIN_COMPILE_FLAGS=(
   -fvisibility-inlines-hidden
   "${TEST_DEFINES[@]}"
   "${TESTABLE_FLAGS[@]}"
+  "${REMAP_RECEIPT_FLAGS[@]}"
   "${INC_FLAGS[@]}"
 )
 # A real second image for package-cache generation and code-identity tests.
@@ -289,6 +324,7 @@ MAIN_SOURCES=(
   "$SRC/test_young_conc.cpp"
   "$SRC/test_alloc_buffer_handoff.cpp"
   "$SRC/test_tlab_usage.cpp"
+  "$SRC/test_object_allocator_paths.cpp"
   "$SRC/test_shared_small_page.cpp"
   "$SRC/test_young_weak.cpp"
   "$SRC/test_native_root_current.cpp"
@@ -519,6 +555,24 @@ if ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$OUT/runtime-dynamic
   exit 10
 fi
 echo "GATE_OLDVALUE_PRODUCT_BINDING_OK rows=$oldvalue_rows elf=$OUT/cj_gc_unit"
+STALL_TEST_DEFINED=$(nm --defined-only "$OUT/cj_gc_unit" | /usr/bin/grep -c 'AllocationStall_' || true)
+echo "STALL_TEST_DEFINED=$STALL_TEST_DEFINED"
+# The migrated tests consume StallAllocation and real page capacity in both
+# product configurations; optional observer exports no longer define coverage.
+if [[ "$STALL_TEST_DEFINED" -eq 0 ]]; then
+  echo "GC_UNIT_GATE_FAIL: AllocationStall tests are missing" >&2
+  exit 8
+fi
+nm -u "$OUT/cj_gc_unit" > "$OUT/stall-imports.txt"
+if ! /usr/bin/grep -q 'StallAllocation' "$OUT/stall-imports.txt"; then
+  echo "GC_UNIT_GATE_FAIL: missing product StallAllocation import" >&2
+  exit 8
+fi
+echo "STALL_SUITE=PRODUCT_BOTH_CONFIGURATIONS"
+
+# ReferenceProcessor is an independently replaceable product carrier. Guard
+# full symbols (not only the dynamic table) so no local/weak test copy can
+# satisfy its consumers, then require the executable to import those methods.
 REFERENCE_PROCESSOR_CONSUMERS=(
   'MapleRuntime::ReferenceProcessor::DiscoverReference('
   'MapleRuntime::ReferenceProcessor::ProcessReferences('

@@ -141,11 +141,7 @@ public:
         shouldReclaimHeapGarbage.store(true, std::memory_order_release);
         Notify();
     }
-    void NotifyToFeedAllocBuffers()
-    {
-        shouldFeedHungryBuffers.store(true, std::memory_order_release);
-        Notify();
-    }
+
 
 private:
     U32 VisitRootLists(const NativeSlotVisitor& strong, const NativeSlotVisitor& weak)
@@ -165,7 +161,6 @@ private:
     void ProcessFinalizables();
     void ProcessFinalizableList();
     void ReclaimHeapGarbage();
-    void FeedHungryBuffers();
 
     std::mutex wakeLock;
     std::condition_variable wakeCondition; // notify finalizer processing continue
@@ -193,7 +188,6 @@ private:
     // one synchronization decision, so a worker cannot clear a later enqueue.
     bool hasFinalizableJob = false;
     std::atomic<bool> shouldReclaimHeapGarbage;
-    std::atomic<bool> shouldFeedHungryBuffers;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     // stats
     void LogAfterProcess();

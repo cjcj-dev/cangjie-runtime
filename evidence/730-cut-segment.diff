@@ -1,0 +1,13 @@
+diff --git a/runtime/src/ObjectModel/MArray.inline.h b/runtime/src/ObjectModel/MArray.inline.h
+index 48f3e63ef..210527595 100644
+--- a/runtime/src/ObjectModel/MArray.inline.h
++++ b/runtime/src/ObjectModel/MArray.inline.h
+@@ -137,7 +137,7 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
+     address = HeapManager::Allocate(
+         arraySize, useSegmentedClear ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
+     if (LIKELY(address != NULL_ADDRESS)) {
+-        if (UNLIKELY(useSegmentedClear)) {
++        if (false && UNLIKELY(useSegmentedClear)) {
+             return ZObjArrayAllocator(address, arraySize, nElems, arrayClass).initialize();
+         }
+         MArray* newArray = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));

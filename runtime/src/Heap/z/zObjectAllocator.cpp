@@ -39,7 +39,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -51,9 +51,6 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-void (*RegionManager::testPinnedPageAcquired)(ZPage*) = nullptr;
-#endif
 // ThreadLocalAllocBuffer::initial_desired_size (cpp:265): a new thread
 // starts with the published allocation fraction instead of a fixed extent.
 void RegionManager::InitializeTLAB(AllocBuffer& buffer)
@@ -61,7 +58,7 @@ void RegionManager::InitializeTLAB(AllocBuffer& buffer)
     std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
     buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads,
-                      GetThreadLocalRegionSize());
+                      ZObjectSizeLimitSmall);
 }
 
 // ZTLABUsage::reset (zTLABUsage.cpp:41), called before retiring allocating
@@ -90,7 +87,7 @@ void RegionManager::PublishTLABStatistics()
     const double fallback = tlabRequestedFraction.Average() / threads;
     Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
         buffer.AccumulateTLABStatistics(total, GetTLABUsed(), capacity);
-        buffer.ResizeTLAB(capacity, fallback, GetThreadLocalRegionSize());
+        buffer.ResizeTLAB(capacity, fallback, ZObjectSizeLimitSmall);
     });
     if (total.Used() != 0) {
         tlabAllocatingThreads.Sample(total.allocatingThreads);
@@ -126,9 +123,9 @@ static bool IsSmallEdenPage(const ZPage* page)
 
 // ZObjectAllocator::PerAge::alloc_page, ZHeap::alloc_page/account_alloc_page.
 ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
-                                             PageAge age, bool nonBlocking, bool clearPayload)
+                                             PageAge age, ZAllocationFlags flags, bool clearPayload)
 {
-    ZPage* page = Heap::alloc_page(size, role, false, !nonBlocking, clearPayload, age);
+    ZPage* page = Heap::alloc_page(size, role, false, !flags.non_blocking(), clearPayload, age, flags);
     if (page == nullptr) { return nullptr; }
     page->reset(age);
     if (IsSmallEdenPage(page)) {
@@ -165,45 +162,26 @@ void RegionManager::UndoSharedPage(ZPage* page)
     });
 }
 
-uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking, bool clearPayload)
+// ZGC zObjectAllocator.cpp:56-64.
+ZPage* ZObjectAllocator::PerAge::alloc_page(ZPageType type, size_t size, ZAllocationFlags flags,
+                                          bool clearPayload)
 {
-    CHECK(untype(age) < kPageAgeCount);
-    RegionManager& manager = Heap::GetHeap().page_allocator();
-    PerAge& allocator = *this->allocator(age);
-    if (size > ZObjectSizeLimitSmall) {
-        if (ZPageSizeMediumEnabled && size <= ZObjectSizeLimitMedium) {
-            std::lock_guard<ZLock> mediumLock(allocator.mediumPageAllocLock);
-            ZPage** const shared = allocator.shared_medium_page_addr();
-            ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
-            uintptr_t addr = page == nullptr ? 0 : page->alloc_object_atomic(size);
-            if (addr != 0) { return addr; }
-            const size_t pageBytes = ZPageSizeMediumMin;
-            ZPage* fresh = manager.AllocateSharedPage(pageBytes, ZPageType::medium, allocator.age, nonBlocking);
-            if (fresh == nullptr) { return 0; }
-            addr = fresh->alloc_object(size);
-            CHECK(addr != 0);
-            for (;;) {
-                if (__atomic_compare_exchange_n(shared, &page, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-                    return addr;
-                }
-                if (page == nullptr) { continue; }
-                const uintptr_t previous = page->alloc_object_atomic(size);
-                if (previous == 0) { continue; }
-                manager.UndoSharedPage(fresh);
-                return previous;
-            }
-        }
-        const size_t pageBytes = AlignUp(size, ZGranuleSize);
-        ZPage* page = manager.AllocateSharedPage(pageBytes, ZPageType::large, allocator.age, nonBlocking, clearPayload);
-        return page == nullptr ? 0 : page->alloc_object(size);
-    }
-    ZPage** const shared = allocator.shared_small_page_addr();
+    return Heap::GetHeap().page_allocator().AllocateSharedPage(size, type, age, flags, clearPayload);
+}
+
+void ZObjectAllocator::PerAge::undo_alloc_page(ZPage* page)
+{
+    Heap::GetHeap().page_allocator().UndoSharedPage(page);
+}
+
+// ZGC zObjectAllocator.cpp:66-110: reserve the object before publishing its page.
+uintptr_t ZObjectAllocator::PerAge::alloc_object_in_shared_page(
+    ZPage** shared, ZPageType type, size_t pageSize, size_t size, ZAllocationFlags flags)
+{
     ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
     uintptr_t addr = page == nullptr ? 0 : page->alloc_object_atomic(size);
     if (addr != 0) { return addr; }
-
-    ZPage* fresh = manager.AllocateSharedPage(ZPageSizeSmall, ZPageType::small,
-                                           allocator.age, nonBlocking);
+    ZPage* fresh = alloc_page(type, pageSize, flags);
     if (fresh == nullptr) { return 0; }
     addr = fresh->alloc_object(size);
     CHECK(addr != 0);
@@ -214,9 +192,78 @@ uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking, bo
         if (page == nullptr) { continue; }
         const uintptr_t previous = page->alloc_object_atomic(size);
         if (previous == 0) { continue; }
-        manager.UndoSharedPage(fresh);
+        undo_alloc_page(fresh);
         return previous;
     }
+}
+
+// ZGC zObjectAllocator.cpp:112-158: page-local, locked non-blocking, unlocked blocking.
+uintptr_t ZObjectAllocator::PerAge::alloc_object_in_medium_page(size_t size, ZAllocationFlags flags)
+{
+    ZPage** shared = shared_medium_page_addr();
+    ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
+    uintptr_t addr = page == nullptr ? 0 : page->alloc_object_atomic(size);
+    if (addr == 0) {
+        std::lock_guard<ZLock> lock(mediumPageAllocLock);
+        ZAllocationFlags nonBlocking = flags;
+        nonBlocking.set_non_blocking();
+        if (ZPageSizeMediumMin != ZPageSizeMediumMax) {
+            CHECK(ZPageSizeMediumEnabled);
+            ZAllocationFlags fastMedium = nonBlocking;
+            fastMedium.set_fast_medium();
+            addr = alloc_object_in_shared_page(shared, ZPageType::medium, ZPageSizeMediumMax, size, fastMedium);
+        }
+        if (addr == 0) {
+            addr = alloc_object_in_shared_page(shared, ZPageType::medium, ZPageSizeMediumMax, size, nonBlocking);
+        }
+    }
+    if (addr == 0 && !flags.non_blocking()) {
+        addr = alloc_object_in_shared_page(shared, ZPageType::medium, ZPageSizeMediumMax, size, flags);
+    }
+    return addr;
+}
+
+uintptr_t ZObjectAllocator::PerAge::alloc_large_object(size_t size, ZAllocationFlags flags, bool clearPayload)
+{
+    ZPage* page = alloc_page(ZPageType::large, AlignUp(size, ZGranuleSize), flags, clearPayload);
+    return page == nullptr ? 0 : page->alloc_object(size);
+}
+
+uintptr_t ZObjectAllocator::PerAge::alloc_medium_object(size_t size, ZAllocationFlags flags)
+{
+    return alloc_object_in_medium_page(size, flags);
+}
+
+uintptr_t ZObjectAllocator::PerAge::alloc_small_object(size_t size, ZAllocationFlags flags)
+{
+    return alloc_object_in_shared_page(shared_small_page_addr(), ZPageType::small, ZPageSizeSmall, size, flags);
+}
+
+uintptr_t ZObjectAllocator::PerAge::alloc_object(size_t size, ZAllocationFlags flags, bool clearPayload)
+{
+    if (size <= ZObjectSizeLimitSmall) {
+        return alloc_small_object(size, flags);
+    } else if (size <= ZObjectSizeLimitMedium) {
+        return alloc_medium_object(size, flags);
+    } else {
+        return alloc_large_object(size, flags, clearPayload);
+    }
+}
+
+// ZGC zObjectAllocator.cpp:228-239.
+size_t ZObjectAllocator::fast_available(PageAge age) const
+{
+    ZPage* const* shared = allocator(age)->shared_small_page_addr();
+    ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
+    return page == nullptr ? 0 : page->remaining();
+}
+
+uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking, bool clearPayload)
+{
+    CHECK(untype(age) < kPageAgeCount);
+    ZAllocationFlags flags;
+    if (nonBlocking) { flags.set_non_blocking(); }
+    return allocator(age)->alloc_object(size, flags, clearPayload);
 }
 
 // ZObjectAllocator::retire_pages / PerAge::retire_pages (cpp:208-237).
@@ -231,51 +278,6 @@ void ZObjectAllocator::retire_pages(PageAgeRange ages)
         perAge->sharedSmallPage.set_all(nullptr);
         perAge->sharedMediumPage.set(nullptr);
     }
-}
-
-ZPage* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem, bool youngRegion,
-                                                   bool allowSaferegion)
-{
-    // ZHeap::max_tlab_size / unsafe_max_tlab_alloc (zHeap.cpp:144-160):
-    // the caller computes the refill size; the allocator enforces its extent.
-    if (size == 0 || size > GetThreadLocalRegionSize()) {
-        return nullptr;
-    }
-    const size_t pageBytes = AlignUp(size, ZGranuleSize);
-    ZPage* region = Heap::alloc_page(pageBytes, ZPageType::small, expectPhysicalMem,
-                                    allowSaferegion, true, youngRegion ? PageAge::eden : PageAge::old);
-    if (region != nullptr) {
-        {
-            region->reset(youngRegion ? PageAge::eden : PageAge::old);
-            if (youngRegion) {
-                // zHeap.cpp:233: charge the backing extent even before a
-                // prepared region is installed as a thread's current TLAB.
-                tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
-            }
-            region->SetRegionRole(ZPageRole::ThreadLocal);
-            DLOG(REGION, "alloc tl-region %p @[0x%zx+%zu, 0x%zx) pageBytes[%zu+%zu, %zu) type %u",
-                region, region->GetRegionStart(), region->GetRegionSize(), region->GetRegionEnd(),
-                region->granule_index(), region->GetRegionSize(), region->granule_index() + region->GetRegionSize(),
-                0u);
-        }
-    }
-
-    return region;
-}
-
-// ZHeap::undo_alloc_page (zHeap.cpp:270): only a failed publication of
-// a newly allocated, unused backing region cancels its allocation charge.
-// GC retirement/reclamation is not an undo and must retain that cycle's usage.
-void RegionManager::UndoThreadLocalRegionAllocation(ZPage* region)
-{
-    CHECK(region != nullptr && region->IsEmpty() && region->IsThreadLocalRegion());
-    if (region->IsYoungRegion()) {
-        const size_t size = region->GetRegionSize();
-        const size_t previous = tlabUsed.fetch_sub(size, std::memory_order_relaxed);
-        CHECK(previous >= size);
-    }
-    RemoveThreadLocalRegion(region);
-    ReclaimRegion(region);
 }
 
 void RegionManager::RequestForRegion(size_t size)

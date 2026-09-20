@@ -112,8 +112,7 @@ void* Exercise(void*)
     Expect(affinityRc == 0, "worker_cpu_input");
     const size_t cpuCount = CPU_COUNT(&cpus);
     const size_t heapBytes = Heap::GetHeap().GetMaxCapacity();
-    const size_t regionBytes = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator())
-        .GetRegionManager().GetThreadLocalRegionSize();
+    const size_t regionBytes = ZPageSizeSmall;
     const size_t heapLimit = heapBytes / regionBytes / 50;
     const size_t concurrent = std::max<size_t>(1, std::min((cpuCount + 3) / 4, heapLimit));
     ZWorkers& youngWorkers = *Heap::GetHeap().young().Workers();

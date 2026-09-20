@@ -1,4 +1,4 @@
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 
 #include <atomic>
 #include <cstdlib>
@@ -14,7 +14,7 @@
 #include "securec.h"
 
 namespace MapleRuntime {
-namespace HeapFiller {
+namespace {
 
 static TypeInfo* g_unitTi = nullptr;
 static TypeInfo* g_arrayTi = nullptr;
@@ -47,9 +47,7 @@ static void EnsureTypes()
     }
     constexpr size_t kBytes = 4096;
     void* page = mmap(nullptr, kBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (page == MAP_FAILED) {
-        return;
-    }
+    CHECK_DETAIL(page != MAP_FAILED, "filler type metadata allocation failed");
     auto* base = static_cast<char*>(page);
     g_byteTi = PlantTi(base, TypeKind::TYPE_KIND_UINT8, 1, "FillerByte");
     g_unitTi = PlantTi(base + 256, TypeKind::TYPE_KIND_CLASS, 0, "FillerUnit");
@@ -59,7 +57,9 @@ static void EnsureTypes()
     g_typesReady.store(true, std::memory_order_release);
 }
 
-bool IsFiller(const BaseObject* obj)
+} // namespace
+
+bool CollectedHeap::is_filler_object(const BaseObject* obj)
 {
     if (obj == nullptr || !g_typesReady.load(std::memory_order_acquire)) {
         return false;
@@ -71,9 +71,7 @@ bool IsFiller(const BaseObject* obj)
 static void Overlay(uintptr_t start, size_t size)
 {
     EnsureTypes();
-    if (g_unitTi == nullptr || (size & 7u) != 0 || size < 8) {
-        return;
-    }
+    CHECK(g_unitTi != nullptr && (size & 7u) == 0 && size >= 8);
     auto* obj = reinterpret_cast<BaseObject*>(start);
     if (size == 8) {
         obj->SetClassInfo(g_unitTi);
@@ -83,14 +81,13 @@ static void Overlay(uintptr_t start, size_t size)
     *reinterpret_cast<MIndex*>(start + sizeof(void*)) = size - 16u;
 }
 
-void ZeroAndFill(uintptr_t start, size_t size)
+void CollectedHeap::fill_with_dummy_object(uintptr_t start, uintptr_t end, bool zap)
 {
-    if (size == 0) {
-        return;
-    }
-    CHECK_E((memset_s(reinterpret_cast<void*>(start), size, 0, size) != EOK), "memset_s fail");
+    CHECK(end >= start);
+    const size_t size = end - start;
+    if (size == 0) { return; }
+    if (zap) { CHECK_E((memset_s(reinterpret_cast<void*>(start), size, 0, size) != EOK), "memset_s fail"); }
     Overlay(start, size);
 }
 
-} // namespace HeapFiller
 } // namespace MapleRuntime

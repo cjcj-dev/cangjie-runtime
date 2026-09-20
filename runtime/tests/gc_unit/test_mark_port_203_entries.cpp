@@ -315,7 +315,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young), major ? GC_REASON_USER : GC_REASON_YOUNG);
     Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    fx.region1->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(children.back());
     const size_t rootCount = commonRoot && helpers != 0 ? 17 * 64 : 1;
     std::vector<NativeSlot> rootSlots(rootCount, NativeSlot(zpointer::null));
@@ -374,7 +374,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         });
     } else if (markOnly || duplicateRootOrder != 0) {
         if (ownsInvisibleBuffer) {
-            invisibleBuffer->SetRegion(nullptr);
+            invisibleBuffer->ClearRegion();
             invisibleBuffer->Fini();
             ThreadLocal::SetAllocBuffer(nullptr);
             delete invisibleBuffer;

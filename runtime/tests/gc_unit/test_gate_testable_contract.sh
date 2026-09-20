@@ -165,7 +165,7 @@ grep -q 'TESTABLE_INTERNALS=1 but product SO lacks segmented-array test hooks' "
 
 # Mode matrix: defer must execute only C++, only must execute only the language
 # entries, and the unset/default mode must retain the combined behavior.
-printf '#!/usr/bin/env bash\necho "00000000 T CJ_MRT_SetLargeArrayInitTestHooks@@CANGJIE"\n' >"$fixture/bin/nm"
+printf '#!/usr/bin/env bash\necho "00000000 T _ZNK12MapleRuntime13RegionManager25PendingStalledAllocationsEv@@CANGJIE"\n' >"$fixture/bin/nm"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fixture/sdk/bin/cjc"
 chmod +x "$fixture/sdk/bin/cjc"
 mkdir -p "$fixture/sdk/third_party/llvm/bin" "$fixture/sdk/lib/linux_x86_64_cjnative"

@@ -15,6 +15,7 @@
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zCPU.inline.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zStat.hpp"
 #if defined(__linux__)
@@ -81,16 +82,17 @@ struct SharedPageFixture {
     // destroyed before the mapping: declare it last.
     std::unique_ptr<ZTestRegionHeap> heap;
     RegionManager manager;
-    SharedPageFixture()
+    explicit SharedPageFixture(size_t units = 64)
     {
         // Match CollectorResources::Init before allocation-rate sampling.
         ZStat::Initialize();
-        constexpr size_t units = 64;
         HeapParam params{};
         params.regionSize = ZGranuleSize / KB;
         params.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
+        BindFixturePageTable(manager, units);
     }
+    ~SharedPageFixture() { Heap::bind_test_page_allocator(nullptr); }
 };
 
 class CPUAffinity {
@@ -146,15 +148,19 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
         GC_EXPECT_EQ(page->OtherSequence(), Heap::GetHeap().GetCycleSnapshot(other).sequence);
         GC_EXPECT_EQ(page->IsYoungRegion(), age != PageAge::old);
         GC_EXPECT_EQ(page->GetYoungAge(), age == PageAge::old ? uint8_t{0} : static_cast<uint8_t>(untype(age)));
-        GC_EXPECT_TRUE(!page->IsThreadLocalRegion());
+        GC_EXPECT_TRUE(page->GetRegionRole() == ZPageRole::RecentFull);
         GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(16, age, true), address + 16);
         for (uint32_t previous = 0; previous < untype(age); ++previous) {
             GC_EXPECT_TRUE(pages[previous] != page);
         }
     }
     ZPage* eden = pages[untype(PageAge::eden)];
-    const size_t remaining = eden->GetRegionSize() - 32;
-    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(remaining, PageAge::eden, true), eden->GetRegionStart() + 32);
+    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(std::min(eden->remaining(), ZObjectSizeLimitSmall), PageAge::eden, true),
+                 eden->GetRegionStart() + 32);
+    while (eden->remaining() >= 16) {
+        const size_t chunk = std::min(eden->remaining(), ZObjectSizeLimitSmall);
+        GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().alloc(chunk, PageAge::eden, true) != 0);
+    }
     const uintptr_t refilled = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(refilled != 0);
     GC_EXPECT_TRUE(Heap::page(refilled) != eden);
@@ -214,12 +220,14 @@ GC_OTHER_VM_TEST(SharedSmallPage, TLABAccountingOnlySmallEden)
 GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
 {
     CPUAffinity affinity;
-    SharedPageFixture fixture;
-    auto& manager = fixture.manager;
-    if (affinity.available.size() < 2) {
-        std::fprintf(stderr, "SharedSmallPage: migration arm unavailable: one allowed CPU\n");
-        return;
-    }
+    // zHeuristics.cpp:69-74: choose a real heap capacity whose 25% budget
+    // admits one small page per configured CPU. Do not override the decision.
+    const size_t units = 4 * static_cast<size_t>(ZCPU::count());
+    ZHeuristics::set_max_heap_size(units * ZGranuleSize);
+    SharedPageFixture fixture(units);
+    GC_EXPECT_TRUE(affinity.available.size() >= 2);
+    GC_EXPECT_TRUE(ZHeuristics::use_per_cpu_shared_small_pages());
+    GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().allocator(PageAge::eden)->usePerCpuSharedSmallPages);
     const size_t cpuA = affinity.available.front();
     const size_t cpuB = affinity.available.back();
     affinity.Select(cpuA);
@@ -227,8 +235,8 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     GC_EXPECT_EQ(ZCPU::id(), cpuA);
     const uintptr_t first = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(first != 0);
-    GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(static_cast<uint32_t>(cpuA)) ==
-                   Heap::page(first));
+    const bool firstPublished = Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(
+        static_cast<uint32_t>(cpuA)) == Heap::page(first);
 
     affinity.Select(cpuB);
     // Fast path: the affinity entry for cpuA still names this thread.
@@ -250,8 +258,33 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     GC_EXPECT_EQ(ZCPU::id(), cpuB);
     const uintptr_t second = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(second != 0);
+    std::fprintf(stderr, "CPU_MIGRATION_TARGET cpu_a=%zu cpu_b=%zu first=%p second=%p per_cpu=%d first_slot=%d\n",
+                 cpuA, cpuB, Heap::page(first), Heap::page(second),
+                 Heap::GetHeap().object_allocator().allocator(PageAge::eden)->usePerCpuSharedSmallPages, firstPublished);
     GC_EXPECT_TRUE(Heap::page(first) != Heap::page(second));
+    GC_EXPECT_TRUE(firstPublished);
     GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(static_cast<uint32_t>(cpuB)) ==
                    Heap::page(second));
+}
+// The other legal heuristic input must route through slot zero on either CPU.
+GC_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
+{
+    CPUAffinity affinity;
+    constexpr size_t units = 1;
+    ZHeuristics::set_max_heap_size(units * ZGranuleSize);
+    SharedPageFixture fixture(units);
+    GC_EXPECT_TRUE(affinity.available.size() >= 2);
+    auto& allocator = Heap::GetHeap().object_allocator();
+    GC_EXPECT_FALSE(ZHeuristics::use_per_cpu_shared_small_pages());
+    GC_EXPECT_FALSE(allocator.allocator(PageAge::eden)->usePerCpuSharedSmallPages);
+    affinity.Select(affinity.available.front());
+    const uintptr_t first = allocator.alloc(16, PageAge::eden, true);
+    affinity.Select(affinity.available.back());
+    const uintptr_t second = allocator.alloc(16, PageAge::eden, true);
+    ZPage* slot = allocator.allocator(PageAge::eden)->sharedSmallPage.get(0);
+    std::fprintf(stderr, "CPU_SLOT_ZERO_TARGET first=%zx second=%zx slot=%p\n", first, second, slot);
+    GC_EXPECT_TRUE(first != 0);
+    GC_EXPECT_EQ(second, first + 16);
+    GC_EXPECT_TRUE(slot == Heap::page(first));
 }
 #endif

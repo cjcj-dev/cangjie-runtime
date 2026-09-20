@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zObjectAllocator.cpp b/runtime/src/Heap/z/zObjectAllocator.cpp
+index 7a5c9c60e..531d48179 100644
+--- a/runtime/src/Heap/z/zObjectAllocator.cpp
++++ b/runtime/src/Heap/z/zObjectAllocator.cpp
+@@ -236,7 +236,7 @@ uintptr_t ZObjectAllocator::PerAge::alloc_medium_object(size_t size, ZAllocation
+ 
+ uintptr_t ZObjectAllocator::PerAge::alloc_small_object(size_t size, ZAllocationFlags flags)
+ {
+-    return alloc_object_in_shared_page(shared_small_page_addr(), ZPageType::small, ZPageSizeSmall, size, flags);
++    return alloc_object_in_shared_page(sharedSmallPage.addr(0), ZPageType::small, ZPageSizeSmall, size, flags);
+ }
+ 
+ uintptr_t ZObjectAllocator::PerAge::alloc_object(size_t size, ZAllocationFlags flags, bool clearPayload)

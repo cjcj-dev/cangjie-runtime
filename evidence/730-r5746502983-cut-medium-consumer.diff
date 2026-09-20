@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zHeap.cpp
++++ b/runtime/src/Heap/z/zHeap.cpp
+@@ -549,7 +549,7 @@
+     RegionManager& manager = GetHeap().page_allocator();
+     ZPage* page = g_prematerializedPage;
+     if (page == nullptr && num > 0) {
+-        page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age, flags);
++        page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age, role == ZPageType::medium ? ZAllocationFlags{} : flags);
+     }
+     if (page != nullptr) {
+         page_table().insert(page);
