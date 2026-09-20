@@ -873,6 +873,13 @@ AbortCapture CaptureAbort(Fn&& fn)
 // The receipt, retirement and lookup all belong to the linked product SO.
 // Save the expected identity from the actual publisher before retiring it;
 // no LookupResult is constructed or passed to a product consumer by this test.
+// ZGC zGeneration.inline.hpp:131-140: no forwarding leaves the address unchanged.
+GC_OTHER_VM_TEST(FindToPublicState, NotManagedIsObservable)
+{
+    BaseObject* const result = Heap::GetHeap().old().relocate_or_remap_object(nullptr);
+    GC_EXPECT_TRUE(result == nullptr);
+}
+
 RefField<>* gIncomingDestination = nullptr;
 uintptr_t gIncomingDestinationExpected = 0;
 

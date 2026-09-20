@@ -154,6 +154,7 @@ struct ForwardingSelectionResult {
     size_t retained{0};
     size_t retired{0};
     size_t receipts{0};
+    size_t remapReceipts{0};
     bool verifyRetirement{false};
     bool verifyPin{false};
     uintptr_t pinExpected{0};
@@ -245,6 +246,12 @@ void* SelectRealLivePages(void* context)
                 result.receipts += target != starts[i] && Heap::page(target) != nullptr &&
                     (result.verifyPin ? static_cast<MArray*>(resolved)->ConvertToCArray()[0] == i + 1 :
                      *reinterpret_cast<uint64_t*>(target + TYPEINFO_PTR_SIZE) == i + 1);
+                BaseObject* const remapped = ZGeneration::young()->remap_object(
+                    reinterpret_cast<BaseObject*>(starts[i]));
+                const MAddress remapTarget = reinterpret_cast<MAddress>(remapped);
+                result.remapReceipts += remapTarget != starts[i] && Heap::page(remapTarget) != nullptr &&
+                    (result.verifyPin ? static_cast<MArray*>(remapped)->ConvertToCArray()[0] == i + 1 :
+                     *reinterpret_cast<uint64_t*>(remapTarget + TYPEINFO_PTR_SIZE) == i + 1);
             }
 
         }
@@ -329,7 +336,10 @@ GC_RUNTIME_OTHER_VM_TEST(ZRelocationRetirement, CopiedSourceLeavesPageTable)
                  result.roots, result.published, result.retired, result.receipts);
     GC_EXPECT_TRUE(result.published > 0);
     GC_EXPECT_EQ(result.retired, result.published);
+    std::fprintf(stderr, "FORWARD_RESULT_TARGET relocated=%zu remapped=%zu expected=%zu\n",
+                 result.receipts, result.remapReceipts, result.published);
     GC_EXPECT_EQ(result.receipts, result.published);
+    GC_EXPECT_EQ(result.remapReceipts, result.published);
     std::fprintf(stderr, "SOURCE_MEMORY_TARGET used_before=%zu used_after=%zu mapped_before=%zu mapped_after=%zu reused=%zu\n",
                  result.usedBefore, result.usedAfter, result.mappedBefore, result.mappedAfter, result.reused);
     GC_EXPECT_EQ(result.usedAfter + result.mappedBefore, result.usedBefore + result.mappedAfter);
