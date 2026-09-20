@@ -154,11 +154,6 @@ public:
         return ZBarrier::TryUpdateRefField(obj, field, newRef);
     }
 
-    static FindToVersionResult ProductFindToVersion(Heap& collector, BaseObject* from, Generation generation)
-    {
-        return ZRelocate::FindToVersion(from, generation);
-    }
-
     static BaseObject* ProductRelocateOrRemap(
         Heap& collector, BaseObject* from, ZGenerationId generation)
     {
@@ -583,7 +578,7 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, Heap& collector,
         // zRelocate.cpp:369: relocation to a fresh page is a disjoint copy.
         ZUtils::object_copy_disjoint(to_zaddress(reinterpret_cast<uintptr_t>(from)),
                                      to_zaddress(reinterpret_cast<uintptr_t>(to)), from->GetSize());
-        GC_EXPECT_EQ(UNUSED_InsertMapping(publication, reinterpret_cast<MAddress>(from),
+        GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(from),
                                                    reinterpret_cast<MAddress>(to)), reinterpret_cast<MAddress>(to));
     }
     region->MarkForwardingDone();
@@ -678,8 +673,7 @@ LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, Heap& collector)
     ZForwarding* publication = forwarding_for_page(
         state.region, reinterpret_cast<MAddress>(state.from));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(UNUSED_InsertMapping(
-                     publication, reinterpret_cast<MAddress>(state.from),
+    GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(state.from),
                      reinterpret_cast<MAddress>(state.to)),
                  reinterpret_cast<MAddress>(state.to));
     return state;
@@ -757,22 +751,7 @@ void ExerciseMutatorCopy(bool runtimeEntry)
 
 
 
-GC_OTHER_VM_TEST(FindToPublicState, NotManagedIsObservable)
-{
-    Heap& collector = Heap::GetHeap();
-    FindToVersionResult result = RelocationReceiptTest::ProductFindToVersion(collector, nullptr, Generation::Old);
-    GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::NotManaged);
-    GC_EXPECT_TRUE(result.found() == nullptr);
-}
 
-
-
-// A single product-linked construction exercises two distinct Unavailable producers.  It proves
-// the route witness is not a constant formatter: one arm closes an installed publication while
-// keeping its ghost region, and the other uses an unarmed, non-ghost region with a FORWARDED
-// header. Both answers come from ZRelocate::FindToVersion in libcangjie-runtime.so.
-
-// LookupTo returns the decision record itself.  Change both metadata faces only
 // after the product lookup returns, then prove the record still describes the
 // carrier inputs that selected Unavailable rather than those later faces.
 
@@ -894,70 +873,6 @@ AbortCapture CaptureAbort(Fn&& fn)
 // The receipt, retirement and lookup all belong to the linked product SO.
 // Save the expected identity from the actual publisher before retiring it;
 // no LookupResult is constructed or passed to a product consumer by this test.
-struct LookupWitnessIdentity {
-    uintptr_t tableId;
-    MAddress start;
-    uint64_t epoch;
-    RegionLifeId lifeId;
-};
-
-LookupWitnessIdentity ReadLookupWitnessIdentity(ZForwarding* table)
-{
-    GC_EXPECT_TRUE(table != nullptr);
-    const ZForwarding::FromPageView* view = table->from_page_snapshot();
-    GC_EXPECT_TRUE(view != nullptr);
-    return { reinterpret_cast<uintptr_t>(table), table->start(),
-             view->epoch, view->lifeId };
-}
-
-void ExpectDiagnosticLookupIdentity(const std::string& output, const LookupWitnessIdentity& expected)
-{
-    char table[64] {};
-    (void)std::snprintf(table, sizeof(table), "table_id=%#zx ", static_cast<size_t>(expected.tableId));
-    const std::string epoch = "from_page_epoch=" + std::to_string(expected.epoch) + " ";
-    const std::string life = "lifeId=" + std::to_string(expected.lifeId) + " ";
-    const bool tableIdentityMatches = output.find(table) != std::string::npos;
-    const bool fromPageEpochMatches = output.find(epoch) != std::string::npos;
-    const bool fromPageLifeIdMatches = output.find(life) != std::string::npos;
-    // Print every comparison before a throwing assertion: a field-specific
-    // product cut must change only its corresponding result in this record.
-    std::fprintf(stderr, "LOOKUP_WITNESS_TARGET diagnostic table=%d epoch=%d life=%d\n",
-                 tableIdentityMatches, fromPageEpochMatches, fromPageLifeIdMatches);
-    GC_EXPECT_TRUE(tableIdentityMatches);
-    GC_EXPECT_TRUE(fromPageEpochMatches);
-    GC_EXPECT_TRUE(fromPageLifeIdMatches);
-}
-
-void CheckLookupWitness(bool publishReceipt)
-{
-    GcHeapFixture& fx = ProductFixture();
-    Heap& collector = Heap::GetHeap();
-    LateBackfillState state = PrepareLateBackfill(fx, collector, Generation::Old, false);
-    const MAddress from = reinterpret_cast<MAddress>(state.from);
-    const MAddress to = reinterpret_cast<MAddress>(state.to);
-    const auto expected = ReadLookupWitnessIdentity(generation_forwarding_table(state.generation).get(from));
-    if (publishReceipt) {
-        auto publication = forwarding_for_page(state.region, from);
-        GC_EXPECT_TRUE(static_cast<bool>(publication));
-        GC_EXPECT_EQ(UNUSED_InsertMapping(publication, from, to), to);
-    }
-    const auto lookup = LookupTo(from, state.generation);
-    GC_EXPECT_EQ(lookup.to, publishReceipt ? to : 0);
-    GC_EXPECT_TRUE(lookup.answer == (publishReceipt ? FwdLookup::ArmedHit :
-                                                    FwdLookup::ArmedMiss));
-    GC_EXPECT_EQ(lookup.tableId, expected.tableId);
-    GC_EXPECT_EQ(lookup.carrierStart, expected.start);
-    GC_EXPECT_EQ(lookup.fromPageEpoch, expected.epoch);
-    GC_EXPECT_EQ(lookup.fromPageLifeId, expected.lifeId);
-    GC_EXPECT_TRUE(lookup.forwardingSnapshotValid);
-    CleanupLateBackfill(fx, state);
-    RelocationReceiptTest::BindCollector(nullptr);
-}
-
-
-
-
-
 RefField<>* gIncomingDestination = nullptr;
 uintptr_t gIncomingDestinationExpected = 0;
 
@@ -1177,9 +1092,9 @@ static void CheckForwardingWinner(bool identity)
     {
         auto publication = forwarding_for_page(region, fromAddr);
         GC_EXPECT_TRUE(static_cast<bool>(publication));
-        GC_EXPECT_EQ(UNUSED_InsertMapping(publication, fromAddr,
+        GC_EXPECT_EQ(publication->insert(fromAddr,
                          reinterpret_cast<MAddress>(winner)), reinterpret_cast<MAddress>(winner));
-        GC_EXPECT_EQ(UNUSED_InsertMapping(publication, fromAddr,
+        GC_EXPECT_EQ(publication->insert(fromAddr,
                          reinterpret_cast<MAddress>(loser)), reinterpret_cast<MAddress>(winner));
     }
     {

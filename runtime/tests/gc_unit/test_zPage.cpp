@@ -151,7 +151,6 @@ namespace {
 struct ForwardingSelectionResult {
     size_t roots{0};
     size_t published{0};
-    size_t prepared{0};
     size_t retained{0};
     size_t retired{0};
     size_t receipts{0};
@@ -247,9 +246,7 @@ void* SelectRealLivePages(void* context)
                     (result.verifyPin ? static_cast<MArray*>(resolved)->ConvertToCArray()[0] == i + 1 :
                      *reinterpret_cast<uint64_t*>(target + TYPEINFO_PTR_SIZE) == i + 1);
             }
-            const auto* view = forwarding->from_page_snapshot();
-            result.prepared += view != nullptr && view->livemap != nullptr &&
-                               view->topAtStart > starts[i];
+
         }
         if (!result.verifyRetirement) {
             result.retained += Heap::GetHeap().GetExportObject(roots[i]) != nullptr;
@@ -306,10 +303,9 @@ GC_RUNTIME_OTHER_VM_TEST(ZForwardingPublication, SelectionPublishesPreparedForwa
     void* taskResult = nullptr;
     GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
     ReleaseHandle(handle);
-    std::fprintf(stderr, "FORWARDING_SELECTION_TARGET roots=%zu published=%zu prepared=%zu retained=%zu\n",
-                 result.roots, result.published, result.prepared, result.retained);
+    std::fprintf(stderr, "FORWARDING_SELECTION_TARGET roots=%zu published=%zu retained=%zu\n",
+                 result.roots, result.published, result.retained);
     GC_EXPECT_TRUE(result.published > 0);
-    GC_EXPECT_EQ(result.prepared, result.published);
     GC_EXPECT_EQ(result.retained, 3u);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

@@ -125,8 +125,7 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
     auto publication = forwarding_for_page(
         fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(UNUSED_InsertMapping(publication,
-        reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1)),
+    GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1)),
         reinterpret_cast<MAddress>(fixture.obj1));
     auto owner = forwarding_for_page(fixture.region0);
     GC_EXPECT_TRUE(static_cast<bool>(owner));
