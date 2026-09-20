@@ -124,16 +124,11 @@ std::set<size_t> ExpectSame(Slot* addr, size_t length)
 // Partial-array entries carry ZAddress::offset(chunk) (zMark.cpp:177-183), so
 // the slot buffer lives in the heap address domain like every page.
 struct SlotBuf {
-    size_t bytes = 0;
-    std::unique_ptr<ZTestAllocatedMemory> owner;
     Slot* slots = nullptr;
 
-    explicit SlotBuf(size_t n)
+    SlotBuf(size_t n, MAddress base)
     {
-        bytes = AlignUp((n + 8) * sizeof(Slot) + MarkPartialArray::MIN_SIZE, ZGranuleSize);
-        owner.reset(new ZTestAllocatedMemory(bytes));
-        auto raw = reinterpret_cast<uintptr_t>(owner->base());
-        slots = reinterpret_cast<Slot*>(AlignUp(raw, MarkPartialArray::MIN_SIZE));
+        slots = reinterpret_cast<Slot*>(AlignUp(base, MarkPartialArray::MIN_SIZE));
         for (size_t i = 0; i < n; ++i) {
             slots[i] = i + 1;
         }
@@ -147,7 +142,7 @@ struct SlotBuf {
 GC_TEST(PartialArray, EncodeDecodeRoundtrip)
 {
     GcHeapFixture fx;
-    SlotBuf buf(MarkPartialArray::MIN_LENGTH);
+    SlotBuf buf(MarkPartialArray::MIN_LENGTH, fx.heapStart + 2 * ZGranuleSize);
     MarkStackEntry entry = MarkPartialArray::Encode(buf.slots, MarkPartialArray::MIN_LENGTH);
     GC_EXPECT_TRUE(MarkPartialArray::IsPartialArrayEntry(entry));
     // zMarkStackEntry.hpp:82-83: 32-bit page offset + 30-bit length.
@@ -164,7 +159,7 @@ GC_TEST(PartialArray, EncodeDecodeRoundtrip)
 GC_TEST(PartialArray, PageOffsetChunkRoundtrips)
 {
     GcHeapFixture fx;
-    SlotBuf buf(MarkPartialArray::MIN_LENGTH * 4);
+    SlotBuf buf(MarkPartialArray::MIN_LENGTH * 4, fx.heapStart + 2 * ZGranuleSize);
     constexpr size_t offsets[] = { 1, 8, 1776 };
     for (size_t offset : offsets) {
         const MAddress arrayStart = reinterpret_cast<MAddress>(buf.slots) + offset;
@@ -188,7 +183,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     GcHeapFixture fx;
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
-    SlotBuf buf(MarkPartialArray::MIN_LENGTH);
+    SlotBuf buf(MarkPartialArray::MIN_LENGTH, fx.heapStart + 2 * ZGranuleSize);
     Heap& collector = Heap::GetHeap();
     WorkStack workStack;
     RefField<>* const chunk = reinterpret_cast<RefField<>*>(buf.slots);
@@ -219,7 +214,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
 GC_TEST(PartialArray, EmptyAndSingle)
 {
     GcHeapFixture fx;
-    SlotBuf buf(8);
+    SlotBuf buf(8, fx.heapStart + 2 * ZGranuleSize);
     ExpectSame(buf.slots, 0);
     ExpectSame(buf.slots, 1);
 }
@@ -228,7 +223,7 @@ GC_TEST(PartialArray, ThresholdExact)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH;
-    SlotBuf buf(n);
+    SlotBuf buf(n, fx.heapStart + 2 * ZGranuleSize);
     ExpectSame(buf.slots, n);
 }
 
@@ -236,7 +231,7 @@ GC_TEST(PartialArray, ThresholdMinusOne)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH - 1;
-    SlotBuf buf(n);
+    SlotBuf buf(n, fx.heapStart + 2 * ZGranuleSize);
     ExpectSame(buf.slots, n);
 }
 
@@ -244,7 +239,7 @@ GC_TEST(PartialArray, ThresholdPlusOne)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH + 1;
-    SlotBuf buf(n);
+    SlotBuf buf(n, fx.heapStart + 2 * ZGranuleSize);
     ExpectSame(buf.slots, n);
 }
 
@@ -252,7 +247,7 @@ GC_TEST(PartialArray, MultiChunk)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH * 8 + 17;
-    SlotBuf buf(n);
+    SlotBuf buf(n, fx.heapStart + 2 * ZGranuleSize);
     ExpectSame(buf.slots, n);
 }
 
@@ -260,7 +255,7 @@ GC_OTHER_VM_TEST(PartialArray, BoundaryRefs)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH * 3;
-    SlotBuf buf(n);
+    SlotBuf buf(n, fx.heapStart + 2 * ZGranuleSize);
     const std::set<size_t> on = ExpectSame(buf.slots, n);
     GC_EXPECT_TRUE(on.count(0) == 1);
     GC_EXPECT_TRUE(on.count(MarkPartialArray::MIN_LENGTH - 1) == 1);
@@ -272,6 +267,6 @@ GC_TEST(PartialArray, UnalignedStart)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH * 4 + 3;
-    SlotBuf buf(n + 16);
+    SlotBuf buf(n + 16, fx.heapStart + 2 * ZGranuleSize);
     ExpectSame(buf.slots + 3, n);
 }
