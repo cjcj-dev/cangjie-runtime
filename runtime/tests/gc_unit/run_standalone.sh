@@ -51,6 +51,7 @@ run_ohos_host_arm() {
       'MRT_GC_UNIT_OHOS_HOST_RECEIPT' \
       'CJ_MRT_RolveCycleRef' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
       'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$product_nm"; then
@@ -100,6 +101,7 @@ run_ohos_host_arm() {
   for symbol in \
       'CJ_MRT_RolveCycleRef' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
       'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if /usr/bin/grep -F -q "$symbol" "$test_nm"; then
@@ -108,7 +110,7 @@ run_ohos_host_arm() {
     fi
   done
   for symbol in \
-      'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$test_undef"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_IMPORT_MISSING symbol=$symbol" >&2
