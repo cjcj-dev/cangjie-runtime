@@ -46,6 +46,7 @@ static const ZStatPhaseGeneration ZPhaseGenerationYoung("Young Generation", ZGen
 std::mutex ZDriver::driverLock;
 
 static bool ShouldPrecleanYoung(GCReason reason);
+static bool ShouldClearAllSoftReferences(GCReason reason);
 
 void ZDriver::lock() { driverLock.lock(); }
 
@@ -213,6 +214,8 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()->set_active_workers(youngCount);
     if (kind == GCDriverKind::MAJOR) {
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()->set_active_workers(oldCount);
+        Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor()
+            .set_soft_reference_policy(ShouldClearAllSoftReferences(request.cause()));
     }
 
     // zDriver.cpp:416-436: full causes preclean with promote-all, then
@@ -359,6 +362,30 @@ void ZDriver::RunYoungCollection(uint64_t index, ZYoungType type, bool warmup)
 {
     YoungTypeSetter typeSetter(Heap::GetHeap().GetZGeneration(ZGenerationId::young), type);
     RunCollection(index, GC_REASON_YOUNG, warmup);
+}
+
+static bool ShouldClearAllSoftReferences(GCReason reason)
+{
+    // ZGC zDriver.cpp:232-268: stall and explicit full collections clear soft refs.
+    switch (reason) {
+        case GC_REASON_OOM:
+        case GC_REASON_FORCE:
+        case GC_REASON_ALLOCATION_STALL:
+            return true;
+        case GC_REASON_USER:
+        case GC_REASON_BACKUP:
+        case GC_REASON_HEU:
+        case GC_REASON_HEU_SYNC:
+        case GC_REASON_NATIVE:
+        case GC_REASON_NATIVE_SYNC:
+        case GC_REASON_WARMUP:
+        case GC_REASON_WB_BREAKPOINT:
+            break;
+        default:
+            CHECK(false);
+    }
+    const auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    return manager.IsAllocationStallingForOld();
 }
 
 static bool ShouldPrecleanYoung(GCReason reason)
