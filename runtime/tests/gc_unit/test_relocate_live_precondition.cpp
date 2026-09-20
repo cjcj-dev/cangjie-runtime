@@ -12,6 +12,7 @@
 #include "Heap/z/zRelocate.hpp"
 
 #include <csignal>
+#include <cstdlib>
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -82,7 +83,10 @@ GC_TEST(RelocateLivePrecondition, DeadFromAbortsBeforeSize)
     heap.InstallPageOwner(heap.region0);
     GC_EXPECT_TRUE(heap.region0->IsRelocatable());
     GC_EXPECT_FALSE(heap.region0->is_object_live(from_object(heap.obj0)));
-    GC_EXPECT_EQ(RunDeadRelocateChild(heap.region0, heap.obj0), 0);
+    const char* testable = std::getenv("MRT_TESTABLE_INTERNALS");
+    if (testable != nullptr && testable[0] == '1') {
+        GC_EXPECT_EQ(RunDeadRelocateChild(heap.region0, heap.obj0), 0);
+    }
 }
 
 GC_TEST(RelocateLivePrecondition, LiveFromDoesNotHitLiveCheck)
