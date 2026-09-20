@@ -173,8 +173,7 @@ namespace {
 // scan and expand stack objects/headerless records before visiting heap slots.
 class MarkThreadClosure {
 public:
-    explicit MarkThreadClosure(uint64_t epoch = StackWatermark::epoch_id(), const RootVisitor* result = nullptr)
-        : epoch(epoch), result(result) {}
+    explicit MarkThreadClosure(const RootVisitor* result = nullptr) : result(result) {}
     static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }
     void DoThread(Mutator& mutator) const
     {
@@ -187,24 +186,22 @@ public:
         };
         DerivedPtrVisitor derivedVisitor = Mutator::MakeDerivedRootVisitor(markRoot);
         size_t frames = 0;
-        (void)StackWatermarkSet::finish_processing(mutator, markRoot, markRoot, epoch,
+        (void)StackWatermarkSet::finish_processing(mutator, markRoot, markRoot, StackWatermark::epoch_id(),
                                                    &derivedVisitor, frames, reinterpret_cast<void*>(root_function()));
     }
 private:
-    const uint64_t epoch;
     const RootVisitor* const result;
 };
 } // namespace
 
-void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
-                                     uint64_t stackScanEpoch)
+void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor)
 {
     gMinorRootOrigin = "mutator_stack";
     RootVisitor plainRoot = [&](ObjectRef& root) {
         ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         rawRootVisitor(root);
     };
-    MarkThreadClosure threadClosure(stackScanEpoch, &rawRootVisitor);
+    MarkThreadClosure threadClosure(&rawRootVisitor);
     VisitStrongPlainRoots(plainRoot, [&](Mutator& mutator) { threadClosure.DoThread(mutator); });
     (void)invisibleRootVisitor; // The watermark owns the invisible slot and its saved color.
     gMinorRootOrigin = "unknown";
@@ -363,8 +360,7 @@ private:
 } // namespace
 
 void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
-                                 const std::function<void(BaseObject*)>& invisibleVisitor,
-                                 uint64_t stackScanEpoch)
+                                 const std::function<void(BaseObject*)>& invisibleVisitor)
 {
     RootVisitor rawRootVisitor = [&visitor](ObjectRef& root) {
         visitor(to_object(safe(root.LoadPlain())));
@@ -373,7 +369,7 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
         invisibleVisitor(to_object(safe(root.LoadPlain())));
     };
     MarkYoungRootsTask task([&] {
-        VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
+        VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor);
         Heap::GetHeap().cross_vm().VisitMinorValueRoots([&](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZBarrier::Mark<false, false, true, false>(from_object(object));
