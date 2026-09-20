@@ -50,12 +50,34 @@ inline void PublishAllocatedPage(ZPage* page)
     Heap::alloc_page(page);
 }
 
-// Heap already owns page_table/forwarding/remembered at construction
-// (zGeneration.cpp:499-505). Fixtures must not replace those members.
+// Isolated page/forwarding tables for synthetic pages. Remembered stays the
+// generation-constructed instance (zGeneration.cpp:499-505); do not construct
+// a second young generation or rewrite ZAddressOffsetMax.
 class ZFixtureRememberedScope {
 public:
-    ZFixtureRememberedScope() { (void)Heap::GetHeap(); }
-    explicit ZFixtureRememberedScope(RegionManager&) { (void)Heap::GetHeap(); }
+    ZFixtureRememberedScope() : ZFixtureRememberedScope(Heap::GetHeap().page_allocator()) {}
+
+    explicit ZFixtureRememberedScope(RegionManager&)
+        : _pages(std::move(Heap::page_table())),
+          _young(std::move(generation_forwarding_table(Generation::Young))),
+          _old(std::move(generation_forwarding_table(Generation::Old)))
+    {
+        Heap::page_table() = ZPageTable();
+        generation_forwarding_table(Generation::Young) = ZForwardingTable();
+        generation_forwarding_table(Generation::Old) = ZForwardingTable();
+    }
+
+    ~ZFixtureRememberedScope()
+    {
+        Heap::page_table() = std::move(_pages);
+        generation_forwarding_table(Generation::Young) = std::move(_young);
+        generation_forwarding_table(Generation::Old) = std::move(_old);
+    }
+
+private:
+    ZPageTable _pages;
+    ZForwardingTable _young;
+    ZForwardingTable _old;
 };
 
 class ZAddressOffsetMaxSetter {

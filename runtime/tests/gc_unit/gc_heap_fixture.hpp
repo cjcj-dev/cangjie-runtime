@@ -412,6 +412,7 @@ struct GcHeapFixture {
         return marked;
     }
 
+    ZFixtureRememberedScope rememberedScope;
     std::unique_ptr<ZTestAllocatedMemory> heapMapping;
     void* mapping = nullptr;
     size_t mappedSize = 0;
