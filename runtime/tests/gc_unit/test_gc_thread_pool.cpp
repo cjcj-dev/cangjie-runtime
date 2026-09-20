@@ -122,7 +122,7 @@ bool RunParallelProductEntryClosesGeneration()
     auto& manager = Heap::GetHeap().page_allocator();
     PrepareOwnerRegion(fx);
 
-    ZRelocateQueue& queue = manager.GetZRelocateQueue();
+    ZRelocateQueue& queue = generation_relocate_queue(Generation::Old);
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     auto& old = Heap::GetHeap().old();
     if (old.Workers() == nullptr) old.InitializeWorkers(3);
@@ -140,7 +140,7 @@ bool RunSerialProductEntryClosesGeneration()
     auto& manager = Heap::GetHeap().page_allocator();
     PrepareOwnerRegion(fx);
 
-    ZRelocateQueue& queue = manager.GetZRelocateQueue();
+    ZRelocateQueue& queue = generation_relocate_queue(Generation::Old);
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     // ZRelocate uses the generation worker entry even with one participant.
     auto& old = Heap::GetHeap().old();
@@ -180,7 +180,7 @@ bool RunYoungRuntimeProductEntry()
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = space.GetRegionManager();
 
-    ZRelocateQueue& queue = manager.GetZRelocateQueue();
+    ZRelocateQueue& queue = generation_relocate_queue(Generation::Old);
 
     Heap& collector = Heap::GetHeap();
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -316,7 +316,7 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     auto owner = forwarding_for_page(fx.region0);
     GC_EXPECT_TRUE(owner->claim());
     RegionManager manager;
-    auto& queue = manager.GetZRelocateQueue();
+    auto& queue = generation_relocate_queue(Generation::Old);
     queue.BeginWorkers(1);
     const auto request = queue.Add(owner);
     ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
@@ -337,7 +337,7 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     auto owner = forwarding_for_page(fx.region0);
     GC_EXPECT_TRUE(owner->claim());
     RegionManager manager;
-    auto& queue = manager.GetZRelocateQueue();
+    auto& queue = generation_relocate_queue(Generation::Old);
     queue.BeginWorkers(2);
     const auto request = queue.Add(owner);
     std::atomic<MAddress> answer{ 0 };
