@@ -528,6 +528,11 @@ void Heap::free_page(ZPage* page)
     if (page == nullptr) {
         return;
     }
+    // ZGC zGeneration.cpp:220-240: select frees empty pages immediately.
+    // A later mutator free_page of the same descriptor is already reclaimed.
+    if (page_table().get(page->GetRegionStart()) != page) {
+        return;
+    }
     page_table().remove(page);
     GetHeap().page_allocator().free_page(page);
 }
