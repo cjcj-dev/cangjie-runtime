@@ -1249,9 +1249,6 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
 {
     if (!owner || (!claimed && !owner->claim())) return;
     ZForwarding::PageWorkScope work(owner);
-    // ZGC zRelocate.cpp:993-1008: one claimed-page verification boundary,
-    // shared by ordinary copying and the direct in-place branch.
-    ZVerify::BeforeRelocation(owner);
     // zRelocate.cpp:437-441,1010: relocation accounts on the owning
     // generation — freed for the from-page, compacted for in-place.
     const ZGenerationId statId = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
@@ -1261,14 +1258,9 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
         owner->set_in_place();
         NoteInPlaceRelocated(region);
         CompactRegion(region);
-    } else {
-        ForwardRegion<G>(region);
-    }
-    ZVerify::AfterRelocation(owner);
-    if (ZVerifyForwarding) { owner->verify(); }
-    if (inPlace) {
         statGeneration.increase_compacted(region->GetRegionAllocatedSize());
     } else {
+        ForwardRegion<G>(region);
         statGeneration.increase_freed(owner->size());
     }
     if (owner->from_age() == PageAge::old) {

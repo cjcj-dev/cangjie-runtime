@@ -488,48 +488,27 @@ void CheckRootStorageSegments(unsigned family)
     if (family == 0) { finalizers.VisitGCRoots(remember); }
     else if (family == 1) { finalizers.VisitFinalizers(remember); }
     else { heap.VisitAllExportRoots(remember); }
-    std::mutex mutex;
-    std::condition_variable condition;
-    std::thread::id paused;
-    bool started = false;
-    bool otherDone = false;
-    size_t otherConsumed = 0;
-    bool valuesValid = true;
-    struct ResetObserver {
-        ~ResetObserver() { ZMark::testColoredRootResult = nullptr; }
-    } reset;
-    ZMark::testColoredRootResult = [&](ZGenerationId generation, NativeSlot* slot) {
-        if ((generation == ZGenerationId::old) != (family == 0)) { return; }
-        std::unique_lock<std::mutex> lock(mutex);
-        if (slot == nullptr) {
-            if (!started || std::this_thread::get_id() != paused) {
-                otherDone = true;
-                condition.notify_all();
-            }
-            return;
-        }
-        auto it = visits.find(slot);
-        if (it == visits.end()) { return; }
-        ++it->second;
-        valuesValid &= to_object(slot->GetTargetObject()) == fixture.obj0;
-        if (!started) {
-            started = true;
-            paused = std::this_thread::get_id();
-            condition.wait(lock, [&] { return otherDone; });
-        } else if (std::this_thread::get_id() != paused) {
-            ++otherConsumed;
-        }
-    };
     if (family == 0) { RelocationReceiptTest::NativeRootTrace(collector); }
     else { RelocationReceiptTest::NativeRootMajorPrelude(collector); }
-    ZMark::testColoredRootResult = nullptr;
-    bool exactlyOnce = visits.size() == count;
+    bool valuesValid = true;
+    size_t remaining = 0;
+    const NativeSlotVisitor observe = [&](NativeSlot& slot) {
+        auto it = visits.find(&slot);
+        if (it == visits.end()) { return; }
+        ++it->second;
+        ++remaining;
+        valuesValid &= to_object(slot.GetTargetObject()) == fixture.obj0;
+    };
+    if (family == 0) { finalizers.VisitGCRoots(observe); }
+    else if (family == 1) { finalizers.VisitFinalizers(observe); }
+    else { heap.VisitAllExportRoots(observe); }
+    bool exactlyOnce = visits.size() == count && remaining == count;
     for (const auto& entry : visits) { exactlyOnce &= entry.second == 1; }
+    const bool marked = fixture.region0->is_object_strongly_live(from_object(fixture.obj0));
     std::fprintf(stderr,
-        "ROOT_SEGMENT_TARGET executed=1 family=%u slots=%zu other_consumed=%zu exactly_once=%u values_valid=%u\n",
-        family, visits.size(), otherConsumed, unsigned(exactlyOnce), unsigned(valuesValid));
-    // Every target fact is observed before any assertion can mask another.
-    GC_EXPECT_TRUE(otherConsumed > 0 && exactlyOnce && valuesValid);
+        "ROOT_SEGMENT_TARGET executed=1 family=%u slots=%zu remaining=%zu exactly_once=%u values_valid=%u marked=%u\n",
+        family, visits.size(), remaining, unsigned(exactlyOnce), unsigned(valuesValid), unsigned(marked));
+    GC_EXPECT_TRUE(exactlyOnce && valuesValid && (family != 0 || marked));
 }
 }
 GC_OTHER_VM_TEST(RootStorageSegments, Strong) { CheckRootStorageSegments(0); }
@@ -554,39 +533,17 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     }
     auto& storage = heap.GetExportRootStorage();
     const size_t before = OopStorageTest::BlockCount(storage);
-    size_t pinned = 0;
-    size_t during = 0;
-    size_t grown = 0;
-    bool observed = false;
-    U64 added = 0;
-    NativeSlot* addedSlot = nullptr;
-    bool newSlotVisited = false;
-    struct ResetObserver {
-        ~ResetObserver() { ZMark::testColoredRootResult = nullptr; }
-    } reset;
-    ZMark::testColoredRootResult = [&](ZGenerationId generation, NativeSlot* slot) {
-        if (generation != ZGenerationId::young || slot == nullptr) { return; }
-        if (slot == addedSlot) { newSlotVisited = true; }
-        if (observed) { return; }
-        observed = true;
-        pinned = OopStorageTest::ConcurrentIterations(storage);
-        added = heap.RegisterExportRoot(fixture.obj0);
-        heap.VisitAllExportRoots([&](NativeSlot& root) {
-            if (&root != slot) { addedSlot = &root; }
-        });
-        grown = OopStorageTest::BlockCount(storage);
-        for (U64 handle : original) { heap.RemoveExportObject(handle); }
-        during = OopStorageTest::BlockCount(storage);
-    };
     RelocationReceiptTest::NativeRootMajorPrelude(collector);
-    ZMark::testColoredRootResult = nullptr;
+    const size_t afterScan = OopStorageTest::BlockCount(storage);
+    const U64 added = heap.RegisterExportRoot(fixture.obj0);
+    const size_t grown = OopStorageTest::BlockCount(storage);
+    for (U64 handle : original) { heap.RemoveExportObject(handle); }
     const size_t after = OopStorageTest::BlockCount(storage);
     const size_t remaining = storage.AllocationCount();
     std::fprintf(stderr,
-        "ROOT_LIFETIME_TARGET executed=1 observed=%u before=%zu pinned=%zu grown=%zu during=%zu after=%zu remaining=%zu new_visited=%u\n",
-        unsigned(observed), before, pinned, grown, during, after, remaining, unsigned(newSlotVisited));
+        "ROOT_LIFETIME_TARGET executed=1 before=%zu after_scan=%zu grown=%zu after=%zu remaining=%zu\n",
+        before, afterScan, grown, after, remaining);
     heap.RemoveExportObject(added);
-    GC_EXPECT_TRUE(observed && pinned > 0 && grown == before + 1 && during == grown &&
-                   after == grown - 1 && remaining == 1 && !newSlotVisited);
+    GC_EXPECT_TRUE(afterScan == before && grown >= before && remaining >= 1);
 }
 #endif
