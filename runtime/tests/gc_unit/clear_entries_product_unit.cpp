@@ -1280,6 +1280,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     LoadHealDeliveryTestAccess::PublishColours(collector);
     LateBackfillState forwarding {};
     BaseObject* secondOld = nullptr;
+    ZPage* secondPage = nullptr;
     if (oldPending) {
         ZPage* region = ResetDeliveryUnit(fx, 5);
         BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
@@ -1291,13 +1292,13 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         // ZGC selects a set only when packing can release a page. Two sparse
         // pages are input to the real selector; a single page is exempted.
         ZPage* second = ResetDeliveryUnit(fx, 4);
+        secondPage = second;
         secondOld = fx.PlaceObject(second->GetRegionStart());
         second->SetRegionAllocPtr(reinterpret_cast<MAddress>(secondOld) + secondOld->GetSize());
         RelocationReceiptTest::ParkFrom(regionManager, second);
         forwarding = {region, region, from, dead, live, Generation::Old};
     } else {
         forwarding = PrepareLateBackfill(fx, collector, Generation::Young);
-        LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
     }
     std::unique_ptr<DeliverySharedPageScope> allocation;
     if (oldPending) {
@@ -1310,6 +1311,13 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         forwarding.region->reset(PageAge::old);
     }
 
+    // ZTest publishes allocated pages before runtime entries query ZHeap's
+    // page table. ResetDeliveryUnit only constructs metadata after P03/P05.
+    PublishAllocatedPage(forwarding.region);
+    if (forwarding.destination != forwarding.region) PublishAllocatedPage(forwarding.destination);
+    if (secondOld != nullptr) {
+        PublishAllocatedPage(secondPage);
+    }
     MutatorManager& manager = MutatorManager::Instance();
     Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     alignas(16) uintptr_t nestedStorage[8] {};
@@ -1323,8 +1331,13 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         nestedField = &RootSlotAt(static_cast<void*>(&nestedStorage[nestedKind == 1 ? 3 : 2]));
         StorePlain(*nestedField, from_object(forwarding.from));
     }
+    const size_t rootMark = mutator->NativeFrameRootCount();
+    // Exercise ordinary frame push/pop once to establish capacity for this
+    // frame. No subsequently acquired slot address crosses vector growth.
+    for (unsigned i = 0; i < 4; ++i) (void)mutator->AddNativeFrameRoot(nullptr);
+    mutator->PopNativeFrameRootsTo(rootMark);
     ObjectRef* root = mutator->AddNativeFrameRoot(rootInput);
-    ObjectRef* secondRoot = secondOld == nullptr ? nullptr : mutator->AddNativeFrameRoot(secondOld);
+    if (secondOld != nullptr) (void)mutator->AddNativeFrameRoot(secondOld);
     ObjectRef* nullRoot = mutator->AddNativeFrameRoot(nullptr);
     static uintptr_t nonHeapStorage[2] = {};
     ObjectRef* nonHeapRoot = mutator->AddNativeFrameRoot(reinterpret_cast<BaseObject*>(nonHeapStorage));
@@ -1347,15 +1360,18 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         }
     }
 #endif
+    // The thread must predate the relocation color flip: its raw roots still
+    // name the from-page, so its saved load-good mask must describe that epoch.
+    if (!oldPending) LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).InitializeWorkers(2);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).InitializeWorkers(2);
     // This fixture invokes the old body without the driver's young prelude.
     // Supply the product mark-start sequence event before publishing old roots.
     auto& oldCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-    if (!oldCycle.Snapshot().active) oldCycle.Begin(0);
-    GenerationSequenceFixture::Advance(oldCycle);
-    Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
-    Heap::GetHeap().old().Mark().Start();
+    if (oldCycle.Snapshot().active) oldCycle.End();
+    // Enter the actual old mark-start producer; a bare ZMark::Start only
+    // initializes stacks and does not publish the generation's Mark phase.
+    Heap::GetHeap().old().mark_start();
     {
         DriverLocker driver;
         ZDriver::RunGarbageCollection(1, GC_REASON_USER);
@@ -1378,10 +1394,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
                      nestedKind, raw(nestedField->LoadPlain()), expected, unsigned(result));
     }
     GC_EXPECT_TRUE(result);
-    mutator->RemoveNativeFrameRoot(root);
-    if (secondRoot != nullptr) mutator->RemoveNativeFrameRoot(secondRoot);
-    mutator->RemoveNativeFrameRoot(nullRoot);
-    mutator->RemoveNativeFrameRoot(nonHeapRoot);
+    mutator->PopNativeFrameRootsTo(rootMark);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 void CheckMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false, unsigned nestedKind = 0)

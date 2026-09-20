@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp
+index 84cd2336f..02b2f34bb 100644
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -512,7 +512,7 @@ void ZGenerationYoung::concurrent_mark()
+         concWindow.markedAtEntry = reachableVec.size();
+         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
+         concWindowStartNs = TimeUtil::NanoSeconds();
+-        produceYoungRoots();
++        /* P16 control: omit the product root producer. */
+         VLOG(REPORT,
+              "[GCV2][youngconc] concurrent young mark start (FOLLOW: roots+closure concurrent) "
+              "roots_marked=%zu",

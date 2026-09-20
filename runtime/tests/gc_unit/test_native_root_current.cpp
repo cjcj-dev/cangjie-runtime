@@ -501,7 +501,7 @@ void CheckRootStorageSegments(unsigned family)
         ++remaining;
         const zpointer value = slot.GetFieldValue();
         transitioned += raw(value) != it->second && ZPointer::is_marked_young(value);
-        valuesValid &= to_object(ZPointer::uncolor(value)) == fixture.obj0;
+        valuesValid &= to_object(slot.GetTargetObject()) == fixture.obj0;
     };
     if (family == 0) { finalizers.VisitGCRoots(observe); }
     else if (family == 1) { finalizers.VisitFinalizers(observe); }
