@@ -105,7 +105,7 @@ GC_OTHER_VM_TEST(Uncommitter, StopWakesDelayedWorker)
     GC_EXPECT_FALSE(result.get());
 }
 
-GC_OTHER_VM_TEST(Uncommitter, StartStopRestartPartitionWorker)
+GC_RUNTIME_OTHER_VM_TEST(Uncommitter, StartStopRestartPartitionWorker)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MRT_CjRuntimeInit();
@@ -121,7 +121,7 @@ GC_OTHER_VM_TEST(Uncommitter, StartStopRestartPartitionWorker)
 // Native counterpart of ZUncommitter's suspendible-thread membership:
 // the real worker is registered while waiting and removed before Stop returns.
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(Uncommitter, PartitionWorkerParticipatesInSafepoints)
+GC_RUNTIME_OTHER_VM_TEST(Uncommitter, PartitionWorkerParticipatesInSafepoints)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MRT_CjRuntimeInit();
@@ -201,39 +201,12 @@ static void BindUncommitWorkerThread()
 // physical memory for the whole capacity, commit, map, and cache it.
 struct ProbeHeap {
     size_t units;
-    MAddress start{0};
-    ZTest::ZBackingLimitSetter backingLimits;
-    ZAddressOffsetMaxSetter offsetMax;
-    std::unique_ptr<ZVirtualMemoryManager> virtualMemory;
-    std::unique_ptr<ZPhysicalMemoryManager> physicalMemory;
-    void* metadata{ nullptr };
-    size_t metadataSize{ 0 };
+    MAddress start;
 
-    explicit ProbeHeap(size_t n)
-        : units(n), offsetMax(ZAddressOffsetMax)
+    explicit ProbeHeap(size_t n) : units(n)
     {
-        EnsureZAddressDomain();
-        virtualMemory.reset(new ZVirtualMemoryManager(n * ZGranuleSize));
-        GC_EXPECT_TRUE(virtualMemory->is_initialized());
-        physicalMemory.reset(new ZPhysicalMemoryManager(n * ZGranuleSize));
-        GC_EXPECT_TRUE(physicalMemory->is_initialized());
-        const std::vector<ZPage::ReservedSegment> segments = RegionManager::ReservedSegments(*virtualMemory);
-        start = segments.front().start;
-        metadataSize = RegionManager::GetMetadataSize();
-        metadata = mmap(nullptr, metadataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-        GC_EXPECT_TRUE(metadata != MAP_FAILED);
-        HeapParam params{};
-        params.regionSize = ZPageSizeSmall / KB;
-        params.exemptionThreshold = 0.8;
-        Heap::GetHeap().page_allocator().Initialize(n * ZGranuleSize,
-            reinterpret_cast<uintptr_t>(metadata), *virtualMemory, *physicalMemory, params, 0.5);
-    }
-
-    ~ProbeHeap()
-    {
-        physicalMemory.reset();
-        virtualMemory.reset();
-        if (metadata != nullptr) { (void)munmap(metadata, metadataSize); }
+        CreateStandaloneHeap(n);
+        start = Heap::GetHeap().page_allocator().GetRegionHeapStart();
     }
 };
 
@@ -284,7 +257,7 @@ static size_t ProbeProductUncommit(bool cancelFirst)
     return backendReleased;
 }
 
-GC_OTHER_VM_TEST(Uncommitter, UncommitIdleUnitsReleasesPhysical)
+GC_COMPONENT_OTHER_VM_TEST(Uncommitter, UncommitIdleUnitsReleasesPhysical)
 {
     const size_t backendReleased = ProbeProductUncommit(false);
     std::fprintf(stderr, "TARGET_UNCOMMIT_RELEASE_ASSERT bytes=%zu\n", backendReleased);
@@ -331,12 +304,12 @@ static void ExercisePartitionWorker(bool enabled)
     }
 }
 
-GC_OTHER_VM_TEST(Uncommitter, TestUncommitIndependentPartitionThread)
+GC_RUNTIME_OTHER_VM_TEST(Uncommitter, TestUncommitIndependentPartitionThread)
 {
     ExercisePartitionWorker(true);
 }
 
-GC_OTHER_VM_TEST(Uncommitter, TestNoUncommitDisabledPartitionThread)
+GC_RUNTIME_OTHER_VM_TEST(Uncommitter, TestNoUncommitDisabledPartitionThread)
 {
     ExercisePartitionWorker(false);
 }
@@ -351,7 +324,7 @@ GC_OTHER_VM_TEST(Uncommitter, CancelDelaysActivation)
     GC_EXPECT_TRUE(UncommitterTestAccess::Canceled());
 }
 
-GC_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)
+GC_COMPONENT_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)
 {
     const size_t backendReleased = ProbeProductUncommit(true);
     GC_EXPECT_EQ(backendReleased, 0U);

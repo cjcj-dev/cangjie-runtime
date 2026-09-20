@@ -2,7 +2,6 @@
 #define MRT_FORWARDING_TABLE_H
 
 #include <cstddef>
-#include <memory>
 
 #include "Common/TypeDef.h"
 #include "Heap/z/zGenerationId.hpp"
@@ -18,15 +17,13 @@ class ZForwardingTable {
 public:
     ZForwardingTable();
 
-    void initialize();
-
     ZForwarding* at(size_t index) const;
     ZForwarding* get(MAddress addr) const;
     void insert(ZForwarding* forwarding);
     void remove(ZForwarding* forwarding);
 
 private:
-    std::unique_ptr<ZGranuleMap<ZForwarding*>> _map;
+    ZGranuleMap<ZForwarding*> _map;
 };
 
 class ZRelocateQueue;

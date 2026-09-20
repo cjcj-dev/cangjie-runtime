@@ -1,0 +1,18 @@
+# kkk2_build_two lane=sym_cangjie_runtime_720_implement_r5746103729-v3 head=cdd9576eafc97d896a94772b0474603673c99439 dirty_files=25 source_sha256=e90c98d7a34bdff6…
+== default configure_rc=0 build_rc=2 wall=21s
+-- first errors (default):
+default-build.log:1471:../../runtime/src/HeapManager.cpp:32:26: error: too few arguments to function call, single argument 'vmHeapParam' was not specified
+default-build.log:2299:../../../runtime/src/Heap/z/zHeap.cpp:132:12: error: out-of-line definition of 'Init' does not match any declaration in 'MapleRuntime::Heap'
+default-build.log:3782:../../../../runtime/src/Heap/Allocator/RegionSpace.cpp:43:24: error: no member named 'Init' in 'MapleRuntime::RegionManager'
+-- SO (default):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+== testable configure_rc=0 build_rc=2 wall=21s
+-- first errors (testable):
+testable-build.log:1081:../../runtime/src/HeapManager.cpp:32:26: error: too few arguments to function call, single argument 'vmHeapParam' was not specified
+testable-build.log:2395:../../../../runtime/src/Heap/Allocator/RegionSpace.cpp:43:24: error: no member named 'Init' in 'MapleRuntime::RegionManager'
+testable-build.log:3971:../../../runtime/src/Heap/z/zHeap.cpp:132:12: error: out-of-line definition of 'Init' does not match any declaration in 'MapleRuntime::Heap'
+-- SO (testable):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+-- logs: /root/sym_cangjie_runtime_720_implement_r5746103729-v3/{default,testable}-{configure,build}.log

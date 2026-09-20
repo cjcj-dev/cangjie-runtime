@@ -154,6 +154,8 @@ GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
 {
     class Probe : public ZGenerationYoung {
     public:
+        Probe() : ZGenerationYoung(&Heap::page_table(), &Heap::GetHeap().old().forwarding_table(),
+                                  &Heap::GetHeap().page_allocator()) {}
         bool should_record_stats() override { return false; }
     };
     Probe young;

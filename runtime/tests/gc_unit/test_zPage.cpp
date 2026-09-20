@@ -119,7 +119,7 @@ void* AllocateGranulePages(void* context)
 }
 }
 
-GC_OTHER_VM_TEST(ZPageGranule, MutatorAllocatesThreePageSizes)
+GC_RUNTIME_OTHER_VM_TEST(ZPageGranule, MutatorAllocatesThreePageSizes)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -294,7 +294,7 @@ void* SelectRealLivePages(void* context)
 }
 }
 
-GC_OTHER_VM_TEST(ZForwardingPublication, SelectionPublishesPreparedForwardingOnce)
+GC_RUNTIME_OTHER_VM_TEST(ZForwardingPublication, SelectionPublishesPreparedForwardingOnce)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -316,7 +316,7 @@ GC_OTHER_VM_TEST(ZForwardingPublication, SelectionPublishesPreparedForwardingOnc
 
 // The product mutator allocates and roots the objects; RequestGC owns selection,
 // copying, detach and retirement. No manually installed forwarding is involved.
-GC_OTHER_VM_TEST(ZRelocationRetirement, CopiedSourceLeavesPageTable)
+GC_RUNTIME_OTHER_VM_TEST(ZRelocationRetirement, CopiedSourceLeavesPageTable)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -368,7 +368,7 @@ void* RunRealOldCycle(void* context)
 }
 }
 
-GC_OTHER_VM_TEST(ZGenerationPhases, OldCycleFlipsRemapMaskOnce)
+GC_RUNTIME_OTHER_VM_TEST(ZGenerationPhases, OldCycleFlipsRemapMaskOnce)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -389,7 +389,7 @@ GC_OTHER_VM_TEST(ZGenerationPhases, OldCycleFlipsRemapMaskOnce)
 
 // ZGC jni.cpp:2868-2886 resolves before pinning. The real allocator reuses a
 // retired source range while its forwarding remains published for old colours.
-GC_OTHER_VM_TEST(ZJNICritical, NewArrayOnReusedSourceKeepsDecodedAddress)
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NewArrayOnReusedSourceKeepsDecodedAddress)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -414,7 +414,7 @@ GC_OTHER_VM_TEST(ZJNICritical, NewArrayOnReusedSourceKeepsDecodedAddress)
 #if defined(MRT_TESTABLE_INTERNALS)
 // ZGC zRelocate.cpp:1036-1047: a real worker owns detach/free/done.
 // Pages come from the product allocator and the driver runs the actual tasks.
-GC_OTHER_VM_TEST(RelocateWorkers, RuntimeCollectionCompletesSelectedPages)
+GC_RUNTIME_OTHER_VM_TEST(RelocateWorkers, RuntimeCollectionCompletesSelectedPages)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;

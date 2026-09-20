@@ -481,6 +481,9 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
     ZPage* region = ZPage::InitRegion(index, (1) * ZGranuleSize, ZPageType::small);
     GC_EXPECT_TRUE(region != nullptr);
     region->SetRegionAllocPtr(region->GetRegionStart());
+    // ZHeap::alloc_page (zHeap.cpp:253-257) publishes before any page lookup
+    // or ZGenerationYoung::flip_promote replaces this descriptor.
+    PublishAllocatedPage(region);
     (void)fx;
     return region;
 }
@@ -655,10 +658,17 @@ private:
 
 void EmptyBothRememberedFaces(RememberedSet& remembered)
 {
-    std::unordered_set<MAddress> discarded;
-    remembered.DrainForMinor(discarded);
-    discarded.clear();
-    remembered.DrainForMinor(discarded);
+    // ZRememberedSet owns two per-page faces. The old global DrainForMinor
+    // adapter no longer consumes either bitmap.
+    for (int face = 0; face < 2; ++face) {
+        remembered.FlipForMinor();
+        ZPageTableIterator pages(&Heap::page_table());
+        for (ZPage* page; pages.next(&page);) {
+            if (page->_remembered_set.is_initialized()) {
+                page->_remembered_set.clear_previous();
+            }
+        }
+    }
 }
 
 LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, Heap& collector)
@@ -931,6 +941,9 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTa
     DestroyAfterGhostCleared(region, "gc-unit-explicit-coverage");
     if (region->IsYoungRegion() && false) {
             }
+    // ZHeap::free_page (zHeap.cpp:275-280) removes the published page.
+    // Resetting forwarding alone does not retire the page-table entry.
+    ZPage::RetirePage(region, []() {});
     GC_EXPECT_TRUE(Heap::page(reinterpret_cast<MAddress>(liveObject)) == nullptr);
     BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, liveObject);
     GC_EXPECT_TRUE(resolved == liveObject);
@@ -1729,10 +1742,6 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     ZPage* routeDestination =
         ResetDeliveryUnit(fx, 3);
     GC_EXPECT_TRUE(region != nullptr && routeDestination != nullptr);
-    // ResetDeliveryUnit constructs descriptors only. ZGC zHeap.cpp:257-271
-    // publishes allocated pages before relocation can look up its destination.
-    Heap::alloc_page(region);
-    Heap::alloc_page(routeDestination);
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     const size_t objectSize = dead->GetSize();
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + objectSize);
@@ -2068,11 +2077,10 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     workers.set_inactive();
     GC_EXPECT_TRUE(remembered.Contains(reinterpret_cast<MAddress>(liveField)));
     GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(deadField)));
-    std::unordered_set<MAddress> previous;
     remembered.FlipForMinor();
-    remembered.ScanPreviousForMinor(previous);
-    GC_EXPECT_EQ(previous.count(reinterpret_cast<MAddress>(liveField)), 1u);
-    GC_EXPECT_EQ(previous.count(reinterpret_cast<MAddress>(deadField)), 0u);
+    // Read the product's previous face, not the removed global-remset adapter.
+    GC_EXPECT_TRUE(remembered.ContainsPrevious(reinterpret_cast<MAddress>(liveField)));
+    GC_EXPECT_FALSE(remembered.ContainsPrevious(reinterpret_cast<MAddress>(deadField)));
     RelocationReceiptTestAccess::BindCollector(nullptr);
     EmptyBothRememberedFaces(remembered);
     // manager owns the original map through its promotion page.
@@ -2229,6 +2237,12 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     EmptyBothRememberedFaces(remembered);
     Heap& collector = Heap::GetHeap();
     LoadHealDeliveryTestAccess::PublishColours(collector);
+    // ZGenerationOld::collect phases 8/9 (zGeneration.cpp:1058-1063):
+    // remap young roots before old relocate-start. The stale target belongs
+    // to the young forwarding table, not an already relocating old set.
+    LateBackfillState forwarding = PrepareLateBackfill(fx, collector, Generation::Young);
+    // PrepareForwardable advances the young cycle and flips remsets; seed
+    // the current face only after that fixture phase transition.
     {
         DeliveryNoAllocBufferScope directRemember;
         nearField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));
@@ -2245,42 +2259,56 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(holderRegion, holder));
     youngCarrier->reset(PageAge::eden);
 
-    LateBackfillState forwarding = PrepareLateBackfill(fx, collector);
     nearField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
     farField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
     youngField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
     LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
-    LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
-    const uintptr_t doubleBad = LoadHealDeliveryTestAccess::DoubleBadColour(collector);
-    GC_EXPECT_TRUE(doubleBad != 0 && (doubleBad & (doubleBad - 1)) == 0);
-    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & ZPointerRemappedMask, doubleBad);
+    GC_EXPECT_FALSE(ZPointer::is_load_good(farField->GetFieldValue()));
     const uintptr_t youngBefore = raw(youngField->GetFieldValue());
+    const uintptr_t nearBefore = raw(nearField->GetFieldValue());
+    const uintptr_t farBefore = raw(farField->GetFieldValue());
+    // ZGenerationOld::remap_young_roots (zGeneration.cpp:1509-1525)
+    // dispatches through both generation-owned worker sets. Standalone
+    // fixtures must establish the driver-created worker lifetime first.
+    collector.young().InitializeWorkers(2);
+    collector.old().InitializeWorkers(2);
+    collector.young().Workers()->set_active_workers(1);
+    collector.old().Workers()->set_active_workers(1);
     LoadHealDeliveryTestAccess::RemapYoungRoots(collector);
+    collector.old().StopWorkers();
+    collector.young().StopWorkers();
 
     const bool nearResolved = to_object(nearField->GetTargetObject()) == forwarding.to;
     const bool farResolved = to_object(farField->GetTargetObject()) == forwarding.to;
-    const bool nearStoreGood = ZPointer::is_store_good((*nearField).GetFieldValue());
-    const bool farStoreGood = ZPointer::is_store_good((*farField).GetFieldValue());
+    const bool nearLoadGood = ZPointer::is_load_good((*nearField).GetFieldValue());
+    const bool farLoadGood = ZPointer::is_load_good((*farField).GetFieldValue());
     const bool youngUnchanged = raw(youngField->GetFieldValue()) == youngBefore;
     const bool holderNonAllocating = !holderRegion->IsAllocating();
     const bool matrixResult = farOffset > 64 && holderNonAllocating && nearResolved && farResolved &&
-        nearStoreGood && farStoreGood && youngUnchanged;
+        nearLoadGood && farLoadGood && youngUnchanged;
     std::fprintf(stderr,
                  "DETAIL current_remset_matrix far_offset=%zu holder_live=%u holder_nonalloc=%u near_resolved=%u "
-                 "far_resolved=%u near_store_good=%u far_store_good=%u young_unchanged=%u result=%u\n",
+                 "far_resolved=%u near_load_good=%u far_load_good=%u young_unchanged=%u result=%u\n",
                  farOffset, static_cast<unsigned>(holderRegion->is_object_strongly_live(from_object(holder))),
                  static_cast<unsigned>(holderNonAllocating),
                  static_cast<unsigned>(nearResolved), static_cast<unsigned>(farResolved),
-                 static_cast<unsigned>(nearStoreGood), static_cast<unsigned>(farStoreGood),
+                 static_cast<unsigned>(nearLoadGood), static_cast<unsigned>(farLoadGood),
                  static_cast<unsigned>(youngUnchanged), static_cast<unsigned>(matrixResult));
     std::fflush(stderr);
 
     GC_EXPECT_TRUE(matrixResult);
+    // ZRemembered::remap_current (zRemembered.cpp:451-460) uses the load
+    // barrier: upgrade remap bits without claiming store/mark epochs.
+    const uintptr_t retainedBits = ZPointerMarkedMask;
+    GC_EXPECT_EQ(raw(nearField->GetFieldValue()) & retainedBits, nearBefore & retainedBits);
+    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & retainedBits, farBefore & retainedBits);
+    // ZAddress::load_good (zAddress.inline.hpp:761) installs both remembered bits.
+    GC_EXPECT_EQ(raw(nearField->GetFieldValue()) & ZPointerRememberedMask, ZPointerRememberedMask);
+    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & ZPointerRememberedMask, ZPointerRememberedMask);
     nearField->StoreColoured(zpointer::null);
     farField->StoreColoured(zpointer::null);
     youngField->StoreColoured(zpointer::null);
     EmptyBothRememberedFaces(remembered);
-    LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
     LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
     CleanupLateBackfill(fx, forwarding);
     RelocationReceiptTestAccess::BindCollector(nullptr);
@@ -2793,10 +2821,20 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
         GC_EXPECT_TRUE(region->generation_id() == expectedId);
     }
     const auto oldLife = region->GetRegionLifeId();
-    ZPage::RetirePage(region, [region]() { region->RetirePageMemory(); });
+    RegionLifeId retiredLife = oldLife;
+    ZPage::RetirePage(region, [region, &retiredLife]() {
+        region->RetirePageMemory();
+        retiredLife = region->GetRegionLifeId();
+    });
+    // The scratch life counter belongs to one descriptor, not its address.
+    GC_EXPECT_TRUE(retiredLife != oldLife);
+    // ZPage::reset_seqnum/reset (zPage.cpp:90-112): a newly constructed page
+    // snapshots the current generation, even when its address is reused.
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
     region = ZPage::InitRegion(ZPage::GranuleIndex(fixture.heapStart), (1) * ZGranuleSize, ZPageType::small);
     PublishAllocatedPage(region);
-    GC_EXPECT_TRUE(region->GetRegionLifeId() != oldLife);
+    fixture.region0 = region;
+    GC_EXPECT_EQ(region->seqnum(), ZGeneration::old()->seqnum());
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
 }

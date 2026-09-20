@@ -264,19 +264,19 @@ void* AllocateFastMedium(void*)
     return reinterpret_cast<void*>(valid ? 0 : 3);
 }
 }
-GC_OTHER_VM_TEST(ObjectAllocatorPaths, ManagedSizeRouting) { RunAllocatorCase(AllocateSizedObjects); }
-GC_OTHER_VM_TEST(ObjectAllocatorPaths, TLABsShareSmallPage) { RunAllocatorCase(AllocateTLABSlices); }
-GC_OTHER_VM_TEST(ObjectAllocatorPaths, FastMediumConsumesCachedActualSize) { RunAllocatorCase(AllocateFastMedium); }
+GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, ManagedSizeRouting) { RunAllocatorCase(AllocateSizedObjects); }
+GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, TLABsShareSmallPage) { RunAllocatorCase(AllocateTLABSlices); }
+GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, FastMediumConsumesCachedActualSize) { RunAllocatorCase(AllocateFastMedium); }
 
-GC_OTHER_VM_TEST(ObjectAllocatorPaths, ManagedFastMediumConsumesCachedPage) { RunAllocatorCase(AllocateManagedFastMedium); }
+GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, ManagedFastMediumConsumesCachedPage) { RunAllocatorCase(AllocateManagedFastMedium); }
 
-GC_OTHER_VM_TEST(ObjectAllocatorPaths, NonBlockingCapacityDoesNotStartCollection) { RunAllocatorCase(AllocateNonBlockingCapacity); }
+GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, NonBlockingCapacityDoesNotStartCollection) { RunAllocatorCase(AllocateNonBlockingCapacity); }
 
-GC_OTHER_VM_TEST(ObjectAllocatorPaths, MediumNonBlockingAllocatesAfterCacheMiss) { RunAllocatorCase(AllocateMediumNonBlocking); }
-GC_OTHER_VM_TEST(ObjectAllocatorPaths, MediumBlockingFailureAttemptsCollection) { RunAllocatorCase(AllocateMediumBlockingFailure); }
+GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, MediumNonBlockingAllocatesAfterCacheMiss) { RunAllocatorCase(AllocateMediumNonBlocking); }
+GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, MediumBlockingFailureAttemptsCollection) { RunAllocatorCase(AllocateMediumBlockingFailure); }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(ObjectAllocatorPaths, MediumBlockingFailureShutdownWithQueuedCollection)
+GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, MediumBlockingFailureShutdownWithQueuedCollection)
 {
     RunAllocatorCase(AllocateMediumBlockingFailure, true);
 }

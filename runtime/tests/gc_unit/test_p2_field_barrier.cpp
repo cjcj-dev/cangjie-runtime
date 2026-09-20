@@ -922,7 +922,7 @@ extern "C" int p2RemsetBindingExercise()
     const pid_t child = fork();
     Expect(child >= 0, "binding_negative_child_started");
     if (child == 0) {
-        ZRemembered unbound;
+        ZRemembered unbound(nullptr, &heap.old().forwarding_table(), &heap.page_allocator());
         unbound.register_found_old(page);
         std::_Exit(0);
     }
@@ -932,8 +932,7 @@ extern "C" int p2RemsetBindingExercise()
         Expect(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
                "binding_unbound_registration_rejected");
     }
-    ZRemembered bound;
-    bound.bind(&Heap::page_table(), &generation_forwarding_table(Generation::Old), &heap.page_allocator());
+    ZRemembered bound(&Heap::page_table(), &generation_forwarding_table(Generation::Old), &heap.page_allocator());
     bound.register_found_old(page);
     ZRemsetTableIterator iter(&bound, false);
     ZRemsetTableEntry entry{};

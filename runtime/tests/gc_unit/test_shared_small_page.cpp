@@ -78,21 +78,11 @@ namespace {
 // A synthetic, single-caller heap, using the product page allocator and page
 // table. There are no registered mutators; retire_pages has a quiescent world.
 struct SharedPageFixture {
-    // The RegionManager (mapped caches keep entries in heap memory) must be
-    // destroyed before the mapping: declare it last.
-    std::unique_ptr<ZTestRegionHeap> heap;
-    RegionManager manager;
-    explicit SharedPageFixture(size_t units = 64)
+    RegionManager& manager;
+    explicit SharedPageFixture(size_t = 0) : manager(Heap::GetHeap().page_allocator())
     {
-        // Match CollectorResources::Init before allocation-rate sampling.
         ZStat::Initialize();
-        HeapParam params{};
-        params.regionSize = ZGranuleSize / KB;
-        params.exemptionThreshold = 0.8;
-        heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
-        BindFixturePageTable(manager, units);
     }
-    ~SharedPageFixture() { Heap::bind_test_page_allocator(nullptr); }
 };
 
 class CPUAffinity {
@@ -267,11 +257,12 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
                    Heap::page(second));
 }
 // The other legal heuristic input must route through slot zero on either CPU.
-GC_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
+GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
 {
     CPUAffinity affinity;
     constexpr size_t units = 1;
     ZHeuristics::set_max_heap_size(units * ZGranuleSize);
+    CreateStandaloneHeap(units);
     SharedPageFixture fixture(units);
     GC_EXPECT_TRUE(affinity.available.size() >= 2);
     auto& allocator = Heap::GetHeap().object_allocator();

@@ -40,16 +40,12 @@ GC_TEST(RelocationSetSelector, SelectOrderLargeMediumSmall)
 
 namespace {
 struct SelectorPageFixture {
-    HeapParam heapParam{};
-    std::unique_ptr<ZTestRegionHeap> heapHolder;
-    RegionManager manager;
+    RegionManager& manager;
     SelectorPageFixture()
+        : manager(Heap::GetHeap().page_allocator())
     {
         ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
         ZStat::Initialize();
-        heapParam.regionSize = 2048;
-        heapParam.exemptionThreshold = 0.8;
-        heapHolder.reset(new ZTestRegionHeap(4096, manager, heapParam, 0.5));
     }
     ZPage* takeSmall()
     {

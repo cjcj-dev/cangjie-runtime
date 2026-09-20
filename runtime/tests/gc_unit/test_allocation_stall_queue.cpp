@@ -64,27 +64,12 @@ private:
     ZPage* capacity{ nullptr };
 
 public:
-    // The RegionManager (mapped caches keep entries in heap memory) must be
-    // destroyed before the mapping: declare it last.
-    std::unique_ptr<ZTestRegionHeap> heap;
-    RegionManager manager;
+    RegionManager& manager;
 
     OneUnitStallFixture()
+        : manager((ZStat::Initialize(), CreateStandaloneHeap(1), Heap::GetHeap().page_allocator()))
     {
-        // ZInitialize: allocator sampling starts only after statistics initialization.
-        ZStat::Initialize();
-        constexpr size_t units = 1;
-        HeapParam heapParam {};
-        heapParam.regionSize = ZGranuleSize / 1024;
-        heapParam.exemptionThreshold = 0.8;
-        heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
-        BindFixturePageTable(manager, units);
         capacity = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false);
-    }
-
-    ~OneUnitStallFixture()
-    {
-        Heap::bind_test_page_allocator(nullptr);
     }
 
     void PublishCapacity()
@@ -96,7 +81,7 @@ public:
 };
 } // namespace
 
-GC_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
 {
     OneUnitStallFixture fixture;
     fixture.PublishCapacity();
@@ -278,12 +263,12 @@ void RunProductStallWaiters(bool stopping = false)
     }
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
-GC_OTHER_VM_TEST(AllocationStall, ProductLateWaiterRequiresNextCollection) { RunProductStallWaiters(); }
-GC_OTHER_VM_TEST(AllocationStall, ProductShutdownAnswersPendingWaiters) { RunProductStallWaiters(true); }
+GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductLateWaiterRequiresNextCollection) { RunProductStallWaiters(); }
+GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductShutdownAnswersPendingWaiters) { RunProductStallWaiters(true); }
 
 // ZGC zPageAllocator.cpp:2167-2189: reclaimed capacity is claimed exclusively
 // before the allocator wakes a waiter. Both requests arrive during old marking.
-GC_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWaiter)
+GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWaiter)
 {
     RuntimeParam params{};
     params.heapParam.heapSize = 64 * 1024;
