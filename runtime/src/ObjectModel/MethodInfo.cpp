@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zRootsIterator.hpp"
 #include "Base/Log.h"
 #include "Heap/z/zHeap.hpp"
 #include "ObjectManager.inline.h"
@@ -39,7 +40,7 @@ void ScopedAllocBuffer::AddNativeFrameRoot(BaseObject* obj)
 
 void* ParameterInfo::GetAnnotations(TypeInfo* arrayTi)
 {
-    ScopedAllocBuffer scopedAllocBuffer;
+    HandleMark handleMark(*Mutator::GetMutator());
     CHECK_DETAIL(arrayTi != nullptr, "arrayTi is nullptr");
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
@@ -51,6 +52,7 @@ void* ParameterInfo::GetAnnotations(TypeInfo* arrayTi)
     if (annotationMethod == 0) {
         return obj;
     }
+    Handle objectHandle(Mutator::GetMutator(), obj);
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
     values.AddReference(as_abi_ref_slot(structRet));
@@ -62,6 +64,7 @@ void* ParameterInfo::GetAnnotations(TypeInfo* arrayTi)
     ApplyCangjieMethodStub(values.GetData(), values.GetStackSize(), annotationMethod, threadData);
 #endif
 
+    obj = static_cast<MObject*>(objectHandle());
     ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
         size, reinterpret_cast<Uptr>(structRet), size);
     return obj;
@@ -113,7 +116,7 @@ void MethodInfo::SetGenericParameterInfos(Uptr genericParamInfosAddr)
 
 void* MethodInfo::GetAnnotations(TypeInfo* arrayTi)
 {
-    ScopedAllocBuffer scopedAllocBuffer;
+    HandleMark handleMark(*Mutator::GetMutator());
     CHECK_DETAIL(arrayTi != nullptr, "arrayTi is nullptr");
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
@@ -125,6 +128,7 @@ void* MethodInfo::GetAnnotations(TypeInfo* arrayTi)
     if (annotationMethod == 0) {
         return obj;
     }
+    Handle objectHandle(Mutator::GetMutator(), obj);
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
     values.AddReference(as_abi_ref_slot(structRet));
@@ -136,6 +140,7 @@ void* MethodInfo::GetAnnotations(TypeInfo* arrayTi)
     ApplyCangjieMethodStub(values.GetData(), values.GetStackSize(), annotationMethod, threadData);
 #endif
 
+    obj = static_cast<MObject*>(objectHandle());
     ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
         size, reinterpret_cast<Uptr>(structRet), size);
     return obj;

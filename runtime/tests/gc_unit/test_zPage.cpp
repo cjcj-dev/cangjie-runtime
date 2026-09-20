@@ -504,3 +504,130 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, RawHolderExcludesCollectionRelocation)
     GC_EXPECT_TRUE(result.collectionFinished && result.movedAfterRelease);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+// Exercise reflection through its compiler entry and the actual N2C stub.
+#include "ObjectModel/MethodInfo.h"
+#include "ObjectModel/FieldInfo.h"
+namespace MapleRuntime {
+extern "C" void* MCC_GetParameterAnnotations(ParameterInfo*, TypeInfo*);
+extern "C" void* MCC_GetMethodAnnotations(MethodInfo*, TypeInfo*);
+extern "C" void* MCC_GetInstanceFieldAnnotations(InstanceFieldInfo*, TypeInfo*);
+extern "C" void* MCC_GetStaticFieldAnnotations(StaticFieldInfo*, TypeInfo*);
+}
+namespace {
+struct AnnotationResult {
+    unsigned entry = 0;
+    TypeInfo* type = nullptr;
+    uintptr_t before = 0;
+    uintptr_t after = 0;
+    uintptr_t returned = 0;
+    bool called = false;
+    bool copied = false;
+};
+thread_local AnnotationResult* annotationResult;
+extern "C" void AnnotationCollect(uintptr_t* result)
+{
+    auto& r = *annotationResult;
+    r.called = true;
+    auto* mutator = Mutator::GetMutator();
+    auto observe = [&]() {
+        uintptr_t value = 0;
+        mutator->VisitMutatorRoots([&](RootSlot& root) {
+            BaseObject* object = to_object(safe(root.LoadPlain()));
+            if (object != nullptr && object->GetTypeInfo() == r.type) {
+                value = reinterpret_cast<uintptr_t>(object);
+            }
+        });
+        return value;
+    };
+    r.before = observe();
+    // Do not access an unregistered object in the destructive control arm.
+    // The final invariant includes registration, relocation and returned address.
+    if (r.before != 0) {
+        alignas(TypeInfo) static unsigned char garbageStorage[sizeof(TypeInfo)]{};
+        auto* garbage = reinterpret_cast<TypeInfo*>(garbageStorage);
+        garbage->SetType(TypeKind::TYPE_KIND_CLASS);
+        garbage->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(garbageStorage), sizeof(garbageStorage));
+        U64 roots[3]{};
+        size_t count = 0;
+        ZPage* previous = Heap::page(r.before);
+        for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && count < 3; ++i) {
+            auto* object = MCC_NewObject(garbage, 4096);
+            auto* page = Heap::page(reinterpret_cast<uintptr_t>(object));
+            if (page != previous) {
+                roots[count++] = Heap::GetHeap().RegisterExportRoot(object);
+                previous = page;
+            }
+        }
+        Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+        r.after = observe();
+        for (size_t i = 0; i < count; ++i) { Heap::GetHeap().RemoveExportObject(roots[i]); }
+    }
+    result[0] = 0;
+    result[1] = 581;
+    result[2] = 584;
+}
+void* RunAnnotation(void* context)
+{
+    auto& r = *static_cast<AnnotationResult*>(context);
+    annotationResult = &r;
+    Mutator::GetMutator()->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_STRUCT);
+    type->SetInstanceSize(3 * sizeof(uintptr_t));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    r.type = type;
+    // Metadata uses the compiler's packed ABI, with the annotation code pointer
+    // in the declared field. No product access hook or alternate stub is used.
+    uintptr_t callback = reinterpret_cast<uintptr_t>(&AnnotationCollect);
+    void* object = nullptr;
+    if (r.entry == 0) {
+        ParameterInfo metadata{};
+        std::memcpy(reinterpret_cast<char*>(&metadata) + sizeof(metadata) - sizeof(callback), &callback, sizeof(callback));
+        object = MCC_GetParameterAnnotations(&metadata, type);
+    } else if (r.entry == 1) {
+        MethodInfo metadata{};
+        std::memcpy(reinterpret_cast<char*>(&metadata) + 32, &callback, sizeof(callback));
+        object = MCC_GetMethodAnnotations(&metadata, type);
+    } else if (r.entry == 2) {
+        InstanceFieldInfo metadata{};
+        std::memcpy(reinterpret_cast<char*>(&metadata) + sizeof(metadata) - sizeof(callback), &callback, sizeof(callback));
+        object = MCC_GetInstanceFieldAnnotations(&metadata, type);
+    } else {
+        StaticFieldInfo metadata{};
+        std::memcpy(reinterpret_cast<char*>(&metadata) + sizeof(metadata) - sizeof(callback), &callback, sizeof(callback));
+        object = MCC_GetStaticFieldAnnotations(&metadata, type);
+    }
+    r.returned = reinterpret_cast<uintptr_t>(object);
+    if (r.returned == r.after && r.after != 0) {
+        auto* data = reinterpret_cast<uintptr_t*>(r.returned + TYPEINFO_PTR_SIZE);
+        r.copied = data[1] == 581 && data[2] == 584;
+    }
+    return nullptr;
+}
+void CheckAnnotation(unsigned entry)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    AnnotationResult result;
+    result.entry = entry;
+    auto task = RunCJTask(RunAnnotation, &result);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "ANNOTATION_HANDLE_TARGET entry=%u called=%d before=%zx after=%zx returned=%zx copied=%d\n",
+        entry, result.called, result.before, result.after, result.returned, result.copied);
+    GC_EXPECT_TRUE(result.called && result.before != 0 && result.after != 0 &&
+                   result.before != result.after && result.returned == result.after && result.copied);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(NativeAnnotationHandle, Parameter) { CheckAnnotation(0); }
+GC_RUNTIME_OTHER_VM_TEST(NativeAnnotationHandle, Method) { CheckAnnotation(1); }
+GC_RUNTIME_OTHER_VM_TEST(NativeAnnotationHandle, InstanceField) { CheckAnnotation(2); }
+GC_RUNTIME_OTHER_VM_TEST(NativeAnnotationHandle, StaticField) { CheckAnnotation(3); }
