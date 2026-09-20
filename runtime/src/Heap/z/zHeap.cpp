@@ -277,8 +277,7 @@ MAddress Heap::GetSpaceEndAddress() const { return _page_allocator.GetSpaceEndAd
 
 Heap& Heap::GetHeap()
 {
-    CHECK(_heap != nullptr);
-    return *_heap;
+    return ZCollectedHeap::heap()->collected_heap();
 }
 
 ZRemembered& Heap::remembered()

@@ -295,19 +295,21 @@ struct GcHeapFixture {
         // ZInitialize initializes statistics before any allocation can sample.
         EnsureZAddressDomain();
         ZStat::Initialize();
-        mappedSize = kUnits * ZGranuleSize;
-        heapMapping.reset(new ZTestAllocatedMemory(mappedSize));
-        mapping = heapMapping->base();
-        heapStart = reinterpret_cast<MAddress>(mapping);
+        (void)Heap::GetHeap();
+        RegionManager& manager = Heap::GetHeap().page_allocator();
+        region0 = manager.TakeRegion(ZGranuleSize, role, false, false, true);
+        region1 = manager.TakeRegion(ZGranuleSize, ZPageType::small, false, false, true);
+        CHECK(region0 != nullptr && region1 != nullptr);
+        heapStart = region0->GetRegionStart();
+        mapping = reinterpret_cast<void*>(heapStart);
+        mappedSize = 2 * ZGranuleSize;
+        PublishAllocatedPage(region0);
+        PublishAllocatedPage(region1);
         for (Generation generation : {Generation::Young, Generation::Old}) {
             if ((*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old()))).Sequence() == 0) {
                 AdvanceGeneration(generation);
             }
         }
-        region0 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart), (1) * ZGranuleSize, role);
-        region1 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart) + 1, (1) * ZGranuleSize, ZPageType::small);
-        PublishAllocatedPage(region0);
-        PublishAllocatedPage(region1);
         // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.
         AdvanceGeneration(Generation::Old);
         AdvanceGeneration(Generation::Young);
@@ -359,7 +361,12 @@ struct GcHeapFixture {
         if (region1 != nullptr && region1->IsYoungRegion()) {
             region1->reset(PageAge::old);
         }
-        heapMapping.reset();
+        if (region0 != nullptr) {
+            Heap::free_page(region0);
+        }
+        if (region1 != nullptr) {
+            Heap::free_page(region1);
+        }
     }
 
     BaseObject* PlaceObject(MAddress addr)
@@ -412,7 +419,6 @@ struct GcHeapFixture {
         return marked;
     }
 
-    ZFixtureRememberedScope rememberedScope;
     std::unique_ptr<ZTestAllocatedMemory> heapMapping;
     void* mapping = nullptr;
     size_t mappedSize = 0;

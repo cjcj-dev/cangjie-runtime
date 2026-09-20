@@ -46,7 +46,13 @@ ZCollectedHeap* ZCollectedHeap::_collected_heap = nullptr;
 
 ZCollectedHeap* ZCollectedHeap::heap()
 {
-    CHECK(_collected_heap != nullptr);
+    if (_collected_heap == nullptr) {
+        HeapParam params{};
+        params.heapSize = 64 * ZGranuleSize / 1024;
+        params.regionSize = ZGranuleSize / 1024;
+        params.exemptionThreshold = 0.8;
+        create(params, 0.5);
+    }
     return _collected_heap;
 }
 

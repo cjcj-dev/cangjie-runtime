@@ -58,7 +58,6 @@ int main(int argc, char** argv)
         }
         (void)setenv("GC_UNIT_FILTER", argv[i] + std::strlen(filterPrefix), 1);
     }
-    MapleRuntime::GcUnit::InitializeStandaloneHeap = [] { MapleRuntime::GcUnit::CreateStandaloneHeap(64); };
     const int result = MapleRuntime::GcUnit::RunAll();
     // Stop only an existing heap; listing/filtering must not construct one.
     if (MapleRuntime::Heap::heap() != nullptr) {
