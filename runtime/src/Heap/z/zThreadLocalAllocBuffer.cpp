@@ -28,9 +28,9 @@ AllocBuffer::~AllocBuffer()
 
 void AllocBuffer::Init()
 {
-    static_assert(offsetof(AllocBuffer, tlabDescriptor) == 0, "compiler TLAB pointer ABI");
+    static_assert(offsetof(AllocBuffer, tlab) == 0, "compiler TLAB inline ABI");
     static_assert(offsetof(TLAB, top) == 0, "compiler TLAB top ABI");
-    static_assert(offsetof(TLAB, end) == sizeof(uintptr_t), "compiler TLAB end ABI");
+    static_assert(offsetof(TLAB, end) == 8, "compiler TLAB end ABI");
     tlab = TLAB{};
     ThreadLocal::InitializeCleaner();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
