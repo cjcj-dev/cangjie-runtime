@@ -297,12 +297,13 @@ struct GcHeapFixture {
         ZStat::Initialize();
         (void)Heap::GetHeap();
         RegionManager& manager = Heap::GetHeap().page_allocator();
-        region0 = manager.TakeRegion(ZGranuleSize, role, false, false, true);
-        region1 = manager.TakeRegion(ZGranuleSize, ZPageType::small, false, false, true);
-        CHECK(region0 != nullptr && region1 != nullptr);
-        heapStart = region0->GetRegionStart();
+        committedSpan = manager.TakeRegion(kUnits * ZGranuleSize, ZPageType::large, false, false, true);
+        CHECK(committedSpan != nullptr);
+        heapStart = committedSpan->GetRegionStart();
         mapping = reinterpret_cast<void*>(heapStart);
-        mappedSize = 2 * ZGranuleSize;
+        mappedSize = kUnits * ZGranuleSize;
+        region0 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart), ZGranuleSize, role);
+        region1 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart) + 1, ZGranuleSize, ZPageType::small);
         PublishAllocatedPage(region0);
         PublishAllocatedPage(region1);
         for (Generation generation : {Generation::Young, Generation::Old}) {
@@ -413,6 +414,7 @@ struct GcHeapFixture {
         return marked;
     }
 
+    ZPage* committedSpan = nullptr;
     std::unique_ptr<ZTestAllocatedMemory> heapMapping;
     void* mapping = nullptr;
     size_t mappedSize = 0;

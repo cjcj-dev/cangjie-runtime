@@ -64,12 +64,13 @@ struct LargeArrayFixture {
         mappedSize = units * ZGranuleSize;
         (void)Heap::GetHeap();
         RegionManager& manager = Heap::GetHeap().page_allocator();
-        region0 = manager.TakeRegion(ZGranuleSize, ZPageType::small, false, false, true);
-        region1 = manager.TakeRegion(arrayUnits * ZGranuleSize, ZPageType::large, false, false, true);
-        GC_EXPECT_TRUE(region0 != nullptr && region1 != nullptr);
-        mapping = reinterpret_cast<void*>(region0->GetRegionStart());
-        const MAddress start = region0->GetRegionStart();
+        committedSpan = manager.TakeRegion(mappedSize, ZPageType::large, false, false, true);
+        GC_EXPECT_TRUE(committedSpan != nullptr);
+        mapping = reinterpret_cast<void*>(committedSpan->GetRegionStart());
+        const MAddress start = committedSpan->GetRegionStart();
         GcHeapFixture::AdvanceGeneration(Generation::Old);
+        region0 = ZPage::InitRegion(ZPage::GranuleIndex(start), ZGranuleSize, ZPageType::small);
+        region1 = ZPage::InitRegion(ZPage::GranuleIndex(start) + 1, arrayUnits * ZGranuleSize, ZPageType::large);
         PublishAllocatedPage(region0);
         PublishAllocatedPage(region1);
         auto* holderType = reinterpret_cast<TypeInfo*>(holderStorage);
@@ -100,6 +101,7 @@ struct LargeArrayFixture {
         delete region1->_scratch.retiredLivemap;
     }
     alignas(TypeInfo) unsigned char holderStorage[sizeof(TypeInfo)] {};
+    ZPage* committedSpan = nullptr;
     ZFixtureRememberedScope rememberedScope;
     std::unique_ptr<ZTestAllocatedMemory> reservation;
     void* mapping = nullptr;
