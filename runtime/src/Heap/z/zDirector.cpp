@@ -15,6 +15,7 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/z_globals.hpp"
@@ -354,7 +355,7 @@ static double calculate_extra_young_gc_time(const ZDirectorStats& stats)
         return 0.0;
     }
     const size_t old_used = stats.old_stats.general.used;
-    const size_t old_live = std::min(stats.old_stats.stat_heap.liveAtMarkEnd, old_used);
+    const size_t old_live = stats.old_stats.stat_heap.liveAtMarkEnd;
     const double old_garbage = static_cast<double>(old_used - old_live);
     const double young_gc_time = gc_time(stats.young_stats);
     const double reclaimed_per_young_gc = stats.young_stats.stat_heap.reclaimedAverage;
@@ -637,7 +638,7 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
     stats.conc_gc_threads = static_cast<uint32_t>(std::max(concurrentGcThreadCount, 1));
     stats.collection_interval_sec =
         static_cast<double>(CangjieRuntime::GetGCParam().backupGCInterval) / SECOND_TO_NANO_SECOND;
-    stats.relocation_headroom = stats.conc_gc_threads * ZPageSizeSmall;
+    stats.relocation_headroom = ZHeuristics::relocation_headroom();
     return stats;
 }
 
