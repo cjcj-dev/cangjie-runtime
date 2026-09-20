@@ -736,9 +736,8 @@ void ZGenerationYoung::pause_relocate_start()
 
 void ZGenerationYoung::concurrent_relocate()
 {
-    if (ZAbort::should_abort()) {
-        return;
-    }
+    // ZGC zGeneration.cpp:575-580: after relocate-start every selected page
+    // must finish relocation, including when shutdown requests an abort.
     RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     size_t allocatedBefore = space.AllocatedBytes();
     // ⑥⑦⑧ inside EvacuateYoungRegions: pause relocate_start / concurrent copy / evac_finish
@@ -760,9 +759,6 @@ void ZGenerationYoung::concurrent_relocate()
     EvacuateYoungRegions(youngReachableVec, youngConsumedSlots,
                                    refFixSlotsCoveredByReachable, youngRemsetInteriorBases,
                                    &youngStw);
-    if (ZAbort::should_abort()) {
-        return;
-    }
     size_t allocatedAfter = space.AllocatedBytes();
     youngStats.reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
@@ -1620,11 +1616,8 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
             // (zGeneration.cpp:254) so liveInfo0 snapshots the closed mark
             // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
             // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
-            // ZGenerationYoung::collect: last abortpoint after selection,
-            // before relocate-start. Once flipped, finish every remaining page.
-            if (ZAbort::should_abort()) {
-                return;
-            }
+            // ZGC zGeneration.cpp:575-580: collect has already entered
+            // relocate-start; finish every selected page even on abort.
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
             // ZGC pause() wraps VMOp_ZRelocateStartYoung with JNICritical block
             // (zGeneration.cpp:475-483, block_jni_critical at :832).
