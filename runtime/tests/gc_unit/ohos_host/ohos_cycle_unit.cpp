@@ -123,7 +123,7 @@ GC_TEST(OHOSCycle, EmptyWorkDoesNotPost)
     ExpectPostState("OHOSCycle.EmptyWorkDoesNotPost", 0U);
 }
 
-GC_TEST(OHOSCycle, MajorEntryPostsResolveTask)
+GC_RUNTIME_TEST(OHOSCycle, MajorEntryPostsResolveTask)
 {
     RuntimeParam param {};
     param.heapParam.heapSize = 32 * 1024;

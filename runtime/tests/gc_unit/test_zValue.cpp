@@ -92,14 +92,6 @@ GC_TEST(ZValue, per_worker_slot_count_follows_conc_gc_threads)
 GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
 {
     ZStat::Initialize();
-    constexpr size_t units = 64;
-    HeapParam params{};
-    params.regionSize = ZGranuleSize / KB;
-    params.exemptionThreshold = 0.8;
-    std::unique_ptr<ZTestRegionHeap> heap;
-    RegionManager manager;
-    heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
-    BindFixturePageTable(manager, units);
 
     auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::eden);
     GC_EXPECT_EQ(allocator.sharedSmallPage.count(), ZCPU::count());
@@ -125,6 +117,5 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(other) == nullptr);
     }
-    Heap::bind_test_page_allocator(nullptr);
 }
 #endif

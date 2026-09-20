@@ -82,7 +82,9 @@ static const ZStatSubPhase PYoungRootEnum("young.root_enum", ZGenerationId::youn
 ZGenerationYoung* ZGeneration::_young = nullptr;
 ZGenerationOld* ZGeneration::_old = nullptr;
 
-ZGenerationYoung::ZGenerationYoung() : ZGeneration(ZGenerationId::young)
+ZGenerationYoung::ZGenerationYoung(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table,
+                                     RegionManager* page_allocator)
+    : ZGeneration(ZGenerationId::young), _remembered(page_table, old_forwarding_table, page_allocator)
 {
     previousYoung = _young;
     _young = this;

@@ -1,23 +1,23 @@
 {
- "repo": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_471_implement_r5747758651",
- "base": "b6d62daa8f3557c8a9effbfa4709a4744e315497",
- "head": "HEAD",
+ "repo": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_720_implement_r5746103729",
+ "base": "8cbac1ea8ef31dbaf5d49d3a1fe67300938ae74c",
+ "head": "cdd9576eafc97d896a94772b0474603673c99439",
  "mode": "product",
  "ok": true,
  "verdicts": [
   {
-   "cut": "lane-evidence/cut-producer.diff",
-   "file": "runtime/src/Heap/z/zGeneration.cpp",
+   "cut": "lane-evidence/cut.diff",
+   "file": "runtime/src/Heap/z/zHeap.cpp",
    "checks": [
     {
      "name": "产品树文件",
      "ok": true,
-     "detail": "runtime/src/Heap/z/zGeneration.cpp"
+     "detail": "runtime/src/Heap/z/zHeap.cpp"
     },
     {
      "name": "文件在基线存在",
      "ok": true,
-     "detail": "b6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zGeneration.cpp"
+     "detail": "8cbac1ea8ef31dbaf5d49d3a1fe67300938ae74c:runtime/src/Heap/z/zHeap.cpp"
     },
     {
      "name": "被断开的行在基线逐字存在",
@@ -31,23 +31,23 @@
     }
    ],
    "phase_hits": [
-    "select_relocation_set（所在函数）"
+    "alloc_page（所在函数）"
    ],
    "ok": true
   },
   {
-   "cut": "lane-evidence/cut-consumer.diff",
-   "file": "runtime/src/Heap/z/zDirector.cpp",
+   "cut": "lane-evidence/cut.diff",
+   "file": "runtime/src/Heap/z/zRemembered.cpp",
    "checks": [
     {
      "name": "产品树文件",
      "ok": true,
-     "detail": "runtime/src/Heap/z/zDirector.cpp"
+     "detail": "runtime/src/Heap/z/zRemembered.cpp"
     },
     {
      "name": "文件在基线存在",
      "ok": true,
-     "detail": "b6d62daa8f3557c8a9effbfa4709a4744e315497:runtime/src/Heap/z/zDirector.cpp"
+     "detail": "8cbac1ea8ef31dbaf5d49d3a1fe67300938ae74c:runtime/src/Heap/z/zRemembered.cpp"
     },
     {
      "name": "被断开的行在基线逐字存在",
@@ -70,7 +70,7 @@
     {
      "name": "至少一处断线落在真实相位入口函数",
      "ok": true,
-     "detail": "RunGarbageCollection, RequestGC, DoGarbageCollection, PushYoungObject, FindUselessExternObjects, Preforward, PostTrace, PublishMarkCoverage, ReclaimRetired, RehomeCompactedInPlaceRegion, TryAllocateForRelocation, SetRelocationRegion, ResolveCycleRef, ResolveCycleRefImpl, RouteOrCompactRegionImpl, PostResolveCycleTask, VerifyFaceEnabled, VerifyPhaseEnter, GCPhasePreForward, TransitionToGCPhaseExclusive, ForwardObjectImpl, ForwardObjectExclusive, RelocateObjectInner, TryMutatorRelocate, WaitForPageForwarding, RunCycle, Uncommit, VisitHeapRootSlots, WriteReference, RecordCrossGenEdge, ZeroAndFill, runtime/src/Heap/z/zStat.cpp:Sort, PublishForwardingCarrier, PrepareForwardableRegion, DoYoungGarbageCollection, DoTracing, ProcessOldNonStrongReferences, PostWriteReference, WaitForAck, ProcessDriverRequest, RequestGCAndWait, DrainStackWatermark, VisitRawObjects, NoteLargeArrayInitRootVisit, runtime/src/Heap/z/zMarkingSMR.cpp:free_node, runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:MRT_TransitMutatorToExit, runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:LibInit, runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:UnloadLibrary, runtime/src/CangjieRuntimeApi.cpp:UnloadCJLibrary, runtime/src/Heap/z/workerThread.cpp:coordinator_distribute_task, runtime/src/Heap/z/zWorkers.cpp:run, runtime/src/Heap/z/zBarrier.cpp:store_barrier_on_heap_oop_field, alloc_page, concurrent_mark, select_relocation_set, GcPhaseEnum, flip_old_relocate_start, pause_relocate_start, free_page, relocate_or_remap_object, runtime/src/Heap/z/zGeneration.cpp:pause, runtime/src/Heap/z/zRootsIterator.cpp:Apply, AllocateImpl, allocate_new_tlab, alloc_object, alloc_small_object, alloc_medium_object, alloc_large_object, alloc_page_stall, alloc_object_in_medium_page, runtime/src/ObjectModel/MArray.inline.h:NewKnownWidthArray, runtime/src/Heap/z/zObjArrayAllocator.cpp:initialize, StallAllocation, TakeRegion, runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:MRT_VisitorCaller, runtime/src/CangjieRuntimeApi.cpp:RunCJTaskImpl, VisitGCRoots"
+     "detail": "RunGarbageCollection, RequestGC, DoGarbageCollection, PushYoungObject, FindUselessExternObjects, Preforward, PostTrace, PublishMarkCoverage, ReclaimRetired, RehomeCompactedInPlaceRegion, TryAllocateForRelocation, SetRelocationRegion, ResolveCycleRef, ResolveCycleRefImpl, RouteOrCompactRegionImpl, PostResolveCycleTask, VerifyFaceEnabled, VerifyPhaseEnter, GCPhasePreForward, TransitionToGCPhaseExclusive, ForwardObjectImpl, ForwardObjectExclusive, RelocateObjectInner, TryMutatorRelocate, WaitForPageForwarding, RunCycle, Uncommit, VisitHeapRootSlots, WriteReference, RecordCrossGenEdge, ZeroAndFill, runtime/src/Heap/z/zStat.cpp:Sort, PublishForwardingCarrier, PrepareForwardableRegion, DoYoungGarbageCollection, DoTracing, ProcessOldNonStrongReferences, PostWriteReference, WaitForAck, ProcessDriverRequest, RequestGCAndWait, DrainStackWatermark, VisitRawObjects, NoteLargeArrayInitRootVisit, runtime/src/Heap/z/zMarkingSMR.cpp:free_node, runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:MRT_TransitMutatorToExit, runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:LibInit, runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:UnloadLibrary, runtime/src/CangjieRuntimeApi.cpp:UnloadCJLibrary, runtime/src/Heap/z/workerThread.cpp:coordinator_distribute_task, runtime/src/Heap/z/zWorkers.cpp:run, runtime/src/Heap/z/zBarrier.cpp:store_barrier_on_heap_oop_field, alloc_page, concurrent_mark, select_relocation_set, GcPhaseEnum, flip_old_relocate_start, pause_relocate_start, free_page, relocate_or_remap_object, runtime/src/Heap/z/zGeneration.cpp:pause, runtime/src/Heap/z/zRootsIterator.cpp:Apply"
     }
    ],
    "ok": true

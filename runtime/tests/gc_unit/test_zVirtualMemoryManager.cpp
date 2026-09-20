@@ -256,7 +256,7 @@ public:
 using namespace MapleRuntime;
 
 #define ZVMM_TEST(name)                                                            \
-GC_TEST(ZVirtualMemoryManagerTest, name)                                           \
+GC_COMPONENT_TEST(ZVirtualMemoryManagerTest, name)                                           \
 {                                                                                  \
     ZVirtualMemoryManagerTest fixture;                                             \
     GC_EXPECT_TRUE(fixture.ready());                                               \
@@ -271,7 +271,7 @@ ZVMM_TEST(test_insert_merges_neighbours)
 
 // P01 reverse-metadata adapter over P04's real reservation producer. Keep the
 // holes occupied so both the contiguous search and recursive fallback run.
-GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, InitialSegmentsPreserveNineReservations)
+GC_COMPONENT_OTHER_VM_TEST(ZVirtualMemoryManagerTest, InitialSegmentsPreserveNineReservations)
 {
     EnsureZAddressDomain();
     constexpr size_t domainSize = 512 * MB;
@@ -318,7 +318,7 @@ GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, InitialSegmentsPreserveNineReservati
 
 // Unit coverage of the header-only P01 provider. The joint llc runner separately
 // consumes ranges emitted by RegionSpace::Init from real OS reservations.
-GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTablePublishesEveryRange)
+GC_COMPONENT_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTablePublishesEveryRange)
 {
     EnsureZAddressDomain();
     const uintptr_t domain = ZAddressHeapBase;
@@ -346,7 +346,7 @@ GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTablePublishesEveryRange)
     }
 }
 
-GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTableRejectsOversizedPublication)
+GC_COMPONENT_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTableRejectsOversizedPublication)
 {
     EnsureZAddressDomain();
     const pid_t child = fork();

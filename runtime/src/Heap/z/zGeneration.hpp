@@ -143,9 +143,6 @@ public:
     void PublishPhase(ZGenerationPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
-    ZRemembered* remembered() { return &_remembered; }
-    const ZRemembered* remembered() const { return &_remembered; }
-    void register_with_remset(ZPage* page) { _remembered.register_found_old(page); }
     void End();
     ZForwardingTable& forwarding_table() { return _forwarding_table; }
     const ZForwardingTable& forwarding_table() const { return _forwarding_table; }
@@ -193,7 +190,6 @@ protected:
     ZForwardingTable _forwarding_table;
     ZRelocationSet _relocation_set;
     std::unique_ptr<ZRelocate> _relocate;
-    ZRemembered _remembered;
     void* _gc_timer { nullptr };
 };
 
@@ -230,7 +226,12 @@ private:
 
 class ZGenerationYoung : public ZGeneration {
 public:
-    ZGenerationYoung();
+    ZGenerationYoung(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table,
+                     RegionManager* page_allocator);
+    ZRemembered* remembered() { return &_remembered; }
+    const ZRemembered* remembered() const { return &_remembered; }
+    void register_with_remset(ZPage* page) { _remembered.register_found_old(page); }
+
     // zGeneration.hpp:199,244-246 — tenuring threshold is young-generation
     // state, selected after select_relocation_set (zGeneration.cpp:250).
     uint32_t tenuring_threshold() { return _tenuring_threshold; }
@@ -278,6 +279,7 @@ private:
     YoungConcWindowStats youngConcWindow;
     uint64_t youngConcWindowStartNs = 0;
     MinorSlotSet youngWeakSlots;
+    ZRemembered _remembered;
     ZGenerationYoung* previousYoung { nullptr };
 };
 

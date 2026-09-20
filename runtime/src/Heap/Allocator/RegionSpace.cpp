@@ -35,11 +35,6 @@ RegionManager& RegionSpace::GetRegionManager() const noexcept
     return Heap::GetHeap().page_allocator();
 }
 
-void RegionSpace::Init(const HeapParam& param)
-{
-    GetRegionManager().Init(param);
-}
-
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
 bool RegionSpace::IsHeapObject(MAddress addr) const
 {

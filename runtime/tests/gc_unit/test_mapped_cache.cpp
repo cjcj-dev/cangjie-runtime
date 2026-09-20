@@ -40,7 +40,7 @@ struct CacheFixture {
 };
 }
 
-GC_TEST(MappedCache, CoalesceAndRemoveWhole)
+GC_COMPONENT_TEST(MappedCache, CoalesceAndRemoveWhole)
 {
     EnsureZAddressDomain();
     CacheFixture f;
@@ -54,7 +54,7 @@ GC_TEST(MappedCache, CoalesceAndRemoveWhole)
     GC_EXPECT_TRUE(f.cache.remove_contiguous(f.bytes(1)).is_null());
 }
 
-GC_TEST(MappedCache, SmallPagesUseLowestAddress)
+GC_COMPONENT_TEST(MappedCache, SmallPagesUseLowestAddress)
 {
     EnsureZAddressDomain();
     // remove_contiguous(ZPageSizeSmall) scans from the lowest address
@@ -87,7 +87,7 @@ GC_TEST(MappedCache, SmallPagesUseLowestAddress)
     GC_EXPECT_TRUE(cache.remove_contiguous(small).is_null());
 }
 
-GC_TEST(MappedCache, EqualCapacityContiguousAndFragmented)
+GC_COMPONENT_TEST(MappedCache, EqualCapacityContiguousAndFragmented)
 {
     EnsureZAddressDomain();
     CacheFixture contiguous;
@@ -114,7 +114,7 @@ GC_TEST(MappedCache, EqualCapacityContiguousAndFragmented)
     GC_EXPECT_EQ(all.length(), 3U);
 }
 
-GC_TEST(MappedCache, UncommitUsesHighestAddress)
+GC_COMPONENT_TEST(MappedCache, UncommitUsesHighestAddress)
 {
     EnsureZAddressDomain();
     CacheFixture f;
@@ -136,7 +136,7 @@ GC_TEST(MappedCache, UncommitUsesHighestAddress)
 // The intrusive red-black tree behind the cache (Base/RBTree.h) against a
 // sorted model: random inserts, removals and coalescing keep the in-order
 // walk equal to the set of cached ranges.
-GC_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
+GC_COMPONENT_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
 {
     EnsureZAddressDomain();
     constexpr size_t kUnits = 256;
@@ -195,7 +195,7 @@ GC_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
 // the same segments map at a different virtual address with their contents
 // intact (PLAN P04 invariant 2), and stash_segments sorts the indices so the
 // restored run maps in backing order.
-GC_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
+GC_COMPONENT_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
 {
     EnsureZAddressDomain();
     // Keep the granule map small: it covers [0, ZAddressOffsetMax).
@@ -255,20 +255,12 @@ GC_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
 
 namespace {
 struct ProductHeapFixture {
-    // The RegionManager (and its mapped caches, whose entries live in heap
-    // memory) must be destroyed before the mapping: declare it last.
-    std::unique_ptr<ZTestRegionHeap> heap;
-    RegionManager manager;
+    RegionManager& manager;
     explicit ProductHeapFixture(size_t units)
+        : manager((MapleRuntime::GcUnit::CreateStandaloneHeap(units), Heap::GetHeap().page_allocator()))
     {
-        // This synthetic allocator runs on a runtime worker, not a CJ scheduler thread.
         ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
-        // Match CollectorResources::Init before allocation-rate sampling.
         ZStat::Initialize();
-        HeapParam parameters{};
-        parameters.regionSize = ZGranuleSize / 1024;
-        parameters.exemptionThreshold = 0.8;
-        heap.reset(new ZTestRegionHeap(units, manager, parameters, 0.5));
     }
 };
 
@@ -287,13 +279,13 @@ uint64_t Read(uintptr_t address)
 // with no capacity left to grow, a request larger than any cached run harvests
 // the cache, unmaps, shuffles the virtual memory to the lowest free address
 // and maps the stashed backing there in backing-index order.
-GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
+GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
 {
     const size_t unit = ZGranuleSize;
     ProductHeapFixture fixture(8);
     RegionManager& manager = fixture.manager;
     const auto role = ZPageType::large;
-    BindFixturePageTable(manager, 8);
+
     ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
     ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
     ZPage* third = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
@@ -326,20 +318,20 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     GC_EXPECT_EQ(Read(result->GetRegionStart() + 2 * unit), 0x3333U);
     GC_EXPECT_TRUE(Heap::page(fourthAddress) == fourth);
     GC_EXPECT_TRUE(Heap::page(heapStart) == nullptr);
-    Heap::bind_test_page_allocator(nullptr);
+
 }
 
 // TestMappedCacheHarvest.java / zPageAllocator.cpp:723-743: with growth room
 // of two units, a four-unit request increases capacity by two and harvests
 // only the remaining two units; the harvested backing lands in the first part
 // of the new vmem (commit_increased_capacity commits the last part).
-GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
+GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
 {
     const size_t unit = ZGranuleSize;
     ProductHeapFixture fixture(12);
     RegionManager& manager = fixture.manager;
     const auto role = ZPageType::large;
-    BindFixturePageTable(manager, 12);
+
     ZPage* regions[5];
     for (auto& region : regions) {
         region = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
@@ -372,7 +364,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     GC_EXPECT_TRUE(cached != nullptr);
     GC_EXPECT_EQ(manager.GetCommittedCapacity(), 12 * unit);
     GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 2U);
-    Heap::bind_test_page_allocator(nullptr);
+
 }
 
 #endif

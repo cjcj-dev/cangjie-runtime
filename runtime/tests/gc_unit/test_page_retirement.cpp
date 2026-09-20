@@ -36,18 +36,12 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
     {
         // Destroyed in reverse order: the manager (mapped caches keep entries
         // in heap memory) goes before the mapping.
-        HeapParam heapParam{};
-        heapParam.regionSize = 64;
-        heapParam.exemptionThreshold = 0.8;
-        std::unique_ptr<ZTestRegionHeap> heapHolder;
-        RegionManager manager;
-        heapHolder.reset(new ZTestRegionHeap(4, manager, heapParam, 0.5));
-        ZTestRegionHeap& heap = *heapHolder;
-        (void)heap;
+        MapleRuntime::GcUnit::CreateStandaloneHeap(4);
+        RegionManager& manager = Heap::GetHeap().page_allocator();
         // ReleaseRetiredRegion clears the product remembered set before
         // returning the page. Its address space must exist as after heap init.
         const auto role = ZPageType::large;
-        BindFixturePageTable(manager, 4);
+
         ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
         ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
         if (first == nullptr || second == nullptr) {
@@ -147,7 +141,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             Heap::page(end - 1) != reused) {
             result = 31;
         }
-        Heap::bind_test_page_allocator(nullptr);
+
     }
     return result;
 }
@@ -167,22 +161,22 @@ void CheckPageRetirement(RetirementPath path, bool concurrent)
 
 } // namespace
 
-GC_TEST(PageRetirement, PageTableReturnWaitsForOutermostIterator)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableReturnWaitsForOutermostIterator)
 {
     CheckPageRetirement(RetirementPath::RETURN, false);
 }
 
-GC_TEST(PageRetirement, PageTableConcurrentReclaimPreservesDescriptor)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableConcurrentReclaimPreservesDescriptor)
 {
     CheckPageRetirement(RetirementPath::RECLAIM, true);
 }
 
-GC_TEST(PageRetirement, PageTableReleaseWaitsForIterator)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableReleaseWaitsForIterator)
 {
     CheckPageRetirement(RetirementPath::RELEASE, true);
 }
 
-GC_TEST(PageRetirement, PageTableMarkQuarantineWaitsForIterator)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableMarkQuarantineWaitsForIterator)
 {
     CheckPageRetirement(RetirementPath::MARK_QUARANTINE, false);
 }
