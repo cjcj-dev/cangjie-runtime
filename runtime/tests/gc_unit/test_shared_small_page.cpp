@@ -90,7 +90,9 @@ struct SharedPageFixture {
         params.regionSize = ZGranuleSize / KB;
         params.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
+        BindFixturePageTable(manager, units);
     }
+    ~SharedPageFixture() { Heap::bind_test_page_allocator(nullptr); }
 };
 
 class CPUAffinity {
