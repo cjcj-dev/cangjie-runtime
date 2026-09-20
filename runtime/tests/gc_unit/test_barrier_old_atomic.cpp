@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <mutex>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -148,6 +149,8 @@ struct StoreFixture {
         regionNew = heap.region1;
         regionOld->reset(PageAge::old);
         regionNew->reset(PageAge::eden);
+        // Page reset stamps allocation sequence; start the snapshot afterwards.
+        marking = std::make_unique<MarkPublicationFixture>();
         holder = heap.obj0;
         oldValue = heap.PlaceObject(heap.heapStart + 256);
         newValue = heap.obj1;
@@ -158,7 +161,7 @@ struct StoreFixture {
     }
 
     GcHeapFixture heap;
-    MarkPublicationFixture marking;
+    std::unique_ptr<MarkPublicationFixture> marking;
     ZPage* regionOld = nullptr;
     ZPage* regionNew = nullptr;
     BaseObject* holder = nullptr;
@@ -306,9 +309,9 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
     for (TypeKind kind : {TypeKind::TYPE_KIND_STRUCT, TypeKind::TYPE_KIND_TUPLE,
                           TypeKind::TYPE_KIND_ENUM, TypeKind::TYPE_KIND_VARRAY}) {
         GcHeapFixture heap;
-        MarkPublicationFixture marking;
         heap.region0->reset(PageAge::old);
         heap.region1->reset(PageAge::eden);
+        MarkPublicationFixture marking;
                 alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)] {};
         auto* component = reinterpret_cast<TypeInfo*>(componentStorage);
         component->SetType(TypeKind::TYPE_KIND_CLASS);
