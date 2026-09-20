@@ -47,12 +47,13 @@ struct PageMemory {
 // answer is published.
 class ZPageAllocation {
 public:
-    ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear, ZAllocationFlags flags = {})
-        : size(size), role(role), physical(physical), clear(clear), flags(flags) {}
+    ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear, ZAllocationFlags flags = {});
     ZPageAllocation(const ZPageAllocation&) = delete;
     ZPageAllocation& operator=(const ZPageAllocation&) = delete;
 
     size_t GetSize() const { return size; }
+    uint32_t YoungSeqnum() const { return youngSeqnum; }
+    uint32_t OldSeqnum() const { return oldSeqnum; }
     ZAllocationFlags Flags() const { return flags; }
     uint8_t GetRole() const { return role; }
     bool ExpectsPhysicalMemory() const { return physical; }
@@ -72,11 +73,12 @@ public:
     }
 
 private:
-    friend class AllocationStallQueue;
+    friend class RegionManager;
     friend class ZList<ZPageAllocation>;
 
     const size_t size;
-    uint64_t sequence{ 0 };
+    const uint32_t youngSeqnum;
+    const uint32_t oldSeqnum;
     const uint8_t role;
     const bool physical;
     const bool clear;
@@ -89,107 +91,8 @@ private:
 };
 using AllocationStallRequest = ZPageAllocation;
 
-// Allocator-owned FIFO.  Enqueue returns true only for the transition from
-// empty to non-empty, giving the first waiter ownership of the GC request.
-class AllocationStallQueue {
-public:
-    explicit AllocationStallQueue(std::mutex& owner) : mutex(owner) {}
-
-    // The allocator holds the same owner across claim failure and enqueue.
-    bool EnqueueLocked(ZPageAllocation& request)
-    {
-        const bool requestGc = !gcInProgress;
-        gcInProgress = true;
-        request.sequence = ++lastSequence;
-        requests.insert_last(&request);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-        ++enqueued;
-#endif
-        return requestGc;
-    }
-
-    // zHeap.inline.hpp: is_alloc_stalling; read the actual outstanding FIFO.
-    bool IsStalling() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return !requests.is_empty();
-    }
-
-    uint64_t CaptureWaveBoundary() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return lastSequence;
-    }
-
-    size_t SatisfyAvailable(const std::function<bool(ZPageAllocation&)>& claim)
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return SatisfyAvailableLocked(claim);
-    }
-
-    size_t SatisfyAvailableLocked(const std::function<bool(ZPageAllocation&)>& claim)
-    {
-        size_t satisfied = 0;
-        while (!requests.is_empty()) {
-            ZPageAllocation* request = requests.first();
-            if (!claim(*request)) {
-                break;
-            }
-            requests.remove_first();
-            request->Satisfy(true);
-            ++satisfied;
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-            ++dequeued;
-            ++satisfiedCount;
-#endif
-        }
-        return satisfied;
-    }
-
-    bool CompleteWave(uint64_t boundary)
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        while (!requests.is_empty() && requests.first()->sequence <= boundary) {
-            ZPageAllocation* request = requests.first();
-            requests.remove_first();
-            request->Satisfy(false);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-            ++dequeued;
-            ++failedCount;
-#endif
-        }
-        if (requests.is_empty()) {
-            gcInProgress = false;
-            return false;
-        }
-        return true;
-    }
-
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    size_t Pending() const;
-    size_t EnqueuedCount() const;
-    size_t DequeuedCount() const;
-    size_t SatisfiedCount() const;
-    size_t FailedCount() const;
-#endif
-
-private:
-    std::mutex& mutex;
-    // zPageAllocator.hpp:165 ZList<ZPageAllocation> _stalled.
-    ZList<ZPageAllocation> requests;
-    uint64_t lastSequence{ 0 };
-    bool gcInProgress{ false };
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    size_t enqueued{ 0 };
-    size_t dequeued{ 0 };
-    size_t satisfiedCount{ 0 };
-    size_t failedCount{ 0 };
-#endif
-};
-
 } // namespace MapleRuntime
 
-#include "Heap/Allocator/AllocationStallQueue.h"
 #endif // MRT_ALLOCATION_STALL_QUEUE_H
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -548,11 +451,15 @@ public:
     template<Generation G>
     void ForwardRegion(ZPage* region);
     ZRelocateQueue& GetZRelocateQueue() { return relocateQueue; }
-    bool StallAllocation(AllocationStallRequest& request, bool requestGc);
+    bool StallAllocation(AllocationStallRequest& request);
+    bool ClaimCapacityOrStall(AllocationStallRequest& request);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
     void ReturnPageMemory(const PageMemory& memory);
-    void SatisfyStalledAllocations();
-    bool IsAllocationStalling() const { return allocationStallQueue.IsStalling(); }
+    bool IsAllocationStalling() const;
+    bool IsAllocationStallingForOld() const;
+    void HandleAllocStallingForYoung();
+    void StopStalledAllocations();
+    void HandleAllocStallingForOld(bool clearedAllSoftRefs);
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     MRT_EXPORT size_t PendingStalledAllocations() const;
     MRT_EXPORT size_t EnqueuedStalledAllocations() const;
@@ -585,7 +492,7 @@ public:
     size_t AllocationStallsNow() const
     {
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
-        return allocationStallQueue.Pending();
+        return PendingStalledAllocations();
 #else
         return 0;
 #endif
@@ -884,8 +791,18 @@ private:
     }
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
     friend class Uncommitter;
-    std::mutex pageAllocatorMutex;
-    AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
+    mutable std::mutex pageAllocatorMutex;
+    ZList<ZPageAllocation> stalled;
+    bool stallClosed{false};
+    void SatisfyStalledAllocations();
+    void NotifyOutOfMemory();
+    void RestartGC() const;
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+    size_t stallEnqueued{0};
+    size_t stallDequeued{0};
+    size_t stallSatisfied{0};
+    size_t stallFailed{0};
+#endif
     size_t pageAllocatorUsed{ 0 };
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
 #endif

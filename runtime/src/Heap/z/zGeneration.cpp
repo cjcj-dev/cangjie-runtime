@@ -329,7 +329,8 @@ void ZGenerationYoung::collect()
 {
     ZGenerationCollectionScopeYoung scope(*this);
     pause_mark_start();
-    DriverUnlocker unlocker;
+    // ZGC zGeneration.cpp:538-576: young keeps the driver lock throughout;
+    // only the old collection scope releases it (zGeneration.cpp:995).
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {

@@ -673,19 +673,30 @@ void RegionManager::ReclaimRetiredRegion(ZPage* region)
     ReturnPageMemory(PageMemory{ unitIndex, num, 0, true });
 }
 
-bool RegionManager::StallAllocation(AllocationStallRequest& request, bool requestGc)
+// ZGC zPageAllocator.cpp:426-440: capture generation epochs at request construction.
+ZPageAllocation::ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear, ZAllocationFlags flags)
+    : size(size), youngSeqnum(ZGeneration::young()->seqnum()), oldSeqnum(ZGeneration::old()->seqnum()),
+      role(role), physical(physical), clear(clear), flags(flags) {}
+
+// ZGC zPageAllocator.cpp:1518-1542: a single decision owns both enqueue and wait.
+bool RegionManager::ClaimCapacityOrStall(AllocationStallRequest& request)
 {
-    if (requestGc) {
-        bool anotherWave = false;
-        do {
-            const uint64_t waveBoundary = allocationStallQueue.CaptureWaveBoundary();
-            {
-                Heap::GetHeap().RequestGC(GC_REASON_OOM, false);
-            }
-            SatisfyStalledAllocations();
-            anotherWave = allocationStallQueue.CompleteWave(waveBoundary);
-        } while (anotherWave);
+    {
+        std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+        if (ClaimAllocationLocked(request)) { return true; }
+        if (request.Flags().non_blocking() || stallClosed) { return false; }
+        stalled.insert_last(&request);
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+        ++stallEnqueued;
+#endif
     }
+    return StallAllocation(request);
+}
+
+bool RegionManager::StallAllocation(AllocationStallRequest& request)
+{
+    // ZGC zPageAllocator.cpp:1443-1448: asynchronous minor request, then one wait.
+    ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, 0, 0));
 
     // zFuture.inline.hpp:47-53: a Java thread waits with a safepoint check;
     // here the mutator enters its saferegion before ZFuture::get (I3/I4).
@@ -735,20 +746,103 @@ void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory, bool allow
     CHECK(pageAllocatorUsed >= bytes);
     pageAllocatorUsed -= bytes;
     TrackUsedPeakLocked();
-    allocationStallQueue.SatisfyAvailableLocked([this](AllocationStallRequest& request) {
-        return ClaimAllocationLocked(request);
-    });
+    SatisfyStalledAllocations();
 }
 
 
 
+// ZGC zPageAllocator.cpp:2167-2189: reserve capacity, dequeue, then notify.
 void RegionManager::SatisfyStalledAllocations()
 {
-    // zPageAllocator.cpp:2167: claim the actual resource and update used
-    // under the ordinary allocation owner, then dequeue and notify.
-    allocationStallQueue.SatisfyAvailable([this](AllocationStallRequest& request) {
-        return ClaimAllocationLocked(request);
-    });
+    while (ZPageAllocation* request = stalled.first()) {
+        if (!ClaimAllocationLocked(*request)) { return; }
+        stalled.remove(request);
+        request->Satisfy(true);
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+        ++stallDequeued;
+        ++stallSatisfied;
+#endif
+    }
+}
+
+// ZGC zPageAllocator.cpp:2295-2300.
+static bool HasAllocSeenYoung(const ZPageAllocation* request)
+{
+    return request->YoungSeqnum() != ZGeneration::young()->seqnum();
+}
+
+static bool HasAllocSeenOld(const ZPageAllocation* request)
+{
+    return request->OldSeqnum() != ZGeneration::old()->seqnum();
+}
+
+bool RegionManager::IsAllocationStalling() const
+{
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    return stalled.first() != nullptr;
+}
+
+bool RegionManager::IsAllocationStallingForOld() const
+{
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    const ZPageAllocation* request = stalled.first();
+    return request != nullptr && HasAllocSeenYoung(request) && !HasAllocSeenOld(request);
+}
+
+// ZGC zPageAllocator.cpp:2320-2332: only a request predating old mark-start fails.
+void RegionManager::NotifyOutOfMemory()
+{
+    while (ZPageAllocation* request = stalled.first()) {
+        if (!HasAllocSeenOld(request)) { return; }
+        stalled.remove(request);
+        request->Satisfy(false);
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+        ++stallDequeued;
+        ++stallFailed;
+#endif
+    }
+}
+
+// ZGC zPageAllocator.cpp:2334-2363: keep late requests queued and drive their GC.
+void RegionManager::RestartGC() const
+{
+    const ZPageAllocation* request = stalled.first();
+    if (request == nullptr) { return; }
+    if (!HasAllocSeenYoung(request)) {
+        ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, 0, 0));
+    } else {
+        ZCollectedHeap::heap()->driver_major()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, 0, 0));
+    }
+}
+
+void RegionManager::HandleAllocStallingForYoung()
+{
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    RestartGC();
+}
+
+void RegionManager::HandleAllocStallingForOld(bool clearedAllSoftRefs)
+{
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    if (clearedAllSoftRefs) { NotifyOutOfMemory(); }
+    RestartGC();
+}
+
+// Cangjie can finish its runtime while native allocation callers still wait.
+// HotSpot has no corresponding allocator shutdown: see advisor 20260920T050835Z.
+// The exiting driver closes the queue and publishes each remaining failure once.
+void RegionManager::StopStalledAllocations()
+{
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    stallClosed = true;
+    while (ZPageAllocation* request = stalled.first()) {
+        stalled.remove(request);
+        request->Satisfy(false);
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+        ++stallDequeued;
+        ++stallFailed;
+#endif
+    }
 }
 
 bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
@@ -836,6 +930,7 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
                                        bool allowSaferegion, bool clearPayload, PageAge age, ZAllocationFlags flags)
 {
     allowSaferegion = allowSaferegion && !flags.non_blocking();
+    if (!allowSaferegion || IsGcThread()) { flags.set_non_blocking(); }
     size_t size = num;
     if (allowSaferegion) {
         RequestForRegion(size);
@@ -853,18 +948,7 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
 
 retry:
     ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload, flags);
-    bool claimed = false;
-    bool requestGc = false;
-    {
-        std::lock_guard<std::mutex> lock(pageAllocatorMutex);
-        claimed = ClaimAllocationLocked(request);
-        if (!claimed && allowSaferegion && !IsGcThread()) {
-            requestGc = allocationStallQueue.EnqueueLocked(request);
-        }
-    }
-    if (!claimed && allowSaferegion && !IsGcThread()) {
-        claimed = StallAllocation(request, requestGc);
-    }
+    const bool claimed = ClaimCapacityOrStall(request);
     if (claimed) {
         size = request.Memory().size;
         size_t committedBytes = 0;
@@ -884,9 +968,7 @@ retry:
             CHECK(pageAllocatorUsed >= size);
             pageAllocatorUsed -= size;
             TrackUsedPeakLocked();
-            allocationStallQueue.SatisfyAvailableLocked([this](ZPageAllocation& pending) {
-                return ClaimAllocationLocked(pending);
-            });
+            SatisfyStalledAllocations();
             if (allowSaferegion) {
                 goto retry;
             }
