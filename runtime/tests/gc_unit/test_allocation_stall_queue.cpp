@@ -145,9 +145,9 @@ void RunProductStallWaiters(bool stopping = false)
     stallReleaseMark = false;
     stallWindowTimeout = false;
     if (stopping) {
-        // This existing hook is in old concurrent_mark after the young scope
-        // has ended and old released the driver lock.
-        ZGeneration::testOldMarkStarted = HoldStallMark;
+        // Hold the real driver owner before queuing allocation requests. Shutdown
+        // publishes abort before this owner is released; no mark callback is needed.
+        ZDriver::lock();
     } else {
         SetMarkClosureObserverForTest(ObserveStallMark);
     }
@@ -156,9 +156,6 @@ void RunProductStallWaiters(bool stopping = false)
     uint64_t completedSequence[2]{};
     std::atomic<bool> done[2]{};
     std::atomic<Mutator*> waitingMutators[2]{};
-    const size_t enqueuedBefore = heap.page_allocator().EnqueuedStalledAllocations();
-    const size_t dequeuedBefore = heap.page_allocator().DequeuedStalledAllocations();
-    const size_t failedBefore = heap.page_allocator().FailedStalledAllocations();
     auto allocate = [&](size_t index) {
         manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         {
@@ -172,19 +169,15 @@ void RunProductStallWaiters(bool stopping = false)
     };
     std::thread first(allocate, 0);
     auto deadline = std::chrono::steady_clock::now() + kHangLimit;
-    while (stallMarkSequence.load() == 0 && !done[0].load() && std::chrono::steady_clock::now() < deadline) {
+    while (!done[0].load() && std::chrono::steady_clock::now() < deadline) {
+        Mutator* firstMutator = waitingMutators[0].load(std::memory_order_acquire);
+        if (stopping ? (firstMutator != nullptr && firstMutator->InSaferegion()) :
+                       stallMarkSequence.load() != 0) { break; }
         std::this_thread::yield();
     }
-    const uint64_t firstMark = stallMarkSequence.load();
-    // Hold the product driver lock while the late request queues its minor GC.
-    // Releasing it only after shutdown published abort constructs the otherwise
-    // rare stop-versus-next-driver-cycle interleaving without changing GC state.
-    if (stopping) { ZDriver::lock(); }
+    const uint64_t firstMark = stopping ? heap.GetCycleSnapshot(ZGenerationId::old).sequence :
+                                          stallMarkSequence.load();
     std::thread late(allocate, 1);
-    deadline = std::chrono::steady_clock::now() + kHangLimit;
-    while (heap.page_allocator().PendingStalledAllocations() != 2 && !done[1].load() &&
-           std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
-    const size_t queued = heap.page_allocator().PendingStalledAllocations();
     deadline = std::chrono::steady_clock::now() + kHangLimit;
     while (std::chrono::steady_clock::now() < deadline) {
         Mutator* a = waitingMutators[0].load(std::memory_order_acquire);
@@ -197,6 +190,8 @@ void RunProductStallWaiters(bool stopping = false)
     const bool safe = a != nullptr && b != nullptr && a->InSaferegion() && b->InSaferegion() &&
                       !done[0].load() && !done[1].load();
     const bool stalling = heap.page_allocator().IsAllocationStalling();
+    const size_t queued = (a != nullptr && a->InSaferegion() && !done[0].load()) +
+                          (b != nullptr && b->InSaferegion() && !done[1].load());
     std::thread stopper;
     bool abortObserved = false;
     if (stopping) {
@@ -215,7 +210,7 @@ void RunProductStallWaiters(bool stopping = false)
     }
     const bool completed = done[0].load() && done[1].load();
     std::fprintf(stderr, "STALL_COMPLETION_TARGET completed=%d first=%d late=%d pending=%zu\n",
-                 completed, done[0].load(), done[1].load(), heap.page_allocator().PendingStalledAllocations());
+                 completed, done[0].load(), done[1].load(), size_t{heap.page_allocator().IsAllocationStalling()});
     // A broken product notification must fail this invariant, rather than hang
     // in join and hide it behind the runner timeout. Stop this isolated VM on failure.
     if (!completed) {
@@ -228,7 +223,6 @@ void RunProductStallWaiters(bool stopping = false)
     first.join();
     late.join();
     if (stopper.joinable()) { stopper.join(); }
-    ZGeneration::testOldMarkStarted = nullptr;
     SetMarkClosureObserverForTest(nullptr);
     const bool retained = heap.GetExportObject(root) != nullptr;
     std::fprintf(stderr, "STALL_PRODUCT_LATE_TARGET queued=%zu first_mark=%llu first_done=%llu late_done=%llu "
@@ -238,19 +232,14 @@ void RunProductStallWaiters(bool stopping = false)
                  retained, stallWindowTimeout.load());
     heap.RemoveExportObject(root);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    const size_t enqueued = heap.page_allocator().EnqueuedStalledAllocations() - enqueuedBefore;
-    const size_t dequeued = heap.page_allocator().DequeuedStalledAllocations() - dequeuedBefore;
-    const size_t failed = heap.page_allocator().FailedStalledAllocations() - failedBefore;
-    const size_t pending = heap.page_allocator().PendingStalledAllocations();
-    std::fprintf(stderr, "STALL_WAIT_TARGET safe=%d stalling=%d enqueued=%zu dequeued=%zu failed=%zu pending=%zu\n",
-                 safe, stalling, enqueued, dequeued, failed, pending);
+    const bool pending = heap.page_allocator().IsAllocationStalling();
+    std::fprintf(stderr, "STALL_WAIT_TARGET safe=%d stalling=%d completed=%d pending=%d\n",
+                 safe, stalling, completed, pending);
     GC_EXPECT_TRUE(safe && stalling);
-    GC_EXPECT_EQ(enqueued, size_t{2});
-    GC_EXPECT_EQ(dequeued, enqueued);
-    GC_EXPECT_EQ(failed, enqueued);
-    GC_EXPECT_EQ(pending, size_t{0});
+    GC_EXPECT_FALSE(pending);
     GC_EXPECT_EQ(queued, size_t{2});
-    GC_EXPECT_TRUE(firstMark != 0 && !stallWindowTimeout.load());
+    GC_EXPECT_FALSE(stallWindowTimeout.load());
+    if (!stopping) { GC_EXPECT_TRUE(firstMark != 0); }
     GC_EXPECT_TRUE(results[0] == nullptr && results[1] == nullptr && retained);
     if (stopping) {
         std::fprintf(stderr, "STALL_SHUTDOWN_TARGET abort_observed=%d abort_retained=%d late_done=%llu first_mark=%llu\n",
@@ -323,15 +312,15 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     while (stallMarkSequence.load() == 0 && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
-    const size_t satisfiedBefore = heap.page_allocator().SatisfiedStalledAllocations();
-    const size_t failedBefore = heap.page_allocator().FailedStalledAllocations();
     BaseObject* results[2]{};
     U64 resultRoots[2]{};
     std::atomic<bool> done[2]{};
+    std::atomic<Mutator*> waitingMutators[2]{};
     auto allocate = [&](size_t index) {
         manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         {
             ScopedObjectAccess access;
+            waitingMutators[index].store(Mutator::GetMutator(), std::memory_order_release);
             results[index] = allocateObject(requestType, requestedBytes);
             if (results[index] != nullptr) { resultRoots[index] = heap.RegisterExportRoot(results[index]); }
         }
@@ -340,10 +329,18 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     };
     std::thread first(allocate, 0), second(allocate, 1);
     deadline = std::chrono::steady_clock::now() + kHangLimit;
-    while (heap.page_allocator().PendingStalledAllocations() != 2 && std::chrono::steady_clock::now() < deadline) {
+    auto waiting = [&] {
+        size_t count = 0;
+        for (size_t i = 0; i < 2; ++i) {
+            Mutator* mutator = waitingMutators[i].load(std::memory_order_acquire);
+            if (mutator != nullptr && mutator->InSaferegion() && !done[i].load()) { ++count; }
+        }
+        return count;
+    };
+    while (waiting() != 2 && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
-    const size_t queued = heap.page_allocator().PendingStalledAllocations();
+    const size_t queued = waiting();
     Heap::free_page(capacity);
     ZAllocationFlags nonBlocking;
     nonBlocking.set_non_blocking();
@@ -368,11 +365,12 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     collection.join();
     SetMarkClosureObserverForTest(nullptr);
     const size_t successes = (results[0] != nullptr) + (results[1] != nullptr);
-    const size_t satisfied = heap.page_allocator().SatisfiedStalledAllocations() - satisfiedBefore;
-    const size_t failed = heap.page_allocator().FailedStalledAllocations() - failedBefore;
-    const size_t pending = heap.page_allocator().PendingStalledAllocations();
-    std::fprintf(stderr, "STALL_CAPACITY_TARGET successes=%zu satisfied=%zu failed=%zu pending=%zu first=%p second=%p competing=%p\n",
-                 successes, satisfied, failed, pending, results[0], results[1], competing);
+    // zPageAllocator.cpp:2167-2189: allocation return values are the consumer
+    // result of satisfy/fail; there is no diagnostic event ledger in ZGC.
+    const size_t failed = (results[0] == nullptr) + (results[1] == nullptr);
+    const bool pending = heap.page_allocator().IsAllocationStalling();
+    std::fprintf(stderr, "STALL_CAPACITY_TARGET successes=%zu failed=%zu pending=%d first=%p second=%p competing=%p\n",
+                 successes, failed, pending, results[0], results[1], competing);
     for (size_t i = 0; i < 2; ++i) {
         if (results[i] != nullptr) { heap.RemoveExportObject(resultRoots[i]); }
     }
@@ -380,9 +378,8 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(competing == nullptr);
     GC_EXPECT_EQ(successes, size_t{1});
-    GC_EXPECT_EQ(satisfied, successes);
     GC_EXPECT_EQ(failed, size_t{1});
-    GC_EXPECT_EQ(pending, size_t{0});
+    GC_EXPECT_FALSE(pending);
     GC_EXPECT_EQ(queued, size_t{2});
     GC_EXPECT_FALSE(stallWindowTimeout.load());
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);

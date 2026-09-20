@@ -157,9 +157,12 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsBadLiveAccounting)
     fixture.region0->SetRegionRole(ZPageRole::From);
     ExpectSceneAbort("Invalid number of live objects", [&] {
         fixture.region0->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
-        RegionManager manager;
-        manager.GetZRelocateQueue().BeginWorkers(1);
-        manager.ForwardFromRegions<Generation::Old>();
+        auto& old = Heap::GetHeap().old();
+        if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
+        old.Workers()->set_active_workers(1);
+        old.Workers()->set_active();
+        old.relocate().relocate(&old.relocation_set());
+        old.Workers()->set_inactive();
     });
 }
 
@@ -224,9 +227,12 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
         rejectedPage = fixture.region0;
         rejectedTop = observed;
         (void)signal(SIGABRT, RecordRejectedTop);
-        RegionManager manager;
-        manager.GetZRelocateQueue().BeginWorkers(1);
-        manager.ForwardFromRegions<Generation::Old>();
+        auto& old = Heap::GetHeap().old();
+        if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
+        old.Workers()->set_active_workers(1);
+        old.Workers()->set_active();
+        old.relocate().relocate(&old.relocation_set());
+        old.Workers()->set_inactive();
     });
     const uintptr_t after = *observed;
     (void)munmap(shared, sizeof(uintptr_t));
