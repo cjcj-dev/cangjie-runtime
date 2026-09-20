@@ -14,7 +14,8 @@
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
-#include "root_publication_snapshot.hpp"
+#include "Heap/z/concurrentGCBreakpoints.hpp"
+#include "Heap/z/zPage.inline.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -79,23 +80,21 @@ void* RunMajorCycle(void*)
     type->SetInstanceSize(sizeof(uint64_t));
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
-    auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
+    auto* object = MObject::NewPinnedObject(type, 16);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(object);
     ZGenerationRootTestAccess::Seed(collector, object);
-    // Read the product's published old mark stacks at the top of DoTracing
-    // (after the old root task returned, before follow). The export root
-    // keeping the object alive is not in this window (it feeds the driver's
-    // foreign stack), so the cycle-owner family scan is what publishes it.
-    ZGeneration::testOldMarkStarted = [handle, &collector]() {
-        BaseObject* current = Heap::GetHeap().GetExportObject(handle);
-        const bool found = RootPublicationSnapshot::Contains(*Heap::GetHeap().old().MarkPtr(), current);
-        gMajorRootObserved.store(found, std::memory_order_relaxed);
-        std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
-                    static_cast<void*>(current), static_cast<unsigned>(found));
-        std::fflush(stdout);
-    };
-    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
-    ZGeneration::testOldMarkStarted = nullptr;
+    // The ZGC breakpoint exposes the completed root+follow result before
+    // mark-end and relocation (zGeneration.cpp:1086-1092).
+    ConcurrentGCBreakpoints::AcquireControl();
+    const bool reached = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
+    BaseObject* current = Heap::GetHeap().GetExportObject(handle);
+    const bool found = reached && Heap::page(reinterpret_cast<MAddress>(current))->is_object_strongly_live(from_object(current));
+    gMajorRootObserved.store(found, std::memory_order_relaxed);
+    std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
+                static_cast<void*>(current), static_cast<unsigned>(found));
+    std::fflush(stdout);
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
     ZGenerationRootTestAccess::Clear(collector);
     Heap::GetHeap().RemoveExportObject(handle);
     return nullptr;

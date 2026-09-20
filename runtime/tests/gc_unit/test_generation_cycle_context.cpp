@@ -23,7 +23,8 @@
 #include "Heap/z/zWorkers.hpp"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
-#include "root_publication_snapshot.hpp"
+#include "gc_generation_test.hpp"
+#include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zBarrier.hpp"
 
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -135,7 +136,7 @@ void* Exercise(void*)
     uintptr_t preludeOldColor = 0;
     // Port the VM_ZMarkStartYoungAndOld/VM_ZMarkStartYoung phase invariants
     // (zGeneration.cpp:583-659) through the real driver request below.
-    ZGeneration::testYoungMarkStarted = [&]() {
+    auto checkYoungMarkStarted = [&]() {
         const auto young = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
         const auto old = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
         Expect(young.active, "young_mark_start_active");
@@ -166,10 +167,10 @@ void* Exercise(void*)
     std::array<U64, 6> handles {};
     std::array<BaseObject*, 6> witnesses {};
     for (auto& handle : handles) {
-        auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
+        auto* object = MObject::NewPinnedObject(type, 16);
         handle = Heap::GetHeap().RegisterExportRoot(object);
     }
-    ZGeneration::testCyclePrepared = [&]() {
+    auto checkCyclePrepared = [&]() {
         // The real driver has selected and prepared its cycle. Add captures
         // its own state; the test does not provide a phase or generation.
         StoreBarrierBuffer buffer;
@@ -202,21 +203,22 @@ void* Exercise(void*)
         }
         buffer.Flush();
     };
-    // Old root publication, read from the product's own published mark stacks
-    // at the top of DoTracing (zGeneration.cpp: after DoEnumeration returned,
-    // before TracingImpl pops anything). Export roots are not in this window:
-    // EnumAllExportRoots fills the driver-local foreign stack that only
-    // ProcessExportRoots consumes, so a witness is observed here only if its
-    // family scan published it.
-    ZGeneration::testOldMarkStarted = [&]() {
-        const std::set<BaseObject*> observed = RootPublicationSnapshot::Objects(*Heap::GetHeap().old().MarkPtr());
+    // Observe the completed product root closure, before relocation. ZGC
+    // zGeneration.cpp:1086-1092 has no breakpoint between roots and follow.
+    auto checkOldMarkResult = [&]() {
+        std::set<BaseObject*> observed;
+        auto isLive = [&](BaseObject* object) {
+            const bool live = Heap::page(reinterpret_cast<MAddress>(object))->is_object_strongly_live(from_object(object));
+            if (live) observed.insert(object);
+            return live;
+        };
         size_t expected = 0;
         bool included = true;
         Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {
             auto* object = to_object(slot.GetTargetObject());
             if (object != nullptr && Heap::IsHeapAddress(object)) {
                 ++expected;
-                included = included && observed.count(object) != 0;
+                included = isLive(object) && included;
             }
         });
         std::set<BaseObject*> concurrencyRoots;
@@ -226,7 +228,7 @@ void* Exercise(void*)
         };
         Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrentVisitor);
         const bool concurrencyIncluded = std::all_of(concurrencyRoots.begin(), concurrencyRoots.end(),
-            [&](BaseObject* object) { return observed.count(object) != 0; });
+            [&](BaseObject* object) { return isLive(object); });
         std::printf("ROOT_CONCURRENCY expected=%zu included=%u\n", concurrencyRoots.size(), concurrencyIncluded);
         Expect(!concurrencyRoots.empty(), "worker_concurrency_witness_exists");
         Expect(concurrencyIncluded, "worker_root_result_contains_concurrency");
@@ -237,9 +239,9 @@ void* Exercise(void*)
         std::set<BaseObject*> unique(witnesses.begin(), witnesses.end());
         Expect(unique.size() == witnesses.size() && unique.count(nullptr) == 0, "worker_family_witnesses_distinct");
         for (size_t i = 0; i < witnesses.size(); ++i) {
-            std::printf("ROOT_FAMILY name=%s object=%p included=%u\n", names[i], witnesses[i],
-                        observed.count(witnesses[i]) != 0);
-            Expect(observed.count(witnesses[i]) != 0, names[i]);
+            const bool live = isLive(witnesses[i]);
+            std::printf("ROOT_FAMILY name=%s object=%p included=%u\n", names[i], witnesses[i], live);
+            Expect(live, names[i]);
         }
         ZGenerationRootTest::Remove(tracing, witnesses);
         ++rootResults;
@@ -250,6 +252,31 @@ void* Exercise(void*)
         Expect(included, "worker_root_result_contains_statics");
         Expect(old.active && old.phase == ZGenerationPhase::Mark, "worker_root_result_owner");
     };
+    // Phase-unit coverage is separate from the complete driver cycles below.
+    // Each observation reads the result of the actual product phase; no
+    // callback supplies phase, roots, or mark results.
+    for (bool major : {true, false}) {
+        DriverLocker lock;
+        auto& heap = Heap::GetHeap();
+        YoungTypeSetter type(heap.young(), major ? ZYoungType::major_partial_roots : ZYoungType::minor);
+        ZGenerationTest::SetReason(heap.young(), major ? GC_REASON_USER : GC_REASON_YOUNG);
+        if (major) ZGenerationTest::SetReason(heap.old(), GC_REASON_USER);
+        heap.young().PreGarbageCollection(true, heap.young().Snapshot().requestIndex);
+        heap.young().pause_mark_start();
+        checkYoungMarkStarted();
+        checkCyclePrepared();
+        heap.young().concurrent_mark();
+        heap.young().End();
+        heap.young().Workers()->set_inactive();
+        if (major) {
+            heap.old().PreGarbageCollection(true, heap.old().Snapshot().requestIndex);
+            checkCyclePrepared();
+            heap.old().concurrent_mark();
+            checkOldMarkResult();
+            heap.old().End();
+            heap.old().Workers()->set_inactive();
+        }
+    }
 #endif
     auto y0 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
     auto o0 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
@@ -284,9 +311,6 @@ void* Exercise(void*)
     Expect(youngLabels == 2 && oldLabels == 1, "store_buffer_real_cycle_inputs");
     Expect(rootResults > 0, "worker_root_result_observed");
     Expect(combinedMarkStarts == 1 && minorMarkStarts == 1, "real_mark_start_variants_observed");
-    ZGeneration::testYoungMarkStarted = nullptr;
-    ZGeneration::testCyclePrepared = nullptr;
-    ZGeneration::testOldMarkStarted = nullptr;
     for (auto handle : handles) Heap::GetHeap().RemoveExportObject(handle);
 #endif
     return reinterpret_cast<void*>(static_cast<uintptr_t>(failures));
