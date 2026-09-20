@@ -39,6 +39,7 @@ set(GC_UNIT_SOURCES
     test_remap_young_roots.cpp
     test_zForwarding.cpp
     test_z_forwarding_table.cpp
+    test_relocate_live_precondition.cpp
     test_young_conc.cpp
     test_alloc_buffer_handoff.cpp
     test_tlab_usage.cpp
