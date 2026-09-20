@@ -429,10 +429,7 @@ void ZCrossVM::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>&
 void ZCrossVM::PreforwardDiscoveredExternObjects(Generation generation)
 {
     std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-    // zRelocate.cpp:382-415: stored roots remap through the same consumer
-    // as load barriers. Relocate-start after abort still visits remaining
-    // export/extern carriers; they are not required to be empty.
-    CurrentizeValueRootMap(discoveredExternObjects, generation);
+    CHECK(discoveredExternObjects.empty());
     CurrentizeValueRootMap(cycleRefWorkStack, generation);
 }
 
