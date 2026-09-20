@@ -28,7 +28,7 @@
 // need them to Init FDM without Heap::Init / InitCJRuntime.
 #define private public
 #include "Heap/z/zPage.hpp"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #undef private
 #include "zunittest.hpp"
 #include "Heap/z/zLiveMap.inline.hpp"

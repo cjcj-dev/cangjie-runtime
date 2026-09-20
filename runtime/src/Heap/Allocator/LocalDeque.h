@@ -17,7 +17,7 @@
 #include "Base/Log.h"
 #include "Base/Panic.h"
 #include "Base/SysCall.h"
-#include "Heap/z/AllocUtil.h"
+#include "Heap/Allocator/AllocUtil.h"
 
 #define DEBUG_DEQUE false
 #if DEBUG_DEQUE

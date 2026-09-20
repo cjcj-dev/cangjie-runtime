@@ -21,7 +21,7 @@
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zRelocate.hpp"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Common/BaseObject.h"
 #include "Common/SuspendibleThreadSet.h"
 #include "Mutator/ThreadLocal.h"

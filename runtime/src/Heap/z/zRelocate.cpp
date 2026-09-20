@@ -9,7 +9,7 @@
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zIterator.inline.hpp"
-#include "Heap/z/stringdedup/stringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 
 #include <array>
@@ -72,7 +72,7 @@
 #include <processthreadsapi.h>
 #endif
 
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Base/CString.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
@@ -90,7 +90,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/z/HeapFiller.h"
+#include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -1873,7 +1873,7 @@ template void RegionManager::ForwardRegion<Generation::Old>(ZPage*);
 
 #include <atomic>
 #include <chrono>
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zArray.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zIterator.inline.hpp"
@@ -2293,7 +2293,7 @@ namespace MapleRuntime {
 
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/z/stringdedup/stringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 
 #include <array>
@@ -2347,7 +2347,7 @@ namespace MapleRuntime {
 #include <processthreadsapi.h>
 #endif
 
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Base/CString.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
@@ -2363,7 +2363,7 @@ namespace MapleRuntime {
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/z/HeapFiller.h"
+#include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -2386,7 +2386,7 @@ namespace MapleRuntime {
 
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/z/stringdedup/stringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 
 #include <array>
@@ -2440,7 +2440,7 @@ namespace MapleRuntime {
 #include <processthreadsapi.h>
 #endif
 
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Base/CString.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
@@ -2456,7 +2456,7 @@ namespace MapleRuntime {
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/z/HeapFiller.h"
+#include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"

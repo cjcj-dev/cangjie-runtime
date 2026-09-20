@@ -8,7 +8,7 @@
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/zVerify.hpp"
-#include "Heap/z/stringdedup/stringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zMark.hpp"
 
@@ -40,7 +40,7 @@
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zPageTable.hpp"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Common/SuspendibleThreadSet.h"
@@ -713,7 +713,7 @@ void ZGenerationYoung::concurrent_relocate()
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/z/stringdedup/stringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -778,7 +778,7 @@ void ZGenerationOld::process_non_strong_references()
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/z/stringdedup/stringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -817,7 +817,7 @@ namespace MapleRuntime {
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/z/stringdedup/stringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -859,7 +859,7 @@ namespace MapleRuntime {
 #include "Common/StateWord.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
@@ -1338,7 +1338,7 @@ namespace MapleRuntime {
 
 #include "Base/GcLog.h"
 #include "Heap/z/zStat.hpp"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zDirector.hpp"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
@@ -1630,7 +1630,7 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
 
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/z/stringdedup/stringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 
 #include <array>

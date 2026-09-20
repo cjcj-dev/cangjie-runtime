@@ -12,7 +12,7 @@
 
 #include "Base/ImmortalWrapper.h"
 #include "Common/BaseObject.h"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MObject.h"
 

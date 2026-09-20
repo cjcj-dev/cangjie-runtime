@@ -25,7 +25,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Base/Log.h"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"

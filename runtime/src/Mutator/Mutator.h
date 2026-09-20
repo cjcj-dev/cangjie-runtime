@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "Exception/Exception.h"
-#include "Heap/z/Allocator.h"
+#include "Heap/Allocator/Allocator.h"
 #include "Heap/z/zRememberedSet.hpp"
 #include "LoaderManager.h"
 #include "Mutator/ThreadLocal.h"

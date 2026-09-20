@@ -23,7 +23,7 @@
 #include <processthreadsapi.h>
 #endif
 
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Base/CString.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
@@ -39,7 +39,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/z/HeapFiller.h"
+#include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -315,7 +315,7 @@ void RegionManager::RequestForRegion(size_t size)
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Heap/z/RegionSpace.h"
+#include "Allocator/RegionSpace.h"
 
 #include <atomic>
 #include <cstdlib>

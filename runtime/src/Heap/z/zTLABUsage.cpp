@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Heap/z/RegionSpace.h"
+#include "Allocator/RegionSpace.h"
 
 #include <atomic>
 #include <cstdlib>

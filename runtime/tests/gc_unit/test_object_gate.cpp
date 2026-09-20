@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "Heap/z/SlotList.h"
+#include "Heap/Allocator/SlotList.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zPageAllocator.hpp"
