@@ -1283,6 +1283,9 @@ static void CheckForwardingWinner(bool identity)
 // the real major driver; a registered runtime mutator owns the raw root.
 void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false, unsigned nestedKind = 0)
 {
+    // #720 creates worker/stat threads with the heap. Construct it in the
+    // captured child, rather than inheriting a preconstructed heap at fork.
+    CreateStandaloneHeap(1024);
     ZStat::Initialize();
     GcHeapFixture& fx = ProductFixture();
     Heap& collector = Heap::GetHeap();
@@ -1424,44 +1427,44 @@ void CheckMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bo
         unsigned(promoted), unsigned(managed), unsigned(oldPending), outcome.status, unsigned(completed));
     GC_EXPECT_TRUE(completed);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorRemapsStackObjectField)
+GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorRemapsStackObjectField)
 {
     CheckMajorRawRemap(false, false, false, false, 1);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorRemapsHeaderlessRecordField)
+GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorRemapsHeaderlessRecordField)
 {
     CheckMajorRawRemap(false, false, false, false, 2);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkConsumesYoungTable)
+GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkConsumesYoungTable)
 {
     CheckMajorRawRemap(false, false);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkConsumesPromotedYoungSource)
+GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkConsumesPromotedYoungSource)
 {
     CheckMajorRawRemap(true, false);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorKeepsOldRawRootUntilNextRootScan)
+GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorKeepsOldRawRootUntilNextRootScan)
 {
     CheckMajorRawRemap(false, false, true);
 }
 #if defined(__x86_64__) && defined(__linux__)
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkRemapsDerivedYoungSource)
+GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkRemapsDerivedYoungSource)
 {
     CheckMajorRawRemap(false, true);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkRemapsDerivedPromotedSource)
+GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkRemapsDerivedPromotedSource)
 {
     CheckMajorRawRemap(true, true);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorKeepsOldDerivedRootUntilNextRootScan)
+GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorKeepsOldDerivedRootUntilNextRootScan)
 {
     CheckMajorRawRemap(false, true, true);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackRemapsDerivedPromotedSource)
+GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackRemapsDerivedPromotedSource)
 {
     CheckMajorRawRemap(true, true, false, true);
 }
-GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackKeepsOldRootUntilNextRootScan)
+GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackKeepsOldRootUntilNextRootScan)
 {
     CheckMajorRawRemap(false, true, true, true);
 }
