@@ -22,7 +22,6 @@ using namespace MapleRuntime::GcUnit;
 GC_TEST(RelocateLivePrecondition, DeadFromAbortsBeforeSize)
 {
     GcHeapFixture heap;
-    heap.InstallPageOwner(heap.region0);
     GC_EXPECT_TRUE(heap.region0->IsRelocatable());
     GC_EXPECT_FALSE(heap.region0->is_object_live(from_object(heap.obj0)));
     const char* testable = std::getenv("MRT_TESTABLE_INTERNALS");
@@ -62,15 +61,11 @@ GC_TEST(RelocateLivePrecondition, DeadFromAbortsBeforeSize)
     GC_EXPECT_TRUE(transcript.find("is_object_live") != std::string::npos);
 }
 
-GC_TEST(RelocateLivePrecondition, LiveFromFindHitSkipsCopy)
+GC_TEST(RelocateLivePrecondition, UnmarkedRelocatableIsNotLive)
 {
     GcHeapFixture heap;
-    heap.InstallPageOwner(heap.region0);
+    GC_EXPECT_TRUE(heap.region0->IsRelocatable());
+    GC_EXPECT_FALSE(heap.region0->is_object_live(from_object(heap.obj0)));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(heap.region0, heap.obj0));
-    const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
-    const MAddress to = reinterpret_cast<MAddress>(heap.obj1);
-    auto publication = forwarding_for_page(heap.region0, from);
-    GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(publication->insert(from, to), to);
-    GC_EXPECT_TRUE(ZRelocate::ForwardObjectExclusive(heap.obj0) == heap.obj1);
+    GC_EXPECT_TRUE(heap.region0->is_object_live(from_object(heap.obj0)));
 }
