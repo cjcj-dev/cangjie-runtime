@@ -25,6 +25,7 @@
 #include "Cangjie.h"
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
+#include "CJThread/src/base/mid/include/schedule_rename.h"
 #include "schedule.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
