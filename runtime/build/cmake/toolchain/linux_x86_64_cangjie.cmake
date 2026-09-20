@@ -152,3 +152,20 @@ set(CMAKE_SHARED_LINKER_FLAGS
 
 # ar flags
 set(CMAKE_C_CREATE_STATIC_LIBRARY "<CMAKE_AR> rcD <TARGET> <OBJECTS>")
+
+# Apply after the toolchain's flag assignments, for every build type. The
+# parent runtime configure is a separate CMake invocation from CJThread.
+# Normalize source and out-of-tree build paths independently of cache state.
+if(NOT CJTHREAD_PARENT_SOURCE_DIR)
+    get_filename_component(CJTHREAD_PARENT_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+endif()
+if(NOT CJTHREAD_PARENT_BINARY_DIR)
+    set(CJTHREAD_PARENT_BINARY_DIR "${CMAKE_BINARY_DIR}")
+endif()
+foreach(_language C CXX ASM)
+    foreach(_map file debug macro)
+        string(APPEND CMAKE_${_language}_FLAGS
+            " -f${_map}-prefix-map=${CJTHREAD_PARENT_SOURCE_DIR}=/usr/src/cangjie-runtime/runtime"
+            " -f${_map}-prefix-map=${CJTHREAD_PARENT_BINARY_DIR}=/usr/src/cangjie-runtime/build")
+    endforeach()
+endforeach()

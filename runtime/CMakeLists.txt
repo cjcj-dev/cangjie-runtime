@@ -280,7 +280,13 @@ else ()
     else ()
         # bash build/build_cjthread.sh -p linux_x86_64_cangjie Debug STATIC ${CJTHREAD_SAN_PRARM}
         message("build cjthread for x86_64")
-        execute_process(COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p linux_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+        execute_process(COMMAND "${CMAKE_COMMAND}" -E env
+            "CJTHREAD_PARENT_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+            "CJTHREAD_PARENT_BINARY_DIR=${CMAKE_BINARY_DIR}"
+            "CJTHREAD_C_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}"
+            "CJTHREAD_CXX_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}"
+            "CJTHREAD_ASM_LAUNCHER=${CMAKE_ASM_COMPILER_LAUNCHER}"
+            bash "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p linux_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} "${OTHER_DEFINITIONS}" "${CMAKE_INSTALL_PREFIX}" "${TARGET_ARCH}"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     endif ()
 endif () # WINDOWS_FLAG
