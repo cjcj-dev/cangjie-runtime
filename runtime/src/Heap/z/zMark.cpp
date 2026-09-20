@@ -84,28 +84,42 @@ void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
 
 // Shared by mark roots and Cangjie foreign-root traversal.
 
-void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
-                                     uint64_t stackScanEpoch)
+namespace {
+// ZGC zMark.cpp:703-708,827-828,883: both generations use this thread closure.
+// Cangjie has no return statepoint: retain the saved head color for the full
+// scan and expand stack objects/headerless records before visiting heap slots.
+class MarkThreadClosure {
+public:
+    explicit MarkThreadClosure(const RootVisitor* result = nullptr) : result(result) {}
+    static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }
+    void DoThread(Mutator& mutator) const
+    {
+        const uintptr_t color = mutator.GetGCData().loadGoodMask;
+        RootVisitor markRoot = [&](ObjectRef& root) {
+            mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
+                ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&slot), color);
+                if (result != nullptr) (*result)(slot);
+            });
+        };
+        DerivedPtrVisitor derivedVisitor = Mutator::MakeDerivedRootVisitor(markRoot);
+        size_t frames = 0;
+        (void)StackWatermarkSet::finish_processing(mutator, markRoot, markRoot, StackWatermark::epoch_id(),
+                                                   &derivedVisitor, frames, reinterpret_cast<void*>(root_function()));
+    }
+private:
+    const RootVisitor* const result;
+};
+} // namespace
+
+void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor)
 {
-#if defined(MRT_GC_UNIT_TESTS)
-    RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
-        invisibleRootVisitor(root);
+    RootVisitor plainRoot = [&](ObjectRef& root) {
+        ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+        rawRootVisitor(root);
     };
-    RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
-#else
-    RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
-#endif
-    RootVisitor& visitedRawRootVisitor = rawRootVisitor;
-    VisitStrongPlainRoots(visitedRawRootVisitor, [&](Mutator& mutator) {
-        bool watermarkDone =
-            stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
-#if defined(MRT_GC_UNIT_TESTS)
-#endif
-        if (watermarkDone) {
-            return;
-        }
-        mutator.VisitMutatorRoots(visitedRawRootVisitor, visitedInvisibleRootVisitor);
-    });
+    MarkThreadClosure threadClosure(&rawRootVisitor);
+    VisitStrongPlainRoots(plainRoot, [&](Mutator& mutator) { threadClosure.DoThread(mutator); });
+    (void)invisibleRootVisitor; // The watermark owns the invisible slot and its saved color.
 }
 
 
@@ -150,20 +164,6 @@ namespace {
         }
     };
 
-class MarkThreadClosure {
-public:
-    static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }
-    void DoThread(Mutator& mutator) const
-    {
-        RootVisitor markRoot = [](ObjectRef& root) {
-            ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-        };
-        size_t frames = 0;
-        (void)StackWatermarkSet::finish_processing(mutator, markRoot, markRoot, StackWatermark::epoch_id(),
-                                                   nullptr, frames, reinterpret_cast<void*>(root_function()));
-    }
-};
-
 // ZMarkOldRootsTask, zMark.cpp:797-834. Root results are published to the
 // generation mark domain by closures, then flushed by each participating worker.
 class MarkOldRootsTask final : public ZTask {
@@ -180,7 +180,9 @@ public:
             coloredClosure.DoOop(slot);
         });
         rootsUncolored.Apply(uncolored);
-        rootsUncolored.ApplyThreads([&](Mutator& mutator) { threadClosure.DoThread(mutator); });
+        rootsUncolored.ApplyThreads([&](Mutator& mutator) {
+            threadClosure.DoThread(mutator);
+        });
         // zMark.cpp:830-834: flush and free worker stacks for both generations
         // here, since the set of workers executing during root scanning can be
         // different from the set of workers executing during mark.
@@ -250,19 +252,16 @@ private:
 } // namespace
 
 void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
-                                 const std::function<void(BaseObject*)>& invisibleVisitor,
-                                 uint64_t stackScanEpoch)
+                                 const std::function<void(BaseObject*)>& invisibleVisitor)
 {
     RootVisitor rawRootVisitor = [&visitor](ObjectRef& root) {
-        ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         visitor(to_object(safe(root.LoadPlain())));
     };
     RootVisitor invisibleRootVisitor = [&invisibleVisitor](ObjectRef& root) {
-        ZUncoloredRoot::process_invisible(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         invisibleVisitor(to_object(safe(root.LoadPlain())));
     };
     MarkYoungRootsTask task([&] {
-        VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
+        VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor);
         Heap::GetHeap().cross_vm().VisitMinorValueRoots([&](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZBarrier::Mark<false, false, true, false>(from_object(object));

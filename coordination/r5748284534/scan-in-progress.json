@@ -1,0 +1,89 @@
+[
+  {
+    "ref": "4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca",
+    "cmd": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "GhostLookupTestHook|RecentFullAccounting|MRT_ALLOCATION_STALL_OBSERVE",
+      "4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca",
+      "--",
+      "runtime/src/Heap"
+    ],
+    "rc": 0,
+    "output": "4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/zPage.cpp:106:std::atomic<ZPage::GhostLookupTestHook> ZPage::ghostLookupTestHook { nullptr };\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/zPage.cpp:110:void ZPage::SetGhostLookupTestHook(GhostLookupTestHook hook)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/zPage.cpp:116:size_t ZPage::GhostLookupTestHookCalls()\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/zPage.cpp:121:void ZPage::RunGhostLookupTestHook(ZPage* region)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/zPage.cpp:123:    GhostLookupTestHook hook = ghostLookupTestHook.exchange(nullptr, std::memory_order_acq_rel);\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/zPageAllocator.cpp:52:namespace RecentFullAccounting {\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/zPageAllocator.cpp:92:} // namespace RecentFullAccounting\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/zPageAllocator.cpp:96:#if defined(MRT_ALLOCATION_STALL_OBSERVE)\n"
+  },
+  {
+    "ref": "4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca",
+    "cmd": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "MRT_TESTABLE_INTERNALS|MRT_GC_UNIT_TESTS|atexit\\(",
+      "4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca",
+      "--",
+      "runtime/src/Heap"
+    ],
+    "rc": 0,
+    "output": "4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/CMakeLists.txt:69:if (MRT_GC_UNIT_TESTS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/CMakeLists.txt:70:    target_compile_definitions(Allocator PRIVATE MRT_GC_UNIT_TESTS=1)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/zPage.cpp:105:#if defined(MRT_GC_UNIT_TESTS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zGeneration.cpp:552:#if defined(MRT_TESTABLE_INTERNALS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zGeneration.cpp:1101:#if defined(MRT_GC_UNIT_TESTS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zGeneration.cpp:1113:#if defined(MRT_TESTABLE_INTERNALS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zGeneration.cpp:1682:#if defined(MRT_TESTABLE_INTERNALS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zGeneration.hpp:63:#if defined(MRT_TESTABLE_INTERNALS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zIterator.inline.hpp:56:#if defined(MRT_GC_UNIT_TESTS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zMark.cpp:90:#if defined(MRT_GC_UNIT_TESTS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zMark.cpp:102:#if defined(MRT_GC_UNIT_TESTS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zMark.cpp:481:#if defined(MRT_TESTABLE_INTERNALS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zMark.cpp:899:#if defined(MRT_TESTABLE_INTERNALS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zMarkStack.cpp:26:#if defined(MRT_TESTABLE_INTERNALS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zMarkStack.cpp:280:#if defined(MRT_TESTABLE_INTERNALS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zMarkStack.hpp:162:#if defined(MRT_TESTABLE_INTERNALS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zObjArrayAllocator.cpp:58:#if defined(MRT_GC_UNIT_TESTS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zObjArrayAllocator.cpp:71:#if defined(MRT_GC_UNIT_TESTS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zObjArrayAllocator.cpp:89:#if defined(MRT_GC_UNIT_TESTS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zObjArrayAllocator.cpp:135:#if defined(MRT_GC_UNIT_TESTS)\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/z/zStackWatermark.cpp:87:#if defined(MRT_GC_UNIT_TESTS)\n"
+  },
+  {
+    "ref": "4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca",
+    "cmd": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "z/zPage\\.cpp|z/zPageAllocator\\.cpp|Allocator/RegionSpace\\.cpp|Allocator/CartesianTree\\.cpp",
+      "4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca",
+      "--",
+      "runtime/src/Heap"
+    ],
+    "rc": 0,
+    "output": "4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/CMakeLists.txt:23:    \"../z/zPageAllocator.cpp\"\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/Allocator/CMakeLists.txt:24:    \"../z/zPage.cpp\"\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/CMakeLists.txt:42:    \"Allocator/RegionSpace.cpp\"\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/CMakeLists.txt:45:    \"z/zPageAllocator.cpp\"\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/CMakeLists.txt:46:    \"z/zPage.cpp\"\n4cc8e34adb7fc3379c4680ab894b4ce5da4d8aca:runtime/src/Heap/CMakeLists.txt:52:    \"Allocator/CartesianTree.cpp\"\n"
+  },
+  {
+    "ref": "WORKTREE",
+    "cmd": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "GhostLookupTestHook|RecentFullAccounting|MRT_ALLOCATION_STALL_OBSERVE",
+      "--",
+      "runtime/src/Heap"
+    ],
+    "rc": 1,
+    "output": ""
+  },
+  {
+    "ref": "WORKTREE",
+    "cmd": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "MRT_TESTABLE_INTERNALS|MRT_GC_UNIT_TESTS|atexit\\(",
+      "--",
+      "runtime/src/Heap"
+    ],
+    "rc": 0,
+    "output": "runtime/src/Heap/z/zGeneration.cpp:552:#if defined(MRT_TESTABLE_INTERNALS)\nruntime/src/Heap/z/zGeneration.cpp:1105:#if defined(MRT_TESTABLE_INTERNALS)\nruntime/src/Heap/z/zGeneration.cpp:1674:#if defined(MRT_TESTABLE_INTERNALS)\nruntime/src/Heap/z/zGeneration.hpp:63:#if defined(MRT_TESTABLE_INTERNALS)\nruntime/src/Heap/z/zIterator.inline.hpp:56:#if defined(MRT_GC_UNIT_TESTS)\nruntime/src/Heap/z/zMark.cpp:91:#if defined(MRT_GC_UNIT_TESTS)\nruntime/src/Heap/z/zMark.cpp:103:#if defined(MRT_GC_UNIT_TESTS)\nruntime/src/Heap/z/zMark.cpp:229:#if defined(MRT_TESTABLE_INTERNALS)\nruntime/src/Heap/z/zMark.cpp:527:#if defined(MRT_TESTABLE_INTERNALS)\nruntime/src/Heap/z/zMark.cpp:945:#if defined(MRT_TESTABLE_INTERNALS)\nruntime/src/Heap/z/zMarkStack.cpp:26:#if defined(MRT_TESTABLE_INTERNALS)\nruntime/src/Heap/z/zMarkStack.cpp:280:#if defined(MRT_TESTABLE_INTERNALS)\nruntime/src/Heap/z/zMarkStack.hpp:162:#if defined(MRT_TESTABLE_INTERNALS)\nruntime/src/Heap/z/zObjArrayAllocator.cpp:58:#if defined(MRT_GC_UNIT_TESTS)\nruntime/src/Heap/z/zObjArrayAllocator.cpp:71:#if defined(MRT_GC_UNIT_TESTS)\nruntime/src/Heap/z/zObjArrayAllocator.cpp:89:#if defined(MRT_GC_UNIT_TESTS)\nruntime/src/Heap/z/zObjArrayAllocator.cpp:135:#if defined(MRT_GC_UNIT_TESTS)\nruntime/src/Heap/z/zStackWatermark.cpp:87:#if defined(MRT_GC_UNIT_TESTS)\n"
+  },
+  {
+    "ref": "WORKTREE",
+    "cmd": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "z/zPage\\.cpp|z/zPageAllocator\\.cpp|Allocator/RegionSpace\\.cpp|Allocator/CartesianTree\\.cpp",
+      "--",
+      "runtime/src/Heap"
+    ],
+    "rc": 0,
+    "output": "runtime/src/Heap/CMakeLists.txt:42:    \"Allocator/RegionSpace.cpp\"\nruntime/src/Heap/CMakeLists.txt:45:    \"z/zPageAllocator.cpp\"\nruntime/src/Heap/CMakeLists.txt:46:    \"z/zPage.cpp\"\nruntime/src/Heap/CMakeLists.txt:52:    \"Allocator/CartesianTree.cpp\"\n"
+  }
+]

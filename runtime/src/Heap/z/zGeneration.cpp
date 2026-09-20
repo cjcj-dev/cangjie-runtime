@@ -488,7 +488,7 @@ void ZGenerationYoung::concurrent_mark()
             if (region != nullptr && !region->IsYoungRegion()) {
                 currentMinorRoots.insert(object);
             }
-        }, stackScanEpoch);
+        });
         // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().young().Mark());
     };
@@ -1077,42 +1077,16 @@ void ZGenerationOld::concurrent_mark()
     oldExportOwners.clear();
     WorkStack& workStack = oldMarkWorkStack;
     ValueRootList& foreignStack = oldExportOwners;
-
-    const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
-    uint64_t stackScanEpoch = 0;
-
-    // Old mark-start belongs to the preceding young pause. The old body
-    // begins with concurrent roots/follow (zGeneration.cpp:1015-1020).
-    // ZGC old concurrent_mark has no extra stack-scan STW (zGeneration.cpp:1015-1020).
-    if (concurrentStackScan) {
-        stackScanEpoch = StackWatermark::epoch_id();
-    }
-
+    // ZGC zGeneration.cpp:1086-1092: the roots task owns thread completion.
+    // Its common MarkThreadClosure absorbs already completed handshakes.
     {
         ZStatTimerOld zstatTimer(PEnumRootsUpdateOldPointersWithin);
-        if (concurrentStackScan) {
-            MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
-                if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                    (void)mutator.GcPhaseEnum(false, stackScanEpoch, false);
-                }
-                if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                    (void)mutator.GcPhaseEnum(false);
-                }
-#if defined(MRT_GC_UNIT_TESTS)
-#endif
-            });
-            ZMark::DoEnumeration(workStack, foreignStack);
-        } else {
-            ZMark::DoEnumeration(workStack, foreignStack);
-        }
+        ZMark::DoEnumeration(workStack, foreignStack);
     }
 
     {
         ZStatTimerOld zstatTimer(PTraceLiveObjectsUpdateOldPointersInRefFields);
         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
-#if defined(MRT_TESTABLE_INTERNALS)
-        if (ZGeneration::testOldMarkStarted) ZGeneration::testOldMarkStarted();
-#endif
         Mark().MarkFollow(false);
         ZBreakpoint::AtBeforeMarkingCompleted();
         if (ZAbort::should_abort()) {
@@ -1680,7 +1654,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
 
 namespace MapleRuntime {
 #if defined(MRT_TESTABLE_INTERNALS)
-std::function<void()> ZGeneration::testOldMarkStarted;
 std::function<void()> ZGeneration::testYoungMarkCompleted;
 #endif
 }
