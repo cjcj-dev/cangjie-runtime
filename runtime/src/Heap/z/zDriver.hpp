@@ -347,6 +347,7 @@ public:
     void RunYoungCollection(uint64_t index, ZYoungType type, bool warmup);
     bool ExecuteDriverRequest(const ZDriverRequest& request);
 protected:
+    virtual void HandleAllocStalls() const = 0;
     const GCDriverKind kind;
     ZDriverPort& port;
 private:
@@ -360,6 +361,7 @@ public:
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
 private:
+    void HandleAllocStalls() const override;
     ZDriverPort _port;
 };
 
@@ -370,6 +372,7 @@ public:
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
 private:
+    void HandleAllocStalls() const override;
     ZDriverPort _port;
 };
 

@@ -285,12 +285,26 @@ GC_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWaiter)
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(TypeInfo));
         return type;
     };
-    TypeInfo* occupiedType = makeType(occupiedStorage, occupiedBytes);
+    TypeInfo* occupiedType = makeType(occupiedStorage, 2 * sizeof(void*));
     TypeInfo* requestType = makeType(requestStorage, requestedBytes);
+    // Large movable objects use the product object allocator; the pinned-page
+    // API is limited to its fixed-size page and cannot represent these sizes.
+    auto allocateObject = [&](TypeInfo* type, size_t bytes) -> BaseObject* {
+        const uintptr_t address = heap.object_allocator().alloc(bytes, PageAge::eden, false);
+        if (address == 0) { return nullptr; }
+        auto* object = reinterpret_cast<BaseObject*>(address);
+        object->SetClassInfo(type);
+        return object;
+    };
     U64 occupiedRoot;
+    ZPage* capacity = nullptr;
     {
         ScopedObjectAccess access;
-        occupiedRoot = heap.RegisterExportRoot(MObject::NewPinnedObject(occupiedType, occupiedBytes));
+        occupiedRoot = heap.RegisterExportRoot(MObject::NewPinnedObject(occupiedType, 2 * sizeof(void*)));
+        // Reserve a real page without publishing an object on it. Returning
+        // that page later is the ordinary product capacity-supply entry.
+        capacity = Heap::alloc_page(occupiedBytes, ZPageType::large);
+        GC_EXPECT_TRUE(capacity != nullptr);
     }
     stallMarkSequence = 0;
     stallReleaseMark = false;
@@ -308,14 +322,14 @@ GC_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWaiter)
     }
     const size_t satisfiedBefore = heap.page_allocator().SatisfiedStalledAllocations();
     const size_t failedBefore = heap.page_allocator().FailedStalledAllocations();
-    MObject* results[2]{};
+    BaseObject* results[2]{};
     U64 resultRoots[2]{};
     std::atomic<bool> done[2]{};
     auto allocate = [&](size_t index) {
         manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         {
             ScopedObjectAccess access;
-            results[index] = MObject::NewPinnedObject(requestType, requestedBytes);
+            results[index] = allocateObject(requestType, requestedBytes);
             if (results[index] != nullptr) { resultRoots[index] = heap.RegisterExportRoot(results[index]); }
         }
         done[index].store(true, std::memory_order_release);
@@ -327,7 +341,11 @@ GC_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWaiter)
         std::this_thread::yield();
     }
     const size_t queued = heap.page_allocator().PendingStalledAllocations();
-    heap.RemoveExportObject(occupiedRoot);
+    Heap::free_page(capacity);
+    ZAllocationFlags nonBlocking;
+    nonBlocking.set_non_blocking();
+    ZPage* competing = Heap::alloc_page(requestedBytes, ZPageType::large, false, true, true,
+                                      PageAge::eden, nonBlocking);
     stallReleaseMark.store(true, std::memory_order_release);
     deadline = std::chrono::steady_clock::now() + kHangLimit;
     while ((!done[0].load() || !done[1].load()) && std::chrono::steady_clock::now() < deadline) {
@@ -350,12 +368,14 @@ GC_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWaiter)
     const size_t satisfied = heap.page_allocator().SatisfiedStalledAllocations() - satisfiedBefore;
     const size_t failed = heap.page_allocator().FailedStalledAllocations() - failedBefore;
     const size_t pending = heap.page_allocator().PendingStalledAllocations();
-    std::fprintf(stderr, "STALL_CAPACITY_TARGET successes=%zu satisfied=%zu failed=%zu pending=%zu first=%p second=%p\n",
-                 successes, satisfied, failed, pending, results[0], results[1]);
+    std::fprintf(stderr, "STALL_CAPACITY_TARGET successes=%zu satisfied=%zu failed=%zu pending=%zu first=%p second=%p competing=%p\n",
+                 successes, satisfied, failed, pending, results[0], results[1], competing);
     for (size_t i = 0; i < 2; ++i) {
         if (results[i] != nullptr) { heap.RemoveExportObject(resultRoots[i]); }
     }
+    heap.RemoveExportObject(occupiedRoot);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(competing == nullptr);
     GC_EXPECT_EQ(successes, size_t{1});
     GC_EXPECT_EQ(satisfied, successes);
     GC_EXPECT_EQ(failed, size_t{1});

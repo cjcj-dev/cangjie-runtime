@@ -86,21 +86,25 @@ void ZDriver::run_thread()
             abortpoint();
             const bool completed = !ZAbort::should_abort() && ExecuteDriverRequest(request);
             port.ack();
-            if (completed) {
-                auto& allocator = Heap::GetHeap().page_allocator();
-                if (major) {
-                    allocator.HandleAllocStallingForOld(Heap::GetHeap().GetFinalizerProcessor()
-                        .GetReferenceProcessor().uses_clear_all_soft_reference_policy());
-                } else {
-                    allocator.HandleAllocStallingForYoung();
-                }
-            }
+            if (completed) { HandleAllocStalls(); }
             if (major) ZBreakpoint::AtAfterGC();
             ZCollectedHeap::heap()->director()->set_busy(!major, false);
             if (completed && !major) ZDirector::evaluate_rules();
         }
         abortpoint();
     }
+}
+
+// ZGC zDriver.cpp:193-198,454-460: generation-specific stall ownership.
+void ZDriverMinor::HandleAllocStalls() const
+{
+    Heap::GetHeap().page_allocator().HandleAllocStallingForYoung();
+}
+
+void ZDriverMajor::HandleAllocStalls() const
+{
+    Heap::GetHeap().page_allocator().HandleAllocStallingForOld(Heap::GetHeap().GetFinalizerProcessor()
+        .GetReferenceProcessor().uses_clear_all_soft_reference_policy());
 }
 
 void ZDriver::terminate()
