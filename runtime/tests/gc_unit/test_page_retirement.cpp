@@ -161,22 +161,22 @@ void CheckPageRetirement(RetirementPath path, bool concurrent)
 
 } // namespace
 
-GC_TEST(PageRetirement, PageTableReturnWaitsForOutermostIterator)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableReturnWaitsForOutermostIterator)
 {
     CheckPageRetirement(RetirementPath::RETURN, false);
 }
 
-GC_TEST(PageRetirement, PageTableConcurrentReclaimPreservesDescriptor)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableConcurrentReclaimPreservesDescriptor)
 {
     CheckPageRetirement(RetirementPath::RECLAIM, true);
 }
 
-GC_TEST(PageRetirement, PageTableReleaseWaitsForIterator)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableReleaseWaitsForIterator)
 {
     CheckPageRetirement(RetirementPath::RELEASE, true);
 }
 
-GC_TEST(PageRetirement, PageTableMarkQuarantineWaitsForIterator)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableMarkQuarantineWaitsForIterator)
 {
     CheckPageRetirement(RetirementPath::MARK_QUARANTINE, false);
 }

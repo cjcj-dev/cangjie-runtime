@@ -257,11 +257,12 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
                    Heap::page(second));
 }
 // The other legal heuristic input must route through slot zero on either CPU.
-GC_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
+GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
 {
     CPUAffinity affinity;
     constexpr size_t units = 1;
     ZHeuristics::set_max_heap_size(units * ZGranuleSize);
+    CreateStandaloneHeap(units);
     SharedPageFixture fixture(units);
     GC_EXPECT_TRUE(affinity.available.size() >= 2);
     auto& allocator = Heap::GetHeap().object_allocator();

@@ -62,20 +62,12 @@ private:
     ZPage* capacity{ nullptr };
 
 public:
-    // The RegionManager (mapped caches keep entries in heap memory) must be
-    // destroyed before the mapping: declare it last.
-    std::unique_ptr<ZTestRegionHeap> heap;
-    RegionManager manager;
+    RegionManager& manager;
 
     OneUnitStallFixture()
+        : manager((ZStat::Initialize(), CreateStandaloneHeap(1), Heap::GetHeap().page_allocator()))
     {
-        ZStat::Initialize();
-        constexpr size_t units = 1;
-        HeapParam heapParam {};
-        heapParam.regionSize = ZGranuleSize / 1024;
-        heapParam.exemptionThreshold = 0.8;
-        heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
-        capacity = manager.TakeRegion(ZPageSizeSmall, ZPageType::small, false, false);
+        capacity = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false);
     }
 
     void PublishCapacity()
@@ -87,19 +79,19 @@ public:
 };
 } // namespace
 
-GC_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
 {
     OneUnitStallFixture fixture;
     fixture.PublishCapacity();
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* first = fixture.manager.TakeRegion(ZPageSizeSmall, ZPageType::small, false, true, true, PageAge::eden, flags);
-    ZPage* second = fixture.manager.TakeRegion(ZPageSizeSmall, ZPageType::small, false, true, true, PageAge::eden, flags);
+    ZPage* first = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, true, PageAge::eden, flags);
+    ZPage* second = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, true, PageAge::eden, flags);
     const size_t count = (first != nullptr) + (second != nullptr);
     std::fprintf(stderr, "ALLOCATION_CAPACITY_TARGET count=%zu first=%p second=%p\n", count, first, second);
     GC_EXPECT_EQ(count, size_t{1});
 }
-GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
 {
     OneUnitStallFixture fixture;
     fixture.PublishCapacity();
@@ -107,13 +99,13 @@ GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
     flags.set_non_blocking();
     ZPageAllocation request(ZPageSizeSmall, static_cast<uint8_t>(ZPageType::small), false, true, flags);
     GC_EXPECT_TRUE(fixture.manager.ClaimAllocationLocked(request));
-    ZPage* competing = fixture.manager.TakeRegion(ZPageSizeSmall, ZPageType::small, false, true, true, PageAge::eden, flags);
+    ZPage* competing = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, true, PageAge::eden, flags);
     std::fprintf(stderr, "ALLOCATION_RESERVATION_TARGET bytes=%zu competing=%p\n", request.Memory().size, competing);
     GC_EXPECT_EQ(request.Memory().size, ZPageSizeSmall);
     GC_EXPECT_TRUE(competing == nullptr);
     fixture.manager.ReturnPageMemory(request.Memory());
 }
-GC_OTHER_VM_TEST(AllocationStall, WaiterBlocksInSaferegion)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, WaiterBlocksInSaferegion)
 {
     OneUnitStallFixture fixture;
     ZPageAllocation request(ZPageSizeSmall, static_cast<uint8_t>(ZPageType::small), false, true);
