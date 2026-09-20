@@ -23,6 +23,9 @@
 #include "gc_unittest.hpp"
 
 #include "Cangjie.h"
+#include "Common/Runtime.h"
+#include "Concurrency/ConcurrencyModel.h"
+extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void* handle);
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
@@ -476,6 +479,57 @@ void* RunPinnedMarkStartCase(void*)
 }
 
 #endif
+// Exercise the actual scheduler argument copy and its registered root visitor.
+void* RunNativeTaskRootCase(void*)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    struct Observation {
+        RootSlot* taskRoot = nullptr;
+        uintptr_t native = 0;
+        size_t tasks = 0;
+    } observed;
+    CJ_ScheduleAllCJThreadVisit([](void* argument, void* context) {
+        auto& result = *static_cast<Observation*>(context);
+        auto& data = *static_cast<LWTData*>(argument);
+        if (data.fn != nullptr) {
+            result.taskRoot = &RootSlotAt(&data.obj);
+            result.native = reinterpret_cast<uintptr_t>(data.fn);
+            ++result.tasks;
+        }
+    }, &observed);
+    size_t visits = 0;
+    size_t nativeRoots = 0;
+    RootVisitor visitor = [&](RootSlot& root) {
+        visits += &root == observed.taskRoot;
+        nativeRoots += observed.native != 0 && raw(root.LoadPlain()) == observed.native;
+    };
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
+    const bool rootsValid = observed.tasks == 1 && visits == 1 && nativeRoots == 0;
+    std::fprintf(stderr, "NATIVE_TASK_ROOT_TARGET tasks=%zu obj_visits=%zu native_roots=%zu pass=%d\n",
+                 observed.tasks, visits, nativeRoots, rootsValid);
+    if (!rootsValid) {
+        Mutator::GetMutator()->SetManagedContext(true);
+        return reinterpret_cast<void*>(41);
+    }
+    // Positive managed-object control through the production heap iterator.
+    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, 1);
+    NativeSlot root(zpointer::null);
+    ZBarrier::WriteStaticRef(root, array);
+    NativeSlot* roots[] = { &root };
+    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    size_t objects = 0;
+    {
+        ScopedEnterSaferegion saferegion(false);
+        ScopedStopTheWorld stw("native task heap iteration", false);
+        HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == array; });
+    }
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    std::fprintf(stderr, "NATIVE_TASK_HEAP_TARGET managed_visits=%zu gc_returned=1\n", objects);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>(objects == 1 ? 0 : 42);
+}
+
 int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
                    bool runtimeThread = false)
 {
@@ -491,8 +545,6 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
         }
         if (runtimeThread) {
             // Use the real native runtime-thread registration for graph tests.
-            // RunCJTask stores a native FutureImpl in LWTData::obj; that is not
-            // a managed heap-object root and is a separate scheduler/root issue.
             auto& manager = MutatorManager::Instance();
             manager.CreateRuntimeMutator(ThreadType::GC_THREAD);
             void* result = task(reinterpret_cast<void*>(argument));
@@ -604,3 +656,8 @@ GC_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
     GC_EXPECT_EQ(RunRuntimeCase(RunLargeYoungClosureCase, 0), 0);
 }
 #endif
+
+GC_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunNativeTaskRootCase, 0), 0);
+}
