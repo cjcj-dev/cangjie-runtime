@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zStoreBarrierBuffer.cpp
++++ b/runtime/src/Heap/z/zStoreBarrierBuffer.cpp
+@@ -160,7 +160,7 @@
+     for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
+         const StoreBarrierEntry& entry = buffer[i];
+         const zaddress addr = ZBarrier::make_load_good(entry.prev);
+-        ZBarrier::mark_and_remember(reinterpret_cast<volatile zpointer*>(entry.p), addr);
++        // Controlled cut: omit the paired entry consumer.
+     }
+     clear();
+ }
