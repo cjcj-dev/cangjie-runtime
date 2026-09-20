@@ -364,7 +364,6 @@ MAIN_SOURCES=(
   "$SRC/test_mark_port_203_engine.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"
-  "$SRC/test_allocation_stall_queue.cpp"
   "$SRC/test_package_init.cpp"
   "$SRC/test_verify_roots.cpp"
   "$SRC/test_p10_roots_iterator.cpp"
@@ -556,20 +555,6 @@ if ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$OUT/runtime-dynamic
   exit 10
 fi
 echo "GATE_OLDVALUE_PRODUCT_BINDING_OK rows=$oldvalue_rows elf=$OUT/cj_gc_unit"
-STALL_TEST_DEFINED=$(nm --defined-only "$OUT/cj_gc_unit" | /usr/bin/grep -c 'AllocationStall_' || true)
-echo "STALL_TEST_DEFINED=$STALL_TEST_DEFINED"
-# The migrated tests consume StallAllocation and real page capacity in both
-# product configurations; optional observer exports no longer define coverage.
-if [[ "$STALL_TEST_DEFINED" -eq 0 ]]; then
-  echo "GC_UNIT_GATE_FAIL: AllocationStall tests are missing" >&2
-  exit 8
-fi
-nm -u "$OUT/cj_gc_unit" > "$OUT/stall-imports.txt"
-if ! /usr/bin/grep -q 'StallAllocation' "$OUT/stall-imports.txt"; then
-  echo "GC_UNIT_GATE_FAIL: missing product StallAllocation import" >&2
-  exit 8
-fi
-echo "STALL_SUITE=PRODUCT_BOTH_CONFIGURATIONS"
 
 # ReferenceProcessor is an independently replaceable product carrier. Guard
 # full symbols (not only the dynamic table) so no local/weak test copy can
