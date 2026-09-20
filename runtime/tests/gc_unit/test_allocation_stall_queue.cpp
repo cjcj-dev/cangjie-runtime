@@ -254,7 +254,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(TypeInfo));
         return type;
     };
-    TypeInfo* occupiedType = makeType(occupiedStorage, 2 * sizeof(void*));
+    TypeInfo* occupiedType = makeType(occupiedStorage, occupiedBytes);
     TypeInfo* requestType = makeType(requestStorage, requestedBytes);
     // Large movable objects use the product object allocator; the pinned-page
     // API is limited to its fixed-size page and cannot represent these sizes.
@@ -266,22 +266,19 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
         return object;
     };
     U64 occupiedRoot;
-    ZPage* capacity = nullptr;
-    {
-        ScopedObjectAccess access;
-        occupiedRoot = heap.RegisterExportRoot(MObject::NewPinnedObject(occupiedType, 2 * sizeof(void*)));
-    }
     // RunTo requests the real driver collection and stops its old marking entry.
     ConcurrentGCBreakpoints::AcquireControl();
     const bool markStopped = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
+    // Old concurrent marking releases the driver lock, so its breakpoint
+    // does not stop young collections (ZGC zGeneration.cpp:995). Hold the
+    // existing driver owner until both requests are queued. Capacity is a
+    // rooted product object, never a raw page retained across a collection.
+    ZDriver::lock();
     {
         ScopedObjectAccess access;
-        // ZGC zPage.inline.hpp:180-186: pages allocated after mark-start keep
-        // the current seqnum and are !is_relocatable, so select_relocation_set
-        // must not free them (zGeneration.cpp:211-214). Reserve after the
-        // breakpoint so the later free_page is still the unique owner.
-        capacity = Heap::alloc_page(occupiedBytes, ZPageType::large);
-        GC_EXPECT_TRUE(capacity != nullptr);
+        BaseObject* occupied = allocateObject(occupiedType, occupiedBytes);
+        GC_EXPECT_TRUE(occupied != nullptr);
+        occupiedRoot = heap.RegisterExportRoot(occupied);
     }
     auto deadline = std::chrono::steady_clock::now() + kHangLimit;
     BaseObject* results[2]{};
@@ -317,7 +314,15 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
         std::this_thread::yield();
     }
     const size_t queued = waiting();
-    Heap::free_page(capacity);
+    // Removing the root makes the next minor collection reclaim this object
+    // through select_relocation_set -> free_empty_pages -> free_page (ZGC
+    // zGeneration.cpp:220-240), which reserves returned capacity for a waiter.
+    heap.RemoveExportObject(occupiedRoot);
+    ZDriver::unlock();
+    deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while (!done[0].load() && !done[1].load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
     ZAllocationFlags nonBlocking;
     nonBlocking.set_non_blocking();
     ZPage* competing = Heap::alloc_page(requestedBytes, ZPageType::large, false, true, true,
@@ -349,7 +354,6 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     for (size_t i = 0; i < 2; ++i) {
         if (results[i] != nullptr) { heap.RemoveExportObject(resultRoots[i]); }
     }
-    heap.RemoveExportObject(occupiedRoot);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(competing == nullptr);
     GC_EXPECT_EQ(successes, size_t{1});
