@@ -187,9 +187,7 @@ bool VM_ZOperation::pause()
             ZJNICritical::block();
     }
     bool success = false;
-    if (skip_stw) {
-        success = do_operation();
-    } else {
+    {
         ScopedStopTheWorld stw("zoperation", false);
         ZVerify::BeforeZOperation();
         success = do_operation();

@@ -95,7 +95,6 @@ public:
         return true;
     }
     bool block_jni_critical() const override { return true; }
-    VM_ZTestJniCriticalPause() { skip_stw = true; }
     bool sawBlocked = false;
 };
 

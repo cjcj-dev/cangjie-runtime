@@ -9,9 +9,6 @@ public:
     virtual bool do_operation() = 0;
     virtual bool block_jni_critical() const { return false; }
     bool pause();
-
-protected:
-    bool skip_stw = false;
 };
 
 } // namespace MapleRuntime
