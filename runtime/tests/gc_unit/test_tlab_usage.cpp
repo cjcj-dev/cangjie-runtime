@@ -164,7 +164,7 @@ void* AllocateThroughCycle(void*)
 }
 }
 
-GC_OTHER_VM_TEST(TLABUsage, AllocationCycleKeepsGranuleBacking)
+GC_RUNTIME_OTHER_VM_TEST(TLABUsage, AllocationCycleKeepsGranuleBacking)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;

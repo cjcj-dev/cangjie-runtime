@@ -16,6 +16,20 @@
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zCPU.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeuristics.hpp"
+
+void MapleRuntime::GcUnit::CreateStandaloneHeap(size_t units)
+{
+    if (Heap::heap() == nullptr) {
+        HeapParam params{};
+        params.heapSize = units * ZGranuleSize / 1024;
+        params.regionSize = ZGranuleSize / 1024;
+        params.exemptionThreshold = 0.8;
+        ZHeuristics::set_max_heap_size(params.heapSize * 1024);
+        ZCollectedHeap::create(params, 0.5);
+    }
+}
 
 int main(int argc, char** argv)
 {
@@ -26,6 +40,9 @@ int main(int argc, char** argv)
     MapleRuntime::ThreadLocal::InitializeCleaner();
     // zInitialize.cpp:62: the CPU affinity table precedes any ZCPU::id() reader.
     MapleRuntime::ZCPU::initialize();
+    MapleRuntime::GcUnit::InitializeStandaloneHeap = [] {
+        MapleRuntime::GcUnit::CreateStandaloneHeap(1024);
+    };
     constexpr const char* filterPrefix = "--gtest_filter=";
     constexpr const char* listTests = "--gtest_list_tests";
     if (argc > 2) {

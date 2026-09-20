@@ -34,6 +34,7 @@ struct TestCase {
     const char* name;
     void (*fn)();
     bool otherVm;
+    bool constructsOwnEnvironment;
 };
 
 inline std::vector<TestCase>& Registry()
@@ -43,11 +44,16 @@ inline std::vector<TestCase>& Registry()
 }
 
 struct Registrar {
-    Registrar(const char* suite, const char* name, void (*fn)(), bool otherVm = false)
+    Registrar(const char* suite, const char* name, void (*fn)(), bool otherVm = false, bool constructsOwnEnvironment = false)
     {
-        Registry().push_back(TestCase{ suite, name, fn, otherVm });
+        Registry().push_back(TestCase{ suite, name, fn, otherVm, constructsOwnEnvironment });
     }
 };
+
+// The executable installs the shared standalone heap fixture. Runtime-entry
+// tests construct their own collector through InitCJRuntime instead.
+inline void (*InitializeStandaloneHeap)() = nullptr;
+void CreateStandaloneHeap(size_t units);
 
 struct AssertFailure : std::exception {
     explicit AssertFailure(std::string m) : msg(std::move(m)) {}
@@ -129,6 +135,20 @@ inline void Fail(const char* file, int line, const char* expr)
     static void suite##_##name();                                                                                      \
     static ::MapleRuntime::GcUnit::Registrar suite##_##name##_reg(#suite, #name, &suite##_##name, true);               \
     static void suite##_##name()
+
+#define GC_RUNTIME_OTHER_VM_TEST(suite, name) \
+    static void suite##_##name(); \
+    static ::MapleRuntime::GcUnit::Registrar suite##_##name##_reg(#suite, #name, &suite##_##name, true, true); \
+    static void suite##_##name()
+
+#define GC_RUNTIME_TEST(suite, name) \
+    static void suite##_##name(); \
+    static ::MapleRuntime::GcUnit::Registrar suite##_##name##_reg(#suite, #name, &suite##_##name, false, true); \
+    static void suite##_##name()
+
+// Component tests own their page/allocator objects and need no global Heap.
+#define GC_COMPONENT_TEST(suite, name) GC_RUNTIME_TEST(suite, name)
+#define GC_COMPONENT_OTHER_VM_TEST(suite, name) GC_RUNTIME_OTHER_VM_TEST(suite, name)
 
 inline void RunInOtherVm(const std::string& fullName)
 {
@@ -249,6 +269,9 @@ inline int RunAll()
             if (t.otherVm && !directOtherVmChild) {
                 RunInOtherVm(fullName);
             } else {
+                if (!t.constructsOwnEnvironment && InitializeStandaloneHeap != nullptr) {
+                    InitializeStandaloneHeap();
+                }
                 t.fn();
             }
             if (otherVmChild == nullptr) {

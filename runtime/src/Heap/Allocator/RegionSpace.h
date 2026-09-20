@@ -72,7 +72,7 @@ public:
 
     }
 
-    void Init(const HeapParam&);
+
 
     MAddress Allocate(size_t size, AllocType allocType);
 

@@ -506,7 +506,6 @@ inline void ZPage::InitializeSegments(uintptr_t metadataEnd, const std::vector<R
             CHECK(IsRepresentableLow48Range(range.start, range.size));
             reservedSegments.push_back(ReservedSegment{ range.start, range.size });
         }
-        ZPageTable::install();
     }
 
 inline size_t ZPage::GranuleIndex(uintptr_t address)

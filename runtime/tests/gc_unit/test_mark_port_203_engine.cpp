@@ -361,7 +361,8 @@ GC_TEST(RememberedWorkers719, MissingYoungPoolFailsAtDispatch)
         ZMark mark(4, MarkingStacks::MarkingGeneration::YOUNG);
         mark.PrepareWork(1);
         if (Heap::GetHeap().young().Workers() != nullptr) _exit(91);
-        ZRemembered remembered;
+        ZRemembered remembered(&Heap::page_table(), &Heap::GetHeap().old().forwarding_table(),
+                               &Heap::GetHeap().page_allocator());
         remembered.scan_and_follow(&mark);
         _exit(0);
     }
@@ -388,7 +389,8 @@ GC_TEST(RememberedWorkers719, YoungPoolRunsFromNonWorkerThread)
     young.InitializeWorkers(1);
     ZMark& mark = young.Mark();
     mark.Start();
-    ZRemembered remembered;
+    ZRemembered remembered(&Heap::page_table(), &Heap::GetHeap().old().forwarding_table(),
+                               &Heap::GetHeap().page_allocator());
     remembered.scan_and_follow(&mark);
     GC_EXPECT_TRUE(mark.Stripes().IsEmpty());
     GC_EXPECT_EQ(WorkerThread::worker_id(), UINT32_MAX);

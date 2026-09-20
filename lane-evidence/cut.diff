@@ -1,0 +1,26 @@
+diff --git a/runtime/src/Heap/z/zHeap.cpp b/runtime/src/Heap/z/zHeap.cpp
+index cedfc6231..1e3f5a962 100644
+--- a/runtime/src/Heap/z/zHeap.cpp
++++ b/runtime/src/Heap/z/zHeap.cpp
+@@ -503,7 +503,7 @@ ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool
+         page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
+     }
+     if (page != nullptr) {
+-        page_table().insert(page);
++        // Controlled producer cut: omit publication.
+     }
+     return page;
+ }
+diff --git a/runtime/src/Heap/z/zRemembered.cpp b/runtime/src/Heap/z/zRemembered.cpp
+index 8842e53ac..c52706440 100644
+--- a/runtime/src/Heap/z/zRemembered.cpp
++++ b/runtime/src/Heap/z/zRemembered.cpp
+@@ -125,7 +125,7 @@ void ZRemembered::register_found_old(ZPage* page)
+ {
+     CHECK(!page->IsYoungRegion());
+     CHECK(_page_table != nullptr);
+-    _found_old.register_page(untype(page->start()) >> ZGranuleSizeShift);
++    // Controlled consumer cut: omit found-old registration.
+ }
+ 
+ template<typename Function>

@@ -23,6 +23,9 @@
 #include "gc_unittest.hpp"
 
 #include "Cangjie.h"
+#include "Common/Runtime.h"
+#include "Concurrency/ConcurrencyModel.h"
+extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void* handle);
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
@@ -476,6 +479,57 @@ void* RunPinnedMarkStartCase(void*)
 }
 
 #endif
+// Exercise the actual scheduler argument copy and its registered root visitor.
+void* RunNativeTaskRootCase(void*)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    struct Observation {
+        RootSlot* taskRoot = nullptr;
+        uintptr_t native = 0;
+        size_t tasks = 0;
+    } observed;
+    CJ_ScheduleAllCJThreadVisit([](void* argument, void* context) {
+        auto& result = *static_cast<Observation*>(context);
+        auto& data = *static_cast<LWTData*>(argument);
+        if (data.fn != nullptr) {
+            result.taskRoot = &RootSlotAt(&data.obj);
+            result.native = reinterpret_cast<uintptr_t>(data.fn);
+            ++result.tasks;
+        }
+    }, &observed);
+    size_t visits = 0;
+    size_t nativeRoots = 0;
+    RootVisitor visitor = [&](RootSlot& root) {
+        visits += &root == observed.taskRoot;
+        nativeRoots += observed.native != 0 && raw(root.LoadPlain()) == observed.native;
+    };
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
+    const bool rootsValid = observed.tasks == 1 && visits == 1 && nativeRoots == 0;
+    std::fprintf(stderr, "NATIVE_TASK_ROOT_TARGET tasks=%zu obj_visits=%zu native_roots=%zu pass=%d\n",
+                 observed.tasks, visits, nativeRoots, rootsValid);
+    if (!rootsValid) {
+        Mutator::GetMutator()->SetManagedContext(true);
+        return reinterpret_cast<void*>(41);
+    }
+    // Positive managed-object control through the production heap iterator.
+    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, 1);
+    NativeSlot root(zpointer::null);
+    ZBarrier::WriteStaticRef(root, array);
+    NativeSlot* roots[] = { &root };
+    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    size_t objects = 0;
+    {
+        ScopedEnterSaferegion saferegion(false);
+        ScopedStopTheWorld stw("native task heap iteration", false);
+        HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == array; });
+    }
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    std::fprintf(stderr, "NATIVE_TASK_HEAP_TARGET managed_visits=%zu gc_returned=1\n", objects);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>(objects == 1 ? 0 : 42);
+}
+
 int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
                    bool runtimeThread = false)
 {
@@ -491,8 +545,6 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
         }
         if (runtimeThread) {
             // Use the real native runtime-thread registration for graph tests.
-            // RunCJTask stores a native FutureImpl in LWTData::obj; that is not
-            // a managed heap-object root and is a separate scheduler/root issue.
             auto& manager = MutatorManager::Instance();
             manager.CreateRuntimeMutator(ThreadType::GC_THREAD);
             void* result = task(reinterpret_cast<void*>(argument));
@@ -532,79 +584,86 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
 } // namespace
 
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 2), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, SmallPrimitiveArrayKeepsFastPath)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, SmallPrimitiveArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 3), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, LargeReferenceArrayPublishesClearedPayload)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, LargeReferenceArrayPublishesClearedPayload)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 0), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, LargePrimitiveArrayUsesSegmentedClearing)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, LargePrimitiveArrayUsesSegmentedClearing)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 1), 0);
 }
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 8), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlockParallel)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlockParallel)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 8, 2), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 4), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 4, 2), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, TwoGcReferenceInitializationRestartsOnlyOnce)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, TwoGcReferenceInitializationRestartsOnlyOnce)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 24), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, TwoGcPrimitiveInitializationDoesNotRestart)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, TwoGcPrimitiveInitializationDoesNotRestart)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 25), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, PrimitivePayloadSurvivesFullGcWindow)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, PrimitivePayloadSurvivesFullGcWindow)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 9), 0);
 }
 #endif
-GC_OTHER_VM_TEST(LargePageGeneration, AllocationPublishesYoungEden)
+GC_RUNTIME_OTHER_VM_TEST(LargePageGeneration, AllocationPublishesYoungEden)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePageIdentityCase, 0), 0);
 }
-GC_OTHER_VM_TEST(P1Mark, PinnedReclaimedSlotIsNotAllocationSource)
+GC_RUNTIME_OTHER_VM_TEST(P1Mark, PinnedReclaimedSlotIsNotAllocationSource)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunPinnedBirthCase, 0), 0);
 }
-GC_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunVisibleArrayGraph, 0, 1, true), 0);
 }
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(MarkAllocation, LargeHolderAndNewTargetAreImplicitlyLive)
+GC_RUNTIME_OTHER_VM_TEST(MarkAllocation, LargeHolderAndNewTargetAreImplicitlyLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunMarkAllocationCase, 0), 0);
 }
-GC_OTHER_VM_TEST(MarkAllocation, LargeHolderKeepsRootedExistingTargetLive)
+GC_RUNTIME_OTHER_VM_TEST(MarkAllocation, LargeHolderKeepsRootedExistingTargetLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunMarkAllocationCase, 1), 0);
 }
-GC_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
+GC_RUNTIME_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargeYoungClosureCase, 0), 0);
 }
-GC_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
+GC_RUNTIME_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunPinnedMarkStartCase, 0), 0);
 }
 #endif
+
+GC_RUNTIME_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
+{
+    // InitCJRuntime must construct the heap with this runtime's parameters.
+    GC_EXPECT_TRUE(ZCollectedHeap::heap() == nullptr);
+    GC_EXPECT_EQ(RunRuntimeCase(RunNativeTaskRootCase, 0), 0);
+}
