@@ -11,6 +11,7 @@
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/z/zObjectAllocator.hpp"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
@@ -81,14 +82,19 @@ void* RunMajorCycle(void*)
     type->SetInstanceSize(sizeof(uint64_t));
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
-    auto* object = MObject::NewPinnedObject(type, 16);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(object);
-    ZGenerationRootTest::Seed(collector, object);
+    auto* object = reinterpret_cast<BaseObject*>(collector.object_allocator().alloc(16, PageAge::old));
+    object->SetClassInfo(type);
     // The ZGC breakpoint exposes the completed root+follow result before
     // mark-end and relocation (zGeneration.cpp:1086-1092).
     ConcurrentGCBreakpoints::AcquireControl();
-    const bool reached = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
-    BaseObject* current = Heap::GetHeap().GetExportObject(handle);
+    const bool started = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
+    ZGenerationRootTest::Seed(collector, object);
+    auto* page = Heap::page(reinterpret_cast<MAddress>(object));
+    std::printf("OHOS_HOST_ROOT_INPUT generation=%u allocating=%u marked_before=%u\n",
+                static_cast<unsigned>(page->generation_id()), page->IsAllocating(),
+                page->is_object_strongly_live(from_object(object)));
+    const bool reached = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED") && started;
+    BaseObject* current = object;
     const bool found = reached && Heap::page(reinterpret_cast<MAddress>(current))->is_object_strongly_live(from_object(current));
     gMajorRootObserved.store(found, std::memory_order_relaxed);
     std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
@@ -97,7 +103,6 @@ void* RunMajorCycle(void*)
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
     ZGenerationRootTest::Clear(collector);
-    Heap::GetHeap().RemoveExportObject(handle);
     return nullptr;
 }
 } // namespace

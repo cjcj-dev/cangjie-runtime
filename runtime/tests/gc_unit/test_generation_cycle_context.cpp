@@ -12,6 +12,8 @@
 #include <array>
 #include <cstring>
 #include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/z/zObjectAllocator.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Cangjie.h"
 #include "Common/Runtime.h"
@@ -48,14 +50,13 @@ namespace MapleRuntime {
 class ZGenerationRootTest {
 public:
     inline static std::array<NativeSlot*, 2> strongSlots {};
-    static void Install(Heap& collector, const std::array<BaseObject*, 6>& objects)
+    static void Install(Heap& collector, const std::array<BaseObject*, 6>& objects,
+                        const std::array<zpointer, 6>& rootInputs)
     {
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (size_t i = 0; i < strongSlots.size(); ++i) {
-            NativeSlot coloured(zpointer::null);
-            ZBarrier::WriteStaticRef(coloured, objects[i]);
             strongSlots[i] = storage.Allocate();
-            strongSlots[i]->StoreColoured(coloured.GetFieldValue(), std::memory_order_relaxed);
+            strongSlots[i]->StoreColoured(rootInputs[i], std::memory_order_relaxed);
         }
         {
             std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
@@ -156,19 +157,22 @@ void* Exercise(void*)
             Expect(!old.active, "independent_minor_does_not_start_old");
         }
     };
-    // Allocate actual product objects, with an independent export-table root
-    // keeping each alive even when a common-root consumer is deliberately cut.
+    // Allocate old objects before the real mark-start retires their page.
+    // Install them only after the young prelude: no export-root load barrier
+    // may mark the witnesses before the old root task under test.
     alignas(TypeInfo) static unsigned char typeStorage[sizeof(TypeInfo)] {};
     auto* type = reinterpret_cast<TypeInfo*>(typeStorage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     type->SetInstanceSize(sizeof(uint64_t));
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
-    std::array<U64, 6> handles {};
     std::array<BaseObject*, 6> witnesses {};
-    for (auto& handle : handles) {
-        auto* object = MObject::NewPinnedObject(type, 16);
-        handle = Heap::GetHeap().RegisterExportRoot(object);
+    std::array<zpointer, 6> rootInputs {};
+    for (size_t i = 0; i < witnesses.size(); ++i) {
+        auto* object = reinterpret_cast<BaseObject*>(collector.object_allocator().alloc(16, PageAge::old));
+        object->SetClassInfo(type);
+        witnesses[i] = object;
+        rootInputs[i] = ZAddress::store_good(from_object(object));
     }
     auto checkCyclePrepared = [&]() {
         // The real driver has selected and prepared its cycle. Add captures
@@ -197,8 +201,13 @@ void* Exercise(void*)
                    "old_body_keeps_prelude_identity");
             Expect((::g_cjMarkBadMask & ZPointerMarkedOldMask) == preludeOldColor,
                    "old_body_keeps_prelude_color");
-            for (size_t i = 0; i < handles.size(); ++i) witnesses[i] = Heap::GetHeap().GetExportObject(handles[i]);
-            ZGenerationRootTest::Install(tracing, witnesses);
+            ZGenerationRootTest::Install(tracing, witnesses, rootInputs);
+            for (auto* object : witnesses) {
+                auto* page = Heap::page(reinterpret_cast<MAddress>(object));
+                std::printf("ROOT_INPUT object=%p generation=%u allocating=%u marked_before=%u\n",
+                            object, static_cast<unsigned>(page->generation_id()), page->IsAllocating(),
+                            page->is_object_strongly_live(from_object(object)));
+            }
             Expect(storedPending == 1u, "store_buffer_old_color");
         }
         buffer.Flush();
@@ -313,7 +322,6 @@ void* Exercise(void*)
     Expect(youngLabels == 2 && oldLabels == 1, "store_buffer_real_cycle_inputs");
     Expect(rootResults > 0, "worker_root_result_observed");
     Expect(combinedMarkStarts == 1 && minorMarkStarts == 1, "real_mark_start_variants_observed");
-    for (auto handle : handles) Heap::GetHeap().RemoveExportObject(handle);
 #endif
     return reinterpret_cast<void*>(static_cast<uintptr_t>(failures));
 }
