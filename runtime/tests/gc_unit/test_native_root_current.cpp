@@ -508,7 +508,7 @@ void CheckRootStorageSegments(unsigned family)
     else { heap.VisitAllExportRoots(observe); }
     bool exactlyOnce = visits.size() == count && remaining == count;
     for (const auto& entry : visits) { exactlyOnce &= entry.second == 1; }
-    const bool marked = fixture.region0->is_object_strongly_live(from_object(fixture.obj0));
+    const bool marked = fixture.region0->is_object_live(from_object(fixture.obj0));
     std::fprintf(stderr,
         "ROOT_SEGMENT_TARGET executed=1 family=%u slots=%zu remaining=%zu exactly_once=%u values_valid=%u marked=%u\n",
         family, visits.size(), remaining, unsigned(exactlyOnce), unsigned(valuesValid), unsigned(marked));

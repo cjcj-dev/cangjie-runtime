@@ -1263,6 +1263,7 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
         ForwardRegion<G>(region);
         statGeneration.increase_freed(owner->size());
     }
+    if (ZVerifyForwarding) { owner->verify(); }
     if (owner->from_age() == PageAge::old) {
         owner->relocated_remembered_fields_after_relocate();
     }
