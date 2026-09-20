@@ -9,7 +9,13 @@ root=$(cd "$src/../../.." && pwd)
 : "${GC_UNIT_OUT:?independent output directory required}"
 mkdir -p "$GC_UNIT_OUT"
 headers=$(python3 "$root/runtime/build/resolve_runtime_headers.py" "$root/runtime" "$GCV2_RUNTIME_LIB_DIR")
-"${CXX:-clang++}" -std=gnu++17 -O0 -g -pthread -fno-rtti -fvisibility-inlines-hidden \
+# Keep inline readers' class layout identical to the linked product shape.
+nm -D --defined-only "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" > "$GC_UNIT_OUT/product-exports.txt"
+defines=()
+if /usr/bin/grep -q PendingStalledAllocations "$GC_UNIT_OUT/product-exports.txt"; then
+  defines=(-DMRT_GC_UNIT_TESTS=1 -DMRT_TESTABLE_INTERNALS=1 -DMRT_PRODUCT_TESTABLE_INTERNALS=1)
+fi
+"${CXX:-clang++}" "${defines[@]}" -std=gnu++17 -O0 -g -pthread -fno-rtti -fvisibility-inlines-hidden \
   -I"$src" -I"$root/runtime/src" -I"$root/runtime/src/Heap" \
   -I"$root/runtime/src/Heap/z/os/linux" -I"$root/runtime/include" -I"$headers/include" \
   -I"$root/runtime/src/CJThread/src/runtime/schedule/include" \

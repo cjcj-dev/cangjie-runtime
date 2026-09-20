@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zObjectAllocator.inline.hpp b/runtime/src/Heap/z/zObjectAllocator.inline.hpp
+index 9fc7e74f9..6df3c938c 100644
+--- a/runtime/src/Heap/z/zObjectAllocator.inline.hpp
++++ b/runtime/src/Heap/z/zObjectAllocator.inline.hpp
+@@ -41,7 +41,7 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
+     if (addr == 0) {
+         // Acquisition may handshake; refresh this empty page under the same
+         // mutex that spans old retirement and sequence advancement.
+-        region->ResetPageSequence();
++        // Controlled cut: retain the page acquisition sequence at publication.
+         // zObjectAllocator.hpp: the pinned allocation page is a per-allocator
+         // pointer, not a list member; the role word carries the lifecycle.
+         region->SetRegionRole(ZPageRole::RecentPinned);

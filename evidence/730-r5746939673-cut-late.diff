@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zPageAllocator.cpp b/runtime/src/Heap/z/zPageAllocator.cpp
+index 572872050..d7460764e 100644
+--- a/runtime/src/Heap/z/zPageAllocator.cpp
++++ b/runtime/src/Heap/z/zPageAllocator.cpp
+@@ -655,7 +655,7 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
+                 Heap::GetHeap().RequestGC(GC_REASON_OOM, false);
+             }
+             SatisfyStalledAllocations();
+-            anotherWave = allocationStallQueue.CompleteWave(waveBoundary);
++            anotherWave = allocationStallQueue.CompleteWave(allocationStallQueue.CaptureWaveBoundary());
+         } while (anotherWave);
+     }
+ 

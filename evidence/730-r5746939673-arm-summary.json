@@ -1,0 +1,1655 @@
+{
+  "counts": {
+    "cpu-default": {
+      "total": 10,
+      "rc0": 7,
+      "rc1": 3,
+      "other": []
+    },
+    "cpu-testable": {
+      "total": 16,
+      "rc0": 13,
+      "rc1": 3,
+      "other": []
+    },
+    "green-default": {
+      "total": 10,
+      "rc0": 10,
+      "rc1": 0,
+      "other": []
+    },
+    "green-testable": {
+      "total": 16,
+      "rc0": 16,
+      "rc1": 0,
+      "other": []
+    },
+    "late-default": {
+      "total": 10,
+      "rc0": 10,
+      "rc1": 0,
+      "other": []
+    },
+    "late-testable": {
+      "total": 16,
+      "rc0": 13,
+      "rc1": 3,
+      "other": []
+    },
+    "pinned-default": {
+      "total": 10,
+      "rc0": 9,
+      "rc1": 1,
+      "other": []
+    },
+    "pinned-testable": {
+      "total": 16,
+      "rc0": 15,
+      "rc1": 1,
+      "other": []
+    },
+    "restored-default": {
+      "total": 10,
+      "rc0": 10,
+      "rc1": 0,
+      "other": []
+    },
+    "restored-testable": {
+      "total": 16,
+      "rc0": 16,
+      "rc1": 0,
+      "other": []
+    }
+  },
+  "identities": {
+    "pinned-testable": {
+      "cj_gc_unit": "e3e7073cc9c703e0b75b3cf43bdf72c66b7f0e0b63ebc3388f985c957dc673f8",
+      "libcangjie-runtime.so": "2b02667f2a50429ebe2a92707dc136fc230b4185ba59f744e437091e9c75c416",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "pinned_publication_window": "bbec0355ac0fbba93c0523f5d01593773df7c19d7557ea703986ebbaafa27b2f"
+    },
+    "cpu-testable": {
+      "cj_gc_unit": "e3e7073cc9c703e0b75b3cf43bdf72c66b7f0e0b63ebc3388f985c957dc673f8",
+      "libcangjie-runtime.so": "72e96375a554bcd8e0cb3ebe2d1f5fa509ebc9397ab0663e603d0e7aba4c5402",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "pinned_publication_window": "bbec0355ac0fbba93c0523f5d01593773df7c19d7557ea703986ebbaafa27b2f"
+    },
+    "cpu-default": {
+      "cj_gc_unit": "e09ba086859a1bdfb8ea7f5f470eed5718ffa7119b3fc52ec9be5d9a4531e2c6",
+      "libcangjie-runtime.so": "07bc8dbaeabdfff4ea4ac570dd70cc8b67c298e8ad6cf992493ee60c69eadd88",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "pinned_publication_window": "6dd66bb0719835bea61752a3820b5d8f6b133f1eb2caa630a699dcbd76ed9920"
+    },
+    "late-default": {
+      "cj_gc_unit": "e09ba086859a1bdfb8ea7f5f470eed5718ffa7119b3fc52ec9be5d9a4531e2c6",
+      "libcangjie-runtime.so": "38c2c10c56a6385e7111cfd1d5e9529e949d89b83f22c9ac5a3b4c9254a36ec0",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "pinned_publication_window": "6dd66bb0719835bea61752a3820b5d8f6b133f1eb2caa630a699dcbd76ed9920"
+    },
+    "pinned-default": {
+      "cj_gc_unit": "e09ba086859a1bdfb8ea7f5f470eed5718ffa7119b3fc52ec9be5d9a4531e2c6",
+      "libcangjie-runtime.so": "59fd051a0b0185c8f1fe01655ed0d20845208d540390f8461b4f8228ee3d48e8",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "pinned_publication_window": "6dd66bb0719835bea61752a3820b5d8f6b133f1eb2caa630a699dcbd76ed9920"
+    },
+    "green-default": {
+      "cj_gc_unit": "e09ba086859a1bdfb8ea7f5f470eed5718ffa7119b3fc52ec9be5d9a4531e2c6",
+      "libcangjie-runtime.so": "f4d8d5c885cbc1929b5acc34bf4112c3648e5284854820cd99d6f173f950eec2",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "pinned_publication_window": "6dd66bb0719835bea61752a3820b5d8f6b133f1eb2caa630a699dcbd76ed9920"
+    },
+    "restored-default": {
+      "cj_gc_unit": "e09ba086859a1bdfb8ea7f5f470eed5718ffa7119b3fc52ec9be5d9a4531e2c6",
+      "libcangjie-runtime.so": "f4d8d5c885cbc1929b5acc34bf4112c3648e5284854820cd99d6f173f950eec2",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "pinned_publication_window": "6dd66bb0719835bea61752a3820b5d8f6b133f1eb2caa630a699dcbd76ed9920"
+    },
+    "restored-testable": {
+      "cj_gc_unit": "e3e7073cc9c703e0b75b3cf43bdf72c66b7f0e0b63ebc3388f985c957dc673f8",
+      "libcangjie-runtime.so": "a1eb5264ed647cf5cba47a40034d085b80264b2b094a2450ff3fe71712a30220",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "pinned_publication_window": "bbec0355ac0fbba93c0523f5d01593773df7c19d7557ea703986ebbaafa27b2f"
+    },
+    "green-testable": {
+      "cj_gc_unit": "e3e7073cc9c703e0b75b3cf43bdf72c66b7f0e0b63ebc3388f985c957dc673f8",
+      "libcangjie-runtime.so": "a1eb5264ed647cf5cba47a40034d085b80264b2b094a2450ff3fe71712a30220",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "pinned_publication_window": "bbec0355ac0fbba93c0523f5d01593773df7c19d7557ea703986ebbaafa27b2f"
+    },
+    "late-testable": {
+      "cj_gc_unit": "e3e7073cc9c703e0b75b3cf43bdf72c66b7f0e0b63ebc3388f985c957dc673f8",
+      "libcangjie-runtime.so": "84eb9babf3347499dec47cf42dea22bad5d657aaf64c326c2b9d09101dc14a94",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "pinned_publication_window": "bbec0355ac0fbba93c0523f5d01593773df7c19d7557ea703986ebbaafa27b2f"
+    }
+  },
+  "identity_checks": {
+    "default": {
+      "green_equals_restored": true,
+      "cpu": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      },
+      "pinned": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      },
+      "late": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      }
+    },
+    "testable": {
+      "green_equals_restored": true,
+      "cpu": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      },
+      "pinned": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      },
+      "late": {
+        "test_equal": true,
+        "gdb_equal": true,
+        "bounds_equal": true,
+        "so_different": true
+      }
+    }
+  },
+  "rows": [
+    {
+      "arm": "cpu",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-default/SharedSmallPage.AtomicBoundsPreserveTop.1.log",
+      "targets": []
+    },
+    {
+      "arm": "cpu",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-default/SharedSmallPage.AtomicBoundsPreserveTop.2.log",
+      "targets": []
+    },
+    {
+      "arm": "cpu",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-default/SharedSmallPage.AtomicBoundsPreserveTop.3.log",
+      "targets": []
+    },
+    {
+      "arm": "cpu",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 1,
+      "rc": 1,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-default/SharedSmallPage.MigrationUsesCurrentCPU.1.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5e3893cd6a60 second=0x5e3893cd6a60 per_cpu=1 first_slot=0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 2,
+      "rc": 1,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-default/SharedSmallPage.MigrationUsesCurrentCPU.2.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5ef18a6ffa60 second=0x5ef18a6ffa60 per_cpu=1 first_slot=0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 3,
+      "rc": 1,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-default/SharedSmallPage.MigrationUsesCurrentCPU.3.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5cfae56afa60 second=0x5cfae56afa60 per_cpu=1 first_slot=0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.1.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x644ef99fd710"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.2.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x558793eb9710"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.3.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5b86d7dba710"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "default",
+      "test": "PinnedPublication.GdbWindow",
+      "n": 1,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-default/pinned.gdb.log",
+      "targets": [
+        "PINNED_PUBLICATION_TARGET ordering=1 current=1 shared=1 page=0x555555590810 before=1 after=2 birth=3 owner=3 injected=1",
+        "2026-09-20 10:27:50.532097 338526 I Final                           0            0      PINNED_RETENTION_TARGET retained=1"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.1.log",
+      "targets": []
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.2.log",
+      "targets": []
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.3.log",
+      "targets": []
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.1.log",
+      "targets": [
+        "2026-09-20 10:27:49.92635STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 2,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.2.log",
+      "targets": [
+        "2026-09-20 10:27:49.999547 337STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.3.log",
+      "targets": [
+        "2026-09-20 10:27:50.050947STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/SharedSmallPage.AtomicBoundsPreserveTop.1.log",
+      "targets": []
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/SharedSmallPage.AtomicBoundsPreserveTop.2.log",
+      "targets": []
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/SharedSmallPage.AtomicBoundsPreserveTop.3.log",
+      "targets": []
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 1,
+      "rc": 1,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/SharedSmallPage.MigrationUsesCurrentCPU.1.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5c60077cdf10 second=0x5c60077cdf10 per_cpu=1 first_slot=0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 2,
+      "rc": 1,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/SharedSmallPage.MigrationUsesCurrentCPU.2.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5d03476b4f10 second=0x5d03476b4f10 per_cpu=1 first_slot=0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 3,
+      "rc": 1,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/SharedSmallPage.MigrationUsesCurrentCPU.3.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x57e5145b1f10 second=0x57e5145b1f10 per_cpu=1 first_slot=0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.1.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x6432b0b9cea0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.2.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x565efbdfdea0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 3,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.3.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5e21b482aea0"
+      ]
+    },
+    {
+      "arm": "cpu",
+      "config": "testable",
+      "test": "PinnedPublication.GdbWindow",
+      "n": 1,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/cpu-testable/pinned.gdb.log",
+      "targets": [
+        "PINNED_PUBLICATION_TARGET ordering=1 current=1 shared=1 page=0x555555590c40 before=1 after=2 birth=3 owner=3 injected=1",
+        "2026-09-20 10:27:50.586106 338622 I Final                           0            0       PINNED_RETENTION_TARGET retained=1"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-default/SharedSmallPage.AtomicBoundsPreserveTop.1.log",
+      "targets": []
+    },
+    {
+      "arm": "green",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-default/SharedSmallPage.AtomicBoundsPreserveTop.2.log",
+      "targets": []
+    },
+    {
+      "arm": "green",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-default/SharedSmallPage.AtomicBoundsPreserveTop.3.log",
+      "targets": []
+    },
+    {
+      "arm": "green",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-default/SharedSmallPage.MigrationUsesCurrentCPU.1.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x568238339a60 second=0x568238339cf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 2,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-default/SharedSmallPage.MigrationUsesCurrentCPU.2.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5d3a54890a60 second=0x5d3a54890cf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-default/SharedSmallPage.MigrationUsesCurrentCPU.3.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5a08e6147a60 second=0x5a08e6147cf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.1.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5572c4d1c710"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.2.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5b921f72f710"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 3,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.3.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x58aebfca5710"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "default",
+      "test": "PinnedPublication.GdbWindow",
+      "n": 1,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-default/pinned.gdb.log",
+      "targets": [
+        "PINNED_PUBLICATION_TARGET ordering=1 current=1 shared=1 page=0x555555590810 before=1 after=2 birth=3 owner=3 injected=1",
+        "2026-09-20 10:27:50.566918 338550 I Final                           0            0            PINNED_RETENTION_TARGET retained=1"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.1.log",
+      "targets": []
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.2.log",
+      "targets": []
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.3.log",
+      "targets": []
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.1.log",
+      "targets": [
+        "2026-09-20 10:27:49.935913 STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.2.log",
+      "targets": [
+        "2026-09-20 10:27:49.980622 338STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 3,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.3.log",
+      "targets": [
+        "2026-09-20 10:27:50.023529 338STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/SharedSmallPage.AtomicBoundsPreserveTop.1.log",
+      "targets": []
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/SharedSmallPage.AtomicBoundsPreserveTop.2.log",
+      "targets": []
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/SharedSmallPage.AtomicBoundsPreserveTop.3.log",
+      "targets": []
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/SharedSmallPage.MigrationUsesCurrentCPU.1.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x56c2f4da0f10 second=0x56c2f4da11a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 2,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/SharedSmallPage.MigrationUsesCurrentCPU.2.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x563046cb1f10 second=0x563046cb21a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/SharedSmallPage.MigrationUsesCurrentCPU.3.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5e329cd17f10 second=0x5e329cd181a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.1.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x6406d8c76ea0"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.2.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5cb9e19f6ea0"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 3,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.3.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5704d651fea0"
+      ]
+    },
+    {
+      "arm": "green",
+      "config": "testable",
+      "test": "PinnedPublication.GdbWindow",
+      "n": 1,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/green-testable/pinned.gdb.log",
+      "targets": [
+        "PINNED_PUBLICATION_TARGET ordering=1 current=1 shared=1 page=0x555555590c40 before=1 after=2 birth=3 owner=3 injected=1",
+        "2026-09-20 10:27:50.602326 338634 I Final                           0            0            PINNED_RETENTION_TARGET retained=1"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-default/SharedSmallPage.AtomicBoundsPreserveTop.1.log",
+      "targets": []
+    },
+    {
+      "arm": "late",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-default/SharedSmallPage.AtomicBoundsPreserveTop.2.log",
+      "targets": []
+    },
+    {
+      "arm": "late",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-default/SharedSmallPage.AtomicBoundsPreserveTop.3.log",
+      "targets": []
+    },
+    {
+      "arm": "late",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-default/SharedSmallPage.MigrationUsesCurrentCPU.1.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x6037fe411a60 second=0x6037fe411cf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-default/SharedSmallPage.MigrationUsesCurrentCPU.2.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x6215dc68ca60 second=0x6215dc68ccf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-default/SharedSmallPage.MigrationUsesCurrentCPU.3.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5af4a3ddba60 second=0x5af4a3ddbcf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.1.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x628b50b3e710"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.2.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x63873ae5b710"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.3.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x60b5a8046710"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "default",
+      "test": "PinnedPublication.GdbWindow",
+      "n": 1,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-default/pinned.gdb.log",
+      "targets": [
+        "PINNED_PUBLICATION_TARGET ordering=1 current=1 shared=1 page=0x555555590810 before=1 after=2 birth=3 owner=3 injected=1",
+        "2026-09-20 10:27:50.548554 338538 I Final                           0            0            PINNED_RETENTION_TARGET retained=1"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.1.log",
+      "targets": []
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.2.log",
+      "targets": []
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.3.log",
+      "targets": []
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 1,
+      "rc": 1,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.1.log",
+      "targets": [
+        "2026-09-20 10:27:49.911001 335881 I Capacity:  STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=2 late_done=2 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 2,
+      "rc": 1,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.2.log",
+      "targets": [
+        "2026-09-20 10:27:49.979386 337796 I Capacity:STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=2 late_done=2 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 3,
+      "rc": 1,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.3.log",
+      "targets": [
+        "2026-09-20 10:27:50.011692 338218 I Capacity:   STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=2 late_done=2 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/SharedSmallPage.AtomicBoundsPreserveTop.1.log",
+      "targets": []
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/SharedSmallPage.AtomicBoundsPreserveTop.2.log",
+      "targets": []
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/SharedSmallPage.AtomicBoundsPreserveTop.3.log",
+      "targets": []
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/SharedSmallPage.MigrationUsesCurrentCPU.1.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5cc0208bbf10 second=0x5cc0208bc1a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 2,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/SharedSmallPage.MigrationUsesCurrentCPU.2.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5a12a875df10 second=0x5a12a875e1a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/SharedSmallPage.MigrationUsesCurrentCPU.3.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x63d9bea01f10 second=0x63d9bea021a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.1.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x6535f2771ea0"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.2.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5adf03f72ea0"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 3,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.3.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5e07e873aea0"
+      ]
+    },
+    {
+      "arm": "late",
+      "config": "testable",
+      "test": "PinnedPublication.GdbWindow",
+      "n": 1,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/late-testable/pinned.gdb.log",
+      "targets": [
+        "PINNED_PUBLICATION_TARGET ordering=1 current=1 shared=1 page=0x555555590c40 before=1 after=2 birth=3 owner=3 injected=1",
+        "2026-09-20 10:27:50.586150 338587 I Final                           0            0         PINNED_RETENTION_TARGET retained=1"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-default/SharedSmallPage.AtomicBoundsPreserveTop.1.log",
+      "targets": []
+    },
+    {
+      "arm": "pinned",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-default/SharedSmallPage.AtomicBoundsPreserveTop.2.log",
+      "targets": []
+    },
+    {
+      "arm": "pinned",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-default/SharedSmallPage.AtomicBoundsPreserveTop.3.log",
+      "targets": []
+    },
+    {
+      "arm": "pinned",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-default/SharedSmallPage.MigrationUsesCurrentCPU.1.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x59a584bb9a60 second=0x59a584bb9cf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-default/SharedSmallPage.MigrationUsesCurrentCPU.2.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x64cb8c316a60 second=0x64cb8c316cf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 3,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-default/SharedSmallPage.MigrationUsesCurrentCPU.3.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x59da47292a60 second=0x59da47292cf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.1.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5cda623df710"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.2.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x64e49292b710"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 3,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.3.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5a9c11866710"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "default",
+      "test": "PinnedPublication.GdbWindow",
+      "n": 1,
+      "rc": 1,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-default/pinned.gdb.log",
+      "targets": [
+        "PINNED_PUBLICATION_TARGET ordering=1 current=0 shared=1 page=0x555555590810 before=1 after=2 birth=1 owner=3 injected=1",
+        "2026-09-20 10:27:50.587129 338610 I Final                           0            0        PINNED_RETENTION_TARGET retained=1"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.1.log",
+      "targets": []
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.2.log",
+      "targets": []
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.3.log",
+      "targets": []
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.1.log",
+      "targets": [
+        "2026-09-20 10:27:49.902517 33570STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 2,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.2.log",
+      "targets": [
+        "2026-09-20 10:27:49.999293STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.3.log",
+      "targets": [
+        "2026-09-20 10:27:50.029691 338326 STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/SharedSmallPage.AtomicBoundsPreserveTop.1.log",
+      "targets": []
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/SharedSmallPage.AtomicBoundsPreserveTop.2.log",
+      "targets": []
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/SharedSmallPage.AtomicBoundsPreserveTop.3.log",
+      "targets": []
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/SharedSmallPage.MigrationUsesCurrentCPU.1.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5cb8d72abf10 second=0x5cb8d72ac1a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 2,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/SharedSmallPage.MigrationUsesCurrentCPU.2.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x613e19437f10 second=0x613e194381a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/SharedSmallPage.MigrationUsesCurrentCPU.3.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5b15ce016f10 second=0x5b15ce0171a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.1.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x57008b641ea0"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.2.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5c1842fa6ea0"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 3,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.3.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5cd50a02bea0"
+      ]
+    },
+    {
+      "arm": "pinned",
+      "config": "testable",
+      "test": "PinnedPublication.GdbWindow",
+      "n": 1,
+      "rc": 1,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/pinned-testable/pinned.gdb.log",
+      "targets": [
+        "PINNED_PUBLICATION_TARGET ordering=1 current=0 shared=1 page=0x555555590c40 before=1 after=2 birth=1 owner=3 injected=1",
+        "2026-09-20 10:27:50.582305 338590 I Final                           0            0            PINNED_RETENTION_TARGET retained=1"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-default/SharedSmallPage.AtomicBoundsPreserveTop.1.log",
+      "targets": []
+    },
+    {
+      "arm": "restored",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-default/SharedSmallPage.AtomicBoundsPreserveTop.2.log",
+      "targets": []
+    },
+    {
+      "arm": "restored",
+      "config": "default",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-default/SharedSmallPage.AtomicBoundsPreserveTop.3.log",
+      "targets": []
+    },
+    {
+      "arm": "restored",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-default/SharedSmallPage.MigrationUsesCurrentCPU.1.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x6233f308ca60 second=0x6233f308ccf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-default/SharedSmallPage.MigrationUsesCurrentCPU.2.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x56ed2cfc6a60 second=0x56ed2cfc6cf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "default",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 3,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-default/SharedSmallPage.MigrationUsesCurrentCPU.3.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5df5554f6a60 second=0x5df5554f6cf0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.1.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5c75fee5f710"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.2.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5c680b4f3710"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "default",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 3,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-default/SharedSmallPage.SmallHeapUsesSharedSlotZero.3.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x6056de27c710"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "default",
+      "test": "PinnedPublication.GdbWindow",
+      "n": 1,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-default/pinned.gdb.log",
+      "targets": [
+        "PINNED_PUBLICATION_TARGET ordering=1 current=1 shared=1 page=0x555555590810 before=1 after=2 birth=3 owner=3 injected=1",
+        "2026-09-20 10:27:50.561108 338560 I Final                           0            0            PINNED_RETENTION_TARGET retained=1"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.1.log",
+      "targets": []
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.2.log",
+      "targets": []
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "AllocationStall.CompletedWaveDoesNotFailLateWaiter",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/AllocationStall.CompletedWaveDoesNotFailLateWaiter.3.log",
+      "targets": []
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.1.log",
+      "targets": [
+        "2026-09-20 10:27:49.937718 33STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 2,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.2.log",
+      "targets": [
+        "2026-09-20 10:27:50.002262 337999STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "AllocationStall.ProductLateWaiterRequiresNextCollection",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/AllocationStall.ProductLateWaiterRequiresNextCollection.3.log",
+      "targets": [
+        "2026-09-20 10:27:50.052179 338433 I STALL_PRODUCT_LATE_TARGET queued=2 first_mark=2 first_done=3 late_done=3 first_null=1 late_null=1 retained=1 timeout=0"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/SharedSmallPage.AtomicBoundsPreserveTop.1.log",
+      "targets": []
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 2,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/SharedSmallPage.AtomicBoundsPreserveTop.2.log",
+      "targets": []
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "SharedSmallPage.AtomicBoundsPreserveTop",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/SharedSmallPage.AtomicBoundsPreserveTop.3.log",
+      "targets": []
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/SharedSmallPage.MigrationUsesCurrentCPU.1.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x5ddee7eb6f10 second=0x5ddee7eb71a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 2,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/SharedSmallPage.MigrationUsesCurrentCPU.2.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x60e769c4cf10 second=0x60e769c4d1a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "SharedSmallPage.MigrationUsesCurrentCPU",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/SharedSmallPage.MigrationUsesCurrentCPU.3.log",
+      "targets": [
+        "CPU_MIGRATION_TARGET cpu_a=16 cpu_b=31 first=0x62c90ddacf10 second=0x62c90ddad1a0 per_cpu=1 first_slot=1"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 1,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.1.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x564b019cfea0"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 2,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.2.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x578aedae9ea0"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "SharedSmallPage.SmallHeapUsesSharedSlotZero",
+      "n": 3,
+      "rc": 0,
+      "wall": 0,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/SharedSmallPage.SmallHeapUsesSharedSlotZero.3.log",
+      "targets": [
+        "CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x5ecc8f320ea0"
+      ]
+    },
+    {
+      "arm": "restored",
+      "config": "testable",
+      "test": "PinnedPublication.GdbWindow",
+      "n": 1,
+      "rc": 0,
+      "wall": 1,
+      "log": "/root/sym_cangjie_runtime_730_implement_r5746939673-evidence/restored-testable/pinned.gdb.log",
+      "targets": [
+        "PINNED_PUBLICATION_TARGET ordering=1 current=1 shared=1 page=0x555555590c40 before=1 after=2 birth=3 owner=3 injected=1",
+        "2026-09-20 10:27:50.570987 338568 I Final                           0            0        PINNED_RETENTION_TARGET retained=1"
+      ]
+    }
+  ],
+  "uptime_before": " 10:27:49 up 10 days, 10:36,  1 user,  load average: 4.06, 6.59, 4.76\n",
+  "uptime_after": " 10:27:50 up 10 days, 10:36,  1 user,  load average: 4.06, 6.59, 4.76\n",
+  "cores": "16-31"
+}
