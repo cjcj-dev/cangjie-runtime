@@ -6,6 +6,8 @@
 #include "Heap/shared/collectedHeap.hpp"
 #include "Mutator/Mutator.h"
 namespace MapleRuntime {
+constexpr size_t AllocBuffer::MinTLABSize;
+
 AllocBuffer* AllocBuffer::GetOrCreateAllocBuffer()
 {
     auto* buffer = AllocBuffer::GetAllocBuffer();
