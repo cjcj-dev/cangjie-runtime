@@ -34,7 +34,7 @@ using LWTData = struct {
     void* obj; // Pointer of a Cangjie object;
                // future or env of closure
     void* threadObject;   // Cangjie class Thread in std/core
-    void* nativeContext;  // Native task context; never visited as a managed root
+    void* nativeContext { nullptr };  // Native task context; never visited as a managed root
 };
 struct ConcurrencyTask; // Task depends on the implementation of ConcurrencyModel
 
