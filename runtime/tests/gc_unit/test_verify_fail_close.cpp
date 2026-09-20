@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <unordered_set>
 
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "ObjectModel/MObject.h"

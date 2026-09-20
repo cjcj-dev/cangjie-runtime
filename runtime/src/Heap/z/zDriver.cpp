@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Heap/shared/stringdedup/stringDedup.hpp"
+#include "Heap/z/stringdedup/stringDedup.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zAbort.hpp"
@@ -23,7 +23,7 @@
 #include "Base/SysCall.h"
 #include "CangjieRuntime.h"
 #include "Heap/z/zMark.hpp"
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Common/Runtime.h"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zDirector.hpp"

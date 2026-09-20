@@ -12,7 +12,7 @@
 #include <array>
 #include <cstring>
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Cangjie.h"
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"

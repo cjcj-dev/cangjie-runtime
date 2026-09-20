@@ -19,7 +19,7 @@
 #endif
 #include "Base/Globals.h"
 #include "Base/SysCall.h"
-#include "Heap/Allocator/CartesianTree.h"
+#include "Heap/z/CartesianTree.h"
 #include "securec.h"
 #if defined(_WIN64) || defined(__APPLE__)
 #include "Base/MemUtils.h"

@@ -941,7 +941,7 @@ void ZStatHeap::PrintStalls() const
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
+#include "Heap/z/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"

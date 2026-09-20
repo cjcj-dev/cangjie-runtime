@@ -12,7 +12,7 @@
 
 #include "Base/Log.h"
 #include "Base/SpinLock.h"
-#include "Heap/Allocator/Allocator.h"
+#include "Heap/z/Allocator.h"
 #include "ObjectModel/MArray.inline.h"
 #include "Sanitizer/SanitizerCompilerCalls.h"
 #include "securec.h"

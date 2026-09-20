@@ -30,7 +30,7 @@
 #include "LogManager.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #ifdef CANGJIE_GWPASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
 #endif

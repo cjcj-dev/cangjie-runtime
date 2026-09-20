@@ -10,7 +10,7 @@
 #include <cstdlib>
 #include <chrono>
 
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Base/Globals.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/MutatorManager.h"

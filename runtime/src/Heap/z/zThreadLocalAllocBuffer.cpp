@@ -6,7 +6,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 
 #include <atomic>
 #include <cstdlib>
@@ -54,7 +54,7 @@ bool RegionIsInRelocationSet(const ZPage* reg)
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 
 #include <atomic>
 #include <cstdlib>
@@ -362,7 +362,7 @@ void AllocBuffer::CommitRawPointerRegions()
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 
 #include <atomic>
 #include <cstdlib>

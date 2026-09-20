@@ -9,7 +9,7 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zRelocate.hpp"
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 
 #include <cstdio>
 #include <cstdlib>
