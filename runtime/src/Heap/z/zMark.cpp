@@ -170,21 +170,12 @@ thread_local const char* gMinorRootOrigin = "unknown";
 void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                                      uint64_t stackScanEpoch)
 {
-#if defined(MRT_GC_UNIT_TESTS)
-    RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
-        invisibleRootVisitor(root);
-    };
-    RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
-#else
-    RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
-#endif
-    RootVisitor& visitedRawRootVisitor = rawRootVisitor;
     gMinorRootOrigin = "mutator_stack";
-    VisitStrongPlainRoots(visitedRawRootVisitor, [&](Mutator& mutator) {
+    VisitStrongPlainRoots(rawRootVisitor, [&](Mutator& mutator) {
         // ZGC zMark.cpp:703-708: completion is idempotent inside the watermark.
-        DerivedPtrVisitor derivedVisitor = Mutator::MakeDerivedRootVisitor(visitedRawRootVisitor);
+        DerivedPtrVisitor derivedVisitor = Mutator::MakeDerivedRootVisitor(rawRootVisitor);
         size_t frames = 0;
-        (void)StackWatermarkSet::finish_processing(mutator, visitedRawRootVisitor, visitedInvisibleRootVisitor,
+        (void)StackWatermarkSet::finish_processing(mutator, rawRootVisitor, invisibleRootVisitor,
                                                    stackScanEpoch, &derivedVisitor, frames);
     });
     gMinorRootOrigin = "unknown";

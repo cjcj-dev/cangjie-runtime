@@ -621,3 +621,59 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
                    after == grown - 1 && remaining == 1 && !newSlotVisited);
 }
 #endif
+
+// ZGC zMark.cpp:703-708: callers finish every thread; the watermark owns
+// completion. Exercise the exported product root phase and handshake entries.
+namespace {
+void CheckYoungThreadCompletion(bool handshakeFirst)
+{
+    using namespace MapleRuntime;
+    using namespace MapleRuntime::GcUnit;
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    fixture.region0->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    thread->SetManagedContext(false);
+    (void)thread->EnterSaferegion(false);
+    ObjectRef* root = thread->AddNativeFrameRoot(fixture.obj0);
+    const uint64_t epoch = StackWatermark::epoch_id();
+    const bool initiallyDone = thread->GetStackWatermark().IsDone(epoch);
+    const bool initiallyLive = fixture.region0->is_object_strongly_live(from_object(fixture.obj0));
+    size_t published = 0;
+    auto readPublished = [&] {
+        marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
+            GC_EXPECT_TRUE(object == fixture.obj0 && follow);
+            ++published;
+        });
+    };
+    if (handshakeFirst) {
+        (void)thread->GcPhaseEnum(true, epoch, false);
+        const bool done = thread->GetStackWatermark().IsDone(epoch);
+        readPublished();
+        std::fprintf(stderr, "YOUNG_HANDSHAKE_TARGET done=%u published=%zu initially_done=%u initially_live=%u\n",
+                     unsigned(done), published, unsigned(initiallyDone), unsigned(initiallyLive));
+        GC_EXPECT_TRUE(!initiallyDone && !initiallyLive && done && published == 1);
+    }
+    size_t rootResults = 0;
+    auto observe = [&](BaseObject* object) { if (object == fixture.obj0) ++rootResults; };
+    ZMark::VisitMinorRoots(observe, observe, epoch);
+    const bool firstDone = thread->GetStackWatermark().IsDone(epoch);
+    readPublished();
+    const size_t firstPublished = published;
+    const size_t firstResults = rootResults;
+    ZMark::VisitMinorRoots(observe, observe, epoch);
+    readPublished();
+    const bool sameRoot = raw(root->LoadPlain()) == reinterpret_cast<uintptr_t>(fixture.obj0);
+    std::fprintf(stderr, "YOUNG_THREAD_COMPLETION_TARGET handshake=%u done=%u published=%zu first=%zu second=%zu same=%u\n",
+                 unsigned(handshakeFirst), unsigned(firstDone), published, firstResults, rootResults,
+                 unsigned(sameRoot));
+    GC_EXPECT_TRUE(firstDone && firstPublished == 1 && published == firstPublished && sameRoot);
+    GC_EXPECT_EQ(firstResults, handshakeFirst ? size_t(0) : size_t(1));
+    GC_EXPECT_EQ(rootResults, firstResults);
+    thread->RemoveNativeFrameRoot(root);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+}
+GC_OTHER_VM_TEST(YoungThreadRoots, UnfinishedThreadCompletesOnce) { CheckYoungThreadCompletion(false); }
+GC_OTHER_VM_TEST(YoungThreadRoots, HandshakeCompletedThreadIsIdempotent) { CheckYoungThreadCompletion(true); }
