@@ -119,22 +119,6 @@ inline size_t RegionManager::GetUsedBytes() const
 
 
 
-inline void RegionManager::MergeRawPointerRegions(std::vector<ZPage*>& smallSizeRegions,
-                                                      std::vector<ZPage*>& largeSizeRegions)
-    {
-        size_t smallBytes = 0;
-        for (ZPage* region : smallSizeRegions) {
-            region->SetRegionRole(ZPageRole::RecentFull);
-            smallBytes += region->GetRegionSize();
-        }
-        RecentFullAccounting::Enqueue(smallSizeRegions.size(), smallBytes);
-        smallSizeRegions.clear();
-        for (ZPage* region : largeSizeRegions) {
-            region->SetRegionRole(ZPageRole::RecentLarge);
-        }
-        largeSizeRegions.clear();
-    }
-
 inline void RegionManager::HandleTraceRegions()
     {
         // #710: trace-stamped pages become ordinary full/large pages; the

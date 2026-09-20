@@ -890,7 +890,7 @@ static void* GetAnnotations(Uptr annotationMethod, TypeInfo* arrayTi)
     ScopedAllocBuffer scopedAllocBuffer;
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::RAW_POINTER_OBJECT);
+    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::MOVEABLE_OBJECT);
     if (obj == nullptr) {
         ExceptionManager::OutOfMemory();
         return nullptr;

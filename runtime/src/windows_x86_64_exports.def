@@ -1062,7 +1062,6 @@ EXPORTS
     _ZN12MapleRuntime11AllocBuffer12AllocateImplEyNS_9AllocTypeE @1160
     _ZN12MapleRuntime11AllocBuffer14GetAllocBufferEv @1161
     _ZN12MapleRuntime11AllocBuffer22GetOrCreateAllocBufferEv @1162
-    _ZN12MapleRuntime11AllocBuffer23CommitRawPointerRegionsEv @1163
     _ZN12MapleRuntime11AllocBuffer4FiniEv @1165
     _ZN12MapleRuntime11AllocBuffer4InitEv @1166
     _ZN12MapleRuntime11AllocBuffer8AllocateEyNS_9AllocTypeE @1167

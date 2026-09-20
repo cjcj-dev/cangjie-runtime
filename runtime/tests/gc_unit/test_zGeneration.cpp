@@ -93,37 +93,6 @@ GC_TEST(ZGeneration, FreedPromotedCompactedAtomics)
     young->reset_statistics();
 }
 
-namespace {
-
-class VM_ZTestJniCriticalPause : public VM_ZOperation {
-public:
-    bool do_operation() override
-    {
-        sawBlocked = ZJNICritical::count_snapshot() < 0;
-        return true;
-    }
-    bool block_jni_critical() const override { return true; }
-    bool sawBlocked = false;
-};
-
-} // namespace
-
-GC_OTHER_VM_TEST(ZJNICritical, PauseSeesBlockedCount)
-{
-    RuntimeParam param{};
-    param.heapParam.heapSize = 512 * 1024;
-    param.coParam.processorNum = 1;
-    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    VM_ZTestJniCriticalPause op;
-    const bool ok = op.pause();
-    std::printf("ZJNI_CRITICAL_PAUSE_SAW_BLOCKED ok=%d saw=%d count=%lld\n",
-                ok ? 1 : 0, op.sawBlocked ? 1 : 0,
-                static_cast<long long>(ZJNICritical::count_snapshot()));
-    GC_EXPECT_TRUE(ok);
-    GC_EXPECT_TRUE(op.sawBlocked);
-    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
-}
-
 GC_TEST(ZJNICritical, BlockWaitsWhileEntered)
 {
     ZJNICritical::initialize();
@@ -135,13 +104,13 @@ GC_TEST(ZJNICritical, BlockWaitsWhileEntered)
         ZJNICritical::unblock();
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    const bool relocatedWhileEntered = finished.load(std::memory_order_acquire);
-    std::printf("ZJNI_CRITICAL_NO_RELOCATE_WHILE_ENTERED finished=%d count=%lld\n",
-                relocatedWhileEntered ? 1 : 0,
+    const bool finishedWhileEntered = finished.load(std::memory_order_acquire);
+    std::printf("ZJNI_CRITICAL_BLOCK_WAIT finished=%d count=%lld\n",
+                finishedWhileEntered ? 1 : 0,
                 static_cast<long long>(ZJNICritical::count_snapshot()));
-    GC_EXPECT_FALSE(relocatedWhileEntered);
     ZJNICritical::exit();
     waiter.join();
+    GC_EXPECT_FALSE(finishedWhileEntered);
     GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
 }
 

@@ -776,7 +776,6 @@ public:
         lastCollectionRate.store(rate, std::memory_order_release);
     }
 
-    void MergeRawPointerRegions(std::vector<ZPage*>& smallSizeRegions, std::vector<ZPage*>& largeSizeRegions);
 
     void SetGarbageThreshold(double garbageThreshold);
 

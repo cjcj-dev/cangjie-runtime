@@ -38,8 +38,6 @@ public:
     size_t TLABSize() const { return tlab.end - tlab.start; }
     // zObjectAllocator.hpp per-thread current-page shape: staging is a
     // vector of page pointers, committed to RecentFull/RecentLarge roles.
-    std::vector<ZPage*>& GetTlRawPointerRegions() { return tlRawPointerRegions; }
-    std::vector<ZPage*>& GetTlLargeRawPointerRegions() { return tlLargeRawPointerRegions; }
     void FillTLAB(uintptr_t start, size_t size);
     void ClearRegion();
 
@@ -48,7 +46,6 @@ public:
     void ResizeTLAB(size_t capacity, double fallbackFraction, size_t maxSize);
 
 
-    void CommitRawPointerRegions();
 
     // h3seed2: young→young write dirties the *holder object* (not the field slot).
     // Minor root enum merges these into the product work stack so FYS closure reaches
@@ -181,8 +178,6 @@ private:
 
     // allocate objects which are exposed to runtime thus can not be moved.
     // allocation context is responsible to notify collector when these objects are safe to be collected.
-    std::vector<ZPage*> tlRawPointerRegions;
-    std::vector<ZPage*> tlLargeRawPointerRegions;
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
     mutable std::mutex y2yDirtyLock;
     std::unordered_set<BaseObject*> y2yDirtyHolders;

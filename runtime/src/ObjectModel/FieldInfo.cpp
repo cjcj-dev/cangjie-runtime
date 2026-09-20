@@ -149,7 +149,7 @@ void* InstanceFieldInfo::GetAnnotations(TypeInfo* arrayTi)
     CHECK_DETAIL(arrayTi != nullptr, "arrayTi is nullptr");
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::RAW_POINTER_OBJECT);
+    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::MOVEABLE_OBJECT);
     if (obj == nullptr) {
         ExceptionManager::OutOfMemory();
         return nullptr;
@@ -169,10 +169,6 @@ void* InstanceFieldInfo::GetAnnotations(TypeInfo* arrayTi)
 #endif
     ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
         size, reinterpret_cast<Uptr>(structRet), size);
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
     return obj;
 }
 
@@ -265,7 +261,7 @@ void* StaticFieldInfo::GetAnnotations(TypeInfo* arrayTi)
     CHECK_DETAIL(arrayTi != nullptr, "arrayTi is nullptr");
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::RAW_POINTER_OBJECT);
+    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::MOVEABLE_OBJECT);
     if (obj == nullptr) {
         ExceptionManager::OutOfMemory();
         return nullptr;
@@ -286,10 +282,6 @@ void* StaticFieldInfo::GetAnnotations(TypeInfo* arrayTi)
 
     ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
         size, reinterpret_cast<Uptr>(structRet), size);
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
     return obj;
 }
 
@@ -416,9 +408,9 @@ ObjRef CreateEnumObject(TypeInfo* ti, MSize size)
     // For other enum kind, the object's TypeInfo should be the enum's TypeInfo.
     ObjRef obj = nullptr;
     if (enumInfo->IsEnumKind1()) {
-        obj = ObjectManager::NewObject(ti, size, AllocType::RAW_POINTER_OBJECT);
+        obj = ObjectManager::NewObject(ti, size, AllocType::MOVEABLE_OBJECT);
     } else {
-        obj = ObjectManager::NewObject(enumTi, size, AllocType::RAW_POINTER_OBJECT);
+        obj = ObjectManager::NewObject(enumTi, size, AllocType::MOVEABLE_OBJECT);
     }
     if (obj == nullptr) {
         VLOG(REPORT, "FieldInitializer: new enum object failed and throw OutOfMemoryError");
@@ -477,7 +469,7 @@ BaseObject* StructLikeToAny(ObjRef obj, TypeInfo* fieldTi, Uptr fieldAddr)
 {
     MSize fieldSize = fieldTi->GetInstanceSize();
     MSize size = MRT_ALIGN(fieldSize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::RAW_POINTER_OBJECT);
+    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::MOVEABLE_OBJECT);
 
     if (fieldSize == 0) {
         return fieldObj;
@@ -500,7 +492,7 @@ BaseObject* StructLikeToAny(ObjRef obj, TypeInfo* fieldTi, Uptr fieldAddr)
 BaseObject* PrimitiveToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 {
     MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::RAW_POINTER_OBJECT);
+    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::MOVEABLE_OBJECT);
     if (fieldTi->GetInstanceSize() == 0) {
         return fieldObj;
     }
@@ -516,11 +508,11 @@ BaseObject* PrimitiveToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 
 BaseObject* VArrayToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 {
-    // RAW_POINTER_OBJECT is not guaranteed young (RegionSpace raw-pointer path);
+    // An allocation is not guaranteed young;
     // ref-bearing VArray must go through WriteStruct (G-C3).
     MSize vArraySize = fieldTi->GetInstanceSize();
     MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::RAW_POINTER_OBJECT);
+    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::MOVEABLE_OBJECT);
     if (vArraySize == 0) {
         return fieldObj;
     }

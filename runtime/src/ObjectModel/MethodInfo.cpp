@@ -19,10 +19,6 @@ ScopedAllocBuffer::~ScopedAllocBuffer()
             mutator->RemoveNativeFrameRoot(nativeFrameRoot);
         }
     }
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
     // Free off-heap struct snapshots created by AddCJArg via ReadStruct.
     for (void* buf : argBuffers) {
         if (buf != nullptr) {
@@ -47,7 +43,7 @@ void* ParameterInfo::GetAnnotations(TypeInfo* arrayTi)
     CHECK_DETAIL(arrayTi != nullptr, "arrayTi is nullptr");
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::RAW_POINTER_OBJECT);
+    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::MOVEABLE_OBJECT);
     if (obj == nullptr) {
         ExceptionManager::OutOfMemory();
         return nullptr;
@@ -121,7 +117,7 @@ void* MethodInfo::GetAnnotations(TypeInfo* arrayTi)
     CHECK_DETAIL(arrayTi != nullptr, "arrayTi is nullptr");
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::RAW_POINTER_OBJECT);
+    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::MOVEABLE_OBJECT);
     if (obj == nullptr) {
         ExceptionManager::OutOfMemory();
         return nullptr;
@@ -431,7 +427,7 @@ void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
             void* dst = nullptr;
             if (argType->HasRefField()) {
                 MSize objSize = MRT_ALIGN(typeSize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-                ObjRef structArgObj = ObjectManager::NewObject(argType, objSize, AllocType::RAW_POINTER_OBJECT);
+                ObjRef structArgObj = ObjectManager::NewObject(argType, objSize, AllocType::MOVEABLE_OBJECT);
                 if (structArgObj == nullptr) {
                     ExceptionManager::CheckAndThrowPendingException("failed to allocate reflected struct argument");
                 }
@@ -517,7 +513,7 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
     } else if (retType->IsStruct() || retType->IsTuple() || retType->IsEnum()) {
         MSize typeSize = retType->GetInstanceSize();
         MSize size = MRT_ALIGN(typeSize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-        MObject* obj = ObjectManager::NewObject(retType, size, AllocType::RAW_POINTER_OBJECT);
+        MObject* obj = ObjectManager::NewObject(retType, size, AllocType::MOVEABLE_OBJECT);
         if (typeSize == 0) {
             return obj;
         }
@@ -535,7 +531,7 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
         return obj;
     } else if (retType->IsPrimitiveType()) {
         MSize size = MRT_ALIGN(retType->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-        MObject* obj = ObjectManager::NewObject(retType, size, AllocType::RAW_POINTER_OBJECT);
+        MObject* obj = ObjectManager::NewObject(retType, size, AllocType::MOVEABLE_OBJECT);
         if (retType->IsUnit()) {
             return obj;
         }
@@ -545,10 +541,10 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
         }
         return obj;
     } else if (retType->IsVArray()) {
-        // RAW_POINTER_OBJECT may land non-young; ref-bearing VArray uses WriteStruct (G-C3).
+        // An allocation may land non-young; ref-bearing VArray uses WriteStruct (G-C3).
         MSize vArraySize = retType->GetInstanceSize();
         MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-        MObject* obj = ObjectManager::NewObject(retType, size, AllocType::RAW_POINTER_OBJECT);
+        MObject* obj = ObjectManager::NewObject(retType, size, AllocType::MOVEABLE_OBJECT);
         if (vArraySize == 0) {
             return obj;
         }
@@ -618,7 +614,7 @@ void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* re
         return;
     } else if (HasSRetWithGeneric()) {
         U32 objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-        *sretSlot = ObjectManager::NewObject(retType, objSize, AllocType::RAW_POINTER_OBJECT);
+        *sretSlot = ObjectManager::NewObject(retType, objSize, AllocType::MOVEABLE_OBJECT);
         CHECK_DETAIL(*sretSlot != nullptr, "PrepareSRet: allocate sret object failed");
 #if defined(__aarch64__)
 #else
@@ -627,7 +623,7 @@ void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* re
         return;
     } else if (HasSRetWithUnknowGenericStruct()) {
         U32 objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-        *sretSlot = ObjectManager::NewObject(retType, objSize, AllocType::RAW_POINTER_OBJECT);
+        *sretSlot = ObjectManager::NewObject(retType, objSize, AllocType::MOVEABLE_OBJECT);
         CHECK_DETAIL(*sretSlot != nullptr, "PrepareSRet: allocate sret object failed");
 #if defined(__aarch64__)
 #else
@@ -687,7 +683,7 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
             ((reflectVersion == 0) ? declaringTi->IsGenericTypeInfo() : declaringTi->IsUnknownSize())))) {
             U32 size = declaringTi->GetInstanceSize();
             MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-            instanceObj = ObjectManager::NewObject(declaringTi, objSize, AllocType::RAW_POINTER_OBJECT);
+            instanceObj = ObjectManager::NewObject(declaringTi, objSize, AllocType::MOVEABLE_OBJECT);
             if (instanceObj == nullptr) {
                 ExceptionManager::CheckAndThrowPendingException("failed to allocate reflected receiver");
             }
@@ -796,7 +792,7 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
     }
 
     size_t retObjSize = MRT_ALIGN(returnType->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    ObjRef retObj = ObjectManager::NewObject(returnType, retObjSize, AllocType::RAW_POINTER_OBJECT);
+    ObjRef retObj = ObjectManager::NewObject(returnType, retObjSize, AllocType::MOVEABLE_OBJECT);
     if (retObj == nullptr) {
         VLOG(REPORT, "ApplyCangjieMethod: new object failed and throw OutOfMemoryError");
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");

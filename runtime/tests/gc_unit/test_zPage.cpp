@@ -63,6 +63,10 @@ GC_TEST(ZPage, AllocObjectRespectsAlignment)
 #include "Cangjie.h"
 #include "TypeInfoManager.h"
 #include <cstring>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include "Heap/z/zJNICritical.hpp"
 
 namespace MapleRuntime {
 extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
@@ -157,6 +161,11 @@ struct ForwardingSelectionResult {
     size_t receipts{0};
     bool verifyRetirement{false};
     bool verifyPin{false};
+    bool verifyCritical{false};
+    bool collectionFinishedWhileHeld{false};
+    bool movedWhileHeld{false};
+    bool movedAfterRelease{false};
+    bool collectionFinished{false};
     uintptr_t pinExpected{0};
     uintptr_t pinObserved{0};
     bool pinCopied{true};
@@ -181,7 +190,7 @@ void* SelectRealLivePages(void* context)
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
     alignas(TypeInfo) static unsigned char sourceByteStorage[sizeof(TypeInfo)]{};
-    if (result.verifyPin) {
+    if (result.verifyPin || result.verifyCritical) {
         auto* byteType = reinterpret_cast<TypeInfo*>(sourceByteStorage);
         byteType->SetType(TypeKind::TYPE_KIND_UINT8);
         byteType->SetInstanceSize(1);
@@ -195,13 +204,13 @@ void* SelectRealLivePages(void* context)
     U64 roots[3]{};
     ZPage* previous = nullptr;
     for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && result.roots < 3; ++i) {
-        BaseObject* object = result.verifyPin ? static_cast<BaseObject*>(MCC_NewArray8(type, 4096))
+        BaseObject* object = (result.verifyPin || result.verifyCritical) ? static_cast<BaseObject*>(MCC_NewArray8(type, 4096))
                                              : static_cast<BaseObject*>(MCC_NewObject(type, 4096));
         if (object == nullptr) { return nullptr; }
         ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(object));
         if (page != previous) {
             starts[result.roots] = reinterpret_cast<uintptr_t>(object);
-            if (result.verifyPin) {
+            if (result.verifyPin || result.verifyCritical) {
                 static_cast<MArray*>(object)->ConvertToCArray()[0] = result.roots + 1;
             } else {
                 *reinterpret_cast<uint64_t*>(starts[result.roots] + TYPEINFO_PTR_SIZE) = result.roots + 1;
@@ -228,7 +237,42 @@ void* SelectRealLivePages(void* context)
         snapshot(result.usedBefore, result.mappedBefore, result.generationBefore, result.mappedGenerationBefore);
     }
     // Live objects in three real small pages force a non-empty relocation set.
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    if (result.verifyCritical) {
+        auto* array = static_cast<MArray*>(Heap::GetHeap().GetExportedObject(roots[0]));
+        bool copied = true;
+        void* raw = MCC_AcquireRawData(array, &copied);
+        std::atomic<bool> finished{false};
+        // Let STW proceed: the JNI gate must exclude relocation, rather than
+        // an uncooperative mutator preventing the pause from starting.
+        mutator->EnterSaferegion();
+        std::thread collector([&] {
+            Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+            finished.store(true, std::memory_order_release);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!finished.load(std::memory_order_acquire) &&
+               ZJNICritical::count_snapshot() >= 0 &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        result.collectionFinishedWhileHeld = finished.load(std::memory_order_acquire);
+        // A completed collector publishes the root before we inspect it.
+        if (result.collectionFinishedWhileHeld) {
+            result.movedWhileHeld = reinterpret_cast<uintptr_t>(
+                Heap::GetHeap().GetExportedObject(roots[0])) != starts[0];
+        }
+        mutator->LeaveSaferegion();
+        array = static_cast<MArray*>(Heap::GetHeap().GetExportedObject(roots[0]));
+        MCC_ReleaseRawData(array, raw);
+        mutator->EnterSaferegion();
+        collector.join();
+        mutator->LeaveSaferegion();
+        result.collectionFinished = finished.load(std::memory_order_acquire);
+        result.movedAfterRelease = reinterpret_cast<uintptr_t>(
+            Heap::GetHeap().GetExportedObject(roots[0])) != starts[0];
+    } else {
+        Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    }
     for (size_t i = 0; i < result.roots; ++i) {
         ZForwarding* forwarding = Heap::GetHeap().young().forwarding_table().get(starts[i]);
         if (forwarding != nullptr) {
@@ -274,7 +318,7 @@ void* SelectRealLivePages(void* context)
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(byteStorage), sizeof(byteStorage));
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(arrayStorage), sizeof(arrayStorage));
         for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && result.reused == 0; ++i) {
-            BaseObject* object = result.verifyPin ? static_cast<BaseObject*>(MCC_NewArray8(arrayType, 4096))
+            BaseObject* object = (result.verifyPin || result.verifyCritical) ? static_cast<BaseObject*>(MCC_NewArray8(arrayType, 4096))
                                                  : static_cast<BaseObject*>(MCC_NewObject(type, 4096));
             const uintptr_t address = reinterpret_cast<uintptr_t>(object);
             for (size_t j = 0; j < result.roots; ++j) {
@@ -436,3 +480,26 @@ GC_RUNTIME_OTHER_VM_TEST(RelocateWorkers, RuntimeCollectionCompletesSelectedPage
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif
+
+// ZGC zCollectedHeap.cpp:275-280 and zGeneration.cpp:474-486.
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, RawHolderExcludesCollectionRelocation)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    result.verifyCritical = true;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "JNI_RELOCATION_TARGET held_finished=%d held_moved=%d released_finished=%d released_moved=%d roots=%zu\n",
+                 result.collectionFinishedWhileHeld, result.movedWhileHeld,
+                 result.collectionFinished, result.movedAfterRelease, result.roots);
+    GC_EXPECT_FALSE(result.movedWhileHeld);
+    GC_EXPECT_FALSE(result.collectionFinishedWhileHeld);
+    GC_EXPECT_TRUE(result.collectionFinished && result.movedAfterRelease);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}

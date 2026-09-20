@@ -131,7 +131,4 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     return AllocateInTLAB(totalSize);
 }
 
-void AllocBuffer::CommitRawPointerRegions()
-{
-}
 } // namespace MapleRuntime
