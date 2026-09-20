@@ -29,6 +29,7 @@
 #include "CjScheduler.h"
 
 #include "gc_heap_fixture.hpp"
+#include "selection_cycle_fixture.hpp"
 #include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
 

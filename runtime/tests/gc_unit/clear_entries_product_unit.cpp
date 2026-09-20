@@ -1064,11 +1064,12 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
         auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         RelocationReceiptTest::ParkFrom(manager, state.region);
-        ZStatWorkers statWorkers;
-        ZWorkers workers(ZGenerationId::old, 1, &statWorkers);
-        workers.set_active();
-        manager.ForwardFromRegions<Generation::Old>(workers);
-        workers.set_inactive();
+        auto& old = Heap::GetHeap().old();
+        if (old.Workers() == nullptr) old.InitializeWorkers(1);
+        old.Workers()->set_active_workers(1);
+        old.Workers()->set_active();
+        old.relocate().relocate(&old.relocation_set());
+        old.Workers()->set_inactive();
         auto owner = forwarding_for_page(state.region);
         const MAddress fromAddr = reinterpret_cast<MAddress>(state.from);
         const MAddress produced = owner ? owner->find(fromAddr) : 0;

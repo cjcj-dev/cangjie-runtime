@@ -66,7 +66,6 @@ static const ZStatSubPhase PIdentifyUselessExternRef("identify useless extern re
 static const ZStatSubPhase PTraceLiveObjectsUpdateOldPointersInRefFields("trace live objects & update old pointers in ref-fields", ZGenerationId::old);
 static const ZStatSubPhase PYoungConcPromoteWalk("young.conc_promote_walk", ZGenerationId::young);
 static const ZStatSubPhase PYoungConcurrentRelocate("young.concurrent_relocate", ZGenerationId::young);
-static const ZStatSubPhase PYoungEvacFinish("young.evac_finish", ZGenerationId::young);
 static const ZStatSubPhase PYoungEvacRetire("young.evac_retire", ZGenerationId::young);
 static const ZStatSubPhase PYoungFlushAlloc("young.flush_alloc", ZGenerationId::young);
 static const ZStatSubPhase PYoungMarkClosure("young.mark_closure", ZGenerationId::young);
@@ -329,7 +328,8 @@ void ZGenerationYoung::collect()
 {
     ZGenerationCollectionScopeYoung scope(*this);
     pause_mark_start();
-    DriverUnlocker unlocker;
+    // ZGC zGeneration.cpp:538-576: young keeps the driver lock throughout;
+    // only the old collection scope releases it (zGeneration.cpp:995).
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {
@@ -385,14 +385,12 @@ void ZGenerationYoung::mark_start()
         Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
         Heap::GetHeap().GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
     }
-    // Cangjie keeps allocation lists and candidate statistics in RegionManager.
-    // Preparing those lists retires the young shared/pinned allocation pages.
-    minorCandidateRegions.clear();
+    // Preserve allocation statistics and park previous-cycle from pages.
+    // Selection owns page pointers only after marking has established liveness.
     YoungCollectionStats stats;
     {
         ZStatTimerYoung zstatTimer(PYoungPrepareCandidates);
-        stats = manager.PrepareYoungGarbageCandidates(
-            [this](ZPage* region) { minorCandidateRegions.insert(region); });
+        stats = manager.PrepareYoungGarbageCandidates();
     }
     // Flush pre-flip producers before invalidating their generation sequence.
     (void)ZMark::FlushAllGenerations();
@@ -420,14 +418,13 @@ void ZGenerationYoung::mark_start()
          "unmovable_young=%zu recent_visited=%zu recent_units=%zu "
          "recent_young=%zu "
          "objects_visited=%zu slots_visited=%zu repark_ns=%llu unmovable_ns=%llu recent_ns=%llu "
-         "visitor_ns=%llu list_move_ns=%llu",
+         "list_move_ns=%llu",
          stats.candidateRegions, stats.candidateBytes, stats.fromVisited, stats.fromVisitedBytes,
          stats.unmovableVisited, stats.unmovableVisitedBytes, stats.unmovableYoung,
          stats.recentFullVisited, stats.recentFullVisitedUnits, stats.recentFullYoung,
          stats.objectVisits, stats.slotVisits,
          static_cast<unsigned long long>(stats.reparkNs), static_cast<unsigned long long>(stats.unmovableNs),
          static_cast<unsigned long long>(stats.recentFullNs),
-         static_cast<unsigned long long>(stats.visitorNs),
          static_cast<unsigned long long>(stats.listMoveNs));
     // Even an empty candidate set completes remembered scanning and clearing.
     // Otherwise the mark-start flip would leave previous unconsumed when the
@@ -596,21 +593,6 @@ void ZGenerationYoung::concurrent_mark_free()
          static_cast<unsigned long long>(youngConcWindow.windowNs), youngConcWindow.MarkedInWindow(),
          youngConcWindow.closureCalls, youngConcWindow.remsetSlots,
          youngConcWindow.reenters, youngConcWindow.markedAtEntry, youngReachableVec.size());
-    size_t liveBytes = 0;
-    TenuringInputs tenuringIn;
-    tenuringIn.softMaxCapacity = Heap::GetHeap().GetMaxCapacity();
-    tenuringIn.youngAllocated = youngStats.candidateBytes;
-    for (ZPage* region : minorCandidateRegions) {
-        const size_t live = region->is_marked() ? region->live_bytes() : 0;
-        liveBytes += live;
-        uint32_t age = region->GetYoungAge();
-        if (age >= kPageAgeCount) {
-            age = untype(PageAge::survivor14);
-        }
-        tenuringIn.liveByAge[age] += live;
-    }
-    tenuringIn.youngGarbage = youngStats.candidateBytes > liveBytes ? (youngStats.candidateBytes - liveBytes) : 0;
-    Heap::GetHeap().young().SelectTenuringThreshold(tenuringIn);
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         ZStatTimerYoung zstatTimer(PYoungPreEvacClear);
@@ -637,7 +619,6 @@ void ZGenerationYoung::concurrent_mark_free()
         });
     }
 
-    youngLiveBytes = liveBytes;
 }
 
 void ZGenerationYoung::concurrent_reset_relocation_set()
@@ -707,7 +688,7 @@ void ZGenerationYoung::concurrent_relocate()
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(youngFullScan),
          youngStats.candidateRegions, youngStats.candidateBytes,
-         youngLiveBytes, youngLiveRememberedCount, youngStats.reclaimedBytes,
+         statHeap.LiveAtMarkEnd(), youngLiveRememberedCount, youngStats.reclaimedBytes,
          pauseUs);
 }
 
@@ -1117,7 +1098,10 @@ void ZGenerationOld::concurrent_process_non_strong_references()
     PostTrace();
 }
 
-void ZGenerationOld::concurrent_reset_relocation_set() {}
+void ZGenerationOld::concurrent_reset_relocation_set()
+{
+    reset_relocation_set();
+}
 
 void ZGenerationOld::pause_verify()
 {
@@ -1125,7 +1109,10 @@ void ZGenerationOld::pause_verify()
     (void)op.pause();
 }
 
-void ZGenerationOld::concurrent_select_relocation_set() {}
+void ZGenerationOld::concurrent_select_relocation_set()
+{
+    select_relocation_set(false);
+}
 
 void ZGenerationOld::concurrent_remap_young_roots()
 {
@@ -1140,7 +1127,7 @@ void ZGenerationOld::pause_relocate_start()
 
 void ZGenerationOld::concurrent_relocate()
 {
-    ZRelocate::ForwardFromSpace(ZGenerationId::old);
+    relocate().relocate(&relocation_set());
     reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
         ZGenerationId::old);
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
@@ -1235,6 +1222,8 @@ void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)
 void ZGeneration::free_empty_pages(ZRelocationSetSelector* selector, int bulk)
 {
     if (selector->should_free_empty_pages(bulk)) {
+        const size_t freed = Heap::free_empty_pages(id(), selector->empty_pages());
+        increase_freed(freed);
         selector->clear_empty_pages();
     }
 }
@@ -1276,6 +1265,9 @@ void ZGeneration::select_relocation_set(bool promote_all)
     if (_cycle == ZGenerationId::young) {
         TenuringInputs inputs;
         inputs.promoteAll = promote_all;
+        inputs.youngGarbage = statHeap.GarbageAtMarkEnd();
+        inputs.youngAllocated = statHeap.AllocatedAtMarkEnd();
+        inputs.softMaxCapacity = Heap::GetHeap().soft_max_capacity();
         const ZRelocationSetSelectorStats st = selector.stats();
         for (PageAge age : kPageAgeRangeAll) {
             inputs.liveByAge[untype(age)] =
@@ -1283,10 +1275,6 @@ void ZGeneration::select_relocation_set(bool promote_all)
         }
         ZGeneration::young()->SelectTenuringThreshold(inputs);
     }
-    // zGeneration.cpp:268-269: the selector snapshot feeds both the
-    // relocation and the heap accounts before the set is installed.
-    statRelocation.AtSelectRelocationSet(selector.stats());
-    statHeap.AtSelectRelocationSet(selector.stats());
     _relocation_set.install(&selector);
     if (_cycle == ZGenerationId::young) {
         ZWorkers* w = Workers();
@@ -1301,6 +1289,9 @@ void ZGeneration::select_relocation_set(bool promote_all)
         forwarding->page()->SetRegionRole(ZPageRole::From);
         _forwarding_table.insert(forwarding);
     }
+    // ZGC zGeneration.cpp:268-269: publish after installing the set/table.
+    statRelocation.AtSelectRelocationSet(selector.stats());
+    statHeap.AtSelectRelocationSet(selector.stats());
 }
 }
 
@@ -1521,7 +1512,7 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
             ZStatTimerYoung zstatTimer(PYoungConcurrentRelocate);
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
-            ZRelocate::ForwardFromSpace(ZGenerationId::young);
+            relocate().relocate(&relocation_set());
             manager.FinishIncompleteFromRegions(ZGenerationId::young);
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
@@ -1555,37 +1546,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
                      rememberedSlots.size(), concRemset.size(), remsetVec.size());
             }
             remapRemembered(workers);
-        }
-    }
-
-    {
-        ZStatTimerYoung zstatTimer(PYoungEvacFinish);
-        {
-        // Select flip-promoted pages; field iteration runs after world release.
-        for (ZPage* region : Heap::GetHeap().young().minorCandidateRegions) {
-            if (region->IsYoungRegion()) {
-                // markwater2: allocating pages never entered the route plan
-                // (zGeneration.cpp:211-213). Leave them young on unmovableFrom.
-                // ZPage::is_marked (zPage.inline.hpp:223-226): only a page marked
-                // this cycle has object liveness to promote.
-                if (region->IsAllocating() || !region->is_marked()) {
-                    continue;
-                }
-                if (kPageAgeAdaptiveTenuring &&
-                    !ShouldPromoteAge(region->GetYoungAge(), ZGeneration::young()->tenuring_threshold())) {
-                    if (region->IsLoneFromRegion() || region->IsFromRegion()) {
-                        manager.EnlistStayYoungSurvivor(region);
-                    } else if (region->GetRegionRole() != ZPageRole::RecentFull) {
-                        RegionManager::FinishStayYoungInPlace(region);
-                    }
-                    continue;
-                }
-                // Past-tenure marked regions are promoted by this cycle's
-                // flip_age_pages when the selector registered them
-                // (zRelocate.cpp:1334-1363); a region the selector skipped is
-                // an ordinary candidate next cycle (zGeneration.cpp:206-218).
-            }
-        }
         }
     }
 

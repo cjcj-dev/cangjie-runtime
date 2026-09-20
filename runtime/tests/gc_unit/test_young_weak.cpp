@@ -19,6 +19,7 @@
 #include "Cangjie.h"
 
 #include "gc_heap_fixture.hpp"
+#include "selection_cycle_fixture.hpp"
 #include "Heap/z/zCrossVM.hpp"
 #include "gc_unittest.hpp"
 
@@ -246,8 +247,9 @@ private:
 // Observe the existing product closure boundary before promotion replaces its map.
 // ZGenerationYoung completes marking before selecting/relocating pages.
 struct WeakGraph {
-    explicit WeakGraph(GcHeapFixture& fixture, ZPage* region, ZPage* targetRegion = nullptr)
-        : fx(fixture), owner(region), targetOwner(targetRegion == nullptr ? region : targetRegion)
+    template<typename Fixture>
+    explicit WeakGraph(Fixture& fx, ZPage* region, ZPage* targetRegion = nullptr)
+        : owner(region), targetOwner(targetRegion == nullptr ? region : targetRegion)
     {
         std::memset(weakTypeStorage, 0, sizeof(weakTypeStorage));
         weakType = reinterpret_cast<TypeInfo*>(weakTypeStorage);
@@ -288,7 +290,6 @@ struct WeakGraph {
         return region->is_object_strongly_live(from_object(object));
     }
 
-    GcHeapFixture& fx;
     ZPage* owner;
     ZPage* targetOwner;
     BaseObject* strongRoot = nullptr;
@@ -300,7 +301,8 @@ struct WeakGraph {
 };
 
 struct ExportForeignGraph {
-    explicit ExportForeignGraph(GcHeapFixture& fixture) : fx(fixture), owner(fixture.region0)
+    template<typename Fixture>
+    explicit ExportForeignGraph(Fixture& fx) : owner(fx.region0)
     {
         std::memset(foreignTypeStorage, 0, sizeof(foreignTypeStorage));
         foreignType = reinterpret_cast<TypeInfo*>(foreignTypeStorage);
@@ -326,7 +328,6 @@ struct ExportForeignGraph {
         return owner->is_object_strongly_live(from_object(object));
     }
 
-    GcHeapFixture& fx;
     ZPage* owner;
     BaseObject* root = nullptr;
     BaseObject* foreign = nullptr;
@@ -460,6 +461,7 @@ enum class MajorRootFamily {
     EXPORT,
 };
 
+template<typename Fixture = GcHeapFixture>
 void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t helpers = 0)
 {
     WorkerFixture worker(0);
@@ -468,7 +470,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     }
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
-    GcHeapFixture fx;
+    Fixture fx;
     fx.region0->reset(PageAge::old);
     WeakGraph graph(fx, fx.region0);
 
@@ -645,17 +647,17 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
 
 GC_OTHER_VM_TEST(MarkingStacksProduct, MajorSerialEntersFromDoGarbageCollection)
 {
-    RunMajorWeakGraph(MajorRootFamily::COMMON, true, 0);
+    RunMajorWeakGraph<SelectionCycleFixture>(MajorRootFamily::COMMON, true, 0);
 }
 
 GC_OTHER_VM_TEST(MarkingStacksProduct, MajorParallelEntersFromDoGarbageCollection)
 {
-    RunMajorWeakGraph(MajorRootFamily::COMMON, true, 1);
+    RunMajorWeakGraph<SelectionCycleFixture>(MajorRootFamily::COMMON, true, 1);
 }
 
 GC_OTHER_VM_TEST(MarkingStacksProduct, MajorForeignEntersFromDoGarbageCollection)
 {
-    RunMajorWeakGraph(MajorRootFamily::EXPORT, true, 0);
+    RunMajorWeakGraph<SelectionCycleFixture>(MajorRootFamily::EXPORT, true, 0);
 }
 
 GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)

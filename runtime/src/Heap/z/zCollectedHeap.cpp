@@ -168,6 +168,7 @@ void ZCollectedHeap::collect(GCReason reason, bool async)
 void ZCollectedHeap::stop()
 {
     ZAbort::abort();
+    Heap::GetHeap().page_allocator().StopStalledAllocations();
     ZCollectedHeap* collected = heap();
     if (collected->_finalizer_processor.IsRunning()) {
         collected->_finalizer_processor.Stop();

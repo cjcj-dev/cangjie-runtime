@@ -1,0 +1,17 @@
+{
+  "base": "e77f8aab1ebf029e55e9b1b982d590d08bea46b7",
+  "head": "c9e245a9723d62e1cefa0c7a737f69630847aef7",
+  "added": [
+    "OldRelocationStatistics.DirectorConsumesOldSelection",
+    "OldRelocationStatistics.FullCollectionPublishesLiveInput"
+  ],
+  "removed": [],
+  "files": [
+    "runtime/tests/gc_unit/clear_entries_product_unit.cpp",
+    "runtime/tests/gc_unit/selection_cycle_fixture.hpp",
+    "runtime/tests/gc_unit/test_gc_thread_pool.cpp",
+    "runtime/tests/gc_unit/test_segmented_array_init.cpp",
+    "runtime/tests/gc_unit/test_young_conc.cpp",
+    "runtime/tests/gc_unit/test_young_weak.cpp"
+  ]
+}

@@ -15,6 +15,7 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/z_globals.hpp"
@@ -114,6 +115,29 @@ bool ZDirector::wait_for_tick()
         [this] { return stopped || reevaluate; });
     return !stopped;
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+std::mutex sampleForTestLock;
+ZDirectorSampleForTest sampleForTest;
+void observe_sample_for_test(const ZDirectorStats& stats)
+{
+    std::lock_guard<std::mutex> lock(sampleForTestLock);
+    ++sampleForTest.serial;
+    sampleForTest.oldSequence = ZGeneration::old()->Sequence();
+    sampleForTest.oldUsed = stats.old_stats.general.used;
+    sampleForTest.oldLive = stats.old_stats.stat_heap.liveAtMarkEnd;
+    sampleForTest.softMaxCapacity = stats.heap.soft_max_heap_size;
+    sampleForTest.relocationHeadroom = stats.relocation_headroom;
+    sampleForTest.majorBusy = stats.major_busy;
+}
+}
+ZDirectorSampleForTest ZDirector::ReadSampleForTest()
+{
+    std::lock_guard<std::mutex> lock(sampleForTestLock);
+    return sampleForTest;
+}
+#endif
 
 static uint32_t young_gc_threads(const ZDirectorStats&)
 {
@@ -308,6 +332,9 @@ static bool rule_minor_allocation_rate(const ZDirectorStats& stats)
 
 static bool rule_minor_high_usage(const ZDirectorStats& stats)
 {
+    if (ZCollectionIntervalOnly) {
+        return false;
+    }
     if (is_young_small(stats)) {
         return false;
     }
@@ -324,6 +351,9 @@ static bool rule_major_timer(const ZDirectorStats& stats)
 
 static bool rule_major_warmup(const ZDirectorStats& stats)
 {
+    if (ZCollectionIntervalOnly) {
+        return false;
+    }
     if (stats.old_stats.cycle.warmupCycles >= 3) {
         return false;
     }
@@ -348,7 +378,7 @@ static double calculate_extra_young_gc_time(const ZDirectorStats& stats)
         return 0.0;
     }
     const size_t old_used = stats.old_stats.general.used;
-    const size_t old_live = std::min(stats.old_stats.stat_heap.liveAtMarkEnd, old_used);
+    const size_t old_live = stats.old_stats.stat_heap.liveAtMarkEnd;
     const double old_garbage = static_cast<double>(old_used - old_live);
     const double young_gc_time = gc_time(stats.young_stats);
     const double reclaimed_per_young_gc = stats.young_stats.stat_heap.reclaimedAverage;
@@ -609,10 +639,7 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
     ZDirectorStats stats;
     stats.mutator_alloc_rate = ZStatMutatorAllocRate::stats();
     stats.max_capacity = Heap::GetHeap().GetMaxCapacity();
-    stats.heap.soft_max_heap_size = ZStatMutatorAllocRate::soft_max_heap_size();
-    if (stats.heap.soft_max_heap_size == 0) {
-        stats.heap.soft_max_heap_size = stats.max_capacity;
-    }
+    stats.heap.soft_max_heap_size = Heap::GetHeap().soft_max_capacity();
     stats.heap.used = Heap::GetHeap().GetAllocator().AllocatedBytes();
     stats.heap.total_collections = Heap::GetHeap().total_collections();
     stats.young_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young).CycleStats().Stats(now);
@@ -634,7 +661,7 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
     stats.conc_gc_threads = static_cast<uint32_t>(std::max(concurrentGcThreadCount, 1));
     stats.collection_interval_sec =
         static_cast<double>(CangjieRuntime::GetGCParam().backupGCInterval) / SECOND_TO_NANO_SECOND;
-    stats.relocation_headroom = stats.conc_gc_threads * ZPageSizeSmall;
+    stats.relocation_headroom = ZHeuristics::relocation_headroom();
     return stats;
 }
 
@@ -647,6 +674,9 @@ void ZDirector::run_thread()
         }
         const ZDirectorStats stats = sample_stats(TimeUtil::NanoSeconds(),
             busy(true), busy(false), ZCollectedHeap::heap()->concurrent_gc_threads());
+#if defined(MRT_TESTABLE_INTERNALS)
+        observe_sample_for_test(stats);
+#endif
         if (!MapleRuntime::start_gc(stats)) {
             adjust_gc(stats);
         }

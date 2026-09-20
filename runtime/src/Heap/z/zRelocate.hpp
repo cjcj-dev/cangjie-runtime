@@ -112,6 +112,7 @@ private:
 class ZWorkers;
 class ZPage;
 class ZGeneration;
+class ZRelocationSet;
 struct ForwardingProvenance;
 template<typename T> class ZArray;
 
@@ -134,8 +135,7 @@ private:
 
 class ZRelocate {
 public:
-    static void ForwardFromSpace(ZGenerationId generation);
-    static void RefineFromSpace();
+    void relocate(ZRelocationSet* relocation_set);
     static BaseObject* ForwardObject(BaseObject* object, Generation generation);
     static BaseObject* ForwardObjectExclusive(BaseObject* object);
     static void UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from, BaseObject* to);

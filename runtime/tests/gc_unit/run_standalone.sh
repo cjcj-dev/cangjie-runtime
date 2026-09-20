@@ -555,6 +555,20 @@ if ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$OUT/runtime-dynamic
   exit 10
 fi
 echo "GATE_OLDVALUE_PRODUCT_BINDING_OK rows=$oldvalue_rows elf=$OUT/cj_gc_unit"
+STALL_TEST_DEFINED=$(nm --defined-only "$OUT/cj_gc_unit" | /usr/bin/grep -c 'AllocationStall_' || true)
+echo "STALL_TEST_DEFINED=$STALL_TEST_DEFINED"
+# The migrated tests enter Heap::alloc_page; StallAllocation is reached inside
+# the product, not called directly by a test-side queue. ZGC zHeap.cpp:491.
+if [[ "$STALL_TEST_DEFINED" -eq 0 ]]; then
+  echo "GC_UNIT_GATE_FAIL: AllocationStall tests are missing" >&2
+  exit 8
+fi
+nm -u "$OUT/cj_gc_unit" > "$OUT/stall-imports.txt"
+if ! /usr/bin/grep -q 'alloc_page' "$OUT/stall-imports.txt"; then
+  echo "GC_UNIT_GATE_FAIL: missing product alloc_page import" >&2
+  exit 8
+fi
+echo "STALL_SUITE=PRODUCT_BOTH_CONFIGURATIONS"
 
 # ReferenceProcessor is an independently replaceable product carrier. Guard
 # full symbols (not only the dynamic table) so no local/weak test copy can

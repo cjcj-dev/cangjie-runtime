@@ -68,12 +68,9 @@ void ZGenerationOld::PostTrace()
     Heap::GetHeap().cross_vm().PrepareCycleRef();
     CollectLargeGarbage();
     CollectPinnedGarbage();
-    // zGeneration.cpp:1042 / :1131-1133: reset previous set before select.
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).reset_relocation_set();
     if (ZAbort::should_abort()) {
         return;
     }
-    ZRelocate::RefineFromSpace();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
     // INV-1 closed: concurrent mark can no longer follow plain edges into these ranges.

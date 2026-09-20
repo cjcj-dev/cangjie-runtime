@@ -12,9 +12,41 @@ LANE=${LANE:-/root/sym_cangjie_runtime_708_implement_r5740357995}
 N=${N:-3}
 SRCROOT=${SRCROOT:-$LANE/default}
 OUT=${OUT:-$LANE/managed-runs}
-COLORED_SDK=${COLORED_SDK:-/root/sdkdepot/90a09c15ba02-fa13e8d5c17b}
+# Temporary ABI transition for cjcj-llvm#7. Pair each arm's runtime layout
+# with the matching compiler/stdlib SDK. Old layout keeps tlabDescriptor;
+# inline TLAB (top@0/end@8) needs the rebuilt stage1+llc SDK.
+OLD_ABI_SDK=/root/sdkdepot/90a09c15ba02-fa13e8d5c17b
+NEW_ABI_SDK=/root/sdkdepot/b99430a618af-1ecb811801ca
+TLAB_HDR="$SRCROOT/runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp"
+ABI_HEADER_EXISTS=0
+ABI_HEADER_HAS_TLAB_DESCRIPTOR=0
+ABI_KIND=unprobeable
+ABI_DEFAULT_SDK=
+if [[ -f "$TLAB_HDR" ]]; then
+  ABI_HEADER_EXISTS=1
+  if /usr/bin/grep -q 'tlabDescriptor' "$TLAB_HDR"; then
+    ABI_HEADER_HAS_TLAB_DESCRIPTOR=1
+    ABI_KIND=old
+    ABI_DEFAULT_SDK=$OLD_ABI_SDK
+  else
+    ABI_KIND=new
+    ABI_DEFAULT_SDK=$NEW_ABI_SDK
+  fi
+fi
+if [[ -z "${COLORED_SDK:-}" ]]; then
+  if [[ "$ABI_KIND" == unprobeable ]]; then
+    echo "kkk2_managed FAIL: ABI unprobeable header_missing=$TLAB_HDR" >&2
+    exit 3
+  fi
+  COLORED_SDK=$ABI_DEFAULT_SDK
+fi
 H48_RT=${H48_RT:-/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative}
 STAINED_RT=${STAINED_RT:-$SRCROOT/build/runtime-staging/lib/x86_64_Release}
+ABI_SO="$STAINED_RT/libcangjie-runtime.so"
+ABI_SO_NM_TLABDESCRIPTOR_COUNT=
+if [[ -f "$ABI_SO" ]]; then
+  ABI_SO_NM_TLABDESCRIPTOR_COUNT=$(nm --defined-only "$ABI_SO" 2>/dev/null | /usr/bin/grep -c tlabDescriptor || true)
+fi
 export CANGJIE_HOME=${CANGJIE_HOME:-$COLORED_SDK}
 export GC_UNIT_CJC_RUNTIME_LIB_DIR="$H48_RT"
 export HOST_RT="$H48_RT"
@@ -132,10 +164,33 @@ result = {
     "cangjie_home": "$CANGJIE_HOME",
     "h48_rt": "$H48_RT",
     "stained_rt": "$STAINED_RT",
+    "sdk_manifest": {},
+    "runtime_so_sha256": "",
+    "abi_probe": {
+        "source": "$TLAB_HDR",
+        "header_exists": $ABI_HEADER_EXISTS,
+        "header_has_tlabDescriptor": $ABI_HEADER_HAS_TLAB_DESCRIPTOR,
+        "so_path": "$ABI_SO",
+        "so_nm_tlabDescriptor_count": (int("$ABI_SO_NM_TLABDESCRIPTOR_COUNT") if "$ABI_SO_NM_TLABDESCRIPTOR_COUNT".isdigit() else None),
+        "abi_kind": "$ABI_KIND",
+        "old_abi_sdk": "$OLD_ABI_SDK",
+        "new_abi_sdk": "$NEW_ABI_SDK",
+        "sdk_selected": "$CANGJIE_HOME",
+    },
     "arms": {},
     "failed": [],
     "build_fail": [],
 }
+import hashlib
+manifest_path = pathlib.Path("$CANGJIE_HOME") / "MANIFEST"
+if manifest_path.is_file():
+    result["sdk_manifest"] = dict(line.split("=", 1) for line in manifest_path.read_text().splitlines() if "=" in line)
+    result["sdk_manifest_sha256"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+runtime_so = pathlib.Path("$STAINED_RT") / "libcangjie-runtime.so"
+if runtime_so.is_file():
+    result["runtime_so_sha256"] = hashlib.sha256(runtime_so.read_bytes()).hexdigest()
+print("MANAGED_SDK_IDENTITY " + json.dumps({"sdk": result["cangjie_home"], "manifest": result["sdk_manifest"], "runtime_so_sha256": result["runtime_so_sha256"]}, sort_keys=True))
+print("MANAGED_ABI_PROBE " + json.dumps(result["abi_probe"], sort_keys=True))
 executables = {
     "finalizer": ["finalizer_trigger"],
     "segmented": ["segmented_array_managed"],

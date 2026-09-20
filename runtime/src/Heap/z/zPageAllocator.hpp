@@ -43,12 +43,13 @@ struct PageMemory {
 // answer is published.
 class ZPageAllocation {
 public:
-    ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear, ZAllocationFlags flags = {})
-        : size(size), role(role), physical(physical), clear(clear), flags(flags) {}
+    ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear, ZAllocationFlags flags = {});
     ZPageAllocation(const ZPageAllocation&) = delete;
     ZPageAllocation& operator=(const ZPageAllocation&) = delete;
 
     size_t GetSize() const { return size; }
+    uint32_t YoungSeqnum() const { return youngSeqnum; }
+    uint32_t OldSeqnum() const { return oldSeqnum; }
     ZAllocationFlags Flags() const { return flags; }
     uint8_t GetRole() const { return role; }
     bool ExpectsPhysicalMemory() const { return physical; }
@@ -68,11 +69,12 @@ public:
     }
 
 private:
-    friend class AllocationStallQueue;
+    friend class RegionManager;
     friend class ZList<ZPageAllocation>;
 
     const size_t size;
-    uint64_t sequence{ 0 };
+    const uint32_t youngSeqnum;
+    const uint32_t oldSeqnum;
     const uint8_t role;
     const bool physical;
     const bool clear;
@@ -84,80 +86,6 @@ private:
     ZListNode<ZPageAllocation> _node;
 };
 using AllocationStallRequest = ZPageAllocation;
-
-// Allocator-owned FIFO.  Enqueue returns true only for the transition from
-// empty to non-empty, giving the first waiter ownership of the GC request.
-class AllocationStallQueue {
-public:
-    explicit AllocationStallQueue(std::mutex& owner) : mutex(owner) {}
-
-    // The allocator holds the same owner across claim failure and enqueue.
-    bool EnqueueLocked(ZPageAllocation& request)
-    {
-        const bool requestGc = !gcInProgress;
-        gcInProgress = true;
-        request.sequence = ++lastSequence;
-        requests.insert_last(&request);
-        return requestGc;
-    }
-
-    // zHeap.inline.hpp: is_alloc_stalling; read the actual outstanding FIFO.
-    bool IsStalling() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return !requests.is_empty();
-    }
-
-    uint64_t CaptureWaveBoundary() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return lastSequence;
-    }
-
-    size_t SatisfyAvailable(const std::function<bool(ZPageAllocation&)>& claim)
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return SatisfyAvailableLocked(claim);
-    }
-
-    size_t SatisfyAvailableLocked(const std::function<bool(ZPageAllocation&)>& claim)
-    {
-        size_t satisfied = 0;
-        while (!requests.is_empty()) {
-            ZPageAllocation* request = requests.first();
-            if (!claim(*request)) {
-                break;
-            }
-            requests.remove_first();
-            request->Satisfy(true);
-            ++satisfied;
-        }
-        return satisfied;
-    }
-
-    bool CompleteWave(uint64_t boundary)
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        while (!requests.is_empty() && requests.first()->sequence <= boundary) {
-            ZPageAllocation* request = requests.first();
-            requests.remove_first();
-            request->Satisfy(false);
-        }
-        if (requests.is_empty()) {
-            gcInProgress = false;
-            return false;
-        }
-        return true;
-    }
-
-
-private:
-    std::mutex& mutex;
-    // zPageAllocator.hpp:165 ZList<ZPageAllocation> _stalled.
-    ZList<ZPageAllocation> requests;
-    uint64_t lastSequence{ 0 };
-    bool gcInProgress{ false };
-};
 
 } // namespace MapleRuntime
 
@@ -236,6 +164,7 @@ public:
     size_t increase_capacity(uint32_t partition_id, size_t size);
     void decrease_capacity(uint32_t partition_id, size_t size, bool set_max_capacity);
     size_t capacity() const;
+    size_t current_max_capacity() const;
 
     // Global granule index plus byte extent <-> ZVirtualMemory.
     static ZVirtualMemory VirtualMemoryOf(size_t index, size_t count);
@@ -481,6 +410,7 @@ public:
     size_t GetCommittedCapacity() const { return freeRegionManager.capacity(); }
 
     size_t GetHeapCapacity() const { return heapCapacity; }
+    size_t soft_max_capacity() const;
 
 
     // zPageAllocator.cpp:1201-1260: page resource ownership belongs to
@@ -516,18 +446,17 @@ public:
     void RetireTLABStatistics(AllocBuffer& buffer);
 
     template<Generation G>
-    void ForwardFromRegions(ZWorkers& workers);
-    template<Generation G>
-    void ForwardFromRegions();
-    template<Generation G>
     void ForwardRegion(ZPage* region);
     ZRelocateQueue& GetZRelocateQueue() { return relocateQueue; }
-    bool StallAllocation(AllocationStallRequest& request, bool requestGc);
+    bool StallAllocation(AllocationStallRequest& request);
+    bool ClaimCapacityOrStall(AllocationStallRequest& request);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
     void ReturnPageMemory(const PageMemory& memory);
-    void SatisfyStalledAllocations();
-    bool IsAllocationStalling() const { return allocationStallQueue.IsStalling(); }
-
+    bool IsAllocationStalling() const;
+    bool IsAllocationStallingForOld() const;
+    void HandleAllocStallingForYoung();
+    void StopStalledAllocations();
+    void HandleAllocStallingForOld(bool clearedAllSoftRefs);
     // In-place relocation account (feeds ZStatRelocation::AtRelocateEnd).
     // Not observation-gated: the relocation report reads it in every build.
     void ResetInPlaceRelocatedCounts()
@@ -557,11 +486,6 @@ public:
     template<Generation G>
     void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
                             bool inPlace = false);
-    template<Generation G>
-    void StartForwardFromRegions(ZWorkers& workers);
-    template<Generation G>
-    void DrainForwardFromRegions();
-    bool RelocationStarted() const { return relocationStarted; }
     // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
     static void RememberPromotedObject(BaseObject* object);
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
@@ -641,7 +565,7 @@ public:
     void AssembleSmallGarbageCandidates();
     void AssembleLargeGarbageCandidates();
     void AssemblePinnedGarbageCandidates(bool collectAll);
-    YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor);
+    YoungCollectionStats PrepareYoungGarbageCandidates();
 
     void MergeRawPointerPinnedRegions();
 
@@ -671,7 +595,6 @@ public:
 
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
     // can be reclaimed.
-    size_t ExemptFromRegions();
     // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).
 
     void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
@@ -829,9 +752,6 @@ private:
     // RecentFull/RecentLarge.
     bool fullTraceCacheActive{ false };
     bool largeTraceCacheActive{ false };
-    ZWorkers* relocationWorkers{ nullptr };
-    bool relocationStarted{ false };
-    bool relocationDrained{ false };
     // zRelocate.cpp:1121 shape: in-place relocated page counts by size class,
     // accumulated while a from-space pass runs and read at its end. Host
     // difference: ZGC counts these on ZRelocateSmall/MediumAllocator; here the
@@ -854,8 +774,12 @@ private:
     }
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
     friend class Uncommitter;
-    std::mutex pageAllocatorMutex;
-    AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
+    mutable std::mutex pageAllocatorMutex;
+    ZList<ZPageAllocation> stalled;
+    bool stallClosed{false};
+    void SatisfyStalledAllocations();
+    void NotifyOutOfMemory();
+    void RestartGC() const;
     size_t pageAllocatorUsed{ 0 };
 
     uintptr_t regionHeapStart = 0; // the address of first region to allocate object
