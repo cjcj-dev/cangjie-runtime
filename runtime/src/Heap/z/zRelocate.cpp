@@ -1076,9 +1076,9 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
         UpdateRemsetForFields(forwarding_for_page(copyPage), obj, to);
         return to;
     }
-    // ZGC zRelocate.cpp:355: retained source must be live before reading its size.
+    // ZGC zRelocate.cpp:355: assert(ZHeap::heap()->is_object_live(from_addr)) before object_size.
 #if defined(MRT_TESTABLE_INTERNALS) || (defined(MRT_DEBUG) && MRT_DEBUG == 1)
-    CHECK(copyPage->is_object_live(from_object(obj)));
+    CHECK(Heap::GetHeap().IsSurvivedObject(obj));
 #endif
     const size_t size = RegionSpace::GetAllocSize(*obj);
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
@@ -1347,9 +1347,9 @@ bool RegionManager::RelocateClaimedPage(ZPage* region)
     MAddress regionLimit = region->GetRegionAllocPtr();
     bool allocFailed = false;
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t) {
-    // ZGC zRelocate.cpp:902-904: check at the worker object-consumer entry.
+    // ZGC zRelocate.cpp:902-904: assert(ZHeap::heap()->is_object_live(addr)) at worker relocate_object.
 #if defined(MRT_TESTABLE_INTERNALS) || (defined(MRT_DEBUG) && MRT_DEBUG == 1)
-        CHECK(region->is_object_live(from_object(currentObj)));
+        CHECK(Heap::GetHeap().IsSurvivedObject(currentObj));
 #endif
         if (allocFailed) {
             return;
@@ -1411,9 +1411,9 @@ void RegionManager::CompactRegion(ZPage* region)
         ZGeneration::young()->register_in_place_relocate_promoted(region);
     }
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
-    // ZGC zRelocate.cpp:902-904: check at the worker object-consumer entry.
+    // ZGC zRelocate.cpp:902-904: assert live before object_size on the in-place consumer.
 #if defined(MRT_TESTABLE_INTERNALS) || (defined(MRT_DEBUG) && MRT_DEBUG == 1)
-        CHECK(region->is_object_live(from_object(currentObj)));
+        CHECK(Heap::GetHeap().IsSurvivedObject(currentObj));
 #endif
         const MAddress currentPtr = regionStart + offset;
         ZForwarding* liveFwd = forwarding_for_page(region);
