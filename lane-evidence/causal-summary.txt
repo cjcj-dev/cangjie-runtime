@@ -1,0 +1,8 @@
+green default n=3 failed=[]
+green testable n=7 failed=[]
+producer default n=3 failed=['OldRelocationStatistics.FullCollectionPublishesLiveInput']
+producer testable n=7 failed=['OldRelocationStatistics.FullCollectionPublishesLiveInput', 'OldRelocationStatistics.DirectorConsumesOldSelection']
+consumer default n=3 failed=[]
+consumer testable n=7 failed=['OldRelocationStatistics.DirectorConsumesOldSelection']
+restored default n=3 failed=[]
+restored testable n=7 failed=[]
