@@ -481,7 +481,7 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
             break;
         case VerifyFieldCase::WeakYoungUnmarked:
         case VerifyFieldCase::WeakYoungMarked: {
-            target = youngTarget;
+            target = static_cast<MObject*>(youngTarget);
             value = raw(StoreGoodPointer(target)) | ZPointerMarkedOld | ZPointerMarkedYoung |
                     ZPointerRememberedMask;
             if (mode == VerifyFieldCase::WeakYoungUnmarked) { value ^= ZPointerMarkedYoungMask; }
