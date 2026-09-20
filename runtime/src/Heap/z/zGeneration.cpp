@@ -548,11 +548,6 @@ bool ZGenerationYoung::mark_end()
     WorkStack& workStack = youngWorkStack;
     const bool markEndSucceeded = ZMark::TryEndYoungMark(workStack, &youngConcWindow);
     if (markEndSucceeded) {
-#if defined(MRT_TESTABLE_INTERNALS)
-        if (ZGeneration::testYoungMarkCompleted) {
-            ZGeneration::testYoungMarkCompleted();
-        }
-#endif
         Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
         // zGeneration.cpp:906-911: mark-end sample.
         statHeap.AtMarkEnd(
@@ -1612,12 +1607,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
 #include "Heap/z/zRelocate.hpp"
 
 
-
-namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-std::function<void()> ZGeneration::testYoungMarkCompleted;
-#endif
-}
 
 namespace MapleRuntime {
 // ZGC zGeneration.cpp:287-293.

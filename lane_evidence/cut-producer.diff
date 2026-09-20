@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp
+index 61f1c59ad..ca4b973c6 100644
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -1059,7 +1059,7 @@ void ZGenerationOld::concurrent_mark()
+     // Its common MarkThreadClosure absorbs already completed handshakes.
+     {
+         ZStatTimerOld zstatTimer(PEnumRootsUpdateOldPointersWithin);
+-        ZMark::DoEnumeration(workStack, foreignStack);
++        // Controlled cut: producer disconnected.
+     }
+ 
+     {

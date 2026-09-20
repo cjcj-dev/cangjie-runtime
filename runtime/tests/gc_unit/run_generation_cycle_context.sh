@@ -20,30 +20,22 @@ LIB="${GCV2_RUNTIME_LIB_DIR:?set GCV2_RUNTIME_LIB_DIR to the product pair}"
 mkdir -p "$OUT"
 SDK="${CANGJIE_HOME:?set CANGJIE_HOME to matching compiler}"
 HEADERS=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" "$ROOT/runtime" "$LIB")
-nm -D "$LIB/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
-# Product shape from both remap-receipt endpoints, exactly as run_standalone.sh
-# derives REMAP_RECEIPT_PRODUCT_SHAPE; a partial export is an invalid shape.
-nm -D --defined-only "$LIB/libcangjie-runtime.so" | c++filt >"$OUT/runtime-defined-symbols.txt"
-receipt_reset=0
-receipt_read=0
-if /usr/bin/grep -F -q 'MapleRuntime::ResetRemapYoungRootsTestReceipt(' "$OUT/runtime-defined-symbols.txt"; then
-  receipt_reset=1
-fi
-if /usr/bin/grep -F -q 'MapleRuntime::ReadRemapYoungRootsTestReceipt(' "$OUT/runtime-defined-symbols.txt"; then
-  receipt_read=1
-fi
-if [[ "$receipt_reset" -eq 1 && "$receipt_read" -eq 1 ]]; then
-  SO_TESTABLE=1
-elif [[ "$receipt_reset" -eq 0 && "$receipt_read" -eq 0 ]]; then
-  SO_TESTABLE=0
-else
-  echo "GC_CYCLE_PRODUCT_SHAPE_INCOMPLETE reset=$receipt_reset read=$receipt_read so=$LIB/libcangjie-runtime.so" >&2
-  exit 19
-fi
-SO_GC_UNIT_TESTS=0
-if /usr/bin/grep -Eq 'PendingStalledAllocations' "$OUT/runtime-dynamic-symbols.txt"; then
-  SO_GC_UNIT_TESTS=1
-fi
+# Read the selected product's published compile recipe. Removed diagnostic
+# symbols cannot identify the product configuration.
+read -r SO_TESTABLE SO_GC_UNIT_TESTS < <(python3 - "$HEADERS/runtime-build-inputs.txt" <<'PYCONFIG'
+import json
+import shlex
+import sys
+
+inputs = json.load(open(sys.argv[1]))
+entry = next(command for command in inputs['commands']
+             if command['file'].endswith('/Heap/z/zGeneration.cpp'))
+arguments = entry.get('arguments') or shlex.split(entry['command'])
+def enabled(name):
+    return int(any(arg == '-D' + name or arg == '-D' + name + '=1' for arg in arguments))
+print(enabled('MRT_TESTABLE_INTERNALS'), enabled('MRT_GC_UNIT_TESTS'))
+PYCONFIG
+)
 if [[ -n "${GC_CYCLE_TESTABLE:-}" && "$GC_CYCLE_TESTABLE" != "$SO_TESTABLE" ]]; then
   echo "GC_CYCLE_PRODUCT_CONFIGURATION_MISMATCH GC_CYCLE_TESTABLE=$GC_CYCLE_TESTABLE so_testable=$SO_TESTABLE so=$LIB/libcangjie-runtime.so" >&2
   exit 6
