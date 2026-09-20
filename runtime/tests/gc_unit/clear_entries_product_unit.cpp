@@ -1580,3 +1580,49 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
 }
+
+namespace {
+// A completed forwarding may still cover an address that is already load-good.
+// The product field consumer must use its colour, not table membership, to
+// decide whether the address is from-space (ZGC zBarrier.inline.hpp:294-305).
+void CheckMinorFieldColour(bool stale)
+{
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::eden);
+    fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + fx.obj0->GetSize());
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
+    fx.InstallPageOwner(fx.region0);
+    ZForwarding* forwarding = forwarding_for_page(fx.region0);
+    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
+    GC_EXPECT_EQ(forwarding->insert(from, to), to);
+    forwarding->release_page();
+    forwarding->mark_done();
+    zpointer bits = ZAddress::store_good(from_object(fx.obj0));
+    if (stale) {
+        // Preserve all other colour families; the previous young remap bit
+        // directs make_load_good to the young generation's forwarding table.
+        bits = ColouredPointer(fx.obj0, ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask);
+    }
+    RefField<> field(bits);
+    (void)ZRelocate::FixMinorEvacuatedSlot(field, nullptr, nullptr);
+    const MAddress actual = untype(field.GetTargetObject());
+    const MAddress expected = stale ? to : from;
+    std::fprintf(stderr, "DETAIL minor_field_colour stale=%u actual=%#zx expected=%#zx\n",
+                 static_cast<unsigned>(stale), actual, expected);
+    GC_EXPECT_EQ(actual, expected);
+}
+
+GC_TEST(RelocateField782, LoadGoodAddressIsNotForwardedTwice)
+{
+    CheckMinorFieldColour(false);
+}
+
+GC_TEST(RelocateField782, LoadBadAddressConsumesForwarding)
+{
+    CheckMinorFieldColour(true);
+}
+
+}
