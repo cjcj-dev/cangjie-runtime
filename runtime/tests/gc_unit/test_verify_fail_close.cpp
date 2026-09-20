@@ -415,12 +415,23 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     auto* holder = MObject::NewPinnedObject(holderType, 2 * sizeof(uintptr_t));
     auto* target = MObject::NewPinnedObject(targetType, 2 * sizeof(uintptr_t));
     if (holder == nullptr || target == nullptr) { _exit(122); }
+    BaseObject* youngTarget = nullptr;
+    if (mode == VerifyFieldCase::WeakYoungUnmarked || mode == VerifyFieldCase::WeakYoungMarked) {
+        ScopedObjectAccess access;
+        youngTarget = MObject::NewObject(targetType, 2 * sizeof(uintptr_t), AllocType::MOVEABLE_OBJECT);
+        if (youngTarget == nullptr || !Heap::is_young(reinterpret_cast<MAddress>(youngTarget))) { _exit(128); }
+    }
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreGoodPointer(target));
     auto& heap = Heap::GetHeap();
     NativeSlot* root = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
     if (root == nullptr) { _exit(123); }
     root->StoreColoured(StoreGoodPointer(holder));
+    if (youngTarget != nullptr) {
+        NativeSlot* youngRoot = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
+        if (youngRoot == nullptr) { _exit(123); }
+        youngRoot->StoreColoured(StoreGoodPointer(youngTarget));
+    }
     const bool afterWeak = mode >= VerifyFieldCase::WeakUnmarked;
     ConcurrentGCBreakpoints::AcquireControl();
     const char* point = afterWeak ? "AFTER CONCURRENT REFERENCE PROCESSING STARTED" :
@@ -470,14 +481,10 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
             break;
         case VerifyFieldCase::WeakYoungUnmarked:
         case VerifyFieldCase::WeakYoungMarked: {
-            {
-                ScopedObjectAccess access;
-                target = MObject::NewObject(targetType, 2 * sizeof(uintptr_t), AllocType::MOVEABLE_OBJECT);
-                if (target == nullptr || !Heap::is_young(reinterpret_cast<MAddress>(target))) { _exit(128); }
-                value = raw(StoreGoodPointer(target)) | ZPointerMarkedOld | ZPointerMarkedYoung |
-                        ZPointerRememberedMask;
-                if (mode == VerifyFieldCase::WeakYoungUnmarked) { value ^= ZPointerMarkedYoungMask; }
-            }
+            target = youngTarget;
+            value = raw(StoreGoodPointer(target)) | ZPointerMarkedOld | ZPointerMarkedYoung |
+                    ZPointerRememberedMask;
+            if (mode == VerifyFieldCase::WeakYoungUnmarked) { value ^= ZPointerMarkedYoungMask; }
             std::fprintf(stderr, "VERIFY_FIELD_YOUNG_TARGET target=%p word=%#zx\n", target, value);
             break;
         }
