@@ -355,17 +355,21 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(BaseObject* value, const void* own
     (void)generation;
     const auto forwarding = forwarding_for_page(
         Heap::page(reinterpret_cast<MAddress>(value)));
-    BaseObject* current = value;
     if (forwarding) {
-        const MAddress target = forwarding->find(reinterpret_cast<MAddress>(value));
-        current = target != 0 ? reinterpret_cast<BaseObject*>(target)
-            : ZRelocate::ResolveStoreValue(value, provenance, static_cast<Generation>(forwarding->table_generation()));
+        // ZGC zGeneration.inline.hpp:131-140 / zRelocate.cpp:382-415:
+        // stored roots use the same forwarding consumer as load barriers.
+        // zRelocate.cpp:412-415: a table hit must yield a non-null to.
+        BaseObject* current = ZGeneration::generation((forwarding->from_age() == PageAge::old ? ZGenerationId::old : ZGenerationId::young))
+            ->relocate_or_remap_object(value, provenance);
+        if (current == nullptr || !Heap::IsHeapAddress(current) ||
+            ZBarrier::JudgeHandOutTarget(current) != HandVerdict::Usable) {
+            ZBarrier::FailClosedLoad("value root relocate_or_remap requires usable to", value, 0, provenance);
+        }
+        return current;
     }
-    CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
-                 "value root resolve requires a heap to-address from=%p current=%p", value, current);
-    CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable,
-                 "value root resolve requires a usable target from=%p current=%p", value, current);
-    return current;
+    CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(value) == HandVerdict::Usable,
+                 "value root without forwarding table must already be usable from=%p", value);
+    return value;
 }
 
 void ZCrossVM::CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const

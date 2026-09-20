@@ -145,6 +145,8 @@ public:
     BaseObject* remap_object(BaseObject* object);
     BaseObject* relocate_or_remap_object(BaseObject* object, const ForwardingProvenance& provenance);
     void reset_relocation_set();
+    void synchronize_relocation();
+    void desynchronize_relocation();
     void free_empty_pages(ZRelocationSetSelector* selector, int bulk);
     void flip_age_pages(const ZRelocationSetSelector* selector);
     void select_relocation_set(bool promote_all);

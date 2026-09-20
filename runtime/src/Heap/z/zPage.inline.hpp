@@ -516,7 +516,7 @@ inline bool ZPage::IsCompactRouteDestination(MAddress address) const
 inline bool ZPage::RetainForwarding()
     {
         auto owner = forwarding_for_page(this);
-        return owner && owner->retain_page(&generation_relocate_queue());
+        return owner && owner->retain_page(&generation_relocate_queue((owner->from_age() == PageAge::old ? Generation::Old : Generation::Young)));
     }
 
 inline void ZPage::ReleaseForwarding()

@@ -212,7 +212,7 @@ GC_TEST(ZForwardingRemembered, RetainedScanRejectsPublication)
 {
     GcHeapFixture heap;
     auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
-    GC_EXPECT_TRUE(fwd->retain_page(&generation_relocate_queue()));
+    GC_EXPECT_TRUE(fwd->retain_page(&generation_relocate_queue(Generation::Old)));
     fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
     GC_EXPECT_TRUE(fwd->relocated_remembered_fields_is_concurrently_scanned());
@@ -265,7 +265,7 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     auto completed = completion.get_future();
     std::thread reader([&] {
         readerStarted.store(true, std::memory_order_release);
-        retained = fwd->retain_page(&generation_relocate_queue());
+        retained = fwd->retain_page(&generation_relocate_queue(Generation::Old));
         returned.store(true, std::memory_order_release);
         completion.set_value();
     });
@@ -281,8 +281,7 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     const bool returnedAfterRelease = completed.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
     fwd->mark_done();
     reader.join();
-    auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator())
-        .GetRegionManager().GetZRelocateQueue();
+    auto& queue = generation_relocate_queue(Generation::Old);
     (void)queue.Complete(fwd);
     fwd->Destroy();
     GC_EXPECT_TRUE(queued);

@@ -447,7 +447,6 @@ public:
 
     template<Generation G>
     void ForwardRegion(ZPage* region);
-    ZRelocateQueue& GetZRelocateQueue() { return relocateQueue; }
     bool StallAllocation(AllocationStallRequest& request);
     bool ClaimCapacityOrStall(AllocationStallRequest& request);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
@@ -736,7 +735,6 @@ private:
     // #710: page lifecycle identity lives in ZPage's role word and the page
     // table (zPageTable.hpp:57-77); there are no page lists. The relocation
     // set (zRelocationSet.hpp) is the from-space work source.
-    ZRelocateQueue relocateQueue;
     // Serializes pinned-page installation with retirement/seqnum (P14), and
     // pinned TLAB staging handoff.
     std::mutex pinnedAllocationMutex;

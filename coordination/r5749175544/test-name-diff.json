@@ -1,0 +1,17 @@
+{
+  "base": "fd8112388cbf85c169b06251adc59aba376eabd8",
+  "head": "e6a6517c30334058011e0e64226bf7aefe8a6079",
+  "scope": [
+    "runtime/tests/gc_unit/clear_entries_product_unit.cpp",
+    "runtime/tests/gc_unit/test_gc_thread_pool.cpp",
+    "runtime/tests/gc_unit/test_zPage.cpp",
+    "runtime/tests/gc_unit/test_z_forwarding_table.cpp"
+  ],
+  "base_count": 94,
+  "head_count": 94,
+  "added": [],
+  "removed": [],
+  "positive_control_added": [
+    "ParserControl.AddedRegistration"
+  ]
+}
