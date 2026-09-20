@@ -364,6 +364,8 @@ MAIN_SOURCES=(
   "$SRC/test_mark_port_203_engine.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"
+  "$SRC/test_allocation_stall_queue.cpp"
+  "$SRC/test_p1_mark_start.cpp"
   "$SRC/test_package_init.cpp"
   "$SRC/test_verify_roots.cpp"
   "$SRC/test_p10_roots_iterator.cpp"
