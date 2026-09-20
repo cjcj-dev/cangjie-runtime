@@ -36,7 +36,7 @@ C=`{root}/runtime/src/Heap/z/`；Z=`/root/cj_build/reference/jdk/src/hotspot/sha
 |对象入口/条目|zMark.inline.hpp:48-87|zMark.inline.hpp:16：allocating→GCThread claim/AnyThread query→resurrected→offset+四位→publish=!GCThread|partial数组仍独立；不吞follow|
 |消费者|zMark.cpp:403-432|zMark.cpp:1015/1424→:1643 MarkEntryObject|entry.mark失败停；GCThread已claim条目合法；incLive结算后才follow|
 |old selection|zGeneration.cpp:205-225|zRelocationSet.cpp:63，mark后select/collect前；zRelocationSetSelector.cpp:66/72/102/155按old+relocatable选小/LARGE/pinned|三组Assemble删ClearLiveInfo；保留本轮标记结果和资源释放职责|
-|owner守卫|zRelocationSet.cpp:79-134|zRelocationSet.inline.hpp:66→Heap/Allocator/zForwardingTable.cpp:115|删除晚期剔young修补；原owner CHECK直接验证selector结果|
+|owner守卫|zRelocationSet.cpp:79-134|zRelocationSet.inline.hpp:66→Heap/z/zForwardingTable.cpp:115|删除晚期剔young修补；原owner CHECK直接验证selector结果|
 
 类归属仍为获准过渡：GenerationCycle组合现有collector依赖，未造第二套代状态；由P14a把类/Phase/ZAbort搬入正式每代对象。Cangjie侵入式分配列表、TLAB统计与预备页退休是现存分配基础设施；本报告不把这些类的整体形态标为已完成，也不越入P11b分桶/flip_age/promote barrier。
 

@@ -1,6 +1,6 @@
 runtime/src/Mutator/Mutator.cpp:871:    return to_object(safe(uncolor_bits(to_zpointer(raw(maybeColoured)))));
 runtime/src/Sync/Sync.cpp:568:    // True read barrier (not uncolor_bits): pin must land on load-good / to-copy.
-runtime/src/Heap/Allocator/SlotList.h:55:        return bits != raw(uncolor_bits(to_zpointer(bits)));
+runtime/src/Heap/z/SlotList.h:55:        return bits != raw(uncolor_bits(to_zpointer(bits)));
 runtime/src/Heap/WCollector/WCollector.h:313:    void flip_young_mark_start()
 runtime/src/Heap/WCollector/WCollector.h:325:    void flip_old_mark_start()
 runtime/src/Inspector/CjHeapData.cpp:391:        zaddress_unsafe value = uncolor_bits(objRef.GetFieldValue());
