@@ -1600,7 +1600,6 @@ void RegionManager::EnlistCompactedRegionForAllocator(ZPage* region)
     }
     if (claimed) {
         region->SetRegionRole(ZPageRole::RecentFull);
-        RecentFullAccounting::Enqueue(1, region->GetRegionSize());
     }
 }
 
@@ -1702,8 +1701,7 @@ void RegionManager::ForwardRegion(ZPage* region)
         }
     } verifyAfterRelocation { verifyForwarding };
 
-    CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
-        (region->IsRoutingState() || region->IsCompacted())), "region type %u", 0u);
+    CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion(), "region type %u", 0u);
 
     DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %zu",
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
