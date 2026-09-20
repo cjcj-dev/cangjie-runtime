@@ -221,7 +221,9 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
     Heap::GetHeap().GetZGeneration(Generation::Young).reset_relocation_set();
-    RelocationReceiptTest::NativeRootTrace(collector);
+    // The preceding major prelude already started this old mark cycle.
+    // Continue its root task without a second mark-color flip.
+    heap.old().concurrent_mark();
     const bool oldMarkedCurrent = region->is_object_strongly_live(from_object(to)) &&
         !region->is_object_strongly_live(from_object(from));
     std::fprintf(stderr, "native_root_after_reset executed=1 marked=%u slot=%#zx expected=%p\n",

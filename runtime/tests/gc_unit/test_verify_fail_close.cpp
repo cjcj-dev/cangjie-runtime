@@ -400,8 +400,10 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     param.coParam.processorNum = 1;
     param.heapParam.heapSize = 32 * 1024;
     if (InitCJRuntime(&param) != E_OK) { _exit(121); }
-    alignas(TypeInfo) unsigned char holderTypeStorage[sizeof(TypeInfo)]{};
-    alignas(TypeInfo) unsigned char targetTypeStorage[sizeof(TypeInfo)]{};
+    // Runtime worker threads may still inspect allocated objects at child exit.
+    // Metadata must outlive this function, including the post-prelude young page.
+    alignas(TypeInfo) static unsigned char holderTypeStorage[sizeof(TypeInfo)]{};
+    alignas(TypeInfo) static unsigned char targetTypeStorage[sizeof(TypeInfo)]{};
     auto* holderType = reinterpret_cast<TypeInfo*>(holderTypeStorage);
     auto* targetType = reinterpret_cast<TypeInfo*>(targetTypeStorage);
     for (auto* type : {holderType, targetType}) {
