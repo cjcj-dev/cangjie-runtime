@@ -48,8 +48,9 @@ run_ohos_host_arm() {
 
   nm --defined-only "$so" | c++filt >"$product_nm"
   for symbol in \
-      'MRT_GC_UNIT_OHOS_HOST_RECEIPT' \
       'CJ_MRT_RolveCycleRef' \
+      'MapleRuntime::ZCrossVM::ResolveCycleRef()' \
+      'MapleRuntime::ZCrossVM::GetCrossRefHandler(MapleRuntime::BaseObject*)' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
       'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
       'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
@@ -100,6 +101,8 @@ run_ohos_host_arm() {
   fi
   for symbol in \
       'CJ_MRT_RolveCycleRef' \
+      'MapleRuntime::ZCrossVM::ResolveCycleRef()' \
+      'MapleRuntime::ZCrossVM::GetCrossRefHandler(MapleRuntime::BaseObject*)' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
       'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
       'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
@@ -178,13 +181,14 @@ run_ohos_host_arm() {
   } >"$OUT/ohos_host_lineage.txt"
 
   declare -a tests=(
+    OHOSCycle.HandlerChainThroughMajorEntry
     OHOSCycle.MajorEntryPostsResolveTask
     OHOSCycle.PostResolvePostsProductTask
     OHOSCycle.EmptyWorkDoesNotPost
   )
-  declare -a keys=(MAJOR POST EMPTY)
-  declare -a states=(NOT_RUN NOT_RUN NOT_RUN)
-  declare -a rcs=(125 125 125)
+  declare -a keys=(HANDLER MAJOR POST EMPTY)
+  declare -a states=(NOT_RUN NOT_RUN NOT_RUN NOT_RUN)
+  declare -a rcs=(125 125 125 125)
 
   for i in "${!tests[@]}"; do
     test_name="${tests[$i]}"
@@ -213,7 +217,8 @@ run_ohos_host_arm() {
   {
     echo "SCHEMA_VERSION=1"
     echo "CONFIGURATION=MRT_GC_UNIT_OHOS_HOST"
-    echo "PRODUCT_RECEIPT=MRT_GC_UNIT_OHOS_HOST_RECEIPT"
+    echo "PRODUCT_RECEIPT=PostResolveCycleTask-dispatch-disassembly"
+    echo "QUALIFICATION=host-product-path-only;device-ABI-NOT_RUN-773"
     for i in "${!tests[@]}"; do
       echo "FILTER_${keys[$i]}=${states[$i]}"
       echo "FILTER_${keys[$i]}_RC=${rcs[$i]}"
@@ -226,7 +231,7 @@ run_ohos_host_arm() {
     echo "GC_UNIT_OHOS_HOST_FAIL receipt=$receipt" >&2
     return "$overall_rc"
   fi
-  echo "GC_UNIT_OHOS_HOST_OK filters=3 receipt=$receipt elf=$elf"
+  echo "GC_UNIT_OHOS_HOST_OK filters=${#tests[@]} receipt=$receipt elf=$elf"
 }
 
 case "${MRT_GC_UNIT_OHOS_HOST:-0}" in

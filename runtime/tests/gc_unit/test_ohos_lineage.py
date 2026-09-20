@@ -47,12 +47,12 @@ def run_case(case):
         rc = subprocess.call(['bash', str(tree / 'runtime/tests/gc_unit/run_standalone.sh')], env=env, stdout=log, stderr=subprocess.STDOUT)
     (out / 'run.rc').write_text(f'{rc}\n')
     try:
-        # This assertion is the regression target: all three real filters ran,
+        # This assertion is the regression target: all four real filters ran,
         # and the runner propagated their actual result instead of Git's 128.
         receipt = out / 'ohos_host.receipt'
         assert rc == 0 and receipt.exists(), f'filters completed: rc={rc}, receipt={receipt.exists()}'
         text = receipt.read_text()
-        for key in ('MAJOR', 'POST', 'EMPTY'):
+        for key in ('HANDLER', 'MAJOR', 'POST', 'EMPTY'):
             assert f'FILTER_{key}=PASS\n' in text, f'{key} did not pass'
         lineage = (out / 'ohos_host_lineage.txt').read_text()
         assert f'SOURCE_GIT={git_state}\n' in lineage, lineage

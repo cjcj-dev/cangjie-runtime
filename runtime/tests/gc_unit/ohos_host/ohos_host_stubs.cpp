@@ -5,12 +5,6 @@
 #include "Inspector/CjAllocData.h"
 #include "Inspector/HeapSnapshotJsonSerializer.h"
 
-// A full-nm receipt lets the runner distinguish this deliberate hybrid from a
-// default Linux product. It is data rather than an API and is linked only when
-// MRT_GC_UNIT_OHOS_HOST is ON.
-extern "C" const char MRT_GC_UNIT_OHOS_HOST_RECEIPT[] =
-    "x86_64-linux-product-with-__OHOS__";
-
 namespace MapleRuntime {
 
 CjAllocData* CjAllocData::GetCjAllocData()
