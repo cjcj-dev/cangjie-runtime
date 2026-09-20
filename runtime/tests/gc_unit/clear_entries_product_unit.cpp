@@ -1580,3 +1580,136 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
 }
+
+namespace {
+// A completed forwarding may still cover an address that is already load-good.
+// The product field consumer must use its colour, not table membership, to
+// decide whether the address is from-space (ZGC zBarrier.inline.hpp:294-305).
+void CheckMinorFieldColour(bool stale)
+{
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::eden);
+    fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + fx.obj0->GetSize());
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
+    fx.InstallPageOwner(fx.region0);
+    ZForwarding* forwarding = forwarding_for_page(fx.region0);
+    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
+    GC_EXPECT_EQ(forwarding->insert(from, to), to);
+    forwarding->release_page();
+    forwarding->mark_done();
+    zpointer bits = ZAddress::store_good(from_object(fx.obj0));
+    if (stale) {
+        // Preserve all other colour families; the previous young remap bit
+        // directs make_load_good to the young generation's forwarding table.
+        bits = ColouredPointer(fx.obj0, ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask);
+    }
+    RefField<> field(bits);
+    (void)ZRelocate::FixMinorEvacuatedSlot(field, nullptr, nullptr);
+    const MAddress actual = untype(field.GetTargetObject());
+    const MAddress expected = stale ? to : from;
+    std::fprintf(stderr, "DETAIL minor_field_colour stale=%u actual=%#zx expected=%#zx\n",
+                 static_cast<unsigned>(stale), actual, expected);
+    GC_EXPECT_EQ(actual, expected);
+}
+
+GC_TEST(RelocateField782, LoadGoodAddressIsNotForwardedTwice)
+{
+    CheckMinorFieldColour(false);
+}
+
+GC_TEST(RelocateField782, LoadBadAddressConsumesForwarding)
+{
+    CheckMinorFieldColour(true);
+}
+
+}
+
+
+// ZGC zRelocate.cpp:392-410: start with no forwarding entry. Unlike the
+// colour tests, these cases require the product to publish the first entry.
+GC_TEST(RelocateMiss782, RetainedPageCopiesAndPublishes)
+{
+    ExerciseMutatorCopy(true);
+}
+
+namespace {
+void ExerciseRelocationWait782(bool claimedPage)
+{
+    GcHeapFixture& fx = ProductFixture();
+    ZPage* source = ResetDeliveryUnit(fx, 4);
+    ZPage* destination = ResetDeliveryUnit(fx, 3);
+    BaseObject* from = fx.PlaceObject(source->GetRegionStart());
+    source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    destination->SetRegionAllocPtr(destination->GetRegionStart());
+    Heap& heap = Heap::GetHeap();
+    RelocationReceiptTest::BindCollector(&heap);
+    auto& generation = heap.GetZGeneration(ZGenerationId::old);
+    generation.set_phase(ZGenerationPhase::Relocate);
+    PrepareForwardable(fx, source, reinterpret_cast<MAddress>(from));
+    ZForwarding* forwarding = forwarding_for_page(source);
+    GC_EXPECT_EQ(forwarding->find(reinterpret_cast<MAddress>(from)), 0U);
+    DeliverySharedPageScope allocation(destination);
+    std::vector<ZPage*> occupied;
+    if (claimedPage) {
+        // Ordinary forwarding lifecycle input: a worker has claimed the page
+        // for in-place relocation before the mutator's first lookup.
+        forwarding->in_place_relocation_claim_page();
+    } else {
+        // Exhaust actual non-blocking page capacity, with no allocation hook.
+        destination->SetRegionAllocPtr(destination->GetRegionEnd());
+        ZAllocationFlags flags;
+        flags.set_non_blocking();
+        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small,
+                   false, false, false, PageAge::old, flags)) {
+            occupied.push_back(page);
+        }
+    }
+    ZRelocateQueue* queue = generation.relocate().queue();
+    std::atomic<bool> returned{false};
+    BaseObject* result = nullptr;
+    std::thread mutator([&] {
+        result = RelocationReceiptTest::ProductRelocateOrRemap(heap, from, ZGenerationId::old);
+        returned.store(true, std::memory_order_release);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (queue->PendingCount() == 0 && !returned.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool queued = queue->PendingCount() != 0;
+    const bool blocked = !returned.load(std::memory_order_acquire);
+    const MAddress before = forwarding->find(reinterpret_cast<MAddress>(from));
+    // Give the worker ordinary allocation space only after observing the
+    // request. Both the table entry and completion are produced by relocate().
+    destination->SetRegionAllocPtr(destination->GetRegionStart());
+    if (generation.Workers() == nullptr) generation.InitializeWorkers(2);
+    generation.Workers()->set_active_workers(2);
+    generation.Workers()->set_active();
+    generation.relocate().relocate(&generation.relocation_set());
+    mutator.join();
+    const MAddress mapping = forwarding->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = destination->GetRegionStart();
+    const bool valid = queued && blocked && before == 0 &&
+        reinterpret_cast<MAddress>(result) == expected && mapping == expected && forwarding->is_done();
+    std::fprintf(stderr,
+        "RELOCATE_MISS_TARGET claimed=%d queued=%d blocked=%d before=%zx result=%zx mapping=%zx expected=%zx done=%d valid=%d\n",
+        claimedPage, queued, blocked, before, reinterpret_cast<MAddress>(result), mapping,
+        expected, forwarding->is_done(), valid);
+    GC_EXPECT_TRUE(valid);
+    for (ZPage* page : occupied) Heap::free_page(page);
+    generation.reset_relocation_set();
+}
+}
+
+GC_TEST(RelocateMiss782, ClaimedPageWaitsForWorkerPublication)
+{
+    ExerciseRelocationWait782(true);
+}
+
+GC_TEST(RelocateMiss782, AllocationFailureWaitsForWorkerPublication)
+{
+    ExerciseRelocationWait782(false);
+}

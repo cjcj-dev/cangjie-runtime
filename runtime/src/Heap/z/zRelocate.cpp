@@ -396,67 +396,12 @@ bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
-    // h3seed2/3 乙 residual: live holder field still points at a region that minor
-    // already CollectRegion'd (ClearPageMemory). Prefer silent null over UAF; CAS so
-    // concurrent fix peers can win. Pre-evac H3 samples the prior cycle's residue —
-    // nulling here clears it before the next VERIFY_HEAP inventory.
-    // Criterion: ZPage::IsFreeRegion|IsGarbageRegion at this Fix call (file:line).
-    if (ScrubMinorFreeTarget(field, target, true)) {
-        return true;
-    }
-    HeapSlot<> oldBits(oldField);
-    BaseObject* oldObj = to_object(oldBits.GetTargetObject());
-    // resolveto: Resolve already rewrote FROM→TO. TO sits in a Compacted ghost
-    // (in-place pack). Forward/Admit indexes liveInfo0 by from-offset — feeding TO
-    // misses → leave-alone. Keep the already-installed to.
-    ZPage* targetRegion = Heap::page(reinterpret_cast<MAddress>(target));
-    const bool compactDestination = targetRegion != nullptr &&
-        targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
-    const bool alreadyTo = (target != oldObj) || compactDestination;
-    BaseObject* current = target;
-    const bool hasForwardingFace = targetRegion != nullptr && forwarding_for_page(targetRegion) != nullptr;
-    if (!alreadyTo && hasForwardingFace && IsFromObject(target) && !IsUnmovableFromObject(target)) {
-        // installdomain: route-domain grant before ForwardObject → GetRoute.
-        EnsureRouteDomainMembership(target);
-        current = ZRelocate::ForwardObject(target, Generation::Young);
-    }
-    // ForwardObject null = movable ghost with no to-version (survivor-gate miss).
-    // Drop the edge; do not reinstall the from address that is about to be reclaimed.
-    if (current == nullptr) {
-        // zBarrier.inline.hpp:294-343 never publishes a null substitute for a
-        // non-null reference whose forwarding lookup missed. The current thread
-        // must finish relocation (or fail closed); a null CAS is not a
-        // substitute for an unresolved product.
-        (void)field.CompareExchange(field.GetFieldValue(), zpointer::null);
-        ZBarrier::FailClosedLoad(
-            "ZRelocate::FixMinorEvacuatedSlot.unresolved", target,
-            static_cast<uintptr_t>(raw(field.GetFieldValue())),
-            ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
-    }
-    // plainroots: stack/reg root slots → plain current; heap remset/fields → Phase C colour.
-    // Plain on heap was the trust-state install that AssertColouredWriteIfEnabled fires on.
-    RefField<> newField = ZBarrier::GetAndTryTagRefField(current);
-    MAddress oldVal = raw(oldField.GetFieldValue());
-    MAddress newVal = raw(newField.GetFieldValue());
-    if (oldVal == newVal) {
-        return false;
-    }
-    // Re-read after resolve (resolve may have CAS-installed plain already).
-    oldVal = raw(field.GetFieldValue());
-    if (oldVal == newVal) {
-        return false;
-    }
-    if (field.CompareExchange(to_zpointer(oldVal), to_zpointer(newVal))) {
-        return true;
-    }
-    // CAS fail: accept if current == desired or already a plain/newer install (major style).
-    MAddress cur = raw(field.GetFieldValue());
-    if (cur == newVal) {
-        return true;
-    }
-    // Peer may have installed same logical target via ResolveMinorReference first
-    // (old tagged → plain) then another worker forwarded; either is a valid fix.
-    return true;
+    // ZGC zBarrier.inline.hpp:294-305,327-340: make-load-good selects
+    // relocation from the observed colour and self-heals that same value.
+    // A load-good address may already name a reused page whose previous
+    // forwarding remains installed; never interpret it as a from-address
+    // a second time based on the page's membership in a relocation set.
+    return raw(field.GetFieldValue()) != raw(oldField.GetFieldValue());
 }
 
 bool ZRelocate::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw)
@@ -787,44 +732,6 @@ BaseObject* ZRelocate::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner
     CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
     queue.Wait(request.forwarding);
     return reinterpret_cast<BaseObject*>(owner->find(from));
-}
-
-BaseObject* ZRelocate::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease)
-{
-    // RelocateObjectInner is for relocate phase only. relocate_or_remap
-    // is reachable from barriers in other phases, so screen here.
-    ZGeneration* generation = Heap::GetHeap().ObjectGeneration(obj) == Generation::Young ?
-        static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old());
-    if (generation == nullptr || !generation->is_phase_relocate()) {
-        return nullptr;
-    }
-    // zForwarding.cpp:86-108: a claimed page waits for its task before
-    // retain_page returns false; no source access follows a failed retain.
-    if (!lease.ok()) {
-        return WaitForPageForwarding(obj, lease.HoldForwarding());
-    }
-    // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
-    // SetGCPhase publishes before handshake, so a mutator that retained across
-    // FORWARD→IDLE must not copy. Release and let
-    // the existing forwarding lookup / wait legs consume the published table.
-    if (generation == nullptr || !generation->is_phase_relocate()) {
-        lease.Release();
-        return nullptr;
-    }
-    // A mutator can publish a previously white from-object after young mark
-    // terminated. Admit it before copying; a next-minor remset entry is too late.
-    // This is the late-store leg corresponding to zBarrier.inline.hpp:695-716.
-    EnsureRouteDomainMembership(obj);
-    BaseObject* toVersion = relocate_object_inner(
-        obj, lease.forwarding()->page());
-    lease.Release(); // release_page
-    if (toVersion == nullptr) {
-        return WaitForPageForwarding(obj, lease.HoldForwarding());
-    }
-    if (toVersion == obj) {
-        return nullptr;
-    }
-    return toVersion;
 }
 
 bool ZRelocate::IsAlreadyToStoreValue(BaseObject* target, Generation generation)
@@ -2095,16 +2002,21 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
     if (const MAddress to = forwarding->find(from)) {
         return reinterpret_cast<BaseObject*>(to);
     }
+    (void)provenance;
     ZPage::RetainScope lease{forwarding};
     if (lease.ok()) {
-        if (BaseObject* to = TryMutatorRelocate(object, lease)) return to;
+        DCHECK(generation->is_phase_relocate());
+        BaseObject* to = relocate_object_inner(object, forwarding->page());
+        lease.Release();
+        if (to != nullptr) {
+            return to;
+        }
+        // ZGC zRelocate.cpp:402-406: only allocation failure after retaining
+        // the page requests worker completion here. retain_page itself waits
+        // for a claimed page (zForwarding.cpp:95-100).
+        relocateQueue.add_and_wait(forwarding);
     }
-    lease.Release();
-    BaseObject* to = WaitForPageForwarding(object, lease.HoldForwarding());
-    if (to == nullptr) {
-        ZBarrier::FailClosedLoad("ZRelocate::forward_object requires a forwarding entry", object, 0, provenance);
-    }
-    return to;
+    return forward_object(forwarding, object);
 }
 }
 

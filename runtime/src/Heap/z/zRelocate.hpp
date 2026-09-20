@@ -172,7 +172,6 @@ public:
 private:
     BaseObject* relocate_object_inner(BaseObject* obj, ZPage* copyPage);
     static void UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
-    BaseObject* TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease);
     BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     ZGeneration* const generation;
     ZRelocateQueue relocateQueue;
