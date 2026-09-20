@@ -24,6 +24,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "gc_unittest.hpp"
 #include "b09_runtime_fixture.hpp"
+#include "gc_heap_fixture.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -396,4 +397,49 @@ GC_TEST(RememberedWorkers719, YoungPoolRunsFromNonWorkerThread)
     GC_EXPECT_EQ(WorkerThread::worker_id(), UINT32_MAX);
     std::fprintf(stderr, "REMEMBERED719 completed with empty mark stripes on non-worker caller\n");
     young.StopWorkers();
+}
+
+namespace {
+// A quiescent caller can inspect live accounting after the real closure task
+// joins. This does not assert that concurrent mutator publication has stopped.
+void CheckYoungClosureAccounting(uint32_t workers)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    heap.region0->reset(PageAge::eden);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    auto& young = Heap::GetHeap().young();
+    young.InitializeWorkers(workers);
+    young.Mark().Start();
+    young.PublishPhase(ZGenerationPhase::Mark);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE)
+        .StoreColoured(zpointer::null);
+    const size_t expected = heap.obj0->GetSize();
+    const uint64_t before = heap.region0->live_bytes();
+    WorkStack work;
+    std::vector<BaseObject*> reached;
+    std::unordered_set<MAddress> slots;
+    std::unordered_set<MAddress> weak;
+    ZMark::PushYoungObject(heap.obj0, work, "young-closure-accounting");
+    ZMark::TraceYoungClosure(work, false, reached, slots, weak);
+    const uint64_t after = heap.region0->live_bytes();
+    const bool marked = heap.region0->is_object_strongly_live(from_object(heap.obj0));
+    young.StopWorkers();
+    std::fprintf(stderr,
+        "YOUNG_CLOSURE784_RESULT workers=%u before=%llu after=%llu expected=%zu marked=%d\n",
+        workers, static_cast<unsigned long long>(before), static_cast<unsigned long long>(after),
+        expected, marked);
+    GC_EXPECT_EQ(after - before, static_cast<uint64_t>(expected));
+    GC_EXPECT_TRUE(marked);
+}
+}
+
+GC_TEST(YoungClosure784, SingleWorkerAccountsPublishedRoot)
+{
+    CheckYoungClosureAccounting(1);
+}
+
+GC_TEST(YoungClosure784, MultipleWorkersAccountPublishedRoot)
+{
+    CheckYoungClosureAccounting(2);
 }
