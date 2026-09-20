@@ -1,0 +1,21 @@
+7b3563cc8000-7b3563cca000 rw-p 001b6000 103:05 16005699                  /root/diff_8d9ef77f66bc/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7b3563cca000-7b3563ce3000 rw-p 00000000 00:00 0 
+7b3563ce3000-7b3563ce5000 r--p 00000000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7b3563ce5000-7b3563d0f000 r-xp 00002000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7b3563d0f000-7b3563d1a000 r--p 0002c000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7b3563d1b000-7b3563d1d000 r--p 00037000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7b3563d1d000-7b3563d1f000 rw-p 00039000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7ffcf0da6000-7ffcf0dc8000 rw-p 00000000 00:00 0                          [stack]
+7ffcf0dd7000-7ffcf0ddb000 r--p 00000000 00:00 0                          [vvar]
+7ffcf0ddb000-7ffcf0ddd000 r-xp 00000000 00:00 0                          [vdso]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
+VERIFY_PRODUCT_MAPS_END
+VERIFY_FIELD_QUALIFIED mode=10 holder=0x40000000000 target=0x40000000010 word=0x100000000042a30
+VERIFY_FIELD_YOUNG_TARGET target=0x40000200000 word=0x100000800002930
+VERIFY_FIELD_CYCLE_COMPLETED mode=10 root=0x40000000000 expected=0x40000000000
+VERIFY_TARGET_ASSERT_EXECUTED diagnostic=Unmarked young oop status=0 matched=0
+[  FAIL  ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+  diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/test_verify_fail_close.cpp:85: EXPECT failed: target
+[  FAIL  ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+  other-vm child did not exit cleanly with sentinel for ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+[  FAIL  ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget

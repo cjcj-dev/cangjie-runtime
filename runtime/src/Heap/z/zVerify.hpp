@@ -7,6 +7,9 @@
 #include "ObjectModel/RefField.h"
 namespace MapleRuntime {
 class ZForwarding;
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+void z_verify_safepoints_are_blocked();
+#endif
 // z_globals.hpp:78-105. The runtime has no HotSpot flag parser; retain the
 // upstream flag names and defaults as startup environment options (0/1).
 extern const bool ZVerifyRoots;
@@ -24,8 +27,6 @@ public:
     static void AfterRelocation(ZForwarding* forwarding);
     static void AfterScan(ZForwarding* forwarding);
     static void OnColorFlip();
-    static void Object(BaseObject* object, const void* slot);
-    static void Oop(BaseObject* base, RefField<>& field, bool verifyWeaks);
     static void threads_start_processing();
 private:
     static void RootsStrong(bool afterOldMark);

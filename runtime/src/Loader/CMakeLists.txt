@@ -16,6 +16,3 @@ add_subdirectory(CjFileLoader)
 add_subdirectory(CjSemanticVersion)
 
 add_library(Loader STATIC ${SRC_LIST})
-if (MRT_GC_UNIT_TESTS)
-    target_compile_definitions(Loader PRIVATE MRT_TESTABLE_INTERNALS=1)
-endif()

@@ -5,7 +5,6 @@
 #ifndef MRT_ALLOCATION_STALL_QUEUE_H
 #define MRT_ALLOCATION_STALL_QUEUE_H
 
-#include "Heap/Allocator/RegionManager.h"
 #include "Heap/z/zStat.hpp"
 #include <condition_variable>
 #include <cstddef>
@@ -18,9 +17,6 @@
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zArray.inline.hpp"
 
-#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
-#define MRT_ALLOCATION_STALL_OBSERVE 1
-#endif
 
 #include "Heap/z/zAllocationFlags.hpp"
 
@@ -123,6 +119,7 @@ class RegionManager;
 class FreeRegionManager {
 
 public:
+
     explicit FreeRegionManager(RegionManager& manager) : regionManager(manager) {}
 
     virtual ~FreeRegionManager() = default;
@@ -459,13 +456,6 @@ public:
     void HandleAllocStallingForYoung();
     void StopStalledAllocations();
     void HandleAllocStallingForOld(bool clearedAllSoftRefs);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    MRT_EXPORT size_t PendingStalledAllocations() const;
-    MRT_EXPORT size_t EnqueuedStalledAllocations() const;
-    MRT_EXPORT size_t DequeuedStalledAllocations() const;
-    MRT_EXPORT size_t SatisfiedStalledAllocations() const;
-    MRT_EXPORT size_t FailedStalledAllocations() const;
-#endif
     // In-place relocation account (feeds ZStatRelocation::AtRelocateEnd).
     // Not observation-gated: the relocation report reads it in every build.
     void ResetInPlaceRelocatedCounts()
@@ -487,14 +477,10 @@ public:
                  inPlaceMediumCount.load(std::memory_order_relaxed) };
     }
     // zPageAllocator.cpp:1362 stats field: currently stalled mutators. Host
-    // difference: the stall queue only counts under MRT_ALLOCATION_STALL_OBSERVE.
+    // difference: the current allocation adapter has no stalled-mutator census (#727).
     size_t AllocationStallsNow() const
     {
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-        return PendingStalledAllocations();
-#else
         return 0;
-#endif
     }
     template<Generation G>
     void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
@@ -706,9 +692,6 @@ public:
     void ReleaseMarkQuarantine();
 
 
-    // Probe-only: visit every region on managed lists with its list name (tag-reuse scan).
-    template <typename F>
-    void VisitAllManagedRegionsForProbe(F&& visitor);
 
 private:
     // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the
@@ -795,15 +778,8 @@ private:
     void SatisfyStalledAllocations();
     void NotifyOutOfMemory();
     void RestartGC() const;
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    size_t stallEnqueued{0};
-    size_t stallDequeued{0};
-    size_t stallSatisfied{0};
-    size_t stallFailed{0};
-#endif
     size_t pageAllocatorUsed{ 0 };
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-#endif
+
     uintptr_t regionHeapStart = 0; // the address of first region to allocate object
     uintptr_t regionHeapEnd = 0;
 

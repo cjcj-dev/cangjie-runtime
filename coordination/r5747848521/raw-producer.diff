@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zDriver.cpp b/runtime/src/Heap/z/zDriver.cpp
+index 7b5649ac1..f5c6fdca6 100644
+--- a/runtime/src/Heap/z/zDriver.cpp
++++ b/runtime/src/Heap/z/zDriver.cpp
+@@ -277,7 +277,7 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
+     if (generation == ZGenerationId::young) {
+         ZGeneration::young()->collect();
+     } else {
+-        ZGeneration::old()->collect();
++        /* P16 control: omit the old collection producer. */
+     }
+ 
+     if (ZAbort::should_abort()) {

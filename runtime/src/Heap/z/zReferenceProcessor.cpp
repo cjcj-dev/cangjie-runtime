@@ -39,11 +39,6 @@ static const ZStatSubPhase ZSubPhaseConcurrentReferencesProcess("Concurrent Refe
 static const ZStatSubPhase ZSubPhaseConcurrentReferencesEnqueue("Concurrent References Enqueue",
                                                                 ZGenerationId::old);
 
-#if defined(MRT_TESTABLE_INTERNALS)
-namespace {
-std::function<void()> g_beforeWeakCleanCasForTest;
-}
-#endif
 
 
 uint32_t ReferenceProcessor::worker_index()
@@ -190,11 +185,6 @@ bool ReferenceProcessor::CleanWeakReference(BaseObject* reference)
             }
         }
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (g_beforeWeakCleanCasForTest) {
-        g_beforeWeakCleanCasForTest();
-    }
-#endif
     if (referentField.CompareExchange(observed, to_zpointer(0))) {
         return true;
     }
@@ -213,12 +203,6 @@ bool ReferenceProcessor::try_make_inactive(BaseObject* reference, ReferenceType 
             return false;
         }
         const bool cleared = const_cast<ReferenceProcessor*>(this)->CleanWeakReference(reference);
-#if defined(MRT_TESTABLE_INTERNALS)
-        if (observeWeakFinalFn) {
-            BaseObject* terminal = to_object(referentField.GetTargetObject(std::memory_order_acquire));
-            observeWeakFinalFn(reference, terminal);
-        }
-#endif
         return cleared;
     }
     if (type == ReferenceType::FINAL) {
@@ -372,26 +356,10 @@ void ReferenceProcessor::process_references()
 void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive)
 {
     isStronglyLiveFn = isStronglyLive;
-    observeWeakFinalFn = {};
     process_references();
     isStronglyLiveFn = {};
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive, const ObserveWeakFinal& observe)
-{
-    isStronglyLiveFn = isStronglyLive;
-    observeWeakFinalFn = observe;
-    process_references();
-    isStronglyLiveFn = {};
-    observeWeakFinalFn = {};
-}
-
-void ReferenceProcessor::SetBeforeWeakCleanCasForTest(std::function<void()> hook)
-{
-    g_beforeWeakCleanCasForTest = std::move(hook);
-}
-#endif
 
 void ReferenceProcessor::verify_pending_references()
 {
@@ -465,11 +433,6 @@ bool ReferenceProcessor::Empty() const
 }
 
 constexpr U32 DEFAULT_FINALIZER_TIMEOUT_MS = 2000;
-#if defined(MRT_TESTABLE_INTERNALS)
-namespace {
-FinalizerProcessor::BeforeFinalizableIdleCheck g_beforeFinalizableIdleCheckForTest;
-}
-#endif
 
 static BaseObject* LoadFinalizerGood(NativeSlot& slot)
 {
@@ -735,11 +698,6 @@ bool FinalizerProcessor::HasFinalizableJob()
 
 void FinalizerProcessor::FinishFinalizableBatch()
 {
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (g_beforeFinalizableIdleCheckForTest) {
-        g_beforeFinalizableIdleCheckForTest();
-    }
-#endif
     std::lock_guard<std::mutex> l(listLock);
     hasFinalizableJob = !finalizables.empty();
 }
@@ -809,36 +767,6 @@ void FinalizerProcessor::ProcessFinalizables()
     FinishFinalizableBatch();
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-void FinalizerProcessor::SetBeforeFinalizableIdleCheckForTest(BeforeFinalizableIdleCheck hook)
-{
-    g_beforeFinalizableIdleCheckForTest = std::move(hook);
-}
-
-void FinalizerProcessor::EnqueueFinalizableForTest(BaseObject* obj)
-{
-    NativeSlot root(zpointer::null);
-    ZBarrier::WriteStaticRef(root, obj);
-    {
-        std::lock_guard<std::mutex> l(listLock);
-        NativeSlot* slot = strongStorage.Allocate();
-        slot->StoreColoured(root.GetFieldValue(), std::memory_order_relaxed);
-        finalizables.push_back(slot);
-        hasFinalizableJob = true;
-    }
-    Notify();
-}
-
-void FinalizerProcessor::FinishFinalizableBatchForTest()
-{
-    FinishFinalizableBatch();
-}
-
-bool FinalizerProcessor::HasFinalizableJobForTest()
-{
-    return HasFinalizableJob();
-}
-#endif
 
 void FinalizerProcessor::InitFinalizerCJThread()
 {

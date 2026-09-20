@@ -450,10 +450,6 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
     }
     std::unique_ptr<ElfUnloadQuiescence::TaskAdmissionScope> directAdmission;
     if (!authorizedByCaller) {
-#ifdef MRT_TESTABLE_INTERNALS
-        ElfUnloadQuiescence::NoteDirectPreflightForTesting();
-        ElfUnloadQuiescence::PauseDirectPreflightForTesting();
-#endif
         // Recheck BOTH pending entries and active frames under each acquired
         // admission. Never hold exclusive admission while an initializer may
         // need to enter a dependency to finish its current pending task.
@@ -489,11 +485,6 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
     // right. StaticRootTable::UnregisterRoots also waits for an in-flight GC
     // root visitor because both operations hold gcRootsLock.
     UnlinkLoadedFile(baseFile);
-#ifdef MRT_TESTABLE_INTERNALS
-    if (!authorizedByCaller) {
-        ElfUnloadQuiescence::NoteDirectUnlinkForTesting();
-    }
-#endif
 
     // GC code lookup readers are not mutators, so drain them explicitly before
     // the mutator rendezvous. Admission remains closed through purge.
@@ -502,16 +493,10 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
     if (!authorizedByCaller) {
         ScopedEnterSaferegion enterSaferegion(false);
         ScopedStopTheWorld handshake("ELF unload quiescence", false);
-#ifdef MRT_TESTABLE_INTERNALS
-        ElfUnloadQuiescence::NoteDirectHandshakeForTesting();
-#endif
         CHECK_DETAIL(!HasActiveImageFrames(baseFile),
                      "ELF image became active after direct unload preflight");
         ElfUnloadQuiescence::PurgeAuthorizationScope authorization(imageAddress);
         PurgeLoadedFile(baseFile);
-#ifdef MRT_TESTABLE_INTERNALS
-        ElfUnloadQuiescence::NoteDirectPurgeForTesting();
-#endif
         unload.OpenAdmission();
         return;
     }
@@ -730,26 +715,6 @@ int CJFileLoader::UnloadLibrary(const char* libName)
     bool imageClosed = false;
     LibNameToHandler handlerItStorage { baseName, handler, generation, true };
     const LibNameToHandler* handlerIt = &handlerItStorage;
-#ifdef MRT_TESTABLE_INTERNALS
-    auto* previousUnload = binLoadApi.binUnload;
-    binLoadApi.binUnload = [](void* platformHandler) {
-        if (LoaderManager::GetInstance()->GetInitStatus()) {
-            bool worldStopped = MutatorManager::Instance().WorldStopped();
-            bool holdsAdmission = ElfUnloadQuiescence::PublicHoldAcrossPlatformForTesting();
-            ElfUnloadQuiescence::NotePublicPlatformWaitForTesting(worldStopped, holdsAdmission);
-            ElfUnloadQuiescence::PausePublicPlatformForTesting();
-        }
-        if (ElfUnloadQuiescence::ConsumeFailedPlatformUnloadForTesting()) {
-            return -1;
-        }
-        return Os::Loader::UnloadBinaryFile(platformHandler);
-    };
-    struct RestoreUnload {
-        BinLoadApi& api;
-        int (*prev)(void*);
-        ~RestoreUnload() { api.binUnload = prev; }
-    } restoreUnload { binLoadApi, previousUnload };
-#endif
     if (LoaderManager::GetInstance()->GetInitStatus()) {
         BaseFile* baseFile = GetBaseFile(baseName);
         if (baseFile == nullptr) {
@@ -758,9 +723,6 @@ int CJFileLoader::UnloadLibrary(const char* libName)
         }
         imageAddress = baseFile->GetFileMetaAddr();
         bool holdAcrossPlatform = false;
-#ifdef MRT_TESTABLE_INTERNALS
-        holdAcrossPlatform = ElfUnloadQuiescence::PublicHoldAcrossPlatformForTesting();
-#endif
         if (holdAcrossPlatform) {
             ElfUnloadQuiescence::TaskAdmissionScope taskAdmission;
             if (taskAdmission.HasPendingForImage(imageAddress)) {
@@ -878,18 +840,6 @@ Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) cons
     return reinterpret_cast<Uptr>(binLoadApi.findSymbol(handler, symName.Str()));
 }
 
-#ifdef MRT_TESTABLE_INTERNALS
-void* CJFileLoader::GetLibraryHandleForTesting(const char* libName) const
-{
-    CString baseName = Os::Path::GetBaseName(libName);
-    std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
-    auto handlerIt =
-        std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
-            return baseName == Os::Path::GetBaseName(info.baseName.Str());
-        });
-    return handlerIt == cjLibHandlers.end() ? nullptr : handlerIt->handler;
-}
-#endif
 
 bool CJFileLoader::DoInitImage(BaseFile* baseFile) const
 {
@@ -1004,12 +954,4 @@ TypeExt* CJFileLoader::GetTypeExt(void* type)
     return it == typeExts.end() ? nullptr : it->second;
 }
 
-#ifdef MRT_TESTABLE_INTERNALS
-size_t CJFileLoader::GetPackageIndexSizeForTesting() const
-{
-    ElfUnloadQuiescence::ReadScope reader;
-    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
-    return filePackageMap.size();
-}
-#endif
 } // namespace MapleRuntime

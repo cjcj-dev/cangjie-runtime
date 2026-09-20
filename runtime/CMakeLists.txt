@@ -477,8 +477,6 @@ if (COV MATCHES 1)
     target_compile_options(Concurrency PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
     target_compile_options(Exception PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
     target_compile_options(Heap PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
-    target_compile_options(Allocator PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
-    target_compile_options(Barrier PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
     target_compile_options(Loader PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
     target_compile_options(Mutator PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
     target_compile_options(ObjectModel PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
@@ -488,7 +486,6 @@ if (COV MATCHES 1)
     target_compile_options(CjFileLoader PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
     target_compile_options(UnwindStack PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
     target_compile_options(Sync PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
-    target_compile_options(Verify PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
     target_compile_options(CjSemanticVersion PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
     target_compile_options(CpuProfiler PUBLIC "SHELL:${CMAKE_COV_FLAGS}")
     if (DOPRA_FLAG MATCHES 1)
@@ -510,10 +507,10 @@ endif ()
 # Signal processing use sigaction() as signal-catching function currently, it`s linux related, which can get context when signal was triggered. In Windows, signal() is the only function we can use, but there is no context.
 if (WINDOWS_FLAG MATCHES 1)
     list(APPEND LINK_LIBS "boundscheck" "Base" "Common" "Concurrency" "Loader" "Inspector" "Exception" "Heap" "Mutator" "ObjectModel" "UnwindStack"
-    "Allocator" "Barrier" "Verify" "BinaryFile" "CjFile" "CjFileLoader" "CjSemanticVersion" "Sync" "dbghelp" "ws2_32" "shlwapi" "CpuProfiler" "Interpreter" ${SANITIZER_LIB})
+    "BinaryFile" "CjFile" "CjFileLoader" "CjSemanticVersion" "Sync" "dbghelp" "ws2_32" "shlwapi" "CpuProfiler" "Interpreter" ${SANITIZER_LIB})
 elseif (WINDOWS_FLAG MATCHES 0)
     list(APPEND LINK_LIBS "boundscheck" "Base" "Common" "Concurrency" "Loader" "Inspector" "Exception" "Heap" "Mutator" "ObjectModel" "UnwindStack" "Signal"
-    "Allocator" "Barrier" "Verify" "BinaryFile" "CjFile" "CjFileLoader" "CjSemanticVersion" "Sync" "CpuProfiler" "Interpreter" ${SANITIZER_LIB})
+    "BinaryFile" "CjFile" "CjFileLoader" "CjSemanticVersion" "Sync" "CpuProfiler" "Interpreter" ${SANITIZER_LIB})
 endif()
 
 if (DOPRA_FLAG MATCHES 1)
@@ -765,8 +762,6 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
             $<TARGET_OBJECTS:Common>
             $<TARGET_OBJECTS:Exception>
             $<TARGET_OBJECTS:Heap>
-            $<TARGET_OBJECTS:Allocator>
-            $<TARGET_OBJECTS:Barrier>
             $<TARGET_OBJECTS:Loader>
             $<TARGET_OBJECTS:Inspector>
             $<TARGET_OBJECTS:Mutator>
@@ -775,7 +770,6 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
             $<TARGET_OBJECTS:CjFileLoader>
             $<TARGET_OBJECTS:UnwindStack>
             $<TARGET_OBJECTS:Sync>
-            $<TARGET_OBJECTS:Verify>
             $<TARGET_OBJECTS:cjthreadmodel>
             $<TARGET_OBJECTS:CjSemanticVersion>
             $<TARGET_OBJECTS:CpuProfiler>
@@ -791,8 +785,6 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
             $<TARGET_OBJECTS:Common>
             $<TARGET_OBJECTS:Exception>
             $<TARGET_OBJECTS:Heap>
-            $<TARGET_OBJECTS:Allocator>
-            $<TARGET_OBJECTS:Barrier>
             $<TARGET_OBJECTS:Loader>
             $<TARGET_OBJECTS:Inspector>
             $<TARGET_OBJECTS:Mutator>
@@ -802,7 +794,6 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
             $<TARGET_OBJECTS:CjFileLoader>
             $<TARGET_OBJECTS:UnwindStack>
             $<TARGET_OBJECTS:Sync>
-            $<TARGET_OBJECTS:Verify>
             $<TARGET_OBJECTS:cjthreadmodel>
             $<TARGET_OBJECTS:CjSemanticVersion>
             $<TARGET_OBJECTS:CpuProfiler>
@@ -861,8 +852,6 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
                 "$<TARGET_OBJECTS:Common>"
                 "$<TARGET_OBJECTS:Exception>"
                 "$<TARGET_OBJECTS:Heap>"
-                "$<TARGET_OBJECTS:Allocator>"
-                "$<TARGET_OBJECTS:Barrier>"
                 "$<TARGET_OBJECTS:Loader>"
                 "$<TARGET_OBJECTS:Inspector>"
                 "$<TARGET_OBJECTS:Mutator>"
@@ -872,7 +861,6 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
                 "$<TARGET_OBJECTS:CjFileLoader>"
                 "$<TARGET_OBJECTS:UnwindStack>"
                 "$<TARGET_OBJECTS:Sync>"
-                "$<TARGET_OBJECTS:Verify>"
                 "$<TARGET_OBJECTS:cjthreadmodel>"
                 "$<TARGET_OBJECTS:CjSemanticVersion>"
                 "$<TARGET_OBJECTS:CpuProfiler>"

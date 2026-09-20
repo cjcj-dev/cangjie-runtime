@@ -1,0 +1,5 @@
+LANE=sym_cangjie_runtime_627_implement_r5744767112
+ROLE=implement
+冻结基线325d6ad73f99cc463a804aedd39595af05791c9a已回读rc=0。
+P16规定Heap下仅z/与CMakeLists，但当前前置新增Heap/shared/stringdedup/stringDedup.{cpp,hpp}，Heap/CMakeLists.txt:48将其纳入产品。请裁定保留shared布局（对应HotSpot gc/shared/stringdedup）还是移动到Heap外对应共享目录。
+旧Allocator目录并非只有诊断：Allocator.h:19抽象分配器由zHeap.cpp:105的RegionSpace产品适配器使用，Allocator.cpp仍实现AggregateAllocator，HeapFiller/CartesianTree/RegionSpace也仍被产品消费。任务说明旧目录整删且禁止改名/别名壳，需确认这些前置尚存适配层的最终归属：本包按ZGC重做分配适配器/公共分配器，还是允许将非GC共享分配设施迁出Heap并保留明确基础设施事实？我先完成不依赖此裁决的zVerify函数形态与接线。

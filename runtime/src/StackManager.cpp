@@ -167,9 +167,6 @@ void StackManager::VisitStackRoots(const UnwindContext& topFrame, const RootVisi
     ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
     GCStackInfo gcStackInfo(&topFrame);
     gcStackInfo.FillInStackTrace();
-#ifdef MRT_TESTABLE_INTERNALS
-    ElfUnloadQuiescence::PauseGcReaderForTesting();
-#endif
     ElfUnloadQuiescence::AssertReaderActive();
     gcStackInfo.VisitStackRoots(func, mutator);
 }

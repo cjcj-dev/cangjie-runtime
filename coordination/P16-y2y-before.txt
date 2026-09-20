@@ -1,0 +1,12 @@
+runtime/src/Heap/z/zMark.cpp:526:    buffer->MergeY2yDirtyHolders(work);
+runtime/src/Heap/z/zMark.cpp:527:    buffer->MergeY2yDirtySlots([&work](MAddress slot) {
+runtime/src/Heap/z/zGeneration.cpp:462:            buffer.MergeY2yDirtyHolders(destination);
+runtime/src/Heap/z/zGeneration.cpp:463:            buffer.MergeY2yDirtySlots([](MAddress slot) {
+runtime/src/Heap/z/zGeneration.cpp:556:        buffer.MergeY2yDirtyHolders(workStack);
+runtime/src/Heap/z/zGeneration.cpp:557:        buffer.MergeY2yDirtySlots([](MAddress slot) {
+runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:61:    void PushY2yDirtyHolder(BaseObject* obj)
+runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:70:    inline void MergeY2yDirtyHolders(WorkStack& workStack)
+runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:106:    void PushY2yDirtySlot(MAddress slot)
+runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:115:    inline void MergeY2yDirtySlots(Visitor&& visitor)
+runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:164:    // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
+rc=0

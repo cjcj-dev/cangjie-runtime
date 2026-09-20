@@ -14,7 +14,8 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 extern "C" void CJ_MRT_RequestStringDedup(const uint8_t* data, size_t length);
 
-struct StringDedupTestAccess {
+class StringDedupTest {
+public:
     static uint32_t Hash(MArray* array, uint64_t seed)
     {
         auto& dedup = StringDedup::Instance();
@@ -71,9 +72,9 @@ GC_TEST(StringDedup, SameLengthKeepsDistinctBacking)
     arrays.second->SetPrimitiveElement<I8>(1, 0);
     CJ_MRT_RequestStringDedup(arrays.first->ConvertToCArray(), arrays.first->GetLength());
     CJ_MRT_RequestStringDedup(arrays.second->ConvertToCArray(), arrays.second->GetLength());
-    GC_EXPECT_EQ(StringDedupTestAccess::Pending(), 2U);
-    StringDedupTestAccess::ProcessRequests();
-    GC_EXPECT_EQ(StringDedupTestAccess::Entries(), 2U);
+    GC_EXPECT_EQ(StringDedupTest::Pending(), 2U);
+    StringDedupTest::ProcessRequests();
+    GC_EXPECT_EQ(StringDedupTest::Entries(), 2U);
 }
 
 // TestStringDeduplication: equal immutable String values share a weak table entry.
@@ -86,9 +87,9 @@ GC_TEST(StringDedup, ExplicitEqualStringBackingFindsEntry)
         array->SetPrimitiveElement<I8>(1, 9);
         CJ_MRT_RequestStringDedup(array->ConvertToCArray(), array->GetLength());
     }
-    GC_EXPECT_EQ(StringDedupTestAccess::Pending(), 2U);
-    StringDedupTestAccess::ProcessRequests();
-    GC_EXPECT_EQ(StringDedupTestAccess::Entries(), 1U);
+    GC_EXPECT_EQ(StringDedupTest::Pending(), 2U);
+    StringDedupTest::ProcessRequests();
+    GC_EXPECT_EQ(StringDedupTest::Entries(), 1U);
 }
 
 // TestStringDeduplicationFullGC: weak storage drops dead table and queued values.
@@ -100,14 +101,14 @@ GC_TEST(StringDedup, CleanDeadTableAndRequest)
     arrays.first->SetPrimitiveElement<I8>(0, 7);
     arrays.first->SetPrimitiveElement<I8>(1, 9);
     CJ_MRT_RequestStringDedup(arrays.first->ConvertToCArray(), arrays.first->GetLength());
-    StringDedupTestAccess::ProcessRequests();
-    GC_EXPECT_EQ(StringDedupTestAccess::Entries(), 1U);
+    StringDedupTest::ProcessRequests();
+    GC_EXPECT_EQ(StringDedupTest::Entries(), 1U);
     CJ_MRT_RequestStringDedup(arrays.second->ConvertToCArray(), arrays.second->GetLength());
     dedup.Clean([&](BaseObject* object) { return object == arrays.first; });
-    StringDedupTestAccess::ProcessRequests();
-    GC_EXPECT_EQ(StringDedupTestAccess::Entries(), 1U);
+    StringDedupTest::ProcessRequests();
+    GC_EXPECT_EQ(StringDedupTest::Entries(), 1U);
     dedup.Clean([](BaseObject*) { return false; });
-    GC_EXPECT_EQ(StringDedupTestAccess::Entries(), 0U);
+    GC_EXPECT_EQ(StringDedupTest::Entries(), 0U);
 }
 
 // TestStringDeduplicationYoungGC adaptation: only explicit String ABI requests
@@ -118,7 +119,7 @@ GC_TEST(StringDedup, RejectOrdinaryObject)
     auto& dedup = StringDedup::Instance();
     dedup.Stop();
     CJ_MRT_RequestStringDedup(reinterpret_cast<uint8_t*>(heap.obj0) + MArray::GetContentOffset(), 2);
-    GC_EXPECT_EQ(StringDedupTestAccess::Pending(), 0U);
+    GC_EXPECT_EQ(StringDedupTest::Pending(), 0U);
     dedup.Stop();
 }
 
@@ -131,12 +132,12 @@ GC_TEST(StringDedup, HalfSipHashByteArrayReference)
     for (unsigned i = 0; i < 256; ++i) bytes[i] = static_cast<uint8_t>(i);
     for (unsigned length = 0; length < 256; ++length) {
         arrays.first->SetLength(length);
-        const uint32_t hash = StringDedupTestAccess::Hash(arrays.first, 256 - length);
+        const uint32_t hash = StringDedupTest::Hash(arrays.first, 256 - length);
         for (unsigned byte = 0; byte != 4; ++byte) hashes[length * 4 + byte] = hash >> (byte * 8);
     }
     std::memcpy(bytes, hashes, sizeof(hashes));
     arrays.first->SetLength(sizeof(hashes));
-    GC_EXPECT_EQ(StringDedupTestAccess::Hash(arrays.first, 0), 0xd2be7fd8U);
+    GC_EXPECT_EQ(StringDedupTest::Hash(arrays.first, 0), 0xd2be7fd8U);
 }
 
 #endif // MRT_TESTABLE_INTERNALS

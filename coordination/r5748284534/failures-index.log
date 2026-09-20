@@ -1,0 +1,49 @@
+187:    GC_EXPECT_EQ(all.length(), 3U);
+189:diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/gc_unittest.hpp:99:19: note: expanded from macro 'GC_EXPECT_EQ'
+193:    GC_EXPECT_EQ(extents.length(), 1U);
+195:diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/gc_unittest.hpp:99:19: note: expanded from macro 'GC_EXPECT_EQ'
+199:        GC_EXPECT_EQ(stash.length(), 2U);
+201:diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/gc_unittest.hpp:99:19: note: expanded from macro 'GC_EXPECT_EQ'
+2802:    GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), 0);
+2804:diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/gc_unittest.hpp:99:19: note: expanded from macro 'GC_EXPECT_EQ'
+3142:  diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1639: EXPECT failed: region->GetRegionLifeId() != oldLife
+3210:cj_gc_unit: diff_8d9ef77f66bc/testable/runtime/src/Base/Copy.h:78: static void MapleRuntime::Copy::assert_params_ok(const void *, void *, size_t): Assertion `reinterpret_cast<uintptr_t>(from) % alignment == 0 && "source must be aligned"' failed.
+3211:cj_gc_unit: diff_8d9ef77f66bc/testable/runtime/src/Base/Copy.h:79: static void MapleRuntime::Copy::assert_params_ok(const void *, void *, size_t): Assertion `reinterpret_cast<uintptr_t>(to) % alignment == 0 && "destination must be aligned"' failed.
+3212:cj_gc_unit: diff_8d9ef77f66bc/testable/runtime/src/Base/Copy.h:73: static void MapleRuntime::Copy::assert_disjoint(const uintptr_t *, uintptr_t *, size_t): Assertion `params_disjoint(from, to, count) && "source and destination overlap"' failed.
+3213:cj_gc_unit: diff_8d9ef77f66bc/testable/runtime/src/Heap/z/zUtils.inline.hpp:65: static void MapleRuntime::ZUtils::object_copy_disjoint_atomic(MapleRuntime::zaddress, MapleRuntime::zaddress, size_t, size_t): Assertion `(size & (sizeof(uintptr_t) - 1)) == 0' failed.
+4553:NATIVE_ROOT_ORACLE before=0x80000400021510 from=0x40000200010 to=0x40000200000 slot=0x80000400021510 young=0
+4560:[  RUN   ] NativeRootCurrent.MajorSeed
+4561:[  RUN   ] NativeRootCurrent.MajorSeed
+4572:NATIVE_ROOT_ORACLE before=0x80000400021510 from=0x40000200010 to=0x40000200000 slot=0x80000400021510 young=0
+4575:[  FAIL  ] NativeRootCurrent.MajorSeed
+4576:  diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/test_native_root_current.cpp:217: EXPECT failed: native_root_marker_current
+4577:[  FAIL  ] NativeRootCurrent.MajorSeed
+4578:  other-vm child did not exit cleanly with sentinel for NativeRootCurrent.MajorSeed
+4602:[  RUN   ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+4603:[  RUN   ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+4605:[  FAIL  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+4606:  diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/test_native_root_current.cpp:427: EXPECT_EQ failed: first (==0) vs before + 1 (==1)
+4607:[  FAIL  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+4608:  other-vm child did not exit cleanly with sentinel for NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+4622:NATIVE_ROOT_ORACLE before=0x80000400021510 from=0x40000200010 to=0x40000200000 slot=0x80000400021510 young=0
+4627:  diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/test_native_root_current.cpp:217: EXPECT failed: native_root_marker_current
+4643:NATIVE_ROOT_ORACLE before=0x80000400021510 from=0x40000200010 to=0x40000200000 slot=0x80000400021510 young=0
+4648:  diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/test_native_root_current.cpp:217: EXPECT failed: native_root_marker_current
+4664:NATIVE_ROOT_ORACLE before=0x80000400021510 from=0x40000200010 to=0x40000200000 slot=0x80000400021510 young=0
+4669:  diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/test_native_root_current.cpp:217: EXPECT failed: native_root_marker_current
+4685:NATIVE_ROOT_ORACLE before=0x80000400021510 from=0x40000200010 to=0x40000200000 slot=0x80000400021510 young=0
+4690:  diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/test_native_root_current.cpp:217: EXPECT failed: native_root_marker_current
+4696:ROOT_STORAGE_STRONG_TARGET executed=1 object=0x40000200040 marked=0
+4698:  diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/test_native_root_current.cpp:463: EXPECT failed: marked
+11944:[  RUN   ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+11945:[  RUN   ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+11946:[  RUN   ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+12048:[  FAIL  ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+12049:  diff_8d9ef77f66bc/testable/runtime/tests/gc_unit/test_verify_fail_close.cpp:85: EXPECT failed: target
+12050:[  FAIL  ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+12051:  other-vm child did not exit cleanly with sentinel for ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+12052:[  FAIL  ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+12053:  other-vm child did not exit cleanly with sentinel for ZVerify.WeakFieldRejectsUnmarkedYoungTarget
+12355:[  FAILED  ] NativeRootCurrent.MajorSeed
+12356:[  FAILED  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+12368:[  FAILED  ] ZVerify.WeakFieldRejectsUnmarkedYoungTarget

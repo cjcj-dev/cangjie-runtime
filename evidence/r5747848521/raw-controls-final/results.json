@@ -1,0 +1,1982 @@
+[
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03392632398754358,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffe179beaf0 result=1",
+      "NESTED_REMAP_TARGET kind=1 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorRemapsStackObjectField-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.033924054936505854,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7fff760f6c00 result=1",
+      "NESTED_REMAP_TARGET kind=1 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorRemapsStackObjectField-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.034450717037543654,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffd28dcd230 result=1",
+      "NESTED_REMAP_TARGET kind=1 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorRemapsStackObjectField-3.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03518821101170033,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7fffc5f251c0 result=1",
+      "NESTED_REMAP_TARGET kind=2 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.035235801013186574,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffeff9ae170 result=1",
+      "NESTED_REMAP_TARGET kind=2 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.0344254580559209,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffe4992f4e0 result=1",
+      "NESTED_REMAP_TARGET kind=2 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-3.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03628040698822588,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.037373342900536954,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03892745997291058,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-3.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03603164502419531,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03335453197360039,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03639753698371351,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-3.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.032910049078054726,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.034452607040293515,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.0324705271050334,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-3.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.032742497976869345,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03608602599706501,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.033964385045692325,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-3.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.033258941024541855,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03353584301657975,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03402057499624789,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-3.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03443423705175519,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=0 derived=0 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00010 after=40000c00000 expected=40000c00000 base=0 derived=0 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03433731698896736,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=0 derived=0 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00010 after=40000c00000 expected=40000c00000 base=0 derived=0 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03362405300140381,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=0 derived=0 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00010 after=40000c00000 expected=40000c00000 base=0 derived=0 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03476900898385793,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03257740696426481,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03490664903074503,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03312383103184402,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03262786800041795,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.0331125600496307,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "green",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.009463759022764862,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-FindToPublicState.NotManagedIsObservable-1.log"
+  },
+  {
+    "arm": "green",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.010237673064693809,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-FindToPublicState.NotManagedIsObservable-2.log"
+  },
+  {
+    "arm": "green",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.009256536955945194,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/green-FindToPublicState.NotManagedIsObservable-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.016766675980761647,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffe1f549ed0 result=0",
+      "NESTED_REMAP_TARGET kind=1 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorRemapsStackObjectField-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.016985138063319027,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffdd2a7a580 result=0",
+      "NESTED_REMAP_TARGET kind=1 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorRemapsStackObjectField-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.016757525969296694,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffe85cb1ea0 result=0",
+      "NESTED_REMAP_TARGET kind=1 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorRemapsStackObjectField-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.032611746923066676,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffc08ac54b0 result=0",
+      "NESTED_REMAP_TARGET kind=2 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.032721668016165495,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffea1d85330 result=0",
+      "NESTED_REMAP_TARGET kind=2 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.017111068009398878,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffcd25b5400 result=0",
+      "NESTED_REMAP_TARGET kind=2 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.01642617501784116,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.01644994504749775,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.017284099012613297,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.016934267012402415,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.017373168957419693,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.017351578921079636,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.016618706053122878,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.017326538916677237,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.016576826106756926,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.016669575008563697,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.016447714995592833,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.016227093059569597,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.03362966293934733,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.01711562799755484,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.017064307001419365,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.032941370038315654,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=0 derived=0 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.032607387052848935,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=0 derived=0 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.017216918990015984,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=0 derived=0 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.016107752919197083,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.03296645998489112,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.03305611002724618,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.016407364048063755,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.01710841804742813,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.01660699595231563,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "producer",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.010686884983442724,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-FindToPublicState.NotManagedIsObservable-1.log"
+  },
+  {
+    "arm": "producer",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.009453588048927486,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-FindToPublicState.NotManagedIsObservable-2.log"
+  },
+  {
+    "arm": "producer",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.01173990999814123,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/producer-FindToPublicState.NotManagedIsObservable-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.035193250980228186,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffda5658850 result=0",
+      "NESTED_REMAP_TARGET kind=1 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorRemapsStackObjectField-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.03614461608231068,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffc61a32d30 result=0",
+      "NESTED_REMAP_TARGET kind=1 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorRemapsStackObjectField-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.03473799803759903,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffd585573b0 result=0",
+      "NESTED_REMAP_TARGET kind=1 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorRemapsStackObjectField-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.0364244170486927,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7fffb49b51e0 result=0",
+      "NESTED_REMAP_TARGET kind=2 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.035827124025672674,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffc3c7de030 result=0",
+      "NESTED_REMAP_TARGET kind=2 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.034004474990069866,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=7ffdc479eac0 result=0",
+      "NESTED_REMAP_TARGET kind=2 observed=40000c00000 expected=40000600000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.03625367593485862,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.033377912011928856,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.03252913698088378,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.032502337009646,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.03391135495621711,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.03294107993133366,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000c00000 expected=40000600000 base=0 derived=0 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.032484487048350275,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.0326488179853186,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.03441842703614384,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.03415893507190049,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.03520478110294789,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.034294786979444325,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.033300132025033236,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.033436242025345564,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.033331110957078636,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000c00000 expected=40000600000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.03443598793819547,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=0 derived=0 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.032216656021773815,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=0 derived=0 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.03230365598574281,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=0 derived=0 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.03263652801979333,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.03249277698341757,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.03452698700129986,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.03356742300093174,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.03355979302432388,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.03447186795528978,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=0 base=40000c00010 derived=40000c00018 deferred=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1391: EXPECT failed: deferred",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.00934983801562339,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-FindToPublicState.NotManagedIsObservable-1.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.009994741063565016,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-FindToPublicState.NotManagedIsObservable-2.log"
+  },
+  {
+    "arm": "consumer",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.009424198069609702,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/consumer-FindToPublicState.NotManagedIsObservable-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.032335645984858274,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7fff1bf367d0 result=1",
+      "NESTED_REMAP_TARGET kind=1 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorRemapsStackObjectField-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.032160616014152765,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7fff1f6dace0 result=1",
+      "NESTED_REMAP_TARGET kind=1 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorRemapsStackObjectField-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03205957496538758,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffc2a071d30 result=1",
+      "NESTED_REMAP_TARGET kind=1 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorRemapsStackObjectField-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03218223596923053,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffc9ffa7210 result=1",
+      "NESTED_REMAP_TARGET kind=2 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03234466596040875,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffec2bcc450 result=1",
+      "NESTED_REMAP_TARGET kind=2 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.0330666700610891,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffe9f254400 result=1",
+      "NESTED_REMAP_TARGET kind=2 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03247120697051287,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.0322086859960109,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03214564500376582,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03223995596636087,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.032218936015851796,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03270430793054402,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03226870601065457,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03202122508082539,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03210699500050396,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.032298185979016125,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03214999497868121,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03212048497516662,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.032229135977104306,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.032361836056225,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.0327110190410167,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.03225059597752988,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=0 derived=0 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00010 after=40000c00010 expected=40000c00000 base=0 derived=0 final_root=40000c00010 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.03267493797466159,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=0 derived=0 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00010 after=40000c00010 expected=40000c00000 base=0 derived=0 final_root=40000c00010 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.03227691596839577,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=0 derived=0 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00010 after=40000c00010 expected=40000c00000 base=0 derived=0 final_root=40000c00010 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.03224125597625971,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00010 expected=40000c00000 base=40000c00010 derived=40000c00018 final_root=40000c00010 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.0320449850987643,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00010 expected=40000c00000 base=40000c00010 derived=40000c00018 final_root=40000c00010 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.0320748450467363,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00010 expected=40000c00000 base=40000c00010 derived=40000c00018 final_root=40000c00010 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 1,
+    "rc": 1,
+    "wall": 0.032123925047926605,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00010 expected=40000c00000 base=40000c00010 derived=40000c00018 final_root=40000c00010 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 2,
+    "rc": 1,
+    "wall": 0.03212300594896078,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00010 expected=40000c00000 base=40000c00010 derived=40000c00018 final_root=40000c00010 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 3,
+    "rc": 1,
+    "wall": 0.03204422502312809,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00010 expected=40000c00000 base=40000c00010 derived=40000c00018 final_root=40000c00010 result=0",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1410: EXPECT failed: result",
+      "  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/clear_entries_product_unit.cpp:1422: EXPECT failed: completed"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.008174212998710573,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-FindToPublicState.NotManagedIsObservable-1.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.008066962007433176,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-FindToPublicState.NotManagedIsObservable-2.log"
+  },
+  {
+    "arm": "nextscan",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.008008160977624357,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/nextscan-FindToPublicState.NotManagedIsObservable-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03368927398696542,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffc8dfab220 result=1",
+      "NESTED_REMAP_TARGET kind=1 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorRemapsStackObjectField-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03517244104295969,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffe4ade2810 result=1",
+      "NESTED_REMAP_TARGET kind=1 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorRemapsStackObjectField-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorRemapsStackObjectField",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03327445103786886,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7fffa98e8000 result=1",
+      "NESTED_REMAP_TARGET kind=1 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorRemapsStackObjectField-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.034574867924675345,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffeae1d27f0 result=1",
+      "NESTED_REMAP_TARGET kind=2 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03367666294798255,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffcb8c950a0 result=1",
+      "NESTED_REMAP_TARGET kind=2 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorRemapsHeaderlessRecordField",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03376428398769349,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffeb75fa020 result=1",
+      "NESTED_REMAP_TARGET kind=2 observed=40000600000 expected=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorRemapsHeaderlessRecordField-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03276466904208064,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.033511141897179186,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesYoungTable",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03420725604519248,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkConsumesYoungTable-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.032985809026286006,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03423728595953435,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03429678699467331,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkConsumesPromotedYoungSource-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03275769797619432,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.032642407924868166,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03241511690430343,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.033239640993997455,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.032863399013876915,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03420682600699365,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorWatermarkRemapsDerivedPromotedSource-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.033668094081804156,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03379027405753732,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.033673772937618196,
+    "target": [
+      "RAW_REMAP_TARGET_ASSERT promoted=1 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorFallbackRemapsDerivedPromotedSource-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.034002864966169,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=0 derived=0 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00010 after=40000c00000 expected=40000c00000 base=0 derived=0 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03396585502196103,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=0 derived=0 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00010 after=40000c00000 expected=40000c00000 base=0 derived=0 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.033408521907404065,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=0 derived=0 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00010 after=40000c00000 expected=40000c00000 base=0 derived=0 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03313896991312504,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.03252817702013999,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03205723501741886,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorKeepsOldDerivedRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.03325410094112158,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.0335603830171749,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.03270975791383535,
+    "target": [
+      "OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1",
+      "RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1"
+    ],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan-3.log"
+  },
+  {
+    "arm": "restored",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 1,
+    "rc": 0,
+    "wall": 0.009443999035283923,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-FindToPublicState.NotManagedIsObservable-1.log"
+  },
+  {
+    "arm": "restored",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 2,
+    "rc": 0,
+    "wall": 0.009715569904074073,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-FindToPublicState.NotManagedIsObservable-2.log"
+  },
+  {
+    "arm": "restored",
+    "test": "FindToPublicState.NotManagedIsObservable",
+    "n": 3,
+    "rc": 0,
+    "wall": 0.00887434498872608,
+    "target": [],
+    "log": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-controls-final/restored-FindToPublicState.NotManagedIsObservable-3.log"
+  }
+]

@@ -148,14 +148,6 @@ bool CartesianTree::TakeIdleUnits(uint64_t idleBeforeNs, Count maxCount, Index& 
     if (root->GetCount() < want) {
         want = root->GetCount();
     }
-#if defined(MRT_GC_UNIT_TESTS)
-    const char* cut = std::getenv("MRT_UNCOMMIT_CUT_OWNERSHIP");
-    if (cut != nullptr && cut[0] != '\0' && !(cut[0] == '0' && cut[1] == '\0')) {
-        idx = root->GetIndex();
-        num = want;
-        return true;
-    }
-#endif
     if (!TakeUnitsImpl(want, idx, false)) {
         return false;
     }

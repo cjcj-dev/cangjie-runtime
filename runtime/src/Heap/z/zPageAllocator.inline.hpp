@@ -122,12 +122,10 @@ inline size_t RegionManager::GetUsedBytes() const
 inline void RegionManager::MergeRawPointerRegions(std::vector<ZPage*>& smallSizeRegions,
                                                       std::vector<ZPage*>& largeSizeRegions)
     {
-        size_t smallBytes = 0;
         for (ZPage* region : smallSizeRegions) {
             region->SetRegionRole(ZPageRole::RecentFull);
-            smallBytes += region->GetRegionSize();
         }
-        RecentFullAccounting::Enqueue(smallSizeRegions.size(), smallBytes);
+
         smallSizeRegions.clear();
         for (ZPage* region : largeSizeRegions) {
             region->SetRegionRole(ZPageRole::RecentLarge);
@@ -142,21 +140,17 @@ inline void RegionManager::HandleTraceRegions()
         // (zPageTable.hpp:57-77), not a list splice.
         fullTraceCacheActive = false;
         largeTraceCacheActive = false;
-        size_t traceRegions = 0;
-        size_t traceBytes = 0;
         ZPage::SafeDestroyScope scope;
         ZPageTableIterator iter(&ZPageTable::heap_table());
         for (ZPage* region; iter.next(&region);) {
             const ZPageRole role = region->GetRegionRole();
             if (role == ZPageRole::FullTrace) {
                 region->SetRegionRole(ZPageRole::RecentFull);
-                ++traceRegions;
-                traceBytes += region->GetRegionSize();
             } else if (role == ZPageRole::LargeTrace) {
                 region->SetRegionRole(ZPageRole::RecentLarge);
             }
         }
-        RecentFullAccounting::Enqueue(traceRegions, traceBytes);
+
     }
 
 inline void RegionManager::PrepareTrace()
@@ -180,18 +174,6 @@ inline void RegionManager::ReleaseMarkQuarantine()
         SatisfyStalledAllocations();
     }
 
-
-    template <typename F>
-inline void RegionManager::VisitAllManagedRegionsForProbe(F&& visitor)
-    {
-        // #710: managed pages are the page table's non-free pages; the probe
-        // names the role word instead of the deleted list.
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            visitor(region, RegionRoleName(region->GetRegionRole()));
-        }
-    }
 
 inline ZPage* RegionManager::TakeReclaimableGarbageRegion(size_t* gatedBytes)
     {
@@ -266,8 +248,9 @@ inline void ExecuteForwardTask(RegionManager& regionManager, ZRelocationSet* rel
 {
     ZRelocateQueue& queue = *relocationSet->generation()->relocate().queue();
     for (;;) {
-        // ZGC zRelocate.cpp:1193-1211: service waiting mutators before
-        // synchronizing for a safepoint, then take ordinary page work.
+        // ZGC zGeneration.cpp:575-580: after relocate-start there is no abort
+        // early return; remaining selected pages still run through
+        // do_forwarding / abort_page inside this loop.
         for (ZForwarding* forwarding; (forwarding = queue.synchronize_poll()) != nullptr;) {
             regionManager.ForwardClaimedPage<G>(forwarding->page(), forwarding, true);
         }

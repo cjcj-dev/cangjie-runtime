@@ -581,7 +581,7 @@ public:
 
     size_t insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed = nullptr);
 
-    Receipt insert_receipt(MAddress from, MAddress to, const std::function<void()>& beforeFirstCas = {})
+    Receipt insert_receipt(MAddress from, MAddress to)
     {
         // zForwarding.inline.hpp:267-300: one attached array and one CAS winner.
         ForwardingCursor cursor = 0;
@@ -595,7 +595,6 @@ public:
             return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false,
                             Receipt::Status::EXISTING };
         }
-        if (beforeFirstCas) beforeFirstCas();
         bool installed = false;
         const size_t finalOff = insert(fromIndex, toOffset, &cursor, &installed);
         return Receipt{ _heapBase + static_cast<MAddress>(finalOff), installed,

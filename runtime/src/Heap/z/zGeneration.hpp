@@ -6,6 +6,7 @@
 
 #pragma once
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <memory>
 #include <unordered_map>
@@ -32,7 +33,6 @@ struct TenuringInputs;
 // Per-generation execution state. The snapshot lock publishes cycle identity
 // and phase together; the phase atomic serves existing barrier readers.
 // ZGC: zGeneration.hpp:65-78 (generation-owned phase and sequence).
-enum class MarkStartPoint : uint8_t { Begin, BeforeRetire, BeforeSequence, BeforeDomain, BeforeRemembered, Complete };
 enum class ZGenerationPhase : uint8_t { Mark, MarkComplete, Relocate };
 struct GCCycleSnapshot {
     ZGenerationId generation;
@@ -61,10 +61,6 @@ public:
     void PreGarbageCollection(bool isConcurrent, uint64_t gcIndex);
     void PostGarbageCollection(uint64_t gcIndex);
 #if defined(MRT_TESTABLE_INTERNALS)
-    static std::function<void()> testCyclePrepared;
-    static std::function<void()> testYoungMarkStarted;
-    static std::function<void()> testOldMarkStarted;
-    static std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> testMarkStartState;
     static std::function<void()> testYoungMarkCompleted;
 #endif
     ZGenerationIdOptional id_optional() const;
@@ -132,7 +128,7 @@ public:
     void SelectReason(GCReason value, uint64_t index = 0);
     // GCStats.reason write counterpart: tests override the reason of an
     // already-active cycle without the !active constraint.
-    MRT_EXPORT void SetReasonForTest(GCReason value) { reason.store(value, std::memory_order_release); }
+    friend class ZGenerationTest;
     ZYoungType YoungType() const { return youngType.load(std::memory_order_acquire); }
     void SetYoungType(ZYoungType type);
     bool IsMajorRoots() const
@@ -150,6 +146,7 @@ public:
     ZRelocate& relocate() { return *_relocate; }
     ZForwarding* forwarding(MAddress addr) const { return addr == 0 ? nullptr : _forwarding_table.get(addr); }
     BaseObject* relocate_or_remap_object(BaseObject* object);
+    BaseObject* remap_object(BaseObject* object);
     BaseObject* relocate_or_remap_object(BaseObject* object, const ForwardingProvenance& provenance);
     void reset_relocation_set();
     void synchronize_relocation();
@@ -237,7 +234,8 @@ public:
     // zGeneration.hpp:199,244-246 — tenuring threshold is young-generation
     // state, selected after select_relocation_set (zGeneration.cpp:250).
     uint32_t tenuring_threshold() { return _tenuring_threshold; }
-    MRT_EXPORT void SetTenuringThresholdForTest(uint32_t value) { _tenuring_threshold = value; }
+    bool is_remembered(volatile zpointer* p) const;
+    friend class ZGenerationTest;
     void flip_promote(ZPage* from_page, ZPage* to_page);
     void in_place_relocate_promote(ZPage* from_page, ZPage* to_page);
     void register_in_place_relocate_promoted(ZPage* page);

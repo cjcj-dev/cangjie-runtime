@@ -144,7 +144,7 @@ GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(ReferenceProcessor, ProcessConsumerReloadsWinningWeakCasValue)
+GC_TEST(ReferenceProcessor, ProcessConsumerPreservesReplacementReferent)
 {
     WorkerFixture worker(0);
     GcHeapFixture fx;
@@ -156,16 +156,21 @@ GC_TEST(ReferenceProcessor, ProcessConsumerReloadsWinningWeakCasValue)
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
-    ReferenceProcessor::SetBeforeWeakCleanCasForTest([&] {
-        referent.StoreColoured(GcUnit::StoreGoodPointer(replacement));
+    // Publish a strongly live replacement through the normal liveness callback.
+    // The consumer must reload the slot before deciding to clear/enqueue it.
+    (void)RegionSpace::MarkObject<Generation::Old>(replacement);
+    bool replaced = false;
+    processor.ProcessReferences([&](BaseObject* object) {
+        if (object == fx.obj1) {
+            referent.StoreColoured(GcUnit::StoreGoodPointer(replacement));
+            replaced = true;
+            return false;
+        }
+        return object == replacement;
     });
-    BaseObject* consumerTerminal = nullptr;
-    processor.ProcessReferences([](BaseObject*) { return false; },
-        [&](BaseObject*, BaseObject* terminal) { consumerTerminal = terminal; });
-    ReferenceProcessor::SetBeforeWeakCleanCasForTest({});
     processor.EnqueueReferences([](BaseObject*) { return true; });
 
-    GC_EXPECT_TRUE(consumerTerminal == replacement);
+    GC_EXPECT_TRUE(replaced);
     GC_EXPECT_TRUE(to_object(referent.GetTargetObject()) == replacement);
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::WEAK), static_cast<size_t>(0));
 }

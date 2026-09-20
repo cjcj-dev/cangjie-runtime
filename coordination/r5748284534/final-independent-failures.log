@@ -1,0 +1,48 @@
+NATIVE_ROOT_MAPS 7bd4eb79a000-7bd4eb80c000 r--p 00000000 103:05 16400092                  /root/diff_0a49b0f3fa56/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7bd4eb80c000-7bd4eb902000 r-xp 00072000 103:05 16400092                  /root/diff_0a49b0f3fa56/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7bd4eb902000-7bd4eb94e000 r--p 00168000 103:05 16400092                  /root/diff_0a49b0f3fa56/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7bd4eb94e000-7bd4eb951000 r--p 001b3000 103:05 16400092                  /root/diff_0a49b0f3fa56/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7bd4eb951000-7bd4eb953000 rw-p 001b6000 103:05 16400092                  /root/diff_0a49b0f3fa56/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_ORACLE before=0x80000400021510 from=0x40000200010 to=0x40000200000 slot=0x80000400021510 young=0
+native_root_marker_current executed=1 entry=minor current=0 stale=0 expected=0x40000200000 result=1
+native_root_healed_current executed=1 before=0x80000400021510 after=0x80000400001630 expected=0x40000200000 result=1
+native_root_after_reset executed=1 marked=0 slot=0x80000400001630 expected=0x40000200000
+[  FAIL  ] NativeRootCurrent.MinorPublication
+  diff_0a49b0f3fa56/testable/runtime/tests/gc_unit/test_native_root_current.cpp:232: EXPECT failed: oldMarkedCurrent
+[  FAIL  ] NativeRootCurrent.MinorPublication
+NATIVE_ROOT_MAPS 7bd4eb902000-7bd4eb94e000 r--p 00168000 103:05 16400092                  /root/diff_0a49b0f3fa56/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7bd4eb94e000-7bd4eb951000 r--p 001b3000 103:05 16400092                  /root/diff_0a49b0f3fa56/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7bd4eb951000-7bd4eb953000 rw-p 001b6000 103:05 16400092                  /root/diff_0a49b0f3fa56/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_ORACLE before=0x80000400021510 from=0x40000200010 to=0x40000200000 slot=0x80000400021510 young=0
+native_root_marker_current executed=1 entry=minor current=0 stale=0 expected=0x40000200000 result=1
+native_root_healed_current executed=1 before=0x80000400021510 after=0x80000400001630 expected=0x40000200000 result=1
+native_root_after_reset executed=1 marked=0 slot=0x80000400001630 expected=0x40000200000
+[  FAIL  ] NativeRootCurrent.MinorPublication
+  diff_0a49b0f3fa56/testable/runtime/tests/gc_unit/test_native_root_current.cpp:232: EXPECT failed: oldMarkedCurrent
+[  FAIL  ] NativeRootCurrent.MinorPublication
+  other-vm child did not exit cleanly with sentinel for NativeRootCurrent.MinorPublication
+[========] 1 tests: 0 passed, 1 failed
+2026-09-20 15:27:11.283467 2190508 I Min Capacity: 0M
+2026-09-20 15:27:11.283496 2190508 I Max Capacity: 32M
+2026-09-20 15:27:11.283525 2190508 I Soft Max Capacity: 32M
+2026-09-20 15:27:11.283553 2190508 I Heap Statistics:
+2026-09-20 15:27:11.283582 2190508 I                Mark Start     Mark End RelocaVERIFY_FIELD_CYCLE_COMPLETED mode=11 root=0x40000000000 expected=0x40000000000
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.WeakFieldAcceptsMarkedYoungTarget
+2190619 E CJNative Handle signal: 11.
+2190619 E signal SIGSEGV (11) pc=0x79a18985da0b fa=0x79a188586410 si_addr=(nil)
+[GCLOG] v=3 rec=crash seq=2 signo=11 signame=SIGSEGV si_code=1 si_codename=SEGV_MAPERR si_addr=(nil) pc=0x79a18985da0b pc_mod=libcangjie-runtime.so pc_off=0x9ea0b sym=_ZNK12MapleRuntime8StdGCTib17ForEachBitmapWordISt8functionIFvRNS_8HeapSlotILb0EEEEEEEvmRKT_ rbp=0x79a188586410 gc_phase=Mark gc_kind=active in_par_fix=0 regs=rax=0x79a18993b4f8,rbx=0x40000200000,rcx=0x7ffef57260d0,rdx=0x79a188586430,rsi=0x40000200008,rdi=0x0,rbp=0x79a188586410,rsp=0x79a1885863d0,r8=0x79a174001230,r9=0x0,r10=0x0,r11=0xd26951dd9fd1eaf1,r12=0x79a188586430,r13=0x0,r14=0x40000200008,r15=0x79a1885864a0,rip=0x79a18985da0b insn=8b0731db83f808736a39c373574189df assert=none
+[  FAIL  ] ZVerify.WeakFieldAcceptsMarkedYoungTarget
+  other-vm child did not exit cleanly with sentinel for ZVerify.WeakFieldAcceptsMarkedYoungTarget
+[  FAIL  ] ZVerify.WeakFieldAcceptsMarkedYoungTarget
+2026-09-20 15:27:11.283525 2190508 I Soft Max Capacity: 32M
+2026-09-20 15:27:11.283553 2190508 I Heap Statistics:
+2026-09-20 15:27:11.283582 2190508 I                Mark Start     Mark End RelocaVERIFY_FIELD_CYCLE_COMPLETED mode=11 root=0x40000000000 expected=0x40000000000
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.WeakFieldAcceptsMarkedYoungTarget
+2190619 E CJNative Handle signal: 11.
+2190619 E signal SIGSEGV (11) pc=0x79a18985da0b fa=0x79a188586410 si_addr=(nil)
+[GCLOG] v=3 rec=crash seq=2 signo=11 signame=SIGSEGV si_code=1 si_codename=SEGV_MAPERR si_addr=(nil) pc=0x79a18985da0b pc_mod=libcangjie-runtime.so pc_off=0x9ea0b sym=_ZNK12MapleRuntime8StdGCTib17ForEachBitmapWordISt8functionIFvRNS_8HeapSlotILb0EEEEEEEvmRKT_ rbp=0x79a188586410 gc_phase=Mark gc_kind=active in_par_fix=0 regs=rax=0x79a18993b4f8,rbx=0x40000200000,rcx=0x7ffef57260d0,rdx=0x79a188586430,rsi=0x40000200008,rdi=0x0,rbp=0x79a188586410,rsp=0x79a1885863d0,r8=0x79a174001230,r9=0x0,r10=0x0,r11=0xd26951dd9fd1eaf1,r12=0x79a188586430,r13=0x0,r14=0x40000200008,r15=0x79a1885864a0,rip=0x79a18985da0b insn=8b0731db83f808736a39c373574189df assert=none
+[  FAIL  ] ZVerify.WeakFieldAcceptsMarkedYoungTarget
+  other-vm child did not exit cleanly with sentinel for ZVerify.WeakFieldAcceptsMarkedYoungTarget
+[  FAIL  ] ZVerify.WeakFieldAcceptsMarkedYoungTarget
+  other-vm child did not exit cleanly with sentinel for ZVerify.WeakFieldAcceptsMarkedYoungTarget
+[========] 1 tests: 0 passed, 1 failed

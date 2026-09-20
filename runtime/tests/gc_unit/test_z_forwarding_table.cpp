@@ -1,3 +1,4 @@
+#include <future>
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -251,38 +252,33 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-namespace {
-std::atomic<bool> rememberedWaitEntered{ false };
-void RememberedWaitEntered(ZForwarding*)
-{
-    rememberedWaitEntered.store(true, std::memory_order_release);
-}
-}
-
 GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 {
     GcHeapFixture heap;
     auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
     GC_EXPECT_TRUE(fwd->claim());
     fwd->in_place_relocation_claim_page();
-    rememberedWaitEntered.store(false);
-    ZRelocateQueue::SetWaitEnterHook(RememberedWaitEntered);
+    std::atomic<bool> readerStarted{false};
     std::atomic<bool> returned{ false };
     bool retained = true;
+    std::promise<void> completion;
+    auto completed = completion.get_future();
     std::thread reader([&] {
+        readerStarted.store(true, std::memory_order_release);
         retained = fwd->retain_page(&generation_relocate_queue(Generation::Old));
         returned.store(true, std::memory_order_release);
+        completion.set_value();
     });
     JoinGuard guard(reader);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!rememberedWaitEntered.load(std::memory_order_acquire) &&
+    while (!readerStarted.load(std::memory_order_acquire) &&
            !returned.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
-    const bool queued = rememberedWaitEntered.load(std::memory_order_acquire);
-    const bool returnedBeforeDone = returned.load(std::memory_order_acquire);
+    const bool queued = readerStarted.load(std::memory_order_acquire);
+    const bool returnedBeforeDone = completed.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
     fwd->release_page();
-    const bool returnedAfterRelease = returned.load(std::memory_order_acquire);
+    const bool returnedAfterRelease = completed.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
     fwd->mark_done();
     reader.join();
     ZRelocateQueue::SetWaitEnterHook(nullptr);

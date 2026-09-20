@@ -1,9 +1,9 @@
 $ git grep -n -E 'GetGenerationCycle|GetGCPhase|GetWorkers|ObjectGeneration|PublishGenerationPhase|DriverLocker|DriverUnlocker|IsMajorRoots|YoungType|SelectTenuringThreshold' HEAD -- runtime/src
 HEAD:runtime/src/CjScheduler.cpp:440:    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
 HEAD:runtime/src/CjScheduler.cpp:582:    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
-HEAD:runtime/src/Heap/Allocator/RegionInfo.h:55:        GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
-HEAD:runtime/src/Heap/Allocator/zPage.cpp:56:    // CollectorProxy::currentCollector is null and GetGCPhase would fault.
-HEAD:runtime/src/Heap/Allocator/zPage.cpp:61:    const GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
+HEAD:runtime/src/Heap/z/RegionInfo.h:55:        GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
+HEAD:runtime/src/Heap/z/zPage.cpp:56:    // CollectorProxy::currentCollector is null and GetGCPhase would fault.
+HEAD:runtime/src/Heap/z/zPage.cpp:61:    const GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
 HEAD:runtime/src/Heap/Collector/Collector.cpp:303:Generation Collector::ObjectGeneration(BaseObject* object) const
 HEAD:runtime/src/Heap/Collector/Collector.cpp:456:        ? ForwardingTable::LookupTo(from, Heap::GetHeap().GetCollector().ObjectGeneration(target))
 HEAD:runtime/src/Heap/Collector/Collector.cpp:461:        ? static_cast<unsigned>(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD))

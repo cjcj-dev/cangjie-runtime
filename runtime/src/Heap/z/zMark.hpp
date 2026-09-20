@@ -9,10 +9,6 @@ namespace MapleRuntime {
 class ZMark;
 namespace MarkingStacks {
 enum class MarkingGeneration : uint8_t { MAJOR, YOUNG };
-// zMark.cpp:104,601,982,1022-1038: an empty stack at the product boundary.
-void VerifyEmpty(size_t pending);
-// zMark.cpp:1022: thread-private stacks followed by shared stripes.
-void VerifyAllEmpty(ZMark& domain);
 }
 }
 #endif
@@ -96,13 +92,8 @@ public:
                              std::unordered_set<MAddress>& weakSlots,
                              YoungConcWindowStats* windowStats = nullptr);
     static bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
-#if defined(MRT_TESTABLE_INTERNALS)
-    static std::function<void(ZGenerationId, NativeSlot*)> testColoredRootResult;
-    static std::function<void(Mutator&)> testOldMarkThreadResult;
-#endif
 
     static bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
-    static void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls);
     static bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);
@@ -146,6 +137,8 @@ public:
     static bool FlushAllGenerations();
     bool FlushStacks();
     bool TryTerminateFlush();
+    void verify_all_stacks_empty() const;
+    void verify_worker_stacks_empty() const;
     bool TryProactiveFlush(size_t workerId);
     bool TryEnd();
     void Free();
@@ -220,25 +213,6 @@ constexpr uint64_t NS_PER_S = 1000000000;
 // (zMark.cpp:973-990). This must stay compile-time and default-on: retired-only
 // sampling cannot see a mutator's non-full SATB node.
 
-void NoteMarkTerminatePause();
-void NoteMarkTerminateFlushed(size_t n);
-void NoteMarkTerminateContinue(size_t stackSize);
-void ReportMarkTerminateContinue();
-#if defined(MRT_TESTABLE_INTERNALS)
-struct MarkTerminateTestReceipt {
-    size_t pauses = 0;
-    size_t flushed = 0;
-    size_t continues = 0;
-    uint64_t maxPauseNs = 0;
-    size_t pauseY2y = 0;
-    size_t closureDuringPause = 0;
-};
-void ResetMarkTerminateTestReceipt();
-MarkTerminateTestReceipt ReadMarkTerminateTestReceipt();
-void NoteMarkTerminatePauseDuration(uint64_t pauseNs);
-void NoteMarkTerminatePauseProducers(size_t y2y);
-void NoteTraceYoungClosureDuringPause();
-#endif
 
 // prefetch distance for mark.
 #define MACRO_MARK_PREFETCH_DISTANCE 16    // this macro is used for check when pre-compiling.
@@ -254,68 +228,7 @@ constexpr int MARK_PREFETCH_DISTANCE = 16; // when it is changed, remember to ch
 
 
 // For managing gc roots
-#if defined(MRT_TESTABLE_INTERNALS)
-// One-shot receipt for the actual DoGarbageCollection -> Preforward path. The
-// target slot is armed by a test, but the observed word is produced and sampled
-// inside the product remap loop before relocate-start changes the good masks.
-// Read-only copies of the product's ownership carriers at PostTrace's handoff.
 
-
-struct RemapYoungRootsTestReceipt {
-    uintptr_t targetSlot = 0;
-    uintptr_t before = 0;
-    uintptr_t after = 0;
-    uintptr_t resolvedAddress = 0;
-    uint64_t visits = 0;
-    uint64_t heals = 0;
-    bool storeGoodAfter = false;
-    uint64_t oldPendingVisits = 0;
-};
-
-// Colored fields select a physical slot; raw roots also accept a source
-// address so derived temporary base slots can be observed. Zero disables it.
-void ResetRemapYoungRootsTestReceipt(uintptr_t targetSlot);
-RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt();
-#endif
-
-#if defined(MRT_TESTABLE_INTERNALS)
-struct Y2yHandoffTestReceipt {
-    uint64_t phase0 = 0; // release-boundary observation
-    uint64_t phase1 = 0; // roots consumed after release
-    uint64_t phase2 = 0; // STW2 merge
-    uint64_t beforeRelease = 0;
-    uint64_t afterRoot = 0;
-    uint64_t afterStw2 = 0;
-};
-void ResetY2yHandoffTestReceipt();
-Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt();
-void NoteY2yBeforeReleaseTestReceipt(uint64_t pending);
-void NoteY2yAfterRootTestReceipt(uint64_t pending);
-void NoteY2yAfterStw2TestReceipt(uint64_t pending);
-void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications);
-void PublishY2yAfterReleaseTestReceipt();
-void ArmMarkBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second = nullptr);
-void PublishMarkBeforeMarkEndTestReceipt();
-void ArmY2yDuringConcurrentTestReceipt(BaseObject* holder);
-void PublishConcurrentYoungProducersTestReceipt();
-void ArmLeftoverBeforePauseTestReceipt(BaseObject* y2yHolder);
-void PublishLeftoverBeforePauseTestReceipt();
-
-struct ExportRootPublicationTestReceipt {
-    uint64_t registrationsAfterT1 = 0;
-    uint64_t producerFlushes = 0;
-    uint64_t observedAtT2 = 0;
-    U64 handle = std::numeric_limits<U64>::max();
-    bool holderMarked = false;
-    bool childMarked = false;
-};
-void ResetExportRootPublicationTestReceipt();
-void ArmExportRootAfterT1TestReceipt(Mutator* producer, BaseObject* holder, BaseObject* child);
-void PublishExportRootAfterT1TestReceipt();
-void FlushExportRootAfterT1TestReceipt();
-void NoteExportRootPublicationAtT2TestReceipt();
-ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt();
-#endif
 
 // portyoungconc: work accounting for the concurrent young mark window.
 // ZGC anchor: ZGenerationYoung::concurrent_mark() = mark_roots() + mark_follow()
@@ -325,10 +238,6 @@ ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt();
 // Duration alone does not establish that the concurrent window performed marking work.
 
 
-#if defined(MRT_TESTABLE_INTERNALS)
-
-
-#endif
 
 
 

@@ -1,0 +1,127 @@
+[
+  {
+    "cmd": [
+      "git",
+      "grep",
+      "-c",
+      "VisitHeapRootSlots",
+      "eab957d9ff92d294eb1a234ebd0f03f522856608",
+      "--",
+      "runtime/src",
+      "runtime/tests/gc_unit/test_native_root_current.cpp"
+    ],
+    "rc": 0,
+    "output": "eab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Heap/z/zHeapIterator.cpp:1\neab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Heap/z/zMark.cpp:1\neab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Heap/z/zRelocate.cpp:1\neab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Heap/z/zVerify.cpp:1\neab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Mutator/Mutator.cpp:2\neab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Mutator/Mutator.h:1\n"
+  },
+  {
+    "cmd": [
+      "git",
+      "grep",
+      "-c",
+      "VisitHeapRootSlots",
+      "HEAD",
+      "--",
+      "runtime/src",
+      "runtime/tests/gc_unit/test_native_root_current.cpp"
+    ],
+    "rc": 0,
+    "output": "HEAD:runtime/src/Heap/z/zHeapIterator.cpp:1\nHEAD:runtime/src/Heap/z/zMark.cpp:1\nHEAD:runtime/src/Heap/z/zRelocate.cpp:1\nHEAD:runtime/src/Heap/z/zVerify.cpp:1\nHEAD:runtime/src/Mutator/Mutator.cpp:2\nHEAD:runtime/src/Mutator/Mutator.h:1\n"
+  },
+  {
+    "cmd": [
+      "git",
+      "grep",
+      "-c",
+      "MakeDerivedRootVisitor",
+      "eab957d9ff92d294eb1a234ebd0f03f522856608",
+      "--",
+      "runtime/src",
+      "runtime/tests/gc_unit/test_native_root_current.cpp"
+    ],
+    "rc": 0,
+    "output": "eab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Heap/z/zMark.cpp:1\neab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Heap/z/zRelocate.cpp:2\neab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Mutator/Mutator.cpp:3\neab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Mutator/Mutator.h:1\neab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/UnwindStack/StackFrameCursor.cpp:1\n"
+  },
+  {
+    "cmd": [
+      "git",
+      "grep",
+      "-c",
+      "MakeDerivedRootVisitor",
+      "HEAD",
+      "--",
+      "runtime/src",
+      "runtime/tests/gc_unit/test_native_root_current.cpp"
+    ],
+    "rc": 0,
+    "output": "HEAD:runtime/src/Heap/z/zMark.cpp:1\nHEAD:runtime/src/Heap/z/zRelocate.cpp:2\nHEAD:runtime/src/Mutator/Mutator.cpp:3\nHEAD:runtime/src/Mutator/Mutator.h:1\nHEAD:runtime/src/UnwindStack/StackFrameCursor.cpp:1\n"
+  },
+  {
+    "cmd": [
+      "git",
+      "grep",
+      "-c",
+      "class MarkThreadClosure",
+      "eab957d9ff92d294eb1a234ebd0f03f522856608",
+      "--",
+      "runtime/src",
+      "runtime/tests/gc_unit/test_native_root_current.cpp"
+    ],
+    "rc": 0,
+    "output": "eab957d9ff92d294eb1a234ebd0f03f522856608:runtime/src/Heap/z/zMark.cpp:1\n"
+  },
+  {
+    "cmd": [
+      "git",
+      "grep",
+      "-c",
+      "class MarkThreadClosure",
+      "HEAD",
+      "--",
+      "runtime/src",
+      "runtime/tests/gc_unit/test_native_root_current.cpp"
+    ],
+    "rc": 0,
+    "output": "HEAD:runtime/src/Heap/z/zMark.cpp:1\n"
+  },
+  {
+    "cmd": [
+      "git",
+      "grep",
+      "-c",
+      "YoungThreadRoots",
+      "eab957d9ff92d294eb1a234ebd0f03f522856608",
+      "--",
+      "runtime/src",
+      "runtime/tests/gc_unit/test_native_root_current.cpp"
+    ],
+    "rc": 0,
+    "output": "eab957d9ff92d294eb1a234ebd0f03f522856608:runtime/tests/gc_unit/test_native_root_current.cpp:2\n"
+  },
+  {
+    "cmd": [
+      "git",
+      "grep",
+      "-c",
+      "YoungThreadRoots",
+      "HEAD",
+      "--",
+      "runtime/src",
+      "runtime/tests/gc_unit/test_native_root_current.cpp"
+    ],
+    "rc": 0,
+    "output": "HEAD:runtime/tests/gc_unit/test_native_root_current.cpp:2\n"
+  },
+  {
+    "cmd": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "^(<<<<<<< |>>>>>>> )",
+      "HEAD",
+      "--"
+    ],
+    "rc": 1,
+    "output": ""
+  }
+]

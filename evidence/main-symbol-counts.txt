@@ -1,4 +1,4 @@
-cjcjdev/main:runtime/src/Heap/Allocator/zForwardingTable.cpp:1
+cjcjdev/main:runtime/src/Heap/z/zForwardingTable.cpp:1
 cjcjdev/main:runtime/src/Heap/Collector/TracingCollector.cpp:1
 cjcjdev/main:runtime/src/Heap/z/zForwardingTable.hpp:1
 cjcjdev/main:runtime/src/Heap/z/zGeneration.cpp:13

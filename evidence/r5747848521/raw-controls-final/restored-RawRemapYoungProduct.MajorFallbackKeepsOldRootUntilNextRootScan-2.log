@@ -1,0 +1,8 @@
+[  RUN   ] RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan
+[  RUN   ] RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan
+OLD_PENDING_TARGET_ASSERT before=40000c00010 root=40000c00010 winner=40000c00000 base=40000c00010 derived=40000c00018 deferred=1
+RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00010 after=40000c00000 expected=40000c00000 base=40000c00000 derived=40000c00008 final_root=40000c00000 result=1
+RAW_REMAP_OUTCOME_ASSERT promoted=0 managed=1 old=1 status=0 completed=1
+GC_UNIT_OTHER_VM_OKIDOKI RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan
+[  PASS  ] RawRemapYoungProduct.MajorFallbackKeepsOldRootUntilNextRootScan
+[========] 1 tests: 1 passed, 0 failed

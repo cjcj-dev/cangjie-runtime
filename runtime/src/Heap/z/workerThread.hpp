@@ -17,6 +17,7 @@
 #include "Heap/z/zGCIdPrinter.hpp"
 
 namespace MapleRuntime {
+struct ThreadGCData;
 class WorkerTaskDispatcher;
 class WorkerThread;
 class WorkerThreadExitTask;
@@ -133,6 +134,7 @@ private:
 
     WorkerTaskDispatcher* const _dispatcher;
     pthread_t _thread;
+    std::atomic<ThreadGCData*> _gc_data{nullptr};
     char _name[32];
 
     static void set_worker_id(uint32_t worker_id) { _worker_id = worker_id; }
@@ -145,6 +147,7 @@ public:
 
     const char* name() const { return _name; }
     pthread_t os_thread() const { return _thread; }
+    ThreadGCData* gc_data() const { return _gc_data.load(std::memory_order_acquire); }
 
     void run();
 };
