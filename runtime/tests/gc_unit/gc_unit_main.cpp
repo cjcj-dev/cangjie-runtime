@@ -28,7 +28,6 @@ void MapleRuntime::GcUnit::CreateStandaloneHeap(size_t units)
         params.exemptionThreshold = 0.8;
         ZHeuristics::set_max_heap_size(params.heapSize * 1024);
         ZCollectedHeap::create(params, 0.5);
-        Heap::GetHeap().Init();
     }
 }
 
