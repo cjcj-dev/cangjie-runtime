@@ -228,7 +228,7 @@ if [[ -f "$GCV2_RUNTIME_LIB_DIR/libboundscheck.so" ]]; then
 fi
 echo "GC_UNIT_RUNTIME_IDENTITY config=$RUNTIME_CONFIG_ID signature=$RUNTIME_CONFIG_SIGNATURE runtime_sha256=$RUNTIME_SHA256 boundscheck_sha256=$BOUNDSCHECK_SHA256 lib_dir=$GCV2_RUNTIME_LIB_DIR"
 
-# The OHOS-host arm is a separate product shape and a focused three-process
+# The OHOS-host arm is a separate product shape and a focused four-process
 # suite. It must neither borrow the default suite's stamp nor depend on a Cangjie
 # SDK. run_standalone verifies the product receipt, product/test symbol
 # ownership, dispatch disassembly, and one exact completion token per filter.
@@ -263,6 +263,7 @@ if [[ "$OHOS_HOST" == "1" ]]; then
   fi
   if [[ $ohos_rc -ne 0 || ! -f "$OHOS_RECEIPT" ]] ||
       ! /usr/bin/grep -qx 'RESULT=PASS' "$OHOS_RECEIPT" ||
+      ! /usr/bin/grep -qx 'FILTER_HANDLER=PASS' "$OHOS_RECEIPT" ||
       ! /usr/bin/grep -qx 'FILTER_MAJOR=PASS' "$OHOS_RECEIPT" ||
       ! /usr/bin/grep -qx 'FILTER_POST=PASS' "$OHOS_RECEIPT" ||
       ! /usr/bin/grep -qx 'FILTER_EMPTY=PASS' "$OHOS_RECEIPT"; then
@@ -271,12 +272,12 @@ if [[ "$OHOS_HOST" == "1" ]]; then
     exit 1
   fi
   OHOS_HOST_STATE=PASS
-  OHOS_HOST_FILTERS=3
+  OHOS_HOST_FILTERS=4
   CPP_SUITE_STATE=PASS
   CPP_SUITE_SOURCE=FRESH
   GATE_STATE=PASS
   STATUS_REASON=PASS
-  echo "GC_UNIT_GATE_OHOS_HOST_OK filters=3 receipt=$OHOS_RECEIPT status=$STATUS_FILE"
+  echo "GC_UNIT_GATE_OHOS_HOST_OK filters=4 receipt=$OHOS_RECEIPT status=$STATUS_FILE"
   exit 0
 fi
 

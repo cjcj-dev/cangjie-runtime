@@ -7,6 +7,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <list>
+#include <cstring>
+#include <vector>
+
+#include "Heap/z/zBarrier.hpp"
 
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
@@ -105,7 +109,109 @@ void* RunMajorCycle(void*)
     ZGenerationRootTest::Clear(collector);
     return nullptr;
 }
+// Managed object payload ABI from zCrossVM.cpp:56-85 and
+// zRootsIterator.hpp:188-193. These are heap objects, not copies of the
+// product resolver or handler lookup. The host N2C stub passes its first two
+// arguments in rdi/rsi (N2CStub.S:329-341, 182-198).
+constexpr size_t kPayload = sizeof(BaseObject);
+U64 gExportHandle = 0;
+unsigned gHandlerCalls = 0;
+bool gHandlerArguments = false;
+bool gHandlerRoots = false;
+bool gOwnerInactive = false;
+
+void ObserveHandler(BaseObject* owner, BaseObject* proxy)
+{
+    auto& heap = Heap::GetHeap();
+    BaseObject* expectedOwner = heap.GetExportObject(gExportHandle);
+    BaseObject* expectedProxy = expectedOwner == nullptr ? nullptr :
+        ZBarrier::ReadReference(expectedOwner, expectedOwner->GetRefField<>(kPayload + sizeof(uint64_t)));
+    ++gHandlerCalls;
+    gHandlerArguments = owner == expectedOwner && proxy == expectedProxy;
+    std::vector<BaseObject*> roots;
+    heap.cross_vm().VisitSurrectedExportRoots([&](BaseObject* object) { roots.push_back(object); });
+    gHandlerRoots = roots.size() == 2 && roots[0] == owner && roots[1] == proxy;
+    std::printf("OHOS_HANDLER_TARGET_REACHED arguments=%u roots=%u count=%u\n",
+                gHandlerArguments, gHandlerRoots, gHandlerCalls);
+    std::fflush(stdout);
+}
+
+void* RunHandlerChain(void*)
+{
+    auto& heap = Heap::GetHeap();
+    alignas(TypeInfo) static unsigned char metadata[4][sizeof(TypeInfo)] {};
+    BaseObject* objects[4] {};
+    for (size_t i = 0; i < 4; ++i) {
+        auto* type = reinterpret_cast<TypeInfo*>(metadata[i]);
+        type->SetType(i == 1 ? TypeKind::TYPE_KIND_FOREIGN_PROXY : TypeKind::TYPE_KIND_CLASS);
+        type->SetInstanceSize(i == 0 ? 16 : 8);
+        if (i < 3) {
+            type->SetFlagHasRefField();
+            GCTib bitmap {};
+            bitmap.tag = SIGN_BIT | (i == 0 ? 2 : 1);
+            type->SetGCTib(bitmap);
+        }
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(metadata[i]), sizeof(TypeInfo));
+        const size_t size = kPayload + (i == 0 ? 16 : 8);
+        objects[i] = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc(size, PageAge::old));
+        std::memset(objects[i], 0, size);
+        objects[i]->SetClassInfo(type);
+    }
+    // ExportObject(id, foreignProxy) -> CJForeignProxy(context) ->
+    // CJInteropContext(cjFunc) -> CJFunc(handler).
+    for (size_t i = 0; i < 3; ++i) {
+        ZBarrier::WriteReference(objects[i],
+            objects[i]->GetRefField<>(kPayload + (i == 0 ? sizeof(uint64_t) : 0)), objects[i + 1]);
+    }
+    const CrossRefHandler handler = &ObserveHandler;
+    std::memcpy(reinterpret_cast<char*>(objects[3]) + kPayload, &handler, sizeof(handler));
+    gExportHandle = heap.RegisterExportRoot(objects[0]);
+    const U32 index = ExportRootTable::ExportHandleIndex(gExportHandle);
+    std::memcpy(reinterpret_cast<char*>(objects[0]) + kPayload, &index, sizeof(index));
+
+    // The real major cycle owns export enumeration, foreign discovery,
+    // PrepareCycleRef, and task posting. Do not seed its intermediate maps.
+    ConcurrentGCBreakpoints::AcquireControl();
+    const bool started = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    void* postedTask = gTask;
+    if (started && postedTask != nullptr) {
+        reinterpret_cast<void(*)()>(postedTask)();
+    }
+    BaseObject* current = heap.GetExportObject(gExportHandle);
+    gOwnerInactive = current != nullptr && !heap.CheckExportObjState(gExportHandle, current);
+    ZGenerationRootTest::Clear(heap);
+    heap.RemoveExportObject(gExportHandle);
+    return nullptr;
+}
 } // namespace
+
+GC_RUNTIME_TEST(OHOSCycle, HandlerChainThroughMajorEntry)
+{
+    RuntimeParam param {};
+    param.heapParam.heapSize = 32 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
+    CJThreadHandle handle = RunCJTask(RunHandlerChain, nullptr);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
+    ReleaseHandle(handle);
+    std::printf("OHOS_HOST_ASSERT_REACHED test=OHOSCycle.HandlerChainThroughMajorEntry "
+                "calls=%u arguments=%u roots=%u inactive=%u\n",
+                gHandlerCalls, gHandlerArguments, gHandlerRoots, gOwnerInactive);
+    std::fflush(stdout);
+    // Always reach these target assertions even when a producer cut prevents
+    // posting/handler delivery. No earlier presence assertion masks them.
+    GC_EXPECT_EQ(gHandlerCalls, 1U);
+    GC_EXPECT_TRUE(gHandlerArguments);
+    GC_EXPECT_TRUE(gHandlerRoots);
+    GC_EXPECT_TRUE(gOwnerInactive);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
 
 GC_TEST(OHOSCycle, PostResolvePostsProductTask)
 {
