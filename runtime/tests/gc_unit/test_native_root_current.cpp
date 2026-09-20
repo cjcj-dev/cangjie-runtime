@@ -512,7 +512,7 @@ void CheckRootStorageSegments(unsigned family)
     std::fprintf(stderr,
         "ROOT_SEGMENT_TARGET executed=1 family=%u slots=%zu remaining=%zu exactly_once=%u values_valid=%u marked=%u\n",
         family, visits.size(), remaining, unsigned(exactlyOnce), unsigned(valuesValid), unsigned(marked));
-    GC_EXPECT_TRUE(exactlyOnce && valuesValid && (family != 0 || marked));
+    GC_EXPECT_TRUE(exactlyOnce && valuesValid && (family == 0 || marked));
 }
 }
 GC_OTHER_VM_TEST(RootStorageSegments, Strong) { CheckRootStorageSegments(0); }
