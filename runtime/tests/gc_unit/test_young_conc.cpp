@@ -203,7 +203,7 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     RelocationReceiptTestAccess::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    fx.region1->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(first);
     space.GetRegionManager().AddRawPointerObject(second);
     Mutator producer;
@@ -256,7 +256,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     RelocationReceiptTestAccess::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    fx.region1->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Snapshot().reason;
@@ -305,7 +305,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     RelocationReceiptTestAccess::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    fx.region1->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Snapshot().reason;
@@ -363,7 +363,7 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     RelocationReceiptTestAccess::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    fx.region1->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     space.GetRegionManager().AddRawPointerObject(y2yHolder);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
@@ -408,7 +408,7 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     RelocationReceiptTestAccess::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    fx.region1->SetRegionRole(ZPageRole::RecentFull);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Snapshot().reason;

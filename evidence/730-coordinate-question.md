@@ -1,0 +1,2 @@
+LANE=sym_cangjie_runtime_730_implement_r5746939673
+冻结坐标回读：git -C /root/cj_build/cangjie_runtime rev-parse cjcjdev/main，rc=0，输出8cbac1ea8ef31dbaf5d49d3a1fe67300938ae74c，与任务表df3e113e61356ccbe6497c226024061cbe6a5c80不符；本候选HEAD恰为df3e113e。请确认df3e为返工起点、8cbac为主线基线，是否可继续R1/R2/R3补齐并按要求fetch/merge。等待期间只读核对。

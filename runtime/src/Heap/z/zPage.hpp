@@ -63,7 +63,6 @@ namespace MapleRuntime {
 // intrusive page lists are retired in favour of this field (#710).
 enum class ZPageRole : uint8_t {
     None = 0, // free, or a from-page claimed off its list ("lone")
-    ThreadLocal,
     RecentFull,
     FullTrace,
     LargeTrace,
@@ -85,7 +84,6 @@ inline const char* RegionRoleName(ZPageRole role)
 {
     switch (role) {
         case ZPageRole::None: return "none";
-        case ZPageRole::ThreadLocal: return "thread local regions";
         case ZPageRole::RecentFull: return "recent full regions";
         case ZPageRole::FullTrace: return "full trace regions";
         case ZPageRole::LargeTrace: return "large trace regions";
@@ -683,7 +681,6 @@ public:
 
     bool IsLargeRegion() const;
 
-    bool IsThreadLocalRegion() const { return GetRegionRole() == ZPageRole::ThreadLocal; }
 
     bool IsPinnedRegion() const;
 

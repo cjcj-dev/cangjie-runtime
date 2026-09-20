@@ -18,7 +18,8 @@
 #include <vector>
 
 #include "Heap/z/zServiceability.hpp"
-#include "Allocator.h"
+#include "AllocBufferManager.h"
+#include "Heap/z/zUncommitter.hpp"
 #include "ExceptionManager.h"
 #include "Mutator/Mutator.h"
 #include "Heap/z/zPageAllocator.hpp"
@@ -39,7 +40,7 @@ namespace MapleRuntime {
 // RegionSpace aims to be the API for other components of runtime
 // the complication of implementation is delegated to RegionManager
 // allocator should not depend on any assumptions on the details of RegionManager
-class RegionSpace : public Allocator {
+class RegionSpace {
 public:
     static size_t ToAllocSize(size_t objSize)
     {
@@ -53,8 +54,16 @@ public:
         return ToAllocSize(objSize);
     }
 
-    RegionSpace() = default;
-    ATTR_NO_INLINE ~RegionSpace() override
+    static constexpr size_t ALLOC_ALIGN = 8;
+    static constexpr size_t HEADER_SIZE = 0;
+    RegionSpace() : allocBufferManager(new AllocBufferManager()) {}
+    Uncommitter& GetUncommitter() { return uncommitter; }
+    void RegisterAllocBuffer(AllocBuffer& buffer) const { allocBufferManager->RegisterAllocBuffer(buffer); }
+    void RemoveAllocBuffer(AllocBuffer& buffer) const { allocBufferManager->RemoveAllocBuffer(buffer); }
+    void VisitAllocBuffers(const AllocBufferVisitor& visitor) { allocBufferManager->VisitAllocBuffers(visitor); }
+    size_t GetAllocBufersCount() { return allocBufferManager->GetAllocBufersCount(); }
+    bool IsHeapAddress(MAddress addr) const { return is_heap_address(addr); }
+    ATTR_NO_INLINE ~RegionSpace()
     {
         if (allocBufferManager != nullptr) {
             delete allocBufferManager;
@@ -63,18 +72,18 @@ public:
 
     }
 
-    void Init(const HeapParam&) override;
+    void Init(const HeapParam&);
 
-    MAddress Allocate(size_t size, AllocType allocType) override;
+    MAddress Allocate(size_t size, AllocType allocType);
 
     RegionManager& GetRegionManager() const noexcept;
 
-    MAddress GetSpaceStartAddress() const override { return GetRegionManager().GetSpaceStartAddress(); }
+    MAddress GetSpaceStartAddress() const { return GetRegionManager().GetSpaceStartAddress(); }
 
-    MAddress GetSpaceEndAddress() const override { return GetRegionManager().GetSpaceEndAddress(); }
+    MAddress GetSpaceEndAddress() const { return GetRegionManager().GetSpaceEndAddress(); }
 
-    size_t GetCurrentCapacity() const override { return GetRegionManager().GetCommittedBytes(); }
-    size_t GetMaxCapacity() const override { return GetRegionManager().GetHeapCapacity(); }
+    size_t GetCurrentCapacity() const { return GetRegionManager().GetCommittedBytes(); }
+    size_t GetMaxCapacity() const { return GetRegionManager().GetHeapCapacity(); }
 
     ZMemoryUsageInfo GetMemoryUsage() const
     {
@@ -91,7 +100,7 @@ public:
     // size of objects survived in previous gc.
     inline size_t GetSurvivedSize() const { return GetRegionManager().GetSurvivedSize(); }
 
-    size_t GetUsedPageSize() const override { return GetRegionManager().GetUsedRegionSize(); }
+    size_t GetUsedPageSize() const { return GetRegionManager().GetUsedRegionSize(); }
 
     inline size_t GetTargetSize() const
     {
@@ -99,23 +108,23 @@ public:
         return static_cast<size_t>(GetUsedPageSize() / heapUtilization);
     }
 
-    size_t AllocatedBytes() const override { return GetRegionManager().GetAllocatedSize(); }
+    size_t AllocatedBytes() const { return GetRegionManager().GetAllocatedSize(); }
 
-    size_t LargeObjectBytes() const override { return GetRegionManager().GetLargeObjectSize(); }
+    size_t LargeObjectBytes() const { return GetRegionManager().GetLargeObjectSize(); }
 
     size_t FromSpaceSize() const { return GetRegionManager().GetFromSpaceSize(); }
 
     size_t PinnedSpaceSize() const { return GetRegionManager().GetPinnedSpaceSize(); }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    bool IsHeapObject(MAddress addr) const override;
+    bool IsHeapObject(MAddress addr) const;
 #endif
 
     // info dump
     void GetInstances(const TypeInfo*, bool, size_t, std::vector<MObject*>&) const {}
     void ClassInstanceNum(std::map<CString, long>&) const {}
 
-    size_t ReclaimGarbageMemory(bool /* releaseAll */) override
+    size_t ReclaimGarbageMemory(bool /* releaseAll */)
     {
         const size_t cachedBefore = GetRegionManager().GetCachedBytes();
         ZStatTimerWorker zstatTimer(PReclaimGarbageRegions);
@@ -126,12 +135,12 @@ public:
         return cachedAfter > cachedBefore ? cachedAfter - cachedBefore : 0;
     }
 #if defined(__EULER__)
-    void TryReclaimGarbageMemory() override
+    void TryReclaimGarbageMemory()
     {
         ReclaimGarbageMemory(false);
     }
 #endif
-    bool ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const override
+    bool ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
     {
         if (UNLIKELY(safe)) {
             GetRegionManager().ForEachObjSafe(visitor);
@@ -183,7 +192,6 @@ public:
     void CountLiveObject(const BaseObject* obj) { GetRegionManager().CountLiveObject(obj); }
 
     void PrepareTrace() { GetRegionManager().PrepareTrace(); }
-    void FeedHungryBuffers() override;
 
 
     // ZPage::mark_object + inc_live (zMark.cpp:405-425) for a caller without a
@@ -238,9 +246,11 @@ public:
 
     void RemoveRawPointerObject(BaseObject* obj) { GetRegionManager().RemoveRawPointerObject(obj); }
 
-    friend class Allocator;
+
 
 private:
+    AllocBufferManager* allocBufferManager;
+    Uncommitter uncommitter{*this};
     MAddress TryAllocateOnce(size_t allocSize, AllocType allocType);
 
 };

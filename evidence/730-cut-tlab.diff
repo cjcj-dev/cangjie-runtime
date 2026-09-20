@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zObjectAllocator.cpp b/runtime/src/Heap/z/zObjectAllocator.cpp
+index 7a5c9c60e..4361d1486 100644
+--- a/runtime/src/Heap/z/zObjectAllocator.cpp
++++ b/runtime/src/Heap/z/zObjectAllocator.cpp
+@@ -351,7 +351,7 @@ MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
+             allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
+     }
+     AllocBuffer* allocBuffer = AllocBuffer::GetOrCreateAllocBuffer();
+-    return allocBuffer->Allocate(allocSize, allocType);
++    return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden);
+ }
+ 
+ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)

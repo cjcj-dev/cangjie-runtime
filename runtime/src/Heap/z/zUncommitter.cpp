@@ -316,5 +316,5 @@ void Uncommitter::CancelCycleLocked()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-Uncommitter::Uncommitter(Allocator& partition) : partition(partition) {}
+Uncommitter::Uncommitter(RegionSpace& partition) : partition(partition) {}
 }

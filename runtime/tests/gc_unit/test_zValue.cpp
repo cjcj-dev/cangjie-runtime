@@ -14,6 +14,7 @@
 // come before every product header this file names.
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zCPU.inline.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zValue.inline.hpp"
@@ -98,18 +99,20 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     std::unique_ptr<ZTestRegionHeap> heap;
     RegionManager manager;
     heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
+    BindFixturePageTable(manager, units);
 
     auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::eden);
     GC_EXPECT_EQ(allocator.sharedSmallPage.count(), ZCPU::count());
     for (uint32_t cpu = 0; cpu < allocator.sharedSmallPage.count(); ++cpu) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(cpu) == nullptr);
     }
-    GC_EXPECT_TRUE(allocator.shared_small_page_addr() == allocator.sharedSmallPage.addr(ZCPU::id()));
+    const uint32_t expectedCpu = ZHeuristics::use_per_cpu_shared_small_pages() ? ZCPU::id() : 0;
+    GC_EXPECT_TRUE(allocator.shared_small_page_addr() == allocator.sharedSmallPage.addr(expectedCpu));
 
     // An allocation installs the current CPU's slot and no other slot.
     const uintptr_t first = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(first != 0);
-    const uint32_t cpu = ZCPU::id();
+    const uint32_t cpu = ZHeuristics::use_per_cpu_shared_small_pages() ? ZCPU::id() : 0;
     GC_EXPECT_TRUE(allocator.sharedSmallPage.get(cpu) == Heap::page(first));
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         if (other != cpu) {
@@ -122,5 +125,6 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(other) == nullptr);
     }
+    Heap::bind_test_page_allocator(nullptr);
 }
 #endif

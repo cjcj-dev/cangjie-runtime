@@ -35,7 +35,7 @@ public:
     ~AllocBufferScope()
     {
         ThreadLocal::SetAllocBuffer(saved);
-        alloc.SetRegion(nullptr);
+        alloc.ClearRegion();
     }
 
 private:

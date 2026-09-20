@@ -65,7 +65,7 @@
 #include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zRootsIterator.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -263,7 +263,7 @@ void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
 
 OopStorage& Heap::GetExportRootStorage() { return exportRootsTable->RootStorage(); }
 
-Allocator& Heap::GetAllocator() { return *_allocation_adapter; }
+RegionSpace& Heap::GetAllocator() { return *_allocation_adapter; }
 
 size_t Heap::GetMaxCapacity() const { return _page_allocator.GetHeapCapacity(); }
 
@@ -528,13 +528,28 @@ ZPage* Heap::alloc_page(ZPage* page)
     return published;
 }
 
+// ZGC zHeap.cpp:148-160; MinTLABSize is in bytes in this runtime.
+size_t Heap::unsafe_max_tlab_alloc() const
+{
+    size_t size = _object_allocator.fast_available(PageAge::eden);
+    if (size < 2 * 1024) { size = max_tlab_size(); }
+    return std::min(size, max_tlab_size());
+}
+
+// ZGC zHeap.inline.hpp:92-95: TLABs use the same object allocator.
+uintptr_t Heap::alloc_tlab(size_t size)
+{
+    CHECK(size <= ZObjectSizeLimitSmall);
+    return object_allocator().alloc(size, PageAge::eden);
+}
+
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
-                             bool clearPayload, PageAge age)
+                             bool clearPayload, PageAge age, ZAllocationFlags flags)
 {
     RegionManager& manager = GetHeap().page_allocator();
     ZPage* page = g_prematerializedPage;
     if (page == nullptr && num > 0) {
-        page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
+        page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age, flags);
     }
     if (page != nullptr) {
         page_table().insert(page);

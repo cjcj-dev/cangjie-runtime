@@ -9,7 +9,6 @@ set(SRC_LIST
     "zPage.cpp"
     "zPageAllocator.cpp"
 
-    "Allocator.cpp"
     "../z/zForwardingTable.cpp"
     "../z/zForwardingAllocator.cpp"
     "../z/zVirtualMemoryManager.cpp"
@@ -25,11 +24,12 @@ set(SRC_LIST
     "../z/zPage.cpp"
     "../z/zPageTable.cpp"
     "../z/zObjectAllocator.cpp"
+    "../z/zObjArrayAllocator.cpp"
     "../z/zHeuristics.cpp"
     "../z/zRelocationSetSelector.cpp"
     "CartesianTree.cpp"
     "../z/zMappedCache.cpp"
-    "HeapFiller.cpp"
+    "../shared/collectedHeap.cpp"
 )
 
 # ZGC os/<os>/gc/z/: CMake selects the pd files. Do not list posix/linux

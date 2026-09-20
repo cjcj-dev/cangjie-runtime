@@ -12,7 +12,7 @@
 
 #include "Base/Log.h"
 #include "Base/SpinLock.h"
-#include "Heap/Allocator/Allocator.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "ObjectModel/MArray.inline.h"
 #include "Sanitizer/SanitizerCompilerCalls.h"
 #include "securec.h"
@@ -106,8 +106,8 @@ void OnHeapDeallocated(void*, size_t)
 
 static void CheckCanary(void* addr, size_t size, uint64_t expect)
 {
-    auto remainSize = size - AlignDown(size, Allocator::ALLOC_ALIGN);
-    uint8_t padSize = remainSize == 0 ? 0 : static_cast<uint8_t>(Allocator::ALLOC_ALIGN - remainSize);
+    auto remainSize = size - AlignDown(size, RegionSpace::ALLOC_ALIGN);
+    uint8_t padSize = remainSize == 0 ? 0 : static_cast<uint8_t>(RegionSpace::ALLOC_ALIGN - remainSize);
     DLOG(SANITIZER, "gwpasan check array(%p): head canary: 0x%lx, tail canary: 0x%01x", addr, size, padSize);
 
     // check head canary
@@ -161,7 +161,7 @@ void* ArrayAcquireMemoryRegion(ArrayRef, void* addr, size_t size)
     LOG(RTLOG_INFO, "Gwp-Asan acquires array [%p]. Current sampled array count: %zu", addr, g_canary->size());
 
     // array is aligned, no for tail canary
-    auto remainSize = size - AlignDown(size, Allocator::ALLOC_ALIGN);
+    auto remainSize = size - AlignDown(size, RegionSpace::ALLOC_ALIGN);
     if (remainSize == 0) {
         g_lock.Unlock();
         DLOG(SANITIZER, "gwpasan acquire array(%p): head canary: 0x%lx, tail canary: 0x0", addr, size);
@@ -169,8 +169,8 @@ void* ArrayAcquireMemoryRegion(ArrayRef, void* addr, size_t size)
     }
 
     // array is not aligned, generate a tail canary
-    auto padSize = static_cast<uint8_t>(Allocator::ALLOC_ALIGN - remainSize);
-    CHECK_DETAIL(memset_s(reinterpret_cast<uint8_t*>(addr) + AlignDown(size, Allocator::ALLOC_ALIGN) + remainSize,
+    auto padSize = static_cast<uint8_t>(RegionSpace::ALLOC_ALIGN - remainSize);
+    CHECK_DETAIL(memset_s(reinterpret_cast<uint8_t*>(addr) + AlignDown(size, RegionSpace::ALLOC_ALIGN) + remainSize,
         padSize, padSize, padSize) == EOK, "array padding memset failed.");
     g_lock.Unlock();
     DLOG(SANITIZER, "gwpasan acquire array(%p): head canary: 0x%lx, tail canary: 0x%01x", addr, size, padSize);
@@ -195,8 +195,8 @@ void* ArrayReleaseMemoryRegion(ArrayRef, void* addr, size_t size)
     LOG(RTLOG_INFO, "Gwp-Asan releases array [%p]. Current sampled array count: %zu", addr, g_canary->size());
     g_lock.Unlock();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    auto remainSize = size - AlignDown(size, Allocator::ALLOC_ALIGN);
-    uint8_t padSize = remainSize == 0 ? 0 : static_cast<uint8_t>(Allocator::ALLOC_ALIGN - remainSize);
+    auto remainSize = size - AlignDown(size, RegionSpace::ALLOC_ALIGN);
+    uint8_t padSize = remainSize == 0 ? 0 : static_cast<uint8_t>(RegionSpace::ALLOC_ALIGN - remainSize);
     DLOG(SANITIZER, "gwpasan release array(%p): head canary: 0x%lx, tail canary: 0x%01x", addr, size, padSize);
 #endif
     return addr;

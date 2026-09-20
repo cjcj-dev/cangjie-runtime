@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp
++++ b/runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp
+@@ -130,7 +130,7 @@
+     const uintptr_t start = ZCollectedHeap::heap()->allocate_new_tlab(totalSize, tlabSize, &actualSize);
+     CJThreadPreemptOffCntSub();
+     if (start == 0) { return 0; }
+-    FillTLAB(start, actualSize);
++    FillTLAB(start, actualSize - 8);
+     return AllocateInTLAB(totalSize);
+ }
+ 

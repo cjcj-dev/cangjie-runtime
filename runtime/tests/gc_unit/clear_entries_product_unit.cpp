@@ -1748,7 +1748,9 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     (void)PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    buffer->SetRegion(routeDestination);
+    buffer->FlushRegion();
+    const size_t tlabBytes = std::min(routeDestination->remaining(), ZObjectSizeLimitSmall);
+    buffer->FillTLAB(routeDestination->alloc_object(tlabBytes), tlabBytes);
     // Page work starts below; RouteRegion now waits for that work to finish.
     // The precondition is an installed, unfinished forwarding table.
     GC_EXPECT_TRUE((generation_forwarding_table(Generation::Old).get(from) != nullptr));
@@ -1819,7 +1821,9 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     (void)PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    buffer->SetRegion(routeDestination);
+    buffer->FlushRegion();
+    const size_t tlabBytes = std::min(routeDestination->remaining(), ZObjectSizeLimitSmall);
+    buffer->FillTLAB(routeDestination->alloc_object(tlabBytes), tlabBytes);
     DeliverySharedPageScope allocation(routeDestination);
     GC_EXPECT_TRUE(manager.RelocateClaimedPage(region));
     ZRelocateQueue& queue = manager.GetZRelocateQueue();

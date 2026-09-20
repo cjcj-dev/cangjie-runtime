@@ -108,7 +108,7 @@ void ZCollectedHeap::initialize_gc_workers()
         activeProcessorCount = std::max(activeProcessorCount, 1U);
         const size_t maxHeap = _heap.GetMaxCapacity();
         const auto& regions = static_cast<RegionSpace&>(_heap.GetAllocator()).GetRegionManager();
-        const size_t regionBytes = regions.GetThreadLocalRegionSize();
+        const size_t regionBytes = ZPageSizeSmall;
         CHECK_DETAIL(regionBytes != 0, "worker region budget must be initialized");
         const size_t heapWorkers = maxHeap / 50 / regionBytes;
         const uint64_t cpus = activeProcessorCount;
@@ -129,6 +129,15 @@ void ZCollectedHeap::initialize_gc_workers()
 }
 
 
+
+// ZGC zCollectedHeap.cpp:137-146. Cangjie allocation sizes are bytes.
+uintptr_t ZCollectedHeap::allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize)
+{
+    (void)minSize;
+    const uintptr_t addr = _heap.alloc_tlab(AlignUp(requestedSize, size_t{8}));
+    if (addr != 0) { *actualSize = requestedSize; }
+    return addr;
+}
 
 void ZCollectedHeap::collect(GCReason reason, bool async)
 {

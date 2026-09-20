@@ -34,9 +34,9 @@ GC_TEST(TLABUsage, BoundsAndDemand)
     buffer.ClearRegion();
     std::fprintf(stderr, "TLAB_EMPTY_IDENTITY product=%p caller=%p\n",
                  static_cast<void*>(buffer.GetRegion()), static_cast<void*>(ZPage::NullRegion()));
-    GC_EXPECT_TRUE(buffer.GetRegion() == ZPage::NullRegion());
-    const size_t unit = ZGranuleSize;
-    const size_t maximum = 32 * unit;
+    GC_EXPECT_TRUE(buffer.GetRegion() == nullptr);
+    const size_t unit = 2 * 1024;
+    const size_t maximum = ZObjectSizeLimitSmall;
     GC_EXPECT_EQ(buffer.ComputeTLABSize(0, maximum), unit);
     GC_EXPECT_EQ(buffer.ComputeTLABSize(unit, maximum), 2 * unit);
     GC_EXPECT_EQ(buffer.ComputeTLABSize(maximum, maximum), maximum);
@@ -120,7 +120,7 @@ void* AllocateThroughCycle(void*)
     const MSize objectSize = 256 + TYPEINFO_PTR_SIZE;
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    const size_t maximum = manager.GetThreadLocalRegionSize();
+    const size_t maximum = ZObjectSizeLimitSmall;
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     buffer = AllocBuffer::GetOrCreateAllocBuffer();
     const size_t initial = buffer->ComputeTLABSize(objectSize, maximum);
@@ -153,10 +153,11 @@ void* AllocateThroughCycle(void*)
     if (MCC_NewObject(type, objectSize) == nullptr) {
         return reinterpret_cast<void*>(2);
     }
-    const size_t actual = buffer->GetRegion()->GetRegionSize();
-    // #727 removes variable unit-sized backing pages; #730 owns sub-page TLAB resizing.
-    const bool valid = initial == ZPageSizeSmall && computed == ZPageSizeSmall &&
-                       actual == ZPageSizeSmall && computed <= maximum;
+    const size_t actual = buffer->TLABSize();
+    // ZHeap::alloc_tlab reserves a slice from a shared small page.
+    const bool valid = initial >= objectSize && computed >= objectSize &&
+                       actual == computed && computed <= maximum &&
+                       buffer->GetRegion()->GetRegionSize() == ZPageSizeSmall;
     std::fprintf(stderr, "TLAB_CYCLE initial=%zu computed=%zu refill=%zu maximum=%zu valid=%u\n",
                  initial, computed, actual, maximum, static_cast<unsigned>(valid));
     return reinterpret_cast<void*>(valid ? 0 : 3);

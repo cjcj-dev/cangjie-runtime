@@ -20,6 +20,7 @@
 #include "Base/LogFile.h"
 #include "Common/RunType.h"
 #include "PagePool.h"
+#include "NativeAllocator.h"
 
 namespace MapleRuntime {
 // when there is a need to use PageAllocator to manage
@@ -255,54 +256,7 @@ private:
     uint16_t slotAlignment;
 };
 
-// Utility class used for StdContainerAllocator
-// It has lots of PageAllocators, each for different slot size,
-// so all allocation sizes can be handled by this bridge class.
-class AggregateAllocator {
-public:
-    static constexpr uint32_t MAX_ALLOCATORS = 53;
-
-    ATTR_NO_INLINE MRT_EXPORT static AggregateAllocator& Instance(AllocationTag tag);
-
-    AggregateAllocator()
-    {
-        for (uint32_t i = 0; i < MAX_ALLOCATORS; ++i) {
-            allocator[i].Init(static_cast<uint16_t>(RUNTYPE_RUN_IDX_TO_SIZE(i)));
-        }
-    }
-    ~AggregateAllocator() = default;
-
-    // choose appropriate allocation to allocate
-    void* Allocate(size_t size)
-    {
-        CHECK(size <= std::numeric_limits<size_t>::max() - (AllocatorUtils::ALLOC_ALIGNMENT - 1));
-        size_t alignedSize = MapleRuntime::AlignUp<size_t>(size, AllocatorUtils::ALLOC_ALIGNMENT);
-        if (alignedSize <= RUN_ALLOC_LARGE_SIZE) {
-            uint32_t index = RUNTYPE_SIZE_TO_RUN_IDX(alignedSize);
-            return allocator[index].Allocate();
-        } else {
-            return PagePool::Instance().GetPage(size);
-        }
-    }
-
-    ATTR_NO_INLINE void Deallocate(void* p, size_t size)
-    {
-        CHECK(size <= std::numeric_limits<size_t>::max() - (AllocatorUtils::ALLOC_ALIGNMENT - 1));
-        size_t alignedSize = MapleRuntime::AlignUp<size_t>(size, AllocatorUtils::ALLOC_ALIGNMENT);
-        if (alignedSize <= RUN_ALLOC_LARGE_SIZE) {
-            uint32_t index = RUNTYPE_SIZE_TO_RUN_IDX(alignedSize);
-            allocator[index].Deallocate(p);
-        } else {
-            PagePool::Instance().ReturnPage(reinterpret_cast<uint8_t*>(p), size);
-        }
-    }
-
-private:
-    PageAllocator allocator[MAX_ALLOCATORS];
-};
-
-// Allocator used to take control of memory allocation for std containers.
-// It uses AggregateAllocator to dispatch the memory operation to appropriate PageAllocator.
+// Native container storage uses the runtime native allocator.
 template<class T, AllocationTag cat>
 class StdContainerAllocator {
 public:
@@ -343,11 +297,11 @@ public:
 
     pointer allocate(size_type n, const void* hint __attribute__((unused)) = 0)
     {
-        pointer result = static_cast<pointer>(AggregateAllocator::Instance(cat).Allocate(sizeof(T) * n));
+        pointer result = static_cast<pointer>(NativeAllocator::NativeAlloc(sizeof(T) * n));
         return result;
     }
 
-    void deallocate(pointer p, size_type n) { AggregateAllocator::Instance(cat).Deallocate(p, sizeof(T) * n); }
+    void deallocate(pointer p, size_type n) { NativeAllocator::NativeFree(p, sizeof(T) * n); }
 
     size_type max_size() const { return static_cast<size_type>(~0) / sizeof(value_type); }
 

@@ -53,7 +53,6 @@ void ZIterator::oop_iterate_safe(BaseObject* object, TypeInfo* klass, OopClosure
         OopIteratorClosureDispatch::oop_oop_iterate(closure, object, klass);
     } else {
 #if defined(MRT_GC_UNIT_TESTS)
-        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::ITERATOR_SKIP, object);
 #endif
     }
 }
