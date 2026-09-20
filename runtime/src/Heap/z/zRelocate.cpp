@@ -2040,16 +2040,21 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
     if (const MAddress to = forwarding->find(from)) {
         return reinterpret_cast<BaseObject*>(to);
     }
+    (void)provenance;
     ZPage::RetainScope lease{forwarding};
     if (lease.ok()) {
-        if (BaseObject* to = TryMutatorRelocate(object, lease)) return to;
+        DCHECK(generation->is_phase_relocate());
+        BaseObject* to = relocate_object_inner(object, forwarding->page());
+        lease.Release();
+        if (to != nullptr) {
+            return to;
+        }
+        // ZGC zRelocate.cpp:402-406: only allocation failure after retaining
+        // the page requests worker completion here. retain_page itself waits
+        // for a claimed page (zForwarding.cpp:95-100).
+        relocateQueue.add_and_wait(forwarding);
     }
-    lease.Release();
-    BaseObject* to = WaitForPageForwarding(object, lease.HoldForwarding());
-    if (to == nullptr) {
-        ZBarrier::FailClosedLoad("ZRelocate::forward_object requires a forwarding entry", object, 0, provenance);
-    }
-    return to;
+    return forward_object(forwarding, object);
 }
 }
 
