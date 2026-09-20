@@ -1204,7 +1204,7 @@ void ZGenerationOld::concurrent_mark()
     WorkStack& workStack = oldMarkWorkStack;
     ValueRootList& foreignStack = oldExportOwners;
     MarkingStacks::VerifyEmpty(workStack.size());
-    // ZGC zGeneration.cpp:1015-1020: the roots task owns thread completion.
+    // ZGC zGeneration.cpp:1086-1092: the roots task owns thread completion.
     // Its common MarkThreadClosure absorbs already completed handshakes.
     {
         ZStatTimerOld zstatTimer(PEnumRootsUpdateOldPointersWithin);

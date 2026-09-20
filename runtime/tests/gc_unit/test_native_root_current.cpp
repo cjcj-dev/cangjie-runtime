@@ -83,7 +83,9 @@ struct RelocationReceiptTestAccess {
     }
     static size_t PendingYoungRootWork(Heap& collector)
     {
-        return ThreadLocal::GetMarkStacks(*Heap::GetHeap().young().MarkPtr()).Population();
+        size_t entries = ThreadLocal::GetMarkStacks(Heap::GetHeap().young().Mark()).Population();
+        RootPublicationSnapshot::Visit(Heap::GetHeap().young().Mark(), [&](const MarkStackEntry&) { ++entries; });
+        return entries;
     }
     static void DrainYoungRootWork(Heap& collector)
     {
@@ -147,6 +149,8 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
     } else {
         thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        thread->SetManagedContext(false);
+        (void)thread->EnterSaferegion(false);
         thread->SetStackTopAddr(reinterpret_cast<uintptr_t>(stackStorage));
         thread->SetStackSize(sizeof(stackStorage));
         if (threadKind == 1) {
@@ -180,12 +184,21 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     region->MarkForwardingDone();
     auto forwarding = forwarding_for_page(region);
     BaseObject* to = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(from)));
+    // CompactRegion does not promote the page. Use the product promotion
+    // operation so the old root task is measured against an actual old page.
+    ZPage* promoted = region->clone_for_promotion();
+    heap.young().flip_promote(region, promoted);
+    fx.region0 = promoted;
+    region = promoted;
     std::fprintf(stderr, "NATIVE_ROOT_ORACLE before=%#zx from=%p to=%p slot=%#zx young=%u\n",
                  before, from, to, raw(slot.GetFieldValue()), unsigned(region->IsYoungRegion()));
     GC_EXPECT_TRUE(to != nullptr && to != from);
-    if (threadKind != 0) RelocationReceiptTestAccess::PreparePlainRoots(collector);
     if (minor) RelocationReceiptTestAccess::NativeRootMajorPrelude(collector);
-    else RelocationReceiptTestAccess::NativeRootTrace(collector);
+    else {
+        heap.old().End();
+        heap.old().mark_start();
+        heap.old().concurrent_mark();
+    }
     const bool currentMarked = region->is_object_strongly_live(from_object(to));
     const bool staleMarked = region->is_object_strongly_live(from_object(from));
     // ZMarkYoungRootsTask -> mark_if_young (zBarrier.inline.hpp:763-767)
@@ -215,7 +228,6 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         return;
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::MarkComplete);
     Heap::GetHeap().GetZGeneration(Generation::Young).reset_relocation_set();
     // Observe the product's published old mark stacks after the root task
     // returned and before follow starts (testOldMarkStarted fires at the top
@@ -231,7 +243,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         observed = true;
         enumerated |= RootPublicationSnapshot::Contains(*Heap::GetHeap().old().MarkPtr(), to);
     };
-    RelocationReceiptTestAccess::NativeRootTrace(collector);
+    heap.old().concurrent_mark();
     ZGeneration::testOldMarkStarted = nullptr;
     ZMark::testColoredRootResult = nullptr;
     const bool oldMarkedCurrent = region->is_object_strongly_live(from_object(to)) &&
@@ -424,13 +436,8 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     auto& heap = Heap::GetHeap();
     Heap& collector = heap;
     RelocationReceiptTestAccess::BindNativeRootFixture(collector);
-    GcHeapFixture::AdvanceGeneration(Generation::Young);
-    Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     fx.region0->reset(PageAge::eden);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Mark);
-    Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
-    Heap::GetHeap().young().Mark().Start();
+    Heap::GetHeap().young().mark_start();
     MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.
@@ -470,15 +477,19 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     fixture.region0->reset(PageAge::old);
-    GC_EXPECT_FALSE(fixture.region0->is_object_strongly_live(from_object(fixture.obj0)));
     // Seed the real scheduling input through its existing fixture operation.
     // The root task and marker below are the product TraceHeap implementation.
     Heap::GetHeap().GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
+    // Register before mark-start: a slot written after the flip is already
+    // mark-good and is not an input to this cycle's root barrier.
+    heap.old().End();
+    heap.old().mark_start();
+    GC_EXPECT_FALSE(fixture.region0->is_object_strongly_live(from_object(fixture.obj0)));
     bool published = false;
     ZGeneration::testOldMarkStarted = [&]() {
         published |= RootPublicationSnapshot::Contains(*Heap::GetHeap().old().MarkPtr(), fixture.obj0);
     };
-    RelocationReceiptTestAccess::NativeRootTrace(collector);
+    heap.old().concurrent_mark();
     ZGeneration::testOldMarkStarted = nullptr;
     const bool marked = fixture.region0->is_object_strongly_live(from_object(fixture.obj0));
     std::fprintf(stderr, "ROOT_STORAGE_STRONG_TARGET executed=1 object=%p published=%u marked=%u\n",
@@ -657,12 +668,12 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
     }
     size_t rootResults = 0;
     auto observe = [&](BaseObject* object) { if (object == fixture.obj0) ++rootResults; };
-    ZMark::VisitMinorRoots(observe, observe, epoch);
+    ZMark::VisitMinorRoots(observe, observe);
     const bool firstDone = thread->GetStackWatermark().IsDone(epoch);
     readPublished();
     const size_t firstPublished = published;
     const size_t firstResults = rootResults;
-    ZMark::VisitMinorRoots(observe, observe, epoch);
+    ZMark::VisitMinorRoots(observe, observe);
     readPublished();
     const bool sameRoot = raw(root->LoadPlain()) == reinterpret_cast<uintptr_t>(fixture.obj0);
     std::fprintf(stderr, "YOUNG_THREAD_COMPLETION_TARGET handshake=%u done=%u published=%zu first=%zu second=%zu same=%u\n",
