@@ -23,7 +23,8 @@ using namespace MapleRuntime::GcUnit;
 extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
-struct ZGenerationRootTestAccess {
+class ZGenerationRootTest {
+public:
     static void Seed(Heap& collector, BaseObject* object)
     {
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
@@ -82,7 +83,7 @@ void* RunMajorCycle(void*)
         reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
     auto* object = MObject::NewPinnedObject(type, 16);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(object);
-    ZGenerationRootTestAccess::Seed(collector, object);
+    ZGenerationRootTest::Seed(collector, object);
     // The ZGC breakpoint exposes the completed root+follow result before
     // mark-end and relocation (zGeneration.cpp:1086-1092).
     ConcurrentGCBreakpoints::AcquireControl();
@@ -95,7 +96,7 @@ void* RunMajorCycle(void*)
     std::fflush(stdout);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    ZGenerationRootTestAccess::Clear(collector);
+    ZGenerationRootTest::Clear(collector);
     Heap::GetHeap().RemoveExportObject(handle);
     return nullptr;
 }
@@ -106,9 +107,9 @@ GC_TEST(OHOSCycle, PostResolvePostsProductTask)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
     Heap& collector = Heap::GetHeap();
-    ZGenerationRootTestAccess::Seed(collector, reinterpret_cast<BaseObject*>(uintptr_t{1}));
-    ZGenerationRootTestAccess::PostResolveCycleTask(collector);
-    ZGenerationRootTestAccess::Clear(collector);
+    ZGenerationRootTest::Seed(collector, reinterpret_cast<BaseObject*>(uintptr_t{1}));
+    ZGenerationRootTest::PostResolveCycleTask(collector);
+    ZGenerationRootTest::Clear(collector);
     ExpectPostState("OHOSCycle.PostResolvePostsProductTask", 1U);
 }
 
@@ -117,8 +118,8 @@ GC_TEST(OHOSCycle, EmptyWorkDoesNotPost)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
     Heap& collector = Heap::GetHeap();
-    ZGenerationRootTestAccess::Clear(collector);
-    ZGenerationRootTestAccess::PostResolveCycleTask(collector);
+    ZGenerationRootTest::Clear(collector);
+    ZGenerationRootTest::PostResolveCycleTask(collector);
     ExpectPostState("OHOSCycle.EmptyWorkDoesNotPost", 0U);
 }
 
