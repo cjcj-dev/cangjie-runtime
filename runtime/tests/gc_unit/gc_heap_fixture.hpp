@@ -361,12 +361,6 @@ struct GcHeapFixture {
         if (region1 != nullptr && region1->IsYoungRegion()) {
             region1->reset(PageAge::old);
         }
-        if (region0 != nullptr) {
-            Heap::free_page(region0);
-        }
-        if (region1 != nullptr) {
-            Heap::free_page(region1);
-        }
     }
 
     BaseObject* PlaceObject(MAddress addr)
