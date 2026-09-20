@@ -78,11 +78,9 @@ public:
     static void VisitStaticRoots(const NativeSlotVisitor& visitor);
     static void EnumRefFieldRoot(RefField<>& ref, ValueRootList& exportOwners);
     static void ProcessFinalizers();
-    static void VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
-                             uint64_t stackScanEpoch = 0);
+    static void VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor);
     static void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
-                         const std::function<void(BaseObject*)>& invisibleVisitor,
-                         uint64_t stackScanEpoch = 0);
+                         const std::function<void(BaseObject*)>& invisibleVisitor);
     static void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown");
     static void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin, bool finalizable);
     static void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
