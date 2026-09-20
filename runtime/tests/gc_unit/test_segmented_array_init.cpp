@@ -23,7 +23,7 @@
 #include "gc_unittest.hpp"
 
 #include "Cangjie.h"
-#include "Runtime.h"
+#include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "schedule.h"
 #include "Common/ScopedObjectAccess.h"
