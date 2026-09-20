@@ -117,9 +117,10 @@ GC_TEST(StoreBuf, EntryCarriesPairedPrevAndInstallColour)
 GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
 {
     GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
+    // SATB previous values must predate mark start (ZGC zMark.inline.hpp:51-55).
+    MarkPublicationFixture markFixture;
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
@@ -173,12 +174,45 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     GC_EXPECT_EQ(retired.size(), 1u);
 }
 
+// ZGC zMark.inline.hpp:51-55: objects on pages allocated in this cycle are
+// implicitly live. Contrast with ProductWriteCarriesOldValueOnlyInPrevArm.
+GC_TEST(StoreBuf, AllocatingPreviousValueIsImplicitlyLive)
+{
+    for (PageAge age : {PageAge::old, PageAge::eden}) {
+        GcHeapFixture fx;
+        fx.region0->reset(PageAge::old);
+        MarkPublicationFixture markFixture;
+        // Deliberately allocate the previous value's page after mark start.
+        fx.region1->reset(age);
+        HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+        field.StoreColoured(StoreBadPointer(fx.obj1));
+        Mutator mutator;
+        InstalledMutatorScope mutatorScope(mutator);
+        ZBarrier::WriteReference(fx.obj0, field, nullptr);
+        const size_t pending = mutator.GetGCData().storeBarrierBuffer->Pending();
+        mutator.FlushStoreBarrierBuffer();
+        std::vector<BaseObject*> retired;
+        DrainPublishedMarkObjects(retired);
+        const bool remembered = SlotPageRemembered(reinterpret_cast<MAddress>(&field));
+        std::fprintf(stderr, "DETAIL allocating age=%u allocating=%u pending=%zu retired=%zu remset=%u\n",
+                     static_cast<unsigned>(age), static_cast<unsigned>(fx.region1->IsAllocating()),
+                     pending, retired.size(), static_cast<unsigned>(remembered));
+        GC_EXPECT_EQ(pending, 1u);
+        GC_EXPECT_TRUE(fx.region1->IsAllocating());
+        GC_EXPECT_TRUE(fx.region1->is_object_strongly_live(from_object(fx.obj1)));
+        GC_EXPECT_TRUE(retired.empty());
+        GC_EXPECT_TRUE(remembered);
+        GC_EXPECT_TRUE(is_null(field.GetTargetObject()));
+    }
+}
+
 GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
 {
     GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
+    // SATB previous values must predate mark start (ZGC zMark.inline.hpp:51-55).
+    MarkPublicationFixture markFixture;
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
@@ -293,9 +327,10 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
 GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
 {
     GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
+    // SATB previous values must predate mark start (ZGC zMark.inline.hpp:51-55).
+    MarkPublicationFixture markFixture;
 
     BaseObject* const holder = fx.obj0;
     BaseObject* const oldReferent = fx.PlaceObject(fx.heapStart + 256);
