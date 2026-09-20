@@ -125,13 +125,13 @@ std::set<size_t> ExpectSame(Slot* addr, size_t length)
 // the slot buffer lives in the heap address domain like every page.
 struct SlotBuf {
     size_t bytes = 0;
-    std::unique_ptr<ZTestHeapMapping> owner;
+    std::unique_ptr<ZTestAllocatedMemory> owner;
     Slot* slots = nullptr;
 
     explicit SlotBuf(size_t n)
     {
         bytes = AlignUp((n + 8) * sizeof(Slot) + MarkPartialArray::MIN_SIZE, ZGranuleSize);
-        owner.reset(new ZTestHeapMapping(bytes));
+        owner.reset(new ZTestAllocatedMemory(bytes));
         auto raw = reinterpret_cast<uintptr_t>(owner->base());
         slots = reinterpret_cast<Slot*>(AlignUp(raw, MarkPartialArray::MIN_SIZE));
         for (size_t i = 0; i < n; ++i) {
