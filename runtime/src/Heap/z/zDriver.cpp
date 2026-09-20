@@ -82,13 +82,20 @@ void ZDriver::run_thread()
             abortpoint();
             const bool completed = !ZAbort::should_abort() && ExecuteDriverRequest(request);
             port.ack();
+            if (completed) {
+                auto& allocator = Heap::GetHeap().page_allocator();
+                if (major) {
+                    allocator.HandleAllocStallingForOld(Heap::GetHeap().GetFinalizerProcessor()
+                        .GetReferenceProcessor().uses_clear_all_soft_reference_policy());
+                } else {
+                    allocator.HandleAllocStallingForYoung();
+                }
+            }
             if (major) ZBreakpoint::AtAfterGC();
             ZCollectedHeap::heap()->director()->set_busy(!major, false);
             if (completed && !major) ZDirector::evaluate_rules();
         }
         abortpoint();
-        auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-        regions.SatisfyStalledAllocations();
     }
 }
 
@@ -106,6 +113,7 @@ void ZDriverMinor::collect(const ZDriverRequest& request)
 {
     switch (request.cause()) {
         case GC_REASON_YOUNG:
+        case GC_REASON_ALLOCATION_STALL:
             _port.send_async(request);
             break;
         case GC_REASON_HEU_SYNC:
@@ -130,6 +138,7 @@ void ZDriverMajor::collect(const ZDriverRequest& request)
         case GC_REASON_HEU:
         case GC_REASON_NATIVE:
         case GC_REASON_WARMUP:
+        case GC_REASON_ALLOCATION_STALL:
             _port.send_async(request);
             break;
         case GC_REASON_WB_BREAKPOINT:
@@ -194,13 +203,13 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
     // zDriver.cpp:166-176 / zGeneration.cpp:154: the request carries the
     // selected worker counts into each generation's ZWorkers.
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()->set_active_workers(youngCount);
-    if (request.cause() != GC_REASON_YOUNG) {
+    if (kind == GCDriverKind::MAJOR) {
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()->set_active_workers(oldCount);
     }
 
     // zDriver.cpp:416-436: full causes preclean with promote-all, then
     // establish the combined young/old roots cycle. Other causes use partial roots.
-    if (request.cause() != GC_REASON_YOUNG) {
+    if (kind == GCDriverKind::MAJOR) {
         ZGCIdMajor majorId(GCIdMark::Current(), 'Y');
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).SelectReason(
             request.cause(), GCTask::ASYNC_TASK_INDEX);
@@ -224,11 +233,15 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
             return false;
         }
     }
+    // ZGC zDriver.cpp:434: major young completion also advances stalled requests.
+    if (kind == GCDriverKind::MAJOR) {
+        Heap::GetHeap().page_allocator().HandleAllocStallingForYoung();
+    }
     VLOG(GCPHASE, "[GCV2][driver] kind=%s seq=%llu reason=%u ack=pending",
-         request.cause() == GC_REASON_YOUNG ? "minor" : "major",
+         kind == GCDriverKind::MINOR ? "minor" : "major",
          0ull, request.cause());
     const uint64_t index = GCTask::ASYNC_TASK_INDEX;
-    if (request.cause() == GC_REASON_YOUNG) {
+    if (kind == GCDriverKind::MINOR) {
         ZGCIdMinor minorId(GCIdMark::Current());
         ZCollectedHeap::heap()->driver_minor()->RunYoungCollection(index, ZYoungType::minor, warmup);
         accumulate(ZGenerationId::young);
@@ -237,7 +250,7 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
         ZCollectedHeap::heap()->driver_major()->RunCollection(index, request.cause(), warmup);
         accumulate(ZGenerationId::old);
     }
-    (request.cause() == GC_REASON_YOUNG ? ZPhaseCollectionMinor : ZPhaseCollectionMajor)
+    (kind == GCDriverKind::MINOR ? ZPhaseCollectionMinor : ZPhaseCollectionMajor)
         .RegisterEnd(collectionStart, TimeUtil::NanoSeconds());
     // A stop during marking or relocation is cancellation, even though the
     // collection call has returned after joining its work and page cleanup.
@@ -246,7 +259,7 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
             ? ZGenerationId::young : ZGenerationId::old).End();
         return false;
     }
-    GcLog::Cycle(GCIdMark::Current(), request.cause() == GC_REASON_YOUNG ? "minor" : "major",
+    GcLog::Cycle(GCIdMark::Current(), kind == GCDriverKind::MINOR ? "minor" : "major",
                  g_gcRequests[request.cause()].name, collectionStart, TimeUtil::NanoSeconds() - collectionStart,
                  liveBefore, liveAfter, collected, Heap::GetHeap().GetUsedPageSize());
     return true;
@@ -348,6 +361,7 @@ static bool ShouldPrecleanYoung(GCReason reason)
         case GC_REASON_OOM:
         case GC_REASON_FORCE:
         case GC_REASON_WB_BREAKPOINT:
+        case GC_REASON_ALLOCATION_STALL:
             return true;
         case GC_REASON_BACKUP:
         case GC_REASON_HEU:
@@ -359,10 +373,9 @@ static bool ShouldPrecleanYoung(GCReason reason)
         default:
             CHECK(false);
     }
-    // All requests in this existing allocation FIFO wait for a major
-    // (zPageAllocator.cpp:StallAllocation requests GC_REASON_OOM).
+    // ZGC zDriver.cpp:294-299: requests that have seen young but not old.
     const auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    return manager.IsAllocationStalling();
+    return manager.IsAllocationStallingForOld();
 }
 
 

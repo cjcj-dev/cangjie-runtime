@@ -81,20 +81,8 @@ GC_TEST(GcDirector, WarmupCountsOnlyWarmupRequests)
     GC_EXPECT_EQ(cycle.Stats(20).warmupCycles, 3u);
 }
 
-GC_TEST(GcDirector, AllocationStallSnapshotUsesOutstandingRequests)
-{
-    std::mutex mutex;
-    AllocationStallQueue queue(mutex);
-    AllocationStallRequest request(4096, 0, true, true);
-    GC_EXPECT_TRUE(!queue.IsStalling());
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        queue.EnqueueLocked(request);
-    }
-    GC_EXPECT_TRUE(queue.IsStalling());
-    queue.CompleteWave(queue.CaptureWaveBoundary());
-    GC_EXPECT_TRUE(!queue.IsStalling());
-}
+// Outstanding-queue state is covered through real drivers by
+// AllocationStall.ProductLateWaiterRequiresNextCollection.
 
 GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
 {

@@ -59,10 +59,14 @@ static void RunAllocatorCase(CJTaskFunc task)
     CJThreadHandle handle = RunCJTask(task, nullptr);
     GC_EXPECT_TRUE(handle != nullptr);
     void* result = nullptr;
+    std::fprintf(stderr, "ALLOCATOR_PHASE before_get_task_ret\n");
     GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
+    std::fprintf(stderr, "ALLOCATOR_PHASE after_get_task_ret\n");
     ReleaseHandle(handle);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(result), uintptr_t{0});
+    std::fprintf(stderr, "ALLOCATOR_PHASE before_fini\n");
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    std::fprintf(stderr, "ALLOCATOR_PHASE after_fini\n");
 }
 
 namespace {

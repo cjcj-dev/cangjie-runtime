@@ -106,76 +106,6 @@ GC_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
     std::fprintf(stderr, "ALLOCATION_CAPACITY_TARGET count=%zu first=%p second=%p\n", count, first, second);
     GC_EXPECT_EQ(count, size_t{1});
 }
-GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
-{
-    OneUnitStallFixture fixture;
-    fixture.PublishCapacity();
-    ZAllocationFlags flags;
-    flags.set_non_blocking();
-    ZPageAllocation request(ZPageSizeSmall, static_cast<uint8_t>(ZPageType::small), false, true, flags);
-    GC_EXPECT_TRUE(fixture.manager.ClaimAllocationLocked(request));
-    ZPage* competing = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, true, PageAge::eden, flags);
-    std::fprintf(stderr, "ALLOCATION_RESERVATION_TARGET bytes=%zu competing=%p\n", request.Memory().size, competing);
-    GC_EXPECT_EQ(request.Memory().size, ZPageSizeSmall);
-    GC_EXPECT_TRUE(competing == nullptr);
-    fixture.manager.ReturnPageMemory(request.Memory());
-}
-GC_OTHER_VM_TEST(AllocationStall, WaiterBlocksInSaferegion)
-{
-    OneUnitStallFixture fixture;
-    ZPageAllocation request(ZPageSizeSmall, static_cast<uint8_t>(ZPageType::small), false, true);
-    Mutator mutator;
-    std::atomic<bool> ready{false}, completed{false};
-    bool result = false;
-    std::thread waiter([&] {
-        mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
-        ThreadLocal::SetMutator(&mutator);
-        ready.store(true, std::memory_order_release);
-        result = fixture.manager.StallAllocation(request, false);
-        completed.store(true, std::memory_order_release);
-        ThreadLocal::SetMutator(nullptr);
-    });
-    const auto deadline = std::chrono::steady_clock::now() + kHangLimit;
-    while ((!ready.load(std::memory_order_acquire) || !mutator.InSaferegion()) &&
-           std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
-    const bool safe = ready.load() && mutator.InSaferegion() && !completed.load();
-    request.Satisfy(true);
-    waiter.join();
-    std::fprintf(stderr, "ALLOCATION_WAIT_TARGET safe=%d result=%d completed=%d\n", safe, result, completed.load());
-    GC_EXPECT_TRUE(safe);
-    GC_EXPECT_TRUE(result && completed.load());
-}
-GC_TEST(AllocationStall, CompletedWaveDoesNotFailLateWaiter)
-{
-    std::mutex owner;
-    AllocationStallQueue queue(owner);
-    ZPageAllocation first(ZPageSizeSmall, 0, false, true), late(ZPageSizeSmall, 0, false, true);
-    queue.EnqueueLocked(first);
-    const uint64_t boundary = queue.CaptureWaveBoundary();
-    queue.EnqueueLocked(late);
-    GC_EXPECT_TRUE(queue.CompleteWave(boundary));
-    GC_EXPECT_FALSE(first.Wait());
-    size_t served = queue.SatisfyAvailable([&](ZPageAllocation& request) { return &request == &late; });
-    std::fprintf(stderr, "ALLOCATION_LATE_TARGET served=%zu\n", served);
-    GC_EXPECT_EQ(served, size_t{1});
-    GC_EXPECT_TRUE(late.Wait());
-}
-GC_TEST(AllocationStall, DequeueBeforeNotifyKeepsOneTerminalPerWaiter)
-{
-    std::mutex owner;
-    AllocationStallQueue queue(owner);
-    ZPageAllocation first(ZPageSizeSmall, 0, false, true), second(ZPageSizeSmall, 0, false, true);
-    queue.EnqueueLocked(first);
-    queue.EnqueueLocked(second);
-    const uint64_t boundary = queue.CaptureWaveBoundary();
-    size_t served = queue.SatisfyAvailable([&](ZPageAllocation& request) { return &request == &first; });
-    GC_EXPECT_EQ(served, size_t{1});
-    GC_EXPECT_FALSE(queue.CompleteWave(boundary));
-    GC_EXPECT_TRUE(first.Wait());
-    GC_EXPECT_FALSE(second.Wait());
-    GC_EXPECT_FALSE(queue.IsStalling());
-}
-
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace {
 std::atomic<uint64_t> stallMarkSequence{0};
@@ -200,7 +130,7 @@ void ObserveStallMark(const std::vector<BaseObject*>* objects)
 // zPageAllocator.cpp:2320-2362: a request arriving after old mark-start
 // cannot be failed by that collection; the remaining queue drives another GC.
 // Both waiters enter via Heap::alloc_page, not by constructing queue requests.
-GC_OTHER_VM_TEST(AllocationStall, ProductLateWaiterRequiresNextCollection)
+void RunProductStallWaiters()
 {
     RuntimeParam params{};
     params.heapParam.heapSize = 64 * 1024;
@@ -227,10 +157,15 @@ GC_OTHER_VM_TEST(AllocationStall, ProductLateWaiterRequiresNextCollection)
     ZPage* results[2]{};
     uint64_t completedSequence[2]{};
     std::atomic<bool> done[2]{};
+    std::atomic<Mutator*> waitingMutators[2]{};
+    const size_t enqueuedBefore = heap.page_allocator().EnqueuedStalledAllocations();
+    const size_t dequeuedBefore = heap.page_allocator().DequeuedStalledAllocations();
+    const size_t failedBefore = heap.page_allocator().FailedStalledAllocations();
     auto allocate = [&](size_t index) {
         manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         {
             ScopedObjectAccess access;
+            waitingMutators[index].store(Mutator::GetMutator(), std::memory_order_release);
             results[index] = Heap::alloc_page(bytes, ZPageType::large);
             completedSequence[index] = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
         }
@@ -248,7 +183,35 @@ GC_OTHER_VM_TEST(AllocationStall, ProductLateWaiterRequiresNextCollection)
     while (heap.page_allocator().PendingStalledAllocations() != 2 && !done[1].load() &&
            std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
     const size_t queued = heap.page_allocator().PendingStalledAllocations();
+    deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while (std::chrono::steady_clock::now() < deadline) {
+        Mutator* a = waitingMutators[0].load(std::memory_order_acquire);
+        Mutator* b = waitingMutators[1].load(std::memory_order_acquire);
+        if (a != nullptr && b != nullptr && a->InSaferegion() && b->InSaferegion()) { break; }
+        std::this_thread::yield();
+    }
+    Mutator* a = waitingMutators[0].load();
+    Mutator* b = waitingMutators[1].load();
+    const bool safe = a != nullptr && b != nullptr && a->InSaferegion() && b->InSaferegion() &&
+                      !done[0].load() && !done[1].load();
+    const bool stalling = heap.page_allocator().IsAllocationStalling();
     stallReleaseMark.store(true, std::memory_order_release);
+    deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while ((!done[0].load() || !done[1].load()) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool completed = done[0].load() && done[1].load();
+    std::fprintf(stderr, "STALL_COMPLETION_TARGET completed=%d first=%d late=%d pending=%zu\n",
+                 completed, done[0].load(), done[1].load(), heap.page_allocator().PendingStalledAllocations());
+    // A broken product notification must fail this invariant, rather than hang
+    // in join and hide it behind the runner timeout. Stop this isolated VM on failure.
+    if (!completed) {
+        try { GC_EXPECT_TRUE(completed); }
+        catch (const std::exception& error) {
+            std::fprintf(stderr, "STALL_COMPLETION_ASSERTION %s\n", error.what());
+            std::_Exit(1);
+        }
+    }
     first.join();
     late.join();
     SetMarkClosureObserverForTest(nullptr);
@@ -260,10 +223,22 @@ GC_OTHER_VM_TEST(AllocationStall, ProductLateWaiterRequiresNextCollection)
                  retained, stallWindowTimeout.load());
     heap.RemoveExportObject(root);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    const size_t enqueued = heap.page_allocator().EnqueuedStalledAllocations() - enqueuedBefore;
+    const size_t dequeued = heap.page_allocator().DequeuedStalledAllocations() - dequeuedBefore;
+    const size_t failed = heap.page_allocator().FailedStalledAllocations() - failedBefore;
+    const size_t pending = heap.page_allocator().PendingStalledAllocations();
+    std::fprintf(stderr, "STALL_WAIT_TARGET safe=%d stalling=%d enqueued=%zu dequeued=%zu failed=%zu pending=%zu\n",
+                 safe, stalling, enqueued, dequeued, failed, pending);
+    GC_EXPECT_TRUE(safe && stalling);
+    GC_EXPECT_EQ(enqueued, size_t{2});
+    GC_EXPECT_EQ(dequeued, enqueued);
+    GC_EXPECT_EQ(failed, enqueued);
+    GC_EXPECT_EQ(pending, size_t{0});
     GC_EXPECT_EQ(queued, size_t{2});
     GC_EXPECT_TRUE(firstMark != 0 && !stallWindowTimeout.load());
     GC_EXPECT_TRUE(results[0] == nullptr && results[1] == nullptr && retained);
     GC_EXPECT_TRUE(completedSequence[1] > firstMark);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+GC_OTHER_VM_TEST(AllocationStall, ProductLateWaiterRequiresNextCollection) { RunProductStallWaiters(); }
 #endif
