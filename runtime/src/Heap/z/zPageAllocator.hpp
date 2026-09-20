@@ -513,11 +513,11 @@ public:
 
     // zPageAllocator.cpp:1201-1260: page resource ownership belongs to
     // this allocator, not to its object-allocation consumers.
-    void Init(const HeapParam& param);
     MAddress GetSpaceStartAddress() const { return reservedStart; }
     MAddress GetSpaceEndAddress() const { return reservedEnd; }
 
     RegionManager();
+    RegionManager(const HeapParam& param, double garbageThreshold);
 
     RegionManager(const RegionManager&) = delete;
 

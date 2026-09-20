@@ -62,27 +62,12 @@ private:
     ZPage* capacity{ nullptr };
 
 public:
-    // The RegionManager (mapped caches keep entries in heap memory) must be
-    // destroyed before the mapping: declare it last.
-    std::unique_ptr<ZTestRegionHeap> heap;
-    RegionManager manager;
+    RegionManager& manager;
 
     OneUnitStallFixture()
+        : manager((ZStat::Initialize(), CreateStandaloneHeap(1), Heap::GetHeap().page_allocator()))
     {
-        // ZInitialize: allocator sampling starts only after statistics initialization.
-        ZStat::Initialize();
-        constexpr size_t units = 1;
-        HeapParam heapParam {};
-        heapParam.regionSize = ZGranuleSize / 1024;
-        heapParam.exemptionThreshold = 0.8;
-        heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
-        BindFixturePageTable(manager, units);
         capacity = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false);
-    }
-
-    ~OneUnitStallFixture()
-    {
-        Heap::bind_test_page_allocator(nullptr);
     }
 
     void PublishCapacity()
@@ -94,7 +79,7 @@ public:
 };
 } // namespace
 
-GC_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
 {
     OneUnitStallFixture fixture;
     fixture.PublishCapacity();
@@ -106,7 +91,7 @@ GC_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
     std::fprintf(stderr, "ALLOCATION_CAPACITY_TARGET count=%zu first=%p second=%p\n", count, first, second);
     GC_EXPECT_EQ(count, size_t{1});
 }
-GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
 {
     OneUnitStallFixture fixture;
     fixture.PublishCapacity();
@@ -120,7 +105,7 @@ GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
     GC_EXPECT_TRUE(competing == nullptr);
     fixture.manager.ReturnPageMemory(request.Memory());
 }
-GC_OTHER_VM_TEST(AllocationStall, WaiterBlocksInSaferegion)
+GC_COMPONENT_OTHER_VM_TEST(AllocationStall, WaiterBlocksInSaferegion)
 {
     OneUnitStallFixture fixture;
     ZPageAllocation request(ZPageSizeSmall, static_cast<uint8_t>(ZPageType::small), false, true);

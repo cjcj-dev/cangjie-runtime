@@ -1052,7 +1052,7 @@ RegionManager::~RegionManager()
 #endif
 }
 
-void RegionManager::Init(const HeapParam& vmHeapParam)
+RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThreshold) : RegionManager()
 {
     size_t heapSize = 0;
     CHECK_DETAIL(CheckedMulSize(vmHeapParam.heapSize, size_t{1024}, heapSize),
@@ -1091,11 +1091,10 @@ void RegionManager::Init(const HeapParam& vmHeapParam)
         mmap(nullptr, metadata.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     CHECK_DETAIL(metadataBase != MAP_FAILED, "failed to map %zu bytes of region metadata", metadata.size);
     metadata.base = metadataBase;
-    Logger::GetLogger().SetMinimumLogLevel(CangjieRuntime::GetLogParam().logLevel);
     MAddress metadataAddress = reinterpret_cast<MAddress>(metadata.base);
     CHECK(IsRepresentableLow48Range(metadataAddress, metadata.size));
     Initialize(alignedHeapSize, metadataAddress, *virtualMemory, *physicalMemory, vmHeapParam,
-                             CangjieRuntime::GetGCParam().garbageThreshold);
+                             garbageThreshold);
 #if defined(MRT_DUMP_ADDRESS)
     VLOG(REPORT, "region metadata@%zx, heap @[0x%zx+%zu, 0x%zx)", metadataAddress, reservedStart, reservedEnd - reservedStart,
          reservedEnd);

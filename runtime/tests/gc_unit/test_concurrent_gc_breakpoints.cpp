@@ -10,7 +10,7 @@ using MapleRuntime::ConcurrentGCBreakpoints;
 
 // Port of gc/TestConcurrentGCBreakpoints.java. Calls the linked runtime's
 // request API; phase notifications come exclusively from its actual GC.
-GC_OTHER_VM_TEST(ConcurrentGCBreakpoints, SimpleCycle)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentGCBreakpoints, SimpleCycle)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MapleRuntime::MRT_CjRuntimeInit();
@@ -23,7 +23,7 @@ GC_OTHER_VM_TEST(ConcurrentGCBreakpoints, SimpleCycle)
     }
     ConcurrentGCBreakpoints::ReleaseControl();
 }
-GC_OTHER_VM_TEST(ConcurrentGCBreakpoints, EndBeforeBreakpoint)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentGCBreakpoints, EndBeforeBreakpoint)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MapleRuntime::MRT_CjRuntimeInit();
@@ -33,7 +33,7 @@ GC_OTHER_VM_TEST(ConcurrentGCBreakpoints, EndBeforeBreakpoint)
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
 }
-GC_OTHER_VM_TEST(ConcurrentGCBreakpoints, UnknownBreakpoint)
+GC_RUNTIME_OTHER_VM_TEST(ConcurrentGCBreakpoints, UnknownBreakpoint)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MapleRuntime::MRT_CjRuntimeInit();

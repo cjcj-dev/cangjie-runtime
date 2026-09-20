@@ -771,7 +771,7 @@ void* RunRuntimeValueRoot(void* context)
 }
 }
 
-GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWritesBack)
+GC_RUNTIME_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWritesBack)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;

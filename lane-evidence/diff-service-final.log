@@ -1,0 +1,50 @@
+# kkk2_diff cand=307f45d266191787a48eeafb0ee155e0f4598649 base=8cbac1ea8ef31dbaf5d49d3a1fe67300938ae74c 2026-09-20T08:22:55+08:00
+# pinned runner sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08 path=kkk2:/root/diff_harness_708/4869bdf1370c/kkk2_managed.sh
+# diff_8cbac1ea8ef3: 命中缓存
+# diff_307f45d26619: 构建两构型…
+== default configure_rc=0 build_rc=0 wall=11s
+== testable configure_rc=0 build_rc=0 wall=11s
+# diff_307f45d26619: 三臂+managed 并行…
+360M
+default rc=1 filler rc=1 testable rc=1 
+# DIFF 307f45d26619 vs 8cbac1ea8ef3
+
+runner_sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08 path=kkk2:/root/diff_harness_708/4869bdf1370c/kkk2_managed.sh
+cand_runner_sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08 base_runner_sha256=4869bdf1370cd6f8f422e9274b69fb0505d69c0ece1b5f073ec3a898b2b13b08
+CANGJIE_HOME=/root/sdkdepot/90a09c15ba02-fa13e8d5c17b
+H48=/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative
+stained=/root/diff_307f45d26619/default/build/runtime-staging/lib/x86_64_Release
+
+## default: status=ran · cand rc=1 failed=204 · base rc=1 failed=60 · common=47 · CAND-ONLY=157 BASE-ONLY=13 · 阳性对照=sets differ
+- CAND-ONLY BarrierOldAtomic.AtomicCasLostPreservesConcurrentWinner
+- CAND-ONLY BarrierOldAtomic.AtomicColourOnlyHealsRealSlot
+- CAND-ONLY BarrierOldAtomic.AtomicFromToHealsRealSlot
+- CAND-ONLY BarrierOldAtomic.NativeBulkLoadBadSourceResolvesBeforeHeapPublication
+- CAND-ONLY DefectRegress.CompilerWriteGlobalOwnerStaticSlotUsesRootPath
+- CAND-ONLY DefectRegress.CompilerWriteTaggedGlobalStructUsesRootPath
+- CAND-ONLY DefectRegress.ExportHandleDoubleRemoveNoAlias
+- CAND-ONLY DefectRegress.ExportHandleStaleReuseDoesNotTouchNewOccupant
+- CAND-ONLY DefectRegress.MinorNonHeapResolveNeverCasNull
+- CAND-ONLY DefectRegress.NonHeapTargetNeverCasNull
+- CAND-ONLY DefectRegress.RelroNonHeapSkipsSelfHealCas
+- CAND-ONLY DefectRegress.StaticRootHealDoesNotClobberConcurrentStore
+- CAND-ONLY DefectRegress.StaticRootObservedValueHeal
+- CAND-ONLY ExemptLife.InPlaceCopyMustNotPaintNormalBeforeUnlock
+- CAND-ONLY ExemptLife.NonOverlapCopyBeforeSourceLandsSourceImage
+- CAND-ONLY ExemptLife.NonOverlapCopyFarBeforeSourceLandsSourceImage
+- CAND-ONLY ExemptLife.PartialOverlapCopyLandsSourceImage
+- CAND-ONLY ExemptLife.PrepareInstallLeavesLockedAlone
+- CAND-ONLY ExemptLife.PrepareInstallStripsForwardedResidual
+- CAND-ONLY FillerObj.EnabledWalkCrossesFilledGap
+- CAND-ONLY FillerObj.RouteReserveGapWalkableWhenEnabled
+- CAND-ONLY FnlzRoots.ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies
+- CAND-ONLY FnlzRoots.RegisteredFinalizerMovesAndCountsExactlyOnce
+- CAND-ONLY FnlzRoots.RegistryMissDoesNotCountAsFinalEnqueue
+- CAND-ONLY FollowEdge.HolderSlotToLargePrimitiveArrayIsTraced
+- CAND-ONLY GctibZero.B_AfterCalculateGCTibWalks
+- CAND-ONLY GctibZero.B_NullGctibSegvIsPointerArm
+- CAND-ONLY I2ReadRef.LoadBadForwardedFromResolvesAndHealsTo
+- CAND-ONLY I2ReadRef.LoadBadHeapSlotIsHealedToCurrentColour
+- CAND-ONLY I2ReadRef.LoadGoodColourSelectsFastPath
+- CAND-ONLY IsFromReg.TakeGarbageSkipsRawPointerHold
+# 产物: /root/cj_build/reports/DIFF-307f45d26619-vs-8cbac1ea8ef3.{json,md}  原始名单: /root/cj_build/agent_scratch/diffout/307f45d26619-vs-8cbac1ea8ef3/{cand,base}.txt  kkk2: /root/diff_307f45d26619 /root/diff_8cbac1ea8ef3

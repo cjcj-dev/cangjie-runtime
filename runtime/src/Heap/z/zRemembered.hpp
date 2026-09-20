@@ -11,7 +11,6 @@
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 
-#include <memory>
 #include <vector>
 
 namespace MapleRuntime {
@@ -30,24 +29,22 @@ class ZRemembered {
     friend class ZRemsetTableIterator;
 
 private:
-    ZPageTable* _page_table;
-    const ZForwardingTable* _old_forwarding_table;
-    RegionManager* _page_allocator;
+    ZPageTable* const _page_table;
+    const ZForwardingTable* const _old_forwarding_table;
+    RegionManager* const _page_allocator;
 
     struct FoundOld {
-        std::unique_ptr<CHeapBitMap> _allocated_bitmap_0;
-        std::unique_ptr<CHeapBitMap> _allocated_bitmap_1;
-        CHeapBitMap* _bitmaps[2];
+        CHeapBitMap _allocated_bitmap_0;
+        CHeapBitMap _allocated_bitmap_1;
+        BitMap* const _bitmaps[2];
         int _current;
 
         FoundOld();
-        void initialize(size_t bits);
-        void ensure();
         void flip();
         void clear_previous();
-        void register_page(size_t index);
-        CHeapBitMap* current_bitmap();
-        CHeapBitMap* previous_bitmap();
+        void register_page(ZPage* page);
+        BitMap* current_bitmap();
+        BitMap* previous_bitmap();
     } _found_old;
 
     void flip_found_old_sets();
@@ -61,8 +58,7 @@ private:
     bool scan_forwarding(ZForwarding* forwarding, void* context) const;
 
 public:
-    ZRemembered();
-    void bind(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table, RegionManager* page_allocator);
+    ZRemembered(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table, RegionManager* page_allocator);
 
     void remember(volatile zpointer* p) const;
     void scan_and_follow(ZMark* mark);
@@ -81,9 +77,9 @@ struct ZRemsetTableEntry {
 class ZRemsetTableIterator {
 private:
     ZRemembered* const _remembered;
-    CHeapBitMap* _bm;
-    ZPageTable* _page_table;
-    const ZForwardingTable* _old_forwarding_table;
+    BitMap* _bm;
+    ZPageTable* const _page_table;
+    const ZForwardingTable* const _old_forwarding_table;
     volatile BitMap::idx_t _claimed;
 
 public:
