@@ -415,28 +415,31 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     auto* holder = MObject::NewPinnedObject(holderType, 2 * sizeof(uintptr_t));
     auto* target = MObject::NewPinnedObject(targetType, 2 * sizeof(uintptr_t));
     if (holder == nullptr || target == nullptr) { _exit(122); }
-    BaseObject* youngTarget = nullptr;
-    if (mode == VerifyFieldCase::WeakYoungUnmarked || mode == VerifyFieldCase::WeakYoungMarked) {
-        ScopedObjectAccess access;
-        youngTarget = MObject::NewObject(targetType, 2 * sizeof(uintptr_t), AllocType::MOVEABLE_OBJECT);
-        if (youngTarget == nullptr || !Heap::is_young(reinterpret_cast<MAddress>(youngTarget))) { _exit(128); }
-    }
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreGoodPointer(target));
     auto& heap = Heap::GetHeap();
     NativeSlot* root = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
     if (root == nullptr) { _exit(123); }
     root->StoreColoured(StoreGoodPointer(holder));
-    if (mode == VerifyFieldCase::WeakYoungMarked && youngTarget != nullptr) {
-        NativeSlot* youngRoot = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
-        if (youngRoot == nullptr) { _exit(123); }
-        youngRoot->StoreColoured(StoreGoodPointer(youngTarget));
-    }
     const bool afterWeak = mode >= VerifyFieldCase::WeakUnmarked;
     ConcurrentGCBreakpoints::AcquireControl();
     const char* point = afterWeak ? "AFTER CONCURRENT REFERENCE PROCESSING STARTED" :
                                    "BEFORE MARKING COMPLETED";
     if (!ConcurrentGCBreakpoints::RunTo(point)) { _exit(124); }
+    // ZGC zVerify.cpp:184-186 distinguishes the target's current generation.
+    // Allocate after the young prelude, while the driver is held, so the
+    // young-color cases remain young when the product verifier consumes them.
+    BaseObject* youngTarget = nullptr;
+    if (mode == VerifyFieldCase::WeakYoungUnmarked || mode == VerifyFieldCase::WeakYoungMarked) {
+        ScopedObjectAccess access;
+        youngTarget = MObject::NewObject(targetType, 2 * sizeof(uintptr_t), AllocType::MOVEABLE_OBJECT);
+        if (youngTarget == nullptr || !Heap::is_young(reinterpret_cast<MAddress>(youngTarget))) { _exit(128); }
+    }
+    if (mode == VerifyFieldCase::WeakYoungMarked && youngTarget != nullptr) {
+        NativeSlot* youngRoot = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
+        if (youngRoot == nullptr) { _exit(123); }
+        youngRoot->StoreColoured(StoreGoodPointer(youngTarget));
+    }
     ZPage* holderPage = Heap::page(reinterpret_cast<MAddress>(holder));
     ZPage* targetPage = Heap::page(reinterpret_cast<MAddress>(target));
     if (!holderPage->is_object_live(from_object(holder)) ||

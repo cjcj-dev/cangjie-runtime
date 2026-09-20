@@ -71,16 +71,12 @@ public:
     }
     static void NativeRootTrace(Heap& collector)
     {
-        // This fixture enters tracing directly after in-place promotion. Match
-        // the old mark-start sequence advance before consuming the new page
-        // (ZGC zGeneration.cpp:1212-1237).
-        GcUnit::GcHeapFixture::AdvanceGeneration(Generation::Old);
-        Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
-        Heap::GetHeap().old().Mark().Start();
+        // ZGC zGeneration.cpp:1212-1237: use the product mark-start to
+        // establish colors and sequence before the real concurrent root task.
         auto& old = Heap::GetHeap().old();
+        old.End();
+        old.mark_start();
         old.concurrent_mark();
-        while (!old.pause_mark_end()) old.concurrent_mark_continue();
-        old.process_non_strong_references();
     }
     static size_t PendingYoungRootWork(Heap& collector)
     {
@@ -193,7 +189,6 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     std::fprintf(stderr, "NATIVE_ROOT_ORACLE before=%#zx from=%p to=%p slot=%#zx young=%u\n",
                  before, from, to, raw(slot.GetFieldValue()), unsigned(region->IsYoungRegion()));
     GC_EXPECT_TRUE(to != nullptr && to != from);
-    if (threadKind != 0) RelocationReceiptTest::PreparePlainRoots(collector);
     if (minor) RelocationReceiptTest::NativeRootMajorPrelude(collector);
     else RelocationReceiptTest::NativeRootTrace(collector);
     const bool currentMarked = region->is_object_strongly_live(from_object(to));
@@ -406,13 +401,8 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     auto& heap = Heap::GetHeap();
     Heap& collector = heap;
     RelocationReceiptTest::BindNativeRootFixture(collector);
-    GcHeapFixture::AdvanceGeneration(Generation::Young);
-    Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     fx.region0->reset(PageAge::eden);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Mark);
-    Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
-    Heap::GetHeap().young().Mark().Start();
+    Heap::GetHeap().young().mark_start();
     Heap::GetHeap().young().Mark().verify_all_stacks_empty();
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.
