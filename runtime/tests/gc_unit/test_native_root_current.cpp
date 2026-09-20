@@ -143,6 +143,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     NativeSlot* roots[] = {&slot, &nullSlot};
     Mutator* thread = nullptr;
     ObjectRef* threadRoot = nullptr;
+    size_t frameMark = 0;
     RootSlot* historicalSlot = nullptr;
     alignas(16) uintptr_t stackStorage[8] {};
     if (threadKind == 0) {
@@ -150,6 +151,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     } else {
         thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         thread->SetManagedContext(false);
+        frameMark = thread->NativeFrameRootCount();
         (void)thread->EnterSaferegion(false);
         thread->SetStackTopAddr(reinterpret_cast<uintptr_t>(stackStorage));
         thread->SetStackSize(sizeof(stackStorage));
@@ -224,7 +226,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     }
     if (threadKind != 0) {
         if (threadKind == 3) (void)thread->WithdrawInvisibleRoot();
-        else thread->RemoveNativeFrameRoot(threadRoot);
+        else thread->PopNativeFrameRootsTo(frameMark);
         return;
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
@@ -387,6 +389,7 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     GC_EXPECT_TRUE(parked != nullptr);
     parked->SetManagedContext(false);
     (void)parked->EnterSaferegion(false);
+    const size_t frameMark = parked->NativeFrameRootCount();
     ObjectRef* root = parked->AddNativeFrameRoot(held);
     GC_EXPECT_TRUE(root != nullptr);
     GC_EXPECT_TRUE(parked->InSaferegion());
@@ -410,7 +413,7 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     GC_EXPECT_TRUE(workerSawParked);
     GC_EXPECT_TRUE(watermarkDone);
 
-    parked->RemoveNativeFrameRoot(root);
+    parked->PopNativeFrameRootsTo(frameMark);
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
@@ -647,6 +650,7 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
     Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     thread->SetManagedContext(false);
     (void)thread->EnterSaferegion(false);
+    const size_t frameMark = thread->NativeFrameRootCount();
     ObjectRef* root = thread->AddNativeFrameRoot(fixture.obj0);
     const uint64_t epoch = StackWatermark::epoch_id();
     const bool initiallyDone = thread->GetStackWatermark().IsDone(epoch);
@@ -682,7 +686,7 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
     GC_EXPECT_TRUE(firstDone && firstPublished == 1 && published == firstPublished && sameRoot);
     GC_EXPECT_EQ(firstResults, handshakeFirst ? size_t(0) : size_t(1));
     GC_EXPECT_EQ(rootResults, firstResults);
-    thread->RemoveNativeFrameRoot(root);
+    thread->PopNativeFrameRootsTo(frameMark);
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 }

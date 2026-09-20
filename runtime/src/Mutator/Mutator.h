@@ -8,6 +8,7 @@
 #ifndef MRT_MUTATOR_H
 #define MRT_MUTATOR_H
 
+#include <deque>
 #include <climits>
 #include "Common/OopStorage.h"
 #include <tuple>
@@ -331,7 +332,6 @@ public:
     }
 
     ObjectRef* AddNativeFrameRoot(BaseObject* obj);
-    void RemoveNativeFrameRoot(ObjectRef* root);
     size_t NativeFrameRootCount() const { return nativeFrameRoots.size(); }
     void PopNativeFrameRootsTo(size_t mark);
 #if defined(MRT_GC_UNIT_TESTS)
@@ -544,7 +544,7 @@ private:
     std::atomic<uint32_t> suspensionFlag = { 0 };
     ObjectRef rawObject{};
     ThreadGCData gcData;
-    std::vector<ObjectRef> nativeFrameRoots;
+    std::deque<ObjectRef> nativeFrameRoots;
 
     NativeRootHandles localFinalizers;
 

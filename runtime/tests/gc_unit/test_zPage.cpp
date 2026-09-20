@@ -513,6 +513,7 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo*, TypeInfo*);
 extern "C" void* MCC_GetMethodAnnotations(MethodInfo*, TypeInfo*);
 extern "C" void* MCC_GetInstanceFieldAnnotations(InstanceFieldInfo*, TypeInfo*);
 extern "C" void* MCC_GetStaticFieldAnnotations(StaticFieldInfo*, TypeInfo*);
+extern "C" void* MCC_GetTypeInfoAnnotations(TypeInfo*, TypeInfo*);
 }
 namespace {
 struct AnnotationResult {
@@ -599,10 +600,19 @@ void* RunAnnotation(void* context)
         InstanceFieldInfo metadata{};
         std::memcpy(reinterpret_cast<char*>(&metadata) + sizeof(metadata) - sizeof(callback), &callback, sizeof(callback));
         object = MCC_GetInstanceFieldAnnotations(&metadata, type);
-    } else {
+    } else if (r.entry == 3) {
         StaticFieldInfo metadata{};
         std::memcpy(reinterpret_cast<char*>(&metadata) + sizeof(metadata) - sizeof(callback), &callback, sizeof(callback));
         object = MCC_GetStaticFieldAnnotations(&metadata, type);
+    } else {
+        ReflectInfo metadata{};
+        std::memcpy(reinterpret_cast<char*>(&metadata) + 24, &callback, sizeof(callback));
+        alignas(TypeInfo) unsigned char annotatedStorage[sizeof(TypeInfo)]{};
+        auto* annotated = reinterpret_cast<TypeInfo*>(annotatedStorage);
+        annotated->SetType(TypeKind::TYPE_KIND_CLASS);
+        annotated->SetFlag(FLAG_REFLECTION);
+        annotated->SetReflectInfo(&metadata);
+        object = MCC_GetTypeInfoAnnotations(annotated, type);
     }
     r.returned = reinterpret_cast<uintptr_t>(object);
     if (r.returned == r.after && r.after != 0) {
@@ -634,3 +644,180 @@ GC_RUNTIME_OTHER_VM_TEST(NativeAnnotationHandle, Parameter) { CheckAnnotation(0)
 GC_RUNTIME_OTHER_VM_TEST(NativeAnnotationHandle, Method) { CheckAnnotation(1); }
 GC_RUNTIME_OTHER_VM_TEST(NativeAnnotationHandle, InstanceField) { CheckAnnotation(2); }
 GC_RUNTIME_OTHER_VM_TEST(NativeAnnotationHandle, StaticField) { CheckAnnotation(3); }
+GC_RUNTIME_OTHER_VM_TEST(NativeAnnotationHandle, Type) { CheckAnnotation(4); }
+
+#include "ObjectManager.inline.h"
+#include "Heap/z/zRootsIterator.hpp"
+namespace MapleRuntime {
+extern "C" void* MCC_ApplyCJStaticMethod(MethodInfo*, void*, TypeInfo*);
+}
+namespace {
+struct ArgumentResult {
+    TypeInfo* smallType = nullptr;
+    uintptr_t source = 0;
+    uintptr_t argument = 0;
+    uintptr_t current = 0;
+    uintptr_t from = 0;
+    U64 sourceRoot = 0;
+    uint64_t sequenceBefore = 0;
+    uint64_t sequenceAfter = 0;
+    bool called = false;
+    bool value = false;
+};
+thread_local ArgumentResult* argumentResult;
+extern "C" I64 ConsumeReflectedStruct(void* first, void*, TypeInfo*)
+{
+    auto& r = *argumentResult;
+    r.called = true;
+    r.argument = reinterpret_cast<uintptr_t>(first) - TYPEINFO_PTR_SIZE;
+    auto& heap = Heap::GetHeap();
+    auto* source = heap.GetExportObject(r.sourceRoot);
+    Mutator::GetMutator()->VisitMutatorRoots([&](RootSlot& root) {
+        auto* object = to_object(safe(root.LoadPlain()));
+        if (object != nullptr && object != source && object->GetTypeInfo() == r.smallType) {
+            r.current = reinterpret_cast<uintptr_t>(object);
+        }
+    });
+    for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
+        auto* forwarding = heap.GetZGeneration(generation).forwarding_table().get(r.source);
+        if (forwarding != nullptr) { (void)forwarding->find_from_by_to(r.current, &r.from); }
+    }
+    r.sequenceAfter = heap.old().Sequence();
+    // Compare the ABI pointer before accessing its payload, including in cuts.
+    if (r.argument == r.current && r.current != 0) {
+        auto* object = reinterpret_cast<MObject*>(r.current);
+        r.value = object->Load<U64>(TYPEINFO_PTR_SIZE + sizeof(Uptr)) == 581;
+    }
+    return 584;
+}
+void* RunArguments(void* context)
+{
+    auto& r = *static_cast<ArgumentResult*>(context);
+    argumentResult = &r;
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    auto& heap = Heap::GetHeap();
+    HandleMark mark(*mutator);
+    heap.EnableGC(false);
+    alignas(TypeInfo) static unsigned char types[5][sizeof(TypeInfo)]{};
+    TypeInfo* type[5];
+    for (unsigned i = 0; i < 5; ++i) {
+        type[i] = reinterpret_cast<TypeInfo*>(types[i]);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(types[i]), sizeof(TypeInfo));
+    }
+    const size_t largeSize = 8 * 1024;
+    for (unsigned i : {0u, 1u}) {
+        type[i]->SetType(TypeKind::TYPE_KIND_STRUCT);
+        type[i]->SetInstanceSize(i == 0 ? 16 : largeSize);
+        type[i]->SetFlagHasRefField();
+        GCTib bitmap{}; bitmap.tag = SIGN_BIT | 1;
+        type[i]->SetGCTib(bitmap);
+    }
+    type[2]->SetType(TypeKind::TYPE_KIND_UINT64); type[2]->SetInstanceSize(8);
+    type[3]->SetType(TypeKind::TYPE_KIND_RAWARRAY); type[3]->SetComponentTypeInfo(type[4]);
+    type[4]->SetType(TypeKind::TYPE_KIND_CLASS); type[4]->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
+    r.smallType = type[0];
+    auto* small = MCC_NewObject(type[0], 24);
+    small->Store<U64>(TYPEINFO_PTR_SIZE + sizeof(Uptr), 581);
+    Handle smallHandle(mutator, small);
+    r.source = reinterpret_cast<uintptr_t>(small);
+    r.sourceRoot = heap.RegisterExportRoot(small);
+    auto* large = MCC_NewObject(type[1], largeSize + TYPEINFO_PTR_SIZE);
+    Handle largeHandle(mutator, large);
+    auto* array = ObjectManager::NewObjArray(2, type[3]);
+    Handle arrayHandle(mutator, array);
+    array->SetRefElement(0, smallHandle()); array->SetRefElement(1, largeHandle());
+    // Exhaust the known small-page capacity, retaining one object in three
+    // pages so the collection has a nonempty relocation set. Stop before the
+    // next allocation: only the second reflected copy enters the stall path.
+    U64 pageRoots[3]{};
+    size_t pageCount = 0;
+    ZPage* previous = nullptr;
+    for (size_t i = 0; i < heap.GetMaxCapacity() / 4096; ++i) {
+        auto* filler = MCC_NewObject(type[4], 4096);
+        const uintptr_t address = reinterpret_cast<uintptr_t>(filler);
+        auto* page = Heap::page(address);
+        if (page != previous && pageCount < 3) {
+            pageRoots[pageCount++] = heap.RegisterExportRoot(filler);
+            previous = page;
+        }
+        if (heap.page_allocator().GetUsedBytes() == heap.GetMaxCapacity() &&
+            page->GetRegionEnd() - (address + 4096) < largeSize) { break; }
+    }
+    ParameterInfo parameters[2]{};
+    parameters[0].SetType(type[0]); parameters[1].SetType(type[1]);
+    MethodInfo method{};
+    method.SetMethodName("consume");
+    method.SetActualParameterInfos(reinterpret_cast<Uptr>(parameters));
+    auto set = [&](size_t offset, auto value) {
+        std::memcpy(reinterpret_cast<char*>(&method) + offset, &value, sizeof(value));
+    };
+    set(8, U32(MODIFIER_STATIC)); set(12, U16(2));
+    set(16, reinterpret_cast<Uptr>(&ConsumeReflectedStruct)); set(24, type[2]);
+    CJArray args{};
+    StorePlain(RootSlotAt(&args.rawPtr), from_object(arrayHandle()));
+    args.length = 2;
+    r.sequenceBefore = heap.old().Sequence();
+    heap.EnableGC(true);
+    (void)MCC_ApplyCJStaticMethod(&method, &args, nullptr);
+    heap.RemoveExportObject(r.sourceRoot);
+    for (size_t i = 0; i < pageCount; ++i) { heap.RemoveExportObject(pageRoots[i]); }
+    return nullptr;
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(NativeArgumentHandle, AllocationBeforeCallRefreshesInterior)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 32 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ArgumentResult result;
+    auto task = RunCJTask(RunArguments, &result);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "ARGUMENT_HANDLE_TARGET called=%d from=%zx current=%zx argument=%zx value=%d sequence=%llu/%llu\n",
+        result.called, result.from, result.current, result.argument, result.value,
+        (unsigned long long)result.sequenceBefore, (unsigned long long)result.sequenceAfter);
+    GC_EXPECT_TRUE(result.called && result.from != 0 && result.from != result.current &&
+        result.argument == result.current && result.value && result.sequenceAfter > result.sequenceBefore);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+namespace {
+struct StableHandleResult { uintptr_t before = 0; uintptr_t after = 0; };
+void* GrowHandleArea(void* context)
+{
+    auto& result = *static_cast<StableHandleResult*>(context);
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    HandleMark mark(*mutator);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(Uptr));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    auto* object = MCC_NewObject(type, 2 * sizeof(Uptr));
+    Handle first(mutator, object);
+    result.before = reinterpret_cast<uintptr_t>(first());
+    // Cross more than one storage block without changing the first Handle.
+    for (unsigned i = 0; i < 128; ++i) { Handle next(mutator, object); }
+    result.after = reinterpret_cast<uintptr_t>(first());
+    return nullptr;
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(NativeHandle, SlotsStayStableAcrossGrowth)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    StableHandleResult result;
+    auto task = RunCJTask(GrowHandleArea, &result);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "HANDLE_SLOT_TARGET before=%zx after=%zx added=128\n", result.before, result.after);
+    GC_EXPECT_TRUE(result.before != 0 && result.before == result.after);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}

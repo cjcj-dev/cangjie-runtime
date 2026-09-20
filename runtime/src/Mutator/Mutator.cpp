@@ -337,16 +337,6 @@ ObjectRef* Mutator::AddNativeFrameRoot(BaseObject* obj)
     return &nativeFrameRoots.back();
 }
 
-void Mutator::RemoveNativeFrameRoot(ObjectRef* root)
-{
-    for (auto it = nativeFrameRoots.begin(); it != nativeFrameRoots.end(); ++it) {
-        if (&(*it) == root) {
-            nativeFrameRoots.erase(it);
-            return;
-        }
-    }
-}
-
 void Mutator::PopNativeFrameRootsTo(size_t mark)
 {
     if (mark < nativeFrameRoots.size()) {

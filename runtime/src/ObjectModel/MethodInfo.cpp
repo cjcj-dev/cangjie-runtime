@@ -13,6 +13,17 @@
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
+namespace {
+CJRawArray* ReadArgumentArray(void* value)
+{
+    auto* slot = &static_cast<CJArray*>(value)->rawPtr;
+    BaseObject* array = Heap::IsHeapAddress(slot) ?
+        ZBarrier::ReadReference(nullptr, HeapSlotAt<false>(slot)) :
+        to_object(safe(RootSlotAt(slot).LoadPlain()));
+    return reinterpret_cast<CJRawArray*>(array);
+}
+}
+
 ScopedAllocBuffer::~ScopedAllocBuffer()
 {
     // Free off-heap struct snapshots created by AddCJArg via ReadStruct.
@@ -243,10 +254,7 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
         if (genericArgsArray == nullptr) {
             return false;
         }
-        HeapSlot<false>& genericRawPtrField = HeapSlotAt<false>(
-            &(static_cast<CJArray*>(genericArgsArray)->rawPtr));
-        CJRawArray* genericRawArray = reinterpret_cast<CJRawArray*>(
-            ZBarrier::ReadReference(nullptr, genericRawPtrField));
+        CJRawArray* genericRawArray = ReadArgumentArray(genericArgsArray);
         if (genericRawArray == nullptr || genericRawArray->len < genericArgCnt) {
             return false;
         }
@@ -333,10 +341,7 @@ TypeInfo* MethodInfo::GetReturnType()
 TypeInfo* MethodInfo::GetActualTypeFromGenericType(GenericTypeInfo* genericTi, void* genericArgs)
 {
     if (genericTi->IsGeneric() && genericArgs != nullptr) {
-        HeapSlot<false>& genericRawPtrField = HeapSlotAt<false>(
-            &(static_cast<CJArray*>(genericArgs)->rawPtr));
-        CJRawArray* genericRawArray = reinterpret_cast<CJRawArray*>(
-            ZBarrier::ReadReference(nullptr, genericRawPtrField));
+        CJRawArray* genericRawArray = ReadArgumentArray(genericArgs);
         if (genericRawArray == nullptr) {
             return nullptr;
         }
@@ -503,9 +508,7 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
     // Read rawPtr (ref to CJRawArray) through the GC read barrier instead of a raw
     // cast: if GC concurrently moves the CJRawArray, the raw read would return a
     // stale pointer and all downstream argObj reads would be garbage.
-    HeapSlot<false>& rawPtrField = HeapSlotAt<false>(&(static_cast<CJArray*>(actualArgsArray)->rawPtr));
-    CJRawArray* cjRawArray = reinterpret_cast<CJRawArray*>(
-        ZBarrier::ReadReference(nullptr, rawPtrField));
+    CJRawArray* cjRawArray = ReadArgumentArray(actualArgsArray);
     U64 actualArgCnt = cjRawArray->len;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
     Handle arrayHandle(Mutator::GetMutator(), rawArray);
@@ -529,10 +532,7 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
 
 void MethodInfo::PrepareCJMethodGenericArgs(ArgValue* argValues, void* genericArgsArray)
 {
-    HeapSlot<false>& genericRawPtrField = HeapSlotAt<false>(
-        &(static_cast<CJArray*>(genericArgsArray)->rawPtr));
-    CJRawArray* genericRawArray = reinterpret_cast<CJRawArray*>(
-        ZBarrier::ReadReference(nullptr, genericRawPtrField));
+    CJRawArray* genericRawArray = ReadArgumentArray(genericArgsArray);
     Uptr base = reinterpret_cast<Uptr>(&(genericRawArray->data));
     U64 genericArgCnt = genericRawArray->len;
     for (U64 idx = 0; idx < genericArgCnt; ++idx) {
@@ -687,6 +687,20 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
 {
     HandleMark handleMark(*Mutator::GetMutator());
     Handle receiver(Mutator::GetMutator(), instanceObj);
+    Handle actualArray;
+    Handle genericArray;
+    CJArray actualSnapshot{};
+    CJArray genericSnapshot{};
+    if (actualArgs != nullptr) {
+        actualSnapshot = *static_cast<CJArray*>(actualArgs);
+        actualArray = Handle(Mutator::GetMutator(), reinterpret_cast<BaseObject*>(ReadArgumentArray(actualArgs)));
+        actualArgs = &actualSnapshot;
+    }
+    if (genericArgs != nullptr) {
+        genericSnapshot = *static_cast<CJArray*>(genericArgs);
+        genericArray = Handle(Mutator::GetMutator(), reinterpret_cast<BaseObject*>(ReadArgumentArray(genericArgs)));
+        genericArgs = &genericSnapshot;
+    }
     ScopedAllocBuffer scopedAllocBuffer;
     // Off-heap struct snapshots created by AddCJArg via ReadStruct; freed after
     // ApplyCJMethodImpl returns since the cjc setter consumes them synchronously.
@@ -754,9 +768,11 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     }
 
     if (actualArgs != nullptr) {
+        StorePlain(RootSlotAt(&actualSnapshot.rawPtr), from_object(actualArray()));
         PrepareCJMethodActualArgs(&argValues, actualArgs, genericArgs, scopedAllocBuffer);
     }
     if (genericArgs != nullptr) {
+        StorePlain(RootSlotAt(&genericSnapshot.rawPtr), from_object(genericArray()));
         PrepareCJMethodGenericArgs(&argValues, genericArgs);
     }
 
@@ -783,6 +799,7 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
         return retObj;
     }
     if (HasSRetWithUnknowGenericStruct()) {
+        *sretSlot = sretHandle();
 #if defined(__aarch64__)
         void* retObj = *sretSlot;
         MemoryFree(sretSlot);

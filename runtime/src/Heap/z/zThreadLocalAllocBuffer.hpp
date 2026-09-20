@@ -36,8 +36,6 @@ public:
     MAddress Allocate(size_t size, AllocType allocType);
     ZPage* GetRegion() const;
     size_t TLABSize() const { return tlab.end - tlab.start; }
-    // zObjectAllocator.hpp per-thread current-page shape: staging is a
-    // vector of page pointers, committed to RecentFull/RecentLarge roles.
     void FillTLAB(uintptr_t start, size_t size);
     void ClearRegion();
 
@@ -175,8 +173,6 @@ private:
     // Allocation work is handed to marking as an atomic batch.
     mutable std::mutex handoffLock;
 
-    // allocate objects which are exposed to runtime thus can not be moved.
-    // allocation context is responsible to notify collector when these objects are safe to be collected.
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
     mutable std::mutex y2yDirtyLock;
     std::unordered_set<BaseObject*> y2yDirtyHolders;
