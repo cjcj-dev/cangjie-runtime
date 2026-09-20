@@ -296,11 +296,12 @@ struct GcHeapFixture {
         EnsureZAddressDomain();
         ZStat::Initialize();
         (void)Heap::GetHeap();
-        heapMapping.reset(new ZTestAllocatedMemory(kUnits * ZGranuleSize));
-        mapping = heapMapping->base();
-        heapStart = reinterpret_cast<MAddress>(mapping);
+        RegionManager& manager = Heap::GetHeap().page_allocator();
+        committedSpan = manager.TakeRegion(kUnits * ZGranuleSize, ZPageType::large, false, false, true);
+        CHECK(committedSpan != nullptr);
+        heapStart = committedSpan->GetRegionStart();
+        mapping = reinterpret_cast<void*>(heapStart);
         mappedSize = kUnits * ZGranuleSize;
-        committedSpan = nullptr;
         region0 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart), ZGranuleSize, role);
         region1 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart) + 1, ZGranuleSize, ZPageType::small);
         PublishAllocatedPage(region0);
