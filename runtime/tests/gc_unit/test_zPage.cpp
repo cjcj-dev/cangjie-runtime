@@ -537,20 +537,19 @@ extern "C" void AnnotationCollect(uintptr_t* result)
     auto& r = *annotationResult;
     r.called = true;
     auto* mutator = Mutator::GetMutator();
-    auto observe = [&]() {
-        uintptr_t value = 0;
-        mutator->VisitMutatorRoots([&](RootSlot& root) {
-            BaseObject* object = to_object(safe(root.LoadPlain()));
-            if (object != nullptr && object->GetTypeInfo() == r.type) {
-                value = reinterpret_cast<uintptr_t>(object);
-            }
-        });
-        return value;
-    };
-    r.before = observe();
-    // Do not access an unregistered object in the destructive control arm.
-    // The final invariant includes registration, relocation and returned address.
-    if (r.before != 0) {
+    // Capture the registered slot once, independently of GC's process_head
+    // visitor. The destructive arm changes only GC refresh, never this read.
+    RootSlot* registeredSlot = nullptr;
+    mutator->VisitMutatorRoots([&](RootSlot& root) {
+        BaseObject* object = to_object(safe(root.LoadPlain()));
+        if (object != nullptr && object->GetTypeInfo() == r.type) {
+            registeredSlot = &root;
+        }
+    });
+    r.before = registeredSlot == nullptr ? 0 : raw(registeredSlot->LoadPlain());
+    std::fprintf(stderr, "ANNOTATION_HANDLE_PRECONDITION registered=%d before=%zx\n",
+        registeredSlot != nullptr, r.before);
+    {
         alignas(TypeInfo) static unsigned char garbageStorage[sizeof(TypeInfo)]{};
         auto* garbage = reinterpret_cast<TypeInfo*>(garbageStorage);
         garbage->SetType(TypeKind::TYPE_KIND_CLASS);
@@ -569,7 +568,7 @@ extern "C" void AnnotationCollect(uintptr_t* result)
             }
         }
         Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
-        r.after = observe();
+        r.after = registeredSlot == nullptr ? 0 : raw(registeredSlot->LoadPlain());
         auto* forwarding = Heap::GetHeap().young().forwarding_table().get(r.before);
         std::fprintf(stderr, "ANNOTATION_FORWARDING from=%zx winner=%zx root=%zx\n", r.before,
             forwarding == nullptr ? 0 : forwarding->find(r.before), r.after);
@@ -641,8 +640,9 @@ void CheckAnnotation(unsigned entry)
     ReleaseHandle(task);
     std::fprintf(stderr, "ANNOTATION_HANDLE_TARGET entry=%u called=%d before=%zx after=%zx returned=%zx copied=%d\n",
         entry, result.called, result.before, result.after, result.returned, result.copied);
-    GC_EXPECT_TRUE(result.called && result.before != 0 && result.after != 0 &&
-                   result.before != result.after && result.returned == result.after && result.copied);
+    GC_EXPECT_TRUE(result.called && result.before != 0 && result.after != 0);
+    GC_EXPECT_TRUE(result.before != result.after);
+    GC_EXPECT_TRUE(result.returned == result.after && result.copied);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 }
