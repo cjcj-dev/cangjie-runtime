@@ -39,6 +39,7 @@
 #include "Heap/z/zRelocationSetSelector.inline.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/z/zJNICritical.hpp"
+#include "Heap/z/zVMOperation.hpp"
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zWorkers.hpp"
@@ -180,28 +181,24 @@ bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 
 
 
-class VM_ZOperation {
-public:
-    virtual ~VM_ZOperation() = default;
-    virtual bool do_operation() = 0;
-    virtual bool block_jni_critical() const { return false; }
-    bool pause()
-    {
-        if (block_jni_critical()) {
-            ZJNICritical::block();
-        }
-        bool success = false;
-        {
-            ScopedStopTheWorld stw("zoperation", false);
-            ZVerify::BeforeZOperation();
-            success = do_operation();
-        }
-        if (block_jni_critical()) {
-            ZJNICritical::unblock();
-        }
-        return success;
+bool VM_ZOperation::pause()
+{
+    if (block_jni_critical()) {
+        ZJNICritical::block();
     }
-};
+    bool success = false;
+    if (skip_stw) {
+        success = do_operation();
+    } else {
+        ScopedStopTheWorld stw("zoperation", false);
+        ZVerify::BeforeZOperation();
+        success = do_operation();
+    }
+    if (block_jni_critical()) {
+        ZJNICritical::unblock();
+    }
+    return success;
+}
 
 class VM_ZMarkStartYoung : public VM_ZOperation {
 public:

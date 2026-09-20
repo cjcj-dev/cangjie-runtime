@@ -3,6 +3,7 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zJNICritical.hpp"
+#include "Heap/z/zVMOperation.hpp"
 #include "gc_unittest.hpp"
 
 #include <atomic>
@@ -82,6 +83,33 @@ GC_TEST(ZGeneration, FreedPromotedCompactedAtomics)
     GC_EXPECT_EQ(young->promoted(), static_cast<size_t>(8));
     GC_EXPECT_EQ(young->compacted(), static_cast<size_t>(4));
     young->reset_statistics();
+}
+
+namespace {
+
+class VM_ZTestJniCriticalPause : public VM_ZOperation {
+public:
+    bool do_operation() override
+    {
+        sawBlocked = ZJNICritical::count_snapshot() < 0;
+        return true;
+    }
+    bool block_jni_critical() const override { return true; }
+    VM_ZTestJniCriticalPause() { skip_stw = true; }
+    bool sawBlocked = false;
+};
+
+} // namespace
+
+GC_TEST(ZJNICritical, PauseSeesBlockedCount)
+{
+    VM_ZTestJniCriticalPause op;
+    const bool ok = op.pause();
+    std::printf("ZJNI_CRITICAL_PAUSE_SAW_BLOCKED ok=%d saw=%d count=%lld\n",
+                ok ? 1 : 0, op.sawBlocked ? 1 : 0,
+                static_cast<long long>(ZJNICritical::count_snapshot()));
+    GC_EXPECT_TRUE(ok);
+    GC_EXPECT_TRUE(op.sawBlocked);
 }
 
 GC_TEST(ZJNICritical, BlockWaitsWhileEntered)
