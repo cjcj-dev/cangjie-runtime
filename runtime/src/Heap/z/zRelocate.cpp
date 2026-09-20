@@ -106,18 +106,24 @@ namespace MapleRuntime {
 
 static const ZStatSubPhase PRemapYoungRoots("RemapYoungRoots", ZGenerationId::old);
 
-void ZRelocate::ForwardFromSpace(ZGenerationId generation)
+// ZGC zRelocate.cpp:1289: both generations submit their installed set.
+void ZRelocate::relocate(ZRelocationSet* relocation_set)
 {
-
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    if (generation == ZGenerationId::young) {
-        space.ForwardFromSpace<Generation::Young>(*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers());
-    } else {
-        space.ForwardFromSpace<Generation::Old>(*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers());
+    CHECK(relocation_set->generation() == generation);
+    auto& manager = Heap::GetHeap().page_allocator();
+    ZWorkers& workers = *generation->Workers();
+    if (!manager.GetZRelocateQueue().IsActive()) {
+        StartRelocationTasks(generation->id());
     }
-    // zRelocate.cpp:1121: in-place counts close the relocation account.
-    const auto inPlace = space.GetRegionManager().InPlaceRelocatedCounts();
-    Heap::GetHeap().GetZGeneration(generation).StatRelocation()->AtRelocateEnd(inPlace.first, inPlace.second);
+    if (generation->is_young()) {
+        ForwardTask<Generation::Young> task(manager, relocation_set);
+        workers.run(&task);
+    } else {
+        ForwardTask<Generation::Old> task(manager, relocation_set);
+        workers.run(&task);
+    }
+    const auto inPlace = manager.InPlaceRelocatedCounts();
+    generation->StatRelocation()->AtRelocateEnd(inPlace.first, inPlace.second);
 }
 
 void ZRelocate::RefineFromSpace()
@@ -243,8 +249,9 @@ void ZRelocate::StartRelocationTasks(ZGenerationId generation)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = space.GetRegionManager();
     ZWorkers& workers = *Heap::GetHeap().GetZGeneration(generation).Workers();
-    if (generation == ZGenerationId::young) manager.StartForwardFromRegions<Generation::Young>(workers);
-    else manager.StartForwardFromRegions<Generation::Old>(workers);
+    CHECK(!manager.GetZRelocateQueue().IsActive());
+    manager.ResetInPlaceRelocatedCounts();
+    manager.GetZRelocateQueue().BeginWorkers(workers.active_workers());
 }
 
 // N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.
@@ -1237,45 +1244,6 @@ void ForwardTask<G>::work()
 #endif
 
 template<Generation G>
-void RegionManager::StartForwardFromRegions(ZWorkers& workers)
-{
-    CHECK(!relocationStarted);
-    relocationStarted = true;
-    relocationDrained = false;
-    relocationWorkers = &workers;
-    ResetInPlaceRelocatedCounts();
-    relocateQueue.BeginWorkers(workers.active_workers());
-}
-
-template<Generation G>
-void RegionManager::DrainForwardFromRegions()
-{
-    if (relocationDrained) {
-        return;
-    }
-    relocationDrained = true;
-    if (relocationWorkers == nullptr) {
-        ForwardFromRegions<G>();
-        return;
-    }
-    ForwardTask<G> task(*this, &Heap::GetHeap().GetZGeneration(
-        G == Generation::Young ? ZGenerationId::young : ZGenerationId::old).relocation_set());
-    relocationWorkers->run(&task);
-}
-
-template<Generation G>
-void RegionManager::ForwardFromRegions(ZWorkers& workers)
-{
-    if (!relocationStarted) {
-        StartForwardFromRegions<G>(workers);
-    }
-    DrainForwardFromRegions<G>();
-    relocationWorkers = nullptr;
-    relocationStarted = false;
-    relocationDrained = false;
-}
-
-template<Generation G>
 void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed, bool inPlace)
 {
     if (!owner || (!claimed && !owner->claim())) return;
@@ -1522,23 +1490,6 @@ void RegionManager::CollectFromSpaceGarbage()
         }
     }
 }
-
-template<Generation G>
-void RegionManager::ForwardFromRegions()
-{
-    ResetInPlaceRelocatedCounts();
-    ZRelocationSet& relocationSet = Heap::GetHeap().GetZGeneration(
-        G == Generation::Young ? ZGenerationId::young : ZGenerationId::old).relocation_set();
-    detail::ExecuteForwardTask<G>(*this, &relocationSet);
-
-    VLOG(REPORT, "forward %zu from-region pageBytes", relocationSet.nforwardings());
-
-    AllocBuffer* allocBuffer = AllocBuffer::GetAllocBuffer();
-    if (LIKELY(allocBuffer != nullptr)) {
-        allocBuffer->ClearRegion(); // clear region for next GC
-    }
-}
-
 
 bool RegionManager::RelocateClaimedPage(ZPage* region)
 {
@@ -1917,18 +1868,10 @@ void RegionManager::ForwardRegion(ZPage* region)
     }
 }
 
-template void RegionManager::ForwardFromRegions<Generation::Young>(ZWorkers&);
-template void RegionManager::ForwardFromRegions<Generation::Old>(ZWorkers&);
-template void RegionManager::ForwardFromRegions<Generation::Young>();
-template void RegionManager::ForwardFromRegions<Generation::Old>();
 #if defined(MRT_TESTABLE_INTERNALS)
 template class ForwardTask<Generation::Young>;
 template class ForwardTask<Generation::Old>;
 #endif
-template void RegionManager::StartForwardFromRegions<Generation::Young>(ZWorkers&);
-template void RegionManager::StartForwardFromRegions<Generation::Old>(ZWorkers&);
-template void RegionManager::DrainForwardFromRegions<Generation::Young>();
-template void RegionManager::DrainForwardFromRegions<Generation::Old>();
 template void RegionManager::ForwardClaimedPage<Generation::Young>(ZPage*, ZForwarding*, bool, bool);
 template void RegionManager::ForwardClaimedPage<Generation::Old>(ZPage*, ZForwarding*, bool, bool);
 template void RegionManager::ForwardRegion<Generation::Young>(ZPage*);

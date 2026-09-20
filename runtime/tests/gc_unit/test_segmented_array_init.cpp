@@ -159,6 +159,35 @@ void* RunLargePageIdentityCase(void*)
     return reinterpret_cast<void*>(valid ? 0 : 1);
 }
 
+// ZGC zGeneration.cpp:1058-1063 and zStat.cpp:1789-1798:
+// an old collection publishes selector liveness before relocation starts.
+void* RunOldRelocationStatisticsCase(void*)
+{
+    auto& heap = Heap::GetHeap();
+    auto* mutator = Mutator::GetMutator();
+    MArray* survivor = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    if (survivor == nullptr) {
+        return reinterpret_cast<void*>(10);
+    }
+    const size_t minimumLive = survivor->GetContentSize();
+    const U64 root = heap.RegisterExportRoot(survivor);
+    mutator->SetManagedContext(false);
+    heap.RequestGC(GC_REASON_USER, false);
+    auto* current = heap.GetExportObject(root);
+    const bool retainedOld = current != nullptr &&
+        !Heap::page(reinterpret_cast<uintptr_t>(current))->IsYoungRegion();
+    const auto input = heap.old().StatHeap()->Stats();
+    const size_t live = input.liveAtMarkEnd;
+    // Report both independently: a setup check must not hide the live assertion.
+    const bool liveAccount = live >= minimumLive;
+    std::fprintf(stderr,
+        "OLD_RELOCATION_STATS_TARGET retained_old=%d live=%zu minimum_live=%zu live_account=%d\n",
+        retainedOld, live, minimumLive, liveAccount);
+    heap.RemoveExportObject(root);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>((retainedOld && liveAccount) ? 0 : 1);
+}
+
 void* RunPinnedBirthCase(void*)
 {
     auto& heap = Heap::GetHeap();
@@ -608,3 +637,8 @@ GC_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
     GC_EXPECT_EQ(RunRuntimeCase(RunPinnedMarkStartCase, 0), 0);
 }
 #endif
+
+GC_OTHER_VM_TEST(OldRelocationStatistics, FullCollectionPublishesLiveInput)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunOldRelocationStatisticsCase, 0, 1, true), 0);
+}

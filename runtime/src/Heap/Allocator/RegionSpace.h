@@ -24,10 +24,8 @@
 #include "Mutator/Mutator.h"
 #include "Heap/z/zPageAllocator.hpp"
 namespace MapleRuntime {
-extern const ZStatSubPhase OldForwardFromRegions;
 extern const ZStatSubPhase PExemptFromRegions;
 extern const ZStatCriticalPhase PReclaimGarbageRegions;
-extern const ZStatSubPhase YoungForwardFromRegions;
 }
 
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
@@ -159,14 +157,6 @@ public:
 
 
 
-
-    template<Generation G>
-    void ForwardFromSpace(ZWorkers& workers)
-    {
-        ZStatTimerWorker zstatTimer(G == Generation::Young ? YoungForwardFromRegions :
-                                    OldForwardFromRegions);
-        GetRegionManager().ForwardFromRegions<G>(workers);
-    }
 
     size_t CollectLargeGarbage() { return GetRegionManager().CollectLargeGarbage(); }
 

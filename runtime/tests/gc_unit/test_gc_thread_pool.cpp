@@ -118,16 +118,17 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
 bool RunParallelProductEntryClosesGeneration()
 {
     GcHeapFixture fx;
-    RegionManager manager;
+    auto& manager = Heap::GetHeap().page_allocator();
     PrepareOwnerRegion(fx);
 
     ZRelocateQueue& queue = manager.GetZRelocateQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
-    ZStatWorkers statWorkers;
-    ZWorkers workers(ZGenerationId::old, 3, &statWorkers);
-    workers.set_active();
-    manager.ForwardFromRegions<Generation::Old>(workers);
-    workers.set_inactive();
+    auto& old = Heap::GetHeap().old();
+    if (old.Workers() == nullptr) old.InitializeWorkers(3);
+    old.Workers()->set_active_workers(3);
+    old.Workers()->set_active();
+    old.relocate().relocate(&old.relocation_set());
+    old.Workers()->set_inactive();
     const bool closed = !queue.IsActive() && queue.PendingCount() == 0;
     return closed;
 }
@@ -135,17 +136,18 @@ bool RunParallelProductEntryClosesGeneration()
 bool RunSerialProductEntryClosesGeneration()
 {
     GcHeapFixture fx;
-    RegionManager manager;
+    auto& manager = Heap::GetHeap().page_allocator();
     PrepareOwnerRegion(fx);
 
     ZRelocateQueue& queue = manager.GetZRelocateQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     // ZRelocate uses the generation worker entry even with one participant.
-    ZStatWorkers statWorkers;
-    ZWorkers workers(ZGenerationId::old, 1, &statWorkers);
-    workers.set_active();
-    manager.ForwardFromRegions<Generation::Old>(workers);
-    workers.set_inactive();
+    auto& old = Heap::GetHeap().old();
+    if (old.Workers() == nullptr) old.InitializeWorkers(1);
+    old.Workers()->set_active_workers(1);
+    old.Workers()->set_active();
+    old.relocate().relocate(&old.relocation_set());
+    old.Workers()->set_inactive();
     return !queue.IsActive() && queue.PendingCount() == 0;
 }
 

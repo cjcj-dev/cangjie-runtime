@@ -544,10 +544,6 @@ public:
     void RetireTLABStatistics(AllocBuffer& buffer);
 
     template<Generation G>
-    void ForwardFromRegions(ZWorkers& workers);
-    template<Generation G>
-    void ForwardFromRegions();
-    template<Generation G>
     void ForwardRegion(ZPage* region);
     ZRelocateQueue& GetZRelocateQueue() { return relocateQueue; }
     bool StallAllocation(AllocationStallRequest& request, bool requestGc);
@@ -595,11 +591,6 @@ public:
     template<Generation G>
     void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
                             bool inPlace = false);
-    template<Generation G>
-    void StartForwardFromRegions(ZWorkers& workers);
-    template<Generation G>
-    void DrainForwardFromRegions();
-    bool RelocationStarted() const { return relocationStarted; }
     // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
     static void RememberPromotedObject(BaseObject* object);
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
@@ -870,9 +861,6 @@ private:
     // RecentFull/RecentLarge.
     bool fullTraceCacheActive{ false };
     bool largeTraceCacheActive{ false };
-    ZWorkers* relocationWorkers{ nullptr };
-    bool relocationStarted{ false };
-    bool relocationDrained{ false };
     // zRelocate.cpp:1121 shape: in-place relocated page counts by size class,
     // accumulated while a from-space pass runs and read at its end. Host
     // difference: ZGC counts these on ZRelocateSmall/MediumAllocator; here the

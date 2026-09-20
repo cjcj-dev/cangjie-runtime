@@ -1276,7 +1276,10 @@ void ZGenerationOld::pause_verify()
     (void)op.pause();
 }
 
-void ZGenerationOld::concurrent_select_relocation_set() {}
+void ZGenerationOld::concurrent_select_relocation_set()
+{
+    select_relocation_set(false);
+}
 
 void ZGenerationOld::concurrent_remap_young_roots()
 {
@@ -1291,7 +1294,7 @@ void ZGenerationOld::pause_relocate_start()
 
 void ZGenerationOld::concurrent_relocate()
 {
-    ZRelocate::ForwardFromSpace(ZGenerationId::old);
+    relocate().relocate(&relocation_set());
     reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
         ZGenerationId::old);
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
@@ -1695,7 +1698,7 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
             ZStatTimerYoung zstatTimer(PYoungConcurrentRelocate);
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
-            ZRelocate::ForwardFromSpace(ZGenerationId::young);
+            relocate().relocate(&relocation_set());
             manager.FinishIncompleteFromRegions(ZGenerationId::young);
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
