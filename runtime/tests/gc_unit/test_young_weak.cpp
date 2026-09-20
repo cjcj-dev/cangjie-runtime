@@ -216,6 +216,7 @@ public:
         Heap::GetHeap().old().collect();
     }
 };
+using RelocationReceiptTestAccess = RelocationReceiptTest;
 
 } // namespace MapleRuntime
 

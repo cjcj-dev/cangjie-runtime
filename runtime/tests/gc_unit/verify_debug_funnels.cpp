@@ -100,7 +100,7 @@ int main(int argc, char** argv)
     }
     const bool matched = valuesMatch && (!iterator || fields == 2);
     std::fprintf(stderr, "DEBUG_FUNNEL_RESULT mode=%s fields=%zu matched=%d\n", argv[1], fields, matched);
-    if (root != nullptr) { mutator->RemoveNativeFrameRoot(root); }
+    if (root != nullptr) { mutator->PopNativeFrameRootsTo(0); }
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     return matched ? 0 : 83;
 }
