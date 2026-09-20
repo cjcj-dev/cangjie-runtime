@@ -24,6 +24,7 @@
 namespace MapleRuntime {
 
 constexpr int ZMappedCache::MinSizeClassShift;
+constexpr int ZMappedCache::MaxSizeClassShift;
 
 class ZMappedCacheEntry {
 private:
