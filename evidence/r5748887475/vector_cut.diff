@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Mutator/Mutator.h b/runtime/src/Mutator/Mutator.h
+index 2e10e4c17..e21f89f54 100644
+--- a/runtime/src/Mutator/Mutator.h
++++ b/runtime/src/Mutator/Mutator.h
+@@ -544,7 +544,7 @@ private:
+     std::atomic<uint32_t> suspensionFlag = { 0 };
+     ObjectRef rawObject{};
+     ThreadGCData gcData;
+-    std::deque<ObjectRef> nativeFrameRoots;
++    std::vector<ObjectRef> nativeFrameRoots;
+ 
+     NativeRootHandles localFinalizers;
+ 

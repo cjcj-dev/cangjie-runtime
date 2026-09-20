@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Mutator/Mutator.h b/runtime/src/Mutator/Mutator.h
+index 2e10e4c17..8aa933669 100644
+--- a/runtime/src/Mutator/Mutator.h
++++ b/runtime/src/Mutator/Mutator.h
+@@ -176,7 +176,7 @@ public:
+             SetInSaferegion(SAFE_REGION_FALSE);
+             MarkFlushEndLeaveSaferegion();
+             MutatorUnlock();
+-            break;
++            return;
+         }
+         if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
+             HandleSuspensionRequest();
