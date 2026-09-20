@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zBarrier.inline.hpp
++++ b/runtime/src/Heap/z/zBarrier.inline.hpp
+@@ -359,7 +359,7 @@
+     const MAddress address = reinterpret_cast<MAddress>(p);
+     ZPage* page = Heap::page(address);
+     if (page != nullptr && !page->IsYoungRegion()) {
+-        page->remember(reinterpret_cast<volatile zpointer*>(address));
++        // Controlled cut: omit the page remembered-field publication.
+     }
+ }
+ 
