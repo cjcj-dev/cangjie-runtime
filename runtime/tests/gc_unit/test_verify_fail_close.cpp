@@ -470,8 +470,6 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
             break;
         case VerifyFieldCase::WeakYoungUnmarked:
         case VerifyFieldCase::WeakYoungMarked: {
-            auto& manager = MutatorManager::Instance();
-            if (manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD) == nullptr) { _exit(127); }
             {
                 ScopedObjectAccess access;
                 target = MObject::NewObject(targetType, 2 * sizeof(uintptr_t), AllocType::MOVEABLE_OBJECT);
@@ -480,7 +478,6 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
                         ZPointerRememberedMask;
                 if (mode == VerifyFieldCase::WeakYoungUnmarked) { value ^= ZPointerMarkedYoungMask; }
             }
-            manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
             std::fprintf(stderr, "VERIFY_FIELD_YOUNG_TARGET target=%p word=%#zx\n", target, value);
             break;
         }
