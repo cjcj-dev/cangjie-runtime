@@ -32,7 +32,7 @@
 #include "Heap/z/zIterator.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zHeap.hpp"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"

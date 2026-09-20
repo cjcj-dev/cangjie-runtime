@@ -10,7 +10,7 @@
 #include "Base/SysCall.h"
 #include "CangjieRuntime.h"
 #include "Common/Runtime.h"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGlobals.hpp"

@@ -41,7 +41,7 @@
 #undef private
 
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zMark.hpp"

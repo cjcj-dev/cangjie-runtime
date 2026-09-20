@@ -4,7 +4,7 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zRelocate.hpp"
-#include "Heap/z/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 
 namespace MapleRuntime {
 

@@ -31,7 +31,7 @@ endif()
 list(APPEND SRC_LIST
     "z/zLiveMap.cpp"
 
-    "z/Allocator.cpp"
+    "Allocator/Allocator.cpp"
     "z/zForwardingTable.cpp"
     "z/zForwardingAllocator.cpp"
     "z/zVirtualMemoryManager.cpp"
@@ -40,7 +40,7 @@ list(APPEND SRC_LIST
     "z/zPhysicalMemoryManager.cpp"
     "z/zLargePages.cpp"
     "z/zErrno.cpp"
-    "z/RegionSpace.cpp"
+    "Allocator/RegionSpace.cpp"
     "z/zThreadLocalAllocBuffer.cpp"
     "z/zTLABUsage.cpp"
     "z/zPageAllocator.cpp"
@@ -49,9 +49,9 @@ list(APPEND SRC_LIST
     "z/zObjectAllocator.cpp"
     "z/zHeuristics.cpp"
     "z/zRelocationSetSelector.cpp"
-    "z/CartesianTree.cpp"
+    "Allocator/CartesianTree.cpp"
     "z/zMappedCache.cpp"
-    "z/HeapFiller.cpp"
+    "Allocator/HeapFiller.cpp"
 )
 
 # ZGC os/<os>/gc/z/: CMake selects the pd files. Do not list posix/linux
@@ -113,7 +113,7 @@ list(APPEND SRC_LIST
     "z/zMarkingSMR.cpp"
     "z/zMarkCache.cpp"
     "z/zReferenceProcessor.cpp"
-    "z/stringdedup/stringDedup.cpp"
+    "shared/stringdedup/stringDedup.cpp"
     "z/zUncommitter.cpp"
     "z/zForwarding.cpp"
 )

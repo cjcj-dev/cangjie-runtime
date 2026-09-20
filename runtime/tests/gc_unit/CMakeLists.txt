@@ -105,6 +105,7 @@ target_include_directories(cj_gc_unit PRIVATE
     ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_BINARY_DIR}/src/Heap
+    ${CMAKE_BINARY_DIR}/src/Heap/Allocator
 )
 target_compile_features(cj_gc_unit PRIVATE cxx_std_17)
 # The product target disables C++ exceptions globally, while this deliberately
