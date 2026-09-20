@@ -40,7 +40,7 @@ struct CacheFixture {
 };
 }
 
-GC_TEST(MappedCache, CoalesceAndRemoveWhole)
+GC_COMPONENT_TEST(MappedCache, CoalesceAndRemoveWhole)
 {
     EnsureZAddressDomain();
     CacheFixture f;
@@ -54,7 +54,7 @@ GC_TEST(MappedCache, CoalesceAndRemoveWhole)
     GC_EXPECT_TRUE(f.cache.remove_contiguous(f.bytes(1)).is_null());
 }
 
-GC_TEST(MappedCache, SmallPagesUseLowestAddress)
+GC_COMPONENT_TEST(MappedCache, SmallPagesUseLowestAddress)
 {
     EnsureZAddressDomain();
     // remove_contiguous(ZPageSizeSmall) scans from the lowest address
@@ -87,7 +87,7 @@ GC_TEST(MappedCache, SmallPagesUseLowestAddress)
     GC_EXPECT_TRUE(cache.remove_contiguous(small).is_null());
 }
 
-GC_TEST(MappedCache, EqualCapacityContiguousAndFragmented)
+GC_COMPONENT_TEST(MappedCache, EqualCapacityContiguousAndFragmented)
 {
     EnsureZAddressDomain();
     CacheFixture contiguous;
@@ -114,7 +114,7 @@ GC_TEST(MappedCache, EqualCapacityContiguousAndFragmented)
     GC_EXPECT_EQ(all.length(), 3U);
 }
 
-GC_TEST(MappedCache, UncommitUsesHighestAddress)
+GC_COMPONENT_TEST(MappedCache, UncommitUsesHighestAddress)
 {
     EnsureZAddressDomain();
     CacheFixture f;
@@ -136,7 +136,7 @@ GC_TEST(MappedCache, UncommitUsesHighestAddress)
 // The intrusive red-black tree behind the cache (Base/RBTree.h) against a
 // sorted model: random inserts, removals and coalescing keep the in-order
 // walk equal to the set of cached ranges.
-GC_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
+GC_COMPONENT_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
 {
     EnsureZAddressDomain();
     constexpr size_t kUnits = 256;
@@ -195,7 +195,7 @@ GC_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
 // the same segments map at a different virtual address with their contents
 // intact (PLAN P04 invariant 2), and stash_segments sorts the indices so the
 // restored run maps in backing order.
-GC_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
+GC_COMPONENT_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
 {
     EnsureZAddressDomain();
     // Keep the granule map small: it covers [0, ZAddressOffsetMax).

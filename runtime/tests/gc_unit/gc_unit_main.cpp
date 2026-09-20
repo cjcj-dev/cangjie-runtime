@@ -19,6 +19,18 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zHeuristics.hpp"
 
+void MapleRuntime::GcUnit::CreateStandaloneHeap(size_t units)
+{
+    if (Heap::heap() == nullptr) {
+        HeapParam params{};
+        params.heapSize = units * ZGranuleSize / 1024;
+        params.regionSize = ZGranuleSize / 1024;
+        params.exemptionThreshold = 0.8;
+        ZHeuristics::set_max_heap_size(params.heapSize * 1024);
+        ZCollectedHeap::create(params, 0.5);
+    }
+}
+
 int main(int argc, char** argv)
 {
     // Standalone fixtures create worker pools without GCThread::Init. Set the
@@ -46,17 +58,7 @@ int main(int argc, char** argv)
         }
         (void)setenv("GC_UNIT_FILTER", argv[i] + std::strlen(filterPrefix), 1);
     }
-    MapleRuntime::GcUnit::InitializeStandaloneHeap = [] {
-        using namespace MapleRuntime;
-        if (Heap::heap() == nullptr) {
-            HeapParam params{};
-            params.heapSize = 64 * ZGranuleSize / 1024;
-            params.regionSize = ZGranuleSize / 1024;
-            params.exemptionThreshold = 0.8;
-            ZHeuristics::set_max_heap_size(params.heapSize * 1024);
-            ZCollectedHeap::create(params, 0.5);
-        }
-    };
+    MapleRuntime::GcUnit::InitializeStandaloneHeap = [] { MapleRuntime::GcUnit::CreateStandaloneHeap(64); };
     const int result = MapleRuntime::GcUnit::RunAll();
     // Stop only an existing heap; listing/filtering must not construct one.
     if (MapleRuntime::Heap::heap() != nullptr) {

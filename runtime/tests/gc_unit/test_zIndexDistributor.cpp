@@ -268,64 +268,64 @@ public:
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-GC_TEST(ZIndexDistributorTest, test_claim_tree_claim_level_size)
+GC_COMPONENT_TEST(ZIndexDistributorTest, test_claim_tree_claim_level_size)
 {
     ZIndexDistributorTest::test_claim_tree_claim_level_size();
 }
 
-GC_TEST(ZIndexDistributorTest, test_claim_tree_claim_level_end_index)
+GC_COMPONENT_TEST(ZIndexDistributorTest, test_claim_tree_claim_level_end_index)
 {
     ZIndexDistributorTest::test_claim_tree_claim_level_end_index();
 }
 
-GC_TEST(ZIndexDistributorTest, test_claim_tree_claim_level_index)
+GC_COMPONENT_TEST(ZIndexDistributorTest, test_claim_tree_claim_level_index)
 {
     ZIndexDistributorTest::test_claim_tree_claim_level_index();
 }
 
-GC_TEST(ZIndexDistributorTest, test_claim_tree_claim_index)
+GC_COMPONENT_TEST(ZIndexDistributorTest, test_claim_tree_claim_index)
 {
     ZIndexDistributorTest::test_claim_tree_claim_index();
 }
 
-GC_TEST(ZIndexDistributorTest, test_claim_tree_claim_is_atomic)
+GC_COMPONENT_TEST(ZIndexDistributorTest, test_claim_tree_claim_is_atomic)
 {
     ZIndexDistributorTest::test_claim_tree_claim_is_atomic();
 }
 
-GC_TEST(ZIndexDistributorTest, test_claim_tree_concurrent_claims_are_accounted)
+GC_COMPONENT_TEST(ZIndexDistributorTest, test_claim_tree_concurrent_claims_are_accounted)
 {
     ZIndexDistributorTest::test_claim_tree_concurrent_claims_are_accounted();
 }
 
 // Serial arm: one worker claims and then steals the whole tree.
-GC_TEST(ZIndexDistributorTest, claim_tree_serial_distributes_each_index_once)
+GC_COMPONENT_TEST(ZIndexDistributorTest, claim_tree_serial_distributes_each_index_once)
 {
     ZIndexDistributorTest::distribute_once<ZIndexDistributorClaimTree>(4096, 1);
     ZIndexDistributorTest::distribute_once<ZIndexDistributorClaimTree>(5000, 1);
 }
 
 // Parallel arm: concurrent claimers never duplicate or miss an index.
-GC_TEST(ZIndexDistributorTest, claim_tree_parallel_distributes_each_index_once)
+GC_COMPONENT_TEST(ZIndexDistributorTest, claim_tree_parallel_distributes_each_index_once)
 {
     ZIndexDistributorTest::distribute_once<ZIndexDistributorClaimTree>(1 << 16, 8);
 }
 
-GC_TEST(ZIndexDistributorTest, striped_distributes_each_index_once)
+GC_COMPONENT_TEST(ZIndexDistributorTest, striped_distributes_each_index_once)
 {
     ZIndexDistributorTest::distribute_once<ZIndexDistributorStriped>(4096, 1);
     ZIndexDistributorTest::distribute_once<ZIndexDistributorStriped>(1 << 16, 8);
 }
 
 // The shell (zIndexDistributor.hpp:29-48) dispatches on ZIndexDistributorStrategy.
-GC_TEST(ZIndexDistributorTest, shell_distributes_each_index_once)
+GC_COMPONENT_TEST(ZIndexDistributorTest, shell_distributes_each_index_once)
 {
     ZIndexDistributorTest::distribute_once<ZIndexDistributor>(1 << 14, 8);
 }
 
 // Product wiring: ZPageTableParallelIterator (zPageTable.hpp:73) holds a
 // ZIndexDistributor and emits each page once, from its start granule only.
-GC_TEST(ZIndexDistributorTest, page_table_parallel_iterator_emits_each_page_once)
+GC_COMPONENT_TEST(ZIndexDistributorTest, page_table_parallel_iterator_emits_each_page_once)
 {
     struct Page {
         MAddress offset;
