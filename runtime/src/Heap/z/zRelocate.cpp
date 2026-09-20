@@ -396,67 +396,12 @@ bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
-    // h3seed2/3 乙 residual: live holder field still points at a region that minor
-    // already CollectRegion'd (ClearPageMemory). Prefer silent null over UAF; CAS so
-    // concurrent fix peers can win. Pre-evac H3 samples the prior cycle's residue —
-    // nulling here clears it before the next VERIFY_HEAP inventory.
-    // Criterion: ZPage::IsFreeRegion|IsGarbageRegion at this Fix call (file:line).
-    if (ScrubMinorFreeTarget(field, target, true)) {
-        return true;
-    }
-    HeapSlot<> oldBits(oldField);
-    BaseObject* oldObj = to_object(oldBits.GetTargetObject());
-    // resolveto: Resolve already rewrote FROM→TO. TO sits in a Compacted ghost
-    // (in-place pack). Forward/Admit indexes liveInfo0 by from-offset — feeding TO
-    // misses → leave-alone. Keep the already-installed to.
-    ZPage* targetRegion = Heap::page(reinterpret_cast<MAddress>(target));
-    const bool compactDestination = targetRegion != nullptr &&
-        targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
-    const bool alreadyTo = (target != oldObj) || compactDestination;
-    BaseObject* current = target;
-    const bool hasForwardingFace = targetRegion != nullptr && forwarding_for_page(targetRegion) != nullptr;
-    if (!alreadyTo && hasForwardingFace && IsFromObject(target) && !IsUnmovableFromObject(target)) {
-        // installdomain: route-domain grant before ForwardObject → GetRoute.
-        EnsureRouteDomainMembership(target);
-        current = ZRelocate::ForwardObject(target, Generation::Young);
-    }
-    // ForwardObject null = movable ghost with no to-version (survivor-gate miss).
-    // Drop the edge; do not reinstall the from address that is about to be reclaimed.
-    if (current == nullptr) {
-        // zBarrier.inline.hpp:294-343 never publishes a null substitute for a
-        // non-null reference whose forwarding lookup missed. The current thread
-        // must finish relocation (or fail closed); a null CAS is not a
-        // substitute for an unresolved product.
-        (void)field.CompareExchange(field.GetFieldValue(), zpointer::null);
-        ZBarrier::FailClosedLoad(
-            "ZRelocate::FixMinorEvacuatedSlot.unresolved", target,
-            static_cast<uintptr_t>(raw(field.GetFieldValue())),
-            ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
-    }
-    // plainroots: stack/reg root slots → plain current; heap remset/fields → Phase C colour.
-    // Plain on heap was the trust-state install that AssertColouredWriteIfEnabled fires on.
-    RefField<> newField = ZBarrier::GetAndTryTagRefField(current);
-    MAddress oldVal = raw(oldField.GetFieldValue());
-    MAddress newVal = raw(newField.GetFieldValue());
-    if (oldVal == newVal) {
-        return false;
-    }
-    // Re-read after resolve (resolve may have CAS-installed plain already).
-    oldVal = raw(field.GetFieldValue());
-    if (oldVal == newVal) {
-        return false;
-    }
-    if (field.CompareExchange(to_zpointer(oldVal), to_zpointer(newVal))) {
-        return true;
-    }
-    // CAS fail: accept if current == desired or already a plain/newer install (major style).
-    MAddress cur = raw(field.GetFieldValue());
-    if (cur == newVal) {
-        return true;
-    }
-    // Peer may have installed same logical target via ResolveMinorReference first
-    // (old tagged → plain) then another worker forwarded; either is a valid fix.
-    return true;
+    // ZGC zBarrier.inline.hpp:294-305,327-340: make-load-good selects
+    // relocation from the observed colour and self-heals that same value.
+    // A load-good address may already name a reused page whose previous
+    // forwarding remains installed; never interpret it as a from-address
+    // a second time based on the page's membership in a relocation set.
+    return raw(field.GetFieldValue()) != raw(oldField.GetFieldValue());
 }
 
 bool ZRelocate::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw)
