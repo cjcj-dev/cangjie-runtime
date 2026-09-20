@@ -252,7 +252,7 @@ void* SelectRealLivePages(void* context)
         });
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (!finished.load(std::memory_order_acquire) &&
-               ZJNICritical::count_snapshot() >= 0 &&
+               ZJNICritical::count_snapshot() != -2 &&
                std::chrono::steady_clock::now() < deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
