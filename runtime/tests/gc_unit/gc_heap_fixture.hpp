@@ -296,12 +296,11 @@ struct GcHeapFixture {
         EnsureZAddressDomain();
         ZStat::Initialize();
         (void)Heap::GetHeap();
-        RegionManager& manager = Heap::GetHeap().page_allocator();
-        committedSpan = manager.TakeRegion(kUnits * ZGranuleSize, ZPageType::large, false, false, true);
-        CHECK(committedSpan != nullptr);
-        heapStart = committedSpan->GetRegionStart();
-        mapping = reinterpret_cast<void*>(heapStart);
+        heapMapping.reset(new ZTestAllocatedMemory(kUnits * ZGranuleSize));
+        heapStart = heapMapping->address();
+        mapping = heapMapping->base();
         mappedSize = kUnits * ZGranuleSize;
+        committedSpan = nullptr;
         region0 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart), ZGranuleSize, role);
         region1 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart) + 1, ZGranuleSize, ZPageType::small);
         PublishAllocatedPage(region0);
@@ -361,15 +360,6 @@ struct GcHeapFixture {
         }
         if (region1 != nullptr && region1->IsYoungRegion()) {
             region1->reset(PageAge::old);
-        }
-        for (ZPage* region : {region0, region1}) {
-            if (region != nullptr && Heap::page(region->GetRegionStart()) == region) {
-                Heap::page_table().remove(region);
-            }
-        }
-        if (committedSpan != nullptr) {
-            Heap::GetHeap().page_allocator().free_page(committedSpan);
-            committedSpan = nullptr;
         }
     }
 
