@@ -10,3 +10,6 @@
 - P1Mark.PinnedPagePublicationAcrossMarkStart 的旧中途拿页回调被删除；其跨获取窗口的精确调度验证尚待新证据，不能以其他 pinned 用例的绿冒充覆盖。
 
 - 分段脚本 GC-window 守卫预演：真实 testable 日志中运行时日志与窗口行可共处一行（validation/unit-testable.log:6840、6978）。去掉行首锚，保留 mode/root/fields 结果边界，避免拦住已执行窗口的正常输入。default 构型走独立 construct 臂；full/young 必须检测到实际窗口。
+
+- 四臂 DIFF 56d880754889 实测独红：ZPageGranule.MutatorAllocatesThreePageSizes 仍硬编码 MediumMin；按 zObjectAllocator.cpp:144 的冷请求 MediumMax 修正。可变缓存命中另由 FastMediumConsumesCachedActualSize 验证。
+- managed 默认臂明确为 construct；testable 门显式传 both，强制 full/young GC 窗口。原“同一次 checksum 返回 0 就叫 GC 通过”的判据拆开，没有豁免 GC 窗口失败。

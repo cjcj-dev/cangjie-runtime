@@ -90,7 +90,9 @@ void* AllocateGranulePages(void* context)
     result.requested[1] = ZObjectSizeLimitSmall + 16;
     result.requested[2] = ZObjectSizeLimitMedium + ZGranuleSize + 16;
     result.expected[0] = ZPageSizeSmall;
-    result.expected[1] = ZPageSizeMediumMin;
+    // zObjectAllocator.cpp:144: a cold medium request uses the maximum page size.
+    // Cache-only variable sizes are covered by FastMediumConsumesCachedActualSize.
+    result.expected[1] = ZPageSizeMediumMax;
     result.expected[2] = AlignUp(result.requested[2], ZGranuleSize);
     ZPage* first = nullptr;
     for (size_t i = 0; i < 3; ++i) {

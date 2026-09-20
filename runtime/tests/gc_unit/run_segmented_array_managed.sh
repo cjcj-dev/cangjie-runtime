@@ -7,12 +7,12 @@ SRC="$ROOT/runtime/tests/gc_unit/segmented_array_managed.cj"
 OUT="${GC_UNIT_OUT:-$ROOT/runtime/tests/gc_unit/build_standalone}"
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:?set GCV2_RUNTIME_LIB_DIR}"
 CJC_BIN="${CJC:-${CANGJIE_HOME:-}/bin/cjc}"
-MODE="${1:-both}"
+MODE="${1:-construct}"
 
 case "$MODE" in
   both|full|young|construct) ;;
   *)
-    echo "usage: $0 [both|full|young]" >&2
+    echo "usage: $0 [construct|both|full|young]" >&2
     exit 2
     ;;
 esac

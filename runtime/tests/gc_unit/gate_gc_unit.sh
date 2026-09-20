@@ -394,7 +394,7 @@ run_language_tests() {
     SEGMENTED_MANAGED_STATE=FAIL
     SEGMENTED_MANAGED_SOURCE=FRESH
     STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
-    if ! bash "$SEGMENTED_MANAGED_SCRIPT"; then
+    if ! bash "$SEGMENTED_MANAGED_SCRIPT" both; then
       echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
       return 1
     fi
