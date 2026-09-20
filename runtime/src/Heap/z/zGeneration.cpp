@@ -184,7 +184,7 @@ bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 bool VM_ZOperation::pause()
 {
     if (block_jni_critical()) {
-        ZJNICritical::block();
+            ZJNICritical::block();
     }
     bool success = false;
     if (skip_stw) {
