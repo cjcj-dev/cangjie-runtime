@@ -1331,7 +1331,6 @@ void RegionManager::CollectFromSpaceGarbage()
 
 bool RegionManager::RelocateClaimedPage(ZPage* region)
 {
-    CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
     MAddress regionStart = region->GetRegionStart();
     MAddress regionLimit = region->GetRegionAllocPtr();
     bool allocFailed = false;
@@ -1674,8 +1673,6 @@ void RegionManager::ForwardRegion(ZPage* region)
         return;
     }
 
-    int32_t rawPointerCount = region->GetRawPointerObjectCount();
-    CHECK(rawPointerCount == 0);
     // RelocateClaimedPage already copied each object and called
     // UpdateRemsetForFields for the CAS winner; do not repeat either walk.
 

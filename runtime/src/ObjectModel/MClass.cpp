@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zRootsIterator.hpp"
 #include "ObjectModel/MClass.h"
 
 #include <iterator>
@@ -886,11 +887,11 @@ U8 EnumInfo::GetReflectVersion() const
 
 static void* GetAnnotations(Uptr annotationMethod, TypeInfo* arrayTi)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
     CHECK_DETAIL(arrayTi != nullptr, "arrayTi is nullptr");
-    ScopedAllocBuffer scopedAllocBuffer;
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::RAW_POINTER_OBJECT);
+    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::MOVEABLE_OBJECT);
     if (obj == nullptr) {
         ExceptionManager::OutOfMemory();
         return nullptr;
@@ -898,6 +899,7 @@ static void* GetAnnotations(Uptr annotationMethod, TypeInfo* arrayTi)
     if (annotationMethod == 0) {
         return obj;
     }
+    Handle objectHandle(Mutator::GetMutator(), obj);
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
     values.AddReference(as_abi_ref_slot(structRet));
@@ -908,6 +910,7 @@ static void* GetAnnotations(Uptr annotationMethod, TypeInfo* arrayTi)
 #else
     ApplyCangjieMethodStub(values.GetData(), values.GetStackSize(), annotationMethod, threadData);
 #endif
+    obj = static_cast<MObject*>(objectHandle());
     ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
         size, reinterpret_cast<Uptr>(structRet), size);
     return obj;

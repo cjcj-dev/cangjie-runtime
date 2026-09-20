@@ -34,11 +34,7 @@ inline const ZRelocationSetSelectorGroupStats& ZRelocationSetSelectorStats::larg
 
 inline bool ZRelocationSetSelectorGroup::pre_filter_page(const ZPage* page, size_t live_bytes) const
 {
-    // Host difference: FFI/raw-pointer objects cannot move. Reject relocation
-    // here, so register_live_page still accounts them and queues young pages
-    // for flip aging (ZGC zRelocationSetSelector.inline.hpp:107-119).
-    if (page->GetRawPointerObjectCount() > 0 || page->IsPinnedRegion() ||
-        page->GetRegionRole() == ZPageRole::RawPointerPinned) {
+    if (page->IsPinnedRegion()) {
         return false;
     }
     if (page->is_small()) {

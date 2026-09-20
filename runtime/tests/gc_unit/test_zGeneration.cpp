@@ -1,7 +1,15 @@
+#include "CangjieRuntime.h"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zJNICritical.hpp"
+#include "gc_unittest.hpp"
+
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <thread>
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zRemembered.hpp"
 #include "gc_unittest.hpp"
@@ -82,6 +90,27 @@ GC_TEST(ZGeneration, FreedPromotedCompactedAtomics)
     GC_EXPECT_EQ(young->promoted(), static_cast<size_t>(8));
     GC_EXPECT_EQ(young->compacted(), static_cast<size_t>(4));
     young->reset_statistics();
+}
+
+GC_TEST(ZJNICritical, BlockWaitsWhileEntered)
+{
+    ZJNICritical::initialize();
+    ZJNICritical::enter();
+    std::atomic<bool> finished{ false };
+    std::thread waiter([&] {
+        ZJNICritical::block();
+        finished.store(true, std::memory_order_release);
+        ZJNICritical::unblock();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    const bool finishedWhileEntered = finished.load(std::memory_order_acquire);
+    std::printf("ZJNI_CRITICAL_BLOCK_WAIT finished=%d count=%lld\n",
+                finishedWhileEntered ? 1 : 0,
+                static_cast<long long>(ZJNICritical::count_snapshot()));
+    ZJNICritical::exit();
+    waiter.join();
+    GC_EXPECT_FALSE(finishedWhileEntered);
+    GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
 }
 
 // ZGC zGeneration.cpp:499-505 and zRemembered.cpp:347-355: the

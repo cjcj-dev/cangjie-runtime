@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zRootsIterator.hpp"
 #include "FieldInfo.h"
 #include "Base/Log.h"
 #include "Base/Globals.h"
@@ -146,10 +147,11 @@ void InstanceFieldInfo::SetValue(TypeInfo* declaringTypeInfo, ObjRef instanceObj
 
 void* InstanceFieldInfo::GetAnnotations(TypeInfo* arrayTi)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
     CHECK_DETAIL(arrayTi != nullptr, "arrayTi is nullptr");
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::RAW_POINTER_OBJECT);
+    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::MOVEABLE_OBJECT);
     if (obj == nullptr) {
         ExceptionManager::OutOfMemory();
         return nullptr;
@@ -157,6 +159,7 @@ void* InstanceFieldInfo::GetAnnotations(TypeInfo* arrayTi)
     if (annotationMethod == 0) {
         return obj;
     }
+    Handle objectHandle(Mutator::GetMutator(), obj);
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
     values.AddReference(as_abi_ref_slot(structRet));
@@ -167,12 +170,9 @@ void* InstanceFieldInfo::GetAnnotations(TypeInfo* arrayTi)
 #else
     ApplyCangjieMethodStub(values.GetData(), values.GetStackSize(), annotationMethod, threadData);
 #endif
+    obj = static_cast<MObject*>(objectHandle());
     ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
         size, reinterpret_cast<Uptr>(structRet), size);
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
     return obj;
 }
 
@@ -262,10 +262,11 @@ void StaticFieldInfo::SetValue(ObjRef newValue)
 
 void* StaticFieldInfo::GetAnnotations(TypeInfo* arrayTi)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
     CHECK_DETAIL(arrayTi != nullptr, "arrayTi is nullptr");
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::RAW_POINTER_OBJECT);
+    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::MOVEABLE_OBJECT);
     if (obj == nullptr) {
         ExceptionManager::OutOfMemory();
         return nullptr;
@@ -273,6 +274,7 @@ void* StaticFieldInfo::GetAnnotations(TypeInfo* arrayTi)
     if (annotationMethod == 0) {
         return obj;
     }
+    Handle objectHandle(Mutator::GetMutator(), obj);
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
     values.AddReference(as_abi_ref_slot(structRet));
@@ -284,12 +286,9 @@ void* StaticFieldInfo::GetAnnotations(TypeInfo* arrayTi)
     ApplyCangjieMethodStub(values.GetData(), values.GetStackSize(), annotationMethod, threadData);
 #endif
 
+    obj = static_cast<MObject*>(objectHandle());
     ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
         size, reinterpret_cast<Uptr>(structRet), size);
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
     return obj;
 }
 
@@ -359,19 +358,14 @@ bool SetVArrayField(ObjRef obj, Uptr argAddr, TypeInfo* argType, ObjRef argObj)
 
 void SetFieldFromArgs(ObjRef obj, TypeInfo* ti, void* args)
 {
-    CJRawArray* cjRawArray = nullptr;
-    if (!Heap::IsHeapAddress(args)) {
-        cjRawArray = static_cast<CJArray*>(args)->rawPtr;
-    } else {
-        RefField<false> oldField(reinterpret_cast<MAddress>(args));
-        cjRawArray = reinterpret_cast<CJRawArray*>(ZBarrier::ReadReference(nullptr, oldField));
-    }
+    HandleMark handleMark(*Mutator::GetMutator());
+    Handle objectHandle(Mutator::GetMutator(), obj);
+    CJRawArray* cjRawArray = static_cast<CJArray*>(args)->GetRawArray();
     U64 argCnt = cjRawArray->len;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
+    Handle arrayHandle(Mutator::GetMutator(), rawArray);
 
     for (U64 idx = 0; idx < argCnt; ++idx) {
-        ObjRef argObj = static_cast<ObjRef>(ZBarrier::ReadReference(rawArray, *refField));
         TypeInfo* argType = ti->GetFieldType(idx);
         U32 offset = ti->GetFieldOffset(idx);
 
@@ -382,6 +376,10 @@ void SetFieldFromArgs(ObjRef obj, TypeInfo* ti, void* args)
             offset = ti->GetFieldOffset(idx + 1);
         }
 
+        obj = static_cast<MObject*>(objectHandle());
+        rawArray = static_cast<MObject*>(arrayHandle());
+        auto& refField = HeapSlotAt<false>(reinterpret_cast<Uptr>(rawArray) + offsetof(CJRawArray, data) + idx * sizeof(Uptr));
+        ObjRef argObj = static_cast<ObjRef>(ZBarrier::ReadReference(rawArray, refField));
         Uptr argAddr = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE + offset;
 
         bool success = true;
@@ -402,7 +400,6 @@ void SetFieldFromArgs(ObjRef obj, TypeInfo* ti, void* args)
             LOG(RTLOG_ERROR, "FieldInitializer: failed to set field at index %zu", idx);
         }
 
-        refField++;
     }
 }
 
@@ -416,9 +413,9 @@ ObjRef CreateEnumObject(TypeInfo* ti, MSize size)
     // For other enum kind, the object's TypeInfo should be the enum's TypeInfo.
     ObjRef obj = nullptr;
     if (enumInfo->IsEnumKind1()) {
-        obj = ObjectManager::NewObject(ti, size, AllocType::RAW_POINTER_OBJECT);
+        obj = ObjectManager::NewObject(ti, size, AllocType::MOVEABLE_OBJECT);
     } else {
-        obj = ObjectManager::NewObject(enumTi, size, AllocType::RAW_POINTER_OBJECT);
+        obj = ObjectManager::NewObject(enumTi, size, AllocType::MOVEABLE_OBJECT);
     }
     if (obj == nullptr) {
         VLOG(REPORT, "FieldInitializer: new enum object failed and throw OutOfMemoryError");
@@ -435,6 +432,9 @@ ObjRef CreateEnumObject(TypeInfo* ti, MSize size)
 
 void SetElementFromObject(ArrayRef array, ObjRef obj, TypeInfo* ti, U16 fieldNum)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
+    Handle arrayHandle(Mutator::GetMutator(), array);
+    Handle objectHandle(Mutator::GetMutator(), obj);
     for (int idx = 0; idx < fieldNum; idx++) {
         TypeInfo* fieldTi = ti->GetFieldType(idx);
         U32 offset = ti->GetFieldOffset(idx);
@@ -446,7 +446,8 @@ void SetElementFromObject(ArrayRef array, ObjRef obj, TypeInfo* ti, U16 fieldNum
             offset = ti->GetFieldOffset(idx + 1);
         }
 
-        BaseObject* fieldObj = FieldToAny(obj, fieldTi, offset);
+        BaseObject* fieldObj = FieldToAny(static_cast<MObject*>(objectHandle()), fieldTi, offset);
+        array = static_cast<MArray*>(arrayHandle());
 
         if (fieldObj != nullptr) {
             array->SetRefElement(idx, fieldObj);
@@ -475,9 +476,13 @@ BaseObject* FieldToAny(ObjRef obj, TypeInfo* fieldTi, U32 offset)
 
 BaseObject* StructLikeToAny(ObjRef obj, TypeInfo* fieldTi, Uptr fieldAddr)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
+    ScopedAllocBuffer valueRoots;
+    void* valueSnapshot = valueRoots.CopyNativeStruct(fieldTi, fieldAddr);
     MSize fieldSize = fieldTi->GetInstanceSize();
     MSize size = MRT_ALIGN(fieldSize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::RAW_POINTER_OBJECT);
+    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::MOVEABLE_OBJECT);
+    valueRoots.RefreshNativeStructs();
 
     if (fieldSize == 0) {
         return fieldObj;
@@ -489,7 +494,8 @@ BaseObject* StructLikeToAny(ObjRef obj, TypeInfo* fieldTi, Uptr fieldAddr)
         return nullptr;
     }
 
-    ZBarrier::ReadStruct(reinterpret_cast<MAddress>(tmp), obj, fieldAddr, fieldSize);
+    CHECK_DETAIL(memcpy_s(tmp, fieldSize, valueSnapshot, fieldSize) == EOK, "field snapshot copy failed");
+    (void)obj;
     ZBarrier::WriteStruct(fieldObj, reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE, fieldSize,
         reinterpret_cast<MAddress>(tmp), fieldSize);
 
@@ -499,14 +505,18 @@ BaseObject* StructLikeToAny(ObjRef obj, TypeInfo* fieldTi, Uptr fieldAddr)
 
 BaseObject* PrimitiveToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
+    ScopedAllocBuffer valueRoots;
+    void* valueSnapshot = valueRoots.CopyNativeStruct(fieldTi, fieldAddr);
     MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::RAW_POINTER_OBJECT);
+    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::MOVEABLE_OBJECT);
+    valueRoots.RefreshNativeStructs();
     if (fieldTi->GetInstanceSize() == 0) {
         return fieldObj;
     }
     if (memcpy_s(reinterpret_cast<void*>(reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE),
                  fieldTi->GetInstanceSize(),
-                 reinterpret_cast<void*>(fieldAddr),
+                 valueSnapshot,
                  fieldTi->GetInstanceSize()) != EOK) {
         LOG(RTLOG_ERROR, "FieldInitializer: memcpy_s failed for primitive field");
     }
@@ -516,19 +526,23 @@ BaseObject* PrimitiveToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 
 BaseObject* VArrayToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 {
-    // RAW_POINTER_OBJECT is not guaranteed young (RegionSpace raw-pointer path);
+    HandleMark handleMark(*Mutator::GetMutator());
+    ScopedAllocBuffer valueRoots;
+    void* valueSnapshot = valueRoots.CopyNativeStruct(fieldTi, fieldAddr);
+    // An allocation is not guaranteed young;
     // ref-bearing VArray must go through WriteStruct (G-C3).
     MSize vArraySize = fieldTi->GetInstanceSize();
     MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::RAW_POINTER_OBJECT);
+    BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::MOVEABLE_OBJECT);
+    valueRoots.RefreshNativeStructs();
     if (vArraySize == 0) {
         return fieldObj;
     }
     MAddress dst = reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE;
     if (fieldTi->HasRefField()) {
-        ZBarrier::WriteStruct(fieldObj, dst, vArraySize, fieldAddr, vArraySize);
+        ZBarrier::WriteStruct(fieldObj, dst, vArraySize, reinterpret_cast<MAddress>(valueSnapshot), vArraySize);
     } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
-                        reinterpret_cast<void*>(fieldAddr), vArraySize) != EOK) {
+                        valueSnapshot, vArraySize) != EOK) {
         LOG(RTLOG_ERROR, "FieldInitializer: memcpy_s failed for VArray field");
     }
 

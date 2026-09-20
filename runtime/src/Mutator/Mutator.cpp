@@ -334,16 +334,6 @@ ObjectRef* Mutator::AddNativeFrameRoot(BaseObject* obj)
     return &nativeFrameRoots.back();
 }
 
-void Mutator::RemoveNativeFrameRoot(ObjectRef* root)
-{
-    for (auto it = nativeFrameRoots.begin(); it != nativeFrameRoots.end(); ++it) {
-        if (&(*it) == root) {
-            nativeFrameRoots.erase(it);
-            return;
-        }
-    }
-}
-
 void Mutator::PopNativeFrameRootsTo(size_t mark)
 {
     if (mark < nativeFrameRoots.size()) {
@@ -802,31 +792,6 @@ static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool
     return PushHeapRoot(field, young, color);
 }
 
-// Argument-form struct-live: `root` holds a pointer to a headerless record
-// (String = {i8*, i32, i32}); the oop lives at record+0. Alloca-form FI already
-// names that word, so LoadPlain is a heap oop and never reaches here.
-// ZUncoloredRoot::barrier writes back the *same* p it loaded (zUncoloredRoot.inline.hpp:38,59).
-static void PreForwardHeaderlessRecord(BaseObject* record, Heap& collector, std::set<void*>& rootFieldSet)
-{
-    if (record == nullptr) {
-        return;
-    }
-    RootSlot& field = RootSlotAt(static_cast<void*>(record));
-    if (!rootFieldSet.insert(static_cast<void*>(record)).second) {
-        return;
-    }
-    BaseObject* oldObj = PlainRootObject(field.LoadPlain());
-    if (!Heap::IsHeapAddress(oldObj) || !collector.IsGhostFromObject(oldObj) ||
-        collector.IsUnmovableFromObject(oldObj)) {
-        return;
-    }
-    BaseObject* toObj = collector.ForwardObject(oldObj, Heap::GetHeap().ObjectGeneration(oldObj));
-    CHECK_DETAIL(toObj != nullptr, "preforward headerless missing winner oldObj=%p", oldObj);
-    if (oldObj != toObj) {
-        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&field), ZPointerLoadGoodMask);
-    }
-}
-
 bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
     MutatorLock();
@@ -860,13 +825,6 @@ bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size
     return scanned;
 }
 
-inline void Mutator::ForwardLocalFinalizers()
-{
-    for (NativeSlot& root : localFinalizers) {
-        (void)ZBarrier::ReadStaticRef(root);
-    }
-}
-
 DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor)
 {
     // oopMap.cpp:400-421, ProcessDerivedOop: retain the old offset and apply
@@ -885,80 +843,6 @@ DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor)
         visitor(currentBase);
         RebaseDerived(derived, currentBase, offset);
     };
-}
-
-inline void Mutator::GCPhasePreForward()
-{
-    std::set<BaseObject*> rootSet;
-    std::set<void*> rootFieldSet;
-    std::stack<BaseObject*> rootStack;
-    Heap& collector = Heap::GetHeap();
-    HeapSlotVisitor refVisitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this](HeapSlot<>& refFieldAddr) {
-        // The containing object is stack allocated, so this metadata field is a RootSlot.
-        RootSlot& rootField = RootSlotAt(
-            static_cast<void*>(&refFieldAddr)); // Stack-object field metadata denotes a root word.
-        BaseObject* oldObj = PlainRootObject(rootField.LoadPlain());
-        if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
-            !collector.IsUnmovableFromObject(oldObj)) {
-            if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
-            BaseObject* toObj = collector.ForwardObject(oldObj, Heap::GetHeap().ObjectGeneration(oldObj));
-            CHECK_DETAIL(toObj != nullptr, "preforward stack field missing winner oldObj=%p", oldObj);
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&rootField), ZPointerLoadGoodMask);
-        } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
-            if (IsHeaderedStackObject(oldObj)) {
-                CheckAndPush(oldObj, rootSet, rootStack);
-            } else {
-                PreForwardHeaderlessRecord(oldObj, collector, rootFieldSet);
-            }
-        }
-    };
-
-    RootVisitor visitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this,
-                           &refVisitor](ObjectRef& root) {
-        // interiorsrc2: peel colour before ghost/forward checks; write plain back so mutator
-        // does not resume with a coloured interior (si_code=128 in arrayInitByFunction).
-        BaseObject* oldObj = PlainRootObject(root.LoadPlain());
-        if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
-            !collector.IsUnmovableFromObject(oldObj)) {
-            if (!rootFieldSet.insert((void*)(&root)).second) {
-                return;
-            }
-            // interiorstart: a livemap-driven "recover the base of an interior root" branch
-            // stood here and has been deleted -- it read IsOwnerSurvivedObject as a start
-            // predicate when MarkBits makes it a coverage predicate (ZPage.h AdmitForRoute
-            // states this), so the base it recovered was the last covered slot of the *previous*
-            // object.  Measured on this workload: root offset 29368, "base" 29360, which is 40
-            // bytes inside a 48-byte object at 29320.  The root itself reads rootSurvived=0
-            // rootMarked=0 -- mark did not mark it -- so there was never an interior to rebase,
-            // and the refusal below is the honest report of that.  ZGC's counterpart assert
-            // (zRelocate.cpp:412-416) encodes the same invariant: an address a root names is a
-            // live object start, or the collector is already wrong.
-            BaseObject* toObj = collector.ForwardObject(oldObj, Heap::GetHeap().ObjectGeneration(oldObj));
-            CHECK_DETAIL(toObj != nullptr, "preforward root missing winner oldObj=%p", oldObj);
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-        } else if (oldObj != nullptr) {
-            if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
-                if (IsHeaderedStackObject(oldObj)) {
-                    CheckAndPush(oldObj, rootSet, rootStack);
-                } else {
-                    PreForwardHeaderlessRecord(oldObj, collector, rootFieldSet);
-                }
-            }
-        }
-        while (!rootStack.empty()) {
-            BaseObject* obj = rootStack.top();
-            rootStack.pop();
-            obj->ForEachRefField(refVisitor);
-        }
-    };
-
-    DerivedPtrVisitor derivedPtrVisitor = MakeDerivedRootVisitor(visitor);
-    ForwardLocalFinalizers();
-    size_t frames = 0;
-    const uint64_t epoch = __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
-    if (!StackWatermarkSet::finish_processing(*this, visitor, visitor, epoch, &derivedPtrVisitor, frames)) {
-        VisitHeapReferences(visitor, derivedPtrVisitor);
-    }
 }
 
 inline void Mutator::HandleCpuProfile()

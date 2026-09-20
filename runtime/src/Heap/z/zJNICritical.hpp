@@ -23,6 +23,7 @@ public:
     static void unblock();
     static void enter();
     static void exit();
+    static int64_t count_snapshot() { return count.load(std::memory_order_acquire); }
 
 private:
     static void enter_inner();

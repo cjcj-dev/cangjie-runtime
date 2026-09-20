@@ -20,6 +20,35 @@ uint32_t StackWatermark::epoch_id()
     return __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
 }
 
+// HotSpot stackWatermarkSet.cpp:114 and stackWatermark.cpp:311.
+void StackWatermarkSet::on_safepoint(Mutator& mutator)
+{
+    mutator.GetStackWatermark().on_safepoint(mutator);
+}
+
+void StackWatermark::on_safepoint(Mutator& mutator)
+{
+    start_processing(mutator);
+}
+
+void StackWatermark::start_processing(Mutator& mutator)
+{
+    const uint64_t epoch = epoch_id();
+    if (epoch == 0 || IsDone(epoch)) { return; }
+    const uintptr_t color = mutator.GetGCData().loadGoodMask;
+    StackWatermarkProcessOopClosure closure(nullptr, color);
+    RootVisitor visitor = [&](RootSlot& root) {
+        mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
+            closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
+        });
+    };
+    DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
+    size_t frames = 0;
+    // Cangjie has no return statepoint (#498). Keep the existing eager frame
+    // traversal; the no-frame head still uses the single start_processing_impl.
+    (void)StackWatermarkSet::finish_processing(mutator, visitor, visitor, epoch, &derived, frames);
+}
+
 bool StackWatermark::IsDone(uint64_t scanEpoch) const
 {
     const uint32_t packed = state.load(std::memory_order_acquire);

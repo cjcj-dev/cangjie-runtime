@@ -68,13 +68,9 @@ using ParameterInfoRef = ParameterInfo*;
 
 using FuncPtr = void(*)(void*);
 
-// at first glance, there is no need to expose this type or at least RAW_POINTER_OBJECT.
-// however in consideration that there are lots of differences for runtime apis to support different gc,
-// this is acceptable.
 enum class AllocType {
     MOVEABLE_OBJECT = 0,
     PINNED_OBJECT,
-    RAW_POINTER_OBJECT,
     // Large reference arrays initialize their payload in safepoint-bounded
     // segments. The allocator must not clear the reused extent first.
     MOVEABLE_OBJECT_SEGMENTED_CLEAR,

@@ -1249,6 +1249,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     // matching ZHeap::alloc_page (zHeap.cpp:253-257). Do not register it twice.
     MutatorManager& manager = MutatorManager::Instance();
     Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    const size_t frameMark = mutator->NativeFrameRootCount();
     alignas(16) uintptr_t nestedStorage[8] {};
     RootSlot* nestedField = nullptr;
     BaseObject* rootInput = forwarding.from;
@@ -1337,7 +1338,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
                      nestedKind, raw(nestedField->LoadPlain()), expected, unsigned(result));
     }
     GC_EXPECT_TRUE(result);
-    mutator->PopNativeFrameRootsTo(rootMark);
+    mutator->PopNativeFrameRootsTo(frameMark);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 void CheckMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false, unsigned nestedKind = 0)

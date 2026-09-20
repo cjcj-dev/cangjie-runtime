@@ -25,6 +25,13 @@
 
 
 namespace MapleRuntime {
+Handle::Handle(Mutator* mutator, BaseObject* object)
+    : slot(object == nullptr ? nullptr : mutator->AddNativeFrameRoot(object)) {}
+BaseObject* Handle::operator()() const
+{
+    return slot == nullptr ? nullptr : to_object(safe(slot->LoadPlain()));
+}
+
 HandleMark::HandleMark(Mutator& mutator) : mutator(mutator), mark(mutator.NativeFrameRootCount()) {}
 HandleMark::~HandleMark() { mutator.PopNativeFrameRootsTo(mark); }
 

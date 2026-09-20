@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zRootsIterator.hpp"
 #include "CompilerCalls.h"
 
 #include "Base/CString.h"
@@ -668,9 +669,10 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
     DLOG(EXCEPTION, "   FileName  \t : \t%s", stackTrace.fileName.Str());
     DLOG(EXCEPTION, "   LineNumber  \t : \t%lu", stackTrace.lineNumber);
 #endif
+    HandleMark handleMark(*Mutator::GetMutator());
     StackTraceData std;
     std.className = ObjectManager::NewKnownWidthArray(
-        stackTrace.className.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::RAW_POINTER_OBJECT);
+        stackTrace.className.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::MOVEABLE_OBJECT);
     if (std.className != nullptr) {
         for (MIndex i = 0; i < stackTrace.className.Length(); ++i) {
             std.className->SetPrimitiveElement(i, static_cast<int8_t>(stackTrace.className[i]));
@@ -681,8 +683,9 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray return nullptr");
     }
 
+    Handle classHandle(Mutator::GetMutator(), std.className);
     std.fileName = ObjectManager::NewKnownWidthArray(
-        stackTrace.fileName.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::RAW_POINTER_OBJECT);
+        stackTrace.fileName.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::MOVEABLE_OBJECT);
     if (std.fileName != nullptr) {
         for (MIndex i = 0; i < stackTrace.fileName.Length(); ++i) {
             std.fileName->SetPrimitiveElement(i, static_cast<int8_t>(stackTrace.fileName[i]));
@@ -693,9 +696,10 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray return nullptr");
     }
 
+    Handle fileHandle(Mutator::GetMutator(), std.fileName);
     std.methodName =
         ObjectManager::NewKnownWidthArray(stackTrace.methodName.Length(), charArray,
-                                          ObjectManager::ArrayElemBits::ELEM_8B, AllocType::RAW_POINTER_OBJECT);
+                                          ObjectManager::ArrayElemBits::ELEM_8B, AllocType::MOVEABLE_OBJECT);
     if (std.methodName != nullptr) {
         for (MIndex i = 0; i < stackTrace.methodName.Length(); ++i) {
             std.methodName->SetPrimitiveElement(i, static_cast<int8_t>(stackTrace.methodName[i]));
@@ -706,20 +710,16 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray return nullptr");
     }
 
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
     std.lineNumber = stackTrace.lineNumber;
+    std.className = static_cast<MArray*>(classHandle());
+    std.fileName = static_cast<MArray*>(fileHandle());
     return std;
 }
 
-// Warning: Caller MUST call `CommitRawPointerRegions` to make sure that
-// the new object will be correctly tracked by gc.
 static ArrayRef CreateCharArrayFromCString(const TypeInfo* charArray, CString name)
 {
     ArrayRef array = ObjectManager::NewKnownWidthArray(
-        name.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::RAW_POINTER_OBJECT);
+        name.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::MOVEABLE_OBJECT);
     if (array == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("CreateCharArrayFromCString: nullptr array");
     }
@@ -729,8 +729,6 @@ static ArrayRef CreateCharArrayFromCString(const TypeInfo* charArray, CString na
     return array;
 }
 
-// Warning: Caller MUST call `CommitRawPointerRegions` to make sure that
-// the new object will be correctly tracked by gc.
 static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo* charArray,
                                  const std::vector<FrameInfo*> &srcSracks)
 {
@@ -744,10 +742,13 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
         size++;
     }
 
-    ArrayRef trace = ObjectManager::NewArray(size, arrayStackTrace, AllocType::RAW_POINTER_OBJECT);
+    auto* mutator = Mutator::GetMutator();
+    HandleMark handleMark(*mutator);
+    ArrayRef trace = ObjectManager::NewArray(size, arrayStackTrace, AllocType::MOVEABLE_OBJECT);
     if (trace == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("CreateStackTrace: nullptr array");
     }
+    Handle traceHandle(mutator, trace);
     int stackIndex = 0;
     for (auto frame : srcSracks) {
         // skip native frame
@@ -760,27 +761,29 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
         CString methodName = frame->GetMethodName();
         uint32_t lineNumber = frame->GetLineNum();
 
+        HandleMark frameMark(*mutator);
         StackTraceData frameData;
         // fill frame
-        frameData.className = CreateCharArrayFromCString(charArray, className);
-        frameData.fileName = CreateCharArrayFromCString(charArray, fileName);
+        Handle classHandle(mutator, CreateCharArrayFromCString(charArray, className));
+        Handle fileHandle(mutator, CreateCharArrayFromCString(charArray, fileName));
         frameData.methodName = CreateCharArrayFromCString(charArray, methodName);
+        frameData.className = static_cast<MArray*>(classHandle());
+        frameData.fileName = static_cast<MArray*>(fileHandle());
         frameData.lineNumber = lineNumber;
 
         // push frame to stack array
+        trace = static_cast<MArray*>(traceHandle());
         MSize elementSize = trace->GetElementSize();
         MAddress dstAddr = reinterpret_cast<Uptr>(trace) + MArray::GetContentOffset() + elementSize * stackIndex;
         ZBarrier::WriteStruct(trace, dstAddr, elementSize,
                                        reinterpret_cast<MAddress>(&frameData), elementSize);
         stackIndex++;
     }
-    return trace;
+    return static_cast<MArray*>(traceHandle());
 }
 
-static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeInfo* arrayStackTrace,
-                                     const TypeInfo* charArray)
+static void CollectThreadSnapshots(std::vector<std::unique_ptr<RecordStackInfo>>& records)
 {
-    std::vector<std::unique_ptr<RecordStackInfo>> records;
     MutatorManager::Instance().VisitAllMutatorsExceptFinalizer([&records](Mutator &mutator) {
         if (!mutator.IsVaildCJThread()) {
             return;
@@ -804,20 +807,32 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
         records.emplace_back(std::move(record));
     });
 
-    ArrayRef allRecords = ObjectManager::NewArray(records.size(), arraySnapshot, AllocType::RAW_POINTER_OBJECT);
+}
+
+static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeInfo* arrayStackTrace,
+                                    const TypeInfo* charArray,
+                                    const std::vector<std::unique_ptr<RecordStackInfo>>& records)
+{
+    auto* mutator = Mutator::GetMutator();
+    HandleMark handleMark(*mutator);
+    ArrayRef allRecords = ObjectManager::NewArray(records.size(), arraySnapshot, AllocType::MOVEABLE_OBJECT);
     if (allRecords == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("GetAllThreadSnapshot: nullptr array");
     }
+    Handle recordsHandle(mutator, allRecords);
     int recordIndex = 0;
     for (const auto &record : records) {
+        HandleMark recordMark(*mutator);
         ThreadSnapshot snapshot;
         // fill thread snapshot
-        snapshot.name = CreateCharArrayFromCString(charArray, record->GetThreadName());
+        Handle nameHandle(mutator, CreateCharArrayFromCString(charArray, record->GetThreadName()));
         snapshot.id = record->GetStackTid();
         snapshot.stackTrace = CreateStackTrace(arrayStackTrace, charArray, record->stacks);
+        snapshot.name = static_cast<MArray*>(nameHandle());
         snapshot.state = record->GetThreadState();
 
         // push snapshot to record array
+        allRecords = static_cast<MArray*>(recordsHandle());
         MSize elementSize = allRecords->GetElementSize();
         MAddress dstAddr =
             reinterpret_cast<Uptr>(allRecords) + MArray::GetContentOffset() + elementSize * recordIndex;
@@ -826,25 +841,23 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
         recordIndex++;
     }
 
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
-    return allRecords;
+    return static_cast<MArray*>(recordsHandle());
 }
 
 extern "C" ArrayRef MCC_GetAllThreadSnapshotImpl(const TypeInfo* arraySnapshot, const TypeInfo* arrayStackTrace,
                                                  const TypeInfo* charArray)
 {
-    ScopedEnterSaferegion enterSaferegion(false);
-    ArrayRef allRecords = nullptr;
-    if (MutatorManager::Instance().WorldStopped()) {
-        allRecords = GetAllThreadSnapshot(arraySnapshot, arrayStackTrace, charArray);
-    } else {
-        ScopedStopTheWorld stw("dump all thread");
-        allRecords = GetAllThreadSnapshot(arraySnapshot, arrayStackTrace, charArray);
+    std::vector<std::unique_ptr<RecordStackInfo>> records;
+    {
+        ScopedEnterSaferegion enterSaferegion(false);
+        if (MutatorManager::Instance().WorldStopped()) {
+            CollectThreadSnapshots(records);
+        } else {
+            ScopedStopTheWorld stw("dump all thread");
+            CollectThreadSnapshots(records);
+        }
     }
-    return allRecords;
+    return GetAllThreadSnapshot(arraySnapshot, arrayStackTrace, charArray, records);
 }
 
 extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* arrayStackTrace, const TypeInfo* charArray)
@@ -870,19 +883,17 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* array
 
     RecordStackInfo record(&(mutator->GetUnwindContext()), threadId, threadName, state);
     record.FillInStackTrace();
+    mutator->LeaveSaferegion();
 
+    HandleMark handleMark(*mutator);
     ThreadSnapshot snapshot;
     // fill thread snapshot
-    snapshot.name = CreateCharArrayFromCString(charArray, record.GetThreadName());
+    Handle nameHandle(mutator, CreateCharArrayFromCString(charArray, record.GetThreadName()));
     snapshot.id = record.GetStackTid();
     snapshot.stackTrace = CreateStackTrace(arrayStackTrace, charArray, record.stacks);
+    snapshot.name = static_cast<MArray*>(nameHandle());
     snapshot.state = record.GetThreadState();
 
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
-    mutator->LeaveSaferegion();
     return snapshot;
 }
 
@@ -1206,6 +1217,7 @@ extern "C" const char* MCC_GetPackageVersion(PackageInfo* packageInfo)
 
 extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arrayTi)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
     std::vector<PackageInfo*> subPackages = {};
     if (!CopyPackageInfoSnapshotSubPackages(packageInfo, subPackages)) {
         LoaderManager::GetInstance()->GetSubPackages(packageInfo, subPackages);
@@ -1214,22 +1226,19 @@ extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arra
     // Array<CPointer<Unit>> layout likes { Rarray<CPointer<Unit>>, Int64, Int64 }
     TypeInfo* rawArrayTi = arrayTi->GetFieldType(0); // 0: first field type RawArray<CPointer<Unit>>.ti
     ArrayRef rawArrayObj = ObjectManager::NewKnownWidthArray(subPkgCnt, rawArrayTi,
-        ObjectManager::ArrayElemBits::ELEM_64B, AllocType::RAW_POINTER_OBJECT);
+        ObjectManager::ArrayElemBits::ELEM_64B, AllocType::MOVEABLE_OBJECT);
     for (size_t idx = 0; idx < subPkgCnt; ++idx) {
         rawArrayObj->SetPrimitiveElement(idx, reinterpret_cast<int64_t>(subPackages[idx]));
     }
+    Handle rawHandle(Mutator::GetMutator(), rawArrayObj);
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::RAW_POINTER_OBJECT);
+    MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::MOVEABLE_OBJECT);
     // set rawArray
-    ZBarrier::WriteReference(obj, obj->GetRefField(TYPEINFO_PTR_SIZE), static_cast<BaseObject*>(rawArrayObj));
+    ZBarrier::WriteReference(obj, obj->GetRefField(TYPEINFO_PTR_SIZE), rawHandle());
     CJArray* cjArray = reinterpret_cast<CJArray*>(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE);
     cjArray->start = 0;
     cjArray->length = subPkgCnt;
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
     return obj;
 }
 
@@ -1648,13 +1657,17 @@ extern "C" ObjRef MCC_NewAndInitEnumTupleObject(TypeInfo* ti, void* args)
     if (args == nullptr) {
         return nullptr;
     }
+    HandleMark handleMark(*Mutator::GetMutator());
+    Handle arguments(Mutator::GetMutator(),
+        reinterpret_cast<BaseObject*>(static_cast<CJArray*>(args)->GetRawArray()));
+    CJArray argumentValue = *static_cast<CJArray*>(args);
     MSize size = MRT_ALIGN(ti->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
     ObjRef obj = nullptr;
 
     if (ti->IsEnum() || ti->IsTempEnum()) {
         obj = FieldInitializer::CreateEnumObject(ti, size);
     } else if (ti->IsTuple()) {
-        obj = ObjectManager::NewObject(ti, size, AllocType::RAW_POINTER_OBJECT);
+        obj = ObjectManager::NewObject(ti, size, AllocType::MOVEABLE_OBJECT);
         if (obj == nullptr) {
             VLOG(REPORT, "MCC_NewAndInitEnumTupleObject new tuple object failed and throw OutOfMemoryError");
             ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
@@ -1671,16 +1684,16 @@ extern "C" ObjRef MCC_NewAndInitEnumTupleObject(TypeInfo* ti, void* args)
     }
 
     // Parse fields from args and store them into obj.
-    FieldInitializer::SetFieldFromArgs(obj, ti, args);
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
-    return obj;
+    Handle objectHandle(Mutator::GetMutator(), obj);
+    StorePlain(RootSlotAt(&argumentValue.rawPtr), from_object(arguments()));
+    FieldInitializer::SetFieldFromArgs(obj, ti, &argumentValue);
+    return static_cast<MObject*>(objectHandle());
 }
 
 extern "C" ObjRef MCC_GetAssociatedValues(ObjRef obj, TypeInfo* arrayTi)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
+    Handle objectHandle(Mutator::GetMutator(), obj);
     TypeInfo* ti = obj->GetTypeInfo();
     U16 fieldNum = ti->GetFieldNum();
     // For enum and temp enum, except zero-sized enum, fields include the tag,
@@ -1707,30 +1720,27 @@ extern "C" ObjRef MCC_GetAssociatedValues(ObjRef obj, TypeInfo* arrayTi)
     }
 
     TypeInfo* rawArrayTi = arrayTi->GetFieldType(0);
-    ArrayRef array = ObjectManager::NewArray(fieldNum, rawArrayTi, AllocType::RAW_POINTER_OBJECT);
+    ArrayRef array = ObjectManager::NewArray(fieldNum, rawArrayTi, AllocType::MOVEABLE_OBJECT);
     if (array == nullptr) {
         VLOG(REPORT, "MCC_GetAssociatedValues new array failed and throw OutOfMemoryError");
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewArray return nullptr");
     }
     // Extract fields from obj and put them into array.
-    FieldInitializer::SetElementFromObject(array, obj, ti, fieldNum);
+    Handle arrayHandle(Mutator::GetMutator(), array);
+    FieldInitializer::SetElementFromObject(array, static_cast<MObject*>(objectHandle()), ti, fieldNum);
 
     U32 size = arrayTi->GetInstanceSize();
     MSize arrayObjSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    ObjRef arrayObj = ObjectManager::NewObject(arrayTi, arrayObjSize, AllocType::RAW_POINTER_OBJECT);
+    ObjRef arrayObj = ObjectManager::NewObject(arrayTi, arrayObjSize, AllocType::MOVEABLE_OBJECT);
     if (arrayObj == nullptr) {
         VLOG(REPORT, "MCC_GetAssociatedValues new object failed and throw OutOfMemoryError");
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
     }
     ZBarrier::WriteReference(
-        arrayObj, arrayObj->GetRefField(TYPEINFO_PTR_SIZE), static_cast<BaseObject*>(array));
+        arrayObj, arrayObj->GetRefField(TYPEINFO_PTR_SIZE), arrayHandle());
     CJArray* cjArray = reinterpret_cast<CJArray*>(reinterpret_cast<Uptr>(arrayObj) + TYPEINFO_PTR_SIZE);
     cjArray->start = 0;
     cjArray->length = fieldNum;
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->CommitRawPointerRegions();
-    }
     return arrayObj;
 }
 

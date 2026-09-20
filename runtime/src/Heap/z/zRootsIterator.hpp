@@ -6,6 +6,7 @@
 
 #pragma once
 #include <array>
+#include "Common/Handle.h"
 #include <atomic>
 #include <functional>
 #include <list>

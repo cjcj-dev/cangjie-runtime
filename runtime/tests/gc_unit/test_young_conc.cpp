@@ -183,7 +183,6 @@ GC_TEST(YoungConc, SingleCurrentMarkSuppressesEnqueueForEitherClosure)
     GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
 }
 
-
 // ZGC native stores consume prev (zBarrier.inline.hpp:709-715), including
 // export root membership. An empty slot has no old value to publish.
 GC_OTHER_VM_TEST(YoungConc, ExportRootRegistrationDoesNotMarkIncomingValue)

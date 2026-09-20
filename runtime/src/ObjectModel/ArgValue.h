@@ -8,6 +8,9 @@
 #ifndef MRT_ARGVALUE_H
 #define MRT_ARGVALUE_H
 
+#include "Common/Handle.h"
+#include <vector>
+
 namespace MapleRuntime {
 #if defined(__linux__) && defined(__x86_64__)
 constexpr U32 kXregSize = 6;
@@ -71,7 +74,20 @@ public:
 
     Value* GetData()
     {
+        // HotSpot JavaCallArguments::parameters(), javaCalls.cpp:477.
+        for (const auto& argument : handles) {
+            auto* object = argument.handle();
+            values[argument.index].l = object == nullptr ? 0 :
+                reinterpret_cast<Uptr>(object) + argument.offset;
+        }
         return &values[0];
+    }
+
+    void AddHandle(Handle handle, size_t offset = 0)
+    {
+        const U32 index = gregIdx < kXregSize ? gregIdx : stackIdx;
+        AddInt64(0);
+        handles.push_back({index, handle, offset});
     }
 
     void AddReference(BaseObject* ref)
@@ -153,6 +169,8 @@ private:
             delete []oldValues; // free dynamic array.
         }
     }
+    struct HandleArgument { U32 index; Handle handle; size_t offset; };
+    std::vector<HandleArgument> handles;
     U32 valuesSize;
     Value regArgValues[kRegArgsSize];
     Value *values;

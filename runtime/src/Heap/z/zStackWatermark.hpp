@@ -63,6 +63,8 @@ public:
     static uint32_t UnpackEpoch(uint32_t packed) { return packed >> 1; }
     static bool UnpackDone(uint32_t packed) { return (packed & 1u) != 0; }
     static uint32_t epoch_id();
+    void on_safepoint(Mutator& mutator);
+    void start_processing(Mutator& mutator);
 
     bool TryBegin(uint64_t scanEpoch, size_t totalFrames);
     void AdvanceTo(size_t index) { cursorIndex.store(index, std::memory_order_release); }
@@ -95,6 +97,7 @@ private:
 };
 class StackWatermarkSet {
 public:
+    static void on_safepoint(Mutator& mutator);
     static bool finish_processing(Mutator& mutator, const RootVisitor& visitor,
                                   const RootVisitor& invisibleRootVisitor, uint64_t epoch,
                                   const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames,

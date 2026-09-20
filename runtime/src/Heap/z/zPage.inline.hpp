@@ -597,27 +597,6 @@ inline bool ZPage::IsRelocatable() const
     return BirthSequence() < GetSnapshotEpoch();
 }
 
-inline int32_t ZPage::IncRawPointerObjectCount()
-    {
-        int32_t oldCount = __atomic_fetch_add(&_scratch.rawPointerObjectCount, 1, __ATOMIC_SEQ_CST);
-        CHECK_DETAIL(oldCount >= 0, "region %p has wrong raw pointer count %d", this);
-        CHECK_DETAIL(oldCount < MAX_RAW_POINTER_COUNT, "inc raw-pointer-count overflow");
-        return oldCount;
-    }
-
-inline int32_t ZPage::DecRawPointerObjectCount()
-    {
-        int32_t oldCount = __atomic_fetch_sub(&_scratch.rawPointerObjectCount, 1, __ATOMIC_SEQ_CST);
-        CHECK_DETAIL(oldCount > 0, "dec raw-pointer-count underflow, please check whether releaseRawData is overused.");
-        return oldCount;
-    }
-
-inline bool ZPage::CompareAndSwapRawPointerObjectCount(int32_t expectVal, int32_t newVal)
-    {
-        return __atomic_compare_exchange_n(&_scratch.rawPointerObjectCount, &expectVal, newVal, false, __ATOMIC_SEQ_CST,
-                                           __ATOMIC_ACQUIRE);
-    }
-
 inline bool ZPage::IsPinnedRegion() const
     {
         const ZPageRole role = GetRegionRole();
@@ -627,7 +606,7 @@ inline bool ZPage::IsPinnedRegion() const
 inline bool ZPage::IsUnmovableFromRegion() const
     {
         const ZPageRole role = GetRegionRole();
-        return role == ZPageRole::UnmovableFrom || role == ZPageRole::RawPointerPinned;
+        return role == ZPageRole::UnmovableFrom;
     }
 
 inline bool ZPage::IsValidRegion() const
@@ -731,7 +710,6 @@ inline void ZPage::InitZPage(size_t pageSize, ZPageType uClass, PageAge age, boo
         // a reclaim gate was bypassed, and leaving the flag set keeps the region out of the
         // next collection set instead of silently papering over the escape.
         SetInGhostRegion(0);
-        __atomic_store_n(&_scratch.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
         (void)uClass;
         (void)live;
     }

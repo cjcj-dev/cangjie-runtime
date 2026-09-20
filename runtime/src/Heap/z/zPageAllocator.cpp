@@ -978,12 +978,6 @@ retry:
 
 size_t RegionManager::CollectFreePinnedSlots(ZPage* region)
 {
-    // pinroot: raw-pointer pin is a liveness hold — do not free any slot while count > 0.
-    // AddRawPointerObject only bumps this counter (no mark bit / root set); reclaim must honour it.
-    if (region->GetRawPointerObjectCount() > 0) {
-
-        return 0;
-    }
     // traverse pinned region to reclaim free pinned objects.
     size_t garbageSize = 0;
     region->VisitAllObjects([this, region, &garbageSize](BaseObject* object) {
@@ -1020,10 +1014,6 @@ size_t RegionManager::CollectPinnedGarbage()
         }
     }
     for (ZPage* region : pinnedPages) {
-        // pinroot: whole-region reclaim also ignores pins; skip while any raw pointer holds.
-        if (region->GetRawPointerObjectCount() > 0) {
-            continue;
-        }
         if (region->IsKnownEmpty()) {
             ZPage* del = region;
             del->SetRegionRole(ZPageRole::None);
@@ -1203,47 +1193,6 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
 }
 
 
-void RegionManager::AddRawPointerObject(BaseObject* obj)
-    {
-        // Pin needs a plain load-good address. High colour bits ⇒ missing barrier
-        // at the call site (would OOB in GranuleIndexAt; fail closed here).
-        MAddress rawAddr = reinterpret_cast<MAddress>(obj);
-        CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
-        ZPage* region = Heap::page(rawAddr);
-        region->IncRawPointerObjectCount();
-
-        // CSet empty-free (select_relocation_set) claims FROM under the same
-        // role word (zGeneration.cpp:211-221 register_empty_page). Inc first so
-        // a GC that already claimed GARBAGE still sees rawPtrCnt>0. The claim
-        // is a role CAS; a lost race leaves the page lone, which is the same
-        // skip as ZGC's !is_relocatable.
-        for (;;) {
-            ZPageRole role = region->GetRegionRole();
-            if (role == ZPageRole::From || role == ZPageRole::Garbage) {
-                ZPageRole expect = role;
-                if (region->CASRegionRole(expect, ZPageRole::RawPointerPinned)) {
-                    ZGeneration* generation = region->IsYoungRegion()
-                        ? static_cast<ZGeneration*>(ZGeneration::young())
-                        : static_cast<ZGeneration*>(ZGeneration::old());
-                    CHECK(generation == nullptr || !generation->is_phase_relocate());
-                    break;
-                }
-                std::this_thread::yield();
-                continue;
-            }
-            CHECK(!region->IsLoneFromRegion());
-            break;
-        }
-    }
-
-void RegionManager::RemoveRawPointerObject(BaseObject* obj)
-    {
-        MAddress rawAddr = reinterpret_cast<MAddress>(obj);
-        CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
-        ZPage* region = Heap::page(rawAddr);
-        region->DecRawPointerObjectCount();
-    }
-
 // zPageAllocator.cpp:1332-1373 — the allocator account feeding ZStatHeap.
 void RegionManager::UpdateCollectionStats(ZGenerationId id)
 {
@@ -1293,17 +1242,6 @@ void FreeRegionManager::AddMarkQuarantineMemory(size_t idx, size_t num)
         markQuarantineMemory.push_back(VirtualMemoryOf(idx, num));
     }
 
-
-void RegionManager::MergeRawPointerPinnedRegions()
-{
-    ZPage::SafeDestroyScope scope;
-    ZPageTableIterator iter(&ZPageTable::heap_table());
-    for (ZPage* region; iter.next(&region);) {
-        if (region->GetRegionRole() == ZPageRole::RawPointerPinned) {
-            region->SetRegionRole(ZPageRole::OldPinned);
-        }
-    }
-}
 
 size_t RegionManager::GetLargeObjectSize() const
 {

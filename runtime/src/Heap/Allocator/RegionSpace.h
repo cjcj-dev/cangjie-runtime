@@ -221,11 +221,6 @@ public:
         return regionInfo->is_object_live(addr) && !regionInfo->is_object_strongly_live(addr);
     }
 
-    void AddRawPointerObject(BaseObject* obj) { GetRegionManager().AddRawPointerObject(obj); }
-
-    void RemoveRawPointerObject(BaseObject* obj) { GetRegionManager().RemoveRawPointerObject(obj); }
-
-
 
 private:
     AllocBufferManager* allocBufferManager;

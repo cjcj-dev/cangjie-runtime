@@ -216,6 +216,7 @@ public:
         Heap::GetHeap().old().collect();
     }
 };
+using RelocationReceiptTestAccess = RelocationReceiptTest;
 
 } // namespace MapleRuntime
 
@@ -360,7 +361,6 @@ void RunYoungWeakVariant(size_t helpers)
     RelocationReceiptTest::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
-    space.GetRegionManager().AddRawPointerObject(graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
@@ -429,8 +429,6 @@ void RunYoungWeakRemsetFlow()
     RelocationReceiptTest::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
-    space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
-    space.GetRegionManager().AddRawPointerObject(graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
@@ -486,11 +484,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     RelocationReceiptTest::BindWorkerBudget(static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region0->SetRegionRole(ZPageRole::RecentFull);
-    space.GetRegionManager().AddRawPointerObject(graph.child);
     if (runtimeEntry) {
-        space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
-        space.GetRegionManager().AddRawPointerObject(graph.weak);
-        space.GetRegionManager().AddRawPointerObject(graph.referent);
     }
 
     // MarkStack::size() counts 64-entry buffers. Seventeen buffers cross the
@@ -679,7 +673,6 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     RelocationReceiptTest::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region0->SetRegionRole(ZPageRole::RecentFull);
-    space.GetRegionManager().AddRawPointerObject(graph.weak);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     RelocationReceiptTest::RunMajorMark(collector);
@@ -694,7 +687,6 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     GC_EXPECT_TRUE(rootMarked);
     GC_EXPECT_TRUE(childMarked);
 }
-
 
 // Directed port test for zHeapIterator.cpp:195-229 (no upstream standalone graph test):
 // W --weak--> R --strong--> C. The public iterator must report R itself.
