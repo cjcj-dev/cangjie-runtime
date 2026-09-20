@@ -929,6 +929,12 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         if (entry.mark() && wasMarked) {
             return;
         }
+#if defined(MRT_TESTABLE_INTERNALS)
+        {
+            const std::vector<BaseObject*> observed{ object };
+            ObserveMarkClosureForTest(&observed);
+        }
+#endif
         if (!object->HasRefField() || !entry.follow()) {
             return;
         }
