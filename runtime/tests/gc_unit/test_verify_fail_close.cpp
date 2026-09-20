@@ -427,7 +427,7 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     NativeSlot* root = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
     if (root == nullptr) { _exit(123); }
     root->StoreColoured(StoreGoodPointer(holder));
-    if (youngTarget != nullptr) {
+    if (mode == VerifyFieldCase::WeakYoungMarked && youngTarget != nullptr) {
         NativeSlot* youngRoot = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
         if (youngRoot == nullptr) { _exit(123); }
         youngRoot->StoreColoured(StoreGoodPointer(youngTarget));
