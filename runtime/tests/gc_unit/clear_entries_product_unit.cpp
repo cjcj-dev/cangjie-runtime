@@ -2238,6 +2238,12 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     EmptyBothRememberedFaces(remembered);
     Heap& collector = Heap::GetHeap();
     LoadHealDeliveryTestAccess::PublishColours(collector);
+    // ZGenerationOld::collect phases 8/9 (zGeneration.cpp:1058-1063):
+    // remap young roots before old relocate-start. The stale target belongs
+    // to the young forwarding table, not an already relocating old set.
+    LateBackfillState forwarding = PrepareLateBackfill(fx, collector, Generation::Young);
+    // PrepareForwardable advances the young cycle and flips remsets; seed
+    // the current face only after that fixture phase transition.
     {
         DeliveryNoAllocBufferScope directRemember;
         nearField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));
@@ -2254,42 +2260,56 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(holderRegion, holder));
     youngCarrier->reset(PageAge::eden);
 
-    LateBackfillState forwarding = PrepareLateBackfill(fx, collector);
     nearField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
     farField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
     youngField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
     LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
-    LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
-    const uintptr_t doubleBad = LoadHealDeliveryTestAccess::DoubleBadColour(collector);
-    GC_EXPECT_TRUE(doubleBad != 0 && (doubleBad & (doubleBad - 1)) == 0);
-    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & ZPointerRemappedMask, doubleBad);
+    GC_EXPECT_FALSE(ZPointer::is_load_good(farField->GetFieldValue()));
     const uintptr_t youngBefore = raw(youngField->GetFieldValue());
+    const uintptr_t nearBefore = raw(nearField->GetFieldValue());
+    const uintptr_t farBefore = raw(farField->GetFieldValue());
+    // ZGenerationOld::remap_young_roots (zGeneration.cpp:1509-1525)
+    // dispatches through both generation-owned worker sets. Standalone
+    // fixtures must establish the driver-created worker lifetime first.
+    collector.young().InitializeWorkers(2);
+    collector.old().InitializeWorkers(2);
+    collector.young().Workers()->set_active_workers(1);
+    collector.old().Workers()->set_active_workers(1);
     LoadHealDeliveryTestAccess::RemapYoungRoots(collector);
+    collector.old().StopWorkers();
+    collector.young().StopWorkers();
 
     const bool nearResolved = to_object(nearField->GetTargetObject()) == forwarding.to;
     const bool farResolved = to_object(farField->GetTargetObject()) == forwarding.to;
-    const bool nearStoreGood = ZPointer::is_store_good((*nearField).GetFieldValue());
-    const bool farStoreGood = ZPointer::is_store_good((*farField).GetFieldValue());
+    const bool nearLoadGood = ZPointer::is_load_good((*nearField).GetFieldValue());
+    const bool farLoadGood = ZPointer::is_load_good((*farField).GetFieldValue());
     const bool youngUnchanged = raw(youngField->GetFieldValue()) == youngBefore;
     const bool holderNonAllocating = !holderRegion->IsAllocating();
     const bool matrixResult = farOffset > 64 && holderNonAllocating && nearResolved && farResolved &&
-        nearStoreGood && farStoreGood && youngUnchanged;
+        nearLoadGood && farLoadGood && youngUnchanged;
     std::fprintf(stderr,
                  "DETAIL current_remset_matrix far_offset=%zu holder_live=%u holder_nonalloc=%u near_resolved=%u "
-                 "far_resolved=%u near_store_good=%u far_store_good=%u young_unchanged=%u result=%u\n",
+                 "far_resolved=%u near_load_good=%u far_load_good=%u young_unchanged=%u result=%u\n",
                  farOffset, static_cast<unsigned>(holderRegion->is_object_strongly_live(from_object(holder))),
                  static_cast<unsigned>(holderNonAllocating),
                  static_cast<unsigned>(nearResolved), static_cast<unsigned>(farResolved),
-                 static_cast<unsigned>(nearStoreGood), static_cast<unsigned>(farStoreGood),
+                 static_cast<unsigned>(nearLoadGood), static_cast<unsigned>(farLoadGood),
                  static_cast<unsigned>(youngUnchanged), static_cast<unsigned>(matrixResult));
     std::fflush(stderr);
 
     GC_EXPECT_TRUE(matrixResult);
+    // ZRemembered::remap_current (zRemembered.cpp:451-460) uses the load
+    // barrier: upgrade remap bits without claiming store/mark epochs.
+    const uintptr_t retainedBits = ZPointerMarkedMask;
+    GC_EXPECT_EQ(raw(nearField->GetFieldValue()) & retainedBits, nearBefore & retainedBits);
+    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & retainedBits, farBefore & retainedBits);
+    // ZAddress::load_good (zAddress.inline.hpp:761) installs both remembered bits.
+    GC_EXPECT_EQ(raw(nearField->GetFieldValue()) & ZPointerRememberedMask, ZPointerRememberedMask);
+    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & ZPointerRememberedMask, ZPointerRememberedMask);
     nearField->StoreColoured(zpointer::null);
     farField->StoreColoured(zpointer::null);
     youngField->StoreColoured(zpointer::null);
     EmptyBothRememberedFaces(remembered);
-    LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
     LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
     CleanupLateBackfill(fx, forwarding);
     RelocationReceiptTestAccess::BindCollector(nullptr);
