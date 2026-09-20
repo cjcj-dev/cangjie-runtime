@@ -1,3 +1,4 @@
+#include "CangjieRuntime.h"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
@@ -100,8 +101,12 @@ public:
 
 } // namespace
 
-GC_TEST(ZJNICritical, PauseSeesBlockedCount)
+GC_OTHER_VM_TEST(ZJNICritical, PauseSeesBlockedCount)
 {
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     VM_ZTestJniCriticalPause op;
     const bool ok = op.pause();
     std::printf("ZJNI_CRITICAL_PAUSE_SAW_BLOCKED ok=%d saw=%d count=%lld\n",
@@ -109,6 +114,7 @@ GC_TEST(ZJNICritical, PauseSeesBlockedCount)
                 static_cast<long long>(ZJNICritical::count_snapshot()));
     GC_EXPECT_TRUE(ok);
     GC_EXPECT_TRUE(op.sawBlocked);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
 GC_TEST(ZJNICritical, BlockWaitsWhileEntered)
