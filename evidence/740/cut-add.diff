@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zBarrier.cpp
++++ b/runtime/src/Heap/z/zBarrier.cpp
+@@ -276,7 +276,7 @@
+     auto slow = [p, prev, heal](zaddress addr) {
+         StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(heal);
+         if (buffer != nullptr) {
+-            buffer->add(reinterpret_cast<MAddress>(p), prev);
++            // Controlled cut: omit buffered previous-value production.
+         } else {
+             mark_and_remember(p, addr);
+         }
