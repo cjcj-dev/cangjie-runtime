@@ -179,3 +179,58 @@ GC_OTHER_VM_TEST(TLABUsage, AllocationCycleKeepsGranuleBacking)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif
+
+#if defined(__linux__)
+namespace {
+void* AllocateInlineBounds(void*)
+{
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
+    std::memset(storage, 0, sizeof(storage));
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    constexpr size_t bytes = 256;
+    type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    const size_t requested = buffer->ComputeTLABSize(bytes, Heap::GetHeap().unsafe_max_tlab_alloc());
+    size_t fits = 0;
+    size_t refills = 0;
+    // Read the actual ABI words consumed by generated code. No layout copy is
+    // populated by this test: all state comes from MCC_NewObject/FillTLAB.
+    for (size_t i = 0; i < requested / bytes + 2; ++i) {
+        uintptr_t before[3];
+        std::memcpy(before, buffer, sizeof(before));
+        const uintptr_t object = reinterpret_cast<uintptr_t>(MCC_NewObject(type, bytes));
+        uintptr_t after[3];
+        std::memcpy(after, buffer, sizeof(after));
+        const bool fitsBefore = before[0] != 0 && before[0] <= before[1] && bytes <= before[1] - before[0];
+        const bool bounds = object != 0 && after[2] <= object && object <= after[1] &&
+                            bytes <= after[1] - object && after[0] == object + bytes &&
+                            after[1] - after[2] == requested;
+        const bool advance = !fitsBefore || (object == before[0] && after[1] == before[1]);
+        std::fprintf(stderr, "TLAB_INLINE_BOUNDS_TARGET iteration=%zu object=%#zx top=%#zx end=%#zx start=%#zx fits=%d bounds=%d advance=%d\n",
+                     i, object, after[0], after[1], after[2], fitsBefore, bounds, advance);
+        if (!bounds || !advance) { return reinterpret_cast<void*>(1); }
+        fits += fitsBefore;
+        refills += !fitsBefore;
+    }
+    std::fprintf(stderr, "TLAB_INLINE_BRANCHES fits=%zu refills=%zu\n", fits, refills);
+    return reinterpret_cast<void*>(fits > 0 && refills > 0 ? 0 : 2);
+}
+}
+
+GC_OTHER_VM_TEST(TLABUsage, InlineBoundsThroughAllocationEntry)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    CJThreadHandle handle = RunCJTask(AllocateInlineBounds, nullptr);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
+    ReleaseHandle(handle);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(result), uintptr_t{0});
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif
