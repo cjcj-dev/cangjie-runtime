@@ -15,7 +15,7 @@
 #include "Mutator/MutatorManager.h"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zPage.hpp"
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zRootsIterator.hpp"

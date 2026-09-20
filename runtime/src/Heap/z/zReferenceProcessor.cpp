@@ -4,7 +4,7 @@
 
 #include "Base/Panic.h"
 #include "Common/SuspendibleThreadSet.h"
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Base/TimeUtils.h"
@@ -20,7 +20,7 @@
 #include "Heap/z/zUncommitter.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/z/HeapFiller.h"
 #include "Heap/z/zBarrier.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"

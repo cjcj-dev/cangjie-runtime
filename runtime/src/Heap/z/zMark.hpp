@@ -34,7 +34,7 @@ enum class MarkingGeneration : uint8_t { MAJOR, YOUNG };
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Heap/z/zForwardingTable.hpp"
 
 #include "Heap/z/zMarkStack.hpp"
@@ -194,7 +194,7 @@ private:
 
 #include "Heap/z/zDriver.hpp"
 #include "Common/MarkWorkStack.h"
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Heap/z/zMarkStackEntry.hpp"
 #include "Mutator/MutatorManager.h"
 

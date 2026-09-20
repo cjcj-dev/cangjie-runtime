@@ -9,7 +9,7 @@
 // Test setup claims virtual space through the real manager so a normal large
 // array allocation reaches the ninth reservation. No range provider is replaced.
 #define private public
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #undef private
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zHeap.hpp"

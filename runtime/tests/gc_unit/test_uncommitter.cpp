@@ -9,13 +9,13 @@
 #include <chrono>
 #include <thread>
 
-#include "Heap/Allocator/CartesianTree.h"
+#include "Heap/z/CartesianTree.h"
 #define private public
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #undef private
 #include "Heap/z/zVirtualMemoryManager.hpp"
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "zunittest.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zHeap.hpp"

@@ -342,7 +342,7 @@ private:
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "securec.h"
-#include "Heap/Allocator/SlotList.h"
+#include "Heap/z/SlotList.h"
 
 namespace MapleRuntime {
 class CompactCollector;

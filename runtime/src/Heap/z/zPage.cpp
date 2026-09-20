@@ -24,7 +24,7 @@
 #include <processthreadsapi.h>
 #endif
 
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Base/CString.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
@@ -40,7 +40,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/z/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -197,7 +197,7 @@ void ZPage::ClearRelocationResiduals()
 
 #include "Base/ImmortalWrapper.h"
 #include "Heap/z/zPage.hpp"
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Heap/z/zLiveMap.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zGlobals.hpp"

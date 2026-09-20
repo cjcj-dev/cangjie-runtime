@@ -10,7 +10,7 @@
 #include <limits>
 #include "Cangjie.h"
 #include "gc_heap_fixture.hpp"
-#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/RegionSpace.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zMark.hpp"
 #include "UnwindStack/StackFrameCursor.h"
