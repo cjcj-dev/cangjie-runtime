@@ -180,6 +180,7 @@ public:
         if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
             HandleSuspensionRequest();
         }
+        StackWatermarkSet::on_safepoint(*this);
     }
 
     // If current mutator is not in saferegion, enter and return true
@@ -306,8 +307,6 @@ public:
                      size_t* scannedFrames = nullptr);
     AllocBuffer* GetAllocBuffer() const { return foreignThreadInfo.allocBuffer; }
     void SetAllocBuffer(AllocBuffer* buffer) { foreignThreadInfo.allocBuffer = buffer; }
-    inline void GCPhasePreForward();
-    inline void ForwardLocalFinalizers();
     static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
 
     inline void HandleCpuProfile();

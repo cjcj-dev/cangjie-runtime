@@ -15,11 +15,6 @@
 namespace MapleRuntime {
 ScopedAllocBuffer::~ScopedAllocBuffer()
 {
-    if (mutator != nullptr) {
-        for (ObjectRef* nativeFrameRoot : nativeFrameRoots) {
-            mutator->RemoveNativeFrameRoot(nativeFrameRoot);
-        }
-    }
     // Free off-heap struct snapshots created by AddCJArg via ReadStruct.
     for (void* buf : argBuffers) {
         if (buf != nullptr) {
@@ -29,13 +24,43 @@ ScopedAllocBuffer::~ScopedAllocBuffer()
     argBuffers.clear();
 }
 
-void ScopedAllocBuffer::AddNativeFrameRoot(BaseObject* obj)
+// Headerless Cangjie values are native records, unlike HotSpot oop values.
+// Preserve each reference using the same thread-private Handle storage, then
+// refresh the plain record before passing it to managed code or copying it.
+void* ScopedAllocBuffer::CopyNativeStruct(TypeInfo* type, MAddress source)
 {
-    if (mutator == nullptr) {
-        mutator = ThreadLocal::GetMutator();
+    const size_t size = type->GetInstanceSize();
+    if (size == 0) { return nullptr; }
+    void* copy = malloc(size);
+    CHECK_DETAIL(copy != nullptr, "native value snapshot allocation failed");
+    argBuffers.push_back(copy);
+    CHECK_DETAIL(memcpy_s(copy, size, reinterpret_cast<void*>(source), size) == EOK,
+                 "native value snapshot copy failed");
+    if (type->HasRefField()) {
+        type->GetGCTib().ForEachBitmapWordInRange(source, [&](RefField<>& field) {
+            BaseObject* value = Heap::IsHeapAddress(&field) ? ZBarrier::ReadReference(nullptr, field) :
+                to_object(safe(RootSlotAt(reinterpret_cast<void*>(&field)).LoadPlain()));
+            const size_t offset = reinterpret_cast<MAddress>(&field) - source;
+            StorePlain(RootSlotAt(reinterpret_cast<MAddress>(copy) + offset), from_object(value));
+        }, source, source + size);
     }
-    CHECK_DETAIL(mutator != nullptr, "reflected invocation has no mutator");
-    nativeFrameRoots.emplace_back(mutator->AddNativeFrameRoot(obj));
+    HoldNativeStruct(type, copy);
+    return copy;
+}
+
+void ScopedAllocBuffer::HoldNativeStruct(TypeInfo* type, void* value)
+{
+    if (value == nullptr || !type->HasRefField()) { return; }
+    type->GetGCTib().ForEachRootSlot(reinterpret_cast<MAddress>(value), [&](RootSlot& field) {
+        nativeFields.emplace_back(&field, Handle(Mutator::GetMutator(), to_object(safe(field.LoadPlain()))));
+    });
+}
+
+void ScopedAllocBuffer::RefreshNativeStructs()
+{
+    for (const auto& field : nativeFields) {
+        StorePlain(*field.first, from_object(field.second()));
+    }
 }
 
 void* ParameterInfo::GetAnnotations(TypeInfo* arrayTi)
@@ -360,6 +385,7 @@ TypeInfo* MethodInfo::GetActualTypeFromGenericType(GenericTypeInfo* genericTi, v
 void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
                           ScopedAllocBuffer& allocBuffer)
 {
+    Handle argumentHandle(Mutator::GetMutator(), argObj);
     I8 type = argType->GetType();
     size_t offset = 8;
     switch (type) {
@@ -400,7 +426,7 @@ void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
         case TypeKind::TYPE_KIND_TEMP_ENUM:
         case TypeKind::TYPE_KIND_RAWARRAY:
         case TypeKind::TYPE_KIND_FUNC: {
-            argValues->AddReference(argObj);
+            argValues->AddHandle(Handle(Mutator::GetMutator(), argObj));
             break;
         }
         case TypeKind::TYPE_KIND_ENUM: {
@@ -415,9 +441,9 @@ void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
                 // When option-like-ref is used as a function parameter,
                 // the actual argument passed is the object pointed to by the ref.
                 ObjRef innerRef = argObj->LoadRef(offset);
-                argValues->AddReference(innerRef);
+                argValues->AddHandle(Handle(Mutator::GetMutator(), innerRef));
             } else {
-                argValues->AddInt64(reinterpret_cast<Uptr>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE));
+                argValues->AddHandle(argumentHandle, TYPEINFO_PTR_SIZE);
             }
             break;
         }
@@ -436,6 +462,8 @@ void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
                 if (structArgObj == nullptr) {
                     ExceptionManager::CheckAndThrowPendingException("failed to allocate reflected struct argument");
                 }
+                argObj = static_cast<MObject*>(argumentHandle());
+                Handle structHandle(Mutator::GetMutator(), structArgObj);
                 dst = reinterpret_cast<void*>(reinterpret_cast<Uptr>(structArgObj) + TYPEINFO_PTR_SIZE);
                 void* snapshot = MemoryAlloc(1, typeSize);
                 ZBarrier::ReadStruct(
@@ -450,7 +478,7 @@ void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
                     reinterpret_cast<MAddress>(snapshot),
                     typeSize);
                 MemoryFree(snapshot);
-                allocBuffer.AddNativeFrameRoot(structArgObj);
+                argValues->AddHandle(structHandle, TYPEINFO_PTR_SIZE);
             } else {
                 dst = MemoryAlloc(1, typeSize);
                 allocBuffer.GetArgBuffers().push_back(dst);
@@ -460,7 +488,7 @@ void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
                     reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE),
                     typeSize);
             }
-            argValues->AddInt64(reinterpret_cast<Uptr>(dst));
+            if (!argType->HasRefField()) { argValues->AddInt64(reinterpret_cast<Uptr>(dst)); }
             break;
         }
         default:
@@ -480,14 +508,16 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
         ZBarrier::ReadReference(nullptr, rawPtrField));
     U64 actualArgCnt = cjRawArray->len;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
+    Handle arrayHandle(Mutator::GetMutator(), rawArray);
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCnt; ++actualArgIdx) {
-        ObjRef argObj = static_cast<ObjRef>(ZBarrier::ReadReference(rawArray, *refField));
+        rawArray = static_cast<MObject*>(arrayHandle());
+        auto& refField = HeapSlotAt<false>(reinterpret_cast<Uptr>(rawArray) +
+            offsetof(CJRawArray, data) + actualArgIdx * sizeof(Uptr));
+        ObjRef argObj = static_cast<ObjRef>(ZBarrier::ReadReference(rawArray, refField));
         ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
         TypeInfo* argType = actualParameterInfo->GetType();
-        refField++;
         if (argType->IsGeneric() || actualParameterInfo->IsGeneric()) {
-            argValues->AddReference(argObj);
+            argValues->AddHandle(Handle(Mutator::GetMutator(), argObj));
             continue;
         }
         if (argType->IsVArray()) {
@@ -513,30 +543,43 @@ void MethodInfo::PrepareCJMethodGenericArgs(ArgValue* argValues, void* genericAr
 
 void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
+    ScopedAllocBuffer valueRoots;
+    void* valueSnapshot = nullptr;
+    if (retType->IsStruct() || retType->IsTuple() || retType->IsEnum() || retType->IsVArray()) {
+        MAddress source = reinterpret_cast<MAddress>(ret.ref);
+        if (HasSRetNotGeneric()) { source = reinterpret_cast<MAddress>(sret); }
+        else if (retType->IsEnum() && !HasSRetWithKnowGenericStruct()) {
+            source = reinterpret_cast<MAddress>(&ret);
+        }
+        valueSnapshot = valueRoots.CopyNativeStruct(retType, source);
+    }
     if (retType->IsRef()) {
         return ret.ref;
     } else if (retType->IsStruct() || retType->IsTuple() || retType->IsEnum()) {
         MSize typeSize = retType->GetInstanceSize();
         MSize size = MRT_ALIGN(typeSize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MObject* obj = ObjectManager::NewObject(retType, size, AllocType::MOVEABLE_OBJECT);
+        valueRoots.RefreshNativeStructs();
         if (typeSize == 0) {
             return obj;
         }
         if (HasSRetNotGeneric()) {
             ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
-                                           typeSize, reinterpret_cast<Uptr>(sret), typeSize);
+                                           typeSize, reinterpret_cast<Uptr>(valueSnapshot), typeSize);
         } else if (retType->IsEnum() && !HasSRetWithKnowGenericStruct()) {
             // Return type is enum type, and don't have sret, function actually returns the object body.
             ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
-                                           typeSize, reinterpret_cast<Uptr>(&ret), typeSize);
+                                           typeSize, reinterpret_cast<Uptr>(valueSnapshot), typeSize);
         } else {
             ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
-                                           typeSize, reinterpret_cast<Uptr>(ret.ref), typeSize);
+                                           typeSize, reinterpret_cast<Uptr>(valueSnapshot), typeSize);
         }
         return obj;
     } else if (retType->IsPrimitiveType()) {
         MSize size = MRT_ALIGN(retType->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MObject* obj = ObjectManager::NewObject(retType, size, AllocType::MOVEABLE_OBJECT);
+        valueRoots.RefreshNativeStructs();
         if (retType->IsUnit()) {
             return obj;
         }
@@ -550,15 +593,16 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
         MSize vArraySize = retType->GetInstanceSize();
         MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MObject* obj = ObjectManager::NewObject(retType, size, AllocType::MOVEABLE_OBJECT);
+        valueRoots.RefreshNativeStructs();
         if (vArraySize == 0) {
             return obj;
         }
         MAddress dst = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE;
         if (retType->HasRefField()) {
             ZBarrier::WriteStruct(obj, dst, vArraySize,
-                                           reinterpret_cast<Uptr>(ret.ref), vArraySize);
+                                           reinterpret_cast<Uptr>(valueSnapshot), vArraySize);
         } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
-                            reinterpret_cast<void*>(ret.ref), vArraySize) != EOK) {
+                            valueSnapshot, vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "RetValueToAny memcpy_s fail");
         }
         return obj;
@@ -632,7 +676,7 @@ void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* re
         CHECK_DETAIL(*sretSlot != nullptr, "PrepareSRet: allocate sret object failed");
 #if defined(__aarch64__)
 #else
-        argValues->AddInt64(reinterpret_cast<Uptr>(*sretSlot));
+        argValues->AddHandle(Handle(Mutator::GetMutator(), static_cast<BaseObject*>(*sretSlot)));
 #endif
         return;
     }
@@ -641,6 +685,8 @@ void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* re
 
 void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* actualArgs, TypeInfo* thisTypeInfo)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
+    Handle receiver(Mutator::GetMutator(), instanceObj);
     ScopedAllocBuffer scopedAllocBuffer;
     // Off-heap struct snapshots created by AddCJArg via ReadStruct; freed after
     // ApplyCJMethodImpl returns since the cjc setter consumes them synchronously.
@@ -658,6 +704,11 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
         }
         PrepareSRet(&argValues, sretSlot, retType);
     }
+    Handle sretHandle;
+    if (sretSlot != nullptr && (HasSRetWithGeneric() || HasSRetWithUnknowGenericStruct())) {
+        sretHandle = Handle(Mutator::GetMutator(), static_cast<BaseObject*>(*sretSlot));
+    }
+    instanceObj = static_cast<MObject*>(receiver());
     if (instanceObj != nullptr) {
         // When a struct is passed as 'this' parameter and its size is unknown at compile time,
         // passed 'this' is a struct object itself
@@ -678,10 +729,11 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
                     instanceObj,
                     reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE),
                     thisSize);
+                scopedAllocBuffer.HoldNativeStruct(declaringTi, thisDst);
                 argValues.AddInt64(reinterpret_cast<Uptr>(thisDst));
             }
         } else {
-            argValues.AddReference(instanceObj);
+            argValues.AddHandle(receiver);
         }
     } else {
         if (IsInitializer() && (declaringTi->IsClass() || (declaringTi->IsStruct() &&
@@ -692,10 +744,8 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
             if (instanceObj == nullptr) {
                 ExceptionManager::CheckAndThrowPendingException("failed to allocate reflected receiver");
             }
-            if (declaringTi->HasRefField()) {
-                scopedAllocBuffer.AddNativeFrameRoot(instanceObj);
-            }
-            argValues.AddReference(instanceObj);
+            receiver = Handle(Mutator::GetMutator(), instanceObj);
+            argValues.AddHandle(receiver);
         } else if (IsInitializer() && declaringTi != nullptr && declaringTi->IsStruct()) {
             instanceObj = reinterpret_cast<ObjRef>(MemoryAlloc(1, declaringTi->GetInstanceSize()));
             argValues.AddInt64(reinterpret_cast<Uptr>(instanceObj));
@@ -721,6 +771,10 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     if (argValues.GetStackIdx() % 2 != 0) {
         argValues.AddReference(nullptr);
     }
+    scopedAllocBuffer.RefreshNativeStructs();
+    if (sretSlot != nullptr && (HasSRetWithGeneric() || HasSRetWithUnknowGenericStruct())) {
+        *sretSlot = sretHandle();
+    }
     Value ret = ApplyCJMethodImpl(&argValues, sretSlot);
 
     if (HasSRetWithGeneric()) {
@@ -740,7 +794,7 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     }
     if (IsInitializer() && declaringTi != nullptr && (declaringTi->IsClass() || (declaringTi->IsStruct() &&
         ((reflectVersion == 0) ? declaringTi->IsGenericTypeInfo() : declaringTi->IsUnknownSize())))) {
-        return instanceObj;
+        return receiver();
     } else if (IsInitializer() && declaringTi != nullptr && declaringTi->IsStruct()) {
         ret.ref = instanceObj;
         void* any = RetValueToAny(ret, sretSlot == nullptr ? nullptr : *sretSlot, declaringTi);
@@ -782,6 +836,7 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
         LOG(RTLOG_ERROR, "DynamicMethodInfo: argsArray is null");
         return nullptr;
     }
+    HandleMark handleMark(*Mutator::GetMutator());
     ScopedAllocBuffer scopedAllocBuffer;
     ArgValue argValues;
     CJRawArray* cjRawArray = nullptr;

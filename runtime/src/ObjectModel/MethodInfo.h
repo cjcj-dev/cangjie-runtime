@@ -62,11 +62,12 @@ public:
     ScopedAllocBuffer() {}
     ~ScopedAllocBuffer();
     std::vector<void*>& GetArgBuffers() { return argBuffers; }
-    void AddNativeFrameRoot(BaseObject* obj);
+    void* CopyNativeStruct(TypeInfo* type, MAddress source);
+    void HoldNativeStruct(TypeInfo* type, void* value);
+    void RefreshNativeStructs();
 private:
     std::vector<void*> argBuffers;
-    Mutator* mutator = nullptr;
-    std::vector<RootSlot*> nativeFrameRoots;
+    std::vector<std::pair<RootSlot*, Handle>> nativeFields;
 };
 
 class ATTR_PACKED(4) MethodInfo {

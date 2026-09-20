@@ -434,6 +434,9 @@ ObjRef CreateEnumObject(TypeInfo* ti, MSize size)
 
 void SetElementFromObject(ArrayRef array, ObjRef obj, TypeInfo* ti, U16 fieldNum)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
+    Handle arrayHandle(Mutator::GetMutator(), array);
+    Handle objectHandle(Mutator::GetMutator(), obj);
     for (int idx = 0; idx < fieldNum; idx++) {
         TypeInfo* fieldTi = ti->GetFieldType(idx);
         U32 offset = ti->GetFieldOffset(idx);
@@ -445,7 +448,8 @@ void SetElementFromObject(ArrayRef array, ObjRef obj, TypeInfo* ti, U16 fieldNum
             offset = ti->GetFieldOffset(idx + 1);
         }
 
-        BaseObject* fieldObj = FieldToAny(obj, fieldTi, offset);
+        BaseObject* fieldObj = FieldToAny(static_cast<MObject*>(objectHandle()), fieldTi, offset);
+        array = static_cast<MArray*>(arrayHandle());
 
         if (fieldObj != nullptr) {
             array->SetRefElement(idx, fieldObj);
@@ -474,9 +478,13 @@ BaseObject* FieldToAny(ObjRef obj, TypeInfo* fieldTi, U32 offset)
 
 BaseObject* StructLikeToAny(ObjRef obj, TypeInfo* fieldTi, Uptr fieldAddr)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
+    ScopedAllocBuffer valueRoots;
+    void* valueSnapshot = valueRoots.CopyNativeStruct(fieldTi, fieldAddr);
     MSize fieldSize = fieldTi->GetInstanceSize();
     MSize size = MRT_ALIGN(fieldSize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
     BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::MOVEABLE_OBJECT);
+    valueRoots.RefreshNativeStructs();
 
     if (fieldSize == 0) {
         return fieldObj;
@@ -488,7 +496,8 @@ BaseObject* StructLikeToAny(ObjRef obj, TypeInfo* fieldTi, Uptr fieldAddr)
         return nullptr;
     }
 
-    ZBarrier::ReadStruct(reinterpret_cast<MAddress>(tmp), obj, fieldAddr, fieldSize);
+    CHECK_DETAIL(memcpy_s(tmp, fieldSize, valueSnapshot, fieldSize) == EOK, "field snapshot copy failed");
+    (void)obj;
     ZBarrier::WriteStruct(fieldObj, reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE, fieldSize,
         reinterpret_cast<MAddress>(tmp), fieldSize);
 
@@ -498,14 +507,18 @@ BaseObject* StructLikeToAny(ObjRef obj, TypeInfo* fieldTi, Uptr fieldAddr)
 
 BaseObject* PrimitiveToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
+    ScopedAllocBuffer valueRoots;
+    void* valueSnapshot = valueRoots.CopyNativeStruct(fieldTi, fieldAddr);
     MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
     BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::MOVEABLE_OBJECT);
+    valueRoots.RefreshNativeStructs();
     if (fieldTi->GetInstanceSize() == 0) {
         return fieldObj;
     }
     if (memcpy_s(reinterpret_cast<void*>(reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE),
                  fieldTi->GetInstanceSize(),
-                 reinterpret_cast<void*>(fieldAddr),
+                 valueSnapshot,
                  fieldTi->GetInstanceSize()) != EOK) {
         LOG(RTLOG_ERROR, "FieldInitializer: memcpy_s failed for primitive field");
     }
@@ -515,19 +528,23 @@ BaseObject* PrimitiveToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 
 BaseObject* VArrayToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 {
+    HandleMark handleMark(*Mutator::GetMutator());
+    ScopedAllocBuffer valueRoots;
+    void* valueSnapshot = valueRoots.CopyNativeStruct(fieldTi, fieldAddr);
     // An allocation is not guaranteed young;
     // ref-bearing VArray must go through WriteStruct (G-C3).
     MSize vArraySize = fieldTi->GetInstanceSize();
     MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
     BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::MOVEABLE_OBJECT);
+    valueRoots.RefreshNativeStructs();
     if (vArraySize == 0) {
         return fieldObj;
     }
     MAddress dst = reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE;
     if (fieldTi->HasRefField()) {
-        ZBarrier::WriteStruct(fieldObj, dst, vArraySize, fieldAddr, vArraySize);
+        ZBarrier::WriteStruct(fieldObj, dst, vArraySize, reinterpret_cast<MAddress>(valueSnapshot), vArraySize);
     } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
-                        reinterpret_cast<void*>(fieldAddr), vArraySize) != EOK) {
+                        valueSnapshot, vArraySize) != EOK) {
         LOG(RTLOG_ERROR, "FieldInitializer: memcpy_s failed for VArray field");
     }
 

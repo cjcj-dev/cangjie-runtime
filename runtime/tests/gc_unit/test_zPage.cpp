@@ -563,6 +563,9 @@ extern "C" void AnnotationCollect(uintptr_t* result)
         }
         Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
         r.after = observe();
+        auto* forwarding = Heap::GetHeap().young().forwarding_table().get(r.before);
+        std::fprintf(stderr, "ANNOTATION_FORWARDING from=%zx winner=%zx root=%zx\n", r.before,
+            forwarding == nullptr ? 0 : forwarding->find(r.before), r.after);
         for (size_t i = 0; i < count; ++i) { Heap::GetHeap().RemoveExportObject(roots[i]); }
     }
     result[0] = 0;
