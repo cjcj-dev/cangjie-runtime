@@ -13,14 +13,9 @@ struct SelectionCycleFixture {
     {
         EnsureZAddressDomain();
         ZStat::Initialize();
-        auto& manager = Heap::GetHeap().page_allocator();
-        if (manager.GetHeapCapacity() == 0) {
-            HeapParam params{};
-            params.heapSize = 128 * 1024;
-            params.regionSize = ZGranuleSize / KB;
-            manager.Init(params);
-        }
-        BindFixtureRemembered(manager);
+        // RunAll creates the standalone heap before this fixture. Heap's
+        // constructor initializes its allocator and injects it into young's
+        // remembered set (ZGC zHeap.cpp:58-79, zGeneration.cpp:499-505).
         region0 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, false, true);
         region1 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, false, true, secondAge);
         GC_EXPECT_TRUE(region0 != nullptr && region1 != nullptr);
