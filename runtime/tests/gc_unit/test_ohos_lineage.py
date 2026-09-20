@@ -40,6 +40,7 @@ def run_case(case):
     for key in ('SOURCE_COMMIT', 'CJ_RUNTIME_COMMIT', 'GC_UNIT_OHOS_HOST_ALLOW_MISSING_POST_DISPATCH'):
         env.pop(key, None)
     env.update(MRT_GC_UNIT_OHOS_HOST='1', GCV2_RUNTIME_LIB_DIR=str(lib),
+               GCV2_RUNTIME_OUTPUT_ROOT=str(lib.parent.parent),
                GC_UNIT_OHOS_HOST_TEST_ELF=str(elf), GC_UNIT_OUT=str(out))
     env.update(extra)
     with (out / 'run.log').open('w') as log:
