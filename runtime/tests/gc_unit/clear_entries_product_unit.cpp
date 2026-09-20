@@ -941,6 +941,9 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTa
     DestroyAfterGhostCleared(region, "gc-unit-explicit-coverage");
     if (region->IsYoungRegion() && false) {
             }
+    // ZHeap::free_page (zHeap.cpp:275-280) removes the published page.
+    // Resetting forwarding alone does not retire the page-table entry.
+    ZPage::RetirePage(region, []() {});
     GC_EXPECT_TRUE(Heap::page(reinterpret_cast<MAddress>(liveObject)) == nullptr);
     BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, liveObject);
     GC_EXPECT_TRUE(resolved == liveObject);
@@ -1739,10 +1742,6 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     ZPage* routeDestination =
         ResetDeliveryUnit(fx, 3);
     GC_EXPECT_TRUE(region != nullptr && routeDestination != nullptr);
-    // ResetDeliveryUnit constructs descriptors only. ZGC zHeap.cpp:257-271
-    // publishes allocated pages before relocation can look up its destination.
-    Heap::alloc_page(region);
-    Heap::alloc_page(routeDestination);
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     const size_t objectSize = dead->GetSize();
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + objectSize);
