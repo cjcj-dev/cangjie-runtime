@@ -37,7 +37,6 @@ class ZPageTable {
 
 public:
     ZPageTable() : _map(ZAddressOffsetMax) {}
-    explicit ZPageTable(size_t max_offset) : _map(max_offset) {}
 
 
     int count() const;

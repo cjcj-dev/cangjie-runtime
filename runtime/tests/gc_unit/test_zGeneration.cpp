@@ -2,6 +2,7 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zPage.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

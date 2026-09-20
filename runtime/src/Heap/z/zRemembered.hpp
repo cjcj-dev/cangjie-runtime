@@ -11,7 +11,6 @@
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 
-#include <memory>
 #include <vector>
 
 namespace MapleRuntime {
