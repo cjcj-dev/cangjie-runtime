@@ -734,44 +734,6 @@ BaseObject* ZRelocate::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner
     return reinterpret_cast<BaseObject*>(owner->find(from));
 }
 
-BaseObject* ZRelocate::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease)
-{
-    // RelocateObjectInner is for relocate phase only. relocate_or_remap
-    // is reachable from barriers in other phases, so screen here.
-    ZGeneration* generation = Heap::GetHeap().ObjectGeneration(obj) == Generation::Young ?
-        static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old());
-    if (generation == nullptr || !generation->is_phase_relocate()) {
-        return nullptr;
-    }
-    // zForwarding.cpp:86-108: a claimed page waits for its task before
-    // retain_page returns false; no source access follows a failed retain.
-    if (!lease.ok()) {
-        return WaitForPageForwarding(obj, lease.HoldForwarding());
-    }
-    // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
-    // SetGCPhase publishes before handshake, so a mutator that retained across
-    // FORWARD→IDLE must not copy. Release and let
-    // the existing forwarding lookup / wait legs consume the published table.
-    if (generation == nullptr || !generation->is_phase_relocate()) {
-        lease.Release();
-        return nullptr;
-    }
-    // A mutator can publish a previously white from-object after young mark
-    // terminated. Admit it before copying; a next-minor remset entry is too late.
-    // This is the late-store leg corresponding to zBarrier.inline.hpp:695-716.
-    EnsureRouteDomainMembership(obj);
-    BaseObject* toVersion = relocate_object_inner(
-        obj, lease.forwarding()->page());
-    lease.Release(); // release_page
-    if (toVersion == nullptr) {
-        return WaitForPageForwarding(obj, lease.HoldForwarding());
-    }
-    if (toVersion == obj) {
-        return nullptr;
-    }
-    return toVersion;
-}
-
 bool ZRelocate::IsAlreadyToStoreValue(BaseObject* target, Generation generation)
 {
     return target != nullptr && Heap::IsHeapAddress(target) &&
