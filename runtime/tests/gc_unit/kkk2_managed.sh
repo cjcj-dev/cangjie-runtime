@@ -12,14 +12,17 @@ LANE=${LANE:-/root/sym_cangjie_runtime_708_implement_r5740357995}
 N=${N:-3}
 SRCROOT=${SRCROOT:-$LANE/default}
 OUT=${OUT:-$LANE/managed-runs}
-# Temporary ABI transition for cjcj-llvm#7. The same runner must pair the
-# pre-inline baseline with its old SDK; new TLAB sources require rebuilt std.
-# Remove this split when the next mainline health baseline is post-transition.
-case "$SHA" in
-  b6d62daa8f3557c8a9effbfa4709a4744e315497)
-    ABI_DEFAULT_SDK=/root/sdkdepot/90a09c15ba02-fa13e8d5c17b ;;
-  *) ABI_DEFAULT_SDK=/root/sdkdepot/b99430a618af-1ecb811801ca ;;
-esac
+# Temporary ABI transition for cjcj-llvm#7. Pair each arm's runtime layout
+# with the matching compiler/stdlib SDK. Old layout keeps tlabDescriptor;
+# inline TLAB (top@0/end@8) needs the rebuilt stage1+llc SDK.
+OLD_ABI_SDK=/root/sdkdepot/90a09c15ba02-fa13e8d5c17b
+NEW_ABI_SDK=/root/sdkdepot/b99430a618af-1ecb811801ca
+TLAB_HDR="$SRCROOT/runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp"
+if [[ -f "$TLAB_HDR" ]] && /usr/bin/grep -q 'tlabDescriptor' "$TLAB_HDR"; then
+  ABI_DEFAULT_SDK=$OLD_ABI_SDK
+else
+  ABI_DEFAULT_SDK=$NEW_ABI_SDK
+fi
 COLORED_SDK=${COLORED_SDK:-$ABI_DEFAULT_SDK}
 H48_RT=${H48_RT:-/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative}
 STAINED_RT=${STAINED_RT:-$SRCROOT/build/runtime-staging/lib/x86_64_Release}
