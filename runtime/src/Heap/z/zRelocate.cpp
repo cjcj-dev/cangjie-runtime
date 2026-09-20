@@ -1078,7 +1078,7 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
     }
     // ZGC zRelocate.cpp:355: assert(ZHeap::heap()->is_object_live(from_addr)) before object_size.
 #if defined(MRT_TESTABLE_INTERNALS) || (defined(MRT_DEBUG) && MRT_DEBUG == 1)
-    CHECK(Heap::GetHeap().IsSurvivedObject(obj));
+    CHECK(copyPage->is_object_live(from_object(obj)));
 #endif
     const size_t size = RegionSpace::GetAllocSize(*obj);
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
@@ -1349,7 +1349,7 @@ bool RegionManager::RelocateClaimedPage(ZPage* region)
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t) {
     // ZGC zRelocate.cpp:902-904: assert(ZHeap::heap()->is_object_live(addr)) at worker relocate_object.
 #if defined(MRT_TESTABLE_INTERNALS) || (defined(MRT_DEBUG) && MRT_DEBUG == 1)
-        CHECK(Heap::GetHeap().IsSurvivedObject(currentObj));
+        CHECK(region->is_object_live(from_object(currentObj)));
 #endif
         if (allocFailed) {
             return;
@@ -1413,7 +1413,7 @@ void RegionManager::CompactRegion(ZPage* region)
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
     // ZGC zRelocate.cpp:902-904: assert live before object_size on the in-place consumer.
 #if defined(MRT_TESTABLE_INTERNALS) || (defined(MRT_DEBUG) && MRT_DEBUG == 1)
-        CHECK(Heap::GetHeap().IsSurvivedObject(currentObj));
+        CHECK(region->is_object_live(from_object(currentObj)));
 #endif
         const MAddress currentPtr = regionStart + offset;
         ZForwarding* liveFwd = forwarding_for_page(region);

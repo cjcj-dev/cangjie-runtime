@@ -70,7 +70,7 @@ int RunDeadRelocateChild(ZPage* page, BaseObject* object)
     if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGABRT) {
         return 1;
     }
-    if (transcript.find("IsSurvivedObject") == std::string::npos) {
+    if (transcript.find("is_object_live") == std::string::npos) {
         return 2;
     }
     return 0;
@@ -89,15 +89,16 @@ GC_TEST(RelocateLivePrecondition, DeadFromAbortsBeforeSize)
     }
 }
 
-GC_TEST(RelocateLivePrecondition, LiveFromDoesNotHitLiveCheck)
+GC_TEST(RelocateLivePrecondition, LiveFromFindHitSkipsLiveCheck)
 {
     GcHeapFixture heap;
     heap.InstallPageOwner(heap.region0);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(heap.region0, heap.obj0));
-    GC_EXPECT_TRUE(heap.region0->is_object_live(from_object(heap.obj0)));
-    Heap::GetHeap().GetZGeneration(heap.region0->generation_id()).set_phase(ZGenerationPhase::Relocate);
-    BaseObject* to = RelocateLivePreconditionAccess::RelocateInner(heap.obj0, heap.region0);
-    (void)to;
-    GC_EXPECT_TRUE(heap.region0->is_object_live(from_object(heap.obj0)));
+    const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
+    const MAddress to = reinterpret_cast<MAddress>(heap.obj1);
+    auto publication = forwarding_for_page(heap.region0, from);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(publication->insert(from, to), to);
+    GC_EXPECT_TRUE(RelocateLivePreconditionAccess::RelocateInner(heap.obj0, heap.region0) == heap.obj1);
 }
 #endif
