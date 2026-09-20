@@ -387,9 +387,10 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(BaseObject* value, const void* own
         Heap::page(reinterpret_cast<MAddress>(value)));
     BaseObject* current = value;
     if (forwarding) {
-        const MAddress target = forwarding->find(reinterpret_cast<MAddress>(value));
-        current = target != 0 ? reinterpret_cast<BaseObject*>(target)
-            : ZRelocate::ResolveStoreValue(value, provenance, static_cast<Generation>(forwarding->table_generation()));
+        // ZGC zGeneration.inline.hpp:131-140 / zRelocate.cpp:382-415:
+        // stored roots use the same forwarding consumer as load barriers.
+        current = ZGeneration::generation(static_cast<ZGenerationId>(forwarding->table_generation()))
+            ->relocate_or_remap_object(value, provenance);
     }
     CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
                  "value root resolve requires a heap to-address from=%p current=%p", value, current);
