@@ -66,7 +66,6 @@ static const ZStatSubPhase PIdentifyUselessExternRef("identify useless extern re
 static const ZStatSubPhase PTraceLiveObjectsUpdateOldPointersInRefFields("trace live objects & update old pointers in ref-fields", ZGenerationId::old);
 static const ZStatSubPhase PYoungConcPromoteWalk("young.conc_promote_walk", ZGenerationId::young);
 static const ZStatSubPhase PYoungConcurrentRelocate("young.concurrent_relocate", ZGenerationId::young);
-static const ZStatSubPhase PYoungEvacFinish("young.evac_finish", ZGenerationId::young);
 static const ZStatSubPhase PYoungEvacRetire("young.evac_retire", ZGenerationId::young);
 static const ZStatSubPhase PYoungFlushAlloc("young.flush_alloc", ZGenerationId::young);
 static const ZStatSubPhase PYoungMarkClosure("young.mark_closure", ZGenerationId::young);
@@ -394,14 +393,12 @@ void ZGenerationYoung::mark_start()
         Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
         Heap::GetHeap().GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
     }
-    // Cangjie keeps allocation lists and candidate statistics in RegionManager.
-    // Preparing those lists retires the young shared/pinned allocation pages.
-    minorCandidateRegions.clear();
+    // Preserve allocation statistics and park previous-cycle from pages.
+    // Selection owns page pointers only after marking has established liveness.
     YoungCollectionStats stats;
     {
         ZStatTimerYoung zstatTimer(PYoungPrepareCandidates);
-        stats = manager.PrepareYoungGarbageCandidates(
-            [this](ZPage* region) { minorCandidateRegions.insert(region); });
+        stats = manager.PrepareYoungGarbageCandidates();
     }
     // Flush pre-flip producers before invalidating their generation sequence.
     (void)ZMark::FlushAllGenerations();
@@ -454,14 +451,13 @@ void ZGenerationYoung::mark_start()
          "unmovable_young=%zu recent_visited=%zu recent_units=%zu "
          "recent_young=%zu "
          "objects_visited=%zu slots_visited=%zu repark_ns=%llu unmovable_ns=%llu recent_ns=%llu "
-         "visitor_ns=%llu list_move_ns=%llu",
+         "list_move_ns=%llu",
          stats.candidateRegions, stats.candidateBytes, stats.fromVisited, stats.fromVisitedBytes,
          stats.unmovableVisited, stats.unmovableVisitedBytes, stats.unmovableYoung,
          stats.recentFullVisited, stats.recentFullVisitedUnits, stats.recentFullYoung,
          stats.objectVisits, stats.slotVisits,
          static_cast<unsigned long long>(stats.reparkNs), static_cast<unsigned long long>(stats.unmovableNs),
          static_cast<unsigned long long>(stats.recentFullNs),
-         static_cast<unsigned long long>(stats.visitorNs),
          static_cast<unsigned long long>(stats.listMoveNs));
     // Even an empty candidate set completes remembered scanning and clearing.
     // Otherwise the mark-start flip would leave previous unconsumed when the
@@ -1725,37 +1721,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
                      rememberedSlots.size(), concRemset.size(), remsetVec.size());
             }
             remapRemembered(workers);
-        }
-    }
-
-    {
-        ZStatTimerYoung zstatTimer(PYoungEvacFinish);
-        {
-        // Select flip-promoted pages; field iteration runs after world release.
-        for (ZPage* region : Heap::GetHeap().young().minorCandidateRegions) {
-            if (region->IsYoungRegion()) {
-                // markwater2: allocating pages never entered the route plan
-                // (zGeneration.cpp:211-213). Leave them young on unmovableFrom.
-                // ZPage::is_marked (zPage.inline.hpp:223-226): only a page marked
-                // this cycle has object liveness to promote.
-                if (region->IsAllocating() || !region->is_marked()) {
-                    continue;
-                }
-                if (kPageAgeAdaptiveTenuring &&
-                    !ShouldPromoteAge(region->GetYoungAge(), ZGeneration::young()->tenuring_threshold())) {
-                    if (region->IsLoneFromRegion() || region->IsFromRegion()) {
-                        manager.EnlistStayYoungSurvivor(region);
-                    } else if (region->GetRegionRole() != ZPageRole::RecentFull) {
-                        RegionManager::FinishStayYoungInPlace(region);
-                    }
-                    continue;
-                }
-                // Past-tenure marked regions are promoted by this cycle's
-                // flip_age_pages when the selector registered them
-                // (zRelocate.cpp:1334-1363); a region the selector skipped is
-                // an ordinary candidate next cycle (zGeneration.cpp:206-218).
-            }
-        }
         }
     }
 

@@ -49,7 +49,6 @@ struct YoungCollectionStats {
     uint64_t reparkNs = 0;
     uint64_t unmovableNs = 0;
     uint64_t recentFullNs = 0;
-    uint64_t visitorNs = 0;
     uint64_t listMoveNs = 0;
 };
 

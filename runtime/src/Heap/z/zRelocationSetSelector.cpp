@@ -241,11 +241,10 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 }
 
 // zGeneration.cpp:205-221: candidates come from the page table. The previous
-// cycle's leftover from-pages are parked; every young non-thread-local page is
-// registered with the visitor, exactly as the deleted list walks did. The
-// selection itself (and the from-role assignment) happens in
+// cycle's leftover from-pages are parked; young pages are counted without
+// retaining page pointers. The selection itself (and the from-role assignment) happens in
 // ZGeneration::select_relocation_set via ZGenerationPagesIterator.
-YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor)
+YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates()
 {
     PublishTLABStatistics();
     YoungCollectionStats stats;
@@ -262,9 +261,6 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             }
             ++stats.unmovableVisited;
             stats.unmovableVisitedBytes += region->GetRegionSize();
-            const uint64_t visitorStart = TimeUtil::NanoSeconds();
-            visitor(region);
-            stats.visitorNs += TimeUtil::NanoSeconds() - visitorStart;
             ++stats.candidateRegions;
             stats.candidateBytes += region->GetRegionAllocatedSize();
         }

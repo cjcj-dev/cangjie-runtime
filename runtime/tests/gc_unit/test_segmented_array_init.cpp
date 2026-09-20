@@ -164,6 +164,41 @@ void* RunLargePageIdentityCase(void*)
     return reinterpret_cast<void*>(valid ? 0 : 1);
 }
 
+// ZGC zGeneration.cpp:216-258: empty pages leave the page table before
+// not-selected live pages are aged. Only the export root keeps the second
+// large page alive; native local values are not managed roots.
+void* RunYoungSelectionLifetimeCase(void*)
+{
+    auto& heap = Heap::GetHeap();
+    MArray* dead = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    MArray* live = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    if (dead == nullptr || live == nullptr) {
+        return reinterpret_cast<void*>(10);
+    }
+    const uintptr_t deadAddress = reinterpret_cast<uintptr_t>(dead);
+    const uintptr_t liveAddress = reinterpret_cast<uintptr_t>(live);
+    ZPage* const deadPage = Heap::page(deadAddress);
+    ZPage* const livePage = Heap::page(liveAddress);
+    const bool distinctYoungPages = deadPage != livePage && deadPage->IsYoungRegion() &&
+        livePage->IsYoungRegion() && deadPage->is_large() && livePage->is_large();
+    const PageAge beforeAge = livePage->age();
+    const U64 root = heap.RegisterExportRoot(live);
+    Mutator::GetMutator()->SetManagedContext(false);
+    heap.RequestGC(GC_REASON_YOUNG, false);
+    // Read through the page table, never through either saved descriptor.
+    const bool emptyReleased = Heap::page(deadAddress) == nullptr;
+    BaseObject* const survivor = heap.GetExportObject(root);
+    ZPage* const current = survivor == nullptr ? nullptr : Heap::page(reinterpret_cast<uintptr_t>(survivor));
+    const bool liveProcessed = current != nullptr && current->age() != beforeAge &&
+        reinterpret_cast<uintptr_t>(survivor) == liveAddress;
+    std::fprintf(stderr,
+        "YOUNG_SELECTION_LIFETIME_TARGET distinct_young_pages=%d empty_released=%d live_processed=%d\n",
+        distinctYoungPages, emptyReleased, liveProcessed);
+    heap.RemoveExportObject(root);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>((distinctYoungPages && emptyReleased && liveProcessed) ? 0 : 1);
+}
+
 // ZGC zGeneration.cpp:1058-1063 and zStat.cpp:1789-1798:
 // an old collection publishes selector liveness before relocation starts.
 void* RunOldRelocationStatisticsCase(void* argument)
@@ -736,4 +771,9 @@ GC_OTHER_VM_TEST(OldRelocationStatistics, DirectorConsumesOldSelection)
 GC_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunNativeTaskRootCase, 0), 0);
+}
+
+GC_OTHER_VM_TEST(YoungSelectionLifetime, EmptyReleasedAndLivePageAged)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunYoungSelectionLifetimeCase, 0, 1, true), 0);
 }

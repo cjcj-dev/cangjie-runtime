@@ -672,7 +672,7 @@ public:
     void AssembleSmallGarbageCandidates();
     void AssembleLargeGarbageCandidates();
     void AssemblePinnedGarbageCandidates(bool collectAll);
-    YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor);
+    YoungCollectionStats PrepareYoungGarbageCandidates();
 
     void MergeRawPointerPinnedRegions();
 
