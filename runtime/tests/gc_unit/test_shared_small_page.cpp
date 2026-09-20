@@ -15,6 +15,7 @@
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zCPU.inline.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zStat.hpp"
 #if defined(__linux__)
@@ -155,8 +156,12 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
         }
     }
     ZPage* eden = pages[untype(PageAge::eden)];
-    const size_t remaining = eden->GetRegionSize() - 32;
-    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(remaining, PageAge::eden, true), eden->GetRegionStart() + 32);
+    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(std::min(eden->remaining(), ZObjectSizeLimitSmall), PageAge::eden, true),
+                 eden->GetRegionStart() + 32);
+    while (eden->remaining() >= 16) {
+        const size_t chunk = std::min(eden->remaining(), ZObjectSizeLimitSmall);
+        GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().alloc(chunk, PageAge::eden, true) != 0);
+    }
     const uintptr_t refilled = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(refilled != 0);
     GC_EXPECT_TRUE(Heap::page(refilled) != eden);
@@ -218,8 +223,9 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     CPUAffinity affinity;
     SharedPageFixture fixture;
     auto& manager = fixture.manager;
-    if (affinity.available.size() < 2) {
-        std::fprintf(stderr, "SharedSmallPage: migration arm unavailable: one allowed CPU\n");
+    if (affinity.available.size() < 2 || !ZHeuristics::use_per_cpu_shared_small_pages()) {
+        std::fprintf(stderr, "SharedSmallPage: migration arm unavailable: cpus=%zu per_cpu=%d\n",
+                     affinity.available.size(), ZHeuristics::use_per_cpu_shared_small_pages());
         return;
     }
     const size_t cpuA = affinity.available.front();
