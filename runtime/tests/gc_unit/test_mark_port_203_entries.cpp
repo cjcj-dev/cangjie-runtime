@@ -143,6 +143,9 @@ struct MarkPort203TestAccess {
     static void Collect(Heap& collector, bool major, BaseObject* array, bool markOnly, int duplicateRootOrder)
     {
         if (major) {
+            // The heap fixture has an active synthetic epoch. The real old
+            // mark-start owns Begin (ZGC zGeneration.cpp:1212-1240).
+            if (collector.old().Snapshot().active) collector.old().End();
             ScopedStopTheWorld pause("P16 old mark-start fixture", false);
             collector.old().mark_start();
         } else {
