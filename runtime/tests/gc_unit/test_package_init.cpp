@@ -752,8 +752,8 @@ void CheckTokenMisuse(bool nonOwner)
     GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 }
-GC_TEST(PackageInit, DuplicateTokenRejected) { CheckTokenMisuse(false); }
-GC_TEST(PackageInit, NonOwnerTokenRejected) { CheckTokenMisuse(true); }
+GC_RUNTIME_TEST(PackageInit, DuplicateTokenRejected) { CheckTokenMisuse(false); }
+GC_RUNTIME_TEST(PackageInit, NonOwnerTokenRejected) { CheckTokenMisuse(true); }
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, MultipleMetadataOwnersRequireExactIdentity)
 {
     Init();
