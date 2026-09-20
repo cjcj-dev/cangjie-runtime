@@ -160,11 +160,7 @@ void StoreBarrierBuffer::Flush()
     for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
         const StoreBarrierEntry& entry = buffer[i];
         const zaddress addr = ZBarrier::make_load_good(entry.prev);
-        if (!is_null(addr)) {
-            Heap::GetHeap().MarkObjectIfActive(to_object(addr));
-        }
-        ZBarrier::remember(reinterpret_cast<volatile zpointer*>(entry.p));
-        buffer[i] = {};
+        ZBarrier::mark_and_remember(reinterpret_cast<volatile zpointer*>(entry.p), addr);
     }
     clear();
 }
