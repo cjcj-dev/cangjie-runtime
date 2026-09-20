@@ -46,6 +46,7 @@ list(APPEND SRC_LIST
     "z/zPage.cpp"
     "z/zPageTable.cpp"
     "z/zObjectAllocator.cpp"
+    "z/zObjArrayAllocator.cpp"
     "z/zHeuristics.cpp"
     "z/zRelocationSetSelector.cpp"
     "Allocator/CartesianTree.cpp"
@@ -112,6 +113,7 @@ list(APPEND SRC_LIST
     "z/zMarkCache.cpp"
     "z/zReferenceProcessor.cpp"
     "shared/stringdedup/stringDedup.cpp"
+    "shared/collectedHeap.cpp"
     "z/zUncommitter.cpp"
     "z/zForwarding.cpp"
 )
