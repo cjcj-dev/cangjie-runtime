@@ -5,6 +5,7 @@ Run on kkk2: test_ohos_lineage.py SNAPSHOT GIT_CHECKOUT LIB_DIR ELF OUTPUT
 The snapshot must be a real source export without .git; the checkout must be
 an independent real Git checkout. No product or test executable is replaced.
 """
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import subprocess
@@ -31,8 +32,8 @@ cases = [
     ('source-override', snapshot, {'SOURCE_COMMIT': 'explicit-source', 'CJ_RUNTIME_COMMIT': 'secondary'}, 'absent', None),
     ('cj-override', snapshot, {'CJ_RUNTIME_COMMIT': 'secondary'}, 'absent', None),
 ]
-failures = []
-for name, tree, extra, git_state, git_head in cases:
+def run_case(case):
+    name, tree, extra, git_state, git_head = case
     out = output / name
     out.mkdir(exist_ok=True)
     env = dict(os.environ)
@@ -67,7 +68,11 @@ for name, tree, extra, git_state, git_head in cases:
             assert 'SOURCE_COMMIT_ORIGIN=product-declared\n' in lineage, lineage
         print(f'PASS {name}: filters completed; lineage assertions reached', flush=True)
     except AssertionError as error:
-        failures.append(name)
         print(f'FAIL {name}: {error}', flush=True)
+        return name
+    return None
+
+with ThreadPoolExecutor(max_workers=len(cases)) as pool:
+    failures = [name for name in pool.map(run_case, cases) if name]
 print(f'cases={len(cases)} failures={len(failures)} names={failures}', flush=True)
 sys.exit(bool(failures))
