@@ -25,8 +25,7 @@
 #include "Cangjie.h"
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
-#include "CJThread/src/base/mid/include/schedule_rename.h"
-#include "schedule.h"
+extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void* handle);
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
@@ -489,7 +488,7 @@ void* RunNativeTaskRootCase(void*)
         uintptr_t native = 0;
         size_t tasks = 0;
     } observed;
-    ScheduleAllCJThreadVisit([](void* argument, void* context) {
+    CJ_ScheduleAllCJThreadVisit([](void* argument, void* context) {
         auto& result = *static_cast<Observation*>(context);
         auto& data = *static_cast<LWTData*>(argument);
         if (data.nativeContext != nullptr) {
