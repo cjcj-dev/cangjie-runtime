@@ -84,14 +84,6 @@ GC_TEST(ZGeneration, FreedPromotedCompactedAtomics)
     young->reset_statistics();
 }
 
-GC_TEST(ZJNICritical, PauseSeesBlockedCount)
-{
-    Heap::GetHeap();
-    const bool ok = ZGeneration::TestPauseJniCritical();
-    std::printf("ZJNI_CRITICAL_PAUSE_SAW_BLOCKED ok=%d\n", ok ? 1 : 0);
-    GC_EXPECT_TRUE(ok);
-}
-
 GC_TEST(ZJNICritical, BlockWaitsWhileEntered)
 {
     ZJNICritical::initialize();

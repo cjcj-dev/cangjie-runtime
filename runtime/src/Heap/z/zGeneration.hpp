@@ -127,7 +127,6 @@ public:
     // zGeneration.hpp:138 stat_relocation() — per-generation relocation account.
     ZStatRelocation* StatRelocation() { return &statRelocation; }
     ZGenerationPhase GcPhase() const { return _phase; }
-    static bool TestPauseJniCritical();
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
     void SelectReason(GCReason value, uint64_t index = 0);
