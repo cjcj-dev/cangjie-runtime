@@ -656,7 +656,7 @@ bool RegionManager::ClaimCapacityOrStall(AllocationStallRequest& request)
     {
         std::lock_guard<std::mutex> lock(pageAllocatorMutex);
         if (ClaimAllocationLocked(request)) { return true; }
-        if (request.Flags().non_blocking()) { return false; }
+        if (request.Flags().non_blocking() || stallClosed) { return false; }
         stalled.insert_last(&request);
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
         ++stallEnqueued;
@@ -718,19 +718,13 @@ void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory, bool allow
     CHECK(pageAllocatorUsed >= bytes);
     pageAllocatorUsed -= bytes;
     TrackUsedPeakLocked();
-    SatisfyStalledAllocationsLocked();
+    SatisfyStalledAllocations();
 }
 
 
-
-void RegionManager::SatisfyStalledAllocations()
-{
-    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
-    SatisfyStalledAllocationsLocked();
-}
 
 // ZGC zPageAllocator.cpp:2167-2189: reserve capacity, dequeue, then notify.
-void RegionManager::SatisfyStalledAllocationsLocked()
+void RegionManager::SatisfyStalledAllocations()
 {
     while (ZPageAllocation* request = stalled.first()) {
         if (!ClaimAllocationLocked(*request)) { return; }
@@ -804,6 +798,23 @@ void RegionManager::HandleAllocStallingForOld(bool clearedAllSoftRefs)
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
     if (clearedAllSoftRefs) { NotifyOutOfMemory(); }
     RestartGC();
+}
+
+// Cangjie can finish its runtime while native allocation callers still wait.
+// HotSpot has no corresponding allocator shutdown: see advisor 20260920T050835Z.
+// The exiting driver closes the queue and publishes each remaining failure once.
+void RegionManager::StopStalledAllocations()
+{
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    stallClosed = true;
+    while (ZPageAllocation* request = stalled.first()) {
+        stalled.remove(request);
+        request->Satisfy(false);
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+        ++stallDequeued;
+        ++stallFailed;
+#endif
+    }
 }
 
 bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
@@ -929,7 +940,7 @@ retry:
             CHECK(pageAllocatorUsed >= size);
             pageAllocatorUsed -= size;
             TrackUsedPeakLocked();
-            SatisfyStalledAllocationsLocked();
+            SatisfyStalledAllocations();
             if (allowSaferegion) {
                 goto retry;
             }

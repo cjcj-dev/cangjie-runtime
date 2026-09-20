@@ -68,6 +68,11 @@ ZDriver::ZDriver(GCDriverKind kind, ZDriverPort& port)
 
 void ZDriver::run_thread()
 {
+    // Runtime finalization is a host lifecycle extension. Every driver exit,
+    // including an abortpoint, answers queued allocations before terminating.
+    struct FinishStalls {
+        ~FinishStalls() { Heap::GetHeap().page_allocator().StopStalledAllocations(); }
+    } finishStalls;
     for (;;) {
         const ZDriverRequest request = port.receive();
         if (request.cause() == GC_REASON_INVALID) {
@@ -77,7 +82,6 @@ void ZDriver::run_thread()
         {
             DriverLocker locker;
             const bool major = kind == GCDriverKind::MAJOR;
-            ZAbort::reset();
             if (major) ZBreakpoint::AtBeforeGC();
             abortpoint();
             const bool completed = !ZAbort::should_abort() && ExecuteDriverRequest(request);

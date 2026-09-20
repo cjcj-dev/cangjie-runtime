@@ -457,10 +457,10 @@ public:
     bool ClaimCapacityOrStall(AllocationStallRequest& request);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
     void ReturnPageMemory(const PageMemory& memory);
-    void SatisfyStalledAllocations();
     bool IsAllocationStalling() const;
     bool IsAllocationStallingForOld() const;
     void HandleAllocStallingForYoung();
+    void StopStalledAllocations();
     void HandleAllocStallingForOld(bool clearedAllSoftRefs);
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     MRT_EXPORT size_t PendingStalledAllocations() const;
@@ -804,7 +804,8 @@ private:
     friend class Uncommitter;
     mutable std::mutex pageAllocatorMutex;
     ZList<ZPageAllocation> stalled;
-    void SatisfyStalledAllocationsLocked();
+    bool stallClosed{false};
+    void SatisfyStalledAllocations();
     void NotifyOutOfMemory();
     void RestartGC() const;
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
