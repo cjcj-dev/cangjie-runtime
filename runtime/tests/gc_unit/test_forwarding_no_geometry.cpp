@@ -20,7 +20,7 @@ void InstallReceipt(GcHeapFixture& heap, MAddress from, MAddress to)
     heap.InstallPageOwner(heap.region0);
     auto publication = forwarding_for_page(heap.region0, from);
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(UNUSED_InsertMapping(publication, from, to), to);
+    GC_EXPECT_EQ(publication->insert(from, to), to);
 }
 }
 
@@ -30,9 +30,8 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     heap.InstallPageOwner(heap.region0);
     const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
     const Generation generation = heap.region0->GetOwnerGeneration();
-    const auto result = LookupTo(from, generation);
-    GC_EXPECT_TRUE(result.answer == FwdLookup::ArmedMiss);
-    GC_EXPECT_EQ(result.to, static_cast<MAddress>(0));
+    const MAddress result = generation_forwarding_table(generation).get(from)->find(from);
+    GC_EXPECT_EQ(result, static_cast<MAddress>(0));
     GC_EXPECT_TRUE(generation_forwarding_table(generation).get(from) != nullptr);
 }
 

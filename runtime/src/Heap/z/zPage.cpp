@@ -134,17 +134,13 @@ void ZPage::verify_remset_cleared_previous() const
     }
 }
 
-// ZPage::verify_live (zPage.cpp:196-203). The forwarding owner holds the
-// original page livemap when this metadata facade already describes to-space.
+// ZGC zPage.cpp:196-203: verify the source page's own livemap.
 void ZPage::verify_live(uint32_t liveObjects, size_t liveBytes, bool inPlace) const
 {
-    const ZForwarding::FromPageView* from = GetFromPageView();
-    CHECK_DETAIL(from != nullptr && from->livemap != nullptr, "Missing forwarding source livemap");
-    const ZLiveMap* map = from->livemap;
+    const ZLiveMap* map = &livemap();
     if (!inPlace) {
         // In-place relocation has changed the page to allocating
-        const ZGenerationId id = static_cast<Generation>(from->owner) == Generation::Young
-            ? ZGenerationId::young : ZGenerationId::old;
+        const ZGenerationId id = generation_id();
         MRT_ASSERT(map->is_marked(id), "Should be marked");
         (void)id;
         ZGeneration* generation = ZGeneration::generation(id);

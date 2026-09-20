@@ -39,7 +39,7 @@ public:
     CurrentObjectRef& operator=(const BaseObject*) = delete;
     operator BaseObject*() const = delete;
 
-    // 凭什么: caller already resolved (make_load_good / FindToVersion / relocate).
+    // 凭什么: caller already resolved (make_load_good / forwarding lookup / relocate).
     // Only resolve-or-forward paths may mint. A maybe-from BaseObject* is not
     // convertible — that is the fence.
     static CurrentObjectRef fromResolved(BaseObject* obj)

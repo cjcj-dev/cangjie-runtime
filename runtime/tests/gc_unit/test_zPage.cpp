@@ -156,10 +156,10 @@ namespace {
 struct ForwardingSelectionResult {
     size_t roots{0};
     size_t published{0};
-    size_t prepared{0};
     size_t retained{0};
     size_t retired{0};
     size_t receipts{0};
+    size_t remapReceipts{0};
     bool verifyRetirement{false};
     bool verifyPin{false};
     bool verifyCritical{false};
@@ -291,10 +291,14 @@ void* SelectRealLivePages(void* context)
                 result.receipts += target != starts[i] && Heap::page(target) != nullptr &&
                     (result.verifyPin ? static_cast<MArray*>(resolved)->ConvertToCArray()[0] == i + 1 :
                      *reinterpret_cast<uint64_t*>(target + TYPEINFO_PTR_SIZE) == i + 1);
+                BaseObject* const remapped = ZGeneration::young()->remap_object(
+                    reinterpret_cast<BaseObject*>(starts[i]));
+                const MAddress remapTarget = reinterpret_cast<MAddress>(remapped);
+                result.remapReceipts += remapTarget != starts[i] && Heap::page(remapTarget) != nullptr &&
+                    (result.verifyPin ? static_cast<MArray*>(remapped)->ConvertToCArray()[0] == i + 1 :
+                     *reinterpret_cast<uint64_t*>(remapTarget + TYPEINFO_PTR_SIZE) == i + 1);
             }
-            const auto* view = forwarding->from_page_snapshot();
-            result.prepared += view != nullptr && view->livemap != nullptr &&
-                               view->topAtStart > starts[i];
+
         }
         if (!result.verifyRetirement) {
             result.retained += Heap::GetHeap().GetExportObject(roots[i]) != nullptr;
@@ -351,10 +355,9 @@ GC_RUNTIME_OTHER_VM_TEST(ZForwardingPublication, SelectionPublishesPreparedForwa
     void* taskResult = nullptr;
     GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
     ReleaseHandle(handle);
-    std::fprintf(stderr, "FORWARDING_SELECTION_TARGET roots=%zu published=%zu prepared=%zu retained=%zu\n",
-                 result.roots, result.published, result.prepared, result.retained);
+    std::fprintf(stderr, "FORWARDING_SELECTION_TARGET roots=%zu published=%zu retained=%zu\n",
+                 result.roots, result.published, result.retained);
     GC_EXPECT_TRUE(result.published > 0);
-    GC_EXPECT_EQ(result.prepared, result.published);
     GC_EXPECT_EQ(result.retained, 3u);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
@@ -378,7 +381,10 @@ GC_RUNTIME_OTHER_VM_TEST(ZRelocationRetirement, CopiedSourceLeavesPageTable)
                  result.roots, result.published, result.retired, result.receipts);
     GC_EXPECT_TRUE(result.published > 0);
     GC_EXPECT_EQ(result.retired, result.published);
+    std::fprintf(stderr, "FORWARD_RESULT_TARGET relocated=%zu remapped=%zu expected=%zu\n",
+                 result.receipts, result.remapReceipts, result.published);
     GC_EXPECT_EQ(result.receipts, result.published);
+    GC_EXPECT_EQ(result.remapReceipts, result.published);
     std::fprintf(stderr, "SOURCE_MEMORY_TARGET used_before=%zu used_after=%zu mapped_before=%zu mapped_after=%zu reused=%zu\n",
                  result.usedBefore, result.usedAfter, result.mappedBefore, result.mappedAfter, result.reused);
     GC_EXPECT_EQ(result.usedAfter + result.mappedBefore, result.usedBefore + result.mappedAfter);

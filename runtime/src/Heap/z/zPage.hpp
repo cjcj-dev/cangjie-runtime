@@ -247,53 +247,6 @@ public:
 
     ZForwarding* GetFromPageCarrier() const;
 
-    const ZForwarding::FromPageView* GetFromPageView() const
-    {
-        ZForwarding* forwarding = forwarding_for_page(const_cast<ZPage*>(this));
-        return forwarding == nullptr ? nullptr : forwarding->from_page_view(GetRegionLifeId());
-    }
-
-    bool HasFromPageMetadata() const;
-
-    // The original page livemap retained by the forwarding carrier while this
-    // slot already describes the reused/promoted page (zForwarding.hpp:44-110
-    // holds the whole from ZPage; only its livemap is carried here).
-    ZLiveMap* FromPageLiveMap() const;
-
-    Generation GetRouteMarkGeneration() const;
-
-    bool IsFromPageAllocating() const;
-
-    bool IsFromPageSurvivedObject(size_t offset) const;
-
-    bool IsRouteSurvivedObject(size_t offset);
-
-    // Compatibility name for existing relocation callers. Both route and compact
-    // now consume the one owner stored in the from-page metadata carrier.
-    bool IsOwnerSurvivedObject(size_t offset)
-    {
-        return IsRouteSurvivedObject(offset);
-    }
-
-    bool IsOwnerKnownEmpty()
-    {
-        return IsRouteKnownEmpty();
-    }
-
-    bool IsRouteMarkedObject(size_t offset);
-
-    bool IsRouteMarkedObject(const BaseObject* object)
-    {
-        return IsRouteMarkedObject(GetAddressOffset(reinterpret_cast<MAddress>(object)));
-    }
-
-    bool IsRouteKnownEmpty();
-
-    // installdomain: if PrepareForwardable snapshotted a null livemap, GetRoute always
-    // rejects. After mark_object created the current livemap, bind it as ghost while still
-    // FORWARDABLE so the paint is route-visible (pointer-share, same as PrepareForwardable).
-    void BindFromPageLiveMapIfNull();
-
     MAddress GetCensusBoundary() const
     {
         return GetRegionStart() + _scratch.censusBoundaryOffset;
