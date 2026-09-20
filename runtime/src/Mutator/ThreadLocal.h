@@ -9,6 +9,7 @@
 #define MRT_THREAD_LOCAL_H
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include "Base/RwLock.h"
 #include "Interpreter/Options.h"
@@ -57,6 +58,8 @@ struct ThreadLocalData {
 public:
     void SetMutator(Mutator* newMutator);
 };
+
+static_assert(offsetof(ThreadLocalData, buffer) == 0, "compiler TLS buffer ABI");
 
 void MarkFlushOnEnterSaferegion();
 void MarkFlushBeginLeaveSaferegion();

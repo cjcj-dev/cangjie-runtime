@@ -158,14 +158,13 @@ private:
     MAddress AllocateImpl(size_t totalSize, AllocType allocType);
     MAddress AllocateRawPointerObject(size_t totalSize);
 
-    // Temporary compiler ABI indirection, owned by cjcj-llvm#7.
-    // The descriptor is not a ZPage: its bounds delimit a shared-page slice.
+    // Inline TLAB bounds, as in HotSpot ThreadLocalAllocBuffer.
+    // Compiler offsets are checked by check-cangjie-tlab-layout.py.
     struct TLAB {
         uintptr_t top = 0;
         uintptr_t end = 0;
         uintptr_t start = 0;
     };
-    TLAB* tlabDescriptor = &tlab;
     TLAB tlab;
     static constexpr size_t MinTLABSize = 2 * 1024;
     uintptr_t AllocateInTLAB(size_t size);
