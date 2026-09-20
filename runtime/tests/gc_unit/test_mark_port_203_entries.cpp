@@ -352,10 +352,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     } else {
         handle = Heap::GetHeap().RegisterExportRoot(array);
     }
-    if (major) {
-        for (auto* child : children) {
-        }
-    }
     const bool wasStarted = Heap::GetHeap().IsGcStarted();
     const GCReason oldReason = Heap::GetHeap().GetZGeneration(
         major ? ZGenerationId::old : ZGenerationId::young).Snapshot().reason;

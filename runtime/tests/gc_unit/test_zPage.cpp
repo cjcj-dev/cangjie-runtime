@@ -67,6 +67,7 @@ GC_TEST(ZPage, AllocObjectRespectsAlignment)
 #include <chrono>
 #include <thread>
 #include "Heap/z/zJNICritical.hpp"
+#include "Mutator/Mutator.inline.h"
 
 namespace MapleRuntime {
 extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
@@ -238,13 +239,13 @@ void* SelectRealLivePages(void* context)
     }
     // Live objects in three real small pages force a non-empty relocation set.
     if (result.verifyCritical) {
-        auto* array = static_cast<MArray*>(Heap::GetHeap().GetExportedObject(roots[0]));
+        auto* array = static_cast<MArray*>(Heap::GetHeap().GetExportObject(roots[0]));
         bool copied = true;
         void* raw = MCC_AcquireRawData(array, &copied);
         std::atomic<bool> finished{false};
         // Let STW proceed: the JNI gate must exclude relocation, rather than
         // an uncooperative mutator preventing the pause from starting.
-        mutator->EnterSaferegion();
+        mutator->EnterSaferegion(false);
         std::thread collector([&] {
             Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
             finished.store(true, std::memory_order_release);
@@ -259,17 +260,17 @@ void* SelectRealLivePages(void* context)
         // A completed collector publishes the root before we inspect it.
         if (result.collectionFinishedWhileHeld) {
             result.movedWhileHeld = reinterpret_cast<uintptr_t>(
-                Heap::GetHeap().GetExportedObject(roots[0])) != starts[0];
+                Heap::GetHeap().GetExportObject(roots[0])) != starts[0];
         }
         mutator->LeaveSaferegion();
-        array = static_cast<MArray*>(Heap::GetHeap().GetExportedObject(roots[0]));
+        array = static_cast<MArray*>(Heap::GetHeap().GetExportObject(roots[0]));
         MCC_ReleaseRawData(array, raw);
-        mutator->EnterSaferegion();
+        mutator->EnterSaferegion(false);
         collector.join();
         mutator->LeaveSaferegion();
         result.collectionFinished = finished.load(std::memory_order_acquire);
         result.movedAfterRelease = reinterpret_cast<uintptr_t>(
-            Heap::GetHeap().GetExportedObject(roots[0])) != starts[0];
+            Heap::GetHeap().GetExportObject(roots[0])) != starts[0];
     } else {
         Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     }
