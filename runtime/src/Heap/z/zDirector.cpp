@@ -308,6 +308,9 @@ static bool rule_minor_allocation_rate(const ZDirectorStats& stats)
 
 static bool rule_minor_high_usage(const ZDirectorStats& stats)
 {
+    if (ZCollectionIntervalOnly) {
+        return false;
+    }
     if (is_young_small(stats)) {
         return false;
     }
@@ -324,6 +327,9 @@ static bool rule_major_timer(const ZDirectorStats& stats)
 
 static bool rule_major_warmup(const ZDirectorStats& stats)
 {
+    if (ZCollectionIntervalOnly) {
+        return false;
+    }
     if (stats.old_stats.cycle.warmupCycles >= 3) {
         return false;
     }
