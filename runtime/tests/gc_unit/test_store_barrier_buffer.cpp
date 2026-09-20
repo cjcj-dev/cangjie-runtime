@@ -174,6 +174,50 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     GC_EXPECT_EQ(retired.size(), 1u);
 }
 
+// The real mutator store and flush publish prev into the young mark domain.
+// The incoming value is distinct, so marking it cannot satisfy this assertion.
+GC_TEST(StoreBuf, ProductWriteFlushPublishesPreviousYoungValue)
+{
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    MarkPublicationFixture markFixture;
+    BaseObject* incoming = fx.PlaceObject(fx.heapStart + ZGranuleSize + 128);
+    HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj1));
+    Mutator mutator;
+    InstalledMutatorScope mutatorScope(mutator);
+    ZBarrier::WriteReference(fx.obj0, field, incoming);
+    const size_t buffered = mutator.GetGCData().storeBarrierBuffer->Pending();
+    const size_t youngBefore = markFixture.YoungPending();
+    mutator.FlushStoreBarrierBuffer();
+    const size_t youngAfter = markFixture.YoungPending();
+    const size_t oldAfter = markFixture.OldPending();
+    const bool remembered = SlotPageRemembered(reinterpret_cast<MAddress>(&field));
+    std::vector<BaseObject*> work;
+    markFixture.DrainObjects(work);
+    size_t previousCount = 0;
+    size_t incomingCount = 0;
+    for (BaseObject* object : work) {
+        previousCount += object == fx.obj1;
+        incomingCount += object == incoming;
+    }
+    std::fprintf(stderr,
+                 "DETAIL young_prev buffered=%zu young_before=%zu young_after=%zu old_after=%zu "
+                 "previous=%zu incoming=%zu remset=%u\n",
+                 buffered, youngBefore, youngAfter, oldAfter, previousCount, incomingCount,
+                 static_cast<unsigned>(remembered));
+    // Assert the consumed result before any producer-presence check can mask it.
+    GC_EXPECT_EQ(youngAfter, 1u);
+    GC_EXPECT_EQ(previousCount, 1u);
+    GC_EXPECT_EQ(incomingCount, 0u);
+    GC_EXPECT_TRUE(remembered);
+    GC_EXPECT_EQ(buffered, 1u);
+    GC_EXPECT_EQ(youngBefore, 0u);
+    GC_EXPECT_EQ(oldAfter, 0u);
+    GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == incoming);
+}
+
 // ZGC zMark.inline.hpp:51-55: objects on pages allocated in this cycle are
 // implicitly live. Contrast with ProductWriteCarriesOldValueOnlyInPrevArm.
 GC_TEST(StoreBuf, AllocatingPreviousValueIsImplicitlyLive)
