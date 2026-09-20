@@ -315,7 +315,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
-    (void)children.back());
     const size_t rootCount = commonRoot && helpers != 0 ? 17 * 64 : 1;
     std::vector<NativeSlot> rootSlots(rootCount, NativeSlot(zpointer::null));
     std::vector<NativeSlot*> roots(rootCount);
@@ -354,9 +353,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         handle = Heap::GetHeap().RegisterExportRoot(array);
     }
     if (major) {
-        (void)array);
         for (auto* child : children) {
-            (void)child);
         }
     }
     const bool wasStarted = Heap::GetHeap().IsGcStarted();

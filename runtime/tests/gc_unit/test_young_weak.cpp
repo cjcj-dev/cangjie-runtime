@@ -374,7 +374,6 @@ void RunYoungWeakVariant(size_t helpers)
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
-    (void)graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
@@ -445,8 +444,6 @@ void RunYoungWeakRemsetFlow()
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
-    (void)graph.strongRoot);
-    (void)graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
@@ -503,11 +500,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     RelocationReceiptTestAccess::BindWorkerBudget(static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region0->SetRegionRole(ZPageRole::RecentFull);
-    (void)graph.child);
     if (runtimeEntry) {
-        (void)graph.strongRoot);
-        (void)graph.weak);
-        (void)graph.referent);
     }
 
     // MarkStack::size() counts 64-entry buffers. Seventeen buffers cross the
@@ -696,7 +689,6 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region0->SetRegionRole(ZPageRole::RecentFull);
-    (void)graph.weak);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     RelocationReceiptTestAccess::RunMajorMark(collector);
@@ -818,7 +810,6 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool old
     RelocationReceiptTestAccess::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     graph.owner->SetRegionRole(ZPageRole::RecentFull);
-    (void)graph.foreign);
     // The old-roots-only case registers before the real old mark-start flip.
     // It exercises the old phase entry without a young prelude premarking it.
     const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(graph.root);
@@ -834,7 +825,6 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool old
     bool driverCompleted = false;
     if (fullDriver) {
         // Pin the fixture objects while the real driver completes relocation.
-        (void)graph.root);
         if (secondRoot != nullptr) (void)secondRoot);
         ZCrossVM::testExportOwnershipResult = [&](const ExportOwnershipTestObservation& observed) {
             const auto paired = [&](const std::vector<ExportOwnershipTestObservation::Edge>& edges) {
