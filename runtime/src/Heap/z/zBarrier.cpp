@@ -45,8 +45,7 @@ bool ZBarrier::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObj
         if (forward) {
             toObj = ZBarrier::remap_generation(oldRef.GetFieldValue())->relocate_or_remap_object(fromObj);
         } else {
-            toObj = ZRelocate::FindToVersion(fromObj, static_cast<Generation>(ZBarrier::remap_generation(oldRef.GetFieldValue())->id())).GetOrFailClosed(
-                "ZBarrier::TryUpdateRefFieldImpl", provenance);
+            toObj = ZBarrier::remap_generation(oldRef.GetFieldValue())->remap_object(fromObj);
         }
         if (toObj == nullptr) {
             return false;
