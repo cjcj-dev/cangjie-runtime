@@ -30,11 +30,10 @@ namespace MapleRuntime {
 using LWTData = struct {
     void* execute; // Execute function (from Cangjie) of the thread;
                    // It may be `Future.execute` or `executeClosure`
-    void* fn;  // Function pointer of closure when create a thread without a future object
+    void* fn;  // Native closure function or native task context; never a managed root
     void* obj; // Pointer of a Cangjie object;
                // future or env of closure
     void* threadObject;   // Cangjie class Thread in std/core
-    void* nativeContext { nullptr };  // Native task context; never visited as a managed root
 };
 struct ConcurrencyTask; // Task depends on the implementation of ConcurrencyModel
 

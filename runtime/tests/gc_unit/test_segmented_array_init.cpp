@@ -491,9 +491,9 @@ void* RunNativeTaskRootCase(void*)
     CJ_ScheduleAllCJThreadVisit([](void* argument, void* context) {
         auto& result = *static_cast<Observation*>(context);
         auto& data = *static_cast<LWTData*>(argument);
-        if (data.nativeContext != nullptr) {
+        if (data.fn != nullptr) {
             result.taskRoot = &RootSlotAt(&data.obj);
-            result.native = reinterpret_cast<uintptr_t>(data.nativeContext);
+            result.native = reinterpret_cast<uintptr_t>(data.fn);
             ++result.tasks;
         }
     }, &observed);
@@ -545,8 +545,6 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
         }
         if (runtimeThread) {
             // Use the real native runtime-thread registration for graph tests.
-            // RunCJTask stores a native FutureImpl in LWTData::obj; that is not
-            // a managed heap-object root and is a separate scheduler/root issue.
             auto& manager = MutatorManager::Instance();
             manager.CreateRuntimeMutator(ThreadType::GC_THREAD);
             void* result = task(reinterpret_cast<void*>(argument));
