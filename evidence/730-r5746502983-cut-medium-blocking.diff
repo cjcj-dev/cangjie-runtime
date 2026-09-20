@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zObjectAllocator.cpp
++++ b/runtime/src/Heap/z/zObjectAllocator.cpp
+@@ -218,7 +218,7 @@
+         }
+     }
+     if (addr == 0 && !flags.non_blocking()) {
+-        addr = alloc_object_in_shared_page(shared, ZPageType::medium, ZPageSizeMediumMax, size, flags);
++        addr = 0; // controlled cut: bypass medium-blocking retry
+     }
+     return addr;
+ }

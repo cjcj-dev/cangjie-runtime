@@ -9,6 +9,7 @@
 #include "Heap/z/zGlobals.hpp"
 #include "TypeInfoManager.h"
 #include "Mutator/Mutator.h"
+#include "ObjectModel/MObject.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -112,6 +113,53 @@ void* AllocateManagedFastMedium(void*)
                  ZPageSizeMediumMin, actual, capacity, manager.GetCommittedBytes(), second - first, ZObjectAlignmentMedium, valid);
     return reinterpret_cast<void*>(valid ? 0 : 3);
 }
+void* AllocateMediumNonBlocking(void*)
+{
+    auto& heap = Heap::GetHeap();
+    const size_t bytes = ZObjectSizeLimitSmall + 8;
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
+    std::memset(storage, 0, sizeof(storage));
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    const uint64_t before = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    const uintptr_t result = heap.object_allocator().alloc(bytes, PageAge::eden, true);
+    if (result != 0) { reinterpret_cast<BaseObject*>(result)->SetClassInfo(type); }
+    const ZPage* page = result == 0 ? nullptr : Heap::page(result);
+    const size_t actual = page == nullptr ? 0 : page->size();
+    const uint64_t after = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    const bool valid = page != nullptr && page->type() == ZPageType::medium && actual == ZPageSizeMediumMax && before == after;
+    std::fprintf(stderr, "MEDIUM_NONBLOCKING_TARGET actual=%zu expected=%zu before=%llu after=%llu valid=%d\n",
+                 actual, ZPageSizeMediumMax, (unsigned long long)before, (unsigned long long)after, valid);
+    return reinterpret_cast<void*>(valid ? 0 : 1);
+}
+void* AllocateMediumBlockingFailure(void*)
+{
+    auto& heap = Heap::GetHeap();
+    const size_t occupiedBytes = heap.GetMaxCapacity() - ZGranuleSize;
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
+    std::memset(storage, 0, sizeof(storage));
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(occupiedBytes - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    auto* occupied = MCC_NewObject(type, occupiedBytes);
+    const U64 root = heap.RegisterExportRoot(occupied);
+    Mutator* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    const uint64_t before = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    // The rooted large object leaves less than a medium page. A blocking
+    // allocator must attempt collection before reporting the terminal failure.
+    const uintptr_t result = heap.object_allocator().alloc(ZObjectSizeLimitSmall + 8, PageAge::eden, false);
+    const uint64_t after = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    const bool valid = result == 0 && after > before;
+    std::fprintf(stderr, "MEDIUM_BLOCKING_TARGET result=%#zx occupied=%zu before=%llu after=%llu valid=%d\n",
+                 result, occupiedBytes, (unsigned long long)before, (unsigned long long)after, valid);
+    heap.RemoveExportObject(root);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>(valid ? 0 : 1);
+}
 void* AllocateNonBlockingCapacity(void*)
 {
     auto& heap = Heap::GetHeap();
@@ -161,3 +209,6 @@ GC_OTHER_VM_TEST(ObjectAllocatorPaths, FastMediumConsumesCachedActualSize) { Run
 GC_OTHER_VM_TEST(ObjectAllocatorPaths, ManagedFastMediumConsumesCachedPage) { RunAllocatorCase(AllocateManagedFastMedium); }
 
 GC_OTHER_VM_TEST(ObjectAllocatorPaths, NonBlockingCapacityDoesNotStartCollection) { RunAllocatorCase(AllocateNonBlockingCapacity); }
+
+GC_OTHER_VM_TEST(ObjectAllocatorPaths, MediumNonBlockingAllocatesAfterCacheMiss) { RunAllocatorCase(AllocateMediumNonBlocking); }
+GC_OTHER_VM_TEST(ObjectAllocatorPaths, MediumBlockingFailureAttemptsCollection) { RunAllocatorCase(AllocateMediumBlockingFailure); }
