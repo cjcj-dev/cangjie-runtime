@@ -94,6 +94,10 @@ public:
                              std::unordered_set<MAddress>& weakSlots,
                              YoungConcWindowStats* windowStats = nullptr);
     static bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
+#if defined(MRT_TESTABLE_INTERNALS)
+    static std::function<void(ZGenerationId, NativeSlot*)> testColoredRootResult;
+    static std::function<void(Mutator&)> testOldMarkThreadResult;
+#endif
 
     static bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);

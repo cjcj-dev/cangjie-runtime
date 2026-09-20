@@ -52,6 +52,10 @@ void ZIterator::oop_iterate_safe(BaseObject* object, TypeInfo* klass, OopClosure
     // here, before VM closure dispatch, not in mark or in a range iterator.
     if (!is_invisible_object_array(object, klass)) {
         OopIteratorClosureDispatch::oop_oop_iterate(closure, object, klass);
+    } else {
+#if defined(MRT_GC_UNIT_TESTS)
+        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::ITERATOR_SKIP, object);
+#endif
     }
 }
 

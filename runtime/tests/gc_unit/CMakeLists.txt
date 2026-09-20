@@ -224,8 +224,7 @@ if (MRT_TESTABLE_INTERNALS)
     # the test target itself only exposes fixture access; the product SO owns
     # the remap receipt endpoints.
     target_compile_definitions(cj_gc_clear_entries_unit PRIVATE
-        MRT_PRODUCT_TESTABLE_INTERNALS=1
-        MRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE=1)
+        MRT_PRODUCT_TESTABLE_INTERNALS=1)
 endif()
 if (TARGET cangjie-runtime)
     target_link_libraries(cj_gc_clear_entries_unit PRIVATE cangjie-runtime)

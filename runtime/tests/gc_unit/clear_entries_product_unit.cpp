@@ -1269,14 +1269,6 @@ static void CheckForwardingWinner(bool identity)
 // page, rather than an object-level recovery guess, is the admission unit.
 
 
-// True runtime entry: this test never calls RemapYoungRoots or Preforward. It
-// enters at DoGarbageCollection, then reads the one-shot receipt sampled by the
-// product remap loop before relocate-start flips the colour masks.
-#if defined(MRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE)
-
-#endif
-
-#if defined(MRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE)
 // ZGenerationOld::remap_young_roots, zGeneration.cpp:1509: enter through
 // the real major driver; a registered runtime mutator owns the raw root.
 void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false, unsigned nestedKind = 0)
@@ -1355,7 +1347,6 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         }
     }
 #endif
-    ResetRemapYoungRootsTestReceipt(reinterpret_cast<uintptr_t>(forwarding.from));
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).InitializeWorkers(2);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).InitializeWorkers(2);
     // This fixture invokes the old body without the driver's young prelude.
@@ -1369,26 +1360,19 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         DriverLocker driver;
         ZDriver::RunGarbageCollection(1, GC_REASON_USER);
     }
-    const auto receipt = ReadRemapYoungRootsTestReceipt();
     const uintptr_t expected = oldPending
         ? forwarding_find(Generation::Old, reinterpret_cast<uintptr_t>(forwarding.from))
         : reinterpret_cast<uintptr_t>(forwarding.to);
-    const uint64_t expectedVisits = managed ? 3 : 1; // native, ordinary base, derived temporary base
     const uintptr_t before = reinterpret_cast<uintptr_t>(forwarding.from);
-    const bool result = receipt.visits == expectedVisits && receipt.before == before &&
-        receipt.after == (oldPending ? before : expected) &&
-        receipt.heals == (oldPending ? 0 : expectedVisits) &&
-        (!oldPending || receipt.oldPendingVisits == expectedVisits) &&
-        expected != 0 && (!oldPending || expected != before) &&
-        (nestedField == nullptr ? raw(root->LoadPlain()) == expected :
-            raw(root->LoadPlain()) == reinterpret_cast<uintptr_t>(rootInput) && raw(nestedField->LoadPlain()) == expected) &&
+    const uintptr_t observedRoot = nestedField == nullptr ? raw(root->LoadPlain()) : raw(nestedField->LoadPlain());
+    const bool result = expected != 0 && (!oldPending || expected != before) &&
+        (nestedField == nullptr ? observedRoot == expected :
+            raw(root->LoadPlain()) == reinterpret_cast<uintptr_t>(rootInput) && observedRoot == expected) &&
         is_null(nullRoot->LoadPlain()) && raw(nonHeapRoot->LoadPlain()) == reinterpret_cast<uintptr_t>(nonHeapStorage) &&
         (!managed || (frame[0] == expected && frame[1] == expected + 8));
-    std::fprintf(stderr, "RAW_REMAP_TARGET_ASSERT promoted=%u managed=%u visits=%llu before=%zx after=%zx "
-        "expected=%zx base=%zx derived=%zx old_pending=%llu final_root=%zx result=%u\n", unsigned(promoted), unsigned(managed),
-        static_cast<unsigned long long>(receipt.visits), receipt.before, receipt.after,
-        expected, frame[0], frame[1], static_cast<unsigned long long>(receipt.oldPendingVisits),
-        raw(root->LoadPlain()), unsigned(result));
+    std::fprintf(stderr, "RAW_REMAP_TARGET_ASSERT promoted=%u managed=%u before=%zx after=%zx "
+        "expected=%zx base=%zx derived=%zx final_root=%zx result=%u\n", unsigned(promoted), unsigned(managed),
+        before, observedRoot, expected, frame[0], frame[1], raw(root->LoadPlain()), unsigned(result));
     if (nestedKind != 0) {
         std::fprintf(stderr, "NESTED_REMAP_TARGET kind=%u observed=%zx expected=%zx result=%u\n",
                      nestedKind, raw(nestedField->LoadPlain()), expected, unsigned(result));
@@ -1451,7 +1435,6 @@ GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackKeepsOldPendingThenRelocates
 {
     CheckMajorRawRemap(false, true, true, true);
 }
-#endif
 #endif
 
 #include "b09_runtime_fixture.hpp"

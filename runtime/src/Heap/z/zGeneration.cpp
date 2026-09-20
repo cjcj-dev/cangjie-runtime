@@ -1093,6 +1093,10 @@ void ZGenerationOld::concurrent_mark()
                 if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
                     (void)mutator.GcPhaseEnum(false);
                 }
+#if defined(MRT_GC_UNIT_TESTS)
+                NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
+                                            mutator.GetStackWatermark().IsDone(stackScanEpoch));
+#endif
             });
             ZMark::DoEnumeration(workStack, foreignStack);
         } else {

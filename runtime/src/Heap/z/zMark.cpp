@@ -60,6 +60,11 @@
 
 namespace MapleRuntime {
 
+#if defined(MRT_TESTABLE_INTERNALS)
+std::function<void(ZGenerationId, NativeSlot*)> ZMark::testColoredRootResult;
+std::function<void(Mutator&)> ZMark::testOldMarkThreadResult;
+#endif
+
 static const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
 // RefFieldRoot is root in tagged pointer format.
 void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
@@ -87,11 +92,23 @@ void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
 void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                                      uint64_t stackScanEpoch)
 {
+#if defined(MRT_GC_UNIT_TESTS)
+    RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
+        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_MARK,
+                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
+        invisibleRootVisitor(root);
+    };
+    RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
+#else
     RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
+#endif
     RootVisitor& visitedRawRootVisitor = rawRootVisitor;
     VisitStrongPlainRoots(visitedRawRootVisitor, [&](Mutator& mutator) {
         bool watermarkDone =
             stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
+#if defined(MRT_GC_UNIT_TESTS)
+        NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MINOR_MARK, &mutator, watermarkDone);
+#endif
         if (watermarkDone) {
             return;
         }
@@ -152,6 +169,11 @@ public:
         size_t frames = 0;
         (void)StackWatermarkSet::finish_processing(mutator, markRoot, markRoot, StackWatermark::epoch_id(),
                                                    nullptr, frames, reinterpret_cast<void*>(root_function()));
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (ZMark::testOldMarkThreadResult) {
+            ZMark::testOldMarkThreadResult(mutator);
+        }
+#endif
     }
 };
 
@@ -169,6 +191,11 @@ public:
         finalizerRoots.OopsDo(finalizable);
         rootsColored.Apply([&](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
+#if defined(MRT_TESTABLE_INTERNALS)
+            if (ZMark::testColoredRootResult) {
+                ZMark::testColoredRootResult(ZGenerationId::old, &slot);
+            }
+#endif
         });
         rootsUncolored.Apply(uncolored);
         rootsUncolored.ApplyThreads([&](Mutator& mutator) { threadClosure.DoThread(mutator); });
@@ -176,6 +203,11 @@ public:
         // here, since the set of workers executing during root scanning can be
         // different from the set of workers executing during mark.
         ThreadLocal::FlushCurrentThreadMarkStacks();
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (ZMark::testColoredRootResult) {
+            ZMark::testColoredRootResult(ZGenerationId::old, nullptr);
+        }
+#endif
     }
 private:
     RootsIteratorStrongColored rootsColored;
@@ -227,10 +259,20 @@ public:
     {
         rootsColored.Apply([this](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
+#if defined(MRT_TESTABLE_INTERNALS)
+            if (ZMark::testColoredRootResult) {
+                ZMark::testColoredRootResult(ZGenerationId::young, &slot);
+            }
+#endif
         });
         rootsUncolored.Apply(uncolored);
         // zMark.cpp:887-891: flush and free worker stacks for both generations.
         ThreadLocal::FlushCurrentThreadMarkStacks();
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (ZMark::testColoredRootResult) {
+            ZMark::testColoredRootResult(ZGenerationId::young, nullptr);
+        }
+#endif
     }
 private:
     RootsIteratorAllColored rootsColored;
