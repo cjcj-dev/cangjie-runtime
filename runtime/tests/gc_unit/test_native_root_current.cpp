@@ -488,8 +488,12 @@ void CheckRootStorageSegments(unsigned family)
     if (family == 0) { finalizers.VisitGCRoots(remember); }
     else if (family == 1) { finalizers.VisitFinalizers(remember); }
     else { heap.VisitAllExportRoots(remember); }
-    if (family == 0) { RelocationReceiptTest::NativeRootTrace(collector); }
-    else { RelocationReceiptTest::NativeRootMajorPrelude(collector); }
+    if (family == 0) {
+        RelocationReceiptTest::RunOldRoots(collector);
+        RelocationReceiptTest::NativeRootTrace(collector);
+    } else {
+        RelocationReceiptTest::NativeRootMajorPrelude(collector);
+    }
     bool valuesValid = true;
     size_t remaining = 0;
     const NativeSlotVisitor observe = [&](NativeSlot& slot) {
