@@ -208,8 +208,8 @@ GC_OTHER_VM_TEST(YoungConc, RemovingExportRootPublishesPreviousValue)
     MutatorManager manager;
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
-    MarkPublicationFixture mark;
     fx.region1->reset(PageAge::eden);
+    MarkPublicationFixture mark;
     const U64 handle = Heap::GetHeap().RegisterExportRoot(fx.obj1);
     RelocationReceiptTest::FlipYoungMarkForNativeBarrier(mark.collector);
     Heap::GetHeap().RemoveExportObject(handle);
@@ -287,9 +287,9 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     MutatorManager manager;
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::old);
+    MarkPublicationFixture markFixture;
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     BaseObject* incoming = nullptr;
@@ -313,9 +313,9 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     MutatorManager manager;
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
+    MarkPublicationFixture markFixture;
     BaseObject* incoming = fx.PlaceObject(fx.heapStart + ZGranuleSize + 128);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     // ZBarrier::store_barrier_on_heap_oop_field reads prev before the store
@@ -370,8 +370,8 @@ GC_TEST(YoungConc, StackScanIsRequired)
 GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
 {
     GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::eden);
+    MarkPublicationFixture markFixture;
     GC_EXPECT_EQ(markFixture.YoungPending(), 0u);
     Heap::GetHeap().MarkYoungObjectIfActive(fx.obj0);
     GC_EXPECT_EQ(markFixture.YoungPending(), 1u);
@@ -386,9 +386,9 @@ GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
 GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
 {
     GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
+    MarkPublicationFixture markFixture;
     RememberedSet remembered;
     remembered.Initialize(fx.heapStart, 2 * ZGranuleSize);
     StoreBarrierBuffer buffer;
