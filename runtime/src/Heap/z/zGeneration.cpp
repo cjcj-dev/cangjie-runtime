@@ -549,6 +549,11 @@ bool ZGenerationYoung::mark_end()
     WorkStack& workStack = youngWorkStack;
     const bool markEndSucceeded = ZMark::TryEndYoungMark(workStack, &youngConcWindow);
     if (markEndSucceeded) {
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (ZGeneration::testYoungMarkCompleted) {
+            ZGeneration::testYoungMarkCompleted();
+        }
+#endif
         Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
         // zGeneration.cpp:906-911: mark-end sample.
         statHeap.AtMarkEnd(
@@ -1107,6 +1112,9 @@ void ZGenerationOld::concurrent_mark()
     {
         ZStatTimerOld zstatTimer(PTraceLiveObjectsUpdateOldPointersInRefFields);
         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (ZGeneration::testOldMarkStarted) ZGeneration::testOldMarkStarted();
+#endif
         Mark().MarkFollow(false);
         ZBreakpoint::AtBeforeMarkingCompleted();
         if (ZAbort::should_abort()) {
@@ -1673,4 +1681,8 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
 
 
 namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+std::function<void()> ZGeneration::testOldMarkStarted;
+std::function<void()> ZGeneration::testYoungMarkCompleted;
+#endif
 }

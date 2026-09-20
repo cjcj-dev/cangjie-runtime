@@ -511,7 +511,9 @@ bool ZMark::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowSt
     if (!ended) {
         return false;
     }
-
+#if defined(MRT_TESTABLE_INTERNALS)
+    ObserveMarkClosureForTest(nullptr);
+#endif
     return true;
 }
 

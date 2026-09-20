@@ -6,6 +6,7 @@
 
 #pragma once
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <memory>
 #include <unordered_map>
@@ -59,6 +60,10 @@ public:
     ZGenerationId id() const;
     void PreGarbageCollection(bool isConcurrent, uint64_t gcIndex);
     void PostGarbageCollection(uint64_t gcIndex);
+#if defined(MRT_TESTABLE_INTERNALS)
+    static std::function<void()> testOldMarkStarted;
+    static std::function<void()> testYoungMarkCompleted;
+#endif
     ZGenerationIdOptional id_optional() const;
     bool is_young() const;
     bool is_old() const;
