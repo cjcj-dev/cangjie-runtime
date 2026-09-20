@@ -180,7 +180,7 @@ bool RunYoungRuntimeProductEntry()
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = space.GetRegionManager();
 
-    ZRelocateQueue& queue = generation_relocate_queue(Generation::Old);
+    ZRelocateQueue& queue = generation_relocate_queue(Generation::Young);
 
     Heap& collector = Heap::GetHeap();
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -345,15 +345,21 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
         (void)queue.Wait(request.forwarding);
         answer.store(owner->find(from), std::memory_order_release);
     });
-    ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
-    std::thread worker([&] { task.work(); });
-    while (queue.SynchronizedWorkerCount() != 1) std::this_thread::yield();
-    const bool pending = !owner->is_done() && answer.load(std::memory_order_acquire) == 0;
-    owner->release_page();
-    owner->mark_done();
-    (void)queue.Complete(owner);
-    const bool closed = queue.SynchronizePoll().workersDone;
-    worker.join(); waiter.join();
+    bool pending = false;
+    {
+        ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
+        std::thread worker([&] { task.work(); });
+        // ZGC zRelocate.cpp:1211: an ordinary worker leaves when its iterator
+        // is exhausted; task destruction deactivates after all work joins.
+        worker.join();
+        pending = !owner->is_done() && answer.load(std::memory_order_acquire) == 0;
+        owner->release_page();
+        owner->mark_done();
+        (void)queue.Complete(owner);
+        queue.leave(); // the externally claimed page's participant completes
+        waiter.join();
+    }
+    const bool closed = !queue.IsActive() && queue.PendingCount() == 0;
     GC_EXPECT_TRUE(pending);
     GC_EXPECT_TRUE(closed);
     GC_EXPECT_EQ(answer.load(), to);

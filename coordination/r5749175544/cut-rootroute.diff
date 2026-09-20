@@ -1,0 +1,19 @@
+diff --git a/runtime/src/Heap/z/zCrossVM.cpp b/runtime/src/Heap/z/zCrossVM.cpp
+index dbc112543..3a8b13994 100644
+--- a/runtime/src/Heap/z/zCrossVM.cpp
++++ b/runtime/src/Heap/z/zCrossVM.cpp
+@@ -387,10 +387,10 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(BaseObject* value, const void* own
+         Heap::page(reinterpret_cast<MAddress>(value)));
+     BaseObject* current = value;
+     if (forwarding) {
+-        // ZGC zGeneration.inline.hpp:131-140 / zRelocate.cpp:382-415:
+-        // stored roots use the same forwarding consumer as load barriers.
+-        current = ZGeneration::generation((forwarding->from_age() == PageAge::old ? ZGenerationId::old : ZGenerationId::young))
+-            ->relocate_or_remap_object(value, provenance);
++        const MAddress target = forwarding->find(reinterpret_cast<MAddress>(value));
++        current = target != 0 ? reinterpret_cast<BaseObject*>(target)
++            : ZRelocate::ResolveStoreValue(value, provenance,
++                forwarding->from_age() == PageAge::old ? Generation::Old : Generation::Young);
+     }
+     CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
+                  "value root resolve requires a heap to-address from=%p current=%p", value, current);
