@@ -3,7 +3,12 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
+#include "Heap/z/zRemembered.hpp"
 #include "gc_unittest.hpp"
+
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -119,4 +124,25 @@ GC_TEST(RememberedLifecycle720, HeapPublicationReachesConstructedRemembered)
     std::fprintf(stderr, "REMEMBERED720 heap_publication_found=%d\n", found);
     GC_EXPECT_TRUE(found);
     Heap::page_table().remove(&page);
+}
+
+GC_TEST(RememberedLifecycle720, UnboundConstructionAbortsRegisterFoundOld)
+{
+    Heap::GetHeap();
+    const size_t last = ZAddressOffsetMax - ZGranuleSize;
+    ZPage page(ZPageType::large, PageAge::old,
+               ZVirtualMemory(static_cast<zoffset>(last), ZGranuleSize));
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        ZRemembered unbound(nullptr, &Heap::GetHeap().old().forwarding_table(),
+                            &Heap::GetHeap().page_allocator());
+        unbound.register_found_old(&page);
+        std::_Exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_TRUE(waitpid(child, &status, 0) == child);
+    std::fprintf(stderr, "REMEMBERED720 unbound_signaled=%d sig=%d\n",
+                 WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
