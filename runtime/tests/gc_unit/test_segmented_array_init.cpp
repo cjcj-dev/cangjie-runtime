@@ -661,7 +661,7 @@ GC_RUNTIME_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
 }
 #endif
 
-GC_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
+GC_RUNTIME_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunNativeTaskRootCase, 0), 0);
 }
