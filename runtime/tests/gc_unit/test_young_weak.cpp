@@ -825,7 +825,6 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false, bool old
     bool driverCompleted = false;
     if (fullDriver) {
         // Pin the fixture objects while the real driver completes relocation.
-        if (secondRoot != nullptr) (void)secondRoot);
         ZCrossVM::testExportOwnershipResult = [&](const ExportOwnershipTestObservation& observed) {
             const auto paired = [&](const std::vector<ExportOwnershipTestObservation::Edge>& edges) {
                 return edges.size() == owners &&
