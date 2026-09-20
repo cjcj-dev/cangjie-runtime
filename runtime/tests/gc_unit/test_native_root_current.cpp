@@ -83,10 +83,6 @@ public:
         while (!old.pause_mark_end()) old.concurrent_mark_continue();
         old.process_non_strong_references();
     }
-    static void RunOldRoots(Heap& collector)
-    {
-        ZMark::EnumAllCommonRoots(*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers());
-    }
     static size_t PendingYoungRootWork(Heap& collector)
     {
         return ThreadLocal::GetMarkStacks(*Heap::GetHeap().young().MarkPtr()).Population();
@@ -474,8 +470,8 @@ void CheckRootStorageSegments(unsigned family)
     RelocationReceiptTest::BindNativeRootFixture(collector, 2);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    fixture.region0->reset(family != 0 ? PageAge::eden : PageAge::old);
-    auto& finalizers = Heap::GetHeap().GetFinalizerProcessor();
+    fixture.region0->reset(PageAge::eden);
+    auto& finalizers = heap.GetFinalizerProcessor();
     // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
     constexpr size_t count = 24 * sizeof(uintptr_t) * CHAR_BIT;
     for (size_t i = 0; i < count; ++i) {
@@ -483,36 +479,38 @@ void CheckRootStorageSegments(unsigned family)
         else if (family == 1) { finalizers.RegisterFinalizer(fixture.obj0); }
         else { (void)heap.RegisterExportRoot(fixture.obj0); }
     }
-    std::unordered_map<NativeSlot*, size_t> visits;
-    const NativeSlotVisitor remember = [&](NativeSlot& slot) { visits.emplace(&slot, 0); };
+    std::unordered_map<NativeSlot*, uintptr_t> before;
+    const NativeSlotVisitor remember = [&](NativeSlot& slot) {
+        before.emplace(&slot, raw(slot.GetFieldValue()));
+    };
     if (family == 0) { finalizers.VisitGCRoots(remember); }
     else if (family == 1) { finalizers.VisitFinalizers(remember); }
     else { heap.VisitAllExportRoots(remember); }
-    if (family == 0) {
-        RelocationReceiptTest::RunOldRoots(collector);
-        RelocationReceiptTest::NativeRootTrace(collector);
-    } else {
-        RelocationReceiptTest::NativeRootMajorPrelude(collector);
-    }
-    bool valuesValid = true;
+    // ZGC zMark.cpp:877: the young root task consumes ALL colored root
+    // storages. Its barrier recolors each slot after mark-start flips the
+    // young mark bit. Read the stored word directly; an oop load would heal
+    // it and hide a skipped task. Allocation-page implicit liveness cannot
+    // satisfy this per-slot transition.
+    RelocationReceiptTest::NativeRootMajorPrelude(collector);
     size_t remaining = 0;
+    size_t transitioned = 0;
+    bool valuesValid = true;
     const NativeSlotVisitor observe = [&](NativeSlot& slot) {
-        auto it = visits.find(&slot);
-        if (it == visits.end()) { return; }
-        ++it->second;
+        const auto it = before.find(&slot);
+        if (it == before.end()) { return; }
         ++remaining;
-        valuesValid &= to_object(slot.GetTargetObject()) == fixture.obj0;
+        const zpointer value = slot.GetFieldValue();
+        transitioned += raw(value) != it->second && ZPointer::is_marked_young(value);
+        valuesValid &= to_object(ZPointer::uncolor(value)) == fixture.obj0;
     };
     if (family == 0) { finalizers.VisitGCRoots(observe); }
     else if (family == 1) { finalizers.VisitFinalizers(observe); }
     else { heap.VisitAllExportRoots(observe); }
-    bool exactlyOnce = visits.size() == count && remaining == count;
-    for (const auto& entry : visits) { exactlyOnce &= entry.second == 1; }
-    const bool marked = fixture.region0->is_object_live(from_object(fixture.obj0));
+    const bool covered = before.size() == count && remaining == count;
     std::fprintf(stderr,
-        "ROOT_SEGMENT_TARGET executed=1 family=%u slots=%zu remaining=%zu exactly_once=%u values_valid=%u marked=%u\n",
-        family, visits.size(), remaining, unsigned(exactlyOnce), unsigned(valuesValid), unsigned(marked));
-    GC_EXPECT_TRUE(exactlyOnce && valuesValid && (family == 0 || marked));
+        "ROOT_SEGMENT_TARGET executed=1 family=%u slots=%zu remaining=%zu transitioned=%zu values_valid=%u\n",
+        family, before.size(), remaining, transitioned, unsigned(valuesValid));
+    GC_EXPECT_TRUE(covered && valuesValid && transitioned == count);
 }
 }
 GC_OTHER_VM_TEST(RootStorageSegments, Strong) { CheckRootStorageSegments(0); }
