@@ -429,7 +429,7 @@ struct FutureImpl {
 static void* UserFuncExecutor(void* arg, [[maybe_unused]] unsigned int len)
 {
     auto lwtData = static_cast<MapleRuntime::LWTData*>(arg);
-    auto fi = static_cast<FutureImpl*>(lwtData->obj);
+    auto fi = static_cast<FutureImpl*>(lwtData->nativeContext);
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
     // mutator has been set to a valid pointer before.
     MapleRuntime::Mutator* mutator = reinterpret_cast<MapleRuntime::ThreadLocalData*>(threadData)->mutator;
@@ -540,10 +540,8 @@ CJThreadHandle RunCJTaskImpl(const CJTaskFunc func, void* args, int num = 0, CJT
         }
     }
 
-    MapleRuntime::LWTData lwtData;
-    lwtData.execute = nullptr;
-    lwtData.threadObject = nullptr;
-    lwtData.obj = fi;
+    MapleRuntime::LWTData lwtData {};
+    lwtData.nativeContext = fi;
     CJThreadHandle handle = CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr), UserFuncExecutor,
                                                   &lwtData, sizeof(lwtData), createSource);
     if (handle == nullptr) {
