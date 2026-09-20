@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp
+index 61f1c59ad..b2ce0920f 100644
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -1065,7 +1065,7 @@ void ZGenerationOld::concurrent_mark()
+     {
+         ZStatTimerOld zstatTimer(PTraceLiveObjectsUpdateOldPointersInRefFields);
+         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
+-        Mark().MarkFollow(false);
++        // Controlled cut: consumer disconnected.
+         ZBreakpoint::AtBeforeMarkingCompleted();
+         if (ZAbort::should_abort()) {
+             return;
