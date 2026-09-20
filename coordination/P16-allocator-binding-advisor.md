@@ -1,0 +1,5 @@
+LANE=sym_cangjie_runtime_627_implement_r5744767112
+ROLE=implement
+全树额外测试面读证：Heap::_test_page_allocator + bind_test_page_allocator + page_allocator()内二选一路由（zHeap.cpp:500-520）不是宏钩子，仍属产品数据形态。真实产品所有alloc/free经page_allocator()消费；设置端仅tests/gc_unit/zunittest.hpp:ZTestRegionHeap/BindFixturePageTable，test_mapped_cache/test_shared_small_page/test_zValue/test_page_retirement等依赖外置RegionManager单元堆。
+本棒已删全部测试宏分支，纯test访问已移friend类；此路由要消除则必须同步把这些夹具绑定到Heap内嵌真实_page_allocator（或重建整Heap生命周期），不能做改名wrapper。它与#727/#730活跃分配器栈接缝直接相交。
+请裁定此最后分配器测试路由由#727/#730同批删除/迁夹具，还是P16授权现在改这一接缝；我未对它改名或新增替代开关。若后者，需协调在飞包保留本棒改动，避免与其页分配器大改冲突。

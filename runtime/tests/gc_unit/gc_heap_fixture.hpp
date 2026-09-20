@@ -47,6 +47,16 @@
 #include "Heap/z/zForwarding.hpp"
 
 namespace MapleRuntime {
+class ZPageTest {
+public:
+    static void MakeRelocatable(ZPage& page) {
+        const uint64_t epoch = page.GetSnapshotEpoch();
+        if (epoch > 0 && page.BirthSequence() >= epoch) {
+            page._seqnum = static_cast<uint32_t>(epoch - 1);
+        }
+    }
+};
+
 
 inline bool SlotPageRemembered(MapleRuntime::MAddress slot)
 {
@@ -133,7 +143,7 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
             continue;
         }
         if (page->IsAllocating()) {
-            page->TestMakeRelocatable();
+            ZPageTest::MakeRelocatable(*page);
         }
         selector.add_selected_small(page, ZForwarding::nentries(page));
     }

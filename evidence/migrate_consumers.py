@@ -65,5 +65,5 @@ a=s.index('    RefFieldValue fieldVal;')+len('    RefFieldValue fieldVal;');b=s.
 p=Path('runtime/src/Heap/WCollector/WCollector.h');s=p.read_text();a=s.index('    RefField<> ColourStoreGood(');b=s.index('    // Produce the load-bad',a);s=s[:a]+s[b:];s=calls(s,r'(?<!\w)ColourStoreGood\(',lambda m,a:'RefField<>(ZAddress::store_good('+a[0]+'))');p.write_text(s)
 p=Path('runtime/src/Heap/z/zRelocate.cpp');s=p.read_text();s=calls(s,r'(?<!\w)ColourStoreGood\(',lambda m,a:'RefField<>(ZAddress::store_good('+a[0]+'))');p.write_text(s)
 # Uncolor adapters are migrated to the appropriate ZPointer variant at each existing call.
-for name in ['runtime/src/Inspector/CjHeapData.cpp','runtime/src/Mutator/Mutator.cpp','runtime/src/Heap/Allocator/SlotList.h']:
+for name in ['runtime/src/Inspector/CjHeapData.cpp','runtime/src/Mutator/Mutator.cpp','runtime/src/Heap/z/SlotList.h']:
  p=Path(name);s=p.read_text();s=calls(s,r'uncolor_bits\(',lambda m,a:'ZPointer::uncolor_unsafe('+a[0]+')');p.write_text(s)

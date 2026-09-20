@@ -44,16 +44,8 @@
 #include "Heap/z/zRelocate.hpp"
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-std::function<void(const ExportOwnershipTestObservation&)> ZCrossVM::testExportOwnershipResult;
-#endif
 static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");
-std::atomic<size_t> g_forwardRaceTotalCount{ 0 };
-std::atomic<size_t> g_forwardRaceStillBadCount{ 0 };
 
-void ReportForwardRaceCounts()
-{
-}
 
 
 
@@ -95,17 +87,12 @@ private:
 
 CrossRefHandler ZCrossVM::GetCrossRefHandler(BaseObject *foreignProxy)
 {
-#if defined(MRT_GC_UNIT_TESTS)
-    if (cycleRefHandlerForTest != nullptr) {
-        return cycleRefHandlerForTest;
-    }
-#endif
     return static_cast<CJForeignProxy*>(foreignProxy)->GetCJInteropContext()->GetCJFunc()->GetHandler();
 }
 
 void ZCrossVM::ResolveCycleRef()
 {
-#if defined (__OHOS__) || defined(MRT_GC_UNIT_TESTS)
+#if defined (__OHOS__)
     // Leave saferegion before acquiring either owner. The resolver owner is not
     // used by GC; it preserves the former single-resolver property while the
     // root-carrier owner is released around every managed callback.
@@ -187,19 +174,7 @@ void ZCrossVM::ResolveCycleRef()
             // the callback runs. cycleResolverMtx alone prevents duplicate
             // resolver delivery and is never acquired by a GC consumer.
             cycleLock.unlock();
-#if defined(MRT_GC_UNIT_TESTS)
-            // The minimal gc_unit process has no scheduler-owned CJThread for
-            // the assembly N2C adapter. The injected handler still runs from
-            // this product call site and enters the real HandleSafepoint path;
-            // production always takes the adapter below.
-            if (cycleRefHandlerForTest != nullptr) {
-                resolveHook(exportObj, externObj);
-            } else {
-                ResolveCycleRefStub(resolveHook, exportObj, externObj, &returnUnit);
-            }
-#else
             ResolveCycleRefStub(resolveHook, exportObj, externObj, &returnUnit);
-#endif
             cycleLock.lock();
 
             // The callback was delivered while the full entry stayed in the
@@ -242,7 +217,6 @@ ForwardingStage ValueRoot::Stage() const
     const uintptr_t mask = generation == Generation::Young ? ZPointerRemappedYoungMask : ZPointerRemappedOldMask;
     return (ZPointer::remap_bits(color) & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
 }
-extern thread_local const char* gMinorRootOrigin;
 
 void ZCrossVM::ResurrectExportObject(BaseObject* obj)
     {
@@ -291,25 +265,21 @@ void ZCrossVM::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visi
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
         CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Young);
         CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Young);
-        gMinorRootOrigin = "value_export";
         for (BaseObject* object : resurrectedExportObjectes) {
             visitor(object);
         }
-        gMinorRootOrigin = "value_export_fwd";
         for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
             visitor(object);
         }
     }
     std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
     CurrentizeValueRootMap(cycleRefWorkStack, Generation::Young);
-    gMinorRootOrigin = "value_cycle";
     for (const auto& entry : cycleRefWorkStack) {
         visitor(entry.first);
         for (BaseObject* object : entry.second) {
             visitor(object);
         }
     }
-    gMinorRootOrigin = "unknown";
 }
 
 void ZCrossVM::FindUselessExternObjects()
@@ -468,35 +438,5 @@ void ZCrossVM::PreforwardAllResurrectExportFromObjects(Generation generation)
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-void ZCrossVM::ObserveExportOwnershipForTest(bool afterHandoff)
-{
-    if (!testExportOwnershipResult) {
-        return;
-    }
-    ExportOwnershipTestObservation observation;
-    observation.afterHandoff = afterHandoff;
-    {
-        std::lock_guard<std::mutex> lock(externMtx);
-        observation.discoveredOwners = discoveredExternObjects.size();
-        for (const auto& owner : discoveredExternObjects) {
-            for (const auto& value : owner.second) {
-                observation.discovered.emplace_back(owner.first, value);
-            }
-        }
-    }
-    {
-        std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
-        observation.handoffOwners = cycleRefWorkStack.size();
-        for (const auto& owner : cycleRefWorkStack) {
-            for (const auto& value : owner.second) {
-                observation.handoff.emplace_back(owner.first, value);
-            }
-        }
-    }
-    // No references to mutable product carriers escape this observation.
-    testExportOwnershipResult(observation);
-}
-#endif
 
 }

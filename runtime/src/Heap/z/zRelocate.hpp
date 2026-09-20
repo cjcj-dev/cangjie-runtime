@@ -88,10 +88,6 @@ public:
     size_t SynchronizedWorkerCount() const;
     uint64_t CompletionCount() const { return completionCount.load(std::memory_order_relaxed); }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-    using WaitEnterHook = void (*)(ZForwarding* forwarding);
-    static void SetWaitEnterHook(WaitEnterHook hook);
-#endif
 
 private:
     bool needs_attention() const;
@@ -164,6 +160,7 @@ public:
     static bool IsAlreadyToStoreValue(BaseObject* target, Generation generation);
     static FindToVersionResult FindToVersion(BaseObject* obj, Generation generation);
     explicit ZRelocate(ZGeneration* generation) : generation(generation) {}
+    BaseObject* forward_object(ZForwarding* forwarding, BaseObject* object);
     BaseObject* relocate_object(ZForwarding* forwarding, BaseObject* object,
                                 const ForwardingProvenance& provenance);
     ZRelocateQueue* queue() { return &relocateQueue; }
@@ -173,10 +170,6 @@ public:
     static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
                                        const ZArray<ZPage*>* relocatePromoted);
 private:
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct RelocationReceiptTestAccess;
-    friend struct MutatorPublishTestAccess;
-#endif
     BaseObject* relocate_object_inner(BaseObject* obj, ZPage* copyPage);
     static void UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
     BaseObject* TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease);

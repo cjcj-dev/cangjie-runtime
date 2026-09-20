@@ -61,6 +61,12 @@ public:
     void do_oop(RefField<>* field) override { _function(*field); }
 };
 
+class OopFieldClosure {
+public:
+    virtual ~OopFieldClosure() = default;
+    virtual void do_field(BaseObject* base, const void* slot, uintptr_t value) = 0;
+};
+
 class ObjectClosure {
 public:
     virtual ~ObjectClosure() = default;

@@ -213,14 +213,6 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());
     // Managed-entry setup may block on sync/STW, so do not hold the mutator
     // management lock across it.
-#if defined(MRT_TESTABLE_INTERNALS)
-    // The lifecycle contract tests run without a scheduler-owned managed frame.
-    // Stop after the real registration/born-clean path; product builds do not
-    // contain this branch and all normal runtime mutators still enter managed code.
-    if (std::getenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY") != nullptr) {
-        return mutator;
-    }
-#endif
     MRT_PreRunManagedCode(mutator, 2, threadData); // 2 layers
     // only running mutator can enter saferegion.
     return mutator;
@@ -266,13 +258,6 @@ bool MutatorManager::ConcurrentStackScanEnabled()
     return true;
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-size_t MutatorManager::RuntimeMutatorRegistrySizeForTest()
-{
-    std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
-    return runtimeMutators.size();
-}
-#endif
 
 void MutatorManager::AcquireMutatorManagementWLock()
 {
@@ -363,13 +348,6 @@ void MutatorManager::VisitStoreBarrierBuffers(const std::function<void(MAddress)
             visitor(buf->buffer[i].p);
         }
     });
-}
-
-bool MutatorManager::StoreBarrierBufferContains(MAddress slot)
-{
-    bool found = false;
-    VisitStoreBarrierBuffers([&](MAddress p) { found = found || p == slot; });
-    return found;
 }
 
 HandshakeState* MutatorManager::HandshakeStateForTls(ThreadLocalData* tls)

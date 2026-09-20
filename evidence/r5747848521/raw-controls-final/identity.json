@@ -1,0 +1,31 @@
+{
+  "elf": "/root/sym_cangjie_runtime_627_implement_r5747848521/raw-v6/cj_gc_forwarding_publication_unit",
+  "elf_sha256": "ab53aee91ca12a36aa2da3560b98059282508ac7e3a289e3b8cedd12d9cd3df9",
+  "arms": {
+    "green": {
+      "libcangjie-trace.so": "5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "libcangjie-runtime.so": "c02a1a2bc511597cc532fd83cf7a497dec45acbb9e86318cfcfeadfba5052010"
+    },
+    "producer": {
+      "libcangjie-trace.so": "5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "libcangjie-runtime.so": "a01e7a75f0a75995f5886724d275c88a968faeef180cf0857d47c2d31b23cb9d"
+    },
+    "consumer": {
+      "libcangjie-trace.so": "5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "libcangjie-runtime.so": "c8c54f0fc37808ac8d568045357e7d0063c4f6ecaef6255e00510e2e2d06a216"
+    },
+    "nextscan": {
+      "libcangjie-trace.so": "5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "libcangjie-runtime.so": "b8ddc7757656c3e1ce8e2ec202dcbccb1e7a0458a411ef407f9bedbc7aed33c0"
+    },
+    "restored": {
+      "libcangjie-trace.so": "5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883",
+      "libcangjie-runtime.so": "c02a1a2bc511597cc532fd83cf7a497dec45acbb9e86318cfcfeadfba5052010"
+    }
+  }
+}

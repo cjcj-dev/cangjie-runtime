@@ -14,8 +14,8 @@ $ git grep -n -F MarkGoodHeapGate c93c0b9d95252f3c7d6fc5053c4435aea7fdc7d3 -- ru
 rc=1
 
 $ git grep -n -F PlausibleManagedObjectGate 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src
-78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Allocator/SlotList.h:43:        if (!PlausibleManagedObjectGate("SlotList::ClearExtraContent", slot)) {
-78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Allocator/SlotList.h:82:        if (!PlausibleManagedObjectGate("SlotList::PopFront", obj) || size != obj->GetSize()) {
+78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/SlotList.h:43:        if (!PlausibleManagedObjectGate("SlotList::ClearExtraContent", slot)) {
+78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/SlotList.h:82:        if (!PlausibleManagedObjectGate("SlotList::PopFront", obj) || size != obj->GetSize()) {
 78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:249:bool PlausibleManagedObjectGate(const char*, BaseObject* obj)
 78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:276:bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
 78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:278:    return MapleRuntime::PlausibleManagedObjectGate(site, obj);
@@ -122,7 +122,7 @@ $ git grep -n -F TryRecoverInteriorBase c93c0b9d95252f3c7d6fc5053c4435aea7fdc7d3
 rc=1
 
 $ git grep -n -F ManagedObjectGate.h 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src
-78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Allocator/SlotList.h:12:#include "Heap/Collector/ManagedObjectGate.h"
+78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/SlotList.h:12:#include "Heap/Collector/ManagedObjectGate.h"
 78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:25:#include "Heap/Collector/ManagedObjectGate.h"
 78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zCollectedHeap.cpp:25:#include "Heap/Collector/ManagedObjectGate.h"
 78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zGeneration.cpp:896:#include "Heap/Collector/ManagedObjectGate.h"

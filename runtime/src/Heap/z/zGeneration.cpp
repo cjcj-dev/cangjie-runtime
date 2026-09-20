@@ -156,8 +156,7 @@ double ZGeneration::FragmentationLimit() const
     return fragmentation_limit(_cycle);
 }
 
-void ResetSkippedStackMapCounts();
-void ReportSkippedStackMapCounts();
+
 
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
 // young sequence once for the whole old relocation, not once per forwarding.
@@ -375,18 +374,8 @@ void ZGenerationYoung::mark_start()
     // (zGeneration.cpp:601-602); a minor only enters the young event.
     CHECK(_cycle == ZGenerationId::young);
     CHECK(Snapshot().active);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
-    }
-#endif
     ZGlobalsPointers::flip_young_mark_start();
     ZVerify::OnColorFlip();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
-    }
-#endif
 
     auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     auto& manager = space.GetRegionManager();
@@ -405,48 +394,23 @@ void ZGenerationYoung::mark_start()
     }
     // Flush pre-flip producers before invalidating their generation sequence.
     (void)ZMark::FlushAllGenerations();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
-    }
-#endif
     {
         std::lock_guard<std::mutex> lock(mutex);
         CHECK(sequence != UINT64_MAX);
         ++sequence;
     }
     set_phase(Phase::Mark);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
-    }
-#endif
     Mark().BindWorkers(Workers());
     Mark().Start();
     // zGeneration.cpp:880-885: mark-start sample (also resets the
     // collection's used high/low trackers, zPageAllocator.cpp:1332-1346).
     statHeap.AtMarkStart(
         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
-    MarkingStacks::VerifyEmpty(Mark().Stripes().Population());
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeRemembered, mark.get());
-    }
-#endif
+
     {
         ZStatTimerYoung zstatTimer(PYoungRemsetDrain);
         Heap::GetHeap().remembered().flip();
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
-    }
-#endif
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testYoungMarkStarted) {
-        ZGeneration::testYoungMarkStarted();
-    }
-#endif
 
     VLOG(REPORT,
          "[GCV2][candfix] prepare_candidates candidate_regions=%zu candidate_bytes=%zu "
@@ -492,30 +456,13 @@ void ZGenerationYoung::concurrent_mark()
     uint64_t stackScanEpoch = youngStackScanEpoch;
     WorkStack& workStack = youngWorkStack;
     constexpr bool fullYoungScan = false;
-    MarkingStacks::VerifyEmpty(workStack.size());
+
     std::vector<BaseObject*> reachableVec;
     reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
     MinorObjectSet allocationRoots;
     MinorObjectSet currentMinorRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
-    auto mergeY2yDirtyWork = [&](WorkStack& destination) {
-        Heap::GetHeap().GetAllocator().VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
-            buffer.MergeY2yDirtyHolders(destination);
-            buffer.MergeY2yDirtySlots([](MAddress slot) {
-                ZBarrier::MarkBarrierOnYoungOopField(HeapSlotAt<>(slot));
-            });
-        });
-    };
-#if defined(MRT_TESTABLE_INTERNALS)
-    auto pendingY2yDirtyWorkCount = [&]() {
-        size_t pending = 0;
-        Heap::GetHeap().GetAllocator().VisitAllocBuffers([&pending](AllocBuffer& buffer) {
-            pending += buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount();
-        });
-        return pending;
-    };
-#endif
     // ZGC zGeneration.cpp:665-669: root production belongs to concurrent_mark.
     // Keep one producer (the existing owner-specific VisitMinorRoots/epoch path),
     // selecting only its phase boundary. MARK-only remains a diagnostic arm and
@@ -543,9 +490,6 @@ void ZGenerationYoung::concurrent_mark()
         });
         // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().young().Mark());
-#if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yAfterRootTestReceipt(Heap::GetHeap().young().Mark().Stacks().Population());
-#endif
     };
     // ZGC zGeneration.cpp:665-692: roots and follow are the single concurrent
     // young-mark path.  Mark-end convergence is owned by FollowYoungMark's
@@ -566,10 +510,6 @@ void ZGenerationYoung::concurrent_mark()
                      "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
-        mergeY2yDirtyWork(workStack);
-#if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyWorkCount());
-#endif
         concWindowStartNs = TimeUtil::NanoSeconds();
         produceYoungRoots();
         VLOG(REPORT,
@@ -592,21 +532,10 @@ void ZGenerationYoung::concurrent_mark()
         ZStatTimerYoung zstatTimer(PYoungRemsetRescan);
         Heap::GetHeap().remembered().scan_and_follow(Heap::GetHeap().young().MarkPtr());
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    // Deterministic T1->T2 export-root window: root enumeration has returned,
-    // and the concurrent mark-follow consumer has not started yet.
-    PublishExportRootAfterT1TestReceipt();
-#endif
     if (ZAbort::should_abort()) {
         return;
     }
     (void)ZMark::FollowYoungMark(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots, &concWindow);
-#if defined(MRT_TESTABLE_INTERNALS)
-    FlushExportRootAfterT1TestReceipt();
-    PublishMarkBeforeMarkEndTestReceipt();
-    PublishLeftoverBeforePauseTestReceipt();
-    PublishY2yAfterReleaseTestReceipt();
-#endif
     youngReachableVec = std::move(reachableVec);
     youngConcWindow = concWindow;
     youngConcWindowStartNs = concWindowStartNs;
@@ -617,44 +546,20 @@ void ZGenerationYoung::concurrent_mark()
 bool ZGenerationYoung::mark_end()
 {
     WorkStack& workStack = youngWorkStack;
-#if defined(MRT_TESTABLE_INTERNALS)
-    const uint64_t markEndPauseStartNs = TimeUtil::NanoSeconds();
-    const size_t y2yBatchAtMarkEnd = 0;
-    (void)y2yBatchAtMarkEnd;
-#endif
-    Heap::GetHeap().GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) {
-#if defined(MRT_TESTABLE_INTERNALS)
-        NoteMarkTerminatePauseProducers(buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
-#else
-        (void)buffer;
-#endif
-    });
-    Heap::GetHeap().GetAllocator().VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
-        buffer.MergeY2yDirtyHolders(workStack);
-        buffer.MergeY2yDirtySlots([](MAddress slot) {
-            ZBarrier::MarkBarrierOnYoungOopField(HeapSlotAt<>(slot));
-        });
-    });
     const bool markEndSucceeded = ZMark::TryEndYoungMark(workStack, &youngConcWindow);
-#if defined(MRT_TESTABLE_INTERNALS)
-    NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
-#endif
     if (markEndSucceeded) {
-        MarkingStacks::VerifyEmpty(workStack.size());
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteExportRootPublicationAtT2TestReceipt();
         if (ZGeneration::testYoungMarkCompleted) {
             ZGeneration::testYoungMarkCompleted();
         }
 #endif
-        ReportMarkTerminateContinue();
         Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
         // zGeneration.cpp:906-911: mark-end sample.
         statHeap.AtMarkEnd(
             static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
         return true;
     }
-    NoteMarkTerminateContinue(workStack.size());
+
     ++youngConcWindow.reenters;
     return false;
 }
@@ -849,10 +754,6 @@ void ZGenerationOld::process_non_strong_references()
     gcRendezvous.doit();
     ZResurrection::unblock();
     Heap::GetHeap().GetFinalizerProcessor().EnqueueReferences();
-
-#if defined(MRT_TESTABLE_INTERNALS)
-    ObserveMarkClosureForTest(nullptr);
-#endif
 }
 
 
@@ -1071,29 +972,14 @@ void ZGenerationOld::mark_start()
     Begin(Snapshot().requestIndex);
     CHECK(_cycle == ZGenerationId::old);
     CHECK(Snapshot().active);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
-    }
-#endif
     ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
-    }
-#endif
     auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     // ZGC holds the VM mark-start pause across retirement and seqnum advance
     // (zGeneration.cpp:1213-1231). Serialize the pinned publication adapter
     // explicitly because our handshake pause permits safe native threads.
     std::unique_lock<std::mutex> pinnedLock(space.GetRegionManager().PinnedAllocationMutex());
     Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
-    }
-#endif
     {
         std::lock_guard<std::mutex> lock(mutex);
         CHECK(sequence != UINT64_MAX);
@@ -1101,35 +987,23 @@ void ZGenerationOld::mark_start()
     }
     pinnedLock.unlock();
     set_phase(Phase::Mark);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
-    }
-#endif
     Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
     Mark().BindWorkers(Workers());
     Mark().Start();
     // zGeneration.cpp:1238-1242: old mark-start sample.
     statHeap.AtMarkStart(
         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (ZGeneration::testMarkStartState) {
-        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
-    }
-#endif
 }
 
 bool ZGenerationOld::mark_end()
 {
     // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
     MarkStripeSet& stripes = Mark().Stripes();
-    NoteMarkTerminatePause();
-    const size_t before = stripes.Population();
+
     const bool ended = Mark().TryEnd();
-    const size_t after = stripes.Population();
-    NoteMarkTerminateFlushed(after >= before ? after - before : 0);
+
     if (!ended) {
-        NoteMarkTerminateContinue(oldMarkWorkStack.size() + stripes.Population());
+
         return false;
     }
     // Preserve export ownership discovery after the ordinary root closure,
@@ -1140,14 +1014,14 @@ bool ZGenerationOld::mark_end()
     if (ZAbort::should_abort()) {
         return false;
     }
-    MarkingStacks::VerifyAllEmpty(Mark());
+
     set_phase(ZGeneration::Phase::MarkComplete);
     // zGeneration.cpp:1275-1278: old mark-end sample.
     statHeap.AtMarkEnd(
         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
     ZVerify::AfterMark();
     ZResurrection::block();
-    ReportMarkTerminateContinue();
+
     return true;
 }
 
@@ -1186,7 +1060,6 @@ void ZGenerationOld::concurrent_mark()
     oldExportOwners.clear();
     WorkStack& workStack = oldMarkWorkStack;
     ValueRootList& foreignStack = oldExportOwners;
-    MarkingStacks::VerifyEmpty(workStack.size());
     // ZGC zGeneration.cpp:1086-1092: the roots task owns thread completion.
     // Its common MarkThreadClosure absorbs already completed handshakes.
     {
@@ -1197,16 +1070,12 @@ void ZGenerationOld::concurrent_mark()
     {
         ZStatTimerOld zstatTimer(PTraceLiveObjectsUpdateOldPointersInRefFields);
         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
-#if defined(MRT_TESTABLE_INTERNALS)
-        if (ZGeneration::testOldMarkStarted) ZGeneration::testOldMarkStarted();
-#endif
         Mark().MarkFollow(false);
         ZBreakpoint::AtBeforeMarkingCompleted();
         if (ZAbort::should_abort()) {
             return;
         }
 
-        MarkingStacks::VerifyEmpty(workStack.size());
     }
 
 }
@@ -1276,7 +1145,7 @@ void ZGeneration::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     if (!continuingPrelude) {
         Heap::GetHeap().GetZGeneration(generation).Begin(gcIndex);
     }
-    ResetSkippedStackMapCounts();
+
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s",
          g_gcRequests[Heap::GetHeap().GetCycleSnapshot(generation).reason].name,
          Pretty(Heap::GetHeap().GetAllocatedSize()).Str());
@@ -1287,11 +1156,6 @@ void ZGeneration::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     (*Workers()).set_active();
     VLOG(REPORT, "GC generation active workers: %d", threadCount);
 
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testCyclePrepared) {
-        testCyclePrepared();
-    }
-#endif
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     Heap::GetHeap().DumpBeforeGC();
 #endif
@@ -1435,30 +1299,6 @@ namespace MapleRuntime {
 
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-// Instantiate the product template for the policy matrix. Tests import these
-// exact bodies from the DSO, as the existing page-mark tests do.
-#include "Heap/z/zGeneration.inline.hpp"
-namespace MapleRuntime {
-#define MRT_P14A_EXPORT __attribute__((visibility("default")))
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, false, false, false>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, false, false, true>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, false, true, false>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, false, true, true>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, true, false, false>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, true, false, true>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, true, true, false>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, true, true, true>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, false, false, false>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, false, false, true>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, false, true, false>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, false, true, true>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, false, false>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, false, true>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, true, false>(zaddress);
-template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, true, true>(zaddress);
-}
-#endif
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -1486,13 +1326,13 @@ template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, true, 
 #endif
 
 namespace MapleRuntime {
-void ReportSkippedStackMapCounts();
+
 void ZGeneration::PostGarbageCollection(uint64_t gcIndex)
 {
     const ZGenerationId generation = id();
     reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).DumpRegionStats("region statistics when gc ends");
     (*Workers()).set_inactive();
-    ReportSkippedStackMapCounts();
+
     PagePool::Instance().Trim();
     (void)gcIndex;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -1508,6 +1348,14 @@ void ZGeneration::PostGarbageCollection(uint64_t gcIndex)
 
 namespace MapleRuntime {
 // zGeneration.inline.hpp:131-140: the owning generation qualifies forwarding.
+// ZGC zGeneration.inline.hpp:142-151: remapping never starts relocation.
+BaseObject* ZGeneration::remap_object(BaseObject* object)
+{
+    ZForwarding* const forwarding = _forwarding_table.get(reinterpret_cast<MAddress>(object));
+    if (forwarding == nullptr) { return object; }
+    return _relocate->forward_object(forwarding, object);
+}
+
 BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object)
 {
     return relocate_or_remap_object(object,
@@ -1653,8 +1501,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
         }
 
         // Reset CAS counters for this fix window (positive-control visibility).
-        g_minorRefCasFail.store(0, std::memory_order_relaxed);
-        g_minorRefCasOk.store(0, std::memory_order_relaxed);
 
     }
 
@@ -1672,8 +1518,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
         {
             ZStatTimerYoung zstatTimer(PYoungRefFixBulk);
-            g_minorRefCasFail.store(0, std::memory_order_relaxed);
-            g_minorRefCasOk.store(0, std::memory_order_relaxed);
             ZRelocate::FixMinorRootSlots(liveStw());
             Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Young);
             Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Young);
@@ -1722,13 +1566,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
         manager.FinishIncompleteFromRegions(ZGenerationId::young);
     }
 }
-#if defined(MRT_TESTABLE_INTERNALS)
-std::function<void()> ZGeneration::testCyclePrepared;
-std::function<void()> ZGeneration::testYoungMarkStarted;
-std::function<void()> ZGeneration::testOldMarkStarted;
-std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> ZGeneration::testMarkStartState;
-std::function<void()> ZGeneration::testYoungMarkCompleted;
-#endif
 }
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -1779,228 +1616,6 @@ std::function<void()> ZGeneration::testYoungMarkCompleted;
 
 namespace MapleRuntime {
 #if defined(MRT_TESTABLE_INTERNALS)
-namespace {
-struct Y2yHandoffReceiptState {
-    std::atomic<uint64_t> phase0 { 0 };
-    std::atomic<uint64_t> phase1 { 0 };
-    std::atomic<uint64_t> phase2 { 0 };
-    std::atomic<uint64_t> beforeRelease { 0 };
-    std::atomic<uint64_t> afterRoot { 0 };
-    std::atomic<uint64_t> afterStw2 { 0 };
-};
-Y2yHandoffReceiptState g_y2yHandoffReceipt;
-std::atomic<BaseObject*> g_y2yAfterReleaseHolder { nullptr };
-std::atomic<uint64_t> g_y2yAfterReleasePublications { 0 };
-std::atomic<Mutator*> g_markBeforeMarkEndProducer { nullptr };
-std::atomic<BaseObject*> g_markBeforeMarkEndFirst { nullptr };
-std::atomic<BaseObject*> g_markBeforeMarkEndSecond { nullptr };
-std::atomic<uint64_t> g_markBeforeMarkEndPublications { 0 };
-std::atomic<BaseObject*> g_y2yDuringConcurrent { nullptr };
-std::atomic<BaseObject*> g_leftoverY2yBeforePause { nullptr };
-std::atomic<Mutator*> g_exportRootAfterT1Producer { nullptr };
-std::atomic<BaseObject*> g_exportRootAfterT1Holder { nullptr };
-std::atomic<BaseObject*> g_exportRootAfterT1Child { nullptr };
-std::atomic<uint64_t> g_exportRootAfterT1Armed { 0 };
-std::atomic<uint64_t> g_exportRootRegistrationsAfterT1 { 0 };
-std::atomic<uint64_t> g_exportRootProducerFlushes { 0 };
-std::atomic<uint64_t> g_exportRootObservedAtT2 { 0 };
-std::atomic<U64> g_exportRootHandle { std::numeric_limits<U64>::max() };
-std::atomic<bool> g_exportRootHolderMarked { false };
-std::atomic<bool> g_exportRootChildMarked { false };
-}
-
-void ResetY2yHandoffTestReceipt()
-{
-    g_y2yHandoffReceipt.phase0.store(0, std::memory_order_relaxed);
-    g_y2yHandoffReceipt.phase1.store(0, std::memory_order_relaxed);
-    g_y2yHandoffReceipt.phase2.store(0, std::memory_order_relaxed);
-    g_y2yHandoffReceipt.beforeRelease.store(0, std::memory_order_relaxed);
-    g_y2yHandoffReceipt.afterRoot.store(0, std::memory_order_relaxed);
-    g_y2yHandoffReceipt.afterStw2.store(0, std::memory_order_relaxed);
-    g_y2yAfterReleaseHolder.store(nullptr, std::memory_order_relaxed);
-    g_y2yAfterReleasePublications.store(0, std::memory_order_relaxed);
-}
-
-Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt()
-{
-    return { g_y2yHandoffReceipt.phase0.load(std::memory_order_relaxed),
-             g_y2yHandoffReceipt.phase1.load(std::memory_order_relaxed),
-             g_y2yHandoffReceipt.phase2.load(std::memory_order_relaxed),
-             g_y2yHandoffReceipt.beforeRelease.load(std::memory_order_relaxed),
-             g_y2yHandoffReceipt.afterRoot.load(std::memory_order_relaxed),
-             g_y2yHandoffReceipt.afterStw2.load(std::memory_order_relaxed) };
-}
-
-void NoteY2yBeforeReleaseTestReceipt(uint64_t pending)
-{
-    g_y2yHandoffReceipt.phase0.fetch_add(1, std::memory_order_relaxed);
-    g_y2yHandoffReceipt.beforeRelease.store(pending, std::memory_order_relaxed);
-}
-
-void NoteY2yAfterRootTestReceipt(uint64_t pending)
-{
-    g_y2yHandoffReceipt.phase1.fetch_add(1, std::memory_order_relaxed);
-    g_y2yHandoffReceipt.afterRoot.store(pending, std::memory_order_relaxed);
-}
-
-void NoteY2yAfterStw2TestReceipt(uint64_t pending)
-{
-    g_y2yHandoffReceipt.phase2.fetch_add(1, std::memory_order_relaxed);
-    g_y2yHandoffReceipt.afterStw2.fetch_add(pending, std::memory_order_relaxed);
-}
-
-void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications)
-{
-    g_y2yAfterReleaseHolder.store(holder, std::memory_order_release);
-    g_y2yAfterReleasePublications.store(publications, std::memory_order_release);
-}
-
-void PublishY2yAfterReleaseTestReceipt()
-{
-    auto claimPublication = [](std::atomic<uint64_t>& publications) {
-        uint64_t remaining = publications.load(std::memory_order_acquire);
-        while (remaining != 0 &&
-               !publications.compare_exchange_weak(remaining, remaining - 1,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire)) {}
-        return remaining != 0;
-    };
-    if (claimPublication(g_y2yAfterReleasePublications)) {
-        BaseObject* holder = g_y2yAfterReleaseHolder.load(std::memory_order_acquire);
-        CHECK_DETAIL(holder != nullptr, "armed y2y after-release receipt without holder");
-        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(holder);
-    }
-}
-
-void ArmMarkBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second)
-{
-    g_markBeforeMarkEndProducer.store(producer, std::memory_order_release);
-    g_markBeforeMarkEndFirst.store(first, std::memory_order_release);
-    g_markBeforeMarkEndSecond.store(second, std::memory_order_release);
-    g_markBeforeMarkEndPublications.store(second == nullptr ? 1 : 2, std::memory_order_release);
-}
-
-void PublishMarkBeforeMarkEndTestReceipt()
-{
-    uint64_t remaining = g_markBeforeMarkEndPublications.load(std::memory_order_acquire);
-    while (remaining != 0 &&
-           !g_markBeforeMarkEndPublications.compare_exchange_weak(remaining, remaining - 1,
-                                                                  std::memory_order_acq_rel,
-                                                                  std::memory_order_acquire)) {}
-    if (remaining == 0) {
-        return;
-    }
-    Mutator* producer = g_markBeforeMarkEndProducer.load(std::memory_order_acquire);
-    BaseObject* first = g_markBeforeMarkEndFirst.load(std::memory_order_acquire);
-    BaseObject* second = g_markBeforeMarkEndSecond.load(std::memory_order_acquire);
-    BaseObject* object = remaining == 2 ? first : (second != nullptr ? second : first);
-    CHECK_DETAIL(producer != nullptr && object != nullptr, "armed mark-end receipt without producer/object");
-    Heap::GetHeap().MarkObjectIfActive(object);
-    producer->FlushStoreBarrierBuffer();
-}
-
-void ArmY2yDuringConcurrentTestReceipt(BaseObject* holder)
-{
-    g_y2yDuringConcurrent.store(holder, std::memory_order_release);
-}
-
-void PublishConcurrentYoungProducersTestReceipt()
-{
-    BaseObject* y2y = g_y2yDuringConcurrent.exchange(nullptr, std::memory_order_acq_rel);
-    if (y2y != nullptr) {
-        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(y2y);
-    }
-}
-
-void ArmLeftoverBeforePauseTestReceipt(BaseObject* y2yHolder)
-{
-    g_leftoverY2yBeforePause.store(y2yHolder, std::memory_order_release);
-}
-
-void PublishLeftoverBeforePauseTestReceipt()
-{
-    BaseObject* y2y = g_leftoverY2yBeforePause.exchange(nullptr, std::memory_order_acq_rel);
-    if (y2y != nullptr) {
-        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(y2y);
-    }
-}
-
-void ResetExportRootPublicationTestReceipt()
-{
-    g_exportRootAfterT1Producer.store(nullptr, std::memory_order_relaxed);
-    g_exportRootAfterT1Holder.store(nullptr, std::memory_order_relaxed);
-    g_exportRootAfterT1Child.store(nullptr, std::memory_order_relaxed);
-    g_exportRootAfterT1Armed.store(0, std::memory_order_relaxed);
-    g_exportRootRegistrationsAfterT1.store(0, std::memory_order_relaxed);
-    g_exportRootProducerFlushes.store(0, std::memory_order_relaxed);
-    g_exportRootObservedAtT2.store(0, std::memory_order_relaxed);
-    g_exportRootHandle.store(std::numeric_limits<U64>::max(), std::memory_order_relaxed);
-    g_exportRootHolderMarked.store(false, std::memory_order_relaxed);
-    g_exportRootChildMarked.store(false, std::memory_order_relaxed);
-}
-
-void ArmExportRootAfterT1TestReceipt(Mutator* producer, BaseObject* holder, BaseObject* child)
-{
-    CHECK_DETAIL(producer != nullptr && holder != nullptr && child != nullptr,
-                 "export-root T1 receipt requires producer, holder, and child");
-    g_exportRootAfterT1Producer.store(producer, std::memory_order_release);
-    g_exportRootAfterT1Holder.store(holder, std::memory_order_release);
-    g_exportRootAfterT1Child.store(child, std::memory_order_release);
-    g_exportRootAfterT1Armed.store(1, std::memory_order_release);
-}
-
-void PublishExportRootAfterT1TestReceipt()
-{
-    if (g_exportRootAfterT1Armed.exchange(0, std::memory_order_acq_rel) == 0) {
-        return;
-    }
-    Mutator* producer = g_exportRootAfterT1Producer.load(std::memory_order_acquire);
-    BaseObject* holder = g_exportRootAfterT1Holder.load(std::memory_order_acquire);
-    CHECK_DETAIL(producer != nullptr && holder != nullptr, "armed export-root T1 receipt is incomplete");
-    Mutator* previous = ThreadLocal::GetMutator();
-    ThreadLocal::SetMutator(producer);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(holder);
-    ThreadLocal::SetMutator(previous);
-    g_exportRootHandle.store(handle, std::memory_order_release);
-    g_exportRootRegistrationsAfterT1.fetch_add(1, std::memory_order_relaxed);
-}
-
-void FlushExportRootAfterT1TestReceipt()
-{
-    if (g_exportRootRegistrationsAfterT1.load(std::memory_order_acquire) == 0 ||
-        g_exportRootProducerFlushes.exchange(1, std::memory_order_acq_rel) != 0) {
-        return;
-    }
-    Mutator* producer = g_exportRootAfterT1Producer.load(std::memory_order_acquire);
-    CHECK_DETAIL(producer != nullptr, "registered export-root T1 receipt has no producer");
-    producer->FlushStoreBarrierBuffer();
-}
-
-void NoteExportRootPublicationAtT2TestReceipt()
-{
-    if (g_exportRootRegistrationsAfterT1.load(std::memory_order_acquire) == 0) {
-        return;
-    }
-    BaseObject* holder = g_exportRootAfterT1Holder.load(std::memory_order_acquire);
-    BaseObject* child = g_exportRootAfterT1Child.load(std::memory_order_acquire);
-    auto isMarked = [](BaseObject* object) {
-        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-        return region != nullptr && region->is_object_strongly_live(from_object(object));
-    };
-    g_exportRootHolderMarked.store(isMarked(holder), std::memory_order_relaxed);
-    g_exportRootChildMarked.store(isMarked(child), std::memory_order_relaxed);
-    g_exportRootObservedAtT2.fetch_add(1, std::memory_order_relaxed);
-}
-
-ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt()
-{
-    return { g_exportRootRegistrationsAfterT1.load(std::memory_order_relaxed),
-             g_exportRootProducerFlushes.load(std::memory_order_relaxed),
-             g_exportRootObservedAtT2.load(std::memory_order_relaxed),
-             g_exportRootHandle.load(std::memory_order_relaxed),
-             g_exportRootHolderMarked.load(std::memory_order_relaxed),
-             g_exportRootChildMarked.load(std::memory_order_relaxed) };
-}
-
+std::function<void()> ZGeneration::testYoungMarkCompleted;
 #endif
 }

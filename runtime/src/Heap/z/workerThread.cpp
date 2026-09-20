@@ -207,6 +207,7 @@ void* WorkerThread::entry(void* arg)
 {
     WorkerThread* const worker = static_cast<WorkerThread*>(arg);
     ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+    worker->_gc_data.store(&ThreadLocal::GetGCData(), std::memory_order_release);
 #ifdef __APPLE__
     CHECK_PTHREAD_CALL(pthread_setname_np, (worker->_name), "WorkerThread");
 #elif defined(__linux__) || defined(hongmeng)
@@ -216,6 +217,7 @@ void* WorkerThread::entry(void* arg)
     Sanitizer::TsanAttachNativeThread();
 #endif
     worker->run();
+    worker->_gc_data.store(nullptr, std::memory_order_release);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanDetachNativeThread();
 #endif

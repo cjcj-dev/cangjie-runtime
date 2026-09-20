@@ -5,15 +5,16 @@
 #define MRT_Z_ITERATOR_INLINE_HPP
 
 #include "Heap/z/zIterator.hpp"
+#include "Heap/z/zVerify.hpp"
 #include "ObjectModel/MArray.inline.h"
 
 namespace MapleRuntime {
 
 inline bool ZIterator::is_invisible_object(BaseObject* object)
 {
-    // VM adapter for zIterator.inline.hpp:35-45: acquire the header bit.
-    // HotSpot's debug-only Thread/STS safepoint verification has no matching
-    // Thread-state interface here; it is not replaced with a different check.
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+    z_verify_safepoints_are_blocked();
+#endif
     return object->IsInvisibleObject();
 }
 

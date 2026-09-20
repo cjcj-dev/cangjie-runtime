@@ -4,8 +4,15 @@
 #include "Base/Panic.h"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zMark.inline.hpp"
+#include "Heap/z/zRemembered.inline.hpp"
 
 namespace MapleRuntime {
+// ZGC zGeneration.inline.hpp:166-168.
+inline bool ZGenerationYoung::is_remembered(volatile zpointer* p) const
+{
+    return remembered()->is_remembered(p);
+}
+
 inline bool ZGeneration::IsPhaseMark() const
 {
     return is_phase_mark();

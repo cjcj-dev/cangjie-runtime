@@ -21,6 +21,7 @@
 #include "RuntimeConfig.h"
 namespace MapleRuntime {
 class CJFileLoader : public ILoader {
+    friend class CJFileLoaderTest;
 public:
     CJFileLoader()
     {
@@ -76,10 +77,6 @@ public:
     U32 GetNumOfInterface(TypeInfo* typeInfo) override;
     TypeInfo* GetInterface(TypeInfo* typeInfo, U32 idx) override;
     TypeExt* GetTypeExt(void* type) override;
-#ifdef MRT_TESTABLE_INTERNALS
-    size_t GetPackageIndexSizeForTesting() const override;
-    void* GetLibraryHandleForTesting(const char* libName) const override;
-#endif
     void RegisterTypeExt(BaseFile* baseFile) override;
 #ifdef __OHOS__
     void RegisterLoadFunc(void* loadFunc, void* loadLibraryFunc) override;

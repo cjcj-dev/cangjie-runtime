@@ -24,6 +24,7 @@ class ZDriverMinor;
 class ZStat;
 
 class ZCollectedHeap : public CollectedHeap {
+    friend class ZCollectedHeapTest;
 public:
     static ZCollectedHeap* heap();
     static void create(const HeapParam& param, double garbageThreshold);
@@ -45,9 +46,6 @@ public:
     WorkerThreads* safepoint_workers() { return _runtime_workers.workers(); }
     FinalizerProcessor& finalizer_processor() { return _finalizer_processor; }
     int32_t concurrent_gc_threads() const { return _concurrent_gc_threads; }
-#if defined(MRT_TESTABLE_INTERNALS)
-    void set_concurrent_gc_threads_for_test(int32_t count) { _concurrent_gc_threads = count; }
-#endif
 
 private:
     static ZCollectedHeap* _collected_heap;

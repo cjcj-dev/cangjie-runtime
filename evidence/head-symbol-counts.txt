@@ -1,4 +1,4 @@
-HEAD:runtime/src/Heap/Allocator/zForwardingTable.cpp:1
+HEAD:runtime/src/Heap/z/zForwardingTable.cpp:1
 HEAD:runtime/src/Heap/Collector/TracingCollector.cpp:1
 HEAD:runtime/src/Heap/z/zForwardingTable.hpp:1
 HEAD:runtime/src/Heap/z/zGeneration.cpp:13

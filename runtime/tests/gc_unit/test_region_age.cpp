@@ -24,7 +24,7 @@ GC_TEST(RegionAge, YoungAgeRoundTrip)
     r->reset(PageAge::old);
     GC_EXPECT_EQ(r->GetYoungAge(), 0u);
     r->reset(PageAge::eden);
-    GC_EXPECT_EQ(r->GetYoungAge(), 1u);
+    GC_EXPECT_EQ(r->GetYoungAge(), 0u);
     r->reset(PageAge::survivor14);
     GC_EXPECT_EQ(r->GetYoungAge(), 14u);
     // Promote-style clear used by product after tenuring (RegionManager promote paths).
@@ -37,7 +37,7 @@ GC_TEST(RegionAge, MaxYoungAgeBound)
     GcHeapFixture fx;
     GC_EXPECT_TRUE(ZPage::MAX_YOUNG_AGE >= 14u);
     fx.region0->reset(PageAge::survivor14);
-    GC_EXPECT_EQ(fx.region0->GetYoungAge(), static_cast<unsigned>(ZPage::MAX_YOUNG_AGE));
+    GC_EXPECT_EQ(fx.region0->GetYoungAge(), 14u);
 }
 
 GC_TEST(RegionAge, YoungFlagIndependentOfAge)

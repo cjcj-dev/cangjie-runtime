@@ -686,9 +686,6 @@ bool RegionManager::ClaimCapacityOrStall(AllocationStallRequest& request)
         if (ClaimAllocationLocked(request)) { return true; }
         if (request.Flags().non_blocking() || stallClosed) { return false; }
         stalled.insert_last(&request);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-        ++stallEnqueued;
-#endif
     }
     return StallAllocation(request);
 }
@@ -758,10 +755,6 @@ void RegionManager::SatisfyStalledAllocations()
         if (!ClaimAllocationLocked(*request)) { return; }
         stalled.remove(request);
         request->Satisfy(true);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-        ++stallDequeued;
-        ++stallSatisfied;
-#endif
     }
 }
 
@@ -796,10 +789,6 @@ void RegionManager::NotifyOutOfMemory()
         if (!HasAllocSeenOld(request)) { return; }
         stalled.remove(request);
         request->Satisfy(false);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-        ++stallDequeued;
-        ++stallFailed;
-#endif
     }
 }
 
@@ -838,10 +827,6 @@ void RegionManager::StopStalledAllocations()
     while (ZPageAllocation* request = stalled.first()) {
         stalled.remove(request);
         request->Satisfy(false);
-#if defined(MRT_ALLOCATION_STALL_OBSERVE)
-        ++stallDequeued;
-        ++stallFailed;
-#endif
     }
 }
 

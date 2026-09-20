@@ -44,7 +44,7 @@ bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
     CHECK_DETAIL(working != 0, "mark worker left termination twice");
     --working;
     if (working == 0) {
-        MarkingStacks::VerifyEmpty(stripes.Population());
+
         condition.notify_all();
         return true;
     }

@@ -13,6 +13,8 @@
 #include <mutex>
 #include <thread>
 
+#include "finalizer_processor_test.hpp"
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -129,40 +131,33 @@ GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(FnlzRoots, EnqueueBetweenIdleCheckAndCommitKeepsJobVisible)
 {
+    GcHeapFixture fixture;
     FinalizerProcessor fp;
-    alignas(8) unsigned char storage[16] = {};
-    auto* obj = reinterpret_cast<BaseObject*>(storage);
-    std::mutex lock;
-    std::condition_variable condition;
-    bool workerAtOldEmptyToClearGap = false;
-    bool releaseWorker = false;
-
-    fp.SetBeforeFinalizableIdleCheckForTest([&] {
-        std::unique_lock<std::mutex> guard(lock);
-        workerAtOldEmptyToClearGap = true;
-        condition.notify_one();
-        condition.wait(guard, [&] { return releaseWorker; });
+    BaseObject* obj = fixture.obj0;
+    fp.RegisterFinalizer(obj);
+    std::atomic<bool> start{false};
+    std::atomic<bool> accepted{false};
+    std::thread finisher([&] {
+        while (!start.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        FinalizerProcessorTest::FinishBatch(fp);
     });
-
-    std::thread worker([&] { fp.FinishFinalizableBatchForTest(); });
-    {
-        std::unique_lock<std::mutex> guard(lock);
-        condition.wait(guard, [&] { return workerAtOldEmptyToClearGap; });
-    }
-
-    // This is the review's exact old :303 -> enqueue -> :304 ordering.
-    fp.EnqueueFinalizableForTest(obj);
-    {
-        std::lock_guard<std::mutex> guard(lock);
-        releaseWorker = true;
-    }
-    condition.notify_one();
-    worker.join();
-
-    GC_EXPECT_TRUE(fp.HasFinalizableJobForTest());
+    std::thread producer([&] {
+        while (!start.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        accepted.store(FinalizerProcessorTest::EnqueueRegistered(fp, obj), std::memory_order_release);
+    });
+    start.store(true, std::memory_order_release);
+    finisher.join();
+    producer.join();
+    // Both legal lock orders must preserve the registered job and its strong root.
+    GC_EXPECT_TRUE(accepted.load(std::memory_order_acquire));
+    GC_EXPECT_TRUE(FinalizerProcessorTest::HasJob(fp));
     size_t queuedRoots = 0;
-    fp.VisitGCRoots([&](NativeSlot&) { ++queuedRoots; });
-    GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(1));
+    fp.VisitGCRoots([&](NativeSlot& root) {
+        GC_EXPECT_TRUE(to_object(root.GetTargetObject()) == obj);
+        ++queuedRoots;
+    });
+    GC_EXPECT_EQ(queuedRoots, size_t(1));
+
 }
 #endif
 
