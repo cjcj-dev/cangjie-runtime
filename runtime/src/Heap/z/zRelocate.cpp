@@ -2602,3 +2602,9 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 namespace MapleRuntime {
 
 }
+
+namespace MapleRuntime {
+// ZGC zRelocate.cpp:1412-1418.
+void ZRelocate::synchronize() { relocateQueue.synchronize(); }
+void ZRelocate::desynchronize() { relocateQueue.desynchronize(); }
+} // namespace MapleRuntime

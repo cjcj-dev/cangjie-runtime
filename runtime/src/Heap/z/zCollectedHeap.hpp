@@ -34,6 +34,8 @@ public:
     void initialize_gc();
     void finalize_gc();
     void collect(GCReason reason, bool async);
+    void safepoint_synchronize_begin();
+    void safepoint_synchronize_end();
     uintptr_t allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize);
 
     Heap& collected_heap() { return _heap; }

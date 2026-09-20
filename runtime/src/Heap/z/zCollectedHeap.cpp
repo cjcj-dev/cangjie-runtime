@@ -22,6 +22,7 @@
 #include "Base/LogFile.h"
 #include "Heap/z/zStat.hpp"
 #include "Common/BaseObject.h"
+#include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Common/StateWord.h"
 #include "Common/ScopedObjectAccess.h"
@@ -201,4 +202,22 @@ void ZCollectedHeap::stop()
     collected->_runtime_workers.stop();
 }
 
+} // namespace MapleRuntime
+
+namespace MapleRuntime {
+// ZGC zCollectedHeap.cpp:339-349. Cangjie stack-watermark publication is
+// performed by the mutator suspension handshake; GC workers rendezvous here.
+void ZCollectedHeap::safepoint_synchronize_begin()
+{
+    ZGeneration::young()->synchronize_relocation();
+    ZGeneration::old()->synchronize_relocation();
+    SuspendibleThreadSet::synchronize();
+}
+
+void ZCollectedHeap::safepoint_synchronize_end()
+{
+    SuspendibleThreadSet::desynchronize();
+    ZGeneration::old()->desynchronize_relocation();
+    ZGeneration::young()->desynchronize_relocation();
+}
 } // namespace MapleRuntime

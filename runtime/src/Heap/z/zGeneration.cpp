@@ -1997,3 +1997,9 @@ ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt()
 
 #endif
 }
+
+namespace MapleRuntime {
+// ZGC zGeneration.cpp:287-293.
+void ZGeneration::synchronize_relocation() { relocate().synchronize(); }
+void ZGeneration::desynchronize_relocation() { relocate().desynchronize(); }
+} // namespace MapleRuntime

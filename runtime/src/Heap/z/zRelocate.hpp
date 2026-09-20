@@ -166,6 +166,8 @@ public:
     explicit ZRelocate(ZGeneration* generation) : generation(generation) {}
     BaseObject* relocate_object(ZForwarding* forwarding, BaseObject* object,
                                 const ForwardingProvenance& provenance);
+    void synchronize();
+    void desynchronize();
     ZRelocateQueue* queue() { return &relocateQueue; }
     bool is_queue_active() const { return relocateQueue.IsActive(); }
     static PageAge compute_to_age(PageAge fromAge);
