@@ -1269,7 +1269,7 @@ static void CheckForwardingWinner(bool identity)
 // page, rather than an object-level recovery guess, is the admission unit.
 
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_GC_UNIT_TESTS)
 // ZGenerationOld::remap_young_roots, zGeneration.cpp:1509: enter through
 // the real major driver; a registered runtime mutator owns the raw root.
 void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false, unsigned nestedKind = 0)
