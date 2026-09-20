@@ -59,16 +59,5 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
     return addr;
 }
 
-inline void RegionManager::EnlistFullThreadLocalRegion(ZPage* region) noexcept
-{
-    MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
-    region->SetRegionRole(ZPageRole::RecentFull);
-}
-
-inline void RegionManager::RemoveThreadLocalRegion(ZPage* region) noexcept
-{
-    MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
-    region->SetRegionRole(ZPageRole::None);
-}
 } // namespace MapleRuntime
 #endif
