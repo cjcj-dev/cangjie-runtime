@@ -49,6 +49,7 @@ run_ohos_host_arm() {
   nm --defined-only "$so" | c++filt >"$product_nm"
   for symbol in \
       'CJ_MRT_RolveCycleRef' \
+      'ResolveCycleRefStub' \
       'MapleRuntime::ZCrossVM::ResolveCycleRef()' \
       'MapleRuntime::ZCrossVM::GetCrossRefHandler(MapleRuntime::BaseObject*)' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
@@ -101,6 +102,7 @@ run_ohos_host_arm() {
   fi
   for symbol in \
       'CJ_MRT_RolveCycleRef' \
+      'ResolveCycleRefStub' \
       'MapleRuntime::ZCrossVM::ResolveCycleRef()' \
       'MapleRuntime::ZCrossVM::GetCrossRefHandler(MapleRuntime::BaseObject*)' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \

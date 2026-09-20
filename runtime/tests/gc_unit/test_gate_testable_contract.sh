@@ -45,7 +45,7 @@ chmod +x "$fixture/bin/nm"
 # in the negative arm so the exact path assertion, rather than an earlier
 # compilation or receipt failure, is what turns red.
 cp "$fixture/runtime/tests/gc_unit/run_standalone.sh" "$fixture/default-runner.sh"
-printf '#!/usr/bin/env bash\nheader_root=${GC_UNIT_OHOS_HEADER_ROOT_TOKEN:-${GCV2_RUNTIME_OUTPUT_ROOT:?}/include}\nreceipt=${GC_UNIT_OHOS_HOST_RECEIPT:-${GC_UNIT_OUT:?}/ohos_host.receipt}\necho "GC_UNIT_OHOS_HOST_HEADER_ROOT=$header_root"\nprintf "RESULT=PASS\\nFILTER_MAJOR=PASS\\nFILTER_POST=PASS\\nFILTER_EMPTY=PASS\\n" >"$receipt"\nexit 0\n' \
+printf '#!/usr/bin/env bash\nheader_root=${GC_UNIT_OHOS_HEADER_ROOT_TOKEN:-${GCV2_RUNTIME_OUTPUT_ROOT:?}/include}\nreceipt=${GC_UNIT_OHOS_HOST_RECEIPT:-${GC_UNIT_OUT:?}/ohos_host.receipt}\necho "GC_UNIT_OHOS_HOST_HEADER_ROOT=$header_root"\nprintf "RESULT=PASS\\nFILTER_HANDLER=PASS\\nFILTER_MAJOR=PASS\\nFILTER_POST=PASS\\nFILTER_EMPTY=PASS\\n" >"$receipt"\nexit 0\n' \
   >"$fixture/runtime/tests/gc_unit/run_standalone.sh"
 chmod +x "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 ohos_output_root="$fixture/selected-output"
@@ -78,6 +78,19 @@ PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-reused.log" 2>&1
 /usr/bin/grep -qx 'GATE=PASS' "$fixture/ohos-reused.status"
 echo 'OHOS explicit ELF reuse: rc=0 receipt=PASS'
+# A successful legacy three-filter receipt must not certify the handler chain.
+sed -i 's/FILTER_HANDLER=PASS/FILTER_HANDLER=NOT_RUN/' "$fixture/runtime/tests/gc_unit/run_standalone.sh"
+set +e
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+  GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
+  GC_UNIT_OUT="$fixture/ohos-handler-missing-out" GC_UNIT_GATE_STATUS="$fixture/ohos-handler-missing.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-handler-missing.log" 2>&1
+ohos_handler_rc=$?
+set -e
+[[ $ohos_handler_rc -eq 1 ]]
+/usr/bin/grep -qx 'REASON=OHOS_HOST_FAILURE' "$fixture/ohos-handler-missing.status"
+/usr/bin/grep -q 'OHOS-host receipt incomplete' "$fixture/ohos-handler-missing.log"
+printf 'OHOS handler receipt: good_rc=0 missing_rc=%s target=receipt-incomplete\n' "$ohos_handler_rc"
 mv "$fixture/default-runner.sh" "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 
 # Configuration selection is a gate input, not a directory scan.  Prove the
