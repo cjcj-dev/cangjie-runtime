@@ -286,6 +286,9 @@ void* Exercise(void*)
             heap.old().Workers()->set_inactive();
         }
     }
+    // A failed phase oracle already has its complete root-family verdict.
+    // Do not start subsequent driver cycles with incomplete marking state.
+    if (failures != 0) return reinterpret_cast<void*>(static_cast<uintptr_t>(failures));
 #endif
     auto y0 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
     auto o0 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
