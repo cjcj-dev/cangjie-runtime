@@ -156,6 +156,7 @@ void RunProductStallWaiters(bool stopping = false)
     uint64_t completedSequence[2]{};
     std::atomic<bool> done[2]{};
     std::atomic<Mutator*> waitingMutators[2]{};
+    std::atomic<bool> releaseMutators{false};
     auto allocate = [&](size_t index) {
         manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         {
@@ -165,6 +166,9 @@ void RunProductStallWaiters(bool stopping = false)
             completedSequence[index] = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
         }
         done[index].store(true, std::memory_order_release);
+        // The controller reads the published mutator state until both results
+        // are collected. Keep its lifetime valid even on an early return.
+        while (!releaseMutators.load(std::memory_order_acquire)) { std::this_thread::yield(); }
         manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     };
     std::thread first(allocate, 0);
@@ -220,6 +224,7 @@ void RunProductStallWaiters(bool stopping = false)
             std::_Exit(1);
         }
     }
+    releaseMutators.store(true, std::memory_order_release);
     first.join();
     late.join();
     if (stopper.joinable()) { stopper.join(); }
@@ -316,6 +321,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     U64 resultRoots[2]{};
     std::atomic<bool> done[2]{};
     std::atomic<Mutator*> waitingMutators[2]{};
+    std::atomic<bool> releaseMutators{false};
     auto allocate = [&](size_t index) {
         manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         {
@@ -325,6 +331,9 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
             if (results[index] != nullptr) { resultRoots[index] = heap.RegisterExportRoot(results[index]); }
         }
         done[index].store(true, std::memory_order_release);
+        // The controller reads the published mutator state until both results
+        // are collected. Keep its lifetime valid even on an early return.
+        while (!releaseMutators.load(std::memory_order_acquire)) { std::this_thread::yield(); }
         manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     };
     std::thread first(allocate, 0), second(allocate, 1);
@@ -360,6 +369,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
             std::_Exit(1);
         }
     }
+    releaseMutators.store(true, std::memory_order_release);
     first.join();
     second.join();
     collection.join();
