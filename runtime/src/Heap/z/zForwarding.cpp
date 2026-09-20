@@ -96,7 +96,7 @@ void ZForwarding::WaitPageDone(ZForwarding* forwarding)
     }
     // Legacy page cleanup runs inside the completion owner itself.
     if (CurrentPageWork() == forwarding || forwarding->is_done()) return;
-    auto& queue = generation_relocate_queue(static_cast<Generation>(forwarding->table_generation()));
+    auto& queue = generation_relocate_queue((forwarding->from_age() == PageAge::old ? Generation::Old : Generation::Young));
     const auto request = queue.Add(forwarding);
     CHECK_DETAIL(request.accepted, "forwarding wait requires a page task");
     queue.Wait(request.forwarding);

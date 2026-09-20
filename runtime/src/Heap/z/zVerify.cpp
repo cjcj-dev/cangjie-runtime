@@ -282,7 +282,7 @@ void ZVerify::OnColorFlip()
 void ZVerify::BeforeRelocation(ZForwarding* forwarding)
 {
     if (!ZVerifyRemembered || forwarding == nullptr ||
-        forwarding->table_generation() != static_cast<uint8_t>(Generation::Old)) { return; }
+        forwarding->from_age() != PageAge::old) { return; }
     ZPage* page = forwarding->page();
     if (page == nullptr) { return; }
     const bool activeCurrent = Heap::GetHeap().OldActiveRemsetIsCurrent();

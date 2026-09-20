@@ -389,7 +389,7 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(BaseObject* value, const void* own
     if (forwarding) {
         // ZGC zGeneration.inline.hpp:131-140 / zRelocate.cpp:382-415:
         // stored roots use the same forwarding consumer as load barriers.
-        current = ZGeneration::generation(static_cast<ZGenerationId>(forwarding->table_generation()))
+        current = ZGeneration::generation((forwarding->from_age() == PageAge::old ? ZGenerationId::old : ZGenerationId::young))
             ->relocate_or_remap_object(value, provenance);
     }
     CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),

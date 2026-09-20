@@ -870,14 +870,14 @@ BaseObject* ZRelocate::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner
         // #498: without return barriers roots are completed eagerly. There is
         // no concurrent page worker in this pause; reuse its in-place task.
         ZPage* page = owner->page();
-        if (owner->table_generation() == static_cast<uint8_t>(Generation::Young)) {
+        if (owner->from_age() != PageAge::old) {
             manager.ForwardClaimedPage<Generation::Young>(page, owner, false, true);
         } else {
             manager.ForwardClaimedPage<Generation::Old>(page, owner, false, true);
         }
         if (const MAddress winner = owner->find(from)) return reinterpret_cast<BaseObject*>(winner);
     }
-    auto& queue = generation_relocate_queue(static_cast<Generation>(owner->table_generation()));
+    auto& queue = generation_relocate_queue((owner->from_age() == PageAge::old ? Generation::Old : Generation::Young));
     const auto request = queue.Add(owner);
     CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
     queue.Wait(request.forwarding);
