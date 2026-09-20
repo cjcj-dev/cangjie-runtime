@@ -8,6 +8,7 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "TypeInfoManager.h"
+#include "Mutator/Mutator.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -111,6 +112,26 @@ void* AllocateManagedFastMedium(void*)
                  ZPageSizeMediumMin, actual, capacity, manager.GetCommittedBytes(), second - first, ZObjectAlignmentMedium, valid);
     return reinterpret_cast<void*>(valid ? 0 : 3);
 }
+void* AllocateNonBlockingCapacity(void*)
+{
+    auto& heap = Heap::GetHeap();
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZPage* occupied = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, false, PageAge::eden, flags);
+    if (occupied == nullptr) { return reinterpret_cast<void*>(1); }
+    Mutator* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    const uint64_t before = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    // A valid page size that cannot fit while occupied consumes part of capacity.
+    // The non-blocking allocation must return its failure without starting a GC.
+    ZPage* result = Heap::alloc_page(heap.GetMaxCapacity(), ZPageType::large, false, true, false, PageAge::eden, flags);
+    const uint64_t after = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    const bool valid = result == nullptr && after == before;
+    std::fprintf(stderr, "NONBLOCKING_CAPACITY_TARGET result=%p before=%llu after=%llu valid=%d\n",
+                 result, (unsigned long long)before, (unsigned long long)after, valid);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>(valid ? 0 : 2);
+}
 void* AllocateFastMedium(void*)
 {
     auto& manager = Heap::GetHeap().page_allocator();
@@ -138,3 +159,5 @@ GC_OTHER_VM_TEST(ObjectAllocatorPaths, TLABsShareSmallPage) { RunAllocatorCase(A
 GC_OTHER_VM_TEST(ObjectAllocatorPaths, FastMediumConsumesCachedActualSize) { RunAllocatorCase(AllocateFastMedium); }
 
 GC_OTHER_VM_TEST(ObjectAllocatorPaths, ManagedFastMediumConsumesCachedPage) { RunAllocatorCase(AllocateManagedFastMedium); }
+
+GC_OTHER_VM_TEST(ObjectAllocatorPaths, NonBlockingCapacityDoesNotStartCollection) { RunAllocatorCase(AllocateNonBlockingCapacity); }
