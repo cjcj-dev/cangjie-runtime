@@ -161,70 +161,6 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
     return true;
 }
 
-struct FwdLookup {
-    MAddress to{ 0 };
-    enum Answer : uint8_t { ArmedHit, ArmedMiss, Unarmed } answer{ Unarmed };
-    uint32_t tableId{ 0 };
-    uint64_t fromPageEpoch{ 0 };
-    RegionLifeId fromPageLifeId{ 0 };
-    bool forwardingSnapshotValid{ false };
-    MAddress carrierStart{ 0 };
-};
-inline MAddress UNUSED_InsertMapping(ZForwarding* forwarding, MAddress from, MAddress to)
-{
-    return forwarding == nullptr ? 0 : forwarding->insert(from, to);
-}
-inline MAddress UNUSED_InstallMapping(ZForwarding* forwarding, MAddress from, MAddress to)
-{
-    return UNUSED_InsertMapping(forwarding, from, to);
-}
-inline void UNUSED_ClearPageOwner(ZPage* region)
-{
-    if (region != nullptr) {
-        region->_scratch.fwdOwner.store(nullptr, std::memory_order_release);
-    }
-}
-inline const ZForwarding::FromPageView* UNUSED_GetFromPageView(ZPage* region)
-{
-    return region == nullptr ? nullptr : region->GetFromPageView();
-}
-inline bool UNUSED_InstallPublication(MAddress, size_t, ZPage* region, Generation)
-{
-    return forwarding_for_page(region) != nullptr;
-}
-template<typename... Args>
-inline bool UNUSED_PublishFromPageView(ZPage* region, Args&&... args)
-{
-    ZForwarding* forwarding = forwarding_for_page(region);
-    if (forwarding == nullptr) {
-        return false;
-    }
-    forwarding->publish_from_page_view(std::forward<Args>(args)...);
-    return true;
-}
-struct UNUSED_Snap {
-    struct Carrier {
-        uintptr_t tableId{ 0 };
-        uint8_t tableGeneration{ 0 };
-        MAddress start{ 0 };
-    };
-    size_t carrierCount{ 0 };
-    size_t carrierTotal{ 0 };
-    bool carrierOverflow{ false };
-    Carrier carriers[4]{};
-};
-inline UNUSED_Snap UNUSED_Snapshot(MAddress) { return {}; }
-
-inline FwdLookup LookupTo(MAddress from, Generation generation)
-{
-    ZForwarding* forwarding = generation_forwarding_table(generation).get(from);
-    if (forwarding == nullptr) {
-        return FwdLookup{ 0, FwdLookup::Unarmed };
-    }
-    const MAddress to = forwarding->find(from);
-    return FwdLookup{ to, to != 0 ? FwdLookup::ArmedHit : FwdLookup::ArmedMiss };
-}
-
 namespace GcUnit {
 
 inline zpointer ColouredPointer(BaseObject* object, uintptr_t remap)
@@ -395,10 +331,7 @@ struct GcHeapFixture {
         }
         ZForwarding* forwarding = forwarding_for_page(region);
         CHECK(forwarding != nullptr);
-        forwarding->publish_from_page_view(&region->livemap(), region->GetSnapshotEpoch(),
-            region->GetRegionAllocPtr(), region->BirthSequence(),
-            static_cast<uint8_t>(region->IsYoungRegion() ? Generation::Young : Generation::Old),
-            0, region->GetRegionLifeId());
+
     }
 
     // ZPage::mark_object followed by the caller's inc_live (zMark.cpp:405-425):

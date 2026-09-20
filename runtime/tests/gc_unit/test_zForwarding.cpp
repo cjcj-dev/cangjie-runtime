@@ -147,7 +147,7 @@ GC_TEST(ZForwardingEntries, survives_without_geometry)
 // 18 bits of from_index at 8-byte alignment addresses exactly 2 MB, the size of a ZGC small page.
 // Our regions are not capped at 2 MB, and the same field wraps quietly on a larger one: two objects
 // whose indices differ by 2^18 would compare equal and find() would return the wrong to-address.
-// A miss is safe -- FindToVersion falls back to route geometry, which is what it did before this
+// A miss is safe -- forwarding lookup falls back to route geometry, which is what it did before this
 // table existed -- so an index that does not fit is refused rather than truncated.
 
 

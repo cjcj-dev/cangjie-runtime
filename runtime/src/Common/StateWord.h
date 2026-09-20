@@ -139,7 +139,7 @@ public:
     // all four object-creation sites go through the static SetClassInfo(MAddress, TypeInfo*) below,
     // so this initialiser covers them, yet the population persists.  The surviving explanation for
     // "FORWARDED with no to-version" is that the cycle's forwarding data has already been retired,
-    // so FindToVersion can no longer answer -- which is what ZForwarding::detach_page prevents by
+    // so forwarding lookup can no longer answer -- which is what ZForwarding::detach_page prevents by
     // blocking on _ref_count == 0 (zForwarding.cpp:171-181).  That is a separate, open item.
     //
     // This initialiser stays regardless: writing half a word at allocation and inheriting the rest

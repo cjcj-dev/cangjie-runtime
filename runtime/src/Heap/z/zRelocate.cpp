@@ -240,32 +240,6 @@ void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 // Same-value concurrent writes converge; first writer wins. Counters for positive control.
 namespace {
 
-// installdomain (ZGC mark_and_remember shape, GC-thread side): before installing a
-// from/ghost-from address into a heap slot (or forwarding it), ensure the survivor
-// bit that GetRoute will read is set.
-//
-// Two windows:
-//   (1) pass1 before PrepareForwardable: region is still from (not yet ghost). Mark
-//       current liveInfo; PrepareForwardable does liveInfo0 = liveInfo (pointer copy)
-//       so the paint is snapshotted into the route domain.
-//   (2) after PrepareForwardable while routeState==FORWARDABLE: MarkObject writes the
-//       same livemap the carrier points at — visible to GetRoute.
-// After ROUTED, liveByteCount/geometry are frozen — do not paint (tooLate counter).
-// Livemap the route reads for this region: the from-page carrier's map when
-// one is published, otherwise the page's own (zForwarding.hpp:44-110 keeps
-// the whole from ZPage; only its livemap is retained here).
-static ZLiveMap* RouteLiveMap(ZPage* region, ZGenerationId& id)
-{
-    const ZForwarding::FromPageView* from = region->GetFromPageView();
-    if (from != nullptr) {
-        id = static_cast<Generation>(from->owner) == Generation::Young ? ZGenerationId::young
-                                                                       : ZGenerationId::old;
-        return from->livemap;
-    }
-    id = region->generation_id();
-    return &region->livemap();
-}
-
 void EnsureRouteDomainMembership(BaseObject* obj)
 {
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
@@ -286,17 +260,8 @@ void EnsureRouteDomainMembership(BaseObject* obj)
     if (!isGhost && !isFrom) {
         return;
     }
-    size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
     const zaddress addr = from_object(obj);
-    bool alreadyInDomain = false;
-    if (isGhost) {
-        alreadyInDomain = region->IsRouteSurvivedObject(offset);
-    } else {
-        // Prefer ghost face when present (what GetRoute reads); else the page's own livemap.
-        ZGenerationId id;
-        ZLiveMap* face = RouteLiveMap(region, id);
-        alreadyInDomain = face != nullptr && face->get(id, region->bit_index(addr));
-    }
+    const bool alreadyInDomain = region->is_object_live(addr);
     if (alreadyInDomain) {
         return;
     }
@@ -306,33 +271,10 @@ void EnsureRouteDomainMembership(BaseObject* obj)
             return;
         }
     }
-    // Mark the current livemap (post-snapshot: same map as the carrier's when non-null).
+    // Mark the source page livemap.
     (void)ZMark::MarkEntryObject(obj,
         MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), nullptr);
-    // If ghost face was null (snapshot of empty livemap), bind freshly allocated livemap
-    // so GetRoute's from-livemap gate opens on the bits we just painted.
-    if (isGhost) {
-        region->BindFromPageLiveMapIfNull();
-    }
-    ZLiveMap* live = &region->livemap();
-    ZLiveMap* ghost = region->FromPageLiveMap();
-    if (ghost != nullptr && ghost != live) {
-        // MarkObject already maintained live bytes on the live face; ghost paint is
-        // domain-visible bits only (do not double-count).
-        ZGenerationId id;
-        (void)RouteLiveMap(region, id);
-        bool incLive = false;
-        (void)ghost->set(id, region->bit_index(addr), false, incLive);
-    }
-    // Re-check: grant only counts if GetRoute face now accepts (positive control truth).
-    ghost = region->FromPageLiveMap();
-    if (isGhost) {
-        if (ghost != nullptr && region->IsRouteSurvivedObject(offset)) {
-        } else {
-        }
-    } else {
-        // pre-snapshot from: paint lands on the page livemap; PrepareForwardable will copy pointer.
-    }
+
 }
 
 // statresid: force ghost livemap paint while still FORWARDABLE (before any Route
@@ -348,26 +290,14 @@ bool ForceRootRouteDomainWhileForwardable(BaseObject* obj)
     if (region == nullptr || !region->IsYoungRegion()) {
         return false;
     }
-    size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
     // Only paint while FORWARDABLE — after ROUTING/ROUTED/COMPACTED liveByteCount is
     // frozen (S2); late marking would desync Admit from geometry.
     if (region->IsForwardingDone() || region->IsRoutingState()) {
-        return region->FromPageLiveMap() != nullptr && region->IsRouteSurvivedObject(offset);
+        return region->is_object_live(from_object(obj));
     }
     (void)ZMark::MarkEntryObject(obj,
         MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), nullptr);
-    region->BindFromPageLiveMapIfNull();
-    ZLiveMap* g0 = region->FromPageLiveMap();
-    if (g0 != nullptr && !region->IsRouteSurvivedObject(offset)) {
-        // MarkObject above already counted live bytes when first paint on live.
-        // Ghost-only paint must not double-count (FYS0 OverflowException risk).
-        ZGenerationId id;
-        (void)RouteLiveMap(region, id);
-        bool incLive = false;
-        (void)g0->set(id, region->bit_index(from_object(obj)), false, incLive);
-    }
-    g0 = region->FromPageLiveMap();
-    return g0 != nullptr && region->IsRouteSurvivedObject(offset);
+    return region->is_object_live(from_object(obj));
 }
 } // namespace
 
@@ -461,7 +391,7 @@ bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     BaseObject* target = ResolveMinorReference(field, stw);
     // Static / RO slots may hold non-heap objects (never evacuated). Colouring them
     // changes the bit pattern so equal-skip misses, then CAS faults on RELRO.
-    // Same heap gate as FindToVersion.
+    // Only managed heap addresses have forwarding entries.
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
@@ -483,7 +413,7 @@ bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
     const bool alreadyTo = (target != oldObj) || compactDestination;
     BaseObject* current = target;
-    const bool hasForwardingFace = targetRegion != nullptr && targetRegion->FromPageLiveMap() != nullptr;
+    const bool hasForwardingFace = targetRegion != nullptr && forwarding_for_page(targetRegion) != nullptr;
     if (!alreadyTo && hasForwardingFace && IsFromObject(target) && !IsUnmovableFromObject(target)) {
         // installdomain: route-domain grant before ForwardObject → GetRoute.
         EnsureRouteDomainMembership(target);
@@ -543,7 +473,7 @@ bool ZRelocate::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* 
         targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
     const bool alreadyTo = (target != oldObj) || compactDestination;
     BaseObject* current = target;
-    const bool hasForwardingFace = targetRegion != nullptr && targetRegion->FromPageLiveMap() != nullptr;
+    const bool hasForwardingFace = targetRegion != nullptr && forwarding_for_page(targetRegion) != nullptr;
     if (!alreadyTo && hasForwardingFace && IsFromObject(target) && !IsUnmovableFromObject(target)) {
         // Last-chance domain paint while FORWARDABLE (grant pass covers the bulk case;
         // this catches roots dirtied after the grant pass or parallel races).
@@ -560,12 +490,11 @@ bool ZRelocate::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* 
     }
     if (current == nullptr) {
 
-        // I2: Forward miss still consults FindToVersion/receipt. Stale miss
+        // I2: Forward miss still consults the generation relocation entry. Stale miss
         // refuses silently leaving from (seqnum-bounded table already rejects
         // expired entries). ⛔ Do not reinstall from; ⛔ do not StorePlain(null).
         const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, &Heap::GetHeap().young().relocate(), &root };
-        BaseObject* viaTable = ZRelocate::FindToVersion(target, Generation::Young).GetOrFailClosed(
-            "ZRelocate::FixMinorEvacuatedSlot", provenance);
+        BaseObject* viaTable = ZGeneration::young()->relocate_or_remap_object(target, provenance);
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
@@ -778,7 +707,7 @@ static CompactedMissClass ClassifyCompactedMiss(ZPage* region, BaseObject* obj)
             return CompactedMissClass::kAlreadyToStart;
         }
     }
-    if (region->IsOwnerSurvivedObject(off)) {
+    if (region->is_object_live(to_zaddress(region->GetRegionStart() + off))) {
         return CompactedMissClass::kReceiptOwed;
     }
     if (addr >= allocPtr) {
@@ -876,7 +805,7 @@ BaseObject* ZRelocate::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& l
     // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
     // SetGCPhase publishes before handshake, so a mutator that retained across
     // FORWARD→IDLE must not copy. Release and let
-    // the existing FindToVersion / wait legs consume the published table.
+    // the existing forwarding lookup / wait legs consume the published table.
     if (generation == nullptr || !generation->is_phase_relocate()) {
         lease.Release();
         return nullptr;
@@ -895,16 +824,6 @@ BaseObject* ZRelocate::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& l
         return nullptr;
     }
     return toVersion;
-}
-
-FindToVersionResult ZRelocate::FindToVersion(BaseObject* obj, Generation generation)
-{
-    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-        return FindToVersionResult::NotManaged();
-    }
-    const MAddress to = forwarding_find(generation, reinterpret_cast<MAddress>(obj));
-    return to != 0 ? FindToVersionResult::Found(reinterpret_cast<BaseObject*>(to))
-                   : FindToVersionResult::NotForwarded();
 }
 
 bool ZRelocate::IsAlreadyToStoreValue(BaseObject* target, Generation generation)
@@ -962,13 +881,13 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
                 return current;
             }
         }
-        FindToVersionResult found = ZRelocate::FindToVersion(current, generation);
+        const MAddress found = forwarding_find(generation, currentAddr);
         // A forwarding entry qualifies one hop, not necessarily the final
         // load-good value. The destination can already belong to the next
         // relocation set; follow that address-keyed forwarding generation too.
         // ZGC's load barrier returns only after remap/relocate has produced the
         // current address (zBarrier.inline.hpp:294-343; zRelocate.cpp:382-416).
-        if (BaseObject* to = found.found()) {
+        if (BaseObject* to = reinterpret_cast<BaseObject*>(found)) {
             const HandVerdict verdict = ZBarrier::JudgeHandOutTarget(to);
             if (verdict == HandVerdict::Usable) {
                 // from->from is the explicit whole-page in-place receipt
@@ -1048,8 +967,8 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
             // In-place completion must have published its identity receipt;
             // without it, returning current would recreate the removed
             // lookup-miss fallback.
-            FindToVersionResult identity = ZRelocate::FindToVersion(current, generation);
-            if (identity.found() == current &&
+            const MAddress identity = forwarding_find(generation, currentAddr);
+            if (identity == currentAddr &&
                 ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
                 return current;
             }
@@ -1256,9 +1175,9 @@ template<typename Fn>
 void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn&& fn)
 {
     // ZPage::object_iterate (zPage.inline.hpp:319-331) over the original page's
-    // livemap: the from-page carrier's map when published, else the page's own.
-    ZGenerationId id;
-    ZLiveMap* map = RouteLiveMap(region, id);
+    // livemap, retained until in_place_relocation_finish.
+    const ZGenerationId id = region->generation_id();
+    ZLiveMap* map = &region->livemap();
     if (map == nullptr) {
         return;
     }
@@ -1659,7 +1578,7 @@ void RegionManager::ForwardRegion(ZPage* region)
     // census (~128/run after the unmarked-arm gate below) was fed from here. Only the
     // YOUNG pass may prove a young region empty (zGeneration.cpp:216-221: each generation
     // frees only pages its own mark examined).
-    if (region->IsRouteKnownEmpty() && !(youngRegion && G == Generation::Old)) {
+    if ((region->IsYoungRegion() ? region->IsKnownYoungEmpty() : region->IsKnownEmpty()) && !(youngRegion && G == Generation::Old)) {
         // cjpmnull2: IsKnownEmpty is now ZGC-shaped (this-cycle marked ∧ live==0).
         // Only those pages are empty; collect them (zGeneration.cpp:216-221).
         if (youngRegion) {
@@ -1676,8 +1595,8 @@ void RegionManager::ForwardRegion(ZPage* region)
     // that has not been copied (route=3). live==0 FORWARDABLE is true dead.
     {
         const bool incompleteRoute = region->IsRoutingState() && !region->IsForwardingDone();
-        ZGenerationId routeId;
-        ZLiveMap* routeMap = RouteLiveMap(region, routeId);
+        const ZGenerationId routeId = region->generation_id();
+        ZLiveMap* routeMap = &region->livemap();
         const bool routeMarked = routeMap != nullptr && routeMap->is_marked(routeId);
         const bool liveResidual = routeMarked && routeMap->live_bytes() > 0;
         // hangfloor: young neverExamined×keep fills the heap. Old from-pages
