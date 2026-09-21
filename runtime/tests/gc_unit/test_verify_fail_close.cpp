@@ -306,7 +306,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerify, RuntimeRejectsUnallocatedRootBeforeMark)
         param.heapParam.heapSize = 32 * 1024;
         if (InitCJRuntime(&param) != E_OK) { _exit(121); }
         auto& heap = Heap::GetHeap();
-        const MAddress bad = heap.GetAllocator().GetSpaceEndAddress() - sizeof(void*);
+        const MAddress bad = heap.GetSpaceEndAddress() - sizeof(void*);
         // Existence qualification precedes the target check and has a distinct rc.
         if (Heap::is_in(bad)) { _exit(122); }
         NativeSlot* root = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
