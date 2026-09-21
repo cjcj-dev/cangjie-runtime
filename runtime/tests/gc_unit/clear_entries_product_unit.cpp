@@ -92,11 +92,6 @@ public:
         }
     }
 
-    static void Exempt(RegionManager& manager, ZPage* region)
-    {
-        manager.ExemptFromRegion(region);
-    }
-
     static RefField<> QualifyStoreValue(Heap& collector, BaseObject* value)
     {
         return ZBarrier::GetAndTryTagRefField(value);
@@ -630,14 +625,14 @@ RememberedSet& DeliveryRememberedSet(GcHeapFixture& fx)
 
 class DeliveryNoAllocBufferScope final {
 public:
-    DeliveryNoAllocBufferScope() : saved(ThreadLocal::GetAllocBuffer())
+    DeliveryNoAllocBufferScope() : saved(ThreadLocal::GetThreadLocalData()->buffer)
     {
-        ThreadLocal::SetAllocBuffer(nullptr);
+        ThreadLocal::GetThreadLocalData()->buffer = nullptr;
     }
 
     ~DeliveryNoAllocBufferScope()
     {
-        ThreadLocal::SetAllocBuffer(saved);
+        ThreadLocal::GetThreadLocalData()->buffer = saved;
     }
 
 private:

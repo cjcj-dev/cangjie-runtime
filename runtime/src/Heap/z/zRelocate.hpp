@@ -178,7 +178,6 @@ public:
     static BaseObject* ForwardObjectExclusive(BaseObject* object);
     static void UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
     static bool IsFromObject(BaseObject* object);
-    static bool IsUnmovableFromObject(BaseObject* object);
     static void RemapYoungRoots();
     static void StartRelocationTasks(ZGenerationId generation);
 

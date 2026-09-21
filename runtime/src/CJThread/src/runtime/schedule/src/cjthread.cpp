@@ -19,6 +19,7 @@
 #include "securec.h"
 
 #include "Mutator/Mutator.inline.h"
+#include "Mutator/ThreadSMR.h"
 
 #include "cjthread.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT)
@@ -168,6 +169,13 @@ void CJThreadFree(struct CJThread *cjthread, bool reuse)
     if (reuse && (schedule == nullptr || targetSchedule == nullptr)) {
         LOG_ERROR(ERRNO_SCHD_UNINITED, "schedule not inited");
         return;
+    }
+    // Failed publication/cancelled tasks may never execute the ordinary exit
+    // transition. Retire their identity before recycling the scheduling carrier.
+    if (cjthread->mutator != nullptr && g_scheduleManager.destructorFunc != nullptr) {
+        auto* mutator = cjthread->mutator;
+        cjthread->mutator = nullptr;
+        g_scheduleManager.destructorFunc(mutator);
     }
 #if defined(CANGJIE_TSAN_SUPPORT)
     MapleRuntime::Sanitizer::TsanDeleteRaceState(cjthread);
@@ -750,6 +758,11 @@ static void GsStackContextInit(struct CJThread *newCJThread)
 MRT_STATIC_INLINE void CJThreadMake(const struct CJThreadAttrInner *attr,
                                     CJThreadFunc func, struct CJThread *newCJThread)
 {
+    // JavaThread construction precedes Threads::add and first execution.
+    // CJThread is a reusable carrier; Mutator is a fresh logical identity.
+    newCJThread->mutator = MapleRuntime::Mutator::NewMutator();
+    newCJThread->mutator->SetCjthreadPtr(newCJThread);
+    MapleRuntime::ThreadsSMRSupport::add_thread(newCJThread->mutator);
     newCJThread->func = func;
     (void)memset_s(&newCJThread->context, sizeof(struct CJThreadContext), 0, sizeof(struct CJThreadContext));
 
@@ -2078,7 +2091,7 @@ int CJThreadSetMutator(void *mutator)
         return ERRNO_SCHD_CJTHREAD_NULL;
     }
     cjthread->mutator = reinterpret_cast<MapleRuntime::Mutator*>(mutator);
-    cjthread->mutator->SetCjthreadPtr(cjthread);
+    if (cjthread->mutator != nullptr) { cjthread->mutator->SetCjthreadPtr(cjthread); }
     return 0;
 }
 

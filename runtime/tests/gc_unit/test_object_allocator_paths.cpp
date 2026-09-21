@@ -137,7 +137,7 @@ void* AllocateTLABSlices(void*)
     constexpr size_t bytes = 256;
     type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    auto* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    auto* buffer = AllocBuffer::GetAllocBuffer();
     buffer->ClearRegion();
     const size_t requested = buffer->ComputeTLABSize(bytes, Heap::GetHeap().unsafe_max_tlab_alloc());
     const uintptr_t first = reinterpret_cast<uintptr_t>(MCC_NewObject(type, bytes));

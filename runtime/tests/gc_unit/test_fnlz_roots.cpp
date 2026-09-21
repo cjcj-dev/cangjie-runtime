@@ -18,19 +18,18 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-GC_OTHER_VM_TEST(FnlzRoots, RegistrationTransferPreservesSlotAndYoungEpoch)
+GC_OTHER_VM_TEST(FnlzRoots, RegistrationPreservesSlotAndYoungEpoch)
 {
     // A native handle is stored at creation, not recolored when its owning
     // list changes: weakHandle.cpp:39-50, zBarrierSet.inline.hpp:258-265.
-    Mutator mutator;
     auto& processor = Heap::GetHeap().GetFinalizerProcessor();
     alignas(8) unsigned char storage[16] = {};
-    mutator.AddLocalFinalizer(reinterpret_cast<BaseObject*>(storage));
-    auto& local = mutator.GetLocalFinalizers();
-    NativeSlot* const originalSlot = &local.front();
+    processor.RegisterFinalizer(reinterpret_cast<BaseObject*>(storage));
+    NativeSlot* originalSlot = nullptr;
+    processor.VisitFinalizers([&](NativeSlot& slot) { originalSlot = &slot; });
+    GC_EXPECT_TRUE(originalSlot != nullptr);
     const zpointer originalWord = originalSlot->GetFieldValue();
     ZGlobalsPointers::flip_young_mark_start();
-    processor.RegisterFinalizers(local);
     size_t seen = 0;
     processor.VisitFinalizers([&](NativeSlot& slot) {
         ++seen;
@@ -41,7 +40,6 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistrationTransferPreservesSlotAndYoungEpoch)
         GC_EXPECT_FALSE(ZPointer::is_marked_young(to_zpointer(raw(slot.GetFieldValue()))));
     });
     GC_EXPECT_EQ(seen, size_t(1));
-    GC_EXPECT_TRUE(local.empty());
 }
 
 GC_TEST(FnlzRoots, RegisteredFinalizerIsRawPointerButNotStrongRoot)
@@ -161,19 +159,20 @@ GC_TEST(FnlzRoots, EnqueueBetweenIdleCheckAndCommitKeepsJobVisible)
 }
 #endif
 
-GC_OTHER_VM_TEST(FnlzRoots, SharedBlockHandlesSurviveGrowthAndTransfer)
+GC_OTHER_VM_TEST(FnlzRoots, SharedBlockHandlesSurviveRegistrationGrowth)
 {
-    Mutator mutator;
     auto& processor = Heap::GetHeap().GetFinalizerProcessor();
     alignas(8) unsigned char objects[130][16] = {};
     std::vector<NativeSlot*> slots;
     std::vector<zpointer> words;
     for (auto& object : objects) {
-        mutator.AddLocalFinalizer(reinterpret_cast<BaseObject*>(object));
-        slots.push_back(&mutator.GetLocalFinalizers().back());
+        auto* value = reinterpret_cast<BaseObject*>(object);
+        processor.RegisterFinalizer(value);
+        processor.VisitFinalizers([&](NativeSlot& slot) {
+            if (to_object(slot.GetTargetObject()) == value) { slots.push_back(&slot); }
+        });
         words.push_back(slots.back()->GetFieldValue());
     }
-    processor.RegisterFinalizers(mutator.GetLocalFinalizers());
     size_t observed = 0;
     processor.VisitFinalizers([&](NativeSlot& slot) {
         auto found = std::find(slots.begin(), slots.end(), &slot);
@@ -184,7 +183,6 @@ GC_OTHER_VM_TEST(FnlzRoots, SharedBlockHandlesSurviveGrowthAndTransfer)
     });
     std::fprintf(stderr, "ROOT_STORAGE_TARGET finalizer_registered=%zu expected=%zu\n", observed, slots.size());
     GC_EXPECT_EQ(observed, slots.size());
-    GC_EXPECT_TRUE(mutator.GetLocalFinalizers().empty());
 }
 
 GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)

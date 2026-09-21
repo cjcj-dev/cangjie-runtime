@@ -28,13 +28,13 @@ zpointer StoreBadPointer(BaseObject* object)
 
 class AllocBufferScope final {
 public:
-    explicit AllocBufferScope(AllocBuffer& alloc) : alloc(alloc), saved(ThreadLocal::GetAllocBuffer())
+    explicit AllocBufferScope(AllocBuffer& alloc) : alloc(alloc), saved(ThreadLocal::GetThreadLocalData()->buffer)
     {
-        ThreadLocal::SetAllocBuffer(&alloc);
+        ThreadLocal::GetThreadLocalData()->buffer = &alloc;
     }
     ~AllocBufferScope()
     {
-        ThreadLocal::SetAllocBuffer(saved);
+        ThreadLocal::GetThreadLocalData()->buffer = saved;
         alloc.ClearRegion();
     }
 

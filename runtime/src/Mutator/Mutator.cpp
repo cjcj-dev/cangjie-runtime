@@ -172,26 +172,17 @@ void Mutator::InitProtectStackAddr()
     ThreadLocal::SetProtectAddr(reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(stackBoundAddr) + reversedSize));
 }
 
-// NativeAccess::oop_store at handle creation (weakHandle.cpp:39-50 /
-// zBarrierSet.inline.hpp:258-265). Keep that slot and its epoch through transfer.
-void Mutator::AddLocalFinalizer(BaseObject* object)
-{
-    localFinalizers.push_back(Heap::GetHeap().GetFinalizerProcessor().AllocateFinalizerHandle(object));
-}
-
 void Mutator::ResetMutator()
 {
     CHECK_DETAIL(nativeFrameRoots.empty(), "native frame roots are not released");
     SetManagedContext(false);
     StorePlain(rawObject, zaddress::null);
-    if (!localFinalizers.empty()) {
-        Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
-    }
     // Exit publishes the logical owner's private work before scheduler
     // unbinding can expose another owner through this OS TLS binding.
     Heap& heap = Heap::GetHeap();
     gcData.storeBarrierBuffer->Flush();
     (void)heap.FlushGCDataMarkProducers(gcData);
+    ReleaseAllocBuffer();
     uwContext.Reset();
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
     // BeginCatch would have performed, or the guard stays expanded with nothing left to
@@ -206,8 +197,8 @@ void Mutator::ResetMutator()
         StackGuardRecover();
     }
     exceptionWrapper.ClearInfo();
-    // stackwm #1 lifecycle: exit/reset closes watermark (must not leave SCANNING dangling).
-    stackWatermark.Reset();
+    // The detached identity's watermark/statistics belong to outstanding
+    // ThreadsListHandles until smr_delete; only construction initializes them.
     MutatorUnlock();
 }
 
@@ -796,12 +787,6 @@ static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool
 
 bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
-    MutatorLock();
-    auto& localFins = GetLocalFinalizers();
-    if (!localFins.empty()) {
-        Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFins);
-    }
-    MutatorUnlock();
     // ZGC zStackWatermark.cpp:163-214: the closure reads the color saved in
     // start_processing_impl, not the previous epoch's headColor.
     RootVisitor visitor = [this, young, stackScanEpoch](ObjectRef& root) {
@@ -903,15 +888,10 @@ void Mutator::TransitionToCpuProfileExclusive()
     HandleCpuProfile();
 }
 
-void Mutator::ReleaseForeignThread()
+void Mutator::ReleaseAllocBuffer()
 {
-    AllocBuffer* buffer = foreignThreadInfo.allocBuffer;
-    foreignThreadInfo.allocBuffer = nullptr;
-
-    if (buffer != nullptr) {
-        buffer->Fini();
-        delete buffer;
-    }
+    AllocBuffer* buffer = tlab();
+    buffer->Fini();
     // We can remove foreign thread c-heap resource here.
 }
 } // namespace MapleRuntime

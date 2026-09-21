@@ -29,7 +29,7 @@ enum class ThreadType { CJ_PROCESSOR = 0, GC_THREAD, FP_THREAD, HOT_UPDATE_THREA
 // must in the first place, followed by the internal tls.
 struct ThreadLocalData {
     // External thread local var.
-    AllocBuffer* buffer;
+    AllocBuffer* buffer; // ABI publication of the current mutator TLAB; never owns storage.
     Mutator* mutator;
     uint8_t* cjthread;
     uint8_t* schedule;
@@ -86,9 +86,6 @@ public:
 
     static Mutator* GetMutator() { return GetThreadLocalData()->mutator; }
 
-    static AllocBuffer* GetAllocBuffer() { return GetThreadLocalData()->buffer; }
-
-    static void SetAllocBuffer(AllocBuffer* buffer) { GetThreadLocalData()->buffer = buffer; }
 
     static uint8_t* GetPreemptFlag() { return GetThreadLocalData()->preemptFlag; }
 

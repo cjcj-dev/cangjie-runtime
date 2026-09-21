@@ -62,6 +62,9 @@ public:
     // Called when a mutator starts and finishes, respectively.
     void Init()
     {
+        // JavaThread construction initializes its TLAB before publication
+        // (javaThread.cpp:600). A parked owner can be scanned immediately.
+        allocBuffer.Init();
         gcData.Attach(this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));
         observerCnt = 0;
         inManagedContext.store(true);
@@ -77,6 +80,7 @@ public:
         // Wait for target inventory users while the lock and roots are still
         // alive, before any Mutator member destruction can begin.
         gcData.Detach();
+        ReleaseAllocBuffer();
         tid = 0;
         stackBoundAddr = nullptr;
 
@@ -305,8 +309,7 @@ public:
 
     bool GcPhaseEnum(bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
-    AllocBuffer* GetAllocBuffer() const { return foreignThreadInfo.allocBuffer; }
-    void SetAllocBuffer(AllocBuffer* buffer) { foreignThreadInfo.allocBuffer = buffer; }
+    AllocBuffer* tlab() { return &allocBuffer; }
     static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
 
     inline void HandleCpuProfile();
@@ -414,7 +417,6 @@ public:
         return obj;
     }
 
-    void AddLocalFinalizer(BaseObject* obj);
 
     void MutatorLock() { mutatorLock.lock(); }
 
@@ -422,9 +424,6 @@ public:
 
     void PreparedToRun(ThreadLocalData* tlData)
     {
-        if (UNLIKELY(tlData->buffer == nullptr)) {
-            (void)AllocBuffer::GetOrCreateAllocBuffer();
-        }
         RegisterCurrentMarkFlushThread();
         UpdatePollValues(tlData);
         DoLeaveSaferegion();
@@ -464,7 +463,6 @@ public:
         InitTid();
         foreignThreadInfo.isForeignThread = true;
         foreignThreadInfo.isExit = false;
-        foreignThreadInfo.allocBuffer = ThreadLocal::GetAllocBuffer();
         foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
         RegisterCurrentMarkFlushThread();
     }
@@ -485,7 +483,7 @@ public:
         foreignThreadInfo.isExit = true;
     }
 
-    void ReleaseForeignThread();
+    void ReleaseAllocBuffer();
 
     // Observe-only: in-flight SATB node (not yet FlushQueue'd).
     // ZMark::flush publishes this thread's single store buffer.
@@ -512,7 +510,6 @@ protected:
     void CreateCurrentGCInfo();
 
 private:
-    NativeRootHandles& GetLocalFinalizers() { return localFinalizers; }
     // thread id
     uint32_t tid = 0;
     // cjthread ptr
@@ -542,7 +539,6 @@ private:
     ThreadGCData gcData;
     std::deque<ObjectRef> nativeFrameRoots;
 
-    NativeRootHandles localFinalizers;
 
     // this flag is used for gc unwind stack, when runtime-thread stack doesn't include managed frame,
     // we don't need to scan it.
@@ -558,12 +554,12 @@ private:
     struct ForeignThreadInfo {
         bool isForeignThread = { false };
         bool isExit = { false };
-        AllocBuffer* allocBuffer = { nullptr };
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
 
 
 
+    AllocBuffer allocBuffer; // HotSpot Thread::_tlab, thread.hpp:258.
     StackWatermark stackWatermark;
 
 public:

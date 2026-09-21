@@ -1060,7 +1060,6 @@ EXPORTS
     _ZN12MapleRuntime11AllocBuffer11FlushRegionEv @1159
     _ZN12MapleRuntime11AllocBuffer12AllocateImplEyNS_9AllocTypeE @1160
     _ZN12MapleRuntime11AllocBuffer14GetAllocBufferEv @1161
-    _ZN12MapleRuntime11AllocBuffer22GetOrCreateAllocBufferEv @1162
     _ZN12MapleRuntime11AllocBuffer4FiniEv @1165
     _ZN12MapleRuntime11AllocBuffer4InitEv @1166
     _ZN12MapleRuntime11AllocBuffer8AllocateEyNS_9AllocTypeE @1167
@@ -1258,7 +1257,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager13ReclaimRegionEPNS_10ZPageE @1417
     _ZN12MapleRuntime13RegionManager13ReleaseRegionEPNS_10ZPageE @1418
     _ZN12MapleRuntime13RegionManager15CountLiveObjectEPKNS_10BaseObjectE @1419
-    _ZN12MapleRuntime13RegionManager16ExemptFromRegionEPNS_10ZPageE @1420
     _ZN12MapleRuntime13RegionManager16RequestForRegionEy @1421
     _ZN12MapleRuntime13RegionManager17PromoteAllRegionsEv @1423
     _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEv @1425
@@ -1268,7 +1266,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager21ReleaseMarkQuarantineEv @1433
     _ZN12MapleRuntime13RegionManager21StampCensusBoundariesEv @1434
     _ZN12MapleRuntime13RegionManager28TakeReclaimableGarbageRegionEPy @1450
-    _ZN12MapleRuntime13RegionManager29PrepareYoungGarbageCandidatesEv @1451
     _ZN12MapleRuntime13RegionManager29ReclaimRegionToMarkQuarantineEPNS_10ZPageE @1452
     _ZN12MapleRuntime13RegionManager30AssembleLargeGarbageCandidatesEv @1453
     _ZN12MapleRuntime13RegionManager30AssembleSmallGarbageCandidatesEv @1454
@@ -1364,7 +1361,6 @@ EXPORTS
     _ZN12MapleRuntime14MutatorManager20CreateRuntimeMutatorENS_10ThreadTypeE @1580
     _ZN12MapleRuntime14MutatorManager20TransitMutatorToExitEv @1581
     _ZN12MapleRuntime14MutatorManager21DestroyRuntimeMutatorENS_10ThreadTypeE @1582
-    _ZN12MapleRuntime14MutatorManager22DestroyExpiredMutatorsEv @1585
     _ZN12MapleRuntime14MutatorManager26ConcurrentStackScanEnabledEv @1588
     _ZN12MapleRuntime14MutatorManager26WaitUntilAllMutatorStoppedEv @1589
     _ZN12MapleRuntime14MutatorManager29AcquireMutatorManagementWLockEv @1590
@@ -1537,15 +1533,12 @@ EXPORTS
     _ZN12MapleRuntime17ScopedAllocBufferD1Ev @1827
     _ZN12MapleRuntime17ScopedAllocBufferD2Ev @1828
     _ZN12MapleRuntime17TYPEINFO_PTR_SIZEE @1848 DATA
-    _ZN12MapleRuntime18AllocBufferManager17RemoveAllocBufferERNS_11AllocBufferE @1852
-    _ZN12MapleRuntime18AllocBufferManagerD2Ev @1853
     _ZN12MapleRuntime18FinalizerProcessor11WaitStartedEv @1872
     _ZN12MapleRuntime18FinalizerProcessor12VisitGCRootsERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEE @1873
     _ZN12MapleRuntime18FinalizerProcessor13NotifyStartedEv @1874
     _ZN12MapleRuntime18FinalizerProcessor19VisitNativePointersERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEE @1875
     _ZN12MapleRuntime18FinalizerProcessor17RegisterFinalizerEPNS_10BaseObjectE @1877
     _ZN12MapleRuntime18FinalizerProcessor18ReclaimHeapGarbageEv @1878
-    _ZN12MapleRuntime18FinalizerProcessor18RegisterFinalizersERNSt3__14listINS_8RootSlotENS_21StdContainerAllocatorIS3_LNS_13AllocationTagE0EEEEE @1879
     _ZN12MapleRuntime18FinalizerProcessor19ProcessFinalizablesEv @1881
     _ZN12MapleRuntime18FinalizerProcessor21InitFinalizerCJThreadEv @1882
     _ZN12MapleRuntime18FinalizerProcessor22ProcessFinalizableListEv @1883

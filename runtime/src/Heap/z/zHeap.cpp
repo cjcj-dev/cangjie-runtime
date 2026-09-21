@@ -225,7 +225,6 @@ bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
 
 bool Heap::IsGhostFromObject(BaseObject* obj) const { return ZRelocate::IsFromObject(obj); }
 
-bool Heap::IsUnmovableFromObject(BaseObject* obj) const { return ZRelocate::IsUnmovableFromObject(obj); }
 
 BaseObject* Heap::ForwardObject(BaseObject* fromVersion, Generation generation)
 {
@@ -389,9 +388,7 @@ FinalizerProcessor& Heap::GetFinalizerProcessor() { return ZCollectedHeap::heap(
 
 void Heap::StopGCWork() { ZCollectedHeap::stop(); }
 
-void Heap::RegisterAllocBuffer(AllocBuffer& buffer) { GetAllocator().RegisterAllocBuffer(buffer); }
 
-void Heap::RemoveAllocBuffer(AllocBuffer &buffer) { GetAllocator().RemoveAllocBuffer(buffer); }
 
 void Heap::VisitAllExportRoots(const NativeSlotVisitor &visitor)
 {

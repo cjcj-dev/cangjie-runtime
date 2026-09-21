@@ -126,14 +126,10 @@ bool StackWatermark::start_processing_impl(Mutator& mutator, void* context, uint
     }
     save_old_watermark(mutator);
     process_head(mutator, context, visitor, invisibleRootVisitor);
-    AllocBuffer* buffer = mutator.GetAllocBuffer();
-    if (buffer != nullptr) {
-        const bool youngMark = ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();
-        const bool oldMark = ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark();
-        if (youngMark || oldMark) {
-            buffer->RetireTLAB(true);
-            ++allocStats.retired;
-        }
+    const bool youngMark = ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();
+    const bool oldMark = ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark();
+    if (youngMark || oldMark) {
+        ZThreadLocalAllocBuffer::retire(mutator, allocStats);
     }
     if (mutator.GetGCData().storeBarrierBuffer != nullptr) {
         mutator.GetGCData().storeBarrierBuffer->on_new_phase();

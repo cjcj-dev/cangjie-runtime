@@ -25,6 +25,9 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
 {
     ThreadLocal::InitializeCleaner();
     mutator = newMutator;
+    // One publication point for all scheduler binding paths. The logical
+    // thread owns its TLAB; generated allocation code borrows this ABI slot.
+    buffer = newMutator != nullptr ? newMutator->tlab() : nullptr;
     if (newMutator != nullptr) {
         auto& data = newMutator->GetGCData();
         data.Attach(newMutator, nullptr, data.invisibleRoot);
@@ -75,7 +78,7 @@ void ThreadLocal::FlushCurrentThreadMarkStacks()
     // it is detached. An idle owner has no publication to perform. Pending
     // stacks, buffered stores, or an allocation-context producer still take
     // the collector path; never use collector absence to discard work.
-    if (tls->buffer == nullptr && empty(tls->gcData) && empty(tls->nativeGCData)) {
+    if (tls->mutator == nullptr && empty(tls->gcData) && empty(tls->nativeGCData)) {
         return;
     }
     Heap& heap = Heap::GetHeap();

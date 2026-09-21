@@ -19,9 +19,24 @@
 #include "Heap/z/zMarkStackEntry.hpp"
 
 #include "Heap/z/zTLABUsage.hpp"
+#include "Heap/z/zValue.hpp"
 #include "Heap/z/zPageFwd.hpp"
 #include "Base/Globals.h"
 namespace MapleRuntime {
+class Mutator;
+// ZGC zThreadLocalAllocBuffer.hpp:31-46: worker statistics are distinct
+// from the active thread's ThreadLocalAllocBuffer and its watermark snapshot.
+class ZThreadLocalAllocBuffer {
+public:
+    static void initialize();
+    static void reset_statistics();
+    static void publish_statistics();
+    static void retire(Mutator& thread, TLABStatistics& stats);
+    static void update_stats(Mutator& thread);
+private:
+    static ZPerWorker<TLABStatistics>* statistics;
+};
+
 // HotSpot gcUtil.cpp:29-56, TLABAllocationWeight=35. Startup samples
 // use 1/n until the configured weight dominates.
 class AllocBuffer {
@@ -30,7 +45,6 @@ public:
     ~AllocBuffer();
     void Init();
     void Fini();
-    static AllocBuffer* GetOrCreateAllocBuffer();
     static AllocBuffer* GetAllocBuffer();
 
     MAddress Allocate(size_t size, AllocType allocType);
@@ -62,6 +76,7 @@ private:
         uintptr_t start = 0;
     };
     TLAB tlab;
+    bool initialized = false;
     static constexpr size_t MinTLABSize = 2 * 1024;
     uintptr_t AllocateInTLAB(size_t size);
 

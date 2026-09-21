@@ -451,6 +451,55 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     parked->PopNativeFrameRootsTo(frameMark);
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
+GC_OTHER_VM_TEST(YoungMarkStart, DoesNotParkPreviousFromPages)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    RelocationReceiptTest::BindNativeRootFixture(heap);
+    fx.region0->reset(PageAge::eden);
+    fx.region0->SetRegionRole(ZPageRole::From);
+    heap.young().pause_mark_start();
+    const auto role = fx.region0->GetRegionRole();
+    std::fprintf(stderr, "YOUNG_PAGE_PHASE_ASSERT executed=1 role=%u expected=%u\n",
+                 unsigned(role), unsigned(ZPageRole::From));
+    GC_EXPECT_EQ(role, ZPageRole::From);
+}
+
+// ZGC zGeneration.cpp:855-883 and zMark.cpp:853-891: mark-start
+// publishes a new epoch; the concurrent root task consumes parked stacks.
+GC_OTHER_VM_TEST(YoungMarkStart, ParkedRootDeferredToConcurrentMark)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    RelocationReceiptTest::BindNativeRootFixture(heap);
+    fx.region0->reset(PageAge::eden);
+    fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart() + 64);
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + 64);
+    Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    parked->SetManagedContext(false);
+    (void)parked->EnterSaferegion(false);
+    const size_t frameMark = parked->NativeFrameRootCount();
+    parked->AddNativeFrameRoot(fx.obj0);
+
+    heap.young().pause_mark_start();
+    const uint32_t epoch = StackWatermark::epoch_id();
+    const bool doneAtStart = parked->GetStackWatermark().IsDone(epoch);
+    const bool liveAtStart = fx.region0->is_object_strongly_live(from_object(fx.obj0));
+    heap.young().concurrent_mark();
+    const bool doneAfterRoots = parked->GetStackWatermark().IsDone(epoch);
+    const bool liveAfterRoots = fx.region0->is_object_strongly_live(from_object(fx.obj0));
+    parked->PopNativeFrameRootsTo(frameMark);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    std::fprintf(stderr, "YOUNG_ROOT_PHASE_ASSERT executed=1 start_done=%u start_live=%u concurrent_done=%u concurrent_live=%u\n",
+                 unsigned(doneAtStart), unsigned(liveAtStart), unsigned(doneAfterRoots), unsigned(liveAfterRoots));
+    GC_EXPECT_FALSE(doneAtStart);
+    GC_EXPECT_FALSE(liveAtStart);
+    GC_EXPECT_TRUE(liveAfterRoots);
+    GC_EXPECT_TRUE(doneAfterRoots);
+}
+
 GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
 {
     PrintNativeRootMaps();

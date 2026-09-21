@@ -399,6 +399,7 @@ MAIN_SOURCES=(
   "$SRC/test_payload_clamp.cpp"
   "$SRC/test_write_generic.cpp"
   "$SRC/test_cycle_ref_saferegion.cpp"
+  "$SRC/test_thread_smr_reclaim.cpp"
 )
 
 PUBLICATION_COMPILE_FLAGS=(

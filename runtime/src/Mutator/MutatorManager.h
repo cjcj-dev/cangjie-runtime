@@ -102,8 +102,7 @@ public:
     bool TryAcquireMutatorManagementRLock()
     {
         // Writer-preference: defer to a pending writer so a non-blocking reader does
-        // not help starve the GC's mutator-list write lock. The caller (DestroyMutator)
-        // already handles a false return by deferring the mutator to expiringMutators.
+        // not help starve the GC's mutator-list write lock.
         if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
             return false;
         }
@@ -279,7 +278,6 @@ public:
 
     void MutatorManagementWUnlock() { mutatorManagementRWLock.UnlockWrite(); }
 
-    void DestroyExpiredMutators();
 
     bool HasNativeMutator();
 
@@ -316,9 +314,6 @@ public:
     }
 
     private:
-    using ExpiredMutatorList = std::list<Mutator*, StdContainerAllocator<Mutator*, MUTATOR_LIST>>;
-    ExpiredMutatorList expiringMutators;
-    std::mutex expiringMutatorListLock;
 
     // guard mutator set for stop-the-world/light-sync
     RwLock mutatorManagementRWLock;
@@ -345,8 +340,6 @@ public:
 
     // Runtime mutators are not necessarily owned by a scheduler CJThread, so
     // keep them in the same participant inventory explicitly.
-    std::mutex runtimeMutatorRegistryMutex;
-    std::unordered_set<Mutator*> runtimeMutators;
     std::mutex markFlushThreadMutex;
     std::unordered_map<ThreadLocalData*, std::unique_ptr<MarkFlushThread>> markFlushThreads;
 

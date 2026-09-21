@@ -266,12 +266,10 @@ private:
     std::vector<BaseObject*> youngReachableVec;
     MinorSlotSet youngConsumedSlots;
     MinorInteriorBaseMap youngRemsetInteriorBases;
-    YoungCollectionStats youngStats;
     uint64_t youngStartNs = 0;
     size_t youngLiveRememberedCount = 0;
     bool youngFullScan = false;
     WorkStack youngWorkStack;
-    uint64_t youngStackScanEpoch = 0;
     YoungConcWindowStats youngConcWindow;
     uint64_t youngConcWindowStartNs = 0;
     MinorSlotSet youngWeakSlots;

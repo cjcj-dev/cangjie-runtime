@@ -1523,8 +1523,6 @@ int ScheduleAllCJThreadListAdd(struct CJThread *cjthread, CJThreadCreateSource c
                     cjthread->schedule->scheduleType, scheduleState);
         return -1;
     }
-    cjthread->mutator = MapleRuntime::Mutator::NewMutator();
-    cjthread->mutator->MapleRuntime::Mutator::SetCjthreadPtr(static_cast<void*>(cjthread));
     // Finalizer cjthread is not added to the list to avoid accessing the finalizer mutator twice in
     // VisitAllMutators, and to prevent cjthread dfx from counting the cjthread of the finalizer
     if (UNLIKELY(createSource == CJTHREAD_CREATE_SOURCE_FINALIZER)) {
@@ -1634,7 +1632,9 @@ void ScheduleAllCJThreadListRemove(struct CJThread *cjthread)
     // Cooperate with Cangjie GC to release the mutator.
     SchdDestructorHookFunc hook_func = g_scheduleManager.destructorFunc;
     if (hook_func != nullptr && cjthread->mutator) {
-        hook_func(cjthread->mutator);
+        auto* mutator = cjthread->mutator;
+        cjthread->mutator = nullptr;
+        hook_func(mutator);
     }
 }
 
@@ -2231,7 +2231,7 @@ void CJForeignThreadExit(CJThreadHandle foreignThread)
     }
     MapleRuntime::Mutator* mutator = foreignCJThread->mutator;
     if (mutator != nullptr && mutator->IsForeignThread()) {
-        mutator->ReleaseForeignThread();
+        mutator->ReleaseAllocBuffer();
     }
     ScheduleNonDefaultFree(schedule);
 }

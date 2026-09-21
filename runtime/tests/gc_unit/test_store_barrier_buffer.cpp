@@ -68,14 +68,14 @@ MAddress SlotAt(GcHeapFixture& fx, size_t i)
 
 class AllocBufferScope final {
 public:
-    explicit AllocBufferScope(AllocBuffer& alloc) : alloc(alloc), saved(ThreadLocal::GetAllocBuffer())
+    explicit AllocBufferScope(AllocBuffer& alloc) : alloc(alloc), saved(ThreadLocal::GetThreadLocalData()->buffer)
     {
-        ThreadLocal::SetAllocBuffer(&alloc);
+        ThreadLocal::GetThreadLocalData()->buffer = &alloc;
     }
 
     ~AllocBufferScope()
     {
-        ThreadLocal::SetAllocBuffer(saved);
+        ThreadLocal::GetThreadLocalData()->buffer = saved;
         // The test TU and product SO each own an inline NullRegion sentinel.
         // Use the product destructor's other empty representation.
         alloc.ClearRegion();
@@ -283,7 +283,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     DrainPublishedMarkObjects(retired);
     retired.clear();
     Mutator mutator;
-    ThreadLocal::SetAllocBuffer(&alloc);
+    ThreadLocal::GetThreadLocalData()->buffer = &alloc;
 #if defined(MRT_TESTABLE_INTERNALS)
 
 #endif
@@ -409,7 +409,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     DrainPublishedMarkObjects(retired);
     retired.clear();
     Mutator mutator;
-    ThreadLocal::SetAllocBuffer(&alloc);
+    ThreadLocal::GetThreadLocalData()->buffer = &alloc;
 #if defined(MRT_TESTABLE_INTERNALS)
 
 #endif
@@ -472,7 +472,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
-    ThreadLocal::SetAllocBuffer(&alloc);
+    ThreadLocal::GetThreadLocalData()->buffer = &alloc;
 #if defined(MRT_TESTABLE_INTERNALS)
 
 #endif
@@ -804,7 +804,7 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
     heap.region1->reset(PageAge::old);
     MarkPublicationFixture marking;
     std::thread owner([&] {
-        ThreadLocal::SetAllocBuffer(nullptr);
+        ThreadLocal::GetThreadLocalData()->buffer = nullptr;
         RegisterCurrentMarkFlushThread();
         ZBarrier::Mark<false, false, true, false>(from_object(heap.obj0));
         ZBarrier::Mark<false, false, false, false>(from_object(heap.obj1));
