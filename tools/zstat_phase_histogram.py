@@ -37,8 +37,13 @@ def analyze(stderr):
     check("VerifyDisabled", len([r for r in rows if r["rec"] == "stw"]),
           [r for r in rows if r["rec"] == "stw" and r.get("reason") == "Verify_Old"])
     check("ThreePhaseNames", len(stws), [r for r in stws if r.get("reason") not in PAUSES])
-    pause_rows = [r for r in phases if r.get("name") in PAUSES]
-    check("PauseKind", len(pause_rows), [r for r in pause_rows if r.get("kind") != "pause"])
+    named_pauses = [r for r in phases if r.get("name") in PAUSES]
+    check("PauseKind", len(named_pauses), [r for r in named_pauses if r.get("kind") != "pause"])
+    # Keep named phases in pairing even when misclassified (PauseKind diagnoses
+    # those), and include every actual pause regardless of its name. Otherwise
+    # an extra pause with a subphase name can escape the reverse pairing check.
+    pause_rows = [r for r in phases
+                  if r.get("name") in PAUSES or r.get("kind") == "pause"]
     pair_failures = []
     matched = Counter()
     for stw in stws:
