@@ -586,7 +586,7 @@ void SnapshotExitOwner(ThreadSnapshotCase& state, unsigned index)
     if (index == 1) { state.exited.store(true, std::memory_order_release); }
 }
 
-void CheckConcurrentRootSnapshot(bool exitDuringRoots)
+void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -605,15 +605,27 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots)
     const uint32_t epoch = StackWatermark::epoch_id();
     std::atomic<bool> rootObserved{false};
     std::atomic<bool> releaseRoot{false};
+    std::atomic<bool> innerDone{false};
+    std::atomic<bool> releaseOuter{false};
     // The real root task has already constructed its ThreadsListHandle when
     // the first product root value reaches this existing result consumer.
-    std::thread roots([&] {
+    const auto consumeRoots = [&] {
         ZMark::VisitMinorRoots([&](BaseObject* object) {
             if (object == state.marker.load()) {
                 rootObserved.store(true, std::memory_order_release);
                 while (!releaseRoot.load(std::memory_order_acquire)) { std::this_thread::yield(); }
             }
         }, [](BaseObject*) {});
+    };
+    std::thread roots([&] {
+        if (nested) {
+            ThreadsListHandle outer;
+            consumeRoots();
+            innerDone.store(true, std::memory_order_release);
+            while (!releaseOuter.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        } else {
+            consumeRoots();
+        }
     });
     const bool observed = WaitForSMR([&] { return rootObserved.load(std::memory_order_acquire); });
     bool removed = false;
@@ -660,6 +672,32 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots)
         _exit(1);
     }
     releaseRoot.store(true, std::memory_order_release);
+    if (nested) {
+        const bool consumed = WaitForSMR([&] { return innerDone.load(std::memory_order_acquire); });
+        // Give the exit thread a definite chance to report premature completion,
+        // or observe it still sleeping in the product's deletion wait.
+        const bool settled = WaitForSMR([&] {
+            if (state.exited.load()) { return true; }
+            std::ifstream status("/proc/self/task/" + std::to_string(state.targetTid.load()) + "/wchan");
+            std::string where;
+            status >> where;
+            return where.find("futex") != std::string::npos;
+        });
+        bool outerRetained = false;
+        ThreadGCData::VisitOwners([&](ThreadGCData&, Mutator* owner, ThreadLocalData*) {
+            outerRetained |= owner == identity;
+        });
+        std::fprintf(stderr, "THREAD_SNAPSHOT_NESTED_TARGET executed=1 consumed=%d settled=%d retained=%d returned=%d\n",
+                     consumed, settled, outerRetained, state.exited.load());
+        try {
+            GC_EXPECT_TRUE(consumed && settled && outerRetained && !state.exited.load());
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "THREAD_SNAPSHOT_NESTED_ASSERT_FAIL %s\n", error.what());
+            std::fflush(stderr);
+            _exit(1);
+        }
+        releaseOuter.store(true, std::memory_order_release);
+    }
     roots.join();
     state.finish.store(true, std::memory_order_release);
     state.exitTarget.store(true, std::memory_order_release);
@@ -682,5 +720,9 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, ExitBeforeYoungRootConsumption)
 GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, LiveYoungRootConsumption)
 {
     CheckConcurrentRootSnapshot(false);
+}
+GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, NestedHandleOutlivesYoungRootTask)
+{
+    CheckConcurrentRootSnapshot(true, true);
 }
 #endif
