@@ -197,8 +197,8 @@ void Mutator::ResetMutator()
         StackGuardRecover();
     }
     exceptionWrapper.ClearInfo();
-    // stackwm #1 lifecycle: exit/reset closes watermark (must not leave SCANNING dangling).
-    stackWatermark.Reset();
+    // The detached identity's watermark/statistics belong to outstanding
+    // ThreadsListHandles until smr_delete; only construction initializes them.
     MutatorUnlock();
 }
 

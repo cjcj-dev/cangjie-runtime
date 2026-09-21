@@ -1235,7 +1235,6 @@ void ZGeneration::PostGarbageCollection(uint64_t gcIndex)
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     Heap::GetHeap().DumpAfterGC();
 #endif
-    MutatorManager::Instance().DestroyExpiredMutators();
 }
 
 

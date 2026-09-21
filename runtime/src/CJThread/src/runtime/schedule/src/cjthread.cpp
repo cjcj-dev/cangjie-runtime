@@ -19,6 +19,7 @@
 #include "securec.h"
 
 #include "Mutator/Mutator.inline.h"
+#include "Mutator/ThreadSMR.h"
 
 #include "cjthread.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT)
@@ -750,6 +751,11 @@ static void GsStackContextInit(struct CJThread *newCJThread)
 MRT_STATIC_INLINE void CJThreadMake(const struct CJThreadAttrInner *attr,
                                     CJThreadFunc func, struct CJThread *newCJThread)
 {
+    // JavaThread construction precedes Threads::add and first execution.
+    // CJThread is a reusable carrier; Mutator is a fresh logical identity.
+    newCJThread->mutator = MapleRuntime::Mutator::NewMutator();
+    newCJThread->mutator->SetCjthreadPtr(newCJThread);
+    MapleRuntime::ThreadsSMRSupport::add_thread(newCJThread->mutator);
     newCJThread->func = func;
     (void)memset_s(&newCJThread->context, sizeof(struct CJThreadContext), 0, sizeof(struct CJThreadContext));
 
@@ -2078,7 +2084,7 @@ int CJThreadSetMutator(void *mutator)
         return ERRNO_SCHD_CJTHREAD_NULL;
     }
     cjthread->mutator = reinterpret_cast<MapleRuntime::Mutator*>(mutator);
-    cjthread->mutator->SetCjthreadPtr(cjthread);
+    if (cjthread->mutator != nullptr) { cjthread->mutator->SetCjthreadPtr(cjthread); }
     return 0;
 }
 
