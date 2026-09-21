@@ -882,6 +882,7 @@ GC_TEST(StoreBuf, ThreadRootVisitorIncludesExecuteClosure)
     GcHeapFixture fx;
     LWTData data {};
     data.execute = fx.obj0;
+    PublishLWTDataColor(data);
     size_t executeVisits = 0;
     RootVisitor visitor = [&](RootSlot& root) {
         if (&root == &RootSlotAt(&data.execute)) {

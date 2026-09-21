@@ -542,6 +542,7 @@ CJThreadHandle RunCJTaskImpl(const CJTaskFunc func, void* args, int num = 0, CJT
 
     MapleRuntime::LWTData lwtData {};
     lwtData.fn = fi;
+    MapleRuntime::PublishLWTDataColor(lwtData);
     CJThreadHandle handle = CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr), UserFuncExecutor,
                                                   &lwtData, sizeof(lwtData), createSource);
     if (handle == nullptr) {

@@ -759,6 +759,7 @@ void MCC_SetCurrentCJThreadObject(void* ptr)
     Sanitizer::TsanAcquire();
 #endif
     StorePlain(RootSlotAt(&data->threadObject), from_object(from_native_ref(ptr)));
+    PublishLWTDataColor(*data);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif

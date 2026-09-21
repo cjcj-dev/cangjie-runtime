@@ -20,16 +20,27 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "schedule.h"
+#include "Heap/z/zUncoloredRoot.hpp"
 
 namespace MapleRuntime {
+void PublishLWTDataColor(LWTData& data)
+{
+    data.color = ZPointerStoreGoodMask;
+}
+
 extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
 {
-    ObjectRef& ref = reinterpret_cast<ObjectRef&>(reinterpret_cast<LWTData*>(argPtr)->obj);
+    LWTData* data = reinterpret_cast<LWTData*>(argPtr);
+    const uintptr_t color = data->color != 0 ? data->color : ZPointerStoreGoodMask;
+    ObjectRef& ref = reinterpret_cast<ObjectRef&>(data->obj);
+    ObjectRef& map = reinterpret_cast<ObjectRef&>(data->threadObject);
+    ObjectRef& execute = RootSlotAt(&data->execute);
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&ref), color);
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&map), color);
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&execute), color);
+    data->color = ZPointerLoadGoodMask;
     (*reinterpret_cast<RootVisitor*>(handle))(ref);
-    ObjectRef& map = reinterpret_cast<ObjectRef&>(reinterpret_cast<LWTData*>(argPtr)->threadObject);
     (*reinterpret_cast<RootVisitor*>(handle))(map);
-    // Thread-owned closure roots share the stack-root handshake/repair protocol.
-    ObjectRef& execute = RootSlotAt(&reinterpret_cast<LWTData*>(argPtr)->execute);
     (*reinterpret_cast<RootVisitor*>(handle))(execute);
 }
 

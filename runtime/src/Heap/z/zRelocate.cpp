@@ -190,7 +190,6 @@ public:
             generation_forwarding_table(Generation::Young).get(observedAddr) != nullptr) {
             const ZGenerationId id = ZGenerationId::young;
             (void)ZGeneration::generation(id)->relocate_or_remap_object(to_object(safe(observed)));
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }
     };
         uncolored.Apply([&] { ZMark::VisitStrongPlainRoots(visitor, {}); });

@@ -34,7 +34,11 @@ using LWTData = struct {
     void* obj; // Pointer of a Cangjie object;
                // future or env of closure
     void* threadObject;   // Cangjie class Thread in std/core
+    // ZGC nmethod: uncolored oops carry a saved color epoch (zNMethod.cpp:316,
+    // zUncoloredRoot.inline.hpp:46-69). C-side LWTData slots stay uncolored.
+    uintptr_t color;
 };
+void PublishLWTDataColor(LWTData& data);
 struct ConcurrencyTask; // Task depends on the implementation of ConcurrencyModel
 
 // ConcurrencyModel is an abstraction for runtime to implement concurrency.

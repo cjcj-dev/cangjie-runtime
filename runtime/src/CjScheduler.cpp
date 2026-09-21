@@ -375,11 +375,12 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
     void* pc = __builtin_return_address(0);
     MapleRuntime::Sanitizer::TsanFuncEntry(pc);
 #endif
-    LWTData data;
+    LWTData data {};
     data.execute = execute;
     data.threadObject = nullptr;
     data.obj = nullptr;
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(future)));
+    PublishLWTDataColor(data);
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
@@ -410,6 +411,7 @@ bool MRT_NewForeignCJThread()
         CJThreadAttrInit(&attr);
         CJThreadAttrNameSet(&attr, "cangjie");
         LWTData data = {};
+        PublishLWTDataColor(data);
         CJThreadHandle cjthread =
             CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr), WrapperTask, &data, sizeof(LWTData));
         MutatorManager::Instance().SetMainThreadHandle(cjthread);
@@ -496,12 +498,13 @@ static void* WrapperExclusiveClosure(void* arg, unsigned int len)
 
 void* MCC_NewExclusiveCJThread(void* executeClosure, void* closurePtr, void* futureTi)
 {
-    LWTData data;
+    LWTData data {};
     data.execute = nullptr;
     data.obj = nullptr;
     data.threadObject = futureTi;
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(closurePtr)));
     StorePlain(RootSlotAt(&data.execute), from_object(from_native_ref(executeClosure)));
+    PublishLWTDataColor(data);
     return ExclusiveCJThreadNew(WrapperExclusiveClosure, &data, sizeof(LWTData));
 }
 
@@ -546,6 +549,7 @@ void* NewFinalizerCJThread()
     CJThreadAttrInit(&attr);
     CJThreadAttrNameSet(&attr, "cangjie");
     LWTData data = {};
+    PublishLWTDataColor(data);
     CJThreadHandle cjthread = CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr),
                                                     WrapperTask, &data, sizeof(LWTData),
                                                     CJTHREAD_CREATE_SOURCE_FINALIZER);
@@ -631,11 +635,12 @@ static void* WrapperOfExecuteClosure(void* arg, unsigned int len)
 
 void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* scheduler, void* futureTi)
 {
-    LWTData data;
+    LWTData data {};
     data.execute = executeClosure;
     data.obj = nullptr;
     data.threadObject = futureTi; // used to pass TypeInfo of future
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(closurePtr)));
+    PublishLWTDataColor(data);
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
@@ -729,11 +734,12 @@ const char** MRT_GetCommandLineArgs()
 void MRT_CjRuntimeStart(void* execute)
 {
     ScheduleHandle scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
-    LWTData lwtData;
+    LWTData lwtData {};
     lwtData.execute = execute;
     lwtData.fn = nullptr;
     lwtData.obj = nullptr;
     lwtData.threadObject = nullptr;
+    PublishLWTDataColor(lwtData);
     CJThreadAttr attr;
     CJThreadAttrInit(&attr);
     CJThreadAttrStackSizeSet(&attr, g_initStackSize * KB); // Set main task stack size.

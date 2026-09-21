@@ -46,6 +46,7 @@ set(GC_UNIT_SOURCES
     test_shared_small_page.cpp
     test_young_weak.cpp
     test_native_root_current.cpp
+    test_concurrency_root_color.cpp
     test_relocation_set_selector.cpp
     test_store_barrier_buffer.cpp
     test_barrier_old_atomic.cpp
