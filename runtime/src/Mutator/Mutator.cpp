@@ -333,17 +333,6 @@ ObjectRef* Mutator::AddNativeFrameRoot(BaseObject* obj)
 {
     nativeFrameRoots.emplace_back();
     StorePlain(nativeFrameRoots.back(), from_object(obj));
-    // HotSpot Handle store is a barriered oop write. Cangjie native-frame
-    // slots are uncolored; heal with the watermark saved color (or TLS
-    // store-good if this epoch has not started) so a from-offset is
-    // relocate_or_remap'd before the slot is published.
-    uintptr_t color = stackWatermark.uncolored_root_color();
-    if (color == 0) {
-        color = GetGCData().storeGoodMask;
-    }
-    if (color != 0 && obj != nullptr) {
-        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&nativeFrameRoots.back()), color);
-    }
     return &nativeFrameRoots.back();
 }
 
