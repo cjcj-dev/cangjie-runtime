@@ -128,6 +128,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     heap.old().mark_start();
     observed = 0;
     ZMark::VisitMinorRootSlots(visitor, visitor);
+    observed = raw(RootSlotAt(&data->obj).LoadPlain());
     std::fprintf(stderr,
         "CONCURRENCY_ROOT_SECOND_TARGET observed=%#lx expected=%#lx\n",
         observed, expected);

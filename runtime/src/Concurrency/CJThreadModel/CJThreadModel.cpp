@@ -43,21 +43,40 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
     ObjectRef& ref = reinterpret_cast<ObjectRef&>(data->obj);
     ObjectRef& map = reinterpret_cast<ObjectRef&>(data->threadObject);
     ObjectRef& execute = RootSlotAt(&data->execute);
-    auto heal = [&](ObjectRef& slot) {
+    auto process = [&](ObjectRef& slot) {
         const zaddress_unsafe observed = slot.LoadPlain();
         if (is_null(observed)) {
             return;
         }
-        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&slot), color);
+        // zNMethod.cpp:384-395: the process closure owns both remapping from
+        // the saved epoch and marking. Do not split those responsibilities
+        // between this callback and its caller.
+        if (handle == nullptr) {
+            ZUncoloredRoot::process(reinterpret_cast<zaddress_unsafe*>(&slot), color);
+        } else {
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&slot), color);
+        }
     };
     if (color != nextColor) {
-        heal(ref);
-        heal(map);
-        heal(execute);
+        process(ref);
+        process(map);
+        process(execute);
+    } else if (handle == nullptr) {
+        auto mark = [](ObjectRef& slot) {
+            const zaddress_unsafe observed = slot.LoadPlain();
+            if (!is_null(observed)) {
+                ZUncoloredRoot::mark_object(safe(observed));
+            }
+        };
+        mark(ref);
+        mark(map);
+        mark(execute);
     }
-    (*reinterpret_cast<RootVisitor*>(handle))(ref);
-    (*reinterpret_cast<RootVisitor*>(handle))(map);
-    (*reinterpret_cast<RootVisitor*>(handle))(execute);
+    if (handle != nullptr) {
+        (*reinterpret_cast<RootVisitor*>(handle))(ref);
+        (*reinterpret_cast<RootVisitor*>(handle))(map);
+        (*reinterpret_cast<RootVisitor*>(handle))(execute);
+    }
     // zNMethod.cpp:380-395: heal the whole group before publishing its new guard.
     *g_uncoloredVisitColor = nextColor;
 }
@@ -169,13 +188,9 @@ void CJThreadModel::Init(const ConcurrencyParam param, ScheduleType scheduleType
 
 void ConcurrencyModel::VisitGCRoots()
 {
-    // ZGeneration.cpp:1435-1451 uses ZUncoloredRootProcessOopClosure while
-    // remapping an armed nmethod: heal from the saved color and retain the
-    // process closure's mark responsibility before publishing the new guard.
-    RootVisitor process = [](RootSlot& root) {
-        ZUncoloredRoot::mark_object(safe(root.LoadPlain()));
-    };
-    VisitGCRoots(&process);
+    // A null handle selects the ZUncoloredRoot process closure in
+    // MRT_VisitorCaller, matching zNMethod.cpp:384-395.
+    VisitGCRoots(nullptr);
 }
 
 void CJThreadModel::VisitGCRoots(RootVisitor* visitorHandle)
