@@ -67,6 +67,7 @@ GC_TEST(ZPage, AllocObjectRespectsAlignment)
 #include <chrono>
 #include <thread>
 #include "Heap/z/zJNICritical.hpp"
+#include "Mutator/MutatorManager.h"
 #include "Mutator/Mutator.inline.h"
 
 namespace MapleRuntime {
@@ -87,6 +88,41 @@ struct GranuleAllocationResult {
     bool sameSmallPage{false};
     size_t tableSize{0};
 };
+
+struct JNICriticalBlockedEnterResult {
+    std::atomic<bool> ready{false};
+    std::atomic<bool> proceed{false};
+    std::atomic<bool> entering{false};
+    std::atomic<bool> acquired{false};
+    bool copied{true};
+};
+
+void* AcquireWhileJNICriticalBlocked(void* context)
+{
+    auto& result = *static_cast<JNICriticalBlockedEnterResult*>(context);
+    alignas(TypeInfo) static unsigned char byteStorage[sizeof(TypeInfo)]{};
+    alignas(TypeInfo) static unsigned char arrayStorage[sizeof(TypeInfo)]{};
+    auto* byteType = reinterpret_cast<TypeInfo*>(byteStorage);
+    auto* arrayType = reinterpret_cast<TypeInfo*>(arrayStorage);
+    byteType->SetType(TypeKind::TYPE_KIND_UINT8);
+    byteType->SetInstanceSize(1);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetComponentTypeInfo(byteType);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(byteStorage), sizeof(byteStorage));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(arrayStorage), sizeof(arrayStorage));
+    auto* array = static_cast<MArray*>(MCC_NewArray8(arrayType, 64));
+    result.ready.store(true, std::memory_order_release);
+    while (!result.proceed.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    result.entering.store(true, std::memory_order_release);
+    void* raw = MCC_AcquireRawData(array, &result.copied);
+    result.acquired.store(true, std::memory_order_release);
+    MCC_ReleaseRawData(array, raw);
+    return nullptr;
+}
 void* AllocateGranulePages(void* context)
 {
     auto& result = *static_cast<GranuleAllocationResult*>(context);
@@ -460,6 +496,57 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NewArrayOnReusedSourceKeepsDecodedAddress
     GC_EXPECT_EQ(result.pinObserved, result.pinExpected);
     GC_EXPECT_TRUE(result.pinExpected != 0 && result.reused > 0);
     GC_EXPECT_FALSE(result.pinCopied);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// ZGC zJNICritical.cpp:102-129: a JavaThread that finds JNI critical blocked
+// transitions to blocked before taking the condition lock. Use RunCJTask so
+// the waiter enters through the product MCC_AcquireRawData path.
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedNewRawAcquireAllowsStopTheWorld)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    JNICriticalBlockedEnterResult result;
+    CJThreadHandle handle = RunCJTask(AcquireWhileJNICriticalBlocked, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!result.ready.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < readyDeadline) {
+        std::this_thread::yield();
+    }
+    GC_EXPECT_TRUE(result.ready.load(std::memory_order_acquire));
+    ZJNICritical::block();
+    result.proceed.store(true, std::memory_order_release);
+    while (!result.entering.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::atomic<bool> stwFinished{false};
+    std::thread collector([&] {
+        ScopedStopTheWorld stw("jni-critical-blocked-enter", false);
+        stwFinished.store(true, std::memory_order_release);
+    });
+    const auto stwDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!stwFinished.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < stwDeadline) {
+        std::this_thread::yield();
+    }
+    const bool stwFinishedWhileBlocked = stwFinished.load(std::memory_order_acquire);
+    const bool acquiredWhileBlocked = result.acquired.load(std::memory_order_acquire);
+    std::fprintf(stderr, "JNI_BLOCKED_ENTER_TARGET stw=%d acquired=%d count=%lld\n",
+                 stwFinishedWhileBlocked ? 1 : 0, acquiredWhileBlocked ? 1 : 0,
+                 static_cast<long long>(ZJNICritical::count_snapshot()));
+    ZJNICritical::unblock();
+    collector.join();
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    GC_EXPECT_TRUE(stwFinishedWhileBlocked);
+    GC_EXPECT_FALSE(acquiredWhileBlocked);
+    GC_EXPECT_TRUE(result.acquired.load(std::memory_order_acquire));
+    GC_EXPECT_FALSE(result.copied);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
