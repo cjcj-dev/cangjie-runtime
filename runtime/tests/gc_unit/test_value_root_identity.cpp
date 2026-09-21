@@ -5,6 +5,7 @@
 #include "Cangjie.h"
 #include "Common/Handle.h"
 #include "Heap/z/zCrossVM.hpp"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "Mutator/Mutator.inline.h"
 #include "TypeInfoManager.h"
@@ -39,6 +40,17 @@ public:
 };
 }
 namespace {
+// An assertion must not leave the product collector parked while the harness
+// stops GC workers. Cancellation is the ordinary product shutdown protocol.
+struct BreakpointFailureCleanup {
+    ~BreakpointFailureCleanup()
+    {
+        if (std::uncaught_exceptions() != 0) {
+            ZAbort::abort();
+            ConcurrentGCBreakpoints::ReleaseControl();
+        }
+    }
+};
 void* AllocateExportForeignRoot(void* argument)
 {
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
@@ -73,6 +85,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportDiscoveryPreservesCurrentIdentity)
     GC_EXPECT_EQ(GetTaskRet(task, &returned), E_OK);
     ReleaseHandle(task);
     ConcurrentGCBreakpoints::AcquireControl();
+    BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
     auto* expected = Heap::GetHeap().GetExportObject(root);
     GC_EXPECT_TRUE(RelocationReceiptTest::DiscoveredIdentity(expected));
@@ -98,6 +111,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, YoungFlipBetweenEnumerationAndConsumption)
     GC_EXPECT_EQ(GetTaskRet(task, &returned), E_OK);
     ReleaseHandle(task);
     ConcurrentGCBreakpoints::AcquireControl();
+    BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"));
     const uintptr_t savedColor = g_cjLoadGoodMask;
     BaseObject* before = Heap::GetHeap().GetExportObject(root);
