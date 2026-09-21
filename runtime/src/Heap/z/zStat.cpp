@@ -1292,6 +1292,8 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     }
     generation.StatHeap()->Print(&generation);
     // zStat.cpp:737-741 — closing used-before/after line.
+    GcLog::Generation(GcLog::CurrentSeq(), Name(), startNs, endNs - startNs,
+                      generation.StatHeap()->UsedAtCollectionStart(), generation.StatHeap()->UsedAtCollectionEnd());
     LOG(RTLOG_INFO, "%s %zuM->%zuM %.3fs", Name(), generation.StatHeap()->UsedAtCollectionStart() / MB,
         generation.StatHeap()->UsedAtCollectionEnd() / MB, (endNs - startNs) / 1e9);
 }
@@ -1353,7 +1355,7 @@ void ZStatSubPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
         return;
     }
     ZStatDurationSample(sampler, endNs - startNs);
-    EmitPhaseRecord(*this, "conc", startNs, endNs);
+    EmitPhaseRecord(*this, "subphase", startNs, endNs);
 }
 
 ZStatCriticalPhase::ZStatCriticalPhase(const char* name, bool verbose)

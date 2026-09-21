@@ -315,9 +315,7 @@ public:
     const char* name() const override { return "Verify Old"; }
     bool do_operation() override
     {
-        if (ZVerifyRoots || ZVerifyObjects) {
-            ZVerify::AfterWeakProcessing();
-        }
+        ZVerify::AfterWeakProcessing();
         return true;
     }
 };
@@ -1143,8 +1141,11 @@ void ZGenerationOld::concurrent_reset_relocation_set()
 
 void ZGenerationOld::pause_verify()
 {
-    VM_ZVerifyOld op;
-    (void)op.pause();
+    // ZGC zGeneration.cpp:1155-1168: verification has its own optional VM operation.
+    if (ZVerifyRoots || ZVerifyObjects) {
+        VM_ZVerifyOld op;
+        (void)op.pause();
+    }
 }
 
 void ZGenerationOld::concurrent_select_relocation_set()
