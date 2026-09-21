@@ -217,6 +217,7 @@ MRT_STATIC_INLINE int CJThreadInit(struct CJThread *newCJThread, struct ArgAttr 
     }
 
     newCJThread->boundThread = nullptr;
+    newCJThread->uncoloredRootColor = 0;
     DulinkInit(&(newCJThread->schdDulink));
     atomic_store_explicit(&newCJThread->state, CJTHREAD_IDLE, std::memory_order_relaxed);
     newCJThread->name[0] = '\0';

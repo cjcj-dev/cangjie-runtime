@@ -13,6 +13,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 extern "C" void MRT_VisitorCaller(void*, void*);
+extern "C" void MRT_BindUncoloredVisitColor(uintptr_t*);
 
 GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset)
 {
@@ -45,8 +46,8 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset)
     page->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
     LWTData data {};
     StorePlain(RootSlotAt(&data.obj), from_object(from));
-    const uintptr_t savedColor = ZPointerLoadGoodMask;
-    data.color = savedColor;
+    uintptr_t savedColor = ZPointerLoadGoodMask;
+    MRT_BindUncoloredVisitColor(&savedColor);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
@@ -70,5 +71,5 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset)
         "CONCURRENCY_ROOT_COLOR saved=%#lx current=%#lx from=%p observed=%#lx expected=%#lx\n",
         savedColor, ZPointerLoadGoodMask, from, observed, expected);
     GC_EXPECT_EQ(observed, expected);
-    GC_EXPECT_EQ(data.color, ZPointerLoadGoodMask);
+    GC_EXPECT_EQ(savedColor, ZPointerLoadGoodMask);
 }

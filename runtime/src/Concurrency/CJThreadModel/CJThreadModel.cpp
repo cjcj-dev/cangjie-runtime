@@ -20,19 +20,33 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "schedule.h"
+#include "cjthread.h"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
-void PublishLWTDataColor(LWTData& data)
+namespace {
+thread_local uintptr_t* g_uncoloredVisitColor = nullptr;
+}
+
+void PublishCJThreadRootColor(void* handle)
 {
-    data.color = ZPointerStoreGoodMask;
+    if (handle == nullptr) {
+        return;
+    }
+    static_cast<struct CJThread*>(handle)->uncoloredRootColor = ZPointerStoreGoodMask;
+}
+
+extern "C" void MRT_BindUncoloredVisitColor(uintptr_t* slot)
+{
+    g_uncoloredVisitColor = slot;
 }
 
 extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
 {
     LWTData* data = reinterpret_cast<LWTData*>(argPtr);
-    const uintptr_t color = data->color != 0 ? data->color : ZPointerStoreGoodMask;
+    const uintptr_t bound = g_uncoloredVisitColor != nullptr ? *g_uncoloredVisitColor : 0;
+    const uintptr_t color = bound != 0 ? bound : ZPointerStoreGoodMask;
     ObjectRef& ref = reinterpret_cast<ObjectRef&>(data->obj);
     ObjectRef& map = reinterpret_cast<ObjectRef&>(data->threadObject);
     ObjectRef& execute = RootSlotAt(&data->execute);
@@ -50,7 +64,9 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
     heal(ref);
     heal(map);
     heal(execute);
-    data->color = ZPointerLoadGoodMask;
+    if (g_uncoloredVisitColor != nullptr) {
+        *g_uncoloredVisitColor = ZPointerLoadGoodMask;
+    }
     (*reinterpret_cast<RootVisitor*>(handle))(ref);
     (*reinterpret_cast<RootVisitor*>(handle))(map);
     (*reinterpret_cast<RootVisitor*>(handle))(execute);
