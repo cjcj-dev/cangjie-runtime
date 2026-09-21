@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <list>
 #include <mutex>
+#include <vector>
 
 namespace MapleRuntime {
 // These are executor fields (HotSpot Thread), not logical Mutator fields
@@ -93,11 +94,21 @@ void ThreadsSMRSupport::free_list(ThreadsList* list)
         list->next = state.retired;
         state.retired = list;
     }
+    // threadSMR.cpp:932-938: gather every hazard ptr first, then an acquire
+    // barrier, and only then read the nested reference counters. Reading the
+    // counters before the hazards can miss a nested handoff that bumps the
+    // counter after we read it but before we scan the hazard.
+    std::vector<uintptr_t> hazards;
+    hazards.reserve(state.executors.size());
+    for (auto* executor : state.executors) {
+        hazards.push_back(executor->hazard.load() & ~TAG);
+    }
+    std::atomic_thread_fence(std::memory_order_acquire);
     for (auto** link = &state.retired; *link != nullptr;) {
         auto* candidate = *link;
         bool protectedList = candidate->nestedHandleCount.load() != 0;
-        for (auto* executor : state.executors) {
-            protectedList |= (executor->hazard.load() & ~TAG) == reinterpret_cast<uintptr_t>(candidate);
+        for (auto hazard : hazards) {
+            protectedList |= hazard == reinterpret_cast<uintptr_t>(candidate);
         }
         if (protectedList) {
             link = &candidate->next;
