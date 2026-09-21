@@ -1296,6 +1296,7 @@ template<Generation G>
 void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed, bool inPlace)
 {
     if (!owner || (!claimed && !owner->claim())) { return; }
+    ZForwarding::PageWorkScope pageWork(owner);
     ZGeneration* generation = &Heap::GetHeap().GetZGeneration(
         G == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
     ZRelocationTargets targets;
