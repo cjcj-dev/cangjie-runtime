@@ -1274,7 +1274,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager29ReclaimRegionToMarkQuarantineEPNS_10ZPageE @1452
     _ZN12MapleRuntime13RegionManager30AssembleLargeGarbageCandidatesEv @1453
     _ZN12MapleRuntime13RegionManager30AssembleSmallGarbageCandidatesEv @1454
-    _ZN12MapleRuntime13RegionManager31AssemblePinnedGarbageCandidatesEb @1456
     _ZN12MapleRuntime13RegionManager31TryTakeGarbageRegionAfterDispelEPNS_10ZPageE @1457
     _ZN12MapleRuntime13RegionManager33ClearNotRelocatableThisCycleFlagsEv @1459
     _ZN12MapleRuntime13RegionManager9HUGE_PAGEE @1460 DATA

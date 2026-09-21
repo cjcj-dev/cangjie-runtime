@@ -4,7 +4,7 @@
 // Exercise the compiler allocation entry and real collection requests against
 // a separately built product SO. No synthetic page/mark/selection state.
 #include "Cangjie.h"
-#include "CompilerCalls.h"
+#include "ObjectModel/MObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.inline.hpp"
@@ -15,6 +15,8 @@
 #include <set>
 #include <vector>
 using namespace MapleRuntime;
+extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo*, MSize, bool);
+extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
 
 int main(int argc, char** argv)
 {
@@ -52,8 +54,13 @@ int main(int argc, char** argv)
             if (census) {
                 // Intentional impossible ordinary allocation causes the
                 // temporary diagnostic SO to report a positive pinned input.
-                type->SetInstanceSize(128 * 1024 * 1024 - sizeof(uintptr_t));
-                (void)MCC_NewObject(type, 128 * 1024 * 1024);
+                alignas(TypeInfo) unsigned char largeStorage[sizeof(TypeInfo)]{};
+                auto* largeType = reinterpret_cast<TypeInfo*>(largeStorage);
+                largeType->SetType(TypeKind::TYPE_KIND_CLASS);
+                largeType->SetInstanceSize(128 * 1024 * 1024 - sizeof(uintptr_t));
+                TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+                    reinterpret_cast<uintptr_t>(largeStorage), sizeof(largeStorage));
+                (void)MCC_NewObject(largeType, 128 * 1024 * 1024);
                 return 84;
             }
         }
