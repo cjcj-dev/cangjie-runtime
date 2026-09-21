@@ -17,7 +17,7 @@ headers=$(python3 "$root/runtime/build/resolve_runtime_headers.py" "$root/runtim
   -o "$GC_UNIT_OUT/pinned_allocation_reclaim"
 sha256sum "$GC_UNIT_OUT/pinned_allocation_reclaim" "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" \
   "$GCV2_RUNTIME_LIB_DIR/libboundscheck.so" > "$GC_UNIT_OUT/identity.sha256"
-for mode in sparse empty; do
+for mode in origin sparse empty; do
   (
     uptime > "$GC_UNIT_OUT/$mode-uptime-before.txt"
     set +e
@@ -28,5 +28,5 @@ for mode in sparse empty; do
   ) &
 done
 wait
-cat "$GC_UNIT_OUT/sparse.rc" "$GC_UNIT_OUT/empty.rc"
-[[ $(cat "$GC_UNIT_OUT/sparse.rc") = 0 && $(cat "$GC_UNIT_OUT/empty.rc") = 0 ]]
+cat "$GC_UNIT_OUT/origin.rc" "$GC_UNIT_OUT/sparse.rc" "$GC_UNIT_OUT/empty.rc"
+[[ $(cat "$GC_UNIT_OUT/origin.rc") = 0 && $(cat "$GC_UNIT_OUT/sparse.rc") = 0 && $(cat "$GC_UNIT_OUT/empty.rc") = 0 ]]

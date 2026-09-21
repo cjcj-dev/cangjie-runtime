@@ -8,6 +8,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.inline.hpp"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Mutator/MutatorManager.h"
 #include "TypeInfoManager.h"
 #include <cstdio>
@@ -36,6 +37,21 @@ int main(int argc, char** argv)
     constexpr size_t size = 1024;
     type->SetInstanceSize(size - sizeof(uintptr_t));
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    if (std::strcmp(argv[1], "origin") == 0) {
+        bool ordinary = false;
+        {
+            ScopedObjectAccess access;
+            BaseObject* obj = MCC_NewPinnedObject(type, size, false);
+            AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
+            ordinary = obj != nullptr && buffer != nullptr &&
+                buffer->GetRegion() == Heap::page(reinterpret_cast<uintptr_t>(obj));
+            std::fprintf(stderr, "PINNED_ORIGIN_TARGET object=%p buffer=%p ordinary=%d\n", obj, buffer, ordinary);
+        }
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        if (FiniCJRuntime() != E_OK) { return 85; }
+        return ordinary ? 0 : 1;
+    }
+    if (!empty && !census && std::strcmp(argv[1], "sparse") != 0) { return 80; }
     std::vector<U64> roots;
     std::vector<uintptr_t> original;
     std::set<uintptr_t> pages;
