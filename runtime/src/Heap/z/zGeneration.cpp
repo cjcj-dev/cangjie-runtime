@@ -73,7 +73,6 @@ static const ZStatSubPhase PYoungPostEvacFinish("young.post_evac_finish", ZGener
 static const ZStatSubPhase PYoungPreEvacClear("young.pre_evac_clear", ZGenerationId::young);
 static const ZStatSubPhase PYoungPrepareCandidates("young.prepare_candidates", ZGenerationId::young);
 static const ZStatSubPhase PYoungRefFix("young.ref_fix", ZGenerationId::young);
-static const ZStatSubPhase PYoungRefFixBulk("young.ref_fix_bulk", ZGenerationId::young);
 static const ZStatSubPhase PYoungRefFixPrepare("young.ref_fix_prepare", ZGenerationId::young);
 static const ZStatSubPhase PYoungRefFixRootPass1("young.ref_fix_root_pass1", ZGenerationId::young);
 static const ZStatSubPhase PYoungRemsetDrain("young.remset_drain", ZGenerationId::young);
@@ -635,25 +634,7 @@ void ZGenerationYoung::concurrent_relocate()
     // must finish relocation, including when shutdown requests an abort.
     RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     size_t allocatedBefore = space.AllocatedBytes();
-    // ⑥⑦⑧ inside EvacuateYoungRegions: pause relocate_start / concurrent copy / evac_finish
-    // Pass STW so Phase 8 can release the world for concurrent_relocate.
-    //
-    // fysfixa / fysaudit D4: slot authority for remset fix = Rescan-admitted
-    // consumedSlots, not the pre-rescan liveRememberedSlots ledger.
-    // The pre-rescan ledger under FYS=0 held all non-weak recorded slots;
-    // rescan may drop retained-dead / free-holder / bad_target
-    // without consuming, yet old Evacuate still Fixed those slots → from-object
-    // not in liveInfo0 → AdmitForRoute miss → ForwardObjectExclusive
-    // "invalid object route" (fysfloor B10). FYS=1 masked via reachableSlots
-    // filtering both live-build and Rescan. Unifying on consumed restores
-    // fix-domain ⊆ mark/route-domain without widening AdmitForRoute.
-    // In non-concurrent FYS, remset consume is scan_and_follow;
-    // its holder coverage belongs to the mark scan.
-    // Concurrent mark force-admits slots without that proof.
-    const bool refFixSlotsCoveredByReachable = false;
-    EvacuateYoungRegions(youngReachableVec, youngConsumedSlots,
-                                   refFixSlotsCoveredByReachable, youngRemsetInteriorBases,
-                                   &youngStw);
+    EvacuateYoungRegions(youngReachableVec, &youngStw);
     size_t allocatedAfter = space.AllocatedBytes();
     youngStats.reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
@@ -1366,52 +1347,16 @@ void ZGenerationOld::CollectLargeGarbage()
 }
 
 void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
-                                       const MinorSlotSet& rememberedSlots,
-                                       bool refFixSlotsCoveredByReachable,
-                                       const MinorInteriorBaseMap& interiorBases,
                                        std::unique_ptr<ScopedStopTheWorld>* stw)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     (void)reachableVec;
-    (void)refFixSlotsCoveredByReachable;
     // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
     // is flip + set_phase(Relocate) + _relocate.start(); object copy is concurrent.
     // Flip is the trap that makes mutator loads take the self-heal / relocate_object
     // path; without it, concurrent copy is the empty window concreffix measured.
-    auto liveStw = [stw]() -> const ScopedStopTheWorld* {
-        return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
-    };
     const bool doYoungFlip = !Heap::GetHeap().GetZGeneration(ZGenerationId::young).is_phase_relocate();
     ZWorkers& workers = *Workers();
-
-    std::vector<MAddress> remsetVec;
-    remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
-
-    // zRemembered.cpp:remap_current visits remembered slots. Stack completion
-    // belongs to the phase watermark; it does not require a reachable-heap sweep.
-    auto remapRemembered = [&](ZWorkers& pool) {
-        // zArray.hpp:104 ZArrayParallelIterator over the remembered slots.
-        ZArrayParallelIterator<MAddress> slots(remsetVec.data(), remsetVec.size());
-        class RememberedTask final : public ZTask {
-        public:
-            explicit RememberedTask(std::function<void()> body) : ZTask("ZRemapRememberedTask"), body(std::move(body)) {}
-            void work() override { body(); }
-        private:
-            std::function<void()> body;
-        } task([&] {
-            for (MAddress slot; slots.next(&slot);) {
-                if (!Heap::IsHeapAddress(slot)) {
-                    continue;
-                }
-                auto known = interiorBases.find(slot);
-                BaseObject* base = known == interiorBases.end() ? nullptr : known->second;
-                (void)ZRelocate::FixMinorEvacuatedSlot(HeapSlotAt<>(slot), base, liveStw());
-            }
-        });
-        pool.run(&task);
-    };
-
-    // Earliest post-mark checkpoint: still before any fix/forward mutates refs.
 
     {
         // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
@@ -1445,7 +1390,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
             // iorfix: the forwarding table is installed by select_relocation_set
             // (zGeneration.cpp:254) so liveInfo0 snapshots the closed mark
             // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
-            // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
             // ZGC zGeneration.cpp:575-580: collect has already entered
             // relocate-start; finish every selected page even on abort.
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
@@ -1470,7 +1414,7 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
         // concurrent_relocate must submit its workers before any concurrent
         // root walk can wait for allocation-failure completion. Raw stack roots
         // are completed by the pause watermark (Cangjie has no return statepoint).
-        // The coloured-root/extern walk below consumes the completed relocation.
+        // Coloured references are healed by load barriers and the remap phase.
 
         // Reset CAS counters for this fix window (positive-control visibility).
 
@@ -1485,38 +1429,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
             relocate().relocate(&relocation_set());
-        }
-        VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
-        {
-            ZStatTimerYoung zstatTimer(PYoungRefFixBulk);
-            ZRelocate::FixMinorRootSlots(liveStw());
-            Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Young);
-            Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Young);
-            remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
-            {
-                // ZGC immediately scans buffered entries that crossed the young
-                // flip (zStoreBarrierBuffer.cpp:162-187). Publish all mutator
-                // buffers before the active-face Snapshot used for this ref fix.
-                (void)ZMark::FlushAllGenerations();
-                std::unordered_set<MAddress> concRemset;
-                ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
-                for (ZRemsetTableEntry entry; remsetIter.next(&entry);) {
-                    if (entry._page == nullptr) {
-                        continue;
-                    }
-                    entry._page->oops_do_current_remembered([&](volatile zpointer* p) {
-                        concRemset.insert(reinterpret_cast<MAddress>(p));
-                    });
-                }
-                remsetVec.reserve(remsetVec.size() + concRemset.size());
-                for (MAddress slot : concRemset) {
-                    remsetVec.push_back(slot);
-                }
-                VLOG(REPORT,
-                     "[GCV2][relocate][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
-                     rememberedSlots.size(), concRemset.size(), remsetVec.size());
-            }
-            remapRemembered(workers);
         }
     }
 

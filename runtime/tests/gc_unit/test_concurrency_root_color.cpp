@@ -110,7 +110,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     if (remap) {
         ZRelocate::RemapYoungRoots();
     } else {
-        ZRelocate::FixMinorRootSlots();
+        runtime.GetConcurrencyModel().VisitGCRoots();
     }
     observed = raw(RootSlotAt(&data->obj).LoadPlain());
     std::fprintf(stderr,
