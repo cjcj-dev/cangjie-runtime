@@ -601,12 +601,12 @@ inline uint8_t ZPage::GetYoungAge() const
 // ZPage::is_allocating / is_relocatable (zPage.inline.hpp:180-186).
 inline bool ZPage::IsAllocating() const
 {
-    return BirthSequence() == GetSnapshotEpoch();
+    return _seqnum == generation()->seqnum();
 }
 
 inline bool ZPage::IsRelocatable() const
 {
-    return BirthSequence() < GetSnapshotEpoch();
+    return _seqnum < generation()->seqnum();
 }
 
 inline bool ZPage::IsUnmovableFromRegion() const

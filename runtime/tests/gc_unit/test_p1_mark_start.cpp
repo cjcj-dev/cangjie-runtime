@@ -55,7 +55,7 @@ extern "C" int p1MarkStartExercise()
     Expect(page->IsAllocating(), "real_allocation_has_current_birth");
     std::printf("P1_ALLOCATED page=%p birth=%llu owner_sequence=%llu\n", page,
                 static_cast<unsigned long long>(page->BirthSequence()),
-                static_cast<unsigned long long>(page->GetSnapshotEpoch()));
+                static_cast<unsigned long long>(page->generation()->seqnum()));
 
     std::array<StartState, 2> state {};
     bool youngComplete = false;

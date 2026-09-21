@@ -5,6 +5,10 @@
 namespace MapleRuntime {
 class ZGenerationTest {
 public:
+    static std::unique_lock<std::mutex> LockSnapshot(ZGeneration& generation)
+    {
+        return std::unique_lock<std::mutex>(generation.mutex);
+    }
     static void SetReason(ZGeneration& generation, GCReason reason)
     {
         generation.reason.store(reason, std::memory_order_release);

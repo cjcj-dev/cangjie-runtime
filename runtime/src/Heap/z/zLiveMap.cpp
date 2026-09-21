@@ -21,14 +21,6 @@ static const ZStatCounter ZCounterMarkSeqNumResetContention("Contention", "Mark 
 static const ZStatCounter ZCounterMarkSegmentResetContention("Contention", "Mark Segment Reset Contention",
                                                              ZStatUnitOpsPerSecond);
 
-// ZGeneration::generation(id)->seqnum(): the per-generation cycle sequence.
-uint64_t ZLiveMap::generation_seqnum(ZGenerationId id)
-{
-    const ZGenerationId generation = id == ZGenerationId::young ? ZGenerationId::young
-                                                                    : ZGenerationId::old;
-    return Heap::GetHeap().GetZGeneration(generation).Snapshot().sequence;
-}
-
 // ZGC zLiveMap.cpp:38: (object_max_count / NumSegments) * BitsPerObject. Cangjie
 // pages are unit multiples rather than power-of-two page sizes, so the
 // segment width is rounded up to the next power of two to keep the shift
@@ -81,15 +73,15 @@ void ZLiveMap::initialize_bitmap()
 // ZGC zLiveMap.cpp:53-107.
 void ZLiveMap::reset(ZGenerationId id)
 {
-    const uint64_t generation_seqnum_now = generation_seqnum(id);
-    const uint64_t seqnum_initializing = (uint64_t)-1;
+    ZGeneration* const generation = ZGeneration::generation(id);
+    const uint32_t seqnum_initializing = (uint32_t)-1;
     bool contention = false;
 
 
     // Multiple threads can enter here, make sure only one of them
     // resets the marking information while the others busy wait.
-    for (uint64_t seqnum = _seqnum.load(std::memory_order_acquire);
-         seqnum != generation_seqnum_now;
+    for (uint32_t seqnum = _seqnum.load(std::memory_order_acquire);
+         seqnum != generation->seqnum();
          seqnum = _seqnum.load(std::memory_order_acquire)) {
 
         if (seqnum != seqnum_initializing) {
@@ -117,7 +109,7 @@ void ZLiveMap::reset(ZGenerationId id)
                 // before the update of the page seqnum, such that when the
                 // up-to-date seqnum is load acquired, the bit maps will not
                 // contain stale information.
-                _seqnum.store(generation_seqnum_now, std::memory_order_release);
+                _seqnum.store(generation->seqnum(), std::memory_order_release);
                 break;
             }
         }

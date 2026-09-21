@@ -30,7 +30,7 @@ private:
     const uint32_t _segment_size;
     const int _segment_shift;
 
-    std::atomic<uint64_t> _seqnum;
+    std::atomic<uint32_t> _seqnum;
     std::atomic<uint32_t> _live_objects;
     std::atomic<size_t> _live_bytes;
     BitMap::bm_word_t _segment_live_bits;
@@ -67,11 +67,6 @@ private:
     void iterate_segment(BitMap::idx_t segment, Function function);
 
 public:
-
-    // ZGeneration::generation(id)->seqnum() (zGeneration.inline.hpp). The
-    // generation object is owned by the generation package; the sequence is
-    // read live from the collector's per-generation cycle state.
-    static uint64_t generation_seqnum(ZGenerationId id);
 
     ZLiveMap(uint32_t object_max_count);
     ZLiveMap(const ZLiveMap& other) = delete;

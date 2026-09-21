@@ -161,7 +161,8 @@ public:
     static constexpr size_t LARGE_OBJECT_RELEASE_THRESHOLD = 4096 * KB;
 
     // ZPage::generation()->seqnum(), shared by all pages in that generation.
-    uint64_t GetSnapshotEpoch() const;
+    ZGeneration* generation();
+    const ZGeneration* generation() const;
     void ResetPageSequence();
     void reset_seqnum() { ResetPageSequence(); }
     uint64_t BirthSequence() const { return _seqnum; }

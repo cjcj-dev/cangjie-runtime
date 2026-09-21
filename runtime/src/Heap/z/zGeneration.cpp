@@ -114,7 +114,6 @@ ZGenerationIdOptional ZGeneration::id_optional() const
 
 bool ZGeneration::is_young() const { return id() == ZGenerationId::young; }
 bool ZGeneration::is_old() const { return id() == ZGenerationId::old; }
-uint32_t ZGeneration::seqnum() const { return static_cast<uint32_t>(Sequence()); }
 ZGenerationYoung* ZGeneration::young() { return _young; }
 ZGenerationOld* ZGeneration::old() { return _old; }
 ZGeneration* ZGeneration::generation(ZGenerationId id)
@@ -394,7 +393,7 @@ void ZGenerationYoung::mark_start()
     (void)ZMark::FlushAllGenerations();
     {
         std::lock_guard<std::mutex> lock(mutex);
-        CHECK(sequence != UINT64_MAX);
+        CHECK(sequence != UINT32_MAX);
         ++sequence;
     }
     set_phase(Phase::Mark);
@@ -886,7 +885,7 @@ void ZGenerationOld::mark_start()
     Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
     {
         std::lock_guard<std::mutex> lock(mutex);
-        CHECK(sequence != UINT64_MAX);
+        CHECK(sequence != UINT32_MAX);
         ++sequence;
     }
     set_phase(Phase::Mark);
