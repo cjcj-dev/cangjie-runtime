@@ -71,12 +71,14 @@ struct CleanThreadLocalData {
     CleanThreadLocalData() noexcept;
     ~CleanThreadLocalData();
     ThreadGCData nativeData;
+    AllocBuffer* nativeBuffer = nullptr;
 };
 
 class ThreadLocal { // merge this to ThreadLocalData.
 public:
     static ThreadLocalData* GetThreadLocalData();
     static void InitializeCleaner();
+    static AllocBuffer*& NativeAllocBuffer();
     static ThreadGCData& GetGCData();
     static void FlushCurrentThreadMarkStacks();
     static MarkThreadLocalStacks& GetMarkStacks(ZMark& domain);

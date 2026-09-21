@@ -5,7 +5,43 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/shared/collectedHeap.hpp"
 #include "Mutator/Mutator.h"
+#include "Heap/z/zValue.inline.hpp"
 namespace MapleRuntime {
+ZPerWorker<TLABStatistics>* ZThreadLocalAllocBuffer::statistics = nullptr;
+
+void ZThreadLocalAllocBuffer::initialize()
+{
+    delete statistics;
+    statistics = new ZPerWorker<TLABStatistics>();
+    reset_statistics();
+}
+
+void ZThreadLocalAllocBuffer::reset_statistics()
+{
+    statistics->set_all(TLABStatistics{});
+}
+
+void ZThreadLocalAllocBuffer::publish_statistics()
+{
+    TLABStatistics total;
+    ZPerWorkerIterator<TLABStatistics> iter(statistics);
+    for (TLABStatistics* stats; iter.next(&stats);) { total.Update(*stats); }
+    Heap::GetHeap().page_allocator().PublishTLABStatistics(total);
+}
+
+void ZThreadLocalAllocBuffer::retire(Mutator& thread, TLABStatistics& stats)
+{
+    stats = TLABStatistics{};
+    if (AllocBuffer* buffer = thread.GetAllocBuffer()) {
+        Heap::GetHeap().page_allocator().RetireTLAB(*buffer, stats);
+    }
+}
+
+void ZThreadLocalAllocBuffer::update_stats(Mutator& thread)
+{
+    statistics->addr()->Update(thread.GetStackWatermark().stats());
+}
+
 constexpr size_t AllocBuffer::MinTLABSize;
 
 AllocBuffer* AllocBuffer::GetOrCreateAllocBuffer()
@@ -15,6 +51,11 @@ AllocBuffer* AllocBuffer::GetOrCreateAllocBuffer()
         buffer = new (std::nothrow) AllocBuffer();
         CHECK_DETAIL(buffer != nullptr, "new region alloc buffer fail");
         buffer->Init();
+        if (auto* mutator = ThreadLocal::GetMutator()) {
+            mutator->SetAllocBuffer(buffer);
+        } else {
+            ThreadLocal::NativeAllocBuffer() = buffer;
+        }
         ThreadLocal::SetAllocBuffer(buffer);
         RegisterCurrentMarkFlushThread();
     }

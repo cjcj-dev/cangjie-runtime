@@ -101,12 +101,9 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData)
 void MutatorManager::BindMutator(Mutator& mutator) const
 {
     ThreadLocalData* tlData = ThreadLocal::GetThreadLocalData();
-    if (UNLIKELY(tlData->buffer == nullptr)) {
-        (void)AllocBuffer::GetOrCreateAllocBuffer();
-    }
-    MutatorManager::Instance().RegisterMarkFlushThread(tlData);
     tlData->SetMutator(&mutator);
-    mutator.SetAllocBuffer(tlData->buffer);
+    (void)AllocBuffer::GetOrCreateAllocBuffer();
+    MutatorManager::Instance().RegisterMarkFlushThread(tlData);
     UpdatePollValues(tlData);
 }
 

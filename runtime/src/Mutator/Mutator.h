@@ -421,12 +421,10 @@ public:
 
     void PreparedToRun(ThreadLocalData* tlData)
     {
-        if (UNLIKELY(tlData->buffer == nullptr)) {
-            (void)AllocBuffer::GetOrCreateAllocBuffer();
-        }
-        // The watermark retires the allocating thread's TLAB (ZGC
-        // zStackWatermark.cpp:197-200). A resumed CJThread can change workers.
-        SetAllocBuffer(tlData->buffer);
+        // HotSpot Thread::_tlab is owned by the logical thread. TLS borrows
+        // that owner's buffer across park/resume and worker migration.
+        tlData->buffer = GetAllocBuffer();
+        (void)AllocBuffer::GetOrCreateAllocBuffer();
         RegisterCurrentMarkFlushThread();
         UpdatePollValues(tlData);
         DoLeaveSaferegion();
@@ -466,7 +464,7 @@ public:
         InitTid();
         foreignThreadInfo.isForeignThread = true;
         foreignThreadInfo.isExit = false;
-        foreignThreadInfo.allocBuffer = ThreadLocal::GetAllocBuffer();
+        (void)AllocBuffer::GetOrCreateAllocBuffer();
         foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
         RegisterCurrentMarkFlushThread();
     }

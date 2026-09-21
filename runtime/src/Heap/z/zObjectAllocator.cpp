@@ -77,18 +77,13 @@ void RegionManager::ResetTLABUsage()
 
 // ZThreadLocalAllocBuffer::publish_statistics (zThreadLocalAllocBuffer.cpp:52).
 // Thread retirement statistics consume the already published backing history.
-void RegionManager::PublishTLABStatistics()
+void RegionManager::PublishTLABStatistics(const TLABStatistics& statistics)
 {
     std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t capacity = GetTLABCapacity();
     TLABStatistics total = retiredTLABStatistics;
     retiredTLABStatistics = TLABStatistics{};
-    const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
-    const double fallback = tlabRequestedFraction.Average() / threads;
-    Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
-        buffer.AccumulateTLABStatistics(total, GetTLABUsed(), capacity);
-        buffer.ResizeTLAB(capacity, fallback, ZObjectSizeLimitSmall);
-    });
+    total.Update(statistics);
     if (total.Used() != 0) {
         tlabAllocatingThreads.Sample(total.allocatingThreads);
         if (lastTLABUsed > 0.5 * capacity) {
@@ -99,6 +94,18 @@ void RegionManager::PublishTLABStatistics()
     VLOG(REPORT, "TLAB totals: used=%zu capacity=%zu allocated=%zu refills=%zu refill-waste=%zu gc-waste=%zu threads=%zu",
          lastTLABUsed, capacity, total.allocatedSize, total.refills, total.refillWaste, total.gcWaste,
          total.allocatingThreads);
+}
+
+// ZThreadLocalAllocBuffer::retire, zThreadLocalAllocBuffer.cpp:65-73.
+// The caller owns the mutator (watermark processing or thread exit).
+void RegionManager::RetireTLAB(AllocBuffer& buffer, TLABStatistics& statistics)
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    statistics = TLABStatistics{};
+    buffer.RetireTLAB(true);
+    buffer.AccumulateTLABStatistics(statistics, GetTLABUsed(), GetTLABCapacity());
+    const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
+    buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads, ZObjectSizeLimitSmall);
 }
 
 void RegionManager::RetireTLABStatistics(AllocBuffer& buffer)

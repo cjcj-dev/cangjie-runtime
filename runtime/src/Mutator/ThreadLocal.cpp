@@ -25,6 +25,7 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
 {
     ThreadLocal::InitializeCleaner();
     mutator = newMutator;
+    buffer = newMutator != nullptr ? newMutator->GetAllocBuffer() : cleaner.nativeBuffer;
     if (newMutator != nullptr) {
         auto& data = newMutator->GetGCData();
         data.Attach(newMutator, nullptr, data.invisibleRoot);
@@ -41,6 +42,12 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
 ThreadLocalData* ThreadLocal::GetThreadLocalData()
 {
     return reinterpret_cast<ThreadLocalData*>(threadLocalData);
+}
+
+AllocBuffer*& ThreadLocal::NativeAllocBuffer()
+{
+    InitializeCleaner();
+    return cleaner.nativeBuffer;
 }
 
 ThreadGCData& ThreadLocal::GetGCData()

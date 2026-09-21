@@ -90,11 +90,17 @@ namespace {
 // scan and expand stack objects/headerless records before visiting heap slots.
 class MarkThreadClosure {
 public:
-    explicit MarkThreadClosure(const RootVisitor* result = nullptr) : result(result) {}
+    explicit MarkThreadClosure(const RootVisitor* result = nullptr) : result(result)
+    {
+        ZThreadLocalAllocBuffer::reset_statistics();
+    }
     // ZGC zMark.cpp:699-701: publish TLAB statistics when root scanning ends.
-    ~MarkThreadClosure() { Heap::GetHeap().page_allocator().PublishTLABStatistics(); }
+    ~MarkThreadClosure()
+    {
+        ZThreadLocalAllocBuffer::publish_statistics();
+    }
     static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }
-    void DoThread(Mutator& mutator) const
+    void DoThread(Mutator& mutator)
     {
         RootVisitor markRoot = [&](ObjectRef& root) {
             const uintptr_t color = mutator.GetStackWatermark().uncolored_root_color();
@@ -107,24 +113,12 @@ public:
         size_t frames = 0;
         (void)StackWatermarkSet::finish_processing(mutator, markRoot, markRoot, StackWatermark::epoch_id(),
                                                    &derivedVisitor, frames, reinterpret_cast<void*>(root_function()));
+        ZThreadLocalAllocBuffer::update_stats(mutator);
     }
 private:
     const RootVisitor* const result;
 };
 } // namespace
-
-void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor)
-{
-    RootVisitor plainRoot = [&](ObjectRef& root) {
-        ZUncoloredRoot::mark_object(safe(root.LoadPlain()));
-        rawRootVisitor(root);
-    };
-    MarkThreadClosure threadClosure(&rawRootVisitor);
-    VisitStrongPlainRoots(plainRoot, [&](Mutator& mutator) { threadClosure.DoThread(mutator); });
-    (void)invisibleRootVisitor; // The watermark owns the invisible slot and its saved color.
-}
-
-
 
 // ZReferenceProcessor::should_discover/discover (zReferenceProcessor.cpp:174-201,
 // 239-250). Native registration owns the original referent slot, rather than a
@@ -233,8 +227,9 @@ public:
 // Cangjie's stack/value-root scanner replaces HotSpot thread/nmethod closures.
 class MarkYoungRootsTask final : public ZTask {
 public:
-    MarkYoungRootsTask(std::function<void()> uncolored, unsigned workers)
-        : ZTask("ZMarkYoungRootsTask"), rootsColored(workers), uncolored(std::move(uncolored)) {}
+    MarkYoungRootsTask(std::function<void()> uncolored, const RootVisitor& visitor, unsigned workers)
+        : ZTask("ZMarkYoungRootsTask"), rootsColored(workers), threadClosure(&visitor),
+          uncolored(std::move(uncolored)) {}
 
     void work() override
     {
@@ -242,12 +237,14 @@ public:
             coloredClosure.DoOop(slot);
         });
         rootsUncolored.Apply(uncolored);
+        rootsUncolored.ApplyThreads([&](Mutator& mutator) { threadClosure.DoThread(mutator); });
         // zMark.cpp:887-891: flush and free worker stacks for both generations.
         ThreadLocal::FlushCurrentThreadMarkStacks();
     }
 private:
     RootsIteratorAllColored rootsColored;
     MarkYoungOopClosure coloredClosure;
+    MarkThreadClosure threadClosure;
     std::function<void()> uncolored;
     RootsIteratorAllUncolored rootsUncolored;
 };
@@ -259,11 +256,9 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
     RootVisitor rawRootVisitor = [&visitor](ObjectRef& root) {
         visitor(to_object(safe(root.LoadPlain())));
     };
-    RootVisitor invisibleRootVisitor = [&invisibleVisitor](ObjectRef& root) {
-        invisibleVisitor(to_object(safe(root.LoadPlain())));
-    };
+    (void)invisibleVisitor; // Watermark owns the invisible slot with its saved color.
     MarkYoungRootsTask task([&] {
-        VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor);
+        VisitStrongPlainRoots(rawRootVisitor, {});
         Heap::GetHeap().cross_vm().VisitMinorValueRoots([&](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZBarrier::Mark<false, false, true, false>(from_object(object));
@@ -274,7 +269,7 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
             ZBarrier::MarkBarrierOnOopField(slot, false);
             visitor(to_object(slot.GetTargetObject()));
         });
-    }, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
+    }, rawRootVisitor, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
     SuspendibleThreadSetJoiner joiner;
     (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).run(&task);
 

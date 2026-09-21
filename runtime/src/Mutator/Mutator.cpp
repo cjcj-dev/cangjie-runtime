@@ -182,6 +182,7 @@ void Mutator::ResetMutator()
     Heap& heap = Heap::GetHeap();
     gcData.storeBarrierBuffer->Flush();
     (void)heap.FlushGCDataMarkProducers(gcData);
+    ReleaseForeignThread();
     uwContext.Reset();
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
     // BeginCatch would have performed, or the guard stays expanded with nothing left to
@@ -894,6 +895,7 @@ void Mutator::ReleaseForeignThread()
 
     if (buffer != nullptr) {
         buffer->Fini();
+        if (ThreadLocal::GetAllocBuffer() == buffer) { ThreadLocal::SetAllocBuffer(nullptr); }
         delete buffer;
     }
     // We can remove foreign thread c-heap resource here.

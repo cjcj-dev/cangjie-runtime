@@ -103,6 +103,7 @@ Heap::Heap(const HeapParam& param, double garbageThreshold)
       _young(&_page_table, &_old.forwarding_table(), &_page_allocator)
 {
     _heap = this;
+    ZThreadLocalAllocBuffer::initialize();
     RunType::InitRunTypeMap();
     _allocation_adapter.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();

@@ -405,7 +405,8 @@ public:
     size_t GetTLABCapacity() const { return static_cast<size_t>(tlabCapacity); }
     void InitializeTLAB(AllocBuffer& buffer);
     void ResetTLABUsage();
-    void PublishTLABStatistics();
+    void PublishTLABStatistics(const TLABStatistics& statistics);
+    void RetireTLAB(AllocBuffer& buffer, TLABStatistics& statistics);
     void RetireTLABStatistics(AllocBuffer& buffer);
 
     bool StallAllocation(AllocationStallRequest& request);
