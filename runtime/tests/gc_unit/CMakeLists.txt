@@ -77,6 +77,7 @@ set(GC_UNIT_SOURCES
     test_fnlz_roots.cpp
     test_reference_processor.cpp
     test_mark_stack_entry.cpp
+    test_mark_entry_oop.cpp
     test_mark_stripe.cpp
     test_mark_port_203_storage.cpp
     test_mark_port_203_entries.cpp
