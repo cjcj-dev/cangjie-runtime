@@ -87,20 +87,10 @@ extern "C" int p1MarkStartExercise()
             Expect(snapshot.sequence == before.sequence, "retirement_precedes_sequence");
         } else if (point == MarkStartPoint::BeforeSequence) {
             Expect(snapshot.sequence == before.sequence, "sequence_unchanged_while_retiring");
-            if (index == 0) {
-                bool retired = true;
-                size_t buffers = 0;
-                Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
-                    ++buffers;
-                    const auto empty = [](ZPage* region) {
-                        return region == nullptr || region == ZPage::NullRegion();
-                    };
-                    retired = retired && empty(buffer.GetRegion());
-                });
-                std::printf("P1_PRODUCT_TLAB buffers=%zu retired=%u\n", buffers, retired);
-                Expect(buffers != 0, "retirement_has_real_mutator_inputs");
-                Expect(retired, "current_and_prepared_tlabs_retired");
-            }
+            // TLAB retirement belongs to concurrent watermark processing,
+            // not this pause. TLABOwnership.ParkedRootDoesNotRetireRunningOwner
+            // and YoungMarkStart.ParkedRootDeferredToConcurrentMark cover it.
+
         } else if (point == MarkStartPoint::BeforeDomain) {
             Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == ZGenerationPhase::Mark,
                    "sequence_and_mark_phase_before_domain");

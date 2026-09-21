@@ -83,7 +83,6 @@ void AllocBuffer::Init()
     ThreadLocal::InitializeCleaner();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     manager.InitializeTLAB(*this);
-    Heap::GetHeap().RegisterAllocBuffer(*this);
 }
 
 void AllocBuffer::Fini()
@@ -98,7 +97,6 @@ void AllocBuffer::Fini()
     FlushRegion();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     manager.RetireTLABStatistics(*this);
-    Heap::GetHeap().RemoveAllocBuffer(*this);
 }
 
 // ThreadLocalAllocBuffer::fill (threadLocalAllocBuffer.cpp:201).

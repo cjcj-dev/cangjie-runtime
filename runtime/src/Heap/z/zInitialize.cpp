@@ -6,6 +6,7 @@
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zLargePages.hpp"
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Base/Log.h"
 #include <cstdarg>
 #include <cstdio>
@@ -25,6 +26,7 @@ void ZInitialize::initialize(ZBarrierSet*)
     ThreadLocal::InitializeCleaner();
     ZCPU::initialize();
     ZStatValue::initialize();
+    ZThreadLocalAllocBuffer::initialize();
     ZLargePages::initialize();
     ZJNICritical::initialize();
     ZHeuristics::set_medium_page_size();

@@ -1535,8 +1535,6 @@ EXPORTS
     _ZN12MapleRuntime17ScopedAllocBufferD1Ev @1827
     _ZN12MapleRuntime17ScopedAllocBufferD2Ev @1828
     _ZN12MapleRuntime17TYPEINFO_PTR_SIZEE @1848 DATA
-    _ZN12MapleRuntime18AllocBufferManager17RemoveAllocBufferERNS_11AllocBufferE @1852
-    _ZN12MapleRuntime18AllocBufferManagerD2Ev @1853
     _ZN12MapleRuntime18FinalizerProcessor11WaitStartedEv @1872
     _ZN12MapleRuntime18FinalizerProcessor12VisitGCRootsERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEE @1873
     _ZN12MapleRuntime18FinalizerProcessor13NotifyStartedEv @1874

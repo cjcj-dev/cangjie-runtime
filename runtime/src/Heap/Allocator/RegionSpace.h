@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "Heap/z/zServiceability.hpp"
-#include "AllocBufferManager.h"
 #include "Heap/z/zUncommitter.hpp"
 #include "ExceptionManager.h"
 #include "Mutator/Mutator.h"
@@ -53,22 +52,10 @@ public:
 
     static constexpr size_t ALLOC_ALIGN = 8;
     static constexpr size_t HEADER_SIZE = 0;
-    RegionSpace() : allocBufferManager(new AllocBufferManager()) {}
+    RegionSpace() = default;
     Uncommitter& GetUncommitter() { return uncommitter; }
-    void RegisterAllocBuffer(AllocBuffer& buffer) const { allocBufferManager->RegisterAllocBuffer(buffer); }
-    void RemoveAllocBuffer(AllocBuffer& buffer) const { allocBufferManager->RemoveAllocBuffer(buffer); }
-    void VisitAllocBuffers(const AllocBufferVisitor& visitor) { allocBufferManager->VisitAllocBuffers(visitor); }
     bool IsHeapAddress(MAddress addr) const { return is_heap_address(addr); }
-    ATTR_NO_INLINE ~RegionSpace()
-    {
-        if (allocBufferManager != nullptr) {
-            delete allocBufferManager;
-            allocBufferManager = nullptr;
-        }
-
-    }
-
-
+    ~RegionSpace() = default;
 
     MAddress Allocate(size_t size, AllocType allocType);
 
@@ -157,7 +144,6 @@ public:
 
 
 private:
-    AllocBufferManager* allocBufferManager;
     Uncommitter uncommitter{*this};
     MAddress TryAllocateOnce(size_t allocSize, AllocType allocType);
 

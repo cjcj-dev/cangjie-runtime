@@ -220,9 +220,7 @@ public:
     FinalizerProcessor& GetFinalizerProcessor();
 
 
-    void RegisterAllocBuffer(AllocBuffer& buffer);
 
-    void RemoveAllocBuffer(AllocBuffer& buffer);
 
     void CrossAccessBarrier(I64);
 

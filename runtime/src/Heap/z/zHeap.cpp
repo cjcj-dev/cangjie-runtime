@@ -103,7 +103,6 @@ Heap::Heap(const HeapParam& param, double garbageThreshold)
       _young(&_page_table, &_old.forwarding_table(), &_page_allocator)
 {
     _heap = this;
-    ZThreadLocalAllocBuffer::initialize();
     RunType::InitRunTypeMap();
     _allocation_adapter.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
@@ -389,9 +388,7 @@ FinalizerProcessor& Heap::GetFinalizerProcessor() { return ZCollectedHeap::heap(
 
 void Heap::StopGCWork() { ZCollectedHeap::stop(); }
 
-void Heap::RegisterAllocBuffer(AllocBuffer& buffer) { GetAllocator().RegisterAllocBuffer(buffer); }
 
-void Heap::RemoveAllocBuffer(AllocBuffer &buffer) { GetAllocator().RemoveAllocBuffer(buffer); }
 
 void Heap::VisitAllExportRoots(const NativeSlotVisitor &visitor)
 {
