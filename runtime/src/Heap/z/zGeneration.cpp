@@ -448,10 +448,8 @@ void ZGenerationYoung::mark_start()
 void ZGenerationYoung::produceYoungRoots()
 {
     ZStatTimerYoung timer(PYoungRootEnum);
-    (void)Mark().Flush();
-    // VisitMinorRoots publishes the roots through the product root task.
+    // ZGC zMark.cpp:932-936: the root task publishes its worker stacks.
     ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
-    (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Mark());
 }
 
 void ZGenerationYoung::mark_follow()
