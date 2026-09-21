@@ -94,8 +94,8 @@ public:
     static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }
     void DoThread(Mutator& mutator) const
     {
-        const uintptr_t color = mutator.GetGCData().loadGoodMask;
         RootVisitor markRoot = [&](ObjectRef& root) {
+            const uintptr_t color = mutator.GetStackWatermark().uncolored_root_color();
             mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
                 ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&slot), color);
                 if (result != nullptr) (*result)(slot);

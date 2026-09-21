@@ -35,10 +35,8 @@ void StackWatermark::start_processing(Mutator& mutator)
 {
     const uint64_t epoch = epoch_id();
     if (epoch == 0 || IsDone(epoch)) { return; }
-    const uintptr_t color = mutator.GetGCData().storeGoodMask != 0 ? mutator.GetGCData().storeGoodMask
-                                                                   : mutator.GetGCData().loadGoodMask;
-    StackWatermarkProcessOopClosure closure(nullptr, color);
     RootVisitor visitor = [&](RootSlot& root) {
+        StackWatermarkProcessOopClosure closure(nullptr, uncolored_root_color());
         mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
             closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
         });
@@ -100,6 +98,11 @@ void StackWatermarkProcessOopClosure::do_root(zaddress_unsafe* p)
     function(p, color);
 }
 
+void StackWatermark::save_old_watermark(Mutator& mutator)
+{
+    headColor = mutator.GetGCData().storeGoodMask;
+}
+
 void StackWatermark::process_head(Mutator& mutator, void* context, const RootVisitor& visitor,
                                   const RootVisitor& invisibleRootVisitor)
 {
@@ -111,10 +114,7 @@ void StackWatermark::process_head(Mutator& mutator, void* context, const RootVis
     (void)invisibleRootVisitor;
     zaddress_unsafe* invisible = mutator.GetGCData().invisibleRoot;
     if (invisible != nullptr) {
-        const uintptr_t color = headColor != 0 ? headColor
-            : (mutator.GetGCData().storeGoodMask != 0 ? mutator.GetGCData().storeGoodMask
-                                                      : mutator.GetGCData().loadGoodMask);
-        ZUncoloredRoot::process_invisible(invisible, color);
+        ZUncoloredRoot::process_invisible(invisible, uncolored_root_color());
 #if defined(MRT_GC_UNIT_TESTS)
 #endif
     }
@@ -126,8 +126,7 @@ bool StackWatermark::start_processing_impl(Mutator& mutator, void* context, uint
     if (!TryBegin(epoch, totalFrames)) {
         return false;
     }
-    headColor = mutator.GetGCData().storeGoodMask != 0 ? mutator.GetGCData().storeGoodMask
-                                                       : mutator.GetGCData().loadGoodMask;
+    save_old_watermark(mutator);
     process_head(mutator, context, visitor, invisibleRootVisitor);
     AllocBuffer* buffer = mutator.GetAllocBuffer();
     if (buffer != nullptr) {

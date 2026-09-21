@@ -27,8 +27,7 @@ inline zaddress ZUncoloredRoot::make_load_good(zaddress_unsafe addr, uintptr_t c
 {
     const zpointer colorPtr = ZAddress::color(zaddress::null, color);
     if (!ZPointer::is_load_good(colorPtr)) {
-        const zpointer colored = ZAddress::color(addr, color);
-        return ZBarrier::relocate_or_remap(addr, ZBarrier::remap_generation(colored));
+        return ZBarrier::relocate_or_remap(addr, ZBarrier::remap_generation(colorPtr));
     }
     return safe(addr);
 }
