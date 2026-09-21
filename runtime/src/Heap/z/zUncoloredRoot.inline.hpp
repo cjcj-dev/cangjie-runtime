@@ -26,6 +26,7 @@ inline void ZUncoloredRoot::barrier(ObjectFunctionT function, zaddress_unsafe* p
 inline zaddress ZUncoloredRoot::make_load_good(zaddress_unsafe addr, uintptr_t color)
 {
     const zpointer colorPtr = ZAddress::color(zaddress::null, color);
+    ZDiagIdentityStale("uncolored.make_load_good", untype(addr), color, "arg-color");
     if (!ZPointer::is_load_good(colorPtr)) {
         return ZBarrier::relocate_or_remap(addr, ZBarrier::remap_generation(colorPtr));
     }
@@ -34,6 +35,7 @@ inline zaddress ZUncoloredRoot::make_load_good(zaddress_unsafe addr, uintptr_t c
 
 inline void ZUncoloredRoot::mark_object(zaddress addr)
 {
+    ZDiagIdentityStale("uncolored.mark_object", untype(addr), 0, "none");
     ZBarrier::Mark<false, false, true, false>(addr);
 }
 

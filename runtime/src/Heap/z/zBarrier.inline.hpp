@@ -274,7 +274,9 @@ inline zaddress ZBarrier::make_load_good_impl(zpointer ptr, const ForwardingProv
         return zaddress::null;
     }
     if (ZPointer::is_load_good_or_null(ptr)) {
-        return RefField<>(ptr).GetTargetObject();
+        const zaddress good = RefField<>(ptr).GetTargetObject();
+        ZDiagIdentityStale("barrier.make_load_good.load-good", untype(good), raw(ptr), "ptr-bits");
+        return good;
     }
     ZGeneration* generation = remap_generation(ptr);
     BaseObject* object = to_object(RefField<>(ptr).GetTargetObject());
