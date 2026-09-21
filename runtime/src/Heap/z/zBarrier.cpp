@@ -1067,9 +1067,9 @@ HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
                  "consumer=%s holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
                  "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
                  "field_type=%s field_offset=%zu from=%p from_region=%p "
-                 "region_type=%u generation=%u in_current_relocation_set=%u "
+                 "region_type=%u generation=%u forwarding_lookup_hit=%u "
                  "table_id=%#zx from_page_epoch=%llu lifeId=%llu "
-                 "lookup_state=%u gc_phase=%u "
+                 "lookup_state=%s gc_phase=%u "
                  "unresolved non-Usable from-address must not be handed out\n",
                  site != nullptr ? site : "?", static_cast<void*>(target),
                  static_cast<unsigned>(verdict), slotBits,
@@ -1088,7 +1088,7 @@ HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
                   static_cast<size_t>(0),
                   0ull,
                   0ull,
-                  0u,
+                  !canLookup ? "not_attempted" : (lookupTo != 0 ? "hit" : "miss"),
                  gcPhase);
     (void)fflush(stderr);
     (void)fflush(stdout);
