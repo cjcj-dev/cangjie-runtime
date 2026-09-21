@@ -92,11 +92,6 @@ public:
         }
     }
 
-    static void Exempt(RegionManager& manager, ZPage* region)
-    {
-        manager.ExemptFromRegion(region);
-    }
-
     static RefField<> QualifyStoreValue(Heap& collector, BaseObject* value)
     {
         return ZBarrier::GetAndTryTagRefField(value);

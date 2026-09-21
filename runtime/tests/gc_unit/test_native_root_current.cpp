@@ -453,6 +453,21 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     parked->PopNativeFrameRootsTo(frameMark);
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
+GC_OTHER_VM_TEST(YoungMarkStart, DoesNotParkPreviousFromPages)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    RelocationReceiptTest::BindNativeRootFixture(heap);
+    fx.region0->reset(PageAge::eden);
+    fx.region0->SetRegionRole(ZPageRole::From);
+    heap.young().pause_mark_start();
+    const auto role = fx.region0->GetRegionRole();
+    std::fprintf(stderr, "YOUNG_PAGE_PHASE_ASSERT executed=1 role=%u expected=%u\n",
+                 unsigned(role), unsigned(ZPageRole::From));
+    GC_EXPECT_EQ(role, ZPageRole::From);
+}
+
 // ZGC zGeneration.cpp:855-883 and zMark.cpp:853-891: mark-start
 // publishes a new epoch; the concurrent root task consumes parked stacks.
 GC_OTHER_VM_TEST(YoungMarkStart, ParkedRootDeferredToConcurrentMark)
@@ -461,6 +476,9 @@ GC_OTHER_VM_TEST(YoungMarkStart, ParkedRootDeferredToConcurrentMark)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     RelocationReceiptTest::BindNativeRootFixture(heap);
+    fx.region0->reset(PageAge::eden);
+    fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart() + 64);
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + 64);
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     parked->SetManagedContext(false);
     (void)parked->EnterSaferegion(false);

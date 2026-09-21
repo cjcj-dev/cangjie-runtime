@@ -65,7 +65,6 @@ enum class ZPageRole : uint8_t {
     FullTrace,
     LargeTrace,
     From,
-    UnmovableFrom,
     Garbage,
     OldLarge,
     RecentLarge,
@@ -79,7 +78,6 @@ inline const char* RegionRoleName(ZPageRole role)
         case ZPageRole::FullTrace: return "full trace regions";
         case ZPageRole::LargeTrace: return "large trace regions";
         case ZPageRole::From: return "from regions";
-        case ZPageRole::UnmovableFrom: return "escaped from regions";
         case ZPageRole::Garbage: return "garbage regions";
         case ZPageRole::OldLarge: return "old large regions";
         case ZPageRole::RecentLarge: return "recent large regions";
@@ -605,7 +603,6 @@ public:
     }
     bool IsFromRegion() const { return GetRegionRole() == ZPageRole::From; }
     bool IsLoneFromRegion() const { return GetRegionRole() == ZPageRole::None && is_relocatable(); }
-    bool IsUnmovableFromRegion() const;
 
     bool IsToRegion() const { return false; }
 

@@ -141,20 +141,7 @@ bool ZRelocate::IsFromObject(BaseObject* obj)
 
 // installdomain: positive control — how often Resolve/Fix would install a ghost-from that is
 // outside GetRoute's liveInfo0 survivor domain. Grant paints that bit before route geometry.
-bool ZRelocate::IsUnmovableFromObject(BaseObject* obj)
-{
-    // filter const string object.
-    if (!Heap::IsHeapAddress(obj)) {
-        return false;
-    }
 
-    // zRelocate.cpp:385-390: a lookup miss after the membership probe is a legal
-    // concurrent outcome (ghost dispel), so re-resolve from authoritative state
-    // instead of using a pointer that this race can leave null. Heap::page
-    // itself CHECKs (early-stop) on a genuine no-owner invariant break.
-    ZPage* regionInfo = Heap::page(reinterpret_cast<uintptr_t>(obj));
-    return regionInfo->IsUnmovableFromRegion();
-}
 
 
 
@@ -234,9 +221,6 @@ void EnsureRouteDomainMembership(BaseObject* obj)
         return;
     }
     if (!obj->IsValidObject()) {
-        return;
-    }
-    if (ZRelocate::IsUnmovableFromObject(obj)) {
         return;
     }
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
@@ -759,10 +743,6 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
         // generation. Even after its route state changes it cannot be
         // reclassified as a non-member; only an explicit receipt or completed
         // relocation qualifies a value (zRelocate.cpp:408-415).
-        if (ghost->IsUnmovableFromRegion() &&
-            ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
-            return current;
-        }
         BaseObject* resolved = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate_or_remap_object(current, provenance);
         if (resolved == nullptr) {
             ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.unresolved", current, 0, provenance);
@@ -800,7 +780,7 @@ BaseObject* ZRelocate::ForwardObject(BaseObject* obj, Generation generation)
     // to-version is not a stable address. Returning `obj` here reinstalls a from
     // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
-    if (IsFromObject(obj) && !IsUnmovableFromObject(obj)) {
+    if (IsFromObject(obj)) {
         ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
         BaseObject* waited = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate()
             .WaitForPageForwarding(obj, forwarding_for_page(region));
@@ -1250,26 +1230,6 @@ void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn
 
 } // namespace
 
-void RegionManager::ParkUnmovableFromRegion(ZPage* region)
-{
-    // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
-    // would DecCounts a second time ("error count 1-0 16-0"). Only a GARBAGE node
-    // can still carry the Garbage role (the CHECK at
-    // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
-    // rehome below so the garbage list cannot name a non-GARBAGE region.
-    // #710: role transition replaces the list re-home; idempotent like the
-    // deleted list unlink under the list lock.
-    (void)region;
-    if (region != nullptr) {
-        region->SetRegionRole(ZPageRole::UnmovableFrom);
-    }
-}
-
-void RegionManager::ExemptFromRegion(ZPage* region)
-{
-    ParkUnmovableFromRegion(region);
-}
-
 void RegionManager::CollectFromSpaceGarbage()
 {
     // cjpmnull2 5b31efeb mirrored onto this second reclaim entry: a page still
@@ -1291,9 +1251,7 @@ void RegionManager::CollectFromSpaceGarbage()
     }
     for (ZPage* region : fromPages) {
         const bool complete = region->IsForwardingDone();
-        if (!complete) {
-            ExemptFromRegion(region);
-        } else {
+        if (complete) {
             region->SetRegionRole(ZPageRole::Garbage);
         }
     }

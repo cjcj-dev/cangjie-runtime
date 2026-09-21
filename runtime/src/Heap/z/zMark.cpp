@@ -91,6 +91,8 @@ namespace {
 class MarkThreadClosure {
 public:
     explicit MarkThreadClosure(const RootVisitor* result = nullptr) : result(result) {}
+    // ZGC zMark.cpp:699-701: publish TLAB statistics when root scanning ends.
+    ~MarkThreadClosure() { Heap::GetHeap().page_allocator().PublishTLABStatistics(); }
     static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }
     void DoThread(Mutator& mutator) const
     {

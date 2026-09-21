@@ -117,7 +117,6 @@ public:
     bool FlushGCDataMarkProducers(ThreadGCData& data);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
     bool IsGhostFromObject(BaseObject* obj) const;
-    bool IsUnmovableFromObject(BaseObject* obj) const;
     BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation);
     ZGenerationYoung& young() { return *ZGeneration::young(); }
     const ZGenerationYoung& young() const { return *ZGeneration::young(); }

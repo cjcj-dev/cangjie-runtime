@@ -225,7 +225,6 @@ bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
 
 bool Heap::IsGhostFromObject(BaseObject* obj) const { return ZRelocate::IsFromObject(obj); }
 
-bool Heap::IsUnmovableFromObject(BaseObject* obj) const { return ZRelocate::IsUnmovableFromObject(obj); }
 
 BaseObject* Heap::ForwardObject(BaseObject* fromVersion, Generation generation)
 {
