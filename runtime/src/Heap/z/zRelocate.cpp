@@ -347,8 +347,6 @@ BaseObject* ZRelocate::ResolveMinorReference(RootSlot& root, const ScopedStopThe
     CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
                  "minor root resolve requires a usable target from=%p resolved=%p", from, resolved);
 
-    ZDiagIdentityStale("relocate.ResolveMinorReference.from", reinterpret_cast<MAddress>(from),
-                       ZPointerLoadGoodMask, "ZPointerLoadGoodMask");
     ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     return resolved;
 }
