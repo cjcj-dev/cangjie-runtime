@@ -425,6 +425,9 @@ public:
         if (UNLIKELY(tlData->buffer == nullptr)) {
             (void)AllocBuffer::GetOrCreateAllocBuffer();
         }
+        // The watermark retires the allocating thread's TLAB (ZGC
+        // zStackWatermark.cpp:197-200). A resumed CJThread can change workers.
+        SetAllocBuffer(tlData->buffer);
         RegisterCurrentMarkFlushThread();
         UpdatePollValues(tlData);
         DoLeaveSaferegion();
