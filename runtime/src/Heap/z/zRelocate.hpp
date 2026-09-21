@@ -8,6 +8,7 @@
 #define MRT_Z_RELOCATE_HPP
 
 #include <atomic>
+#include <array>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -19,6 +20,7 @@
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zPageAge.hpp"
+#include "Heap/z/zValue.inline.hpp"
 
 namespace MapleRuntime {
 class ScopedStopTheWorld;
@@ -115,21 +117,58 @@ class ZRelocationSet;
 struct ForwardingProvenance;
 template<typename T> class ZArray;
 
+// ZGC zRelocate.hpp:79-94 / zRelocate.cpp:309-333.
 class ZRelocationTargets {
 public:
-    static constexpr size_t kAges = 16;
+    static constexpr size_t kAges = kPageAgeCount - 1;
+    ZRelocationTargets() : targets(std::array<ZPage*, kAges>{}) {}
     ZPage* get(uint32_t partitionId, PageAge age) const
     {
-        (void)partitionId;
-        return targets[static_cast<size_t>(age) % kAges];
+        return targets.get(partitionId)[static_cast<size_t>(age) - 1];
     }
     void set(uint32_t partitionId, PageAge age, ZPage* page)
     {
-        (void)partitionId;
-        targets[static_cast<size_t>(age) % kAges] = page;
+        targets.get(partitionId)[static_cast<size_t>(age) - 1] = page;
+    }
+    template<class F> void apply_and_clear_targets(F fn)
+    {
+        ZPerNUMAIterator<std::array<ZPage*, kAges>> iter(&targets);
+        for (std::array<ZPage*, kAges>* entries; iter.next(&entries);) {
+            for (auto& page : *entries) { fn(page); page = nullptr; }
+        }
     }
 private:
-    ZPage* targets[kAges]{};
+    ZPerNUMA<std::array<ZPage*, kAges>> targets;
+};
+
+class ZRelocateSmallAllocator {
+public:
+    explicit ZRelocateSmallAllocator(ZGeneration* generation) : generation(generation) {}
+    ZPage* alloc_and_retire_target_page(ZForwarding* forwarding, ZPage* target);
+    void share_target_page(ZPage*, uint32_t) {}
+    void free_target_page(ZPage* page);
+    uintptr_t alloc_object(ZPage* page, size_t size) const;
+    void undo_alloc_object(ZPage* page, uintptr_t addr, size_t size) const;
+private:
+    ZGeneration* generation;
+};
+
+class ZRelocateMediumAllocator {
+public:
+    ZRelocateMediumAllocator(ZGeneration* generation, ZRelocationTargets* targets)
+        : generation(generation), sharedTargets(targets) {}
+    ~ZRelocateMediumAllocator();
+    ZPage* alloc_and_retire_target_page(ZForwarding* forwarding, ZPage* target);
+    void share_target_page(ZPage* page, uint32_t partition);
+    void free_target_page(ZPage*) {}
+    uintptr_t alloc_object(ZPage* page, size_t size) const;
+    void undo_alloc_object(ZPage* page, uintptr_t addr, size_t size) const;
+private:
+    ZGeneration* generation;
+    ZRelocationTargets* sharedTargets;
+    std::mutex lock;
+    std::condition_variable changed;
+    bool inPlace{false};
 };
 
 class ZRelocate {
@@ -158,6 +197,9 @@ public:
                                 const ForwardingProvenance& provenance);
     void synchronize();
     void desynchronize();
+    ZPerWorker<ZRelocationTargets>* small_targets() { return &smallTargets; }
+    ZPerWorker<ZRelocationTargets>* medium_targets() { return &mediumTargets; }
+    ZRelocationTargets* shared_medium_targets() { return &sharedMediumTargets; }
     ZRelocateQueue* queue() { return &relocateQueue; }
     bool is_queue_active() const { return relocateQueue.IsActive(); }
     static PageAge compute_to_age(PageAge fromAge);
@@ -170,6 +212,9 @@ private:
     BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     ZGeneration* const generation;
     ZRelocateQueue relocateQueue;
+    ZPerWorker<ZRelocationTargets> smallTargets;
+    ZPerWorker<ZRelocationTargets> mediumTargets;
+    ZRelocationTargets sharedMediumTargets;
 };
 
 bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix);

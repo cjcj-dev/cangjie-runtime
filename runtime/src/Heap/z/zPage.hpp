@@ -174,6 +174,8 @@ public:
     friend class ZPageTest;
 
     ZPageType type() const { return _type; }
+    uint32_t partition_id() const { return _partition_id; }
+    void reset_top_for_allocation() { _top = to_zoffset_end(start()); }
     PageAge age() const { return _age; }
     bool is_young() const { return IsYoungRegion(); }
     bool is_small() const { return _type == ZPageType::small; }
@@ -449,7 +451,7 @@ public:
     void ReleaseForwarding();
 
     // ZForwarding::retain_page: the three-state count is the gate, not the list
-    // type. After ForwardRegion, CollectRegion moves the region to garbage
+    // type. After relocation, CollectRegion moves the region to garbage
     // while the payload is still live; mutator relocate must still pin it.
     bool TryLockReadFromRegion() { return RetainForwarding(); }
 
