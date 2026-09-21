@@ -466,6 +466,15 @@ if (MRT_GC_UNIT_TESTS)
     set(MRT_TESTABLE_INTERNALS ON)
 endif()
 
+# HotSpot product builds omit assert and DEBUG_ONLY (utilities/macros.hpp:347-353).
+# The Release flags above replace CMake's defaults, including -DNDEBUG.
+# Keep assertions in the explicit testable shape and in Debug builds.
+if (NOT MRT_TESTABLE_INTERNALS)
+    string(APPEND CMAKE_C_FLAGS_RELEASE " -DNDEBUG")
+    string(APPEND CMAKE_CXX_FLAGS_RELEASE " -DNDEBUG")
+    string(APPEND CMAKE_ASM_FLAGS_RELEASE " -DNDEBUG")
+endif()
+
 set(TARGET_ARCH "linux_${CMAKE_HOST_SYSTEM_PROCESSOR}_cjnative")
 if (OHOS_FLAG MATCHES 1)
     set(TARGET_ARCH "linux_ohos_aarch64_cjnative")

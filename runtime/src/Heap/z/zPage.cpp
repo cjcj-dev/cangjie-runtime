@@ -202,17 +202,20 @@ namespace MapleRuntime {
 // ZPage::reset_seqnum (zPage.cpp:90-93), after owner selection and before publication.
 void ZPage::ResetPageSequence()
 {
-    const auto owner = IsYoungRegion() ? ZGenerationId::young : ZGenerationId::old;
-    const auto other = IsYoungRegion() ? ZGenerationId::old : ZGenerationId::young;
-    _seqnum = static_cast<uint32_t>(Heap::GetHeap().GetCycleSnapshot(owner).sequence);
-    _seqnum_other = static_cast<uint32_t>(Heap::GetHeap().GetCycleSnapshot(other).sequence);
+    _seqnum = generation()->seqnum();
+    _seqnum_other = ZGeneration::generation(
+        _generation_id == ZGenerationId::young ? ZGenerationId::old : ZGenerationId::young)->seqnum();
 }
 
-uint64_t ZPage::GetSnapshotEpoch() const
+// ZGC zPage.cpp:82-88: resolve the page's owning generation.
+ZGeneration* ZPage::generation()
 {
-    const ZGenerationId generation = GetOwnerGeneration() == Generation::Young
-        ? ZGenerationId::young : ZGenerationId::old;
-    return Heap::GetHeap().GetCycleSnapshot(generation).sequence;
+    return ZGeneration::generation(_generation_id);
+}
+
+const ZGeneration* ZPage::generation() const
+{
+    return ZGeneration::generation(_generation_id);
 }
 } // namespace MapleRuntime
 
@@ -305,18 +308,7 @@ ZPage* ZPage::clone_for_promotion() const
     return page;
 }
 
-// zPage.inline.hpp:428-522: one offset frontier, aligned byte allocation.
-uintptr_t ZPage::alloc_object(size_t size)
-{
-    MRT_ASSERT(is_allocating(), "Invalid state");
-    const size_t aligned = AlignUp<size_t>(size, object_alignment());
-    const zoffset_end addr = top();
-    zoffset_end newTop;
-    if (!to_zoffset_end(&newTop, addr, aligned) || newTop > end()) { return 0; }
-    _top = newTop;
-    return untype(ZOffset::address_unsafe(to_zoffset(addr)));
-}
-
+// zPage.inline.hpp:453-522: atomic allocation and allocation undo.
 uintptr_t ZPage::alloc_object_atomic(size_t size)
 {
     MRT_ASSERT(is_allocating(), "Invalid state");

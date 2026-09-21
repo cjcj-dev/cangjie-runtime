@@ -65,7 +65,7 @@ public:
     static ZGenerationYoung* young();
     static ZGenerationOld* old();
     static ZGeneration* generation(ZGenerationId id);
-    uint32_t seqnum() const;
+    uint32_t seqnum() const { return sequence; }
     GCCycleSnapshot Snapshot() const;
     ZMark& Mark() { return *mark; }
     const ZMark& Mark() const { return *mark; }
@@ -119,7 +119,7 @@ public:
     // zGeneration.hpp:138 stat_relocation() — per-generation relocation account.
     ZStatRelocation* StatRelocation() { return &statRelocation; }
     ZGenerationPhase GcPhase() const { return _phase; }
-    uint64_t Sequence() const { return Snapshot().sequence; }
+    uint64_t Sequence() const { return seqnum(); }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
     void SelectReason(GCReason value, uint64_t index = 0);
     // GCStats.reason write counterpart: tests override the reason of an
@@ -171,7 +171,7 @@ protected:
     // ZGeneration::ZGeneration (zGeneration.cpp:137): _seqnum(1). ZLiveMap uses
     // seqnum 0 as "never marked" (zLiveMap.cpp:40, zLiveMap.inline.hpp:37-43),
     // so no generation may ever report sequence 0.
-    uint64_t sequence = 1;
+    uint32_t sequence = 1;
     uint64_t requestIndex = 0;
     // ZGenerationOld::_young_seqnum_at_reloc_start (zGeneration.hpp:278).
     std::atomic<uint64_t> youngSequenceAtRelocateStart{ 0 };
@@ -244,6 +244,8 @@ public:
     void collect();
     void mark_start();
     void pause_mark_start();
+    void produceYoungRoots();
+    void mark_follow();
     void concurrent_mark();
     bool mark_end();
     bool pause_mark_end();

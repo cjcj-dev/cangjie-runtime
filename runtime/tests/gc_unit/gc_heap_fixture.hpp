@@ -50,7 +50,7 @@ namespace MapleRuntime {
 class ZPageTest {
 public:
     static void MakeRelocatable(ZPage& page) {
-        const uint64_t epoch = page.GetSnapshotEpoch();
+        const uint64_t epoch = page.generation()->seqnum();
         if (epoch > 0 && page.BirthSequence() >= epoch) {
             page._seqnum = static_cast<uint32_t>(epoch - 1);
         }

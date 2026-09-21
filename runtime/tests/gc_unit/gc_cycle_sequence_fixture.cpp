@@ -8,7 +8,7 @@ void GenerationSequenceFixture::Advance(ZGeneration& cycle)
 {
     std::lock_guard<std::mutex> lock(cycle.mutex);
     CHECK(cycle.active);
-    CHECK(cycle.sequence != UINT64_MAX);
+    CHECK(cycle.sequence != UINT32_MAX);
     ++cycle.sequence;
 }
 }
