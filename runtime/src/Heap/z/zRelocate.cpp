@@ -921,10 +921,9 @@ public:
         ZForwarding::PageWorkScope scope(owner, ZForwarding::CurrentPageWork() != owner);
         ZPage* page = owner->page();
         const MAddress start = page->GetRegionStart();
-        const MAddress limit = page->GetRegionAllocPtr();
         ZPage* target = start_in_place_relocation(start);
         targets->set(page->partition_id(), owner->to_age(), target);
-        iterate_objects(page, start, limit);
+        iterate_objects(page);
         target->ResetCensusBoundary();
         owner->in_place_relocation_finish();
         page->MarkForwardingDone();
@@ -943,7 +942,7 @@ public:
         ZForwarding::PageWorkScope scope(owner);
         ZPage* page = owner->page();
         ZVerify::BeforeRelocation(owner);
-        iterate_objects(page, page->GetRegionStart(), page->GetRegionAllocPtr());
+        iterate_objects(page);
         ZVerify::AfterRelocation(owner);
         if (ZVerifyForwarding) { owner->verify(); }
         generation->increase_freed(owner->size());
@@ -964,14 +963,12 @@ public:
     }
 
 private:
-    void iterate_objects(ZPage* page, MAddress start, MAddress limit)
+    // ZGC zRelocate.cpp:1001: same single livemap entry as ZPage::object_iterate
+    // (zPage.inline.hpp:319-331). The livemap is the only bound; a raw TLAB tail
+    // holds no live bit and is never visited.
+    void iterate_objects(ZPage* page)
     {
-        const int shift = page->object_alignment_shift();
-        page->livemap().iterate(page->generation_id(), [&](BitMap::idx_t index) {
-            const MAddress addr = start + ((index / 2) << shift);
-            if (addr < limit) { relocate_object(reinterpret_cast<BaseObject*>(addr)); }
-            return true;
-        });
+        page->object_iterate([&](BaseObject* object) { relocate_object(object); });
     }
     void increase_other_forwarded(size_t size)
     {
