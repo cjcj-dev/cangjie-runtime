@@ -34,6 +34,22 @@ class GcLogSchemaTest(unittest.TestCase):
         self.assertEqual((gc.phases[0].ns, gc.phase_leaves[0].ns, gc.stw[0].held_ns), (999, 19, 4))
         self.assertEqual((len(zs.phases), len(zs.cycles), zs.phases[0].conc_ns), (1, 1, 19))
 
+    def test_subphase_is_not_concurrent(self) -> None:
+        row = GOOD_PHASE.replace("v=4", "v=5").replace("kind=conc", "kind=subphase")
+        self.assertEqual(parse_gclog(row).phases[0].kind, "subphase")
+        with self.assertRaises(ValueError):
+            parse_gclog(row.replace("kind=subphase", "kind=invalid"))
+
+    def test_generation_record_preserves_identity_and_ns(self) -> None:
+        row = ("[GCLOG] v=5 rec=generation seq=7 gc_tag=Y name=Young_Generation "
+               "start_ns=1 dur_ns=99 live_before=9 live_after=8")
+        record = parse_gclog(row).generations[0]
+        self.assertEqual((record.seq, record.gc_tag, record.dur_ns), (7, "Y", 99))
+        for bad in (row.replace("dur_ns=99", "dur_ns=x"), row + " extra=1",
+                    row.replace("gc_tag=Y", "gc_tag=x")):
+            with self.subTest(row=bad), self.assertRaises(ValueError):
+                parse_gclog(bad)
+
     def test_generation_tags_preserved(self) -> None:
         text = "\n".join(GOOD_PHASE.replace("gc_tag=-", f"gc_tag={tag}") for tag in "yYO-")
         self.assertEqual([phase.gc_tag for phase in parse_gclog(text).phases], list("yYO-"))
