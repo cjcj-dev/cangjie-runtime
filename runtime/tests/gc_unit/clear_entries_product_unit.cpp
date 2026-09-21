@@ -1691,9 +1691,15 @@ void ExerciseRelocationWait782(bool claimedPage)
     generation.relocate().relocate(&generation.relocation_set());
     mutator.join();
     const MAddress mapping = forwarding->find(reinterpret_cast<MAddress>(from));
-    const MAddress expected = destination->GetRegionStart();
-    const bool valid = queued && blocked && before == 0 &&
-        reinterpret_cast<MAddress>(result) == expected && mapping == expected && forwarding->is_done();
+    // ZGC zRelocate.cpp:906-927: workers use relocation targets, not the
+    // mutator shared page. Capacity exhaustion compacts the source in place.
+    const MAddress expected = claimedPage ? mapping : source->GetRegionStart();
+    const bool workerTarget = claimedPage
+        ? mapping != reinterpret_cast<MAddress>(from) && Heap::page(mapping) != destination
+        : forwarding->in_place();
+    const bool valid = queued && blocked && before == 0 && mapping != 0 && workerTarget &&
+        reinterpret_cast<MAddress>(result) == expected && mapping == expected && forwarding->is_done() &&
+        result->GetTypeInfo() == fx.typeInfo;
     std::fprintf(stderr,
         "RELOCATE_MISS_TARGET claimed=%d queued=%d blocked=%d before=%zx result=%zx mapping=%zx expected=%zx done=%d valid=%d\n",
         claimedPage, queued, blocked, before, reinterpret_cast<MAddress>(result), mapping,

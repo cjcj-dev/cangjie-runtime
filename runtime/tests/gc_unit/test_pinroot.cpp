@@ -52,7 +52,6 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, InPlaceTargetReusedAndSourceFreed)
         auto* object = reinterpret_cast<BaseObject*>(objects[i]);
         object->SetClassInfo(type);
         *reinterpret_cast<uint64_t*>(objects[i] + 8) = 0x796000 + i;
-        pages[i]->SetRegionAllocPtr(pages[i]->GetRegionEnd());
         GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], object));
     }
     GC_EXPECT_EQ(manager.GetUsedBytes(), 2 * ZPageSizeSmall);

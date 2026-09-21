@@ -1864,6 +1864,13 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
         return reinterpret_cast<BaseObject*>(to);
     }
     (void)provenance;
+    // Cangjie has no return statepoints: eager root repair also enters through
+    // coloured static/export roots before concurrent workers are submitted.
+    // Reuse the existing stopped-world page completion adapter (ZGC's ordinary
+    // concurrent retain/wait path is zRelocate.cpp:382-410).
+    if (MutatorManager::Instance().WorldStopped()) {
+        return WaitForPageForwarding(object, forwarding);
+    }
     ZPage::RetainScope lease{forwarding};
     if (lease.ok()) {
         DCHECK(generation->is_phase_relocate());

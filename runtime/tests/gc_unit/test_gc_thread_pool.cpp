@@ -321,6 +321,7 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     queue.BeginWorkers(1);
     const auto request = queue.Add(owner);
     ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
+    WorkerFixture workerIdentity;
     task.work();
     GC_EXPECT_FALSE(owner->is_done());
     GC_EXPECT_TRUE(request.state() == ZRelocateQueue::State::CLAIMED);
@@ -349,7 +350,7 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     bool pending = false;
     {
         ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
-        std::thread worker([&] { task.work(); });
+        std::thread worker([&] { WorkerFixture workerIdentity; task.work(); });
         // ZGC zRelocate.cpp:1211: an ordinary worker leaves when its iterator
         // is exhausted; task destruction deactivates after all work joins.
         worker.join();
