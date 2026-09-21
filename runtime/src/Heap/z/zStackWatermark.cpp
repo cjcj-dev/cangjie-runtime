@@ -117,6 +117,7 @@ void StackWatermark::process_head(Mutator& mutator, void* context, const RootVis
         mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
             closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
         });
+        visitor(root);
     };
     mutator.VisitExceptionRoots(expand);
     mutator.VisitNativeFrameRoots(expand);
