@@ -126,10 +126,7 @@ public:
         return mapped;
     }
 
-    static bool FixMinorField(Heap& collector, RefField<>& field, BaseObject* knownBase = nullptr)
-    {
-        return ZRelocate::FixMinorEvacuatedSlot(field, knownBase, nullptr);
-    }
+
 
     static BaseObject* TryForward(Heap& collector, BaseObject* object)
     {
@@ -1602,7 +1599,7 @@ void CheckMinorFieldColour(bool stale)
         bits = ColouredPointer(fx.obj0, ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask);
     }
     RefField<> field(bits);
-    (void)ZRelocate::FixMinorEvacuatedSlot(field, nullptr, nullptr);
+    (void)ZBarrier::ReadReference(nullptr, field);
     const MAddress actual = untype(field.GetTargetObject());
     const MAddress expected = stale ? to : from;
     std::fprintf(stderr, "DETAIL minor_field_colour stale=%u actual=%#zx expected=%#zx\n",
