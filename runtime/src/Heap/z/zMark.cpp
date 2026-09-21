@@ -76,7 +76,7 @@ void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
         return;
     }
     // Ownership state carries current identity and color, never GC work entries.
-    exportOwners.emplace_back(latest, ForwardingStage::IncomingNew);
+    exportOwners.emplace_back(latest);
 }
 
 

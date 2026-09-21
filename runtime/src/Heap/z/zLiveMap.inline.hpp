@@ -8,6 +8,7 @@
 #define MRT_Z_LIVEMAP_INLINE_HPP
 
 #include "Heap/z/zLiveMap.hpp"
+#include "Heap/z/zGeneration.hpp"
 
 #include "Base/Log.h"
 #include "Heap/z/zBitMap.inline.hpp"
@@ -23,7 +24,7 @@ inline void ZLiveMap::reset()
 // ZGC zLiveMap.inline.hpp:41-43: the generation seqnum is read at call time.
 inline bool ZLiveMap::is_marked(ZGenerationId id) const
 {
-    return _seqnum.load(std::memory_order_acquire) == generation_seqnum(id);
+    return _seqnum.load(std::memory_order_acquire) == ZGeneration::generation(id)->seqnum();
 }
 
 inline uint32_t ZLiveMap::live_objects() const
