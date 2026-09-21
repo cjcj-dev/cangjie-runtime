@@ -936,8 +936,11 @@ void ZBarrier::store_barrier_on_native_oop_field(volatile zpointer* p, bool heal
 
 zaddress ZBarrier::load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o)
 {
-    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
-    return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Strong));
+    // ZGC zBarrier.inline.hpp:461-466: a preloaded value may have no slot.
+    // Keep the nullable pointer through barrier() so verification resolves the
+    // value without requesting self-healing (zBarrier.inline.hpp:334).
+    return barrier(is_load_good_or_null_fast_path, &ZBarrier::load_good_slow_path,
+                   ColorLoadGood, p, o, false);
 }
 
 zaddress ZBarrier::load_barrier_on_oop_field(volatile zpointer* p)
