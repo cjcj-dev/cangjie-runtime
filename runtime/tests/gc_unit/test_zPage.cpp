@@ -545,6 +545,9 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedNewRawAcquireAllowsStopTheWorld)
     void* taskResult = nullptr;
     GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
     ReleaseHandle(handle);
+    std::fprintf(stderr, "JNI_BLOCKED_ENTER_RESTORED acquired=%d saferegion=%d\n",
+                 result.acquired.load(std::memory_order_acquire) ? 1 : 0,
+                 result.saferegionAfterAcquire.load(std::memory_order_acquire) ? 1 : 0);
     GC_EXPECT_TRUE(stwFinishedWhileBlocked);
     GC_EXPECT_FALSE(acquiredWhileBlocked);
     GC_EXPECT_TRUE(result.acquired.load(std::memory_order_acquire));
