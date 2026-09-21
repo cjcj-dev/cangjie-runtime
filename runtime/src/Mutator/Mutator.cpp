@@ -801,7 +801,9 @@ bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size
     }
     MutatorUnlock();
     // ZGC zStackWatermark.cpp:155-173: preserve the root color in the closure.
-    const uintptr_t rootColor = GetGCData().loadGoodMask;
+    const uintptr_t saved = GetStackWatermark().uncolored_root_color();
+    const uintptr_t rootColor = saved != 0 ? saved
+        : (GetGCData().storeGoodMask != 0 ? GetGCData().storeGoodMask : GetGCData().loadGoodMask);
     RootVisitor visitor = [this, young, rootColor](ObjectRef& root) {
         VisitHeapRootSlots(root, [young, rootColor](ObjectRef& slot) {
             (void)PushHeapRoot(slot, young, rootColor);

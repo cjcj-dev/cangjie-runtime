@@ -46,7 +46,10 @@ public:
         frameCount.store(0, std::memory_order_relaxed);
         stackGeneration.store(0, std::memory_order_relaxed);
         allocStats.retired = 0;
+        headColor = 0;
     }
+
+    uintptr_t uncolored_root_color() const { return headColor; }
 
     void OnStackGrow(intptr_t stackOffset)
     {
@@ -94,6 +97,7 @@ private:
     std::atomic<size_t> frameCount;
     std::atomic<uint64_t> stackGeneration;
     ThreadLocalAllocStats allocStats;
+    uintptr_t headColor = 0;
 };
 class StackWatermarkSet {
 public:
