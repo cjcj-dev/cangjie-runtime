@@ -152,7 +152,6 @@ void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
 JavaThreadsIterator::JavaThreadsIterator(ZGenerationIdOptional generation)
     : claimed(0), generation(generation)
 {
-    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) { threads.push_back(&mutator); });
 }
 
 uint32_t JavaThreadsIterator::claim()
@@ -164,10 +163,10 @@ void JavaThreadsIterator::Apply(const std::function<void(Mutator&)>& visitor)
 {
     for (;;) {
         const uint32_t index = claim();
-        if (index >= threads.size()) {
+        if (index >= threads.length()) {
             return;
         }
-        visitor(*threads[index]);
+        visitor(*threads.thread_at(index));
     }
 }
 

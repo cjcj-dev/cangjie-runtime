@@ -6,6 +6,7 @@
 
 
 #include "MutatorManager.h"
+#include "ThreadSMR.h"
 
 #include <atomic>
 #include <thread>
@@ -101,12 +102,8 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData)
 void MutatorManager::BindMutator(Mutator& mutator) const
 {
     ThreadLocalData* tlData = ThreadLocal::GetThreadLocalData();
-    if (UNLIKELY(tlData->buffer == nullptr)) {
-        (void)AllocBuffer::GetOrCreateAllocBuffer();
-    }
-    MutatorManager::Instance().RegisterMarkFlushThread(tlData);
     tlData->SetMutator(&mutator);
-    mutator.SetAllocBuffer(tlData->buffer);
+    MutatorManager::Instance().RegisterMarkFlushThread(tlData);
     UpdatePollValues(tlData);
 }
 
@@ -120,21 +117,13 @@ void MutatorManager::UnbindMutator(Mutator& mutator) const
 
 Mutator* MutatorManager::CreateMutator()
 {
+    // The scheduler constructs this logical thread before its first resume.
+    // Binding must not reinitialize a watermark already seen by a root task.
     Mutator* mutator = ConcurrencyModel::GetMutator();
-    if (mutator == nullptr) {
-        mutator = new (std::nothrow) Mutator();
-        CHECK_DETAIL(mutator != nullptr, "new Mutator failed");
-        MutatorManagementRLock();
-        mutator->Init();
-        mutator->InitTid();
-        BindMutator(*mutator);
-        ConcurrencyModel::SetMutator(mutator);
-    } else {
-        MutatorManagementRLock();
-        mutator->Init();
-        mutator->InitTid();
-        BindMutator(*mutator);
-    }
+    CHECK_DETAIL(mutator != nullptr, "scheduler must construct the logical mutator");
+    MutatorManagementRLock();
+    mutator->InitTid();
+    BindMutator(*mutator);
     MutatorManagementRUnlock();
     return mutator;
 }
@@ -144,50 +133,32 @@ void MutatorManager::TransitMutatorToExit()
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
     PackageInitTable::OwnerExit();
-    mutator->MutatorLock();
-    mutator->MutatorUnlock();
-    mutator->ResetMutator();
+    // Complete this identity's phase processing before detaching its roots.
+    // threads.cpp:1099-1114 keeps the watermark alive through the last transition.
+    StackWatermarkSet::on_safepoint(*mutator);
     (void)mutator->EnterSaferegion(false);
+    mutator->MutatorLock();
+    mutator->ResetMutator();
     UnbindMutator(*mutator);
-}
-
-void MutatorManager::DestroyExpiredMutators()
-{
-    expiringMutatorListLock.lock();
-    ExpiredMutatorList workList;
-    workList.swap(expiringMutators);
-    expiringMutatorListLock.unlock();
-    for (auto it = workList.begin(); it != workList.end(); ++it) {
-        Mutator* expiringMutator = *it;
-        delete expiringMutator;
+    if (mutator->GetCjthreadPtr() != nullptr) {
+        // The scheduling carrier can be recycled; its logical thread cannot.
+        ConcurrencyModel::SetMutator(nullptr);
+        DestroyMutator(mutator);
     }
 }
 
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
     ConsumeCpuProfileRequest(mutator);
-    if (TryAcquireMutatorManagementRLock()) {
-        delete mutator; // call ~Mutator() under mutatorListLock
-        MutatorManagementRUnlock();
-    } else {
-        expiringMutatorListLock.lock();
-        expiringMutators.push_back(mutator);
-        expiringMutatorListLock.unlock();
-    }
+    // Threads::remove publishes new membership before smr_delete waits on
+    // old handles. Never wait while holding the management/STW lock.
+    ThreadsSMRSupport::remove_thread(mutator);
+    ThreadsSMRSupport::smr_delete(mutator);
 }
 
 Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
 {
-    // Because TSAN tool can't identify the RwLock implemented by ourselves,
-    // we use a global instance fpMutatorInstance instead of an instance created on
-    // heap in order to prevent false positives.
-    static Mutator fpMutatorInstance;
-    Mutator* mutator = nullptr;
-    if (threadType == ThreadType::FP_THREAD) {
-        mutator = &fpMutatorInstance;
-    } else {
-        mutator = new (std::nothrow) Mutator();
-    }
+    Mutator* mutator = new (std::nothrow) Mutator();
     CHECK_DETAIL(mutator != nullptr, "create mutator out of native memory");
     MutatorManagementRLock();
 #ifdef INTERPRETER_ENABLED
@@ -198,10 +169,7 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
     mutator->InitProtectStackAddr();
     mutator->SetManagedContext(false);
     MutatorManager::Instance().BindMutator(*mutator);
-    {
-        std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
-        runtimeMutators.insert(mutator);
-    }
+    ThreadsSMRSupport::add_thread(mutator);
     ThreadLocal::SetMutator(mutator);
     ThreadLocal::SetThreadType(threadType);
     ThreadLocal::SetCJProcessorFlag(true);
@@ -224,21 +192,14 @@ void MutatorManager::DestroyRuntimeMutator(ThreadType threadType)
     Mutator* mutator = ThreadLocal::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Fini UpdateThreads with null mutator");
 
-    // Reuse the ordinary CJThread exit transition: an active participant first
-    // acknowledges as EXITING, is reset/unbound, and its storage remains pinned
-    // by DestroyMutator until the epoch closes.
+    // A native logical thread has the same detach and SMR lifetime as a
+    // scheduler-backed thread; the TLS binding is cleared before reclamation.
     TransitMutatorToExit();
-    {
-        std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
-        runtimeMutators.erase(mutator);
-    }
     ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
     UnregisterMarkFlushThread(tls);
-    ThreadLocal::SetAllocBuffer(nullptr);
     ThreadLocal::SetCJProcessorFlag(false);
-    if (threadType != ThreadType::FP_THREAD) {
-        DestroyMutator(mutator);
-    }
+    (void)threadType;
+    DestroyMutator(mutator);
 }
 
 void MutatorManager::Init()
@@ -301,36 +262,22 @@ bool MutatorManager::AcquireMutatorManagementWLockForCpuProfile()
     return acquired;
 }
 
-// Visit all mutators, hold mutatorListLock firstly
+// ThreadsListHandle protects every callback without holding registration locks.
 void MutatorManager::VisitAllMutators(MutatorVisitor func)
 {
-    std::unordered_set<Mutator*> visited;
-    MutatorVisitor visitOnce = [&func, &visited](Mutator& mutator) {
-        if (visited.insert(&mutator).second) {
-            func(mutator);
-        }
-    };
-    ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &visitOnce);
-    {
-        std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
-        for (Mutator* runtimeMutator : runtimeMutators) {
-            if (runtimeMutator != nullptr) {
-                visitOnce(*runtimeMutator);
-            }
-        }
-    }
-    Mutator* mutator = Heap::GetHeap().GetFinalizerProcessor().GetMutator();
-    if (mutator != nullptr) {
-        visitOnce(*mutator);
+    ThreadsListHandle threads;
+    for (size_t i = 0; i < threads.length(); ++i) {
+        func(*threads.thread_at(i));
     }
 }
 
 void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
 {
-    ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &func);
+    Mutator* finalizer = Heap::GetHeap().GetFinalizerProcessor().GetMutator();
+    VisitAllMutators([&](Mutator& mutator) {
+        if (&mutator != finalizer) { func(mutator); }
+    });
 }
-
-
 
 void MutatorManager::VisitMarkingThreads(const std::function<void(const ThreadGCData*)>& visitor)
 {

@@ -324,20 +324,15 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     std::vector<NativeSlot> rootSlots(rootCount, NativeSlot(zpointer::null));
     std::vector<NativeSlot*> roots(rootCount);
     U64 handle = 0;
-    AllocBuffer* invisibleBuffer = nullptr;
-    bool ownsInvisibleBuffer = false;
     if (finalizable) {
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizer(finalizerRoot);
-    } else if (markOnly || duplicateRootOrder != 0) {
-        ownsInvisibleBuffer = AllocBuffer::GetAllocBuffer() == nullptr;
-        invisibleBuffer = AllocBuffer::GetOrCreateAllocBuffer();
-    } else if (commonRoot) {
+    } else if (!markOnly && duplicateRootOrder == 0 && commonRoot) {
         for (size_t i = 0; i < rootCount; ++i) {
             rootSlots[i].StoreColoured(StoreGoodPointer(array));
             roots[i] = &rootSlots[i];
         }
         Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
-    } else {
+    } else if (!markOnly && duplicateRootOrder == 0) {
         handle = Heap::GetHeap().RegisterExportRoot(array);
     }
     const bool wasStarted = Heap::GetHeap().IsGcStarted();
@@ -369,16 +364,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         Heap::GetHeap().GetFinalizerProcessor().VisitNativePointers([](NativeSlot& root) {
             root.StoreColoured(StoreGoodPointer(nullptr));
         });
-    } else if (markOnly || duplicateRootOrder != 0) {
-        if (ownsInvisibleBuffer) {
-            invisibleBuffer->ClearRegion();
-            invisibleBuffer->Fini();
-            ThreadLocal::SetAllocBuffer(nullptr);
-            delete invisibleBuffer;
-        }
-    } else if (commonRoot) {
+    } else if (!markOnly && duplicateRootOrder == 0 && commonRoot) {
         Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
-    } else {
+    } else if (!markOnly && duplicateRootOrder == 0) {
         Heap::GetHeap().RemoveExportObject(handle);
     }
     if (!ownerWasActive) activityCycle.End();

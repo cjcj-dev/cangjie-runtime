@@ -12,8 +12,11 @@ public:
 class MutatorManagerTest {
 public:
     static size_t RegistrySize(MutatorManager& manager) {
-        std::lock_guard<std::mutex> lock(manager.runtimeMutatorRegistryMutex);
-        return manager.runtimeMutators.size();
+        size_t nativeThreads = 0;
+        manager.VisitAllMutators([&](Mutator& mutator) {
+            if (mutator.GetCjthreadPtr() == nullptr) { ++nativeThreads; }
+        });
+        return nativeThreads;
     }
 };
 class OopStorageTest {

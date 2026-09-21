@@ -514,7 +514,6 @@ static void ResetFinalizerThreadLocal()
     ThreadLocal::SetCJThread(nullptr);
     ThreadLocal::SetForeignCJThread(nullptr);
     ThreadLocal::SetSchedule(nullptr);
-    ThreadLocal::SetAllocBuffer(nullptr);
     ThreadLocal::SetMutator(nullptr);
     ThreadLocal::SetProtectAddr(nullptr);
     ThreadLocal::SetCJProcessorFlag(false);

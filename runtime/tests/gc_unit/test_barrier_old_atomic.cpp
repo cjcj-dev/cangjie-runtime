@@ -63,13 +63,13 @@ namespace {
 class AllocBufferScope final {
 public:
     explicit AllocBufferScope(AllocBuffer* replacement)
-        : replacement(replacement), saved(ThreadLocal::GetAllocBuffer())
+        : replacement(replacement), saved(ThreadLocal::GetThreadLocalData()->buffer)
     {
-        ThreadLocal::SetAllocBuffer(replacement);
+        ThreadLocal::GetThreadLocalData()->buffer = replacement;
     }
     ~AllocBufferScope()
     {
-        ThreadLocal::SetAllocBuffer(saved);
+        ThreadLocal::GetThreadLocalData()->buffer = saved;
         if (replacement != nullptr) {
             replacement->ClearRegion();
         }

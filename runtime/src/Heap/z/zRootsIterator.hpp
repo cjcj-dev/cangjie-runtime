@@ -20,6 +20,7 @@
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Mutator/MutatorManager.h"
+#include "Mutator/ThreadSMR.h"
 namespace MapleRuntime {
 class Mutator;
 
@@ -90,7 +91,7 @@ public:
     uint32_t claim();
     void Apply(const std::function<void(Mutator&)>& visitor);
 private:
-    std::vector<Mutator*> threads;
+    ThreadsListHandle threads;
     volatile uint32_t claimed;
     ZGenerationIdOptional generation;
 };

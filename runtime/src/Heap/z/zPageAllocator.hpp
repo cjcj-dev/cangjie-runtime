@@ -405,7 +405,8 @@ public:
     size_t GetTLABCapacity() const { return static_cast<size_t>(tlabCapacity); }
     void InitializeTLAB(AllocBuffer& buffer);
     void ResetTLABUsage();
-    void PublishTLABStatistics();
+    void PublishTLABStatistics(const TLABStatistics& statistics);
+    void RetireTLAB(AllocBuffer& buffer, TLABStatistics& statistics);
     void RetireTLABStatistics(AllocBuffer& buffer);
 
     bool StallAllocation(AllocationStallRequest& request);
@@ -458,11 +459,9 @@ public:
     void PromoteAllRegions();
     void CompactRegion(ZPage* region);
 
-    void ExemptFromRegion(ZPage* region);
     // Rehome onto unmovableFrom without publishing kept. PrepareYoung parks
     // leftover from-pages here; they were expired at cycle start and must not
     // be re-published as this cycle's done (zRelocationSetSelector.cpp:114-196).
-    void ParkUnmovableFromRegion(ZPage* region);
     // ZGC zRelocationSetSelector.cpp:114-196 / zGeneration.cpp:205-213: a page
     // not in this cycle's relocation set is an ordinary candidate next cycle.
     // Kept (IsForwardingDone via Exempt) is in-cycle only.
@@ -514,7 +513,6 @@ public:
 
     void AssembleSmallGarbageCandidates();
     void AssembleLargeGarbageCandidates();
-    YoungCollectionStats PrepareYoungGarbageCandidates();
 
     void CollectFromSpaceGarbage();
 

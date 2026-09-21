@@ -609,12 +609,6 @@ inline bool ZPage::IsRelocatable() const
     return _seqnum < generation()->seqnum();
 }
 
-inline bool ZPage::IsUnmovableFromRegion() const
-    {
-        const ZPageRole role = GetRegionRole();
-        return role == ZPageRole::UnmovableFrom;
-    }
-
 inline bool ZPage::IsValidRegion() const
     {
         return is_small() || is_medium() || is_large();

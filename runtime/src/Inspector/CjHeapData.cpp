@@ -228,8 +228,6 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
             auto regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
             if (regionInfo->IsLargeRegion()) {
                 dumpObject.tag = TAG_LARGE_PRIMITIVE_ARRAY_DUMP;
-            } else if (regionInfo->IsUnmovableFromRegion()) {
-                dumpObject.tag = TAG_UNMOVABLE_PRIMITIVE_ARRAY_DUMP;
             }
             dumpObjects.push_back(dumpObject);
         } else if (componentTypeInfo->IsStructType()) {
@@ -237,8 +235,6 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
             auto regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
             if (regionInfo->IsLargeRegion()) {
                 dumpObject.tag = TAG_LARGE_STRUCT_ARRAY_DUMP;
-            } else if (regionInfo->IsUnmovableFromRegion()) {
-                dumpObject.tag = TAG_UNMOVABLE_STRUCT_ARRAY_DUMP;
             }
             dumpObjects.push_back(dumpObject);
             ProcessStructClass(obj->GetTypeInfo());
@@ -250,8 +246,6 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
                 auto regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
                 if (regionInfo->IsLargeRegion()) {
                     dumpObject.tag = TAG_LARGE_OBJECT_ARRAY_DUMP;
-                } else if (regionInfo->IsUnmovableFromRegion()) {
-                    dumpObject.tag = TAG_UNMOVABLE_OBJECT_ARRAY_DUMP;
                 }
                 dumpObjects.push_back(dumpObject);
         } else {
@@ -262,8 +256,6 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
         auto regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
         if (regionInfo->IsLargeRegion()) {
             dumpObject.tag = TAG_LARGE_INSTANCE_DUMP;
-        } else if (regionInfo->IsUnmovableFromRegion()) {
-            dumpObject.tag = TAG_UNMOVABLE_INSTANCE_DUMP;
         }
         dumpObjects.push_back(dumpObject);
     } else {

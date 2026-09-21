@@ -235,33 +235,4 @@ void RegionManager::AssembleSmallGarbageCandidates() {}
 
 void RegionManager::AssembleLargeGarbageCandidates() {}
 
-// zGeneration.cpp:205-221: candidates come from the page table. The previous
-// cycle's leftover from-pages are parked; young pages are counted without
-// retaining page pointers. The selection itself (and the from-role assignment) happens in
-// ZGeneration::select_relocation_set via ZGenerationPagesIterator.
-YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates()
-{
-    PublishTLABStatistics();
-    YoungCollectionStats stats;
-    uint64_t subStart = TimeUtil::NanoSeconds();
-    {
-        ZGenerationPagesIterator iter(&Heap::page_table(), ZGenerationId::young, nullptr);
-        for (ZPage* region; iter.next(&region);) {
-            const ZPageRole role = region->GetRegionRole();
-            if (role == ZPageRole::From) {
-                ++stats.fromVisited;
-                stats.fromVisitedBytes += region->GetRegionSize();
-                ParkUnmovableFromRegion(region);
-                continue;
-            }
-            ++stats.unmovableVisited;
-            stats.unmovableVisitedBytes += region->GetRegionSize();
-            ++stats.candidateRegions;
-            stats.candidateBytes += region->GetRegionAllocatedSize();
-        }
-    }
-    stats.reparkNs = TimeUtil::NanoSeconds() - subStart;
-    return stats;
-}
-
 } // namespace MapleRuntime

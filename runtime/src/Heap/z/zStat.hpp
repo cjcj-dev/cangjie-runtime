@@ -26,32 +26,6 @@
 #include "Heap/z/zThread.hpp"
 
 namespace MapleRuntime {
-struct YoungCollectionStats {
-    size_t candidateRegions = 0;
-    size_t candidateBytes = 0;
-    size_t reclaimedRegions = 0;
-    size_t reclaimedBytes = 0;
-
-    // candfix: PrepareYoungGarbageCandidates selects regions and mutates region lists;
-    // it does not visit heap objects or reference slots. Keep the input inventory and
-    // skip reasons explicit so a long phase can be classified as "many entries" vs
-    // "expensive per entry" without adding an object walk merely for measurement.
-    size_t fromVisited = 0;
-    size_t fromVisitedBytes = 0;
-    size_t unmovableVisited = 0;
-    size_t unmovableVisitedBytes = 0;
-    size_t unmovableYoung = 0;
-    size_t recentFullVisited = 0;
-    size_t recentFullVisitedUnits = 0;
-    size_t recentFullYoung = 0;
-    size_t objectVisits = 0;
-    size_t slotVisits = 0;
-    uint64_t reparkNs = 0;
-    uint64_t unmovableNs = 0;
-    uint64_t recentFullNs = 0;
-    uint64_t listMoveNs = 0;
-};
-
 struct YoungConcWindowStats {
     uint64_t windowNs = 0;    // world-released → STW2 requested
     size_t closureCalls = 0;  // TraceYoungClosure invocations inside the window

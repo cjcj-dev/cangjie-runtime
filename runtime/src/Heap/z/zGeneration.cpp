@@ -93,7 +93,6 @@ static const ZStatSubPhase PYoungFlushAlloc("young.flush_alloc", ZGenerationId::
 static const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
 static const ZStatSubPhase PYoungPostEvacFinish("young.post_evac_finish", ZGenerationId::young);
 static const ZStatSubPhase PYoungPreEvacClear("young.pre_evac_clear", ZGenerationId::young);
-static const ZStatSubPhase PYoungPrepareCandidates("young.prepare_candidates", ZGenerationId::young);
 static const ZStatSubPhase PYoungRefFix("young.ref_fix", ZGenerationId::young);
 static const ZStatSubPhase PYoungRefFixPrepare("young.ref_fix_prepare", ZGenerationId::young);
 static const ZStatSubPhase PYoungRefFixRootPass1("young.ref_fix_root_pass1", ZGenerationId::young);
@@ -229,6 +228,7 @@ public:
     bool do_operation() override
     {
         ZStatTimerYoung timer(ZPhasePauseMarkStartYoung);
+        Heap::GetHeap().increment_total_collections();
         ZGeneration::young()->mark_start();
         return true;
     }
@@ -241,6 +241,7 @@ public:
     bool do_operation() override
     {
         ZStatTimerYoung timer(ZPhasePauseMarkStartYoungAndOld);
+        Heap::GetHeap().increment_total_collections();
         ZGeneration::young()->mark_start();
         ZGeneration::old()->mark_start();
         return true;
@@ -400,12 +401,6 @@ bool ZGenerationYoung::pause_mark_end()
 void ZGenerationYoung::mark_start()
 {
     uint64_t start = TimeUtil::NanoSeconds();
-    // VM_ZOperation::pause owns the STW (zGeneration.cpp:474-485).
-    // zGeneration.cpp:600,637: VM op increments the heap-wide count before
-    // young mark start, for both minor and major collections.
-    Heap::GetHeap().increment_total_collections();
-    // VM_ZMarkStartYoungAndOld starts the complete young event before old
-    // (zGeneration.cpp:601-602); a minor only enters the young event.
     CHECK(_cycle == ZGenerationId::young);
     CHECK(Snapshot().active);
     ZGlobalsPointers::flip_young_mark_start();
@@ -417,17 +412,8 @@ void ZGenerationYoung::mark_start()
         ZStatTimerYoung zstatTimer(PYoungFlushAlloc);
         manager.ResetTLABUsage();
         Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
-        Heap::GetHeap().GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
     }
-    // Preserve allocation statistics and park previous-cycle from pages.
-    // Selection owns page pointers only after marking has established liveness.
-    YoungCollectionStats stats;
-    {
-        ZStatTimerYoung zstatTimer(PYoungPrepareCandidates);
-        stats = manager.PrepareYoungGarbageCandidates();
-    }
-    // Flush pre-flip producers before invalidating their generation sequence.
-    (void)ZMark::FlushAllGenerations();
+    reset_statistics();
     {
         std::lock_guard<std::mutex> lock(mutex);
         CHECK(sequence != UINT32_MAX);
@@ -436,47 +422,16 @@ void ZGenerationYoung::mark_start()
     set_phase(Phase::Mark);
     Mark().BindWorkers(Workers());
     Mark().Start();
-    // zGeneration.cpp:880-885: mark-start sample (also resets the
-    // collection's used high/low trackers, zPageAllocator.cpp:1332-1346).
-    statHeap.AtMarkStart(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
-
     {
         ZStatTimerYoung zstatTimer(PYoungRemsetDrain);
         Heap::GetHeap().remembered().flip();
     }
 
-    VLOG(REPORT,
-         "[GCV2][candfix] prepare_candidates candidate_regions=%zu candidate_bytes=%zu "
-         "from_visited=%zu from_units=%zu unmovable_visited=%zu unmovable_units=%zu "
-         "unmovable_young=%zu recent_visited=%zu recent_units=%zu "
-         "recent_young=%zu "
-         "objects_visited=%zu slots_visited=%zu repark_ns=%llu unmovable_ns=%llu recent_ns=%llu "
-         "list_move_ns=%llu",
-         stats.candidateRegions, stats.candidateBytes, stats.fromVisited, stats.fromVisitedBytes,
-         stats.unmovableVisited, stats.unmovableVisitedBytes, stats.unmovableYoung,
-         stats.recentFullVisited, stats.recentFullVisitedUnits, stats.recentFullYoung,
-         stats.objectVisits, stats.slotVisits,
-         static_cast<unsigned long long>(stats.reparkNs), static_cast<unsigned long long>(stats.unmovableNs),
-         static_cast<unsigned long long>(stats.recentFullNs),
-         static_cast<unsigned long long>(stats.listMoveNs));
-    // Even an empty candidate set completes remembered scanning and clearing.
-    // Otherwise the mark-start flip would leave previous unconsumed when the
-    // next young collection reuses that bitmap (zRemembered.cpp:561-576).
+    // zGeneration.cpp:880-885: mark-start sample (also resets the
+    // collection's used high/low trackers, zPageAllocator.cpp:1332-1346).
+    statHeap.AtMarkStart(
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
 
-    // fysaudit: full non-young O→Y vs mutator remset (D1/D2/D3). Observe only.
-
-    // promodomain: reset last cycle's flip-promoted table (CHECK registered==discharged).
-    // Corresponds to ZGC reset_relocation_set before the new young collection.
-    // flippromo: open broad-vs-product window for regions demoted last minor.
-
-    youngStackScanEpoch = StackWatermark::epoch_id();
-    MutatorManager::Instance().VisitAllMutators([epoch = youngStackScanEpoch](Mutator& mutator) {
-        if (!mutator.GetStackWatermark().IsDone(epoch)) {
-            (void)mutator.GcPhaseEnum(true, epoch, false);
-        }
-    });
-    youngStats = stats;
     youngStartNs = start;
 }
 
@@ -498,8 +453,6 @@ void ZGenerationYoung::mark_follow()
 void ZGenerationYoung::concurrent_mark()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentMarkYoung);
-    CHECK_DETAIL(youngStackScanEpoch != 0,
-                 "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
     youngReachableVec.clear();
     youngWeakSlots.clear();
     youngFullScan = false;
@@ -563,17 +516,6 @@ void ZGenerationYoung::concurrent_mark_free()
         // tracecache: PrepareTrace above switched the TRACE-phase region caches on
         // (RegionManager.h:726-727), and this is the young mark's post-trace point -- the
         // same place ZGenerationOld::PostTrace drains them for a major (RelocationSet.cpp:73-78).
-        // Without this call the minor leaves the cache active forever, so every region a
-        // mutator fills afterwards was diverted off the recent-full set and was invisible to
-        // both collection-set builders (PrepareYoungGarbageCandidates and
-        // AssembleSmallGarbageCandidates) until the next major's PostTrace.  Measured on
-        // NW256: 3744 regions / 245 MB parked in the cache at the end of the first minor,
-        // so the first major's collection set was 23 MB of a 256 MB full heap.
-        // ZGC keeps every page in the page table and lets ZGeneration::select_relocation_set
-        // walk all of them, skipping only pages allocated during this very cycle
-        // (zGeneration.cpp:206-218; ZPage::is_relocatable, zPage.inline.hpp:184-186).  A page
-        // filled during marking is an ordinary candidate next cycle; it is never removed
-        // from the structure the selector iterates.
         space.GetRegionManager().HandleTraceRegions();
         // zGeneration.cpp:563 / :699-701: after this young mark_end, reset
         // the previous young relocation set. Independent of old remap.
@@ -614,9 +556,9 @@ void ZGenerationYoung::concurrent_relocate()
     size_t allocatedBefore = space.AllocatedBytes();
     EvacuateYoungRegions(youngReachableVec, &youngStw);
     size_t allocatedAfter = space.AllocatedBytes();
-    youngStats.reclaimedBytes =
+    const size_t reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
-    ZGeneration::young()->increase_freed(youngStats.reclaimedBytes);
+    ZGeneration::young()->increase_freed(reclaimedBytes);
 
     if (youngStw != nullptr) {
         youngStw.reset();
@@ -629,11 +571,10 @@ void ZGenerationYoung::concurrent_relocate()
     ++minorTotalRuns;
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - youngStartNs) / NS_PER_US;
     VLOG(REPORT,
-         "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu liveBytes=%zu "
+         "[GCV2Minor] run=%zu fallbackFullScan=%u liveBytes=%zu "
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(youngFullScan),
-         youngStats.candidateRegions, youngStats.candidateBytes,
-         statHeap.LiveAtMarkEnd(), youngLiveRememberedCount, youngStats.reclaimedBytes,
+         statHeap.LiveAtMarkEnd(), youngLiveRememberedCount, reclaimedBytes,
          pauseUs);
 }
 
@@ -1294,7 +1235,6 @@ void ZGeneration::PostGarbageCollection(uint64_t gcIndex)
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     Heap::GetHeap().DumpAfterGC();
 #endif
-    MutatorManager::Instance().DestroyExpiredMutators();
 }
 
 

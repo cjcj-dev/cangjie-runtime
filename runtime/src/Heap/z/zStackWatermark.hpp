@@ -12,16 +12,13 @@
 #include "Common/BaseObject.h"
 #include "StackMap/StackMapTypeDef.h"
 #include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zTLABUsage.hpp"
 
 namespace MapleRuntime {
 
 class Mutator;
 class AllocBuffer;
 struct FrameInfo;
-
-struct ThreadLocalAllocStats {
-    size_t retired = 0;
-};
 
 class StackWatermarkProcessOopClosure {
 public:
@@ -45,7 +42,7 @@ public:
         cursorIndex.store(0, std::memory_order_relaxed);
         frameCount.store(0, std::memory_order_relaxed);
         stackGeneration.store(0, std::memory_order_relaxed);
-        allocStats.retired = 0;
+        allocStats = TLABStatistics{};
         headColor = 0;
     }
 
@@ -90,14 +87,14 @@ public:
                                const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor);
     void process(const FrameInfo& frame, Mutator& mutator, void* context, const RootVisitor& visitor,
                  const DerivedPtrVisitor* derivedPtrVisitor, RegSlotsMap& regSlotsMap);
-    ThreadLocalAllocStats& stats() { return allocStats; }
+    TLABStatistics& stats() { return allocStats; }
 
 private:
     std::atomic<uint32_t> state;
     std::atomic<size_t> cursorIndex;
     std::atomic<size_t> frameCount;
     std::atomic<uint64_t> stackGeneration;
-    ThreadLocalAllocStats allocStats;
+    TLABStatistics allocStats;
     uintptr_t headColor = 0;
 };
 class StackWatermarkSet {

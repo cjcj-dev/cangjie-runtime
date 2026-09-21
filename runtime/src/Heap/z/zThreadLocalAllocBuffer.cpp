@@ -5,23 +5,48 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/shared/collectedHeap.hpp"
 #include "Mutator/Mutator.h"
+#include "Heap/z/zValue.inline.hpp"
 namespace MapleRuntime {
-constexpr size_t AllocBuffer::MinTLABSize;
+ZPerWorker<TLABStatistics>* ZThreadLocalAllocBuffer::statistics = nullptr;
 
-AllocBuffer* AllocBuffer::GetOrCreateAllocBuffer()
+void ZThreadLocalAllocBuffer::initialize()
 {
-    auto* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer == nullptr) {
-        buffer = new (std::nothrow) AllocBuffer();
-        CHECK_DETAIL(buffer != nullptr, "new region alloc buffer fail");
-        buffer->Init();
-        ThreadLocal::SetAllocBuffer(buffer);
-        RegisterCurrentMarkFlushThread();
-    }
-    return buffer;
+    delete statistics;
+    statistics = new ZPerWorker<TLABStatistics>();
+    reset_statistics();
 }
 
-AllocBuffer* AllocBuffer::GetAllocBuffer() { return ThreadLocal::GetAllocBuffer(); }
+void ZThreadLocalAllocBuffer::reset_statistics()
+{
+    statistics->set_all(TLABStatistics{});
+}
+
+void ZThreadLocalAllocBuffer::publish_statistics()
+{
+    TLABStatistics total;
+    ZPerWorkerIterator<TLABStatistics> iter(statistics);
+    for (TLABStatistics* stats; iter.next(&stats);) { total.Update(*stats); }
+    Heap::GetHeap().page_allocator().PublishTLABStatistics(total);
+}
+
+void ZThreadLocalAllocBuffer::retire(Mutator& thread, TLABStatistics& stats)
+{
+    stats = TLABStatistics{};
+    Heap::GetHeap().page_allocator().RetireTLAB(*thread.tlab(), stats);
+}
+
+void ZThreadLocalAllocBuffer::update_stats(Mutator& thread)
+{
+    statistics->addr()->Update(thread.GetStackWatermark().stats());
+}
+
+constexpr size_t AllocBuffer::MinTLABSize;
+
+AllocBuffer* AllocBuffer::GetAllocBuffer()
+{
+    Mutator* owner = ThreadLocal::GetMutator();
+    return owner != nullptr ? owner->tlab() : nullptr;
+}
 
 AllocBuffer::~AllocBuffer()
 {
@@ -30,6 +55,8 @@ AllocBuffer::~AllocBuffer()
 
 void AllocBuffer::Init()
 {
+    if (initialized) { return; }
+    initialized = true;
     static_assert(offsetof(AllocBuffer, tlab) == 0, "compiler TLAB inline ABI");
     static_assert(offsetof(TLAB, top) == 0, "compiler TLAB top ABI");
     static_assert(offsetof(TLAB, end) == 8, "compiler TLAB end ABI");
@@ -37,20 +64,20 @@ void AllocBuffer::Init()
     ThreadLocal::InitializeCleaner();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     manager.InitializeTLAB(*this);
-    Heap::GetHeap().RegisterAllocBuffer(*this);
 }
 
 void AllocBuffer::Fini()
 {
+    if (!initialized) { return; }
+    initialized = false;
     // Finish allocation publications before releasing the current context.
-    // Mark stacks and SBB remain owned by the OS thread until its detach.
-    if (ThreadLocal::GetAllocBuffer() == this) {
+    // Mark stacks and SBB remain owned by the logical thread until detach.
+    if (GetAllocBuffer() == this) {
         ThreadLocal::FlushCurrentThreadMarkStacks();
     }
     FlushRegion();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     manager.RetireTLABStatistics(*this);
-    Heap::GetHeap().RemoveAllocBuffer(*this);
 }
 
 // ThreadLocalAllocBuffer::fill (threadLocalAllocBuffer.cpp:201).
