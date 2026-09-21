@@ -303,7 +303,10 @@ void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
         {
             std::lock_guard<std::mutex> lock(externMtx);
             // Multiple export handles may name the same owner.
-            if (!discoveredExternObjects.emplace(exportObj, ValueRootList{}).second) {
+            // ZUncoloredRoot::make_load_good (zUncoloredRoot.inline.hpp:62-69):
+            // preserve the load-good identity just produced by the root barrier.
+            if (!discoveredExternObjects.emplace(
+                    ValueRoot(exportObj, ForwardingStage::IncomingNew), ValueRootList{}).second) {
                 continue;
             }
         }
@@ -320,7 +323,8 @@ void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
             }
             if (object->GetTypeInfo()->IsForeignType()) {
                 std::lock_guard<std::mutex> lock(externMtx);
-                discoveredExternObjects[exportObj].push_back(object);
+                discoveredExternObjects[ValueRoot(exportObj, ForwardingStage::IncomingNew)].emplace_back(
+                    object, ForwardingStage::IncomingNew);
             }
             // Discovery is not keep-alive (zReferenceProcessor.cpp:175-203):
             // do not turn a weak referent into an export ownership edge.
