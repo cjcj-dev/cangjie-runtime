@@ -62,6 +62,9 @@ public:
     // Called when a mutator starts and finishes, respectively.
     void Init()
     {
+        // JavaThread construction initializes its TLAB before publication
+        // (javaThread.cpp:600). A parked owner can be scanned immediately.
+        allocBuffer.Init();
         gcData.Attach(this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));
         observerCnt = 0;
         inManagedContext.store(true);
@@ -77,6 +80,7 @@ public:
         // Wait for target inventory users while the lock and roots are still
         // alive, before any Mutator member destruction can begin.
         gcData.Detach();
+        ReleaseAllocBuffer();
         tid = 0;
         stackBoundAddr = nullptr;
 
@@ -420,9 +424,8 @@ public:
 
     void PreparedToRun(ThreadLocalData* tlData)
     {
-        // HotSpot Thread::_tlab is owned by the logical thread. TLS borrows
-        // that owner's buffer across park/resume and worker migration.
-        tlData->buffer = GetAllocBuffer();
+        // SetMutator binds this logical thread's embedded TLAB into TLS.
+        // Initialize its allocation policy before leaving the saferegion.
         (void)AllocBuffer::GetOrCreateAllocBuffer();
         RegisterCurrentMarkFlushThread();
         UpdatePollValues(tlData);

@@ -46,20 +46,21 @@ constexpr size_t AllocBuffer::MinTLABSize;
 
 AllocBuffer* AllocBuffer::GetOrCreateAllocBuffer()
 {
-    AllocBuffer* buffer;
-    if (Mutator* owner = ThreadLocal::GetMutator()) {
-        buffer = owner->GetAllocBuffer();
-        buffer->Init();
-    } else {
-        buffer = ThreadLocal::NativeAllocBuffer();
-        if (buffer == nullptr) {
-            buffer = new (std::nothrow) AllocBuffer();
-            CHECK_DETAIL(buffer != nullptr, "new region alloc buffer fail");
-            buffer->Init();
-            ThreadLocal::NativeAllocBuffer() = buffer;
+    AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
+    if (buffer == nullptr) {
+        if (Mutator* owner = ThreadLocal::GetMutator()) {
+            buffer = owner->GetAllocBuffer();
+        } else {
+            buffer = ThreadLocal::NativeAllocBuffer();
+            if (buffer == nullptr) {
+                buffer = new (std::nothrow) AllocBuffer();
+                CHECK_DETAIL(buffer != nullptr, "new region alloc buffer fail");
+                ThreadLocal::NativeAllocBuffer() = buffer;
+            }
         }
+        ThreadLocal::SetAllocBuffer(buffer);
     }
-    ThreadLocal::SetAllocBuffer(buffer);
+    buffer->Init();
     RegisterCurrentMarkFlushThread();
     return buffer;
 }
