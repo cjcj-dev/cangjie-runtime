@@ -19,7 +19,6 @@
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zUncoloredRoot.hpp"
-#include "Heap/z/zForwardingTable.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
 #include "StackManager.h"
@@ -771,7 +770,6 @@ static bool PushHeapRoot(RootSlot& root, bool young, uintptr_t color, bool follo
     (void)young;
     const zaddress_unsafe observed = root.LoadPlain();
     BaseObject* object = PlainRootObject(observed);
-    ZDiagIdentityStale("PushHeapRoot", untype(observed), color, "arg-color");
     if (!Heap::IsHeapAddress(object)) {
         return false;
     }

@@ -275,7 +275,6 @@ bool ZRemembered::scan_field(volatile zpointer* p) const
 {
     RefField<>& field = *reinterpret_cast<RefField<>*>(const_cast<zpointer*>(p));
     const zaddress addr = ZBarrier::RemsetBarrierOnOopField(field);
-    ZDiagIdentityStale("remset.scan_field", untype(addr), 0, "remset-out");
     if (!is_null(addr) && Heap::is_young(untype(addr))) {
         remember(p);
         return true;
