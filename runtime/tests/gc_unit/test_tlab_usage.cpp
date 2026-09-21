@@ -726,3 +726,70 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, NestedHandleOutlivesYoungRootTask)
     CheckConcurrentRootSnapshot(true, true);
 }
 #endif
+
+#if defined(__linux__)
+namespace {
+// Opaque product scheduler interfaces declared in inner/cjthread.h. Keep
+// scheduler-private storage out of the test executable.
+extern "C" struct CJThread* CJThreadBuild(ScheduleHandle, const CJThreadAttr*, CJThreadFunc,
+                                         const void*, unsigned int, CJThreadCreateSource, uintptr_t);
+extern "C" void CJ_CJThreadFree(struct CJThread*, bool);
+struct CancelledThreadCase {
+    bool created = false;
+    bool registered = false;
+    bool removed = false;
+    CJThreadHandle cleanupTask = nullptr;
+};
+void* EmptySnapshotTask(void*) { return nullptr; }
+void* NeverScheduledSnapshotTask(void*, unsigned int) { return nullptr; }
+void* CancelBuiltSnapshotTask(void* value)
+{
+    auto& state = *static_cast<CancelledThreadCase*>(value);
+    CJThreadAttr attr;
+    CJThreadAttrInit(&attr);
+    // Use the same product construction and recycling entries as the
+    // enqueue-failure branch in CJThreadNew; no Mutator is manufactured here.
+    auto* carrier = CJThreadBuild(reinterpret_cast<ScheduleHandle>(ThreadLocal::GetSchedule()), &attr, NeverScheduledSnapshotTask,
+                                 nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
+    state.created = carrier != nullptr;
+    if (carrier == nullptr) { return nullptr; }
+    Mutator* identity = nullptr;
+    {
+        ThreadsListHandle list;
+        for (size_t i = 0; i < list.length(); ++i) {
+            if (list.thread_at(i)->GetCjthreadPtr() == carrier) { identity = list.thread_at(i); }
+        }
+        state.registered = identity != nullptr;
+    }
+    CJ_CJThreadFree(carrier, true);
+    {
+        ThreadsListHandle list;
+        state.removed = !list.includes(identity);
+    }
+    // Run a real task on the reusable carrier so the scheduling state also
+    // follows its normal completion path before shutting down the runtime.
+    state.cleanupTask = RunCJTask(EmptySnapshotTask, nullptr);
+    return nullptr;
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, UnstartedCarrierReleasesIdentity)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    CancelledThreadCase state;
+    auto task = RunCJTask(CancelBuiltSnapshotTask, &state);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &result), E_OK);
+    ReleaseHandle(task);
+    if (state.cleanupTask != nullptr) {
+        GC_EXPECT_EQ(GetTaskRet(state.cleanupTask, &result), E_OK);
+        ReleaseHandle(state.cleanupTask);
+    }
+    std::fprintf(stderr, "THREAD_SNAPSHOT_CANCEL_TARGET executed=1 created=%d registered=%d removed=%d\n",
+                 state.created, state.registered, state.removed);
+    GC_EXPECT_TRUE(state.created && state.registered && state.removed);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif
