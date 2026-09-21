@@ -371,7 +371,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     std::fprintf(stderr, "P1_TLAB_RETIRE_ASSERT_EXECUTED different=%d birth=%llu owner=%llu\n",
                  afterSmallPage != beforeSmallPage,
                  static_cast<unsigned long long>(afterSmallPage->BirthSequence()),
-                 static_cast<unsigned long long>(afterSmallPage->GetSnapshotEpoch()));
+                 static_cast<unsigned long long>(afterSmallPage->generation()->seqnum()));
     MArray* holder = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
     if (!existing) target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     const U64 holderRoot = heap.RegisterExportRoot(holder);
@@ -393,7 +393,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     std::fprintf(stderr, "P1_NEW_REGISTRATION_ASSERT_EXECUTED birth=%llu owner=%llu no_bitmap=%d "
                  "pending_before=%zu pending_after=%zu\n",
                  static_cast<unsigned long long>(page->BirthSequence()),
-                 static_cast<unsigned long long>(page->GetSnapshotEpoch()), noExplicitMark,
+                 static_cast<unsigned long long>(page->generation()->seqnum()), noExplicitMark,
                  pendingBefore, pendingAfter);
     const auto during = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
     const auto phase = during.phase;
@@ -418,7 +418,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     // zRelocate.cpp:868-874 resets a survivor target or clones a promoted
     // page. A newly initialized target may still be allocating in its domain.
     const bool resampled = page->age() != PageAge::eden &&
-                           page->BirthSequence() <= page->GetSnapshotEpoch();
+                           page->BirthSequence() <= page->generation()->seqnum();
     const auto after = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
     const bool nextCycle = after.sequence > during.sequence;
     std::fprintf(stderr, "MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED before=%llu after=%llu resampled=%d\n",

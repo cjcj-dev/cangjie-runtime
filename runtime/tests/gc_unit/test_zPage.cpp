@@ -1139,3 +1139,80 @@ GC_RUNTIME_OTHER_VM_TEST(NativeHandle, SlotsStayStableAcrossGrowth)
     GC_EXPECT_TRUE(result.before != 0 && result.before == result.after);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+// ZGC zPage.inline.hpp:180-186 and zGeneration.inline.hpp:46-48.
+// Hold only the aggregate snapshot lock. The live-object query is imported
+// from the product SO; its page-state result must complete while it is held.
+#include "gc_generation_test.hpp"
+namespace {
+struct SequenceReadResult {
+    BaseObject* object = nullptr;
+    U64 root = 0;
+};
+void* AllocateForSequenceRead(void* context)
+{
+    auto& result = *static_cast<SequenceReadResult*>(context);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(32 - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    result.object = static_cast<BaseObject*>(MCC_NewObject(type, 32));
+    result.root = Heap::GetHeap().RegisterExportRoot(result.object);
+    return nullptr;
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, LiveQueryDoesNotAcquireSnapshotLock)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    SequenceReadResult result;
+    CJThreadHandle handle = RunCJTask(AllocateForSequenceRead, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    GC_EXPECT_TRUE(result.object != nullptr);
+    ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(result.object));
+    ZGeneration& generation = *page->generation();
+    const auto expected = generation.Snapshot().sequence;
+    std::atomic<bool> snapshotStarted{false}, snapshotDone{false}, readStarted{false}, readDone{false};
+    bool live = false, allocating = false, relocatable = true;
+    uint64_t sequence = 0;
+    auto lock = ZGenerationTest::LockSnapshot(generation);
+    std::thread control([&] {
+        snapshotStarted.store(true, std::memory_order_release);
+        (void)generation.Snapshot();
+        snapshotDone.store(true, std::memory_order_release);
+    });
+    std::thread reader([&] {
+        readStarted.store(true, std::memory_order_release);
+        live = Heap::GetHeap().IsSurvivedObject(result.object);
+        allocating = page->IsAllocating();
+        relocatable = page->IsRelocatable();
+        sequence = generation.Sequence();
+        readDone.store(true, std::memory_order_release);
+    });
+    while (!readStarted.load(std::memory_order_acquire) || !snapshotStarted.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!readDone.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool completedWhileLocked = readDone.load(std::memory_order_acquire);
+    const bool controlBlocked = !snapshotDone.load(std::memory_order_acquire);
+    lock.unlock();
+    reader.join();
+    control.join();
+    std::fprintf(stderr, "SEQNUM_LOCK_ASSERT completed=%u control_blocked=%u control_resumed=%u live=%u allocating=%u relocatable=%u sequence=%llu expected=%llu\n",
+        completedWhileLocked, controlBlocked, snapshotDone.load(), live, allocating, relocatable,
+        static_cast<unsigned long long>(sequence), static_cast<unsigned long long>(expected));
+    GC_EXPECT_TRUE(completedWhileLocked);
+    GC_EXPECT_TRUE(controlBlocked && snapshotDone.load());
+    GC_EXPECT_TRUE(live && allocating && !relocatable);
+    GC_EXPECT_EQ(sequence, expected);
+}

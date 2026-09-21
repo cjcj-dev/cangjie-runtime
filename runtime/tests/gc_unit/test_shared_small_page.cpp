@@ -132,7 +132,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
         GC_EXPECT_TRUE(address != 0);
         ZPage* page = Heap::page(address);
         pages[untype(age)] = page;
-        GC_EXPECT_EQ(page->BirthSequence(), page->GetSnapshotEpoch());
+        GC_EXPECT_EQ(page->BirthSequence(), page->generation()->seqnum());
         GC_EXPECT_TRUE(page->IsAllocating());
         const auto other = age == PageAge::old ? ZGenerationId::young : ZGenerationId::old;
         GC_EXPECT_EQ(page->OtherSequence(), Heap::GetHeap().GetCycleSnapshot(other).sequence);
@@ -161,7 +161,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     auto* retiredPage = Heap::page(retired);
     std::fprintf(stderr, "P1_SHARED_BIRTH_ASSERT generation=young birth=%llu owner=%llu\n",
         static_cast<unsigned long long>(retiredPage->BirthSequence()),
-        static_cast<unsigned long long>(retiredPage->GetSnapshotEpoch()));
+        static_cast<unsigned long long>(retiredPage->generation()->seqnum()));
     GC_EXPECT_TRUE(retiredPage->IsAllocating());
     GC_EXPECT_TRUE(Heap::page(retired) != Heap::page(refilled));
     ZPage* old = pages[untype(PageAge::old)];
@@ -174,7 +174,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     auto* newOldPage = Heap::page(newOld);
     std::fprintf(stderr, "P1_SHARED_BIRTH_ASSERT generation=old birth=%llu owner=%llu\n",
         static_cast<unsigned long long>(newOldPage->BirthSequence()),
-        static_cast<unsigned long long>(newOldPage->GetSnapshotEpoch()));
+        static_cast<unsigned long long>(newOldPage->generation()->seqnum()));
     GC_EXPECT_TRUE(newOldPage->IsAllocating());
     GC_EXPECT_TRUE(old->IsRelocatable());
     GC_EXPECT_TRUE(Heap::page(newOld) != old);
