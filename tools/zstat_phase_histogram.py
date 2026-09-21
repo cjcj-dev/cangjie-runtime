@@ -34,6 +34,8 @@ def analyze(stderr):
     def check(name, observed, failures):
         checks[name] = {"observed": observed, "failures": failures,
                         "pass": observed > 0 and not failures}
+    check("VerifyDisabled", len([r for r in rows if r["rec"] == "stw"]),
+          [r for r in rows if r["rec"] == "stw" and r.get("reason") == "Verify_Old"])
     check("ThreePhaseNames", len(stws), [r for r in stws if r.get("reason") not in PAUSES])
     pause_rows = [r for r in phases if r.get("name") in PAUSES]
     check("PauseKind", len(pause_rows), [r for r in pause_rows if r.get("kind") != "pause"])
