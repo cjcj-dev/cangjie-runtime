@@ -60,6 +60,28 @@
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
 
+// ZGC zGeneration.cpp:78-98: phase identity is selected at the VM operation or concurrent entry.
+static const ZStatPhasePause ZPhasePauseMarkStartYoung("Pause Mark Start", ZGenerationId::young);
+static const ZStatPhasePause ZPhasePauseMarkStartYoungAndOld("Pause Mark Start (Major)", ZGenerationId::young);
+static const ZStatPhasePause ZPhasePauseMarkEndYoung("Pause Mark End", ZGenerationId::young);
+static const ZStatPhasePause ZPhasePauseRelocateStartYoung("Pause Relocate Start", ZGenerationId::young);
+static const ZStatPhasePause ZPhasePauseMarkEndOld("Pause Mark End", ZGenerationId::old);
+static const ZStatPhasePause ZPhasePauseRelocateStartOld("Pause Relocate Start", ZGenerationId::old);
+static const ZStatPhaseConcurrent ZPhaseConcurrentMarkYoung("Concurrent Mark", ZGenerationId::young);
+static const ZStatPhaseConcurrent ZPhaseConcurrentMarkContinueYoung("Concurrent Mark Continue", ZGenerationId::young);
+static const ZStatPhaseConcurrent ZPhaseConcurrentMarkFreeYoung("Concurrent Mark Free", ZGenerationId::young);
+static const ZStatPhaseConcurrent ZPhaseConcurrentResetRelocationSetYoung("Concurrent Reset Relocation Set", ZGenerationId::young);
+static const ZStatPhaseConcurrent ZPhaseConcurrentSelectRelocationSetYoung("Concurrent Select Relocation Set", ZGenerationId::young);
+static const ZStatPhaseConcurrent ZPhaseConcurrentRelocateYoung("Concurrent Relocate", ZGenerationId::young);
+static const ZStatPhaseConcurrent ZPhaseConcurrentMarkOld("Concurrent Mark", ZGenerationId::old);
+static const ZStatPhaseConcurrent ZPhaseConcurrentMarkContinueOld("Concurrent Mark Continue", ZGenerationId::old);
+static const ZStatPhaseConcurrent ZPhaseConcurrentMarkFreeOld("Concurrent Mark Free", ZGenerationId::old);
+static const ZStatPhaseConcurrent ZPhaseConcurrentResetRelocationSetOld("Concurrent Reset Relocation Set", ZGenerationId::old);
+static const ZStatPhaseConcurrent ZPhaseConcurrentSelectRelocationSetOld("Concurrent Select Relocation Set", ZGenerationId::old);
+static const ZStatPhaseConcurrent ZPhaseConcurrentRelocateOld("Concurrent Relocate", ZGenerationId::old);
+static const ZStatPhaseConcurrent ZPhaseConcurrentProcessNonStrongOld("Concurrent Process Non-Strong", ZGenerationId::old);
+static const ZStatPhaseConcurrent ZPhaseConcurrentRemapRootsOld("Concurrent Remap Roots", ZGenerationId::old);
+
 static const ZStatSubPhase PCollectLargeGarbage("Collect large garbage", ZGenerationId::old);
 static const ZStatSubPhase PEnumRootsUpdateOldPointersWithin("enum roots & update old pointers within", ZGenerationId::old);
 static const ZStatSubPhase PIdentifyUselessExternRef("identify useless extern ref", ZGenerationId::old);
@@ -184,6 +206,7 @@ class VM_ZOperation {
 public:
     virtual ~VM_ZOperation() = default;
     virtual bool do_operation() = 0;
+    virtual const char* name() const = 0;
     virtual bool block_jni_critical() const { return false; }
     bool pause()
     {
@@ -192,7 +215,7 @@ public:
         }
         bool success = false;
         {
-            ScopedStopTheWorld stw("zoperation", false);
+            ScopedStopTheWorld stw(name(), false);
             ZVerify::BeforeZOperation();
             success = do_operation();
         }
@@ -205,8 +228,10 @@ public:
 
 class VM_ZMarkStartYoung : public VM_ZOperation {
 public:
+    const char* name() const override { return ZPhasePauseMarkStartYoung.Name(); }
     bool do_operation() override
     {
+        ZStatTimerYoung timer(ZPhasePauseMarkStartYoung);
         ZGeneration::young()->mark_start();
         return true;
     }
@@ -215,8 +240,10 @@ public:
 
 class VM_ZMarkStartYoungAndOld : public VM_ZOperation {
 public:
+    const char* name() const override { return ZPhasePauseMarkStartYoungAndOld.Name(); }
     bool do_operation() override
     {
+        ZStatTimerYoung timer(ZPhasePauseMarkStartYoungAndOld);
         ZGeneration::young()->mark_start();
         ZGeneration::old()->mark_start();
         return true;
@@ -226,13 +253,20 @@ public:
 
 class VM_ZMarkEndYoung : public VM_ZOperation {
 public:
-    bool do_operation() override { return ZGeneration::young()->mark_end(); }
+    const char* name() const override { return ZPhasePauseMarkEndYoung.Name(); }
+    bool do_operation() override
+    {
+        ZStatTimerYoung timer(ZPhasePauseMarkEndYoung);
+        return ZGeneration::young()->mark_end();
+    }
 };
 
 class VM_ZRelocateStartYoung : public VM_ZOperation {
 public:
+    const char* name() const override { return ZPhasePauseRelocateStartYoung.Name(); }
     bool do_operation() override
     {
+        ZStatTimerYoung timer(ZPhasePauseRelocateStartYoung);
         ZGlobalsPointers::flip_young_relocate_start();
         ZVerify::OnColorFlip();
         ZGeneration::young()->set_phase(ZGeneration::Phase::Relocate);
@@ -246,16 +280,20 @@ public:
 
 class VM_ZMarkEndOld : public VM_ZOperation {
 public:
-    bool do_operation() override { return ZGeneration::old()->mark_end(); }
+    const char* name() const override { return ZPhasePauseMarkEndOld.Name(); }
+    bool do_operation() override
+    {
+        ZStatTimerOld timer(ZPhasePauseMarkEndOld);
+        return ZGeneration::old()->mark_end();
+    }
 };
-
-static const ZStatPhasePause POldRelocateStart("old.relocate_start", ZGenerationId::old);
 
 class VM_ZRelocateStartOld : public VM_ZOperation {
 public:
+    const char* name() const override { return ZPhasePauseRelocateStartOld.Name(); }
     bool do_operation() override
     {
-        ZStatTimerOld timer(POldRelocateStart);
+        ZStatTimerOld timer(ZPhasePauseRelocateStartOld);
         ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
             data.storeBarrierBuffer->install_base_pointers();
         });
@@ -274,6 +312,7 @@ public:
 
 class VM_ZVerifyOld : public VM_ZOperation {
 public:
+    const char* name() const override { return "Verify Old"; }
     bool do_operation() override
     {
         if (ZVerifyRoots || ZVerifyObjects) {
@@ -448,6 +487,7 @@ void ZGenerationYoung::mark_start()
 
 void ZGenerationYoung::concurrent_mark()
 {
+    ZStatTimerYoung timer(ZPhaseConcurrentMarkYoung);
     uint64_t stackScanEpoch = youngStackScanEpoch;
     WorkStack& workStack = youngWorkStack;
     constexpr bool fullYoungScan = false;
@@ -556,6 +596,7 @@ bool ZGenerationYoung::mark_end()
 
 void ZGenerationYoung::concurrent_mark_continue()
 {
+    ZStatTimerYoung timer(ZPhaseConcurrentMarkContinueYoung);
     MinorSlotSet reachableSlots;
     (void)ZMark::FollowYoungMark(youngWorkStack, youngFullScan, youngReachableVec, reachableSlots, youngWeakSlots,
                           &youngConcWindow);
@@ -563,6 +604,7 @@ void ZGenerationYoung::concurrent_mark_continue()
 
 void ZGenerationYoung::concurrent_mark_free()
 {
+    ZStatTimerYoung timer(ZPhaseConcurrentMarkFreeYoung);
     if (ZAbort::should_abort()) {
         return;
     }
@@ -613,6 +655,7 @@ void ZGenerationYoung::concurrent_mark_free()
 
 void ZGenerationYoung::concurrent_reset_relocation_set()
 {
+    ZStatTimerYoung timer(ZPhaseConcurrentResetRelocationSetYoung);
     reset_relocation_set();
     auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().ResetFlipPromotedPages();
@@ -620,6 +663,7 @@ void ZGenerationYoung::concurrent_reset_relocation_set()
 
 void ZGenerationYoung::concurrent_select_relocation_set()
 {
+    ZStatTimerYoung timer(ZPhaseConcurrentSelectRelocationSetYoung);
     select_relocation_set(YoungType() == ZYoungType::major_full_preclean);
 }
 
@@ -631,6 +675,7 @@ void ZGenerationYoung::pause_relocate_start()
 
 void ZGenerationYoung::concurrent_relocate()
 {
+    ZStatTimerYoung timer(ZPhaseConcurrentRelocateYoung);
     // ZGC zGeneration.cpp:575-580: after relocate-start every selected page
     // must finish relocation, including when shutdown requests an abort.
     RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -1041,6 +1086,7 @@ void ZGenerationOld::collect()
 
 void ZGenerationOld::concurrent_mark()
 {
+    ZStatTimerOld timer(ZPhaseConcurrentMarkOld);
     ZBreakpoint::AtAfterMarkingStarted();
     oldMarkWorkStack.clear();
     oldExportOwners.clear();
@@ -1074,18 +1120,24 @@ bool ZGenerationOld::pause_mark_end()
 
 void ZGenerationOld::concurrent_mark_continue()
 {
+    ZStatTimerOld timer(ZPhaseConcurrentMarkContinueOld);
     Mark().MarkFollow(false);
 }
-void ZGenerationOld::concurrent_mark_free() {}
+void ZGenerationOld::concurrent_mark_free()
+{
+    ZStatTimerOld timer(ZPhaseConcurrentMarkFreeOld);
+}
 
 void ZGenerationOld::concurrent_process_non_strong_references()
 {
+    ZStatTimerOld timer(ZPhaseConcurrentProcessNonStrongOld);
     process_non_strong_references();
     PostTrace();
 }
 
 void ZGenerationOld::concurrent_reset_relocation_set()
 {
+    ZStatTimerOld timer(ZPhaseConcurrentResetRelocationSetOld);
     reset_relocation_set();
 }
 
@@ -1097,11 +1149,13 @@ void ZGenerationOld::pause_verify()
 
 void ZGenerationOld::concurrent_select_relocation_set()
 {
+    ZStatTimerOld timer(ZPhaseConcurrentSelectRelocationSetOld);
     select_relocation_set(false);
 }
 
 void ZGenerationOld::concurrent_remap_young_roots()
 {
+    ZStatTimerOld timer(ZPhaseConcurrentRemapRootsOld);
     ZRelocate::RemapYoungRoots();
 }
 
@@ -1113,6 +1167,7 @@ void ZGenerationOld::pause_relocate_start()
 
 void ZGenerationOld::concurrent_relocate()
 {
+    ZStatTimerOld timer(ZPhaseConcurrentRelocateOld);
     relocate().relocate(&relocation_set());
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
     Heap::GetHeap().cross_vm().PostResolveCycleTask();
