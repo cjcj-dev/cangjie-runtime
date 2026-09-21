@@ -936,8 +936,13 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
     if (isCopy != nullptr) {
         *isCopy = false;
     }
+    // ZGC jni.cpp:2870-2881: pinning may block across a safepoint. Keep
+    // the decoded array in a root slot and reload it after pinning returns.
+    HandleMark handleMark(*Mutator::GetMutator());
+    Handle arrayHandle(Mutator::GetMutator(), plain);
     (void)CJThreadPreemptOffCntAdd();
-    ArrayRef pArray = PinArray(plain);
+    (void)PinArray(static_cast<ArrayRef>(arrayHandle()));
+    ArrayRef pArray = static_cast<ArrayRef>(arrayHandle());
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     auto* rawPtr = pArray->ConvertToCArray();
     std::vector<uint64_t> frame;
