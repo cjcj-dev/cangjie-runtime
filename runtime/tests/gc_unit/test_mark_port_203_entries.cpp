@@ -4,6 +4,8 @@
 
 #include "gc_cycle_sequence_fixture.hpp"
 #include <memory>
+#include <string>
+#include <unistd.h>
 #include "gc_heap_fixture.hpp"
 #include "zunittest.hpp"
 #include "gc_unittest.hpp"
@@ -495,5 +497,119 @@ GC_OTHER_VM_TEST(MarkPort203Entries, StripedInvisibleThenNormalAccountsOnce)
 GC_OTHER_VM_TEST(MarkPort203Entries, StripedNormalThenInvisibleAccountsOnce)
 {
     RunArrayCollection("striped", 1, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
+}
+
+namespace {
+// Observe the two independent product inputs at the real young phase entry.
+// Neither the fixture nor the assertions drain mark work themselves.
+void RunCombinedYoungFollow(size_t workers, bool continuation)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager manager;
+    MarkPortRuntime runtime(manager);
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->SetRegionRole(ZPageRole::RecentFull);
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    MarkPort203TestAccess::Bind(&heap, static_cast<int32_t>(workers));
+    young.InitializeWorkers(workers);
+    heap.old().InitializeWorkers(workers);
+    heap.old().set_phase(ZGenerationPhase::Mark);
+    young.set_phase(ZGenerationPhase::MarkComplete);
+    ZGenerationTest::SetReason(young, GC_REASON_YOUNG);
+    if (!young.Snapshot().active) young.Begin(1);
+
+    MAddress next = reinterpret_cast<MAddress>(fx.obj1);
+    auto object = [&]() {
+        auto* result = fx.PlaceObject(next);
+        HeapSlotAt<>(next + TYPEINFO_PTR_SIZE).StoreColoured(zpointer::null);
+        next += 64;
+        return result;
+    };
+    BaseObject* root = object();
+    BaseObject* rootChild = object();
+    BaseObject* remembered = object();
+    BaseObject* rememberedChild = object();
+    fx.region1->SetRegionAllocPtr(next);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(root) + TYPEINFO_PTR_SIZE)
+        .StoreColoured(StoreGoodPointer(rootChild));
+    HeapSlotAt<>(reinterpret_cast<MAddress>(remembered) + TYPEINFO_PTR_SIZE)
+        .StoreColoured(StoreGoodPointer(rememberedChild));
+    auto* oldSlot = reinterpret_cast<volatile zpointer*>(
+        reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(oldSlot)).StoreColoured(StoreGoodPointer(remembered));
+    fx.region0->remember(oldSlot);
+    young.register_with_remset(fx.region0);
+    const U64 handle = heap.RegisterExportRoot(root);
+    YoungTypeSetter type(young, ZYoungType::minor);
+    young.pause_mark_start();
+    FILE* phaseLog = std::tmpfile();
+    GC_EXPECT_TRUE(phaseLog != nullptr);
+    const int savedStderr = dup(STDERR_FILENO);
+    GC_EXPECT_TRUE(savedStderr >= 0);
+    GC_EXPECT_TRUE(dup2(fileno(phaseLog), STDERR_FILENO) >= 0);
+    if (continuation) {
+        // Roots are already published when mark-end asks for another follow.
+        // The remembered page remains a genuine mark-start-flipped input.
+        young.produceYoungRoots();
+        young.concurrent_mark_continue();
+    } else {
+        young.concurrent_mark();
+    }
+    std::fflush(stderr);
+    (void)dup2(savedStderr, STDERR_FILENO);
+    close(savedStderr);
+    std::rewind(phaseLog);
+    std::string phases;
+    char line[1024];
+    while (std::fgets(line, sizeof(line), phaseLog) != nullptr) phases += line;
+    std::fclose(phaseLog);
+    std::fputs(phases.c_str(), stderr);
+    auto phaseCount = [&](const char* name) {
+        const std::string token = std::string(" name=") + name + " ";
+        size_t count = 0;
+        for (size_t pos = 0; (pos = phases.find(token, pos)) != std::string::npos; pos += token.size()) ++count;
+        return count;
+    };
+    const size_t rootWindows = phaseCount("young.root_enum");
+    const size_t followWindows = phaseCount("young.mark_follow");
+    const size_t splitWindows = phaseCount("young.remset_rescan") + phaseCount("young.mark_closure");
+    const bool rootLive = fx.region1->is_object_strongly_live(from_object(rootChild));
+    const bool rememberedLive = fx.region1->is_object_strongly_live(from_object(rememberedChild));
+    const bool previousCleared = !fx.region0->was_remembered(oldSlot);
+    const bool rearmed = fx.region0->is_remembered(oldSlot);
+    std::fprintf(stderr,
+        "YOUNG828_RESULT workers=%zu continuation=%d root_child=%d remset_child=%d previous_cleared=%d rearmed=%d\n",
+        workers, continuation, rootLive, rememberedLive, previousCleared, rearmed);
+    heap.RemoveExportObject(handle);
+    // One combined target assertion prevents an earlier receipt from hiding
+    // either input's contribution to the phase result.
+    GC_EXPECT_TRUE(rootLive && rememberedLive && previousCleared && rearmed);
+    std::fprintf(stderr, "YOUNG828_PHASE_ASSERT roots=%zu follow=%zu split=%zu\n",
+                 rootWindows, followWindows, splitWindows);
+    // Existing product phase records are the observation, with roots/follow
+    // as positive controls for the absence of the separate serial windows.
+    GC_EXPECT_TRUE(rootWindows == 1 && followWindows == 1 && splitWindows == 0);
+}
+}
+
+GC_OTHER_VM_TEST(YoungCombinedFollow828, InitialSingleWorker)
+{
+    RunCombinedYoungFollow(1, false);
+}
+GC_OTHER_VM_TEST(YoungCombinedFollow828, InitialMultipleWorkers)
+{
+    RunCombinedYoungFollow(2, false);
+}
+GC_OTHER_VM_TEST(YoungCombinedFollow828, ContinueSingleWorker)
+{
+    RunCombinedYoungFollow(1, true);
+}
+GC_OTHER_VM_TEST(YoungCombinedFollow828, ContinueMultipleWorkers)
+{
+    RunCombinedYoungFollow(2, true);
 }
 #endif
