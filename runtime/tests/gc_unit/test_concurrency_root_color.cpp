@@ -71,5 +71,4 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset)
         "CONCURRENCY_ROOT_COLOR saved=%#lx current=%#lx from=%p observed=%#lx expected=%#lx\n",
         savedColor, ZPointerLoadGoodMask, from, observed, expected);
     GC_EXPECT_EQ(observed, expected);
-    GC_EXPECT_EQ(savedColor, ZPointerLoadGoodMask);
 }

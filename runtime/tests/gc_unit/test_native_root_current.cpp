@@ -238,7 +238,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 
 }
 namespace {
-void CheckSavedRootColor(bool invisible, bool watermark = true)
+void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds = false)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
@@ -264,6 +264,12 @@ void CheckSavedRootColor(bool invisible, bool watermark = true)
         slot = reinterpret_cast<RootSlot*>(thread->GetGCData().invisibleRoot);
     } else {
         slot = thread->AddNativeFrameRoot(from);
+    }
+    if (twoRounds) {
+        ZGlobalsPointers::flip_old_relocate_start();
+        const bool first = thread->GcPhaseEnum(false, watermark ? StackWatermark::epoch_id() : 0);
+        GC_EXPECT_TRUE(first);
+        GC_EXPECT_EQ(raw(slot->LoadPlain()), reinterpret_cast<uintptr_t>(from));
     }
     const uintptr_t savedColor = thread->GetGCData().loadGoodMask;
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
@@ -295,6 +301,8 @@ void CheckSavedRootColor(bool invisible, bool watermark = true)
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 }
+GC_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochNativeFrameRoot) { CheckSavedRootColor(false, true, true); }
+GC_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochInvisibleRoot) { CheckSavedRootColor(true, true, true); }
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorNativeFrameRoot) { CheckSavedRootColor(false); }
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorInvisibleRoot) { CheckSavedRootColor(true); }
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectNativeFrameRoot) { CheckSavedRootColor(false, false); }
