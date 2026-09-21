@@ -4,7 +4,6 @@
 
 // Young concurrent-mark window invariants (REPORT-youngconc 6/20).
 // These tests exercise the three mutator actions inside the TRACE window:
-//   1. TraceBarrier-shaped SATB pre-image (ShouldEnqueue skip after paint)
 //   2. Mark publication and concurrent termination
 //   3. young→young overwrite (not remset; dirty-holder compensation)
 // Shape: ZGC gtest construct-state → assert (test_zLiveMap / test_zBitMap).
@@ -154,34 +153,6 @@ private:
 // Bitmap/ledger mechanism model. Product-path attribution is covered by the
 // runtime-dispatch tests below, not by this helper.
 } // namespace
-
-// 1. SATB / TraceBarrier write: a marked object suppresses duplicate enqueue
-//    (ZGC zBarrier.inline.hpp:735-740 mark_and_remember; our SATB skips marked).
-GC_TEST(YoungConc, PaintedObjectSkippedByShouldEnqueue)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    fx.region0->reset(PageAge::eden);
-    fx.region0->reset(PageAge::eden);
-
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
-
-    GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
-
-}
-
-// A current page has one owner/livemap pair. Typed closure views do not expose
-// a second current bitmap, so either reader observes the owner's existing mark.
-GC_TEST(YoungConc, SingleCurrentMarkSuppressesEnqueueForEitherClosure)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    fx.region0->reset(PageAge::eden);
-    fx.region0->reset(PageAge::eden);
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
-    GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
-    GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
-}
 
 // ZGC native stores consume prev (zBarrier.inline.hpp:709-715), including
 // export root membership. An empty slot has no old value to publish.

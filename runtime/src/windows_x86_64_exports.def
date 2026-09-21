@@ -1105,7 +1105,6 @@ EXPORTS
     _ZN12MapleRuntime11RegSlotsMap20VisitDoubleSlotsRootERKNSt3__18functionIFvRNS_8RootSlotEEEERKNS2_IFvjNS_15zaddress_unsafeEEEEj @1214
     _ZN12MapleRuntime11RegSlotsMap20VisitSingleSlotsRootERKNSt3__18functionIFvRNS_8RootSlotEEEERKNS2_IFvjNS_15zaddress_unsafeEEEEjPNS1_4listIS9_NS1_9allocatorIS9_EEEE @1215
     _ZN12MapleRuntime11RegionCache21DeactivateRegionCacheEv @1216
-    _ZN12MapleRuntime11RegionSpace13ShouldEnqueueEPKNS_10BaseObjectE @1217
     _ZN12MapleRuntime11RegionSpace14IsMarkedObjectEPKNS_10BaseObjectE @1218
     _ZN12MapleRuntime11RegionSpace15TryAllocateOnceEyNS_9AllocTypeE @1219
     _ZN12MapleRuntime11RegionSpace19IsResurrectedObjectEPKNS_10BaseObjectE @1222
@@ -2000,12 +1999,6 @@ EXPORTS
     _ZNK12MapleRuntime11ReflectInfo21GetInstanceMethodInfoEj @2495
     _ZNK12MapleRuntime11RegionSpace10ForEachObjERKNSt3__18functionIFvPNS_10BaseObjectEEEEb @2496
     _ZNK12MapleRuntime11RegionSpace14AllocatedBytesEv @2497
-    _ZNK12MapleRuntime11RegionSpace14GetMaxCapacityEv @2498
-    _ZNK12MapleRuntime11RegionSpace15GetUsedPageSizeEv @2499
-    _ZNK12MapleRuntime11RegionSpace16LargeObjectBytesEv @2500
-    _ZNK12MapleRuntime11RegionSpace18GetCurrentCapacityEv @2501
-    _ZNK12MapleRuntime11RegionSpace18GetSpaceEndAddressEv @2502
-    _ZNK12MapleRuntime11RegionSpace20GetSpaceStartAddressEv @2503
     _ZNK12MapleRuntime12CJFileLoader10FindSymbolENS_7CStringES1_ @2505
     _ZNK12MapleRuntime12CJFileLoader11DoInitImageEPNS_8BaseFileE @2506
     _ZNK12MapleRuntime12CJFileLoader11GetBaseFileENS_7CStringE @2507

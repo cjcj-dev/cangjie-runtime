@@ -60,11 +60,6 @@ public:
 
 
 
-    size_t GetAllocBufersCount()
-    {
-        return allocBuffers.size();
-    }
-
 private:
     AllocBuffersSet allocBuffers;
     AtomicSpinLock allocBufferLock;
