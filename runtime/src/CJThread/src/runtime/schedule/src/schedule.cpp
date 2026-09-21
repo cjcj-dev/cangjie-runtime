@@ -30,7 +30,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-void MRT_BindUncoloredVisitColor(uintptr_t* slot);
+uintptr_t* MRT_BindUncoloredVisitColor(uintptr_t* slot);
 
 const int SCHEDULE_PROCESSOR_EXIT_WAIT_TIME = 10;   /* wait 10us */
 /* When the non-default scheduler exits, if there are unfinished cjthreads, wait10 us */
@@ -1638,6 +1638,18 @@ void ScheduleAllCJThreadListRemove(struct CJThread *cjthread)
     }
 }
 
+// ZNMethod::nmethod_oops_do: the root group and its guard share one reentrant lock.
+void CJThreadVisitRoots(CJThreadHandle thread, AllCJThreadListProcFunc visitor, void* handle)
+{
+    auto* cjthread = static_cast<struct CJThread*>(thread);
+    std::lock_guard<std::recursive_mutex> lock(cjthread->uncoloredRootLock);
+    if (cjthread->argStart != nullptr && cjthread->uncoloredRootColor != 0) {
+        auto* previous = MRT_BindUncoloredVisitColor(&cjthread->uncoloredRootColor);
+        visitor(cjthread->argStart, handle);
+        MRT_BindUncoloredVisitColor(previous);
+    }
+}
+
 /* When type is set to 1, the visited object is arg_start. When type is set to 0, the visited
  * object is mutator.
  */
@@ -1653,11 +1665,7 @@ void ScheduleAllCJThreadVisitImpl(AllCJThreadListProcFunc visitor, void *handle,
     if (type == 1) {
         DULINK_FOR_EACH_ITEM(scheduleCJThreadNode, &g_scheduleManager.allCJThreadList) {
             cjthread = DULINK_ENTRY(scheduleCJThreadNode, struct CJThread, allCJThreadDulink);
-            void *arg = cjthread->argStart;
-            if (arg != nullptr) {
-                MRT_BindUncoloredVisitColor(&cjthread->uncoloredRootColor);
-                visitor(arg, handle);
-            }
+            CJThreadVisitRoots(cjthread, visitor, handle);
         }
     } else {
         DULINK_FOR_EACH_ITEM(scheduleCJThreadNode, &g_scheduleManager.allCJThreadList) {

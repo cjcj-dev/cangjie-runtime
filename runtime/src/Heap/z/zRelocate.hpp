@@ -142,12 +142,7 @@ public:
     static bool IsUnmovableFromObject(BaseObject* object);
     static BaseObject* ResolveMinorReference(RefField<>& field,
                                              const ScopedStopTheWorld* stw = nullptr);
-    static BaseObject* ResolveMinorReference(RootSlot& root,
-                                             const ScopedStopTheWorld* stw = nullptr);
     static bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,
-                                      const ScopedStopTheWorld* stw = nullptr);
-    static bool FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw = nullptr);
-    static bool FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase = nullptr,
                                       const ScopedStopTheWorld* stw = nullptr);
     static void FixMinorRootSlots(const ScopedStopTheWorld* stw = nullptr);
     static void RemapYoungRoots();

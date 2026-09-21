@@ -601,7 +601,7 @@ int CJThreadAttrSpecificSet(struct CJThreadAttr *attrUser, unsigned int num, str
  * NULL indicates that the cjthread fails to be created.
  */
 CJThreadHandle ExclusiveCJThreadNew(CJThreadFunc func,
-                                    const void *argStart, unsigned int argSize);
+                                    const void *argStart, unsigned int argSize, uintptr_t rootColor = 0);
 
 /**
  * @brief Create a cjthread. This interface must be invoked in the cjthread context.
@@ -623,8 +623,8 @@ CJThreadHandle ExclusiveCJThreadNew(CJThreadFunc func,
  */
 CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *attrUser,
                            CJThreadFunc func, const void *argStart, unsigned int argSize,
-                           CJThreadCreateSource createSource = CJTHREAD_CREATE_SOURCE_DEFAULT);
-void CJThreadSetUncoloredRootColor(CJThreadHandle handle, uintptr_t color);
+                           CJThreadCreateSource createSource = CJTHREAD_CREATE_SOURCE_DEFAULT, uintptr_t rootColor = 0);
+void CJThreadVisitRoots(CJThreadHandle thread, AllCJThreadListProcFunc visitor, void* handle);
 
 /**
  * @brief Create a cjthread from outside the scheduling framework to the scheduler.
@@ -646,7 +646,7 @@ void CJThreadSetUncoloredRootColor(CJThreadHandle handle, uintptr_t color);
  */
 CJThreadHandle CJThreadNewToSchedule(ScheduleHandle schedule, const struct CJThreadAttr *attr,
                                      CJThreadFunc func, const void *argStart, unsigned int argSize,
-                                     CJThreadCreateSource createSource = CJTHREAD_CREATE_SOURCE_DEFAULT);
+                                     CJThreadCreateSource createSource = CJTHREAD_CREATE_SOURCE_DEFAULT, uintptr_t rootColor = 0);
 
 /**
  * @brief Creates a cjthread to the default scheduler. This interface can be invoked from
