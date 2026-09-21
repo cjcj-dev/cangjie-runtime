@@ -976,62 +976,6 @@ retry:
     return nullptr;
 }
 
-size_t RegionManager::CollectFreePinnedSlots(ZPage* region)
-{
-    // traverse pinned region to reclaim free pinned objects.
-    size_t garbageSize = 0;
-    region->VisitAllObjects([this, region, &garbageSize](BaseObject* object) {
-        if (!region->is_object_live(from_object(object))) {
-            size_t objSize = object->GetSize();
-            DLOG(ALLOC, "reclaim pinned obj %p<%p>(%zu)", object, object->GetTypeInfo(), objSize);
-            garbageSize += objSize;
-            std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
-            ReleaseNativeResource(object);
-            freePinnedSlotLists.PushFront(object);
-        }
-    });
-    return garbageSize;
-}
-
-size_t RegionManager::CollectPinnedGarbage()
-{
-
-    {
-        std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
-        freePinnedSlotLists.Clear();
-    }
-    size_t garbageSize = 0;
-    // #710: pinned pages are page-table entries with a pinned role
-    // (zPageTable.hpp:57-77 walk), not a list.
-    std::vector<ZPage*> pinnedPages;
-    {
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            if (region->GetRegionRole() == ZPageRole::OldPinned) {
-                pinnedPages.push_back(region);
-            }
-        }
-    }
-    for (ZPage* region : pinnedPages) {
-        if (region->IsKnownEmpty()) {
-            ZPage* del = region;
-            del->SetRegionRole(ZPageRole::None);
-
-            auto fixToObj = [](BaseObject* obj) { ReleaseNativeResource(obj); };
-            del->VisitAllObjects(fixToObj);
-
-
-            garbageSize += CollectRegion<Generation::Old>(del);
-            continue;
-        } else {
-            garbageSize += CollectFreePinnedSlots(region);
-        }
-    }
-
-    return garbageSize;
-}
-
 size_t RegionManager::CollectLargeGarbage()
 {
     size_t garbageSize = 0;
@@ -1256,23 +1200,5 @@ size_t RegionManager::GetLargeObjectSize() const
     }
     return bytes;
 }
-
-bool RegionManager::TryStampTraceRegion(ZPage* region, ZPageRole role)
-{
-    std::lock_guard<std::mutex> lock(pinnedAllocationMutex);
-    const bool active = role == ZPageRole::FullTrace ? fullTraceCacheActive : largeTraceCacheActive;
-    if (!active) {
-        return false;
-    }
-    region->SetRegionRole(role);
-    return true;
-}
-
-void RegionManager::LockPageMutexInSaferegion(std::mutex& listMutex)
-    {
-        while (!listMutex.try_lock()) {
-            ScopedEnterSaferegion enterSaferegion(true);
-        }
-    }
 
 }

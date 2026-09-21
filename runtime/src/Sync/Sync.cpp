@@ -122,33 +122,6 @@ extern "C" {
 
 static constexpr int64_t INVALID_THREAD_ID = -1LL;
 
-void ReleaseNativeResource(BaseObject* obj)
-{
-    TypeInfo* typeInfo = obj->GetTypeInfo();
-    if (typeInfo->IsFutureClass()) {
-        NativeWaitSet* n = reinterpret_cast<CJFuture*>(obj)->waitNative;
-        reinterpret_cast<CJFuture*>(obj)->waitNative = nullptr;
-        reinterpret_cast<CJFuture*>(obj)->isWaitQueueInit.store(0);
-        (void)n;
-        return;
-    }
-    if (typeInfo->IsMonitorClass()) {
-        reinterpret_cast<CJMonitor*>(obj)->waitNative = nullptr;
-        reinterpret_cast<CJMonitor*>(obj)->isWaitQueueInit = false;
-        return;
-    }
-    if (typeInfo->IsMutexClass()) {
-        reinterpret_cast<CJMutex*>(obj)->waitNative = nullptr;
-        reinterpret_cast<CJMutex*>(obj)->isSemaInit = false;
-        return;
-    }
-    if (typeInfo->IsWaitQueueClass()) {
-        reinterpret_cast<CJWaitQueue*>(obj)->waitNative = nullptr;
-        reinterpret_cast<CJWaitQueue*>(obj)->isWaitQueueInit = false;
-        return;
-    }
-}
-
 void MCC_FutureInit(void* ptr)
 {
     CJFuture* future = reinterpret_cast<CJFuture*>(ptr);
@@ -758,8 +731,7 @@ void MCC_SetCurrentCJThreadObject(void* ptr)
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
 #endif
-    StorePlain(RootSlotAt(&data->threadObject), from_object(from_native_ref(ptr)));
-    PublishCJThreadRootColor(CJThreadGetHandle());
+    StoreCJThreadObject(ptr);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif

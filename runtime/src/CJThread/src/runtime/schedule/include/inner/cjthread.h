@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <atomic>
+#include <mutex>
 #ifdef __OHOS__
 #include <vector>
 #endif
@@ -151,6 +152,7 @@ struct CJThread {
     char name[CJTHREAD_NAME_SIZE];           /* cjthread name */
     bool isCJThread0;
     uintptr_t uncoloredRootColor;
+    std::recursive_mutex uncoloredRootLock;
 #ifdef __OHOS__
     std::vector<unsigned long long> threadStackTopList;
 #endif
@@ -175,6 +177,7 @@ struct LuaCJThread {
 struct ArgAttr {
     const void *argStart;                   /* arg pointer */
     size_t argSize;                         /* arg length */
+    uintptr_t rootColor = 0; // Zero means native arguments, not an LWTData root group.
 };
 
 /**
@@ -233,7 +236,7 @@ struct CJThread *CJThreadAlloc(struct Schedule *schedule, struct ArgAttr *argAtt
 void CJThreadKeysClean(struct CJThread *cjthread);
 
 struct CJThread* CJThreadBuild(ScheduleHandle schedule, const struct CJThreadAttr *attrUser, CJThreadFunc func,
-                               const void *argStart, unsigned int argSize, CJThreadCreateSource createSource);
+                               const void *argStart, unsigned int argSize, CJThreadCreateSource createSource, uintptr_t rootColor = 0);
 
 /**
  * @brief Add cjthreads to the queue in batches.

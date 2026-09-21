@@ -34,9 +34,6 @@ inline const ZRelocationSetSelectorGroupStats& ZRelocationSetSelectorStats::larg
 
 inline bool ZRelocationSetSelectorGroup::pre_filter_page(const ZPage* page, size_t live_bytes) const
 {
-    if (page->IsPinnedRegion()) {
-        return false;
-    }
     if (page->is_small()) {
         const size_t garbage = page->size() - live_bytes;
         return garbage > _page_fragmentation_limit;

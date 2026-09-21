@@ -543,8 +543,7 @@ CJThreadHandle RunCJTaskImpl(const CJTaskFunc func, void* args, int num = 0, CJT
     MapleRuntime::LWTData lwtData {};
     lwtData.fn = fi;
     CJThreadHandle handle = CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr), UserFuncExecutor,
-                                                  &lwtData, sizeof(lwtData), createSource);
-    MapleRuntime::PublishCJThreadRootColor(handle);
+                                                  &lwtData, sizeof(lwtData), createSource, ZPointerStoreGoodMask);
     if (handle == nullptr) {
         LOG(RTLOG_ERROR, "failed to create cjthread.\n");
         std::lock_guard<std::mutex> lck(g_mtx);

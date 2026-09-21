@@ -50,7 +50,7 @@ int main(int argc, char** argv)
         target = MObject::NewPinnedObject(type, 2 * sizeof(uintptr_t));
         if (target == nullptr) { return 81; }
         if (iterator) {
-            array = MArray::NewRefArray(2, *arrayType, AllocType::PINNED_OBJECT);
+            array = MArray::NewRefArray(2, *arrayType, AllocType::MOVEABLE_OBJECT);
             if (array == nullptr) { return 82; }
             for (size_t index = 0; index < 2; ++index) {
                 auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(array) +

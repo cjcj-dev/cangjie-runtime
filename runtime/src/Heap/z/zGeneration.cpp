@@ -430,11 +430,6 @@ void ZGenerationYoung::mark_start()
     // Otherwise the mark-start flip would leave previous unconsumed when the
     // next young collection reuses that bitmap (zRemembered.cpp:561-576).
 
-    // Pinned holders (Future/Mutex/Monitor): AllocPinned never sets young; IDLE write
-    // fast-path (phase < ENUM) is a bare store — old→young edges never hit remset.
-    // Stamp them before Acquire so pre-evacuate verify and young mark both see them.
-    // idleedge: census remset-miss old→young BEFORE pinned stamp fills those gaps.
-
     // fysaudit: full non-young O→Y vs mutator remset (D1/D2/D3). Observe only.
 
     // promodomain: reset last cycle's flip-promoted table (CHECK registered==discharged).
@@ -971,18 +966,12 @@ void ZGenerationOld::mark_start()
     CHECK(Snapshot().active);
     ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();
-    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    // ZGC holds the VM mark-start pause across retirement and seqnum advance
-    // (zGeneration.cpp:1213-1231). Serialize the pinned publication adapter
-    // explicitly because our handshake pause permits safe native threads.
-    std::unique_lock<std::mutex> pinnedLock(space.GetRegionManager().PinnedAllocationMutex());
     Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
     {
         std::lock_guard<std::mutex> lock(mutex);
         CHECK(sequence != UINT64_MAX);
         ++sequence;
     }
-    pinnedLock.unlock();
     set_phase(Phase::Mark);
     Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
     Mark().BindWorkers(Workers());
@@ -1374,12 +1363,6 @@ void ZGenerationOld::CollectLargeGarbage()
     ZStatTimerOld zstatTimer(PCollectLargeGarbage);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     ZGeneration::old()->increase_freed(space.CollectLargeGarbage());
-}
-
-void ZGenerationOld::CollectPinnedGarbage()
-{
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    ZGeneration::old()->increase_freed(space.CollectPinnedGarbage());
 }
 
 void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,

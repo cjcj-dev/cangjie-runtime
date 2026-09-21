@@ -131,11 +131,6 @@ public:
         return ZRelocate::FixMinorEvacuatedSlot(field, knownBase, nullptr);
     }
 
-    static bool FixMinorRoot(Heap& collector, RootSlot& root)
-    {
-        return ZRelocate::FixMinorEvacuatedSlot(root, nullptr);
-    }
-
     static BaseObject* TryForward(Heap& collector, BaseObject* object)
     {
         return Heap::GetHeap().old().relocate_or_remap_object(object);

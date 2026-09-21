@@ -152,6 +152,7 @@ void CJThreadStackMemFree(struct CJThread *cjthread, char *stackTopAddr, size_t 
 void CJThreadMemFree(struct CJThread *cjthread)
 {
     CJThreadStackMemFree(cjthread, cjthread->stack.stackTopAddr, cjthread->stack.stackSize);
+    cjthread->uncoloredRootLock.~recursive_mutex();
     free(cjthread);
 }
 
@@ -199,6 +200,7 @@ unsigned long long CJThreadNewId(void)
 
 MRT_STATIC_INLINE int CJThreadInit(struct CJThread *newCJThread, struct ArgAttr *argAttr)
 {
+    std::lock_guard<std::recursive_mutex> lock(newCJThread->uncoloredRootLock);
     int error;
     char *argBuffer;
     newCJThread->argSize = argAttr->argSize;
@@ -217,7 +219,7 @@ MRT_STATIC_INLINE int CJThreadInit(struct CJThread *newCJThread, struct ArgAttr 
     }
 
     newCJThread->boundThread = nullptr;
-    newCJThread->uncoloredRootColor = 0;
+    newCJThread->uncoloredRootColor = argAttr->rootColor;
     DulinkInit(&(newCJThread->schdDulink));
     atomic_store_explicit(&newCJThread->state, CJTHREAD_IDLE, std::memory_order_relaxed);
     newCJThread->name[0] = '\0';
@@ -293,6 +295,7 @@ struct CJThread *CJThreadAndArgsMemAlloc()
         HILOG_ERROR(error, "cjthread memset_s failed");
         return nullptr;
     }
+    new (&cjthread->uncoloredRootLock) std::recursive_mutex;
     return cjthread;
 }
 
@@ -471,6 +474,7 @@ struct CJThread *CJThreadMemAlloc(struct Schedule *schedule, struct StackAttr *s
         // Allocate stack memeory of CJThread.
         stackAddr = CJThreadStackMemAlloc(schedule, cjthread, stackAttr->stackSizeAlign, &totalSize);
         if (stackAddr == nullptr) {
+            cjthread->uncoloredRootLock.~recursive_mutex();
             free(cjthread);
             return nullptr;
         }
@@ -576,7 +580,11 @@ void *CJThreadMexit(struct CJThread *delCJThread)
     MapleRuntime::Sanitizer::AsanEndSwitchThreadContext(CJThreadGet());
 #endif
 
-    delCJThread->argStart = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> lock(delCJThread->uncoloredRootLock);
+        delCJThread->argStart = nullptr;
+        delCJThread->uncoloredRootColor = 0;
+    }
     atomic_store_explicit(&delCJThread->state, CJTHREAD_IDLE, std::memory_order_relaxed);
     CJThreadKeysClean(delCJThread);
     // Non-default scheduler waits for CJThreadNum == 0 on exit to ensure normal execution
@@ -912,7 +920,7 @@ MRT_INLINE static void CJThreadNewSetAttr(const struct CJThreadAttrInner *attr,
 }
 
 struct CJThread* CJThreadBuild(ScheduleHandle schedule, const struct CJThreadAttr *attrUser, CJThreadFunc func,
-                               const void *argStart, unsigned int argSize, CJThreadCreateSource createSource)
+                               const void *argStart, unsigned int argSize, CJThreadCreateSource createSource, uintptr_t rootColor)
 {
     struct StackAttr stackAttr;
     struct CJThread *newCJThread;
@@ -925,6 +933,7 @@ struct CJThread* CJThreadBuild(ScheduleHandle schedule, const struct CJThreadAtt
     currentSchedule = ScheduleGet();
     argAttr.argStart = argStart;
     argAttr.argSize = argSize;
+    argAttr.rootColor = rootColor;
     if (targetSchedule == nullptr || (targetSchedule->scheduleType != SCHEDULE_DEFAULT &&
                                    targetSchedule->state == SCHEDULE_WAITING)) {
         HILOG_ERROR(ERRNO_SCHD_INVALID, "can't new cjthread because schedule state is waiting");
@@ -1067,6 +1076,7 @@ void ExclusiveRestore(struct CJThread* oldCJThread, struct Thread* thread,
 #endif
     // Free cjthread and scheduler
     ScheduleAllCJThreadListRemove(newCJThread);
+    newCJThread->uncoloredRootLock.~recursive_mutex();
     free(newCJThread);
     ExclusiveScheduleFree(newSchedule);
 #if defined(__ANDROID__)
@@ -1075,7 +1085,7 @@ void ExclusiveRestore(struct CJThread* oldCJThread, struct Thread* thread,
 }
 
 CJThreadHandle ExclusiveCJThreadNew(CJThreadFunc func,
-                                    const void *argStart, unsigned int argSize)
+                                    const void *argStart, unsigned int argSize, uintptr_t rootColor)
 {
     struct StackAttr stackAttr;
     stackAttr.stackGrow = false;
@@ -1083,6 +1093,7 @@ CJThreadHandle ExclusiveCJThreadNew(CJThreadFunc func,
     struct ArgAttr argAttr;
     argAttr.argStart = argStart;
     argAttr.argSize = argSize;
+    argAttr.rootColor = rootColor;
 
     // Use CreateSubSchedulerAndInit to properly initialize the exclusive scheduler
     auto runtime = reinterpret_cast<MapleRuntime::CangjieRuntime*>(&MapleRuntime::Runtime::Current());
@@ -1096,7 +1107,7 @@ CJThreadHandle ExclusiveCJThreadNew(CJThreadFunc func,
     struct Schedule* schedule = reinterpret_cast<struct Schedule*>(scheduler);
     schedule->state = SCHEDULE_RUNNING;
 
-    CJThreadHandle newCJThread = CJThreadNew(scheduler, nullptr, func, argStart, argSize);
+    CJThreadHandle newCJThread = CJThreadNew(scheduler, nullptr, func, argStart, argSize, CJTHREAD_CREATE_SOURCE_DEFAULT, rootColor);
     if (newCJThread == nullptr) {
         LOG(RTLOG_FATAL, "failed to create exclusive cjthread");
     }
@@ -1105,7 +1116,7 @@ CJThreadHandle ExclusiveCJThreadNew(CJThreadFunc func,
 
 /* Create a cjthread in the cjthread context. */
 CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *attrUser, CJThreadFunc func,
-                           const void *argStart, unsigned int argSize, CJThreadCreateSource createSource)
+                           const void *argStart, unsigned int argSize, CJThreadCreateSource createSource, uintptr_t rootColor)
 {
     unsigned long long cjthreadId = CJThreadNewId();
 #ifdef __OHOS__
@@ -1119,7 +1130,7 @@ CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *a
     struct Schedule *targetSchedule = (struct Schedule *)schedule;
     struct ScheduleCJThread *scheduleCJThread = &targetSchedule->schdCJThread;
     currentSchedule = ScheduleGet();
-    struct CJThread* newCJThread = CJThreadBuild(schedule, attrUser, func, argStart, argSize, createSource);
+    struct CJThread* newCJThread = CJThreadBuild(schedule, attrUser, func, argStart, argSize, createSource, rootColor);
     if (newCJThread == nullptr) {
         HILOG_ERROR(ERRNO_SCHD_CJTHREAD_NULL, "build cjthread failed");
         return nullptr;
@@ -1172,21 +1183,13 @@ CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *a
 /* Submit tasks from an external thread to the scheduling framework. */
 CJThreadHandle CJThreadNewToSchedule(ScheduleHandle schedule, const struct CJThreadAttr *attr,
                                      CJThreadFunc func, const void *argStart, unsigned int argSize,
-                                     CJThreadCreateSource createSource)
+                                     CJThreadCreateSource createSource, uintptr_t rootColor)
 {
     if (schedule == nullptr) {
         LOG_ERROR(ERRNO_SCHD_INVALID, "schedule null invalid");
         return nullptr;
     }
-    return CJThreadNew(schedule, attr, func, argStart, argSize, createSource);
-}
-
-void CJThreadSetUncoloredRootColor(CJThreadHandle handle, uintptr_t color)
-{
-    if (handle == nullptr) {
-        return;
-    }
-    static_cast<struct CJThread*>(handle)->uncoloredRootColor = color;
+    return CJThreadNew(schedule, attr, func, argStart, argSize, createSource, rootColor);
 }
 
 CJThreadHandle CJThreadNewToDefault(const struct CJThreadAttr *attr, CJThreadFunc func,

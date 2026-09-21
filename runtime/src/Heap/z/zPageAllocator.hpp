@@ -276,7 +276,6 @@ private:
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "securec.h"
-#include "Heap/Allocator/SlotList.h"
 
 namespace MapleRuntime {
 class CompactCollector;
@@ -286,40 +285,6 @@ class ForwardTask;
 
 
 
-struct FreePinnedSlotLists {
-    static constexpr size_t ATOMIC_OBJECT_SIZE = 16;
-    SlotList freeAtomicSlotList;
-
-private:
-    friend class RegionManager;
-    uintptr_t PopFront(size_t size)
-    {
-        switch (size) {
-            case ATOMIC_OBJECT_SIZE:
-                return freeAtomicSlotList.PopFront(size);
-            default:
-                return 0;
-        }
-    }
-
-public:
-    void PushFront(BaseObject* slot)
-    {
-        size_t size = slot->GetSize();
-        switch (size) {
-            case ATOMIC_OBJECT_SIZE:
-                freeAtomicSlotList.PushFront(slot);
-                break;
-            default:
-                return;
-        }
-    }
-
-    void Clear()
-    {
-        freeAtomicSlotList.Clear();
-    }
-};
 
 // RegionManager needs to know header size and alignment in order to iterate objects linearly
 // and thus its Alloc should be rewrite with AllocObj(objSize)
@@ -430,8 +395,6 @@ public:
 
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
-    // P14: the handshake pause must serialize pinned installation with retirement/seqnum.
-    std::mutex& PinnedAllocationMutex() { return pinnedAllocationMutex; }
 
     // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
     // independent of the thread-local requested bytes and retirement waste.
@@ -538,7 +501,6 @@ public:
                            bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old, ZAllocationFlags flags = {});
 
 
-    uintptr_t AllocPinned(size_t size);
 
     // caller assures size is truely large (> region size)
 
@@ -552,7 +514,6 @@ public:
 
     void AssembleSmallGarbageCandidates();
     void AssembleLargeGarbageCandidates();
-    void AssemblePinnedGarbageCandidates(bool collectAll);
     YoungCollectionStats PrepareYoungGarbageCandidates();
 
     void CollectFromSpaceGarbage();
@@ -572,11 +533,7 @@ public:
 
     size_t CollectLargeGarbage();
 
-    size_t CollectPinnedGarbage();
-    size_t CollectFreePinnedSlots(ZPage* region);
 
-    // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
-    // can be reclaimed.
     // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).
 
     void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
@@ -588,7 +545,6 @@ public:
     size_t GetRecentAllocatedSize() const;
     size_t GetSurvivedSize() const;
     size_t GetFromSpaceSize() const;
-    size_t GetPinnedSpaceSize() const;
     size_t SumAllocatedByRoles(std::initializer_list<ZPageRole> roles) const;
 
     size_t GetUsedBytes() const;
@@ -636,7 +592,6 @@ public:
     size_t UsedGeneration(ZGenerationId id) const { return used_generation(id); }
 
 
-    void ClearFreePinnedSlots() { freePinnedSlotLists.Clear(); }
 
     // wait for a period of time to allocate region which will avoid harm to gc
     void RequestForRegion(size_t size);
@@ -654,7 +609,6 @@ public:
 
     void HandleTraceRegions();
     // Stamps `role` on the page when the matching trace cache is active.
-    bool TryStampTraceRegion(ZPage* region, ZPageRole role);
 
     void PrepareTrace();
 
@@ -690,18 +644,6 @@ private:
 
     size_t GetGatedGarbageBytes();
 
-    // Acquire a region list mutex which the collector also takes while the world is stopped.
-    // Waiting for it in a saferegion is required so that a contended mutator cannot stall
-    // StopTheWorld (MutatorManager.cpp:485-490), but the mutex must never be owned while the
-    // saferegion guard is destroyed: LeaveSaferegion() parks the mutator in SuspendForSync()
-    // (Mutator.h:172-186, Mutator.cpp:229-280) and the collector would then wait for that mutex
-    // forever. Wait in try-lock rounds so every saferegion transition happens unlocked, exactly
-    // as FreeRegionManager::TakeRegion() does for the free unit trees (FreeRegionManager.h:45-92).
-    static void LockPageMutexInSaferegion(std::mutex& listMutex);
-
-    // caller must own the pinned allocation mutex, and must not release it in between.
-    uintptr_t AllocPinnedLocked(size_t size);
-
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
     ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, ZAllocationFlags flags, bool clearPayload = true);
@@ -723,9 +665,6 @@ private:
     // #710: page lifecycle identity lives in ZPage's role word and the page
     // table (zPageTable.hpp:57-77); there are no page lists. The relocation
     // set (zRelocationSet.hpp) is the from-space work source.
-    // Serializes pinned-page installation with retirement/seqnum (P14), and
-    // pinned TLAB staging handoff.
-    std::mutex pinnedAllocationMutex;
     // RegionCache activations (PrepareTrace/HandleTraceRegions): while active,
     // freshly filled pages are stamped FullTrace/LargeTrace instead of
     // RecentFull/RecentLarge.
@@ -784,8 +723,6 @@ private:
 #if defined(__EULER__)
     double cacheRatio;
 #endif
-    std::mutex freePinnedSlotListMutex;
-    FreePinnedSlotLists freePinnedSlotLists;
 };
 
 } // namespace MapleRuntime

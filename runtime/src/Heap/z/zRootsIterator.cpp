@@ -177,8 +177,8 @@ void ZMark::VisitStrongPlainRoots(
     if (threadVisitor) {
         MutatorManager::Instance().VisitAllMutators(threadVisitor);
     }
-    RootVisitor plainVisitor = visitor;
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&plainVisitor);
+    (void)visitor;
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots();
 }
 
 void ZMark::VisitStaticRoots(const NativeSlotVisitor& visitor)

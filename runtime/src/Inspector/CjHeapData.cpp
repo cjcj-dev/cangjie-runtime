@@ -260,9 +260,7 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
     } else if (obj->GetTypeInfo()->IsVaildType()) {
         dumpObject.tag = TAG_INSTANCE_DUMP;
         auto regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
-        if (regionInfo->IsPinnedRegion()) {
-            dumpObject.tag = TAG_PINNED_INSTANCE_DUMP;
-        } else if (regionInfo->IsLargeRegion()) {
+        if (regionInfo->IsLargeRegion()) {
             dumpObject.tag = TAG_LARGE_INSTANCE_DUMP;
         } else if (regionInfo->IsUnmovableFromRegion()) {
             dumpObject.tag = TAG_UNMOVABLE_INSTANCE_DUMP;
@@ -479,7 +477,6 @@ void CjHeapData::WriteAllObjects()
                 WritePrimitiveArray(objectInfo.obj, objectInfo.tag);
                 break;
             case TAG_INSTANCE_DUMP:
-            case TAG_PINNED_INSTANCE_DUMP:
             case TAG_LARGE_INSTANCE_DUMP:
             case TAG_UNMOVABLE_INSTANCE_DUMP:
                 WriteInstance(objectInfo.obj, objectInfo.tag);

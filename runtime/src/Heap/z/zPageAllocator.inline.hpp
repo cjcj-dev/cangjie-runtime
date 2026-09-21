@@ -92,22 +92,17 @@ inline size_t RegionManager::SumAllocatedByRoles(std::initializer_list<ZPageRole
 
 inline size_t RegionManager::GetRecentAllocatedSize() const
     {
-        return SumAllocatedByRoles({ ZPageRole::RecentFull, ZPageRole::RecentLarge, ZPageRole::RecentPinned });
+        return SumAllocatedByRoles({ ZPageRole::RecentFull, ZPageRole::RecentLarge });
     }
 
 inline size_t RegionManager::GetSurvivedSize() const
     {
-        return SumAllocatedByRoles({ ZPageRole::From, ZPageRole::OldPinned, ZPageRole::OldLarge });
+        return SumAllocatedByRoles({ ZPageRole::From, ZPageRole::OldLarge });
     }
 
 inline size_t RegionManager::GetFromSpaceSize() const
     {
         return SumAllocatedByRoles({ ZPageRole::From });
-    }
-
-inline size_t RegionManager::GetPinnedSpaceSize() const
-    {
-        return SumAllocatedByRoles({ ZPageRole::OldPinned, ZPageRole::RecentPinned });
     }
 
 inline size_t RegionManager::GetUsedBytes() const
