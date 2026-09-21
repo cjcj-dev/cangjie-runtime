@@ -287,7 +287,6 @@ public:
     void PostTrace();
     void CollectSmallSpace();
     void CollectLargeGarbage();
-    void CollectPinnedGarbage();
     ~ZGenerationOld();
     bool should_record_stats() override;
     void collect();

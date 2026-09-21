@@ -328,7 +328,6 @@ MAIN_SOURCES=(
   "$SRC/test_zserviceability.cpp"
   "$SRC/test_trustp1_phase1.cpp"
 
-  "$SRC/test_object_gate.cpp"
   "$SRC/test_defect_regressions.cpp"
   "$SRC/test_zLiveMap.cpp"
   "$SRC/test_region_age.cpp"

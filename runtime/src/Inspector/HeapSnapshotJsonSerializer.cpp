@@ -299,7 +299,6 @@ void CjHeapDataForIDE::SerializeAllObjects()
                 SerializePrimitiveArray(objectInfo.obj, objectInfo.tag);
                 break;
             case TAG_INSTANCE_DUMP:
-            case TAG_PINNED_INSTANCE_DUMP:
             case TAG_LARGE_INSTANCE_DUMP:
             case TAG_UNMOVABLE_INSTANCE_DUMP:
                 SerializeInstance(objectInfo.obj, objectInfo.tag);

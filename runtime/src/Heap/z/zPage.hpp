@@ -67,8 +67,6 @@ enum class ZPageRole : uint8_t {
     From,
     UnmovableFrom,
     Garbage,
-    RecentPinned,
-    OldPinned,
     OldLarge,
     RecentLarge,
 };
@@ -83,8 +81,6 @@ inline const char* RegionRoleName(ZPageRole role)
         case ZPageRole::From: return "from regions";
         case ZPageRole::UnmovableFrom: return "escaped from regions";
         case ZPageRole::Garbage: return "garbage regions";
-        case ZPageRole::RecentPinned: return "recent pinned regions";
-        case ZPageRole::OldPinned: return "old pinned regions";
         case ZPageRole::OldLarge: return "old large regions";
         case ZPageRole::RecentLarge: return "recent large regions";
     }
@@ -595,7 +591,6 @@ public:
     bool IsLargeRegion() const;
 
 
-    bool IsPinnedRegion() const;
 
     ZPageRole GetRegionRole() const { return _scratch.regionRole.load(std::memory_order_acquire); }
 

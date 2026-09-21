@@ -276,7 +276,6 @@ private:
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "securec.h"
-#include "Heap/Allocator/SlotList.h"
 
 namespace MapleRuntime {
 class CompactCollector;
@@ -286,40 +285,6 @@ class ForwardTask;
 
 
 
-struct FreePinnedSlotLists {
-    static constexpr size_t ATOMIC_OBJECT_SIZE = 16;
-    SlotList freeAtomicSlotList;
-
-private:
-    friend class RegionManager;
-    uintptr_t PopFront(size_t size)
-    {
-        switch (size) {
-            case ATOMIC_OBJECT_SIZE:
-                return freeAtomicSlotList.PopFront(size);
-            default:
-                return 0;
-        }
-    }
-
-public:
-    void PushFront(BaseObject* slot)
-    {
-        size_t size = slot->GetSize();
-        switch (size) {
-            case ATOMIC_OBJECT_SIZE:
-                freeAtomicSlotList.PushFront(slot);
-                break;
-            default:
-                return;
-        }
-    }
-
-    void Clear()
-    {
-        freeAtomicSlotList.Clear();
-    }
-};
 
 // RegionManager needs to know header size and alignment in order to iterate objects linearly
 // and thus its Alloc should be rewrite with AllocObj(objSize)
@@ -431,7 +396,6 @@ public:
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
     // P14: the handshake pause must serialize pinned installation with retirement/seqnum.
-    std::mutex& PinnedAllocationMutex() { return pinnedAllocationMutex; }
 
     // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
     // independent of the thread-local requested bytes and retirement waste.
@@ -546,7 +510,6 @@ public:
                            bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old, ZAllocationFlags flags = {});
 
 
-    uintptr_t AllocPinned(size_t size);
 
     // caller assures size is truely large (> region size)
 
@@ -580,8 +543,6 @@ public:
 
     size_t CollectLargeGarbage();
 
-    size_t CollectPinnedGarbage();
-    size_t CollectFreePinnedSlots(ZPage* region);
 
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
     // can be reclaimed.
@@ -596,7 +557,6 @@ public:
     size_t GetRecentAllocatedSize() const;
     size_t GetSurvivedSize() const;
     size_t GetFromSpaceSize() const;
-    size_t GetPinnedSpaceSize() const;
     size_t SumAllocatedByRoles(std::initializer_list<ZPageRole> roles) const;
 
     size_t GetUsedBytes() const;
@@ -644,7 +604,6 @@ public:
     size_t UsedGeneration(ZGenerationId id) const { return used_generation(id); }
 
 
-    void ClearFreePinnedSlots() { freePinnedSlotLists.Clear(); }
 
     // wait for a period of time to allocate region which will avoid harm to gc
     void RequestForRegion(size_t size);
@@ -662,7 +621,6 @@ public:
 
     void HandleTraceRegions();
     // Stamps `role` on the page when the matching trace cache is active.
-    bool TryStampTraceRegion(ZPage* region, ZPageRole role);
 
     void PrepareTrace();
 
@@ -706,10 +664,8 @@ private:
     // (Mutator.h:172-186, Mutator.cpp:229-280) and the collector would then wait for that mutex
     // forever. Wait in try-lock rounds so every saferegion transition happens unlocked, exactly
     // as FreeRegionManager::TakeRegion() does for the free unit trees (FreeRegionManager.h:45-92).
-    static void LockPageMutexInSaferegion(std::mutex& listMutex);
 
     // caller must own the pinned allocation mutex, and must not release it in between.
-    uintptr_t AllocPinnedLocked(size_t size);
 
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
@@ -734,7 +690,6 @@ private:
     // set (zRelocationSet.hpp) is the from-space work source.
     // Serializes pinned-page installation with retirement/seqnum (P14), and
     // pinned TLAB staging handoff.
-    std::mutex pinnedAllocationMutex;
     // RegionCache activations (PrepareTrace/HandleTraceRegions): while active,
     // freshly filled pages are stamped FullTrace/LargeTrace instead of
     // RecentFull/RecentLarge.
@@ -794,8 +749,6 @@ private:
 #if defined(__EULER__)
     double cacheRatio;
 #endif
-    std::mutex freePinnedSlotListMutex;
-    FreePinnedSlotLists freePinnedSlotLists;
 };
 
 } // namespace MapleRuntime

@@ -597,12 +597,6 @@ inline bool ZPage::IsRelocatable() const
     return BirthSequence() < GetSnapshotEpoch();
 }
 
-inline bool ZPage::IsPinnedRegion() const
-    {
-        const ZPageRole role = GetRegionRole();
-        return role == ZPageRole::OldPinned || role == ZPageRole::RecentPinned;
-    }
-
 inline bool ZPage::IsUnmovableFromRegion() const
     {
         const ZPageRole role = GetRegionRole();

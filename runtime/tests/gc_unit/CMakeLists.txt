@@ -26,7 +26,6 @@ set(GC_UNIT_SOURCES
     test_zserviceability.cpp
     test_trustp1_phase1.cpp
 
-    test_object_gate.cpp
     test_defect_regressions.cpp
     test_zLiveMap.cpp
     test_region_age.cpp
