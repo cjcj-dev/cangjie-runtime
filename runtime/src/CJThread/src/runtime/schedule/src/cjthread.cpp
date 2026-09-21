@@ -1181,6 +1181,14 @@ CJThreadHandle CJThreadNewToSchedule(ScheduleHandle schedule, const struct CJThr
     return CJThreadNew(schedule, attr, func, argStart, argSize, createSource);
 }
 
+void CJThreadSetUncoloredRootColor(CJThreadHandle handle, uintptr_t color)
+{
+    if (handle == nullptr) {
+        return;
+    }
+    static_cast<struct CJThread*>(handle)->uncoloredRootColor = color;
+}
+
 CJThreadHandle CJThreadNewToDefault(const struct CJThreadAttr *attr, CJThreadFunc func,
                                     const void *argStart, unsigned int argSize)
 {

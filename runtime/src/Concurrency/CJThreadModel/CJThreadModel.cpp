@@ -20,7 +20,6 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "schedule.h"
-#include "cjthread.h"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zHeap.hpp"
 
@@ -31,10 +30,7 @@ thread_local uintptr_t* g_uncoloredVisitColor = nullptr;
 
 void PublishCJThreadRootColor(void* handle)
 {
-    if (handle == nullptr) {
-        return;
-    }
-    static_cast<struct CJThread*>(handle)->uncoloredRootColor = ZPointerStoreGoodMask;
+    CJThreadSetUncoloredRootColor(handle, ZPointerStoreGoodMask);
 }
 
 extern "C" void MRT_BindUncoloredVisitColor(uintptr_t* slot)

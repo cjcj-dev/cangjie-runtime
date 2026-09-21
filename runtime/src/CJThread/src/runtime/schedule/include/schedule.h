@@ -624,6 +624,7 @@ CJThreadHandle ExclusiveCJThreadNew(CJThreadFunc func,
 CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *attrUser,
                            CJThreadFunc func, const void *argStart, unsigned int argSize,
                            CJThreadCreateSource createSource = CJTHREAD_CREATE_SOURCE_DEFAULT);
+void CJThreadSetUncoloredRootColor(CJThreadHandle handle, uintptr_t color);
 
 /**
  * @brief Create a cjthread from outside the scheduling framework to the scheduler.
