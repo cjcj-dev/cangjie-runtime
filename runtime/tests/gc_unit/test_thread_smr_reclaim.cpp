@@ -26,8 +26,8 @@ using MapleRuntime::Mutator;
 using MapleRuntime::ThreadsListHandle;
 using MapleRuntime::ThreadsSMRSupport;
 
-constexpr size_t kParkedExecutors = 128;
-constexpr int kRounds = 64;
+constexpr size_t kParkedExecutors = 1024;
+constexpr int kRounds = 512;
 
 struct ReclaimInterleave {
     std::atomic<int> roundTodo{0};
@@ -39,6 +39,9 @@ struct ReclaimInterleave {
     std::atomic<bool> churnPause{true};
     std::atomic<bool> churnActive{false};
     std::atomic<bool> stop{false};
+    std::atomic<uint64_t> churnScans{0};
+    std::atomic<uint64_t> windowScans{0};
+    std::atomic<bool> inWindow{false};
 };
 
 bool WaitForSignal(const std::function<bool()>& done)
@@ -84,6 +87,10 @@ void ChurnLoop(ReclaimInterleave& state)
             ThreadsSMRSupport::add_thread(ChurnDummy());
         }
         added = !added;
+        state.churnScans.fetch_add(1, std::memory_order_relaxed);
+        if (state.inWindow.load(std::memory_order_relaxed)) {
+            state.windowScans.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 }
 
@@ -147,8 +154,10 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadSMRReclaim, NestedHandoffRetainsRetiredList)
         ThreadsSMRSupport::remove_thread(identity);
         state.churnPause.store(false, std::memory_order_release);
         GC_EXPECT_TRUE(WaitForSignal([&] { return state.churnActive.load(std::memory_order_acquire); }));
+        state.inWindow.store(true, std::memory_order_relaxed);
         state.handoffGo.store(round, std::memory_order_release);
         GC_EXPECT_TRUE(WaitForSignal([&] { return state.handoffDone.load(std::memory_order_acquire) >= round; }));
+        state.inWindow.store(false, std::memory_order_relaxed);
         state.churnPause.store(true, std::memory_order_release);
         GC_EXPECT_TRUE(WaitForSignal([&] { return !state.churnActive.load(std::memory_order_acquire); }));
         // Quiescent oracle: with the nested handle alive, the retired round
@@ -172,8 +181,10 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadSMRReclaim, NestedHandoffRetainsRetiredList)
     handoff.join();
     churn.join();
     for (auto& thread : parked) { thread.join(); }
-    std::fprintf(stderr, "THREAD_SMR_RECLAIM_TARGET executed=1 checked=%d protected=%d\n",
-                 checked, protectedEveryRound ? 1 : 0);
+    std::fprintf(stderr, "THREAD_SMR_RECLAIM_TARGET executed=1 checked=%d protected=%d churn=%llu window=%llu\n",
+                 checked, protectedEveryRound ? 1 : 0,
+                 static_cast<unsigned long long>(state.churnScans.load()),
+                 static_cast<unsigned long long>(state.windowScans.load()));
     GC_EXPECT_TRUE(protectedEveryRound && checked == kRounds);
 }
 #endif
