@@ -73,7 +73,7 @@ struct LiveMapGenerations {
     GcHeapFixture fx;
     LiveMapGenerations()
     {
-        while (ZLiveMap::generation_seqnum(ZGenerationId::young) == ZLiveMap::generation_seqnum(ZGenerationId::old)) {
+        while (ZGeneration::young()->seqnum() == ZGeneration::old()->seqnum()) {
             GcHeapFixture::AdvanceGeneration(Generation::Young);
         }
     }
@@ -423,7 +423,7 @@ GC_TEST(ZLiveMapTest, initial_generation_does_not_match_unmarked_map)
 {
     ZLiveMap map(1);
     for (auto id : {ZGenerationId::young, ZGenerationId::old}) {
-        const uint64_t sequence = ZLiveMap::generation_seqnum(id);
+        const uint64_t sequence = ZGeneration::generation(id)->seqnum();
         const bool marked = map.is_marked(id);
         std::fprintf(stderr, "P02_INITIAL_LIVEMAP generation=%u sequence=%llu marked=%d\n",
                      static_cast<unsigned>(id), static_cast<unsigned long long>(sequence), marked);

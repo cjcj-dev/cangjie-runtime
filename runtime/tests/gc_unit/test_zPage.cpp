@@ -1146,6 +1146,7 @@ GC_RUNTIME_OTHER_VM_TEST(NativeHandle, SlotsStayStableAcrossGrowth)
 #include "gc_generation_test.hpp"
 namespace {
 struct SequenceReadResult {
+    bool collected = false;
     BaseObject* object = nullptr;
     U64 root = 0;
 };
@@ -1155,21 +1156,31 @@ void* AllocateForSequenceRead(void* context)
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
-    type->SetInstanceSize(32 - TYPEINFO_PTR_SIZE);
+    const size_t size = result.collected ? ZObjectSizeLimitMedium + ZGranuleSize : 32;
+    type->SetInstanceSize(size - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    result.object = static_cast<BaseObject*>(MCC_NewObject(type, 32));
+    result.object = static_cast<BaseObject*>(MCC_NewObject(type, size));
     result.root = Heap::GetHeap().RegisterExportRoot(result.object);
+    if (result.collected) {
+        Mutator::GetMutator()->SetManagedContext(false);
+        Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+        Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+        result.object = Heap::GetHeap().GetExportObject(result.root);
+        Mutator::GetMutator()->SetManagedContext(true);
+    }
     return nullptr;
 }
 }
 
-GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, LiveQueryDoesNotAcquireSnapshotLock)
+namespace {
+void CheckLiveQueryWithoutSnapshotLock(bool collected)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     SequenceReadResult result;
+    result.collected = collected;
     CJThreadHandle handle = RunCJTask(AllocateForSequenceRead, &result);
     GC_EXPECT_TRUE(handle != nullptr);
     void* taskResult = nullptr;
@@ -1213,8 +1224,17 @@ GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, LiveQueryDoesNotAcquireSnapshotLock)
         static_cast<unsigned long long>(sequence), static_cast<unsigned long long>(expected));
     GC_EXPECT_TRUE(completedWhileLocked);
     GC_EXPECT_TRUE(controlBlocked && snapshotDone.load());
-    GC_EXPECT_TRUE(live && allocating && !relocatable);
+    GC_EXPECT_TRUE(live && allocating == !collected && relocatable == collected);
     GC_EXPECT_EQ(sequence, expected);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, LiveQueryDoesNotAcquireSnapshotLock)
+{
+    CheckLiveQueryWithoutSnapshotLock(false);
+}
+GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, MarkedLiveQueryDoesNotAcquireSnapshotLock)
+{
+    CheckLiveQueryWithoutSnapshotLock(true);
 }
 
 namespace {
