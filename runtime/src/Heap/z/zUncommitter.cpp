@@ -207,7 +207,7 @@ size_t Uncommitter::Uncommit()
         const size_t committed = regions.GetCommittedCapacity();
         const size_t retain = MinCapacity(regions.pageAllocatorUsed, 32 * MB);
         const size_t release = committed > retain ? committed - retain : 0;
-        const size_t flush = std::min({release, toUncommit, ChunkLimit(partition.GetMaxCapacity())});
+        const size_t flush = std::min({release, toUncommit, ChunkLimit(Heap::GetHeap().GetMaxCapacity())});
         // zUncommitter.cpp:395: flush memory from the mapped cache for uncommit.
         flushed = regions.freeRegionManager.RemoveForUncommit(flush, &flushedVmems);
         if (flushed == 0) {
