@@ -8,6 +8,7 @@
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zTask.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include <cstdio>
 #include "Sync/Sync.h"
@@ -139,6 +140,38 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset) { CheckSavedC
 GC_OTHER_VM_TEST(ConcurrencyRootColor, NoReturnSavedColorRemapsFromOffset) { CheckSavedColor(false, false, true); }
 GC_OTHER_VM_TEST(ConcurrencyRootColor, RemapYoungRootGroupOnce) { CheckSavedColor(false, true); }
 GC_OTHER_VM_TEST(ConcurrencyRootColor, ThreadObjectStorePreservesOtherRootEpoch) { CheckSavedColor(true); }
+
+GC_OTHER_VM_TEST(ConcurrencyRootColor, RemapDuringYoungMarkPublishesFollowWork)
+{
+    ConcurrencyRootRuntime runtime;
+    GcHeapFixture fx;
+    ZGlobalsPointers::initialize();
+    fx.region0->reset(PageAge::eden);
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + 64);
+    auto* thread = MCC_NewCJThread(nullptr, fx.obj0,
+                                  runtime.GetConcurrencyModel().GetThreadScheduler());
+    GC_EXPECT_TRUE(thread != nullptr);
+    MarkPublicationFixture marking;
+    marking.CompleteOldMarkForAdmissionTest();
+    Heap::GetHeap().young().Workers()->set_active_workers(1);
+    Heap::GetHeap().old().Workers()->set_active_workers(1);
+
+    ZRelocate::RemapYoungRoots();
+
+    class FlushMarkRootTask final : public ZTask {
+    public:
+        FlushMarkRootTask() : ZTask("ConcurrencyRootColorFlushMarkRoot") {}
+        void work() override { Heap::GetHeap().young().Mark().FlushStacks(); }
+    } flush;
+    Heap::GetHeap().old().Workers()->run(&flush);
+    bool found = false;
+    marking.Drain([&](BaseObject* object, bool follow) {
+        found |= object == fx.obj0 && follow;
+    });
+    std::fprintf(stderr, "CONCURRENCY_REMAP_MARK young=%d found=%d object=%p\n",
+                 fx.region0->IsYoungRegion(), found, fx.obj0);
+    GC_EXPECT_TRUE(found);
+}
 
 GC_OTHER_VM_TEST(ConcurrencyRootColor, NativeArgumentsAreNotRoots)
 {

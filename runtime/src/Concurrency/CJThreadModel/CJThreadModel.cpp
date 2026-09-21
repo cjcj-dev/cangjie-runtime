@@ -169,10 +169,13 @@ void CJThreadModel::Init(const ConcurrencyParam param, ScheduleType scheduleType
 
 void ConcurrencyModel::VisitGCRoots()
 {
-    // Relocation needs only the group's saved-color barrier, like
-    // ZUncoloredRoot::process_no_keepalive; there is no second resolve action.
-    RootVisitor relocated = [](RootSlot&) {};
-    VisitGCRoots(&relocated);
+    // ZGeneration.cpp:1435-1451 uses ZUncoloredRootProcessOopClosure while
+    // remapping an armed nmethod: heal from the saved color and retain the
+    // process closure's mark responsibility before publishing the new guard.
+    RootVisitor process = [](RootSlot& root) {
+        ZUncoloredRoot::mark_object(safe(root.LoadPlain()));
+    };
+    VisitGCRoots(&process);
 }
 
 void CJThreadModel::VisitGCRoots(RootVisitor* visitorHandle)
