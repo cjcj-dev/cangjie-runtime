@@ -177,8 +177,14 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, ThreadObjectOverwriteKeepsOldGroupAlive)
     ThreadLocal::SetCJThread(thread);
     MCC_SetCurrentCJThreadObject(nullptr);
     ThreadLocal::SetCJThread(previous);
-    const bool afterObj = fx.region0->is_object_marked_strong(from_object(fx.obj0));
-    const bool afterThread = fx.region1->is_object_marked_strong(from_object(fx.obj1));
+    // zMark.inline.hpp:48-87: a mutator publishes work; a GC worker marks
+    // the bitmap later. Observe the product stack entries, not an early bit.
+    bool afterObj = false;
+    bool afterThread = false;
+    marking.Drain([&](BaseObject* object, bool follow) {
+        afterObj |= follow && object == fx.obj0;
+        afterThread |= follow && object == fx.obj1;
+    });
     std::fprintf(stderr, "CONCURRENCY_KEEPALIVE_TARGET obj=%u thread=%u\n", afterObj, afterThread);
     GC_EXPECT_TRUE(afterObj && afterThread);
 }
