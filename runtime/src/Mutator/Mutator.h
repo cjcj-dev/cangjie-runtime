@@ -414,7 +414,6 @@ public:
         return obj;
     }
 
-    void AddLocalFinalizer(BaseObject* obj);
 
     void MutatorLock() { mutatorLock.lock(); }
 
@@ -515,7 +514,6 @@ protected:
     void CreateCurrentGCInfo();
 
 private:
-    NativeRootHandles& GetLocalFinalizers() { return localFinalizers; }
     // thread id
     uint32_t tid = 0;
     // cjthread ptr
@@ -545,7 +543,6 @@ private:
     ThreadGCData gcData;
     std::deque<ObjectRef> nativeFrameRoots;
 
-    NativeRootHandles localFinalizers;
 
     // this flag is used for gc unwind stack, when runtime-thread stack doesn't include managed frame,
     // we don't need to scan it.

@@ -171,12 +171,9 @@ void BaseObject::OnFinalizerCreated()
 {
     Heap& heap = Heap::GetHeap();
     heap.MarkNewObject(this);
-    Mutator* mutator = Mutator::GetMutator();
-    if (mutator != nullptr) {
-        mutator->AddLocalFinalizer(this);
-    } else {
-        heap.GetFinalizerProcessor().RegisterFinalizer(this);
-    }
+    // HotSpot sharedRuntime.cpp:1072-1075 / instanceKlass.cpp:1919-1932:
+    // constructor completion registers the object before returning to the caller.
+    heap.GetFinalizerProcessor().RegisterFinalizer(this);
 }
 
 bool BaseObject::IsInTraceRegion() const

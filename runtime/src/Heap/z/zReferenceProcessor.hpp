@@ -124,9 +124,7 @@ public:
     void Fini();
     void WaitStop();
 
-    NativeSlot* AllocateFinalizerHandle(BaseObject* obj);
     void RegisterFinalizer(BaseObject* obj);
-    void RegisterFinalizers(NativeRootHandles& objs);
     bool IsRunning() const { return running.load(std::memory_order_acquire); }
     uint32_t GetTid() const { return tid; }
     ReferenceProcessor& GetReferenceProcessor() { return referenceProcessor; }

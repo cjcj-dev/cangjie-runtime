@@ -172,21 +172,11 @@ void Mutator::InitProtectStackAddr()
     ThreadLocal::SetProtectAddr(reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(stackBoundAddr) + reversedSize));
 }
 
-// NativeAccess::oop_store at handle creation (weakHandle.cpp:39-50 /
-// zBarrierSet.inline.hpp:258-265). Keep that slot and its epoch through transfer.
-void Mutator::AddLocalFinalizer(BaseObject* object)
-{
-    localFinalizers.push_back(Heap::GetHeap().GetFinalizerProcessor().AllocateFinalizerHandle(object));
-}
-
 void Mutator::ResetMutator()
 {
     CHECK_DETAIL(nativeFrameRoots.empty(), "native frame roots are not released");
     SetManagedContext(false);
     StorePlain(rawObject, zaddress::null);
-    if (!localFinalizers.empty()) {
-        Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
-    }
     // Exit publishes the logical owner's private work before scheduler
     // unbinding can expose another owner through this OS TLS binding.
     Heap& heap = Heap::GetHeap();
@@ -796,12 +786,6 @@ static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool
 
 bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
-    MutatorLock();
-    auto& localFins = GetLocalFinalizers();
-    if (!localFins.empty()) {
-        Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFins);
-    }
-    MutatorUnlock();
     // ZGC zStackWatermark.cpp:163-214: the closure reads the color saved in
     // start_processing_impl, not the previous epoch's headColor.
     RootVisitor visitor = [this, young, stackScanEpoch](ObjectRef& root) {

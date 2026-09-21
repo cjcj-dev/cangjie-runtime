@@ -1543,7 +1543,6 @@ EXPORTS
     _ZN12MapleRuntime18FinalizerProcessor19VisitNativePointersERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEE @1875
     _ZN12MapleRuntime18FinalizerProcessor17RegisterFinalizerEPNS_10BaseObjectE @1877
     _ZN12MapleRuntime18FinalizerProcessor18ReclaimHeapGarbageEv @1878
-    _ZN12MapleRuntime18FinalizerProcessor18RegisterFinalizersERNSt3__14listINS_8RootSlotENS_21StdContainerAllocatorIS3_LNS_13AllocationTagE0EEEEE @1879
     _ZN12MapleRuntime18FinalizerProcessor19ProcessFinalizablesEv @1881
     _ZN12MapleRuntime18FinalizerProcessor21InitFinalizerCJThreadEv @1882
     _ZN12MapleRuntime18FinalizerProcessor22ProcessFinalizableListEv @1883
