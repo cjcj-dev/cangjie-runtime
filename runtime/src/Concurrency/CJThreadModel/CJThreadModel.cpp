@@ -51,11 +51,7 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
         // zNMethod.cpp:384-395: the process closure owns both remapping from
         // the saved epoch and marking. Do not split those responsibilities
         // between this callback and its caller.
-        if (handle == nullptr) {
-            ZUncoloredRoot::process(reinterpret_cast<zaddress_unsafe*>(&slot), color);
-        } else {
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&slot), color);
-        }
+        ZUncoloredRoot::process(reinterpret_cast<zaddress_unsafe*>(&slot), color);
     };
     if (color != nextColor) {
         process(ref);
