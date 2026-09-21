@@ -21,6 +21,7 @@
 #endif
 #include "schedule.h"
 #include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 void PublishLWTDataColor(LWTData& data)
@@ -35,9 +36,20 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
     ObjectRef& ref = reinterpret_cast<ObjectRef&>(data->obj);
     ObjectRef& map = reinterpret_cast<ObjectRef&>(data->threadObject);
     ObjectRef& execute = RootSlotAt(&data->execute);
-    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&ref), color);
-    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&map), color);
-    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&execute), color);
+    auto heal = [&](ObjectRef& slot) {
+        const zaddress_unsafe observed = slot.LoadPlain();
+        if (is_null(observed)) {
+            return;
+        }
+        BaseObject* object = to_object(safe(observed));
+        if (!Heap::IsHeapAddress(object)) {
+            return;
+        }
+        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&slot), color);
+    };
+    heal(ref);
+    heal(map);
+    heal(execute);
     data->color = ZPointerLoadGoodMask;
     (*reinterpret_cast<RootVisitor*>(handle))(ref);
     (*reinterpret_cast<RootVisitor*>(handle))(map);
