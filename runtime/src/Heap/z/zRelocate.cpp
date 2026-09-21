@@ -1200,6 +1200,14 @@ void RegionManager::CollectFromSpaceGarbage()
         const bool complete = region->IsForwardingDone();
         if (!complete) {
             ExemptFromRegion(region);
+            continue;
+        }
+        // ZGC zRelocate.cpp:1026-1037: an in-place relocated page is retained
+        // as the relocation target; it stays a live page and must never be
+        // reclaimed as from-space garbage while its forwarding is installed.
+        ZForwarding* owner = region->PeekForwardingOwner();
+        if (owner != nullptr && owner->in_place()) {
+            region->SetRegionRole(ZPageRole::None);
         } else {
             region->SetRegionRole(ZPageRole::Garbage);
         }
