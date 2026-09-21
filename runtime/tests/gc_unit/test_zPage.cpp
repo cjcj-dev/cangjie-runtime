@@ -1216,3 +1216,48 @@ GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, LiveQueryDoesNotAcquireSnapshotLock)
     GC_EXPECT_TRUE(live && allocating && !relocatable);
     GC_EXPECT_EQ(sequence, expected);
 }
+
+namespace {
+struct CycleSequenceResult {
+    uint32_t youngBefore = 0, youngAfter = 0, oldBefore = 0, oldAfter = 0;
+    uint64_t snapshotYoung = 0, snapshotOld = 0;
+};
+void* CollectForSequenceRead(void* context)
+{
+    auto& result = *static_cast<CycleSequenceResult*>(context);
+    auto& heap = Heap::GetHeap();
+    Mutator::GetMutator()->SetManagedContext(false);
+    result.youngBefore = heap.young().seqnum();
+    result.oldBefore = heap.old().seqnum();
+    heap.RequestGC(GC_REASON_USER, false);
+    result.youngAfter = heap.young().seqnum();
+    result.oldAfter = heap.old().seqnum();
+    result.snapshotYoung = heap.young().Snapshot().sequence;
+    result.snapshotOld = heap.old().Snapshot().sequence;
+    Mutator::GetMutator()->SetManagedContext(true);
+    return nullptr;
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, CollectionPublishesBothGenerationSequences)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    CycleSequenceResult result;
+    CJThreadHandle handle = RunCJTask(CollectForSequenceRead, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    std::fprintf(stderr, "SEQNUM_PUBLISH_ASSERT young=%u->%u old=%u->%u snapshot_young=%llu snapshot_old=%llu\n",
+        result.youngBefore, result.youngAfter, result.oldBefore, result.oldAfter,
+        static_cast<unsigned long long>(result.snapshotYoung), static_cast<unsigned long long>(result.snapshotOld));
+    // Explicit major request: young preclean + full roots; one old mark start.
+    // ZGC zDriver.cpp:270-279,416-428; zGeneration.cpp:871,1231.
+    GC_EXPECT_EQ(result.youngAfter, result.youngBefore + 2);
+    GC_EXPECT_EQ(result.oldAfter, result.oldBefore + 1);
+    GC_EXPECT_EQ(result.snapshotYoung, result.youngAfter);
+    GC_EXPECT_EQ(result.snapshotOld, result.oldAfter);
+}
