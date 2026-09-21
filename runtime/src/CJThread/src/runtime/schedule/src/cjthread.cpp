@@ -170,6 +170,13 @@ void CJThreadFree(struct CJThread *cjthread, bool reuse)
         LOG_ERROR(ERRNO_SCHD_UNINITED, "schedule not inited");
         return;
     }
+    // Failed publication/cancelled tasks may never execute the ordinary exit
+    // transition. Retire their identity before recycling the scheduling carrier.
+    if (cjthread->mutator != nullptr && g_scheduleManager.destructorFunc != nullptr) {
+        auto* mutator = cjthread->mutator;
+        cjthread->mutator = nullptr;
+        g_scheduleManager.destructorFunc(mutator);
+    }
 #if defined(CANGJIE_TSAN_SUPPORT)
     MapleRuntime::Sanitizer::TsanDeleteRaceState(cjthread);
 #endif

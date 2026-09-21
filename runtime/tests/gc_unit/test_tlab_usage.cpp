@@ -9,6 +9,8 @@
 #define MRT_USE_CJTHREAD_RENAME 1
 #include <cstring>
 #include <limits>
+#include <fstream>
+#include "Mutator/ThreadSMR.h"
 #include "Cangjie.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/Allocator/RegionSpace.h"
@@ -18,6 +20,7 @@
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
 #if defined(__linux__)
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -544,5 +547,140 @@ GC_RUNTIME_OTHER_VM_TEST(TLABOwnership, ParkedRootDoesNotRetireRunningOwner)
                  state.before, state.after, state.parkedBefore, parkedAfter);
     GC_EXPECT_TRUE(state.before > 0 && state.after == state.before && state.parkedBefore > 0 && parkedAfter == 0);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif
+
+#if defined(__linux__)
+namespace {
+bool WaitForSMR(const std::function<bool()>& done)
+{
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!done() && std::chrono::steady_clock::now() < end) { std::this_thread::yield(); }
+    return done();
+}
+struct ThreadSnapshotCase {
+    TypeInfo* type;
+    std::atomic<Mutator*> owner[2]{};
+    std::atomic<BaseObject*> marker{nullptr};
+    std::atomic<bool> exitTarget{false};
+    std::atomic<bool> exited{false};
+    std::atomic<bool> finish{false};
+    std::atomic<pid_t> targetTid{0};
+};
+void SnapshotExitOwner(ThreadSnapshotCase& state, unsigned index)
+{
+    auto& manager = MutatorManager::Instance();
+    auto* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    owner->DoLeaveSaferegion();
+    BaseObject* object = nullptr;
+    for (unsigned i = 0; i < 128; ++i) { object = reinterpret_cast<BaseObject*>(MCC_NewObject(state.type, 4096)); }
+    const size_t mark = owner->NativeFrameRootCount();
+    owner->AddNativeFrameRoot(object);
+    owner->DoEnterSaferegion();
+    if (index == 0) { state.marker.store(object, std::memory_order_release); }
+    else { state.targetTid.store(static_cast<pid_t>(syscall(SYS_gettid))); }
+    state.owner[index].store(owner, std::memory_order_release);
+    while (!(index == 1 ? state.exitTarget.load() : state.finish.load())) { std::this_thread::yield(); }
+    owner->PopNativeFrameRootsTo(mark);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    if (index == 1) { state.exited.store(true, std::memory_order_release); }
+}
+
+void CheckConcurrentRootSnapshot(bool exitDuringRoots)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ThreadSnapshotCase state{TLABTestType()};
+    std::thread first([&] { SnapshotExitOwner(state, 0); });
+    GC_EXPECT_TRUE(WaitForSMR([&] { return state.owner[0].load() != nullptr; }));
+    std::thread target([&] { SnapshotExitOwner(state, 1); });
+    GC_EXPECT_TRUE(WaitForSMR([&] { return state.owner[1].load() != nullptr; }));
+    Mutator* identity = state.owner[1].load();
+    auto& young = Heap::GetHeap().young();
+    young.Workers()->set_active_workers(1);
+    young.Begin(1);
+    young.pause_mark_start();
+    const uint32_t epoch = StackWatermark::epoch_id();
+    std::atomic<bool> rootObserved{false};
+    std::atomic<bool> releaseRoot{false};
+    // The real root task has already constructed its ThreadsListHandle when
+    // the first product root value reaches this existing result consumer.
+    std::thread roots([&] {
+        ZMark::VisitMinorRoots([&](BaseObject* object) {
+            if (object == state.marker.load()) {
+                rootObserved.store(true, std::memory_order_release);
+                while (!releaseRoot.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+            }
+        }, [](BaseObject*) {});
+    });
+    const bool observed = WaitForSMR([&] { return rootObserved.load(std::memory_order_acquire); });
+    bool removed = false;
+    bool exitSettled = false;
+    if (exitDuringRoots && observed) {
+        state.exitTarget.store(true, std::memory_order_release);
+        removed = WaitForSMR([&] {
+            ThreadsListHandle current;
+            return !current.includes(identity);
+        });
+        // Observe the real exit's wait, or its completed return on the cut
+        // arm. No sleep window, injected product hook, or thread pointer read.
+        exitSettled = WaitForSMR([&] {
+            if (state.exited.load(std::memory_order_acquire)) { return true; }
+            std::ifstream status("/proc/self/task/" + std::to_string(state.targetTid.load()) + "/wchan");
+            std::string where;
+            status >> where;
+            return where.find("futex") != std::string::npos;
+        });
+    }
+    bool retained = false;
+    bool statsPreserved = !exitDuringRoots;
+    size_t allocated = 0;
+    // This is an independent product inventory, not the protecting handle.
+    // A deleted Mutator has detached from it; never dereference its old pointer.
+    ThreadGCData::VisitOwners([&](ThreadGCData&, Mutator* owner, ThreadLocalData*) {
+        if (owner != identity) { return; }
+        retained = true;
+        if (exitDuringRoots) {
+            allocated = owner->GetStackWatermark().stats().allocatedSize;
+            statsPreserved = owner->GetStackWatermark().IsDone(epoch) && allocated > 0;
+        }
+    });
+    std::fprintf(stderr, "THREAD_SNAPSHOT_LIFETIME_TARGET executed=1 exit=%d observed=%d removed=%d settled=%d retained=%d stats=%d allocated=%zu returned=%d\n",
+                 exitDuringRoots, observed, removed, exitSettled, retained, statsPreserved, allocated, state.exited.load());
+    // On a broken SO do not resume a consumer whose input object was reclaimed.
+    // The explicit target assertion is the verdict; cleanup cannot hide it.
+    try {
+        GC_EXPECT_TRUE(observed && retained && statsPreserved &&
+                       (!exitDuringRoots || (removed && exitSettled && !state.exited.load())));
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "THREAD_SNAPSHOT_LIFETIME_ASSERT_FAIL %s\n", error.what());
+        std::fflush(stderr);
+        _exit(1);
+    }
+    releaseRoot.store(true, std::memory_order_release);
+    roots.join();
+    state.finish.store(true, std::memory_order_release);
+    state.exitTarget.store(true, std::memory_order_release);
+    first.join();
+    target.join();
+    bool stillRegistered = false;
+    ThreadGCData::VisitOwners([&](ThreadGCData&, Mutator* owner, ThreadLocalData*) {
+        stillRegistered |= owner == identity;
+    });
+    std::fprintf(stderr, "THREAD_SNAPSHOT_RECLAIM_TARGET executed=1 returned=%d registered=%d\n",
+                 state.exited.load(), stillRegistered);
+    GC_EXPECT_TRUE(state.exited.load() && !stillRegistered);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, ExitBeforeYoungRootConsumption)
+{
+    CheckConcurrentRootSnapshot(true);
+}
+GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, LiveYoungRootConsumption)
+{
+    CheckConcurrentRootSnapshot(false);
 }
 #endif

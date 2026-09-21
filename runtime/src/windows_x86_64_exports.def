@@ -1361,7 +1361,6 @@ EXPORTS
     _ZN12MapleRuntime14MutatorManager20CreateRuntimeMutatorENS_10ThreadTypeE @1580
     _ZN12MapleRuntime14MutatorManager20TransitMutatorToExitEv @1581
     _ZN12MapleRuntime14MutatorManager21DestroyRuntimeMutatorENS_10ThreadTypeE @1582
-    _ZN12MapleRuntime14MutatorManager22DestroyExpiredMutatorsEv @1585
     _ZN12MapleRuntime14MutatorManager26ConcurrentStackScanEnabledEv @1588
     _ZN12MapleRuntime14MutatorManager26WaitUntilAllMutatorStoppedEv @1589
     _ZN12MapleRuntime14MutatorManager29AcquireMutatorManagementWLockEv @1590
