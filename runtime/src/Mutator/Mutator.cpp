@@ -182,7 +182,7 @@ void Mutator::ResetMutator()
     Heap& heap = Heap::GetHeap();
     gcData.storeBarrierBuffer->Flush();
     (void)heap.FlushGCDataMarkProducers(gcData);
-    ReleaseForeignThread();
+    ReleaseAllocBuffer();
     uwContext.Reset();
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
     // BeginCatch would have performed, or the guard stays expanded with nothing left to
@@ -888,16 +888,11 @@ void Mutator::TransitionToCpuProfileExclusive()
     HandleCpuProfile();
 }
 
-void Mutator::ReleaseForeignThread()
+void Mutator::ReleaseAllocBuffer()
 {
-    AllocBuffer* buffer = foreignThreadInfo.allocBuffer;
-    foreignThreadInfo.allocBuffer = nullptr;
-
-    if (buffer != nullptr) {
-        buffer->Fini();
-        if (ThreadLocal::GetAllocBuffer() == buffer) { ThreadLocal::SetAllocBuffer(nullptr); }
-        delete buffer;
-    }
+    AllocBuffer* buffer = GetAllocBuffer();
+    buffer->Fini();
+    if (ThreadLocal::GetAllocBuffer() == buffer) { ThreadLocal::SetAllocBuffer(nullptr); }
     // We can remove foreign thread c-heap resource here.
 }
 } // namespace MapleRuntime

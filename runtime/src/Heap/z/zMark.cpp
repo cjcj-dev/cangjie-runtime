@@ -253,8 +253,15 @@ private:
 void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
                                  const std::function<void(BaseObject*)>& invisibleVisitor)
 {
-    RootVisitor rawRootVisitor = [&visitor](ObjectRef& root) {
-        visitor(to_object(safe(root.LoadPlain())));
+    // The C++ result container supplied by the young phase is shared by
+    // root workers; marking itself still uses the worker-local mark stacks.
+    std::mutex resultLock;
+    const auto resultVisitor = [&visitor, &resultLock](BaseObject* object) {
+        std::lock_guard<std::mutex> lock(resultLock);
+        visitor(object);
+    };
+    RootVisitor rawRootVisitor = [&resultVisitor](ObjectRef& root) {
+        resultVisitor(to_object(safe(root.LoadPlain())));
     };
     (void)invisibleVisitor; // Watermark owns the invisible slot with its saved color.
     MarkYoungRootsTask task([&] {
@@ -263,11 +270,11 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
             if (Heap::IsHeapAddress(object)) {
                 ZBarrier::Mark<false, false, true, false>(from_object(object));
             }
-            visitor(object);
+            resultVisitor(object);
         });
         Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) {
             ZBarrier::MarkBarrierOnOopField(slot, false);
-            visitor(to_object(slot.GetTargetObject()));
+            resultVisitor(to_object(slot.GetTargetObject()));
         });
     }, rawRootVisitor, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
     SuspendibleThreadSetJoiner joiner;

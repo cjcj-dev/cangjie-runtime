@@ -77,6 +77,7 @@ private:
         uintptr_t start = 0;
     };
     TLAB tlab;
+    bool initialized = false;
     static constexpr size_t MinTLABSize = 2 * 1024;
     uintptr_t AllocateInTLAB(size_t size);
 

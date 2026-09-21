@@ -46,19 +46,21 @@ constexpr size_t AllocBuffer::MinTLABSize;
 
 AllocBuffer* AllocBuffer::GetOrCreateAllocBuffer()
 {
-    auto* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer == nullptr) {
-        buffer = new (std::nothrow) AllocBuffer();
-        CHECK_DETAIL(buffer != nullptr, "new region alloc buffer fail");
+    AllocBuffer* buffer;
+    if (Mutator* owner = ThreadLocal::GetMutator()) {
+        buffer = owner->GetAllocBuffer();
         buffer->Init();
-        if (auto* mutator = ThreadLocal::GetMutator()) {
-            mutator->SetAllocBuffer(buffer);
-        } else {
+    } else {
+        buffer = ThreadLocal::NativeAllocBuffer();
+        if (buffer == nullptr) {
+            buffer = new (std::nothrow) AllocBuffer();
+            CHECK_DETAIL(buffer != nullptr, "new region alloc buffer fail");
+            buffer->Init();
             ThreadLocal::NativeAllocBuffer() = buffer;
         }
-        ThreadLocal::SetAllocBuffer(buffer);
-        RegisterCurrentMarkFlushThread();
     }
+    ThreadLocal::SetAllocBuffer(buffer);
+    RegisterCurrentMarkFlushThread();
     return buffer;
 }
 
@@ -71,6 +73,8 @@ AllocBuffer::~AllocBuffer()
 
 void AllocBuffer::Init()
 {
+    if (initialized) { return; }
+    initialized = true;
     static_assert(offsetof(AllocBuffer, tlab) == 0, "compiler TLAB inline ABI");
     static_assert(offsetof(TLAB, top) == 0, "compiler TLAB top ABI");
     static_assert(offsetof(TLAB, end) == 8, "compiler TLAB end ABI");
@@ -83,8 +87,10 @@ void AllocBuffer::Init()
 
 void AllocBuffer::Fini()
 {
+    if (!initialized) { return; }
+    initialized = false;
     // Finish allocation publications before releasing the current context.
-    // Mark stacks and SBB remain owned by the OS thread until its detach.
+    // Mark stacks and SBB remain owned by the logical thread until detach.
     if (ThreadLocal::GetAllocBuffer() == this) {
         ThreadLocal::FlushCurrentThreadMarkStacks();
     }

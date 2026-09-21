@@ -234,3 +234,229 @@ GC_OTHER_VM_TEST(TLABUsage, InlineBoundsThroughAllocationEntry)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif
+
+#if defined(__linux__)
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include "Mutator/Mutator.inline.h"
+#include "Mutator/MutatorManager.h"
+#include "Heap/z/zWorkers.hpp"
+#include "schedule.h"
+extern "C" int CJ_CJThreadResched();
+
+namespace {
+TypeInfo* TLABTestType()
+{
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    return type;
+}
+
+struct TLABOwnerCase {
+    TypeInfo* type;
+    std::atomic<unsigned> turn{0};
+    AllocBuffer* first = nullptr;
+    AllocBuffer* second = nullptr;
+    bool stable = false;
+    bool distinct = false;
+    bool firstBinding = false;
+    bool secondBinding = false;
+};
+void* FirstTLABOwner(void* argument)
+{
+    auto& state = *static_cast<TLABOwnerCase*>(argument);
+    (void)MCC_NewObject(state.type, 4096);
+    state.first = AllocBuffer::GetAllocBuffer();
+    state.firstBinding = state.first == Mutator::GetMutator()->GetAllocBuffer();
+    state.turn.store(1, std::memory_order_release);
+    while (state.turn.load(std::memory_order_acquire) != 2) { CJ_CJThreadResched(); }
+    state.stable = AllocBuffer::GetAllocBuffer() == state.first;
+    state.distinct = state.first != state.second;
+    (void)MCC_NewObject(state.type, 4096);
+    state.turn.store(3, std::memory_order_release);
+    return nullptr;
+}
+void* SecondTLABOwner(void* argument)
+{
+    auto& state = *static_cast<TLABOwnerCase*>(argument);
+    while (state.turn.load(std::memory_order_acquire) != 1) { CJ_CJThreadResched(); }
+    (void)MCC_NewObject(state.type, 4096);
+    state.second = AllocBuffer::GetAllocBuffer();
+    state.secondBinding = state.second == Mutator::GetMutator()->GetAllocBuffer();
+    state.turn.store(2, std::memory_order_release);
+    while (state.turn.load(std::memory_order_acquire) != 3) { CJ_CJThreadResched(); }
+    return nullptr;
+}
+}
+
+// HotSpot Thread::_tlab (thread.hpp:258,406) belongs to a logical thread.
+// Two real tasks alternate on the same worker through the product scheduler.
+GC_RUNTIME_OTHER_VM_TEST(TLABOwnership, ParkResumeKeepsExclusiveBuffer)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    TLABOwnerCase state{TLABTestType()};
+    auto first = RunCJTask(FirstTLABOwner, &state);
+    auto second = RunCJTask(SecondTLABOwner, &state);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(first, &result), E_OK);
+    GC_EXPECT_EQ(GetTaskRet(second, &result), E_OK);
+    ReleaseHandle(first);
+    ReleaseHandle(second);
+    std::fprintf(stderr, "TLAB_OWNER_TARGET executed=1 first=%p second=%p stable=%d distinct=%d bindings=%d,%d\n",
+                 state.first, state.second, state.stable, state.distinct, state.firstBinding, state.secondBinding);
+    GC_EXPECT_TRUE(state.stable && state.distinct && state.firstBinding && state.secondBinding);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+namespace {
+struct TLABSnapshotCase {
+    TypeInfo* type;
+    std::atomic<Mutator*> owner[2]{};
+    std::atomic<int> refillOwner{-1};
+    std::atomic<uint32_t> epoch{0};
+    std::atomic<bool> refilled{false};
+    std::atomic<bool> published{false};
+    TLABStatistics pending;
+};
+void SnapshotOwner(TLABSnapshotCase& state, unsigned index)
+{
+    auto& manager = MutatorManager::Instance();
+    Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    owner->DoLeaveSaferegion();
+    for (unsigned i = 0; i < 128; ++i) { (void)MCC_NewObject(state.type, 4096); }
+    owner->DoEnterSaferegion();
+    state.owner[index].store(owner, std::memory_order_release);
+    while (state.epoch.load(std::memory_order_acquire) == 0) { std::this_thread::yield(); }
+    if (state.refillOwner.load(std::memory_order_acquire) == static_cast<int>(index)) {
+        while (!owner->GetStackWatermark().IsDone(state.epoch.load())) { std::this_thread::yield(); }
+        owner->DoLeaveSaferegion();
+        for (unsigned i = 0; i < 32; ++i) { (void)MCC_NewObject(state.type, 4096); }
+        owner->DoEnterSaferegion();
+        state.refilled.store(true, std::memory_order_release);
+    }
+    while (!state.published.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    if (state.refillOwner.load() == static_cast<int>(index)) {
+        // Read the owner's remaining product statistics only after publication.
+        // They are assertion output, never injected into a downstream phase.
+        owner->GetAllocBuffer()->AccumulateTLABStatistics(state.pending,
+            Heap::GetHeap().page_allocator().GetTLABUsed(), Heap::GetHeap().page_allocator().GetTLABCapacity());
+    }
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+}
+
+// ZGC zStackWatermark.cpp:197 and zMark.cpp:703: a retired snapshot is
+// consumed after finish_processing, while that owner may already allocate again.
+GC_RUNTIME_OTHER_VM_TEST(TLABSnapshot, RootPublicationPreservesLaterRefills)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    TLABSnapshotCase state{TLABTestType()};
+    std::thread a([&] { SnapshotOwner(state, 0); });
+    std::thread b([&] { SnapshotOwner(state, 1); });
+    while (state.owner[0].load(std::memory_order_acquire) == nullptr ||
+           state.owner[1].load(std::memory_order_acquire) == nullptr) { std::this_thread::yield(); }
+    auto& heap = Heap::GetHeap();
+    heap.young().Workers()->set_active_workers(1);
+    heap.young().Begin(1);
+    heap.young().pause_mark_start();
+    // Choose using the same product inventory order as JavaThreadsIterator.
+    int first = -1;
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& owner) {
+        for (int i = 0; i < 2; ++i) {
+            if (&owner == state.owner[i].load() && first == -1) { first = i; }
+        }
+    });
+    Mutator* last = state.owner[1 - first].load();
+    last->MutatorLock();
+    state.refillOwner.store(first, std::memory_order_release);
+    state.epoch.store(StackWatermark::epoch_id(), std::memory_order_release);
+    std::thread roots([&] { ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {}); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!state.refilled.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool overlapped = state.refilled.load(std::memory_order_acquire);
+    last->MutatorUnlock();
+    roots.join();
+    TLABStatistics retired;
+    for (auto& owner : state.owner) { retired.Update(owner.load()->GetStackWatermark().stats()); }
+    // A fresh thread's initial size consumes the published worker totals.
+    // Both allocating owners have real allocation history; no history setter.
+    size_t initial = 0;
+    std::thread probe([&] {
+        auto* owner = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        initial = owner->GetAllocBuffer()->ComputeTLABSize(0, ZObjectSizeLimitSmall);
+        MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    probe.join();
+    const size_t requested = retired.allocatingThreads == 0 ? 0 : retired.Used() / retired.allocatingThreads / 50;
+    const size_t expected = AlignUp(std::min(std::max(requested, size_t{2048}), ZObjectSizeLimitSmall), size_t{8});
+    state.published.store(true, std::memory_order_release);
+    a.join();
+    b.join();
+    std::fprintf(stderr, "TLAB_SNAPSHOT_TARGET executed=1 overlap=%d retired=%zu threads=%zu pending=%zu initial=%zu expected=%zu\n",
+                 overlapped, retired.allocatedSize, retired.allocatingThreads, state.pending.allocatedSize, initial, expected);
+    GC_EXPECT_TRUE(overlapped);
+    GC_EXPECT_TRUE(retired.allocatedSize > 0 && retired.allocatingThreads == 2);
+    GC_EXPECT_TRUE(state.pending.allocatedSize > 0);
+    GC_EXPECT_EQ(initial, expected);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif
+
+#if defined(__linux__)
+// Exercise the scheduler's actual bind/resume entry on two OS workers. The
+// first worker stays alive until the second has resumed the parked owner.
+GC_RUNTIME_OTHER_VM_TEST(TLABOwnership, ResumeOnAnotherWorkerKeepsBuffer)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    TypeInfo* type = TLABTestType();
+    std::atomic<Mutator*> parked{nullptr};
+    std::atomic<bool> complete{false};
+    AllocBuffer* before = nullptr;
+    AllocBuffer* after = nullptr;
+    uintptr_t allocated = 0;
+    std::thread source([&] {
+        auto& manager = MutatorManager::Instance();
+        Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        owner->DoLeaveSaferegion();
+        (void)MCC_NewObject(type, 4096);
+        before = owner->GetAllocBuffer();
+        owner->PreparedToPark(nullptr, nullptr);
+        manager.UnbindMutator(*owner);
+        parked.store(owner, std::memory_order_release);
+        while (!complete.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        manager.UnregisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
+    });
+    std::thread destination([&] {
+        while (parked.load(std::memory_order_acquire) == nullptr) { std::this_thread::yield(); }
+        auto* owner = parked.load();
+        auto& manager = MutatorManager::Instance();
+        manager.BindMutator(*owner);
+        owner->PreparedToRun(ThreadLocal::GetThreadLocalData());
+        after = AllocBuffer::GetAllocBuffer();
+        allocated = reinterpret_cast<uintptr_t>(MCC_NewObject(type, 4096));
+        owner->DoEnterSaferegion();
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        complete.store(true, std::memory_order_release);
+    });
+    source.join();
+    destination.join();
+    std::fprintf(stderr, "TLAB_MIGRATION_TARGET executed=1 before=%p after=%p allocated=%#zx\n", before, after, allocated);
+    GC_EXPECT_TRUE(before == after && allocated != 0);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif

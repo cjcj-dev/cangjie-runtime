@@ -305,8 +305,7 @@ public:
 
     bool GcPhaseEnum(bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
-    AllocBuffer* GetAllocBuffer() const { return foreignThreadInfo.allocBuffer; }
-    void SetAllocBuffer(AllocBuffer* buffer) { foreignThreadInfo.allocBuffer = buffer; }
+    AllocBuffer* GetAllocBuffer() { return &allocBuffer; }
     static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
 
     inline void HandleCpuProfile();
@@ -485,7 +484,7 @@ public:
         foreignThreadInfo.isExit = true;
     }
 
-    void ReleaseForeignThread();
+    void ReleaseAllocBuffer();
 
     // Observe-only: in-flight SATB node (not yet FlushQueue'd).
     // ZMark::flush publishes this thread's single store buffer.
@@ -556,12 +555,12 @@ private:
     struct ForeignThreadInfo {
         bool isForeignThread = { false };
         bool isExit = { false };
-        AllocBuffer* allocBuffer = { nullptr };
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
 
 
 
+    AllocBuffer allocBuffer; // HotSpot Thread::_tlab, thread.hpp:258.
     StackWatermark stackWatermark;
 
 public:

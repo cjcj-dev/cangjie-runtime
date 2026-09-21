@@ -2231,7 +2231,7 @@ void CJForeignThreadExit(CJThreadHandle foreignThread)
     }
     MapleRuntime::Mutator* mutator = foreignCJThread->mutator;
     if (mutator != nullptr && mutator->IsForeignThread()) {
-        mutator->ReleaseForeignThread();
+        mutator->ReleaseAllocBuffer();
     }
     ScheduleNonDefaultFree(schedule);
 }
