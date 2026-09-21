@@ -8,6 +8,7 @@
 #include "gc_unittest.hpp"
 #include "Cangjie.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Mutator/MutatorManager.h"
 
 #include <csignal>
 #include <cstdlib>
@@ -405,6 +406,10 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     param.coParam.processorNum = 1;
     param.heapParam.heapSize = 32 * 1024;
     if (InitCJRuntime(&param) != E_OK) { _exit(121); }
+    // Allocate through a registered native mutator so the product watermark
+    // owns this thread's TLAB (ZGC zStackWatermark.cpp:197-200).
+    Mutator* native = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    (void)native->LeaveSaferegion();
     // Runtime worker threads may still inspect allocated objects at child exit.
     // Metadata must outlive this function, including the post-prelude young page.
     alignas(TypeInfo) static unsigned char holderTypeStorage[sizeof(TypeInfo)]{};
@@ -428,6 +433,7 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     NativeSlot* root = heap.GetFinalizerProcessor().StrongRootStorage().Allocate();
     if (root == nullptr) { _exit(123); }
     root->StoreColoured(StoreGoodPointer(holder));
+    (void)native->EnterSaferegion(false);
     const bool afterWeak = mode >= VerifyFieldCase::WeakUnmarked;
     ConcurrentGCBreakpoints::AcquireControl();
     const char* point = afterWeak ? "AFTER CONCURRENT REFERENCE PROCESSING STARTED" :
