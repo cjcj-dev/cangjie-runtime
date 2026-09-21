@@ -238,8 +238,6 @@ public:
     void register_flip_promoted(const ZArray<ZPage*>& pages);
     void SelectTenuringThreshold(const TenuringInputs& inputs);
     void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
-        const std::unordered_set<MAddress>& rememberedSlots, bool refFixSlotsCoveredByReachable,
-        const std::unordered_map<MAddress, BaseObject*>& interiorBases,
         std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
     ~ZGenerationYoung();
     bool should_record_stats() override;
