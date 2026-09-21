@@ -1125,8 +1125,6 @@ void ZGenerationOld::pause_relocate_start()
 void ZGenerationOld::concurrent_relocate()
 {
     relocate().relocate(&relocation_set());
-    reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
-        ZGenerationId::old);
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
     Heap::GetHeap().cross_vm().PostResolveCycleTask();
     CollectSmallSpace();
@@ -1507,7 +1505,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
             relocate().relocate(&relocation_set());
-            manager.FinishIncompleteFromRegions(ZGenerationId::young);
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
         {
@@ -1556,8 +1553,7 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
     {
         ZStatTimerYoung zstatTimer(PYoungEvacRetire);
         // zGeneration.cpp:563: keep this set until the next young mark-end reset.
-        // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
-        manager.FinishIncompleteFromRegions(ZGenerationId::young);
+        // zRelocate.cpp:1289-1310: completeness is workers()->run(relocation_set).
     }
 }
 }
