@@ -363,9 +363,7 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, YoungRelocateSkipsForeignIncompleteFrom)
     GC_EXPECT_TRUE(forwarding_for_page(fx.region1) != nullptr);
     heap.young().set_phase(ZGenerationPhase::Relocate);
     const std::vector<BaseObject*> none;
-    const std::unordered_set<MAddress> emptySlots;
-    const std::unordered_map<MAddress, BaseObject*> emptyBases;
-    heap.young().EvacuateYoungRegions(none, emptySlots, false, emptyBases, nullptr);
+    heap.young().EvacuateYoungRegions(none, nullptr);
     GC_EXPECT_TRUE(forwarding_for_page(fx.region1) != nullptr);
     GC_EXPECT_TRUE(!fx.region1->IsForwardingDone());
 }

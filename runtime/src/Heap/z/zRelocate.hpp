@@ -178,11 +178,6 @@ public:
     static BaseObject* ForwardObjectExclusive(BaseObject* object);
     static void UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
     static bool IsFromObject(BaseObject* object);
-    static BaseObject* ResolveMinorReference(RefField<>& field,
-                                             const ScopedStopTheWorld* stw = nullptr);
-    static bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,
-                                      const ScopedStopTheWorld* stw = nullptr);
-    static void FixMinorRootSlots(const ScopedStopTheWorld* stw = nullptr);
     static void RemapYoungRoots();
     static void StartRelocationTasks(ZGenerationId generation);
 
