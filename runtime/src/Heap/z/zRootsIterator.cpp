@@ -93,8 +93,7 @@ void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
 
 OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(unsigned workers,
                                                          ZGenerationIdOptional generation)
-    : states{{{Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers},
-              {Heap::GetHeap().GetExportRootStorage(), workers}}}, generation(generation)
+    : states{{{Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers}}}, generation(generation)
 {
     (void)this->generation;
 }
@@ -102,6 +101,7 @@ OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(unsigned workers,
 OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(unsigned workers,
                                                      ZGenerationIdOptional generation)
     : states{{{Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers},
+              {Heap::GetHeap().GetExportRootStorage(), workers},
               {SyncWeakOopStorage(), workers}}}, generation(generation) {}
 
 void OopStorageSetIteratorWeak::report_num_dead()

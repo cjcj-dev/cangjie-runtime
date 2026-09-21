@@ -269,12 +269,7 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
             visitor(object);
         });
         Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) {
-            // ZMarkYoungOopClosure, zMark.cpp:678-681: a minor collection marks
-            // young referents only. The old-generation mark barrier here would
-            // color the slot old-mark-good without a surviving old livemap
-            // mark, so the next old root scan fast-paths past an unmarked
-            // object (issue #839).
-            ZBarrier::MarkYoungGoodBarrierOnOopField(slot);
+            ZBarrier::MarkBarrierOnOopField(slot, false);
             visitor(to_object(slot.GetTargetObject()));
         });
     }, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
