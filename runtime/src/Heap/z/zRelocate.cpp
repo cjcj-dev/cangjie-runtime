@@ -1147,36 +1147,6 @@ void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn
 
 } // namespace
 
-void RegionManager::CollectFromSpaceGarbage()
-{
-    // cjpmnull2 5b31efeb mirrored onto this second reclaim entry: a page still
-    // in the relocation set (route ∉ {FORWARDED,COMPACTED} and not Exempt-kept)
-    // must not be merged into garbage. ZGC free_page never runs while the page
-    // is in the relocation set (zGeneration.cpp:216-221).
-    // #710: forwarded from-pages are found by page-table walk over the From
-    // role (zPageTable.hpp:57-77); forwarding work itself comes from the
-    // relocation set, so nothing here feeds a work queue.
-    std::vector<ZPage*> fromPages;
-    {
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            if (region->GetRegionRole() == ZPageRole::From) {
-                fromPages.push_back(region);
-            }
-        }
-    }
-    for (ZPage* region : fromPages) {
-        // ZGC zRelocate.cpp:1012-1047: retention/release of a completed
-        // relocation page is decided at the relocation completion branch
-        // (in-place target retained and routed out of the From role, normal
-        // page freed); no second role-based reclaim decision runs here.
-        if (!region->IsForwardingDone()) {
-            ExemptFromRegion(region);
-        }
-    }
-}
-
 void RegionManager::CompactRegion(ZPage* region)
 {
     ZForwarding* owner = forwarding_for_page(region);
