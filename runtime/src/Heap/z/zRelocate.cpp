@@ -1043,6 +1043,13 @@ public:
         page->MarkForwardingDone();
     }
 
+    // ZGC zRelocate.cpp:977-985,1031: detach before clearing the old bitmap.
+    void clear_remset_before_in_place_reuse(ZPage* page)
+    {
+        if (forwarding->from_age() != PageAge::old) { return; }
+        page->clear_remset_previous();
+    }
+
     void do_forwarding(ZForwarding* owner)
     {
         forwarding = owner;
@@ -1059,7 +1066,7 @@ public:
         owner->release_page();
         ZPage* source = owner->detach_page();
         if (inPlace) {
-            if (owner->from_age() == PageAge::old) { source->clear_remset_previous(); }
+            clear_remset_before_in_place_reuse(source);
             const uint32_t partition = source->partition_id();
             ZPage* target = targets->get(partition, owner->to_age());
             target->ResetCensusBoundary();
@@ -1202,7 +1209,8 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
         work.compact(owner);
         if (owner->from_age() == PageAge::old) { owner->relocated_remembered_fields_after_relocate(); }
         if (owner->ref_count().load(std::memory_order_acquire) != 0) { owner->release_page(); }
-        owner->detach_page();
+        ZPage* source = owner->detach_page();
+        work.clear_remset_before_in_place_reuse(source);
     } else {
         work.do_forwarding(owner);
     }
