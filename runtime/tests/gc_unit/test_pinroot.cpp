@@ -112,9 +112,28 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, MediumInPlaceTargetSharedAcrossWor
 }
 
 // ZGC zRelocate.cpp:977-985,1031: preserve relocated current bits, clear previous.
-static void CheckInPlaceRemset(bool eager)
+extern "C" int CJ_ScheduleManagerInit();
 
+namespace {
+// Runtime container only; pause and relocation execute the product methods.
+class InPlaceRemsetRuntime final : public Runtime {
+public:
+    explicit InPlaceRemsetRuntime(MutatorManager& manager)
+    {
+        mutatorManager = &manager;
+        runtime = this;
+    }
+    ~InPlaceRemsetRuntime() override { runtime = nullptr; }
+    RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
+    void SetGCThreshold(uint64_t) override {}
+};
+}
+
+static void CheckInPlaceRemset(bool eager)
 {
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager mutators;
+    InPlaceRemsetRuntime runtime(mutators);
     const bool medium=false, promote=false; const uint32_t workers=1;
     CreateStandaloneHeap(medium ? 4 : 2);
     if (medium) {
