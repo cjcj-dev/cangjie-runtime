@@ -61,16 +61,6 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
         process(ref);
         process(map);
         process(execute);
-    } else if (handle == nullptr) {
-        auto mark = [](ObjectRef& slot) {
-            const zaddress_unsafe observed = slot.LoadPlain();
-            if (!is_null(observed)) {
-                ZUncoloredRoot::mark_object(safe(observed));
-            }
-        };
-        mark(ref);
-        mark(map);
-        mark(execute);
     }
     if (handle != nullptr) {
         (*reinterpret_cast<RootVisitor*>(handle))(ref);
