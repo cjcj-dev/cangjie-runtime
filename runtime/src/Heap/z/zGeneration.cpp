@@ -68,7 +68,7 @@ static const ZStatSubPhase PYoungConcPromoteWalk("young.conc_promote_walk", ZGen
 static const ZStatSubPhase PYoungConcurrentRelocate("young.concurrent_relocate", ZGenerationId::young);
 static const ZStatSubPhase PYoungEvacRetire("young.evac_retire", ZGenerationId::young);
 static const ZStatSubPhase PYoungFlushAlloc("young.flush_alloc", ZGenerationId::young);
-static const ZStatSubPhase PYoungMarkClosure("young.mark_closure", ZGenerationId::young);
+static const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
 static const ZStatSubPhase PYoungPostEvacFinish("young.post_evac_finish", ZGenerationId::young);
 static const ZStatSubPhase PYoungPreEvacClear("young.pre_evac_clear", ZGenerationId::young);
 static const ZStatSubPhase PYoungPrepareCandidates("young.prepare_candidates", ZGenerationId::young);
@@ -77,7 +77,6 @@ static const ZStatSubPhase PYoungRefFixBulk("young.ref_fix_bulk", ZGenerationId:
 static const ZStatSubPhase PYoungRefFixPrepare("young.ref_fix_prepare", ZGenerationId::young);
 static const ZStatSubPhase PYoungRefFixRootPass1("young.ref_fix_root_pass1", ZGenerationId::young);
 static const ZStatSubPhase PYoungRemsetDrain("young.remset_drain", ZGenerationId::young);
-static const ZStatSubPhase PYoungRemsetRescan("young.remset_rescan", ZGenerationId::young);
 static const ZStatSubPhase PYoungRootEnum("young.root_enum", ZGenerationId::young);
 ZGenerationYoung* ZGeneration::_young = nullptr;
 ZGenerationOld* ZGeneration::_old = nullptr;
@@ -446,96 +445,36 @@ void ZGenerationYoung::mark_start()
     youngStartNs = start;
 }
 
+void ZGenerationYoung::mark_roots()
+{
+    ZStatTimerYoung timer(PYoungRootEnum);
+    (void)Mark().Flush();
+    // VisitMinorRoots publishes the roots through the product root task.
+    ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
+    (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Mark());
+}
+
+void ZGenerationYoung::mark_follow()
+{
+    // ZGC zGeneration.cpp:891-895: scan remembered slots and follow root
+    // work in the same worker task, including on mark-end continuation.
+    ZStatTimerYoung timer(PYoungMarkFollow);
+    _remembered.scan_and_follow(MarkPtr());
+}
+
 void ZGenerationYoung::concurrent_mark()
 {
-    uint64_t stackScanEpoch = youngStackScanEpoch;
-    WorkStack& workStack = youngWorkStack;
-    constexpr bool fullYoungScan = false;
-
-    std::vector<BaseObject*> reachableVec;
-    reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
-    MinorObjectSet allocationRoots;
-    MinorObjectSet currentMinorRoots;
-    MinorSlotSet reachableSlots;
-    MinorSlotSet weakSlots;
-    // ZGC zGeneration.cpp:665-669: root production belongs to concurrent_mark.
-    // Keep one producer (the existing owner-specific VisitMinorRoots/epoch path),
-    // selecting only its phase boundary. MARK-only remains a diagnostic arm and
-    // therefore keeps the producer under its pause; MARK+FOLLOW invokes it after
-    // the world-release publication below.
-    auto produceYoungRoots = [&]() {
-        // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
-        ZStatTimerYoung zstatTimer(PYoungRootEnum);
-        (void)Heap::GetHeap().young().Mark().Flush();
-        ZMark::VisitMinorRoots([this, &currentMinorRoots](BaseObject* object) {
-            if (Heap::IsHeapAddress(object)) {
-                ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-                if (region != nullptr && !region->IsYoungRegion()) {
-                    currentMinorRoots.insert(object);
-                }
-            }
-        }, [this, &currentMinorRoots](BaseObject* object) {
-            if (!Heap::IsHeapAddress(object)) {
-                return;
-            }
-            ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-            if (region != nullptr && !region->IsYoungRegion()) {
-                currentMinorRoots.insert(object);
-            }
-        });
-        // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().young().Mark());
-    };
-    // ZGC zGeneration.cpp:665-692: roots and follow are the single concurrent
-    // young-mark path.  Mark-end convergence is owned by FollowYoungMark's
-    // termination protocol, not by a pause-local discovery loop.
-    YoungConcWindowStats concWindow;
-    uint64_t concWindowStartNs = 0;
-    // markstw: reachableSlots is queried only with members of rememberedSlots in the
-    // non-concurrent FYS path.  Keep the exact intersection instead of materialising
-    // every reachable heap field.  Concurrent young marking is deliberately excluded:
-    // its STW2 admits slots recorded after this initial remset snapshot.
-    const MinorSlotSet* reachableSlotDomain = nullptr;
-    // portyoungconc L2: this is ZGC's boundary. Everything above is pause_mark_start
-    // (colour flip, retire, remset flip) only; roots and follow are concurrent_mark().
-    // Release here before invoking the existing root producer so mark_follow runs
-    // with mutators alive.
-    {
-        CHECK_DETAIL(stackScanEpoch != 0,
-                     "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
-        concWindow.markedAtEntry = reachableVec.size();
-        reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
-        concWindowStartNs = TimeUtil::NanoSeconds();
-        produceYoungRoots();
-        VLOG(REPORT,
-             "[GCV2][youngconc] concurrent young mark start (FOLLOW: roots+closure concurrent) "
-             "roots_marked=%zu",
-             concWindow.markedAtEntry);
-    }
-    {
-        // minortime: ⑤ mark closure pass-1 (from roots)
-        // The release above makes this ZGC mark_roots()+mark_follow work concurrent.
-        ZStatTimerYoung zstatTimer(PYoungMarkClosure);
-        ++concWindow.closureCalls;
-        ZMark::TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                          reachableSlotDomain);
-    }
-    if (ZAbort::should_abort()) {
-        return;
-    }
-    {
-        ZStatTimerYoung zstatTimer(PYoungRemsetRescan);
-        Heap::GetHeap().remembered().scan_and_follow(Heap::GetHeap().young().MarkPtr());
-    }
-    if (ZAbort::should_abort()) {
-        return;
-    }
-    (void)ZMark::FollowYoungMark(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots, &concWindow);
-    youngReachableVec = std::move(reachableVec);
-    youngConcWindow = concWindow;
-    youngConcWindowStartNs = concWindowStartNs;
-    youngWeakSlots = std::move(weakSlots);
-    youngFullScan = fullYoungScan;
+    CHECK_DETAIL(youngStackScanEpoch != 0,
+                 "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
+    youngReachableVec.clear();
+    youngWeakSlots.clear();
+    youngFullScan = false;
+    youngConcWindow = {};
+    reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
+    youngConcWindowStartNs = TimeUtil::NanoSeconds();
+    // ZGC zGeneration.cpp:665-669: roots, then combined scan and follow.
+    mark_roots();
+    mark_follow();
 }
 
 bool ZGenerationYoung::mark_end()
@@ -556,9 +495,8 @@ bool ZGenerationYoung::mark_end()
 
 void ZGenerationYoung::concurrent_mark_continue()
 {
-    MinorSlotSet reachableSlots;
-    (void)ZMark::FollowYoungMark(youngWorkStack, youngFullScan, youngReachableVec, reachableSlots, youngWeakSlots,
-                          &youngConcWindow);
+    // ZGC zGeneration.cpp:689-692 uses the same combined follow path.
+    mark_follow();
 }
 
 void ZGenerationYoung::concurrent_mark_free()
