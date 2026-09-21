@@ -67,7 +67,6 @@ void ZGenerationOld::PostTrace()
     // zGeneration.cpp:1261 mark_end does not reset forwarding.
     Heap::GetHeap().cross_vm().PrepareCycleRef();
     CollectLargeGarbage();
-    CollectPinnedGarbage();
     if (ZAbort::should_abort()) {
         return;
     }

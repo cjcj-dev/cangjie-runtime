@@ -274,7 +274,6 @@ void ZObjectAllocator::retire_pages(PageAgeRange ages)
     // zObjectAllocator.cpp:198-203 PerAge::retire_pages: set_all(nullptr).
     for (PageAge age : ages) {
         auto* perAge = allocator(age);
-        perAge->pinnedPage.store(nullptr, std::memory_order_release);
         perAge->sharedSmallPage.set_all(nullptr);
         perAge->sharedMediumPage.set(nullptr);
     }
@@ -343,9 +342,6 @@ void RegionManager::RequestForRegion(size_t size)
 namespace MapleRuntime {
 MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
 {
-    if (UNLIKELY(allocType == AllocType::PINNED_OBJECT)) {
-        return GetRegionManager().AllocPinned(allocSize);
-    }
     if (allocSize > ZObjectSizeLimitSmall) {
         return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden, false,
             allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);

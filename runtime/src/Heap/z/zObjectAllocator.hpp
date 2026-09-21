@@ -26,7 +26,6 @@ public:
         ZPerCPU<ZPage*> sharedSmallPage;
         ZContended<ZPage*> sharedMediumPage;
         ZLock mediumPageAllocLock;
-        std::atomic<ZPage*> pinnedPage{nullptr};
 
         ZPage* alloc_page(ZPageType type, size_t size, ZAllocationFlags flags, bool clearPayload = true);
         void undo_alloc_page(ZPage* page);

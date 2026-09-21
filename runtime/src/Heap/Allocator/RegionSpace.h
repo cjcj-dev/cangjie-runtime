@@ -108,7 +108,6 @@ public:
 
     size_t CollectLargeGarbage() { return GetRegionManager().CollectLargeGarbage(); }
 
-    size_t CollectPinnedGarbage() { return GetRegionManager().CollectPinnedGarbage(); }
 
     void CollectFromSpaceGarbage()
     {

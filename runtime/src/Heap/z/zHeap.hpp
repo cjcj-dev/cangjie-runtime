@@ -319,6 +319,5 @@ private:
 };
 } // namespace MapleRuntime
 
-#include "Heap/z/zObjectAllocator.inline.hpp"
 #include "Heap/z/zRelocationSet.inline.hpp"
 #endif // MRT_HEAP_MANAGER_H
