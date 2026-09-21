@@ -94,8 +94,15 @@ struct JNICriticalBlockedEnterResult {
     std::atomic<bool> proceed{false};
     std::atomic<bool> entering{false};
     std::atomic<bool> acquired{false};
+    std::atomic<bool> finish{false};
     std::atomic<bool> saferegionAfterAcquire{true};
     bool copied{true};
+};
+
+struct SignalOnExit {
+    explicit SignalOnExit(std::atomic<bool>& value) : flag(value) {}
+    ~SignalOnExit() { flag.store(true, std::memory_order_release); }
+    std::atomic<bool>& flag;
 };
 
 void* AcquireWhileJNICriticalBlocked(void* context)
@@ -122,6 +129,9 @@ void* AcquireWhileJNICriticalBlocked(void* context)
     void* raw = MCC_AcquireRawData(array, &result.copied);
     result.saferegionAfterAcquire.store(Mutator::GetMutator()->InSaferegion(), std::memory_order_release);
     result.acquired.store(true, std::memory_order_release);
+    while (!result.finish.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
     MCC_ReleaseRawData(array, raw);
     return nullptr;
 }
@@ -542,16 +552,23 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedNewRawAcquireAllowsStopTheWorld)
                  static_cast<long long>(ZJNICritical::count_snapshot()));
     ZJNICritical::unblock();
     collector.join();
-    void* taskResult = nullptr;
-    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
-    ReleaseHandle(handle);
+    const auto acquireDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!result.acquired.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < acquireDeadline) {
+        std::this_thread::yield();
+    }
     std::fprintf(stderr, "JNI_BLOCKED_ENTER_RESTORED acquired=%d saferegion=%d\n",
                  result.acquired.load(std::memory_order_acquire) ? 1 : 0,
                  result.saferegionAfterAcquire.load(std::memory_order_acquire) ? 1 : 0);
+    SignalOnExit finishTask(result.finish);
     GC_EXPECT_TRUE(stwFinishedWhileBlocked);
     GC_EXPECT_FALSE(acquiredWhileBlocked);
     GC_EXPECT_TRUE(result.acquired.load(std::memory_order_acquire));
     GC_EXPECT_FALSE(result.saferegionAfterAcquire.load(std::memory_order_acquire));
+    result.finish.store(true, std::memory_order_release);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
     GC_EXPECT_FALSE(result.copied);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
