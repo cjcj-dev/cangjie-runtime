@@ -565,8 +565,8 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
         if (currentRegion != nullptr && currentRegion->IsCompacted() &&
             ClassifyCompactedMiss(currentRegion, current) == CompactedMissClass::kAlreadyToStart) {
             // An address-shaped compact destination is not, by itself, a
-            // load-good value.  In particular the from header may still be
-            // FORWARDED (or a zero header for an interior-shaped probe), so
+            // load-good value.  In particular the from header may be a zero
+            // header for an interior-shaped probe, so
             // kAlreadyToStart is only a geometric classification.  The
             // resolve postcondition is the same as every other receipt hop:
             // only a Usable object may leave this function.  Keep the
@@ -611,8 +611,7 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
                 }
             }
             if (live != nullptr && !live->IsFreeRegion() && !live->IsGarbageRegion() &&
-                ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable &&
-                !current->IsForwarded()) {
+                ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
                 return current;
             }
             const MAddress lookupTo = forwarding_find(generation, currentAddr);
@@ -667,7 +666,6 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
             // Ghost can be dispelled between the membership check and
             // relocate_or_remap; that is not a missing identity receipt.
             if (ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable &&
-                !current->IsForwarded() &&
                 Heap::page(currentAddr) == nullptr) {
                 return current;
             }
@@ -786,7 +784,9 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
         if (toObj == obj || (toObj != nullptr)) {
             const MAddress mapped = publication->insert(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
             if (mapped != 0) {
-                obj->SetStateCode(ObjectState::FORWARDED);
+                // ZGC keeps no FORWARDED header state: the forwarding table is
+                // the only truth (zRelocate.cpp:382-415; zForwarding has no
+                // header bit). The insert above is the whole publication.
                 result = reinterpret_cast<BaseObject*>(mapped);
             }
         }

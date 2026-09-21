@@ -83,16 +83,6 @@ public:
         ReclaimGarbageMemory(false);
     }
 #endif
-    bool ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
-    {
-        if (UNLIKELY(safe)) {
-            GetRegionManager().ForEachObjSafe(visitor);
-        } else {
-            GetRegionManager().ForEachObjUnsafe(visitor);
-        }
-        return true;
-    }
-
     size_t CollectLargeGarbage() { return GetRegionManager().CollectLargeGarbage(); }
 
 

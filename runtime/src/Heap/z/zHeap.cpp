@@ -124,11 +124,6 @@ Heap::~Heap()
 
 MAddress Heap::Allocate(size_t size, AllocType allocType) { return _allocation_adapter->Allocate(size, allocType); }
 
-bool Heap::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
-{
-    return _allocation_adapter->ForEachObj(visitor, safe);
-}
-
 void Heap::Init()
 {
     // zHeap.cpp:89-90: capacity bounds open both generations' heap accounts.
@@ -439,27 +434,6 @@ bool Heap::CheckExportObjState(U64 id, BaseObject *exportObj)
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
-                                     bool skipKnownEmptyRegions) const
-{
-    VisitPageOwners([&](ZPage* region) {
-        if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
-            return;
-        }
-        if (skipKnownEmptyRegions && region->IsKnownEmpty()) {
-            return;
-        }
-        region->VisitAllObjects([&visitor](BaseObject* object) { visitor(object); });
-    });
-}
-
-void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visitor) const
-{
-    ScopedEnterSaferegion enterSaferegion(false);
-    ScopedStopTheWorld stw("visit all objects");
-    ForEachObjUnsafe(visitor);
-}
-
 void RegionManager::StampCensusBoundaries()
 {
     VisitPageOwners([&](ZPage* region) {
@@ -615,26 +589,8 @@ void Heap::DumpHeap(const CString& tag)
     DLOG(FRAGMENT, "DumpHeap %s", tag.Str());
     // dump roots
     DumpRoots(FRAGMENT);
-    // dump object contents
-    auto dumpVisitor = [](BaseObject* obj) { obj->DumpObject(FRAGMENT); };
-    bool ret = Heap::GetHeap().ForEachObj(dumpVisitor, false);
-    CHECK_E(UNLIKELY(!ret), "theAllocator.ForEachObj() in DumpHeap() return false.");
-
-    // dump object types
-    DLOG(FRAGMENT, "Print Type information");
-    std::set<TypeInfo*> classinfoSet;
-    auto assembleClassInfoVisitor = [&classinfoSet](BaseObject* obj) {
-        TypeInfo* classInfo = obj->GetTypeInfo();
-        // No need to check the result of insertion, because there are multiple-insertions.
-        (void)classinfoSet.insert(classInfo);
-    };
-    ret = Heap::GetHeap().ForEachObj(assembleClassInfoVisitor, false);
-    CHECK_E(UNLIKELY(!ret), "theAllocator.ForEachObj()#2 in DumpHeap() return false.");
-
-    for (auto it = classinfoSet.begin(); it != classinfoSet.end(); it++) {
-        TypeInfo* classInfo = *it;
-        DLOG(FRAGMENT, "%p %s", classInfo, classInfo->GetName());
-    }
+    // ZGC has no allocPtr-linear full-heap object walk (zPage.inline.hpp:319-331
+    // iterates the livemap only); the size-walk dump pass was removed with it.
     DLOG(FRAGMENT, "Dump Allocator");
 }
 #endif
