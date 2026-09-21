@@ -67,6 +67,10 @@ GC_TEST(ZPage, AllocObjectRespectsAlignment)
 #include <chrono>
 #include <thread>
 #include "Heap/z/zJNICritical.hpp"
+#include "Heap/z/concurrentGCBreakpoints.hpp"
+#include "Heap/z/zRootsIterator.hpp"
+#include "Common/Handle.h"
+#include "Mutator/MutatorManager.h"
 #include "Mutator/Mutator.inline.h"
 
 namespace MapleRuntime {
@@ -87,6 +91,57 @@ struct GranuleAllocationResult {
     bool sameSmallPage{false};
     size_t tableSize{0};
 };
+
+struct JNICriticalBlockedEnterResult {
+    std::atomic<bool> ready{false};
+    std::atomic<bool> proceed{false};
+    std::atomic<bool> entering{false};
+    std::atomic<bool> acquired{false};
+    std::atomic<bool> finish{false};
+    std::atomic<bool> saferegionAfterAcquire{true};
+    bool copied{true};
+};
+
+struct SignalOnExit {
+    explicit SignalOnExit(std::atomic<bool>& value) : flag(value) {}
+    ~SignalOnExit() { flag.store(true, std::memory_order_release); }
+    std::atomic<bool>& flag;
+};
+
+void* AcquireWhileJNICriticalBlocked(void* context)
+{
+    auto& result = *static_cast<JNICriticalBlockedEnterResult*>(context);
+    alignas(TypeInfo) static unsigned char byteStorage[sizeof(TypeInfo)]{};
+    alignas(TypeInfo) static unsigned char arrayStorage[sizeof(TypeInfo)]{};
+    auto* byteType = reinterpret_cast<TypeInfo*>(byteStorage);
+    auto* arrayType = reinterpret_cast<TypeInfo*>(arrayStorage);
+    byteType->SetType(TypeKind::TYPE_KIND_UINT8);
+    byteType->SetInstanceSize(1);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetComponentTypeInfo(byteType);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(byteStorage), sizeof(byteStorage));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(arrayStorage), sizeof(arrayStorage));
+    auto* array = static_cast<MArray*>(MCC_NewArray8(arrayType, 64));
+    result.ready.store(true, std::memory_order_release);
+    while (!result.proceed.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    result.entering.store(true, std::memory_order_release);
+    void* raw = MCC_AcquireRawData(array, &result.copied);
+    result.saferegionAfterAcquire.store(Mutator::GetMutator()->InSaferegion(), std::memory_order_release);
+    result.acquired.store(true, std::memory_order_release);
+    // After publishing the observed return state, allow the collector to
+    // finish even in the cut arm. Otherwise teardown masks the STW assertion.
+    Mutator::GetMutator()->EnterSaferegion(false);
+    while (!result.finish.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    Mutator::GetMutator()->LeaveSaferegion();
+    MCC_ReleaseRawData(array, raw);
+    return nullptr;
+}
 void* AllocateGranulePages(void* context)
 {
     auto& result = *static_cast<GranuleAllocationResult*>(context);
@@ -439,6 +494,158 @@ GC_RUNTIME_OTHER_VM_TEST(ZGenerationPhases, OldCycleFlipsRemapMaskOnce)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
+namespace {
+struct JNICriticalMovingEnterResult {
+    std::atomic<bool> allocated{false};
+    std::atomic<bool> pin{false};
+    std::atomic<bool> ready{false};
+    std::atomic<bool> releaseHolder{false};
+    std::atomic<bool> waiterReady{false};
+    std::atomic<bool> enter{false};
+    std::atomic<bool> entering{false};
+    std::atomic<Mutator*> waiter{nullptr};
+    U64 roots[3]{};
+    uintptr_t before{0};
+    uintptr_t current{0};
+    uintptr_t returned{0};
+    bool payload{false};
+    bool copied{true};
+};
+
+void* HoldArrayForMovingEnter(void* context)
+{
+    auto& result = *static_cast<JNICriticalMovingEnterResult*>(context);
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char byteStorage[sizeof(TypeInfo)]{};
+    alignas(TypeInfo) static unsigned char arrayStorage[sizeof(TypeInfo)]{};
+    auto* byteType = reinterpret_cast<TypeInfo*>(byteStorage);
+    auto* arrayType = reinterpret_cast<TypeInfo*>(arrayStorage);
+    byteType->SetType(TypeKind::TYPE_KIND_UINT8);
+    byteType->SetInstanceSize(1);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetComponentTypeInfo(byteType);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(byteStorage), sizeof(byteStorage));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(arrayStorage), sizeof(arrayStorage));
+    {
+        HandleMark mark(*mutator);
+        std::vector<Handle> allRoots;
+        for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096; ++i) {
+            auto* array = MCC_NewArray8(arrayType, 4096);
+            std::memset(array->ConvertToCArray(), 0x5a, 4096);
+            allRoots.emplace_back(mutator, array);
+        }
+        Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+        // Retain one array per old page for the measured collection.
+        ZPage* previous = nullptr;
+        size_t roots = 0;
+        for (const auto& root : allRoots) {
+            auto* object = root();
+            auto* page = Heap::page(reinterpret_cast<uintptr_t>(object));
+            if (page != previous && roots < 3) {
+                result.roots[roots++] = Heap::GetHeap().RegisterExportRoot(object);
+                previous = page;
+            }
+        }
+    }
+    mutator->EnterSaferegion(false);
+    result.allocated.store(true, std::memory_order_release);
+    while (!result.pin.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    mutator->LeaveSaferegion();
+    auto* array = static_cast<MArray*>(Heap::GetHeap().GetExportObject(result.roots[0]));
+    bool copied = true;
+    void* raw = MCC_AcquireRawData(array, &copied);
+    mutator->EnterSaferegion(false);
+    result.ready.store(true, std::memory_order_release);
+    while (!result.releaseHolder.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    mutator->LeaveSaferegion();
+    MCC_ReleaseRawData(array, raw);
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+
+void* AcquireMovingArray(void* context)
+{
+    auto& result = *static_cast<JNICriticalMovingEnterResult*>(context);
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    mutator->EnterSaferegion(false);
+    result.waiter.store(mutator, std::memory_order_release);
+    result.waiterReady.store(true, std::memory_order_release);
+    while (!result.enter.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    mutator->LeaveSaferegion();
+    auto* array = static_cast<MArray*>(Heap::GetHeap().GetExportObject(result.roots[0]));
+    result.before = reinterpret_cast<uintptr_t>(array->ConvertToCArray());
+    std::fprintf(stderr, "JNI_MOVING_BEFORE mask=%#lx global=%#lx forwarding=%p\n",
+        mutator->GetGCData().storeGoodMask, ZPointerStoreGoodMask,
+        Heap::GetHeap().old().forwarding_table().get(reinterpret_cast<uintptr_t>(array)));
+    result.entering.store(true, std::memory_order_release);
+    void* raw = MCC_AcquireRawData(array, &result.copied);
+    std::fprintf(stderr, "JNI_MOVING_AFTER mask=%#lx global=%#lx forwarding=%p\n",
+        mutator->GetGCData().storeGoodMask, ZPointerStoreGoodMask,
+        Heap::GetHeap().old().forwarding_table().get(reinterpret_cast<uintptr_t>(array)));
+    auto* current = static_cast<MArray*>(Heap::GetHeap().GetExportObject(result.roots[0]));
+    result.current = reinterpret_cast<uintptr_t>(current->ConvertToCArray());
+    result.returned = reinterpret_cast<uintptr_t>(raw);
+    // A mismatching address is asserted without accessing the old page.
+    result.payload = raw == current->ConvertToCArray() &&
+        static_cast<unsigned char*>(raw)[0] == 0x5a &&
+        static_cast<unsigned char*>(raw)[4095] == 0x5a;
+    MCC_ReleaseRawData(current, raw);
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+}
+
+// Real collector owns block -> relocate-start -> unblock. The existing GC
+// breakpoint places the holder after mark-start, so it parks relocate-start
+// before STW while the second registered mutator enters MCC_AcquireRawData.
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedAcquireReloadsRelocatedArray)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    JNICriticalMovingEnterResult result;
+    auto holder = RunCJTask(HoldArrayForMovingEnter, &result);
+    GC_EXPECT_TRUE(holder != nullptr);
+    while (!result.allocated.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    ConcurrentGCBreakpoints::AcquireControl();
+    GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"));
+    result.pin.store(true, std::memory_order_release);
+    while (!result.ready.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    auto waiter = RunCJTask(AcquireMovingArray, &result);
+    GC_EXPECT_TRUE(waiter != nullptr);
+    while (!result.waiterReady.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    std::thread collector([] { ConcurrentGCBreakpoints::RunToIdle(); });
+    while (ZJNICritical::count_snapshot() != -2) { std::this_thread::yield(); }
+    result.enter.store(true, std::memory_order_release);
+    while (!result.entering.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!result.waiter.load(std::memory_order_acquire)->InSaferegion() &&
+           std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
+    result.releaseHolder.store(true, std::memory_order_release);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(holder, &taskResult), E_OK);
+    GC_EXPECT_EQ(GetTaskRet(waiter, &taskResult), E_OK);
+    ReleaseHandle(holder);
+    ReleaseHandle(waiter);
+    collector.join();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    std::fprintf(stderr, "JNI_MOVING_AFTER_GC current=%p\n",
+        static_cast<MArray*>(Heap::GetHeap().GetExportObject(result.roots[0]))->ConvertToCArray());
+    std::fprintf(stderr, "JNI_MOVING_ENTER_TARGET before=%#lx current=%#lx returned=%#lx payload=%d copied=%d\n",
+                 result.before, result.current, result.returned, result.payload, result.copied);
+    GC_EXPECT_EQ(result.returned, result.current);
+    GC_EXPECT_TRUE(result.payload);
+    GC_EXPECT_TRUE(result.current != result.before);
+    GC_EXPECT_FALSE(result.copied);
+    for (auto root : result.roots) { Heap::GetHeap().RemoveExportObject(root); }
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
 // ZGC jni.cpp:2868-2886 resolves before pinning. The real allocator reuses a
 // retired source range while its forwarding remains published for old colours.
 GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NewArrayOnReusedSourceKeepsDecodedAddress)
@@ -460,6 +667,68 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NewArrayOnReusedSourceKeepsDecodedAddress
     GC_EXPECT_EQ(result.pinObserved, result.pinExpected);
     GC_EXPECT_TRUE(result.pinExpected != 0 && result.reused > 0);
     GC_EXPECT_FALSE(result.pinCopied);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// ZGC zJNICritical.cpp:102-129: a JavaThread that finds JNI critical blocked
+// transitions to blocked before taking the condition lock. Use RunCJTask so
+// the waiter enters through the product MCC_AcquireRawData path.
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedNewRawAcquireAllowsStopTheWorld)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    JNICriticalBlockedEnterResult result;
+    CJThreadHandle handle = RunCJTask(AcquireWhileJNICriticalBlocked, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    const auto readyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!result.ready.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < readyDeadline) {
+        std::this_thread::yield();
+    }
+    GC_EXPECT_TRUE(result.ready.load(std::memory_order_acquire));
+    ZJNICritical::block();
+    result.proceed.store(true, std::memory_order_release);
+    while (!result.entering.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::atomic<bool> stwFinished{false};
+    std::thread collector([&] {
+        ScopedStopTheWorld stw("jni-critical-blocked-enter", false);
+        stwFinished.store(true, std::memory_order_release);
+    });
+    const auto stwDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!stwFinished.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < stwDeadline) {
+        std::this_thread::yield();
+    }
+    const bool stwFinishedWhileBlocked = stwFinished.load(std::memory_order_acquire);
+    const bool acquiredWhileBlocked = result.acquired.load(std::memory_order_acquire);
+    std::fprintf(stderr, "JNI_BLOCKED_ENTER_TARGET stw=%d acquired=%d count=%lld\n",
+                 stwFinishedWhileBlocked ? 1 : 0, acquiredWhileBlocked ? 1 : 0,
+                 static_cast<long long>(ZJNICritical::count_snapshot()));
+    ZJNICritical::unblock();
+    collector.join();
+    const auto acquireDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!result.acquired.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < acquireDeadline) {
+        std::this_thread::yield();
+    }
+    std::fprintf(stderr, "JNI_BLOCKED_ENTER_RESTORED acquired=%d saferegion=%d\n",
+                 result.acquired.load(std::memory_order_acquire) ? 1 : 0,
+                 result.saferegionAfterAcquire.load(std::memory_order_acquire) ? 1 : 0);
+    SignalOnExit finishTask(result.finish);
+    GC_EXPECT_TRUE(stwFinishedWhileBlocked);
+    GC_EXPECT_FALSE(acquiredWhileBlocked);
+    GC_EXPECT_TRUE(result.acquired.load(std::memory_order_acquire));
+    GC_EXPECT_FALSE(result.saferegionAfterAcquire.load(std::memory_order_acquire));
+    result.finish.store(true, std::memory_order_release);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    GC_EXPECT_FALSE(result.copied);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 

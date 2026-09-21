@@ -897,7 +897,7 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* array
     return snapshot;
 }
 
-static ArrayRef PinArray(const ArrayRef array)
+static void PinArray(const ArrayRef /* array */)
 {
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
@@ -906,7 +906,6 @@ static ArrayRef PinArray(const ArrayRef array)
     // the caller supplies a decoded object. A retained forwarding entry can
     // cover a newly allocated page at the same address; it is not a colour.
     ZJNICritical::enter();
-    return array;
 }
 
 // Return the raw pointer of input array object, isCopy records whether memory copy occurs.
@@ -936,8 +935,13 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
     if (isCopy != nullptr) {
         *isCopy = false;
     }
+    // ZGC jni.cpp:2870-2881: pinning may block across a safepoint. Keep
+    // the decoded array in a root slot and reload it after pinning returns.
+    HandleMark handleMark(*Mutator::GetMutator());
+    Handle arrayHandle(Mutator::GetMutator(), plain);
     (void)CJThreadPreemptOffCntAdd();
-    ArrayRef pArray = PinArray(plain);
+    PinArray(static_cast<ArrayRef>(arrayHandle()));
+    ArrayRef pArray = static_cast<ArrayRef>(arrayHandle());
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     auto* rawPtr = pArray->ConvertToCArray();
     std::vector<uint64_t> frame;
