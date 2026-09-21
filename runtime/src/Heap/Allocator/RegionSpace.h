@@ -58,7 +58,6 @@ public:
     void RegisterAllocBuffer(AllocBuffer& buffer) const { allocBufferManager->RegisterAllocBuffer(buffer); }
     void RemoveAllocBuffer(AllocBuffer& buffer) const { allocBufferManager->RemoveAllocBuffer(buffer); }
     void VisitAllocBuffers(const AllocBufferVisitor& visitor) { allocBufferManager->VisitAllocBuffers(visitor); }
-    size_t GetAllocBufersCount() { return allocBufferManager->GetAllocBufersCount(); }
     bool IsHeapAddress(MAddress addr) const { return is_heap_address(addr); }
     ATTR_NO_INLINE ~RegionSpace()
     {
@@ -75,51 +74,11 @@ public:
 
     RegionManager& GetRegionManager() const noexcept;
 
-    MAddress GetSpaceStartAddress() const { return GetRegionManager().GetSpaceStartAddress(); }
-
-    MAddress GetSpaceEndAddress() const { return GetRegionManager().GetSpaceEndAddress(); }
-
-    size_t GetCurrentCapacity() const { return GetRegionManager().GetCommittedBytes(); }
-    size_t GetMaxCapacity() const { return GetRegionManager().GetHeapCapacity(); }
-
-    ZMemoryUsageInfo GetMemoryUsage() const
-    {
-        // ZHeap::used_generation -> ZPageAllocator::used_generation. Use
-        // page occupancy for both generations, never object bytes minus pages.
-        const size_t young = GetRegionManager().used_generation(ZGenerationId::young);
-        const size_t old = GetRegionManager().used_generation(ZGenerationId::old);
-        return ComputeMemoryUsageInfo(GetRegionManager().GetCommittedCapacity(), GetMaxCapacity(), young, old);
-    }
-
-
-    inline size_t GetRecentAllocatedSize() const { return GetRegionManager().GetRecentAllocatedSize(); }
-
-    // size of objects survived in previous gc.
-    inline size_t GetSurvivedSize() const { return GetRegionManager().GetSurvivedSize(); }
-
-    size_t GetUsedPageSize() const { return GetRegionManager().GetUsedRegionSize(); }
-
-    inline size_t GetTargetSize() const
-    {
-        double heapUtilization = CangjieRuntime::GetHeapParam().heapUtilization;
-        return static_cast<size_t>(GetUsedPageSize() / heapUtilization);
-    }
-
     size_t AllocatedBytes() const { return GetRegionManager().GetAllocatedSize(); }
-
-    size_t LargeObjectBytes() const { return GetRegionManager().GetLargeObjectSize(); }
-
-    size_t FromSpaceSize() const { return GetRegionManager().GetFromSpaceSize(); }
-
-    size_t PinnedSpaceSize() const { return GetRegionManager().GetPinnedSpaceSize(); }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     bool IsHeapObject(MAddress addr) const;
 #endif
-
-    // info dump
-    void GetInstances(const TypeInfo*, bool, size_t, std::vector<MObject*>&) const {}
-    void ClassInstanceNum(std::map<CString, long>&) const {}
 
     size_t ReclaimGarbageMemory(bool /* releaseAll */)
     {
@@ -156,19 +115,10 @@ public:
         GetRegionManager().CollectFromSpaceGarbage();
     }
 
-    void AssembleGarbageCandidates(bool collectAll = false)
-    {
-        GetRegionManager().AssembleSmallGarbageCandidates();
-        GetRegionManager().AssemblePinnedGarbageCandidates(collectAll);
-        GetRegionManager().AssembleLargeGarbageCandidates();
-    }
-
     void DumpRegionStats(const char* msg) const
     {
         GetRegionManager().DumpRegionStats(msg);
     }
-
-    void CountLiveObject(const BaseObject* obj) { GetRegionManager().CountLiveObject(obj); }
 
     void PrepareTrace() { GetRegionManager().PrepareTrace(); }
 
@@ -195,21 +145,6 @@ public:
         (void)G;
         ZPage* regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
         return regionInfo->is_object_strongly_live(from_object(obj));
-    }
-
-    template<Generation G>
-    static bool ShouldEnqueue(const BaseObject* obj)
-    {
-        ZPage* regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
-        if (regionInfo == nullptr || regionInfo->IsFreeRegion() || regionInfo->IsGarbageRegion() ||
-            regionInfo->IsFreeRegion()) {
-            return false;
-        }
-        (void)G;
-        // ZGC SATB entries are not suppressed by an independent enqueue
-        // bitmap.  The mark pair is the sole epoch authority; until the strong
-        // bit is visible, every observation remains eligible for publication.
-        return !regionInfo->is_object_strongly_live(from_object(obj));
     }
 
     // Finalizable-only marked: the live bit without the strong bit

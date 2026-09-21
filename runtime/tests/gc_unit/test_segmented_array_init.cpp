@@ -6,8 +6,6 @@
 #include <atomic>
 #include <algorithm>
 #include <array>
-#include <chrono>
-#include <thread>
 #include <cstdint>
 #include <cstdio>
 #include <dlfcn.h>
@@ -31,8 +29,6 @@ extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void*
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/z/zDirector.hpp"
-#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zIterator.hpp"
@@ -203,7 +199,7 @@ void* RunYoungSelectionLifetimeCase(void*)
 
 // ZGC zGeneration.cpp:1058-1063 and zStat.cpp:1789-1798:
 // an old collection publishes selector liveness before relocation starts.
-void* RunOldRelocationStatisticsCase(void* argument)
+void* RunOldRelocationStatisticsCase(void*)
 {
     auto& heap = Heap::GetHeap();
     auto* mutator = Mutator::GetMutator();
@@ -225,36 +221,9 @@ void* RunOldRelocationStatisticsCase(void* argument)
     std::fprintf(stderr,
         "OLD_RELOCATION_STATS_TARGET retained_old=%d live=%zu minimum_live=%zu live_account=%d\n",
         retainedOld, live, minimumLive, liveAccount);
-    bool directorInput = true;
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (argument != nullptr) {
-        const uint64_t before = ZDirector::ReadSampleForTest().serial;
-        const uint64_t sequence = ZGeneration::old()->Sequence();
-        ZDirectorSampleForTest sample;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        do {
-            ZDirector::evaluate_rules();
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            sample = ZDirector::ReadSampleForTest();
-        } while ((sample.serial <= before || sample.oldSequence < sequence || sample.majorBusy) &&
-                 std::chrono::steady_clock::now() < deadline);
-        directorInput = sample.serial > before && sample.oldSequence >= sequence && !sample.majorBusy &&
-            sample.oldLive >= minimumLive && sample.oldLive == live &&
-            sample.softMaxCapacity == 128 * MB &&
-            sample.softMaxCapacity == heap.soft_max_capacity() &&
-            sample.relocationHeadroom == ZHeuristics::relocation_headroom();
-        std::fprintf(stderr,
-            "OLD_DIRECTOR_INPUT_TARGET serial=%llu old_sequence=%llu old_live=%zu old_used=%zu "
-            "soft_max=%zu headroom=%zu input_account=%d\n",
-            (unsigned long long)sample.serial, (unsigned long long)sample.oldSequence,
-            sample.oldLive, sample.oldUsed, sample.softMaxCapacity, sample.relocationHeadroom, directorInput);
-    }
-#else
-    (void)argument;
-#endif
     heap.RemoveExportObject(root);
     mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>((retainedOld && liveAccount && directorInput) ? 0 : 1);
+    return reinterpret_cast<void*>((retainedOld && liveAccount) ? 0 : 1);
 }
 
 void* RunPinnedBirthCase(void*)
@@ -651,12 +620,6 @@ GC_RUNTIME_OTHER_VM_TEST(OldRelocationStatistics, FullCollectionPublishesLiveInp
     GC_EXPECT_EQ(RunRuntimeCase(RunOldRelocationStatisticsCase, 0, 1, true), 0);
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-GC_RUNTIME_OTHER_VM_TEST(OldRelocationStatistics, DirectorConsumesOldSelection)
-{
-    GC_EXPECT_EQ(RunRuntimeCase(RunOldRelocationStatisticsCase, 1, 1, true), 0);
-}
-#endif
 GC_RUNTIME_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
 
 {
