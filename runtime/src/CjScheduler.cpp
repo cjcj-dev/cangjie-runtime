@@ -299,7 +299,7 @@ void* StartMainTask(void* arg, unsigned int len)
     ScheduleHandle scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     ASSERT(arg != nullptr);
     auto lwtData = static_cast<LWTData*>(arg);
-    auto execute = lwtData->execute;
+    auto execute = lwtData->fn;
     Mutator* mutator = MutatorManager::Instance().CreateMutator();
     uintptr_t threadData = MRT_GetThreadLocalData();
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
@@ -351,7 +351,7 @@ void* WrapperTask(void* arg, unsigned int len)
 {
     ASSERT(arg != nullptr);
     auto lwtData = static_cast<LWTData*>(arg);
-    auto execute = lwtData->execute;
+    auto execute = lwtData->fn;
     uintptr_t threadData = MRT_GetThreadLocalData();
     // mutator has been set to a valid pointer before.
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
@@ -376,7 +376,8 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
     MapleRuntime::Sanitizer::TsanFuncEntry(pc);
 #endif
     LWTData data {};
-    data.execute = execute;
+    data.execute = nullptr;
+    data.fn = execute;
     data.threadObject = nullptr;
     data.obj = nullptr;
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(future)));
@@ -500,8 +501,9 @@ void* MCC_NewExclusiveCJThread(void* executeClosure, void* closurePtr, void* fut
 {
     LWTData data {};
     data.execute = nullptr;
+    data.fn = futureTi;
     data.obj = nullptr;
-    data.threadObject = futureTi;
+    data.threadObject = nullptr;
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(closurePtr)));
     StorePlain(RootSlotAt(&data.execute), from_object(from_native_ref(executeClosure)));
     CJThreadHandle handle = ExclusiveCJThreadNew(WrapperExclusiveClosure, &data, sizeof(LWTData));
@@ -611,15 +613,13 @@ static void* WrapperOfExecuteClosure(void* arg, unsigned int len)
 {
     ASSERT(arg != nullptr);
     auto lwtData = static_cast<LWTData*>(arg);
-    auto executeClosure = lwtData->execute;
+    auto executeClosure = lwtData->fn;
     uintptr_t threadData = MRT_GetThreadLocalData();
     // mutator has been set to a valid pointer before.
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
-    TypeInfo* futureTi = static_cast<TypeInfo*>(lwtData->threadObject);
-    // threadObject is used to pass TypeInfo of future. After use, need set to nullptr.
-    lwtData->threadObject = nullptr;
     BaseObject* closureObj = to_object(safe(RootSlotAt(&lwtData->obj).LoadPlain()));
+    TypeInfo* futureTi = closureObj != nullptr ? closureObj->GetTypeInfo() : nullptr;
 #if defined(__aarch64__)
     ExecuteCangjieStub(closureObj, futureTi, 0, executeClosure, reinterpret_cast<void*>(threadData), &g_ut);
 #elif defined(__arm__)
@@ -637,10 +637,12 @@ static void* WrapperOfExecuteClosure(void* arg, unsigned int len)
 void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* scheduler, void* futureTi)
 {
     LWTData data {};
-    data.execute = executeClosure;
+    data.execute = nullptr;
+    data.fn = executeClosure;
     data.obj = nullptr;
-    data.threadObject = futureTi; // used to pass TypeInfo of future
+    data.threadObject = nullptr;
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(closurePtr)));
+    (void)futureTi;
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
@@ -736,8 +738,8 @@ void MRT_CjRuntimeStart(void* execute)
 {
     ScheduleHandle scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     LWTData lwtData {};
-    lwtData.execute = execute;
-    lwtData.fn = nullptr;
+    lwtData.execute = nullptr;
+    lwtData.fn = execute;
     lwtData.obj = nullptr;
     lwtData.threadObject = nullptr;
     CJThreadAttr attr;

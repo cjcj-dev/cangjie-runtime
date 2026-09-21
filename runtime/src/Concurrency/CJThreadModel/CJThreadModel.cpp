@@ -21,7 +21,6 @@
 #endif
 #include "schedule.h"
 #include "Heap/z/zUncoloredRoot.hpp"
-#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 namespace {
@@ -51,18 +50,11 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
         if (is_null(observed)) {
             return;
         }
-        BaseObject* object = to_object(safe(observed));
-        if (!Heap::IsHeapAddress(object)) {
-            return;
-        }
         ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&slot), color);
     };
     heal(ref);
     heal(map);
     heal(execute);
-    if (g_uncoloredVisitColor != nullptr) {
-        *g_uncoloredVisitColor = ZPointerLoadGoodMask;
-    }
     (*reinterpret_cast<RootVisitor*>(handle))(ref);
     (*reinterpret_cast<RootVisitor*>(handle))(map);
     (*reinterpret_cast<RootVisitor*>(handle))(execute);
