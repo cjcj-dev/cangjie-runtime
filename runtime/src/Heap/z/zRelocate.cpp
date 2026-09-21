@@ -178,21 +178,7 @@ public:
     void work() override
     {
         colored.Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
-    RootVisitor visitor = [](ObjectRef& root) {
-        const zaddress_unsafe observed = root.LoadPlain();
-        // ZGeneration::remap_object (zGeneration.inline.hpp:142-151): only
-        // the selected generation's forwarding table qualifies this root.
-        // Old relocation may already have installed its table before this
-        // young-remap pass. Conversely a promoted source can still belong
-        // to the young table, so the page's current generation is not a gate.
-        const MAddress observedAddr = raw(observed);
-        if (observedAddr != 0 &&
-            generation_forwarding_table(Generation::Young).get(observedAddr) != nullptr) {
-            const ZGenerationId id = ZGenerationId::young;
-            (void)ZGeneration::generation(id)->relocate_or_remap_object(to_object(safe(observed)));
-        }
-    };
-        uncolored.Apply([&] { ZMark::VisitStrongPlainRoots(visitor, {}); });
+        uncolored.Apply([] { Runtime::Current().GetConcurrencyModel().VisitGCRoots(); });
         uncolored.ApplyThreads([&](Mutator& mutator) {
         // ZGC ZRemapThreadClosure (zGeneration.cpp:1419-1424): only
         // StackWatermarkSet::finish_processing. Slot heal uses the saved
@@ -331,27 +317,6 @@ BaseObject* ZRelocate::ResolveMinorReference(RefField<>& field, const ScopedStop
     (void)ZBarrier::CasInstallResolvedTarget(field, raw(observed.GetFieldValue()), from_object(resolved), false);
     return resolved;
 }
-BaseObject* ZRelocate::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw)
-{
-    (void)stw;
-    zaddress_unsafe observed = root.LoadPlain();
-    BaseObject* from = to_object(safe(observed));
-    if (from == nullptr || !Heap::IsHeapAddress(from)) {
-        return from;
-    }
-
-    // ZUncoloredRootProcessOopClosure applies the load barrier and writes the
-    // resolved address back uncolored (zGeneration.cpp:1458-1523).
-    const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, &Heap::GetHeap().young().relocate(), &root };
-    BaseObject* resolved = ZRelocate::ResolveStoreValue(from, provenance, Generation::Young);
-    CHECK_DETAIL(resolved != nullptr && Heap::IsHeapAddress(resolved),
-                 "minor root resolve requires a heap to-address from=%p", from);
-    CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
-                 "minor root resolve requires a usable target from=%p resolved=%p", from, resolved);
-
-    StorePlain(root, from_object(resolved));
-    return resolved;
-}
 bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
                                       const ScopedStopTheWorld* stw)
 {
@@ -405,82 +370,12 @@ bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     return raw(field.GetFieldValue()) != raw(oldField.GetFieldValue());
 }
 
-bool ZRelocate::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw)
-{
-    MAddress oldValue = raw(root.LoadPlain());
-    BaseObject* target = ResolveMinorReference(root, stw);
-    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-        return false;
-    }
-    BaseObject* oldObj = to_object(to_zaddress(oldValue));
-    // resolveto: Resolve already remapped FROM→TO. Do not Admit the to-address
-    // against the from-offset bitmap (offpast same-target probe: sameObj=0).
-    ZPage* targetRegion = Heap::page(reinterpret_cast<MAddress>(target));
-    const bool compactDestination = targetRegion != nullptr &&
-        targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
-    const bool alreadyTo = (target != oldObj) || compactDestination;
-    BaseObject* current = target;
-    const bool hasForwardingFace = targetRegion != nullptr && forwarding_for_page(targetRegion) != nullptr;
-    if (!alreadyTo && hasForwardingFace && IsFromObject(target) && !IsUnmovableFromObject(target)) {
-        // Last-chance domain paint while FORWARDABLE (grant pass covers the bulk case;
-        // this catches roots dirtied after the grant pass or parallel races).
-        (void)ForceRootRouteDomainWhileForwardable(target);
-        current = ZRelocate::ForwardObject(target, Generation::Young);
-        // Third disposition (statresid): if still null and region still FORWARDABLE,
-        // force-paint once more and retry Forward — never HealRoot(null), never leave
-        // a reclaimable from named by a live root without a second attempt.
-        if (current == nullptr) {
-            if (ForceRootRouteDomainWhileForwardable(target)) {
-                current = ZRelocate::ForwardObject(target, Generation::Young);
-            }
-        }
-    }
-    if (current == nullptr) {
-
-        // I2: Forward miss still consults the generation relocation entry. Stale miss
-        // refuses silently leaving from (seqnum-bounded table already rejects
-        // expired entries). ⛔ Do not reinstall from; ⛔ do not StorePlain(null).
-        const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, &Heap::GetHeap().young().relocate(), &root };
-        BaseObject* viaTable = ZGeneration::young()->relocate_or_remap_object(target, provenance);
-        if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
-            viaTable->IsValidObject()) {
-            StorePlain(root, from_object(viaTable));
-            return true;
-        }
-        ZBarrier::FailClosedLoad(
-            "ZRelocate::FixMinorEvacuatedSlot.unresolved", target,
-            reinterpret_cast<uintptr_t>(&root),
-            ForwardingProvenance{ ForwardingHolderKind::StackSlot, &Heap::GetHeap().young().relocate(), &root });
-    }
-    MAddress newValue = reinterpret_cast<MAddress>(current);
-    if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
-        return false;
-    }
-    StorePlain(root, from_object(current));
-    return true;
-}
-
-bool ZRelocate::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase,
-                                      const ScopedStopTheWorld* stw)
-{
-    const zaddress_unsafe observed = derived.LoadDerived();
-    if (knownBase == nullptr) {
-        return false;
-    }
-    RootVisitor root = [stw](RootSlot& slot) { (void)FixMinorEvacuatedSlot(slot, stw); };
-    auto closure = Mutator::MakeDerivedRootVisitor(root);
-    closure(to_zaddress_unsafe(reinterpret_cast<MAddress>(knownBase)), derived);
-    return raw(observed) != raw(derived.LoadDerived());
-}
-
 void ZRelocate::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 {
-    // The phase handshake has already completed each stack watermark. Only
-    // non-frame plain carriers and colored storage remain at this entry.
-        RootVisitor rawRootVisitor = [stw](ObjectRef& root) {
-        (void)FixMinorEvacuatedSlot(root, stw);
-    };
-    ZMark::VisitStrongPlainRoots(rawRootVisitor, {});
+    (void)stw;
+    // Stack watermarks own frame roots. Each remaining uncolored group owns
+    // its saved epoch and performs its barrier exactly once under its lock.
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots();
     RootsIteratorAllColored().Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
 
 }

@@ -164,6 +164,14 @@ void CJThreadModel::Init(const ConcurrencyParam param, ScheduleType scheduleType
     RegisterCJThreadHooks();
 }
 
+void ConcurrencyModel::VisitGCRoots()
+{
+    // Relocation needs only the group's saved-color barrier, like
+    // ZUncoloredRoot::process_no_keepalive; there is no second resolve action.
+    RootVisitor relocated = [](RootSlot&) {};
+    VisitGCRoots(&relocated);
+}
+
 void CJThreadModel::VisitGCRoots(RootVisitor* visitorHandle)
 {
     ScheduleAllCJThreadVisit(MRT_VisitorCaller, visitorHandle);

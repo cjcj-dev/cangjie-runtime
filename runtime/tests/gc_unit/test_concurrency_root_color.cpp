@@ -1,3 +1,4 @@
+#define MRT_USE_CJTHREAD_RENAME 1
 #include "gc_heap_fixture.hpp"
 #include "gc_generation_test.hpp"
 #include "b09_runtime_fixture.hpp"
@@ -8,9 +9,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include <cstdio>
-#include "cjthread.h"
 #include "Sync/Sync.h"
-#include "threadlocal.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -19,9 +18,29 @@ extern "C" void MRT_VisitorCaller(void*, void*);
 
 
 namespace {
-void CheckSavedColor(bool updateThreadObject)
+// ScheduleNew owns ScheduleManagerInit. A second initialization would reject
+// the default scheduler before the real producer can allocate a CJThread.
+class ConcurrencyRootRuntime final : public Runtime {
+public:
+    ConcurrencyRootRuntime()
+    {
+        runtime = this;
+        mutatorManager = &manager;
+        concurrencyModel = &concurrency;
+        manager.Init();
+        concurrency.Init(ConcurrencyParam{1024, 64, 1});
+    }
+    ~ConcurrencyRootRuntime() override { runtime = nullptr; }
+    RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
+    void SetGCThreshold(uint64_t) override {}
+private:
+    MutatorManager manager;
+    Concurrency concurrency;
+};
+
+void CheckSavedColor(bool updateThreadObject, bool remap = false)
 {
-    B09RuntimeFixture runtime;
+    ConcurrencyRootRuntime runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     ZCollectedHeapTest::SetWorkers(1);
@@ -48,11 +67,15 @@ void CheckSavedColor(bool updateThreadObject)
     BaseObject* from = fx.PlaceObject(reinterpret_cast<MAddress>(earlier) + earlier->GetSize());
     BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(from) + from->GetSize());
     page->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
-    auto* thread = static_cast<CJThread*>(MCC_NewCJThread(nullptr, from,
-        runtime.GetConcurrencyModel().GetThreadScheduler()));
+    auto* thread = MCC_NewCJThread(nullptr, from,
+        runtime.GetConcurrencyModel().GetThreadScheduler());
     GC_EXPECT_TRUE(thread != nullptr);
-    auto* data = static_cast<LWTData*>(thread->argStart);
-    const uintptr_t savedColor = thread->uncoloredRootColor;
+    auto* previousThread = CJThreadGetHandle();
+    ThreadLocal::SetCJThread(thread);
+    auto* data = static_cast<LWTData*>(CJThreadGetArg());
+    ThreadLocal::SetCJThread(previousThread);
+    GC_EXPECT_TRUE(data != nullptr);
+    const uintptr_t savedColor = ZPointerStoreGoodMask;
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
@@ -74,12 +97,17 @@ void CheckSavedColor(bool updateThreadObject)
     MAddress storedExpected = 0;
     if (updateThreadObject) {
         storedExpected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(second));
-        auto* previous = CJThreadGet();
-        CJThreadSet(thread);
+        auto* previous = CJThreadGetHandle();
+        ThreadLocal::SetCJThread(thread);
         MCC_SetCurrentCJThreadObject(reinterpret_cast<void*>(storedExpected));
-        CJThreadSet(previous);
+        ThreadLocal::SetCJThread(previous);
     }
-    runtime.GetConcurrencyModel().VisitGCRoots(&visitor);
+    if (remap) {
+        ZRelocate::RemapYoungRoots();
+    } else {
+        ZRelocate::FixMinorRootSlots();
+    }
+    observed = raw(RootSlotAt(&data->obj).LoadPlain());
     std::fprintf(stderr,
         "CONCURRENCY_ROOT_COLOR saved=%#lx current=%#lx from=%p observed=%#lx expected=%#lx\n",
         savedColor, ZPointerLoadGoodMask, from, observed, expected);
@@ -96,19 +124,20 @@ void CheckSavedColor(bool updateThreadObject)
     observed = 0;
     ZMark::VisitMinorRootSlots(visitor, visitor);
     std::fprintf(stderr,
-        "CONCURRENCY_ROOT_SECOND_TARGET observed=%#lx expected=%#lx guard=%#lx\n",
-        observed, expected, thread->uncoloredRootColor);
+        "CONCURRENCY_ROOT_SECOND_TARGET observed=%#lx expected=%#lx\n",
+        observed, expected);
     GC_EXPECT_EQ(observed, expected);
 }
 
 } // namespace
 
 GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset) { CheckSavedColor(false); }
+GC_OTHER_VM_TEST(ConcurrencyRootColor, RemapYoungRootGroupOnce) { CheckSavedColor(false, true); }
 GC_OTHER_VM_TEST(ConcurrencyRootColor, ThreadObjectStorePreservesOtherRootEpoch) { CheckSavedColor(true); }
 
 GC_OTHER_VM_TEST(ConcurrencyRootColor, NativeArgumentsAreNotRoots)
 {
-    B09RuntimeFixture runtime;
+    ConcurrencyRootRuntime runtime;
     ZGlobalsPointers::initialize();
     uintptr_t nativeArgument = 1;
     auto entry = +[](void*, unsigned int) -> void* { return nullptr; };
