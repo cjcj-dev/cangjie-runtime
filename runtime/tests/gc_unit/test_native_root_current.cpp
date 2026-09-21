@@ -308,6 +308,46 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorInvisibleRoot) { CheckSavedRootCol
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectNativeFrameRoot) { CheckSavedRootColor(false, false); }
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectInvisibleRoot) { CheckSavedRootColor(true, false); }
 
+GC_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    RelocationReceiptTest::BindNativeRootFixture(heap);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    ZPage* page = fx.region0;
+    page->reset(PageAge::eden);
+    ZGenerationTest::SetTenuringThreshold(heap.young(), 1);
+    BaseObject* dead = fx.PlaceObject(page->GetRegionStart());
+    BaseObject* earlier = fx.PlaceObject(page->GetRegionStart() + dead->GetSize());
+    BaseObject* from = fx.PlaceObject(reinterpret_cast<MAddress>(earlier) + earlier->GetSize());
+    BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(from) + from->GetSize());
+    page->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
+    Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    thread->SetManagedContext(false);
+    (void)thread->EnterSaferegion(false);
+    const size_t roots = thread->NativeFrameRootCount();
+    RootSlot* slot = thread->AddNativeFrameRoot(from);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page}));
+    heap.young().set_phase(ZGenerationPhase::Relocate);
+    RelocationReceiptTest::FlipNativeRootYoung(heap);
+    auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
+    manager.CompactRegion(page);
+    page->MarkForwardingDone();
+    const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
+    ZRelocate::RemapYoungRoots();
+    const uintptr_t observed = raw(slot->LoadPlain());
+    std::fprintf(stderr, "REMAP_YOUNG_ROOTS_THREAD from=%p observed=%#lx expected=%#lx\n", from, observed, expected);
+    GC_EXPECT_EQ(observed, expected);
+    thread->PopNativeFrameRootsTo(roots);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+
 GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
 {
     B09RuntimeFixture runtime;

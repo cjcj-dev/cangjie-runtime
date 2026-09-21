@@ -194,18 +194,20 @@ public:
     };
         uncolored.Apply([&] { ZMark::VisitStrongPlainRoots(visitor, {}); });
         uncolored.ApplyThreads([&](Mutator& mutator) {
-        // Cangjie stack maps may name stack objects/headerless records. Expand
-        // their plain fields before remapping, as verification and mark do.
-        // ZGC zStackWatermark.cpp:164-214 processes each oop frame slot.
+        // ZGC ZRemapThreadClosure (zGeneration.cpp:1419-1424): only
+        // StackWatermarkSet::finish_processing. Slot heal uses the saved
+        // watermark color via ZUncoloredRoot::process. Cangjie still expands
+        // headerless records (no return statepoint).
         RootVisitor heapRoots = [&](ObjectRef& root) {
-            mutator.VisitHeapRootSlots(root, visitor);
+            StackWatermarkProcessOopClosure closure(nullptr, mutator.GetStackWatermark().uncolored_root_color());
+            mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
+                closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
+            });
         };
-        DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
+        DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(heapRoots);
         size_t frames = 0;
-        if (!StackWatermarkSet::finish_processing(mutator, heapRoots, heapRoots,
-                __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE), &derived, frames)) {
-            mutator.VisitHeapReferences(heapRoots, derived);
-        }
+        (void)StackWatermarkSet::finish_processing(mutator, heapRoots, heapRoots,
+                StackWatermark::epoch_id(), &derived, frames);
         });
         Heap::GetHeap().remembered().remap_current(&remset);
     }
