@@ -50,6 +50,18 @@ inline void ZPage::StampCensusBoundary()
 
 // ---- ZPage livemap surface ----
 
+// ZGC zPage.inline.hpp:428-451: page-local allocation is visible to callers.
+inline uintptr_t ZPage::alloc_object(size_t size)
+{
+    MRT_ASSERT(is_allocating(), "Invalid state");
+    const size_t aligned = AlignUp<size_t>(size, object_alignment());
+    const zoffset_end addr = top();
+    zoffset_end newTop;
+    if (!to_zoffset_end(&newTop, addr, aligned) || newTop > end()) { return 0; }
+    _top = newTop;
+    return untype(ZOffset::address_unsafe(to_zoffset(addr)));
+}
+
 // zPage.inline.hpp:72-101 object_alignment_shift: large pages hold one object
 // at start; small pages use the minimum object alignment.
 inline int ZPage::object_alignment_shift() const
