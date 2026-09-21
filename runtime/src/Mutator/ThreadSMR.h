@@ -32,6 +32,9 @@ class ThreadsSMRSupport {
     static void free_list(ThreadsList* list);
     static void release_stable_list_wake_up();
 public:
+#if defined(MRT_TESTABLE_INTERNALS)
+    static void SetReclaimScanBreakpoint(void (*callback)());
+#endif
     static ThreadsList* get_java_thread_list();
     static void add_thread(Mutator* thread);
     static void remove_thread(Mutator* thread);

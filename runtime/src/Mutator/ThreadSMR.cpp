@@ -37,6 +37,9 @@ SMRThread& CurrentExecutor()
     return thread;
 }
 constexpr uintptr_t TAG = 1;
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<void (*)()> reclaimScanBreakpoint{nullptr};
+#endif
 }
 
 SMRThread::SMRThread()
@@ -50,6 +53,13 @@ SMRThread::~SMRThread()
     std::lock_guard<std::mutex> lock(State().mutex);
     State().executors.remove(this);
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void ThreadsSMRSupport::SetReclaimScanBreakpoint(void (*callback)())
+{
+    reclaimScanBreakpoint.store(callback);
+}
+#endif
 
 bool ThreadsList::includes(const Mutator* thread) const
 {
@@ -103,6 +113,9 @@ void ThreadsSMRSupport::free_list(ThreadsList* list)
     for (auto* executor : state.executors) {
         hazards.push_back(executor->hazard.load() & ~TAG);
     }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (auto breakpoint = reclaimScanBreakpoint.load()) { breakpoint(); }
+#endif
     std::atomic_thread_fence(std::memory_order_acquire);
     for (auto** link = &state.retired; *link != nullptr;) {
         auto* candidate = *link;
