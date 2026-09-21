@@ -445,8 +445,6 @@ public:
     void PublishTLABStatistics();
     void RetireTLABStatistics(AllocBuffer& buffer);
 
-    template<Generation G>
-    void ForwardRegion(ZPage* region);
     bool StallAllocation(AllocationStallRequest& request);
     bool ClaimCapacityOrStall(AllocationStallRequest& request);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
@@ -495,12 +493,6 @@ public:
     void free_page(ZPage* page);
     void StampCensusBoundaries();
     void PromoteAllRegions();
-    // CompactRegion's list-ownership tail. A concurrent stay-young path may
-    // already have moved the region to recent-full; never steal its links.
-    void EnlistCompactedRegionForAllocator(ZPage* region);
-    // Put a region the forward path finished with in place back where a collection-set builder
-    // will find it; CompactRegion leaves it thread-local, which no builder walks.
-    void RehomeCompactedInPlaceRegion(ZPage* region);
     void CompactRegion(ZPage* region);
 
     void ExemptFromRegion(ZPage* region);
@@ -667,7 +659,6 @@ public:
     void PrepareTrace();
 
 
-    bool RelocateClaimedPage(ZPage* region);
 
 
 
@@ -743,8 +734,7 @@ private:
     // zRelocate.cpp:1121 shape: in-place relocated page counts by size class,
     // accumulated while a from-space pass runs and read at its end. Host
     // difference: ZGC counts these on ZRelocateSmall/MediumAllocator; here the
-    // in-place decision is made inside RegionManager::ForwardClaimedPage /
-    // RelocateClaimedPage, so the counters live with that driver.
+    // in-place decision is made inside ZRelocateWork, so the counters live with that driver.
     std::atomic<size_t> inPlaceSmallCount{ 0 };
     std::atomic<size_t> inPlaceMediumCount{ 0 };
     // zPageAllocator.hpp:157-162 shape: per-generation used (region-granular)

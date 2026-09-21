@@ -1257,7 +1257,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager11AllocPinnedEy @1411
     _ZN12MapleRuntime13RegionManager13CollectRegionEPNS_10ZPageE @1413
     _ZN12MapleRuntime13RegionManager13CompactRegionEPNS_10ZPageE @1414
-    _ZN12MapleRuntime13RegionManager13ForwardRegionEPNS_10ZPageE @1416
     _ZN12MapleRuntime13RegionManager13ReclaimRegionEPNS_10ZPageE @1417
     _ZN12MapleRuntime13RegionManager13ReleaseRegionEPNS_10ZPageE @1418
     _ZN12MapleRuntime13RegionManager15CountLiveObjectEPKNS_10BaseObjectE @1419
@@ -1272,7 +1271,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager21ReleaseMarkQuarantineEv @1433
     _ZN12MapleRuntime13RegionManager21StampCensusBoundariesEv @1434
     _ZN12MapleRuntime13RegionManager22CollectFreePinnedSlotsEPNS_10ZPageE @1435
-    _ZN12MapleRuntime13RegionManager19RelocateClaimedPageEPNS_10ZPageE @1440
     _ZN12MapleRuntime13RegionManager28TakeReclaimableGarbageRegionEPy @1450
     _ZN12MapleRuntime13RegionManager29PrepareYoungGarbageCandidatesEv @1451
     _ZN12MapleRuntime13RegionManager29ReclaimRegionToMarkQuarantineEPNS_10ZPageE @1452
