@@ -9,6 +9,7 @@ set(SRC_LIST
     "MutatorManager.cpp"
     "Handshake.cpp"
     "ThreadLocal.cpp"
+    "ThreadSMR.cpp"
 )
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../Interpreter)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../Heap)
