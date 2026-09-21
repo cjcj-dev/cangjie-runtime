@@ -61,7 +61,7 @@ public:
         : OopStorageSetIteratorStrong(workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    std::array<OopStorage::ParState<true>, 1> states;
+    std::array<OopStorage::ParState<true>, 2> states;
     ZGenerationIdOptional generation;
 };
 class OopStorageSetIteratorWeak {
@@ -73,7 +73,7 @@ public:
     void Apply(const NativeSlotVisitor& visitor);
     void report_num_dead();
 private:
-    std::array<OopStorage::ParState<true>, 3> states;
+    std::array<OopStorage::ParState<true>, 2> states;
     ZGenerationIdOptional generation;
     size_t numDead = 0;
 };
