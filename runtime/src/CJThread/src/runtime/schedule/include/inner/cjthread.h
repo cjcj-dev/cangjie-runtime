@@ -152,7 +152,7 @@ struct CJThread {
     char name[CJTHREAD_NAME_SIZE];           /* cjthread name */
     bool isCJThread0;
     uintptr_t uncoloredRootColor;
-    std::recursive_mutex* uncoloredRootLock;
+    std::recursive_mutex uncoloredRootLock;
 #ifdef __OHOS__
     std::vector<unsigned long long> threadStackTopList;
 #endif

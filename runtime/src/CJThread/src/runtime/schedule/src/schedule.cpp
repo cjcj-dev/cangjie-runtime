@@ -1642,7 +1642,7 @@ void ScheduleAllCJThreadListRemove(struct CJThread *cjthread)
 void CJThreadVisitRoots(CJThreadHandle thread, AllCJThreadListProcFunc visitor, void* handle)
 {
     auto* cjthread = static_cast<struct CJThread*>(thread);
-    std::lock_guard<std::recursive_mutex> lock(*cjthread->uncoloredRootLock);
+    std::lock_guard<std::recursive_mutex> lock(cjthread->uncoloredRootLock);
     if (cjthread->argStart != nullptr && cjthread->uncoloredRootColor != 0) {
         auto* previous = MRT_BindUncoloredVisitColor(&cjthread->uncoloredRootColor);
         visitor(cjthread->argStart, handle);

@@ -66,6 +66,9 @@ void StoreCJThreadObject(void* object)
 {
     auto* data = static_cast<LWTData*>(CJThreadGetArg());
     RootVisitor store = [&](RootSlot& slot) {
+        // zBarrierSetNMethod.cpp:76-79: a mutator entry keeps the old oops
+        // alive before the guard is disarmed or a root is overwritten.
+        ZUncoloredRoot::keep_alive_object(safe(slot.LoadPlain()));
         if (&slot == &RootSlotAt(&data->threadObject)) {
             StorePlain(slot, from_object(from_native_ref(object)));
         }

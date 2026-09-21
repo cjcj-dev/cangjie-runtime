@@ -152,7 +152,7 @@ void CJThreadStackMemFree(struct CJThread *cjthread, char *stackTopAddr, size_t 
 void CJThreadMemFree(struct CJThread *cjthread)
 {
     CJThreadStackMemFree(cjthread, cjthread->stack.stackTopAddr, cjthread->stack.stackSize);
-    delete cjthread->uncoloredRootLock;
+    cjthread->uncoloredRootLock.~recursive_mutex();
     free(cjthread);
 }
 
@@ -200,7 +200,7 @@ unsigned long long CJThreadNewId(void)
 
 MRT_STATIC_INLINE int CJThreadInit(struct CJThread *newCJThread, struct ArgAttr *argAttr)
 {
-    std::lock_guard<std::recursive_mutex> lock(*newCJThread->uncoloredRootLock);
+    std::lock_guard<std::recursive_mutex> lock(newCJThread->uncoloredRootLock);
     int error;
     char *argBuffer;
     newCJThread->argSize = argAttr->argSize;
@@ -295,7 +295,7 @@ struct CJThread *CJThreadAndArgsMemAlloc()
         HILOG_ERROR(error, "cjthread memset_s failed");
         return nullptr;
     }
-    cjthread->uncoloredRootLock = new std::recursive_mutex;
+    new (&cjthread->uncoloredRootLock) std::recursive_mutex;
     return cjthread;
 }
 
@@ -474,7 +474,7 @@ struct CJThread *CJThreadMemAlloc(struct Schedule *schedule, struct StackAttr *s
         // Allocate stack memeory of CJThread.
         stackAddr = CJThreadStackMemAlloc(schedule, cjthread, stackAttr->stackSizeAlign, &totalSize);
         if (stackAddr == nullptr) {
-            delete cjthread->uncoloredRootLock;
+            cjthread->uncoloredRootLock.~recursive_mutex();
             free(cjthread);
             return nullptr;
         }
@@ -581,7 +581,7 @@ void *CJThreadMexit(struct CJThread *delCJThread)
 #endif
 
     {
-        std::lock_guard<std::recursive_mutex> lock(*delCJThread->uncoloredRootLock);
+        std::lock_guard<std::recursive_mutex> lock(delCJThread->uncoloredRootLock);
         delCJThread->argStart = nullptr;
         delCJThread->uncoloredRootColor = 0;
     }
@@ -1076,7 +1076,7 @@ void ExclusiveRestore(struct CJThread* oldCJThread, struct Thread* thread,
 #endif
     // Free cjthread and scheduler
     ScheduleAllCJThreadListRemove(newCJThread);
-    delete newCJThread->uncoloredRootLock;
+    newCJThread->uncoloredRootLock.~recursive_mutex();
     free(newCJThread);
     ExclusiveScheduleFree(newSchedule);
 #if defined(__ANDROID__)

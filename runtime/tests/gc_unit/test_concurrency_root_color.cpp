@@ -2,6 +2,7 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_generation_test.hpp"
 #include "b09_runtime_fixture.hpp"
+#include "mark_publication_fixture.hpp"
 #include "gc_product_access_test.hpp"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zMark.hpp"
@@ -155,4 +156,29 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, NativeArgumentsAreNotRoots)
     runtime.GetConcurrencyModel().VisitGCRoots(&visitor);
     std::fprintf(stderr, "CONCURRENCY_MANAGED_CONTROL visits=%zu\n", visits);
     GC_EXPECT_EQ(visits, size_t(3));
+}
+
+GC_OTHER_VM_TEST(ConcurrencyRootColor, ThreadObjectOverwriteKeepsOldGroupAlive)
+{
+    ConcurrencyRootRuntime runtime;
+    GcHeapFixture fx;
+    auto* thread = MCC_NewCJThread(nullptr, fx.obj0,
+                                  runtime.GetConcurrencyModel().GetThreadScheduler());
+    GC_EXPECT_TRUE(thread != nullptr);
+    auto* previous = CJThreadGetHandle();
+    ThreadLocal::SetCJThread(thread);
+    MCC_SetCurrentCJThreadObject(fx.obj1);
+    ThreadLocal::SetCJThread(previous);
+    MarkPublicationFixture marking;
+    const bool beforeObj = fx.region0->is_object_marked_strong(from_object(fx.obj0));
+    const bool beforeThread = fx.region1->is_object_marked_strong(from_object(fx.obj1));
+    std::fprintf(stderr, "CONCURRENCY_KEEPALIVE_BEFORE obj=%u thread=%u\n", beforeObj, beforeThread);
+    GC_EXPECT_TRUE(!beforeObj && !beforeThread);
+    ThreadLocal::SetCJThread(thread);
+    MCC_SetCurrentCJThreadObject(nullptr);
+    ThreadLocal::SetCJThread(previous);
+    const bool afterObj = fx.region0->is_object_marked_strong(from_object(fx.obj0));
+    const bool afterThread = fx.region1->is_object_marked_strong(from_object(fx.obj1));
+    std::fprintf(stderr, "CONCURRENCY_KEEPALIVE_TARGET obj=%u thread=%u\n", afterObj, afterThread);
+    GC_EXPECT_TRUE(afterObj && afterThread);
 }
