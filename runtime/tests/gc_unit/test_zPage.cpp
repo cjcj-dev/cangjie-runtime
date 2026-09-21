@@ -132,9 +132,13 @@ void* AcquireWhileJNICriticalBlocked(void* context)
     void* raw = MCC_AcquireRawData(array, &result.copied);
     result.saferegionAfterAcquire.store(Mutator::GetMutator()->InSaferegion(), std::memory_order_release);
     result.acquired.store(true, std::memory_order_release);
+    // After publishing the observed return state, allow the collector to
+    // finish even in the cut arm. Otherwise teardown masks the STW assertion.
+    Mutator::GetMutator()->EnterSaferegion(false);
     while (!result.finish.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
+    Mutator::GetMutator()->LeaveSaferegion();
     MCC_ReleaseRawData(array, raw);
     return nullptr;
 }
