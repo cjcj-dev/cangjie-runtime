@@ -1483,14 +1483,11 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
             ZJNICritical::unblock();
         }
 
-        // pass1 root fix after the domain snapshot.
-        // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
-        {
-            ZStatTimerYoung zstatTimer(PYoungRefFixRootPass1);
-            ZRelocate::FixMinorRootSlots(liveStw());
-            Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Young);
-            Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Young);
-        }
+        // ZGC zGeneration.cpp:575-580: relocate-start activates the queue;
+        // concurrent_relocate must submit its workers before any concurrent
+        // root walk can wait for allocation-failure completion. Raw stack roots
+        // are completed by the pause watermark (Cangjie has no return statepoint).
+        // The coloured-root/extern walk below consumes the completed relocation.
 
         // Reset CAS counters for this fix window (positive-control visibility).
 
