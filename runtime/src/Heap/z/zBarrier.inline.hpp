@@ -274,13 +274,17 @@ inline zaddress ZBarrier::make_load_good_impl(zpointer ptr, const ForwardingProv
         return zaddress::null;
     }
     if (ZPointer::is_load_good_or_null(ptr)) {
-        return RefField<>(ptr).GetTargetObject();
+        const zaddress good = RefField<>(ptr).GetTargetObject();
+        ZDiagIdentityStale("barrier.make_load_good.load-good", untype(good), raw(ptr), "ptr-bits");
+        return good;
     }
     ZGeneration* generation = remap_generation(ptr);
     BaseObject* object = to_object(RefField<>(ptr).GetTargetObject());
-    return from_object(provenance == nullptr
+    const zaddress out = from_object(provenance == nullptr
         ? generation->relocate_or_remap_object(object)
         : generation->relocate_or_remap_object(object, *provenance));
+    ZDiagIdentityStale("barrier.make_load_good.output", untype(out), raw(ptr), "slow-out");
+    return out;
 }
 
 inline zaddress ZBarrier::make_load_good_no_relocate(zpointer ptr)

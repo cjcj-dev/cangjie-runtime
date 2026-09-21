@@ -136,6 +136,7 @@ void StoreBarrierBuffer::on_new_phase_mark(size_t i)
     if (is_old_mark() && stored_during_old_mark() && Heap::IsHeapAddress(p) &&
         !Heap::page(p)->IsYoungRegion()) {
         const zaddress addr = ZBarrier::make_load_good(entry.prev);
+        ZDiagIdentityStale("satb.on_new_phase_mark", untype(addr), raw(entry.prev), "prev");
         Heap::GetHeap().MarkObjectIfActive(to_object(addr));
     }
 }

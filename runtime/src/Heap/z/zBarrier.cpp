@@ -291,6 +291,7 @@ void ZBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObjec
 
 void ZBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref)
 {
+    ZDiagIdentityStale("WriteReferenceImpl.stored", reinterpret_cast<MAddress>(ref), 0, "stored-ref");
     field.StoreColoured(to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(ref))))));
 }
 
@@ -575,6 +576,7 @@ void ZBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, Base
 
 void ZBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order)
 {
+    ZDiagIdentityStale("AtomicWriteReferenceImpl.stored", reinterpret_cast<MAddress>(ref), 0, "stored-ref");
     field.StoreColoured(to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(ref))))), order);
 }
 

@@ -33,6 +33,8 @@ ZForwarding* forwarding_for_page(const ZPage* page);
 inline ZForwarding* forwarding_for_page(const ZPage* page, MAddress) { return forwarding_for_page(page); }
 MAddress forwarding_find(Generation generation, MAddress from);
 
+void ZDiagIdentityStale(const char* gate, MAddress addr, uintptr_t color, const char* colorSrc);
+
 } // namespace MapleRuntime
 
 #include "Heap/z/zForwardingTable.inline.hpp"

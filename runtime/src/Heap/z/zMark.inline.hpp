@@ -7,6 +7,7 @@
 #pragma once
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zForwardingTable.hpp"
 #include "Mutator/ThreadLocal.h"
 
 
@@ -16,6 +17,7 @@ template<bool resurrect, bool gcThread, bool follow, bool finalizable>
 inline void ZMark::MarkObject(zaddress address)
 {
     (void)to_object(address); // ZMark entry validates the current oop before the page query.
+    ZDiagIdentityStale("mark.MarkObject.push", raw(address), 0, "none");
     ZPage* page = Heap::page(raw(address));
     if (page->IsAllocating()) {
         return;
