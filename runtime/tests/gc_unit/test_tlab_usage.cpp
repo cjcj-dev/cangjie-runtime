@@ -325,13 +325,11 @@ struct TLABSnapshotCase {
     std::atomic<bool> refilled{false};
     std::atomic<bool> published{false};
     TLABStatistics pending;
-    size_t initialSize[2]{};
 };
 void SnapshotOwner(TLABSnapshotCase& state, unsigned index)
 {
     auto& manager = MutatorManager::Instance();
     Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    state.initialSize[index] = owner->GetAllocBuffer()->ComputeTLABSize(0, ZObjectSizeLimitSmall);
     owner->DoLeaveSaferegion();
     for (unsigned i = 0; i < 128; ++i) { (void)MCC_NewObject(state.type, 4096); }
     owner->DoEnterSaferegion();
@@ -372,6 +370,19 @@ GC_RUNTIME_OTHER_VM_TEST(TLABSnapshot, RootPublicationPreservesLaterRefills)
     heap.young().Workers()->set_active_workers(1);
     heap.young().Begin(1);
     heap.young().pause_mark_start();
+    const auto initialTLABSize = [] {
+        size_t size = 0;
+        std::thread probe([&] {
+            auto* owner = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+            size = owner->GetAllocBuffer()->ComputeTLABSize(0, ZObjectSizeLimitSmall);
+            MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        });
+        probe.join();
+        return size;
+    };
+    // Keep the capacity history identical on both sides: mark-start already
+    // reset it, and only root-worker publication may change this next sample.
+    const size_t beforePublication = initialTLABSize();
     // Choose using the same product inventory order as JavaThreadsIterator.
     int first = -1;
     MutatorManager::Instance().VisitAllMutators([&](Mutator& owner) {
@@ -395,24 +406,18 @@ GC_RUNTIME_OTHER_VM_TEST(TLABSnapshot, RootPublicationPreservesLaterRefills)
     for (auto& owner : state.owner) { retired.Update(owner.load()->GetStackWatermark().stats()); }
     // A fresh thread's initial size consumes the published worker totals.
     // Both allocating owners have real allocation history; no history setter.
-    size_t initial = 0;
-    std::thread probe([&] {
-        auto* owner = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-        initial = owner->GetAllocBuffer()->ComputeTLABSize(0, ZObjectSizeLimitSmall);
-        MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    });
-    probe.join();
+    const size_t initial = initialTLABSize();
     state.published.store(true, std::memory_order_release);
     a.join();
     b.join();
-    std::fprintf(stderr, "TLAB_SNAPSHOT_TARGET executed=1 overlap=%d retired=%zu threads=%zu pending=%zu initial=%zu startup=%zu\n",
-                 overlapped, retired.allocatedSize, retired.allocatingThreads, state.pending.allocatedSize, initial, state.initialSize[first]);
+    std::fprintf(stderr, "TLAB_SNAPSHOT_TARGET executed=1 overlap=%d retired=%zu threads=%zu pending=%zu initial=%zu before_publication=%zu\n",
+                 overlapped, retired.allocatedSize, retired.allocatingThreads, state.pending.allocatedSize, initial, beforePublication);
     GC_EXPECT_TRUE(overlapped);
     GC_EXPECT_TRUE(retired.allocatedSize > 0 && retired.allocatingThreads == 2);
     GC_EXPECT_TRUE(state.pending.allocatedSize > 0);
     // threadLocalAllocBuffer.cpp:324 seeds the averages at startup. Test
     // the published history's observable effect, not a reconstructed average.
-    GC_EXPECT_TRUE(initial > state.initialSize[first]);
+    GC_EXPECT_TRUE(initial > beforePublication);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif
