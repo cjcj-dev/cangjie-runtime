@@ -190,23 +190,24 @@ public:
             generation_forwarding_table(Generation::Young).get(observedAddr) != nullptr) {
             const ZGenerationId id = ZGenerationId::young;
             (void)ZGeneration::generation(id)->relocate_or_remap_object(to_object(safe(observed)));
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }
     };
         uncolored.Apply([&] { ZMark::VisitStrongPlainRoots(visitor, {}); });
         uncolored.ApplyThreads([&](Mutator& mutator) {
-        // Cangjie stack maps may name stack objects/headerless records. Expand
-        // their plain fields before remapping, as verification and mark do.
-        // ZGC zStackWatermark.cpp:164-214 processes each oop frame slot.
+        // ZGC ZRemapThreadClosure (zGeneration.cpp:1419-1424): only
+        // StackWatermarkSet::finish_processing. Slot heal uses the saved
+        // watermark color via ZUncoloredRoot::process. Cangjie still expands
+        // headerless records (no return statepoint).
         RootVisitor heapRoots = [&](ObjectRef& root) {
-            mutator.VisitHeapRootSlots(root, visitor);
+            StackWatermarkProcessOopClosure closure(nullptr, mutator.GetStackWatermark().uncolored_root_color());
+            mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
+                closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
+            });
         };
-        DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
+        DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(heapRoots);
         size_t frames = 0;
-        if (!StackWatermarkSet::finish_processing(mutator, heapRoots, heapRoots,
-                __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE), &derived, frames)) {
-            mutator.VisitHeapReferences(heapRoots, derived);
-        }
+        (void)StackWatermarkSet::finish_processing(mutator, heapRoots, heapRoots,
+                StackWatermark::epoch_id(), &derived, frames);
         });
         Heap::GetHeap().remembered().remap_current(&remset);
     }
@@ -1126,93 +1127,6 @@ void RegionManager::ParkUnmovableFromRegion(ZPage* region)
 void RegionManager::ExemptFromRegion(ZPage* region)
 {
     ParkUnmovableFromRegion(region);
-}
-
-namespace {
-bool IncompleteRouteUnpublished(ZPage* region)
-{
-    if (region == nullptr || region->IsFreeRegion()) {
-        return false;
-    }
-    if (region->IsForwardingDone()) {
-        return false;
-    }
-    return forwarding_for_page(region) != nullptr;
-}
-} // namespace
-
-void RegionManager::FinishIncompleteFromRegions(ZGenerationId generation)
-{
-    // zRelocate.cpp:1041-1047: relocate() does not return with a half-copied page.
-    // #710: cycle-end stragglers are found by page-table walk over the from /
-    // unmovable-from / garbage roles (zPageTable.hpp:57-77), not by list walks.
-    std::vector<ZPage*> snap;
-    {
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            const ZPageRole role = region->GetRegionRole();
-            if (role == ZPageRole::From || role == ZPageRole::UnmovableFrom || role == ZPageRole::Garbage) {
-                snap.push_back(region);
-            }
-        }
-    }
-
-    std::sort(snap.begin(), snap.end());
-    snap.erase(std::unique(snap.begin(), snap.end()), snap.end());
-
-    const bool young = generation == ZGenerationId::young;
-
-    for (ZPage* region : snap) {
-        if (!IncompleteRouteUnpublished(region)) {
-            continue;
-        }
-        if (region->IsUnmovableFromRegion()) {
-
-            continue;
-        }
-        if (region->IsGarbageRegion()) {
-            region->SetRegionRole(ZPageRole::None);
-            ExemptFromRegion(region);
-
-            continue;
-        }
-        const bool wasFrom = region->IsFromRegion();
-        if (wasFrom) {
-            region->SetRegionRole(ZPageRole::None);
-        }
-        const bool canForward = region->IsLoneFromRegion();
-        if (canForward) {
-            const MAddress start = region->GetRegionStart();
-            if (young) {
-                ForwardClaimedPage<Generation::Young>(region, forwarding_for_page(region));
-            } else {
-                ForwardClaimedPage<Generation::Old>(region, forwarding_for_page(region));
-            }
-            if (Heap::page(start) != region || !IncompleteRouteUnpublished(region)) {
-                continue;
-            }
-        }
-        if (region->IsFromRegion()) {
-            region->SetRegionRole(ZPageRole::None);
-        }
-        if (region->IsLoneFromRegion() || region->IsFromRegion() || wasFrom) {
-            ExemptFromRegion(region);
-        }
-
-    }
-
-    for (ZPage* region : snap) {
-        if (region == nullptr || region->IsFreeRegion()) {
-            continue;
-        }
-        CHECK_DETAIL(!IncompleteRouteUnpublished(region),
-                     "[GCV2][zombie] fourth state region=%p start=%#zx route=%u done=%u type=%u live=%zu "
-                     "— cycle-end from-page not in {FORWARDED,COMPACTED,Exempt-kept}",
-                     region, region->GetRegionStart(), static_cast<unsigned>(region->RelocateObserve()),
-                     static_cast<unsigned>(region->IsForwardingDone()),
-                     0u, (region->is_marked() ? region->live_bytes() : 0));
-    }
 }
 
 void RegionManager::CollectFromSpaceGarbage()

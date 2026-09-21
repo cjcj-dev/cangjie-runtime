@@ -35,9 +35,8 @@ void StackWatermark::start_processing(Mutator& mutator)
 {
     const uint64_t epoch = epoch_id();
     if (epoch == 0 || IsDone(epoch)) { return; }
-    const uintptr_t color = mutator.GetGCData().loadGoodMask;
-    StackWatermarkProcessOopClosure closure(nullptr, color);
     RootVisitor visitor = [&](RootSlot& root) {
+        StackWatermarkProcessOopClosure closure(nullptr, uncolored_root_color());
         mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
             closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
         });
@@ -99,6 +98,11 @@ void StackWatermarkProcessOopClosure::do_root(zaddress_unsafe* p)
     function(p, color);
 }
 
+void StackWatermark::save_old_watermark(Mutator& mutator)
+{
+    headColor = mutator.GetGCData().storeGoodMask;
+}
+
 void StackWatermark::process_head(Mutator& mutator, void* context, const RootVisitor& visitor,
                                   const RootVisitor& invisibleRootVisitor)
 {
@@ -110,11 +114,7 @@ void StackWatermark::process_head(Mutator& mutator, void* context, const RootVis
     (void)invisibleRootVisitor;
     zaddress_unsafe* invisible = mutator.GetGCData().invisibleRoot;
     if (invisible != nullptr) {
-        const uintptr_t color = mutator.GetGCData().loadGoodMask != 0 ? mutator.GetGCData().loadGoodMask
-                                                                     : ZPointerLoadGoodMask;
-        ZUncoloredRoot::process_invisible(invisible, color);
-#if defined(MRT_GC_UNIT_TESTS)
-#endif
+        ZUncoloredRoot::process_invisible(invisible, uncolored_root_color());
     }
 }
 
@@ -124,8 +124,8 @@ bool StackWatermark::start_processing_impl(Mutator& mutator, void* context, uint
     if (!TryBegin(epoch, totalFrames)) {
         return false;
     }
+    save_old_watermark(mutator);
     process_head(mutator, context, visitor, invisibleRootVisitor);
-    mutator.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
     AllocBuffer* buffer = mutator.GetAllocBuffer();
     if (buffer != nullptr) {
         const bool youngMark = ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();
@@ -163,6 +163,7 @@ bool StackWatermarkSet::finish_processing(Mutator& mutator, const RootVisitor& v
         bool began = mutator.stackWatermark.start_processing_impl(mutator, context, epoch, 0, visitor,
                                                                   invisibleRootVisitor);
         if (began) {
+            mutator.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
             mutator.stackWatermark.finish_processing();
         }
         mutator.MutatorUnlock();
@@ -183,6 +184,7 @@ bool StackWatermarkSet::finish_processing(Mutator& mutator, const RootVisitor& v
             mutator.stackWatermark.AdvanceTo(cursor.Cursor());
         }
         scannedFrames = cursor.Cursor();
+        mutator.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
         mutator.stackWatermark.finish_processing();
     }
     mutator.DecObserver();

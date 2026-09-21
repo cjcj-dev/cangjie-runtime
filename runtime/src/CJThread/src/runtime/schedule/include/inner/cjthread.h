@@ -9,6 +9,7 @@
 #define MRT_CJTHREAD_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <atomic>
 #ifdef __OHOS__
 #include <vector>
@@ -149,6 +150,7 @@ struct CJThread {
                                               Do not change it. */
     char name[CJTHREAD_NAME_SIZE];           /* cjthread name */
     bool isCJThread0;
+    uintptr_t uncoloredRootColor;
 #ifdef __OHOS__
     std::vector<unsigned long long> threadStackTopList;
 #endif

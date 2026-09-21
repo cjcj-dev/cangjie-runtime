@@ -28,13 +28,14 @@ namespace MapleRuntime {
  *    where a closure structure `{void *fnGeneric, void *fnInst, captured_var1, ..., captured_varN}` will be saved.
  */
 using LWTData = struct {
-    void* execute; // Execute function (from Cangjie) of the thread;
-                   // It may be `Future.execute` or `executeClosure`
-    void* fn;  // Native closure function or native task context; never a managed root
+    void* execute; // Managed execute closure (exclusive) or null; native fn lives in fn
+    void* fn;  // Native entry or TypeInfo; never a managed root
     void* obj; // Pointer of a Cangjie object;
                // future or env of closure
-    void* threadObject;   // Cangjie class Thread in std/core
+    void* threadObject;   // Cangjie class Thread in std/core; never TypeInfo
 };
+static_assert(sizeof(LWTData) <= 32, "LWTData must fit COARGS_SIZE_MAX");
+void PublishCJThreadRootColor(void* handle);
 struct ConcurrencyTask; // Task depends on the implementation of ConcurrencyModel
 
 // ConcurrencyModel is an abstraction for runtime to implement concurrency.

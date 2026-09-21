@@ -217,6 +217,7 @@ MRT_STATIC_INLINE int CJThreadInit(struct CJThread *newCJThread, struct ArgAttr 
     }
 
     newCJThread->boundThread = nullptr;
+    newCJThread->uncoloredRootColor = 0;
     DulinkInit(&(newCJThread->schdDulink));
     atomic_store_explicit(&newCJThread->state, CJTHREAD_IDLE, std::memory_order_relaxed);
     newCJThread->name[0] = '\0';
@@ -1178,6 +1179,14 @@ CJThreadHandle CJThreadNewToSchedule(ScheduleHandle schedule, const struct CJThr
         return nullptr;
     }
     return CJThreadNew(schedule, attr, func, argStart, argSize, createSource);
+}
+
+void CJThreadSetUncoloredRootColor(CJThreadHandle handle, uintptr_t color)
+{
+    if (handle == nullptr) {
+        return;
+    }
+    static_cast<struct CJThread*>(handle)->uncoloredRootColor = color;
 }
 
 CJThreadHandle CJThreadNewToDefault(const struct CJThreadAttr *attr, CJThreadFunc func,

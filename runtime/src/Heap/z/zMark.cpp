@@ -94,8 +94,8 @@ public:
     static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }
     void DoThread(Mutator& mutator) const
     {
-        const uintptr_t color = mutator.GetGCData().loadGoodMask;
         RootVisitor markRoot = [&](ObjectRef& root) {
+            const uintptr_t color = mutator.GetStackWatermark().uncolored_root_color();
             mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
                 ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&slot), color);
                 if (result != nullptr) (*result)(slot);
@@ -114,7 +114,7 @@ private:
 void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor)
 {
     RootVisitor plainRoot = [&](ObjectRef& root) {
-        ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+        ZUncoloredRoot::mark_object(safe(root.LoadPlain()));
         rawRootVisitor(root);
     };
     MarkThreadClosure threadClosure(&rawRootVisitor);
@@ -206,7 +206,7 @@ void ZMark::EnumAllCommonRoots(ZWorkers& workers)
     MarkOldRootsTask task(Heap::GetHeap().old().Mark(),
                          [](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
         VisitStrongPlainRoots([&](ObjectRef& root) {
-            ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+            ZUncoloredRoot::mark_object(safe(root.LoadPlain()));
         }, {});
         Heap::GetHeap().cross_vm().VisitSurrectedExportRoots([](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {

@@ -299,7 +299,7 @@ void* StartMainTask(void* arg, unsigned int len)
     ScheduleHandle scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     ASSERT(arg != nullptr);
     auto lwtData = static_cast<LWTData*>(arg);
-    auto execute = lwtData->execute;
+    auto execute = lwtData->fn;
     Mutator* mutator = MutatorManager::Instance().CreateMutator();
     uintptr_t threadData = MRT_GetThreadLocalData();
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
@@ -351,7 +351,7 @@ void* WrapperTask(void* arg, unsigned int len)
 {
     ASSERT(arg != nullptr);
     auto lwtData = static_cast<LWTData*>(arg);
-    auto execute = lwtData->execute;
+    auto execute = lwtData->fn;
     uintptr_t threadData = MRT_GetThreadLocalData();
     // mutator has been set to a valid pointer before.
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
@@ -375,8 +375,9 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
     void* pc = __builtin_return_address(0);
     MapleRuntime::Sanitizer::TsanFuncEntry(pc);
 #endif
-    LWTData data;
-    data.execute = execute;
+    LWTData data {};
+    data.execute = nullptr;
+    data.fn = execute;
     data.threadObject = nullptr;
     data.obj = nullptr;
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(future)));
@@ -384,6 +385,7 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
     CJThreadHandle handle = CJThreadNew(scheduler, nullptr, WrapperTask, &data, sizeof(LWTData));
+    PublishCJThreadRootColor(handle);
     if (handle == nullptr) {
 #if defined(CANGJIE_TSAN_SUPPORT)
         MapleRuntime::Sanitizer::TsanFuncExit();
@@ -412,6 +414,7 @@ bool MRT_NewForeignCJThread()
         LWTData data = {};
         CJThreadHandle cjthread =
             CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr), WrapperTask, &data, sizeof(LWTData));
+        PublishCJThreadRootColor(cjthread);
         MutatorManager::Instance().SetMainThreadHandle(cjthread);
         CJThreadPreemptOffCntAdd();
         RebindCJThread(cjthread);
@@ -496,13 +499,16 @@ static void* WrapperExclusiveClosure(void* arg, unsigned int len)
 
 void* MCC_NewExclusiveCJThread(void* executeClosure, void* closurePtr, void* futureTi)
 {
-    LWTData data;
+    LWTData data {};
     data.execute = nullptr;
+    data.fn = futureTi;
     data.obj = nullptr;
-    data.threadObject = futureTi;
+    data.threadObject = nullptr;
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(closurePtr)));
     StorePlain(RootSlotAt(&data.execute), from_object(from_native_ref(executeClosure)));
-    return ExclusiveCJThreadNew(WrapperExclusiveClosure, &data, sizeof(LWTData));
+    CJThreadHandle handle = ExclusiveCJThreadNew(WrapperExclusiveClosure, &data, sizeof(LWTData));
+    PublishCJThreadRootColor(handle);
+    return handle;
 }
 
 static void ResetFinalizerThreadLocal()
@@ -549,6 +555,7 @@ void* NewFinalizerCJThread()
     CJThreadHandle cjthread = CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr),
                                                     WrapperTask, &data, sizeof(LWTData),
                                                     CJTHREAD_CREATE_SOURCE_FINALIZER);
+    PublishCJThreadRootColor(cjthread);
     if (cjthread == nullptr) {
         LOG(RTLOG_ERROR, "failed to create finalizer cjthread");
         FiniAndFreeFinalizerScheduler(scheduler);
@@ -606,15 +613,13 @@ static void* WrapperOfExecuteClosure(void* arg, unsigned int len)
 {
     ASSERT(arg != nullptr);
     auto lwtData = static_cast<LWTData*>(arg);
-    auto executeClosure = lwtData->execute;
+    auto executeClosure = lwtData->fn;
     uintptr_t threadData = MRT_GetThreadLocalData();
     // mutator has been set to a valid pointer before.
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
-    TypeInfo* futureTi = static_cast<TypeInfo*>(lwtData->threadObject);
-    // threadObject is used to pass TypeInfo of future. After use, need set to nullptr.
-    lwtData->threadObject = nullptr;
     BaseObject* closureObj = to_object(safe(RootSlotAt(&lwtData->obj).LoadPlain()));
+    TypeInfo* futureTi = closureObj != nullptr ? closureObj->GetTypeInfo() : nullptr;
 #if defined(__aarch64__)
     ExecuteCangjieStub(closureObj, futureTi, 0, executeClosure, reinterpret_cast<void*>(threadData), &g_ut);
 #elif defined(__arm__)
@@ -631,16 +636,19 @@ static void* WrapperOfExecuteClosure(void* arg, unsigned int len)
 
 void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* scheduler, void* futureTi)
 {
-    LWTData data;
-    data.execute = executeClosure;
+    LWTData data {};
+    data.execute = nullptr;
+    data.fn = executeClosure;
     data.obj = nullptr;
-    data.threadObject = futureTi; // used to pass TypeInfo of future
+    data.threadObject = nullptr;
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(closurePtr)));
+    (void)futureTi;
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
     CJThreadHandle handle =
         CJThreadNewToSchedule(scheduler, nullptr, WrapperOfExecuteClosure, &data, sizeof(LWTData));
+    PublishCJThreadRootColor(handle);
     return handle;
 }
 
@@ -729,9 +737,9 @@ const char** MRT_GetCommandLineArgs()
 void MRT_CjRuntimeStart(void* execute)
 {
     ScheduleHandle scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
-    LWTData lwtData;
-    lwtData.execute = execute;
-    lwtData.fn = nullptr;
+    LWTData lwtData {};
+    lwtData.execute = nullptr;
+    lwtData.fn = execute;
     lwtData.obj = nullptr;
     lwtData.threadObject = nullptr;
     CJThreadAttr attr;
@@ -739,6 +747,7 @@ void MRT_CjRuntimeStart(void* execute)
     CJThreadAttrStackSizeSet(&attr, g_initStackSize * KB); // Set main task stack size.
     CJThreadAttrNameSet(&attr, "cangjie");
     CJThreadHandle cjthread = CJThreadNew(scheduler, &attr, StartMainTask, &lwtData, sizeof(LWTData));
+    PublishCJThreadRootColor(cjthread);
     MutatorManager::Instance().SetMainThreadHandle(cjthread);
     ScheduleStart();
 }

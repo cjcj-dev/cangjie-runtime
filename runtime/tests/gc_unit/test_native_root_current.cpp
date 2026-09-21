@@ -238,7 +238,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 
 }
 namespace {
-void CheckSavedRootColor(bool invisible, bool watermark = true)
+void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds = false)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
@@ -264,6 +264,12 @@ void CheckSavedRootColor(bool invisible, bool watermark = true)
         slot = reinterpret_cast<RootSlot*>(thread->GetGCData().invisibleRoot);
     } else {
         slot = thread->AddNativeFrameRoot(from);
+    }
+    if (twoRounds) {
+        ZGlobalsPointers::flip_old_relocate_start();
+        const bool first = thread->GcPhaseEnum(false, watermark ? StackWatermark::epoch_id() : 0);
+        GC_EXPECT_TRUE(first);
+        GC_EXPECT_EQ(raw(slot->LoadPlain()), reinterpret_cast<uintptr_t>(from));
     }
     const uintptr_t savedColor = thread->GetGCData().loadGoodMask;
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
@@ -295,10 +301,74 @@ void CheckSavedRootColor(bool invisible, bool watermark = true)
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 }
+GC_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochNativeFrameRoot) { CheckSavedRootColor(false, true, true); }
+GC_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochInvisibleRoot) { CheckSavedRootColor(true, true, true); }
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorNativeFrameRoot) { CheckSavedRootColor(false); }
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorInvisibleRoot) { CheckSavedRootColor(true); }
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectNativeFrameRoot) { CheckSavedRootColor(false, false); }
 GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectInvisibleRoot) { CheckSavedRootColor(true, false); }
+
+GC_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    RelocationReceiptTest::BindNativeRootFixture(heap);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    ZPage* page = fx.region0;
+    page->reset(PageAge::eden);
+    ZGenerationTest::SetTenuringThreshold(heap.young(), 1);
+    BaseObject* dead = fx.PlaceObject(page->GetRegionStart());
+    BaseObject* earlier = fx.PlaceObject(page->GetRegionStart() + dead->GetSize());
+    BaseObject* from = fx.PlaceObject(reinterpret_cast<MAddress>(earlier) + earlier->GetSize());
+    BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(from) + from->GetSize());
+    page->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
+    Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    thread->SetManagedContext(false);
+    (void)thread->EnterSaferegion(false);
+    const size_t roots = thread->NativeFrameRootCount();
+    RootSlot* slot = thread->AddNativeFrameRoot(from);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page}));
+    heap.young().set_phase(ZGenerationPhase::Relocate);
+    RelocationReceiptTest::FlipNativeRootYoung(heap);
+    auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
+    manager.CompactRegion(page);
+    page->MarkForwardingDone();
+    const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
+    ZRelocate::RemapYoungRoots();
+    const uintptr_t observed = raw(slot->LoadPlain());
+    std::fprintf(stderr, "REMAP_YOUNG_ROOTS_THREAD from=%p observed=%#lx expected=%#lx\n", from, observed, expected);
+    GC_EXPECT_EQ(observed, expected);
+    thread->PopNativeFrameRootsTo(roots);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+
+GC_OTHER_VM_TEST(ThreadRootCurrent, YoungRelocateSkipsForeignIncompleteFrom)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    RelocationReceiptTest::BindNativeRootFixture(heap);
+    fx.region1->reset(PageAge::old);
+    BaseObject* held = fx.PlaceObject(fx.region1->GetRegionStart());
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(held) + held->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, held));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region1}));
+    GC_EXPECT_TRUE(!fx.region1->IsForwardingDone());
+    GC_EXPECT_TRUE(forwarding_for_page(fx.region1) != nullptr);
+    heap.young().set_phase(ZGenerationPhase::Relocate);
+    const std::vector<BaseObject*> none;
+    const std::unordered_set<MAddress> emptySlots;
+    const std::unordered_map<MAddress, BaseObject*> emptyBases;
+    heap.young().EvacuateYoungRegions(none, emptySlots, false, emptyBases, nullptr);
+    GC_EXPECT_TRUE(forwarding_for_page(fx.region1) != nullptr);
+    GC_EXPECT_TRUE(!fx.region1->IsForwardingDone());
+}
 
 GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
 {

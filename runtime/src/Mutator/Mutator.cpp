@@ -19,6 +19,8 @@
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
+#include "Heap/z/zStackWatermark.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
 #include "StackManager.h"
@@ -800,14 +802,18 @@ bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFins);
     }
     MutatorUnlock();
-    // ZGC zStackWatermark.cpp:155-173: preserve the root color in the closure.
-    const uintptr_t rootColor = GetGCData().loadGoodMask;
-    RootVisitor visitor = [this, young, rootColor](ObjectRef& root) {
+    // ZGC zStackWatermark.cpp:163-214: the closure reads the color saved in
+    // start_processing_impl, not the previous epoch's headColor.
+    RootVisitor visitor = [this, young, stackScanEpoch](ObjectRef& root) {
+        const uintptr_t rootColor = stackScanEpoch == 0 ? GetGCData().storeGoodMask
+            : GetStackWatermark().uncolored_root_color();
         VisitHeapRootSlots(root, [young, rootColor](ObjectRef& slot) {
             (void)PushHeapRoot(slot, young, rootColor);
         });
     };
-    RootVisitor invisibleRootVisitor = [young, rootColor](ObjectRef& root) {
+    RootVisitor invisibleRootVisitor = [this, young, stackScanEpoch](ObjectRef& root) {
+        const uintptr_t rootColor = stackScanEpoch == 0 ? GetGCData().storeGoodMask
+            : GetStackWatermark().uncolored_root_color();
         (void)PushHeapRoot(root, young, rootColor, false);
     };
     DerivedPtrVisitor derivedVisitor = MakeDerivedRootVisitor(visitor);
