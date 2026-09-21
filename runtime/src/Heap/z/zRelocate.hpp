@@ -120,15 +120,15 @@ template<typename T> class ZArray;
 // ZGC zRelocate.hpp:79-94 / zRelocate.cpp:309-333.
 class ZRelocationTargets {
 public:
-    static constexpr size_t kAges = 16;
+    static constexpr size_t kAges = kPageAgeCount - 1;
     ZRelocationTargets() : targets(std::array<ZPage*, kAges>{}) {}
     ZPage* get(uint32_t partitionId, PageAge age) const
     {
-        return targets.get(partitionId)[static_cast<size_t>(age)];
+        return targets.get(partitionId)[static_cast<size_t>(age) - 1];
     }
     void set(uint32_t partitionId, PageAge age, ZPage* page)
     {
-        targets.get(partitionId)[static_cast<size_t>(age)] = page;
+        targets.get(partitionId)[static_cast<size_t>(age) - 1] = page;
     }
     template<class F> void apply_and_clear_targets(F fn)
     {
