@@ -80,14 +80,14 @@ bool ModelShouldSelfHealCas(bool loadGoodIsHeap)
 class InstalledExportAllocBuffer final {
 public:
     explicit InstalledExportAllocBuffer(AllocBuffer& allocBuffer)
-        : alloc(allocBuffer), previous(ThreadLocal::GetAllocBuffer())
+        : alloc(allocBuffer), previous(ThreadLocal::GetThreadLocalData()->buffer)
     {
-        ThreadLocal::SetAllocBuffer(&alloc);
+        ThreadLocal::GetThreadLocalData()->buffer = &alloc;
     }
 
     ~InstalledExportAllocBuffer()
     {
-        ThreadLocal::SetAllocBuffer(previous);
+        ThreadLocal::GetThreadLocalData()->buffer = previous;
         alloc.ClearRegion();
     }
 

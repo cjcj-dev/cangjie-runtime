@@ -124,17 +124,17 @@ GC_OTHER_VM_TEST(AllocBufferHandoff, StackRootPublishDuringRetireKeepsHeapIntact
     ThreadGCData* owners[2]{};
     auto publish = [&](size_t id) {
         ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
-        ThreadLocal::SetAllocBuffer(id == 0 ? &first : &second);
+        ThreadLocal::GetThreadLocalData()->buffer = id == 0 ? &first : &second;
         owners[id] = &ThreadLocal::GetGCData();
         auto& stacks = domain.Stacks();
         stacks.Push(domain.Stripes(), id,
                     MarkStackEntry(untype(ZAddress::offset(from_object(id == 0 ? fx.obj0 : fx.obj1))), true, true, true, false), true);
         ready.fetch_add(1);
         while (ready.load() != 2) { std::this_thread::yield(); }
-        ThreadLocal::SetAllocBuffer(id == 0 ? &second : &first);
+        ThreadLocal::GetThreadLocalData()->buffer = id == 0 ? &second : &first;
         GC_EXPECT_TRUE(owners[id] == &ThreadLocal::GetGCData());
         GC_EXPECT_TRUE(domain.FlushStacks());
-        ThreadLocal::SetAllocBuffer(nullptr);
+        ThreadLocal::GetThreadLocalData()->buffer = nullptr;
     };
     std::thread one(publish, 0);
     std::thread two(publish, 1);

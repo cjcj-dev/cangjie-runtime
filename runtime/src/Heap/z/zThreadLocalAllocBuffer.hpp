@@ -45,7 +45,6 @@ public:
     ~AllocBuffer();
     void Init();
     void Fini();
-    static AllocBuffer* GetOrCreateAllocBuffer();
     static AllocBuffer* GetAllocBuffer();
 
     MAddress Allocate(size_t size, AllocType allocType);

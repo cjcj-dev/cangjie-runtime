@@ -32,9 +32,7 @@ void ZThreadLocalAllocBuffer::publish_statistics()
 void ZThreadLocalAllocBuffer::retire(Mutator& thread, TLABStatistics& stats)
 {
     stats = TLABStatistics{};
-    if (AllocBuffer* buffer = thread.GetAllocBuffer()) {
-        Heap::GetHeap().page_allocator().RetireTLAB(*buffer, stats);
-    }
+    Heap::GetHeap().page_allocator().RetireTLAB(*thread.tlab(), stats);
 }
 
 void ZThreadLocalAllocBuffer::update_stats(Mutator& thread)
@@ -44,28 +42,11 @@ void ZThreadLocalAllocBuffer::update_stats(Mutator& thread)
 
 constexpr size_t AllocBuffer::MinTLABSize;
 
-AllocBuffer* AllocBuffer::GetOrCreateAllocBuffer()
+AllocBuffer* AllocBuffer::GetAllocBuffer()
 {
-    AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
-    if (buffer == nullptr) {
-        if (Mutator* owner = ThreadLocal::GetMutator()) {
-            buffer = owner->GetAllocBuffer();
-        } else {
-            buffer = ThreadLocal::NativeAllocBuffer();
-            if (buffer == nullptr) {
-                buffer = new (std::nothrow) AllocBuffer();
-                CHECK_DETAIL(buffer != nullptr, "new region alloc buffer fail");
-                ThreadLocal::NativeAllocBuffer() = buffer;
-            }
-        }
-        ThreadLocal::SetAllocBuffer(buffer);
-    }
-    buffer->Init();
-    RegisterCurrentMarkFlushThread();
-    return buffer;
+    Mutator* owner = ThreadLocal::GetMutator();
+    return owner != nullptr ? owner->tlab() : nullptr;
 }
-
-AllocBuffer* AllocBuffer::GetAllocBuffer() { return ThreadLocal::GetAllocBuffer(); }
 
 AllocBuffer::~AllocBuffer()
 {
@@ -91,7 +72,7 @@ void AllocBuffer::Fini()
     initialized = false;
     // Finish allocation publications before releasing the current context.
     // Mark stacks and SBB remain owned by the logical thread until detach.
-    if (ThreadLocal::GetAllocBuffer() == this) {
+    if (GetAllocBuffer() == this) {
         ThreadLocal::FlushCurrentThreadMarkStacks();
     }
     FlushRegion();

@@ -349,11 +349,11 @@ void RegionManager::RequestForRegion(size_t size)
 namespace MapleRuntime {
 MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
 {
-    if (allocSize > ZObjectSizeLimitSmall) {
+    if (allocSize > ZObjectSizeLimitSmall || ThreadLocal::GetMutator() == nullptr) {
         return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden, false,
             allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
     }
-    AllocBuffer* allocBuffer = AllocBuffer::GetOrCreateAllocBuffer();
+    AllocBuffer* allocBuffer = ThreadLocal::GetMutator()->tlab();
     return allocBuffer->Allocate(allocSize, allocType);
 }
 

@@ -309,7 +309,7 @@ public:
 
     bool GcPhaseEnum(bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
-    AllocBuffer* GetAllocBuffer() { return &allocBuffer; }
+    AllocBuffer* tlab() { return &allocBuffer; }
     static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
 
     inline void HandleCpuProfile();
@@ -424,9 +424,6 @@ public:
 
     void PreparedToRun(ThreadLocalData* tlData)
     {
-        // SetMutator binds this logical thread's embedded TLAB into TLS.
-        // Initialize its allocation policy before leaving the saferegion.
-        (void)AllocBuffer::GetOrCreateAllocBuffer();
         RegisterCurrentMarkFlushThread();
         UpdatePollValues(tlData);
         DoLeaveSaferegion();
@@ -466,7 +463,6 @@ public:
         InitTid();
         foreignThreadInfo.isForeignThread = true;
         foreignThreadInfo.isExit = false;
-        (void)AllocBuffer::GetOrCreateAllocBuffer();
         foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
         RegisterCurrentMarkFlushThread();
     }

@@ -11,14 +11,14 @@ uintptr_t before[3];
 const void* beforeBuffer;
 void ReadBounds(uintptr_t (&words)[3])
 {
-    const auto* buffer = MapleRuntime::ThreadLocal::GetAllocBuffer();
+    const auto* buffer = MapleRuntime::ThreadLocal::GetThreadLocalData()->buffer;
     std::memset(words, 0, sizeof(words));
     if (buffer != nullptr) { std::memcpy(words, buffer, sizeof(words)); }
 }
 }
 extern "C" void TLABBefore()
 {
-    beforeBuffer = MapleRuntime::ThreadLocal::GetAllocBuffer();
+    beforeBuffer = MapleRuntime::ThreadLocal::GetThreadLocalData()->buffer;
     ReadBounds(before);
 }
 extern "C" int64_t TLABAfter(int64_t expected, int64_t actual)
@@ -27,7 +27,7 @@ extern "C" int64_t TLABAfter(int64_t expected, int64_t actual)
     ReadBounds(after);
     const bool bounds = after[2] != 0 && after[2] <= after[0] && after[0] <= after[1];
     const bool value = expected == actual;
-    const bool sameBuffer = beforeBuffer == MapleRuntime::ThreadLocal::GetAllocBuffer();
+    const bool sameBuffer = beforeBuffer == MapleRuntime::ThreadLocal::GetThreadLocalData()->buffer;
     const bool refill = after[1] != before[1];
     const bool advance = !sameBuffer || refill || after[0] > before[0];
     std::fprintf(stderr, "TLAB_MANAGED_BOUNDS top=%#zx end=%#zx start=%#zx before_top=%#zx before_end=%#zx value=%d bounds=%d advance=%d refill=%d same_buffer=%d\n",

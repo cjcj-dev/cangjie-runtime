@@ -890,9 +890,8 @@ void Mutator::TransitionToCpuProfileExclusive()
 
 void Mutator::ReleaseAllocBuffer()
 {
-    AllocBuffer* buffer = GetAllocBuffer();
+    AllocBuffer* buffer = tlab();
     buffer->Fini();
-    if (ThreadLocal::GetAllocBuffer() == buffer) { ThreadLocal::SetAllocBuffer(nullptr); }
     // We can remove foreign thread c-heap resource here.
 }
 } // namespace MapleRuntime

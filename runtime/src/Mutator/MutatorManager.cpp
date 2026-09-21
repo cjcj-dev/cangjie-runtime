@@ -102,7 +102,6 @@ void MutatorManager::BindMutator(Mutator& mutator) const
 {
     ThreadLocalData* tlData = ThreadLocal::GetThreadLocalData();
     tlData->SetMutator(&mutator);
-    (void)AllocBuffer::GetOrCreateAllocBuffer();
     MutatorManager::Instance().RegisterMarkFlushThread(tlData);
     UpdatePollValues(tlData);
 }
@@ -231,7 +230,6 @@ void MutatorManager::DestroyRuntimeMutator(ThreadType threadType)
     }
     ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
     UnregisterMarkFlushThread(tls);
-    ThreadLocal::SetAllocBuffer(nullptr);
     ThreadLocal::SetCJProcessorFlag(false);
     if (threadType != ThreadType::FP_THREAD) {
         DestroyMutator(mutator);

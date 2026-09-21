@@ -25,7 +25,9 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
 {
     ThreadLocal::InitializeCleaner();
     mutator = newMutator;
-    buffer = newMutator != nullptr ? newMutator->GetAllocBuffer() : cleaner.nativeBuffer;
+    // One publication point for all scheduler binding paths. The logical
+    // thread owns its TLAB; generated allocation code borrows this ABI slot.
+    buffer = newMutator != nullptr ? newMutator->tlab() : nullptr;
     if (newMutator != nullptr) {
         auto& data = newMutator->GetGCData();
         data.Attach(newMutator, nullptr, data.invisibleRoot);
@@ -42,12 +44,6 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
 ThreadLocalData* ThreadLocal::GetThreadLocalData()
 {
     return reinterpret_cast<ThreadLocalData*>(threadLocalData);
-}
-
-AllocBuffer*& ThreadLocal::NativeAllocBuffer()
-{
-    InitializeCleaner();
-    return cleaner.nativeBuffer;
 }
 
 ThreadGCData& ThreadLocal::GetGCData()
@@ -82,7 +78,7 @@ void ThreadLocal::FlushCurrentThreadMarkStacks()
     // it is detached. An idle owner has no publication to perform. Pending
     // stacks, buffered stores, or an allocation-context producer still take
     // the collector path; never use collector absence to discard work.
-    if (tls->buffer == nullptr && empty(tls->gcData) && empty(tls->nativeGCData)) {
+    if (tls->mutator == nullptr && empty(tls->gcData) && empty(tls->nativeGCData)) {
         return;
     }
     Heap& heap = Heap::GetHeap();
@@ -128,12 +124,6 @@ CleanThreadLocalData::~CleanThreadLocalData()
         // the owner from the handshake inventory (ZMark::flush, zMark.cpp:998).
         MutatorManager::Instance().UnregisterMarkFlushThread(local);
         ThreadLocal::FlushCurrentThreadMarkStacks();
-    }
-    if (nativeBuffer != nullptr) {
-        nativeBuffer->Fini();
-        if (local->buffer == nativeBuffer) { local->buffer = nullptr; }
-        delete nativeBuffer;
-        nativeBuffer = nullptr;
     }
     nativeData.Detach();
     // gcData may borrow a parked/migrating Mutator. The cleaner owns only

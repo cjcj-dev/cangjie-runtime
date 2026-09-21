@@ -120,10 +120,10 @@ void* AllocateThroughCycle(void*)
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     const MSize objectSize = 256 + TYPEINFO_PTR_SIZE;
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
     const size_t maximum = ZObjectSizeLimitSmall;
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
-    buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    buffer = AllocBuffer::GetAllocBuffer();
     const size_t initial = buffer->ComputeTLABSize(objectSize, maximum);
     size_t backingBytes = 0;
     size_t requestedBytes = 0;
@@ -140,7 +140,7 @@ void* AllocateThroughCycle(void*)
         requestedBytes += objectSize;
     }
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
-    buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    buffer = AllocBuffer::GetAllocBuffer();
     // ZHeap::account_alloc_page: the cycle denominator retains backing
     // capacity, including unused TLAB tails. These values come from actual
     // MCC_NewObject refills, never a test history setter.
@@ -192,7 +192,7 @@ void* AllocateInlineBounds(void*)
     constexpr size_t bytes = 256;
     type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
     const size_t requested = buffer->ComputeTLABSize(bytes, Heap::GetHeap().unsafe_max_tlab_alloc());
     size_t fits = 0;
     size_t refills = 0;
@@ -272,7 +272,7 @@ void* FirstTLABOwner(void* argument)
     auto& state = *static_cast<TLABOwnerCase*>(argument);
     (void)MCC_NewObject(state.type, 4096);
     state.first = AllocBuffer::GetAllocBuffer();
-    state.firstBinding = state.first == Mutator::GetMutator()->GetAllocBuffer();
+    state.firstBinding = state.first == ThreadLocal::GetThreadLocalData()->buffer;
     state.turn.store(1, std::memory_order_release);
     while (state.turn.load(std::memory_order_acquire) != 2) { CJ_CJThreadResched(); }
     state.stable = AllocBuffer::GetAllocBuffer() == state.first;
@@ -287,7 +287,7 @@ void* SecondTLABOwner(void* argument)
     while (state.turn.load(std::memory_order_acquire) != 1) { CJ_CJThreadResched(); }
     (void)MCC_NewObject(state.type, 4096);
     state.second = AllocBuffer::GetAllocBuffer();
-    state.secondBinding = state.second == Mutator::GetMutator()->GetAllocBuffer();
+    state.secondBinding = state.second == ThreadLocal::GetThreadLocalData()->buffer;
     state.turn.store(2, std::memory_order_release);
     while (state.turn.load(std::memory_order_acquire) != 3) { CJ_CJThreadResched(); }
     return nullptr;
@@ -346,7 +346,7 @@ void SnapshotOwner(TLABSnapshotCase& state, unsigned index)
     if (state.refillOwner.load() == static_cast<int>(index)) {
         // Read the owner's remaining product statistics only after publication.
         // They are assertion output, never injected into a downstream phase.
-        owner->GetAllocBuffer()->AccumulateTLABStatistics(state.pending,
+        owner->tlab()->AccumulateTLABStatistics(state.pending,
             Heap::GetHeap().page_allocator().GetTLABUsed(), Heap::GetHeap().page_allocator().GetTLABCapacity());
     }
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
@@ -374,7 +374,7 @@ GC_RUNTIME_OTHER_VM_TEST(TLABSnapshot, RootPublicationPreservesLaterRefills)
         size_t size = 0;
         std::thread probe([&] {
             auto* owner = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-            size = owner->GetAllocBuffer()->ComputeTLABSize(0, ZObjectSizeLimitSmall);
+            size = owner->tlab()->ComputeTLABSize(0, ZObjectSizeLimitSmall);
             MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         });
         probe.join();
@@ -442,7 +442,7 @@ GC_RUNTIME_OTHER_VM_TEST(TLABOwnership, ResumeOnAnotherWorkerKeepsBuffer)
         Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         owner->DoLeaveSaferegion();
         (void)MCC_NewObject(type, 4096);
-        before = owner->GetAllocBuffer();
+        before = owner->tlab();
         owner->PreparedToPark(nullptr, nullptr);
         manager.UnbindMutator(*owner);
         parked.store(owner, std::memory_order_release);
@@ -479,12 +479,16 @@ struct ParkedTLABCase {
     std::atomic<bool> parked{false}, ready{false}, flipped{false}, refilled{false}, rootsDone{false}, finish{false};
     size_t before = 0;
     size_t after = 0;
+    Mutator* parkedOwner = nullptr;
+    size_t parkedBefore = 0;
 };
 bool ParkedTLABReleased(void* value) { return static_cast<ParkedTLABCase*>(value)->finish.load(); }
 void* ParkOldTLABOwner(void* value)
 {
     auto& state = *static_cast<ParkedTLABCase*>(value);
     (void)MCC_NewObject(state.type, 4096);
+    state.parkedOwner = Mutator::GetMutator();
+    state.parkedBefore = state.parkedOwner->tlab()->TLABSize();
     state.parked.store(true, std::memory_order_release);
     WaitqueuePark(&state.release, LLONG_MAX, ParkedTLABReleased, &state, false);
     return nullptr;
@@ -528,6 +532,7 @@ GC_RUNTIME_OTHER_VM_TEST(TLABOwnership, ParkedRootDoesNotRetireRunningOwner)
     state.flipped.store(true, std::memory_order_release);
     while (!state.refilled.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
+    const size_t parkedAfter = state.parkedOwner->tlab()->TLABSize();
     state.rootsDone.store(true, std::memory_order_release);
     void* result = nullptr;
     GC_EXPECT_EQ(GetTaskRet(first, &result), E_OK);
@@ -535,8 +540,9 @@ GC_RUNTIME_OTHER_VM_TEST(TLABOwnership, ParkedRootDoesNotRetireRunningOwner)
     ReleaseHandle(first);
     ReleaseHandle(second);
     WaitqueueDelete(&state.release);
-    std::fprintf(stderr, "TLAB_PARKED_OWNER_TARGET executed=1 before=%zu after=%zu\n", state.before, state.after);
-    GC_EXPECT_TRUE(state.before > 0 && state.after == state.before);
+    std::fprintf(stderr, "TLAB_PARKED_OWNER_TARGET executed=1 before=%zu after=%zu parked_before=%zu parked_after=%zu\n",
+                 state.before, state.after, state.parkedBefore, parkedAfter);
+    GC_EXPECT_TRUE(state.before > 0 && state.after == state.before && state.parkedBefore > 0 && parkedAfter == 0);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif
