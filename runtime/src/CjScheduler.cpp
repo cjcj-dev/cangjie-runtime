@@ -384,8 +384,8 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
-    CJThreadHandle handle = CJThreadNew(scheduler, nullptr, WrapperTask, &data, sizeof(LWTData));
-    PublishCJThreadRootColor(handle);
+    CJThreadHandle handle = CJThreadNew(scheduler, nullptr, WrapperTask, &data, sizeof(LWTData),
+            CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
     if (handle == nullptr) {
 #if defined(CANGJIE_TSAN_SUPPORT)
         MapleRuntime::Sanitizer::TsanFuncExit();
@@ -413,8 +413,8 @@ bool MRT_NewForeignCJThread()
         CJThreadAttrNameSet(&attr, "cangjie");
         LWTData data = {};
         CJThreadHandle cjthread =
-            CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr), WrapperTask, &data, sizeof(LWTData));
-        PublishCJThreadRootColor(cjthread);
+            CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr), WrapperTask, &data, sizeof(LWTData),
+            CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
         MutatorManager::Instance().SetMainThreadHandle(cjthread);
         CJThreadPreemptOffCntAdd();
         RebindCJThread(cjthread);
@@ -482,7 +482,6 @@ static void* WrapperExclusiveClosure(void* arg, unsigned int len)
     uintptr_t threadData = MRT_GetThreadLocalData();
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
-    lwtData->threadObject = nullptr;
     BaseObject* executeClosure = to_object(safe(RootSlotAt(&lwtData->execute).LoadPlain()));
     BaseObject* closureObj = to_object(safe(RootSlotAt(&lwtData->obj).LoadPlain()));
 #if defined(__aarch64__)
@@ -506,8 +505,7 @@ void* MCC_NewExclusiveCJThread(void* executeClosure, void* closurePtr, void* fut
     data.threadObject = nullptr;
     StorePlain(RootSlotAt(&data.obj), from_object(from_native_ref(closurePtr)));
     StorePlain(RootSlotAt(&data.execute), from_object(from_native_ref(executeClosure)));
-    CJThreadHandle handle = ExclusiveCJThreadNew(WrapperExclusiveClosure, &data, sizeof(LWTData));
-    PublishCJThreadRootColor(handle);
+    CJThreadHandle handle = ExclusiveCJThreadNew(WrapperExclusiveClosure, &data, sizeof(LWTData), ZPointerStoreGoodMask);
     return handle;
 }
 
@@ -554,8 +552,7 @@ void* NewFinalizerCJThread()
     LWTData data = {};
     CJThreadHandle cjthread = CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr),
                                                     WrapperTask, &data, sizeof(LWTData),
-                                                    CJTHREAD_CREATE_SOURCE_FINALIZER);
-    PublishCJThreadRootColor(cjthread);
+                                                    CJTHREAD_CREATE_SOURCE_FINALIZER, ZPointerStoreGoodMask);
     if (cjthread == nullptr) {
         LOG(RTLOG_ERROR, "failed to create finalizer cjthread");
         FiniAndFreeFinalizerScheduler(scheduler);
@@ -647,8 +644,8 @@ void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* sche
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
     CJThreadHandle handle =
-        CJThreadNewToSchedule(scheduler, nullptr, WrapperOfExecuteClosure, &data, sizeof(LWTData));
-    PublishCJThreadRootColor(handle);
+        CJThreadNewToSchedule(scheduler, nullptr, WrapperOfExecuteClosure, &data, sizeof(LWTData),
+            CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
     return handle;
 }
 
@@ -746,8 +743,8 @@ void MRT_CjRuntimeStart(void* execute)
     CJThreadAttrInit(&attr);
     CJThreadAttrStackSizeSet(&attr, g_initStackSize * KB); // Set main task stack size.
     CJThreadAttrNameSet(&attr, "cangjie");
-    CJThreadHandle cjthread = CJThreadNew(scheduler, &attr, StartMainTask, &lwtData, sizeof(LWTData));
-    PublishCJThreadRootColor(cjthread);
+    CJThreadHandle cjthread = CJThreadNew(scheduler, &attr, StartMainTask, &lwtData, sizeof(LWTData),
+            CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
     MutatorManager::Instance().SetMainThreadHandle(cjthread);
     ScheduleStart();
 }
