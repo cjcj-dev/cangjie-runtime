@@ -94,6 +94,7 @@ struct JNICriticalBlockedEnterResult {
     std::atomic<bool> proceed{false};
     std::atomic<bool> entering{false};
     std::atomic<bool> acquired{false};
+    std::atomic<bool> saferegionAfterAcquire{true};
     bool copied{true};
 };
 
@@ -119,6 +120,7 @@ void* AcquireWhileJNICriticalBlocked(void* context)
     }
     result.entering.store(true, std::memory_order_release);
     void* raw = MCC_AcquireRawData(array, &result.copied);
+    result.saferegionAfterAcquire.store(Mutator::GetMutator()->InSaferegion(), std::memory_order_release);
     result.acquired.store(true, std::memory_order_release);
     MCC_ReleaseRawData(array, raw);
     return nullptr;
@@ -546,6 +548,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedNewRawAcquireAllowsStopTheWorld)
     GC_EXPECT_TRUE(stwFinishedWhileBlocked);
     GC_EXPECT_FALSE(acquiredWhileBlocked);
     GC_EXPECT_TRUE(result.acquired.load(std::memory_order_acquire));
+    GC_EXPECT_FALSE(result.saferegionAfterAcquire.load(std::memory_order_acquire));
     GC_EXPECT_FALSE(result.copied);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
