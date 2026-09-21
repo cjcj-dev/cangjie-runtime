@@ -207,16 +207,9 @@ void ZCrossVM::PostResolveCycleTask()
 }
 
 
-ValueRoot::ValueRoot(BaseObject* value) : ValueRoot(value, ForwardingStage::OverwritePrevious) {}
-ValueRoot::ValueRoot(BaseObject* value, ForwardingStage source)
-    : object(value), stage(source), color(::g_cjLoadGoodMask),
-      generation(source == ForwardingStage::IncomingNew && Heap::IsHeapAddress(value)
-          ? Heap::page(reinterpret_cast<MAddress>(value))->GetOwnerGeneration() : Generation::Old) {}
-ForwardingStage ValueRoot::Stage() const
-{
-    const uintptr_t mask = generation == Generation::Young ? ZPointerRemappedYoungMask : ZPointerRemappedOldMask;
-    return (ZPointer::remap_bits(color) & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
-}
+// Like ZUncoloredRoot's saved color, the carrier records the epoch in which
+// its address was made load-good. The consumer, not the page, selects remapping.
+ValueRoot::ValueRoot(BaseObject* value) : object(value), color(::g_cjLoadGoodMask) {}
 
 void ZCrossVM::ResurrectExportObject(BaseObject* obj)
     {
@@ -226,22 +219,20 @@ void ZCrossVM::ResurrectExportObject(BaseObject* obj)
         if (generation == nullptr || !generation->is_phase_relocate()) {
             resurrectedExportObjectes.erase(obj);
             resurrectedExportObjectes.insert(ValueRoot(ResolveCurrentValueRoot(
-                obj, &resurrectedExportObjectes, Heap::GetHeap().ObjectGeneration(obj), ForwardingStage::IncomingNew),
-                ForwardingStage::IncomingNew));
+                ValueRoot(obj), &resurrectedExportObjectes)));
         } else {
             resurrectedExportObjectesForwardPhase.erase(obj);
             resurrectedExportObjectesForwardPhase.insert(ValueRoot(
                 ResolveCurrentValueRoot(
-                    obj, &resurrectedExportObjectesForwardPhase, Heap::GetHeap().ObjectGeneration(obj), ForwardingStage::IncomingNew),
-                ForwardingStage::IncomingNew));
+                    ValueRoot(obj), &resurrectedExportObjectesForwardPhase)));
         }
     }
 
 void ZCrossVM::PrepareCycleRef()
     {
         std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-        CurrentizeValueRootMap(cycleRefWorkStack, Generation::Old);
-        CurrentizeValueRootMap(discoveredExternObjects, Generation::Old);
+        CurrentizeValueRootMap(cycleRefWorkStack);
+        CurrentizeValueRootMap(discoveredExternObjects);
         for (auto& entry : discoveredExternObjects) {
             ValueRootList& destination = cycleRefWorkStack[entry.first];
             destination.splice(destination.end(), entry.second);
@@ -252,8 +243,8 @@ void ZCrossVM::PrepareCycleRef()
 void ZCrossVM::MergeResurrectExportObjects(Generation generation)
     {
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        CurrentizeValueRootSet(resurrectedExportObjectes, generation);
-        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, generation);
+        CurrentizeValueRootSet(resurrectedExportObjectes);
+        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
         resurrectedExportObjectes.insert(resurrectedExportObjectesForwardPhase.begin(),
             resurrectedExportObjectesForwardPhase.end());
         resurrectedExportObjectesForwardPhase.clear();
@@ -263,8 +254,8 @@ void ZCrossVM::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visi
 {
     {
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
-        CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Young);
-        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Young);
+        CurrentizeValueRootSet(resurrectedExportObjectes);
+        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
         for (BaseObject* object : resurrectedExportObjectes) {
             visitor(object);
         }
@@ -273,7 +264,7 @@ void ZCrossVM::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visi
         }
     }
     std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
-    CurrentizeValueRootMap(cycleRefWorkStack, Generation::Young);
+    CurrentizeValueRootMap(cycleRefWorkStack);
     for (const auto& entry : cycleRefWorkStack) {
         visitor(entry.first);
         for (BaseObject* object : entry.second) {
@@ -285,7 +276,7 @@ void ZCrossVM::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visi
 void ZCrossVM::FindUselessExternObjects()
 {
     std::lock_guard<std::mutex> lock(externMtx);
-    CurrentizeValueRootMap(discoveredExternObjects, Generation::Old);
+    CurrentizeValueRootMap(discoveredExternObjects);
 }
 
 void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
@@ -295,7 +286,7 @@ void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
             return;
         }
         const ValueRoot owner = exportOwners.back();
-        BaseObject* exportObj = ResolveCurrentValueRoot(owner, &exportOwners, owner.generation, owner.Stage());
+        BaseObject* exportObj = ResolveCurrentValueRoot(owner, &exportOwners);
         exportOwners.pop_back();
         if (exportObj == nullptr) {
             continue;
@@ -306,7 +297,7 @@ void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
             // ZUncoloredRoot::make_load_good (zUncoloredRoot.inline.hpp:62-69):
             // preserve the load-good identity just produced by the root barrier.
             if (!discoveredExternObjects.emplace(
-                    ValueRoot(exportObj, ForwardingStage::IncomingNew), ValueRootList{}).second) {
+                    ValueRoot(exportObj), ValueRootList{}).second) {
                 continue;
             }
         }
@@ -323,8 +314,8 @@ void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
             }
             if (object->GetTypeInfo()->IsForeignType()) {
                 std::lock_guard<std::mutex> lock(externMtx);
-                discoveredExternObjects[ValueRoot(exportObj, ForwardingStage::IncomingNew)].emplace_back(
-                    object, ForwardingStage::IncomingNew);
+                discoveredExternObjects[ValueRoot(exportObj)].emplace_back(
+                    object);
             }
             // Discovery is not keep-alive (zReferenceProcessor.cpp:175-203):
             // do not turn a weak referent into an export ownership edge.
@@ -338,32 +329,26 @@ void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
     }
 }
 
-BaseObject* ZCrossVM::ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
-                                                      ForwardingStage stage) const
+BaseObject* ZCrossVM::ResolveCurrentValueRoot(const ValueRoot& root, const void* owner) const
 {
+    BaseObject* const value = root.object;
     if (value == nullptr || !Heap::IsHeapAddress(value)) {
         return value;
     }
+    // ZUncoloredRoot::make_load_good (zUncoloredRoot.inline.hpp:62-69):
+    // the saved root color is the only remap discriminator.
+    const zpointer colorPtr = ZAddress::color(zaddress::null, root.color);
+    const bool loadGood = ZPointer::is_load_good(colorPtr);
     const ForwardingProvenance provenance{
-        ForwardingHolderKind::Static, owner, nullptr, stage, ForwardingWriterKind::CollectorHeal,
-        ForwardingSourceKind::CallerValue, nullptr, nullptr, ForwardingFieldKind::RootSlot
+        ForwardingHolderKind::Static, owner, nullptr,
+        loadGood ? ForwardingStage::IncomingNew : ForwardingStage::OverwritePrevious,
+        ForwardingWriterKind::CollectorHeal, ForwardingSourceKind::CallerValue,
+        nullptr, nullptr, ForwardingFieldKind::RootSlot
     };
-    // ZUncoloredRoot::make_load_good (zUncoloredRoot.inline.hpp:62-69)
-    // preserves load-good identity. IncomingNew carries the caller's current
-    // identity; a page owner alone cannot distinguish overlapping from/to keys.
-    if (stage == ForwardingStage::IncomingNew) {
-        return ZBarrier::ValidateCurrentValue(value, provenance);
-    }
-    // Stored roots still need remapping using their source page's generation,
-    // which can differ from the generation currently visiting the roots.
-    (void)generation;
-    const auto forwarding = forwarding_for_page(
-        Heap::page(reinterpret_cast<MAddress>(value)));
-    if (forwarding) {
-        // ZGC zGeneration.inline.hpp:131-140 / zRelocate.cpp:382-415:
-        // stored roots use the same forwarding consumer as load barriers.
-        // zRelocate.cpp:412-415: a table hit must yield a non-null to.
-        BaseObject* current = ZGeneration::generation((forwarding->from_age() == PageAge::old ? ZGenerationId::old : ZGenerationId::young))
+    if (!loadGood) {
+        // ZGeneration::relocate_or_remap_object returns the original address
+        // when this generation's forwarding table has no entry for it.
+        BaseObject* current = ZBarrier::remap_generation(colorPtr)
             ->relocate_or_remap_object(value, provenance);
         if (current == nullptr || !Heap::IsHeapAddress(current) ||
             ZBarrier::JudgeHandOutTarget(current) != HandVerdict::Usable) {
@@ -371,34 +356,29 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(BaseObject* value, const void* own
         }
         return current;
     }
-    CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(value) == HandVerdict::Usable,
-                 "value root without forwarding table must already be usable from=%p", value);
-    return value;
+    return ZBarrier::ValidateCurrentValue(value, provenance);
 }
 
-void ZCrossVM::CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const
+void ZCrossVM::CurrentizeValueRootSet(ValueRootSet& roots) const
 {
     ValueRootSet current;
     current.reserve(roots.size());
     for (const ValueRoot& value : roots) {
-        current.insert(ValueRoot(ResolveCurrentValueRoot(value, &roots, generation, value.Stage()),
-                                 ForwardingStage::IncomingNew));
+        current.insert(ValueRoot(ResolveCurrentValueRoot(value, &roots)));
     }
     roots.swap(current);
 }
 
 void ZCrossVM::CurrentizeValueRootMap(
-    ValueRootMap& roots, Generation generation) const
+    ValueRootMap& roots) const
 {
     ValueRootMap current;
     current.reserve(roots.size());
     for (const auto& entry : roots) {
-        ValueRoot key(ResolveCurrentValueRoot(entry.first, &roots, generation, entry.first.Stage()),
-                      ForwardingStage::IncomingNew);
+        ValueRoot key(ResolveCurrentValueRoot(entry.first, &roots));
         ValueRootList& values = current[key];
         for (const ValueRoot& value : entry.second) {
-            values.emplace_back(ResolveCurrentValueRoot(value, &roots, generation, value.Stage()),
-                                ForwardingStage::IncomingNew);
+            values.emplace_back(ResolveCurrentValueRoot(value, &roots));
         }
     }
     roots.swap(current);
@@ -408,8 +388,8 @@ void ZCrossVM::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>&
 {
     {
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Old);
-        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Old);
+        CurrentizeValueRootSet(resurrectedExportObjectes);
+        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
         for (BaseObject* obj : resurrectedExportObjectes) {
             visitor(obj);
         }
@@ -418,7 +398,7 @@ void ZCrossVM::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>&
         }
     }
     std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-    CurrentizeValueRootMap(cycleRefWorkStack, Generation::Old);
+    CurrentizeValueRootMap(cycleRefWorkStack);
     auto it = cycleRefWorkStack.begin();
     while (it != cycleRefWorkStack.end()) {
         BaseObject* exportObj = it->first;
@@ -434,14 +414,14 @@ void ZCrossVM::PreforwardDiscoveredExternObjects(Generation generation)
 {
     std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
     CHECK(discoveredExternObjects.empty());
-    CurrentizeValueRootMap(cycleRefWorkStack, generation);
+    CurrentizeValueRootMap(cycleRefWorkStack);
 }
 
 void ZCrossVM::PreforwardAllResurrectExportFromObjects(Generation generation)
 {
     std::lock_guard<std::mutex> lg(resurrectExportMtx);
-    CurrentizeValueRootSet(resurrectedExportObjectes, generation);
-    CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, generation);
+    CurrentizeValueRootSet(resurrectedExportObjectes);
+    CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
 }
 } // namespace MapleRuntime
 

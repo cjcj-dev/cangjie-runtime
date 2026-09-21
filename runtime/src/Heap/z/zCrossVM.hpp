@@ -14,17 +14,12 @@
 #include "Heap/z/zGenerationId.hpp"
 namespace MapleRuntime {
 class BaseObject;
-enum class ForwardingStage : uint8_t;
 using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 struct ValueRoot {
     BaseObject* object;
-    ForwardingStage stage;
     uintptr_t color;
-    Generation generation;
     ValueRoot(BaseObject* value);
-    ValueRoot(BaseObject* value, ForwardingStage source);
     operator BaseObject*() const { return object; }
-    ForwardingStage Stage() const;
 };
 struct ValueRootHash {
     size_t operator()(const ValueRoot& root) const { return std::hash<BaseObject*>{}(root.object); }
@@ -71,10 +66,9 @@ private:
     // Value-only root containers have no addressable RootSlot to heal. Keep
     // their RootObligation on the existing ResolveStoreValue authority and
     // rebuild key-bearing containers while their owner lock is held.
-    BaseObject* ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
-                                        ForwardingStage stage) const;
-    void CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const;
-    void CurrentizeValueRootMap(ValueRootMap& roots, Generation generation) const;
+    BaseObject* ResolveCurrentValueRoot(const ValueRoot& root, const void* owner) const;
+    void CurrentizeValueRootSet(ValueRootSet& roots) const;
+    void CurrentizeValueRootMap(ValueRootMap& roots) const;
 };
 } // namespace MapleRuntime
 #endif

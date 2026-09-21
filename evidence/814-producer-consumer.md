@@ -13,3 +13,15 @@
 修改必须在步骤4/5发布前保存 IncomingNew；map 查找同样显式使用当前身份，避免隐式默认构造。
 ZGC /root/cj_build/reference/jdk/src/hotspot/share/gc/z/zUncoloredRoot.inline.hpp:62-69：颜色 load-good 时保持地址，不以 forwarding 存在为旧身份依据。
 本包保留既有默认构造的 old-value 合同，只修正真实 producer 发布身份。
+
+## 补注裁决后完整形态
+
+已读 /root/cj_build/ops/advisor/outbox/sym_cangjie_runtime_814_implement_r5764144763-20260921T165356Z.md 和 sym_task 追加的0922 00:5x裁决。早期 producer-only 候选不是最终实现。
+
+ValueRoot 只保存 object/color；删除 Stage/generation 派生身份。每个 producer 当前值构造时保存 load-good 色；consumer ResolveCurrentValueRoot 先 is_load_good(saved color)，坏色按 remap_generation 路由到该代 relocate_or_remap_object（其 get 空回原地址），好色 ValidateCurrentValue。Currentize 重建时刷新地址及色。
+
+ZGC 对应：zUncoloredRoot.inline.hpp:35-69（保存色判定与修复），zGeneration.inline.hpp:131-140（本代 forwarding 表为空保留地址），zRelocate.cpp:382-415（from-key消费）。
+
+诊断：旧 in_current_relocation_set 实为 lookupTo!=0，改 forwarding_lookup_hit；lookup_state 改 not_attempted/hit/miss，未改判断或 LOADFC。
+
+删除清单：ValueRoot::Stage、ValueRoot.stage、ValueRoot.generation、以 forwarding_for_page 为 ResolveCurrentValueRoot 分路。

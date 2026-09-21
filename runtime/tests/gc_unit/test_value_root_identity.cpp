@@ -25,10 +25,10 @@ public:
         std::lock_guard<std::mutex> lock(cross.externMtx);
         for (const auto& entry : cross.discoveredExternObjects) {
             if (entry.first.object != expected) continue;
-            const bool keyGood = entry.first.Stage() == ForwardingStage::IncomingNew;
+            const bool keyGood = ZPointer::is_load_good(ZAddress::color(zaddress::null, entry.first.color));
             const bool valueGood = entry.second.size() == 1 &&
                 entry.second.front().object == expected &&
-                entry.second.front().Stage() == ForwardingStage::IncomingNew;
+                ZPointer::is_load_good(ZAddress::color(zaddress::null, entry.second.front().color));
             std::fprintf(stderr, "VALUE_ROOT_IDENTITY_TARGET expected=%p key=%p key_current=%d value_current=%d\n",
                 expected, entry.first.object, keyGood, valueGood);
             return keyGood && valueGood;
@@ -76,6 +76,39 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportDiscoveryPreservesCurrentIdentity)
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
     auto* expected = Heap::GetHeap().GetExportObject(root);
     GC_EXPECT_TRUE(RelocationReceiptTest::DiscoveredIdentity(expected));
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    Heap::GetHeap().RemoveExportObject(root);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// A real minor cycle changes the remap epoch after old root enumeration.
+// The owner is already old, so the young table has no forwarding for it:
+// make_load_good must retain that address and publish a current carrier.
+GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, YoungFlipBetweenEnumerationAndConsumption)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    U64 root = 0;
+    auto task = RunCJTask(AllocateExportForeignRoot, &root);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* returned = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &returned), E_OK);
+    ReleaseHandle(task);
+    ConcurrentGCBreakpoints::AcquireControl();
+    GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"));
+    const uintptr_t savedColor = g_cjLoadGoodMask;
+    BaseObject* before = Heap::GetHeap().GetExportObject(root);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    const bool colorChanged = !ZPointer::is_load_good(ZAddress::color(zaddress::null, savedColor));
+    GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
+    BaseObject* after = Heap::GetHeap().GetExportObject(root);
+    const bool currentIdentity = RelocationReceiptTest::DiscoveredIdentity(after);
+    std::fprintf(stderr, "VALUE_ROOT_EPOCH_TARGET before=%p after=%p color_changed=%d current_identity=%d\n",
+        before, after, colorChanged, currentIdentity);
+    GC_EXPECT_TRUE(colorChanged && before == after && currentIdentity);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
     Heap::GetHeap().RemoveExportObject(root);
