@@ -235,11 +235,6 @@ void RegionManager::AssembleSmallGarbageCandidates() {}
 
 void RegionManager::AssembleLargeGarbageCandidates() {}
 
-void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
-{
-    (void)collectAll;
-}
-
 // zGeneration.cpp:205-221: candidates come from the page table. The previous
 // cycle's leftover from-pages are parked; young pages are counted without
 // retaining page pointers. The selection itself (and the from-role assignment) happens in

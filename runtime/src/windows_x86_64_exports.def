@@ -814,7 +814,6 @@ EXPORTS
     RegisterEventHandlerCallbacks @808
     RegisterStackInfoCallbacks @809
     ReleaseHandle @810
-    ReleaseNativeResource @811
     ReportSemRetMsg @812
     ReportWaitQueueRetMsg @813
     RestoreContextForEH @814
@@ -1254,7 +1253,6 @@ EXPORTS
     _ZN12MapleRuntime13ParameterInfo14GetAnnotationsEPNS_8TypeInfoE @1406
     _ZN12MapleRuntime13ParameterInfo7SetNameEPKc @1407
     _ZN12MapleRuntime13RegionManager10InitializeEyy @1409
-    _ZN12MapleRuntime13RegionManager11AllocPinnedEy @1411
     _ZN12MapleRuntime13RegionManager13CollectRegionEPNS_10ZPageE @1413
     _ZN12MapleRuntime13RegionManager13CompactRegionEPNS_10ZPageE @1414
     _ZN12MapleRuntime13RegionManager13ForwardRegionEPNS_10ZPageE @1416
@@ -1268,17 +1266,14 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager19CollectLargeGarbageEv @1427
     _ZN12MapleRuntime13RegionManager19ReassembleFromSpaceEv @1428
     _ZN12MapleRuntime13RegionManager19SetGarbageThresholdEv @1429
-    _ZN12MapleRuntime13RegionManager20CollectPinnedGarbageEv @1430
     _ZN12MapleRuntime13RegionManager21ReleaseMarkQuarantineEv @1433
     _ZN12MapleRuntime13RegionManager21StampCensusBoundariesEv @1434
-    _ZN12MapleRuntime13RegionManager22CollectFreePinnedSlotsEPNS_10ZPageE @1435
     _ZN12MapleRuntime13RegionManager19RelocateClaimedPageEPNS_10ZPageE @1440
     _ZN12MapleRuntime13RegionManager28TakeReclaimableGarbageRegionEPy @1450
     _ZN12MapleRuntime13RegionManager29PrepareYoungGarbageCandidatesEv @1451
     _ZN12MapleRuntime13RegionManager29ReclaimRegionToMarkQuarantineEPNS_10ZPageE @1452
     _ZN12MapleRuntime13RegionManager30AssembleLargeGarbageCandidatesEv @1453
     _ZN12MapleRuntime13RegionManager30AssembleSmallGarbageCandidatesEv @1454
-    _ZN12MapleRuntime13RegionManager31AssemblePinnedGarbageCandidatesEb @1456
     _ZN12MapleRuntime13RegionManager31TryTakeGarbageRegionAfterDispelEPNS_10ZPageE @1457
     _ZN12MapleRuntime13RegionManager33ClearNotRelocatableThisCycleFlagsEv @1459
     _ZN12MapleRuntime13RegionManager9HUGE_PAGEE @1460 DATA
@@ -1576,7 +1571,6 @@ EXPORTS
     _ZN12MapleRuntime18StackGrowStackInfo16FillInStackTraceEv @1905
     _ZN12MapleRuntime18StackGrowStackInfo19RecordStackPtrsImplERKNSt3__18functionIFvRNS_8RootSlotEEEES8_RKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEERNS_11RegSlotsMapERKNS_9FrameInfoERNS_7MutatorE @1906
     _ZN12MapleRuntime18StackGrowStackInfoD0Ev @1907
-    _ZN12MapleRuntime19FreePinnedSlotLists9PushFrontEPNS_10BaseObjectE @1909
     _ZN12MapleRuntime19ORDERS_OF_MAGNITUDEE @1910 DATA
     _ZN12MapleRuntime19PrettyOrderMathNanoEyPKc @1912
     _ZN12MapleRuntime19SemanticVersionInfoC1ERNS_7CStringE @1913

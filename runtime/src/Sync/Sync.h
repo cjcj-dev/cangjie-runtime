@@ -93,7 +93,6 @@ struct CJMultiConditionMonitor {
     HeapSlot<> mutexPtr;
 };
 
-void ReleaseNativeResource(BaseObject* obj);
 
 void MCC_FutureInit(void* ptr);
 bool MCC_FutureIsComplete(void* ptr);
