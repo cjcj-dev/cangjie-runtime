@@ -498,8 +498,8 @@ GC_OTHER_VM_TEST(YoungMarkStart, ParkedRootDeferredToConcurrentMark)
                  unsigned(doneAtStart), unsigned(liveAtStart), unsigned(doneAfterRoots), unsigned(liveAfterRoots));
     GC_EXPECT_FALSE(doneAtStart);
     GC_EXPECT_FALSE(liveAtStart);
-    GC_EXPECT_TRUE(doneAfterRoots);
     GC_EXPECT_TRUE(liveAfterRoots);
+    GC_EXPECT_TRUE(doneAfterRoots);
 }
 
 GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
