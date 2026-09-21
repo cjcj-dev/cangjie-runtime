@@ -8,6 +8,7 @@
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "Mutator/Mutator.inline.h"
 #include "TypeInfoManager.h"
+#include "ObjectModel/MObject.h"
 #include <cstring>
 
 using namespace MapleRuntime;
