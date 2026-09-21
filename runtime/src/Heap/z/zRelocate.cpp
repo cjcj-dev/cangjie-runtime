@@ -349,7 +349,7 @@ BaseObject* ZRelocate::ResolveMinorReference(RootSlot& root, const ScopedStopThe
     CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
                  "minor root resolve requires a usable target from=%p resolved=%p", from, resolved);
 
-    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+    StorePlain(root, from_object(resolved));
     return resolved;
 }
 bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
@@ -444,7 +444,7 @@ bool ZRelocate::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* 
         BaseObject* viaTable = ZGeneration::young()->relocate_or_remap_object(target, provenance);
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+            StorePlain(root, from_object(viaTable));
             return true;
         }
         ZBarrier::FailClosedLoad(
@@ -456,7 +456,7 @@ bool ZRelocate::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* 
     if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
         return false;
     }
-    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+    StorePlain(root, from_object(current));
     return true;
 }
 

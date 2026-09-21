@@ -890,7 +890,10 @@ GC_TEST(StoreBuf, ThreadRootVisitorIncludesExecuteClosure)
             StorePlain(root, from_object(fx.obj1));
         }
     };
+    uintptr_t color = ZPointerStoreGoodMask;
+    auto* previous = MRT_BindUncoloredVisitColor(&color);
     MRT_VisitorCaller(&data, &visitor);
+    MRT_BindUncoloredVisitColor(previous);
     GC_EXPECT_EQ(executeVisits, 1u);
     GC_EXPECT_TRUE(data.execute == static_cast<void*>(fx.obj1));
 }

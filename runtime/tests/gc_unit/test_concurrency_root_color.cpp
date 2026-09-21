@@ -8,14 +8,18 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include <cstdio>
+#include "cjthread.h"
+#include "Sync/Sync.h"
+#include "threadlocal.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 extern "C" void MRT_VisitorCaller(void*, void*);
-extern "C" void MRT_BindUncoloredVisitColor(uintptr_t*);
 
-GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset)
+
+namespace {
+void CheckSavedColor(bool updateThreadObject)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
@@ -44,10 +48,11 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset)
     BaseObject* from = fx.PlaceObject(reinterpret_cast<MAddress>(earlier) + earlier->GetSize());
     BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(from) + from->GetSize());
     page->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
-    LWTData data {};
-    StorePlain(RootSlotAt(&data.obj), from_object(from));
-    uintptr_t savedColor = ZPointerLoadGoodMask;
-    MRT_BindUncoloredVisitColor(&savedColor);
+    auto* thread = static_cast<CJThread*>(MCC_NewCJThread(nullptr, from,
+        runtime.GetConcurrencyModel().GetThreadScheduler()));
+    GC_EXPECT_TRUE(thread != nullptr);
+    auto* data = static_cast<LWTData*>(thread->argStart);
+    const uintptr_t savedColor = thread->uncoloredRootColor;
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
@@ -62,13 +67,63 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset)
     GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
     MAddress observed = 0;
     RootVisitor visitor = [&](RootSlot& root) {
-        if (&root == &RootSlotAt(&data.obj)) {
+        if (&root == &RootSlotAt(&data->obj)) {
             observed = raw(root.LoadPlain());
         }
     };
-    MRT_VisitorCaller(&data, &visitor);
+    MAddress storedExpected = 0;
+    if (updateThreadObject) {
+        storedExpected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(second));
+        auto* previous = CJThreadGet();
+        CJThreadSet(thread);
+        MCC_SetCurrentCJThreadObject(reinterpret_cast<void*>(storedExpected));
+        CJThreadSet(previous);
+    }
+    runtime.GetConcurrencyModel().VisitGCRoots(&visitor);
     std::fprintf(stderr,
         "CONCURRENCY_ROOT_COLOR saved=%#lx current=%#lx from=%p observed=%#lx expected=%#lx\n",
         savedColor, ZPointerLoadGoodMask, from, observed, expected);
     GC_EXPECT_EQ(observed, expected);
+    // Keep the young forwarding table alive. Reinterpreting the healed value
+    // with the first epoch maps it to the preceding live object's destination.
+    if (updateThreadObject) {
+        const auto stored = raw(RootSlotAt(&data->threadObject).LoadPlain());
+        std::fprintf(stderr, "CONCURRENCY_STORE_TARGET observed=%#lx expected=%#lx\n", stored, storedExpected);
+        GC_EXPECT_EQ(stored, storedExpected);
+    }
+    heap.old().End();
+    heap.old().mark_start();
+    observed = 0;
+    ZMark::VisitMinorRootSlots(visitor, visitor);
+    std::fprintf(stderr,
+        "CONCURRENCY_ROOT_SECOND_TARGET observed=%#lx expected=%#lx guard=%#lx\n",
+        observed, expected, thread->uncoloredRootColor);
+    GC_EXPECT_EQ(observed, expected);
+}
+
+} // namespace
+
+GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset) { CheckSavedColor(false); }
+GC_OTHER_VM_TEST(ConcurrencyRootColor, ThreadObjectStorePreservesOtherRootEpoch) { CheckSavedColor(true); }
+
+GC_OTHER_VM_TEST(ConcurrencyRootColor, NativeArgumentsAreNotRoots)
+{
+    B09RuntimeFixture runtime;
+    ZGlobalsPointers::initialize();
+    uintptr_t nativeArgument = 1;
+    auto entry = +[](void*, unsigned int) -> void* { return nullptr; };
+    auto* thread = CJThreadNew(runtime.GetConcurrencyModel().GetThreadScheduler(), nullptr,
+                              entry, &nativeArgument, sizeof(nativeArgument));
+    GC_EXPECT_TRUE(thread != nullptr);
+    size_t visits = 0;
+    RootVisitor visitor = [&](RootSlot&) { ++visits; };
+    runtime.GetConcurrencyModel().VisitGCRoots(&visitor);
+    std::fprintf(stderr, "CONCURRENCY_NATIVE_TARGET visits=%zu\n", visits);
+    GC_EXPECT_EQ(visits, size_t(0));
+    auto* managed = MCC_NewCJThread(reinterpret_cast<void*>(1), nullptr,
+                                   runtime.GetConcurrencyModel().GetThreadScheduler());
+    GC_EXPECT_TRUE(managed != nullptr);
+    runtime.GetConcurrencyModel().VisitGCRoots(&visitor);
+    std::fprintf(stderr, "CONCURRENCY_MANAGED_CONTROL visits=%zu\n", visits);
+    GC_EXPECT_EQ(visits, size_t(3));
 }
