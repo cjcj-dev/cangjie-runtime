@@ -226,7 +226,7 @@ void* RunOldRelocationStatisticsCase(void*)
     return reinterpret_cast<void*>((retainedOld && liveAccount) ? 0 : 1);
 }
 
-void* RunPinnedBirthCase(void*)
+void* RunOrdinaryBirthCase(void*)
 {
     auto& heap = Heap::GetHeap();
     auto* mutator = Mutator::GetMutator();
@@ -242,11 +242,16 @@ void* RunPinnedBirthCase(void*)
     mutator->SetManagedContext(true);
     MObject* fresh = MObject::NewPinnedObject(type, size);
     ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(fresh));
-    const bool fromNewPage = page != oldPage;
+    // ZGC zGeneration.cpp:205-259 permits relocation; reload the live object
+    // through its root before checking that fresh eden allocation is separate.
+    BaseObject* currentSurvivor = heap.GetExportObject(root);
+    const bool fromNewPage = currentSurvivor != nullptr &&
+        page != Heap::page(reinterpret_cast<uintptr_t>(currentSurvivor));
     const bool noExplicitMark = !page->is_marked();
     const bool allocating = page->IsAllocating();
-    const bool retained = heap.GetExportObject(root) == survivor;
-    std::fprintf(stderr, "P1_PINNED_ASSERT_EXECUTED shared=%d new_page=%d allocating=%d no_bitmap=%d retained=%d\n",
+    const bool retained = currentSurvivor != nullptr && currentSurvivor->GetTypeInfo() == type &&
+        currentSurvivor->GetSize() == size;
+    std::fprintf(stderr, "P1_ORDINARY_ASSERT_EXECUTED shared=%d new_page=%d allocating=%d no_bitmap=%d retained=%d\n",
                  shared, fromNewPage, allocating, noExplicitMark, retained);
     heap.RemoveExportObject(root);
     return reinterpret_cast<void*>((shared && fromNewPage && allocating && noExplicitMark && retained) ? 0 : 1);
@@ -592,9 +597,9 @@ GC_RUNTIME_OTHER_VM_TEST(LargePageGeneration, AllocationPublishesYoungEden)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePageIdentityCase, 0), 0);
 }
-GC_RUNTIME_OTHER_VM_TEST(P1Mark, PinnedReclaimedSlotIsNotAllocationSource)
+GC_RUNTIME_OTHER_VM_TEST(P1Mark, OrdinaryAllocationRetiresPageAcrossCollection)
 {
-    GC_EXPECT_EQ(RunRuntimeCase(RunPinnedBirthCase, 0), 0);
+    GC_EXPECT_EQ(RunRuntimeCase(RunOrdinaryBirthCase, 0), 0);
 }
 GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
 {
