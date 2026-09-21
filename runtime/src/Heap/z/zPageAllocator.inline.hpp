@@ -218,31 +218,6 @@ inline size_t RegionManager::GetGatedGarbageBytes()
 namespace MapleRuntime {
 namespace detail {
 
-// A single algorithm body serves both compile-time shapes below.  The default
-// product inlines it through ForwardTask::Execute; the testable shape calls it
-// from the exported out-of-line Execute instantiated in RegionManager.cpp.
-// #710: ordinary work comes from the relocation set's parallel iterator
-// (zRelocate.cpp:1088-1153 ZRelocate::relocate shape), not a page list.
-template<Generation G>
-inline void ExecuteForwardTask(RegionManager& regionManager, ZRelocationSet* relocationSet,
-                               ZRelocationSetParallelIterator& iter)
-{
-    ZRelocateQueue& queue = *relocationSet->generation()->relocate().queue();
-    for (;;) {
-        // ZGC zGeneration.cpp:575-580: after relocate-start there is no abort
-        // early return; remaining selected pages still run through
-        // do_forwarding / abort_page inside this loop.
-        for (ZForwarding* forwarding; (forwarding = queue.synchronize_poll()) != nullptr;) {
-            regionManager.ForwardClaimedPage<G>(forwarding->page(), forwarding, true);
-        }
-        ZForwarding* forwarding = nullptr;
-        if (!iter.next(&forwarding)) {
-            break;
-        }
-        regionManager.ForwardClaimedPage<G>(forwarding->page(), forwarding);
-    }
-    queue.leave();
-}
 
 } // namespace detail
 
@@ -253,23 +228,23 @@ template<Generation G>
 class ForwardTask : public ZTask {
 public:
     ForwardTask(RegionManager& manager, ZRelocationSet* relocationSet)
-        : ZTask("ZRelocateTask"), regionManager(manager), relocationSet(relocationSet), iter(relocationSet) {}
-
-    // ZGC zRelocate.cpp:1124: deactivate after all workers have left.
+        : ZTask("ZRelocateTask"), regionManager(manager), relocationSet(relocationSet), iter(relocationSet),
+          smallAllocator(relocationSet->generation()),
+          mediumAllocator(relocationSet->generation(),
+                          relocationSet->generation()->relocate().shared_medium_targets()) {}
     ~ForwardTask() override { relocationSet->generation()->relocate().queue()->deactivate(); }
 #if defined(MRT_TESTABLE_INTERNALS)
     MRT_EXPORT void work() override;
 #else
-    __attribute__((visibility("hidden"))) void work() override
-    {
-        detail::ExecuteForwardTask<G>(regionManager, relocationSet, iter);
-    }
+    __attribute__((visibility("hidden"))) void work() override;
 #endif
-
 private:
     RegionManager& regionManager;
     ZRelocationSet* relocationSet;
     ZRelocationSetParallelIterator iter;
+    ZRelocateSmallAllocator smallAllocator;
+    ZRelocateMediumAllocator mediumAllocator;
+
 };
 
 
