@@ -26,8 +26,12 @@ GC_CYCLE_V4 = re.compile(
     r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+) collected=(\S+) "
     r"heap_used=(\S+) threshold=(\S+) rss_kb=(\S+)$"
 )
+GC_GENERATION = re.compile(
+    rf"^\[GCLOG\] v=(\S+) rec=generation seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) "
+    r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+)$"
+)
 GC_PHASE = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=phase seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) kind=(pause|conc|unknown) "
+    rf"^\[GCLOG\] v=(\S+) rec=phase seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) kind=(pause|conc|subphase|unknown) "
     r"start_ns=(\S+) ns=(\S+)$"
 )
 GC_PHASE_LEAF = re.compile(
@@ -72,6 +76,17 @@ class CycleRecord:
 
 
 @dataclass(frozen=True)
+class GenerationRecord:
+    seq: int
+    gc_tag: str
+    name: str
+    start_ns: int
+    dur_ns: int
+    live_before: int
+    live_after: int
+
+
+@dataclass(frozen=True)
 class PhaseRecord:
     seq: int
     gc_tag: str
@@ -107,12 +122,13 @@ class StwRecord:
 @dataclass
 class GcLogRecords:
     cycles: list[CycleRecord] = field(default_factory=list)
+    generations: list[GenerationRecord] = field(default_factory=list)
     phases: list[PhaseRecord] = field(default_factory=list)
     phase_leaves: list[PhaseLeafRecord] = field(default_factory=list)
     stw: list[StwRecord] = field(default_factory=list)
 
     def any(self) -> bool:
-        return bool(self.cycles or self.phases or self.phase_leaves or self.stw)
+        return bool(self.cycles or self.generations or self.phases or self.phase_leaves or self.stw)
 
 
 @dataclass(frozen=True)
@@ -214,6 +230,14 @@ def parse_gclog(text: str) -> GcLogRecords:
                 continue
             raise ValueError(f"unknown GCLOG phase-family record rec={family}")
 
+        if "generation" in rec_tokens:
+            match = _exact(GC_GENERATION, line, "GCLOG generation")
+            _version(match.group(1), 5, "GCLOG generation", line)
+            records.generations.append(GenerationRecord(
+                _u64(match.group(2), "seq", line), match.group(3), match.group(4),
+                *[_u64(match.group(index), name, line) for index, name in zip(
+                    range(5, 9), ("start_ns", "dur_ns", "live_before", "live_after"))]))
+            continue
         if "cycle" in rec_tokens:
             match = GC_CYCLE.fullmatch(line)
             if match is not None:
