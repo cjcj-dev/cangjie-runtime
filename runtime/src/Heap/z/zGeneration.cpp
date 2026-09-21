@@ -436,19 +436,12 @@ void ZGenerationYoung::mark_start()
     // Corresponds to ZGC reset_relocation_set before the new young collection.
     // flippromo: open broad-vs-product window for regions demoted last minor.
 
-    youngStackScanEpoch = StackWatermark::epoch_id();
-    MutatorManager::Instance().VisitAllMutators([epoch = youngStackScanEpoch](Mutator& mutator) {
-        if (!mutator.GetStackWatermark().IsDone(epoch)) {
-            (void)mutator.GcPhaseEnum(true, epoch, false);
-        }
-    });
     youngStats = stats;
     youngStartNs = start;
 }
 
 void ZGenerationYoung::concurrent_mark()
 {
-    uint64_t stackScanEpoch = youngStackScanEpoch;
     WorkStack& workStack = youngWorkStack;
     constexpr bool fullYoungScan = false;
 
@@ -501,8 +494,6 @@ void ZGenerationYoung::concurrent_mark()
     // Release here before invoking the existing root producer so mark_follow runs
     // with mutators alive.
     {
-        CHECK_DETAIL(stackScanEpoch != 0,
-                     "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
         concWindowStartNs = TimeUtil::NanoSeconds();

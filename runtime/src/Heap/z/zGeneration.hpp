@@ -271,7 +271,6 @@ private:
     size_t youngLiveRememberedCount = 0;
     bool youngFullScan = false;
     WorkStack youngWorkStack;
-    uint64_t youngStackScanEpoch = 0;
     YoungConcWindowStats youngConcWindow;
     uint64_t youngConcWindowStartNs = 0;
     MinorSlotSet youngWeakSlots;
