@@ -246,7 +246,7 @@ public:
     void collect();
     void mark_start();
     void pause_mark_start();
-    void mark_roots();
+    void produceYoungRoots();
     void mark_follow();
     void concurrent_mark();
     bool mark_end();

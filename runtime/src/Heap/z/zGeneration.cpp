@@ -445,7 +445,7 @@ void ZGenerationYoung::mark_start()
     youngStartNs = start;
 }
 
-void ZGenerationYoung::mark_roots()
+void ZGenerationYoung::produceYoungRoots()
 {
     ZStatTimerYoung timer(PYoungRootEnum);
     (void)Mark().Flush();
@@ -473,7 +473,7 @@ void ZGenerationYoung::concurrent_mark()
     reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
     youngConcWindowStartNs = TimeUtil::NanoSeconds();
     // ZGC zGeneration.cpp:665-669: roots, then combined scan and follow.
-    mark_roots();
+    produceYoungRoots();
     mark_follow();
 }
 
