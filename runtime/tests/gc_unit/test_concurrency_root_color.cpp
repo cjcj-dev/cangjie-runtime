@@ -11,11 +11,12 @@
 #include "ObjectModel/RefField.inline.h"
 #include <cstdio>
 #include "Sync/Sync.h"
+#include "Cangjie.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-extern "C" void MRT_VisitorCaller(void*, void*);
+extern "C" void* MCC_NewExclusiveCJThread(void*, void*, void*);
 
 
 namespace {
@@ -39,7 +40,7 @@ private:
     Concurrency concurrency;
 };
 
-void CheckSavedColor(bool updateThreadObject, bool remap = false)
+void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn = false)
 {
     ConcurrencyRootRuntime runtime;
     GcHeapFixture fx;
@@ -68,8 +69,10 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false)
     BaseObject* from = fx.PlaceObject(reinterpret_cast<MAddress>(earlier) + earlier->GetSize());
     BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(from) + from->GetSize());
     page->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
-    auto* thread = MCC_NewCJThread(nullptr, from,
-        runtime.GetConcurrencyModel().GetThreadScheduler());
+    auto scheduler = runtime.GetConcurrencyModel().GetThreadScheduler();
+    auto* thread = noReturn
+        ? MCC_NewCJThreadNoReturn(reinterpret_cast<void*>(1), from, scheduler, fx.typeInfo)
+        : MCC_NewCJThread(nullptr, from, scheduler);
     GC_EXPECT_TRUE(thread != nullptr);
     auto* previousThread = CJThreadGetHandle();
     ThreadLocal::SetCJThread(thread);
@@ -133,6 +136,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false)
 } // namespace
 
 GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset) { CheckSavedColor(false); }
+GC_OTHER_VM_TEST(ConcurrencyRootColor, NoReturnSavedColorRemapsFromOffset) { CheckSavedColor(false, false, true); }
 GC_OTHER_VM_TEST(ConcurrencyRootColor, RemapYoungRootGroupOnce) { CheckSavedColor(false, true); }
 GC_OTHER_VM_TEST(ConcurrencyRootColor, ThreadObjectStorePreservesOtherRootEpoch) { CheckSavedColor(true); }
 
@@ -187,4 +191,53 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, ThreadObjectOverwriteKeepsOldGroupAlive)
     });
     std::fprintf(stderr, "CONCURRENCY_KEEPALIVE_TARGET obj=%u thread=%u\n", afterObj, afterThread);
     GC_EXPECT_TRUE(afterObj && afterThread);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ConcurrencyRootColor, ExclusiveProducerSeparatesTypeInfo)
+{
+    RuntimeParam param {};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    auto task = +[](void*) -> void* {
+        Mutator::GetMutator()->SetManagedContext(false);
+        try {
+            static GcHeapFixture fx; // Roots live until this isolated VM exits.
+            auto* thread = MCC_NewExclusiveCJThread(fx.obj1, fx.obj0, fx.typeInfo);
+            GC_EXPECT_TRUE(thread != nullptr);
+            auto* previous = CJThreadGetHandle();
+            ThreadLocal::SetCJThread(thread);
+            auto* data = static_cast<LWTData*>(CJThreadGetArg());
+            ThreadLocal::SetCJThread(previous);
+            GC_EXPECT_TRUE(data != nullptr);
+            MAddress observedObj = 0;
+            MAddress observedExecute = 0;
+            size_t nativeVisits = 0;
+            RootVisitor visitor = [&](RootSlot& slot) {
+                if (&slot == &RootSlotAt(&data->obj)) { observedObj = raw(slot.LoadPlain()); }
+                if (&slot == &RootSlotAt(&data->execute)) { observedExecute = raw(slot.LoadPlain()); }
+                if (&slot == &RootSlotAt(&data->fn)) { ++nativeVisits; }
+            };
+            Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
+            std::fprintf(stderr,
+                "CONCURRENCY_EXCLUSIVE_TARGET obj=%#lx expected_obj=%p execute=%#lx expected_execute=%p native_visits=%zu\n",
+                observedObj, fx.obj0, observedExecute, fx.obj1, nativeVisits);
+            GC_EXPECT_EQ(observedObj, reinterpret_cast<MAddress>(fx.obj0));
+            GC_EXPECT_EQ(observedExecute, reinterpret_cast<MAddress>(fx.obj1));
+            GC_EXPECT_EQ(nativeVisits, size_t(0));
+            GC_EXPECT_TRUE(data->fn == fx.typeInfo);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "CONCURRENCY_EXCLUSIVE_ASSERT %s\n", error.what());
+            Mutator::GetMutator()->SetManagedContext(true);
+            return reinterpret_cast<void*>(1);
+        }
+        Mutator::GetMutator()->SetManagedContext(true);
+        return nullptr;
+    };
+    auto handle = RunCJTask(task, nullptr);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
+    ReleaseHandle(handle);
+    GC_EXPECT_TRUE(result == nullptr);
 }
