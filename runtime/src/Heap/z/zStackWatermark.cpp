@@ -106,17 +106,23 @@ void StackWatermark::save_old_watermark(Mutator& mutator)
 void StackWatermark::process_head(Mutator& mutator, void* context, const RootVisitor& visitor,
                                   const RootVisitor& invisibleRootVisitor)
 {
-    (void)context;
-    mutator.VisitExceptionRoots(visitor);
-    mutator.VisitNativeFrameRoots(visitor);
-    // ZGC zStackWatermark.cpp:164-174: the invisible slot is processed once,
-    // below, with the saved head color. VisitRawObjects names that same slot.
+    // ZGC zStackWatermark.cpp:163-174: oops_do_no_frames uses the saved head
+    // color and the same RootFunction as frames (process / mark). Native-frame
+    // Handle slots and exception roots are the Cangjie no-frames set.
+    (void)visitor;
     (void)invisibleRootVisitor;
+    const uintptr_t color = uncolored_root_color();
+    StackWatermarkProcessOopClosure closure(context, color);
+    auto expand = [&](RootSlot& root) {
+        mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
+            closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
+        });
+    };
+    mutator.VisitExceptionRoots(expand);
+    mutator.VisitNativeFrameRoots(expand);
     zaddress_unsafe* invisible = mutator.GetGCData().invisibleRoot;
     if (invisible != nullptr) {
-        ZUncoloredRoot::process_invisible(invisible, uncolored_root_color());
-#if defined(MRT_GC_UNIT_TESTS)
-#endif
+        ZUncoloredRoot::process_invisible(invisible, color);
     }
 }
 
