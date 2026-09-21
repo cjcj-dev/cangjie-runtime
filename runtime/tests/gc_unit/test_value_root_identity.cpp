@@ -229,7 +229,11 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, CurrentDestinationOnForwardedPage)
     const bool identity = RelocationReceiptTest::DiscoveredIdentity(current);
     std::fprintf(stderr, "VALUE_ROOT_DESTINATION_TARGET moved=%d table=%d from_key=%d identity=%d\n",
         root.from != root.to, root.table, root.fromKey, identity);
-    GC_EXPECT_TRUE(root.from != root.to && root.table && !root.fromKey && identity);
+    // ZGC zGeneration.cpp:205-213: forwardings are dropped at the next old
+    // collection's relocation-set reset, so table presence is observational;
+    // the invariant is re-resolution (moved, current identity) and that a
+    // present forwarding never names the destination as a from-key.
+    GC_EXPECT_TRUE(root.from != root.to && identity && !root.fromKey);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
     for (U64 id : root.roots) Heap::GetHeap().RemoveExportObject(id);
