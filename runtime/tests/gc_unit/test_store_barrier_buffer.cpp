@@ -49,6 +49,7 @@
 
 
 #include "gc_generation_test.hpp"
+#include "ObjectModel/FieldInfo.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -916,4 +917,79 @@ GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
     GC_EXPECT_FALSE(SlotPageRemembered(reinterpret_cast<MAddress>(&field)));
     GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(fx.obj1));
+}
+
+extern "C" void CJ_MCC_WriteRefField(ObjectPtr, ObjectPtr, RefField<false>*);
+extern "C" void CJ_MCC_WriteRefField_Strong(ObjectPtr, ObjectPtr, RefField<false>*);
+extern "C" void CJ_MCC_WriteRefField_Weak(ObjectPtr, ObjectPtr, RefField<false>*);
+
+extern "C" void MCC_SetInstanceFieldValue(InstanceFieldInfo*, TypeInfo*, ObjRef, ObjRef);
+
+namespace {
+using StoreEntry = void (*)(ObjectPtr, ObjectPtr, RefField<false>*);
+void CheckStoreAccessor(StoreEntry entry, bool weak, bool weakHolder, bool reflection = false)
+{
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    if (weakHolder) {
+        fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    }
+    HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj0));
+    Mutator mutator;
+    InstalledMutatorScope mutatorScope(mutator);
+    // Flush the product buffer through its normal phase-change consumer.
+    // A weak entry must remember without publishing previous-value mark work.
+    if (reflection) {
+        TypeInfo* fieldTypes[] = {fx.typeInfo};
+        U32 offsets[] = {0};
+        fx.typeInfo->SetFieldNum(1);
+        fx.typeInfo->SetFieldAddr(fieldTypes);
+        fx.typeInfo->SetOffsets(offsets);
+        InstanceFieldInfo fieldInfo{};
+        MCC_SetInstanceFieldValue(&fieldInfo, fx.typeInfo,
+            reinterpret_cast<MObject*>(fx.obj0), reinterpret_cast<MObject*>(fx.obj1));
+    } else {
+        entry(fx.obj1, fx.obj0, &field);
+    }
+    mutator.FlushStoreBarrierBuffer(true);
+    const bool remembered = Heap::page(reinterpret_cast<MAddress>(&field))->is_remembered(
+        reinterpret_cast<volatile zpointer*>(&field));
+    std::vector<BaseObject*> marked;
+    marking.DrainObjects(marked);
+    const bool keptAlive = std::find(marked.begin(), marked.end(), fx.obj0) != marked.end();
+    const bool installed = to_object(field.GetTargetObject()) == fx.obj1;
+    std::fprintf(stderr, "TARGET_STORE_ACCESSOR weak=%d remembered=%d kept_alive=%d installed=%d\n",
+                 weak, remembered, keptAlive, installed);
+    // One target invariant: preliminary existence assertions cannot hide it.
+    GC_EXPECT_TRUE(remembered && keptAlive == !weak && installed);
+}
+}
+
+GC_TEST(StoreAccess843, StaticWeakRemembersWithoutKeepingAlive)
+{
+    CheckStoreAccessor(CJ_MCC_WriteRefField_Weak, true, false);
+}
+GC_TEST(StoreAccess843, StaticStrongKeepsPreviousAlive)
+{
+    CheckStoreAccessor(CJ_MCC_WriteRefField_Strong, false, true);
+}
+GC_TEST(StoreAccess843, UnknownWeakResolvesBeforeBarrier)
+{
+    CheckStoreAccessor(CJ_MCC_WriteRefField, true, true);
+}
+GC_TEST(StoreAccess843, UnknownStrongResolvesBeforeBarrier)
+{
+    CheckStoreAccessor(CJ_MCC_WriteRefField, false, false);
+}
+
+GC_TEST(StoreAccess843, ReflectionWeakRemembersWithoutKeepingAlive)
+{
+    CheckStoreAccessor(nullptr, true, true, true);
+}
+GC_TEST(StoreAccess843, ReflectionStrongKeepsPreviousAlive)
+{
+    CheckStoreAccessor(nullptr, false, false, true);
 }

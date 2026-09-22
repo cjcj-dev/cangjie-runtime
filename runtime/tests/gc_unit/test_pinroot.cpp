@@ -203,7 +203,7 @@ static void CheckInPlaceRemset(bool eager)
     if (eager) {
         ScopedStopTheWorld pause("in-place remset completion", false);
         BaseObject* result = generation.relocate().relocate_object(
-            owners[0], reinterpret_cast<BaseObject*>(objects[0]), ForwardingProvenance{});
+            owners[0], reinterpret_cast<BaseObject*>(objects[0]));
         GC_EXPECT_TRUE(result == reinterpret_cast<BaseObject*>(owners[0]->find(objects[0])));
     }
     else { generation.relocate().relocate(&generation.relocation_set()); }

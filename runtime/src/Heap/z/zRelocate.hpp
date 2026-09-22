@@ -114,7 +114,6 @@ class ZWorkers;
 class ZPage;
 class ZGeneration;
 class ZRelocationSet;
-struct ForwardingProvenance;
 template<typename T> class ZArray;
 
 // ZGC zRelocate.hpp:79-94 / zRelocate.cpp:309-333.
@@ -181,14 +180,13 @@ public:
     static void RemapYoungRoots();
     static void StartRelocationTasks(ZGenerationId generation);
 
-    // Raw historical carriers have no source color; preserve explicit provenance.
-    static BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+    // Raw historical carriers have no source color; use the owning generation.
+    static BaseObject* ResolveStoreValue(BaseObject* ref,
                                          Generation generation);
     static bool IsAlreadyToStoreValue(BaseObject* target, Generation generation);
     explicit ZRelocate(ZGeneration* generation) : generation(generation) {}
     BaseObject* forward_object(ZForwarding* forwarding, BaseObject* object);
-    BaseObject* relocate_object(ZForwarding* forwarding, BaseObject* object,
-                                const ForwardingProvenance& provenance);
+    BaseObject* relocate_object(ZForwarding* forwarding, BaseObject* object);
     void synchronize();
     void desynchronize();
     ZPerWorker<ZRelocationTargets>* small_targets() { return &smallTargets; }

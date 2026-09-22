@@ -315,7 +315,8 @@ extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
     return array;
 }
 
-extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
+template<bool weak>
+static void WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
 {
     // arrayinit2: compiler GEP of coloured base yields coloured field place; strip before use.
     ObjectPtr plainObj = obj;
@@ -330,7 +331,11 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
     // forms are outside Heap.  Keeping the heap-slot decision authoritative
     // also fails safe for a malformed contradictory pair.
     if (Heap::IsHeapAddress(plainField)) {
-        ZBarrier::WriteReference(plainObj, *plainField, plainRef);
+        if constexpr (weak) {
+            ZBarrier::WriteWeakReference(plainObj, *plainField, plainRef);
+        } else {
+            ZBarrier::WriteReference(plainObj, *plainField, plainRef);
+        }
         return;
     }
     if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
@@ -341,6 +346,30 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
     // The remaining value-type field is a stack/plain slot ($BP == 0).
     // ZUncoloredRoot's carrier stays uncolored; global storage was selected above.
     StorePlain(RootSlotAt(static_cast<void*>(plainField)), from_object(plainRef));
+}
+
+// ZGC zBarrierSet.inline.hpp:232-242: known-strength accessors select statically.
+extern "C" void MCC_WriteRefField_Strong(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
+{
+    WriteRefField<false>(ref, obj, field);
+}
+
+extern "C" void MCC_WriteRefField_Weak(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
+{
+    WriteRefField<true>(ref, obj, field);
+}
+
+// ZGC zBarrierSet.inline.hpp:211-255: only unknown-strength access resolves
+// the referent property at runtime, before selecting a barrier entry.
+extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
+{
+    const bool weakReferent = obj != nullptr && Heap::IsHeapAddress(obj) && obj->IsWeakRef() &&
+        reinterpret_cast<MAddress>(field) == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
+    if (weakReferent) {
+        MCC_WriteRefField_Weak(ref, obj, field);
+    } else {
+        MCC_WriteRefField_Strong(ref, obj, field);
+    }
 }
 
 extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
