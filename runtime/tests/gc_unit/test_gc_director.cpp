@@ -412,3 +412,22 @@ GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumBoundary) { CheckTenuringFlags(64
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideBoundary) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 15); }
 
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultBoundaryFourteen) { CheckTenuringFlags(112 * 1024, 1, false, 0, false, 0); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringGeometry, ConfiguredMaximumSurvivesInitialization)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 512 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t configured = params.heapParam.heapSize * 1024;
+    const size_t effective = ZHeuristics::max_heap_size();
+    const size_t medium = ZPageSizeMediumMax;
+    const size_t budget = ZHeuristics::significant_young_overhead();
+    std::fprintf(stderr, "TENURING_GEOMETRY_TARGET configured=%zu effective=%zu medium=%zu budget=%zu\n",
+                 configured, effective, medium, budget);
+    // The input identity and power-of-two tier are checked independently of
+    // the headroom outputs used by the threshold tests above.
+    GC_EXPECT_TRUE(effective == configured && medium == 16 * 1024 * 1024 && budget == configured / 4);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}

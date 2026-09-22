@@ -22,6 +22,7 @@ run_case() {
 }
 pids=()
 for name in "${cases[@]}"; do run_case "TenuringFlags.$name" & pids+=("$!"); done
+run_case TenuringGeometry.ConfiguredMaximumSurvivesInitialization & pids+=("$!")
 run_case PageAge.UntypeRoundTrip & pids+=("$!")
 for pid in "${pids[@]}"; do wait "$pid"; done
 failed=0
