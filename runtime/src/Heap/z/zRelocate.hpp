@@ -211,9 +211,6 @@ private:
     ZRelocationTargets sharedMediumTargets;
 };
 
-bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix);
-bool HolderObjectIsLive(BaseObject* holder);
-bool SlotHeldByLiveObject(const void* slot);
 template <typename SetT, typename KeyT>
 bool LedgerInsert(SetT& set, const KeyT& key)
 {
