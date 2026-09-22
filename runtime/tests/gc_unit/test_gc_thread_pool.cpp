@@ -364,6 +364,23 @@ GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
     GC_EXPECT_FALSE(old.relocate().queue()->is_active());
 }
 
+// The young branch must also select ZWorkers::run(ZRestartableTask*),
+// including an empty installed set at the end of a relocation cycle.
+GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryRestartsWithRequestedWorkers)
+{
+    GcHeapFixture fx;
+    auto& young = Heap::GetHeap().young();
+    if (young.Workers() == nullptr) young.InitializeWorkers(3);
+    young.Workers()->set_active_workers(1);
+    young.Workers()->set_active();
+    young.Workers()->request_resize_workers(3);
+    young.relocate().relocate(&young.relocation_set());
+    const auto active = young.Workers()->active_workers();
+    young.Workers()->set_inactive();
+    GC_EXPECT_EQ(active, 3u);
+    GC_EXPECT_FALSE(young.relocate().queue()->is_active());
+}
+
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(RelocateWorkers, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
 {
