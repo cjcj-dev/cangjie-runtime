@@ -289,7 +289,8 @@ static bool rule_minor_allocation_rate(const ZDirectorStats& stats)
     if (ZCollectionIntervalOnly) {
         return false;
     }
-    if (stats.allocation_stalling) {
+    const auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    if (regions.IsAllocationStallingForOld()) {
         return false;
     }
     if (is_young_small(stats)) {
