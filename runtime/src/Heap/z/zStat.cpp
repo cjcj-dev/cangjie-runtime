@@ -135,17 +135,41 @@ void ZStatNumberSeq::Add(double value)
 ZStatWorkers::ZStatWorkers()
     : _stat_lock(), _active_workers(0), _start_of_last(0), _accumulated_duration(0), _accumulated_time(0) {}
 
+#if defined(MRT_TESTABLE_INTERNALS)
+thread_local const uint64_t* ZStatWorkers::_clock_for_test = nullptr;
+
+const uint64_t* ZStatWorkers::set_clock_for_test(const uint64_t* clock)
+{
+    const uint64_t* previous = _clock_for_test;
+    _clock_for_test = clock;
+    return previous;
+}
+
+uint64_t ZStatWorkers::now_for_test()
+{
+    return _clock_for_test == nullptr ? TimeUtil::NanoSeconds() : *_clock_for_test;
+}
+#endif
+
 void ZStatWorkers::at_start(uint32_t active_workers)
 {
     std::lock_guard<std::mutex> locker(_stat_lock);
+#if defined(MRT_TESTABLE_INTERNALS)
+    _start_of_last = now_for_test();
+#else
     _start_of_last = TimeUtil::NanoSeconds();
+#endif
     _active_workers = active_workers;
 }
 
 void ZStatWorkers::at_end()
 {
     std::lock_guard<std::mutex> locker(_stat_lock);
+#if defined(MRT_TESTABLE_INTERNALS)
+    const uint64_t now = now_for_test();
+#else
     const uint64_t now = TimeUtil::NanoSeconds();
+#endif
     const uint64_t duration = now - _start_of_last;
     uint64_t time = duration;
     for (uint32_t i = 1; i < _active_workers; ++i) {
@@ -159,7 +183,11 @@ void ZStatWorkers::at_end()
 double ZStatWorkers::accumulated_time()
 {
     const uint32_t nworkers = _active_workers;
+#if defined(MRT_TESTABLE_INTERNALS)
+    const uint64_t now = now_for_test();
+#else
     const uint64_t now = TimeUtil::NanoSeconds();
+#endif
     const uint64_t start = _start_of_last;
     uint64_t time = _accumulated_time;
     if (nworkers != 0) {
@@ -172,7 +200,11 @@ double ZStatWorkers::accumulated_time()
 
 double ZStatWorkers::accumulated_duration()
 {
+#if defined(MRT_TESTABLE_INTERNALS)
+    const uint64_t now = now_for_test();
+#else
     const uint64_t now = TimeUtil::NanoSeconds();
+#endif
     const uint64_t start = _start_of_last;
     uint64_t duration = _accumulated_duration;
     if (_active_workers != 0) {
