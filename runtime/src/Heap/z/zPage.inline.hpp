@@ -63,6 +63,29 @@ inline uintptr_t ZPage::alloc_object(size_t size)
     return untype(ZOffset::address_unsafe(to_zoffset(addr)));
 }
 
+// ZGC zPage.inline.hpp:451-479: page-local atomic allocation is visible to callers.
+inline uintptr_t ZPage::alloc_object_atomic(size_t size)
+{
+    MRT_ASSERT(is_allocating(), "Invalid state");
+    const size_t aligned = AlignUp<size_t>(size, object_alignment());
+    zoffset_end addr = top();
+    for (;;) {
+        zoffset_end newTop;
+        if (!to_zoffset_end(&newTop, addr, aligned)) {
+            return 0;
+        }
+        if (newTop > end()) {
+            return 0;
+        }
+        zoffset_end prevTop = addr;
+        __atomic_compare_exchange(&_top, &prevTop, &newTop, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+        if (prevTop == addr) {
+            return untype(ZOffset::address_unsafe(to_zoffset(addr)));
+        }
+        addr = prevTop;
+    }
+}
+
 // zPage.inline.hpp:72-101 object_alignment_shift: large pages hold one object
 // at start; small pages use the minimum object alignment.
 inline int ZPage::object_alignment_shift() const

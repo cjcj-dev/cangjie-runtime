@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zGlobals.hpp"
