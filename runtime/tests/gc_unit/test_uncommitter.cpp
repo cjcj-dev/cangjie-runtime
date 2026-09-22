@@ -410,3 +410,31 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, FreshCacheWaitsForWatermarkCycle)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     GC_EXPECT_EQ(regions.GetCommittedCapacity(), stopped);
 }
+
+// ZGC zUncommitter.cpp:383-395: the activation budget is only an upper
+// bound. Allocations during the cycle can reduce the remaining allowance.
+GC_COMPONENT_OTHER_VM_TEST(Uncommitter, AllocationDuringCycleLowersUncommitAllowance)
+{
+    BindUncommitWorkerThread();
+    ProbeHeap heap(64 * MB / ZGranuleSize);
+    auto& regions = Heap::GetHeap().GetAllocator().GetRegionManager();
+    InitializeUncommitCache(regions.freeRegionManager, heap);
+    auto& partition = UncommitterTestAccess::Partition();
+    auto& worker = partition.uncommitter;
+    UncommitterTestAccess::ResetCancel();
+    GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
+    GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
+    const size_t before = partition.capacity;
+    const size_t allocated = before - 2 * ZGranuleSize;
+    ZPage* page = regions.TakeRegion(allocated, ZPageType::large, true, false);
+    GC_EXPECT_TRUE(page != nullptr);
+    regions.ReturnPageMemory(PageMemory{page->granule_index(), allocated, 0, true});
+    size_t released = 0;
+    for (int chunk = 0; chunk < 3; ++chunk) {
+        released += UncommitterTestAccess::Uncommit(worker);
+    }
+    std::fprintf(stderr, "TARGET_CURRENT_WATERMARK released=%zu capacity=%zu expected=%zu\n",
+                 released, partition.capacity, 2 * ZGranuleSize);
+    GC_EXPECT_EQ(released, 2 * ZGranuleSize);
+    GC_EXPECT_EQ(partition.capacity, before - released);
+}
