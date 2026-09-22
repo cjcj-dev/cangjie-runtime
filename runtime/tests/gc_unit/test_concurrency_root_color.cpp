@@ -135,7 +135,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     GC_EXPECT_EQ(observed, expected);
 }
 
-void CheckOldRootRead(bool healBeforeRead)
+void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
 {
     ConcurrencyRootRuntime runtime;
     GcHeapFixture fx;
@@ -208,6 +208,17 @@ void CheckOldRootRead(bool healBeforeRead)
     const MAddress groupObserved = raw(RootSlotAt(&data->obj).LoadPlain());
     std::fprintf(stderr, "CONCURRENCY_OLD_GROUP observed=%#lx expected=%#lx\n", groupObserved, expected);
     GC_EXPECT_EQ(groupObserved, expected);
+    if (revisitAfterRead) {
+        unsigned visits = 0;
+        RootVisitor visitor = [&](RootSlot&) { ++visits; };
+        runtime.GetConcurrencyModel().VisitGCRoots(&visitor);
+        const bool armed = CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask);
+        std::fprintf(stderr, "CONCURRENCY_GC_REVISIT armed=%d visits=%u\n", armed, visits);
+        // zNMethod.cpp:379-398: GC cannot re-arm a group within this epoch.
+        GC_EXPECT_TRUE(!armed);
+        GC_EXPECT_TRUE(visits >= 3);
+        GC_EXPECT_EQ(raw(RootSlotAt(&data->threadObject).LoadPlain()), expected);
+    }
 }
 
 } // namespace
@@ -353,3 +364,8 @@ GC_RUNTIME_OTHER_VM_TEST(ConcurrencyRootColor, ExclusiveProducerSeparatesTypeInf
 
 GC_OTHER_VM_TEST(ConcurrencyRootColor, OldRootReadBeforeGCVisit) { CheckOldRootRead(false); }
 GC_OTHER_VM_TEST(ConcurrencyRootColor, OldRootReadAfterGCVisit) { CheckOldRootRead(true); }
+
+GC_OTHER_VM_TEST(ConcurrencyRootColor, DisarmedGroupRemainsDisarmedAfterGCVisit)
+{
+    CheckOldRootRead(true, true);
+}

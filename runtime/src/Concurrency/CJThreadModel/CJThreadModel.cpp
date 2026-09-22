@@ -53,20 +53,19 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
         // between this callback and its caller.
         ZUncoloredRoot::process(reinterpret_cast<zaddress_unsafe*>(&slot), color);
     };
-    if (color != nextColor) {
+    if (color != ZPointerStoreGoodMask) {
         process(ref);
         process(map);
         process(execute);
+        // zNMethod.cpp:379-398: only an armed group may be processed and
+        // receive the partial GC guard. Never re-arm a disarmed group.
+        __atomic_store_n(g_uncoloredVisitColor, nextColor, __ATOMIC_RELEASE);
     }
     if (handle != nullptr) {
         (*reinterpret_cast<RootVisitor*>(handle))(ref);
         (*reinterpret_cast<RootVisitor*>(handle))(map);
         (*reinterpret_cast<RootVisitor*>(handle))(execute);
     }
-    // zNMethod.cpp:392-398: the GC publishes a partial color that is mark good
-    // but never store good, so the group is still armed and a mutator entry
-    // must take the slow path.
-    __atomic_store_n(g_uncoloredVisitColor, nextColor, __ATOMIC_RELEASE);
 }
 
 namespace {
