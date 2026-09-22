@@ -1071,7 +1071,6 @@ void ForwardTask<G>::work()
         if (owner->page()->is_small()) { small.do_forwarding(owner); }
         else { medium.do_forwarding(owner); }
         owner->mark_done();
-        (void)queue.Complete(owner);
     };
     for (;;) {
         for (ZForwarding* owner; (owner = queue.synchronize_poll()) != nullptr;) { doForwarding(owner); }

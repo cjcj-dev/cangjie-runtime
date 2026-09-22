@@ -1673,6 +1673,20 @@ void ExerciseRelocationWait782(bool claimedPage)
     generation.Workers()->set_active_workers(2);
     generation.Workers()->set_active();
     generation.relocate().relocate(&generation.relocation_set());
+    // ZGC zRelocate.cpp:116-151,177-180: worker pruning must notify the
+    // waiting mutator. Bound the observation independently of cleanup so a
+    // missing notification reaches the result assertion instead of hanging.
+    const auto wakeDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!returned.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < wakeDeadline) {
+        std::this_thread::yield();
+    }
+    const bool notified = returned.load(std::memory_order_acquire);
+    if (!notified) {
+        // All workers have left. Release the waiter through the normal queue
+        // synchronization protocol, without changing the observed verdict.
+        queue->synchronize();
+        queue->desynchronize();
+    }
     mutator.join();
     const MAddress mapping = forwarding->find(reinterpret_cast<MAddress>(from));
     // ZGC zRelocate.cpp:906-927: workers use relocation targets, not the
@@ -1689,6 +1703,8 @@ void ExerciseRelocationWait782(bool claimedPage)
         claimedPage, queued, blocked, before, reinterpret_cast<MAddress>(result), mapping,
         expected, forwarding->is_done(), valid);
     GC_EXPECT_TRUE(valid);
+    std::fprintf(stderr, "RELOCATE_QUEUE_NOTIFICATION notified=%d\n", notified);
+    GC_EXPECT_TRUE(notified);
     for (ZPage* page : occupied) Heap::free_page(page);
     generation.reset_relocation_set();
 }
