@@ -255,7 +255,10 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
             // Default value of backup GC interval is 240s.
             .backupGCInterval = param->gcParam.backupGCInterval == 0 ? 240 * MapleRuntime::SECOND_TO_NANO_SECOND :
                 param->gcParam.backupGCInterval * MapleRuntime::SECOND_TO_NANO_SECOND,
-            // Default GC threads factor is 2.
+            .concGCThreads = param->gcParam.concGCThreads,
+            .youngGCThreads = param->gcParam.youngGCThreads,
+            .oldGCThreads = param->gcParam.oldGCThreads,
+            .staticGCThreads = param->gcParam.staticGCThreads,
         },
         .logParam = {
             .logLevel = param->logParam.logLevel,

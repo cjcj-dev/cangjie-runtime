@@ -268,6 +268,31 @@ static size_t InitCoStackSize()
  * Otherwise check whether the value of CPU_CORE is 0, use it if not.
  * Otherwise use the default value 8.
  */
+// Worker counts use the existing runtime environment configuration entry.
+static uint32_t InitGCWorkerCount(const char* name)
+{
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return 0;
+    }
+    char* end = nullptr;
+    const unsigned long count = std::strtoul(value, &end, 10);
+    CHECK_DETAIL(value[0] >= '0' && value[0] <= '9' && end != value && *end == '\0' &&
+                 count > 0 && count <= UINT32_MAX, "GC worker count must be a positive uint32");
+    return static_cast<uint32_t>(count);
+}
+
+static bool InitStaticGCThreads()
+{
+    const char* value = std::getenv("cjUseDynamicNumberOfGCThreads");
+    if (value == nullptr) {
+        return false;
+    }
+    CHECK_DETAIL((value[0] == '0' || value[0] == '1') && value[1] == '\0',
+                 "cjUseDynamicNumberOfGCThreads must be 0 or 1");
+    return value[0] == '0';
+}
+
 static uint32_t InitProcessorNum()
 {
     unsigned int cpus = std::thread::hardware_concurrency();
@@ -700,7 +725,10 @@ static RuntimeParam InitRuntimeParam()
                 .gcInterval = InitTimeParameter("cjGCInterval", 0, 150 * MILLI_SECOND_TO_NANO_SECOND),
                 // Default backup GC interval is 240s.
                 .backupGCInterval = InitTimeParameter("cjBackupGCInterval", 0, 240 * SECOND_TO_NANO_SECOND),
-                // Default GC thread factor is 2.
+                .concGCThreads = InitGCWorkerCount("cjConcGCThreads"),
+                .youngGCThreads = InitGCWorkerCount("cjYoungGCThreads"),
+                .oldGCThreads = InitGCWorkerCount("cjOldGCThreads"),
+                .staticGCThreads = InitStaticGCThreads(),
             },
         .logParam = {
             .logLevel = LogFile::GetLogLevel(),

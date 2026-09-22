@@ -8,9 +8,9 @@
     product(double, ZYoungCompactionLimit, 25.0) \
     product(unsigned, ZIndexDistributorStrategy, 0) \
     product(bool, ZProactive, true) \
-    product(bool, ZCollectionIntervalOnly, false) \
-    product(bool, UseDynamicNumberOfGCThreads, true)
+    product(bool, ZCollectionIntervalOnly, false)
 namespace MapleRuntime {
+extern bool UseDynamicNumberOfGCThreads;
 #define DECLARE_Z_FLAG(type, name, value) constexpr type name = value;
 Z_FLAGS(DECLARE_Z_FLAG)
 #undef DECLARE_Z_FLAG

@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <thread>
+#if defined(__linux__) || defined(hongmeng)
+#include <sched.h>
+#endif
 
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -27,7 +30,14 @@ size_t round_down_pow2(size_t value)
 
 uint32_t nworkers_based_on_ncpus(double cpu_share_in_percent)
 {
-    const unsigned ncpu = std::max(1u, std::thread::hardware_concurrency());
+    unsigned ncpu = std::max(1u, std::thread::hardware_concurrency());
+#if defined(__linux__) || defined(hongmeng)
+    cpu_set_t cpus;
+    CPU_ZERO(&cpus);
+    if (sched_getaffinity(0, sizeof(cpus), &cpus) == 0 && CPU_COUNT(&cpus) > 0) {
+        ncpu = static_cast<unsigned>(CPU_COUNT(&cpus));
+    }
+#endif
     return static_cast<uint32_t>(std::ceil(ncpu * cpu_share_in_percent / 100.0));
 }
 
