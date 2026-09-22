@@ -49,6 +49,7 @@
 
 
 #include "gc_generation_test.hpp"
+#include "ObjectModel/FieldInfo.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -922,9 +923,11 @@ extern "C" void CJ_MCC_WriteRefField(ObjectPtr, ObjectPtr, RefField<false>*);
 extern "C" void CJ_MCC_WriteRefField_Strong(ObjectPtr, ObjectPtr, RefField<false>*);
 extern "C" void CJ_MCC_WriteRefField_Weak(ObjectPtr, ObjectPtr, RefField<false>*);
 
+extern "C" void MCC_SetInstanceFieldValue(InstanceFieldInfo*, TypeInfo*, ObjRef, ObjRef);
+
 namespace {
 using StoreEntry = void (*)(ObjectPtr, ObjectPtr, RefField<false>*);
-void CheckStoreAccessor(StoreEntry entry, bool weak, bool weakHolder)
+void CheckStoreAccessor(StoreEntry entry, bool weak, bool weakHolder, bool reflection = false)
 {
     GcHeapFixture fx;
     fx.region0->reset(PageAge::old);
@@ -939,7 +942,18 @@ void CheckStoreAccessor(StoreEntry entry, bool weak, bool weakHolder)
     InstalledMutatorScope mutatorScope(mutator);
     // Flush the product buffer through its normal phase-change consumer.
     // A weak entry must remember without publishing previous-value mark work.
-    entry(fx.obj1, fx.obj0, &field);
+    if (reflection) {
+        TypeInfo* fieldTypes[] = {fx.typeInfo};
+        U32 offsets[] = {0};
+        fx.typeInfo->SetFieldNum(1);
+        fx.typeInfo->SetFieldAddr(fieldTypes);
+        fx.typeInfo->SetOffsets(offsets);
+        InstanceFieldInfo fieldInfo{};
+        MCC_SetInstanceFieldValue(&fieldInfo, fx.typeInfo,
+            reinterpret_cast<MObject*>(fx.obj0), reinterpret_cast<MObject*>(fx.obj1));
+    } else {
+        entry(fx.obj1, fx.obj0, &field);
+    }
     mutator.FlushStoreBarrierBuffer(true);
     const bool remembered = Heap::page(reinterpret_cast<MAddress>(&field))->is_remembered(
         reinterpret_cast<volatile zpointer*>(&field));
@@ -969,4 +983,13 @@ GC_TEST(StoreAccess843, UnknownWeakResolvesBeforeBarrier)
 GC_TEST(StoreAccess843, UnknownStrongResolvesBeforeBarrier)
 {
     CheckStoreAccessor(CJ_MCC_WriteRefField, false, false);
+}
+
+GC_TEST(StoreAccess843, ReflectionWeakRemembersWithoutKeepingAlive)
+{
+    CheckStoreAccessor(nullptr, true, true, true);
+}
+GC_TEST(StoreAccess843, ReflectionStrongKeepsPreviousAlive)
+{
+    CheckStoreAccessor(nullptr, false, false, true);
 }
