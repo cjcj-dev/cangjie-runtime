@@ -305,7 +305,6 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     if (ZAbort::should_abort()) {
         // The phase owner already joined any submitted work. Keep mark and
         // forwarding storage alive for driver shutdown; skip normal reclaim.
-        cycle.Workers()->set_inactive();
         cycle.End();
         return;
     }
