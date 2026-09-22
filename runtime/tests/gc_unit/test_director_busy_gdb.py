@@ -239,6 +239,13 @@ try:
     if SITE == 'merge':
         MajorRule('zDirector.cpp:' + str(LINES['rule']), internal=True)
     emit('TARGET_BEFORE', site=SITE, initial=INITIAL, current=CURRENT, location=location())
+    if SITE == 'resize':
+        actual_dynamic = bool(value('MapleRuntime::UseDynamicNumberOfGCThreads'))
+        emit('RESIZE_INPUT', dynamic=actual_dynamic,
+             configured_old_workers=int(value('MapleRuntime::ZOldGCThreads')),
+             sampled_workers=diagnostic('stats.old_stats.resize.nworkers_current'))
+        if actual_dynamic != bool(DYNAMIC):
+            raise RuntimeError('RuntimeParam did not establish the requested worker policy')
     if SITE == 'select':
         advance('resize')
     elif SITE == 'resize':
