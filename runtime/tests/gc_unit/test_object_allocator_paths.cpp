@@ -294,7 +294,7 @@ void* AllocateWithoutPacing(void* argument)
     auto& timing = *static_cast<PageAllocationTiming*>(argument);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
-    constexpr size_t size = ZObjectSizeLimitMedium + 8;
+    const size_t size = ZObjectSizeLimitMedium + 8;
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     type->SetInstanceSize(size - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
