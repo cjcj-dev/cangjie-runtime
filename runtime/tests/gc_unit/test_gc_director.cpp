@@ -4,6 +4,11 @@
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Base/TimeUtils.h"
+#include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
+#include "Mutator/MutatorManager.h"
+#include "ObjectModel/MObject.h"
+#include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
 
 #include <chrono>
@@ -74,11 +79,56 @@ GC_TEST(GcDirector, WarmupCountsOnlyWarmupRequests)
     cycle.AtStart(1);
     cycle.AtEnd(2, &workers, false, true);
     GC_EXPECT_EQ(cycle.Stats(3).warmupCycles, 0u);
+    GC_EXPECT_FALSE(cycle.Stats(3).isWarm);
+    GC_EXPECT_FALSE(cycle.Stats(3).isTimeTrustable);
     for (uint64_t i = 0; i < 4; ++i) {
         cycle.AtStart(10 + 2 * i);
         cycle.AtEnd(11 + 2 * i, &workers, true, true);
+        const auto stats = cycle.Stats(12 + 2 * i);
+        GC_EXPECT_EQ(stats.isWarm, i >= 2);
+        GC_EXPECT_TRUE(stats.isTimeTrustable);
     }
     GC_EXPECT_EQ(cycle.Stats(20).warmupCycles, 3u);
+}
+
+// Real allocation -> director thread -> driver -> cycle statistics. No direct
+// rule calls or synthesized statistics are supplied to the director.
+GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    const size_t size = heap.GetMaxCapacity() / 2;
+    type->SetInstanceSize(size);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    {
+        ScopedObjectAccess access;
+        heap.RegisterExportRoot(MObject::NewPinnedObject(type, size));
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (heap.old().CycleStats().Stats(TimeUtil::NanoSeconds()).warmupCycles < 3 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const auto stats = heap.old().CycleStats().Stats(TimeUtil::NanoSeconds());
+    const auto before = heap.old().Snapshot();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const auto after = heap.old().Snapshot();
+    std::fprintf(stderr, "DIRECTOR_WARMUP_TARGET cycles=%u warm=%d trustable=%d before=%llu after=%llu\n",
+        stats.warmupCycles, stats.isWarm, stats.isTimeTrustable,
+        static_cast<unsigned long long>(before.sequence), static_cast<unsigned long long>(after.sequence));
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_EQ(stats.warmupCycles, 3u);
+    GC_EXPECT_EQ(after.sequence, before.sequence);
+    GC_EXPECT_TRUE(stats.isWarm);
+    GC_EXPECT_TRUE(stats.isTimeTrustable);
 }
 
 // Outstanding-queue state is covered through real drivers by
