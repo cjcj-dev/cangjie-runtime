@@ -126,9 +126,9 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)
         static_cast<unsigned long long>(before.sequence), static_cast<unsigned long long>(after.sequence));
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_EQ(stats.warmupCycles, 3u);
+    GC_EXPECT_EQ(after.sequence, before.sequence);
     GC_EXPECT_TRUE(stats.isWarm);
     GC_EXPECT_TRUE(stats.isTimeTrustable);
-    GC_EXPECT_EQ(after.sequence, before.sequence);
 }
 
 // Outstanding-queue state is covered through real drivers by
