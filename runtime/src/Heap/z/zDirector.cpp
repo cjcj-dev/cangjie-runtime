@@ -289,7 +289,7 @@ static bool rule_minor_allocation_rate(const ZDirectorStats& stats)
     if (ZCollectionIntervalOnly) {
         return false;
     }
-    if (stats.allocation_stalling) {
+    if (Heap::GetHeap().page_allocator().IsAllocationStallingForOld()) {
         return false;
     }
     if (is_young_small(stats)) {
