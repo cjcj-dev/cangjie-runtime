@@ -60,6 +60,10 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     MarkPublicationFixture mark;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
+    // reset() creates allocating pages; the mark input must predate its cycle.
+    // ZGC zPage.inline.hpp:180-186, as in the P1Mark policy fixture.
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
     Heap::GetHeap().MarkObjectIfActive(fx.obj0);
     Heap::GetHeap().MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
