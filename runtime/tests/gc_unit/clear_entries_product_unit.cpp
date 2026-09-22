@@ -231,11 +231,7 @@ public:
         return visited;
     }
 
-    static void RunLateValueRootRekey(Heap& collector)
-    {
-        Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Old);
-        Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Old);
-    }
+
 };
 
 // The four delivery fixtures enter the same private product methods that their

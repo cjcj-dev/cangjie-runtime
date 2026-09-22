@@ -34,20 +34,18 @@ class ZCrossVM {
     friend class ZGenerationRootTest;
 public:
     void ResurrectExportObject(BaseObject* obj);
-    void PrepareCycleRef();
+    void PrepareCycleRef(ValueRootMap& discoveredExternObjects);
     void MergeResurrectExportObjects(Generation generation);
     void ResolveCycleRef();
     void PostResolveCycleTask();
-    void ProcessExportRoots(ValueRootList& exportOwners);
-    void FindUselessExternObjects();
+    void ProcessExportRoots(ValueRootList& exportOwners, ValueRootMap& discoveredExternObjects);
+    void FindUselessExternObjects(ValueRootMap& discoveredExternObjects);
     void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
     void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
-    void PreforwardDiscoveredExternObjects(Generation generation);
     void PreforwardAllResurrectExportFromObjects(Generation generation);
 private:
     CrossRefHandler GetCrossRefHandler(BaseObject* foreignProxy);
     std::mutex externMtx;
-    ValueRootMap discoveredExternObjects;
     // Resolver callbacks may enter managed code and therefore must not own the
     // root-carrier mutex.  Keep resolver serialization separate from the mutex
     // used by GC root and preforward consumers.

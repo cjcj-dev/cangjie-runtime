@@ -276,6 +276,7 @@ private:
 };
 
 class ZGenerationOld : public ZGeneration {
+    friend class RelocationReceiptTest;
 public:
     ZGenerationOld();
     // zGeneration.cpp:1248,1526: young-count snapshot at major start.
@@ -304,6 +305,9 @@ private:
     uint32_t _total_collections_at_start = 0;
     WorkStack oldMarkWorkStack;
     ValueRootList oldExportOwners;
+    // zGeneration.hpp:274: discovered references belong to their generation.
+    // Foreign ownership discovery is performed only by the old cycle.
+    ValueRootMap discoveredExternObjects;
     ZGenerationOld* previousOld { nullptr };
 };
 
