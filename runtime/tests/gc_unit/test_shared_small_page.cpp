@@ -18,6 +18,7 @@
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/z_globals.hpp"
 #if defined(__linux__)
 #include <sched.h>
 #include <unistd.h>
@@ -207,13 +208,13 @@ GC_OTHER_VM_TEST(SharedSmallPage, TLABAccountingOnlySmallEden)
 // and revalidates through the affinity table; the cached id is only replaced
 // once another thread has claimed that CPU's entry (the slow path). The shared
 // small page follows ZCPU::id() (zObjectAllocator.cpp:48-50).
-GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
+GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
 {
     CPUAffinity affinity;
-    // zHeuristics.cpp:69-74: choose a real heap capacity whose 25% budget
+    // zHeuristics.cpp:81-86: choose a real heap capacity whose flag budget
     // admits one small page per configured CPU. Do not override the decision.
-    const size_t units = 4 * static_cast<size_t>(ZCPU::count());
-    ZHeuristics::set_max_heap_size(units * ZGranuleSize);
+    const size_t units = static_cast<size_t>(100 / ZFragmentationLimit) * ZCPU::count();
+    CreateStandaloneHeap(units);
     SharedPageFixture fixture(units);
     GC_EXPECT_TRUE(affinity.available.size() >= 2);
     GC_EXPECT_TRUE(ZHeuristics::use_per_cpu_shared_small_pages());
@@ -257,6 +258,20 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
                    Heap::page(second));
 }
 // The other legal heuristic input must route through slot zero on either CPU.
+GC_COMPONENT_OTHER_VM_TEST(P13Heuristics, FragmentationBudgetSelectsSharedSlot)
+{
+    // Ten pages per CPU: 5% cannot fund one shared page per CPU, 25% can.
+    // Construct the product heap so PerAge consumes the decision itself.
+    CreateStandaloneHeap(10 * static_cast<size_t>(ZCPU::count()));
+    auto& allocator = Heap::GetHeap().object_allocator();
+    const uintptr_t address = allocator.alloc(16, PageAge::eden, true);
+    const bool perCpu = allocator.allocator(PageAge::eden)->usePerCpuSharedSmallPages;
+    std::fprintf(stderr, "FRAGMENTATION_ROUTE address=%zx per_cpu=%d\n", address, perCpu);
+    GC_EXPECT_FALSE(perCpu);
+    GC_EXPECT_TRUE(address != 0);
+    GC_EXPECT_TRUE(allocator.allocator(PageAge::eden)->sharedSmallPage.get(0) == Heap::page(address));
+}
+
 GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
 {
     CPUAffinity affinity;
