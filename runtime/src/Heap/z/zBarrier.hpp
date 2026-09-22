@@ -18,7 +18,6 @@
 
 namespace MapleRuntime {
 enum class ReferenceStrength : uint8_t { Strong, Weak, Phantom };
-struct ForwardingProvenance;
 enum class HandVerdict : uint8_t;
 
 class AllStatic {
@@ -37,19 +36,15 @@ public:
     static bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef);
     template<bool forward>
     static bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
-                                      BaseObject*& toObj, const ForwardingProvenance& provenance);
+                                      BaseObject*& toObj);
     static bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
                                          bool allowNull = false);
 
     static HandVerdict JudgeHandOutTarget(BaseObject* target);
-    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
-                                           const ForwardingProvenance& provenance);
-    static BaseObject* ValidateCurrentValue(BaseObject* target, const ForwardingProvenance& provenance);
-    static void CheckStoreGoodTarget(const char* consumer, BaseObject* target,
-                                    const ForwardingProvenance& provenance);
+    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits);
+    static BaseObject* ValidateCurrentValue(BaseObject* target);
+    static void CheckStoreGoodTarget(const char* consumer, BaseObject* target);
     static RefField<> GetAndTryTagRefField(BaseObject* target);
-    static RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* target,
-                                                       const ForwardingProvenance& provenance);
 
 
 
@@ -88,8 +83,6 @@ public:
     static ZGeneration* remap_generation(zpointer ptr);
     static void remap_young_relocated(volatile zpointer* p, zpointer o);
     static zaddress make_load_good(zpointer ptr);
-    static zaddress make_load_good(zpointer ptr, const ForwardingProvenance& provenance);
-    static zaddress make_load_good_impl(zpointer ptr, const ForwardingProvenance* provenance);
     static zaddress make_load_good_no_relocate(zpointer ptr);
     static void remember(volatile zpointer* p);
     static void mark_and_remember(volatile zpointer* p, zaddress addr);
@@ -153,7 +146,7 @@ public:
     using MarkColor = zpointer (*)(zaddress, zpointer);
     template<typename SlowPath>
     static zaddress MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor color,
-                           RefField<>& field, zpointer observed, const ForwardingProvenance& provenance);
+                           RefField<>& field, zpointer observed);
     static bool IsFinalizableGoodFastPath(zpointer value);
     static zpointer ColorFinalizableGood(zaddress address, zpointer previous);
     static zaddress MarkFinalizableSlowPath(zaddress address);

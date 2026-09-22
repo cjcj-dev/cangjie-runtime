@@ -37,7 +37,7 @@ namespace MapleRuntime {
 
 template<bool forward>
 bool ZBarrier::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
-                                       BaseObject*& toObj, const ForwardingProvenance& provenance)
+                                       BaseObject*& toObj)
 {
     RefField<> oldRef(field);
     if (ZPointer::is_load_bad(oldRef.GetFieldValue())) {
@@ -82,8 +82,7 @@ bool ZBarrier::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObj
 bool ZBarrier::TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef)
 {
     BaseObject* oldRef = nullptr;
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef, provenance);
+    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef);
 }
 
 bool ZBarrier::CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
@@ -134,8 +133,7 @@ BaseObject* ZBarrier::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFiel
                      obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         return targetObj;
     }
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    latest = to_object(ZBarrier::make_load_good(oldField.GetFieldValue(), provenance));
+    latest = to_object(ZBarrier::make_load_good(oldField.GetFieldValue()));
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
         return nullptr;
@@ -1000,13 +998,6 @@ HandVerdict ClassifyRawHeader(uint64_t header)
 
 RefField<> ZBarrier::GetAndTryTagRefField(BaseObject* target)
 {
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &target };
-    return ZBarrier::GetAndTryTagRefFieldWithProvenance(target, provenance);
-}
-
-RefField<> ZBarrier::GetAndTryTagRefFieldWithProvenance(BaseObject* target,
-                                              const ForwardingProvenance& provenance)
-{
     // Null carries no colour (ZGC zAddress: null is never load-bad).
     if (target == nullptr) {
         return RefField<>(zpointer::null);
@@ -1021,19 +1012,19 @@ RefField<> ZBarrier::GetAndTryTagRefFieldWithProvenance(BaseObject* target,
     // (zAddress.inline.hpp:609-624,806-811). ResolveStoreValue is our
     // make-load-good producer: a relocation-set address is looked up or copied
     // by this thread; an unresolved address never reaches colouring.
-    target = ZBarrier::ValidateCurrentValue(target, provenance);
+    target = ZBarrier::ValidateCurrentValue(target);
     CHECK_DETAIL(target != nullptr && Heap::IsHeapAddress(target),
                  "store-good requires a resolved heap address");
-    ZBarrier::CheckStoreGoodTarget("GetAndTryTagRefField", target, provenance);
+    ZBarrier::CheckStoreGoodTarget("GetAndTryTagRefField", target);
     return RefField<>(ZAddress::store_good(from_object(target)));
 }
 
-BaseObject* ZBarrier::ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance)
+BaseObject* ZBarrier::ValidateCurrentValue(BaseObject* ref)
 {
     if (ref == nullptr || !Heap::IsHeapAddress(ref) || ZBarrier::JudgeHandOutTarget(ref) == HandVerdict::Usable) {
         return ref;
     }
-    ZBarrier::FailClosedLoad("current raw value required", ref, 0, provenance);
+    ZBarrier::FailClosedLoad("current raw value required", ref, 0);
 }
 
 HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
@@ -1045,8 +1036,7 @@ HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
     return ClassifyRawHeader(hdr);
 }
 
-[[noreturn]] void ZBarrier::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
-                                            const ForwardingProvenance& provenance)
+[[noreturn]] void ZBarrier::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits)
 {
     const HandVerdict verdict = ZBarrier::JudgeHandOutTarget(target);
     const MAddress from = target != nullptr ? reinterpret_cast<MAddress>(target) : 0;
@@ -1064,23 +1054,14 @@ HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
         : 0xffu;
     std::fprintf(stderr,
                  "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
-                 "consumer=%s holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
-                 "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
-                 "field_type=%s field_offset=%zu from=%p from_region=%p "
+                 "from=%p from_region=%p "
                  "region_type=%u generation=%u forwarding_lookup_hit=%u "
                  "table_id=%#zx from_page_epoch=%llu lifeId=%llu "
                  "lookup_state=%s gc_phase=%u "
                  "unresolved non-Usable from-address must not be handed out\n",
                  site != nullptr ? site : "?", static_cast<void*>(target),
                  static_cast<unsigned>(verdict), slotBits,
-                 site != nullptr ? site : "unknown",
-                 ForwardingProvenance::KindName(provenance.kind),
-                 provenance.holder, provenance.slot,
-                 ForwardingProvenance::StageName(provenance.stage),
-                 ForwardingProvenance::WriterName(provenance.writerKind),
-                 ForwardingProvenance::SourceName(provenance.incomingSourceKind), provenance.sourceSlot,
-                 provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
-                 provenance.fieldOffset, static_cast<void*>(target),
+                 static_cast<void*>(target),
                  static_cast<void*>(region),
                  region != nullptr ? static_cast<unsigned>(0u) : 0xffu,
                  region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
@@ -1095,12 +1076,11 @@ HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
     std::abort();
 }
 
-void ZBarrier::CheckStoreGoodTarget(const char* consumer, BaseObject* target,
-                                      const ForwardingProvenance& provenance)
+void ZBarrier::CheckStoreGoodTarget(const char* consumer, BaseObject* target)
 {
     // zAddress.inline.hpp:store_good consumes an already current address.
     // The originating load/root operation performed generation-specific remap.
     (void)consumer;
-    (void)ZBarrier::ValidateCurrentValue(target, provenance);
+    (void)ZBarrier::ValidateCurrentValue(target);
 }
 } // namespace MapleRuntime

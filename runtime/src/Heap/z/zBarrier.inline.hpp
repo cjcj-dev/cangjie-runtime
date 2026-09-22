@@ -26,7 +26,7 @@ namespace MapleRuntime {
 // word until after marking: the color operation needs its old-generation bits.
 template<typename SlowPath>
 inline zaddress ZBarrier::MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor color,
-                                 RefField<>& field, zpointer observed, const ForwardingProvenance&)
+                                 RefField<>& field, zpointer observed)
 {
     return barrier(fast, slow, color, reinterpret_cast<volatile zpointer*>(&field), observed, false);
 }
@@ -63,9 +63,8 @@ inline zpointer ZBarrier::ColorMarkYoungGood(zaddress address, zpointer previous
 inline void ZBarrier::MarkYoungGoodBarrierOnOopField(NativeSlot& field)
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
     MarkBarrier(IsMarkYoungGoodFastPath, &ZBarrier::MarkYoungSlowPath,
-                ColorMarkYoungGood, field, observed, provenance);
+                ColorMarkYoungGood, field, observed);
 }
 
 // ZBarrier fast/color functions, zBarrier.inline.hpp:379-448.
@@ -114,9 +113,8 @@ inline zpointer ZBarrier::ColorRemsetGood(zaddress address, zpointer previous)
 inline void ZBarrier::MarkFinalizableBarrierOnRoot(NativeSlot& field)
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
     MarkBarrier(IsFinalizableGoodFastPath, &ZBarrier::MarkFinalizableSlowPath,
-                ColorFinalizableGood, field, observed, provenance);
+                ColorFinalizableGood, field, observed);
 }
 
 // ZZBarrier::mark_barrier_on_old_oop_field, zBarrier.inline.hpp:626-660.
@@ -124,27 +122,24 @@ inline void ZBarrier::MarkFinalizableBarrierOnRoot(NativeSlot& field)
 inline void ZBarrier::MarkBarrierOnOopField(RefField<>& field, bool finalizable)
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
     if (finalizable) {
         (void)MarkBarrier(IsFinalizableGoodFastPath, &ZBarrier::MarkFinalizableSlowPath,
-                          ColorFinalizableGood, field, observed, provenance);
+                          ColorFinalizableGood, field, observed);
     } else {
-        (void)MarkBarrier(IsMarkGoodFastPath, &ZBarrier::MarkSlowPath, ColorMarkGood, field, observed,
-                          provenance);
+        (void)MarkBarrier(IsMarkGoodFastPath, &ZBarrier::MarkSlowPath, ColorMarkGood, field, observed);
     }
 }
 
 inline void ZBarrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable)
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, holder, &field };
     zaddress result;
     if (finalizable) {
         result = MarkBarrier(IsFinalizableGoodFastPath, &ZBarrier::MarkFinalizableFromOldSlowPath,
-                             ColorFinalizableGood, field, observed, provenance);
+                             ColorFinalizableGood, field, observed);
     } else {
         result = MarkBarrier(IsMarkGoodFastPath, &ZBarrier::MarkFromOldSlowPath,
-                             ColorMarkGood, field, observed, provenance);
+                             ColorMarkGood, field, observed);
     }
     (void)result;
 }
@@ -153,9 +148,8 @@ inline void ZBarrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& f
 inline void ZBarrier::MarkBarrierOnYoungOopField(RefField<>& field)
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, nullptr, &field };
     const zaddress result = MarkBarrier(IsStoreGoodOrNullAnyFastPath, &ZBarrier::MarkFromYoungSlowPath,
-                                       ColorStoreGood, field, observed, provenance);
+                                       ColorStoreGood, field, observed);
     (void)result;
 }
 
@@ -163,9 +157,8 @@ inline void ZBarrier::MarkBarrierOnYoungOopField(RefField<>& field)
 inline zaddress ZBarrier::RemsetBarrierOnOopField(RefField<>& field)
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
     const zaddress result = MarkBarrier(IsMarkYoungGoodFastPath, &ZBarrier::MarkYoungSlowPath,
-                                       ColorRemsetGood, field, observed, provenance);
+                                       ColorRemsetGood, field, observed);
     return result;
 }
 
@@ -258,18 +251,6 @@ inline zaddress ZBarrier::remap(zaddress_unsafe addr, ZGeneration* generation)
 
 inline zaddress ZBarrier::make_load_good(zpointer ptr)
 {
-    return make_load_good_impl(ptr, nullptr);
-}
-
-// Cangjie raw carriers retain their diagnostic provenance through the same
-// colored-word routing as ordinary field barriers (zBarrier.inline.hpp:294).
-inline zaddress ZBarrier::make_load_good(zpointer ptr, const ForwardingProvenance& provenance)
-{
-    return make_load_good_impl(ptr, &provenance);
-}
-
-inline zaddress ZBarrier::make_load_good_impl(zpointer ptr, const ForwardingProvenance* provenance)
-{
     if (is_null_any(ptr)) {
         return zaddress::null;
     }
@@ -278,9 +259,7 @@ inline zaddress ZBarrier::make_load_good_impl(zpointer ptr, const ForwardingProv
     }
     ZGeneration* generation = remap_generation(ptr);
     BaseObject* object = to_object(RefField<>(ptr).GetTargetObject());
-    return from_object(provenance == nullptr
-        ? generation->relocate_or_remap_object(object)
-        : generation->relocate_or_remap_object(object, *provenance));
+    return from_object(generation->relocate_or_remap_object(object));
 }
 
 inline zaddress ZBarrier::make_load_good_no_relocate(zpointer ptr)
@@ -305,9 +284,11 @@ inline void ZBarrier::self_heal(ZBarrierFastPath fast_path, volatile zpointer* p
     if (!allow_null && is_null_assert_load_good(heal_ptr) && !is_null_any(ptr)) {
         return;
     }
-    if (fast_path(ptr) || !fast_path(heal_ptr)) {
-        return;
-    }
+    assert_is_valid(ptr);
+    assert_is_valid(heal_ptr);
+    assert(!fast_path(ptr));
+    assert(fast_path(heal_ptr));
+    assert(ZPointer::is_remapped(heal_ptr));
     auto& field = *reinterpret_cast<RefField<>*>(const_cast<zpointer*>(p));
     for (;;) {
         assert_transition_monotonicity(ptr, heal_ptr);

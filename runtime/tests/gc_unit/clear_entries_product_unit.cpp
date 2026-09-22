@@ -99,14 +99,12 @@ public:
 
     static BaseObject* ResolveStoreValue(Heap& collector, BaseObject* value)
     {
-        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, value, &value };
-        return ZRelocate::ResolveStoreValue(value, provenance, Generation::Old);
+        return ZRelocate::ResolveStoreValue(value, Generation::Old);
     }
 
     static void CheckStoreGoodTarget(Heap& collector, BaseObject* value)
     {
-        ZBarrier::CheckStoreGoodTarget("ForwardingLookupWitness", value,
-            ForwardingProvenance{ ForwardingHolderKind::HeapRef, value, &value });
+        ZBarrier::CheckStoreGoodTarget("ForwardingLookupWitness", value);
     }
 
     static BaseObject* ForwardUpdateRawRef(Heap& collector, ObjectRef& root)

@@ -219,12 +219,12 @@ void ZCrossVM::ResurrectExportObject(BaseObject* obj)
         if (generation == nullptr || !generation->is_phase_relocate()) {
             resurrectedExportObjectes.erase(obj);
             resurrectedExportObjectes.insert(ValueRoot(ResolveCurrentValueRoot(
-                ValueRoot(obj), &resurrectedExportObjectes)));
+                ValueRoot(obj))));
         } else {
             resurrectedExportObjectesForwardPhase.erase(obj);
             resurrectedExportObjectesForwardPhase.insert(ValueRoot(
                 ResolveCurrentValueRoot(
-                    ValueRoot(obj), &resurrectedExportObjectesForwardPhase)));
+                    ValueRoot(obj))));
         }
     }
 
@@ -286,7 +286,7 @@ void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
             return;
         }
         const ValueRoot owner = exportOwners.back();
-        BaseObject* exportObj = ResolveCurrentValueRoot(owner, &exportOwners);
+        BaseObject* exportObj = ResolveCurrentValueRoot(owner);
         exportOwners.pop_back();
         if (exportObj == nullptr) {
             continue;
@@ -329,7 +329,7 @@ void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
     }
 }
 
-BaseObject* ZCrossVM::ResolveCurrentValueRoot(const ValueRoot& root, const void* owner) const
+BaseObject* ZCrossVM::ResolveCurrentValueRoot(const ValueRoot& root) const
 {
     BaseObject* const value = root.object;
     if (value == nullptr || !Heap::IsHeapAddress(value)) {
@@ -339,24 +339,18 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(const ValueRoot& root, const void*
     // the saved root color is the only remap discriminator.
     const zpointer colorPtr = ZAddress::color(zaddress::null, root.color);
     const bool loadGood = ZPointer::is_load_good(colorPtr);
-    const ForwardingProvenance provenance{
-        ForwardingHolderKind::Static, owner, nullptr,
-        loadGood ? ForwardingStage::IncomingNew : ForwardingStage::OverwritePrevious,
-        ForwardingWriterKind::CollectorHeal, ForwardingSourceKind::CallerValue,
-        nullptr, nullptr, ForwardingFieldKind::RootSlot
-    };
     if (!loadGood) {
         // ZGeneration::relocate_or_remap_object returns the original address
         // when this generation's forwarding table has no entry for it.
         BaseObject* current = ZBarrier::remap_generation(colorPtr)
-            ->relocate_or_remap_object(value, provenance);
+            ->relocate_or_remap_object(value);
         if (current == nullptr || !Heap::IsHeapAddress(current) ||
             ZBarrier::JudgeHandOutTarget(current) != HandVerdict::Usable) {
-            ZBarrier::FailClosedLoad("value root relocate_or_remap requires usable to", value, 0, provenance);
+            ZBarrier::FailClosedLoad("value root relocate_or_remap requires usable to", value, 0);
         }
         return current;
     }
-    return ZBarrier::ValidateCurrentValue(value, provenance);
+    return ZBarrier::ValidateCurrentValue(value);
 }
 
 void ZCrossVM::CurrentizeValueRootSet(ValueRootSet& roots) const
@@ -364,7 +358,7 @@ void ZCrossVM::CurrentizeValueRootSet(ValueRootSet& roots) const
     ValueRootSet current;
     current.reserve(roots.size());
     for (const ValueRoot& value : roots) {
-        current.insert(ValueRoot(ResolveCurrentValueRoot(value, &roots)));
+        current.insert(ValueRoot(ResolveCurrentValueRoot(value)));
     }
     roots.swap(current);
 }
@@ -375,10 +369,10 @@ void ZCrossVM::CurrentizeValueRootMap(
     ValueRootMap current;
     current.reserve(roots.size());
     for (const auto& entry : roots) {
-        ValueRoot key(ResolveCurrentValueRoot(entry.first, &roots));
+        ValueRoot key(ResolveCurrentValueRoot(entry.first));
         ValueRootList& values = current[key];
         for (const ValueRoot& value : entry.second) {
-            values.emplace_back(ResolveCurrentValueRoot(value, &roots));
+            values.emplace_back(ResolveCurrentValueRoot(value));
         }
     }
     roots.swap(current);

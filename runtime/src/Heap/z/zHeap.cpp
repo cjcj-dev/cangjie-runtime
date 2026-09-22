@@ -189,9 +189,9 @@ void Heap::MarkNewObject(BaseObject* obj)
     cycle.MarkObjectIfActive<false, false, false, false>(from_object(obj));
 }
 
-BaseObject* Heap::make_load_good(RefField<>& ref, const ForwardingProvenance& provenance)
+BaseObject* Heap::make_load_good(RefField<>& ref)
 {
-    return to_object(ZBarrier::make_load_good(ref.GetFieldValue(), provenance));
+    return to_object(ZBarrier::make_load_good(ref.GetFieldValue()));
 }
 
 void Heap::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)

@@ -127,8 +127,7 @@ void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
 {
     CHECK(Heap::GetHeap().old().IsPhaseMark());
     BaseObject* object = ZBarrier::ReadStaticRef(slot);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
-    object = ZBarrier::ValidateCurrentValue(object, provenance);
+    object = ZBarrier::ValidateCurrentValue(object);
     if (object == nullptr) return;
     auto* page = Heap::page(reinterpret_cast<MAddress>(object));
     if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
@@ -372,8 +371,7 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
     // coverage completed; fail closed instead of manufacturing a null heal.
     (void)field.CompareExchange(oldField.GetFieldValue(), zpointer::null);
     ZBarrier::FailClosedLoad(
-        "ZMark::ScrubMinorFreeTarget.unresolved", target, oldVal,
-        ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
+        "ZMark::ScrubMinorFreeTarget.unresolved", target, oldVal);
 }
 
 
