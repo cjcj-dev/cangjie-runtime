@@ -339,7 +339,7 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
         {
             for (ZPage* page; iter.next(&page);) {
                 page->object_iterate([&](BaseObject* object) {
-                    RefFieldVisitor remapAndRemember = [&](RefField<>& field) {
+                    auto remapAndRemember = [&](RefField<>& field) {
                         const zpointer observed = field.GetFieldValue();
                         BaseObject* target = RemapPromotedField(field, observed);
                         if (target != nullptr && Heap::IsHeapAddress(target) &&

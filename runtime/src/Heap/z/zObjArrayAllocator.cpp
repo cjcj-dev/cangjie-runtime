@@ -11,7 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
-#include "Heap/z/zIterator.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 
 #include "Base/MemUtils.h"
 #include "Common/ScopedObjectAccess.h"
@@ -93,8 +93,8 @@ MArray* ZObjArrayAllocator::initialize()
                     MArray* observed = static_cast<MArray*>(mutator->LoadInvisibleRoot());
                     CHECK(observed != nullptr && observed->IsInvisibleObject());
                     size_t fields = 0;
-                    RefFieldVisitor visitor = [&](RefField<>&) { ++fields; };
-                    ZBasicOopIterateClosure<RefFieldVisitor> closure(visitor);
+                    auto visitor = [&](RefField<>&) { ++fields; };
+                    ZBasicOopIterateClosure<decltype(visitor)> closure(visitor);
                     ZIterator::oop_iterate_safe(observed, &closure);
                     CHECK_DETAIL(fields == 0, "incomplete array must not expose reference fields");
                     const ZGenerationId id = requestYoung ? ZGenerationId::young : ZGenerationId::old;

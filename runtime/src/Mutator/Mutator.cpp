@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Common/BaseObject.inline.h"
 #include "Base/Types.h"
 #include "Common/TypeDef.h"
 #include <cstring>
@@ -506,7 +507,7 @@ void Mutator::RecordStackPtrs(std::set<RootSlot*>& rootSlots,
     StackManager::VisitStackPtrMap(uwContext, traceAndFixPtrVisitor, fixPtrVisitor, derivedPtrVisitor, *this);
 
     // Ref trace on non-escaped heap pointers.
-    HeapSlotVisitor refVisitor = [&rootList, this](HeapSlot<>& oldRefFieldAddr) {
+    auto refVisitor = [&rootList, this](HeapSlot<>& oldRefFieldAddr) {
         // A reference field in a stack-allocated object is a root slot, not a heap slot.
         RootSlot& oldRootField = RootSlotAt(
             static_cast<void*>(&oldRefFieldAddr)); // Stack-object field storage is root storage.

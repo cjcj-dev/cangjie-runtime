@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
+#include "Common/BaseObject.inline.h"
 #include "Heap/z/zVerify.hpp"
 #include <cstdlib>
 #include <cstring>
@@ -285,12 +286,12 @@ public:
         ZVerifyOldOopClosure oopClosure(verifyWeaks);
         const MAddress referent = reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE;
         if (object->IsWeakRef() && verifyWeaks) { oopClosure.do_oop(&HeapSlotAt<>(referent)); }
-        RefFieldVisitor fields = [&](RefField<>& field) {
+        auto fields = [&](RefField<>& field) {
             if (!object->IsWeakRef() || reinterpret_cast<MAddress>(&field) != referent) {
                 oopClosure.do_oop(&field);
             }
         };
-        ZBasicOopIterateClosure<RefFieldVisitor> closure(fields);
+        ZBasicOopIterateClosure<decltype(fields)> closure(fields);
         ZIterator::oop_iterate_safe(object, &closure);
     }
 

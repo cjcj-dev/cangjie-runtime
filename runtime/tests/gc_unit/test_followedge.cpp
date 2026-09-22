@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "gc_heap_fixture.hpp"
+#include "Common/BaseObject.inline.h"
 #include "gc_unittest.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "ObjectModel/MArray.inline.h"
