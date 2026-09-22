@@ -18,8 +18,10 @@ constexpr bool kBufferStoreBarriers = true;
 constexpr size_t kStoreBarrierBufferLength = 32;
 
 struct StoreBarrierEntry {
-    MAddress p = 0;
+    volatile zpointer* p = nullptr;
     zpointer prev = zpointer::null;
+    static constexpr size_t p_offset() { return offsetof(StoreBarrierEntry, p); }
+    static constexpr size_t prev_offset() { return offsetof(StoreBarrierEntry, prev); }
 };
 
 class StoreBarrierBuffer {

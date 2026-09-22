@@ -293,7 +293,7 @@ void MutatorManager::VisitStoreBarrierBuffers(const std::function<void(MAddress)
     ThreadGCData::VisitOwners([&](ThreadGCData& data, Mutator*, ThreadLocalData*) {
         StoreBarrierBuffer* buf = data.storeBarrierBuffer;
         for (size_t i = buf->Current(); i < kStoreBarrierBufferLength; ++i) {
-            visitor(buf->buffer[i].p);
+            visitor(reinterpret_cast<MAddress>(buf->buffer[i].p));
         }
     });
 }

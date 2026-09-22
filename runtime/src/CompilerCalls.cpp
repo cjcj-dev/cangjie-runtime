@@ -93,8 +93,8 @@ extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferOffset = ThreadGCDat
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferCurrentOffset = StoreBarrierBuffer::current_offset();
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferBufferOffset = StoreBarrierBuffer::buffer_offset();
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierEntrySize = sizeof(StoreBarrierEntry);
-extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierEntryPOffset = offsetof(StoreBarrierEntry, p);
-extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierEntryPrevOffset = offsetof(StoreBarrierEntry, prev);
+extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierEntryPOffset = StoreBarrierEntry::p_offset();
+extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierEntryPrevOffset = StoreBarrierEntry::prev_offset();
 
 static bool IsGlobalStruct(const ObjectPtr basePtr, MAddress field)
 {
