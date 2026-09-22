@@ -43,7 +43,8 @@ void CheckAllocationPreservesOwnedPage(bool allowSaferegion, bool nonBlocking)
     }
     ZPage* allocated = Heap::alloc_page(ZGranuleSize, ZPageType::large, false,
                                       allowSaferegion, false, PageAge::eden, flags);
-    const bool retained = Heap::page(address) == owned;
+    ZPage* current = Heap::page(address);
+    const bool retained = current == owned && current->IsGarbageRegion();
     const size_t usedAfter = manager.GetAllocatedSize();
     std::printf("AllocationOwnership retained=%d used_before=%zu used_after=%zu\n",
                 retained, used, usedAfter);
