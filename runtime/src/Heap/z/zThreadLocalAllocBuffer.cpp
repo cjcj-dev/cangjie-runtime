@@ -147,7 +147,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     (void)allocType;
     const size_t tlabSize = ComputeTLABSize(totalSize, Heap::GetHeap().unsafe_max_tlab_alloc());
     if (tlabSize == 0) {
-        return Heap::GetHeap().object_allocator().alloc(totalSize, PageAge::eden);
+        return Heap::GetHeap().object_allocator().alloc(totalSize);
     }
     RetireTLAB(false);
     // Cangjie tasks can migrate while page allocation enters a saferegion.

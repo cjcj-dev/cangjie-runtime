@@ -186,7 +186,7 @@ void* AllocateMediumNonBlocking(void*)
     type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     const uint64_t before = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
-    const uintptr_t result = heap.object_allocator().alloc(bytes, PageAge::eden, true);
+    const uintptr_t result = heap.object_allocator().alloc_for_relocation(bytes, PageAge::eden);
     if (result != 0) { reinterpret_cast<BaseObject*>(result)->SetClassInfo(type); }
     const ZPage* page = result == 0 ? nullptr : Heap::page(result);
     const size_t actual = page == nullptr ? 0 : page->size();
@@ -213,7 +213,7 @@ void* AllocateMediumBlockingFailure(void*)
     const uint64_t before = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
     // The rooted large object leaves less than a medium page. A blocking
     // allocator must attempt collection before reporting the terminal failure.
-    const uintptr_t result = heap.object_allocator().alloc(ZObjectSizeLimitSmall + 8, PageAge::eden, false);
+    const uintptr_t result = heap.object_allocator().alloc(ZObjectSizeLimitSmall + 8);
     const uint64_t after = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
     const bool valid = result == 0 && after > before;
     std::fprintf(stderr, "MEDIUM_BLOCKING_TARGET result=%#zx occupied=%zu before=%llu after=%llu valid=%d\n",

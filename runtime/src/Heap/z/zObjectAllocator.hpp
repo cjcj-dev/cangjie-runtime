@@ -46,7 +46,8 @@ public:
     PerAge* allocator(PageAge age) { return objectAllocators[untype(age)].get(); }
     const PerAge* allocator(PageAge age) const { return objectAllocators[untype(age)].get(); }
     size_t fast_available(PageAge age) const;
-    uintptr_t alloc(size_t size, PageAge age, bool nonBlocking = false, bool clearPayload = true);
+    uintptr_t alloc(size_t size, bool clearPayload = true);
+    uintptr_t alloc_for_relocation(size_t size, PageAge age);
     void retire_pages(PageAgeRange ages);
 
 private:

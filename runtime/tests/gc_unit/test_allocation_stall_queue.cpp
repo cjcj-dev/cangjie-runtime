@@ -262,7 +262,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     // Large movable objects use the product object allocator; the pinned-page
     // API is limited to its fixed-size page and cannot represent these sizes.
     auto allocateObject = [&](TypeInfo* type, size_t bytes) -> BaseObject* {
-        const uintptr_t address = heap.object_allocator().alloc(bytes, PageAge::eden, false);
+        const uintptr_t address = heap.object_allocator().alloc(bytes);
         if (address == 0) { return nullptr; }
         auto* object = reinterpret_cast<BaseObject*>(address);
         object->SetClassInfo(type);

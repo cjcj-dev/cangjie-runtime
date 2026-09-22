@@ -169,7 +169,7 @@ void* Exercise(void*)
     std::array<BaseObject*, 6> witnesses {};
     std::array<zpointer, 6> rootInputs {};
     for (size_t i = 0; i < witnesses.size(); ++i) {
-        auto* object = reinterpret_cast<BaseObject*>(collector.object_allocator().alloc(16, PageAge::old));
+        auto* object = reinterpret_cast<BaseObject*>(collector.object_allocator().alloc_for_relocation(16, PageAge::old));
         object->SetClassInfo(type);
         witnesses[i] = object;
         rootInputs[i] = ZAddress::store_good(from_object(object));
