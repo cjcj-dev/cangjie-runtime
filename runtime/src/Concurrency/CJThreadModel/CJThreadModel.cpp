@@ -116,13 +116,17 @@ void StoreCJThreadObject(void* object)
 {
     auto* data = static_cast<LWTData*>(CJThreadGetArg());
     RootVisitor store = [&](RootSlot& slot) {
+        // zBarrierSetNMethod.cpp:76-79: a mutator entry keeps the old oops
+        // alive before the guard is disarmed or a root is overwritten. When
+        // the group is already disarmed this is the only keep-alive on store.
+        ZUncoloredRoot::keep_alive_object(safe(slot.LoadPlain()));
         if (&slot == &RootSlotAt(&data->threadObject)) {
             StorePlain(slot, from_object(from_native_ref(object)));
         }
     };
-    // zBarrierSetNMethod.cpp:76-84: a mutator entry heals the group with
-    // process_weak (keep-alive) before a root is overwritten; production and
-    // consumption share this entry.
+    // zBarrierSetNMethod.cpp:78-84: a mutator entry heals the group with
+    // process_weak before a root is overwritten; production and consumption
+    // share this entry.
     CJThreadVisitRoots(CJThreadGetHandle(), MutatorEntryCaller, &store);
 }
 
