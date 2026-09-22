@@ -151,35 +151,6 @@ void ZPage::verify_live(uint32_t liveObjects, size_t liveBytes, bool inPlace) co
     CHECK_DETAIL(liveBytes == map->live_bytes(), "Invalid number of live bytes");
 }
 
-void ZPage::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
-{
-    if (IsLargeRegion()) {
-        BaseObject* obj = from_region_addr(GetRegionStart());
-        func(obj);
-    } else if (IsSmallRegion()) {
-        uintptr_t position = GetRegionStart();
-        uintptr_t allocPtr = GetRegionAllocPtr();
-        while (position < allocPtr) {
-            BaseObject* obj = from_region_addr(position);
-            // GetAllocSize should before call func, because object maybe destroy in compact gc.
-            size_t size = RegionSpace::GetAllocSize(*obj);
-            func(obj);
-            position += size;
-        }
-    }
-}
-
-void ZPage::ClearRelocationResiduals()
-{
-    // WaitCopiedObjectsUnlocked already ran at Exempt. Do not SetStateCode on
-    // LOCKED: a live copier still UnlockObject(FORWARDED) (StateWord.h:183).
-    VisitAllObjects([](BaseObject* obj) {
-        if (obj != nullptr && obj->IsForwarded()) {
-            obj->SetStateCode(ObjectState::NORMAL);
-        }
-    });
-}
-
 } // namespace MapleRuntime
 
 

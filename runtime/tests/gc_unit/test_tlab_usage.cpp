@@ -14,6 +14,7 @@
 #include "Cangjie.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zMark.hpp"
 #include "UnwindStack/StackFrameCursor.h"
@@ -790,6 +791,86 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, UnstartedCarrierReleasesIdentity)
     std::fprintf(stderr, "THREAD_SNAPSHOT_CANCEL_TARGET executed=1 created=%d registered=%d removed=%d\n",
                  state.created, state.registered, state.removed);
     GC_EXPECT_TRUE(state.created && state.registered && state.removed);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif
+
+#if defined(__linux__)
+namespace {
+struct TailMarkCase {
+    TypeInfo* type;
+    std::atomic<uintptr_t> object{0};
+    std::atomic<uintptr_t> tail{0};
+    std::atomic<uintptr_t> bound{0};
+    std::atomic<bool> allocated{false};
+    std::atomic<bool> retire{false};
+    std::atomic<bool> retired{false};
+    std::atomic<bool> release{false};
+};
+void TailMarkOwner(TailMarkCase& state)
+{
+    auto& manager = MutatorManager::Instance();
+    Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    owner->DoLeaveSaferegion();
+    BaseObject* obj = reinterpret_cast<BaseObject*>(MCC_NewObject(state.type, 4096));
+    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
+    uintptr_t words[3];
+    std::memcpy(words, buffer, sizeof(words));
+    state.object.store(reinterpret_cast<uintptr_t>(obj), std::memory_order_release);
+    state.tail.store(words[0], std::memory_order_release);
+    state.bound.store(words[1], std::memory_order_release);
+    owner->DoEnterSaferegion();
+    state.allocated.store(true, std::memory_order_release);
+    while (!state.retire.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    // threadLocalAllocBuffer.cpp:130-158: the owner retires its own buffer
+    // (ZGC zThreadLocalAllocBuffer.cpp:60-67: retire_for_thread reaches the
+    // owning thread's TLAB). The tail span becomes a filler object.
+    owner->DoLeaveSaferegion();
+    AllocBuffer::GetAllocBuffer()->RetireTLAB(true);
+    owner->DoEnterSaferegion();
+    state.retired.store(true, std::memory_order_release);
+    while (!state.release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+}
+
+// #826: the NW256 crash consumer chain. A slot naming the TLAB tail reaches
+// the real mark consumer ZMark::MarkEntryObject (zMark.cpp:620-634; the crash
+// instruction was GetSize+0x12 reading TypeInfo+8 on a zero head). After the
+// retire above the tail is a filler with a valid header, so the same entry
+// must complete. Red arm: revert the retire coverage and the tail stays raw,
+// so this faults with the original signature (see the #822 report evidence).
+GC_RUNTIME_OTHER_VM_TEST(TLABTail, RetiredTailSurvivesMarkEntry)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    TailMarkCase state{TLABTestType()};
+    std::thread worker([&] { TailMarkOwner(state); });
+    while (!state.allocated.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    auto& young = Heap::GetHeap().young();
+    young.Workers()->set_active_workers(1);
+    young.Begin(1);
+    young.pause_mark_start();
+    state.retire.store(true, std::memory_order_release);
+    while (!state.retired.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    const uintptr_t tail = state.tail.load(std::memory_order_acquire);
+    const uintptr_t bound = state.bound.load(std::memory_order_acquire);
+    GC_EXPECT_TRUE(tail != 0 && bound > tail);
+    BaseObject* tailObj = reinterpret_cast<BaseObject*>(tail);
+    GC_EXPECT_TRUE(CollectedHeap::is_filler_object(tailObj));
+    BaseObject* obj = reinterpret_cast<BaseObject*>(state.object.load(std::memory_order_acquire));
+    // Positive control: the live object takes the same entry without faulting.
+    GC_EXPECT_FALSE(ZMark::MarkEntryObject(obj,
+        MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), nullptr));
+    // Target: the retired tail filler through the same consumer.
+    GC_EXPECT_FALSE(ZMark::MarkEntryObject(tailObj,
+        MarkStackEntry(untype(ZAddress::offset(from_object(tailObj))), true, true, false, false), nullptr));
+    std::fprintf(stderr, "TLAB_TAIL_TARGET executed=1 tail=%#zx bound=%#zx tail_size=%zu obj_size=%zu\n",
+                 tail, bound, tailObj->GetSize(), obj->GetSize());
+    state.release.store(true, std::memory_order_release);
+    worker.join();
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif

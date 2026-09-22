@@ -8,6 +8,7 @@
 #define MRT_ZPAGE_INLINE_H
 
 #include "Heap/z/zPage.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zLiveMap.inline.hpp"
 #include "Heap/z/zSafeDelete.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -242,10 +243,13 @@ inline MAddress ZPage::find_base_unsafe(MAddress p)
     }
 }
 
-// zPage.inline.hpp:388-392.
+// zPage.inline.hpp:388-392, with ZGC's assert_zpage_mark_state
+// (zPage.inline.hpp:295-299): marked, and not in that generation's mark phase.
 inline MAddress ZPage::find_base(MAddress p)
 {
     DCHECK_D(is_marked(), "Should be marked");
+    DCHECK_D(!is_young() || !ZGeneration::young()->is_phase_mark(), "Wrong phase");
+    DCHECK_D(is_young() || ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_mark(), "Wrong phase");
     return find_base_unsafe(p);
 }
 

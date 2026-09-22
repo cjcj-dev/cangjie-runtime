@@ -72,7 +72,6 @@ set(GC_UNIT_SOURCES
     test_exempt_unlock.cpp
     test_isfromreg.cpp
     test_current_object_ref.cpp
-    test_fillerobj.cpp
     test_i2_readref.cpp
     test_loadfc.cpp
     test_fnlz_roots.cpp
