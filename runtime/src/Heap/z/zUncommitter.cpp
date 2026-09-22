@@ -196,9 +196,13 @@ size_t Uncommitter::Uncommit()
             return 0;
         }
         std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
-        const size_t retain = std::max(partition.used + partition.claimed, partition.minCapacity);
+        // ZGC zUncommitter.cpp:383-390: allocations during this cycle can
+        // lower the watermark further, even without increasing capacity.
+        const size_t allowed = std::max(partition.cache.min_size_watermark(), uncommitted) - uncommitted;
+        const size_t remaining = std::min(toUncommit, allowed);
+        const size_t retain = std::max(partition.used, partition.minCapacity);
         const size_t release = partition.capacity - retain;
-        const size_t flush = std::min({release, toUncommit, ChunkLimit(Heap::GetHeap().GetMaxCapacity())});
+        const size_t flush = std::min({release, remaining, ChunkLimit(partition.currentMaxCapacity)});
         // zUncommitter.cpp:395: flush memory from the mapped cache for uncommit.
         flushed = partition.cache.remove_for_uncommit(flush, &flushedVmems);
         partition.claimed += flushed;

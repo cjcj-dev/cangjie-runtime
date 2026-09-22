@@ -64,6 +64,7 @@ struct UncommitterTestAccess {
     }
     static void PrepareChunk(Uncommitter& worker)
     {
+        worker.partition.cache.reset_min_size_watermark();
         worker.cycleStart = TimeUtil::NanoSeconds() + Uncommitter::DelayNs();
         worker.toUncommit = ZGranuleSize;
     }
