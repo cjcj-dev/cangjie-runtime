@@ -95,34 +95,25 @@ void CheckNativeFrameScan(bool derived)
 {
     const auto* pc = reinterpret_cast<const uint32_t*>(&NativeFrameProbe);
     GC_EXPECT_TRUE(MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(pc)) == nullptr);
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        FrameInfo frame(pc);
-        frame.mFrame.SetIP(pc);
-        Mutator mutator;
-        RegSlotsMap registers;
-        size_t visits = 0;
-        const RootVisitor roots = [&](RootSlot&) { ++visits; };
-        const DerivedPtrVisitor derivedRoots = [&](BasePtrType, DerivedSlot&) { ++visits; };
-        StackFrameCursor::ProcessManagedFrame(roots, derived ? &derivedRoots : nullptr, registers, frame, mutator);
-        _exit(visits == 0 ? 0 : 1);
-    }
-    int status = 0;
-    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    const bool completed = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    std::fprintf(stderr, "NATIVE_FRAME_TARGET executed=1 derived=%d status=%d completed=%d\n",
-                 derived, status, completed);
-    GC_EXPECT_TRUE(completed);
+    FrameInfo frame(pc);
+    frame.mFrame.SetIP(pc);
+    Mutator mutator;
+    RegSlotsMap registers;
+    size_t visits = 0;
+    const RootVisitor roots = [&](RootSlot&) { ++visits; };
+    const DerivedPtrVisitor derivedRoots = [&](BasePtrType, DerivedSlot&) { ++visits; };
+    StackFrameCursor::ProcessManagedFrame(roots, derived ? &derivedRoots : nullptr, registers, frame, mutator);
+    std::fprintf(stderr, "NATIVE_FRAME_TARGET executed=1 derived=%d visits=%zu\n", derived, visits);
+    GC_EXPECT_EQ(visits, size_t{0});
 }
 }
 
-GC_TEST(TLABUsage, NativeFrameRootScan)
+GC_OTHER_VM_TEST(TLABUsage, NativeFrameRootScan)
 {
     CheckNativeFrameScan(false);
 }
 
-GC_TEST(TLABUsage, NativeFrameDerivedScan)
+GC_OTHER_VM_TEST(TLABUsage, NativeFrameDerivedScan)
 {
     CheckNativeFrameScan(true);
 }

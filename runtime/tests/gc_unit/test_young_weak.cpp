@@ -154,7 +154,7 @@ public:
         }
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
         Heap::GetHeap().cross_vm().cycleRefWorkStack.clear();
-        Heap::GetHeap().cross_vm().discoveredExternObjects.clear();
+        Heap::GetHeap().old().discoveredExternObjects.clear();
         Heap::GetHeap().cross_vm().cycleRefWorkStack[value].push_back(value);
     }
 
@@ -179,16 +179,16 @@ public:
     {
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
         auto it = Heap::GetHeap().cross_vm().cycleRefWorkStack.find(key);
-        return Heap::GetHeap().cross_vm().discoveredExternObjects.empty() && Heap::GetHeap().cross_vm().cycleRefWorkStack.size() == owners &&
+        return Heap::GetHeap().old().discoveredExternObjects.empty() && Heap::GetHeap().cross_vm().cycleRefWorkStack.size() == owners &&
             it != Heap::GetHeap().cross_vm().cycleRefWorkStack.end() && it->second.size() == 1 && it->second.front() == value;
     }
 
     static bool DiscoveredCarrierEquals(Heap& collector, BaseObject* key, BaseObject* value, size_t owners = 1)
     {
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().externMtx);
-        auto it = Heap::GetHeap().cross_vm().discoveredExternObjects.find(key);
-        return Heap::GetHeap().cross_vm().discoveredExternObjects.size() == owners &&
-            it != Heap::GetHeap().cross_vm().discoveredExternObjects.end() && it->second.size() == 1 &&
+        auto it = Heap::GetHeap().old().discoveredExternObjects.find(key);
+        return Heap::GetHeap().old().discoveredExternObjects.size() == owners &&
+            it != Heap::GetHeap().old().discoveredExternObjects.end() && it->second.size() == 1 &&
             it->second.front() == value;
     }
 
@@ -597,6 +597,20 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
         RunInOtherVm("MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration");
         return;
     }
+    const char* rejectGeneration = std::getenv("GC_UNIT_PRIVATE_STACK_REJECT");
+    if (rejectGeneration == nullptr) {
+        for (const char* generation : {"old", "young"}) {
+            GC_EXPECT_EQ(setenv("GC_UNIT_PRIVATE_STACK_REJECT", generation, 1), 0);
+            try {
+                RunInOtherVm("MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration",
+                             "Thread marking stack is not empty");
+            } catch (...) {
+                unsetenv("GC_UNIT_PRIVATE_STACK_REJECT");
+                throw;
+            }
+            GC_EXPECT_EQ(unsetenv("GC_UNIT_PRIVATE_STACK_REJECT"), 0);
+        }
+    }
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager manager;
     WeakClosureTestRuntime runtime(manager);
@@ -613,17 +627,12 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
         {
             ScopedStopTheWorld stw("mark stacks verification test", false);
             other.verify_all_stacks_empty();
-            const pid_t child = fork();
-            GC_EXPECT_TRUE(child >= 0);
-            if (child == 0) {
+            const char* generation = domain == &old ? "old" : "young";
+            if (rejectGeneration != nullptr && std::strcmp(rejectGeneration, generation) == 0) {
                 signal(SIGABRT, SIG_DFL);
                 current.verify_all_stacks_empty();
-                _exit(0);
+                return; // Normal completion fails the parent's abort assertion.
             }
-            int status = 0;
-            GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-            GC_EXPECT_TRUE(WIFSIGNALED(status));
-            GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
             // Verification of the other generation has not flushed this stack.
             GC_EXPECT_FALSE(stacks.IsEmpty());
             GC_EXPECT_TRUE(current.Stripes().IsEmpty());
