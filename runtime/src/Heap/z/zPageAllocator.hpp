@@ -459,18 +459,6 @@ public:
     void PromoteAllRegions();
     void CompactRegion(ZPage* region);
 
-    // Rehome onto unmovableFrom without publishing kept. PrepareYoung parks
-    // leftover from-pages here; they were expired at cycle start and must not
-    // be re-published as this cycle's done (zRelocationSetSelector.cpp:114-196).
-    // ZGC zRelocationSetSelector.cpp:114-196 / zGeneration.cpp:205-213: a page
-    // not in this cycle's relocation set is an ordinary candidate next cycle.
-    // Kept (IsForwardingDone via Exempt) is in-cycle only.
-    // zRelocate.cpp:1346-1352 flip_survived: keep the page, reset age, leave young.
-    // Must not remain LONE_FROM / FROM after TakeHead — barriers treat those as from-space.
-    void EnlistStayYoungSurvivor(ZPage* region, bool advanceAge = true);
-    static void BumpYoungSurvivorAge(ZPage* region);
-    static void FinishStayYoungInPlace(ZPage* region, bool advanceAge = true);
-
     // ZGeneration::select_relocation_set iterates only pages owned by that
     // generation (zGeneration.cpp:195-221).  An old relocation pass may
     // observe a young page in our shared list, but it must not relocate or
