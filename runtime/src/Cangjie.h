@@ -278,8 +278,8 @@ struct GCParam {
     /*
      * Minimum interval each backup GC request will be responded.
      * Backup GC will be triggered if there is no GC during this interval.
-     * Measured in ns, default to 240 s, must be > 0 s.
-     * It will be set default value if the value is 0.
+     * Zero disables timer collections (the default); positive values enable them.
+     * InitCJRuntime accepts seconds; the runtime stores nanoseconds.
      */
     uint64_t backupGCInterval;
 
