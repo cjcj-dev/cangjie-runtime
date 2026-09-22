@@ -348,9 +348,29 @@ GC_OTHER_VM_TEST(RelocateWorkers, ProductSerialEntryRegistersWorkerAndClosesGene
     GC_EXPECT_TRUE(RunSerialProductEntryClosesGeneration());
 }
 
-// ZGC zRelocate.cpp:1193-1224 and zWorkers.cpp:108-124. A resize request
-// survives into the real relocation entry; the task must restart and finish
-// the installed forwarding set with the new worker budget.
+namespace {
+// Park the real relocation workers using the queue's normal GC synchronization
+// protocol, then request resize while that product task is already running.
+// No test callback or timing race decides when the request is issued.
+void ResizeRunningRelocation(ZGeneration& generation)
+{
+    auto* queue = generation.relocate().queue();
+    queue->synchronize();
+    std::thread relocating([&] { generation.relocate().relocate(&generation.relocation_set()); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (queue->SynchronizedWorkerCount() != 1 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool running = queue->SynchronizedWorkerCount() == 1;
+    generation.Workers()->request_resize_workers(3);
+    queue->desynchronize();
+    relocating.join();
+    GC_EXPECT_TRUE(running);
+}
+}
+
+// ZGC zRelocate.cpp:1193-1224 and zWorkers.cpp:108-124. A request made
+// during the real relocation task must restart it with the new worker budget.
 GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
 {
     GcHeapFixture fx;
@@ -361,8 +381,7 @@ GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
     if (old.Workers() == nullptr) old.InitializeWorkers(3);
     old.Workers()->set_active_workers(1);
     old.Workers()->set_active();
-    old.Workers()->request_resize_workers(3);
-    old.relocate().relocate(&old.relocation_set());
+    ResizeRunningRelocation(old);
     const auto active = old.Workers()->active_workers();
     old.Workers()->set_inactive();
     GC_EXPECT_EQ(active, 3u);
@@ -379,8 +398,7 @@ GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryRestartsWithRequestedWorkers)
     if (young.Workers() == nullptr) young.InitializeWorkers(3);
     young.Workers()->set_active_workers(1);
     young.Workers()->set_active();
-    young.Workers()->request_resize_workers(3);
-    young.relocate().relocate(&young.relocation_set());
+    ResizeRunningRelocation(young);
     const auto active = young.Workers()->active_workers();
     young.Workers()->set_inactive();
     GC_EXPECT_EQ(active, 3u);
