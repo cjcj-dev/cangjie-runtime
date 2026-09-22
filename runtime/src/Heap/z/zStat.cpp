@@ -469,7 +469,6 @@ ZStatCounterData ZStatUnsampledCounter::GetAndReset() const
 // zStat.cpp:892-930
 void ZStatSample(const ZStatSampler& sampler, uint64_t value)
 {
-    if (!ZStatValue::StorageReadyPublic()) return;
     auto* const cpuData = sampler.CpuLocal<ZStatSampler::CpuData>(ZCPU::id());
     cpuData->nsamples.fetch_add(1, std::memory_order_relaxed);
     cpuData->sum.fetch_add(value, std::memory_order_relaxed);
