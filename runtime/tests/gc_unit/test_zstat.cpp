@@ -29,7 +29,7 @@ const ZStatSampler unobserved("Test", "Unobserved", ZStatUnitTimeNs);
 // consumers. Each case has a fresh process so sampler history is independent.
 void CheckPageAllocationRate(bool relocation)
 {
-    CreateStandaloneHeap(8);
+    CreateStandaloneHeap(64);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     ZStatMutatorAllocRate::initialize();
@@ -38,21 +38,21 @@ void CheckPageAllocationRate(bool relocation)
     ZAllocationFlags flags;
     flags.set_non_blocking();
     if (relocation) flags.set_gc_relocation();
-    ZPage* page = Heap::alloc_page(2 * ZGranuleSize, ZPageType::large,
+    // Exceed the sampling granule even with the runner's 1024-granule heap.
+    const size_t allocationSize = 16 * ZGranuleSize;
+    ZPage* page = Heap::alloc_page(allocationSize, ZPageType::large,
                                  false, false, false, PageAge::eden, flags);
     GC_EXPECT_TRUE(page != nullptr);
     const auto bytes = ZStatMutatorAllocRate::counter().GetAndReset().counter;
     const auto after = ZStatMutatorAllocRate::stats();
     std::fprintf(stderr, "ALLOC_RATE_TARGET relocation=%d bytes=%llu avg_before=%g avg_after=%g\n",
                  relocation, static_cast<unsigned long long>(bytes), before.avg, after.avg);
-    GC_EXPECT_EQ(bytes, relocation ? 0U : 2 * ZGranuleSize);
-    if (relocation) {
-        GC_EXPECT_EQ(after.avg, before.avg);
-        GC_EXPECT_EQ(after.predict, before.predict);
-        GC_EXPECT_EQ(after.sd, before.sd);
-    } else {
-        GC_EXPECT_TRUE(after.avg > before.avg);
-    }
+    const bool counterCorrect = bytes == (relocation ? 0U : allocationSize);
+    const bool samplerCorrect = relocation
+        ? after.avg == before.avg && after.predict == before.predict && after.sd == before.sd
+        : after.avg > before.avg;
+    // Evaluate both consumers before asserting, so neither masks the other.
+    GC_EXPECT_TRUE(counterCorrect && samplerCorrect);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(AllocationRate855, MutatorPageContributes)
