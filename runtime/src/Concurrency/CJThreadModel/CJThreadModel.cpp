@@ -63,34 +63,67 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
         (*reinterpret_cast<RootVisitor*>(handle))(map);
         (*reinterpret_cast<RootVisitor*>(handle))(execute);
     }
-    // zNMethod.cpp:380-395: heal the whole group before publishing its new guard.
+    // zNMethod.cpp:392-398: the GC publishes a partial color that is mark good
+    // but never store good, so the group is still armed and a mutator entry
+    // must take the slow path.
     __atomic_store_n(g_uncoloredVisitColor, nextColor, __ATOMIC_RELEASE);
 }
 
+namespace {
+// zBarrierSetNMethod.cpp:53-91: mutator entry slow path. Runs under the group
+// lock via CJThreadVisitRoots; heals with process_weak (keep-alive) and fully
+// disarms by publishing the store-good guard.
+void MutatorEntryCaller(void* argPtr, void* handle)
+{
+    LWTData* data = reinterpret_cast<LWTData*>(argPtr);
+    // zBarrierSetNMethod.cpp:53-57: recheck the guard under the group lock.
+    const uintptr_t color = *g_uncoloredVisitColor;
+    ObjectRef& ref = reinterpret_cast<ObjectRef&>(data->obj);
+    ObjectRef& map = reinterpret_cast<ObjectRef&>(data->threadObject);
+    ObjectRef& execute = RootSlotAt(&data->execute);
+    if (color != ZPointerStoreGoodMask) {
+        // zBarrierSetNMethod.cpp:78-84: ZUncoloredRootProcessWeakOopClosure.
+        auto processWeak = [&](ObjectRef& slot) {
+            // zUncoloredRoot.inline.hpp:75-78: process_weak keeps the oop alive.
+            ZUncoloredRoot::process_weak(reinterpret_cast<zaddress_unsafe*>(&slot), color);
+        };
+        processWeak(ref);
+        processWeak(map);
+        processWeak(execute);
+        // zBarrierSetNMethod.cpp:88-97: disarm by publishing store good.
+        __atomic_store_n(g_uncoloredVisitColor, ZPointerStoreGoodMask, __ATOMIC_RELEASE);
+    }
+    if (handle != nullptr) {
+        (*reinterpret_cast<RootVisitor*>(handle))(ref);
+        (*reinterpret_cast<RootVisitor*>(handle))(map);
+        (*reinterpret_cast<RootVisitor*>(handle))(execute);
+    }
+}
+} // namespace
+
 void CJThreadRootEntryBarrier()
 {
-    // zBarrierSetNMethod.cpp:39-91: fast guard check, then lock and recheck
-    // in MRT_VisitorCaller, heal the group, and publish the new guard.
+    // zBarrierSetNMethod.cpp:39-43: fast guard check against the disarmed
+    // (store good) value; the GC partial color is still armed.
     auto thread = CJThreadGetHandle();
-    if (!CJThreadRootsAreArmed(thread, ZPointerMarkGoodMask | ZPointerRememberedMask)) {
+    if (!CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask)) {
         return;
     }
-    CJThreadVisitRoots(thread, MRT_VisitorCaller, nullptr);
+    CJThreadVisitRoots(thread, MutatorEntryCaller, nullptr);
 }
 
 void StoreCJThreadObject(void* object)
 {
     auto* data = static_cast<LWTData*>(CJThreadGetArg());
     RootVisitor store = [&](RootSlot& slot) {
-        // zBarrierSetNMethod.cpp:76-79: a mutator entry keeps the old oops
-        // alive before the guard is disarmed or a root is overwritten.
-        ZUncoloredRoot::keep_alive_object(safe(slot.LoadPlain()));
         if (&slot == &RootSlotAt(&data->threadObject)) {
             StorePlain(slot, from_object(from_native_ref(object)));
         }
     };
-    // Heal the existing roots from their saved epoch before adding a current value.
-    CJThreadVisitRoots(CJThreadGetHandle(), MRT_VisitorCaller, &store);
+    // zBarrierSetNMethod.cpp:76-84: a mutator entry heals the group with
+    // process_weak (keep-alive) before a root is overwritten; production and
+    // consumption share this entry.
+    CJThreadVisitRoots(CJThreadGetHandle(), MutatorEntryCaller, &store);
 }
 
 // External interface for adapting to concurrent tasks

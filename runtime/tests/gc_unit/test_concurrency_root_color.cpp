@@ -186,8 +186,13 @@ void CheckOldRootRead(bool healBeforeRead)
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
+    // The saved store-good color is from the previous epoch, so the group is armed.
+    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     if (healBeforeRead) {
         runtime.GetConcurrencyModel().VisitGCRoots();
+        // zNMethod.cpp:392-398: the GC partial color is mark good but never
+        // store good, so the group stays armed for the mutator entry.
+        GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     }
     auto* previous = CJThreadGetHandle();
     ThreadLocal::SetCJThread(thread);
@@ -198,6 +203,8 @@ void CheckOldRootRead(bool healBeforeRead)
         healBeforeRead, savedColor, ZPointerLoadGoodMask, from, observed, expected);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(observed), expected);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(repeated), expected);
+    // zBarrierSetNMethod.cpp:88-97: the mutator entry fully disarms the group.
+    GC_EXPECT_TRUE(!CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     const MAddress groupObserved = raw(RootSlotAt(&data->obj).LoadPlain());
     std::fprintf(stderr, "CONCURRENCY_OLD_GROUP observed=%#lx expected=%#lx\n", groupObserved, expected);
     GC_EXPECT_EQ(groupObserved, expected);
