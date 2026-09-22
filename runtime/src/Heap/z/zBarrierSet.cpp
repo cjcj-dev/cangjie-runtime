@@ -68,6 +68,11 @@ void ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing(volatile zpo
     ZBarrier::store_barrier_on_heap_oop_field(p, false);
 }
 
+void ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing_no_keep_alive(volatile zpointer* p)
+{
+    ZBarrier::no_keep_alive_store_barrier_on_heap_oop_field(p);
+}
+
 void ZBarrierSetRuntime::store_barrier_on_native_oop_field_without_healing(volatile zpointer* p)
 {
     ZBarrier::store_barrier_on_native_oop_field(p, false);

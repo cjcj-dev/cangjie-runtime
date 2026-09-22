@@ -29,6 +29,7 @@ public:
     static BaseObject* load_barrier_on_phantom_oop_field_preloaded(BaseObject* o, volatile zpointer* p);
     static void store_barrier_on_oop_field_with_healing(volatile zpointer* p);
     static void store_barrier_on_oop_field_without_healing(volatile zpointer* p);
+    static void store_barrier_on_oop_field_without_healing_no_keep_alive(volatile zpointer* p);
     static void store_barrier_on_native_oop_field_without_healing(volatile zpointer* p);
     static void load_barrier_on_oop_array(volatile zpointer* p, size_t length);
 

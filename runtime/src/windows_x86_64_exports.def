@@ -2763,3 +2763,16 @@ EXPORTS
     MCC_WriteRefField_Weak @3500
     CJ_MCC_WriteRefField_Strong @3501
     CJ_MCC_WriteRefField_Weak @3502
+
+    CJ_MCC_StoreBarrierOnHeapField @3503
+    CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive @3504
+    g_cjThreadGCDataOffset @3505 DATA
+    g_cjLoadBadMaskOffset @3506 DATA
+    g_cjStoreBadMaskOffset @3507 DATA
+    g_cjStoreGoodMaskOffset @3508 DATA
+    g_cjStoreBarrierBufferOffset @3509 DATA
+    g_cjStoreBarrierBufferCurrentOffset @3510 DATA
+    g_cjStoreBarrierBufferBufferOffset @3511 DATA
+    g_cjStoreBarrierEntrySize @3512 DATA
+    g_cjStoreBarrierEntryPOffset @3513 DATA
+    g_cjStoreBarrierEntryPrevOffset @3514 DATA

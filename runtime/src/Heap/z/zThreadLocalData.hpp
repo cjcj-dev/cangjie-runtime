@@ -46,11 +46,11 @@ struct ThreadGCData {
     ThreadGCData(const ThreadGCData&) = delete;
     ThreadGCData& operator=(const ThreadGCData&) = delete;
 
-    static size_t load_bad_mask_offset() { return offsetof(ThreadGCData, loadBadMask); }
-    static size_t mark_bad_mask_offset() { return offsetof(ThreadGCData, markBadMask); }
-    static size_t store_bad_mask_offset() { return offsetof(ThreadGCData, storeBadMask); }
-    static size_t store_good_mask_offset() { return offsetof(ThreadGCData, storeGoodMask); }
-    static size_t store_barrier_buffer_offset() { return offsetof(ThreadGCData, storeBarrierBuffer); }
+    static constexpr size_t load_bad_mask_offset() { return offsetof(ThreadGCData, loadBadMask); }
+    static constexpr size_t mark_bad_mask_offset() { return offsetof(ThreadGCData, markBadMask); }
+    static constexpr size_t store_bad_mask_offset() { return offsetof(ThreadGCData, storeBadMask); }
+    static constexpr size_t store_good_mask_offset() { return offsetof(ThreadGCData, storeGoodMask); }
+    static constexpr size_t store_barrier_buffer_offset() { return offsetof(ThreadGCData, storeBarrierBuffer); }
 };
 
 } // namespace MapleRuntime

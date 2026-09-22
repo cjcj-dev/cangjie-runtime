@@ -10,9 +10,9 @@ inline void StoreBarrierBuffer::add(MAddress p, zpointer prev)
     if (current == 0) {
         Flush();
     }
-    --current;
-    buffer[current] = { p, prev };
+    current -= sizeof(StoreBarrierEntry);
+    buffer[Current()] = { reinterpret_cast<volatile zpointer*>(p), prev };
 }
 
-inline size_t StoreBarrierBuffer::Current() const { return current; }
+inline size_t StoreBarrierBuffer::Current() const { return current / sizeof(StoreBarrierEntry); }
 }

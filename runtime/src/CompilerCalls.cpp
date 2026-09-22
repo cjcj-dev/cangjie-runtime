@@ -7,6 +7,8 @@
 
 #include "Heap/z/zRootsIterator.hpp"
 #include "CompilerCalls.h"
+#include "Heap/z/zBarrierSet.hpp"
+#include "Mutator/ThreadLocal.h"
 
 #include "Base/CString.h"
 #include "Heap/z/zStat.hpp"
@@ -71,6 +73,28 @@
 
 namespace MapleRuntime {
 
+
+// ZGC zBarrierSetRuntime.cpp: store-only slow tiers return before the store.
+extern "C" MRT_EXPORT void CJ_MCC_StoreBarrierOnHeapField(volatile zpointer* slot)
+{
+    ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing(slot);
+}
+
+extern "C" MRT_EXPORT void CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(volatile zpointer* slot)
+{
+    ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing_no_keep_alive(slot);
+}
+
+extern "C" MRT_EXPORT const uintptr_t g_cjThreadGCDataOffset = offsetof(ThreadLocalData, gcData);
+extern "C" MRT_EXPORT const uintptr_t g_cjLoadBadMaskOffset = ThreadGCData::load_bad_mask_offset();
+extern "C" MRT_EXPORT const uintptr_t g_cjStoreBadMaskOffset = ThreadGCData::store_bad_mask_offset();
+extern "C" MRT_EXPORT const uintptr_t g_cjStoreGoodMaskOffset = ThreadGCData::store_good_mask_offset();
+extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferOffset = ThreadGCData::store_barrier_buffer_offset();
+extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferCurrentOffset = StoreBarrierBuffer::current_offset();
+extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferBufferOffset = StoreBarrierBuffer::buffer_offset();
+extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierEntrySize = sizeof(StoreBarrierEntry);
+extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierEntryPOffset = StoreBarrierEntry::p_offset();
+extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierEntryPrevOffset = StoreBarrierEntry::prev_offset();
 
 static bool IsGlobalStruct(const ObjectPtr basePtr, MAddress field)
 {

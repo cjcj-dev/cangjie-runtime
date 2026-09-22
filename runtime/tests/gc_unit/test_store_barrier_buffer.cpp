@@ -112,8 +112,8 @@ GC_TEST(StoreBuf, EntryCarriesPairedPrevAndInstallColour)
 
     buf.add(slot, prev);
 
-    const StoreBarrierEntry& entry = buf.buffer[buf.current];
-    GC_EXPECT_EQ(entry.p, slot);
+    const StoreBarrierEntry& entry = buf.buffer[buf.Current()];
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(entry.p), slot);
     GC_EXPECT_EQ(raw(entry.prev), raw(prev));
     GC_EXPECT_EQ(buf.Pending(), 1u);
 }
@@ -160,14 +160,14 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     if (pending != 1u) {
         return;
     }
-    const StoreBarrierEntry& entry = buf.buffer[buf.current];
-    const bool pairMatches = raw(entry.prev) == raw(prev) && raw(entry.prev) != entry.p;
-    GC_EXPECT_EQ(entry.p, reinterpret_cast<MAddress>(&field));
+    const StoreBarrierEntry& entry = buf.buffer[buf.Current()];
+    const bool pairMatches = raw(entry.prev) == raw(prev) && raw(entry.prev) != reinterpret_cast<MAddress>(entry.p);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(entry.p), reinterpret_cast<MAddress>(&field));
     GC_EXPECT_EQ(raw(entry.prev), raw(prev));
-    GC_EXPECT_NE(raw(entry.prev), entry.p);
+    GC_EXPECT_NE(raw(entry.prev), reinterpret_cast<MAddress>(entry.p));
     if (!pairMatches) {
-        buf.buffer[buf.current] = {};
-        buf.current = StoreBarrierBuffer::Capacity();
+        buf.buffer[buf.Current()] = {};
+        buf.current = StoreBarrierBuffer::BufferSizeBytes;
         return;
     }
     buf.Flush();
@@ -330,8 +330,8 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     StoreBarrierBuffer& buf = *ThreadLocal::GetGCData().storeBarrierBuffer;
     GC_EXPECT_EQ(buf.Pending(), 1u);
     if (buf.Pending() == 1u) {
-        GC_EXPECT_EQ(buf.buffer[buf.current].p, reinterpret_cast<MAddress>(&field));
-        GC_EXPECT_EQ(raw(buf.buffer[buf.current].prev), raw(prev));
+        GC_EXPECT_EQ(reinterpret_cast<MAddress>(buf.buffer[buf.Current()].p), reinterpret_cast<MAddress>(&field));
+        GC_EXPECT_EQ(raw(buf.buffer[buf.Current()].prev), raw(prev));
     }
     std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
@@ -362,8 +362,8 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     StoreBarrierBuffer& buf = *ThreadLocal::GetGCData().storeBarrierBuffer;
     GC_EXPECT_EQ(buf.Pending(), 1u);
     if (buf.Pending() == 1u) {
-        GC_EXPECT_EQ(buf.buffer[buf.current].p, reinterpret_cast<MAddress>(&field));
-        GC_EXPECT_EQ(raw(buf.buffer[buf.current].prev), raw(prev));
+        GC_EXPECT_EQ(reinterpret_cast<MAddress>(buf.buffer[buf.Current()].p), reinterpret_cast<MAddress>(&field));
+        GC_EXPECT_EQ(raw(buf.buffer[buf.Current()].prev), raw(prev));
     }
     std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
@@ -993,3 +993,125 @@ GC_TEST(StoreAccess843, ReflectionStrongKeepsPreviousAlive)
 {
     CheckStoreAccessor(nullptr, false, false, true);
 }
+
+#include "Cangjie.h"
+#include "ObjectModel/MObject.h"
+namespace MapleRuntime {
+extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
+extern "C" void CJ_MCC_StoreBarrierOnHeapField(volatile zpointer*);
+extern "C" void CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(volatile zpointer*);
+extern "C" const uintptr_t g_cjThreadGCDataOffset;
+extern "C" const uintptr_t g_cjLoadBadMaskOffset;
+extern "C" const uintptr_t g_cjStoreBadMaskOffset;
+extern "C" const uintptr_t g_cjStoreGoodMaskOffset;
+extern "C" const uintptr_t g_cjStoreBarrierBufferOffset;
+extern "C" const uintptr_t g_cjStoreBarrierBufferCurrentOffset;
+extern "C" const uintptr_t g_cjStoreBarrierBufferBufferOffset;
+extern "C" const uintptr_t g_cjStoreBarrierEntrySize;
+extern "C" const uintptr_t g_cjStoreBarrierEntryPOffset;
+extern "C" const uintptr_t g_cjStoreBarrierEntryPrevOffset;
+}
+namespace {
+struct ByteBufferResult {
+    size_t appended = 0;
+    size_t full = SIZE_MAX;
+    size_t afterFlush = SIZE_MAX;
+    bool pairs = true;
+    bool unchanged = true;
+    bool offsets = false;
+};
+void* FillByteBuffer(void* context)
+{
+    auto& result = *static_cast<ByteBufferResult*>(context);
+    Mutator::GetMutator()->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uintptr_t));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    auto* object = static_cast<BaseObject*>(MCC_NewObject(type, TYPEINFO_PTR_SIZE + sizeof(uintptr_t)));
+    auto* slot = reinterpret_cast<volatile zpointer*>(reinterpret_cast<uintptr_t>(object) + TYPEINFO_PTR_SIZE);
+    auto& data = ThreadLocal::GetGCData();
+    auto& buffer = *data.storeBarrierBuffer;
+    result.offsets = g_cjThreadGCDataOffset == offsetof(ThreadLocalData, gcData) &&
+        g_cjLoadBadMaskOffset == offsetof(ThreadGCData, loadBadMask) &&
+        g_cjStoreBadMaskOffset == offsetof(ThreadGCData, storeBadMask) &&
+        g_cjStoreGoodMaskOffset == offsetof(ThreadGCData, storeGoodMask) &&
+        g_cjStoreBarrierBufferOffset == offsetof(ThreadGCData, storeBarrierBuffer) &&
+        g_cjStoreBarrierBufferCurrentOffset == offsetof(StoreBarrierBuffer, current) &&
+        g_cjStoreBarrierBufferBufferOffset == offsetof(StoreBarrierBuffer, buffer) &&
+        g_cjStoreBarrierEntrySize == sizeof(StoreBarrierEntry) &&
+        g_cjStoreBarrierEntryPOffset == offsetof(StoreBarrierEntry, p) &&
+        g_cjStoreBarrierEntryPrevOffset == offsetof(StoreBarrierEntry, prev);
+    const zpointer previous = StoreBadPointer(object);
+    for (size_t i = 0; i <= StoreBarrierBuffer::Capacity(); ++i) {
+        *slot = previous;
+        CJ_MCC_StoreBarrierOnHeapField(slot);
+        const size_t expected = StoreBarrierBuffer::BufferSizeBytes -
+            ((i % StoreBarrierBuffer::Capacity()) + 1) * sizeof(StoreBarrierEntry);
+        result.unchanged &= raw(*slot) == raw(previous);
+        // Stop at a malformed cursor so the target invariant reports the first
+        // incorrect result before a subsequent append can address outside it.
+        if (buffer.current != expected) { result.pairs = false; return nullptr; }
+        const auto& entry = buffer.buffer[buffer.Current()];
+        result.pairs &= reinterpret_cast<MAddress>(entry.p) == reinterpret_cast<MAddress>(slot) && raw(entry.prev) == raw(previous);
+        ++result.appended;
+        if (i + 1 == StoreBarrierBuffer::Capacity()) result.full = buffer.current;
+    }
+    result.afterFlush = buffer.current;
+    CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(slot);
+    result.unchanged &= raw(*slot) == raw(previous);
+    // A store-good control must not append or change the slot.
+    *slot = StoreGoodPointer(object);
+    CJ_MCC_StoreBarrierOnHeapField(slot);
+    result.unchanged &= raw(*slot) == raw(StoreGoodPointer(object)) && buffer.current == result.afterFlush;
+    return nullptr;
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(StoreBuffer856, AllocatedBarrierOnlyFillsByteCursor)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ByteBufferResult result;
+    auto task = RunCJTask(FillByteBuffer, &result);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "BYTE_BUFFER_TARGET appended=%zu full=%zu after_flush=%zu pairs=%d unchanged=%d offsets=%d\n",
+        result.appended, result.full, result.afterFlush, result.pairs, result.unchanged, result.offsets);
+    GC_EXPECT_TRUE(result.appended == StoreBarrierBuffer::Capacity() + 1 && result.full == 0 &&
+        result.afterFlush == StoreBarrierBuffer::BufferSizeBytes - sizeof(StoreBarrierEntry) &&
+        result.pairs && result.unchanged && result.offsets);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+namespace {
+void CheckBarrierOnly856(bool weak)
+{
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const zpointer previous = StoreBadPointer(fx.obj0);
+    field.StoreColoured(previous);
+    Mutator mutator;
+    InstalledMutatorScope scope(mutator);
+    auto* slot = reinterpret_cast<volatile zpointer*>(&field);
+    if (weak) CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(slot);
+    else CJ_MCC_StoreBarrierOnHeapField(slot);
+    mutator.FlushStoreBarrierBuffer(true);
+    const bool remembered = Heap::page(reinterpret_cast<MAddress>(slot))->is_remembered(slot);
+    std::vector<BaseObject*> marked;
+    marking.DrainObjects(marked);
+    const bool kept = std::find(marked.begin(), marked.end(), fx.obj0) != marked.end();
+    const bool unchanged = raw(field.GetFieldValue()) == raw(previous);
+    std::fprintf(stderr, "BARRIER_ONLY_TARGET weak=%d remembered=%d kept=%d unchanged=%d\n",
+        weak, remembered, kept, unchanged);
+    GC_EXPECT_TRUE(remembered && kept == !weak && unchanged);
+}
+}
+GC_TEST(StoreBuffer856, StrongOnlyPublishesPrevious) { CheckBarrierOnly856(false); }
+GC_TEST(StoreBuffer856, WeakOnlyRemembersPreviousSlot) { CheckBarrierOnly856(true); }

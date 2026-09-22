@@ -79,7 +79,7 @@ GC_TEST(WriteGeneric, CopiesRefSlotThroughStoreBarrier)
     GC_EXPECT_TRUE(buf != nullptr);
     GC_EXPECT_EQ(buf->Pending(), 1u);
     if (buf->Pending() == 1u) {
-        GC_EXPECT_EQ(buf->buffer[buf->current].p, reinterpret_cast<MAddress>(&dstField));
+        GC_EXPECT_EQ(reinterpret_cast<MAddress>(buf->buffer[buf->Current()].p), reinterpret_cast<MAddress>(&dstField));
     }
     std::fprintf(stderr, "TARGET_WRITE_GENERIC_STORE_BARRIER_EXECUTED pending=%u\n",
                  buf != nullptr ? buf->Pending() : 0u);
