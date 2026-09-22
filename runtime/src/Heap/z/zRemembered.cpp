@@ -129,7 +129,7 @@ bool ZRemembered::should_scan_page(ZPage* page) const
 bool ZRemembered::scan_page_and_clear_remset(ZPage* page) const
 {
     const bool can_trust_live_bits =
-        page->is_relocatable() && (ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_mark());
+        page->is_relocatable() && !ZGeneration::old()->is_phase_mark();
     bool result = false;
     if (!can_trust_live_bits) {
         page->oops_do_remembered([&](volatile zpointer* p) { result |= scan_field(p); });

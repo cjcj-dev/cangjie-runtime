@@ -119,9 +119,8 @@ protected:
     }
     void clear_large_range_of_words(idx_t beg, idx_t end)
     {
-        if (beg < end) {
-            std::memset(_map + beg, 0, (end - beg) * sizeof(bm_word_t));
-        }
+        CHECK(beg <= end);
+        std::memset(_map + beg, 0, (end - beg) * sizeof(bm_word_t));
     }
 
     // Set the map and size.
