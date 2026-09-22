@@ -8,6 +8,9 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <fstream>
+#include <iterator>
+#include <unistd.h>
 
 #include "gc_unittest.hpp"
 #include "Cangjie.h"
@@ -364,3 +367,90 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif
+
+// ZGC zDirector.cpp:337 and zPageAllocator.cpp:2308. Both inputs come from
+// actual blocked Heap::alloc_page requests. The existing old-mark breakpoint
+// keeps their old epoch stable while the real director thread evaluates rules.
+namespace {
+void CheckDirectorStallGate(bool waitingForOld)
+{
+    const std::string logPath = std::string("./director-stall-") + std::to_string(getpid()) + ".log";
+    GC_EXPECT_EQ(setenv("MRT_REPORT", logPath.c_str(), 1), 0);
+    // Logger::GetLogPath appends the process id to each report path.
+    const std::string actualLogPath = logPath + "." + std::to_string(getpid());
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(void*));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    U64 root;
+    {
+        ScopedObjectAccess access;
+        root = heap.RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
+    }
+    ConcurrentGCBreakpoints::AcquireControl();
+    // Before old mark-start: request later sees old, so it must NOT suppress.
+    // After old mark-start: its automatic minor advances only young, so it MUST suppress.
+    bool markStopped = true;
+    if (waitingForOld) { markStopped = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"); }
+    std::atomic<bool> done{false};
+    std::thread waiter([&] {
+        manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        {
+            ScopedObjectAccess access;
+            Heap::alloc_page(heap.GetMaxCapacity(), ZPageType::large);
+        }
+        done.store(true, std::memory_order_release);
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    auto deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while (!heap.page_allocator().IsAllocationStalling() && !done.load() &&
+           std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
+    if (!waitingForOld) { markStopped = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"); }
+    const std::string expected = waitingForOld
+        ? "Rule Minor: Allocation Stall, StallingForOld: 1, Stalling: 1, Suppressed: 1"
+        : "Rule Minor: Allocation Stall, StallingForOld: 0, Stalling: 1, Suppressed: 0";
+    bool observed = false;
+    bool entered = false;
+    deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    do {
+        std::ifstream input(actualLogPath);
+        const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        entered = text.find("Stalling: 1, Suppressed:") != std::string::npos;
+        observed = text.find(expected) != std::string::npos;
+        if (!observed) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+    } while (!observed && std::chrono::steady_clock::now() < deadline);
+    const bool stalling = heap.page_allocator().IsAllocationStalling();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while (!done.load() && std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
+    if (!done.load()) {
+        std::fprintf(stderr, "DIRECTOR_STALL_CLEANUP_TIMEOUT log=%s\n", logPath.c_str());
+        std::_Exit(1);
+    }
+    waiter.join();
+    heap.RemoveExportObject(root);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    std::fprintf(stderr, "DIRECTOR_STALL_TARGET waiting_for_old=%d observed=%d entered=%d stalled=%d "
+        "mark_stopped=%d log=%s\n", waitingForOld, observed, entered, stalling, markStopped, actualLogPath.c_str());
+    // Target assertion comes first: no existence assertion can hide its failure.
+    GC_EXPECT_TRUE(observed);
+    GC_EXPECT_TRUE(entered && stalling && markStopped);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(GcDirector, OldStallSuppressesMinorAllocationRate)
+{
+    CheckDirectorStallGate(true);
+}
+GC_RUNTIME_OTHER_VM_TEST(GcDirector, OtherStallDoesNotSuppressMinorAllocationRate)
+{
+    CheckDirectorStallGate(false);
+}
