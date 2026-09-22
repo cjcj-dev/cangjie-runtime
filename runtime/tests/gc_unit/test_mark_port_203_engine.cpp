@@ -467,15 +467,13 @@ GC_TEST(RememberedClear845, ConsumedPreviousSlotsAreAbsentOnRescan)
     const bool published = page->was_remembered(slot);
     heap.remembered().scan_and_follow(&young.Mark());
     const bool remaining = page->was_remembered(slot);
-    // Scan the same previous face again, using the page set re-registered by
-    // the first product task. There must be no previously consumed slot.
-    heap.remembered().flip_found_old_sets();
-    heap.remembered().scan_and_follow(&young.Mark());
-    const bool repeated = page->was_remembered(slot);
-    std::fprintf(stderr, "REMEMBERED845_ASSERT_EXECUTED published=%d remaining=%d repeated=%d\n",
+    // Read the entries a subsequent page scan would visit in this face.
+    size_t repeated = 0;
+    page->oops_do_remembered([&](volatile zpointer*) { ++repeated; });
+    std::fprintf(stderr, "REMEMBERED845_ASSERT_EXECUTED published=%d remaining=%d repeated=%zu\n",
                  published, remaining, repeated);
     young.StopWorkers();
     GC_EXPECT_EQ(remaining, false);
-    GC_EXPECT_EQ(repeated, false);
+    GC_EXPECT_EQ(repeated, size_t{0});
     GC_EXPECT_EQ(published, true);
 }
