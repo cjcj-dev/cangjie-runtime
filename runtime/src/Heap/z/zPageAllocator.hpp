@@ -444,9 +444,6 @@ public:
     {
         return 0;
     }
-    template<Generation G>
-    void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
-                            bool inPlace = false);
     // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
     static void RememberPromotedObject(BaseObject* object);
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
@@ -457,7 +454,6 @@ public:
     void free_page(ZPage* page);
     void StampCensusBoundaries();
     void PromoteAllRegions();
-    void CompactRegion(ZPage* region);
 
     // Rehome onto unmovableFrom without publishing kept. PrepareYoung parks
     // leftover from-pages here; they were expired at cycle start and must not

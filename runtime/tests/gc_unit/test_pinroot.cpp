@@ -129,7 +129,7 @@ public:
 };
 }
 
-static void CheckInPlaceRemset(bool eager)
+static void CheckInPlaceRemset()
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager mutators;
@@ -200,14 +200,9 @@ static void CheckInPlaceRemset(bool eager)
     ZForwarding* owners[2] = {forwarding_for_page(pages[0]), forwarding_for_page(pages[1])};
     GC_EXPECT_TRUE(owners[0] != nullptr && owners[1] != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
-    if (eager) {
-        ScopedStopTheWorld pause("in-place remset completion", false);
-        BaseObject* result = generation.relocate().relocate_object(
-            owners[0], reinterpret_cast<BaseObject*>(objects[0]));
-        GC_EXPECT_TRUE(result == reinterpret_cast<BaseObject*>(owners[0]->find(objects[0])));
-    }
-    else { generation.relocate().relocate(&generation.relocation_set()); }
-    std::fprintf(stderr, "REMSET_RESULT eager=%d current_clear=%d previous_clear=%d done=%d\n", eager, pages[0]->is_remset_cleared_current(), pages[0]->is_remset_cleared_previous(), owners[0]->is_done());
+    generation.relocate().relocate(&generation.relocation_set());
+    std::fprintf(stderr, "REMSET_RESULT current_clear=%d previous_clear=%d done=%d\n",
+        pages[0]->is_remset_cleared_current(), pages[0]->is_remset_cleared_previous(), owners[0]->is_done());
     GC_EXPECT_TRUE(pages[0]->is_remset_cleared_previous());
     GC_EXPECT_FALSE(pages[0]->is_remset_cleared_current());
     GC_EXPECT_TRUE(owners[0]->is_done());
@@ -215,8 +210,90 @@ static void CheckInPlaceRemset(bool eager)
     GC_EXPECT_EQ(destination, starts[0]);
     GC_EXPECT_EQ(*reinterpret_cast<uint64_t*>(destination + 8), 0u);
 }
-GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, EagerInPlaceClearsPreviousRemset) { CheckInPlaceRemset(true); }
-GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, WorkerInPlaceClearsPreviousRemset) { CheckInPlaceRemset(false); }
+GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, WorkerInPlaceClearsPreviousRemset) { CheckInPlaceRemset(); }
+
+// ZGC zRelocate.cpp:382-410: a successful mutator relocation publishes only
+// the requested object, irrespective of the caller's safepoint state. Spare
+// capacity makes allocation success deterministic; the worker failure/reuse
+// cases above exercise the separate allocation-failure in-place route.
+static void CheckMutatorRelocation(bool stopped)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager mutators;
+    InPlaceRemsetRuntime runtime(mutators);
+    CreateStandaloneHeap(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& heap = Heap::GetHeap();
+    auto& generation = heap.old();
+    generation.Begin(1);
+    GenerationSequenceFixture::Advance(generation);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(16);
+    type->SetAlign(8);
+    GCTib tib{};
+    tib.tag = SIGN_BIT;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZRelocationSetSelector selector;
+    ZPage* pages[2];
+    BaseObject* objects[2][2];
+    for (size_t i = 0; i < 2; ++i) {
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, true, PageAge::old, flags);
+        GC_EXPECT_TRUE(pages[i] != nullptr);
+        for (size_t j = 0; j < 2; ++j) {
+            objects[i][j] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
+            objects[i][j]->SetClassInfo(type);
+            *reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(objects[i][j]) + 8) = 0x909 + j;
+            GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], objects[i][j]));
+        }
+        ZPageTest::MakeRelocatable(*pages[i]);
+        selector.register_live_page(pages[i]);
+    }
+    selector.select();
+    generation.relocation_set().install(&selector);
+    ZRelocationSetIterator installed(&generation.relocation_set());
+    for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
+    ZForwarding* owner = forwarding_for_page(pages[0]);
+    GC_EXPECT_TRUE(owner != nullptr);
+    generation.set_phase(ZGenerationPhase::Relocate);
+    auto relocate = [&] {
+        BaseObject* result = generation.relocate().relocate_object(owner, objects[0][0]);
+        const MAddress other = owner->find(reinterpret_cast<MAddress>(objects[0][1]));
+        // Print the product results before the target assertion, including the
+        // positive control that distinguishes a skipped call from a real copy.
+        std::fprintf(stderr, "MUTATOR_RELOCATE_RESULT stopped=%d world_stopped=%d source=%p result=%p "
+            "in_place=%d other=%zx done=%d refs=%d\n", stopped, mutators.WorldStopped(),
+            objects[0][0], result, owner->in_place(), other, owner->is_done(),
+            owner->ref_count().load(std::memory_order_acquire));
+        GC_EXPECT_FALSE(owner->in_place());
+        GC_EXPECT_TRUE(result != nullptr && result != objects[0][0]);
+        GC_EXPECT_EQ(owner->find(reinterpret_cast<MAddress>(objects[0][0])), reinterpret_cast<MAddress>(result));
+        GC_EXPECT_EQ(other, 0u);
+        GC_EXPECT_FALSE(owner->is_done());
+        GC_EXPECT_EQ(owner->ref_count().load(std::memory_order_acquire), 1);
+        GC_EXPECT_EQ(*reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(result) + 8), 0x909u);
+    };
+    if (stopped) {
+        ScopedStopTheWorld pause("mutator relocation routing", false);
+        relocate();
+    } else {
+        relocate();
+    }
+}
+
+GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, StoppedWorldCopiesOnlyRequestedObject)
+{
+    CheckMutatorRelocation(true);
+}
+GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, RunningWorldCopiesOnlyRequestedObject)
+{
+    CheckMutatorRelocation(false);
+}
 
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 #include <csignal>
