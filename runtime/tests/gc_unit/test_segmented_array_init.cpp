@@ -319,6 +319,50 @@ public:
     }
 };
 
+// The only paths to the two targets are fields of a real allocated object.
+// Read the product young-mark livemap before relocation; no test callback is
+// installed in the iterator and no intermediate mark result is supplied.
+void* RunConcreteFieldYoungMark(void*)
+{
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    TypeInfo* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(3 * sizeof(void*));
+    type->SetFlagHasRefField();
+    GCTib tib{};
+    tib.tag = SIGN_BIT | 5;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    MObject* holder = MObject::NewPinnedObject(type, TYPEINFO_PTR_SIZE + 3 * sizeof(void*));
+    MArray* targets[] = {
+        MCC_NewArray8(GetByteArrayTypeInfos().array, 16),
+        MCC_NewArray8(GetByteArrayTypeInfos().array, 16)
+    };
+    for (size_t i = 0; i < 2; ++i) {
+        auto& field = holder->GetRefField(TYPEINFO_PTR_SIZE + 2 * i * sizeof(void*));
+        ZBarrier::WriteReference(holder, field, targets[i]);
+    }
+    auto& heap = Heap::GetHeap();
+    const U64 root = heap.RegisterExportRoot(holder);
+    Mutator::GetMutator()->SetManagedContext(false);
+    unsigned liveMask = 0;
+    bool holderLive = false;
+    {
+        YoungMarkPhase phase;
+        holderLive = Heap::page(reinterpret_cast<uintptr_t>(holder))->is_object_strongly_live(from_object(holder));
+        for (size_t i = 0; i < 2; ++i) {
+            if (Heap::page(reinterpret_cast<uintptr_t>(targets[i]))->is_object_strongly_live(from_object(targets[i]))) {
+                liveMask |= 1u << i;
+            }
+        }
+        std::fprintf(stderr, "FIELD_ITERATOR_YOUNG_RESULT holder_live=%d live_mask=%u expected=3\n",
+                     holderLive, liveMask);
+    }
+    heap.RemoveExportObject(root);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>(holderLive && liveMask == 3 ? 0 : 1);
+}
+
 void* RunLargeYoungClosureCase(void*)
 {
     // Construct the sole strong path before requesting GC. No unregistered
@@ -606,6 +650,10 @@ GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
     GC_EXPECT_EQ(RunRuntimeCase(RunVisibleArrayGraph, 0, 1, true), 0);
 }
 #if defined(MRT_TESTABLE_INTERNALS)
+GC_RUNTIME_OTHER_VM_TEST(FieldIteratorRuntime, YoungMarkFollowsBothObjectFields)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunConcreteFieldYoungMark, 0), 0);
+}
 GC_RUNTIME_OTHER_VM_TEST(MarkAllocation, LargeHolderAndNewTargetAreImplicitlyLive)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunMarkAllocationCase, 0), 0);
