@@ -173,23 +173,6 @@ public:
 
     void AddGarbageMemory(size_t idx, size_t num, bool allowSaferegion = true);
 
-    // mark-epoch quarantine: units reclaimed after from-page reclaim must not enter the dirty
-    // tree (mutator TakeRegion → ClearPageMemory) until the next major concurrent mark ends.
-    // INV: concurrent mark may still hold plain strong refs into this range (SATB).
-    void AddMarkQuarantineMemory(size_t idx, size_t num);
-
-    // Release point = major PostTrace entry (TRACE+CLEAR_SATB done). Moves all quarantined
-    // units into the dirty tree so allocation may ClearPageMemory them again.
-    size_t ReleaseMarkQuarantineToDirty();
-
-    size_t GetMarkQuarantineBytes() const
-    {
-        std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
-        size_t bytes = 0;
-        for (const auto& memory : markQuarantineMemory) { bytes += memory.size(); }
-        return bytes;
-    }
-
     size_t GetCachedBytes() const;
     // ZPartition::print_cache_on (zPageAllocator.cpp:1118-1121) for every partition.
     void PrintCacheOn() const;
@@ -233,9 +216,6 @@ private:
     ZPhysicalMemoryManager* physicalMemory{ nullptr };
     size_t nextPartition{ 0 };
 
-    // Post-dispel units held until major mark ends (see AddMarkQuarantineMemory).
-    mutable std::mutex markQuarantineTreeMutex;
-    std::vector<ZVirtualMemory> markQuarantineMemory;
 
 };
 } // namespace MapleRuntime
@@ -509,8 +489,6 @@ public:
     size_t CollectRegion(ZPage* region);
 
     void ReclaimRegion(ZPage* region);
-    // Like ReclaimRegion but units enter mark-quarantine tree, not dirty tree.
-    void ReclaimRegionToMarkQuarantine(ZPage* region);
     size_t ReleaseRegion(ZPage* region);
 
     void ReclaimGarbageRegions();
@@ -586,21 +564,11 @@ public:
 
 
 
-    // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
-    // Concurrent mark (TRACE+CLEAR_SATB) has finished; plain strong refs into quarantined
-    // ranges are no longer traced. Safe to publish units to dirty tree for ClearPageMemory reuse.
-    // Note: this major's just-installed quarantine (from PrepareForwardTable above) is also
-    // released here — mark is already done, so no TRACE can race those units. Units held from
-    // prior minor PrepareForwardTable are the ones that covered the TRACE window.
-    void ReleaseMarkQuarantine();
-
-
 
 private:
     // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the
     // page table no longer publishes the old descriptor.
     void ReclaimRetiredRegion(ZPage* region);
-    void ReclaimRetiredRegionToMarkQuarantine(ZPage* region);
     void ReleaseRetiredRegion(ZPage* region);
     void ReturnRetiredPageMemory(const PageMemory& memory, bool allowSaferegion = true);
 
