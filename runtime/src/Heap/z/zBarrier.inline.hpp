@@ -130,7 +130,7 @@ inline void ZBarrier::MarkBarrierOnOopField(RefField<>& field, bool finalizable)
     }
 }
 
-inline void ZBarrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable)
+inline void ZBarrier::MarkBarrierOnOldOopField(RefField<>& field, bool finalizable)
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
     zaddress result;

@@ -52,7 +52,7 @@ public:
     static BaseObject* ReadStaticRef(NativeSlot& field);
     static void MarkYoungGoodBarrierOnOopField(NativeSlot& field);
     static void MarkFinalizableBarrierOnRoot(NativeSlot& field);
-    static void MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable);
+    static void MarkBarrierOnOldOopField(RefField<>& field, bool finalizable);
     static void MarkBarrierOnYoungOopField(RefField<>& field);
     static zaddress RemsetBarrierOnOopField(RefField<>& field);
     static BaseObject* ReadPhantomRef(BaseObject* obj, RefField<false>& field);

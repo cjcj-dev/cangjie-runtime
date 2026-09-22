@@ -914,7 +914,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
     if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
         MarkPartialArray::FollowPartialReferences(entry, [&entry](MAddress slot) {
             auto& field = HeapSlotAt<>(slot);
-            ZBarrier::MarkBarrierOnOldOopField(nullptr, field, entry.finalizable());
+            ZBarrier::MarkBarrierOnOldOopField(field, entry.finalizable());
         }, publish);
         return;
     }
@@ -935,7 +935,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         }
         auto visitSlot = [obj, &entry](MAddress slot) {
             auto& field = HeapSlotAt<>(slot);
-            ZBarrier::MarkBarrierOnOldOopField(obj, field, entry.finalizable());
+            ZBarrier::MarkBarrierOnOldOopField(field, entry.finalizable());
         };
         MarkPartialArray::FollowObjectReferences(obj, entry.finalizable(), visitSlot, publish);
     }
