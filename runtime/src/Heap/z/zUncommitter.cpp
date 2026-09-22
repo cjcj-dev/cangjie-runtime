@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <chrono>
+#include <cstdio>
 
 #include "Heap/Allocator/RegionSpace.h"
 #include "Base/Globals.h"
@@ -116,20 +117,15 @@ size_t Uncommitter::MinCapacity(size_t liveBytes, size_t youngReserve)
     return sum;
 }
 
-Uncommitter& Uncommitter::Current()
-{
-    // Allocation currently selects logical partition 0. The worker itself is
-    // owned by that allocator, and receives its partition at construction.
-    return Heap::GetHeap().GetAllocator().GetUncommitter();
-}
-
 // zUncommitter.cpp:41-56: set_name + create_and_start.
 void Uncommitter::Start()
 {
     CHECK(!started);
     stopped.store(false, std::memory_order_release);
     started = true;
-    set_name("ZUncommitter#0");
+    char name[64];
+    std::snprintf(name, sizeof(name), "ZUncommitter#%u", partition.numaId);
+    set_name(name);
     create_and_start();
 }
 
@@ -174,7 +170,7 @@ bool Uncommitter::WaitUntil(uint64_t deadline)
 
 bool Uncommitter::Activate()
 {
-    RegionManager& regions = static_cast<RegionSpace&>(partition).GetRegionManager();
+    RegionManager& regions = partition.regionManager;
     ScopedObjectAccess participation;
     std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
     const uint64_t now = TimeUtil::NanoSeconds();
@@ -193,7 +189,7 @@ bool Uncommitter::Activate()
 
 size_t Uncommitter::Uncommit()
 {
-    RegionManager& regions = static_cast<RegionSpace&>(partition).GetRegionManager();
+    RegionManager& regions = partition.regionManager;
     ZArray<ZVirtualMemory> flushedVmems;
     size_t flushed = 0;
     {
@@ -291,7 +287,7 @@ void Uncommitter::run_thread()
             RunCycle();
         }
         ScopedObjectAccess participation;
-        RegionManager& regions = static_cast<RegionSpace&>(partition).GetRegionManager();
+        RegionManager& regions = partition.regionManager;
         std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
         deadline = (canceled ? cancelTime : cycleStart) + DelayNs();
         toUncommit = 0;
@@ -309,12 +305,8 @@ void Uncommitter::Cancel()
     canceled = true;
 }
 
-void Uncommitter::CancelCycleLocked()
-{
-    Current().Cancel();
-}
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-Uncommitter::Uncommitter(RegionSpace& partition) : partition(partition) {}
+Uncommitter::Uncommitter(ZPartition& partition) : partition(partition) {}
 }

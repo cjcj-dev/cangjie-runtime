@@ -17,14 +17,14 @@
 #include "Heap/z/zThread.hpp"
 
 namespace MapleRuntime {
-class RegionSpace;
+class ZPartition;
 
 // zUncommitter.hpp:33-71: a ZThread per partition. ZGC starts it in the
 // constructor; this runtime's finalizer thread owns Start/Stop (P05), so the
 // ZThread lifecycle is entered from Start and left from Stop.
 class Uncommitter final : public ZThread {
 public:
-    explicit Uncommitter(RegionSpace& partition);
+    explicit Uncommitter(ZPartition& partition);
     ~Uncommitter() override { Stop(); }
     void Start();
     void Stop();
@@ -50,19 +50,16 @@ public:
     static uint64_t ParseDelayNs(const char* env);
 
     // The allocation producer already holds the partition page allocator lock.
-    static void CancelCycleLocked();
+    void Cancel();
 
 private:
-    static Uncommitter& Current();
     bool WaitUntil(uint64_t deadline);
     bool Activate();
     size_t Uncommit();
     void RegisterUncommit(size_t size);
     void RunCycle();
-    void Cancel();
 
-    // The current allocator has one logical partition (id 0).
-    RegionSpace& partition;
+    ZPartition& partition;
     bool started = false;
     std::mutex lock;
     std::condition_variable condition;

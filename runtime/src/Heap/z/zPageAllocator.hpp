@@ -70,6 +70,25 @@ public:
 
 private:
     friend class RegionManager;
+class FreeRegionManager;
+
+// ZGC zPageAllocator.cpp:628-637: each partition owns its cache and worker.
+class ZPartition {
+public:
+    RegionManager& regionManager;
+    uint32_t numaId;
+    ZMappedCache cache;
+    Uncommitter uncommitter;
+    size_t capacity{0};
+    size_t claimed{0};
+    size_t used{0};
+    size_t currentMaxCapacity{0};
+    ZPartition(uint32_t id, RegionManager& manager)
+        : regionManager(manager), numaId(id), uncommitter(*this) {}
+    size_t available() const { return currentMaxCapacity - used - claimed; }
+    bool claim_capacity_fast_medium(PageMemory& memory);
+};
+
     friend class ZList<ZPageAllocation>;
 
     const size_t size;
@@ -123,6 +142,8 @@ public:
     explicit FreeRegionManager(RegionManager& manager) : regionManager(manager) {}
 
     virtual ~FreeRegionManager() = default;
+    void StartUncommitters();
+    void StopUncommitters();
     // ZPageAllocator(min/initial/max capacity) owns _virtual/_physical and one
     // ZPartition per NUMA id (zPageAllocator.cpp:1201-1260); the partitions
     // here consume the two managers the same way.
@@ -210,20 +231,6 @@ private:
     }
     RegionManager& regionManager;
 
-    // ZPartition (zPageAllocator.hpp:57-141): numa id, mapped cache and the
-    // capacity account; virtual/physical memory is reached through the managers.
-    class ZPartition {
-    public:
-        uint32_t numaId;
-        ZMappedCache cache;
-        size_t capacity{ 0 };
-        size_t claimed{ 0 };
-        size_t used{ 0 };
-        size_t currentMaxCapacity{ 0 };
-        explicit ZPartition(uint32_t id) : numaId(id) {}
-        size_t available() const { return currentMaxCapacity - used - claimed; }
-        bool claim_capacity_fast_medium(PageMemory& memory);
-    };
     using Partition = ZPartition;
     void InsertCommitted(Partition& partition, size_t index, size_t count);
     void FreeMemory(size_t index, size_t count);

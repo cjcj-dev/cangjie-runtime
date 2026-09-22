@@ -67,11 +67,22 @@ void FreeRegionManager::Initialize(ZVirtualMemoryManager& virtualMemoryManager,
     // ZPartition per NUMA id, each with max_capacity's share.
     const uint32_t numaCount = ZPerNUMAStorage::count();
     for (uint32_t numaId = 0; numaId < numaCount; ++numaId) {
-        partitions.emplace_back(new Partition(numaId));
+        partitions.emplace_back(new Partition(numaId, regionManager));
         Partition& partition = *partitions.back();
         partition.currentMaxCapacity =
             NumaTopology::calculate_share(numaId, maxCapacity, ZGranuleSize);
     }
+}
+
+// Partitions are initialized before the reference processor starts workers.
+void FreeRegionManager::StartUncommitters()
+{
+    for (auto& partition : partitions) { partition->uncommitter.Start(); }
+}
+
+void FreeRegionManager::StopUncommitters()
+{
+    for (auto& partition : partitions) { partition->uncommitter.Stop(); }
 }
 
 ZVirtualMemory FreeRegionManager::VirtualMemoryOf(size_t index, size_t count)
@@ -167,7 +178,7 @@ size_t FreeRegionManager::increase_capacity(uint32_t partition_id, size_t size)
     const size_t increased = std::min(size, partition.currentMaxCapacity - partition.capacity);
     if (increased > 0) {
         partition.capacity += increased;
-        Uncommitter::CancelCycleLocked();
+        partition.uncommitter.Cancel();
     }
     return increased;
 }
@@ -243,7 +254,7 @@ size_t FreeRegionManager::ReleaseMarkQuarantineToDirty()
 }
 
 // ZGC zPageAllocator.cpp:764-785: no virtual-memory or physical-memory work.
-bool FreeRegionManager::ZPartition::claim_capacity_fast_medium(PageMemory& memory)
+bool ZPartition::claim_capacity_fast_medium(PageMemory& memory)
 {
     CHECK(ZPageSizeMediumEnabled);
     const ZVirtualMemory vmem = cache.remove_contiguous_power_of_2(ZPageSizeMediumMin, ZPageSizeMediumMax);
