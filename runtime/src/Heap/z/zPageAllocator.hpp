@@ -70,26 +70,6 @@ public:
 
 private:
     friend class RegionManager;
-class FreeRegionManager;
-
-// ZGC zPageAllocator.cpp:628-637: each partition owns its cache and worker.
-class ZPartition {
-public:
-    RegionManager& regionManager;
-    uint32_t numaId;
-    ZMappedCache cache;
-    Uncommitter uncommitter;
-    size_t minCapacity{0};
-    size_t capacity{0};
-    size_t claimed{0};
-    size_t used{0};
-    size_t currentMaxCapacity{0};
-    ZPartition(uint32_t id, RegionManager& manager)
-        : regionManager(manager), numaId(id), uncommitter(*this) {}
-    size_t available() const { return currentMaxCapacity - used - claimed; }
-    bool claim_capacity_fast_medium(PageMemory& memory);
-};
-
     friend class ZList<ZPageAllocation>;
 
     const size_t size;
@@ -134,6 +114,26 @@ using AllocationStallRequest = ZPageAllocation;
 
 namespace MapleRuntime {
 class RegionManager;
+
+class FreeRegionManager;
+
+// ZGC zPageAllocator.cpp:628-637: each partition owns its cache and worker.
+class ZPartition {
+public:
+    RegionManager& regionManager;
+    uint32_t numaId;
+    ZMappedCache cache;
+    Uncommitter uncommitter;
+    size_t minCapacity{0};
+    size_t capacity{0};
+    size_t claimed{0};
+    size_t used{0};
+    size_t currentMaxCapacity{0};
+    ZPartition(uint32_t id, RegionManager& manager)
+        : regionManager(manager), numaId(id), uncommitter(*this) {}
+    size_t available() const { return currentMaxCapacity - used - claimed; }
+    bool claim_capacity_fast_medium(PageMemory& memory);
+};
 
 // This class is and should be accessed only for region allocation. we do not rely on it to check region status.
 class FreeRegionManager {
