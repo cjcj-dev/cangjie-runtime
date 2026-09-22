@@ -235,8 +235,7 @@ public:
     void register_in_place_relocate_promoted(ZPage* page);
     void register_flip_promoted(const ZArray<ZPage*>& pages);
     void SelectTenuringThreshold(const TenuringInputs& inputs);
-    void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
-        std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
+    void EvacuateYoungRegions(std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
     ~ZGenerationYoung();
     bool should_record_stats() override;
     void collect();
@@ -261,7 +260,6 @@ private:
     uint32_t _tenuring_threshold = 0;
     uint64_t minorTotalRuns = 0;
     std::unique_ptr<ScopedStopTheWorld> youngStw;
-    std::vector<BaseObject*> youngReachableVec;
     MinorSlotSet youngConsumedSlots;
     MinorInteriorBaseMap youngRemsetInteriorBases;
     uint64_t youngStartNs = 0;

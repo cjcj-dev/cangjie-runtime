@@ -406,34 +406,7 @@ void ZMark::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
                              reachableSlotDomain);
 }
 
-// ZGenerationYoung::concurrent_mark_continue follows the generation's
-// published mark work. Young marking has no SATB queue (zBarrier.cpp:160-180).
-bool ZMark::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
-                                     std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
-                                     std::unordered_set<MAddress>& weakSlots,
-                                     YoungConcWindowStats* windowStats)
-{
-    ZStatTimerWorker zstatTimer(PYoungMarkFollow);
-    // Follow explicit roots and allocation work; young has no SATB queue.
-    (void)Heap::GetHeap().young().Mark().Flush();
-    (void)Heap::GetHeap().young().Mark().Flush(ThreadLocal::GetThreadLocalData());
-    (void)ZMark::PublishHandshakeMarkWork(workStack, &Heap::GetHeap().young().Mark());
-    do {
-        if (!workStack.empty() || !Heap::GetHeap().young().Mark().Stripes().IsEmpty() ||
-            !Heap::GetHeap().young().Mark().Stacks().IsEmpty()) {
-            if (windowStats != nullptr) {
-                ++windowStats->closureCalls;
-            }
-            TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
-        }
-        if (ZAbort::should_abort()) {
-            return false;
-        }
-    } while (Heap::GetHeap().young().Mark().TryTerminateFlush());
-    return true;
-}
-
-bool ZMark::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats)
+bool ZMark::TryEndYoungMark(WorkStack& workStack)
 {
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
 

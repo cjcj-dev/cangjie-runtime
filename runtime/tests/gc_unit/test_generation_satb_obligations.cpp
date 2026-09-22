@@ -64,13 +64,13 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     Heap::GetHeap().MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     GC_EXPECT_EQ(mark.YoungPending(), 1u);
-    WorkStack work;
-    std::vector<BaseObject*> reached;
-    GC_EXPECT_TRUE(mark.FollowYoung(work, reached));
-    GC_EXPECT_TRUE(work.empty());
+    // ZGC zGeneration.cpp:891-895: use the product combined follow task.
+    Heap::GetHeap().young().mark_follow();
+    const size_t live = fx.region1->live_bytes();
+    std::fprintf(stderr, "GENERATION_YOUNG_FOLLOW_ASSERT live=%zu expected=%zu\n",
+                 live, static_cast<size_t>(fx.obj1->GetSize()));
     GC_EXPECT_EQ(mark.YoungPending(), 0u);
-    GC_EXPECT_EQ(reached.size(), 1u);
-    GC_EXPECT_TRUE(reached.front() == fx.obj1);
+    GC_EXPECT_EQ(live, fx.obj1->GetSize());
     // Completing/cleaning young work must leave old's object and carrier intact.
     GC_EXPECT_TRUE(RegionSpace::IsMarkedObject<Generation::Young>(fx.obj1));
     GC_EXPECT_EQ(mark.OldPending(), 1u);

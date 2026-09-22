@@ -453,7 +453,6 @@ void ZGenerationYoung::mark_follow()
 void ZGenerationYoung::concurrent_mark()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentMarkYoung);
-    youngReachableVec.clear();
     youngWeakSlots.clear();
     youngFullScan = false;
     youngConcWindow = {};
@@ -467,7 +466,7 @@ void ZGenerationYoung::concurrent_mark()
 bool ZGenerationYoung::mark_end()
 {
     WorkStack& workStack = youngWorkStack;
-    const bool markEndSucceeded = ZMark::TryEndYoungMark(workStack, &youngConcWindow);
+    const bool markEndSucceeded = ZMark::TryEndYoungMark(workStack);
     if (markEndSucceeded) {
         Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
         // zGeneration.cpp:906-911: mark-end sample.
@@ -494,22 +493,13 @@ void ZGenerationYoung::concurrent_mark_free()
         return;
     }
     RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    {
-        youngConcWindow.markedAtExit = youngReachableVec.size();
-        if (youngConcWindowStartNs != 0) {
-            youngConcWindow.windowNs = TimeUtil::NanoSeconds() - youngConcWindowStartNs;
-        }
-        VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 evacuation handoff reachable=%zu",
-             youngReachableVec.size());
+    if (youngConcWindowStartNs != 0) {
+        youngConcWindow.windowNs = TimeUtil::NanoSeconds() - youngConcWindowStartNs;
     }
     VLOG(REPORT,
-         "[GCV2][youngconc][concwork] run=%zu conc=%d follow=%d window_ns=%llu marked_in_window=%zu "
-         "closure_calls=%zu remset_slots=%zu reenters=%zu "
-         "marked_at_entry=%zu reachable_total=%zu",
+         "[GCV2][youngconc][concwork] run=%zu conc=%d follow=%d window_ns=%llu reenters=%zu",
          minorTotalRuns + 1, 1, 1,
-         static_cast<unsigned long long>(youngConcWindow.windowNs), youngConcWindow.MarkedInWindow(),
-         youngConcWindow.closureCalls, youngConcWindow.remsetSlots,
-         youngConcWindow.reenters, youngConcWindow.markedAtEntry, youngReachableVec.size());
+         static_cast<unsigned long long>(youngConcWindow.windowNs), youngConcWindow.reenters);
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         ZStatTimerYoung zstatTimer(PYoungPreEvacClear);
@@ -554,7 +544,7 @@ void ZGenerationYoung::concurrent_relocate()
     // must finish relocation, including when shutdown requests an abort.
     RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     size_t allocatedBefore = space.AllocatedBytes();
-    EvacuateYoungRegions(youngReachableVec, &youngStw);
+    EvacuateYoungRegions(&youngStw);
     size_t allocatedAfter = space.AllocatedBytes();
     const size_t reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
@@ -1272,11 +1262,9 @@ void ZGenerationOld::CollectLargeGarbage()
     ZGeneration::old()->increase_freed(space.CollectLargeGarbage());
 }
 
-void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
-                                       std::unique_ptr<ScopedStopTheWorld>* stw)
+void ZGenerationYoung::EvacuateYoungRegions(std::unique_ptr<ScopedStopTheWorld>* stw)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    (void)reachableVec;
     // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
     // is flip + set_phase(Relocate) + _relocate.start(); object copy is concurrent.
     // Flip is the trap that makes mutator loads take the self-heal / relocate_object
@@ -1352,8 +1340,7 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
                 stw->reset();
             }
             ZStatTimerYoung zstatTimer(PYoungConcurrentRelocate);
-            VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
-                 reachableVec.size());
+            VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start flip=1");
             relocate().relocate(&relocation_set());
         }
     }

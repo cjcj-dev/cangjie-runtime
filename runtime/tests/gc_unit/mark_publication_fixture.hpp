@@ -63,12 +63,6 @@ struct MarkPublicationFixture {
     {
         DrainDomain(*Heap::GetHeap().old().MarkPtr(), std::forward<Visitor>(visitor));
     }
-    bool FollowYoung(WorkStack& work, std::vector<BaseObject*>& reached)
-    {
-        std::unordered_set<MAddress> slots;
-        std::unordered_set<MAddress> weakSlots;
-        return ZMark::FollowYoungMark(work, false, reached, slots, weakSlots);
-    }
     void CompleteOldMarkForAdmissionTest()
     {
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).PublishPhase(ZGenerationPhase::MarkComplete);
