@@ -23,6 +23,7 @@
 #include "Mutator/Mutator.inline.h"
 #include "Cangjie.h"
 #include "TypeInfoManager.h"
+#include "ObjectModel/MObject.h"
 #include "Heap/z/zPageTable.inline.hpp"
 
 namespace MapleRuntime {
@@ -92,7 +93,7 @@ void* RunEmptyPageCycles(void* context)
     type->SetInstanceSize(result.objectSize - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    BaseObject* object = MCC_NewObject(type, result.objectSize);
+    BaseObject* object = static_cast<BaseObject*>(MCC_NewObject(type, result.objectSize));
     const U64 root = heap.RegisterExportRoot(object);
     if (result.promote) {
         heap.RequestGC(GC_REASON_USER, false);
