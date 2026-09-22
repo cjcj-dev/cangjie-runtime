@@ -15,8 +15,7 @@ unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
   GC_UNIT_GATE_LANGUAGE_TESTS GC_UNIT_GATE_SKIP GC_UNIT_GATE_STATUS \
   GC_UNIT_OUT GC_UNIT_TALLY_FILE \
   MRT_GC_UNIT_OHOS_HOST GC_UNIT_OHOS_HOST_TEST_ELF \
-  GC_UNIT_OHOS_HOST_RECEIPT GC_UNIT_OHOS_HEADER_ROOT_TOKEN \
-  GC_UNIT_OHOS_HOST_ALLOW_MISSING_POST_DISPATCH
+  GC_UNIT_OHOS_HOST_RECEIPT GC_UNIT_OHOS_HEADER_ROOT_TOKEN
 # Synthetic gate arms likewise supply their own header root. The copied-pair
 # integration regression exercises automatic publication lookup with real SOs.
 export GC_UNIT_CJC_RUNTIME_LIB_DIR="$fixture/lib"
@@ -42,6 +41,13 @@ printf 'placeholder\n' >"$fixture/lib/libcangjie-runtime.so"
 printf 'placeholder\n' >"$fixture/lib/libboundscheck.so"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fixture/bin/nm"
 chmod +x "$fixture/bin/nm"
+
+cat >"$fixture/bin/nm" <<'NM'
+#!/usr/bin/env bash
+printf '00000000 T CJ_GetUIThreadStackTop
+00000010 T CJ_PushUIThreadStackTop
+'
+NM
 
 # The OHOS-host compiler must consume generated headers from the same output
 # identity as the selected runtime SO.  Keep the runner otherwise successful
@@ -81,6 +87,33 @@ PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-reused.log" 2>&1
 /usr/bin/grep -qx 'GATE=PASS' "$fixture/ohos-reused.status"
 echo 'OHOS explicit ELF reuse: rc=0 receipt=PASS'
+# Missing either host stub must stop before a successful synthetic runner,
+# including the explicit-ELF path. Similar names must not satisfy identity.
+cp "$fixture/bin/nm" "$fixture/ohos-nm"
+for missing in CJ_GetUIThreadStackTop CJ_PushUIThreadStackTop; do
+  sed "s/${missing}/${missing}_unrelated/" "$fixture/ohos-nm" >"$fixture/bin/nm"
+  for reuse in fresh reused; do
+    out="$fixture/missing-$missing-$reuse"
+    mkdir -p "$out"
+    printf 'FILTER_POST=PASS\n' >"$out/ohos_host.receipt"
+    reuse_elf=""
+    [[ "$reuse" == fresh ]] || reuse_elf="$fixture/reused-elf"
+    set +e
+    PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+      GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
+      GC_UNIT_OHOS_HOST_TEST_ELF="$reuse_elf" \
+      GC_UNIT_OUT="$out" GC_UNIT_GATE_STATUS="$out/status" \
+      bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$out/run.log" 2>&1
+    missing_rc=$?
+    set -e
+    [[ $missing_rc -eq 21 ]]
+    /usr/bin/grep -qx 'OHOS_HOST=NOT_RUN' "$out/status"
+    /usr/bin/grep -qx 'OHOS_HOST_FILTERS=0' "$out/status"
+    [[ ! -e "$out/ohos_host.receipt" && ! -e "$out/ohos_host_gate.log" ]]
+    printf 'OHOS missing stub: symbol=%s reuse=%s rc=%s filters=NOT_RUN\n' "$missing" "$reuse" "$missing_rc"
+  done
+done
+mv "$fixture/ohos-nm" "$fixture/bin/nm"
 # A successful legacy three-filter receipt must not certify the handler chain.
 sed -i 's/FILTER_HANDLER=PASS/FILTER_HANDLER=NOT_RUN/' "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 set +e
@@ -94,6 +127,7 @@ set -e
 /usr/bin/grep -qx 'REASON=OHOS_HOST_FAILURE' "$fixture/ohos-handler-missing.status"
 /usr/bin/grep -q 'OHOS-host receipt incomplete' "$fixture/ohos-handler-missing.log"
 printf 'OHOS handler receipt: good_rc=0 missing_rc=%s target=receipt-incomplete\n' "$ohos_handler_rc"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$fixture/bin/nm"
 mv "$fixture/default-runner.sh" "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 
 # Configuration selection is a gate input, not a directory scan.  Prove the
