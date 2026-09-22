@@ -154,7 +154,7 @@ public:
         }
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
         Heap::GetHeap().cross_vm().cycleRefWorkStack.clear();
-        Heap::GetHeap().cross_vm().discoveredExternObjects.clear();
+        Heap::GetHeap().old().discoveredExternObjects.clear();
         Heap::GetHeap().cross_vm().cycleRefWorkStack[value].push_back(value);
     }
 
@@ -179,16 +179,16 @@ public:
     {
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
         auto it = Heap::GetHeap().cross_vm().cycleRefWorkStack.find(key);
-        return Heap::GetHeap().cross_vm().discoveredExternObjects.empty() && Heap::GetHeap().cross_vm().cycleRefWorkStack.size() == owners &&
+        return Heap::GetHeap().old().discoveredExternObjects.empty() && Heap::GetHeap().cross_vm().cycleRefWorkStack.size() == owners &&
             it != Heap::GetHeap().cross_vm().cycleRefWorkStack.end() && it->second.size() == 1 && it->second.front() == value;
     }
 
     static bool DiscoveredCarrierEquals(Heap& collector, BaseObject* key, BaseObject* value, size_t owners = 1)
     {
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().externMtx);
-        auto it = Heap::GetHeap().cross_vm().discoveredExternObjects.find(key);
-        return Heap::GetHeap().cross_vm().discoveredExternObjects.size() == owners &&
-            it != Heap::GetHeap().cross_vm().discoveredExternObjects.end() && it->second.size() == 1 &&
+        auto it = Heap::GetHeap().old().discoveredExternObjects.find(key);
+        return Heap::GetHeap().old().discoveredExternObjects.size() == owners &&
+            it != Heap::GetHeap().old().discoveredExternObjects.end() && it->second.size() == 1 &&
             it->second.front() == value;
     }
 

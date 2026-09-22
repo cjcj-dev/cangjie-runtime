@@ -229,7 +229,7 @@ void ZCrossVM::ResurrectExportObject(BaseObject* obj)
         }
     }
 
-void ZCrossVM::PrepareCycleRef()
+void ZCrossVM::PrepareCycleRef(ValueRootMap& discoveredExternObjects)
     {
         std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
         CurrentizeValueRootMap(cycleRefWorkStack);
@@ -274,13 +274,13 @@ void ZCrossVM::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visi
     }
 }
 
-void ZCrossVM::FindUselessExternObjects()
+void ZCrossVM::FindUselessExternObjects(ValueRootMap& discoveredExternObjects)
 {
     std::lock_guard<std::mutex> lock(externMtx);
     CurrentizeValueRootMap(discoveredExternObjects);
 }
 
-void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners)
+void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners, ValueRootMap& discoveredExternObjects)
 {
     while (!exportOwners.empty()) {
         if (ZAbort::should_abort()) {
@@ -403,13 +403,6 @@ void ZCrossVM::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>&
         }
         it++;
     }
-}
-
-void ZCrossVM::PreforwardDiscoveredExternObjects(Generation generation)
-{
-    std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-    CHECK(discoveredExternObjects.empty());
-    CurrentizeValueRootMap(cycleRefWorkStack);
 }
 
 void ZCrossVM::PreforwardAllResurrectExportFromObjects(Generation generation)

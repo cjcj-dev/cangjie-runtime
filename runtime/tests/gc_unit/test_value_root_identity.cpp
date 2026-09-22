@@ -25,7 +25,7 @@ public:
     {
         auto& cross = Heap::GetHeap().cross_vm();
         std::lock_guard<std::mutex> lock(cross.externMtx);
-        for (const auto& entry : cross.discoveredExternObjects) {
+        for (const auto& entry : Heap::GetHeap().old().discoveredExternObjects) {
             if (entry.first.object != expected) continue;
             const bool keyGood = ZPointer::is_load_good(ZAddress::color(zaddress::null, entry.first.color));
             const bool valueGood = entry.second.size() == 1 &&
@@ -38,6 +38,27 @@ public:
         std::fprintf(stderr, "VALUE_ROOT_IDENTITY_TARGET expected=%p missing=1\n", expected);
         return false;
     }
+    static bool DiscoveredOwnership(BaseObject* expected)
+    {
+        const auto& discovered = Heap::GetHeap().old().discoveredExternObjects;
+        auto entry = discovered.find(expected);
+        return entry != discovered.end() && entry->second.size() == 1 &&
+            entry->second.front().object == expected;
+    }
+
+    static bool CycleHandoffIdentity(BaseObject* expected)
+    {
+        auto& cross = Heap::GetHeap().cross_vm();
+        std::lock_guard<std::mutex> lock(cross.cycleWorkStackMtx);
+        const auto& discovered = Heap::GetHeap().old().discoveredExternObjects;
+        auto entry = cross.cycleRefWorkStack.find(expected);
+        const bool handedOff = entry != cross.cycleRefWorkStack.end() &&
+            entry->second.size() == 1 && entry->second.front().object == expected;
+        std::fprintf(stderr, "DISCOVERED_OWNER_HANDOFF empty=%d handed_off=%d\n",
+            discovered.empty(), handedOff);
+        return discovered.empty() && handedOff;
+    }
+
 };
 }
 namespace {
@@ -237,5 +258,48 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, CurrentDestinationOnForwardedPage)
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
     for (U64 id : root.roots) Heap::GetHeap().RemoveExportObject(id);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// zGeneration.cpp:1228 / zReferenceProcessor.cpp:347-359: only the owner
+// generation checks its discovered list at the next cycle's mark start.
+GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, MinorPreservesOldDiscoveredOwnership)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    U64 root = 0;
+    auto task = RunCJTask(AllocateExportForeignRoot, &root);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* returned = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &returned), E_OK);
+    ReleaseHandle(task);
+    ConcurrentGCBreakpoints::AcquireControl();
+    BreakpointFailureCleanup cleanup;
+    GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
+    BaseObject* before = Heap::GetHeap().GetExportObject(root);
+    const bool produced = RelocationReceiptTest::DiscoveredOwnership(before);
+    const auto oldSequence = Heap::GetHeap().old().seqnum();
+    const auto youngSequence = Heap::GetHeap().young().seqnum();
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    BaseObject* after = Heap::GetHeap().GetExportObject(root);
+    const bool preserved = RelocationReceiptTest::DiscoveredOwnership(after);
+    const bool minorCompleted = Heap::GetHeap().young().seqnum() > youngSequence &&
+        Heap::GetHeap().old().seqnum() == oldSequence;
+    std::fprintf(stderr, "DISCOVERED_OWNER_ISOLATION produced=%d preserved=%d minor_completed=%d\n",
+        produced, preserved, minorCompleted);
+    GC_EXPECT_TRUE(produced && preserved && before == after && minorCompleted);
+    ConcurrentGCBreakpoints::RunToIdle();
+    const bool consumed = RelocationReceiptTest::CycleHandoffIdentity(Heap::GetHeap().GetExportObject(root));
+    GC_EXPECT_TRUE(consumed);
+    // A subsequent owner cycle must pass the real mark-start empty check.
+    GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
+    const bool rediscovered = RelocationReceiptTest::DiscoveredOwnership(Heap::GetHeap().GetExportObject(root));
+    std::fprintf(stderr, "DISCOVERED_OWNER_NEXT_CYCLE rediscovered=%d\n", rediscovered);
+    GC_EXPECT_TRUE(rediscovered);
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    Heap::GetHeap().RemoveExportObject(root);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

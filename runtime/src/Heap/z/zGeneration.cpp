@@ -620,7 +620,7 @@ void ZGenerationOld::process_non_strong_references()
                  "non-strong references require completed old marking");
     {
         ZStatTimerOld zstatTimer(PIdentifyUselessExternRef);
-        Heap::GetHeap().cross_vm().FindUselessExternObjects();
+        Heap::GetHeap().cross_vm().FindUselessExternObjects(discoveredExternObjects);
     }
     // Finalizable graphs were followed during mark discovery. This phase
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
@@ -873,6 +873,8 @@ void ZGenerationOld::mark_start()
         ++sequence;
     }
     set_phase(Phase::Mark);
+    // zReferenceProcessor.cpp:347-359, zGeneration.cpp:1228: owner-cycle reset.
+    CHECK(discoveredExternObjects.empty());
     Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
     Mark().BindWorkers(Workers());
     Mark().Start();
@@ -894,7 +896,7 @@ bool ZGenerationOld::mark_end()
     }
     // Preserve export ownership discovery after the ordinary root closure,
     // while the mark-end pause excludes new mutator publication.
-    Heap::GetHeap().cross_vm().ProcessExportRoots(oldExportOwners);
+    Heap::GetHeap().cross_vm().ProcessExportRoots(oldExportOwners, discoveredExternObjects);
     // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
     // to the phase owner before verification or publishing mark completion.
     if (ZAbort::should_abort()) {
