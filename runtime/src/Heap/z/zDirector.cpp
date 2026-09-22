@@ -587,9 +587,13 @@ static void start_minor_gc(const ZDirectorStats& stats, GCReason cause)
         ZCollectedHeap::heap()->driver_major()->port().is_busy() ? ZWorkerSelectionType::minor_during_old :
                                                                 ZWorkerSelectionType::normal;
     const ZWorkerCounts selection = initial_workers(stats, type);
-    if (ZCollectedHeap::heap()->driver_major()->port().is_busy() &&
-        stats.old_stats.resize.nworkers_current != selection.old_workers) {
-        Heap::GetHeap().old().Workers()->request_resize_workers(selection.old_workers);
+    if (UseDynamicNumberOfGCThreads && ZCollectedHeap::heap()->driver_major()->port().is_busy()) {
+        const ZWorkerResizeStats old_resize_stats = stats.old_stats.resize;
+        const uint32_t old_current_workers = old_resize_stats.nworkers_current;
+
+        if (old_current_workers != selection.old_workers) {
+            Heap::GetHeap().old().Workers()->request_resize_workers(selection.old_workers);
+        }
     }
     ZCollectedHeap::heap()->driver_minor()->port().send_async(ZDriverRequest(cause, selection.young_workers, 0));
 }

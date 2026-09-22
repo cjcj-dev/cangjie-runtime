@@ -20,6 +20,7 @@ INITIAL = int(os.environ['BUSY_INITIAL'])
 CURRENT = int(os.environ['BUSY_CURRENT'])
 RESIZE = int(os.environ.get('BUSY_RESIZE', '0'))
 EQUAL = int(os.environ.get('BUSY_EQUAL', '0'))
+DYNAMIC = int(os.environ.get('BUSY_DYNAMIC', '1'))
 SOURCE = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
 READS = []
 RETURNS = set()
@@ -146,7 +147,7 @@ try:
     for setting in ('pagination off', 'confirm off', 'breakpoint pending on',
                     'print thread-events off'):
         command('set ' + setting)
-    command('set environment cjUseDynamicNumberOfGCThreads 1')
+    command('set environment cjUseDynamicNumberOfGCThreads ' + str(DYNAMIC))
     fixture = 'GcDirector.ProductWarmupStopsAfterThreeCycles'
     command('set environment GC_UNIT_FILTER ' + fixture)
     command('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
@@ -180,8 +181,9 @@ try:
     command('call ((void (*)(void*, unsigned int, unsigned int, unsigned int)) '
             '&_ZN12MapleRuntime14ZDriverRequestC1ENS_8GCReasonEjj)($req, 3, 1, 1)')
     workers = 'MapleRuntime::ZCollectedHeap::_collected_heap->_heap._old.workers.get()'
-    if EQUAL:
-        command('call ' + workers + '->set_active_workers(1)')
+    if not DYNAMIC or EQUAL:
+        active_workers = (2 if EQUAL else 1) if not DYNAMIC else 1
+        command('call ' + workers + '->set_active_workers(' + str(active_workers) + ')')
     if RESIZE:
         command('call ' + workers + '->set_active()')
     director.switch()
@@ -257,8 +259,11 @@ try:
         if location()['line'] != LINES['send']:
             advance('send')
         observed = int(value(workers + '->_requested_nworkers._M_i'))
-        expected = 1 if CURRENT and not EQUAL else 0
-        check('ASSERT_RESIZE', observed == expected, requested_workers=observed, expected=expected)
+        expected = 1 if DYNAMIC and CURRENT and not EQUAL else 0
+        check('ASSERT_RESIZE', observed == expected, requested_workers=observed, expected=expected,
+              dynamic=DYNAMIC, equal=EQUAL, current=CURRENT,
+              sampled_workers=diagnostic('stats.old_stats.resize.nworkers_current'),
+              selected_workers=diagnostic('selection.old_workers'))
     if SITE == 'major':
         rejected = after['function'] == 'MapleRuntime::start_gc'
     elif SITE == 'minor':

@@ -18,9 +18,10 @@ sha256sum "$GC_UNIT_TEST_ELF" "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" \
 nm --defined-only "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" > "$BUSY_OUT/product.full-nm.txt"
 printf 'cpuset=%s\nscript=%s\nsource=%s\n' "$BUSY_CPUSET" "$script_dir/test_director_busy_gdb.py" "$DIRECTOR_SOURCE" > "$BUSY_OUT/recipe.txt"
 run_case() {
-    local site=$1 initial=$2 current=$3 resize=$4 equal=$5
+    local site=$1 initial=$2 current=$3 resize=$4 equal=$5 dynamic=$6
     local name="$site-$initial-$current-r$resize-e$equal"
-    BUSY_SITE=$site BUSY_INITIAL=$initial BUSY_CURRENT=$current BUSY_RESIZE=$resize BUSY_EQUAL=$equal \
+    if [[ "$dynamic" == 0 ]]; then name="$name-static"; fi
+    BUSY_SITE=$site BUSY_INITIAL=$initial BUSY_CURRENT=$current BUSY_RESIZE=$resize BUSY_EQUAL=$equal BUSY_DYNAMIC=$dynamic \
       timeout 40 taskset -c "$BUSY_CPUSET" gdb -nx -batch \
       -ex "source $script_dir/test_director_busy_gdb.py" "$GC_UNIT_TEST_ELF" > "$BUSY_OUT/$name.log" 2>&1
     local rc=$?
@@ -30,12 +31,14 @@ pids=()
 for site in ${BUSY_SITES:-major minor minor_major merge select resize entry}; do
     for initial in ${BUSY_INITIALS:-0 1}; do
         for current in ${BUSY_CURRENTS:-0 1}; do
-            run_case "$site" "$initial" "$current" 0 0 & pids+=("$!")
+          for dynamic in ${BUSY_DYNAMICS:-1}; do
+            run_case "$site" "$initial" "$current" 0 0 "$dynamic" & pids+=("$!")
             if [[ "$site" == minor_major ]]; then
-                run_case "$site" "$initial" "$current" 1 0 & pids+=("$!")
+                run_case "$site" "$initial" "$current" 1 0 "$dynamic" & pids+=("$!")
             elif [[ "$site" == resize ]]; then
-                run_case "$site" "$initial" "$current" 1 1 & pids+=("$!")
+                run_case "$site" "$initial" "$current" 1 1 "$dynamic" & pids+=("$!")
             fi
+          done
         done
     done
 done
