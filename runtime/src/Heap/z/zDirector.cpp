@@ -8,6 +8,7 @@
 #include <limits>
 
 #include "Base/SysCall.h"
+#include "Base/Log.h"
 #include "CangjieRuntime.h"
 #include "Common/Runtime.h"
 #include "Heap/Allocator/RegionSpace.h"
@@ -132,6 +133,8 @@ static bool rule_minor_timer(const ZDirectorStats& stats)
         return false;
     }
     const double time_until_gc = stats.collection_interval_sec - stats.young_stats.cycle.timeSinceLast;
+    VLOG(REPORT, "Rule Minor: Timer, Interval: %.3fs, TimeUntilGC: %.3fs\n",
+        stats.collection_interval_sec, time_until_gc);
     return time_until_gc <= 0;
 }
 
@@ -156,6 +159,7 @@ static double select_young_gc_workers(const ZDirectorStats& stats, double serial
 {
     const uint32_t cap = young_gc_threads(stats);
     if (!stats.old_stats.cycle.isWarm) {
+        VLOG(REPORT, "Select Minor GC Workers (Not Warm), GCWorkers: %.3f\n", static_cast<double>(cap));
         return static_cast<double>(cap);
     }
     const double gc_workers = estimated_gc_workers(serial_gc_time, parallelizable_gc_time, time_until_oom);
@@ -169,16 +173,15 @@ static double select_young_gc_workers(const ZDirectorStats& stats, double serial
         const double next_avoid_oom_gc_workers =
             estimated_gc_workers(serial_gc_time, parallelizable_gc_time, next_time_until_oom);
         const double next_gc_workers = next_avoid_oom_gc_workers + 0.5;
-        const double lo = static_cast<double>(actual_gc_workers);
-        const double hi = last_gc_workers;
-        if (next_gc_workers < lo) {
-            return lo;
-        }
-        if (next_gc_workers > hi) {
-            return hi;
-        }
-        return next_gc_workers;
+        const double try_lowering_gc_workers = std::clamp(next_gc_workers,
+            static_cast<double>(actual_gc_workers), last_gc_workers);
+        VLOG(REPORT, "Select Minor GC Workers (Try Lowering), AvoidOOMGCWorkers: %.3f, "
+            "NextAvoidOOMGCWorkers: %.3f, LastGCWorkers: %.3f, GCWorkers: %.3f\n",
+            gc_workers, next_avoid_oom_gc_workers, last_gc_workers, try_lowering_gc_workers);
+        return try_lowering_gc_workers;
     }
+    VLOG(REPORT, "Select Minor GC Workers (Normal), AvoidOOMGCWorkers: %.3f, LastGCWorkers: %.3f, GCWorkers: %.3f\n",
+        gc_workers, last_gc_workers, gc_workers);
     return gc_workers;
 }
 
@@ -207,6 +210,10 @@ static ZDriverRequest rule_minor_allocation_rate_dynamic(const ZDirectorStats& s
     const uint32_t actual_gc_workers = discrete_young_gc_workers(gc_workers, young_gc_threads(stats));
     const double actual_gc_duration = serial_gc_time + (parallelizable_gc_time / actual_gc_workers);
     const double time_until_gc = time_until_oom - actual_gc_duration;
+    VLOG(REPORT, "Rule Minor: Allocation Rate (Dynamic GC Workers), MaxAllocRate: %.1fMB/s (+/-%.1f%%), "
+        "Free: %zuMB, GCCPUTime: %.3f, GCDuration: %.3fs, TimeUntilOOM: %.3fs, TimeUntilGC: %.3fs, GCWorkers: %u\n",
+        alloc_rate / MB, alloc_rate_sd_percent * 100, free / MB, serial_gc_time + parallelizable_gc_time,
+        actual_gc_duration, time_until_oom, time_until_gc, actual_gc_workers);
     if (time_until_gc > time_until_oom * 0.05) {
         return ZDriverRequest(GC_REASON_INVALID, actual_gc_workers, 0);
     }
@@ -252,7 +259,11 @@ static bool rule_minor_allocation_rate_static(const ZDirectorStats& stats)
     const double parallelizable_gc_time =
         stats.young_stats.cycle.parallelTime + (stats.young_stats.cycle.parallelTimeSd * one_in_1000);
     const double gc_duration = serial_gc_time + (parallelizable_gc_time / young_gc_threads(stats));
-    return (time_until_oom - gc_duration) <= 0;
+    const double time_until_gc = time_until_oom - gc_duration;
+    VLOG(REPORT, "Rule Minor: Allocation Rate (Static GC Workers), MaxAllocRate: %.1fMB/s, "
+        "Free: %zuMB, GCDuration: %.3fs, TimeUntilGC: %.3fs\n",
+        max_alloc_rate / MB, free / MB, gc_duration, time_until_gc);
+    return time_until_gc <= 0;
 }
 
 static bool is_young_small(const ZDirectorStats& stats)
@@ -266,7 +277,7 @@ static bool is_young_small(const ZDirectorStats& stats)
     return young_used_percent <= 5.0;
 }
 
-static bool is_high_usage(const ZDirectorStats& stats)
+static bool is_high_usage(const ZDirectorStats& stats, bool log = false)
 {
     const size_t soft_max_capacity = stats.heap.soft_max_heap_size;
     if (soft_max_capacity == 0) {
@@ -276,6 +287,9 @@ static bool is_high_usage(const ZDirectorStats& stats)
     const size_t free_including_headroom = soft_max_capacity - std::min(soft_max_capacity, used);
     const size_t free = free_including_headroom - std::min(free_including_headroom, stats.relocation_headroom);
     const double free_percent = 100.0 * static_cast<double>(free) / static_cast<double>(soft_max_capacity);
+    if (log) {
+        VLOG(REPORT, "Rule Minor: High Usage, Free: %zuMB(%.1f%%)\n", free / MB, free_percent);
+    }
     return free_percent <= 5.0;
 }
 
@@ -289,7 +303,10 @@ static bool rule_minor_allocation_rate(const ZDirectorStats& stats)
     if (ZCollectionIntervalOnly) {
         return false;
     }
-    if (Heap::GetHeap().page_allocator().IsAllocationStallingForOld()) {
+    const bool stalling_for_old = Heap::GetHeap().page_allocator().IsAllocationStallingForOld();
+    VLOG(REPORT, "Rule Minor: Allocation Stall, StallingForOld: %d, Stalling: %d, Suppressed: %d\n",
+        stalling_for_old, stats.allocation_stalling, stalling_for_old);
+    if (stalling_for_old) {
         return false;
     }
     if (is_young_small(stats)) {
@@ -315,7 +332,7 @@ static bool rule_minor_high_usage(const ZDirectorStats& stats)
     if (is_young_small(stats)) {
         return false;
     }
-    return is_high_usage(stats);
+    return is_high_usage(stats, true);
 }
 
 static bool rule_major_timer(const ZDirectorStats& stats)
@@ -323,7 +340,10 @@ static bool rule_major_timer(const ZDirectorStats& stats)
     if (stats.collection_interval_sec <= 0) {
         return false;
     }
-    return (stats.collection_interval_sec - stats.old_stats.cycle.timeSinceLast) <= 0;
+    const double time_until_gc = stats.collection_interval_sec - stats.old_stats.cycle.timeSinceLast;
+    VLOG(REPORT, "Rule Major: Timer, Interval: %.3fs, TimeUntilGC: %.3fs\n",
+        stats.collection_interval_sec, time_until_gc);
+    return time_until_gc <= 0;
 }
 
 static bool rule_major_warmup(const ZDirectorStats& stats)
@@ -337,6 +357,8 @@ static bool rule_major_warmup(const ZDirectorStats& stats)
     const size_t soft_max_capacity = stats.heap.soft_max_heap_size;
     const double used_threshold_percent = (stats.old_stats.cycle.warmupCycles + 1) * 0.1;
     const size_t used_threshold = static_cast<size_t>(soft_max_capacity * used_threshold_percent);
+    VLOG(REPORT, "Rule Major: Warmup %.0f%%, Used: %zuMB, UsedThreshold: %zuMB\n",
+        used_threshold_percent * 100, stats.heap.used / MB, used_threshold / MB);
     return stats.heap.used >= used_threshold;
 }
 
@@ -383,6 +405,9 @@ static bool rule_major_allocation_rate(const ZDirectorStats& stats)
     const double extra_young_gc_time = calculate_extra_young_gc_time(stats);
     const uint32_t lookahead = stats.heap.total_collections - stats.old_stats.general.total_collections_at_start;
     const double extra_young_gc_time_for_lookahead = extra_young_gc_time * static_cast<double>(lookahead);
+    VLOG(REPORT, "Rule Major: Allocation Rate, ExtraYoungGCTime: %.3fs, OldGCTime: %.3fs, "
+        "Lookahead: %u, ExtraYoungGCTimeForLookahead: %.3fs\n",
+        extra_young_gc_time, old_gc_time, lookahead, extra_young_gc_time_for_lookahead);
     const bool can_amortize_time_cost = extra_young_gc_time_for_lookahead > old_gc_time;
     const bool old_garbage_is_cheaper = current_old_gc_time_per_bytes_freed < current_young_gc_time_per_bytes_freed;
     return can_amortize_time_cost || old_garbage_is_cheaper || is_major_urgent(stats);
@@ -421,11 +446,16 @@ static bool rule_major_proactive(const ZDirectorStats& stats)
     const size_t used_increase_threshold = static_cast<size_t>(stats.heap.soft_max_heap_size * 0.10);
     const size_t used_threshold = used_after_last_gc + used_increase_threshold;
     if (stats.heap.used < used_threshold && stats.old_stats.cycle.timeSinceLast < 5 * 60) {
+        VLOG(REPORT, "Rule Major: Proactive, UsedUntilEnabled: %zuMB, TimeUntilEnabled: %.3fs\n",
+            (used_threshold - stats.heap.used) / MB, 5 * 60 - stats.old_stats.cycle.timeSinceLast);
         return false;
     }
     const double serial_gc_time = gc_time(stats.old_stats) + gc_time(stats.young_stats);
     const double acceptable_gc_interval = serial_gc_time * ((0.50 / 0.01) - 1.0);
-    return (acceptable_gc_interval - stats.old_stats.cycle.timeSinceLast) <= 0;
+    const double time_until_gc = acceptable_gc_interval - stats.old_stats.cycle.timeSinceLast;
+    VLOG(REPORT, "Rule Major: Proactive, AcceptableGCInterval: %.3fs, TimeSinceLastGC: %.3fs, TimeUntilGC: %.3fs\n",
+        acceptable_gc_interval, stats.old_stats.cycle.timeSinceLast, time_until_gc);
+    return time_until_gc <= 0;
 }
 
 static GCReason make_minor_gc_decision(const ZDirectorStats& stats)
