@@ -249,6 +249,39 @@ inline zaddress ZBarrier::remap(zaddress_unsafe addr, ZGeneration* generation)
     return relocate_or_remap(addr, generation);
 }
 
+// ZGC zBarrier.inline.hpp:695-727: strong, native and no-keep-alive entries.
+inline void ZBarrier::store_barrier_on_heap_oop_field(volatile zpointer* p, bool heal)
+{
+    const zpointer prev = load_atomic(p);
+    auto slow_path = [=](zaddress addr) {
+        return heap_store_slow_path(p, addr, prev, heal);
+    };
+    if (heal) {
+        barrier(is_store_good_fast_path, slow_path, ColorStoreGood, p, prev, false);
+    } else {
+        barrier(is_store_good_or_null_fast_path, slow_path, ColorStoreGood, nullptr, prev, false);
+    }
+}
+
+inline void ZBarrier::store_barrier_on_native_oop_field(volatile zpointer* p, bool heal)
+{
+    const zpointer prev = load_atomic(p);
+    if (heal) {
+        barrier(is_store_good_fast_path, native_store_slow_path, ColorStoreGood, p, prev, false);
+    } else {
+        barrier(is_store_good_or_null_fast_path, native_store_slow_path, ColorStoreGood, nullptr, prev, false);
+    }
+}
+
+inline void ZBarrier::no_keep_alive_store_barrier_on_heap_oop_field(volatile zpointer* p)
+{
+    const zpointer prev = load_atomic(p);
+    auto slow_path = [=](zaddress addr) {
+        return no_keep_alive_heap_store_slow_path(p, addr);
+    };
+    barrier(is_store_good_fast_path, slow_path, ColorStoreGood, nullptr, prev, false);
+}
+
 inline zaddress ZBarrier::make_load_good(zpointer ptr)
 {
     if (is_null_any(ptr)) {

@@ -246,44 +246,41 @@ void ZBarrier::ReadStruct(MAddress dst, MAddress src, size_t size, GCTib gctib)
         CopySlotKind::Heap, CopySlotKind::Uncolored);
 }
 
-// ZZBarrier::store_barrier_on_heap_oop_field, zBarrier.inline.hpp:695-706.
-// Atomic operations heal before attempting the exchange, ordinary stores buffer prev.
-template<bool atomic>
-void ZBarrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
-                            ReferenceStrength strength)
+// ZGC zBarrier.cpp:253-278: store slow paths are separate from entry routing.
+zaddress ZBarrier::heap_store_slow_path(volatile zpointer* p, zaddress addr, zpointer prev, bool heal)
 {
-    (void)obj;
-    volatile zpointer* p = reinterpret_cast<volatile zpointer*>(&field);
-    const zpointer prev = load_atomic(p);
-    if (strength != ReferenceStrength::Strong) {
-        auto slow = [p](zaddress addr) {
-            remember(p);
-            return addr;
-        };
-        barrier(is_store_good_fast_path, slow, ColorStoreGood, nullptr, prev, false);
-        return;
-    }
-    auto slow = [p, prev, heal](zaddress addr) {
-        StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(heal);
-        if (buffer != nullptr) {
-            buffer->add(reinterpret_cast<MAddress>(p), prev);
-        } else {
-            mark_and_remember(p, addr);
-        }
-        return addr;
-    };
-    if (heal) {
-        barrier(is_store_good_fast_path, slow, ColorStoreGood, p, prev, false);
+    StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(heal);
+    if (buffer != nullptr) {
+        buffer->add(reinterpret_cast<MAddress>(p), prev);
     } else {
-        barrier(is_store_good_or_null_fast_path, slow, ColorStoreGood, nullptr, prev, false);
+        mark_and_remember(p, addr);
     }
+    return addr;
+}
+
+zaddress ZBarrier::no_keep_alive_heap_store_slow_path(volatile zpointer* p, zaddress addr)
+{
+    remember(p);
+    return addr;
+}
+
+zaddress ZBarrier::native_store_slow_path(zaddress addr)
+{
+    if (!is_null(addr)) {
+        Heap::GetHeap().MarkObjectIfActive(to_object(addr));
+    }
+    return addr;
 }
 
 void ZBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref)
 {
-    const bool weakReferent = obj != nullptr && Heap::IsHeapAddress(obj) && obj->IsWeakRef() &&
-        reinterpret_cast<MAddress>(&field) == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
-    StoreBarrier(obj, field, false, weakReferent ? ReferenceStrength::Weak : ReferenceStrength::Strong);
+    store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
+    WriteReferenceImpl(obj, field, ref);
+}
+
+void ZBarrier::WriteWeakReference(BaseObject* obj, RefField<false>& field, BaseObject* ref)
+{
+    no_keep_alive_store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field));
     WriteReferenceImpl(obj, field, ref);
 }
 
@@ -313,29 +310,9 @@ void ZBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAd
 #endif
 }
 
-// ZZBarrier::store_barrier_on_native_oop_field, zBarrier.inline.hpp:709.
-// Native slots carry color but have no heap remembered-set obligation.
-template<bool atomic>
-void ZBarrier::NativeStoreBarrier(RefField<atomic>& field, bool heal)
-{
-    volatile zpointer* p = reinterpret_cast<volatile zpointer*>(&field);
-    const zpointer prev = load_atomic(p);
-    auto slow = [](zaddress addr) {
-        if (!is_null(addr)) {
-            Heap::GetHeap().MarkObjectIfActive(to_object(addr));
-        }
-        return addr;
-    };
-    if (heal) {
-        barrier(is_store_good_fast_path, slow, ColorStoreGood, p, prev, false);
-    } else {
-        barrier(is_store_good_or_null_fast_path, slow, ColorStoreGood, nullptr, prev, false);
-    }
-}
-
 void ZBarrier::WriteStaticRef(NativeSlot& field, BaseObject* ref)
 {
-    NativeStoreBarrier(field, false);
+    store_barrier_on_native_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
     WriteReferenceImpl(nullptr, field, ref);
 }
 
@@ -563,11 +540,11 @@ BaseObject* ZBarrier::ReadPhantomRef(BaseObject* obj, RefField<false>& field)
 void ZBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order)
 {
     if (!Heap::IsHeapAddress(&field)) {
-        NativeStoreBarrier(field, true);
+        store_barrier_on_native_oop_field(reinterpret_cast<volatile zpointer*>(&field), true);
         AtomicWriteReferenceImpl(obj, field, ref, order);
         return;
     }
-    StoreBarrier(obj, field, true);
+    store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), true);
     AtomicWriteReferenceImpl(obj, field, ref, order);
 }
 
@@ -580,10 +557,10 @@ BaseObject* ZBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field
                                          MemoryOrder order)
 {
     if (!Heap::IsHeapAddress(&field)) {
-        NativeStoreBarrier(field, true);
+        store_barrier_on_native_oop_field(reinterpret_cast<volatile zpointer*>(&field), true);
         return AtomicSwapReferenceImpl(obj, field, newRef, order);
     }
-    StoreBarrier(obj, field, true);
+    store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), true);
     return AtomicSwapReferenceImpl(obj, field, newRef, order);
 }
 
@@ -604,10 +581,10 @@ bool ZBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, B
                                       MemoryOrder succOrder, MemoryOrder failOrder)
 {
     if (!Heap::IsHeapAddress(&field)) {
-        NativeStoreBarrier(field, true);
+        store_barrier_on_native_oop_field(reinterpret_cast<volatile zpointer*>(&field), true);
         return CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     }
-    StoreBarrier(obj, field, true);
+    store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), true);
     return CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
 }
 
@@ -918,18 +895,6 @@ void ZBarrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseOb
         return;
     }
     mark_and_remember(reinterpret_cast<volatile zpointer*>(fieldAddress), make_load_good(prev));
-}
-
-void ZBarrier::store_barrier_on_heap_oop_field(volatile zpointer* p, bool heal)
-{
-    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
-    StoreBarrier<false>(nullptr, field, heal);
-}
-
-void ZBarrier::store_barrier_on_native_oop_field(volatile zpointer* p, bool heal)
-{
-    auto& field = *reinterpret_cast<NativeSlot*>(const_cast<zpointer*>(p));
-    NativeStoreBarrier<false>(field, heal);
 }
 
 zaddress ZBarrier::load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o)

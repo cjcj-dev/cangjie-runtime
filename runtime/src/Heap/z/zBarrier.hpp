@@ -61,6 +61,7 @@ public:
     static void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib);
 
     static void WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref);
+    static void WriteWeakReference(BaseObject* obj, RefField<false>& field, BaseObject* ref);
     static void WriteStaticRef(NativeSlot& field, BaseObject* ref);
     static void WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen);
     static void WriteStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, GCTib gctib);
@@ -88,6 +89,10 @@ public:
     static void mark_and_remember(volatile zpointer* p, zaddress addr);
     static void store_barrier_on_heap_oop_field(volatile zpointer* p, bool heal);
     static void store_barrier_on_native_oop_field(volatile zpointer* p, bool heal);
+    static void no_keep_alive_store_barrier_on_heap_oop_field(volatile zpointer* p);
+    static zaddress heap_store_slow_path(volatile zpointer* p, zaddress addr, zpointer prev, bool heal);
+    static zaddress no_keep_alive_heap_store_slow_path(volatile zpointer* p, zaddress addr);
+    static zaddress native_store_slow_path(zaddress addr);
     static zaddress load_barrier_on_oop_field(volatile zpointer* p);
     static zaddress load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o);
     static zaddress load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o);
@@ -168,13 +173,8 @@ public:
     static void MarkIfYoung(zaddress address);
     static void MarkYoung(zaddress address);
     template<bool atomic>
-    static void NativeStoreBarrier(RefField<atomic>& field, bool heal);
-    template<bool atomic>
     static BaseObject* LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpointer observed,
                             ReferenceStrength strength);
-    template<bool atomic>
-    static void StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
-                      ReferenceStrength strength = ReferenceStrength::Strong);
 
     static zaddress relocate_or_remap(zaddress_unsafe addr, ZGeneration* generation);
     static zaddress remap(zaddress_unsafe addr, ZGeneration* generation);
