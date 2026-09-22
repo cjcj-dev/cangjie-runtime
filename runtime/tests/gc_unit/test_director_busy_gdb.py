@@ -157,6 +157,7 @@ try:
     command('set var params.gcParam.concGCThreads=2')
     command('set var params.gcParam.youngGCThreads=2')
     command('set var params.gcParam.oldGCThreads=2')
+    command('set var params.gcParam.staticGCThreads=' + str(1 - DYNAMIC))
     if SITE == 'merge':
         gdb.Breakpoint('test_gc_director.cpp:142', temporary=True)
         command('continue')
@@ -240,6 +241,10 @@ try:
     emit('TARGET_BEFORE', site=SITE, initial=INITIAL, current=CURRENT, location=location())
     if SITE == 'select':
         advance('resize')
+    elif SITE == 'resize':
+        # A source-level next can step past the send boundary when this small
+        # function is inlined. Stop at the output boundary before stepping.
+        advance('send')
     else:
         command('next')
     after = location()
