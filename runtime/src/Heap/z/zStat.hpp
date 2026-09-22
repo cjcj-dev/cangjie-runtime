@@ -53,8 +53,8 @@ private:
     uint64_t _accumulated_time;
 
 #if defined(MRT_TESTABLE_INTERNALS)
-    const uint64_t* _clock_for_test = nullptr;
-    uint64_t now_for_test() const;
+    static thread_local const uint64_t* _clock_for_test;
+    static uint64_t now_for_test();
 #endif
 
     double accumulated_duration();
@@ -64,8 +64,8 @@ private:
 public:
     ZStatWorkers();
 #if defined(MRT_TESTABLE_INTERNALS)
-    // The manual nanosecond clock must outlive this instance.
-    explicit ZStatWorkers(const uint64_t& clock_for_test);
+    // Scoped test clocks apply only to the calling thread; instance layout is unchanged.
+    static const uint64_t* set_clock_for_test(const uint64_t* clock);
 #endif
 
     void at_start(uint32_t active_workers);

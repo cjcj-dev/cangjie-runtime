@@ -136,12 +136,16 @@ ZStatWorkers::ZStatWorkers()
     : _stat_lock(), _active_workers(0), _start_of_last(0), _accumulated_duration(0), _accumulated_time(0) {}
 
 #if defined(MRT_TESTABLE_INTERNALS)
-ZStatWorkers::ZStatWorkers(const uint64_t& clock_for_test) : ZStatWorkers()
+thread_local const uint64_t* ZStatWorkers::_clock_for_test = nullptr;
+
+const uint64_t* ZStatWorkers::set_clock_for_test(const uint64_t* clock)
 {
-    _clock_for_test = &clock_for_test;
+    const uint64_t* previous = _clock_for_test;
+    _clock_for_test = clock;
+    return previous;
 }
 
-uint64_t ZStatWorkers::now_for_test() const
+uint64_t ZStatWorkers::now_for_test()
 {
     return _clock_for_test == nullptr ? TimeUtil::NanoSeconds() : *_clock_for_test;
 }

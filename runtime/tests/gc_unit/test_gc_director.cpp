@@ -57,7 +57,12 @@ GC_TEST(GcDirector, CycleUsesWorkerAccountingAndControlledClock)
 GC_TEST(GcDirector, WorkerStatsIncludeInFlightBatch)
 {
     uint64_t now = 1000000000;
-    ZStatWorkers workers(now);
+    struct ClockScope {
+        const uint64_t* previous;
+        explicit ClockScope(const uint64_t& clock) : previous(ZStatWorkers::set_clock_for_test(&clock)) {}
+        ~ClockScope() { ZStatWorkers::set_clock_for_test(previous); }
+    } clockScope(now);
+    ZStatWorkers workers;
     GC_EXPECT_EQ(workers.stats()._accumulated_time, 0.0);
     GC_EXPECT_EQ(workers.stats()._accumulated_duration, 0.0);
     workers.at_start(4);
