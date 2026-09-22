@@ -342,6 +342,28 @@ GC_OTHER_VM_TEST(RelocateWorkers, ProductSerialEntryRegistersWorkerAndClosesGene
     GC_EXPECT_TRUE(RunSerialProductEntryClosesGeneration());
 }
 
+// ZGC zRelocate.cpp:1193-1224 and zWorkers.cpp:108-124. A resize request
+// survives into the real relocation entry; the task must restart and finish
+// the installed forwarding set with the new worker budget.
+GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
+{
+    GcHeapFixture fx;
+    PrepareOwnerRegion(fx);
+    auto& old = Heap::GetHeap().old();
+    auto& manager = Heap::GetHeap().page_allocator();
+    RelocationReceiptTest::ParkFrom(manager, fx.region0);
+    if (old.Workers() == nullptr) old.InitializeWorkers(3);
+    old.Workers()->set_active_workers(1);
+    old.Workers()->set_active();
+    old.Workers()->request_resize_workers(3);
+    old.relocate().relocate(&old.relocation_set());
+    const auto active = old.Workers()->active_workers();
+    old.Workers()->set_inactive();
+    GC_EXPECT_EQ(active, 3u);
+    GC_EXPECT_TRUE(forwarding_for_page(fx.region0)->is_done());
+    GC_EXPECT_FALSE(old.relocate().queue()->is_active());
+}
+
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(RelocateWorkers, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
 {

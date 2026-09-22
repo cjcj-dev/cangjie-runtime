@@ -41,6 +41,7 @@
 #include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Common/SuspendibleThreadSet.h"
@@ -1077,6 +1078,9 @@ void ForwardTask<G>::work()
         ZForwarding* owner = nullptr;
         if (!iter.next(&owner)) { break; }
         if (owner->claim()) { doForwarding(owner); }
+        // ZGC zRelocate.cpp:1206-1214: finish one ordinary forwarding before
+        // yielding the worker. The shared iterator survives the restart.
+        if (generation->should_worker_resize()) { break; }
     }
     queue.leave();
 }
@@ -1280,6 +1284,9 @@ void ZRelocateQueue::join(uint32_t workers)
 
 void ZRelocateQueue::resize_workers(uint32_t workers)
 {
+    CHECK_DETAIL(workers != 0 && nworkers == 0 && nsynchronized == 0,
+                 "invalid relocate queue resize workers=%u nworkers=%u nsync=%u",
+                 workers, nworkers, nsynchronized);
     std::lock_guard<std::mutex> guard(lock);
     nworkers = workers;
 }
@@ -1307,7 +1314,7 @@ void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
         attention.notify_all();
     }
     while (!forwarding->is_done()) {
-        attention.wait_for(guard, std::chrono::milliseconds(1));
+        attention.wait(guard);
     }
 }
 

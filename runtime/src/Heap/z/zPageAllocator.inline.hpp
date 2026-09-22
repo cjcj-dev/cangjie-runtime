@@ -225,14 +225,19 @@ namespace detail {
 // export Work so the unit runner binds the product SO; default builds retain
 // the implicit inline virtual with no MRT_EXPORT and no dynamic export.
 template<Generation G>
-class ForwardTask : public ZTask {
+class ForwardTask : public ZRestartableTask {
 public:
     ForwardTask(RegionManager& manager, ZRelocationSet* relocationSet)
-        : ZTask("ZRelocateTask"), regionManager(manager), relocationSet(relocationSet), iter(relocationSet),
+        : ZRestartableTask("ZRelocateTask"), regionManager(manager), relocationSet(relocationSet), iter(relocationSet),
           smallAllocator(relocationSet->generation()),
           mediumAllocator(relocationSet->generation(),
                           relocationSet->generation()->relocate().shared_medium_targets()) {}
     ~ForwardTask() override { relocationSet->generation()->relocate().queue()->deactivate(); }
+    // ZGC zRelocate.cpp:1222-1224: all old workers have left before restart.
+    void resize_workers(uint32_t nworkers) override
+    {
+        relocationSet->generation()->relocate().queue()->resize_workers(nworkers);
+    }
 #if defined(MRT_TESTABLE_INTERNALS)
     MRT_EXPORT void work() override;
 #else
