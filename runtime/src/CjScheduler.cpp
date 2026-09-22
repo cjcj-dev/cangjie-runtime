@@ -357,7 +357,7 @@ void* WrapperTask(void* arg, unsigned int len)
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
     // zBarrierSetNMethod.cpp:45-91: entry barrier before consuming group roots.
-    CJThreadVisitRoots(CJThreadGetHandle(), MRT_VisitorCaller, nullptr);
+    CJThreadRootEntryBarrier();
     BaseObject* future = to_object(safe(RootSlotAt(&lwtData->obj).LoadPlain()));
     TypeInfo* typeInfo = future->GetTypeInfo();
 #if defined(__aarch64__)
@@ -485,7 +485,7 @@ static void* WrapperExclusiveClosure(void* arg, unsigned int len)
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
     // zBarrierSetNMethod.cpp:45-91: entry barrier before consuming group roots.
-    CJThreadVisitRoots(CJThreadGetHandle(), MRT_VisitorCaller, nullptr);
+    CJThreadRootEntryBarrier();
     BaseObject* executeClosure = to_object(safe(RootSlotAt(&lwtData->execute).LoadPlain()));
     BaseObject* closureObj = to_object(safe(RootSlotAt(&lwtData->obj).LoadPlain()));
 #if defined(__aarch64__)
@@ -619,7 +619,7 @@ static void* WrapperOfExecuteClosure(void* arg, unsigned int len)
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
     // zBarrierSetNMethod.cpp:45-91: entry barrier before consuming group roots.
-    CJThreadVisitRoots(CJThreadGetHandle(), MRT_VisitorCaller, nullptr);
+    CJThreadRootEntryBarrier();
     BaseObject* closureObj = to_object(safe(RootSlotAt(&lwtData->obj).LoadPlain()));
     TypeInfo* futureTi = closureObj != nullptr ? closureObj->GetTypeInfo() : nullptr;
 #if defined(__aarch64__)

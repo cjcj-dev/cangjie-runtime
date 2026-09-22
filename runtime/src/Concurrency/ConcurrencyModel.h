@@ -35,6 +35,7 @@ using LWTData = struct {
     BaseObject* threadObject;   // Cangjie class Thread in std/core; never TypeInfo
 };
 static_assert(sizeof(LWTData) <= 32, "LWTData must fit COARGS_SIZE_MAX");
+void CJThreadRootEntryBarrier();
 void StoreCJThreadObject(void* object);
 struct ConcurrencyTask; // Task depends on the implementation of ConcurrencyModel
 

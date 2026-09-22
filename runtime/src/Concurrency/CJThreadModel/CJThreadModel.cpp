@@ -64,7 +64,18 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
         (*reinterpret_cast<RootVisitor*>(handle))(execute);
     }
     // zNMethod.cpp:380-395: heal the whole group before publishing its new guard.
-    *g_uncoloredVisitColor = nextColor;
+    __atomic_store_n(g_uncoloredVisitColor, nextColor, __ATOMIC_RELEASE);
+}
+
+void CJThreadRootEntryBarrier()
+{
+    // zBarrierSetNMethod.cpp:39-91: fast guard check, then lock and recheck
+    // in MRT_VisitorCaller, heal the group, and publish the new guard.
+    auto thread = CJThreadGetHandle();
+    if (!CJThreadRootsAreArmed(thread, ZPointerMarkGoodMask | ZPointerRememberedMask)) {
+        return;
+    }
+    CJThreadVisitRoots(thread, MRT_VisitorCaller, nullptr);
 }
 
 void StoreCJThreadObject(void* object)

@@ -14,7 +14,6 @@
 
 #include "Base/TimeUtils.h"
 #include "schedule.h"
-#include "RuntimeConfig.h"
 #include "Concurrency/ConcurrencyModel.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
@@ -719,7 +718,7 @@ void* MRT_GetCurrentCJThreadObject()
     // zBarrierSetNMethod.cpp:45-91: heal the root group from its saved
     // guard before a mutator consumes any member. The visitor shares the
     // guard predicate and group lock with StoreCJThreadObject.
-    CJThreadVisitRoots(CJThreadGetHandle(), MRT_VisitorCaller, nullptr);
+    CJThreadRootEntryBarrier();
     auto res = to_object(safe(root.LoadPlain()));
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
