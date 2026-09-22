@@ -65,7 +65,10 @@ adopted = set()
 while True:
     children = set()
     for task in Path(f'/proc/{os.getpid()}/task').iterdir():
-        children.update(int(pid) for pid in (task / 'children').read_text().split())
+        try:
+            children.update(int(pid) for pid in (task / 'children').read_text().split())
+        except FileNotFoundError:
+            pass  # A joined driver thread can disappear during enumeration.
     if not children:
         break
     adopted.update(children)
