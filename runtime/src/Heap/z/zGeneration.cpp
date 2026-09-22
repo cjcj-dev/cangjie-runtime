@@ -327,41 +327,33 @@ void ZGeneration::at_collection_start(void* timer)
     // zGeneration.cpp:380-385: the heap account opens at collection start.
     statHeap.AtCollectionStart(
         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+    Workers()->set_active();
 }
 
 void ZGeneration::at_collection_end()
 {
+    Workers()->set_inactive();
     set_gc_timer(nullptr);
     End();
 }
 
-ZGenerationCollectionScopeYoung::ZGenerationCollectionScopeYoung(ZGenerationYoung& generation)
-    : generation(generation)
-{
-    generation.at_collection_start();
-}
+// ZGC zGeneration.cpp:514-532: collection state belongs to the scope.
+class ZGenerationCollectionScopeYoung {
+public:
+    ZGenerationCollectionScopeYoung()
+    {
+        ZGeneration::young()->at_collection_start();
+    }
 
-ZGenerationCollectionScopeYoung::~ZGenerationCollectionScopeYoung()
-{
-    generation.at_collection_end();
-}
-
-ZGenerationCollectionScopeOld::ZGenerationCollectionScopeOld(ZGenerationOld& generation)
-    : generation(generation)
-{
-    generation.at_collection_start();
-}
-
-ZGenerationCollectionScopeOld::~ZGenerationCollectionScopeOld()
-{
-    generation.at_collection_end();
-}
-
-
+    ~ZGenerationCollectionScopeYoung()
+    {
+        ZGeneration::young()->at_collection_end();
+    }
+};
 
 void ZGenerationYoung::collect()
 {
-    ZGenerationCollectionScopeYoung scope(*this);
+    ZGenerationCollectionScopeYoung scope;
     pause_mark_start();
     // ZGC zGeneration.cpp:538-576: young keeps the driver lock throughout;
     // only the old collection scope releases it (zGeneration.cpp:995).
@@ -903,10 +895,27 @@ bool ZGenerationOld::mark_end()
     return true;
 }
 
+// ZGC zGeneration.cpp:993-1010: the destructor body deactivates workers
+// before the unlocker member reacquires the driver lock.
+class ZGenerationCollectionScopeOld {
+private:
+    DriverUnlocker _unlocker;
+
+public:
+    ZGenerationCollectionScopeOld() : _unlocker()
+    {
+        ZGeneration::old()->at_collection_start();
+    }
+
+    ~ZGenerationCollectionScopeOld()
+    {
+        ZGeneration::old()->at_collection_end();
+    }
+};
+
 void ZGenerationOld::collect()
 {
-    ZGenerationCollectionScopeOld scope(*this);
-    DriverUnlocker unlocker;
+    ZGenerationCollectionScopeOld scope;
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {
@@ -1042,7 +1051,6 @@ void ZGeneration::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     // zDriver.cpp:183,399-400: generation workers use their concurrent
     // budget for both pause and concurrent work. Parallel workers are separate.
     const int32_t threadCount = static_cast<int32_t>((*Workers()).active_workers());
-    (*Workers()).set_active();
     VLOG(REPORT, "GC generation active workers: %d", threadCount);
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -1220,7 +1228,6 @@ void ZGeneration::PostGarbageCollection(uint64_t gcIndex)
 {
     const ZGenerationId generation = id();
     reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).DumpRegionStats("region statistics when gc ends");
-    (*Workers()).set_inactive();
 
     PagePool::Instance().Trim();
     (void)gcIndex;
