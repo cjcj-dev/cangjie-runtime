@@ -12,7 +12,8 @@ The 22 cases initialize the actual runtime through both `InitCJRuntime` and
 `CJ_MRT_CjRuntimeInit`, then enumerate `/proc/self/task/*/comm` and compare against
 product REPORT output. The fixture contains no worker-selection implementation.
 Each process initializes once, without a GC workload; eight independent cases run
-concurrently. Optional fourth argument: comma-separated case names.
+concurrently. A fixed one-second startup window precedes the single thread-name
+snapshot because pthread creation precedes worker-side OS naming. Optional fourth argument: comma-separated case names.
 
 The public GCParam fields `concGCThreads`, `youngGCThreads`, `oldGCThreads` use
 zero for ergonomics, following the existing runtime parameter convention.

@@ -29,6 +29,11 @@ int main(int argc, char** argv)
         std::printf("INIT_RC=%d\n", rc);
         if (rc != 0) return 3;
     }
+    // pthread_create returns before WorkerThread::entry sets the OS thread name.
+    // Use a fixed observation window, independent of any expected worker count.
+    // This is one initialization per case, not a retry of failed assertions.
+    usleep(1000000);
+    std::puts("OBSERVATION_WINDOW_MS=1000");
     DIR* tasks = opendir("/proc/self/task");
     if (tasks == nullptr) return 4;
     unsigned young = 0, old = 0;
