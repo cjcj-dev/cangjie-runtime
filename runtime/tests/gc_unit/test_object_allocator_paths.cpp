@@ -292,7 +292,7 @@ extern "C" ArrayRef MCC_NewArray8(const TypeInfo*, MIndex);
 extern "C" ObjRef MCC_NewFinalizer(const TypeInfo*, MSize);
 }
 namespace {
-enum class ZeroCase { Page, TLAB, Medium, Large, Array, Finalizer };
+enum class ZeroCase { Page, TLAB, Medium, Large, Array, Finalizer, SegmentedArray };
 bool BytesAre(uintptr_t begin, uintptr_t end, unsigned char value)
 {
     for (; begin < end; ++begin) {
@@ -309,7 +309,7 @@ void* AllocateFromDirtyCache(void*)
     buffer->RetireTLAB(false);
     heap.object_allocator().retire_pages(kPageAgeRangeEden);
     const bool small = kind == ZeroCase::TLAB;
-    const bool medium = kind == ZeroCase::Medium || kind == ZeroCase::Array || kind == ZeroCase::Finalizer;
+    const bool medium = kind == ZeroCase::Medium || kind == ZeroCase::Array || kind == ZeroCase::Finalizer || kind == ZeroCase::SegmentedArray;
     const size_t bytes = small ? 256 : medium ? ZObjectSizeLimitSmall + 32 : ZObjectSizeLimitMedium + 32;
     const auto pageType = small ? ZPageType::small : medium ? ZPageType::medium : ZPageType::large;
     const size_t pageBytes = small ? ZPageSizeSmall : medium ? ZPageSizeMediumMin : AlignUp(bytes, ZGranuleSize);
@@ -332,7 +332,9 @@ void* AllocateFromDirtyCache(void*)
     auto* arrayType = reinterpret_cast<TypeInfo*>(storage + 2 * sizeof(TypeInfo));
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
-    component->SetType(TypeKind::TYPE_KIND_UINT8);
+    // A one-byte value struct uses ordinary array initialization; the primitive
+    // case deliberately exercises the existing segmented initializer instead.
+    component->SetType(kind == ZeroCase::Array ? TypeKind::TYPE_KIND_STRUCT : TypeKind::TYPE_KIND_UINT8);
     component->SetInstanceSize(1);
     arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
     arrayType->SetComponentTypeInfo(component);
@@ -350,7 +352,7 @@ void* AllocateFromDirtyCache(void*)
         if (reused != nullptr) { Heap::free_page(reused); }
         return reinterpret_cast<void*>(valid ? 0 : 2);
     }
-    if (kind == ZeroCase::Array) {
+    if (kind == ZeroCase::Array || kind == ZeroCase::SegmentedArray) {
         object = reinterpret_cast<uintptr_t>(MCC_NewArray8(arrayType, bytes - MArray::GetContentOffset()));
     } else if (kind == ZeroCase::Finalizer) {
         object = reinterpret_cast<uintptr_t>(MCC_NewFinalizer(type, bytes));
@@ -358,7 +360,7 @@ void* AllocateFromDirtyCache(void*)
         object = reinterpret_cast<uintptr_t>(MCC_NewObject(type, bytes));
     }
     const size_t initialized = small ? buffer->TLABSize() : bytes;
-    const size_t header = kind == ZeroCase::Array ? MArray::GetContentOffset() : sizeof(BaseObject);
+    const size_t header = (kind == ZeroCase::Array || kind == ZeroCase::SegmentedArray) ? MArray::GetContentOffset() : sizeof(BaseObject);
     const bool zero = object != 0 && BytesAre(object + header, object + initialized, 0);
     const bool suffix = object != 0 && dirtyWitness && initialized <= witness &&
                         BytesAre(object + witness, object + witness + 64, 0xa5);
@@ -391,4 +393,9 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, ArrayClearsOnlyObject)
 GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, FinalizerClearsOnlyObject)
 {
     RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::Finalizer>);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, SegmentedArrayKeepsItsOwnInitializer)
+{
+    RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::SegmentedArray>);
 }
