@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 #include "gc_heap_fixture.hpp"
+#include "gc_verify_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zCPU.inline.hpp"
@@ -122,6 +123,7 @@ private:
 
 GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
 {
+    VerifyRuntime runtime;
     CPUAffinity affinity;
     SharedPageFixture fixture;
     auto& manager = fixture.manager;
@@ -291,6 +293,7 @@ GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
 // ZGC zObjectAllocator.cpp:196-202: retirement is legal only in a pause.
 GC_OTHER_VM_TEST(ObjectAllocator917, RetirementRequiresSafepoint)
 {
+    VerifyRuntime runtime;
     const char* scene = std::getenv("GC_UNIT_RETIRE917_SCENE");
     if (scene == nullptr) {
         for (const char* age : {"young", "old"}) {
@@ -309,5 +312,36 @@ GC_OTHER_VM_TEST(ObjectAllocator917, RetirementRequiresSafepoint)
     (void)signal(SIGABRT, SIG_DFL);
     Heap::GetHeap().object_allocator().retire_pages(
         std::strcmp(scene, "young") == 0 ? kPageAgeRangeYoung : kPageAgeRangeOld);
+}
+#endif
+
+#if defined(__linux__)
+// ZGC zObjectAllocator.cpp:196-202: retirement is legal only in a pause.
+GC_OTHER_VM_TEST(ObjectAllocator917, PhaseRetirementRequiresSafepoint)
+{
+    VerifyRuntime runtime;
+    const char* scene = std::getenv("GC_UNIT_PHASE_RETIRE917_SCENE");
+    if (scene == nullptr) {
+        for (const char* age : {"young", "old"}) {
+            GC_EXPECT_EQ(setenv("GC_UNIT_PHASE_RETIRE917_SCENE", age, 1), 0);
+            try {
+                RunInOtherVm("ObjectAllocator917.PhaseRetirementRequiresSafepoint", "Should be at safepoint");
+            } catch (...) {
+                unsetenv("GC_UNIT_PHASE_RETIRE917_SCENE");
+                throw;
+            }
+            GC_EXPECT_EQ(unsetenv("GC_UNIT_PHASE_RETIRE917_SCENE"), 0);
+        }
+        return;
+    }
+    GC_EXPECT_TRUE(!MutatorManager::Instance().WorldStopped());
+    (void)signal(SIGABRT, SIG_DFL);
+    GcHeapFixture fixture;
+    if (std::strcmp(scene, "young") == 0) {
+        Heap::GetHeap().young().mark_start();
+    } else {
+        Heap::GetHeap().old().End();
+        Heap::GetHeap().old().mark_start();
+    }
 }
 #endif

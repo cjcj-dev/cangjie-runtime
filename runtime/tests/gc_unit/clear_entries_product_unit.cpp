@@ -1285,7 +1285,10 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     if (oldCycle.Snapshot().active) oldCycle.End();
     // Enter the actual old mark-start producer; a bare ZMark::Start only
     // initializes stacks and does not publish the generation's Mark phase.
-    Heap::GetHeap().old().mark_start();
+    {
+        ScopedStopTheWorld stopped("old mark-start fixture");
+        Heap::GetHeap().old().mark_start();
+    }
     {
         DriverLocker driver;
         ZDriver::RunGarbageCollection(1, GC_REASON_USER);

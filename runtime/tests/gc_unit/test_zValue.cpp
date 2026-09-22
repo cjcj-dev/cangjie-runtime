@@ -13,6 +13,7 @@
 // gc_heap_fixture.hpp opens the product privates for the harness; it has to
 // come before every product header this file names.
 #include "gc_heap_fixture.hpp"
+#include "gc_verify_fixture.hpp"
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
@@ -92,6 +93,7 @@ GC_TEST(ZValue, per_worker_slot_count_follows_conc_gc_threads)
 // zObjectAllocator.cpp:198-203).
 GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
 {
+    VerifyRuntime runtime;
     ZStat::Initialize();
 
     auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::eden);

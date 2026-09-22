@@ -125,7 +125,10 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
         GC_EXPECT_EQ(stored, storedExpected);
     }
     heap.old().End();
-    heap.old().mark_start();
+    {
+        ScopedStopTheWorld stopped("old mark-start fixture");
+        heap.old().mark_start();
+    }
     observed = 0;
     heap.old().concurrent_mark();
     observed = raw(RootSlotAt(&data->obj).LoadPlain());
