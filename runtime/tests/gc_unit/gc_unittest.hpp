@@ -155,6 +155,11 @@ inline void Fail(const char* file, int line, const char* expr)
 inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortDiagnostic = nullptr)
 {
 #if defined(__linux__)
+    ChildVmSupervisor supervisor;
+    if (!supervisor.IsValid()) {
+        throw AssertFailure("other-vm subreaper setup failed for " + fullName);
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     int childStderr[2];
     if (pipe(childStderr) != 0) {
         throw AssertFailure("other-vm pipe failed for " + fullName + ": " + std::strerror(errno));
@@ -164,6 +169,11 @@ inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortD
     std::fflush(nullptr);
     const pid_t child = fork();
     if (child == 0) {
+        if (supervisor.OwnsGroup()) {
+            if (setpgid(0, 0) != 0) { _exit(126); }
+            const std::string group = std::to_string(getpid());
+            if (setenv("GC_UNIT_OTHER_VM_GROUP", group.c_str(), 1) != 0) { _exit(126); }
+        }
         close(childStderr[0]);
         if (dup2(childStderr[1], STDERR_FILENO) < 0) {
             _exit(126);
@@ -184,7 +194,11 @@ inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortD
         throw AssertFailure("other-vm fork failed for " + fullName + ": " + std::strerror(savedErrno));
     }
 
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    if (supervisor.OwnsGroup()) {
+        // Either side may run first. The child must establish its group before
+        // exec; the parent also establishes it before starting supervision.
+        (void)setpgid(child, child);
+    }
     std::string transcript;
     char buffer[1024];
     bool readOk = true;
@@ -214,7 +228,7 @@ inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortD
     close(childStderr[0]);
 
     int status = 0;
-    const bool waited = WaitChildExit(child, status, deadline);
+    const bool waited = WaitChildExit(child, status, deadline, supervisor.OwnsGroup());
     const std::string sentinel = "GC_UNIT_OTHER_VM_OKIDOKI " + fullName + "\n";
     const bool exitedCleanly = waited && WIFEXITED(status) && WEXITSTATUS(status) == 0;
     if (expectedAbortDiagnostic != nullptr) {
