@@ -10,6 +10,9 @@
 // per A12b advisor 20260913T211044Z.
 #include "gc_unittest.hpp"
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zPageAllocator.hpp"
+#include "Mutator/ThreadLocal.h"
 #include <cstring>
 #if defined(__linux__)
 #include <sys/wait.h>
@@ -21,6 +24,46 @@ using namespace MapleRuntime::GcUnit;
 
 namespace {
 const ZStatSampler unobserved("Test", "Unobserved", ZStatUnitTimeNs);
+
+// Exercise the product page-allocation entry and read both product rate
+// consumers. Each case has a fresh process so sampler history is independent.
+void CheckPageAllocationRate(bool relocation)
+{
+    CreateStandaloneHeap(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    ZStatMutatorAllocRate::initialize();
+    (void)ZStatMutatorAllocRate::counter().GetAndReset();
+    const auto before = ZStatMutatorAllocRate::stats();
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    if (relocation) flags.set_gc_relocation();
+    ZPage* page = Heap::alloc_page(2 * ZGranuleSize, ZPageType::large,
+                                 false, false, false, PageAge::eden, flags);
+    GC_EXPECT_TRUE(page != nullptr);
+    const auto bytes = ZStatMutatorAllocRate::counter().GetAndReset().counter;
+    const auto after = ZStatMutatorAllocRate::stats();
+    std::fprintf(stderr, "ALLOC_RATE_TARGET relocation=%d bytes=%llu avg_before=%g avg_after=%g\n",
+                 relocation, static_cast<unsigned long long>(bytes), before.avg, after.avg);
+    GC_EXPECT_EQ(bytes, relocation ? 0U : 2 * ZGranuleSize);
+    if (relocation) {
+        GC_EXPECT_EQ(after.avg, before.avg);
+        GC_EXPECT_EQ(after.predict, before.predict);
+        GC_EXPECT_EQ(after.sd, before.sd);
+    } else {
+        GC_EXPECT_TRUE(after.avg > before.avg);
+    }
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationRate855, MutatorPageContributes)
+{
+    CheckPageAllocationRate(false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationRate855, RelocationPageExcluded)
+{
+    CheckPageAllocationRate(true);
+}
 
 #if defined(__linux__)
 // ZStatIterableValue::sort rewrites registration links during initialization.
