@@ -290,58 +290,57 @@ GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
 #endif
 
 #if defined(__linux__)
-// ZGC zObjectAllocator.cpp:196-202: retirement is legal only in a pause.
-GC_OTHER_VM_TEST(ObjectAllocator917, RetirementRequiresSafepoint)
+namespace {
+template<class Action>
+void ExpectAllocatorAbort(const char* test, const char* diagnostic, Action action)
 {
     VerifyRuntime runtime;
-    const char* scene = std::getenv("GC_UNIT_RETIRE917_SCENE");
-    if (scene == nullptr) {
-        for (const char* age : {"young", "old"}) {
-            GC_EXPECT_EQ(setenv("GC_UNIT_RETIRE917_SCENE", age, 1), 0);
-            try {
-                RunInOtherVm("ObjectAllocator917.RetirementRequiresSafepoint", "Should be at safepoint");
-            } catch (...) {
-                unsetenv("GC_UNIT_RETIRE917_SCENE");
-                throw;
-            }
-            GC_EXPECT_EQ(unsetenv("GC_UNIT_RETIRE917_SCENE"), 0);
+    if (std::getenv("GC_UNIT_ALLOCATOR917_SCENE") == nullptr) {
+        GC_EXPECT_EQ(setenv("GC_UNIT_ALLOCATOR917_SCENE", "1", 1), 0);
+        try {
+            RunInOtherVm(test, diagnostic);
+        } catch (...) {
+            unsetenv("GC_UNIT_ALLOCATOR917_SCENE");
+            throw;
         }
+        GC_EXPECT_EQ(unsetenv("GC_UNIT_ALLOCATOR917_SCENE"), 0);
         return;
     }
     GC_EXPECT_TRUE(!MutatorManager::Instance().WorldStopped());
     (void)signal(SIGABRT, SIG_DFL);
-    Heap::GetHeap().object_allocator().retire_pages(
-        std::strcmp(scene, "young") == 0 ? kPageAgeRangeYoung : kPageAgeRangeOld);
+    action();
 }
-#endif
+}
 
-#if defined(__linux__)
 // ZGC zObjectAllocator.cpp:196-202: retirement is legal only in a pause.
-GC_OTHER_VM_TEST(ObjectAllocator917, PhaseRetirementRequiresSafepoint)
+GC_OTHER_VM_TEST(ObjectAllocator917, RetireYoungRequiresSafepoint)
 {
-    VerifyRuntime runtime;
-    const char* scene = std::getenv("GC_UNIT_PHASE_RETIRE917_SCENE");
-    if (scene == nullptr) {
-        for (const char* age : {"young", "old"}) {
-            GC_EXPECT_EQ(setenv("GC_UNIT_PHASE_RETIRE917_SCENE", age, 1), 0);
-            try {
-                RunInOtherVm("ObjectAllocator917.PhaseRetirementRequiresSafepoint", "Should be at safepoint");
-            } catch (...) {
-                unsetenv("GC_UNIT_PHASE_RETIRE917_SCENE");
-                throw;
-            }
-            GC_EXPECT_EQ(unsetenv("GC_UNIT_PHASE_RETIRE917_SCENE"), 0);
-        }
-        return;
-    }
-    GC_EXPECT_TRUE(!MutatorManager::Instance().WorldStopped());
-    (void)signal(SIGABRT, SIG_DFL);
-    GcHeapFixture fixture;
-    if (std::strcmp(scene, "young") == 0) {
+    ExpectAllocatorAbort("ObjectAllocator917.RetireYoungRequiresSafepoint", "Should be at safepoint", [] {
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, RetireOldRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.RetireOldRequiresSafepoint", "Should be at safepoint", [] {
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, YoungPhaseRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.YoungPhaseRequiresSafepoint", "Should be at safepoint", [] {
+        GcHeapFixture fixture;
         Heap::GetHeap().young().mark_start();
-    } else {
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, OldPhaseRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.OldPhaseRequiresSafepoint", "Should be at safepoint", [] {
+        GcHeapFixture fixture;
         Heap::GetHeap().old().End();
         Heap::GetHeap().old().mark_start();
-    }
+    });
 }
 #endif
