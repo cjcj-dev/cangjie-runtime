@@ -110,10 +110,11 @@ void PrintNativeRootMaps()
 }
 
 // ZMarkOldRootsTask -> ZMarkOopClosure (zMark.cpp:798-829): colored roots
-// resolve before marker publication. CompactRegion supplies the actual to;
+// resolve before marker publication. The relocation worker supplies the actual to;
 // no forwarding mapping or consumer argument is manufactured by this test.
 void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 {
+    CreateStandaloneHeap(GcHeapFixture::kUnits);
     PrintNativeRootMaps();
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
@@ -177,17 +178,14 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, { region }));
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(collector);
-    auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
-    manager.CompactRegion(region);
-    region->MarkForwardingDone();
+    if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
+    heap.young().Workers()->set_active_workers(1);
+    heap.young().relocate().relocate(&heap.young().relocation_set());
     auto forwarding = forwarding_for_page(region);
     BaseObject* to = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(from)));
-    // CompactRegion does not promote the page. Use the product promotion
-    // operation so the old root task is measured against an actual old page.
-    ZPage* promoted = region->clone_for_promotion();
-    heap.young().flip_promote(region, promoted);
-    fx.region0 = promoted;
-    region = promoted;
+    // The allocation-failure worker produces the promoted in-place target.
+    region = Heap::page(reinterpret_cast<MAddress>(to));
+    fx.region0 = region;
     std::fprintf(stderr, "NATIVE_ROOT_ORACLE before=%#zx from=%p to=%p slot=%#zx young=%u\n",
                  before, from, to, raw(slot.GetFieldValue()), unsigned(region->IsYoungRegion()));
     GC_EXPECT_TRUE(to != nullptr && to != from);
@@ -240,6 +238,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 namespace {
 void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds = false)
 {
+    CreateStandaloneHeap(GcHeapFixture::kUnits);
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
@@ -283,9 +282,9 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     // header. The earlier live object also makes a duplicate remap return a
     // valid but wrong object, exposing double consumption at that assertion.
     // Neither the forwarding value nor the root result is fabricated.
-    auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
-    manager.CompactRegion(page);
-    page->MarkForwardingDone();
+    if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
+    heap.young().Workers()->set_active_workers(1);
+    heap.young().relocate().relocate(&heap.young().relocation_set());
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     const bool scanned = thread->GcPhaseEnum(false, watermark ? StackWatermark::epoch_id() : 0);
@@ -301,15 +300,16 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 }
-GC_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochNativeFrameRoot) { CheckSavedRootColor(false, true, true); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochInvisibleRoot) { CheckSavedRootColor(true, true, true); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorNativeFrameRoot) { CheckSavedRootColor(false); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorInvisibleRoot) { CheckSavedRootColor(true); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectNativeFrameRoot) { CheckSavedRootColor(false, false); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectInvisibleRoot) { CheckSavedRootColor(true, false); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochNativeFrameRoot) { CheckSavedRootColor(false, true, true); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochInvisibleRoot) { CheckSavedRootColor(true, true, true); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorNativeFrameRoot) { CheckSavedRootColor(false); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorInvisibleRoot) { CheckSavedRootColor(true); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectNativeFrameRoot) { CheckSavedRootColor(false, false); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectInvisibleRoot) { CheckSavedRootColor(true, false); }
 
-GC_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
 {
+    CreateStandaloneHeap(GcHeapFixture::kUnits);
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
@@ -335,9 +335,9 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page}));
     heap.young().set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(heap);
-    auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
-    manager.CompactRegion(page);
-    page->MarkForwardingDone();
+    if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
+    heap.young().Workers()->set_active_workers(1);
+    heap.young().relocate().relocate(&heap.young().relocation_set());
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     ZRelocate::RemapYoungRoots();
@@ -411,8 +411,8 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
     GC_EXPECT_EQ(old, 1u);
 }
 
-GC_OTHER_VM_TEST(NativeRootCurrent, MinorPublication) { CheckNativeRoot(true); }
-GC_OTHER_VM_TEST(NativeRootCurrent, MajorSeed) { CheckNativeRoot(false); }
+GC_COMPONENT_OTHER_VM_TEST(NativeRootCurrent, MinorPublication) { CheckNativeRoot(true); }
+GC_COMPONENT_OTHER_VM_TEST(NativeRootCurrent, MajorSeed) { CheckNativeRoot(false); }
 GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
 {
     B09RuntimeFixture runtime;
@@ -546,10 +546,10 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
 #endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(ThreadRootCurrent, C1StackFieldHistoricalColor) { CheckNativeRoot(false, 1); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, C2ObjectRefHistoricalColor) { CheckNativeRoot(false, 2); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, C3InvisibleHistoricalColor) { CheckNativeRoot(false, 3); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, C4HeaderlessHistoricalColor) { CheckNativeRoot(false, 4); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, C1StackFieldHistoricalColor) { CheckNativeRoot(false, 1); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, C2ObjectRefHistoricalColor) { CheckNativeRoot(false, 2); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, C3InvisibleHistoricalColor) { CheckNativeRoot(false, 3); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, C4HeaderlessHistoricalColor) { CheckNativeRoot(false, 4); }
 #endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
