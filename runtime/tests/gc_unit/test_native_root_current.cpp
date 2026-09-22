@@ -183,9 +183,12 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     heap.young().relocate().relocate(&heap.young().relocation_set());
     auto forwarding = forwarding_for_page(region);
     BaseObject* to = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(from)));
-    // The allocation-failure worker produces the promoted in-place target.
-    region = Heap::page(reinterpret_cast<MAddress>(to));
-    fx.region0 = region;
+    // Eden advances to survivor1 at this threshold. Preserve the fixture's
+    // explicit promotion so the old root task observes an actual old page.
+    ZPage* promoted = region->clone_for_promotion();
+    heap.young().flip_promote(region, promoted);
+    fx.region0 = promoted;
+    region = promoted;
     std::fprintf(stderr, "NATIVE_ROOT_ORACLE before=%#zx from=%p to=%p slot=%#zx young=%u\n",
                  before, from, to, raw(slot.GetFieldValue()), unsigned(region->IsYoungRegion()));
     GC_EXPECT_TRUE(to != nullptr && to != from);

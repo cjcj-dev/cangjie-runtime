@@ -360,7 +360,7 @@ GcHeapFixture& ProductFixture()
     static GcHeapFixture fixture;
     RelocationReceiptTest::BindCollector(nullptr);
     static const bool initialized = InitFwdTables();
-    // CompactRegion now carries remembered bits with an in-place copy.  This
+    // Relocation carries remembered bits with an in-place copy. This
     // independent product-test process does not run Heap::Init, so initialize
     // the Heap-owned remembered set alongside its forwarding table.
     static const bool rememberedInitialized = [&]() {
@@ -1134,12 +1134,6 @@ static void CheckForwardingWinner(bool identity)
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 
 #endif // MRT_PRODUCT_TESTABLE_INTERNALS
-
-// Product compact-request entry: the request is registered before compaction;
-// CompactRegion itself copies the live second object, inserts its receipt, then
-// zeroes that from slot.  The resolver must therefore answer the installed to,
-// never the cleared from address.
-
 
 // ClearEntries must seal an installed table and wait for the publication owner
 // that crossed the copy boundary.  The owner inserts while clear is waiting;
