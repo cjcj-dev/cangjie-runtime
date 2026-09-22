@@ -58,6 +58,15 @@ def value(expression):
     return gdb.parse_and_eval(expression)
 
 
+def diagnostic(expression):
+    # Diagnostic fields can disappear when the dispatch consumer is cut. Their
+    # availability is not an invariant and must not mask the output assertion.
+    try:
+        return str(value(expression))
+    except gdb.error as error:
+        return '<unavailable: ' + str(error) + '>'
+
+
 def emit(tag, **fields):
     print(tag + ' ' + json.dumps(fields, sort_keys=True))
 
@@ -184,15 +193,18 @@ try:
     port_return = next(i + 1 for i, text in enumerate(port_lines) if 'return _has_message;' in text)
     BusyRead('zDriverPort.cpp:' + str(port_return), internal=True)
     advance('entry')
-    emit('SAMPLED', resize=bool(value('stats.old_stats.resize.is_active')),
-         workers=int(value('stats.old_stats.resize.nworkers_current')),
-         interval=float(value('stats.collection_interval_sec')))
+    emit('SAMPLED', resize=diagnostic('stats.old_stats.resize.is_active'),
+         workers=diagnostic('stats.old_stats.resize.nworkers_current'),
+         interval=diagnostic('stats.collection_interval_sec'),
+         old_minor_snapshot=diagnostic('stats.minor_busy'),
+         old_major_snapshot=diagnostic('stats.major_busy'))
     if SITE == 'entry':
         set_busy('$major', CURRENT)
         for _ in range(64):
             command('next')
             here=location()
-            if here['line']==LINES['loop'] and here['function']=='MapleRuntime::ZDirector::run_thread':
+            if (LINES['loop'] <= here['line'] < LINES['tick'] and
+                    here['function']=='MapleRuntime::ZDirector::run_thread'):
                 break
         else:
             raise RuntimeError('Director loop boundary not observed')
