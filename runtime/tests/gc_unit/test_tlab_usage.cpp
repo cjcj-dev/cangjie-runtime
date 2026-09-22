@@ -19,6 +19,7 @@
 #include "Heap/z/zMark.hpp"
 #include "UnwindStack/StackFrameCursor.h"
 #include "TypeInfoManager.h"
+#include "ObjectModel/MObject.h"
 #include "gc_unittest.hpp"
 #if defined(__linux__)
 #include <sys/syscall.h>
