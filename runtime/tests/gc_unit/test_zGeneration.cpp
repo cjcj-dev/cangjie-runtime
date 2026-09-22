@@ -67,9 +67,12 @@ GC_TEST(ZCollectedHeap, StopAborts)
     ZAbort::reset();
 }
 
-GC_TEST(ZGeneration, CollectionScopeClearsTimer)
+GC_RUNTIME_OTHER_VM_TEST(ZGeneration, CollectionScopeClearsTimer)
 {
-    Heap::GetHeap();
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     ZGenerationYoung* young = ZGeneration::young();
     young->at_collection_start(young);
     GC_EXPECT_TRUE(young->gc_timer() == young);
