@@ -935,9 +935,12 @@ void CheckStoreAccessor(StoreEntry entry, bool weak, bool weakHolder)
     }
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreBadPointer(fx.obj0));
-    // No mutator buffer: a strong previous value reaches the product mark
-    // queues immediately; the weak entry must only remember the field.
+    Mutator mutator;
+    InstalledMutatorScope mutatorScope(mutator);
+    // Flush the product buffer through its normal phase-change consumer.
+    // A weak entry must remember without publishing previous-value mark work.
     entry(fx.obj1, fx.obj0, &field);
+    mutator.FlushStoreBarrierBuffer(true);
     const bool remembered = Heap::page(reinterpret_cast<MAddress>(&field))->is_remembered(
         reinterpret_cast<volatile zpointer*>(&field));
     std::vector<BaseObject*> marked;
