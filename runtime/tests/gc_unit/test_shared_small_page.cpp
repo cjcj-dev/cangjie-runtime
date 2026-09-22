@@ -211,7 +211,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, TLABAccountingOnlySmallEden)
 GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
 {
     CPUAffinity affinity;
-    // zHeuristics.cpp:81-86: choose a real heap capacity whose flag budget
+    // ZGC zHeuristics.cpp:69-74: choose a real heap capacity whose flag budget
     // admits one small page per configured CPU. Do not override the decision.
     const size_t units = static_cast<size_t>(100 / ZFragmentationLimit) * ZCPU::count();
     CreateStandaloneHeap(units);

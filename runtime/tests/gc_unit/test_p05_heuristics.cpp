@@ -10,7 +10,7 @@ using namespace MapleRuntime::GcUnit;
 
 GC_COMPONENT_OTHER_VM_TEST(P13Heuristics, FragmentationBudget)
 {
-    // ZGC z_globals.hpp:58 and zHeuristics.cpp:110-112.
+    // ZGC z_globals.hpp:40 and zHeuristics.cpp:110-112.
     GC_EXPECT_EQ(ZFragmentationLimit, 5.0);
     ZHeuristics::set_max_heap_size(1000000);
     const size_t budget = ZHeuristics::significant_heap_overhead();
