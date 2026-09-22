@@ -198,26 +198,6 @@ private:
     ZGeneration& cycle;
 };
 
-class ZGenerationCollectionScopeYoung {
-public:
-    explicit ZGenerationCollectionScopeYoung(ZGenerationYoung& generation);
-    ~ZGenerationCollectionScopeYoung();
-    ZGenerationCollectionScopeYoung(const ZGenerationCollectionScopeYoung&) = delete;
-    ZGenerationCollectionScopeYoung& operator=(const ZGenerationCollectionScopeYoung&) = delete;
-private:
-    ZGenerationYoung& generation;
-};
-
-class ZGenerationCollectionScopeOld {
-public:
-    explicit ZGenerationCollectionScopeOld(ZGenerationOld& generation);
-    ~ZGenerationCollectionScopeOld();
-    ZGenerationCollectionScopeOld(const ZGenerationCollectionScopeOld&) = delete;
-    ZGenerationCollectionScopeOld& operator=(const ZGenerationCollectionScopeOld&) = delete;
-private:
-    ZGenerationOld& generation;
-};
-
 class ZGenerationYoung : public ZGeneration {
 public:
     ZGenerationYoung(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table,
