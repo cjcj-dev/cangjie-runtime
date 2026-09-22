@@ -711,10 +711,6 @@ static RuntimeParam InitRuntimeParam()
                 .heapUtilization = InitPercentParameter("cjHeapUtilization", 0.0, 1.0, 0.8),
                 // Default heap growth is (1 + 0.15) = 1.15.
                 .heapGrowth = InitDecParameter("cjHeapGrowth", 0.0, 0.15),
-                // Default allocation rate is 10240MB/s.
-                .allocationRate = InitDecParameter("cjAllocationRate", 0.0, 10240),
-                // Default allocation wait time is 1000ns.
-                .allocationWaitTime = static_cast<size_t>(InitTimeParameter("cjAllocationWaitTime", 0, 1000)),
             },
         .gcParam = {
                 // Default gc threshold is heapSize.
