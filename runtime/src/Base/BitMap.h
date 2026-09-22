@@ -119,9 +119,8 @@ protected:
     }
     void clear_large_range_of_words(idx_t beg, idx_t end)
     {
-        if (beg < end) {
-            std::memset(_map + beg, 0, (end - beg) * sizeof(bm_word_t));
-        }
+        CHECK(beg <= end);
+        std::memset(_map + beg, 0, (end - beg) * sizeof(bm_word_t));
     }
 
     // Set the map and size.
@@ -269,6 +268,7 @@ public:
 
     // Clearing
     void clear() { clear_range_of_words(0, size_in_words()); }
+    void clear_large() { clear_large_range_of_words(0, size_in_words()); }
 
     // Return the index of the first set bit in the range [beg, end), or end if none found.
     idx_t find_first_set_bit(idx_t beg, idx_t end) const

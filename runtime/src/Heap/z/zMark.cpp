@@ -344,40 +344,6 @@ size_t MarkStripeCount(size_t workers)
 
 } // namespace
 
-// h3seed3 乙: live-holder slot → free|garbage target → CAS null.
-// Criterion fields (RegionInfo state word): IsFreeRegion() / IsGarbageRegion()
-// via TryGetRegionInfoAt(target) at the call site (closure edge or Fix).
-// Returns true if the slot was scrubbed (caller must not push / treat as live edge).
-bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*/)
-{
-    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-        return false;
-    }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
-    if (region == nullptr) {
-        return false;
-    }
-    const bool isFree = region->IsFreeRegion();
-    const bool isGarbage = region->IsGarbageRegion();
-    if (!isFree && !isGarbage) {
-        return false;
-    }
-    if (SlotHeldByLiveObject(&field)) {
-        return false;
-    }
-    RefField<> oldField(field);
-    const MAddress oldVal = raw(oldField.GetFieldValue());
-    // zBarrier.inline.hpp:294-343 has no unresolved-to-null installation arm.
-    // A free/garbage target means forwarding authority was retired before
-    // coverage completed; fail closed instead of manufacturing a null heal.
-    (void)field.CompareExchange(oldField.GetFieldValue(), zpointer::null);
-    ZBarrier::FailClosedLoad(
-        "ZMark::ScrubMinorFreeTarget.unresolved", target, oldVal,
-        ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
-}
-
-
-
 class ZMarkTask : public ZRestartableTask {
 public:
     explicit ZMarkTask(ZMark* mark, bool partial = false)
