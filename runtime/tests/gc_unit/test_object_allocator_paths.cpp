@@ -222,6 +222,30 @@ void* AllocateMediumBlockingFailure(void*)
     mutator->SetManagedContext(true);
     return reinterpret_cast<void*>(valid ? 0 : 1);
 }
+// ZGC zObjectAllocator.cpp:243-250: failed relocation allocation must not stall.
+void* AllocateRelocationCapacity(void*)
+{
+    auto& heap = Heap::GetHeap();
+    const size_t occupiedBytes = heap.GetMaxCapacity() - ZGranuleSize;
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(occupiedBytes - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    auto* occupied = MCC_NewObject(type, occupiedBytes);
+    const U64 root = heap.RegisterExportRoot(occupied);
+    Mutator* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    const uint64_t before = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    const uintptr_t result = heap.object_allocator().alloc_for_relocation(heap.GetMaxCapacity(), PageAge::old);
+    const uint64_t after = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    const bool valid = result == 0 && after == before;
+    std::fprintf(stderr, "RELOCATION_CAPACITY_TARGET result=%#zx before=%llu after=%llu valid=%d\n",
+                 result, (unsigned long long)before, (unsigned long long)after, valid);
+    heap.RemoveExportObject(root);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>(valid ? 0 : 1);
+}
 void* AllocateNonBlockingCapacity(void*)
 {
     auto& heap = Heap::GetHeap();
@@ -270,6 +294,7 @@ GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, FastMediumConsumesCachedActualSiz
 
 GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, ManagedFastMediumConsumesCachedPage) { RunAllocatorCase(AllocateManagedFastMedium); }
 
+GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, RelocationCapacityDoesNotStartCollection) { RunAllocatorCase(AllocateRelocationCapacity); }
 GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, NonBlockingCapacityDoesNotStartCollection) { RunAllocatorCase(AllocateNonBlockingCapacity); }
 
 GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, MediumNonBlockingAllocatesAfterCacheMiss) { RunAllocatorCase(AllocateMediumNonBlocking); }
