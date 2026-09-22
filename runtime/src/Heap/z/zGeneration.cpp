@@ -292,9 +292,6 @@ public:
     bool do_operation() override
     {
         ZStatTimerOld timer(ZPhasePauseRelocateStartOld);
-        ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
-            data.storeBarrierBuffer->install_base_pointers();
-        });
         ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         ZGeneration::old()->set_phase(ZGeneration::Phase::Relocate);
@@ -1318,9 +1315,6 @@ void ZGenerationYoung::EvacuateYoungRegions(std::unique_ptr<ScopedStopTheWorld>*
             // (zGeneration.cpp:475-483, block_jni_critical at :832).
             ZJNICritical::block();
             if (doYoungFlip) {
-                ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
-                    data.storeBarrierBuffer->install_base_pointers();
-                });
                 ZGlobalsPointers::flip_young_relocate_start();
                 ZVerify::OnColorFlip();
             }
