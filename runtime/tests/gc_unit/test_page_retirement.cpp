@@ -29,6 +29,8 @@ namespace {
 void CheckAllocationPreservesOwnedPage(bool allowSaferegion, bool nonBlocking)
 {
     ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+    MapleRuntime::GcUnit::CreateStandaloneHeap(16);
+    ZStat::Initialize();
     RegionManager& manager = Heap::GetHeap().page_allocator();
     ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, false, false);
     GC_EXPECT_TRUE(owned != nullptr);
@@ -212,6 +214,8 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, NonBlockingAllocationPreservesO
 GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, ExplicitFreeWithdrawsOwnedPage)
 {
     ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+    MapleRuntime::GcUnit::CreateStandaloneHeap(16);
+    ZStat::Initialize();
     RegionManager& manager = Heap::GetHeap().page_allocator();
     const size_t used = manager.GetAllocatedSize();
     ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, false, false);
