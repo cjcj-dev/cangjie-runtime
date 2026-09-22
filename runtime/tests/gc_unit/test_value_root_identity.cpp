@@ -38,6 +38,14 @@ public:
         std::fprintf(stderr, "VALUE_ROOT_IDENTITY_TARGET expected=%p missing=1\n", expected);
         return false;
     }
+    static bool DiscoveredOwnership(BaseObject* expected)
+    {
+        const auto& discovered = Heap::GetHeap().old().discoveredExternObjects;
+        auto entry = discovered.find(expected);
+        return entry != discovered.end() && entry->second.size() == 1 &&
+            entry->second.front().object == expected;
+    }
+
     static bool CycleHandoffIdentity(BaseObject* expected)
     {
         auto& cross = Heap::GetHeap().cross_vm();
@@ -271,12 +279,12 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, MinorPreservesOldDiscoveredOwnership)
     BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
     BaseObject* before = Heap::GetHeap().GetExportObject(root);
-    const bool produced = RelocationReceiptTest::DiscoveredIdentity(before);
+    const bool produced = RelocationReceiptTest::DiscoveredOwnership(before);
     const auto oldSequence = Heap::GetHeap().old().seqnum();
     const auto youngSequence = Heap::GetHeap().young().seqnum();
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     BaseObject* after = Heap::GetHeap().GetExportObject(root);
-    const bool preserved = RelocationReceiptTest::DiscoveredIdentity(after);
+    const bool preserved = RelocationReceiptTest::DiscoveredOwnership(after);
     const bool minorCompleted = Heap::GetHeap().young().seqnum() > youngSequence &&
         Heap::GetHeap().old().seqnum() == oldSequence;
     std::fprintf(stderr, "DISCOVERED_OWNER_ISOLATION produced=%d preserved=%d minor_completed=%d\n",
@@ -287,7 +295,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, MinorPreservesOldDiscoveredOwnership)
     GC_EXPECT_TRUE(consumed);
     // A subsequent owner cycle must pass the real mark-start empty check.
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    const bool rediscovered = RelocationReceiptTest::DiscoveredIdentity(Heap::GetHeap().GetExportObject(root));
+    const bool rediscovered = RelocationReceiptTest::DiscoveredOwnership(Heap::GetHeap().GetExportObject(root));
     std::fprintf(stderr, "DISCOVERED_OWNER_NEXT_CYCLE rediscovered=%d\n", rediscovered);
     GC_EXPECT_TRUE(rediscovered);
     ConcurrentGCBreakpoints::RunToIdle();
