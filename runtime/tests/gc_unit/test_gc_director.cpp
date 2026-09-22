@@ -257,12 +257,15 @@ GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
 // Explicitness is independent from the value: zero and -1 are real inputs.
 #include "Heap/z/zHeuristics.hpp"
 #include "CjScheduler.h"
+#include <sys/wait.h>
+#include <unistd.h>
 #include "Heap/z/zPage.hpp"
 namespace {
 extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
 struct TenuringCollectionResult {
     uint32_t threshold = 0;
     PageAge survivorAge = PageAge::eden;
+    bool full = false;
 };
 void* CollectWithTenuringFlags(void* context)
 {
@@ -275,6 +278,7 @@ void* CollectWithTenuringFlags(void* context)
     const U64 root = Heap::GetHeap().RegisterExportRoot(MCC_NewObject(type, 4096));
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     auto& result = *static_cast<TenuringCollectionResult*>(context);
+    if (result.full) { Heap::GetHeap().RequestGC(GC_REASON_USER, false); }
     result.threshold = Heap::GetHeap().young().tenuring_threshold();
     auto* survivor = Heap::GetHeap().GetExportObject(root);
     result.survivorAge = Heap::page(reinterpret_cast<uintptr_t>(survivor))->age();
@@ -283,9 +287,50 @@ void* CollectWithTenuringFlags(void* context)
     return nullptr;
 }
 
-void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t maximum,
-                        bool overrideSet, int32_t overrideValue, bool environment = false)
+void CheckTenuringResult(const TenuringCollectionResult& result, uint32_t selected)
 {
+    std::fprintf(stderr, "TENURING_CONSUMER_TARGET actual=%u expected=%u\n", result.threshold, selected);
+    const bool thresholdMatches = result.threshold == selected;
+    const PageAge expectedAge = result.full || selected == 0 ? PageAge::old : PageAge::survivor1;
+    std::fprintf(stderr, "TENURING_PROMOTION_TARGET actual=%u expected=%u\n",
+                 untype(result.survivorAge), untype(expectedAge));
+    const bool promotionMatches = result.survivorAge == expectedAge;
+    // Evaluate both product results before the single invariant assertion so
+    // a threshold failure cannot hide the actual promotion observation.
+    std::fprintf(stderr, "TENURING_RESULT_ASSERT threshold_match=%d promotion_match=%d\n",
+                 thresholdMatches, promotionMatches);
+    GC_EXPECT_TRUE(thresholdMatches && promotionMatches);
+}
+uint32_t environmentSelected;
+int32_t RunEnvironmentTenuringMain()
+{
+    try {
+        TenuringCollectionResult result;
+        CollectWithTenuringFlags(&result);
+        CheckTenuringResult(result, environmentSelected);
+        return 0;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "TENURING_ENV_ASSERT_FAILED %s\n", error.what());
+        return 1;
+    }
+}
+
+void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t maximum,
+                        bool overrideSet, int32_t overrideValue, bool environment = false, bool full = false)
+{
+    // The managed executable entry exits with its main result. Isolate that
+    // normal product lifecycle in a child and assert its actual exit status.
+    if (environment) {
+        const pid_t child = fork();
+        GC_EXPECT_TRUE(child >= 0);
+        if (child != 0) {
+            int status = 0;
+            GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+            std::fprintf(stderr, "TENURING_MANAGED_EXIT status=%d\n", status);
+            GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            return;
+        }
+    }
     RuntimeParam params{};
     params.heapParam.heapSize = heapKB;
     params.coParam.processorNum = 1;
@@ -324,21 +369,22 @@ void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t m
                  actual, fixed, expected, overhead, budget, thresholdMatches);
     GC_EXPECT_TRUE(thresholdMatches);
     GC_EXPECT_EQ(ZTenuringThreshold, overrideSet ? overrideValue : -1);
+    const uint32_t selected = overrideSet && overrideValue != -1 ?
+        static_cast<uint32_t>(overrideValue) : std::min(1u, actual);
+    if (environment) {
+        environmentSelected = selected;
+        MRT_CjRuntimeStart(reinterpret_cast<void*>(&RunEnvironmentTenuringMain));
+        _exit(2); // The product main must terminate with its own result.
+    }
     {
         TenuringCollectionResult result;
+        result.full = full;
         CJThreadHandle task = RunCJTask(CollectWithTenuringFlags, &result);
         GC_EXPECT_TRUE(task != nullptr);
         void* taskResult = nullptr;
         GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
         ReleaseHandle(task);
-        const uint32_t selected = overrideSet && overrideValue != -1 ?
-            static_cast<uint32_t>(overrideValue) : std::min(1u, actual);
-        std::fprintf(stderr, "TENURING_CONSUMER_TARGET actual=%u expected=%u\n", result.threshold, selected);
-        GC_EXPECT_EQ(result.threshold, selected);
-        const PageAge expectedAge = selected == 0 ? PageAge::old : PageAge::survivor1;
-        std::fprintf(stderr, "TENURING_PROMOTION_TARGET actual=%u expected=%u\n",
-                     untype(result.survivorAge), untype(expectedAge));
-        GC_EXPECT_EQ(untype(result.survivorAge), untype(expectedAge));
+        CheckTenuringResult(result, selected);
     }
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
@@ -360,3 +406,7 @@ GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentAutomatic) { CheckTenuringFla
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentZero) { CheckTenuringFlags(64 * 1024, 2, true, 0, true, 0, true); }
 
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumOne) { CheckTenuringFlags(64 * 1024, 2, true, 1, false, 0); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, PrecleanOverridesFlag) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9, false, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumBoundary) { CheckTenuringFlags(64 * 1024, 2, true, 16, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideBoundary) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 15); }
