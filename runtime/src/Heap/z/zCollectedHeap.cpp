@@ -99,37 +99,11 @@ void ZCollectedHeap::finalize_gc()
 void ZCollectedHeap::initialize_gc_workers()
 {
     if (_heap.young().Workers() == nullptr) {
-        unsigned int activeProcessorCount = std::thread::hardware_concurrency();
-        bool affinityDetected = false;
-#if defined(__linux__) || defined(hongmeng)
-        cpu_set_t cpuSet;
-        CPU_ZERO(&cpuSet);
-        if (sched_getaffinity(0, sizeof(cpuSet), &cpuSet) == 0) {
-            int affinityProcessorCount = CPU_COUNT(&cpuSet);
-            if (affinityProcessorCount > 0) {
-                activeProcessorCount = static_cast<unsigned int>(affinityProcessorCount);
-                affinityDetected = true;
-            }
-        }
-#endif
-        activeProcessorCount = std::max(activeProcessorCount, 1U);
-        const size_t maxHeap = _heap.GetMaxCapacity();
-        const auto& regions = static_cast<RegionSpace&>(_heap.GetAllocator()).GetRegionManager();
-        const size_t regionBytes = ZPageSizeSmall;
-        CHECK_DETAIL(regionBytes != 0, "worker region budget must be initialized");
-        const size_t heapWorkers = maxHeap / 50 / regionBytes;
-        const uint64_t cpus = activeProcessorCount;
-        _concurrent_gc_threads = static_cast<int32_t>(std::max<size_t>(1,
-            std::min<size_t>((cpus + 3) / 4, heapWorkers)));
-        ConcGCThreads = static_cast<uint32_t>(_concurrent_gc_threads);
-        ZYoungGCThreads = ConcGCThreads;
-        ZOldGCThreads = ConcGCThreads;
-        VLOG(REPORT,
-             "concurrent gc thread count %d, active processor count %u, affinity detected %d, region bytes %zu",
-             _concurrent_gc_threads, activeProcessorCount, affinityDetected, regionBytes);
-
-        _heap.young().InitializeWorkers(_concurrent_gc_threads);
-        _heap.old().InitializeWorkers(_concurrent_gc_threads);
+        _concurrent_gc_threads = static_cast<int32_t>(ConcGCThreads);
+        VLOG(REPORT, "concurrent gc thread count %u, young %u, old %u",
+             ConcGCThreads, ZYoungGCThreads, ZOldGCThreads);
+        _heap.young().InitializeWorkers(ZYoungGCThreads);
+        _heap.old().InitializeWorkers(ZOldGCThreads);
     }
 
 

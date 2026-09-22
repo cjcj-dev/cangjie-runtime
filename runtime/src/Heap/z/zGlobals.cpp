@@ -22,6 +22,7 @@ namespace MapleRuntime {
 // gc/shared/gc_globals.hpp ConcGCThreads; zArguments.cpp:67-81 sets it before the
 // heap comes up. ZCollectedHeap::start_gc_threads publishes the concurrent budget
 // after heap initialization; this initial capacity covers early per-worker storage.
+bool UseDynamicNumberOfGCThreads = true;
 uint32_t ConcGCThreads = 64;
 uint32_t ZYoungGCThreads = 64;
 uint32_t ZOldGCThreads = 64;

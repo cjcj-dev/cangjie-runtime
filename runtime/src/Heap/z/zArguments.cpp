@@ -1,9 +1,12 @@
 #include "Heap/z/zArguments.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
 #include "Base/Log.h"
+#include "CangjieRuntime.h"
+#include "Heap/z/z_globals.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -26,8 +29,47 @@ void ZArguments::initialize_heap_flags_and_sizes()
 
 void ZArguments::select_max_gc_threads()
 {
-    (void)ZHeuristics::nconcurrent_workers();
-    (void)ZHeuristics::nparallel_workers();
+    // ZGC zArguments.cpp:67-118: explicit flags precede ergonomics at this entry.
+    const GCParam param = CangjieRuntime::GetGCParam();
+    UseDynamicNumberOfGCThreads = !param.staticGCThreads;
+    ConcGCThreads = param.concGCThreads;
+    ZYoungGCThreads = param.youngGCThreads;
+    ZOldGCThreads = param.oldGCThreads;
+    uint32_t max_nworkers_generation;
+    if (param.concGCThreads == 0) {
+        max_nworkers_generation = ZHeuristics::nconcurrent_workers();
+        uint32_t max_nworkers = max_nworkers_generation;
+        if (param.youngGCThreads != 0) {
+            max_nworkers = std::max(max_nworkers, ZYoungGCThreads);
+        }
+        if (param.oldGCThreads != 0) {
+            max_nworkers = std::max(max_nworkers, ZOldGCThreads);
+        }
+        ConcGCThreads = max_nworkers;
+    } else {
+        max_nworkers_generation = ConcGCThreads;
+    }
+    if (param.youngGCThreads == 0) {
+        if (UseDynamicNumberOfGCThreads) {
+            ZYoungGCThreads = max_nworkers_generation;
+        } else {
+            const uint32_t static_young_threads = std::max(uint32_t(max_nworkers_generation * 0.9), 1u);
+            ZYoungGCThreads = static_young_threads;
+        }
+    }
+    if (param.oldGCThreads == 0) {
+        if (UseDynamicNumberOfGCThreads) {
+            ZOldGCThreads = max_nworkers_generation;
+        } else {
+            const uint32_t static_old_threads = std::max(ConcGCThreads - ZYoungGCThreads, 1u);
+            ZOldGCThreads = static_old_threads;
+        }
+    }
+    CHECK_DETAIL(ConcGCThreads != 0, "ConcGCThreads must be positive");
+    CHECK_DETAIL(ZYoungGCThreads > 0 && ZYoungGCThreads <= ConcGCThreads,
+                 "ZYoungGCThreads must be in [1, ConcGCThreads]");
+    CHECK_DETAIL(ZOldGCThreads > 0 && ZOldGCThreads <= ConcGCThreads,
+                 "ZOldGCThreads must be in [1, ConcGCThreads]");
 }
 
 bool ZArguments::gc_enabled() { return g_gcEnabled; }
