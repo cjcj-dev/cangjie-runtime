@@ -127,8 +127,7 @@ void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
 {
     CHECK(Heap::GetHeap().old().IsPhaseMark());
     BaseObject* object = ZBarrier::ReadStaticRef(slot);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
-    object = ZBarrier::ValidateCurrentValue(object, provenance);
+    object = ZBarrier::ValidateCurrentValue(object);
     if (object == nullptr) return;
     auto* page = Heap::page(reinterpret_cast<MAddress>(object));
     if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
@@ -343,6 +342,7 @@ size_t MarkStripeCount(size_t workers)
 }
 
 } // namespace
+
 
 class ZMarkTask : public ZRestartableTask {
 public:
@@ -882,7 +882,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
     if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
         MarkPartialArray::FollowPartialReferences(entry, [&entry](MAddress slot) {
             auto& field = HeapSlotAt<>(slot);
-            ZBarrier::MarkBarrierOnOldOopField(nullptr, field, entry.finalizable());
+            ZBarrier::MarkBarrierOnOldOopField(field, entry.finalizable());
         }, publish);
         return;
     }
@@ -903,7 +903,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         }
         auto visitSlot = [obj, &entry](MAddress slot) {
             auto& field = HeapSlotAt<>(slot);
-            ZBarrier::MarkBarrierOnOldOopField(obj, field, entry.finalizable());
+            ZBarrier::MarkBarrierOnOldOopField(field, entry.finalizable());
         };
         MarkPartialArray::FollowObjectReferences(obj, entry.finalizable(), visitSlot, publish);
     }

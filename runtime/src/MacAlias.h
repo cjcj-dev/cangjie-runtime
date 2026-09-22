@@ -11,6 +11,10 @@ extern "C" MRT_EXPORT ObjRef CJ_MCC_OnFinalizerCreated(ObjRef ref);
 __asm__(".global _CJ_MCC_OnFinalizerCreated\n\t.set _CJ_MCC_OnFinalizerCreated, _MCC_OnFinalizerCreated");
 extern "C" MRT_EXPORT void CJ_MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field);
 __asm__(".global _CJ_MCC_WriteRefField\n\t.set _CJ_MCC_WriteRefField, _MCC_WriteRefField");
+extern "C" MRT_EXPORT void CJ_MCC_WriteRefField_Strong(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field);
+__asm__(".global _CJ_MCC_WriteRefField_Strong\n\t.set _CJ_MCC_WriteRefField_Strong, _MCC_WriteRefField_Strong");
+extern "C" MRT_EXPORT void CJ_MCC_WriteRefField_Weak(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field);
+__asm__(".global _CJ_MCC_WriteRefField_Weak\n\t.set _CJ_MCC_WriteRefField_Weak, _MCC_WriteRefField_Weak");
 extern "C" MRT_EXPORT void CJ_MCC_WriteStructField(const ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src,
                                                    size_t srcLen);
 __asm__(".global _CJ_MCC_WriteStructField\n\t.set _CJ_MCC_WriteStructField, _MCC_WriteStructField");

@@ -53,7 +53,6 @@ enum class HeapDumpKind { NORMAL, OOM, IDE };
 class RegionSpace;
 class AllocBuffer;
 class FinalizerProcessor;
-struct ForwardingProvenance;
 struct ThreadLocalData;
 struct ThreadGCData;
 class ZRemembered;
@@ -102,7 +101,7 @@ public:
     void MarkYoungObjectIfActive(BaseObject* object);
     void MarkNewObject(BaseObject* object);
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId generation);
-    BaseObject* make_load_good(RefField<>& ref, const ForwardingProvenance& provenance);
+    BaseObject* make_load_good(RefField<>& ref);
     Generation ObjectGeneration(BaseObject* object) const;
     GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
     {
@@ -196,8 +195,6 @@ public:
     void DumpHeap(HeapDumpKind kind);
     void object_iterate(ObjectClosure* object_cl, bool visit_weaks);
     void object_and_field_iterate_for_verify(ObjectClosure* object_cl, OopFieldClosure* field_cl, bool visit_weaks);
-
-    bool ForEachObj(const std::function<void(BaseObject*)>&, bool safe) const;
 
     void RegisterStaticRoots(Uptr, U32);
 

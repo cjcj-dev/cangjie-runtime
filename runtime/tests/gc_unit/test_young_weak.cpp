@@ -422,7 +422,7 @@ void RunYoungWeakRemsetFlow()
     rememberedSet.Initialize(fx.heapStart, 2 * ZGranuleSize);
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
     referentField.StoreColoured(to_zpointer(raw(StoreGoodPointer(graph.referent)) ^ ZPointerMarkedYoungMask));
-    ZBarrier::WriteReference(graph.weak, referentField, graph.referent);
+    ZBarrier::WriteWeakReference(graph.weak, referentField, graph.referent);
     const MAddress weakSlot = reinterpret_cast<MAddress>(&referentField);
     const bool recordedBeforeMinor = rememberedSet.Contains(weakSlot);
 

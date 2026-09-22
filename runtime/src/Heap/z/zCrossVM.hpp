@@ -66,7 +66,7 @@ private:
     // Value-only root containers have no addressable RootSlot to heal. Keep
     // their RootObligation on the existing ResolveStoreValue authority and
     // rebuild key-bearing containers while their owner lock is held.
-    BaseObject* ResolveCurrentValueRoot(const ValueRoot& root, const void* owner) const;
+    BaseObject* ResolveCurrentValueRoot(const ValueRoot& root) const;
     void CurrentizeValueRootSet(ValueRootSet& roots) const;
     void CurrentizeValueRootMap(ValueRootMap& roots) const;
 };

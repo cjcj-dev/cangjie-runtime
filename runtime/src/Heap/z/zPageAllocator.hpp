@@ -532,10 +532,6 @@ public:
 
     // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).
 
-    void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
-                          bool skipKnownEmptyRegions = false) const;
-    void ForEachObjSafe(const std::function<void(BaseObject*)>& visitor) const;
-
     size_t GetUsedRegionSize() const { return GetUsedBytes(); }
 
     size_t GetRecentAllocatedSize() const;

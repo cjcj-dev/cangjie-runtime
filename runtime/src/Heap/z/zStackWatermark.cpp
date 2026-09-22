@@ -126,6 +126,9 @@ bool StackWatermark::start_processing_impl(Mutator& mutator, void* context, uint
     }
     save_old_watermark(mutator);
     process_head(mutator, context, visitor, invisibleRootVisitor);
+    // ZGC zStackWatermark.cpp:187-192: install this thread's new phase
+    // masks after its old-color head, before retiring TLABs and buffers.
+    mutator.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
     const bool youngMark = ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();
     const bool oldMark = ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark();
     if (youngMark || oldMark) {
@@ -159,7 +162,6 @@ bool StackWatermarkSet::finish_processing(Mutator& mutator, const RootVisitor& v
         bool began = mutator.stackWatermark.start_processing_impl(mutator, context, epoch, 0, visitor,
                                                                   invisibleRootVisitor);
         if (began) {
-            mutator.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
             mutator.stackWatermark.finish_processing();
         }
         mutator.MutatorUnlock();
@@ -180,7 +182,6 @@ bool StackWatermarkSet::finish_processing(Mutator& mutator, const RootVisitor& v
             mutator.stackWatermark.AdvanceTo(cursor.Cursor());
         }
         scannedFrames = cursor.Cursor();
-        mutator.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
         mutator.stackWatermark.finish_processing();
     }
     mutator.DecObserver();

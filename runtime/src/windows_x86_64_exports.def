@@ -1035,7 +1035,6 @@ EXPORTS
     _ZN12MapleRuntime10ZPage14IsMarkedObjectEPKNS_10BaseObjectE @1040
     _ZN12MapleRuntime10ZPage15HasYoungRegionsEv @1042
     _ZN12MapleRuntime10ZPage15ResurrectObjectEPKNS_10BaseObjectEy @1043
-    _ZN12MapleRuntime10ZPage15VisitAllObjectsEOKNSt3__18functionIFvPNS_10BaseObjectEEEE @1044
     _ZN12MapleRuntime10ZPage16IsSafeKnownEmptyEv @1045
     _ZN12MapleRuntime10ZPage16IsSurvivedObjectEy @1046
     _ZN12MapleRuntime10ZPage13tdWindowCountE @1047 DATA
@@ -1982,7 +1981,6 @@ EXPORTS
     _ZNK12MapleRuntime11ReflectInfo12GetFieldNameEj @2493
     _ZNK12MapleRuntime11ReflectInfo17GetReflectVersionEv @2494
     _ZNK12MapleRuntime11ReflectInfo21GetInstanceMethodInfoEj @2495
-    _ZNK12MapleRuntime11RegionSpace10ForEachObjERKNSt3__18functionIFvPNS_10BaseObjectEEEEb @2496
     _ZNK12MapleRuntime11RegionSpace14AllocatedBytesEv @2497
     _ZNK12MapleRuntime12CJFileLoader10FindSymbolENS_7CStringES1_ @2505
     _ZNK12MapleRuntime12CJFileLoader11DoInitImageEPNS_8BaseFileE @2506
@@ -2020,9 +2018,7 @@ EXPORTS
     _ZNK12MapleRuntime13LoaderManager18UnregisterLoadFileEy @2555
     _ZNK12MapleRuntime13LoaderManager7LibInitEPKc @2556
     _ZNK12MapleRuntime13LoaderManager9GetLoaderEv @2557
-    _ZNK12MapleRuntime13RegionManager14ForEachObjSafeERKNSt3__18functionIFvPNS_10BaseObjectEEEE @2558
     _ZNK12MapleRuntime13RegionManager15DumpRegionStatsEPKcb @2559
-    _ZNK12MapleRuntime13RegionManager16ForEachObjUnsafeERKNSt3__18functionIFvPNS_10BaseObjectEEEEb @2560
     _ZNK12MapleRuntime13RegionManager16GetAllocatedSizeEv @2561
     _ZNK12MapleRuntime13RememberedSet12AddressToBitEy @2562
     _ZNK12MapleRuntime13RememberedSet16CheckInitializedEv @2563
@@ -2763,3 +2759,7 @@ EXPORTS
     CJ_MCC_PackageInitComplete @3496
     CJ_MCC_PackageInitFail @3497
     CJ_MCC_PackageInitAbort @3498
+    MCC_WriteRefField_Strong @3499
+    MCC_WriteRefField_Weak @3500
+    CJ_MCC_WriteRefField_Strong @3501
+    CJ_MCC_WriteRefField_Weak @3502

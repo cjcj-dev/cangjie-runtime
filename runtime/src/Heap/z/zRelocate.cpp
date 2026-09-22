@@ -285,8 +285,7 @@ static BaseObject* RemapPromotedField(RefField<>& field, zpointer observed)
     if (loadGood(observed)) {
         return to_object(value.GetTargetObject());
     }
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
-    BaseObject* target = to_object(ZBarrier::make_load_good(value.GetFieldValue(), provenance));
+    BaseObject* target = to_object(ZBarrier::make_load_good(value.GetFieldValue()));
     CHECK_DETAIL(target != nullptr || !(!is_null_any(to_zpointer(raw(observed)))),
                  "promotion remap must preserve a non-null reference");
     // ZAddress::load_good: upgrade remap bits without claiming a marking epoch.
@@ -528,7 +527,7 @@ bool ZRelocate::IsAlreadyToStoreValue(BaseObject* target, Generation generation)
         generation_forwarding_table(generation).get(reinterpret_cast<MAddress>(target)) == nullptr;
 }
 
-BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref,
                                          Generation generation)
 {
     // zBarrier.inline.hpp:695-716 store_barrier_on_heap_oop_field:
@@ -565,8 +564,8 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
         if (currentRegion != nullptr && currentRegion->IsCompacted() &&
             ClassifyCompactedMiss(currentRegion, current) == CompactedMissClass::kAlreadyToStart) {
             // An address-shaped compact destination is not, by itself, a
-            // load-good value.  In particular the from header may still be
-            // FORWARDED (or a zero header for an interior-shaped probe), so
+            // load-good value.  In particular the from header may be a zero
+            // header for an interior-shaped probe, so
             // kAlreadyToStart is only a geometric classification.  The
             // resolve postcondition is the same as every other receipt hop:
             // only a Usable object may leave this function.  Keep the
@@ -611,27 +610,17 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
                 }
             }
             if (live != nullptr && !live->IsFreeRegion() && !live->IsGarbageRegion() &&
-                ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable &&
-                !current->IsForwarded()) {
+                ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
                 return current;
             }
             const MAddress lookupTo = forwarding_find(generation, currentAddr);
             LOG(RTLOG_ERROR,
                 "[FWDTABLE][resolve-miss] site=no-forwarding consumer=ZRelocate::ResolveStoreValue "
-                "holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
-                "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
-                "field_type=%s field_offset=%zu "
                 "from=%p from_region=%p region_type=%u generation=%u "
                 "in_current_relocation_set=%u table_id=%#zx lookup_state=%u "
                 "from_page_epoch=%llu lifeId=%llu "
                 "gc_phase=%u ghost=0 compacted=%u route=%u lookup.to=%p "
                 " verdict=%u",
-                ForwardingProvenance::KindName(provenance.kind), provenance.holder, provenance.slot,
-                ForwardingProvenance::StageName(provenance.stage),
-                ForwardingProvenance::WriterName(provenance.writerKind),
-                ForwardingProvenance::SourceName(provenance.incomingSourceKind), provenance.sourceSlot,
-                provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
-                provenance.fieldOffset,
                 static_cast<void*>(current), static_cast<void*>(live),
                 live != nullptr ? 0u : 0xffu,
                 live != nullptr ? static_cast<unsigned>(live->generation_id()) : 0xffu,
@@ -644,15 +633,15 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
                 live != nullptr ? live->RelocateObserve() : 0u,
                 reinterpret_cast<void*>(lookupTo),
                 static_cast<unsigned>(ZBarrier::JudgeHandOutTarget(current)));
-            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.no-forwarding", current, 0, provenance);
+            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.no-forwarding", current, 0);
         }
         // A pointer with ghost membership belongs to a published forwarding
         // generation. Even after its route state changes it cannot be
         // reclassified as a non-member; only an explicit receipt or completed
         // relocation qualifies a value (zRelocate.cpp:408-415).
-        BaseObject* resolved = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate_or_remap_object(current, provenance);
+        BaseObject* resolved = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate_or_remap_object(current);
         if (resolved == nullptr) {
-            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.unresolved", current, 0, provenance);
+            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.unresolved", current, 0);
         }
         if (resolved == current) {
             // In-place completion must have published its identity receipt;
@@ -667,11 +656,10 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
             // Ghost can be dispelled between the membership check and
             // relocate_or_remap; that is not a missing identity receipt.
             if (ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable &&
-                !current->IsForwarded() &&
                 Heap::page(currentAddr) == nullptr) {
                 return current;
             }
-            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.missing-identity", current, 0, provenance);
+            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.missing-identity", current, 0);
         }
         current = resolved;
     }
@@ -786,7 +774,9 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
         if (toObj == obj || (toObj != nullptr)) {
             const MAddress mapped = publication->insert(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
             if (mapped != 0) {
-                obj->SetStateCode(ObjectState::FORWARDED);
+                // ZGC keeps no FORWARDED header state: the forwarding table is
+                // the only truth (zRelocate.cpp:382-415; zForwarding has no
+                // header bit). The insert above is the whole publication.
                 result = reinterpret_cast<BaseObject*>(mapped);
             }
         }
@@ -921,10 +911,9 @@ public:
         ZForwarding::PageWorkScope scope(owner, ZForwarding::CurrentPageWork() != owner);
         ZPage* page = owner->page();
         const MAddress start = page->GetRegionStart();
-        const MAddress limit = page->GetRegionAllocPtr();
         ZPage* target = start_in_place_relocation(start);
         targets->set(page->partition_id(), owner->to_age(), target);
-        iterate_objects(page, start, limit);
+        iterate_objects(page);
         target->ResetCensusBoundary();
         owner->in_place_relocation_finish();
         page->MarkForwardingDone();
@@ -948,7 +937,7 @@ public:
         ZForwarding::PageWorkScope scope(owner);
         ZPage* page = owner->page();
         ZVerify::BeforeRelocation(owner);
-        iterate_objects(page, page->GetRegionStart(), page->GetRegionAllocPtr());
+        iterate_objects(page);
         ZVerify::AfterRelocation(owner);
         if (ZVerifyForwarding) { owner->verify(); }
         generation->increase_freed(owner->size());
@@ -974,14 +963,12 @@ public:
     }
 
 private:
-    void iterate_objects(ZPage* page, MAddress start, MAddress limit)
+    // ZGC zRelocate.cpp:1001: same single livemap entry as ZPage::object_iterate
+    // (zPage.inline.hpp:319-331). The livemap is the only bound; a raw TLAB tail
+    // holds no live bit and is never visited.
+    void iterate_objects(ZPage* page)
     {
-        const int shift = page->object_alignment_shift();
-        page->livemap().iterate(page->generation_id(), [&](BitMap::idx_t index) {
-            const MAddress addr = start + ((index / 2) << shift);
-            if (addr < limit) { relocate_object(reinterpret_cast<BaseObject*>(addr)); }
-            return true;
-        });
+        page->object_iterate([&](BaseObject* object) { relocate_object(object); });
     }
     void increase_other_forwarded(size_t size)
     {
@@ -1608,14 +1595,12 @@ BaseObject* ZRelocate::forward_object(ZForwarding* forwarding, BaseObject* objec
 }
 
 // zRelocate.cpp:382-410: lookup, retain/copy/release, then wait/forward.
-BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* object,
-                                      const ForwardingProvenance& provenance)
+BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* object)
 {
     const MAddress from = reinterpret_cast<MAddress>(object);
     if (const MAddress to = forwarding->find(from)) {
         return reinterpret_cast<BaseObject*>(to);
     }
-    (void)provenance;
     // Cangjie has no return statepoints: eager root repair also enters through
     // coloured static/export roots before concurrent workers are submitted.
     // Reuse the existing stopped-world page completion adapter (ZGC's ordinary

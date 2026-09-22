@@ -88,27 +88,5 @@ GC_OTHER_VM_TEST(ExemptLife, NonOverlapCopyFarBeforeSourceLandsSourceImage)
     ExerciseOverlappingCopy(-0x20);
 }
 
-GC_TEST(ExemptLife, PrepareInstallStripsForwardedResidual)
-{
-    // CSet empty-select still needs FORWARDED headers; strip only at the next
-    // install after the table is retired (zRelocationSet.cpp:91-96).
-    GcHeapFixture fx;
-    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + obj->GetSize());
-    obj->SetStateCode(ObjectState::FORWARDED);
-    GC_EXPECT_TRUE(obj->IsForwarded());
-    fx.region0->ClearRelocationResiduals();
-    GC_EXPECT_FALSE(obj->IsForwarded());
-}
-
-GC_TEST(ExemptLife, PrepareInstallLeavesLockedAlone)
-{
-    GcHeapFixture fx;
-    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + obj->GetSize());
-    obj->SetStateCode(ObjectState::LOCKED);
-    fx.region0->ClearRelocationResiduals();
-    GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
-}
 
 

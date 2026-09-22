@@ -15,6 +15,8 @@
 #include "ObjectModel/MObject.inline.h"
 #include "ObjectManager.inline.h"
 namespace MapleRuntime {
+// CompilerCalls.h also defines TU-local aliases; declare the shared accessor here.
+extern "C" void MCC_WriteRefField(ObjectPtr ref, ObjectPtr obj, RefField<false>* field);
 
 U32 InstanceFieldInfo::GetModifier() const { return modifier; }
 
@@ -104,8 +106,9 @@ void InstanceFieldInfo::SetValue(TypeInfo* declaringTypeInfo, ObjRef instanceObj
     TypeInfo* fieldTi = GetFieldType(declaringTypeInfo);
     Uptr fieldAddr = reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE + GetOffset(declaringTypeInfo);
     if (fieldTi->IsRef()) {
-        ZBarrier::WriteReference(instanceObj,
-            instanceObj->GetRefField(TYPEINFO_PTR_SIZE + GetOffset(declaringTypeInfo)), newValue);
+        // ZGC jni.cpp:1928 uses unknown-strength access for reflective fields.
+        MCC_WriteRefField(newValue, instanceObj,
+            &instanceObj->GetRefField(TYPEINFO_PTR_SIZE + GetOffset(declaringTypeInfo)));
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize fieldSize = fieldTi->GetInstanceSize();
         if (fieldSize == 0) {
