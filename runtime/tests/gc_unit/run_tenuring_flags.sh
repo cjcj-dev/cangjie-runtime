@@ -16,7 +16,7 @@ start=$SECONDS
 run_case() {
     local name=$1
     env LD_LIBRARY_PATH="$TENURING_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-      GC_UNIT_FILTER="$name" timeout 45 taskset -c "$TENURING_CPUSET" \
+      LD_DEBUG=libs GC_UNIT_FILTER="$name" timeout 45 taskset -c "$TENURING_CPUSET" \
       "$TENURING_TEST_ELF" > "$TENURING_OUT/$name.log" 2>&1
     echo "$?" > "$TENURING_OUT/$name.rc"
 }
