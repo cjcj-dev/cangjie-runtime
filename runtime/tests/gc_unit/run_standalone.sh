@@ -379,6 +379,7 @@ MAIN_SOURCES=(
   "$SRC/test_fnlz_roots.cpp"
   "$SRC/test_reference_processor.cpp"
   "$SRC/test_mark_stack_entry.cpp"
+  "$SRC/test_mark_entry_oop.cpp"
   "$SRC/test_mark_stripe.cpp"
   "$SRC/test_mark_port_203_storage.cpp"
   "$SRC/test_mark_port_203_entries.cpp"

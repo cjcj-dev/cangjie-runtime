@@ -709,12 +709,27 @@ inline zaddress safe(zaddress_unsafe value) { return to_zaddress(raw(value)); }
 extern const bool ZVerifyOops;
 void VerifyAccessedOop(zaddress address);
 #endif
-inline BaseObject* to_object(zaddress a)
+inline void assert_is_oop_or_null(zaddress a)
 {
 #if defined(MRT_DEBUG) && MRT_DEBUG == 1
-    // zAddress.inline.hpp:505-522: verify the actual accessed oop.
     if (ZVerifyOops && a != zaddress::null) { VerifyAccessedOop(a); }
+#else
+    (void)a;
 #endif
+}
+
+inline void assert_is_oop(zaddress a)
+{
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+    assert(a != zaddress::null);
+#endif
+    assert_is_oop_or_null(a);
+}
+
+inline BaseObject* to_object(zaddress a)
+{
+    // zAddress.inline.hpp:505-522: conversion and mark entry share the oop assertion.
+    assert_is_oop_or_null(a);
     return reinterpret_cast<BaseObject*>(raw(a));
 }
 

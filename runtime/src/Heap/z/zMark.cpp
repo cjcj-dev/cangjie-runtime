@@ -292,6 +292,7 @@ void ZMark::PushYoungObject(BaseObject* object, WorkStack& workStack, const char
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
+    assert_is_oop(from_object(object));
     CHECK_DETAIL(object->IsValidObject(), "minor root/reference %p is not a valid object origin=%s",
                  object, origin);
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
@@ -1234,4 +1235,3 @@ namespace MapleRuntime {
 }
 
 #include "Heap/z/zMark.inline.hpp"
-

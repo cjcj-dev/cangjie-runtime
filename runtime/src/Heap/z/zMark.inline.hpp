@@ -15,7 +15,7 @@ namespace MapleRuntime {
 template<bool resurrect, bool gcThread, bool follow, bool finalizable>
 inline void ZMark::MarkObject(zaddress address)
 {
-    (void)to_object(address); // ZMark entry validates the current oop before the page query.
+    assert_is_oop(address);
     ZPage* page = Heap::page(raw(address));
     if (page->IsAllocating()) {
         return;
