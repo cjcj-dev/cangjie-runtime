@@ -218,7 +218,6 @@ private:
     // Keep that link writable when constant initialization places its owner in RELRO.
     mutable ZStatSampler* next;
     const ZStatUnitPrinter printer;
-    void Sample(uint64_t value) const;
 };
 
 // zStat.hpp:285-303, zStat.cpp:460-487

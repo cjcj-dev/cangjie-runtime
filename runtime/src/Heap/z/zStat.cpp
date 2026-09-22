@@ -417,16 +417,6 @@ ZStatSamplerData ZStatSampler::CollectAndReset() const
     return result;
 }
 
-void ZStatSampler::Sample(uint64_t value) const
-{
-    if (!StorageReady()) return;
-    auto& data = *CpuLocal<CpuData>(ZCPU::id());
-    data.nsamples.fetch_add(1, std::memory_order_relaxed);
-    data.sum.fetch_add(value, std::memory_order_relaxed);
-    uint64_t maximum = data.max.load(std::memory_order_relaxed);
-    while (maximum < value && !data.max.compare_exchange_weak(maximum, value, std::memory_order_relaxed)) {}
-}
-
 void ZStatCounter::Increment(uint64_t value) const
 {
     if (!StorageReady()) return;
