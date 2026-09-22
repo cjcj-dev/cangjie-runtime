@@ -349,12 +349,17 @@ void RegionManager::RequestForRegion(size_t size)
 namespace MapleRuntime {
 MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
 {
-    if (allocSize > ZObjectSizeLimitSmall || ThreadLocal::GetMutator() == nullptr) {
-        return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden, false,
-            allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
+    // HotSpot memAllocator.cpp:327-347: both TLAB attempts precede the
+    // outside-TLAB allocation. A failed refill is not yet an allocation failure.
+    if (allocSize <= ZObjectSizeLimitSmall && ThreadLocal::GetMutator() != nullptr) {
+        AllocBuffer* allocBuffer = ThreadLocal::GetMutator()->tlab();
+        MAddress addr = allocBuffer->Allocate(allocSize, allocType);
+        if (addr != 0) { return addr; }
+        addr = allocBuffer->AllocateImpl(allocSize, allocType);
+        if (addr != 0) { return addr; }
     }
-    AllocBuffer* allocBuffer = ThreadLocal::GetMutator()->tlab();
-    return allocBuffer->Allocate(allocSize, allocType);
+    return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden, false,
+        allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
 }
 
 MAddress RegionSpace::Allocate(size_t size, AllocType allocType)

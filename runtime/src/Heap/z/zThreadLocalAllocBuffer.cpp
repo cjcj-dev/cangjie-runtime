@@ -138,18 +138,18 @@ void AllocBuffer::ResizeTLAB(size_t capacity, double fallbackFraction, size_t ma
 
 MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
 {
-    const uintptr_t addr = AllocateInTLAB(totalSize);
-    return addr != 0 ? addr : AllocateImpl(totalSize, allocType);
+    (void)allocType;
+    return AllocateInTLAB(totalSize);
 }
 
 MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
 {
     (void)allocType;
-    const size_t tlabSize = ComputeTLABSize(totalSize, Heap::GetHeap().unsafe_max_tlab_alloc());
-    if (tlabSize == 0) {
-        return Heap::GetHeap().object_allocator().alloc(totalSize, PageAge::eden);
-    }
+    // HotSpot memAllocator.cpp:282-296: retire before computing the refill;
+    // the caller owns the outside-TLAB fallback for every slow-path failure.
     RetireTLAB(false);
+    const size_t tlabSize = ComputeTLABSize(totalSize, Heap::GetHeap().unsafe_max_tlab_alloc());
+    if (tlabSize == 0) { return 0; }
     // Cangjie tasks can migrate while page allocation enters a saferegion.
     CJThreadPreemptOffCntAdd();
     size_t actualSize = 0;
