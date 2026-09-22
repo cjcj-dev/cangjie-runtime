@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -286,36 +285,6 @@ void ZObjectAllocator::retire_pages(PageAgeRange ages)
     }
 }
 
-void RegionManager::RequestForRegion(size_t size)
-{
-    if (IsGcThread()) {
-        // gc thread is always permitted for allocation.
-        return;
-    }
-
-    Heap& heap = Heap::GetHeap();
-    const size_t liveAfterGC = lastLiveBytesAfterGC.load(std::memory_order_acquire);
-    size_t allocatedBytes = GetAllocatedSize() - liveAfterGC;
-    constexpr double pi = 3.14;
-    size_t availableBytesAfterGC = heap.GetMaxCapacity() - liveAfterGC;
-    double heuAllocRate = std::cos((pi / 2.0) * allocatedBytes / availableBytesAfterGC) *
-        lastCollectionRate.load(std::memory_order_acquire);
-    // for maximum performance, choose the larger one.
-    double allocRate = std::max(
-        static_cast<double>(CangjieRuntime::GetHeapParam().allocationRate) * MB / SECOND_TO_NANO_SECOND, heuAllocRate);
-    size_t waitTime = static_cast<size_t>(size / allocRate);
-    uint64_t now = TimeUtil::NanoSeconds();
-    if (prevRegionAllocTime + waitTime <= now) {
-        prevRegionAllocTime = TimeUtil::NanoSeconds();
-        return;
-    }
-
-    uint64_t sleepTime = std::min<uint64_t>(CangjieRuntime::GetHeapParam().allocationWaitTime,
-                                  prevRegionAllocTime + waitTime - now);
-    DLOG(ALLOC, "wait %zu ns to alloc %zu(B)", sleepTime, size);
-    std::this_thread::sleep_for(std::chrono::nanoseconds{ sleepTime });
-    prevRegionAllocTime = TimeUtil::NanoSeconds();
-}
 
 } // namespace MapleRuntime
 

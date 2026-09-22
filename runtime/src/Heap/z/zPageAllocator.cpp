@@ -918,9 +918,6 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
     allowSaferegion = allowSaferegion && !flags.non_blocking();
     if (!allowSaferegion || IsGcThread()) { flags.set_non_blocking(); }
     size_t size = num;
-    if (allowSaferegion) {
-        RequestForRegion(size);
-    }
 
 #if !defined(__OHOS__)
     size_t gatedBytes = 0;
