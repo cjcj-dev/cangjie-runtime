@@ -53,6 +53,9 @@ try:
     if Path(product).resolve() != Path(os.environ['GCV2_RUNTIME_LIB_DIR'], 'libcangjie-runtime.so').resolve():
         raise RuntimeError('Product identity mismatch')
     emit('PRODUCT_IDENTITY', library=product)
+    # Observe service startup before waiting for old tail, so an allocator-
+    # initiated first cycle cannot precede the director thread's naming.
+    until('MapleRuntime::ZDirector::run_thread()')
     bp = Tail('MapleRuntime::ZGenerationOld::concurrent_relocate()')
     cmd('continue')
     bp.delete()
@@ -66,10 +69,11 @@ try:
     emit('OLD_RELOCK', stack=stack, thread=old.num)
     if 'ZGenerationOld::collect' not in stack:
         raise RuntimeError('Not the collection relock')
+    emit('THREADS', listing=cmd('info threads'))
     director = next(t for t in gdb.selected_inferior().threads() if t.name == 'ZDirector')
     director.switch()
     source = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
-    tick = next(i+1 for i,s in enumerate(source) if 'const ZDirectorStats stats = sample_stats' in s)
+    tick = next(i+1 for i,s in enumerate(source) if 'stats = sample_stats' in s)
     until('zDirector.cpp:' + str(tick))
     # Let the public timer expire before the real sample obtains its timestamp.
     time.sleep(1.1)
@@ -105,5 +109,5 @@ try:
              pc=hex(gdb.newest_frame().pc()))
     cmd('quit ' + ('0' if passed else '1'))
 except Exception as error:
-    emit('HARNESS_ERROR', error=str(error))
+    emit('HARNESS_ERROR', error=repr(error))
     cmd('quit 2')
