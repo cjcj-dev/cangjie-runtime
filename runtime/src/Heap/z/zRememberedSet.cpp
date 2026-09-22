@@ -46,7 +46,7 @@ bool ZRememberedSet::is_cleared_previous() const
 
 void ZRememberedSet::clear_previous()
 {
-    previous()->clear_range(0, previous()->size());
+    previous()->clear_large();
 }
 
 void ZRememberedSet::swap_remset_bitmaps()
@@ -56,7 +56,7 @@ void ZRememberedSet::swap_remset_bitmaps()
         previous()->set_bit(index);
         return true;
     });
-    current()->clear_range(0, current()->size());
+    current()->clear_large();
 }
 
 ZBitMap::ReverseIterator ZRememberedSet::iterator_reverse_previous()

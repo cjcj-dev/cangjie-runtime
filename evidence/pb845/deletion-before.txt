@@ -1,0 +1,9 @@
+HEAD:runtime/src/Heap/z/zMark.cpp:351:bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*/)
+HEAD:runtime/src/Heap/z/zMark.cpp:365:    if (SlotHeldByLiveObject(&field)) {
+HEAD:runtime/src/Heap/z/zMark.cpp:375:        "ZMark::ScrubMinorFreeTarget.unresolved", target, oldVal,
+HEAD:runtime/src/Heap/z/zRelocate.hpp:214:bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix);
+HEAD:runtime/src/Heap/z/zRelocate.hpp:215:bool HolderObjectIsLive(BaseObject* holder);
+HEAD:runtime/src/Heap/z/zRelocate.hpp:216:bool SlotHeldByLiveObject(const void* slot);
+HEAD:runtime/src/Heap/z/zRemembered.cpp:36:bool HolderObjectIsLive(BaseObject* holder)
+HEAD:runtime/src/Heap/z/zRemembered.cpp:51:bool SlotHeldByLiveObject(const void* slot)
+HEAD:runtime/src/Heap/z/zRemembered.cpp:69:    return HolderObjectIsLive(holder);

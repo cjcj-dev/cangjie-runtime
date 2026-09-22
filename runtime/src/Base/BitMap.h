@@ -269,6 +269,7 @@ public:
 
     // Clearing
     void clear() { clear_range_of_words(0, size_in_words()); }
+    void clear_large() { clear_large_range_of_words(0, size_in_words()); }
 
     // Return the index of the first set bit in the range [beg, end), or end if none found.
     idx_t find_first_set_bit(idx_t beg, idx_t end) const

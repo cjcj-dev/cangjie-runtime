@@ -30,48 +30,6 @@
 
 namespace MapleRuntime {
 
-#if defined(__GNUC__)
-#pragma GCC visibility push(hidden)
-#endif
-bool HolderObjectIsLive(BaseObject* holder)
-{
-    if (holder == nullptr || !Heap::IsHeapAddress(holder) || !holder->IsValidObject()) {
-        return false;
-    }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(holder));
-    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
-        return false;
-    }
-    if (region->IsAllocating()) {
-        return true;
-    }
-    return region->is_object_strongly_live(from_object(holder));
-}
-
-bool SlotHeldByLiveObject(const void* slot)
-{
-    if (slot == nullptr || !Heap::IsHeapAddress(slot)) {
-        return false;
-    }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(slot));
-    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
-        return false;
-    }
-    if (region->IsAllocating()) {
-        return true;
-    }
-    const MAddress base = region->find_base_unsafe(reinterpret_cast<MAddress>(slot));
-    BaseObject* holder = base == 0 ? nullptr : from_region_addr(base);
-    if (holder == nullptr || reinterpret_cast<MAddress>(slot) - reinterpret_cast<MAddress>(holder) >=
-        RegionSpace::GetAllocSize(*holder)) {
-        return false;
-    }
-    return HolderObjectIsLive(holder);
-}
-#if defined(__GNUC__)
-#pragma GCC visibility pop
-#endif
-
 ZRemembered::FoundOld::FoundOld()
     : _allocated_bitmap_0(ZAddressOffsetMax >> ZGranuleSizeShift, true),
       _allocated_bitmap_1(ZAddressOffsetMax >> ZGranuleSizeShift, true),
@@ -177,6 +135,10 @@ bool ZRemembered::scan_page_and_clear_remset(ZPage* page) const
         page->oops_do_remembered([&](volatile zpointer* p) { result |= scan_field(p); });
     } else if (page->is_marked()) {
         page->oops_do_remembered_in_live([&](volatile zpointer* p) { result |= scan_field(p); });
+    }
+    if (ZVerifyRemembered) {
+        // Order pointer self healing before clearing the previous remset bits.
+        std::atomic_thread_fence(std::memory_order_release);
     }
     if (!can_trust_live_bits || page->is_marked()) {
         page->clear_remset_previous();
