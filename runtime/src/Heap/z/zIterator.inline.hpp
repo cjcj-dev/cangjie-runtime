@@ -5,6 +5,7 @@
 #define MRT_Z_ITERATOR_INLINE_HPP
 
 #include "Heap/z/zIterator.hpp"
+#include "Common/BaseObject.inline.h"
 #include "Heap/z/zVerify.hpp"
 #include "ObjectModel/MArray.inline.h"
 

@@ -3,7 +3,7 @@
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
 #include "Common/ScopedObjectAccess.h"
-#include "Heap/z/zIterator.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Mutator/MutatorManager.h"
@@ -73,13 +73,13 @@ int main(int argc, char** argv)
                      ThreadLocal::GetThreadType() == ThreadType::GC_THREAD,
                      manager.WorldStopped(), mutator->InSaferegion());
         if (iterator) {
-            RefFieldVisitor visitor = [&](RefField<>& field) {
+            auto visitor = [&](RefField<>& field) {
                 ++fields;
                 valuesMatch = valuesMatch && ZPointer::uncolor(field.GetFieldValue()) == from_object(target);
             };
             // This exact specialization is extern-template in zIterator.hpp:
             // its implementation is imported from the product, not instantiated here.
-            ZIterator::basic_oop_iterate_safe<RefFieldVisitor>(array, visitor);
+            ZIterator::basic_oop_iterate_safe(array, visitor);
         } else {
             valuesMatch = mutator->GcPhaseEnum(false, 0, true, nullptr) &&
                 raw(root->LoadPlain()) == reinterpret_cast<uintptr_t>(target);

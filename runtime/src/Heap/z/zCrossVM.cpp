@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Common/BaseObject.inline.h"
 #include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zGeneration.inline.hpp"

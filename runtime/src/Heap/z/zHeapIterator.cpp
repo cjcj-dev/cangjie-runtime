@@ -129,8 +129,8 @@ void HeapIterator::FollowArrayChunk(const ObjArrayTask& array, const FieldVisito
     if (end < length) {
         workerArrayQueues[0].push_back({ array.object, end });
     }
-    RefFieldVisitor fields = [&](RefField<>& field) { visitor(array.object, field); };
-    ZBasicOopIterateClosure<RefFieldVisitor> closure(fields);
+    auto fields = [&](RefField<>& field) { visitor(array.object, field); };
+    ZBasicOopIterateClosure<decltype(fields)> closure(fields);
     ZIterator::oop_iterate_elements_range(array.object, &closure, start, end);
 }
 

@@ -934,11 +934,8 @@ EXPORTS
     _ZGVZN12MapleRuntime11CpuProfiler11GetInstanceEvE8instance @931 DATA
     _ZGVZN12MapleRuntime13RegionManager13CollectRegionEPNS_10ZPageEE5probe @932 DATA
     _ZGVZN12MapleRuntime5GcLog7EnabledEvE7enabled @934 DATA
-    _ZN12MapleRuntime10BaseObject15ForEachRefFieldERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEE @935
-    _ZN12MapleRuntime10BaseObject18ForEachRefInStructERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEEyy @936
     _ZN12MapleRuntime10BaseObject18OnFinalizerCreatedEv @937
     _ZN12MapleRuntime10BaseObject23CompareExchangeRefFieldERNS_8HeapSlotILb0EEES2_S2_ @938
-    _ZN12MapleRuntime10BaseObject25ForEachAggRefFieldInArrayERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEEyy @939
     _ZN12MapleRuntime10CjHeapData10WriteClassEPNS_8TypeInfoEyh @940
     _ZN12MapleRuntime10CjHeapData11AddStringIdEy @941
     _ZN12MapleRuntime10CjHeapData11HandleAddU1EPKhy @942
@@ -1950,7 +1947,6 @@ EXPORTS
     _ZNK12MapleRuntime10BaseObject11GetTypeInfoEv @2405
     _ZNK12MapleRuntime10BaseObject11HasRefFieldEv @2406
     _ZNK12MapleRuntime10BaseObject15IsInTraceRegionEv @2407
-    _ZNK12MapleRuntime10BaseObject28ForEachAggRefFieldInNonArrayERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEEyy @2408
     _ZNK12MapleRuntime10BaseObject7GetSizeEv @2409
     _ZNK12MapleRuntime10CjHeapData11GetObjectIdEPNS_10BaseObjectE @2410
     _ZNK12MapleRuntime10CjHeapData19SerializedIdWrapper10Use4ByteIdEv @2411
@@ -2059,7 +2055,6 @@ EXPORTS
     _ZNK12MapleRuntime23CompressedStackMapEntry13BuildSlotRootEv @2656
     _ZNK12MapleRuntime23CompressedStackMapEntry18BuildStackSlotRootEv @2657
     _ZNK12MapleRuntime23CompressedStackMapEntry19BuildDerivedPtrRootEv @2658
-    _ZNK12MapleRuntime5GCTib24ForEachBitmapWordInRangeEyRKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEEyy @2659
     _ZNK12MapleRuntime6CJFile13GetCJFileMetaEv @2660
     _ZNK12MapleRuntime6CJFile13GetSDKVersionEv @2661
     _ZNK12MapleRuntime6CJFile14IsAddrInCJFileEy @2662
@@ -2067,7 +2062,6 @@ EXPORTS
     _ZNK12MapleRuntime6CJFile17GetGlobalInitFuncERNSt3__16vectorIyNS1_9allocatorIyEEEE @2664
     _ZNK12MapleRuntime6GCTask10NeedFilterEv @2665
     _ZNK12MapleRuntime6Logger18GetMinimumLogLevelEv @2666
-    _ZNK12MapleRuntime6MArray22ForEachRefFieldInRangeERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEEyy @2667
     _ZNK12MapleRuntime6VarInt8GetValueEv @2668
     _ZNK12MapleRuntime7Barrier10ReadStructEyPNS_10BaseObjectEyy @2669
     _ZNK12MapleRuntime7Barrier11ReadWeakRefEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2671

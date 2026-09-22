@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Common/BaseObject.inline.h"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zGeneration.inline.hpp"

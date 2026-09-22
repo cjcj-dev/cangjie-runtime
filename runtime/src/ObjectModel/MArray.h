@@ -51,7 +51,8 @@ public:
     inline void SetRefElement(MIndex index, const ObjectPtr mObj);
     inline U8* ConvertToCArray() const;
     // this interface can only be called by array with reference fields.
-    void ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const;
+    template<typename Visitor>
+    void ForEachRefFieldInRange(const Visitor& visitor, MAddress fieldStart, MIndex fieldEnd) const;
 
 private:
 

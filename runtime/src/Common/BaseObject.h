@@ -31,10 +31,13 @@ public:
 
     inline GCTib GetGCTib() const { return GetTypeInfo()->GetGCTib(); }
 
-    void ForEachRefField(const HeapSlotVisitor& visitor);
-    void ForEachRefField(const HeapSlotVisitor& visitor, TypeInfo* klass);
+    template<typename Visitor>
+    void ForEachRefField(const Visitor& visitor);
+    template<typename Visitor>
+    void ForEachRefField(const Visitor& visitor, TypeInfo* klass);
 
-    void ForEachRefInStruct(const HeapSlotVisitor& visitor, MAddress aggStart, MAddress aggEnd);
+    template<typename Visitor>
+    void ForEachRefInStruct(const Visitor& visitor, MAddress aggStart, MAddress aggEnd);
     // size in bytes
     size_t GetSize() const;
 
@@ -104,8 +107,10 @@ private:
     // We cannot explicit construct BaseObject and destruct it
     BaseObject() = delete;
     ~BaseObject() = delete;
-    void ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd);
-    void ForEachAggRefFieldInNonArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd) const;
+    template<typename Visitor>
+    void ForEachAggRefFieldInArray(const Visitor& visitor, MAddress aggStart, MAddress aggEnd);
+    template<typename Visitor>
+    void ForEachAggRefFieldInNonArray(const Visitor& visitor, MAddress aggStart, MAddress aggEnd) const;
 
     // The only contract between Managed Heap and other modules
     StateWord stateWord;
