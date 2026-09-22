@@ -256,21 +256,30 @@ GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
 // #906: InitCJRuntime produces the effective flag values in the product SO.
 // Explicitness is independent from the value: zero and -1 are real inputs.
 #include "Heap/z/zHeuristics.hpp"
+#include "CjScheduler.h"
 namespace {
+extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
 struct TenuringCollectionResult {
     uint32_t threshold = 0;
 };
 void* CollectWithTenuringFlags(void* context)
 {
     Mutator::GetMutator()->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    const U64 root = Heap::GetHeap().RegisterExportRoot(MCC_NewObject(type, 4096));
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     static_cast<TenuringCollectionResult*>(context)->threshold = Heap::GetHeap().young().tenuring_threshold();
+    Heap::GetHeap().RemoveExportObject(root);
     Mutator::GetMutator()->SetManagedContext(true);
     return nullptr;
 }
 
 void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t maximum,
-                        bool overrideSet, int32_t overrideValue)
+                        bool overrideSet, int32_t overrideValue, bool environment = false)
 {
     RuntimeParam params{};
     params.heapParam.heapSize = heapKB;
@@ -280,7 +289,24 @@ void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t m
     params.gcParam.maxTenuringThreshold = maximum;
     params.gcParam.zTenuringThresholdSet = overrideSet;
     params.gcParam.zTenuringThreshold = overrideValue;
-    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    if (environment) {
+        setenv("cjHeapSize", (std::to_string(heapKB) + "KB").c_str(), 1);
+        setenv("cjProcessorNum", "1", 1);
+        setenv("cjConcGCThreads", std::to_string(workers).c_str(), 1);
+        if (maxSet) {
+            setenv("cjMaxTenuringThreshold", std::to_string(maximum).c_str(), 1);
+        } else {
+            unsetenv("cjMaxTenuringThreshold");
+        }
+        if (overrideSet) {
+            setenv("cjZTenuringThreshold", std::to_string(overrideValue).c_str(), 1);
+        } else {
+            unsetenv("cjZTenuringThreshold");
+        }
+        MRT_CjRuntimeInit();
+    } else {
+        GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    }
     const size_t overhead = ZHeuristics::relocation_headroom();
     const size_t budget = ZHeuristics::significant_young_overhead();
     const uint32_t actual = MaxTenuringThreshold;
@@ -293,24 +319,33 @@ void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t m
                  actual, fixed, expected, overhead, budget, thresholdMatches);
     GC_EXPECT_TRUE(thresholdMatches);
     GC_EXPECT_EQ(ZTenuringThreshold, overrideSet ? overrideValue : -1);
-    if (overrideSet && overrideValue != -1) {
+    {
         TenuringCollectionResult result;
         CJThreadHandle task = RunCJTask(CollectWithTenuringFlags, &result);
         GC_EXPECT_TRUE(task != nullptr);
         void* taskResult = nullptr;
         GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
         ReleaseHandle(task);
-        std::fprintf(stderr, "TENURING_CONSUMER_TARGET actual=%u expected=%d\n", result.threshold, overrideValue);
-        GC_EXPECT_EQ(result.threshold, static_cast<uint32_t>(overrideValue));
+        const uint32_t selected = overrideSet && overrideValue != -1 ?
+            static_cast<uint32_t>(overrideValue) : std::min(1u, actual);
+        std::fprintf(stderr, "TENURING_CONSUMER_TARGET actual=%u expected=%u\n", result.threshold, selected);
+        GC_EXPECT_EQ(result.threshold, selected);
     }
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultSmallHeap) { CheckTenuringFlags(64 * 1024, 2, false, 0, false, 0); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultLargeHeap) { CheckTenuringFlags(512 * 1024, 2, false, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultCeiling) { CheckTenuringFlags(2048 * 1024, 2, false, 0, false, 0); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultManyWorkers) { CheckTenuringFlags(64 * 1024, 8, false, 0, false, 0); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, ExplicitAutomatic) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, -1); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, ExplicitMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 12, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumZero) { CheckTenuringFlags(64 * 1024, 2, true, 0, false, 0); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideZero) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 0); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverridePositive) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumAndOverride) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 9); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverride) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 9, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentAutomatic) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, -1, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentZero) { CheckTenuringFlags(64 * 1024, 2, true, 0, true, 0, true); }
