@@ -79,7 +79,6 @@ void ZDriver::run_thread()
         if (request.cause() == GC_REASON_INVALID) {
             return;
         }
-        ZCollectedHeap::heap()->director()->set_busy(kind == GCDriverKind::MINOR, true);
         {
             DriverLocker locker;
             const bool major = kind == GCDriverKind::MAJOR;
@@ -89,7 +88,6 @@ void ZDriver::run_thread()
             port.ack();
             if (completed) { HandleAllocStalls(); }
             if (major) ZBreakpoint::AtAfterGC();
-            ZCollectedHeap::heap()->director()->set_busy(!major, false);
             if (completed && !major) ZDirector::evaluate_rules();
         }
         abortpoint();
