@@ -240,6 +240,10 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, RemapDuringYoungMarkPublishesFollowWork)
     GC_EXPECT_TRUE(thread != nullptr);
     MarkPublicationFixture marking;
     marking.CompleteOldMarkForAdmissionTest();
+    // The fixture publishes the mark phase but does not flip pointer colors.
+    // ZGenerationYoung::mark_start also arms existing groups for this epoch.
+    ZGlobalsPointers::flip_young_mark_start();
+    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     Heap::GetHeap().young().Workers()->set_active_workers(1);
     Heap::GetHeap().old().Workers()->set_active_workers(1);
 
