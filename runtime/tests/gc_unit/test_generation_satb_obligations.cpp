@@ -69,8 +69,8 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     const size_t live = fx.region1->live_bytes();
     std::fprintf(stderr, "GENERATION_YOUNG_FOLLOW_ASSERT live=%zu expected=%zu\n",
                  live, static_cast<size_t>(fx.obj1->GetSize()));
-    GC_EXPECT_EQ(mark.YoungPending(), 0u);
     GC_EXPECT_EQ(live, fx.obj1->GetSize());
+    GC_EXPECT_EQ(mark.YoungPending(), 0u);
     // Completing/cleaning young work must leave old's object and carrier intact.
     GC_EXPECT_TRUE(RegionSpace::IsMarkedObject<Generation::Young>(fx.obj1));
     GC_EXPECT_EQ(mark.OldPending(), 1u);
