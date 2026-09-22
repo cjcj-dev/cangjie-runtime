@@ -284,6 +284,10 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     auto& queue = generation_relocate_queue(Generation::Old);
     queue.BeginWorkers(1);
     const auto request = queue.Add(owner);
+    // ForwardTask polls the owning generation's workers, as the runtime entry
+    // does. This component fixture must provide that existing dependency.
+    auto& old = Heap::GetHeap().old();
+    if (old.Workers() == nullptr) old.InitializeWorkers(1);
     ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
     WorkerFixture workerIdentity;
     task.work();
@@ -306,6 +310,8 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     auto& queue = generation_relocate_queue(Generation::Old);
     queue.BeginWorkers(2);
     const auto request = queue.Add(owner);
+    auto& old = Heap::GetHeap().old();
+    if (old.Workers() == nullptr) old.InitializeWorkers(1);
     std::atomic<MAddress> answer{ 0 };
     std::thread waiter([&] {
         (void)queue.Wait(request.forwarding);
