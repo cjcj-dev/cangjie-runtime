@@ -344,3 +344,24 @@ GC_OTHER_VM_TEST(ObjectAllocator917, OldPhaseRequiresSafepoint)
     });
 }
 #endif
+
+#if defined(__linux__)
+// ZGC zObjectAllocator.cpp:227: only a mutator queries its allocation page.
+GC_OTHER_VM_TEST(ObjectAllocator917, FastAvailableRequiresMutator)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.FastAvailableRequiresMutator", "Should be a mutator thread", [] {
+        GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
+        (void)Heap::GetHeap().object_allocator().fast_available(PageAge::eden);
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, TLABEntryRequiresMutator)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.TLABEntryRequiresMutator", "Should be a mutator thread", [] {
+        GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
+        AllocBuffer buffer;
+        buffer.ClearRegion();
+        (void)buffer.Allocate(16, AllocType::MOVEABLE_OBJECT);
+    });
+}
+#endif
