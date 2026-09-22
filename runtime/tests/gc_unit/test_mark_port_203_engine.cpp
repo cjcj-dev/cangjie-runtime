@@ -443,3 +443,39 @@ GC_TEST(YoungClosure784, MultipleWorkersAccountPublishedRoot)
 {
     CheckYoungClosureAccounting(2);
 }
+
+// ZGC zRemembered.cpp:127-168: consumed previous entries are cleared by the
+// page scan before the same page can be scanned again. Enter the product worker
+// task; observe the product bitmap, without a replacement consumer or callback.
+GC_TEST(RememberedClear845, ConsumedPreviousSlotsAreAbsentOnRescan)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    young.InitializeWorkers(1);
+    young.Mark().Start();
+    // Old marking makes the scan independent of incomplete old live bits.
+    heap.old().PublishPhase(ZGenerationPhase::Mark);
+    auto* page = fixture.region0;
+    auto* slot = reinterpret_cast<volatile zpointer*>(
+        reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
+    *slot = StoreGoodPointer(nullptr);
+    page->remember(slot);
+    heap.remembered().register_found_old(page);
+    heap.remembered().flip();
+    const bool published = page->was_remembered(slot);
+    heap.remembered().scan_and_follow(&young.Mark());
+    const bool remaining = page->was_remembered(slot);
+    // Scan the same previous face again, using the page set re-registered by
+    // the first product task. There must be no previously consumed slot.
+    heap.remembered().flip_found_old_sets();
+    heap.remembered().scan_and_follow(&young.Mark());
+    const bool repeated = page->was_remembered(slot);
+    std::fprintf(stderr, "REMEMBERED845_ASSERT_EXECUTED published=%d remaining=%d repeated=%d\n",
+                 published, remaining, repeated);
+    young.StopWorkers();
+    GC_EXPECT_EQ(remaining, false);
+    GC_EXPECT_EQ(repeated, false);
+    GC_EXPECT_EQ(published, true);
+}
