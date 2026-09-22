@@ -4,7 +4,7 @@ Build `runtime_workers.cpp` with the candidate `runtime/src/Cangjie.h` and link 
 product runtime SO. On Linux, run under a 16-CPU affinity:
 
 ```sh
-clang++ -std=c++17 -I runtime/src runtime/tests/gc_unit/worker_config/runtime_workers.cpp -L "$SO" -lcangjie-runtime -o "$ELF"
+clang++ -std=c++17 -I runtime/src runtime/tests/gc_unit/worker_config/runtime_workers.cpp -L "$SO" -Wl,-rpath-link,"$SO" -lcangjie-runtime -o "$ELF"
 taskset -c "$CPUS" python3 runtime/tests/gc_unit/worker_config/check_workers.py "$ELF" "$SO" "$OUT"
 ```
 
