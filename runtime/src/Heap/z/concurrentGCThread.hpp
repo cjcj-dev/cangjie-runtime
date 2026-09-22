@@ -44,6 +44,7 @@ public:
 
     // runtime/init.cpp:245-258: publish only after runtime initialization.
     static void NotifyRuntimeInitialized();
+    static bool IsRuntimeInitialized();
 
     virtual void run();
     virtual void stop();

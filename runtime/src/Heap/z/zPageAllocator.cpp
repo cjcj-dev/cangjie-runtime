@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/concurrentGCThread.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -960,7 +961,7 @@ retry:
             return nullptr;
         }
         // ZGC zPageAllocator.cpp:1414-1418: relocation is not mutator allocation.
-        if (!flags.gc_relocation()) {
+        if (!flags.gc_relocation() && ConcurrentGCThread::IsRuntimeInitialized()) {
             ZStatInc(ZStatMutatorAllocRate::counter(), size);
             ZStatMutatorAllocRate::sample_allocation(size);
         }
