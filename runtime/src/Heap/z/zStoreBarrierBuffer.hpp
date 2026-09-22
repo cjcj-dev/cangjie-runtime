@@ -29,7 +29,7 @@ public:
 
     bool IsEmpty() const;
     size_t Current() const;
-    size_t Pending() const { return kStoreBarrierBufferLength - current; }
+    size_t Pending() const { return kStoreBarrierBufferLength - Current(); }
     static constexpr size_t Capacity() { return kStoreBarrierBufferLength; }
     static StoreBarrierBuffer* buffer_for_store(bool heal);
 
@@ -41,7 +41,6 @@ public:
 
     friend class MutatorManager;
     StoreBarrierEntry buffer[kStoreBarrierBufferLength] {};
-    size_t current;
 
 private:
     void clear();
@@ -52,10 +51,18 @@ private:
     bool is_old_mark() const;
     bool stored_during_old_mark() const;
 
+public:
     uintptr_t lastProcessedColor;
     uintptr_t lastInstalledColor;
     std::mutex basePointerLock;
     zaddress_unsafe basePointers[kStoreBarrierBufferLength] {};
+    // ZGC zStoreBarrierBuffer.hpp:61: byte index growing downwards.
+    size_t current;
+
+public:
+    static constexpr size_t BufferSizeBytes = kStoreBarrierBufferLength * sizeof(StoreBarrierEntry);
+    static constexpr size_t buffer_offset() { return offsetof(StoreBarrierBuffer, buffer); }
+    static constexpr size_t current_offset() { return offsetof(StoreBarrierBuffer, current); }
 };
 
 } // namespace MapleRuntime

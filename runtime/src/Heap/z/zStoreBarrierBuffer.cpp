@@ -23,9 +23,9 @@
 
 namespace MapleRuntime {
 StoreBarrierBuffer::StoreBarrierBuffer()
-    : current(kStoreBarrierBufferLength),
-      lastProcessedColor(::g_cjStoreGoodMask),
-      lastInstalledColor(::g_cjStoreGoodMask) {}
+    : lastProcessedColor(::g_cjStoreGoodMask),
+      lastInstalledColor(::g_cjStoreGoodMask),
+      current(kBufferStoreBarriers ? BufferSizeBytes : 0) {}
 
 void StoreBarrierBuffer::Initialize(uintptr_t color)
 {
@@ -35,7 +35,7 @@ void StoreBarrierBuffer::Initialize(uintptr_t color)
 
 void StoreBarrierBuffer::clear()
 {
-    current = kStoreBarrierBufferLength;
+    current = BufferSizeBytes;
 }
 
 StoreBarrierBuffer* StoreBarrierBuffer::buffer_for_store(bool heal)
@@ -51,7 +51,7 @@ StoreBarrierBuffer* StoreBarrierBuffer::buffer_for_store(bool heal)
 
 void StoreBarrierBuffer::install_base_pointers_inner()
 {
-    for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
+    for (size_t i = Current(); i < kStoreBarrierBufferLength; ++i) {
         const StoreBarrierEntry& entry = buffer[i];
         const zaddress_unsafe pUnsafe = to_zaddress_unsafe(entry.p);
         const zpointer ptr = ZAddress::color(pUnsafe, lastProcessedColor);
@@ -146,7 +146,7 @@ void StoreBarrierBuffer::on_new_phase()
         return;
     }
     install_base_pointers();
-    for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
+    for (size_t i = Current(); i < kStoreBarrierBufferLength; ++i) {
         on_new_phase_relocate(i);
         on_new_phase_remember(i);
         on_new_phase_mark(i);
@@ -157,7 +157,7 @@ void StoreBarrierBuffer::on_new_phase()
 
 void StoreBarrierBuffer::Flush()
 {
-    for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
+    for (size_t i = Current(); i < kStoreBarrierBufferLength; ++i) {
         const StoreBarrierEntry& entry = buffer[i];
         const zaddress addr = ZBarrier::make_load_good(entry.prev);
         ZBarrier::mark_and_remember(reinterpret_cast<volatile zpointer*>(entry.p), addr);
@@ -174,7 +174,7 @@ bool StoreBarrierBuffer::is_in(MAddress p)
         const StoreBarrierBuffer* buffer = mutator.GetGCData().storeBarrierBuffer;
         const uintptr_t lastRemap = ZPointer::remap_bits(buffer->lastProcessedColor);
         const bool needsRemap = lastRemap != ZPointerRemapped;
-        for (size_t i = buffer->current; i < kStoreBarrierBufferLength; ++i) {
+        for (size_t i = buffer->Current(); i < kStoreBarrierBufferLength; ++i) {
             MAddress entryP = buffer->buffer[i].p;
             if (needsRemap && !is_null(buffer->basePointers[i])) {
                 entryP = RemapBufferedField(entryP, buffer->basePointers[i], buffer->lastProcessedColor);
@@ -190,5 +190,5 @@ bool StoreBarrierBuffer::is_in(MAddress p)
 #include "Heap/z/zStoreBarrierBuffer.inline.hpp"
 
 namespace MapleRuntime {
-bool StoreBarrierBuffer::IsEmpty() const { return current == kStoreBarrierBufferLength; }
+bool StoreBarrierBuffer::IsEmpty() const { return current == BufferSizeBytes; }
 }

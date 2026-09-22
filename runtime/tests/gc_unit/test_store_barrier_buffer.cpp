@@ -112,7 +112,7 @@ GC_TEST(StoreBuf, EntryCarriesPairedPrevAndInstallColour)
 
     buf.add(slot, prev);
 
-    const StoreBarrierEntry& entry = buf.buffer[buf.current];
+    const StoreBarrierEntry& entry = buf.buffer[buf.Current()];
     GC_EXPECT_EQ(entry.p, slot);
     GC_EXPECT_EQ(raw(entry.prev), raw(prev));
     GC_EXPECT_EQ(buf.Pending(), 1u);
@@ -160,14 +160,14 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     if (pending != 1u) {
         return;
     }
-    const StoreBarrierEntry& entry = buf.buffer[buf.current];
+    const StoreBarrierEntry& entry = buf.buffer[buf.Current()];
     const bool pairMatches = raw(entry.prev) == raw(prev) && raw(entry.prev) != entry.p;
     GC_EXPECT_EQ(entry.p, reinterpret_cast<MAddress>(&field));
     GC_EXPECT_EQ(raw(entry.prev), raw(prev));
     GC_EXPECT_NE(raw(entry.prev), entry.p);
     if (!pairMatches) {
-        buf.buffer[buf.current] = {};
-        buf.current = StoreBarrierBuffer::Capacity();
+        buf.buffer[buf.Current()] = {};
+        buf.current = StoreBarrierBuffer::BufferSizeBytes;
         return;
     }
     buf.Flush();
@@ -330,8 +330,8 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     StoreBarrierBuffer& buf = *ThreadLocal::GetGCData().storeBarrierBuffer;
     GC_EXPECT_EQ(buf.Pending(), 1u);
     if (buf.Pending() == 1u) {
-        GC_EXPECT_EQ(buf.buffer[buf.current].p, reinterpret_cast<MAddress>(&field));
-        GC_EXPECT_EQ(raw(buf.buffer[buf.current].prev), raw(prev));
+        GC_EXPECT_EQ(buf.buffer[buf.Current()].p, reinterpret_cast<MAddress>(&field));
+        GC_EXPECT_EQ(raw(buf.buffer[buf.Current()].prev), raw(prev));
     }
     std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
@@ -362,8 +362,8 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     StoreBarrierBuffer& buf = *ThreadLocal::GetGCData().storeBarrierBuffer;
     GC_EXPECT_EQ(buf.Pending(), 1u);
     if (buf.Pending() == 1u) {
-        GC_EXPECT_EQ(buf.buffer[buf.current].p, reinterpret_cast<MAddress>(&field));
-        GC_EXPECT_EQ(raw(buf.buffer[buf.current].prev), raw(prev));
+        GC_EXPECT_EQ(buf.buffer[buf.Current()].p, reinterpret_cast<MAddress>(&field));
+        GC_EXPECT_EQ(raw(buf.buffer[buf.Current()].prev), raw(prev));
     }
     std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
