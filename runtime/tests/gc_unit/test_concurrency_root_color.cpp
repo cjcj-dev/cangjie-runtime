@@ -135,6 +135,74 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     GC_EXPECT_EQ(observed, expected);
 }
 
+void CheckOldRootRead(bool healBeforeRead)
+{
+    ConcurrencyRootRuntime runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    ZCollectedHeapTest::SetWorkers(1);
+    for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
+        auto& cycle = heap.GetZGeneration(gen);
+        if (cycle.Snapshot().active) {
+            cycle.End();
+        }
+        if (cycle.Workers() == nullptr) {
+            cycle.InitializeWorkers(1);
+        } else {
+            cycle.Workers()->set_active_workers(1);
+        }
+        cycle.Begin(1);
+    }
+    ZGlobalsPointers::initialize();
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    ZPage* page = fx.region0;
+    page->reset(PageAge::old);
+    ZGenerationTest::SetTenuringThreshold(heap.young(), 1);
+    BaseObject* dead = fx.PlaceObject(page->GetRegionStart());
+    BaseObject* earlier = fx.PlaceObject(page->GetRegionStart() + dead->GetSize());
+    BaseObject* from = fx.PlaceObject(reinterpret_cast<MAddress>(earlier) + earlier->GetSize());
+    BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(from) + from->GetSize());
+    page->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
+    auto scheduler = runtime.GetConcurrencyModel().GetThreadScheduler();
+    auto* thread = MCC_NewCJThread(nullptr, from, scheduler);
+    GC_EXPECT_TRUE(thread != nullptr);
+    auto* previousThread = CJThreadGetHandle();
+    ThreadLocal::SetCJThread(thread);
+    MCC_SetCurrentCJThreadObject(from);
+    auto* data = static_cast<LWTData*>(CJThreadGetArg());
+    ThreadLocal::SetCJThread(previousThread);
+    GC_EXPECT_TRUE(data != nullptr);
+    const uintptr_t savedColor = ZPointerStoreGoodMask;
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {page}));
+    heap.old().set_phase(ZGenerationPhase::Relocate);
+    ZGlobalsPointers::flip_old_relocate_start();
+    auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
+    manager.CompactRegion(page);
+    page->MarkForwardingDone();
+    const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
+    if (healBeforeRead) {
+        runtime.GetConcurrencyModel().VisitGCRoots();
+    }
+    auto* previous = CJThreadGetHandle();
+    ThreadLocal::SetCJThread(thread);
+    auto* observed = MRT_GetCurrentCJThreadObject();
+    auto* repeated = MRT_GetCurrentCJThreadObject();
+    ThreadLocal::SetCJThread(previous);
+    std::fprintf(stderr, "CONCURRENCY_OLD_READ heal=%d saved=%#lx current=%#lx from=%p observed=%p expected=%#lx\n",
+        healBeforeRead, savedColor, ZPointerLoadGoodMask, from, observed, expected);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(observed), expected);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(repeated), expected);
+    const MAddress groupObserved = raw(RootSlotAt(&data->obj).LoadPlain());
+    std::fprintf(stderr, "CONCURRENCY_OLD_GROUP observed=%#lx expected=%#lx\n", groupObserved, expected);
+    GC_EXPECT_EQ(groupObserved, expected);
+}
+
 } // namespace
 
 GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset) { CheckSavedColor(false); }
@@ -275,3 +343,6 @@ GC_RUNTIME_OTHER_VM_TEST(ConcurrencyRootColor, ExclusiveProducerSeparatesTypeInf
     ReleaseHandle(handle);
     GC_EXPECT_TRUE(result == nullptr);
 }
+
+GC_OTHER_VM_TEST(ConcurrencyRootColor, OldRootReadBeforeGCVisit) { CheckOldRootRead(false); }
+GC_OTHER_VM_TEST(ConcurrencyRootColor, OldRootReadAfterGCVisit) { CheckOldRootRead(true); }
