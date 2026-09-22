@@ -624,6 +624,7 @@ CJThreadHandle ExclusiveCJThreadNew(CJThreadFunc func,
 CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *attrUser,
                            CJThreadFunc func, const void *argStart, unsigned int argSize,
                            CJThreadCreateSource createSource = CJTHREAD_CREATE_SOURCE_DEFAULT, uintptr_t rootColor = 0);
+bool CJThreadRootsAreArmed(CJThreadHandle thread, uintptr_t color);
 void CJThreadVisitRoots(CJThreadHandle thread, AllCJThreadListProcFunc visitor, void* handle);
 
 /**

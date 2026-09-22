@@ -1638,6 +1638,14 @@ void ScheduleAllCJThreadListRemove(struct CJThread *cjthread)
     }
 }
 
+// zBarrierSetNMethod.cpp:39-45: the guard may be read before taking the group lock.
+bool CJThreadRootsAreArmed(CJThreadHandle thread, uintptr_t color)
+{
+    auto* cjthread = static_cast<struct CJThread*>(thread);
+    const uintptr_t saved = __atomic_load_n(&cjthread->uncoloredRootColor, __ATOMIC_ACQUIRE);
+    return saved != 0 && saved != color;
+}
+
 // ZNMethod::nmethod_oops_do: the root group and its guard share one reentrant lock.
 void CJThreadVisitRoots(CJThreadHandle thread, AllCJThreadListProcFunc visitor, void* handle)
 {
