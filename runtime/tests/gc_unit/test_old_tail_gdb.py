@@ -76,21 +76,33 @@ try:
     until('MapleRuntime::make_minor_gc_decision(MapleRuntime::ZDirectorStats const&)')
     resize = bool(val('stats.old_stats.resize.is_active'))
     emit('PRODUCT_SAMPLE', old_active=resize, thread=director.num)
-    # The validation build must retain a real return value. An inlined enum
-    # that the optimizer eliminated is not represented by an arbitrary ABI
-    # register; reject that unsupported observation rather than infer it.
-    frame = gdb.newest_frame()
-    if frame.type() == gdb.INLINE_FRAME:
-        raise RuntimeError('Decision return optimized away; use the approved product debug build')
-    result = gdb.FinishBreakpoint(frame, internal=True)
-    cmd('continue')
-    if result.return_value is None:
-        raise RuntimeError('No observable decision return value')
-    actual = int(result.return_value)
-    invalid = int(val('MapleRuntime::GC_REASON_INVALID'))
-    passed = actual == invalid
-    emit('ASSERT_OLD_TAIL_NO_MINOR', actual=actual, expected=invalid, passed=passed,
-         sampled_old_active=resize)
+    if os.environ.get('TAIL_ENUM') == '1':
+        # Auxiliary -O0 product build only: read the actual enum return value.
+        frame = gdb.newest_frame()
+        if frame.type() == gdb.INLINE_FRAME:
+            raise RuntimeError('Decision return optimized away')
+        result = gdb.FinishBreakpoint(frame, internal=True)
+        cmd('continue')
+        if result.return_value is None:
+            raise RuntimeError('No observable decision return value')
+        actual = int(result.return_value)
+        invalid = int(val('MapleRuntime::GC_REASON_INVALID'))
+        passed = actual == invalid
+        emit('ASSERT_OLD_TAIL_NO_MINOR', actual=actual, expected=invalid, passed=passed,
+             sampled_old_active=resize, observation='auxiliary-enum')
+    else:
+        # Production Release can eliminate the enum entirely. Observe the
+        # actual downstream branch, as authorized in the lane advisor reply.
+        no_minor = gdb.Breakpoint('MapleRuntime::adjust_gc(MapleRuntime::ZDirectorStats const&)', temporary=True)
+        minor = gdb.Breakpoint('MapleRuntime::start_minor_gc(MapleRuntime::ZDirectorStats const&, MapleRuntime::GCReason)', temporary=True)
+        cmd('continue')
+        observed = gdb.newest_frame().name()
+        passed = observed == 'MapleRuntime::adjust_gc'
+        if observed not in ('MapleRuntime::adjust_gc', 'MapleRuntime::start_minor_gc'):
+            raise RuntimeError('No actual decision consumer observed: ' + str(observed))
+        emit('ASSERT_OLD_TAIL_NO_MINOR', actual=observed, expected='MapleRuntime::adjust_gc',
+             passed=passed, sampled_old_active=resize, observation='release-machine-branch',
+             pc=hex(gdb.newest_frame().pc()))
     cmd('quit ' + ('0' if passed else '1'))
 except Exception as error:
     emit('HARNESS_ERROR', error=str(error))
