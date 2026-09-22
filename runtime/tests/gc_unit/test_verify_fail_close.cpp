@@ -13,7 +13,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <string>
-#include <sys/wait.h>
+#include <sys/syscall.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <unordered_set>
@@ -43,16 +43,9 @@ void RecordRejectedTop(int)
 template <typename Fn>
 void ExpectSceneAbort(const char* expectedDiagnostic, Fn&& fn)
 {
-    int childStderr[2];
-    GC_EXPECT_EQ(pipe(childStderr), 0);
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        close(childStderr[0]);
-        if (dup2(childStderr[1], STDERR_FILENO) < 0) {
-            _exit(126);
-        }
-        close(childStderr[1]);
+    const char* selected = std::getenv("GC_UNIT_VERIFY_SCENE");
+    if (selected != nullptr) {
+        if (std::strcmp(selected, expectedDiagnostic) != 0) { return; }
         (void)signal(SIGABRT, SIG_DFL);
         if (FILE* maps = std::fopen("/proc/self/maps", "r")) {
             char line[1024];
@@ -62,28 +55,20 @@ void ExpectSceneAbort(const char* expectedDiagnostic, Fn&& fn)
             std::fputs("VERIFY_PRODUCT_MAPS_END\n", stderr);
         }
         fn();
-        _exit(0);
+        _exit(0); // A returned scene must fail the parent's expected-abort check.
     }
-    close(childStderr[1]);
-    std::string transcript;
-    char buffer[512];
-    for (;;) {
-        const ssize_t count = read(childStderr[0], buffer, sizeof(buffer));
-        if (count <= 0) {
-            break;
-        }
-        transcript.append(buffer, static_cast<size_t>(count));
+    const char* testName = std::getenv("GC_UNIT_OTHER_VM_CHILD");
+    GC_EXPECT_TRUE(testName != nullptr);
+    // Re-enter the selected test through exec, before recreating its fixture.
+    GC_EXPECT_EQ(setenv("GC_UNIT_VERIFY_SCENE", expectedDiagnostic, 1), 0);
+    try {
+        RunInOtherVm(testName, expectedDiagnostic);
+    } catch (...) {
+        unsetenv("GC_UNIT_VERIFY_SCENE");
+        throw;
     }
-    close(childStderr[0]);
-    (void)std::fwrite(transcript.data(), 1, transcript.size(), stderr);
-    std::fflush(stderr);
-    int status = 0;
-    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    const bool target = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
-        transcript.find(expectedDiagnostic) != std::string::npos;
-    std::fprintf(stderr, "VERIFY_TARGET_ASSERT_EXECUTED diagnostic=%s status=%d matched=%d\n",
-                 expectedDiagnostic, status, target);
-    GC_EXPECT_TRUE(target);
+    GC_EXPECT_EQ(unsetenv("GC_UNIT_VERIFY_SCENE"), 0);
+    std::fprintf(stderr, "VERIFY_TARGET_ASSERT_EXECUTED diagnostic=%s matched=1\n", expectedDiagnostic);
 }
 
 } // namespace
@@ -216,16 +201,26 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
     remset.Record(slot);
     const bool currentActive = Heap::GetHeap().OldActiveRemsetIsCurrent();
     if (currentActive) { remset.FlipForMinor(); }
-    const uintptr_t before = fixture.region0->GetRegionAllocPtr();
-    void* shared = mmap(nullptr, sizeof(uintptr_t), PROT_READ | PROT_WRITE,
-                        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    // Preserve the rejection sample across exec. Both addresses are sampled
+    // in the rejecting child, never compared across process address spaces.
+    const char* inherited = std::getenv("GC_UNIT_REJECT_TOP_FD");
+    const bool ownsFd = inherited == nullptr;
+    const int sampleFd = ownsFd ? static_cast<int>(syscall(SYS_memfd_create, "gc-unit-reject-top", 0)) :
+                                 std::stoi(inherited);
+    GC_EXPECT_TRUE(sampleFd >= 0);
+    if (ownsFd) { GC_EXPECT_EQ(ftruncate(sampleFd, 2 * sizeof(uintptr_t)), 0); }
+    void* shared = mmap(nullptr, 2 * sizeof(uintptr_t), PROT_READ | PROT_WRITE, MAP_SHARED, sampleFd, 0);
     GC_EXPECT_TRUE(shared != MAP_FAILED);
     auto* observed = static_cast<volatile uintptr_t*>(shared);
-    *observed = 0;
+    if (ownsFd) {
+        observed[0] = observed[1] = 0;
+        GC_EXPECT_EQ(setenv("GC_UNIT_REJECT_TOP_FD", std::to_string(sampleFd).c_str(), 1), 0);
+    }
     ExpectSceneAbort(currentActive ? "previous remset bits should be cleared" :
                                     "current remset bits should be cleared", [&] {
         rejectedPage = fixture.region0;
-        rejectedTop = observed;
+        observed[0] = fixture.region0->GetRegionAllocPtr();
+        rejectedTop = observed + 1;
         (void)signal(SIGABRT, RecordRejectedTop);
         auto& old = Heap::GetHeap().old();
         if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
@@ -234,8 +229,12 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
         old.relocate().relocate(&old.relocation_set());
         old.Workers()->set_inactive();
     });
-    const uintptr_t after = *observed;
-    (void)munmap(shared, sizeof(uintptr_t));
+    const uintptr_t before = observed[0];
+    const uintptr_t after = observed[1];
+    (void)munmap(shared, 2 * sizeof(uintptr_t));
+    close(sampleFd);
+    if (ownsFd) { GC_EXPECT_EQ(unsetenv("GC_UNIT_REJECT_TOP_FD"), 0); }
+    GC_EXPECT_NE(before, uintptr_t{0});
     std::fprintf(stderr, "REMSET_REJECT_BEFORE_RESET_ASSERT_EXECUTED before=%#zx after=%#zx\n", before, after);
     // ZGC zRelocate.cpp:993-1008 verifies before do_forwarding mutates top.
     GC_EXPECT_EQ(after, before);

@@ -5,10 +5,6 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include <atomic>
-#include <csignal>
-#include <fcntl.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zStat.hpp"
@@ -55,26 +51,6 @@ public:
 } // namespace MapleRuntime
 
 namespace {
-
-int WaitChildExit(pid_t pid)
-{
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
-        return -1;
-    }
-    return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
-}
-
-void EnterIsolatedChild()
-{
-    int devnull = open("/dev/null", O_WRONLY);
-    if (devnull >= 0) {
-        (void)dup2(devnull, STDERR_FILENO);
-        (void)dup2(devnull, STDOUT_FILENO);
-        (void)close(devnull);
-    }
-    (void)signal(SIGABRT, SIG_DFL);
-}
 
 // zPage.inline.hpp object_iterate walks a dense allocation interval.
 void PlaceOwnerObjects(GcHeapFixture& fx)
@@ -194,18 +170,6 @@ bool RunYoungRuntimeProductEntry()
     return !queue.IsActive() && queue.PendingCount() == 0;
 }
 #endif
-
-template<bool (*Scenario)()>
-void ExpectIsolatedScenarioPasses()
-{
-    const pid_t pid = fork();
-    GC_EXPECT_TRUE(pid >= 0);
-    if (pid == 0) {
-        EnterIsolatedChild();
-        _exit(Scenario() ? 0 : 1);
-    }
-    GC_EXPECT_EQ(WaitChildExit(pid), 0);
-}
 
 } // namespace
 
@@ -368,20 +332,20 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
 }
 #endif
 
-GC_TEST(RelocateWorkers, ProductParallelEntryRegistersWorkersAndClosesGeneration)
+GC_OTHER_VM_TEST(RelocateWorkers, ProductParallelEntryRegistersWorkersAndClosesGeneration)
 {
-    ExpectIsolatedScenarioPasses<RunParallelProductEntryClosesGeneration>();
+    GC_EXPECT_TRUE(RunParallelProductEntryClosesGeneration());
 }
 
-GC_TEST(RelocateWorkers, ProductSerialEntryRegistersWorkerAndClosesGeneration)
+GC_OTHER_VM_TEST(RelocateWorkers, ProductSerialEntryRegistersWorkerAndClosesGeneration)
 {
-    ExpectIsolatedScenarioPasses<RunSerialProductEntryClosesGeneration>();
+    GC_EXPECT_TRUE(RunSerialProductEntryClosesGeneration());
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(RelocateWorkers, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
+GC_OTHER_VM_TEST(RelocateWorkers, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
 {
-    ExpectIsolatedScenarioPasses<RunYoungRuntimeProductEntry>();
+    GC_EXPECT_TRUE(RunYoungRuntimeProductEntry());
 }
 #endif
 

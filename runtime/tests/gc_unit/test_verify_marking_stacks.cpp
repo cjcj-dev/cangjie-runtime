@@ -71,34 +71,21 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
         mark.Start();
         GC_EXPECT_EQ(stripes.Population(), 0u);
     };
-    // Fork before creating the worker pool. Its owner-registry locks must not
-    // be inherited from threads that do not exist in the child.
-    int diagnosticPipe[2];
-    GC_EXPECT_EQ(pipe(diagnosticPipe), 0);
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        close(diagnosticPipe[0]);
-        if (dup2(diagnosticPipe[1], STDERR_FILENO) < 0) { _exit(126); }
-        close(diagnosticPipe[1]);
+    // Each scene starts through exec before the harness creates its heap.
+    // A second bare fork here would inherit the shared heap's worker locks.
+    if (std::getenv("GC_UNIT_MARKING_STACK_REJECT") != nullptr) {
         signal(SIGABRT, SIG_DFL);
         runScene(true);
-        _exit(0);
+        return; // A normal return must fail the parent's expected-abort check.
     }
-    close(diagnosticPipe[1]);
-    std::string diagnostic;
-    char buffer[512];
-    ssize_t length;
-    while ((length = read(diagnosticPipe[0], buffer, sizeof(buffer))) > 0) {
-        diagnostic.append(buffer, static_cast<size_t>(length));
+    GC_EXPECT_EQ(setenv("GC_UNIT_MARKING_STACK_REJECT", "1", 1), 0);
+    try {
+        RunInOtherVm("MarkingStacks.RejectsPublishedStackAndAcceptsDrainedStack",
+                     "Shared marking stripes are not empty");
+    } catch (...) {
+        unsetenv("GC_UNIT_MARKING_STACK_REJECT");
+        throw;
     }
-    close(diagnosticPipe[0]);
-    std::fwrite(diagnostic.data(), 1, diagnostic.size(), stderr);
-    int status = 0;
-    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    const bool target = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
-        diagnostic.find("Shared marking stripes are not empty") != std::string::npos;
-    std::fprintf(stderr, "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=%d matched=%d\n", status, target);
-    GC_EXPECT_TRUE(target);
+    GC_EXPECT_EQ(unsetenv("GC_UNIT_MARKING_STACK_REJECT"), 0);
     runScene(false);
 }
