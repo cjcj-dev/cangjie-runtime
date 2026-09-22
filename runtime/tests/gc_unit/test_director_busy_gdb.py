@@ -20,6 +20,7 @@ INITIAL = int(os.environ['BUSY_INITIAL'])
 CURRENT = int(os.environ['BUSY_CURRENT'])
 RESIZE = int(os.environ.get('BUSY_RESIZE', '0'))
 EQUAL = int(os.environ.get('BUSY_EQUAL', '0'))
+DYNAMIC = int(os.environ.get('BUSY_DYNAMIC', '1'))
 SOURCE = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
 READS = []
 RETURNS = set()
@@ -146,7 +147,7 @@ try:
     for setting in ('pagination off', 'confirm off', 'breakpoint pending on',
                     'print thread-events off'):
         command('set ' + setting)
-    command('set environment cjUseDynamicNumberOfGCThreads 1')
+    command('set environment cjUseDynamicNumberOfGCThreads ' + str(DYNAMIC))
     fixture = 'GcDirector.ProductWarmupStopsAfterThreeCycles'
     command('set environment GC_UNIT_FILTER ' + fixture)
     command('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
@@ -156,6 +157,7 @@ try:
     command('set var params.gcParam.concGCThreads=2')
     command('set var params.gcParam.youngGCThreads=2')
     command('set var params.gcParam.oldGCThreads=2')
+    command('set var params.gcParam.staticGCThreads=' + str(1 - DYNAMIC))
     if SITE == 'merge':
         gdb.Breakpoint('test_gc_director.cpp:142', temporary=True)
         command('continue')
@@ -180,8 +182,9 @@ try:
     command('call ((void (*)(void*, unsigned int, unsigned int, unsigned int)) '
             '&_ZN12MapleRuntime14ZDriverRequestC1ENS_8GCReasonEjj)($req, 3, 1, 1)')
     workers = 'MapleRuntime::ZCollectedHeap::_collected_heap->_heap._old.workers.get()'
-    if EQUAL:
-        command('call ' + workers + '->set_active_workers(1)')
+    if not DYNAMIC or EQUAL:
+        active_workers = (2 if EQUAL else 1) if not DYNAMIC else 1
+        command('call ' + workers + '->set_active_workers(' + str(active_workers) + ')')
     if RESIZE:
         command('call ' + workers + '->set_active()')
     director.switch()
@@ -236,8 +239,19 @@ try:
     if SITE == 'merge':
         MajorRule('zDirector.cpp:' + str(LINES['rule']), internal=True)
     emit('TARGET_BEFORE', site=SITE, initial=INITIAL, current=CURRENT, location=location())
+    if SITE == 'resize':
+        actual_dynamic = bool(value('MapleRuntime::UseDynamicNumberOfGCThreads'))
+        emit('RESIZE_INPUT', dynamic=actual_dynamic,
+             configured_old_workers=int(value('MapleRuntime::ZOldGCThreads')),
+             sampled_workers=diagnostic('stats.old_stats.resize.nworkers_current'))
+        if actual_dynamic != bool(DYNAMIC):
+            raise RuntimeError('RuntimeParam did not establish the requested worker policy')
     if SITE == 'select':
         advance('resize')
+    elif SITE == 'resize':
+        # A source-level next can step past the send boundary when this small
+        # function is inlined. Stop at the output boundary before stepping.
+        advance('send')
     else:
         command('next')
     after = location()
@@ -257,8 +271,11 @@ try:
         if location()['line'] != LINES['send']:
             advance('send')
         observed = int(value(workers + '->_requested_nworkers._M_i'))
-        expected = 1 if CURRENT and not EQUAL else 0
-        check('ASSERT_RESIZE', observed == expected, requested_workers=observed, expected=expected)
+        expected = 1 if DYNAMIC and CURRENT and not EQUAL else 0
+        check('ASSERT_RESIZE', observed == expected, requested_workers=observed, expected=expected,
+              dynamic=DYNAMIC, equal=EQUAL, current=CURRENT,
+              sampled_workers=diagnostic('stats.old_stats.resize.nworkers_current'),
+              selected_workers=diagnostic('selection.old_workers'))
     if SITE == 'major':
         rejected = after['function'] == 'MapleRuntime::start_gc'
     elif SITE == 'minor':
