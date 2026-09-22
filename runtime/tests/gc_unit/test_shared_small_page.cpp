@@ -17,6 +17,7 @@
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
+#include "Mutator/MutatorManager.h"
 #include "Heap/z/zStat.hpp"
 #if defined(__linux__)
 #include <sched.h>
@@ -154,7 +155,10 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     const uintptr_t refilled = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(refilled != 0);
     GC_EXPECT_TRUE(Heap::page(refilled) != eden);
-    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+    {
+        ScopedStopTheWorld stopped("object allocator retirement");
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+    }
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     const uintptr_t retired = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(retired != 0);
@@ -167,7 +171,10 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     ZPage* old = pages[untype(PageAge::old)];
     GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(16, PageAge::old, true), old->GetRegionStart() + 32);
     GC_EXPECT_TRUE(old->IsAllocating());
-    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+    {
+        ScopedStopTheWorld stopped("object allocator retirement");
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+    }
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     const uintptr_t newOld = Heap::GetHeap().object_allocator().alloc(16, PageAge::old, true);
     GC_EXPECT_TRUE(newOld != 0);
@@ -277,5 +284,30 @@ GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
     GC_EXPECT_TRUE(first != 0);
     GC_EXPECT_EQ(second, first + 16);
     GC_EXPECT_TRUE(slot == Heap::page(first));
+}
+#endif
+
+#if defined(__linux__)
+// ZGC zObjectAllocator.cpp:196-202: retirement is legal only in a pause.
+GC_OTHER_VM_TEST(ObjectAllocator917, RetirementRequiresSafepoint)
+{
+    const char* scene = std::getenv("GC_UNIT_RETIRE917_SCENE");
+    if (scene == nullptr) {
+        for (const char* age : {"young", "old"}) {
+            GC_EXPECT_EQ(setenv("GC_UNIT_RETIRE917_SCENE", age, 1), 0);
+            try {
+                RunInOtherVm("ObjectAllocator917.RetirementRequiresSafepoint", "Should be at safepoint");
+            } catch (...) {
+                unsetenv("GC_UNIT_RETIRE917_SCENE");
+                throw;
+            }
+            GC_EXPECT_EQ(unsetenv("GC_UNIT_RETIRE917_SCENE"), 0);
+        }
+        return;
+    }
+    GC_EXPECT_TRUE(!MutatorManager::Instance().WorldStopped());
+    (void)signal(SIGABRT, SIG_DFL);
+    Heap::GetHeap().object_allocator().retire_pages(
+        std::strcmp(scene, "young") == 0 ? kPageAgeRangeYoung : kPageAgeRangeOld);
 }
 #endif

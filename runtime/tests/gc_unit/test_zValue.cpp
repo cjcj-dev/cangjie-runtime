@@ -16,6 +16,7 @@
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
+#include "Mutator/MutatorManager.h"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zValue.inline.hpp"
 #include "gc_unittest.hpp"
@@ -113,7 +114,10 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     }
 
     // retire_pages: every slot of the age is cleared.
-    Heap::GetHeap().object_allocator().retire_pages(PageAgeRange::create<PageAge::eden, PageAge::survivor1>());
+    {
+        ScopedStopTheWorld stopped("object allocator retirement");
+        Heap::GetHeap().object_allocator().retire_pages(PageAgeRange::create<PageAge::eden, PageAge::survivor1>());
+    }
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(other) == nullptr);
     }

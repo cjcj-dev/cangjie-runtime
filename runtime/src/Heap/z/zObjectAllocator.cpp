@@ -273,16 +273,22 @@ uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking, bo
     return allocator(age)->alloc_object(size, flags, clearPayload);
 }
 
-// ZObjectAllocator::retire_pages / PerAge::retire_pages (cpp:208-237).
+// ZGC zObjectAllocator.cpp:196-202.
+void ZObjectAllocator::PerAge::retire_pages()
+{
+    CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "Should be at safepoint");
+
+    sharedMediumPage.set(nullptr);
+    sharedSmallPage.set_all(nullptr);
+}
+
+// ZObjectAllocator::retire_pages (zObjectAllocator.cpp:220-224).
 // Called in the corresponding generation's mark-start pause. The lifecycle
 // lists retain pages; retirement only removes allocation shortcuts.
 void ZObjectAllocator::retire_pages(PageAgeRange ages)
 {
-    // zObjectAllocator.cpp:198-203 PerAge::retire_pages: set_all(nullptr).
     for (PageAge age : ages) {
-        auto* perAge = allocator(age);
-        perAge->sharedSmallPage.set_all(nullptr);
-        perAge->sharedMediumPage.set(nullptr);
+        allocator(age)->retire_pages();
     }
 }
 
