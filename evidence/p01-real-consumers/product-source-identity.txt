@@ -1,3 +1,0 @@
-build_sha=1d7149296c4d29a0daa90bbf8ae8ee0f390055fa
-head=ca3393086148856f818f1a88f3f70d6574cb97ca
-product_diff_rc=0

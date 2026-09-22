@@ -1,7 +1,0 @@
-# slot test2 acquired 2026-09-16T05:08:17+08:00
-UNIT arm=/root/sym_cangjie_runtime_610_implement_r5687426297-cut4 config=default rc=1 wall=9
-[==========] 524 tests from 93 test suites ran.
-[  PASSED  ] 523 tests.
-[  FAILED  ] 1 tests, listed below:
-[  FAILED  ] MappedCache.SmallPagesUseLowestAddress
-GC_UNIT_PARALLEL jobs=192 tests=524 wall=8.501

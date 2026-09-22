@@ -1,5 +1,0 @@
-# slot test0 acquired 2026-09-16T04:52:07+08:00
-unit=default rc=0
-[==========] 523 tests from 93 test suites ran.
-[  PASSED  ] 523 tests.
-GC_UNIT_PARALLEL jobs=192 tests=523 wall=8.672

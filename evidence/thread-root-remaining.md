@@ -1,4 +1,0 @@
-100117Z第2条已按plain旧地址构造，目标断言保留。最新testable实际仍红：C1根字=0x40000001010，current=0x40000001000，stale_marked=1/current_marked=0，日志 kkk2:/root/sym_cangjie_runtime_608_implement_r5676392826-native-domain/units/testable/test-logs/000323-main.log。
-定位：Mutator.cpp PushHeapRoot 在原高位布局时把根字临时装HeapSlot然后make_load_good，原测试给RootSlot塞StoreGoodPointer(from)来携带历史；改plain后失去颜色历史。现代码按原注释“此前eager握手已current”直接发布object，该假设已被真实握手标记路径证伪。RemapYoungRoots五个真实旧GC入口用例在修复HealRoot写回后已通过，但四个测试调用NativeRootTrace->TraceHeap的mark-before-root路径未先RemapYoungRoots。
-请求最小归属裁决：P01应在此接哪一个已有plain根remap API？还是缺少P10 (#617)保存/消费root epoch的跨包机制？不能用当前address是否在table里猜当前/历史（in-place地址复用会歧义），也不削弱先current后mark断言。保持WIP。
-另：任务正文明确ClassifySlotWord常开CHECK退debug已做；PlainWriteFunnelFailsClosed只在testable而非debug下期待原CHECK。自动审批拒绝按旧机制整条删除，此文件保留原样，暂实录失败，不绕过拒绝。

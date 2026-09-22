@@ -1,8 +1,0 @@
-# slot test2 acquired 2026-09-16T05:06:37+08:00
-UNIT arm=/root/sym_cangjie_runtime_610_implement_r5687426297-green config=testable rc=1 wall=19
-[==========] 720 tests from 112 test suites ran.
-[  PASSED  ] 718 tests.
-[  FAILED  ] 2 tests, listed below:
-[  FAILED  ] NativeRootCurrent.MajorSeed
-[  FAILED  ] ColourCensus.PlainWriteFunnelFailsClosed
-GC_UNIT_PARALLEL jobs=192 tests=720 wall=10.382

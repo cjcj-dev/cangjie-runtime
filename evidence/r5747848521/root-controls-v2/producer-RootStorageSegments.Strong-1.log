@@ -1,8 +1,0 @@
-[  RUN   ] RootStorageSegments.Strong
-[  RUN   ] RootStorageSegments.Strong
-ROOT_SEGMENT_TARGET executed=1 family=0 slots=1536 remaining=1536 transitioned=0 values_valid=1
-[  FAIL  ] RootStorageSegments.Strong
-  sym_cangjie_runtime_627_implement_r5747848521/testable/runtime/tests/gc_unit/test_native_root_current.cpp:513: EXPECT failed: covered && valuesValid && transitioned == count
-[  FAIL  ] RootStorageSegments.Strong
-  other-vm child did not exit cleanly with sentinel for RootStorageSegments.Strong
-[========] 1 tests: 0 passed, 1 failed

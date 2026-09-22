@@ -1,7 +1,0 @@
-[  RUN   ] RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource
-[  RUN   ] RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource
-RAW_REMAP_TARGET_ASSERT promoted=0 managed=1 before=40000c00000 after=40000600000 expected=40000600000 base=40000600000 derived=40000600008 final_root=40000600000 result=1
-RAW_REMAP_OUTCOME_ASSERT promoted=0 managed=1 old=0 status=0 completed=1
-GC_UNIT_OTHER_VM_OKIDOKI RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource
-[  PASS  ] RawRemapYoungProduct.MajorWatermarkRemapsDerivedYoungSource
-[========] 1 tests: 1 passed, 0 failed

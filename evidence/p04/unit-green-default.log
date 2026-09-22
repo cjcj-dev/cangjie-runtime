@@ -1,5 +1,0 @@
-# slot test1 acquired 2026-09-16T05:06:33+08:00
-UNIT arm=/root/sym_cangjie_runtime_610_implement_r5687426297-green config=default rc=0 wall=17
-[==========] 524 tests from 93 test suites ran.
-[  PASSED  ] 524 tests.
-GC_UNIT_PARALLEL jobs=192 tests=524 wall=8.596

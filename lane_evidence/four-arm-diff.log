@@ -1,7 +1,0 @@
-# kkk2_diff cand=37e69d9bbcad8425dee9527ee872e45af63fbe97 base=0189f2e0151506709f4ea9f2100956402f5c0e28 2026-09-20T19:25:45+08:00
-# pinned runner sha256=458eb18d058a23f6cb21bad108242776593be387a077847f7285a698558c8316 path=kkk2:/root/diff_harness_708/458eb18d058a/kkk2_managed.sh
-# diff_0189f2e01515: 命中缓存
-# diff_37e69d9bbcad: 构建两构型…
-== default configure_rc=0 build_rc=0 wall=11s
-== testable configure_rc=0 build_rc=0 wall=11s
-# diff_37e69d9bbcad: 三臂+managed 并行…

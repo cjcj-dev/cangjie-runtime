@@ -1,6 +1,0 @@
-green
-../../../sym_cangjie_runtime_610_implement_r5687426297-llvm/green/CJBarrierLowering.cpp
-_GLOBAL__sub_I_CJBarrierLowering.cpp
-restored
-../../../sym_cangjie_runtime_610_implement_r5687426297-llvm/restored/CJBarrierLowering.cpp
-_GLOBAL__sub_I_CJBarrierLowering.cpp

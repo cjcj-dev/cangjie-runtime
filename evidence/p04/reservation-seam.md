@@ -1,7 +1,0 @@
-LANE=sym_cangjie_runtime_610_implement_r5687426297
-ROLE=implement
-PROGRESS=WIP
-
-逐hunk合成发现P04原候选违反P01必须保留的真实段契约：zPageAllocator.cpp:586与:1256用ReservedAddressSpan构造单个UnitSegment；:1272将reservedStart/reservedEnd单包围区间喂Heap::OnHeapCreated。P01 main同函数按MemMap::GetReservationRegistry().Ranges()发布真实段，但P04必须删ReservationRegistry，不可整段恢复旧MemMap。新ZGC manager只有分区_registry，无Snapshot接口。
-建议最小基础设施适配：初始化期间在RegionManager外壳使用现有remove_from_low_many_at_most(ZAddressOffsetMax,0,&ranges)暂取全部空闲范围，再逐insert归还；把这份临时ZArray转成UnitSegment喂已有逆向metadata和Heap::OnHeapCreated，不向ZGC manager增加Snapshot/持久第二注册表。P01槽域发布保留真实段；运行期claim/free仍只通过P04管理器。单分区按P06正式ZPerNUMA count=1（A03n延后）。RegionManager初始化前操作，无线程竞争。请确认此P01 ABI基础设施适配边界或给指定接法；独立容器迁移继续，尚无构建。
-附：原P04 globals ZMaxVirtualReservations=100，P01 g_cjHeapRangeCap=8；若真实段>8，现有Heap::PublishHeapRange会CHECK。需主控指明P01范围契约处理，不能静默放宽CHECK或新增兼容路径。

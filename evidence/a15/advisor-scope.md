@@ -1,2 +1,0 @@
-lane: sym_cangjie_runtime_496_implement_r5656148950
-主控裁定（0914 05:1x）：范围确认。① 新增 Heap/z/zBreakpoint.{hpp,cpp}，并按参考把 gc/shared/concurrentGCBreakpoints.{hpp,cpp} 的请求/到达/暂停/恢复状态机原协议移植为共享文件（放 Heap/z/ 下、命名照 ZGC/shared 原名即可，⛔ 不加开关）；② zGeneration.cpp 三个 phase 通知点（对应 zGeneration.cpp:1088/1091/1127）与 zDriver.cpp 的请求/周期边界接线；③ 删除 Heap/z/zRelocate.cpp 与旧层 Heap/Collector/zRelocate.cpp 的 RunRemapWindowTestHook 散点回调及声明、对应测试改用 breakpoint 协议。坐标：冻结 78fc9ce0，交付前 fetch＋merge cjcjdev/main 40391676（A10b 合入，driver/generation 已改），同分支同 PR。

@@ -1,3 +1,0 @@
-Handle多根反例发现另一个必要前提：Mutator.h:547 nativeFrameRoots是std::vector<ObjectRef>，Mutator.cpp:333 AddNativeFrameRoot emplace_back后返回&back。第二/第三个Handle创建触发vector扩容，先前Handle.slot失效（不是GC后的取址问题）。真实MCC_ApplyCJStaticMethod入口的输入数组字段已读到错误地址；gdb在调用前确认根的使用结果，kkk2:/root/sym_cangjie_runtime_581_implement_r5748887475_args2/argument-debug2.log。单根注解用例不暴露它。
-计划把native根槽改成地址稳定的分块存储（std::deque<ObjectRef>；删除通过resize尾截，RemoveNativeFrameRoot在非尾情况清空slot而不移动其它slot）。ZGC HandleArea在Arena块中分配，不因新增Handle改变旧slot地址，handles.cpp/handles.inline.hpp锚入表；C++容器代替HotSpot Arena记基础设施差异。不存在新增pin机制。
-这在已授权Handle迁移的数据生产端必要修复范围内；如主控要求逐字段移植Arena而非deque，请指出。我先按稳定槽推进，保持WIP。

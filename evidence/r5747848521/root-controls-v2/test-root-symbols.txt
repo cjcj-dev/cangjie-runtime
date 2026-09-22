@@ -1,4 +1,0 @@
-000000000021bfe1 b _ZL30RootStorageSegments_Export_reg
-000000000021bfdf b _ZL30RootStorageSegments_Strong_reg
-000000000021bfe0 b _ZL37RootStorageSegments_WeakFinalizer_reg
-0000000000023bd0 T main

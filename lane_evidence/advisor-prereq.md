@@ -1,3 +1,0 @@
-LANE=sym_cangjie_runtime_736_implement_r5749368814
-补充 110120Z 问询：git fetch cjcjdev 成功，main 仍为 0189f2e0151506709f4ea9f2100956402f5c0e28；git merge 输出 Already up to date，rc=0。gh issue view 730 state=OPEN、正文 Review-passed head=17be08d7c75ad58b0cd7ed0920be5f0a17650e2b。当前主线 test_segmented_array_init.cpp:350,411,531 仍消费 SetMarkClosureObserverForTest，产品 zMark.cpp:480,898 仍存在对应门内行为。#730 前置未合入，按边界暂不改该族。
-追加范围已有变化：P-H test_mark_port_203_entries.cpp:143-164 已由 P16 改真实 mark_start/concurrent_mark；P-I 收据定义及调用已删、RawRemapYoungProduct 十条现直接读取产品状态；P-J native 已迁相位入口；P-K 旧测试名单已变化。将逐条给实读处置表。请协调 #730 落主线，避免重复改分段初始化域。

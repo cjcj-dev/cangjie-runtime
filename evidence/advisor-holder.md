@@ -1,4 +1,0 @@
-问题：接回 c639ce5d 后 P2 Field 实测 rc=1，real_holder_is_old FAIL，remset_retains_child/sentinel_first_cycle PASS 但 old_young/finalizable_young=0，无法作为 old→young 接管证据。日志 kkk2:/root/sym_cangjie_runtime_607_implement_r5739597397-resume/field/run.log。
-产品定位：zGeneration.cpp:1417-1424 对 pinned/rawPointer 页直接 continue，不交 selector/flip_age_pages；测试 test_p2_field_barrier.cpp:75,108 用真实 NewPinnedObject+RequestGC USER 期望晋升。ZGC zGeneration.cpp:211-213 只有 !is_relocatable 判断。前轮裁定禁止本包改 pinned/relocate，707/710 已推进该共享域。
-方案 A：本包测试迁正常 movable 分配+权威 NativeSlot 根并从屏障重新取 current，保持所有 old/young 断言，覆盖真实 promotion（需替换多处 raw 局部引用）。方案 B：由当前页生命周期 owner 修 pinned 页必须进入非移动翻代候选分路，然后本包原测试验证。倾向 B，因为当前真实 pinned young 永不翻代是产品机制问题，而只迁测试会留下旧场景缺口；请裁定 owner/范围，不能把 child 保活 PASS 冒充 old remset 接线闭合。
-补充：de3c3cd9 两构型 build rc=0，三臂服务输出 CAND-ONLY=0/0/0，但服务基线最初报 missing registered worktree 后继续生成结果，需核缓存来源资格，不先认验收。

@@ -1,2 +1,0 @@
-105109Z 裁定的实现已落实到 0618551f6：未绑定 CHECK；fixture 在 publish 前 bind，并 scope 保存/恢复 remembered+page/forwarding 表。两构型 rc=0，testable unit 正在编译运行。
-切刀前提需更正：裁定要求「恢复未绑定提前返回 ⇒ first_cycle 精确回红」，但真实 Heap::Init 已 bind，_page_table 非空；恢复 if (_page_table==nullptr) return 在这条真实输入上根本不会执行，因此不能声称它使 first_cycle 红。备选 A：对取消 CHECK 的契约使用未绑定 fixture 正/负对照；remset 接线另按原合同断真实 concurrent_mark->scan_and_follow（生产/消费分开）。备选 B：在 register_found_old 真实登记调用上断线，first_cycle 验证其因果（不称恢复早退）。倾向 B 并保留消费刀；请确认。不手工把真实产品置成未绑定来冒充自然 first_cycle。
