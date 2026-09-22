@@ -172,7 +172,13 @@ bool Uncommitter::Activate()
     cycleStart = now;
     nextUncommitNs = 0;
     uncommitted = 0;
-    toUncommit = partition.capacity - partition.minCapacity;
+    // ZGC zUncommitter.cpp:222-242: claim this partition's cache history.
+    std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
+    const size_t uncommitWatermark = partition.cache.min_size_watermark();
+    const size_t budget = AlignUp(static_cast<size_t>(double(uncommitWatermark) * 0.9), ZGranuleSize);
+    const size_t limit = partition.capacity - partition.minCapacity;
+    toUncommit = std::min(limit, budget);
+    partition.cache.reset_min_size_watermark();
     return true;
 }
 
