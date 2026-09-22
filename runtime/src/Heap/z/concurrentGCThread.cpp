@@ -34,6 +34,12 @@ RuntimeInitialization& RuntimeInit()
 }
 } // namespace
 
+// runtime/init.cpp:241-243: acquire the shared initialization completion state.
+bool ConcurrentGCThread::IsRuntimeInitialized()
+{
+    return RuntimeInit().completed.load(std::memory_order_acquire);
+}
+
 void ConcurrentGCThread::NotifyRuntimeInitialized()
 {
     auto& initialization = RuntimeInit();

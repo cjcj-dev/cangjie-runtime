@@ -9,7 +9,12 @@
 // Private sampler/history construction tests retire with the TU-private types
 // per A12b advisor 20260913T211044Z.
 #include "gc_unittest.hpp"
+#include "CjScheduler.h"
+extern "C" int CJ_ScheduleManagerInit();
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zPageAllocator.hpp"
+#include "Mutator/ThreadLocal.h"
 #include <cstring>
 #if defined(__linux__)
 #include <sys/wait.h>
@@ -21,6 +26,62 @@ using namespace MapleRuntime::GcUnit;
 
 namespace {
 const ZStatSampler unobserved("Test", "Unobserved", ZStatUnitTimeNs);
+
+// Exercise the product page-allocation entry and read both product rate
+// consumers. Each case has a fresh process so sampler history is independent.
+void CheckPageAllocationRate(bool relocation, bool initialized)
+{
+    if (initialized) {
+        GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+        MRT_CjRuntimeInit();
+    } else {
+        CreateStandaloneHeap(64);
+    }
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    ZStatMutatorAllocRate::initialize();
+    (void)ZStatMutatorAllocRate::counter().GetAndReset();
+    const auto before = ZStatMutatorAllocRate::stats();
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    if (relocation) flags.set_gc_relocation();
+    // Exceed the sampling granule even with the runner's 1024-granule heap.
+    const size_t allocationSize = 16 * ZGranuleSize;
+    ZPage* page = Heap::alloc_page(allocationSize, ZPageType::large,
+                                 false, false, false, PageAge::eden, flags);
+    GC_EXPECT_TRUE(page != nullptr);
+    const auto bytes = ZStatMutatorAllocRate::counter().GetAndReset().counter;
+    const auto after = ZStatMutatorAllocRate::stats();
+    std::fprintf(stderr, "ALLOC_RATE_TARGET initialized=%d relocation=%d bytes=%llu avg_before=%g avg_after=%g\n",
+                 initialized, relocation, static_cast<unsigned long long>(bytes), before.avg, after.avg);
+    const bool excluded = relocation || !initialized;
+    const bool counterCorrect = bytes == (excluded ? 0U : allocationSize);
+    const bool samplerCorrect = excluded
+        ? after.avg == before.avg && after.predict == before.predict && after.sd == before.sd
+        : after.avg > before.avg;
+    // Evaluate both consumers before asserting, so neither masks the other.
+    GC_EXPECT_TRUE(counterCorrect && samplerCorrect);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationRate855, MutatorPageContributes)
+{
+    CheckPageAllocationRate(false, true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationRate855, RelocationPageExcluded)
+{
+    CheckPageAllocationRate(true, true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationRate855, PreInitMutatorPageExcluded)
+{
+    CheckPageAllocationRate(false, false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationRate855, PreInitRelocationPageExcluded)
+{
+    CheckPageAllocationRate(true, false);
+}
 
 #if defined(__linux__)
 // ZStatIterableValue::sort rewrites registration links during initialization.
