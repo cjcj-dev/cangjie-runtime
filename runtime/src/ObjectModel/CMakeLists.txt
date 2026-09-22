@@ -7,7 +7,6 @@
 set(SRC_LIST
     "MObject.cpp"
     "MClass.cpp"
-    "MArray.cpp"
     "MFunc.cpp"
     "PackageInfo.cpp"
     "FieldInfo.cpp"
