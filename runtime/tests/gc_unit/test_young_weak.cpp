@@ -597,6 +597,20 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
         RunInOtherVm("MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration");
         return;
     }
+    const char* rejectGeneration = std::getenv("GC_UNIT_PRIVATE_STACK_REJECT");
+    if (rejectGeneration == nullptr) {
+        for (const char* generation : {"old", "young"}) {
+            GC_EXPECT_EQ(setenv("GC_UNIT_PRIVATE_STACK_REJECT", generation, 1), 0);
+            try {
+                RunInOtherVm("MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration",
+                             "Thread marking stack is not empty");
+            } catch (...) {
+                unsetenv("GC_UNIT_PRIVATE_STACK_REJECT");
+                throw;
+            }
+            GC_EXPECT_EQ(unsetenv("GC_UNIT_PRIVATE_STACK_REJECT"), 0);
+        }
+    }
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager manager;
     WeakClosureTestRuntime runtime(manager);
@@ -613,17 +627,12 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
         {
             ScopedStopTheWorld stw("mark stacks verification test", false);
             other.verify_all_stacks_empty();
-            const pid_t child = fork();
-            GC_EXPECT_TRUE(child >= 0);
-            if (child == 0) {
+            const char* generation = domain == &old ? "old" : "young";
+            if (rejectGeneration != nullptr && std::strcmp(rejectGeneration, generation) == 0) {
                 signal(SIGABRT, SIG_DFL);
                 current.verify_all_stacks_empty();
-                _exit(0);
+                return; // Normal completion fails the parent's abort assertion.
             }
-            int status = 0;
-            GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-            GC_EXPECT_TRUE(WIFSIGNALED(status));
-            GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
             // Verification of the other generation has not flushed this stack.
             GC_EXPECT_FALSE(stacks.IsEmpty());
             GC_EXPECT_TRUE(current.Stripes().IsEmpty());

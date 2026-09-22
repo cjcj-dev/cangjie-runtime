@@ -21,6 +21,8 @@
 #include <vector>
 
 #if defined(__linux__)
+#include "gc_child_process.hpp"
+#include <poll.h>
 #include <cerrno>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -150,7 +152,7 @@ inline void Fail(const char* file, int line, const char* expr)
 #define GC_COMPONENT_TEST(suite, name) GC_RUNTIME_TEST(suite, name)
 #define GC_COMPONENT_OTHER_VM_TEST(suite, name) GC_RUNTIME_OTHER_VM_TEST(suite, name)
 
-inline void RunInOtherVm(const std::string& fullName)
+inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortDiagnostic = nullptr)
 {
 #if defined(__linux__)
     int childStderr[2];
@@ -158,6 +160,7 @@ inline void RunInOtherVm(const std::string& fullName)
         throw AssertFailure("other-vm pipe failed for " + fullName + ": " + std::strerror(errno));
     }
 
+    const std::string filterArg = "--gtest_filter=" + fullName;
     std::fflush(nullptr);
     const pid_t child = fork();
     if (child == 0) {
@@ -169,7 +172,6 @@ inline void RunInOtherVm(const std::string& fullName)
         (void)setenv("GC_UNIT_OTHER_VM_CHILD", fullName.c_str(), 1);
         (void)unsetenv("GC_UNIT_FILTER");
         (void)unsetenv("GC_UNIT_TALLY_FILE");
-        const std::string filterArg = "--gtest_filter=" + fullName;
         execl("/proc/self/exe", "cj_gc_unit", filterArg.c_str(), static_cast<char*>(nullptr));
         std::fprintf(stderr, "[  ERROR ] exec /proc/self/exe failed: %s\n", std::strerror(errno));
         _exit(127);
@@ -182,10 +184,19 @@ inline void RunInOtherVm(const std::string& fullName)
         throw AssertFailure("other-vm fork failed for " + fullName + ": " + std::strerror(savedErrno));
     }
 
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     std::string transcript;
     char buffer[1024];
     bool readOk = true;
     for (;;) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            readOk = false;
+            break;
+        }
+        pollfd descriptor {childStderr[0], POLLIN, 0};
+        const int ready = poll(&descriptor, 1, 100);
+        if (ready == 0 || (ready < 0 && errno == EINTR)) { continue; }
+        if (ready < 0) { readOk = false; break; }
         const ssize_t count = read(childStderr[0], buffer, sizeof(buffer));
         if (count > 0) {
             transcript.append(buffer, static_cast<size_t>(count));
@@ -203,13 +214,16 @@ inline void RunInOtherVm(const std::string& fullName)
     close(childStderr[0]);
 
     int status = 0;
-    pid_t waitedPid;
-    do {
-        waitedPid = waitpid(child, &status, 0);
-    } while (waitedPid < 0 && errno == EINTR);
-    const bool waited = waitedPid == child;
+    const bool waited = WaitChildExit(child, status, deadline);
     const std::string sentinel = "GC_UNIT_OTHER_VM_OKIDOKI " + fullName + "\n";
     const bool exitedCleanly = waited && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    if (expectedAbortDiagnostic != nullptr) {
+        const bool target = readOk && waited && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+            transcript.find(expectedAbortDiagnostic) != std::string::npos;
+        std::fprintf(stderr, "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=%d matched=%d\n", status, target);
+        if (!target) { throw AssertFailure("other-vm child missed expected abort for " + fullName); }
+        return;
+    }
     if (!readOk || !exitedCleanly || transcript.find(sentinel) == std::string::npos) {
         throw AssertFailure("other-vm child did not exit cleanly with sentinel for " + fullName);
     }
