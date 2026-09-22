@@ -941,7 +941,9 @@ GC_RUNTIME_OTHER_VM_TEST(TLABRefill, FailureFallsBackOutsideTLAB)
     const uintptr_t before = page->GetRegionAllocPtr();
     const size_t refill = buffer->ComputeTLABSize(bytes, heap.unsafe_max_tlab_alloc());
     GC_EXPECT_TRUE(refill > tail);
-    auto* object = MObject::NewObject(TLABTestType(), bytes, AllocType::MOVEABLE_OBJECT);
+    TypeInfo* type = TLABTestType();
+    type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
+    auto* object = MObject::NewObject(type, bytes, AllocType::MOVEABLE_OBJECT);
     const uintptr_t after = page->GetRegionAllocPtr();
     const bool success = reinterpret_cast<uintptr_t>(object) == before && after == before + bytes &&
                          buffer->TLABSize() == 0;
