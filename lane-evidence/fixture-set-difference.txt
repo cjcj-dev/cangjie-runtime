@@ -1,1 +1,0 @@
-base 48 candidate 48 candidate_only [] base_only []

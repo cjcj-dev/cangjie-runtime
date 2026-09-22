@@ -1,4 +1,0 @@
-续101540Z：已在C1..C4夹具直接TraceHeap前调用真实collector.RemapYoungRoots，最新order-fixture default/filler 520全过；testable719项715通过4失败：MajorSeed(#616)、PlainWriteFunnel(审批保留)、C1栈对象字段/C4无头记录。
-准确路径差异：zRelocate.cpp:320 RemapYoungRoots的threadVisitor将普通visitor直接传DrainStackWatermark/VisitHeapReferences；Mutator.cpp:982 VisitNativeFrameRoots(visitor)使visitor只看到stackObject地址，Heap::IsHeapAddress=false而跳过。标记GcPhaseEnum在Mutator.cpp:1012-1045却会展开stackObject字段/无头记录。现成无副作用展开器是Mutator::VisitHeapRootSlots(root,visitor)（:824），目前仅zVerify.cpp:115调用。
-该差异通过真实RemapYoungRoots产品函数后仍出现，不是fixture缺少调用顺序。最小可修方案：仅在RemapYoungRoots的每个mutator threadVisitor中，把ordinary/invisible root visitor都包一层mutator.VisitHeapRootSlots(root,visitor)，derived仍用原visitor。无新增API/不猜地址历史；利用既有stack-range+对象形态分路。
-请确认P01最小消费者域迁移可做，还是绑定P10#617/P14#623已知红由别包补。若属本包将保留C1/C4目标断言并做真实Preforward入口切刀。

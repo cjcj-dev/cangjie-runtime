@@ -1,4 +1,0 @@
-文件系统        大小  已用  可用 已用% 挂载点
-/dev/nvme0n1p5  443G  418G  1.8G  100% /
- 04:42:35 up 6 days,  4:50,  1 user,  load average: 5.60, 6.15, 4.45
-drwxr-xr-x 17 root root 4096 Sep 15 16:00 /root/sym_cangjie_runtime_608_implement_r5676392826/llvm/llvm-build

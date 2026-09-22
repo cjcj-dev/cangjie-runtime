@@ -1,4 +1,0 @@
-run_stack_watermark_probe.sh              manual     built runtime SO + cpuset; has its own injection arm
-run_stack_grow_probe.sh                   manual     built runtime SO + cpuset; 6 cases
-stack_watermark_harness.cpp               manual     harness for run_stack_watermark_probe.sh
-stack_grow_harness.cpp                    manual     harness for run_stack_grow_probe.sh

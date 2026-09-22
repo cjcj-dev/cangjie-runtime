@@ -1,6 +1,0 @@
-派发冻结=78fc9ce028de705b3ea705b7069759c1036a2796
-开工工作树 git rev-parse HEAD: 78fc9ce028de705b3ea705b7069759c1036a2796 rc=0
-开工 git -C /root/cj_build/cangjie_runtime rev-parse cjcjdev/main: 403916767341fd0610fdc7a1201f1a0333e0da38 rc=0
-候选第一次 git fetch cjcjdev && git merge --no-edit cjcjdev/main: fast-forward 至 403916767341fd0610fdc7a1201f1a0333e0da38 rc=0
-交付前（c522bce01521f118867668e3193b05ad78beb929）fetch + merge: Already up to date. rc=0
-构建源码提交=c93c0b9d95252f3c7d6fc5053c4435aea7fdc7d3

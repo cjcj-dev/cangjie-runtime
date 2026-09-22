@@ -1,3 +1,0 @@
-续100117Z答复第1条的事实回读：产品目前没有“现有readonly登记/段属性”的槽类别查询。rg -n -i 'readonly|read.only|IsReadOnly|Writable' runtime/src命中仅注释/ReadOnlyRootSlot类型，没有运行期权限查询；zBarrier.inline.hpp:26-29实际是先GetTargetObject再!Heap::IsHeapAddress(payload)，zBarrier.cpp:255亦是payload地址启发式。这一前提需更正。
-真实最新托管r4的gdb证据：Barrier::ReadStaticRef读取slot值0x5555557a8480（普通ELF literal），调用来自std.time:initLocal:119。std.time输入IR的_CNbb6TZPATHE/_CNbb9SEPARATORE为weak_odr constant String，前端发cj.gcread.static.struct，这个编译器常量性是可靠类别。P01可以在前端对已知constant全局值载体发plain load/copy；但ReadOnlyNonHeapBoundary测试的匿名mmap+mprotect槽运行期无登记，无法从类型NativeSlot判别。
-提议：编译器已知readonly常量改plain load/copy（本包）；运行期临时只读槽分类用平台映射权限查询（不新增独立root registry，P10迁入时替换）。这可覆盖ELF与mprotect测试且不猜指针位。是否允许？若有现成查询请给具体file锚。当前不添加裸值启发式；等待裁决同时做P01确定消费者修复。

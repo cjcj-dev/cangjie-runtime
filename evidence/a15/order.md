@@ -1,3 +1,0 @@
-LANE=sym_cangjie_runtime_496_implement_r5656148950
-已按裁定移 DoTracing 到 zGeneration.cpp 并接 before marking completed。但进一步 producer 顺序核对：实际 mark_roots 是 WCollector::TraceHeap（zMark.cpp:516）内 DoEnumeration，在 DoTracing 之前。ZGC zGeneration.cpp:1088 的 AFTER MARKING STARTED 必须在 mark_roots 之前，而放在 DoTracing 开头已晚。请求额外授权仅在 WCollector::TraceHeap 入口加 AtAfterMarkingStarted（不移/改其余函数体），DoTracing 不重复通知。
-另外参考 concurrentGCBreakpoints::release_control 的前提禁止与 run_to 并发，且 zDriver terminate/abortpoint 不调用 notify_active_to_idle；本轮 pending stop 解释为 at() 暂停保留控制、周期结束 pending run_to 转 want_idle 并 false（照 shared 原协议），不另发明 shutdown cancel 状态。确认是否按此落实。

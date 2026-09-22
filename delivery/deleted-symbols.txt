@@ -1,1 +1,0 @@
-runtime/tests/gc_unit/test_object_gate.cpp:32:// AllocPinnedFromFreeList (RegionManager.cpp:3611) is the soak caller.

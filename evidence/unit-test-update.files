@@ -1,4 +1,0 @@
-runtime/tests/gc_unit/clear_entries_product_unit.cpp
-runtime/tests/gc_unit/test_barrier_old_atomic.cpp
-runtime/tests/gc_unit/test_defect_regressions.cpp
-runtime/tests/gc_unit/test_remset.cpp

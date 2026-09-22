@@ -1,3 +1,0 @@
-Set cache size limit to 50.0 GB
-OHOS configure=0 arm=128 wall=37 jobs=192
-/root/sym_cangjie_runtime_740_implement_r5747608277-ohos/run.log:GC_UNIT_OHOS_HOST_HEADER_ROOT=/root/sym_cangjie_runtime_740_implement_r5747608277-ohos/build/runtime-staging/include

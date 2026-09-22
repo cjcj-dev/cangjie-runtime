@@ -1,7 +1,0 @@
-# slot test1 acquired 2026-09-16T05:07:58+08:00
-UNIT arm=/root/sym_cangjie_runtime_610_implement_r5687426297-cut2 config=default rc=1 wall=9
-[==========] 524 tests from 93 test suites ran.
-[  PASSED  ] 523 tests.
-[  FAILED  ] 1 tests, listed below:
-[  FAILED  ] ZPhysicalMemoryManager.BackingIndicesSurviveVirtualShuffle
-GC_UNIT_PARALLEL jobs=192 tests=524 wall=8.742

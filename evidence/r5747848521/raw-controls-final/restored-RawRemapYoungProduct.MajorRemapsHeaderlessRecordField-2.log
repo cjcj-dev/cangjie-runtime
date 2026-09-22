@@ -1,8 +1,0 @@
-[  RUN   ] RawRemapYoungProduct.MajorRemapsHeaderlessRecordField
-[  RUN   ] RawRemapYoungProduct.MajorRemapsHeaderlessRecordField
-RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40000c00000 after=40000600000 expected=40000600000 base=0 derived=0 final_root=7ffcb8c950a0 result=1
-NESTED_REMAP_TARGET kind=2 observed=40000600000 expected=40000600000 result=1
-RAW_REMAP_OUTCOME_ASSERT promoted=0 managed=0 old=0 status=0 completed=1
-GC_UNIT_OTHER_VM_OKIDOKI RawRemapYoungProduct.MajorRemapsHeaderlessRecordField
-[  PASS  ] RawRemapYoungProduct.MajorRemapsHeaderlessRecordField
-[========] 1 tests: 1 passed, 0 failed

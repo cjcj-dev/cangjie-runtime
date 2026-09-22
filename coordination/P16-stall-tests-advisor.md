@@ -1,6 +1,0 @@
-LANE=sym_cangjie_runtime_627_implement_r5744767112
-ROLE=implement
-当前default真正跑了446项（tests4），verify目标只剩夹具页龄修正，正在复测；testable迁移正在处理真实平台dlclose边界替代产品测试钩子、friend状态读取等。
-剩余test_allocation_stall_queue.cpp五项完全以OneUnitStallFixture绑定单元RegionManager/SetAllocationStallTestHooks替换真实GC请求：requestGc钩子PublishCapacity和批次停顿控制。断言有真实容量独占/等待saferegion/晚到请求不误失败，不能按receipt测试删。产品分配器正归#727整栈改写且要求本棒不动。
-请明确#727是否已迁移这份旧AllocationStall套件，P16是否等接回消费其新入口测试，或授权本棒做这一旧分配器测试迁移（容易与#727撞车）。目前保持测试不删/不隐藏，testable因此仍编译失败，WIP。
-补充自更正：前问说Y2y载体已删不精确；PushY2yDirtyHolder/Slot定义与Merge消费者仍在，但当前runtime/src对Push只有定义无产品调用（清扫前生产只在Arm*宏钩子）。本棒按裁决仅删receipt/observer断言的五项，保留直接dirty-holder批次/产品状态测试，不将上述检索推为整机制已删除。

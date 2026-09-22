@@ -1,4 +1,0 @@
-P01三分ABI runtime/LLVM/cjcj已实施，两构型runtime构建rc0，新增标量/结构体6用例已运行（一个夹具缺remset初始化，已补；旧null-holder global用例按新$BP=1改构造不改断言）。
-联合std-v9在llc寄存器分配失败，非本包判据被放宽：Array<T>.swap，MachineOperand::isTied()的isReg前置断言，llc pc_off=0x107749c，日志 kkk2:/root/sym_cangjie_runtime_608_implement_r5676392826/llvm/evidence/std-build.log，完整std.core.opt.bc留在同root/stdlib/build/build/.../std.core-temp-files。
-已单独开 cjcj-llvm#3。源码最小缺陷：llvm/lib/CodeGen/InlineSpiller.cpp:940在debug value memory-fold substitution的optional分支中直接MI->getOperand(1).isTied()，未确认operand1是register。上游原2021代码(blame ee3eee71e4154)，Cangjie STATEPOINT的operand1为立即数，接口前置断言有效不能删。候选最小修法是调用前补operand1.isReg()，仅让不支持的debug-substitution形态不进common two-address分支，不改寄存器分配/不删断言。
-是否允许把#3 companion修法同LLVM候选分支单独commit随P01 bundle交付，并给当前stdcore负例/恢复及更小MIR用例？否则需#3独立Implement先落，我们不能靠关debug/换allocator/删storefast路径绕过。

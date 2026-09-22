@@ -1,2 +1,0 @@
-== default configure_rc=0 build_rc=0 wall=16s
-== testable configure_rc=0 build_rc=0 wall=16s

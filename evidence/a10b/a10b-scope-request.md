@@ -1,2 +1,0 @@
-LANE=sym_cangjie_runtime_494_implement_r5655389950
-A10b 调用层核查发现真实周期入口仍为 runtime/src/Heap/Collector/CopyCollector.cpp:55，内有整周期 ScopedSTWLock、SelectCycle、无 generation 的 GetWorkers/GetGCStats。old 主体仍在 runtime/src/Heap/WCollector/WCollector.cpp:223，phase 握手在 runtime/src/Mutator/MutatorManager.cpp，代理在 CollectorProxy.h。这些不在包书旧排他起点里。为闭合本包双 driver 并发/明确 generation owner，申请允许修改上述文件中仅本包 RunGarbageCollection/DoGarbageCollection/phase 传递与代理函数，以及其头声明与直接调用点；不改其它机制。若已有后续包负责请明确边界，避免只放锁留下共享状态。当前未修改产品码，继续整理函数映射。

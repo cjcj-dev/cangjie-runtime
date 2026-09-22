@@ -1,6 +1,0 @@
-repo=/root/cj_build/llvm_rebase
-worktree=/root/cj_build/llvm_rebase_wt/sym_cangjie_runtime_614_implement_r5687433872
-base=1a01451912f160219665abdc497274e574338bad
-branch=sym/614-p08-llvm-r5687433872
-head=4bb0c3ab7187c0e9fef3ce3e5378003aa15edcf9
-state=local-only; sparse checkout; unbuilt; independent publisher required

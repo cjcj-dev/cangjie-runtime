@@ -1,3 +1,0 @@
-                 U _ZN12MapleRuntime14ZGenerationOld10mark_startEv@CANGJIE
-                 U _ZN12MapleRuntime7Mutator11GcPhaseEnumEbmbPm@CANGJIE
-                 U _ZN12MapleRuntime7ZDriver20RunGarbageCollectionEmNS_8GCReasonE@CANGJIE

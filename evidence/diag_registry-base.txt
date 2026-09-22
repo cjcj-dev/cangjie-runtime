@@ -1,3 +1,0 @@
-repo=/root/cj_build/tools
-base=2c5e3566491f97529149009cdf65b7d6b41f882d
-application=controller after D07 merge
