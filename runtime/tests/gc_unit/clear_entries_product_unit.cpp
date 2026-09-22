@@ -727,7 +727,10 @@ void ExerciseMutatorCopy(bool runtimeEntry)
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(result), expected);
     GC_EXPECT_EQ(mapping, expected);
     GC_EXPECT_TRUE(result->GetTypeInfo() == fx.typeInfo);
-    GC_EXPECT_TRUE(from->IsForwarded());
+    // ZGC keeps no FORWARDED header state (zRelocate.cpp:382-415): the
+    // forwarding entry asserted above is the whole receipt. The header must
+    // stay clear; a resurrection of the deleted SetStateCode turns this red.
+    GC_EXPECT_FALSE(from->IsForwarded());
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::BindCollector(nullptr);
     Heap::GetHeap().GetZGeneration(Generation::Old).reset_relocation_set();
