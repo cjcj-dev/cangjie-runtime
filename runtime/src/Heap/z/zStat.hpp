@@ -52,12 +52,21 @@ private:
     uint64_t _accumulated_duration;
     uint64_t _accumulated_time;
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    const uint64_t* _clock_for_test = nullptr;
+    uint64_t now_for_test() const;
+#endif
+
     double accumulated_duration();
     double accumulated_time();
     uint32_t active_workers();
 
 public:
     ZStatWorkers();
+#if defined(MRT_TESTABLE_INTERNALS)
+    // The manual nanosecond clock must outlive this instance.
+    explicit ZStatWorkers(const uint64_t& clock_for_test);
+#endif
 
     void at_start(uint32_t active_workers);
     void at_end();

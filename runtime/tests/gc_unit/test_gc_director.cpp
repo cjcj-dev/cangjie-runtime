@@ -53,23 +53,38 @@ GC_TEST(GcDirector, CycleUsesWorkerAccountingAndControlledClock)
     GC_EXPECT_EQ(unrecorded.warmupCycles, 1u);
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(GcDirector, WorkerStatsIncludeInFlightBatch)
 {
-    ZStatWorkers workers;
+    uint64_t now = 1000000000;
+    ZStatWorkers workers(now);
     GC_EXPECT_EQ(workers.stats()._accumulated_time, 0.0);
-    workers.at_start(4);
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    const auto inFlight = workers.stats();
-    GC_EXPECT_TRUE(inFlight._accumulated_duration > 0.0);
-    GC_EXPECT_TRUE(std::fabs(inFlight._accumulated_time - 4.0 * inFlight._accumulated_duration) < 0.000001);
-    workers.at_end();
-    const auto done = workers.stats();
-    GC_EXPECT_TRUE(done._accumulated_duration >= inFlight._accumulated_duration);
-    GC_EXPECT_TRUE(std::fabs(done._accumulated_time - 4.0 * done._accumulated_duration) < 0.000001);
-    GC_EXPECT_TRUE(std::fabs(workers.get_and_reset_duration() - done._accumulated_duration) < 0.000001);
-    GC_EXPECT_TRUE(std::fabs(workers.get_and_reset_time() - done._accumulated_time) < 0.000001);
     GC_EXPECT_EQ(workers.stats()._accumulated_duration, 0.0);
+    workers.at_start(4);
+    const auto stationary = workers.stats();
+    GC_EXPECT_EQ(stationary._accumulated_time, 0.0);
+    GC_EXPECT_EQ(stationary._accumulated_duration, 0.0);
+    // Binary-exact quarter seconds avoid rounding in the equality oracle.
+    for (uint64_t step = 1; step <= 4; ++step) {
+        now += 250000000;
+        const auto inFlight = workers.stats();
+        GC_EXPECT_EQ(inFlight._accumulated_time, static_cast<double>(step));
+        GC_EXPECT_EQ(inFlight._accumulated_duration, static_cast<double>(step) / 4.0);
+        GC_EXPECT_EQ(inFlight._accumulated_time, 4.0 * inFlight._accumulated_duration);
+    }
+    now += 250000000;
+    workers.at_end();
+    now += 1000000000;
+    const auto done = workers.stats();
+    GC_EXPECT_EQ(done._accumulated_time, 5.0);
+    GC_EXPECT_EQ(done._accumulated_duration, 1.25);
+    GC_EXPECT_EQ(done._accumulated_time, 4.0 * done._accumulated_duration);
+    GC_EXPECT_EQ(workers.get_and_reset_duration(), done._accumulated_duration);
+    GC_EXPECT_EQ(workers.get_and_reset_time(), done._accumulated_time);
+    GC_EXPECT_EQ(workers.stats()._accumulated_duration, 0.0);
+    GC_EXPECT_EQ(workers.stats()._accumulated_time, 0.0);
 }
+#endif
 
 GC_TEST(GcDirector, WarmupCountsOnlyWarmupRequests)
 {
