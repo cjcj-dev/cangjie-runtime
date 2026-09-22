@@ -382,7 +382,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CacheValleyLimitsActivationBudget)
 // watermark. Its first activation only resets history; a later cycle reclaims.
 GC_RUNTIME_OTHER_VM_TEST(Uncommitter, FreshCacheWaitsForWatermarkCycle)
 {
-    GC_EXPECT_EQ(setenv("cjUncommitDelay", "400ms", 1), 0);
+    GC_EXPECT_EQ(setenv("cjUncommitDelay", "1s", 1), 0);
     BindUncommitWorkerThread();
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MRT_CjRuntimeInit();
@@ -391,20 +391,26 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, FreshCacheWaitsForWatermarkCycle)
     auto& partition = UncommitterTestAccess::Partition();
     ZPage* page = regions.TakeRegion(64 * MB, ZPageType::large, true, false);
     GC_EXPECT_TRUE(page != nullptr);
-    regions.ReturnPageMemory(PageMemory{page->granule_index(), 64 * MB, 0, true});
     UncommitterTestAccess::ResetCancel();
     const size_t before = regions.GetCommittedCapacity();
     partition.uncommitter.Start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const uint64_t returnedAt = TimeUtil::NanoSeconds();
+    regions.ReturnPageMemory(PageMemory{page->granule_index(), 64 * MB, 0, true});
+    std::this_thread::sleep_for(std::chrono::milliseconds(750));
     const size_t firstCycle = regions.GetCommittedCapacity();
+    const uint64_t cacheAgeAtObservation = TimeUtil::NanoSeconds() - returnedAt;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (regions.GetCommittedCapacity() == before && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     partition.uncommitter.Stop();
     const size_t after = regions.GetCommittedCapacity();
-    std::fprintf(stderr, "TARGET_FRESH_CACHE before=%zu first=%zu later=%zu\n", before, firstCycle, after);
+    std::fprintf(stderr, "TARGET_FRESH_CACHE before=%zu first=%zu later=%zu cache_age_ns=%llu delay_ns=%llu\n",
+                 before, firstCycle, after, static_cast<unsigned long long>(cacheAgeAtObservation),
+                 static_cast<unsigned long long>(Uncommitter::DelayNs()));
     GC_EXPECT_EQ(firstCycle, before);
+    GC_EXPECT_TRUE(cacheAgeAtObservation < Uncommitter::DelayNs());
     GC_EXPECT_TRUE(after < before);
     const size_t stopped = regions.GetCommittedCapacity();
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
