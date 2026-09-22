@@ -289,6 +289,11 @@ struct GCParam {
     uint32_t oldGCThreads;
     /* False keeps dynamic worker selection (the default). */
     bool staticGCThreads;
+    /* Explicitness is separate because zero is a valid tenuring threshold. */
+    uint32_t maxTenuringThreshold;
+    int32_t zTenuringThreshold;
+    bool maxTenuringThresholdSet;
+    bool zTenuringThresholdSet;
 
 };
 

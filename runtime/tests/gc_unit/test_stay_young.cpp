@@ -39,7 +39,7 @@ GC_TEST(StayYoung, PolicySwitchIsWiredToTheDecision)
     shaped.youngAllocated = 1 << 20;
     shaped.softMaxCapacity = 1 << 24;
     const uint32_t shapedThreshold = ComputeTenuringThreshold(shaped);
-    GC_EXPECT_TRUE(shapedThreshold <= kMaxTenuringThreshold);
+    GC_EXPECT_TRUE(shapedThreshold <= MaxTenuringThreshold);
 }
 
 GC_TEST(StayYoung, BelowThresholdDoesNotPromote)

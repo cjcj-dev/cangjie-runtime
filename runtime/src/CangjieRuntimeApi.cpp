@@ -259,6 +259,10 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
             .youngGCThreads = param->gcParam.youngGCThreads,
             .oldGCThreads = param->gcParam.oldGCThreads,
             .staticGCThreads = param->gcParam.staticGCThreads,
+            .maxTenuringThreshold = param->gcParam.maxTenuringThreshold,
+            .zTenuringThreshold = param->gcParam.zTenuringThreshold,
+            .maxTenuringThresholdSet = param->gcParam.maxTenuringThresholdSet,
+            .zTenuringThresholdSet = param->gcParam.zTenuringThresholdSet,
         },
         .logParam = {
             .logLevel = param->logParam.logLevel,
