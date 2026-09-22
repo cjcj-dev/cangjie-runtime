@@ -11,11 +11,6 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
-#include <algorithm>
-#include <thread>
-#if defined(__linux__) || defined(hongmeng)
-#include <sched.h>
-#endif
 
 #include "Base/ImmortalWrapper.h"
 #include "Base/Log.h"
