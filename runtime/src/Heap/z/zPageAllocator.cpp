@@ -963,40 +963,6 @@ retry:
     return nullptr;
 }
 
-size_t RegionManager::CollectLargeGarbage()
-{
-    size_t garbageSize = 0;
-    std::vector<ZPage*> largePages;
-    {
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            if (region->GetRegionRole() == ZPageRole::OldLarge) {
-                largePages.push_back(region);
-            }
-        }
-    }
-    for (ZPage* region : largePages) {
-        // for large region, the object is the page start (zPage.inline.hpp:254-256).
-        if (!region->is_object_live(to_zaddress(region->GetRegionStart()))) {
-            DLOG(REGION, "reclaim large region %p@[0x%zx+%zu, 0x%zx) type %u", region, region->GetRegionStart(),
-                 region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
-
-            ZPage* del = region;
-            del->SetRegionRole(ZPageRole::None);
-            if (del->GetRegionSize() > ZPage::LARGE_OBJECT_RELEASE_THRESHOLD) {
-                garbageSize += ReleaseRegion(del);
-            } else {
-
-                garbageSize += CollectRegion<Generation::Old>(del);
-            }
-        }
-    }
-
-    return garbageSize;
-}
-
-
 void RegionManager::DumpRegionStats(const char* msg) const
 {
     // zPageAllocator.cpp:1363-1366 stats(): census is the allocator counters,

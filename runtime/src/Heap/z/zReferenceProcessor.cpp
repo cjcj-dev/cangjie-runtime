@@ -500,7 +500,6 @@ FinalizerProcessor::FinalizerProcessor(ZWorkers* workers)
     timeProcessorBegin = 0;
     timeProcessUsed = 0;
     timeCurrentProcessBegin = 0;
-    shouldReclaimHeapGarbage.store(false, std::memory_order_relaxed);
 }
 
 void FinalizerProcessor::Run()
@@ -509,14 +508,11 @@ void FinalizerProcessor::Run()
     NotifyStarted();
     while (running.load(std::memory_order_acquire)) {
         bool hasPendingFinalizableJob = false;
-        bool hasPendingReclaimHeapGarbage = false;
         {
             ZStatTimer zstatTimer(PFinalizerProcessorWaittingTime);
             while (running.load(std::memory_order_acquire)) {
                 hasPendingFinalizableJob = HasFinalizableJob();
-                hasPendingReclaimHeapGarbage =
-                    shouldReclaimHeapGarbage.exchange(false, std::memory_order_acq_rel);
-                if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage) {
+                if (hasPendingFinalizableJob) {
                     break;
                 }
                 Wait(iterationWaitTime);
@@ -541,9 +537,6 @@ void FinalizerProcessor::Run()
         }
 
 
-        if (hasPendingReclaimHeapGarbage) {
-            ReclaimHeapGarbage();
-        }
 
     }
     Fini();
@@ -596,8 +589,7 @@ void FinalizerProcessor::Wait()
 {
     std::unique_lock<std::mutex> lock(wakeLock);
     while (running.load(std::memory_order_acquire) &&
-           !HasFinalizableJob() &&
-           !shouldReclaimHeapGarbage.load(std::memory_order_acquire)) {
+           !HasFinalizableJob()) {
         lock.unlock();
         if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
             (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
@@ -605,8 +597,7 @@ void FinalizerProcessor::Wait()
         lock.lock();
         wakeCondition.wait_for(lock, std::chrono::milliseconds(1), [this] {
             return !running.load(std::memory_order_acquire) ||
-                HasFinalizableJob() ||
-                shouldReclaimHeapGarbage.load(std::memory_order_acquire);
+                HasFinalizableJob();
         });
     }
 }
@@ -811,12 +802,6 @@ void FinalizerProcessor::RegisterFinalizer(BaseObject* obj)
     ZBarrier::WriteStaticRef(*slot, obj);
     finalizers.push_back(slot);
 }
-
-void FinalizerProcessor::ReclaimHeapGarbage()
-{
-    Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(false);
-}
-
 
 } // namespace MapleRuntime
 

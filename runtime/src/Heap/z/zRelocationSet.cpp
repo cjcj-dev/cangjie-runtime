@@ -65,7 +65,6 @@ void ZGenerationOld::PostTrace()
     // Complete their owner handoff while that authority is queryable.
     // zGeneration.cpp:1261 mark_end does not reset forwarding.
     Heap::GetHeap().cross_vm().PrepareCycleRef(discoveredExternObjects);
-    CollectLargeGarbage();
     if (ZAbort::should_abort()) {
         return;
     }
@@ -73,17 +72,6 @@ void ZGenerationOld::PostTrace()
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
     // INV-1 closed: concurrent mark can no longer follow plain edges into these ranges.
     space.GetRegionManager().ReleaseMarkQuarantine();
-}
-void ZGenerationOld::CollectSmallSpace()
-{
-    // ZGC zRelocate.cpp:1012-1047: retention/release of relocation pages is
-    // decided at the do_forwarding completion branch; no from-space garbage
-    // scan runs here.
-    VLOG(REPORT, "start to release heap garbage memory");
-#if defined(__EULER__)
-    Heap::GetHeap().GetAllocator().TryReclaimGarbageMemory();
-#endif
-    Heap::GetHeap().GetFinalizerProcessor().NotifyToReclaimGarbage();
 }
 } // namespace MapleRuntime
 

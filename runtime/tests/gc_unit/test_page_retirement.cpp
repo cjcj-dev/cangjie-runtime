@@ -20,6 +20,10 @@
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Mutator/ThreadLocal.h"
+#include "Mutator/Mutator.inline.h"
+#include "Cangjie.h"
+#include "TypeInfoManager.h"
+#include "Heap/z/zPageTable.inline.hpp"
 
 namespace MapleRuntime {
 namespace {
@@ -57,6 +61,97 @@ void CheckAllocationPreservesOwnedPage(bool allowSaferegion, bool nonBlocking)
     GC_EXPECT_NE(allocated->GetRegionStart(), address);
     Heap::free_page(allocated);
     Heap::free_page(owned);
+}
+
+// ZGC zGeneration.cpp:204-240: an empty page is registered and freed by
+// the selector in the same collection, with no deferred Garbage-role scan.
+struct EmptyPageCycles {
+    size_t objectSize;
+    bool promote;
+    bool rootedPagePresent = false;
+    size_t ownedBytes = 0;
+    size_t usedBefore = 0;
+    size_t usedAfter[2]{};
+    size_t garbage[2]{};
+    bool withdrawn[2]{};
+    uint32_t sequenceBefore = 0;
+    uint32_t sequenceAfter = 0;
+};
+
+extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
+
+void* RunEmptyPageCycles(void* context)
+{
+    auto& result = *static_cast<EmptyPageCycles*>(context);
+    auto& heap = Heap::GetHeap();
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(result.objectSize - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    BaseObject* object = MCC_NewObject(type, result.objectSize);
+    const U64 root = heap.RegisterExportRoot(object);
+    if (result.promote) {
+        heap.RequestGC(GC_REASON_USER, false);
+    }
+    object = heap.GetExportObject(root);
+    const uintptr_t address = reinterpret_cast<uintptr_t>(object);
+    ZPage* page = Heap::page(address);
+    result.rootedPagePresent = page != nullptr;
+    result.ownedBytes = page == nullptr ? 0 : page->size();
+    result.usedBefore = heap.page_allocator().GetAllocatedSize();
+    const GCReason reason = result.promote ? GC_REASON_USER : GC_REASON_YOUNG;
+    ZGeneration* generation = result.promote
+        ? static_cast<ZGeneration*>(ZGeneration::old())
+        : static_cast<ZGeneration*>(ZGeneration::young());
+    result.sequenceBefore = generation->seqnum();
+    heap.RemoveExportObject(root);
+    for (unsigned cycle = 0; cycle < 2; ++cycle) {
+        heap.RequestGC(reason, false);
+        result.withdrawn[cycle] = Heap::page(address) == nullptr;
+        result.usedAfter[cycle] = heap.page_allocator().GetAllocatedSize();
+        ZPageTableIterator iterator(&Heap::page_table());
+        for (ZPage* current; iterator.next(&current);) {
+            result.garbage[cycle] += current->IsGarbageRegion();
+        }
+    }
+    result.sequenceAfter = generation->seqnum();
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+
+void CheckEmptyPageCycles(size_t objectSize, bool promote)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 512 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    EmptyPageCycles result{objectSize, promote};
+    auto task = RunCJTask(RunEmptyPageCycles, &result);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    // Positive ownership observation and collection progress are reported with
+    // the target results; no fatal prerequisite hides either target assertion.
+    for (unsigned cycle = 0; cycle < 2; ++cycle) {
+        std::fprintf(stderr,
+            "EMPTY_PAGE_904_TARGET old=%d size=%zu cycle=%u rooted=%d bytes=%zu "
+            "withdrawn=%d garbage=%zu used_before=%zu used_after=%zu seq_before=%u seq_after=%u\n",
+            promote, objectSize, cycle + 1, result.rootedPagePresent, result.ownedBytes,
+            result.withdrawn[cycle], result.garbage[cycle], result.usedBefore,
+            result.usedAfter[cycle], result.sequenceBefore, result.sequenceAfter);
+    }
+    GC_EXPECT_TRUE(result.withdrawn[0] && result.withdrawn[1]);
+    GC_EXPECT_TRUE(result.usedAfter[0] + result.ownedBytes <= result.usedBefore &&
+                   result.usedAfter[1] + result.ownedBytes <= result.usedBefore);
+    GC_EXPECT_EQ(result.garbage[0] + result.garbage[1], size_t{0});
+    GC_EXPECT_TRUE(result.rootedPagePresent && result.ownedBytes != 0);
+    GC_EXPECT_TRUE(result.sequenceAfter >= result.sequenceBefore + 2);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
 enum class RetirementPath { RETURN, RECLAIM, RELEASE, MARK_QUARANTINE };
@@ -209,6 +304,21 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, NonSaferegionAllocationPreserve
 GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, NonBlockingAllocationPreservesOwnedPage)
 {
     CheckAllocationPreservesOwnedPage(true, true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, YoungEmptyPageFreedAcrossTwoCycles)
+{
+    CheckEmptyPageCycles(ZGranuleSize, false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, OldEmptyPageFreedAcrossTwoCycles)
+{
+    CheckEmptyPageCycles(ZGranuleSize, true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, OldLargeEmptyPageFreedAcrossTwoCycles)
+{
+    CheckEmptyPageCycles(3 * ZGranuleSize, true);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, ExplicitFreeWithdrawsOwnedPage)
