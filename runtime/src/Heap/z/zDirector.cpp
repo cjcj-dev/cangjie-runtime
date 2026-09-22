@@ -155,7 +155,7 @@ static double select_young_gc_workers(const ZDirectorStats& stats, double serial
     double parallelizable_gc_time, double time_until_oom)
 {
     const uint32_t cap = young_gc_threads(stats);
-    if (stats.old_stats.cycle.warmupCycles < 3) {
+    if (!stats.old_stats.cycle.isWarm) {
         return static_cast<double>(cap);
     }
     const double gc_workers = estimated_gc_workers(serial_gc_time, parallelizable_gc_time, time_until_oom);
@@ -185,7 +185,7 @@ static double select_young_gc_workers(const ZDirectorStats& stats, double serial
 static ZDriverRequest rule_minor_allocation_rate_dynamic(const ZDirectorStats& stats, double serial_gc_time_passed,
     double parallel_gc_time_passed, bool conservative_alloc_rate, size_t capacity)
 {
-    if (stats.old_stats.cycle.warmupCycles == 0) {
+    if (!stats.old_stats.cycle.isTimeTrustable) {
         return ZDriverRequest(GC_REASON_INVALID, young_gc_threads(stats), 0);
     }
     const size_t used = stats.heap.used;
@@ -236,7 +236,7 @@ static ZDriverRequest rule_hard_minor_allocation_rate_dynamic(const ZDirectorSta
 
 static bool rule_minor_allocation_rate_static(const ZDirectorStats& stats)
 {
-    if (stats.old_stats.cycle.warmupCycles == 0) {
+    if (!stats.old_stats.cycle.isTimeTrustable) {
         return false;
     }
     const size_t soft_max_capacity = stats.heap.soft_max_heap_size;
@@ -331,7 +331,7 @@ static bool rule_major_warmup(const ZDirectorStats& stats)
     if (ZCollectionIntervalOnly) {
         return false;
     }
-    if (stats.old_stats.cycle.warmupCycles >= 3) {
+    if (stats.old_stats.cycle.isWarm) {
         return false;
     }
     const size_t soft_max_capacity = stats.heap.soft_max_heap_size;
@@ -351,7 +351,7 @@ static double gc_time(const ZDirectorGenerationStats& generation_stats)
 
 static double calculate_extra_young_gc_time(const ZDirectorStats& stats)
 {
-    if (stats.old_stats.cycle.warmupCycles == 0) {
+    if (!stats.old_stats.cycle.isTimeTrustable) {
         return 0.0;
     }
     const size_t old_used = stats.old_stats.general.used;
@@ -371,7 +371,7 @@ static double calculate_extra_young_gc_time(const ZDirectorStats& stats)
 
 static bool rule_major_allocation_rate(const ZDirectorStats& stats)
 {
-    if (stats.old_stats.cycle.warmupCycles == 0) {
+    if (!stats.old_stats.cycle.isTimeTrustable) {
         return false;
     }
     const double old_gc_time = gc_time(stats.old_stats);
@@ -390,7 +390,7 @@ static bool rule_major_allocation_rate(const ZDirectorStats& stats)
 
 static double calculate_young_to_old_worker_ratio(const ZDirectorStats& stats)
 {
-    if (stats.old_stats.cycle.warmupCycles == 0) {
+    if (!stats.old_stats.cycle.isTimeTrustable) {
         return 1.0;
     }
     const double young_gc_time = gc_time(stats.young_stats);
@@ -414,7 +414,7 @@ static bool rule_major_proactive(const ZDirectorStats& stats)
     if (!ZProactive) {
         return false;
     }
-    if (stats.old_stats.cycle.warmupCycles < 3) {
+    if (!stats.old_stats.cycle.isWarm) {
         return false;
     }
     const size_t used_after_last_gc = stats.old_stats.stat_heap.usedAtRelocateEnd;
