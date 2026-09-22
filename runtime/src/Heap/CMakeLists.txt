@@ -100,7 +100,6 @@ list(APPEND SRC_LIST
     "z/concurrentGCBreakpoints.cpp"
     "z/zAbort.cpp"
     "z/zHeapIterator.cpp"
-    "z/zIterator.cpp"
     "z/zCollectedHeap.cpp"
     "z/zDriver.cpp"
     "z/zDirector.cpp"

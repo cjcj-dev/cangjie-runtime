@@ -81,19 +81,5 @@ public:
     void do_object(BaseObject* object) override { function(object); }
 };
 
-// The runtime's type-erased field visitor is also used by promotion workers.
-// Keep those instantiations in the product so callers link the same entry.
-extern template void ZIterator::oop_iterate_safe<ZBasicOopIterateClosure<RefFieldVisitor>>(
-    BaseObject*, ZBasicOopIterateClosure<RefFieldVisitor>*);
-extern template void ZIterator::oop_iterate_safe<ZBasicOopIterateClosure<RefFieldVisitor>>(
-    BaseObject*, TypeInfo*, ZBasicOopIterateClosure<RefFieldVisitor>*);
-extern template void ZIterator::oop_iterate<ZBasicOopIterateClosure<RefFieldVisitor>>(
-    BaseObject*, ZBasicOopIterateClosure<RefFieldVisitor>*);
-extern template void ZIterator::oop_iterate_elements_range<ZBasicOopIterateClosure<RefFieldVisitor>>(
-    MArray*, ZBasicOopIterateClosure<RefFieldVisitor>*, MIndex, MIndex);
-extern template void ZIterator::basic_oop_iterate_safe<RefFieldVisitor>(BaseObject*, RefFieldVisitor);
-extern template void ZIterator::basic_oop_iterate_safe<RefFieldVisitor>(BaseObject*, TypeInfo*, RefFieldVisitor);
-extern template void ZIterator::basic_oop_iterate<RefFieldVisitor>(BaseObject*, RefFieldVisitor);
-
 } // namespace MapleRuntime
 #endif

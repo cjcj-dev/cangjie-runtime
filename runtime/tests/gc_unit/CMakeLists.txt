@@ -32,6 +32,7 @@ set(GC_UNIT_SOURCES
     test_unwind_regressions.cpp
     test_stackmap_base_capture.cpp
     test_gctibzero.cpp
+    test_field_iterator.cpp
     test_pinroot.cpp
     test_followedge.cpp
     test_colour_is_checks.cpp

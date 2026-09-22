@@ -57,6 +57,33 @@ inline bool MArray::IsPrimitiveArray() const
     return componentTypeInfo == nullptr ? false : componentTypeInfo->IsPrimitiveType();
 }
 
+template<typename Visitor>
+void MArray::ForEachRefFieldInRange(const Visitor& visitor, MAddress fieldStart, MIndex fieldEnd) const
+{
+    // VM layout adapter. ZIterator's range entry requires visible ref arrays;
+    // this byte-range form also supports Cangjie's inline struct-array copies.
+    TypeInfo* componentTi = GetComponentTypeInfo();
+    MIndex size = fieldEnd - fieldStart;
+    if (componentTi->IsStructType()) {
+        GCTib gcTib = componentTi->GetGCTib();
+        size_t elementSize = GetElementSize();
+        CHECK(elementSize != 0);
+        MIndex limit = size / elementSize;
+        for (MIndex i = 0; i < limit; ++i) {
+            gcTib.ForEachBitmapWord(fieldStart, visitor);
+            fieldStart += elementSize;
+        }
+    } else if (componentTi->IsObjectType() || componentTi->IsArrayType() || componentTi->IsInterface()) {
+        HeapSlot<false>* arrayContent = &HeapSlotAt<false>(fieldStart);
+        MIndex upLimit = size / sizeof(RefField<>);
+        for (MIndex i = 0; i < upLimit; ++i) {
+            visitor(arrayContent[i]);
+        }
+    } else {
+        LOG(RTLOG_FATAL, "array object %p has wrong component type", this);
+    }
+}
+
 inline ObjectPtr MArray::GetRefElement(MIndex index)
 {
     RefField<>& ref = GetRefField(MArray::GetContentOffset() + RefField<>::GetSize() * index);

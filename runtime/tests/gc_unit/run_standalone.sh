@@ -334,6 +334,7 @@ MAIN_SOURCES=(
   "$SRC/test_unwind_regressions.cpp"
   "$SRC/test_stackmap_base_capture.cpp"
   "$SRC/test_gctibzero.cpp"
+  "$SRC/test_field_iterator.cpp"
   "$SRC/test_pinroot.cpp"
   "$SRC/test_followedge.cpp"
   "$SRC/test_colour_is_checks.cpp"

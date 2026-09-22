@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "gc_heap_fixture.hpp"
+#include "Common/BaseObject.inline.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
