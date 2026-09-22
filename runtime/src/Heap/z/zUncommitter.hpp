@@ -45,7 +45,6 @@ public:
     static bool Enabled() { return ZUncommit() && DelayNs() > 0; }
 
     static size_t ChunkLimit(size_t maxCapacity);
-    static size_t MinCapacity(size_t liveBytes, size_t youngReserve);
 
     static uint64_t ParseDelayNs(const char* env);
 

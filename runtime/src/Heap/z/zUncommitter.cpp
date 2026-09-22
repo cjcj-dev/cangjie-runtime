@@ -108,15 +108,6 @@ size_t Uncommitter::ChunkLimit(size_t maxCapacity)
     return std::min(AlignUp(maxCapacity >> 7, ZGranuleSize), upper);
 }
 
-size_t Uncommitter::MinCapacity(size_t liveBytes, size_t youngReserve)
-{
-    size_t sum = liveBytes + youngReserve;
-    if (sum < liveBytes) {
-        return static_cast<size_t>(-1);
-    }
-    return sum;
-}
-
 // zUncommitter.cpp:41-56: set_name + create_and_start.
 void Uncommitter::Start()
 {
@@ -181,9 +172,7 @@ bool Uncommitter::Activate()
     cycleStart = now;
     nextUncommitNs = 0;
     uncommitted = 0;
-    const size_t committed = regions.GetCommittedCapacity();
-    const size_t retain = MinCapacity(regions.pageAllocatorUsed, 32 * MB);
-    toUncommit = committed > retain ? committed - retain : 0;
+    toUncommit = partition.capacity - partition.minCapacity;
     return true;
 }
 
@@ -200,12 +189,13 @@ size_t Uncommitter::Uncommit()
         if (stopped.load(std::memory_order_acquire) || canceled) {
             return 0;
         }
-        const size_t committed = regions.GetCommittedCapacity();
-        const size_t retain = MinCapacity(regions.pageAllocatorUsed, 32 * MB);
-        const size_t release = committed > retain ? committed - retain : 0;
+        std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
+        const size_t retain = std::max(partition.used + partition.claimed, partition.minCapacity);
+        const size_t release = partition.capacity - retain;
         const size_t flush = std::min({release, toUncommit, ChunkLimit(Heap::GetHeap().GetMaxCapacity())});
         // zUncommitter.cpp:395: flush memory from the mapped cache for uncommit.
-        flushed = regions.freeRegionManager.RemoveForUncommit(flush, &flushedVmems);
+        flushed = partition.cache.remove_for_uncommit(flush, &flushedVmems);
+        partition.claimed += flushed;
         if (flushed == 0) {
             Cancel();
             return 0;
@@ -216,7 +206,7 @@ size_t Uncommitter::Uncommit()
     // allocator owner and safepoint participation; the claimed extents are not
     // allocatable.
     for (const ZVirtualMemory vmem : flushedVmems) {
-        const uint32_t partitionId = regions.freeRegionManager.PartitionIdOf(vmem);
+        const uint32_t partitionId = partition.numaId;
         regions.freeRegionManager.unmap_virtual(vmem);
         regions.freeRegionManager.uncommit_physical(vmem);
         regions.freeRegionManager.free_physical(vmem, partitionId);
@@ -227,7 +217,9 @@ size_t Uncommitter::Uncommit()
         // zUncommitter.cpp:413-420: rejoin, adjust claimed and capacity.
         ScopedObjectAccess participation;
         std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
-        regions.freeRegionManager.UncommitFlushed(flushed);
+        std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
+        partition.claimed -= flushed;
+        regions.freeRegionManager.decrease_capacity(partition.numaId, flushed, false);
         RegisterUncommit(flushed);
         return flushed;
     }

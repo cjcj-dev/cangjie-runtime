@@ -79,6 +79,7 @@ public:
     uint32_t numaId;
     ZMappedCache cache;
     Uncommitter uncommitter;
+    size_t minCapacity{0};
     size_t capacity{0};
     size_t claimed{0};
     size_t used{0};
@@ -141,6 +142,7 @@ public:
 
     explicit FreeRegionManager(RegionManager& manager) : regionManager(manager) {}
 
+    friend class Uncommitter;
     virtual ~FreeRegionManager() = default;
     void StartUncommitters();
     void StopUncommitters();
@@ -214,12 +216,6 @@ public:
     size_t GetCachedBytes() const;
     // ZPartition::print_cache_on (zPageAllocator.cpp:1118-1121) for every partition.
     void PrintCacheOn() const;
-    // zUncommitter.cpp:395-403: flush from the mapped cache under the page
-    // allocator lock and record the flushed amount as claimed.
-    size_t RemoveForUncommit(size_t flush, ZArray<ZVirtualMemory>* out);
-    // zUncommitter.cpp:417-419: the flushed memory left the cache and was
-    // uncommitted; adjust claimed and capacity.
-    void UncommitFlushed(size_t flushed);
 
 private:
 

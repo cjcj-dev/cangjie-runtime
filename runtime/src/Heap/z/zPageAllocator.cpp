@@ -69,6 +69,8 @@ void FreeRegionManager::Initialize(ZVirtualMemoryManager& virtualMemoryManager,
     for (uint32_t numaId = 0; numaId < numaCount; ++numaId) {
         partitions.emplace_back(new Partition(numaId, regionManager));
         Partition& partition = *partitions.back();
+        // The allocator reports min_capacity=0 (no minimum-heap parameter).
+        partition.minCapacity = NumaTopology::calculate_share(numaId, 0, ZGranuleSize);
         partition.currentMaxCapacity =
             NumaTopology::calculate_share(numaId, maxCapacity, ZGranuleSize);
     }
@@ -491,36 +493,6 @@ void FreeRegionManager::PrintCacheOn() const
              partition->used / MB, partition->capacity / MB, partition->currentMaxCapacity / MB);
         partition->cache.print_on();
     }
-}
-
-// zUncommitter.cpp:392-403.
-size_t FreeRegionManager::RemoveForUncommit(size_t flush, ZArray<ZVirtualMemory>* out)
-{
-    std::lock_guard<std::mutex> lock(cacheMutex);
-    size_t flushed = 0;
-    for (auto& partition : partitions) {
-        if (flush <= flushed) { break; }
-        const size_t partitionFlushed = partition->cache.remove_for_uncommit(flush - flushed, out);
-        // Record flushed memory as claimed
-        partition->claimed += partitionFlushed;
-        flushed += partitionFlushed;
-    }
-    return flushed;
-}
-
-// zUncommitter.cpp:414-420.
-void FreeRegionManager::UncommitFlushed(size_t flushed)
-{
-    std::lock_guard<std::mutex> lock(cacheMutex);
-    size_t remaining = flushed;
-    for (auto& partition : partitions) {
-        const size_t part = std::min(remaining, partition->claimed);
-        if (part == 0) { continue; }
-        partition->claimed -= part;
-        decrease_capacity(partition->numaId, part, false /* set_max_capacity */);
-        remaining -= part;
-    }
-    CHECK(remaining == 0);
 }
 
 void RegionManager::SetGarbageThreshold(double garbageThreshold)
