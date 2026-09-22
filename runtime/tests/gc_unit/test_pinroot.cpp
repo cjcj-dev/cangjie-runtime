@@ -8,6 +8,8 @@
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include <cstdio>
+#include <chrono>
+#include <thread>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -16,7 +18,7 @@ using namespace MapleRuntime::GcUnit;
 // then invoke the product relocation phase with two sparse old source pages.
 // Mark bits/selection are fixture inputs; target choice, copying, page-table
 // removal and physical accounting are exclusively produced by the runtime SO.
-static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers)
+static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, bool retain = false)
 {
     CreateStandaloneHeap(medium ? 4 : 2);
     if (medium) {
@@ -78,7 +80,32 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers)
     ZForwarding* owners[2] = {forwarding_for_page(pages[0]), forwarding_for_page(pages[1])};
     GC_EXPECT_TRUE(owners[0] != nullptr && owners[1] != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
-    generation.relocate().relocate(&generation.relocation_set());
+    if (retain) {
+        GC_EXPECT_TRUE(owners[0]->retain_page(generation.relocate().queue()) &&
+            owners[1]->retain_page(generation.relocate().queue()));
+        std::thread worker([&] { generation.relocate().relocate(&generation.relocation_set()); });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        bool claimedBeforeCopy = false;
+        int32_t counts[2]{};
+        MAddress published[2]{};
+        do {
+            counts[0] = owners[0]->ref_count().load(std::memory_order_acquire);
+            counts[1] = owners[1]->ref_count().load(std::memory_order_acquire);
+            published[0] = owners[0]->find(objects[0]);
+            published[1] = owners[1]->find(objects[1]);
+            claimedBeforeCopy = (counts[0] < 0 || counts[1] < 0) && published[0] == 0 && published[1] == 0;
+            if (claimedBeforeCopy || published[0] != 0 || published[1] != 0) { break; }
+            std::this_thread::yield();
+        } while (std::chrono::steady_clock::now() < deadline);
+        owners[0]->release_page();
+        owners[1]->release_page();
+        worker.join();
+        std::fprintf(stderr, "INPLACE_CLAIM_RESULT refs0=%d refs1=%d published0=%zx published1=%zx "
+            "claimed_before_copy=%d\n", counts[0], counts[1], published[0], published[1], claimedBeforeCopy);
+        GC_EXPECT_TRUE(claimedBeforeCopy);
+    } else {
+        generation.relocate().relocate(&generation.relocation_set());
+    }
     const MAddress destinations[2] = {owners[0]->find(objects[0]), owners[1]->find(objects[1])};
     GC_EXPECT_TRUE(destinations[0] != 0 && destinations[1] != 0);
     ZPage* target0 = Heap::page(destinations[0]);
@@ -109,6 +136,11 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, PromotedInPlaceTargetReusedAndSour
 GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, MediumInPlaceTargetSharedAcrossWorkers)
 {
     CheckInPlaceTargets(true, false, 2);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, InPlaceClaimsBeforeCopyWithRetainedPage)
+{
+    CheckInPlaceTargets(false, false, 1, true);
 }
 
 // ZGC zRelocate.cpp:977-985,1031: preserve relocated current bits, clear previous.
