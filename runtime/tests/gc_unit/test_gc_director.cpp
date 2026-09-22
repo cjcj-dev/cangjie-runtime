@@ -410,3 +410,5 @@ GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumOne) { CheckTenuringFlags(64 * 10
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, PrecleanOverridesFlag) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9, false, true); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumBoundary) { CheckTenuringFlags(64 * 1024, 2, true, 16, false, 0); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideBoundary) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 15); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultBoundaryFourteen) { CheckTenuringFlags(112 * 1024, 1, false, 0, false, 0); }

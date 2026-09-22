@@ -11,7 +11,7 @@ nm --defined-only "$TENURING_LIB_DIR/libcangjie-runtime.so" > "$TENURING_OUT/pro
 printf 'cpuset=%s\n' "$TENURING_CPUSET" > "$TENURING_OUT/recipe.txt"
 cases=(DefaultSmallHeap DefaultLargeHeap DefaultCeiling DefaultManyWorkers ExplicitAutomatic
        ExplicitMaximum MaximumZero OverrideZero OverridePositive MaximumAndOverride
-       EnvironmentOverride EnvironmentMaximum EnvironmentAutomatic EnvironmentZero MaximumOne PrecleanOverridesFlag MaximumBoundary OverrideBoundary)
+       EnvironmentOverride EnvironmentMaximum EnvironmentAutomatic EnvironmentZero MaximumOne PrecleanOverridesFlag MaximumBoundary OverrideBoundary DefaultBoundaryFourteen)
 start=$SECONDS
 run_case() {
     local name=$1
