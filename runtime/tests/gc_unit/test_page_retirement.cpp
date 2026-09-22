@@ -22,12 +22,24 @@
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/Mutator.inline.h"
 #include "Cangjie.h"
+#include "Common/Handle.h"
+#include "Heap/z/zRootsIterator.hpp"
 #include "TypeInfoManager.h"
 #include "ObjectModel/MObject.h"
 #include "Heap/z/zPageTable.inline.hpp"
 
 namespace MapleRuntime {
 namespace {
+
+size_t CountGarbagePages()
+{
+    size_t count = 0;
+    ZPageTableIterator iterator(&Heap::page_table());
+    for (ZPage* page; iterator.next(&page);) {
+        count += page->IsGarbageRegion();
+    }
+    return count;
+}
 
 // zPageAllocator.cpp:1401-1407,1467-1478: allocation consumes allocator
 // capacity; only the owner returning a page makes that page available.
@@ -43,6 +55,7 @@ void CheckAllocationPreservesOwnedPage(bool allowSaferegion, bool nonBlocking)
     // Model a page awaiting GC reclamation. Allocation must not claim it
     // merely because its role is Garbage; the GC owner still owns the page.
     owned->SetRegionRole(ZPageRole::Garbage);
+    const size_t garbageBefore = CountGarbagePages();
     const size_t used = manager.GetAllocatedSize();
     ZAllocationFlags flags;
     if (nonBlocking) {
@@ -57,6 +70,7 @@ void CheckAllocationPreservesOwnedPage(bool allowSaferegion, bool nonBlocking)
                 retained, used, usedAfter);
     // This is the target assertion, before checks of the new allocation.
     GC_EXPECT_TRUE(retained);
+    GC_EXPECT_TRUE(garbageBefore != 0);
     GC_EXPECT_EQ(usedAfter, used + ZGranuleSize);
     GC_EXPECT_TRUE(allocated != nullptr);
     GC_EXPECT_NE(allocated->GetRegionStart(), address);
@@ -70,6 +84,8 @@ struct EmptyPageCycles {
     size_t objectSize;
     bool promote;
     bool rootedPagePresent = false;
+    bool expectedGeneration = false;
+    bool rootsReleased = false;
     size_t ownedBytes = 0;
     size_t usedBefore = 0;
     size_t usedAfter[2]{};
@@ -93,31 +109,39 @@ void* RunEmptyPageCycles(void* context)
     type->SetInstanceSize(result.objectSize - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    BaseObject* object = static_cast<BaseObject*>(MCC_NewObject(type, result.objectSize));
-    const U64 root = heap.RegisterExportRoot(object);
-    if (result.promote) {
-        heap.RequestGC(GC_REASON_USER, false);
+    const size_t rootsBefore = mutator->NativeFrameRootCount();
+    uintptr_t address = 0;
+    {
+        HandleMark roots(*mutator);
+        Handle root(mutator, MCC_NewObject(type, result.objectSize));
+        if (result.promote) {
+            heap.RequestGC(GC_REASON_USER, false);
+        }
+        address = reinterpret_cast<uintptr_t>(root());
+        ZPage* page = Heap::page(address);
+        result.rootedPagePresent = page != nullptr;
+        result.ownedBytes = page == nullptr ? 0 : page->size();
+        result.expectedGeneration = page != nullptr && page->generation_id() ==
+            (result.promote ? ZGenerationId::old : ZGenerationId::young);
     }
-    object = heap.GetExportObject(root);
-    const uintptr_t address = reinterpret_cast<uintptr_t>(object);
-    ZPage* page = Heap::page(address);
-    result.rootedPagePresent = page != nullptr;
-    result.ownedBytes = page == nullptr ? 0 : page->size();
+    result.rootsReleased = mutator->NativeFrameRootCount() == rootsBefore;
     result.usedBefore = heap.page_allocator().GetAllocatedSize();
     const GCReason reason = result.promote ? GC_REASON_USER : GC_REASON_YOUNG;
     ZGeneration* generation = result.promote
         ? static_cast<ZGeneration*>(ZGeneration::old())
         : static_cast<ZGeneration*>(ZGeneration::young());
     result.sequenceBefore = generation->seqnum();
-    heap.RemoveExportObject(root);
     for (unsigned cycle = 0; cycle < 2; ++cycle) {
         heap.RequestGC(reason, false);
-        result.withdrawn[cycle] = Heap::page(address) == nullptr;
-        result.usedAfter[cycle] = heap.page_allocator().GetAllocatedSize();
-        ZPageTableIterator iterator(&Heap::page_table());
-        for (ZPage* current; iterator.next(&current);) {
-            result.garbage[cycle] += current->IsGarbageRegion();
+        ZPage* observed = Heap::page(address);
+        result.withdrawn[cycle] = observed == nullptr;
+        if (observed != nullptr) {
+            std::fprintf(stderr, "EMPTY_STATE_904 cycle=%u gen=%u seq=%u current=%u marked=%d allocating=%d role=%u\n",
+                cycle, unsigned(observed->generation_id()), observed->seqnum(), observed->generation()->seqnum(),
+                observed->is_marked(), observed->is_allocating(), unsigned(observed->GetRegionRole()));
         }
+        result.usedAfter[cycle] = heap.page_allocator().GetAllocatedSize();
+        result.garbage[cycle] = CountGarbagePages();
     }
     result.sequenceAfter = generation->seqnum();
     mutator->SetManagedContext(true);
@@ -151,6 +175,7 @@ void CheckEmptyPageCycles(size_t objectSize, bool promote)
                    result.usedAfter[1] + result.ownedBytes <= result.usedBefore);
     GC_EXPECT_EQ(result.garbage[0] + result.garbage[1], size_t{0});
     GC_EXPECT_TRUE(result.rootedPagePresent && result.ownedBytes != 0);
+    GC_EXPECT_TRUE(result.expectedGeneration && result.rootsReleased);
     GC_EXPECT_TRUE(result.sequenceAfter >= result.sequenceBefore + 2);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

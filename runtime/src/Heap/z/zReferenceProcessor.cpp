@@ -525,7 +525,7 @@ void FinalizerProcessor::Run()
 
         if (UNLIKELY(!finalizerCJThreadInitialized)) {
             // Delay finalizer CJThread creation until the worker really has something to do,
-            // but make all finalizer-side job types share the same one-time initialization.
+            // and initialize its execution context once.
             InitFinalizerCJThread();
         }
 
@@ -535,9 +535,6 @@ void FinalizerProcessor::Run()
             LogAfterProcess();
 #endif
         }
-
-
-
     }
     Fini();
 }

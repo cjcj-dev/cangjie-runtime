@@ -664,9 +664,6 @@ void RegionManager::ReclaimRetiredRegion(ZPage* region)
     DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
-    // STEER3: scrub is at CollectRegion only (see header). Reclaim/TakeRegion reuse
-    // must not re-scan O(N) under remset mutex.
-
     {
         ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_DIRTY);
     }
@@ -879,12 +876,8 @@ void RegionManager::ReleaseRetiredRegion(ZPage* region)
 {
     // routedest: census only, see ReclaimRegion.
 
-    // holdercapture: large regions above the release threshold never reach CollectRegion,
-    // so the snapshot has to be taken on this path too or the face is lost unrecorded.
-
     size_t num = region->GetRegionSize();
     size_t unitIndex = region->granule_index();
-    // Large regions above the release threshold bypass CollectRegion. Invalidate
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
@@ -1126,8 +1119,7 @@ size_t RegionManager::GetAllocatedSize() const
 {
         // zPageAllocator.cpp:1311 ZPageAllocator::used: page-granular committed
         // counter maintained at TakeRegion/ReturnPageMemory/reclaim, not a
-        // list sum. Garbage-pending pages count as used until reclaim, as
-        // ZGC's _used does until free_page.
+        // list sum. Pages count as used until free_page.
         return pageAllocatorUsed;
     }
 

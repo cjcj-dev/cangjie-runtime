@@ -156,7 +156,6 @@ public:
     // regarding a object as a large object when the size is greater than 8 units.
 
     // release a large object when the size is greater than 4096KB.
-    static constexpr size_t LARGE_OBJECT_RELEASE_THRESHOLD = 4096 * KB;
 
     // ZPage::generation()->seqnum(), shared by all pages in that generation.
     ZGeneration* generation();
@@ -437,8 +436,7 @@ public:
     void ReleaseForwarding();
 
     // ZForwarding::retain_page: the three-state count is the gate, not the list
-    // type. After relocation, CollectRegion moves the region to garbage
-    // while the payload is still live; mutator relocate must still pin it.
+    // type. Mutator relocation retains the page until forwarding completes.
     bool TryLockReadFromRegion() { return RetainForwarding(); }
 
     void UnlockReadFromRegion() { ReleaseForwarding(); }
