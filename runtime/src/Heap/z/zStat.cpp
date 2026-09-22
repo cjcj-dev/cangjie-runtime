@@ -479,7 +479,21 @@ ZStatCounterData ZStatUnsampledCounter::GetAndReset() const
 // zStat.cpp:892-930
 void ZStatSample(const ZStatSampler& sampler, uint64_t value)
 {
-    ZStatSample(sampler, value);
+    if (!ZStatValue::StorageReadyPublic()) return;
+    auto* const cpuData = sampler.CpuLocal<ZStatSampler::CpuData>(ZCPU::id());
+    cpuData->nsamples.fetch_add(1, std::memory_order_relaxed);
+    cpuData->sum.fetch_add(value, std::memory_order_relaxed);
+
+    uint64_t maximum = cpuData->max.load(std::memory_order_relaxed);
+    for (;;) {
+        if (maximum >= value) {
+            break;
+        }
+        const uint64_t newMaximum = value;
+        if (cpuData->max.compare_exchange_strong(maximum, newMaximum, std::memory_order_relaxed)) {
+            break;
+        }
+    }
     ZTracer::report_stat_sampler(sampler, value);
 }
 
