@@ -330,18 +330,5 @@ ZForwarding* ZPage::GetFromPageCarrier() const
         return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
     }
 
-void ZPage::ClearPageMemory(size_t idx, size_t cnt)
-    {
-        uintptr_t unitAddress = ZPage::GranuleAddress(idx);
-        size_t size = cnt;
-        CHECK(ContainsReservedRange(unitAddress, size));
-        ZPage* wipeRegion = Heap::page(unitAddress);
-        WaitCopiedBeforePayloadWipe(wipeRegion, "ClearPageMemory");
-
-        DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
-             unitAddress + size);
-
-        MapleRuntime::MemorySet(unitAddress, size, 0, size);
-    }
 
 }

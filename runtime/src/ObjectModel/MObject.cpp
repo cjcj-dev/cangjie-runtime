@@ -13,6 +13,7 @@ MObject* MObject::NewObject(TypeInfo* ti, MSize size, AllocType allocType)
 {
     auto addr = HeapManager::Allocate(size, allocType);
     if (LIKELY(addr != NULL_ADDRESS)) {
+        ClearMemory(addr, size);
         (void)SetClassInfo(addr, ti);
     } else {
         return nullptr;
@@ -37,6 +38,7 @@ MObject* MObject::NewFinalizer(const TypeInfo* ti, MSize size)
     CHECK_DETAIL(ti->IsObjectType() == true, "must be object class.");
     auto addr = HeapManager::Allocate(size);
     if (LIKELY(addr != NULL_ADDRESS)) {
+        ClearMemory(addr, size);
         (void)SetClassInfo(addr, const_cast<TypeInfo*>(ti));
         from_alloc_addr(addr)->OnFinalizerCreated();
     } else {

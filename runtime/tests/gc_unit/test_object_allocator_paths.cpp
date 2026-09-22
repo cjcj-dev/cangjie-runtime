@@ -227,14 +227,14 @@ void* AllocateNonBlockingCapacity(void*)
     auto& heap = Heap::GetHeap();
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* occupied = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, false, PageAge::eden, flags);
+    ZPage* occupied = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, PageAge::eden, flags);
     if (occupied == nullptr) { return reinterpret_cast<void*>(1); }
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
     const uint64_t before = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
     // A valid page size that cannot fit while occupied consumes part of capacity.
     // The non-blocking allocation must return its failure without starting a GC.
-    ZPage* result = Heap::alloc_page(heap.GetMaxCapacity(), ZPageType::large, false, true, false, PageAge::eden, flags);
+    ZPage* result = Heap::alloc_page(heap.GetMaxCapacity(), ZPageType::large, false, true, PageAge::eden, flags);
     const uint64_t after = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
     const bool valid = result == nullptr && after == before;
     std::fprintf(stderr, "NONBLOCKING_CAPACITY_TARGET result=%p before=%llu after=%llu valid=%d\n",
@@ -255,7 +255,7 @@ void* AllocateFastMedium(void*)
     ZAllocationFlags flags;
     flags.set_non_blocking();
     flags.set_fast_medium();
-    ZPage* result = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, false, true, true, PageAge::eden, flags);
+    ZPage* result = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, false, true, PageAge::eden, flags);
     const size_t actual = result == nullptr ? 0 : result->size();
     const bool valid = result != nullptr && actual == size && result->type() == ZPageType::medium &&
                        manager.GetCommittedBytes() == capacity && manager.GetUsedRegionSize() - before == actual;

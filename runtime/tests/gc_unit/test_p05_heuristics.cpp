@@ -22,7 +22,7 @@ GC_TEST(P05Heuristics, ZPageAllocationIsStackRequest)
 {
     // ZGC zPageAllocator.cpp:433-434: requests snapshot both initialized generations.
     (void)Heap::GetHeap();
-    ZPageAllocation request(4096, 0, true, true);
+    ZPageAllocation request(4096, 0, true);
     GC_EXPECT_EQ(request.GetSize(), size_t{4096});
     request.Satisfy(true);
     GC_EXPECT_TRUE(request.Wait());

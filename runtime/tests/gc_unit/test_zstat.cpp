@@ -48,7 +48,7 @@ void CheckPageAllocationRate(bool relocation, bool initialized)
     // Exceed the sampling granule even with the runner's 1024-granule heap.
     const size_t allocationSize = 16 * ZGranuleSize;
     ZPage* page = Heap::alloc_page(allocationSize, ZPageType::large,
-                                 false, false, false, PageAge::eden, flags);
+                                 false, false, PageAge::eden, flags);
     GC_EXPECT_TRUE(page != nullptr);
     const auto bytes = ZStatMutatorAllocRate::counter().GetAndReset().counter;
     const auto after = ZStatMutatorAllocRate::stats();

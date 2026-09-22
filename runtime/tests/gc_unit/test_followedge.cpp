@@ -65,7 +65,7 @@ struct LargeArrayFixture {
         mappedSize = units * ZGranuleSize;
         (void)Heap::GetHeap();
         RegionManager& manager = Heap::GetHeap().page_allocator();
-        committedSpan = manager.TakeRegion(mappedSize, ZPageType::large, false, false, true);
+        committedSpan = manager.TakeRegion(mappedSize, ZPageType::large, false, false);
         GC_EXPECT_TRUE(committedSpan != nullptr);
         mapping = reinterpret_cast<void*>(committedSpan->GetRegionStart());
         const MAddress start = committedSpan->GetRegionStart();

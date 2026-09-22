@@ -50,7 +50,7 @@ struct SelectorPageFixture {
     ZPage* takeSmall()
     {
         const size_t n = ZPageSizeSmall / ZGranuleSize;
-        return manager.TakeRegion((n) * ZGranuleSize, ZPageType::small, false, false, false);
+        return manager.TakeRegion((n) * ZGranuleSize, ZPageType::small, false, false);
     }
 };
 }

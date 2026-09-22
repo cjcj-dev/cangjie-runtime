@@ -43,7 +43,7 @@ struct PageMemory {
 // answer is published.
 class ZPageAllocation {
 public:
-    ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear, ZAllocationFlags flags = {});
+    ZPageAllocation(size_t size, uint8_t role, bool physical, ZAllocationFlags flags = {});
     ZPageAllocation(const ZPageAllocation&) = delete;
     ZPageAllocation& operator=(const ZPageAllocation&) = delete;
 
@@ -53,7 +53,6 @@ public:
     ZAllocationFlags Flags() const { return flags; }
     uint8_t GetRole() const { return role; }
     bool ExpectsPhysicalMemory() const { return physical; }
-    bool ClearsPayload() const { return clear; }
     PageMemory& Memory() { return memory; }
     const PageMemory& Memory() const { return memory; }
 
@@ -77,7 +76,6 @@ private:
     const uint32_t oldSeqnum;
     const uint8_t role;
     const bool physical;
-    const bool clear;
     const ZAllocationFlags flags;
     PageMemory memory;
     // zPageAllocator.cpp:420-421 ZPageAllocation: ZFuture<bool> _stall_result
@@ -135,7 +133,7 @@ public:
     // vmem outside the allocator lock: claim_physical_for_increased_capacity →
     // commit_and_map (cleanup_failed_commit on a partial commit) → create_page.
     ZPage* MaterializePageMemory(PageMemory& memory, ZPageType role,
-                                     bool expectPhysicalMem, bool clearPayload, size_t& committedBytes,
+                                     bool expectPhysicalMem, size_t& committedBytes,
                                      PageAge age = PageAge::old);
     // ZPartition::free_memory_alloc_failed (zPageAllocator.cpp:1079-1101).
     // Requires the owning RegionManager page allocator lock.
@@ -174,12 +172,12 @@ public:
     void AddGarbageMemory(size_t idx, size_t num, bool allowSaferegion = true);
 
     // mark-epoch quarantine: units reclaimed after from-page reclaim must not enter the dirty
-    // tree (mutator TakeRegion → ClearPageMemory) until the next major concurrent mark ends.
+    // cache (mutator page reuse) until the next major concurrent mark ends.
     // INV: concurrent mark may still hold plain strong refs into this range (SATB).
     void AddMarkQuarantineMemory(size_t idx, size_t num);
 
     // Release point = major PostTrace entry (TRACE+CLEAR_SATB done). Moves all quarantined
-    // units into the dirty tree so allocation may ClearPageMemory them again.
+    // units into the mapped cache so allocation may reuse them again.
     size_t ReleaseMarkQuarantineToDirty();
 
     size_t GetMarkQuarantineBytes() const
@@ -202,12 +200,6 @@ public:
 
 private:
 
-    inline void ClearReleasedMemory(bool expectPhysicalMem, size_t idx, size_t num) const
-    {
-        if (expectPhysicalMem) {
-            ZPage::ClearPageMemory(idx, num);
-        }
-    }
     RegionManager& regionManager;
 
     // ZPartition (zPageAllocator.hpp:57-141): numa id, mapped cache and the
@@ -497,7 +489,7 @@ public:
     // take a region with *num* units for allocation
     // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
     ZPage* TakeRegion(size_t num, ZPageType, bool expectPhysicalMem = false,
-                           bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old, ZAllocationFlags flags = {});
+                           bool allowSaferegion = true, PageAge age = PageAge::old, ZAllocationFlags flags = {});
 
 
 
@@ -612,7 +604,7 @@ public:
 
     // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
     // Concurrent mark (TRACE+CLEAR_SATB) has finished; plain strong refs into quarantined
-    // ranges are no longer traced. Safe to publish units to dirty tree for ClearPageMemory reuse.
+    // ranges are no longer traced. Safe to publish units to mapped cache for allocation reuse.
     // Note: this major's just-installed quarantine (from PrepareForwardTable above) is also
     // released here — mark is already done, so no TRACE can race those units. Units held from
     // prior minor PrepareForwardTable are the ones that covered the TRACE window.
@@ -638,7 +630,7 @@ private:
 
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
-    ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, ZAllocationFlags flags, bool clearPayload = true);
+    ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, ZAllocationFlags flags);
     void UndoSharedPage(ZPage* page);
 
     MAddress reservedStart = 0;
