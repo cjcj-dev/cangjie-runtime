@@ -1,9 +1,0 @@
-[
-  "runtime/tests/gc_unit/clear_entries_product_unit.cpp",
-  "runtime/tests/gc_unit/test_cycle_ref_saferegion.cpp",
-  "runtime/tests/gc_unit/test_young_weak.cpp",
-  "runtime/tests/gc_unit/test_generation_cycle_context.cpp",
-  "runtime/tests/gc_unit/run_standalone.sh",
-  "runtime/tests/gc_unit/CMakeLists.txt",
-  "runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp"
-]

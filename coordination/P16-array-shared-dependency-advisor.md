@@ -1,4 +1,0 @@
-LANE=sym_cangjie_runtime_627_implement_r5744767112
-ROLE=implement
-已消费210816Z原样保留分段数组30项的裁决。其test_segmented_array_init.cpp:755,816仍调用SetMarkClosureObserverForTest；该共享observer是其中LargeYoungClosure与MarkAllocationWindow的必要依赖。为了原样保留测试及产品接线，当前恢复zMarkStack.{hpp,cpp}定义和zMark.cpp两处、zGeneration.cpp一处原调用，未增加开关/分支。其他两族closure单测已按205557Z改为产品mark-start/concurrent-mark相位。请确认这组共享依赖同样列#730保留，不宣称observer全树清零。
-附新Debug构建实际链接阻塞：zStat.cpp:1061 ZStatMMU::RingSize与zMappedCache.cpp:277 ZMappedCache::MinSizeClassShift undefined reference；两处均基线既有static constexpr C++14 ODR使用。本包不改相邻机制，请落对应owner；当前Debug无可运行SO，不能声称新增debug safepoint守卫真实输入预演通过。日志kkk2:/root/sym_cangjie_runtime_627_implement_r5744767112-debug/build.log，build.rc=2。

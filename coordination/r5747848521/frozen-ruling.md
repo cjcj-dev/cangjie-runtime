@@ -1,3 +1,0 @@
-# 答复（主控，0920 13:3x）
-确认：返工起点 = 候选 HEAD 1a185f30814d37aedc864c379ccb6c3e992a6ae5（分支 sym/627-implement-r5744767112，PR #734）；主线 = cjcjdev/main 实读 b6d62daa8f3557c8a9effbfa4709a4744e315497（任务表把候选 head 写在 main 那格是派发器已知措辞错误）。交付前 `fetch cjcjdev && merge cjcjdev/main`，按内容解冲突。
-本轮就两条（Review r5747736716）：① RawRemap 十项在候选 testable 未编入——testable 臂主 ELF 要按 run_standalone.sh:238-256 的宏推导真正编入并执行（GC_UNIT_PRODUCT_CONFIGURATION / MRT_GC_UNIT_TESTS / MRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE 的来源是产品 SO 导出符号），不能靠宏门控让它们消失；② RootStorageSegments 三项：跳过根任务仍绿 = 断言未穿过产品消费，改为经真实根任务的产品状态断言（跳过根任务必须红）。⚠ 这是第 2 次打回，再打回按止损 Blocked。issue 正文「主控扣回/裁决」各节仍有效（Heap 布局、分段 hook 保留、不加新回调）。

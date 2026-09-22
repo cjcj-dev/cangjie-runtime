@@ -1,7 +1,0 @@
-YoungConc.SatbAfterWorkerTerminationUsesBoundedMarkEndContinue	receipt pause/continue counts or YoungClosureObservation.Saw/Calls	advisor 201036Z §2 observer-state-only
-YoungConc.Y2yDirtyVisibleBeforePauseMarkEnd	receipt pause/continue counts or YoungClosureObservation.Saw/Calls	advisor 201036Z §2 observer-state-only
-YoungConc.Y2yAfterReleaseBatchForcesContinueAndReachesClosure	receipt pause/continue counts or YoungClosureObservation.Saw/Calls	advisor 201036Z §2 observer-state-only
-YoungConc.LeftoverY2yAfterWorkerForcesContinue	receipt pause/continue counts or YoungClosureObservation.Saw/Calls	advisor 201036Z §2 observer-state-only
-YoungConc.PauseMarkEndNeverRunsClosure	receipt pause/continue counts or YoungClosureObservation.Saw/Calls	advisor 201036Z §2 observer-state-only
-MarkPort203Storage.EmptySingleAndMultiplePrivateSegmentsAreReturned	StorageObserver alloc/free event pairing	advisor 201036Z §1; page-return invariant belongs #727
-MarkPort203Storage.YoungCollectionReturnsActualSegments	StorageObserver alloc/free event pairing	advisor 201036Z §1; page-return invariant belongs #727

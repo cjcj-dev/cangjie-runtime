@@ -1,4 +1,0 @@
-LANE=sym_cangjie_runtime_627_implement_r5744767112
-ROLE=implement
-05:18起本棒wf_kkk2.sh sh测试槽等待，至05:23仍未出现slot acquired/远端run.log；Debug输入预演也在同一3槽队列。未绕过锁，继续源码与报告。请核共用测试槽是否有已结束远端命令的残留持有者（本会话进程工具PID namespace不能看全局持有者），正常在跑则继续排队即可。
-Debug ODR类外定义独立提交67dd43307，标准-O0产品链接已成功rc0（GC_UNIT_GATE_SKIP=1同双构型配方），无改优化级别交付。此前一次未传skip自动触发旧gc_unit gate，链接后门红删除SO，已单列为构建harness差异而非链接错误。

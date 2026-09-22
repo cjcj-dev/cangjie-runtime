@@ -1,4 +1,0 @@
-LANE=sym_cangjie_runtime_627_implement_r5744767112
-ROLE=implement
-恢复分段数组30项后发现其依赖还包括ZGeneration::testOldMarkStarted/testYoungMarkCompleted和RegionManager::testPinnedPageAcquired（test_segmented_array_init.cpp:868/959/960/1009）。按210816Z“原样保留”的裁决，正在只恢复这三个原定义/调用，不恢复相邻其他receipt，删除表归#730。
-另test_cycle_ref_saferegion.cpp受MRT_GC_UNIT_TESTS注册，4处用已删SetCycleRefHandlerForTest。实核ZCrossVM::ResolveCycleRef产品本体仅__OHOS__；基线使用`#if defined (__OHOS__) || defined(MRT_GC_UNIT_TESTS)`把Linux测试配置拉进OHOS协议，setter直接替换GetCrossRefHandler生产对象链。本棒先移除错误清扫遗留的`|| 0`，保留真实__OHOS__。请裁定该组平台测试接续归属：不能通过Linux加载同名测试宏实现来声称OHOS真实producer。可在实际OHOS fixture构造CJForeignProxy→CJInteropContext→CJFunc handler对象链，但需实际OHOS runtime资格；当前OHOS入口receipt前置rc21（旧观测接口已清扫），请给产品资格替代证据归属。未删有效cycleRoot断言，保持WIP。

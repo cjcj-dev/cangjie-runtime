@@ -1,6 +1,0 @@
-LANE=sym_cangjie_runtime_606_implement_r5673376405
-ROLE=implement
-对015917Z问句的证据更正：不能从其FAIL断言直接推出真实正常产品入口被阻断。
-刚核到MarkPort203Entries测试在test_mark_port_203_entries.cpp:320另构造WCollector，MarkPublicationFixture也另造collector并替换proxy（mark_publication_fixture.hpp:13-22）。GcHeapFixture的页出生序号来自先前collector，后换collector从0起步，资格不闭合；这是共享夹具周期身份缺口，不能用来主张删consumer检查。
-真实托管运行MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive及LargeHolderKeepsRootedExistingTargetLive均PASS（kkk2:/root/sym_cangjie_runtime_606_implement_r5673376405-green/unit-testable/test-logs/000630-main.log、000631-main.log，单项rc=0）。它们在真实RequestGC TRACE窗口分配并检查mark-end结果。
-因此撤回对“真实正常输入已被挡”的归因；暂保留consumer CHECK，先识别各个输入身份。请对旧问答采用此更正，若需要修共享夹具，请明确范围授权；不扩产品current资格。

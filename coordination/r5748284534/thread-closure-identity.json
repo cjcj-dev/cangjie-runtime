@@ -1,7 +1,0 @@
-{
-  "main": "eab957d9ff92d294eb1a234ebd0f03f522856608",
-  "candidate": "8d9ef77f66bc3f82cab8f998879ce48c7539ac02",
-  "method": "exact source block compare class MarkThreadClosure",
-  "equal": true,
-  "source": "class MarkThreadClosure {\npublic:\n    explicit MarkThreadClosure(const RootVisitor* result = nullptr) : result(result) {}\n    static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }\n    void DoThread(Mutator& mutator) const\n    {\n        const uintptr_t color = mutator.GetGCData().loadGoodMask;\n        RootVisitor markRoot = [&](ObjectRef& root) {\n            mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {\n                ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&slot), color);\n                if (result != nullptr) (*result)(slot);\n            });\n        };\n        DerivedPtrVisitor derivedVisitor = Mutator::MakeDerivedRootVisitor(markRoot);\n        size_t frames = 0;\n        (void)StackWatermarkSet::finish_processing(mutator, markRoot, markRoot, StackWatermark::epoch_id(),\n                                                   &derivedVisitor, frames, reinterpret_cast<void*>(root_function()));\n    }\nprivate:\n    const RootVisitor* const result;\n};\n"
-}

@@ -1,7 +1,0 @@
-kkk2 full nm --defined-only
-SO=/root/sym_cangjie_runtime_700_implement_r5723534433-owner-crossvm3/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
-command=bash /root/cj_build/tools/box.sh kkk2 'ulimit -c 0; nm --defined-only <SO> | /usr/bin/grep relocate_or_remap_object'
-rc=0
-00000000004d2fc0 T _ZN12MapleRuntime11ZGeneration24relocate_or_remap_objectEPNS_10BaseObjectE
-00000000004d3110 T _ZN12MapleRuntime11ZGeneration24relocate_or_remap_objectEPNS_10BaseObjectERKNS_20ForwardingProvenanceE
-00000000004b2750 T _ZN12MapleRuntime4Heap24relocate_or_remap_objectEPNS_10BaseObjectENS_13ZGenerationIdE

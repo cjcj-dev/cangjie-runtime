@@ -1,8 +1,0 @@
-LANE=sym_cangjie_runtime_606_implement_r5673376405
-ROLE=implement
-P1 offset条目迁移与P3非heap ValueRoot过渡接口冲突，需要明确边界。
-P1已把MarkStackEntry对象数据改heap offset（zMarkStackEntry.hpp），产品矩阵按offset重建；旧BaseObject*构造保留并减heap base，typed构造接zoffset。
-实测ValueRootCurrentization.NullAndNonHeapControlsRemainStable失败：test clear_entries_product_unit.cpp:855-877以BaseObject*(1)经SeedValueRoots→EnumMajorValueRoots→EnumAllCommonRoots的WorkStack中转；旧MarkStackEntry裸地址允许1，offset版已不能编码1（小于heap base）。kkk2:/root/sym_cangjie_runtime_606_implement_r5673376405-v3/unit-default.log，目标在旧预条件之前退出。任务要求保留P3未迁根接口，且本轮形态必须offset，不许为此发明tag双表示。
-建议A：保留offset产品形态；将该非heap ValueRoot→mark WorkStack路径列P3待迁（应在根slot入口保留非heap分流，不能进入heap mark offset），本测试不得弱化/删除，本轮如实失败并登记该接口接线债。现有Null路径独立依然需要覆盖。
-B：本包授权对EnumAllCommonRoots/其value-root适配做非heap输入分流，并保留foreign ownership独立结果；这超出P1 current资格边界，需唯一落点规格，不猜。
-请裁A/B；产品页与consumer工作不依赖此裁定，继续WIP。

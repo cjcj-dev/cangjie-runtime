@@ -1,8 +1,0 @@
-{
-  "removed_own_isolated_source_copies": [
-    "retire",
-    "consumer",
-    "cut"
-  ],
-  "retained": "patches, build logs, kkk2 product SO pairs, raw tests"
-}

@@ -1,8 +1,0 @@
-{
-  "base": "38c7b2a4fad2d72ef001b07669f1f1b7f434f9a6",
-  "scope": "runtime/tests/gc_unit/test_segmented_array_init.cpp",
-  "added": [
-    "P1Mark.PinnedMarkStartRetiresAllocationPage"
-  ],
-  "removed": []
-}
