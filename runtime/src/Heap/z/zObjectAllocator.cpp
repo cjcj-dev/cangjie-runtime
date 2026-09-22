@@ -358,6 +358,12 @@ MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
         addr = allocBuffer->AllocateImpl(allocSize, allocType);
         if (addr != 0) { return addr; }
     }
+    return AllocateOutsideTLAB(allocSize, allocType);
+}
+
+// HotSpot memAllocator.cpp:235-247: one outside-TLAB allocation operation.
+MAddress RegionSpace::AllocateOutsideTLAB(size_t allocSize, AllocType allocType)
+{
     return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden, false,
         allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
 }
