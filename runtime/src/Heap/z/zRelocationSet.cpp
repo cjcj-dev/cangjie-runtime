@@ -54,7 +54,6 @@
 
 namespace MapleRuntime {
 
-static const ZStatSubPhase PCollectFromSpaceGarbage("CollectFromSpaceGarbage", ZGenerationId::old);
 static const ZStatSubPhase PPostTrace("PostTrace", ZGenerationId::old);
 
 void ZGenerationOld::PostTrace()
@@ -77,12 +76,9 @@ void ZGenerationOld::PostTrace()
 }
 void ZGenerationOld::CollectSmallSpace()
 {
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    {
-        ZStatTimerOld zstatTimer(PCollectFromSpaceGarbage);
-        space.CollectFromSpaceGarbage();
-    }
-
+    // ZGC zRelocate.cpp:1012-1047: retention/release of relocation pages is
+    // decided at the do_forwarding completion branch; no from-space garbage
+    // scan runs here.
     VLOG(REPORT, "start to release heap garbage memory");
 #if defined(__EULER__)
     Heap::GetHeap().GetAllocator().TryReclaimGarbageMemory();

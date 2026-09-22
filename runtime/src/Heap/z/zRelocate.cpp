@@ -917,6 +917,11 @@ public:
         target->ResetCensusBoundary();
         owner->in_place_relocation_finish();
         page->MarkForwardingDone();
+        // ZGC zRelocate.cpp:1026-1037: the in-place page is retained as the
+        // relocation target and stays live; route it out of the From role at
+        // this completion branch so no later role scan can reclaim it.
+        ZPageRole expect = ZPageRole::From;
+        (void)page->CASRegionRole(expect, ZPageRole::None);
     }
 
     // ZGC zRelocate.cpp:977-985,1031: detach before clearing the old bitmap.
@@ -947,6 +952,11 @@ public:
             ZPage* target = targets->get(partition, owner->to_age());
             target->ResetCensusBoundary();
             allocator->share_target_page(target, partition);
+            // ZGC zRelocate.cpp:1026-1037: the in-place page is retained as the
+            // relocation target and stays live; route it out of the From role
+            // at this completion branch so no later role scan can reclaim it.
+            ZPageRole expect = ZPageRole::From;
+            (void)source->CASRegionRole(expect, ZPageRole::None);
         } else {
             Heap::free_page(source);
         }
@@ -1123,33 +1133,6 @@ void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn
 }
 
 } // namespace
-
-void RegionManager::CollectFromSpaceGarbage()
-{
-    // cjpmnull2 5b31efeb mirrored onto this second reclaim entry: a page still
-    // in the relocation set (route ∉ {FORWARDED,COMPACTED} and not Exempt-kept)
-    // must not be merged into garbage. ZGC free_page never runs while the page
-    // is in the relocation set (zGeneration.cpp:216-221).
-    // #710: forwarded from-pages are found by page-table walk over the From
-    // role (zPageTable.hpp:57-77); forwarding work itself comes from the
-    // relocation set, so nothing here feeds a work queue.
-    std::vector<ZPage*> fromPages;
-    {
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            if (region->GetRegionRole() == ZPageRole::From) {
-                fromPages.push_back(region);
-            }
-        }
-    }
-    for (ZPage* region : fromPages) {
-        const bool complete = region->IsForwardingDone();
-        if (complete) {
-            region->SetRegionRole(ZPageRole::Garbage);
-        }
-    }
-}
 
 void RegionManager::CompactRegion(ZPage* region)
 {

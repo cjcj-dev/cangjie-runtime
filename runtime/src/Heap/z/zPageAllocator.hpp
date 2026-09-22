@@ -514,8 +514,6 @@ public:
     void AssembleSmallGarbageCandidates();
     void AssembleLargeGarbageCandidates();
 
-    void CollectFromSpaceGarbage();
-
 
     size_t GetYoungAllocatedSize() const;
 

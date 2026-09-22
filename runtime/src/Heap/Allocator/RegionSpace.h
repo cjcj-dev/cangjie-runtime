@@ -86,11 +86,6 @@ public:
     size_t CollectLargeGarbage() { return GetRegionManager().CollectLargeGarbage(); }
 
 
-    void CollectFromSpaceGarbage()
-    {
-        GetRegionManager().CollectFromSpaceGarbage();
-    }
-
     void DumpRegionStats(const char* msg) const
     {
         GetRegionManager().DumpRegionStats(msg);
