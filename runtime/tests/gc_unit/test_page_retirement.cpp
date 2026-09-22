@@ -24,6 +24,38 @@
 namespace MapleRuntime {
 namespace {
 
+// zPageAllocator.cpp:1401-1407,1467-1478: allocation consumes allocator
+// capacity; only the owner returning a page makes that page available.
+void CheckAllocationPreservesOwnedPage(bool allowSaferegion, bool nonBlocking)
+{
+    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+    RegionManager& manager = Heap::GetHeap().page_allocator();
+    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, false, false);
+    GC_EXPECT_TRUE(owned != nullptr);
+    const uintptr_t address = owned->GetRegionStart();
+    // Model a page awaiting GC reclamation. Allocation must not claim it
+    // merely because its role is Garbage; the GC owner still owns the page.
+    owned->SetRegionRole(ZPageRole::Garbage);
+    const size_t used = manager.GetAllocatedSize();
+    ZAllocationFlags flags;
+    if (nonBlocking) {
+        flags.set_non_blocking();
+    }
+    ZPage* allocated = Heap::alloc_page(ZGranuleSize, ZPageType::large, false,
+                                      allowSaferegion, false, PageAge::eden, flags);
+    const bool retained = Heap::page(address) == owned;
+    const size_t usedAfter = manager.GetAllocatedSize();
+    std::printf("AllocationOwnership retained=%d used_before=%zu used_after=%zu\n",
+                retained, used, usedAfter);
+    // This is the target assertion, before checks of the new allocation.
+    GC_EXPECT_TRUE(retained);
+    GC_EXPECT_EQ(usedAfter, used + ZGranuleSize);
+    GC_EXPECT_TRUE(allocated != nullptr);
+    GC_EXPECT_NE(allocated->GetRegionStart(), address);
+    Heap::free_page(allocated);
+    Heap::free_page(owned);
+}
+
 enum class RetirementPath { RETURN, RECLAIM, RELEASE, MARK_QUARANTINE };
 
 int ExercisePageRetirement(RetirementPath path, bool concurrent)
@@ -160,6 +192,38 @@ void CheckPageRetirement(RetirementPath path, bool concurrent)
 }
 
 } // namespace
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, SaferegionAllocationPreservesOwnedPage)
+{
+    CheckAllocationPreservesOwnedPage(true, false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, NonSaferegionAllocationPreservesOwnedPage)
+{
+    CheckAllocationPreservesOwnedPage(false, false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, NonBlockingAllocationPreservesOwnedPage)
+{
+    CheckAllocationPreservesOwnedPage(true, true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, ExplicitFreeWithdrawsOwnedPage)
+{
+    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+    RegionManager& manager = Heap::GetHeap().page_allocator();
+    const size_t used = manager.GetAllocatedSize();
+    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, false, false);
+    GC_EXPECT_TRUE(owned != nullptr);
+    const uintptr_t address = owned->GetRegionStart();
+    owned->SetRegionRole(ZPageRole::Garbage);
+    Heap::free_page(owned);
+    const bool withdrawn = Heap::page(address) == nullptr;
+    std::printf("AllocationOwnership explicit_free_withdrawn=%d used=%zu\n",
+                withdrawn, manager.GetAllocatedSize());
+    GC_EXPECT_TRUE(withdrawn);
+    GC_EXPECT_EQ(manager.GetAllocatedSize(), used);
+}
 
 GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableReturnWaitsForOutermostIterator)
 {

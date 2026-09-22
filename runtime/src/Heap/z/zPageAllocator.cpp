@@ -922,16 +922,6 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
         RequestForRegion(size);
     }
 
-#if !defined(__OHOS__)
-    size_t gatedBytes = 0;
-    ZPage* garbage = allowSaferegion ? TakeReclaimableGarbageRegion(&gatedBytes) : nullptr;
-    if (garbage != nullptr) {
-        ReclaimRegion(garbage);
-    }
-#else
-    size_t gatedBytes = GetGatedGarbageBytes();
-#endif
-
 retry:
     ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload, flags);
     const bool claimed = ClaimCapacityOrStall(request);
@@ -970,13 +960,6 @@ retry:
         return region;
     }
 
-    if (gatedBytes > 0) {
-        static std::atomic<size_t> supplyGatedPressureCount { 0 };
-        size_t n = supplyGatedPressureCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if ((n & (n - 1)) == 0) {
-            VLOG(REPORT, "[Alloc] supply_gated_pressure gated_bytes=%zu n=%zu", gatedBytes, n);
-        }
-    }
     return nullptr;
 }
 
