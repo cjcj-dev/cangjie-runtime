@@ -7,7 +7,6 @@
 
 #include "Heap/z/zRootsIterator.hpp"
 #include "FieldInfo.h"
-#include "CompilerCalls.h"
 #include "Base/Log.h"
 #include "Base/Globals.h"
 #include "Loader/ILoader.h"
@@ -16,6 +15,8 @@
 #include "ObjectModel/MObject.inline.h"
 #include "ObjectManager.inline.h"
 namespace MapleRuntime {
+// CompilerCalls.h also defines TU-local aliases; declare the shared accessor here.
+extern "C" void MCC_WriteRefField(ObjectPtr ref, ObjectPtr obj, RefField<false>* field);
 
 U32 InstanceFieldInfo::GetModifier() const { return modifier; }
 
