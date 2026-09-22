@@ -217,3 +217,118 @@ static void CheckInPlaceRemset(bool eager)
 }
 GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, EagerInPlaceClearsPreviousRemset) { CheckInPlaceRemset(true); }
 GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, WorkerInPlaceClearsPreviousRemset) { CheckInPlaceRemset(false); }
+
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+#include <csignal>
+#include <string>
+#include <sys/wait.h>
+#include <unistd.h>
+
+namespace {
+// The unmarked object has valid metadata: omitting the product precondition
+// must complete relocation, rather than fail in an unrelated size reader.
+void RunRelocateLiveness(bool worker, bool marked)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager mutators;
+    InPlaceRemsetRuntime runtime(mutators);
+    CreateStandaloneHeap(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& heap = Heap::GetHeap();
+    auto& generation = heap.old();
+    generation.InitializeWorkers(1);
+    generation.Workers()->set_active_workers(1);
+    generation.Begin(1);
+    GenerationSequenceFixture::Advance(generation);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(16);
+    type->SetAlign(8);
+    GCTib tib{};
+    tib.tag = SIGN_BIT;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZPage* pages[2];
+    BaseObject* live[2];
+    BaseObject* dead[2];
+    ZRelocationSetSelector selector;
+    for (size_t i = 0; i < 2; ++i) {
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, true, PageAge::old, flags);
+        GC_EXPECT_TRUE(pages[i] != nullptr);
+        dead[i] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
+        live[i] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
+        for (auto* object : {dead[i], live[i]}) {
+            object->SetClassInfo(type);
+            *reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(object) + 8) = 0x869;
+        }
+        GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], live[i]));
+        ZPageTest::MakeRelocatable(*pages[i]);
+        GC_EXPECT_TRUE(heap.IsSurvivedObject(live[i]));
+        GC_EXPECT_FALSE(heap.IsSurvivedObject(dead[i]));
+        selector.register_live_page(pages[i]);
+    }
+    selector.select();
+    generation.relocation_set().install(&selector);
+    ZRelocationSetIterator installed(&generation.relocation_set());
+    for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
+    ZForwarding* owner = forwarding_for_page(pages[0]);
+    GC_EXPECT_TRUE(owner != nullptr);
+    generation.set_phase(ZGenerationPhase::Relocate);
+    BaseObject* source = marked ? live[0] : dead[0];
+    BaseObject* result;
+    if (worker) {
+        generation.relocate().relocate(&generation.relocation_set());
+        result = reinterpret_cast<BaseObject*>(owner->find(reinterpret_cast<uintptr_t>(source)));
+    } else {
+        result = generation.relocate().relocate_object(owner, source);
+    }
+    GC_EXPECT_TRUE(result != nullptr && result != source);
+    GC_EXPECT_EQ(*reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(result) + 8), 0x869u);
+    std::fprintf(stderr, "RELOCATE_LIVE_RESULT worker=%d marked=%d source=%p result=%p payload=0x869\n",
+                 worker, marked, source, result);
+}
+
+void CheckRelocateLiveness(bool worker, bool marked)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        RunRelocateLiveness(worker, marked);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char buffer[512];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) { transcript.append(buffer, count); }
+    close(output[0]);
+    std::fwrite(transcript.data(), 1, transcript.size(), stderr);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool target = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find("IsSurvivedObject(obj)") != std::string::npos &&
+        transcript.find("Should be live") != std::string::npos;
+    std::fprintf(stderr, "RELOCATE_LIVE_ASSERT worker=%d marked=%d status=%d target=%d\n",
+                 worker, marked, status, target);
+    if (!marked) {
+        GC_EXPECT_TRUE(target);
+    } else {
+        GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        GC_EXPECT_TRUE(transcript.find("RELOCATE_LIVE_RESULT") != std::string::npos);
+    }
+}
+}
+GC_COMPONENT_OTHER_VM_TEST(RelocateLiveness, MutatorRejectsUnmarkedSource) { CheckRelocateLiveness(false, false); }
+GC_COMPONENT_OTHER_VM_TEST(RelocateLiveness, MutatorCopiesMarkedSource) { CheckRelocateLiveness(false, true); }
+GC_COMPONENT_OTHER_VM_TEST(RelocateLiveness, WorkerCopiesMarkedSource) { CheckRelocateLiveness(true, true); }
+#endif

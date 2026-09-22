@@ -13,6 +13,7 @@
 #include "Heap/z/zMark.hpp"
 
 #include <array>
+#include <cassert>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -748,6 +749,8 @@ void ZRelocate::UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from,
 
 BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
 {
+    // ZGC zRelocate.cpp:354-355: validate liveness before reading the object.
+    assert(Heap::GetHeap().IsSurvivedObject(obj) && "Should be live");
     const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
     if (const MAddress hit = (forwarding_for_page(copyPage) != nullptr ? forwarding_for_page(copyPage)->find(fromAddr) : 0)) {
         BaseObject* to = reinterpret_cast<BaseObject*>(hit);
@@ -1034,6 +1037,8 @@ private:
     }
     void relocate_object(BaseObject* object)
     {
+        // ZGC zRelocate.cpp:902-905: the worker checks at the outer entry.
+        assert(Heap::GetHeap().IsSurvivedObject(object) && "Should be live");
         const uint32_t partition = forwarding->page()->partition_id();
         const PageAge age = forwarding->to_age();
         while (!try_relocate_object(object, partition)) {
