@@ -173,8 +173,9 @@ static double select_young_gc_workers(const ZDirectorStats& stats, double serial
         const double next_avoid_oom_gc_workers =
             estimated_gc_workers(serial_gc_time, parallelizable_gc_time, next_time_until_oom);
         const double next_gc_workers = next_avoid_oom_gc_workers + 0.5;
-        const double try_lowering_gc_workers = std::clamp(next_gc_workers,
-            static_cast<double>(actual_gc_workers), last_gc_workers);
+        const double lo = static_cast<double>(actual_gc_workers);
+        const double try_lowering_gc_workers = next_gc_workers < lo ? lo :
+            (next_gc_workers > last_gc_workers ? last_gc_workers : next_gc_workers);
         VLOG(REPORT, "Select Minor GC Workers (Try Lowering), AvoidOOMGCWorkers: %.3f, "
             "NextAvoidOOMGCWorkers: %.3f, LastGCWorkers: %.3f, GCWorkers: %.3f\n",
             gc_workers, next_avoid_oom_gc_workers, last_gc_workers, try_lowering_gc_workers);
@@ -304,11 +305,13 @@ static bool rule_minor_allocation_rate(const ZDirectorStats& stats)
         return false;
     }
     const bool stalling_for_old = Heap::GetHeap().page_allocator().IsAllocationStallingForOld();
-    VLOG(REPORT, "Rule Minor: Allocation Stall, StallingForOld: %d, Stalling: %d, Suppressed: %d\n",
-        stalling_for_old, stats.allocation_stalling, stalling_for_old);
     if (stalling_for_old) {
+        VLOG(REPORT, "Rule Minor: Allocation Stall, StallingForOld: %d, Stalling: %d, Suppressed: 1\n",
+            stalling_for_old, stats.allocation_stalling);
         return false;
     }
+    VLOG(REPORT, "Rule Minor: Allocation Stall, StallingForOld: %d, Stalling: %d, Suppressed: 0\n",
+        stalling_for_old, stats.allocation_stalling);
     if (is_young_small(stats)) {
         return false;
     }
