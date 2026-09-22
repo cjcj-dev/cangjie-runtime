@@ -499,14 +499,12 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     cycle.PublishPhase(ZGenerationPhase::Mark);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
-    WorkStack work;
-    std::vector<BaseObject*> reached;
-    publication.FollowYoung(work, reached);
-    std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu marked=%d\n", reached.size(),
+    Heap::GetHeap().young().mark_follow();
+    std::fprintf(stderr, "P1_CONSUMER_ASSERT live=%zu marked=%d\n",
                  static_cast<size_t>(fx.region0->live_bytes()),
                  fx.region0->livemap().is_marked(fx.region0->generation_id()) ? 1 : 0);
-    GC_EXPECT_TRUE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
     GC_EXPECT_EQ(fx.region0->live_bytes(), fx.obj0->GetSize());
+    GC_EXPECT_TRUE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
 }
 
 

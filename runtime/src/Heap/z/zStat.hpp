@@ -28,12 +28,7 @@
 namespace MapleRuntime {
 struct YoungConcWindowStats {
     uint64_t windowNs = 0;    // world-released → STW2 requested
-    size_t closureCalls = 0;  // TraceYoungClosure invocations inside the window
-    size_t markedAtEntry = 0; // reachableVec.size() at world-release
-    size_t markedAtExit = 0;  // reachableVec.size() at STW2 request
-    size_t remsetSlots = 0;   // remset slots consumed by the in-window rescan
     size_t reenters = 0;      // ZGC pause_mark_end() == false → concurrent_mark_continue()
-    size_t MarkedInWindow() const { return markedAtExit >= markedAtEntry ? markedAtExit - markedAtEntry : 0; }
 };
 
 // zStat.hpp:449-452

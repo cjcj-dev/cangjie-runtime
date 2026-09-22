@@ -60,17 +60,21 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     MarkPublicationFixture mark;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
+    // reset() creates allocating pages; the mark input must predate its cycle.
+    // ZGC zPage.inline.hpp:180-186, as in the P1Mark policy fixture.
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
     Heap::GetHeap().MarkObjectIfActive(fx.obj0);
     Heap::GetHeap().MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     GC_EXPECT_EQ(mark.YoungPending(), 1u);
-    WorkStack work;
-    std::vector<BaseObject*> reached;
-    GC_EXPECT_TRUE(mark.FollowYoung(work, reached));
-    GC_EXPECT_TRUE(work.empty());
+    // ZGC zGeneration.cpp:891-895: use the product combined follow task.
+    Heap::GetHeap().young().mark_follow();
+    const size_t live = fx.region1->live_bytes();
+    std::fprintf(stderr, "GENERATION_YOUNG_FOLLOW_ASSERT live=%zu expected=%zu\n",
+                 live, static_cast<size_t>(fx.obj1->GetSize()));
+    GC_EXPECT_EQ(live, fx.obj1->GetSize());
     GC_EXPECT_EQ(mark.YoungPending(), 0u);
-    GC_EXPECT_EQ(reached.size(), 1u);
-    GC_EXPECT_TRUE(reached.front() == fx.obj1);
     // Completing/cleaning young work must leave old's object and carrier intact.
     GC_EXPECT_TRUE(RegionSpace::IsMarkedObject<Generation::Young>(fx.obj1));
     GC_EXPECT_EQ(mark.OldPending(), 1u);

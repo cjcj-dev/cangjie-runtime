@@ -57,7 +57,6 @@ class AllocBuffer;
 struct ThreadGCData;
 struct ThreadLocalData;
 class Mutator;
-struct YoungConcWindowStats;
 
 // Per-generation mark ownership (zMark.hpp:42-124, zMark.cpp:80-92).
 class ZMark {
@@ -86,11 +85,7 @@ public:
                                   std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
                                   std::unordered_set<MAddress>& weakSlots,
                                   const std::unordered_set<MAddress>* reachableSlotDomain = nullptr);
-    static bool FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
-                             std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
-                             std::unordered_set<MAddress>& weakSlots,
-                             YoungConcWindowStats* windowStats = nullptr);
-    static bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
+    static bool TryEndYoungMark(WorkStack& workStack);
 
     static bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
@@ -206,7 +201,7 @@ constexpr uint64_t NS_PER_US = 1000;
 constexpr uint64_t NS_PER_S = 1000000000;
 
 // Strict mark-end cut shared by major mark-end and young
-// FollowYoungMark. ZMark::end -> try_end (zMark.cpp:954-971) decides
+// mark-end. ZMark::end -> try_end (zMark.cpp:954-971) decides
 // termination with mutators stopped, after ZMark::flush (zMark.cpp:587-605,
 // :998-1006), and resumes concurrent follow when that cut exposes work
 // (zMark.cpp:973-990). This must stay compile-time and default-on: retired-only
