@@ -376,6 +376,8 @@ public:
 
     // ZPageAllocator::capacity(): sum of ZPartition::_capacity.
     size_t GetCommittedCapacity() const { return freeRegionManager.capacity(); }
+    void StartUncommitters() { freeRegionManager.StartUncommitters(); }
+    void StopUncommitters() { freeRegionManager.StopUncommitters(); }
 
     size_t GetHeapCapacity() const { return heapCapacity; }
     size_t soft_max_capacity() const;
