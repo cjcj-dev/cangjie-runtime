@@ -19,14 +19,6 @@ bool g_gcEnabled = true;
 
 void ZArguments::initialize_alignments() {}
 
-void ZArguments::initialize_heap_flags_and_sizes()
-{
-    const size_t maxHeap = ZHeuristics::max_heap_size();
-    if (maxHeap > 0) {
-        ZHeuristics::set_max_heap_size(maxHeap * 90 / 100 + (maxHeap * 10 / 100));
-    }
-}
-
 void ZArguments::select_max_gc_threads()
 {
     // ZGC zArguments.cpp:67-118: explicit flags precede ergonomics at this entry.
@@ -88,7 +80,6 @@ void ZArguments::initialize()
             g_gcEnabled = true;
         }
     }
-    initialize_heap_flags_and_sizes();
     select_max_gc_threads();
 
     // zArguments.cpp: medium sizing precedes relocation-headroom ergonomics.
