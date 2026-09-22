@@ -237,6 +237,17 @@ if [[ "$OHOS_HOST" == "1" ]]; then
   mkdir -p "$GC_UNIT_OUT"
   OHOS_RECEIPT="${GC_UNIT_OHOS_HOST_RECEIPT:-$GC_UNIT_OUT/ohos_host.receipt}"
   rm -f "$OHOS_RECEIPT"
+  # Verify the selected product even when the caller reuses a test ELF.
+  nm --defined-only "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" \
+    >"$GC_UNIT_OUT/ohos_host_product.full-defined.txt"
+  for symbol in CJ_GetUIThreadStackTop CJ_PushUIThreadStackTop; do
+    if ! /usr/bin/grep -Eq "[[:space:]]${symbol}(@@?[^[:space:]]+)?$" \
+        "$GC_UNIT_OUT/ohos_host_product.full-defined.txt"; then
+      STATUS_REASON=OHOS_HOST_PRODUCT_SYMBOL_MISSING
+      echo "GC_UNIT_OHOS_HOST_PRODUCT_SYMBOL_MISSING symbol=$symbol" >&2
+      exit 21
+    fi
+  done
   OHOS_HOST_STATE=FAIL
   OHOS_HOST_SOURCE=FRESH
   STATUS_REASON=OHOS_HOST_FAILURE

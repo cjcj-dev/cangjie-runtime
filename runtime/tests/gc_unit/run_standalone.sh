@@ -48,6 +48,8 @@ run_ohos_host_arm() {
 
   nm --defined-only "$so" | c++filt >"$product_nm"
   for symbol in \
+      'CJ_GetUIThreadStackTop' \
+      'CJ_PushUIThreadStackTop' \
       'CJ_MRT_RolveCycleRef' \
       'ResolveCycleRefStub' \
       'MapleRuntime::ZCrossVM::ResolveCycleRef()' \
@@ -126,12 +128,8 @@ run_ohos_host_arm() {
   objdump -drC "$so" | sed -n \
     '/<MapleRuntime::ZCrossVM::PostResolveCycleTask()>/,/^$/p' >"$post_disassembly"
   if ! /usr/bin/grep -F -q 'CJ_MRT_RolveCycleRef' "$post_disassembly"; then
-    if [[ "${GC_UNIT_OHOS_HOST_ALLOW_MISSING_POST_DISPATCH:-0}" == "1" ]]; then
-      echo "GC_UNIT_OHOS_HOST_POST_DISPATCH_MISSING_ALLOWED"
-    else
-      echo "GC_UNIT_OHOS_HOST_POST_DISPATCH_MISSING" >&2
-      return 26
-    fi
+    echo "GC_UNIT_OHOS_HOST_POST_DISPATCH_MISSING" >&2
+    return 26
   fi
 
   sha256sum "$elf" "$so" "$bounds" >"$OUT/ohos_host_artifacts.sha256"
