@@ -257,10 +257,12 @@ GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
 // Explicitness is independent from the value: zero and -1 are real inputs.
 #include "Heap/z/zHeuristics.hpp"
 #include "CjScheduler.h"
+#include "Heap/z/zPage.hpp"
 namespace {
 extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
 struct TenuringCollectionResult {
     uint32_t threshold = 0;
+    PageAge survivorAge = PageAge::eden;
 };
 void* CollectWithTenuringFlags(void* context)
 {
@@ -272,7 +274,10 @@ void* CollectWithTenuringFlags(void* context)
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     const U64 root = Heap::GetHeap().RegisterExportRoot(MCC_NewObject(type, 4096));
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
-    static_cast<TenuringCollectionResult*>(context)->threshold = Heap::GetHeap().young().tenuring_threshold();
+    auto& result = *static_cast<TenuringCollectionResult*>(context);
+    result.threshold = Heap::GetHeap().young().tenuring_threshold();
+    auto* survivor = Heap::GetHeap().GetExportObject(root);
+    result.survivorAge = Heap::page(reinterpret_cast<uintptr_t>(survivor))->age();
     Heap::GetHeap().RemoveExportObject(root);
     Mutator::GetMutator()->SetManagedContext(true);
     return nullptr;
@@ -330,6 +335,10 @@ void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t m
             static_cast<uint32_t>(overrideValue) : std::min(1u, actual);
         std::fprintf(stderr, "TENURING_CONSUMER_TARGET actual=%u expected=%u\n", result.threshold, selected);
         GC_EXPECT_EQ(result.threshold, selected);
+        const PageAge expectedAge = selected == 0 ? PageAge::old : PageAge::survivor1;
+        std::fprintf(stderr, "TENURING_PROMOTION_TARGET actual=%u expected=%u\n",
+                     untype(result.survivorAge), untype(expectedAge));
+        GC_EXPECT_EQ(untype(result.survivorAge), untype(expectedAge));
     }
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
@@ -349,3 +358,5 @@ GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverride) { CheckTenuringFlag
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 9, true); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentAutomatic) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, -1, true); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentZero) { CheckTenuringFlags(64 * 1024, 2, true, 0, true, 0, true); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumOne) { CheckTenuringFlags(64 * 1024, 2, true, 1, false, 0); }
