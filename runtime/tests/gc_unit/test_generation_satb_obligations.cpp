@@ -24,7 +24,7 @@
 #include "gc_unittest.hpp"
 #include "mark_publication_fixture.hpp"
 #include <cstdio>
-#include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -117,7 +117,9 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
     GC_EXPECT_TRUE(ZPointer::is_mark_bad(stored));
     std::fprintf(stderr, "SATB_QUAL name=BlockedWeakReadSeparatesOldStrongAndFinalizable mark_bad=%d\n",
                  ZPointer::is_mark_bad(stored) ? 1 : 0);
-    RefField<> field(stored);
+    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(stored);
     mark.CompleteOldMarkForAdmissionTest();
     ZResurrection::block();
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
@@ -141,7 +143,9 @@ GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
     GC_EXPECT_TRUE(ZPointer::is_mark_bad(stored));
     std::fprintf(stderr, "SATB_QUAL name=BlockedWeakReadKeepsYoungAlive mark_bad=%d\n",
                  ZPointer::is_mark_bad(stored) ? 1 : 0);
-    RefField<> field(stored);
+    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(stored);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
     std::vector<BaseObject*> published;
     mark.Drain([&](BaseObject* object, bool) { published.push_back(object); });
@@ -158,10 +162,87 @@ GC_TEST(GenerationMark, UnblockedWeakReadPublishesOldKeepAlive)
     GC_EXPECT_TRUE(ZPointer::is_mark_bad(stored));
     std::fprintf(stderr, "SATB_QUAL name=UnblockedWeakReadPublishesOldKeepAlive mark_bad=%d\n",
                  ZPointer::is_mark_bad(stored) ? 1 : 0);
-    RefField<> field(stored);
+    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(stored);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
     std::vector<BaseObject*> published;
     mark.DrainOld([&](BaseObject* object, bool) { published.push_back(object); });
     GC_EXPECT_EQ(published.size(), 1u);
     GC_EXPECT_TRUE(published.front() == fx.obj0);
 }
+
+// ZGC zBarrier.inline.hpp:504-523 and zBarrier.cpp:106-144.
+GC_TEST(WeakLoadFamily, BlockedNoKeepAliveRejectsFinalizableOld)
+{
+    GcHeapFixture fx;
+    MarkPublicationFixture mark;
+    RestoreMarkFlips flips;
+    const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
+    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(stored);
+    (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
+    mark.CompleteOldMarkForAdmissionTest();
+    struct Unblock { ~Unblock() { ZResurrection::unblock(); } } unblock;
+    ZResurrection::block();
+    const zaddress result = ZBarrier::no_keep_alive_load_barrier_on_weak_oop_field_preloaded(
+        reinterpret_cast<volatile zpointer*>(&field), stored);
+    const bool strong = fx.region0->is_object_strongly_live(from_object(fx.obj0));
+    std::fprintf(stderr, "WEAK_LOAD_RESULT blocked=1 result=%zx strong=%d\n", raw(result), strong);
+    GC_EXPECT_TRUE(is_null(result));
+    GC_EXPECT_FALSE(strong);
+    // Positive arm: same object and pointer, outside the blocked window.
+    ZResurrection::unblock();
+    const zaddress unblocked = ZBarrier::no_keep_alive_load_barrier_on_weak_oop_field_preloaded(
+        reinterpret_cast<volatile zpointer*>(&field), stored);
+    std::fprintf(stderr, "WEAK_LOAD_RESULT blocked=0 result=%zx expected=%zx\n",
+                 raw(unblocked), reinterpret_cast<uintptr_t>(fx.obj0));
+    GC_EXPECT_TRUE(to_object(unblocked) == fx.obj0);
+}
+
+GC_TEST(WeakLoadFamily, UnblockedNoKeepAliveDoesNotPublishMark)
+{
+    GcHeapFixture fx;
+    MarkPublicationFixture mark;
+    RestoreMarkFlips flips;
+    const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
+    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(stored);
+    const zaddress result = ZBarrier::no_keep_alive_load_barrier_on_weak_oop_field_preloaded(
+        reinterpret_cast<volatile zpointer*>(&field), stored);
+    const size_t pending = mark.OldPending();
+    std::fprintf(stderr, "WEAK_LOAD_NO_MARK result=%zx pending=%zu\n", raw(result), pending);
+    GC_EXPECT_TRUE(to_object(result) == fx.obj0);
+    GC_EXPECT_EQ(pending, 0u);
+    // Same product pointer through the keep-alive entry must publish marking.
+    const zaddress kept = ZBarrier::load_barrier_on_weak_oop_field_preloaded(
+        reinterpret_cast<volatile zpointer*>(&field), stored);
+    GC_EXPECT_TRUE(to_object(kept) == fx.obj0);
+    GC_EXPECT_EQ(mark.OldPending(), 1u);
+    mark.DrainOld([](BaseObject*, bool) {});
+}
+
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+GC_OTHER_VM_TEST(WeakLoadFamily, RejectsNonReferentSlot)
+{
+    constexpr const char* name = "WeakLoadFamily.RejectsNonReferentSlot";
+    if (std::getenv("GC_UNIT_WEAK_INVALID_SLOT") == nullptr) {
+        GC_EXPECT_EQ(setenv("GC_UNIT_WEAK_INVALID_SLOT", "1", 1), 0);
+        try {
+            RunInOtherVm(name, "obj->IsWeakRef()");
+        } catch (...) {
+            unsetenv("GC_UNIT_WEAK_INVALID_SLOT");
+            throw;
+        }
+        unsetenv("GC_UNIT_WEAK_INVALID_SLOT");
+        std::fprintf(stderr, "WEAK_SLOT_TARGET_ASSERT_EXECUTED\n");
+        return;
+    }
+    GcHeapFixture fx;
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreGoodPointer(fx.obj0));
+    (void)CJ_MCC_ReadWeakRef(fx.obj1, &field);
+}
+#endif

@@ -17,7 +17,6 @@
 #include "ObjectModel/MClass.h"
 
 namespace MapleRuntime {
-enum class ReferenceStrength : uint8_t { Strong, Weak, Phantom };
 enum class HandVerdict : uint8_t;
 
 class AllStatic {
@@ -98,6 +97,18 @@ public:
     static zaddress load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o);
     static zaddress load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o);
     static zaddress no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static zaddress keep_alive_load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static zaddress no_keep_alive_load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static zaddress blocking_keep_alive_load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static zaddress blocking_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static zaddress blocking_load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static zaddress blocking_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static zaddress blocking_load_barrier_on_weak_slow_path(volatile zpointer* p, zaddress addr);
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+    static void verify_on_weak(volatile zpointer* p);
+#else
+    static void verify_on_weak(volatile zpointer*) {}
+#endif
     static bool clean_barrier_on_phantom_oop_field(volatile zpointer* p);
     static void load_barrier_on_oop_array(volatile zpointer* p, size_t length);
 
@@ -172,17 +183,14 @@ public:
     static zaddress MarkYoungSlowPath(zaddress address);
     static void MarkIfYoung(zaddress address);
     static void MarkYoung(zaddress address);
-    template<bool atomic>
-    static BaseObject* LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpointer observed,
-                            ReferenceStrength strength);
 
     static zaddress relocate_or_remap(zaddress_unsafe addr, ZGeneration* generation);
     static zaddress remap(zaddress_unsafe addr, ZGeneration* generation);
     static zaddress load_good_slow_path(zaddress addr);
     static zaddress keep_alive_slow_path(zaddress addr);
-    static zaddress blocking_keep_alive_on_weak_slow_path(zaddress addr);
-    static zaddress blocking_keep_alive_on_phantom_slow_path(zaddress addr);
-    static zaddress blocking_load_barrier_on_phantom_slow_path(zaddress addr);
+    static zaddress blocking_keep_alive_on_weak_slow_path(volatile zpointer* p, zaddress addr);
+    static zaddress blocking_keep_alive_on_phantom_slow_path(volatile zpointer* p, zaddress addr);
+    static zaddress blocking_load_barrier_on_phantom_slow_path(volatile zpointer* p, zaddress addr);
     static zpointer ColorLoadGood(zaddress address, zpointer previous);
     static zaddress promote_slow_path(zaddress addr);
     static void promote_barrier_on_young_oop_field(volatile zpointer* p);

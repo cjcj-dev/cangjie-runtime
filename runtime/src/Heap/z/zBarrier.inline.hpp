@@ -9,6 +9,7 @@
 #define MRT_BARRIER_INLINE_H
 
 #include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zResurrection.inline.hpp"
 #include "Base/Log.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zVerify.hpp"
@@ -378,6 +379,95 @@ inline void ZBarrier::mark_and_remember(volatile zpointer* p, zaddress addr)
     }
     remember(p);
 }
+
+inline zaddress ZBarrier::load_barrier_on_oop_field(volatile zpointer* p) {
+  const zpointer o = load_atomic(p);
+  return load_barrier_on_oop_field_preloaded(p, o);
+}
+
+inline zaddress ZBarrier::load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o) {
+  auto slow_path = [](zaddress addr) -> zaddress {
+    return addr;
+  };
+
+  return barrier(is_load_good_or_null_fast_path, slow_path, ColorLoadGood, p, o);
+}
+
+inline zaddress ZBarrier::keep_alive_load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o) {
+  ASSERT(!ZResurrection::is_blocked());
+  return barrier(is_mark_good_fast_path, keep_alive_slow_path, ColorMarkGood, p, o);
+}
+
+//
+// Load barrier on non-strong oop refs
+//
+
+inline zaddress ZBarrier::load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o) {
+  verify_on_weak(p);
+
+  if (ZResurrection::is_blocked()) {
+    return blocking_keep_alive_load_barrier_on_weak_oop_field_preloaded(p, o);
+  }
+
+  return keep_alive_load_barrier_on_oop_field_preloaded(p, o);
+}
+
+inline zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {
+  if (ZResurrection::is_blocked()) {
+    return blocking_keep_alive_load_barrier_on_phantom_oop_field_preloaded(p, o);
+  }
+
+  return keep_alive_load_barrier_on_oop_field_preloaded(p, o);
+}
+
+inline zaddress ZBarrier::no_keep_alive_load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o) {
+  verify_on_weak(p);
+
+  if (ZResurrection::is_blocked()) {
+    return blocking_load_barrier_on_weak_oop_field_preloaded(p, o);
+  }
+
+  // Normal load barrier doesn't keep the object alive
+  return load_barrier_on_oop_field_preloaded(p, o);
+}
+
+inline zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {
+  if (ZResurrection::is_blocked()) {
+    return blocking_load_barrier_on_phantom_oop_field_preloaded(p, o);
+  }
+
+  // Normal load barrier doesn't keep the object alive
+  return load_barrier_on_oop_field_preloaded(p, o);
+}
+
+inline zaddress ZBarrier::blocking_keep_alive_load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o) {
+  auto slow_path = [=](zaddress addr) -> zaddress {
+    return ZBarrier::blocking_keep_alive_on_weak_slow_path(p, addr);
+  };
+  return barrier(is_mark_good_fast_path, slow_path, ColorMarkGood, p, o);
+}
+
+inline zaddress ZBarrier::blocking_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {
+  auto slow_path = [=](zaddress addr) -> zaddress {
+    return ZBarrier::blocking_keep_alive_on_phantom_slow_path(p, addr);
+  };
+  return barrier(is_mark_good_fast_path, slow_path, ColorMarkGood, p, o);
+}
+
+inline zaddress ZBarrier::blocking_load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o) {
+  auto slow_path = [=](zaddress addr) -> zaddress {
+    return ZBarrier::blocking_load_barrier_on_weak_slow_path(p, addr);
+  };
+  return barrier(is_mark_good_fast_path, slow_path, ColorMarkGood, p, o);
+}
+
+inline zaddress ZBarrier::blocking_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {
+  auto slow_path = [=](zaddress addr) -> zaddress {
+    return ZBarrier::blocking_load_barrier_on_phantom_slow_path(p, addr);
+  };
+  return barrier(is_mark_good_fast_path, slow_path, ColorMarkGood, p, o);
+}
+
 
 } // namespace MapleRuntime
 #endif // ~MRT_BARRIER_INLINE_H
