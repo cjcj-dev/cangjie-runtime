@@ -541,10 +541,7 @@ public:
 
     void SetGarbageThreshold(double garbageThreshold);
 
-    void HandleTraceRegions();
-    // Stamps `role` on the page when the matching trace cache is active.
 
-    void PrepareTrace();
 
 
 
@@ -586,11 +583,6 @@ private:
     // #710: page lifecycle identity lives in ZPage's role word and the page
     // table (zPageTable.hpp:57-77); there are no page lists. The relocation
     // set (zRelocationSet.hpp) is the from-space work source.
-    // RegionCache activations (PrepareTrace/HandleTraceRegions): while active,
-    // freshly filled pages are stamped FullTrace/LargeTrace instead of
-    // RecentFull/RecentLarge.
-    bool fullTraceCacheActive{ false };
-    bool largeTraceCacheActive{ false };
     // zRelocate.cpp:1121 shape: in-place relocated page counts by size class,
     // accumulated while a from-space pass runs and read at its end. Host
     // difference: ZGC counts these on ZRelocateSmall/MediumAllocator; here the

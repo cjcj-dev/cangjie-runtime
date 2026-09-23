@@ -249,8 +249,6 @@ private:
     size_t youngLiveRememberedCount = 0;
     bool youngFullScan = false;
     WorkStack youngWorkStack;
-    YoungConcWindowStats youngConcWindow;
-    uint64_t youngConcWindowStartNs = 0;
     MinorSlotSet youngWeakSlots;
     ZRemembered _remembered;
     ZGenerationYoung* previousYoung { nullptr };

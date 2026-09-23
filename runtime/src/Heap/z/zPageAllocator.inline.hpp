@@ -83,34 +83,6 @@ inline size_t RegionManager::GetUsedBytes() const
 
 
 
-inline void RegionManager::HandleTraceRegions()
-    {
-        // #710: trace-stamped pages become ordinary full/large pages; the
-        // stamp is a role word, so the merge is a page-table walk
-        // (zPageTable.hpp:57-77), not a list splice.
-        fullTraceCacheActive = false;
-        largeTraceCacheActive = false;
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            const ZPageRole role = region->GetRegionRole();
-            if (role == ZPageRole::FullTrace) {
-                region->SetRegionRole(ZPageRole::RecentFull);
-            } else if (role == ZPageRole::LargeTrace) {
-                region->SetRegionRole(ZPageRole::RecentLarge);
-            }
-        }
-
-    }
-
-inline void RegionManager::PrepareTrace()
-    {
-        fullTraceCacheActive = true;
-        largeTraceCacheActive = true;
-        // twoflags: notRelocatableThisCycle stamps do not exist as list state;
-        // is_allocating (zPage.inline.hpp:180-186) is the only filter.
-    }
-
 } // namespace MapleRuntime
 #endif
 
