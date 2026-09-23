@@ -1080,64 +1080,6 @@ void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn
 
 } // namespace
 
-namespace {
-bool StayYoungThisCycle(ZPage* region)
-{
-    if (!kPageAgeAdaptiveTenuring) {
-        return false;
-    }
-    const uint32_t thr = ZGeneration::young()->tenuring_threshold();
-    return !ShouldPromoteAge(region->GetYoungAge(), thr);
-}
-
-} // namespace
-
-void RegionManager::BumpYoungSurvivorAge(ZPage* region)
-{
-    uint8_t next = region->GetYoungAge();
-    if (next < untype(PageAge::survivor14)) {
-        region->reset(static_cast<PageAge>(next + 1));
-    }
-}
-
-void RegionManager::FinishStayYoungInPlace(ZPage* region, bool advanceAge)
-{
-    if (advanceAge) {
-        BumpYoungSurvivorAge(region);
-    }
-    WaitCopiedObjectsUnlocked(region);
-    region->MarkForwardingDone();
-    // The selected-set carrier remains queryable after payload release.
-    // The next selection/reset retires its ghost/source view; completing this
-    // page task does not revoke forwarding-table membership.
-}
-
-void RegionManager::EnlistStayYoungSurvivor(ZPage* region, bool advanceAge)
-{
-    FinishStayYoungInPlace(region, advanceAge);
-    // evac_finish calls this on FROM regions. The claim is a role CAS;
-    // there is no link chain to corrupt (#710).
-    bool claimed = false;
-    if (region->IsFromRegion()) {
-        ZPageRole expect = ZPageRole::From;
-        claimed = region->CASRegionRole(expect, ZPageRole::None);
-    } else if (region->IsLoneFromRegion()) {
-        claimed = true;
-    } else if (region->IsGarbageRegion()) {
-        ZPageRole expect = ZPageRole::Garbage;
-        claimed = region->CASRegionRole(expect, ZPageRole::None);
-
-    } else if (region->GetRegionRole() == ZPageRole::RecentFull) {
-        return;
-    }
-    if (!claimed) {
-        return;
-    }
-    region->SetRegionRole(ZPageRole::RecentFull);
-
-}
-
-
 } // namespace MapleRuntime
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
