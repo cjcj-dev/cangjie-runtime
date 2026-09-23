@@ -1254,7 +1254,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager19ReassembleFromSpaceEv @1428
     _ZN12MapleRuntime13RegionManager19SetGarbageThresholdEv @1429
     _ZN12MapleRuntime13RegionManager21StampCensusBoundariesEv @1434
-    _ZN12MapleRuntime13RegionManager29ReclaimRegionToMarkQuarantineEPNS_10ZPageE @1452
     _ZN12MapleRuntime13RegionManager30AssembleLargeGarbageCandidatesEv @1453
     _ZN12MapleRuntime13RegionManager30AssembleSmallGarbageCandidatesEv @1454
     _ZN12MapleRuntime13RegionManager33ClearNotRelocatableThisCycleFlagsEv @1459
