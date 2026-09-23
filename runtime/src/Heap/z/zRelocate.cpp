@@ -803,8 +803,7 @@ static ZPage* AllocateRelocationTarget(ZForwarding* forwarding)
     flags.set_non_blocking();
     flags.set_gc_relocation();
     ZPage* source = forwarding->page();
-    ZPage* page = Heap::alloc_page(forwarding->size(), source->type(), false, false,
-                                  true, forwarding->to_age(), flags);
+    ZPage* page = Heap::alloc_page(forwarding->size(), source->type(), false, false, forwarding->to_age(), flags);
     if (page == nullptr) {
         Heap::GetHeap().page_allocator().NoteInPlaceRelocated(source);
     }
