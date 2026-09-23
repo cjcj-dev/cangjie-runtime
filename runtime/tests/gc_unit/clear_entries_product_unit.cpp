@@ -1274,7 +1274,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     }
     {
         DriverLocker driver;
-        ZDriver::RunGarbageCollection(1, GC_REASON_USER);
+        ZGeneration::old()->collect();
     }
     const uintptr_t expected = oldPending
         ? forwarding_find(Generation::Old, reinterpret_cast<uintptr_t>(forwarding.from))

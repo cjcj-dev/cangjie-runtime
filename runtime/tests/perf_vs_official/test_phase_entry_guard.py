@@ -11,13 +11,17 @@ from pathlib import Path
 GUARD = Path(__file__).with_name("phase_entry_guard.py")
 
 
+def generation(seq, name, tag, start=1, duration=100):
+    return (f"[GCLOG] v=5 rec=generation seq={seq} gc_tag={tag} name={name} "
+            f"start_ns={start} dur_ns={duration} live_before=9 live_after=8")
+
+
 def cycle(seq, kind="minor"):
-    return (f"[GCLOG] v=4 rec=cycle seq={seq} gc_tag=- kind={kind} reason=young "
-            "start_ns=1 dur_ns=100 live_before=9 live_after=8 collected=1 "
-            "heap_used=8 threshold=10 rss_kb=11")
+    return generation(seq, "Young_Generation" if kind == "minor" else "Old_Generation",
+                      "y" if kind == "minor" else "O")
 
 
-def entry(seq, ns=1, start=1, tag="-"):
+def entry(seq, ns=1, start=1, tag="y"):
     return (f"[GCLOG] v=4 rec=phase seq={seq} gc_tag={tag} name=young.flush_alloc "
             f"kind=pause start_ns={start} ns={ns}")
 
@@ -36,13 +40,12 @@ def log(mode="minor"):
 
 
 def major_log(entries=True):
-    rows = log("major")
-    for name, start, tag in (("major.preclean", 10, "Y"),
-                             ("major.full_roots", 30, "Y"), ("major.old", 50, "O")):
+    rows = log("major")[1:]
+    for name, start, tag in (("Young_Generation__Promote_All_", 10, "Y"),
+                             ("Young_Generation__Collect_Roots_", 30, "Y"), ("Old_Generation", 50, "O")):
         if entries and tag == "Y":
             rows.append(entry(1, start=start + 1, tag=tag))
-        rows.append(f"[GCLOG] v=4 rec=phase seq=1 gc_tag={tag} name={name} "
-                    f"kind=unknown start_ns={start} ns=10")
+        rows.append(generation(1, name, tag, start, 10))
     return rows
 
 
@@ -89,15 +92,14 @@ class PhaseEntryGuardTest(unittest.TestCase):
 
 
     def test_each_major_span_is_required(self):
-        for name in ("major.preclean", "major.full_roots", "major.old"):
+        for name in ("Young_Generation__Promote_All_", "Young_Generation__Collect_Roots_", "Old_Generation"):
             with self.subTest(span=name):
                 self.check_guard([row for row in major_log() if f"name={name} " not in row],
                                  mode="major", errors="major_spans_seq=1")
 
     def test_extra_major_generation_span_is_rejected(self):
         rows = major_log()
-        rows.append("[GCLOG] v=4 rec=phase seq=1 gc_tag=Y name=major.partial_roots "
-                    "kind=unknown start_ns=70 ns=10")
+        rows.append(generation(1, "Young_Generation", "Y", 70, 10))
         self.check_guard(rows, mode="major", errors="major_spans_seq=1")
 
     def test_major_spans_must_be_ordered(self):
@@ -110,10 +112,9 @@ class PhaseEntryGuardTest(unittest.TestCase):
         self.check_guard(rows, mode="major", errors="major_span_tags_seq=1")
 
     def test_other_request_cannot_supply_major_spans(self):
-        rows = log("major") + [cycle(2)] + [entry(2)]
-        rows += [row.replace("seq=1", "seq=2") for row in major_log()[5:]]
-        self.check_guard(rows, mode="major",
-                         errors="major_explicit_shape=major,minor,major_spans_seq=1")
+        rows = [row.replace("seq=1", "seq=2") if "name=Old_Generation " in row else row
+                for row in major_log()]
+        self.check_guard(rows, mode="major", errors="major_request_ids=1,2")
 
     def test_preclean_entry_cannot_supply_full_roots(self):
         rows = [row for row in major_log() if "name=young.flush_alloc" not in row or "start_ns=11" in row]
@@ -121,7 +122,7 @@ class PhaseEntryGuardTest(unittest.TestCase):
 
     def test_separate_minor_cycle_is_not_major_prelude(self):
         self.check_guard(log("major") + [cycle(2), entry(2)], mode="major",
-                         errors="major_explicit_shape=major,minor,major_spans_seq=1")
+                         errors="major_request_ids=1,2,major_spans_seq=1")
 
 
 if __name__ == "__main__":

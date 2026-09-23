@@ -160,13 +160,13 @@ try:
     if expected_enabled and generation == 'minor' and backup:
         minor_driver = next(t for t in gdb.selected_inferior().threads() if t.name == 'ZDriverMinor')
         minor_driver.switch()
-        bp = gdb.Breakpoint('MapleRuntime::ZDriver::ExecuteDriverRequest', temporary=True)
+        bp = gdb.Breakpoint('MapleRuntime::ZDriverMinor::gc', temporary=True)
         command('continue')
         if bp.is_valid():
             raise RuntimeError('Minor driver did not consume timer request')
         received_cause = int(value('request._cause'))
         emit('ASSERT_MINOR_REQUEST', cause=received_cause, passed=received_cause == 2)
-        bp = gdb.Breakpoint('MapleRuntime::ZDriver::RunYoungCollection', temporary=True)
+        bp = gdb.Breakpoint('MapleRuntime::ZGenerationYoung::collect', temporary=True)
         command('continue')
         if bp.is_valid():
             raise RuntimeError('Minor collection entry was not reached')

@@ -336,8 +336,8 @@ void ZGeneration::at_collection_start(void* timer)
 void ZGeneration::at_collection_end()
 {
     Workers()->set_inactive();
-    const GCReason reason = is_young() && YoungType() != ZYoungType::minor
-        ? ZGeneration::old()->Snapshot().reason : Snapshot().reason;
+    // ZGC zStat.cpp:1247: warmup accounting reads the major driver cause.
+    const GCReason reason = ZDriver::major()->gc_cause();
     CycleStats().AtEnd(TimeUtil::NanoSeconds(), StatWorkers(),
                        reason == GC_REASON_WARMUP, should_record_stats());
     set_gc_timer(nullptr);
@@ -406,6 +406,7 @@ bool ZGenerationYoung::pause_mark_end()
 void ZGenerationYoung::mark_start()
 {
     uint64_t start = TimeUtil::NanoSeconds();
+    if (!Snapshot().active) Begin(Snapshot().requestIndex);
     CHECK(_cycle == ZGenerationId::young);
     CHECK(Snapshot().active);
     ZGlobalsPointers::flip_young_mark_start();
@@ -843,6 +844,12 @@ void ZGeneration::InitializeWorkers(uint32_t capacity)
     }
 }
 
+// ZGC zGeneration.cpp:153-155.
+void ZGeneration::set_active_workers(uint32_t nworkers)
+{
+    Workers()->set_active_workers(nworkers);
+}
+
 void ZGeneration::StopWorkers()
 {
     mark->BindWorkers(nullptr);
@@ -853,6 +860,18 @@ void ZGeneration::StopWorkers()
 
 namespace MapleRuntime {
 
+
+// ZGC zGeneration.cpp:1296-1302: policy access belongs to the old generation.
+void ZGenerationOld::set_soft_reference_policy(bool clear)
+{
+    Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().set_soft_reference_policy(clear);
+}
+
+bool ZGenerationOld::uses_clear_all_soft_reference_policy() const
+{
+    return Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor()
+        .uses_clear_all_soft_reference_policy();
+}
 
 void ZGenerationOld::mark_start()
 {
@@ -1058,27 +1077,7 @@ void ZGenerationOld::concurrent_relocate()
 }
 
 namespace MapleRuntime {
-void ZGeneration::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
-{
-    const ZGenerationId generation = id();
-    const bool continuingPrelude = Heap::GetHeap().GetZGeneration(generation).Snapshot().active;
-    if (!continuingPrelude) {
-        Heap::GetHeap().GetZGeneration(generation).Begin(gcIndex);
-    }
 
-    VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s",
-         g_gcRequests[Heap::GetHeap().GetCycleSnapshot(generation).reason].name,
-         Pretty(Heap::GetHeap().GetAllocatedSize()).Str());
-
-    // zDriver.cpp:183,399-400: generation workers use their concurrent
-    // budget for both pause and concurrent work. Parallel workers are separate.
-    const int32_t threadCount = static_cast<int32_t>((*Workers()).active_workers());
-    VLOG(REPORT, "GC generation active workers: %d", threadCount);
-
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    Heap::GetHeap().DumpBeforeGC();
-#endif
-}
 }
 
 namespace MapleRuntime {
@@ -1246,17 +1245,7 @@ namespace MapleRuntime {
 
 namespace MapleRuntime {
 
-void ZGeneration::PostGarbageCollection(uint64_t gcIndex)
-{
-    const ZGenerationId generation = id();
-    reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).DumpRegionStats("region statistics when gc ends");
 
-    PagePool::Instance().Trim();
-    (void)gcIndex;
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    Heap::GetHeap().DumpAfterGC();
-#endif
-}
 
 
 

@@ -69,7 +69,8 @@ try:
     gdb.execute('start')
     Observe('MapleRuntime::ZDriverMinor::collect', 'collect')
     Observe('MapleRuntime::ZDriverMajor::collect', 'collect', True)
-    Observe('MapleRuntime::ZDriver::ExecuteDriverRequest', 'execute')
+    Observe('MapleRuntime::ZDriverMinor::gc', 'execute')
+    Observe('MapleRuntime::ZDriverMajor::gc', 'execute', True)
     gdb.execute('continue')
     if errors:
         raise RuntimeError(str(errors))

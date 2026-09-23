@@ -399,7 +399,6 @@ public:
         // requesting the product pause, as the real GC-thread caller does.
         ScopedEnterSaferegion safe(false);
         auto& young = Heap::GetHeap().young();
-        young.PreGarbageCollection(true, young.Snapshot().requestIndex);
         young.pause_mark_start();
         young.concurrent_mark();
     }

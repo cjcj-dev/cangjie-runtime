@@ -106,7 +106,7 @@ public:
             remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZGranuleSize);
         }
         // ZDriver::gc_major runs the young roots collection before old marking.
-        ZDriver::RunGarbageCollection(1, GC_REASON_YOUNG, ZYoungType::major_partial_roots);
+        ZGeneration::young()->collect(ZYoungType::major_partial_roots);
     }
 
     static void RunMajorMark(Heap& collector)

@@ -32,7 +32,7 @@ main(): Int64 {
     unsafe { PhaseEntryRequestMinor() }
 
     // The runner creates this private receipt only after reading a completed
-    // minor cycle from this process. Polling yields to managed GC handshakes;
+    // minor generation span from this process. Polling yields to managed GC handshakes;
     // a fixed delay cannot prove completion. The runner bounds the whole run.
     while (!exists(completion)) {
         sleep(10 * Duration.millisecond)

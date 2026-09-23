@@ -38,11 +38,11 @@ def run(binary, log_path):
                     pending += chunk
                     while b"\n" in pending:
                         line, pending = pending.split(b"\n", 1)
-                        if acknowledged or not line.startswith(b"[GCLOG] ") or b" rec=cycle " not in line:
+                        if acknowledged or not line.startswith(b"[GCLOG] ") or b" rec=generation " not in line:
                             continue
                         records = parse_gclog(line.decode("utf-8"))
-                        for cycle in records.cycles:
-                            if cycle.kind == "minor" and cycle.seq > 0:
+                        for cycle in records.generations:
+                            if cycle.gc_tag == "y" and cycle.name == "Young_Generation" and cycle.seq > 0:
                                 (Path(directory) / "completed").write_text(f"seq={cycle.seq}\n")
                                 acknowledged = True
                                 log.write(f"PHASE_ENTRY_CYCLE_ACK seq={cycle.seq}\n".encode())

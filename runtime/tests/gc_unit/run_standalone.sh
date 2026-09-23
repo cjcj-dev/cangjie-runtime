@@ -56,7 +56,7 @@ run_ohos_host_arm() {
       'MapleRuntime::ZCrossVM::GetCrossRefHandler(MapleRuntime::BaseObject*)' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason)' \
       'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
-      'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason, MapleRuntime::ZYoungType)' \
+      'MapleRuntime::ZDriverMajor::gc(MapleRuntime::ZDriverRequest const&)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$product_nm"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_SYMBOL_MISSING symbol=$symbol" >&2
@@ -71,7 +71,7 @@ run_ohos_host_arm() {
     return 22
   fi
   libc_real="$(readlink -f "$libc_real")"
-  ln -sfn "$libc_real" "$runroot/libc.so"
+  cp -f "$libc_real" "$runroot/libc.so"
 
   if [[ -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]]; then
     echo "GC_UNIT_OHOS_HOST_HEADER_ROOT=${runtime_include_flags[0]#-I}"
@@ -109,7 +109,7 @@ run_ohos_host_arm() {
       'MapleRuntime::ZCrossVM::GetCrossRefHandler(MapleRuntime::BaseObject*)' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason)' \
       'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
-      'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason, MapleRuntime::ZYoungType)' \
+      'MapleRuntime::ZDriverMajor::gc(MapleRuntime::ZDriverRequest const&)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if /usr/bin/grep -F -q "$symbol" "$test_nm"; then
       echo "GC_UNIT_OHOS_HOST_LOCAL_PRODUCT_DEFINITION symbol=$symbol" >&2

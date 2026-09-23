@@ -336,7 +336,7 @@ private:
     LocklessTaskQueue<T> asyncTaskQueue;
 };
 
-enum class GCDriverKind : uint8_t { MINOR, MAJOR };
+
 
 
 // zDriver.hpp:48-119: ZDriverMinor/ZDriverMajor are ZThreads whose run_thread
@@ -353,18 +353,11 @@ public:
     static ZDriverMajor* major();
     static void lock();
     static void unlock();
-    ZDriver(GCDriverKind kind, ZDriverPort& port);
-    void run_thread() override;
-    void terminate() override;
-    MRT_EXPORT static void RunGarbageCollection(uint64_t gcIndex, GCReason reason,
-                                               ZYoungType type = ZYoungType::minor);
-    void RunYoungCollection(uint64_t index, ZYoungType type);
-    bool ExecuteDriverRequest(const ZDriverRequest& request);
-protected:
-    virtual void HandleAllocStalls() const = 0;
-    const GCDriverKind kind;
-    ZDriverPort& port;
+    ZDriver();
+    void set_gc_cause(GCReason cause);
+    GCReason gc_cause() const;
 private:
+    GCReason _gc_cause;
     static ZLock* _lock;
     static ZDriverMinor* _minor;
     static ZDriverMajor* _major;
@@ -378,7 +371,10 @@ public:
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
 private:
-    void HandleAllocStalls() const override;
+    void run_thread() override;
+    void terminate() override;
+    void handle_alloc_stalls() const;
+    void gc(const ZDriverRequest& request);
     ZDriverPort _port;
 };
 
@@ -390,7 +386,12 @@ public:
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
 private:
-    void HandleAllocStalls() const override;
+    void run_thread() override;
+    void terminate() override;
+    void handle_alloc_stalls() const;
+    void collect_young(const ZDriverRequest& request);
+    void collect_old();
+    void gc(const ZDriverRequest& request);
     ZDriverPort _port;
 };
 
