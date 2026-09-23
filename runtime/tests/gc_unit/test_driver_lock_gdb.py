@@ -17,7 +17,7 @@ try:
     fixture = 'GcDirector.ProductWarmupStopsAfterThreeCycles'
     gdb.execute('set environment GC_UNIT_FILTER ' + fixture)
     gdb.execute('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
-    gdb.Breakpoint('MapleRuntime::ZDriver::ExecuteDriverRequest', temporary=True)
+    gdb.Breakpoint('MapleRuntime::ZDriverMajor::gc', temporary=True)
     gdb.execute('run')
     frame = gdb.newest_frame()
     product = gdb.solib_name(frame.pc())

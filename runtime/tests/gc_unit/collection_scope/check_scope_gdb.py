@@ -165,7 +165,8 @@ class Complete(gdb.Breakpoint):
 try:
     for setting in ('pagination off', 'confirm off', 'breakpoint pending on', 'print thread-events off'):
         gdb.execute('set ' + setting)
-    Entry('MapleRuntime::ZDriver::RunGarbageCollection', internal=True)
+    Entry('MapleRuntime::ZGenerationYoung::collect', internal=True)
+    Entry('MapleRuntime::ZGenerationOld::collect', internal=True)
     Sample('MapleRuntime::ZStatPhaseGeneration::RegisterEnd', internal=True)
     SampleDone('MapleRuntime::ZStatHeap::PrintStalls', internal=True)
     CycleStart('MapleRuntime::ZStatCycle::AtStart', internal=True)

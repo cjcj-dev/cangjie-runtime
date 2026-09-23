@@ -336,8 +336,8 @@ void ZGeneration::at_collection_start(void* timer)
 void ZGeneration::at_collection_end()
 {
     Workers()->set_inactive();
-    const GCReason reason = is_young() && YoungType() != ZYoungType::minor
-        ? ZGeneration::old()->Snapshot().reason : Snapshot().reason;
+    // ZGC zStat.cpp:1247: warmup accounting reads the major driver cause.
+    const GCReason reason = ZDriver::major()->gc_cause();
     CycleStats().AtEnd(TimeUtil::NanoSeconds(), StatWorkers(),
                        reason == GC_REASON_WARMUP, should_record_stats());
     set_gc_timer(nullptr);

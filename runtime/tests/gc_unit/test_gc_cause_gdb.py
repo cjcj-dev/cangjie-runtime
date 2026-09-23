@@ -56,7 +56,7 @@ def expect(tag, passed, **fields):
 
 class WarmupDelay(gdb.Breakpoint):
     def stop(self):
-        if int(val('reason')) == int(val('MapleRuntime::GC_REASON_WARMUP')):
+        if int(val('MapleRuntime::ZDriver::_major->_gc_cause')) == int(val('MapleRuntime::GC_REASON_WARMUP')):
             # Extend a real measured old cycle; do not edit its statistics.
             time.sleep(0.15)
         return False
@@ -100,7 +100,7 @@ try:
     until('test_gc_director.cpp:' + str(ready))
     if CASE in ('allocation_rate', 'allocation_rate_static', 'major_allocation_rate', 'proactive'):
         if CASE == 'major_allocation_rate':
-            WarmupDelay('MapleRuntime::ZDriver::RunGarbageCollection', internal=True)
+            WarmupDelay('MapleRuntime::ZDriverMajor::collect_old', internal=True)
         cmd('set scheduler-locking off')
         second = next(i + 1 for i, s in enumerate(tests) if 'const size_t nextSize =' in s)
         until('test_gc_director.cpp:' + str(second))
@@ -153,7 +153,7 @@ try:
     if dispatch.is_valid(): dispatch.delete()
     if other_dispatch.is_valid(): other_dispatch.delete()
     if idle.is_valid(): idle.delete()
-    observed = int(val('request._cause'))
+    observed = int(val('MapleRuntime::ZDriver::_major->_gc_cause'))
     expected = int(val('MapleRuntime::GC_REASON_' + EXPECTED))
     stack = cmd('bt')
     expect('ASSERT_DIRECTOR_CAUSE', observed == expected and expected_driver and 'ZDirector::run_thread' in stack,
