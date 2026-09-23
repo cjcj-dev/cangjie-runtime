@@ -60,6 +60,7 @@ private:
     class ColoredRootOopClosure {
         HeapIterator& iter;
         const HeapIteratorContext& context;
+        BaseObject* load_oop(NativeSlot* root);
     public:
         ColoredRootOopClosure(HeapIterator& iter, const HeapIteratorContext& context) : iter(iter), context(context) {}
         void do_root(NativeSlot& root);

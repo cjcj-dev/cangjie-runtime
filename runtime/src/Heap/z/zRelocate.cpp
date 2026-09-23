@@ -4,7 +4,6 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zJNICritical.hpp"

@@ -770,11 +770,15 @@ GC_OTHER_VM_TEST(HeapIterator, PhantomRootDoesNotKeepAliveDuringOldMark)
     Heap& collector = Heap::GetHeap();
     RelocationReceiptTest::BindCollector(&collector);
     const U64 handle = collector.RegisterExportRoot(fx.obj0);
-    ScopedStopTheWorld stw("B10 phantom root iteration", false);
-    collector.old().mark_start();
-    GC_EXPECT_FALSE(fx.region0->is_object_live(from_object(fx.obj0)));
     size_t visits = 0;
-    HeapIterator(true).Iterate([&](BaseObject* object) { visits += object == fx.obj0; });
+    {
+        ScopedStopTheWorld stw("B10 phantom root iteration", false);
+        collector.old().mark_start();
+        GC_EXPECT_FALSE(fx.region0->is_object_live(from_object(fx.obj0)));
+        HeapIterator(true).Iterate([&](BaseObject* object) { visits += object == fx.obj0; });
+    }
+    ThreadLocal::FlushCurrentThreadMarkStacks();
+    collector.old().Mark().MarkFollow(false);
     const bool live = fx.region0->is_object_live(from_object(fx.obj0));
     collector.RemoveExportObject(handle);
     std::fprintf(stderr, "B10_ITERATOR_RESULT visits=%zu live=%d\n", visits, live);

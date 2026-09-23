@@ -136,19 +136,21 @@ void HeapIterator::FollowArrayChunk(const ObjArrayTask& array, const FieldVisito
 }
 
 template <bool Weak>
+BaseObject* HeapIterator::ColoredRootOopClosure<Weak>::load_oop(NativeSlot* root)
+{
+    if constexpr (Weak) {
+        return NativeAccess<AS_NO_KEEPALIVE | ON_PHANTOM_OOP_REF>::oop_load(root);
+    }
+    return NativeAccess<AS_NO_KEEPALIVE>::oop_load(root);
+}
+
+template <bool Weak>
 void HeapIterator::ColoredRootOopClosure<Weak>::do_root(NativeSlot& root)
 {
     if (context.fieldVisitor != nullptr && *context.fieldVisitor) {
         (*context.fieldVisitor)(nullptr, &root, raw(root.GetFieldValue()));
     }
-    BaseObject* object = nullptr;
-    if constexpr (Weak) {
-        // ZGC zHeapIterator.cpp:116-119 NativeAccess<AS_NO_KEEPALIVE | ON_PHANTOM_OOP_REF>
-        object = NativeAccess<AS_NO_KEEPALIVE | ON_PHANTOM_OOP_REF>::oop_load(&root);
-    } else {
-        object = NativeAccess<AS_NO_KEEPALIVE>::oop_load(&root);
-    }
-    context.push(object);
+    context.push(load_oop(&root));
 }
 
 void HeapIterator::UncoloredRootOopClosure::do_root(ObjectRef& root)
