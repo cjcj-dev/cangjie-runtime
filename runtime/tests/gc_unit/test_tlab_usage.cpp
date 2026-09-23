@@ -936,13 +936,13 @@ GC_RUNTIME_OTHER_VM_TEST(TLABRefill, FailureFallsBackOutsideTLAB)
     constexpr size_t bytes = 256;
     constexpr size_t tail = 1024;
     auto& allocator = heap.object_allocator();
-    const uintptr_t seed = allocator.alloc(bytes, PageAge::eden, true);
+    const uintptr_t seed = allocator.alloc(bytes);
     GC_EXPECT_TRUE(seed != 0);
     ZPage* page = Heap::page(seed);
     while (page->GetRegionEnd() - page->GetRegionAllocPtr() > tail) {
         const size_t remaining = page->GetRegionEnd() - page->GetRegionAllocPtr();
         const size_t chunk = std::min(remaining - tail, ZObjectSizeLimitSmall);
-        GC_EXPECT_TRUE(allocator.alloc(chunk, PageAge::eden, true) != 0);
+        GC_EXPECT_TRUE(allocator.alloc(chunk) != 0);
     }
     // Reserve every other page through the product page allocator. The shared
     // page stays installed; no synthetic result is passed to the consumer.
