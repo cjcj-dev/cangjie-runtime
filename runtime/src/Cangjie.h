@@ -228,11 +228,6 @@ struct HeapParam {
      * It will be set to default value if assigned with 0.
      */
     double heapGrowth;
-
-    // No runtime readers. Retained for cjcj's RuntimeHeapParamC layout;
-    // remove together with the macro/option fields in cjcj#91.
-    double allocationRate;
-    size_t allocationWaitTime;
 };
 
 /*
