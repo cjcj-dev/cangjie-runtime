@@ -1,0 +1,110 @@
+{
+  "base": "ed74b464efc257cc884efd94d5ee923a970b6eab",
+  "head": "40969cb83b5425915bca21022019b62429c0495a",
+  "symbols": {
+    "_unlocker": {
+      "ed74b464efc257cc884efd94d5ee923a970b6eab": {
+        "rc": 0,
+        "output": "ed74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zGeneration.cpp:2\n",
+        "total": 2
+      },
+      "40969cb83b5425915bca21022019b62429c0495a": {
+        "rc": 0,
+        "output": "40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zGeneration.cpp:2\n",
+        "total": 2
+      }
+    },
+    "at_collection_start": {
+      "ed74b464efc257cc884efd94d5ee923a970b6eab": {
+        "rc": 0,
+        "output": "ed74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zGeneration.cpp:3\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zGeneration.hpp:1\n",
+        "total": 4
+      },
+      "40969cb83b5425915bca21022019b62429c0495a": {
+        "rc": 0,
+        "output": "40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zGeneration.cpp:3\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zGeneration.hpp:1\n",
+        "total": 4
+      }
+    },
+    "at_collection_end": {
+      "ed74b464efc257cc884efd94d5ee923a970b6eab": {
+        "rc": 0,
+        "output": "ed74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zGeneration.cpp:3\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zGeneration.hpp:1\n",
+        "total": 4
+      },
+      "40969cb83b5425915bca21022019b62429c0495a": {
+        "rc": 0,
+        "output": "40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zGeneration.cpp:3\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zGeneration.hpp:1\n",
+        "total": 4
+      }
+    },
+    "set_inactive": {
+      "ed74b464efc257cc884efd94d5ee923a970b6eab": {
+        "rc": 0,
+        "output": "ed74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zGeneration.cpp:1\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zWorkers.cpp:1\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zWorkers.hpp:1\n",
+        "total": 3
+      },
+      "40969cb83b5425915bca21022019b62429c0495a": {
+        "rc": 0,
+        "output": "40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zGeneration.cpp:1\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zWorkers.cpp:1\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zWorkers.hpp:1\n",
+        "total": 3
+      }
+    },
+    "set_active": {
+      "ed74b464efc257cc884efd94d5ee923a970b6eab": {
+        "rc": 0,
+        "output": "ed74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/workerThread.cpp:2\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/workerThread.hpp:3\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zDriver.cpp:2\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zGeneration.cpp:1\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zHeap.cpp:1\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zRelocate.cpp:2\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zRuntimeWorkers.cpp:1\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zWorkers.cpp:7\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zWorkers.hpp:2\n",
+        "total": 21
+      },
+      "40969cb83b5425915bca21022019b62429c0495a": {
+        "rc": 0,
+        "output": "40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/workerThread.cpp:2\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/workerThread.hpp:3\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zDriver.cpp:2\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zGeneration.cpp:1\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zHeap.cpp:1\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zRelocate.cpp:2\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zRuntimeWorkers.cpp:1\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zWorkers.cpp:7\n40969cb83b5425915bca21022019b62429c0495a:runtime/src/Heap/z/zWorkers.hpp:2\n",
+        "total": 21
+      }
+    }
+  },
+  "deleted": {
+    "kMaxTenuringThreshold": {
+      "ed74b464efc257cc884efd94d5ee923a970b6eab": {
+        "rc": 0,
+        "output": "ed74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zRelocationSetSelector.hpp:2\n"
+      },
+      "40969cb83b5425915bca21022019b62429c0495a": {
+        "rc": 1,
+        "output": ""
+      }
+    },
+    "initialize_heap_flags_and_sizes": {
+      "ed74b464efc257cc884efd94d5ee923a970b6eab": {
+        "rc": 0,
+        "output": "ed74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zArguments.cpp:2\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zArguments.hpp:1\n"
+      },
+      "40969cb83b5425915bca21022019b62429c0495a": {
+        "rc": 1,
+        "output": ""
+      }
+    }
+  },
+  "main_files": {
+    "runtime/src/Heap/z/zDriver.cpp": "",
+    "runtime/src/Heap/z/zGeneration.cpp": "diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp\nindex ec3d66d03..fb0f40c36 100644\n--- a/runtime/src/Heap/z/zGeneration.cpp\n+++ b/runtime/src/Heap/z/zGeneration.cpp\n@@ -1111,9 +1111,14 @@ void ZGenerationYoung::register_flip_promoted(const ZArray<ZPage*>& pages)\n \n void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)\n {\n-    // zGeneration.cpp:704-715: preclean promotes all, other types compute.\n-    _tenuring_threshold = YoungType() == ZYoungType::major_full_preclean\n-        ? 0 : ComputeTenuringThreshold(inputs);\n+    // ZGC zGeneration.cpp:704-715: promote-all precedes an explicit override.\n+    if (inputs.promoteAll) {\n+        _tenuring_threshold = 0;\n+    } else if (ZTenuringThreshold != -1) {\n+        _tenuring_threshold = static_cast<uint32_t>(ZTenuringThreshold);\n+    } else {\n+        _tenuring_threshold = ComputeTenuringThreshold(inputs);\n+    }\n }\n \n void ZGeneration::free_empty_pages(ZRelocationSetSelector* selector, int bulk)\n",
+    "runtime/src/Heap/z/zGeneration.hpp": "",
+    "runtime/tests/gc_unit/run_old_tail_gdb.sh": "",
+    "runtime/tests/gc_unit/test_old_tail_gdb.py": "",
+    "runtime/tests/gc_unit/test_zGeneration.cpp": ""
+  },
+  "conflict_scan": {
+    "rc": 1,
+    "output": ""
+  },
+  "conflict_positive_control": {
+    "rc": 0,
+    "output": "coordination/conflict-control.txt:1:<<<<<<< positive control\n"
+  },
+  "transient_adjacent_file": {
+    "path": "runtime/src/HeapManager.cpp",
+    "head_sha256": "d018ede94b8f43d205a25d5b7a628efa06ec3102b890ce7b2ee9d77f383bc072",
+    "working_sha256": "d018ede94b8f43d205a25d5b7a628efa06ec3102b890ce7b2ee9d77f383bc072",
+    "status": ""
+  }
+}

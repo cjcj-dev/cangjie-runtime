@@ -1,0 +1,6 @@
+diff --git a/stdlib/libs/std/core/string.cj b/stdlib/libs/std/core/string.cj
+--- a/stdlib/libs/std/core/string.cj
++++ b/stdlib/libs/std/core/string.cj
+@@ -259 +259 @@
+-        return canonicalizeString(candidate)
++        return candidate

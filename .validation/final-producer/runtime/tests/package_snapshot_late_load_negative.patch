@@ -1,0 +1,11 @@
+diff --git a/runtime/src/CompilerCalls.cpp b/runtime/src/CompilerCalls.cpp
+--- a/runtime/src/CompilerCalls.cpp
++++ b/runtime/src/CompilerCalls.cpp
+@@ -1389,6 +1389,6 @@ public:
+             publishedHandles.push_back(handle);
+             snapshots.emplace(handle, std::move(entry));
+         }
+-        ReconcilePublishedSubPackages(snapshots, publishedHandles);
++        // Fault injection: disconnect late-loaded descendants from already-published snapshot handles.
+         return root;
+     }

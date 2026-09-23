@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp
+index fb0f40c36..1189ef69b 100644
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -1175,7 +1175,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
+             inputs.liveByAge[untype(age)] =
+                 st.small(age).live() + st.medium(age).live() + st.large(age).live();
+         }
+-        ZGeneration::young()->SelectTenuringThreshold(inputs);
++        (void)inputs;
+     }
+     _relocation_set.install(&selector);
+     if (_cycle == ZGenerationId::young) {

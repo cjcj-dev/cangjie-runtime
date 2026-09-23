@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -454,7 +454,7 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
+             {
+                 ScopedEnterSaferegion enterSaferegion(false);
+                 ScopedStopTheWorld preflight("direct ELF unload active-image preflight", false);
+-                active = HasActiveImageFrames(baseFile);
++                active = false; // Fault injection: omit the direct active-frame decision.
+             }
+             if (!active) {
+                 break;

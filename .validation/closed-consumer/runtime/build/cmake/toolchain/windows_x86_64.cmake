@@ -1,0 +1,154 @@
+# Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+# This source file is part of the Cangjie project, licensed under Apache-2.0
+# with Runtime Library Exception.
+#
+# See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+# toolchain for windows_x86_64
+
+# platform
+set(PLATFORM_NAME "windows_x86_64")
+
+# environment info
+set(OS "windows")
+
+set(CPU_CORE "x86_64")
+set(CPU_FAMILY "x86")
+set(CPU_TYPE "i686")
+set(MEM_TYPE "mem")
+set(BYTE_ORDER "le")
+set(COMPILER "gnu")
+set(FWD_PLATFORM "MCCA")
+
+set(CMAKE_ASM_COMPILER_WORKS 1)
+set(CMAKE_ASM_ABI_COMPILED 1)
+
+# build tools
+set(CMAKE_C_COMPILER "clang")
+set(CMAKE_CXX_COMPILER "clang++")
+
+# compile flags for common
+set(CMAKE_C_FLAGS
+    "--target=x86_64-pc-windows-gnu \
+    -Wall \
+    -Wextra \
+    -Wformat=2 \
+    -Wpointer-arith \
+    -Wdate-time \
+    -Wfloat-equal \
+    -Wswitch-default \
+    -Wshadow \
+    -Wvla \
+    -Wunused \
+    -Wundef \
+    -Wcast-qual \
+    -Wstrict-prototypes \
+    -m64 \
+    -std=c11 \
+    -fno-strict-aliasing \
+    -fno-omit-frame-pointer \
+    -fgnu89-inline \
+    -fsigned-char \
+    -fno-common \
+    -fstack-protector-strong \
+    -Wframe-larger-than=10240 \
+    -D_WIN32_WINNT=_WIN32_WINNT_VISTA \
+    -Wno-inconsistent-dllimport \
+    -Wno-pointer-to-int-cast \
+    -fuse-ld=lld \
+    --rtlib=compiler-rt \
+    -pipe"
+)
+
+set(CMAKE_CXX_FLAGS
+    "--target=x86_64-pc-windows-gnu \
+    -Wall \
+    -Wextra \
+    -Wformat=2 \
+    -Wpointer-arith \
+    -Wdate-time \
+    -Wfloat-equal \
+    -Wswitch-default \
+    -Wshadow \
+    -Wvla \
+    -Wunused \
+    -Wundef \
+    -Wcast-qual \
+    -Woverloaded-virtual \
+    -Wnon-virtual-dtor \
+    -Wdelete-non-virtual-dtor \
+    -m64 \
+    -std=gnu++14 \
+    -fno-strict-aliasing \
+    -fno-omit-frame-pointer \
+    -fsigned-char \
+    -fno-common \
+    -fstack-protector-strong \
+    -Wframe-larger-than=10240 \
+    -D_WIN32_WINNT=_WIN32_WINNT_VISTA \
+    -Wno-inconsistent-dllimport \
+    -fno-exceptions \
+    -Wno-pointer-to-int-cast \
+    -fuse-ld=lld \
+    -stdlib=libc++ \
+    --rtlib=compiler-rt \
+    -pipe"
+)
+
+if("${BUILDING_STAGE}")
+    set(CMAKE_C_FLAGS_DEBUG "-g -Wframe-larger-than=2048")
+    set(CMAKE_CXX_FLAGS_DEBUG "-g -Wframe-larger-than=2048 -gdwarf-4")
+endif()
+
+# compile flags for debug version only
+set(CMAKE_C_FLAGS_DEBUG "-g")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -gdwarf-4")
+
+# compile flags for release version only
+set(CMAKE_C_FLAGS_RELEASE "-D_FORTIFY_SOURCE=2 -O2")
+set(CMAKE_CXX_FLAGS_RELEASE "-D_FORTIFY_SOURCE=2 -O2")
+
+# assemble flags
+set(CMAKE_ASM_FLAGS
+    "${CMAKE_C_FLAGS}"
+)
+
+# Attention we need to clear CMAKE_ASM_FLAGS_DEBUG and CMAKE_ASM_FLAGS_RELEASE
+# otherwise cmake will add some default compile option which we may not want
+
+# assemble flags for debug version only
+set(CMAKE_ASM_FLAGS_DEBUG "")
+
+# assemble flags for release version only
+set(CMAKE_ASM_FLAGS_RELEASE "")
+
+# compile definitions
+add_compile_definitions(
+   "_LARGEFILE_SOURCE"
+   "_FILE_OFFSET_BITS=64"
+   "MRT_HARDWARE_PLATFORM=MRT_WINDOWS_X86"
+   "VOS_WORDSIZE=64"
+   "_CRT_RAND_S"
+   "MRT_WINDOWS"
+   "TLS_COMMON_DYNAMIC"
+   "CANGJIE"
+)
+
+set(dynamic_path ${CMAKE_CURRENT_SOURCE_DIR}/../../../output/bin)
+
+set(secure_link "-lboundscheck")
+set(openssl_link "-lcrypto -lssl")
+
+# link flags
+set(CMAKE_SHARED_LINKER_FLAGS
+    "--target=x86_64-pc-windows-gnu \
+    -m64 \
+    -rdynamic \
+    -Wl,-Bsymbolic \
+    -Wl,--no-undefined"
+)
+
+link_libraries(ssp pthread Ws2_32)
+
+# ar flags
+set(CMAKE_C_CREATE_STATIC_LIBRARY "<CMAKE_AR> rcD <TARGET> <OBJECTS>")

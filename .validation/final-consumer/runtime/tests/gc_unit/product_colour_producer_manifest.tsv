@@ -1,0 +1,5 @@
+producer_name	source_file	stable_anchor	required_families
+store_good	runtime/src/Heap/z/zAddress.inline.hpp	return color(addr, ZPointerStoreGoodMask);	remap,marked_young,old_reachability,remembered
+interior_store_good	runtime/src/ObjectModel/RefField.h	ZAddress::store_good(to_zaddress(address))	remap,marked_young,old_reachability,remembered
+bulk_store_good	runtime/src/Heap/z/zBarrier.cpp	WriteReferenceImpl(nullptr, field, ref);	remap,marked_young,old_reachability,remembered
+finalizable_good	runtime/src/Heap/z/zAddress.inline.hpp	return color(addr, ZPointerLoadGoodMask | ZPointerMarkedYoung | ZPointerFinalizable | ZPointerRememberedMask);	remap,marked_young,old_reachability,remembered

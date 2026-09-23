@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zArguments.cpp b/runtime/src/Heap/z/zArguments.cpp
+index 50ff3fcba..911bd7a60 100644
+--- a/runtime/src/Heap/z/zArguments.cpp
++++ b/runtime/src/Heap/z/zArguments.cpp
+@@ -106,7 +106,7 @@ void ZArguments::initialize()
+                 break;
+             }
+         }
+-        MaxTenuringThreshold = tenuring_threshold;
++        MaxTenuringThreshold = 14;
+     }
+ }
+ 

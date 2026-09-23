@@ -1,0 +1,14 @@
+# kkk2_build_two lane=sym_cangjie_runtime_906_ceiling head=21b9d6359e3f3a01bf2455c014742f59febe8252 dirty_files=2 source_sha256=15f903cf2c26b7e9…
+mux_client_request_session: session request failed: Session open refused by peer
+ControlSocket /tmp/audit/cm/root@121.43.126.198:7001 already exists, disabling multiplexing
+== default configure_rc=0 build_rc=0 wall=34s
+-- SO (default):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+01bad0b49a1db27191a2cea0ce420c797afe701bc6d733ccc79237ea2bd2cd8a  build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+== testable configure_rc=0 build_rc=0 wall=35s
+-- SO (testable):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+25aed4fedba62e678784d4853a9797354984f5900d507ea5bb4c9d7a3c7466ba  build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+-- logs: /root/sym_cangjie_runtime_906_ceiling/{default,testable}-{configure,build}.log

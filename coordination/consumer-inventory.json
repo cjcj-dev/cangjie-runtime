@@ -1,0 +1,32 @@
+[
+  {
+    "command": [
+      "rg",
+      "-n",
+      "MaxTenuringThreshold|ZTenuringThreshold|SelectTenuringThreshold|set_medium_page_size",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "output": "runtime/src/CjScheduler.cpp:285:// ZGC z_globals.hpp: ZTenuringThreshold accepts -1 for automatic selection.\nruntime/src/CjScheduler.cpp:747:                    InitTenuringThreshold(\"cjMaxTenuringThreshold\", 0, 16, 15)),\nruntime/src/CjScheduler.cpp:748:                .zTenuringThreshold = InitTenuringThreshold(\"cjZTenuringThreshold\", -1, 15, -1),\nruntime/src/CjScheduler.cpp:749:                .maxTenuringThresholdSet = std::getenv(\"cjMaxTenuringThreshold\") != nullptr,\nruntime/src/CjScheduler.cpp:750:                .zTenuringThresholdSet = std::getenv(\"cjZTenuringThreshold\") != nullptr,\nruntime/src/Heap/z/zArguments.cpp:95:    ZHeuristics::set_medium_page_size();\nruntime/src/Heap/z/zArguments.cpp:98:    MaxTenuringThreshold = max_threshold_is_default ? 15 : param.maxTenuringThreshold;\nruntime/src/Heap/z/zArguments.cpp:99:    ZTenuringThreshold = param.zTenuringThresholdSet ? param.zTenuringThreshold : -1;\nruntime/src/Heap/z/zArguments.cpp:100:    CHECK_DETAIL(MaxTenuringThreshold <= 16, \"MaxTenuringThreshold must be in [0, 16]\");\nruntime/src/Heap/z/zArguments.cpp:101:    CHECK_DETAIL(ZTenuringThreshold >= -1 && ZTenuringThreshold <= 15,\nruntime/src/Heap/z/zArguments.cpp:102:                 \"ZTenuringThreshold must be in [-1, 15]\");\nruntime/src/Heap/z/zArguments.cpp:104:    if (param.zTenuringThresholdSet && ZTenuringThreshold != -1) {\nruntime/src/Heap/z/zArguments.cpp:106:            MaxTenuringThreshold = static_cast<uint32_t>(ZTenuringThreshold);\nruntime/src/Heap/z/zArguments.cpp:112:        for (tenuring_threshold = 0; tenuring_threshold < MaxTenuringThreshold; ++tenuring_threshold) {\nruntime/src/Heap/z/zArguments.cpp:118:        MaxTenuringThreshold = tenuring_threshold;\nruntime/src/Heap/z/zGlobals.cpp:27:uint32_t MaxTenuringThreshold = 15;\nruntime/src/Heap/z/zGlobals.cpp:28:int32_t ZTenuringThreshold = -1;\nruntime/src/Heap/z/zGeneration.hpp:217:    void SelectTenuringThreshold(const TenuringInputs& inputs);\nruntime/src/Heap/z/zHeuristics.hpp:13:    static void set_medium_page_size();\nruntime/src/Heap/z/zHeuristics.cpp:61:void ZHeuristics::set_medium_page_size()\nruntime/src/Heap/z/zGlobals.hpp:56:extern uint32_t MaxTenuringThreshold;\nruntime/src/Heap/z/zGlobals.hpp:57:extern int32_t ZTenuringThreshold;\nruntime/src/Heap/z/zRelocationSetSelector.hpp:75:    const uint32_t upperBound = std::min(lastPopulatedAge + 1u, MaxTenuringThreshold);\nruntime/src/Heap/z/zGeneration.cpp:1112:void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)\nruntime/src/Heap/z/zGeneration.cpp:1117:    } else if (ZTenuringThreshold != -1) {\nruntime/src/Heap/z/zGeneration.cpp:1118:        _tenuring_threshold = static_cast<uint32_t>(ZTenuringThreshold);\nruntime/src/Heap/z/zGeneration.cpp:1178:        ZGeneration::young()->SelectTenuringThreshold(inputs);\n"
+  },
+  {
+    "command": [
+      "rg",
+      "-n",
+      "CreateAndInit\\(|concurrent_select_relocation_set\\(|select_relocation_set\\(",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "output": "runtime/src/CangjieRuntimeApi.cpp:171:    MapleRuntime::CangjieRuntime::CreateAndInit(*p);\nruntime/src/CjScheduler.cpp:768:    CangjieRuntime::CreateAndInit(param);\nruntime/src/CangjieRuntime.h:30:    static void CreateAndInit(const RuntimeParam& runtimeParam);\nruntime/src/CangjieRuntime.cpp:102:void CangjieRuntime::CreateAndInit(const RuntimeParam& runtimeParam)\nruntime/src/Heap/z/zGeneration.hpp:150:    void select_relocation_set(bool promote_all);\nruntime/src/Heap/z/zGeneration.hpp:232:    void concurrent_select_relocation_set();\nruntime/src/Heap/z/zGeneration.hpp:278:    void concurrent_select_relocation_set();\nruntime/src/Heap/z/zGeneration.cpp:370:    concurrent_select_relocation_set();\nruntime/src/Heap/z/zGeneration.cpp:520:void ZGenerationYoung::concurrent_select_relocation_set()\nruntime/src/Heap/z/zGeneration.cpp:523:    select_relocation_set(YoungType() == ZYoungType::major_full_preclean);\nruntime/src/Heap/z/zGeneration.cpp:932:    concurrent_select_relocation_set();\nruntime/src/Heap/z/zGeneration.cpp:1009:void ZGenerationOld::concurrent_select_relocation_set()\nruntime/src/Heap/z/zGeneration.cpp:1012:    select_relocation_set(false);\nruntime/src/Heap/z/zGeneration.cpp:1146:void ZGeneration::select_relocation_set(bool promote_all)\n"
+  },
+  {
+    "command": [
+      "rg",
+      "-n",
+      "ComputeToAge\\(|ShouldPromoteAge\\(|tenuring_threshold\\(",
+      "runtime/src/Heap/z"
+    ],
+    "rc": 0,
+    "output": "runtime/src/Heap/z/zGeneration.hpp:210:    uint32_t tenuring_threshold() { return _tenuring_threshold; }\nruntime/src/Heap/z/zRelocationSetSelector.hpp:81:inline PageAge ComputeToAge(PageAge fromAge, uint32_t tenuringThreshold)\nruntime/src/Heap/z/zRelocationSetSelector.hpp:92:inline bool ShouldPromoteAge(uint8_t youngAge, uint32_t tenuringThreshold)\nruntime/src/Heap/z/zRelocationSetSelector.hpp:94:    return ComputeToAge(to_pageage(youngAge), tenuringThreshold) == PageAge::old;\nruntime/src/Heap/z/zRelocate.cpp:1162:    const uint32_t thr = ZGeneration::young()->tenuring_threshold();\nruntime/src/Heap/z/zRelocate.cpp:1163:    return !ShouldPromoteAge(region->GetYoungAge(), thr);\nruntime/src/Heap/z/zRelocate.cpp:1509:    const uint32_t threshold = ZGeneration::young()->tenuring_threshold();\nruntime/src/Heap/z/zRelocate.cpp:1510:    return ComputeToAge(fromAge, threshold);\n"
+  }
+]

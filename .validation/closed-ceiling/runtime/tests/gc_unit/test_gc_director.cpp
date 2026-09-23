@@ -1,0 +1,433 @@
+#include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zStat.hpp"
+#include "Heap/z/zPageAllocator.hpp"
+#include "Base/TimeUtils.h"
+#include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
+#include "Mutator/MutatorManager.h"
+#include "ObjectModel/MObject.h"
+#include "TypeInfoManager.h"
+#include "gc_unittest.hpp"
+
+#include <chrono>
+#include <cmath>
+#include <thread>
+
+using namespace MapleRuntime;
+using namespace MapleRuntime::GcUnit;
+
+GC_TEST(GcDirector, CycleUsesWorkerAccountingAndControlledClock)
+{
+    ZStatCycle cycle;
+    ZStatWorkers workers;
+    cycle.Initialize(0);
+    const uint64_t start = TimeUtil::NanoSeconds();
+    cycle.AtStart(start);
+    workers.at_start(2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    workers.at_end();
+    const auto recorded = workers.stats();
+    GC_EXPECT_TRUE(recorded._accumulated_duration > 0.0);
+    GC_EXPECT_TRUE(std::fabs(recorded._accumulated_time - 2.0 * recorded._accumulated_duration) < 0.000001);
+    const uint64_t end = TimeUtil::NanoSeconds();
+    cycle.AtEnd(end, &workers, true, true);
+    const auto first = cycle.Stats(end + 1000000000);
+    const double wall = static_cast<double>(end - start) / SECOND_TO_NANO_SECOND;
+    GC_EXPECT_TRUE(std::fabs(first.serialTime - (wall - recorded._accumulated_duration)) < 0.000001);
+    GC_EXPECT_TRUE(std::fabs(first.parallelTime - recorded._accumulated_time) < 0.000001);
+    GC_EXPECT_TRUE(std::fabs(first.lastActiveWorkers - 2.0) < 0.000001);
+    GC_EXPECT_EQ(first.timeSinceLast, 1.0);
+    GC_EXPECT_EQ(first.warmupCycles, 1u);
+    const auto reset = workers.stats();
+    GC_EXPECT_EQ(reset._accumulated_duration, 0.0);
+    GC_EXPECT_EQ(reset._accumulated_time, 0.0);
+    workers.at_start(3);
+    workers.at_end();
+    cycle.AtStart(end);
+    cycle.AtEnd(end + 1, &workers, false, false);
+    GC_EXPECT_EQ(workers.stats()._accumulated_duration, 0.0);
+    const auto unrecorded = cycle.Stats(end + 2);
+    GC_EXPECT_TRUE(std::fabs(unrecorded.parallelTime - recorded._accumulated_time) < 0.000001);
+    GC_EXPECT_EQ(unrecorded.warmupCycles, 1u);
+}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_TEST(GcDirector, WorkerStatsIncludeInFlightBatch)
+{
+    uint64_t now = 1000000000;
+    struct ClockScope {
+        const uint64_t* previous;
+        explicit ClockScope(const uint64_t& clock) : previous(ZStatWorkers::set_clock_for_test(&clock)) {}
+        ~ClockScope() { ZStatWorkers::set_clock_for_test(previous); }
+    } clockScope(now);
+    ZStatWorkers workers;
+    GC_EXPECT_EQ(workers.stats()._accumulated_time, 0.0);
+    GC_EXPECT_EQ(workers.stats()._accumulated_duration, 0.0);
+    workers.at_start(4);
+    const auto stationary = workers.stats();
+    GC_EXPECT_EQ(stationary._accumulated_time, 0.0);
+    GC_EXPECT_EQ(stationary._accumulated_duration, 0.0);
+    // Binary-exact quarter seconds avoid rounding in the equality oracle.
+    for (uint64_t step = 1; step <= 4; ++step) {
+        now += 250000000;
+        const auto inFlight = workers.stats();
+        GC_EXPECT_EQ(inFlight._accumulated_time, static_cast<double>(step));
+        GC_EXPECT_EQ(inFlight._accumulated_duration, static_cast<double>(step) / 4.0);
+        GC_EXPECT_EQ(inFlight._accumulated_time, 4.0 * inFlight._accumulated_duration);
+    }
+    now += 250000000;
+    workers.at_end();
+    now += 1000000000;
+    const auto done = workers.stats();
+    GC_EXPECT_EQ(done._accumulated_time, 5.0);
+    GC_EXPECT_EQ(done._accumulated_duration, 1.25);
+    GC_EXPECT_EQ(done._accumulated_time, 4.0 * done._accumulated_duration);
+    GC_EXPECT_EQ(workers.get_and_reset_duration(), done._accumulated_duration);
+    GC_EXPECT_EQ(workers.get_and_reset_time(), done._accumulated_time);
+    GC_EXPECT_EQ(workers.stats()._accumulated_duration, 0.0);
+    GC_EXPECT_EQ(workers.stats()._accumulated_time, 0.0);
+}
+#endif
+
+GC_TEST(GcDirector, WarmupCountsOnlyWarmupRequests)
+{
+    ZStatCycle cycle;
+    ZStatWorkers workers;
+    cycle.Initialize(0);
+    cycle.AtStart(1);
+    cycle.AtEnd(2, &workers, false, true);
+    GC_EXPECT_EQ(cycle.Stats(3).warmupCycles, 0u);
+    GC_EXPECT_FALSE(cycle.Stats(3).isWarm);
+    GC_EXPECT_FALSE(cycle.Stats(3).isTimeTrustable);
+    for (uint64_t i = 0; i < 4; ++i) {
+        cycle.AtStart(10 + 2 * i);
+        cycle.AtEnd(11 + 2 * i, &workers, true, true);
+        const auto stats = cycle.Stats(12 + 2 * i);
+        GC_EXPECT_EQ(stats.isWarm, i >= 2);
+        GC_EXPECT_TRUE(stats.isTimeTrustable);
+    }
+    GC_EXPECT_EQ(cycle.Stats(20).warmupCycles, 3u);
+}
+
+// Real allocation -> director thread -> driver -> cycle statistics. No direct
+// rule calls or synthesized statistics are supplied to the director.
+GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    const size_t size = heap.GetMaxCapacity() / 2;
+    type->SetInstanceSize(size);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    {
+        ScopedObjectAccess access;
+        heap.RegisterExportRoot(MObject::NewPinnedObject(type, size));
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (heap.old().CycleStats().Stats(TimeUtil::NanoSeconds()).warmupCycles < 3 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const auto stats = heap.old().CycleStats().Stats(TimeUtil::NanoSeconds());
+    const auto before = heap.old().Snapshot();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const auto after = heap.old().Snapshot();
+    std::fprintf(stderr, "DIRECTOR_WARMUP_TARGET cycles=%u warm=%d trustable=%d before=%llu after=%llu\n",
+        stats.warmupCycles, stats.isWarm, stats.isTimeTrustable,
+        static_cast<unsigned long long>(before.sequence), static_cast<unsigned long long>(after.sequence));
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_EQ(stats.warmupCycles, 3u);
+    GC_EXPECT_EQ(after.sequence, before.sequence);
+    GC_EXPECT_TRUE(stats.isWarm);
+    GC_EXPECT_TRUE(stats.isTimeTrustable);
+}
+
+// Outstanding-queue state is covered through real drivers by
+// AllocationStall.ProductLateWaiterRequiresNextCollection.
+
+GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
+{
+    // zGeneration.cpp:600,637: the total lives on the heap; a major start
+    // snapshots it on ZGenerationOld (zGeneration.cpp:1248,1526).
+    const uint32_t prior = Heap::GetHeap().total_collections();
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 1);
+    ZStatCycle young;
+    ZStatCycle old;
+    young.Initialize(0);
+    old.Initialize(0);
+
+    ZStatWorkers youngWorkers;
+    ZStatWorkers oldWorkers;
+    young.AtStart(1);
+    young.AtEnd(2, &youngWorkers, true, true);
+    old.AtStart(2);
+    old.AtEnd(3, &oldWorkers, true, true);
+    // Cycle/worker accounting does not move the collection count.
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 1);
+
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 2);
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 3);
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 4);
+}
+
+GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
+{
+    class Probe : public ZGeneration {
+    public:
+        using ZGeneration::ZGeneration;
+        bool should_record_stats() override { return false; }
+    };
+    Probe young(ZGenerationId::young);
+    Probe old(ZGenerationId::old);
+    young.InitializeWorkers(2);
+    old.InitializeWorkers(2);
+    young.SelectReason(GC_REASON_YOUNG);
+    young.Begin(1);
+    young.PublishPhase(ZGenerationPhase::Mark);
+    young.Workers()->set_active_workers(1);
+    const auto before = young.Snapshot();
+
+    old.SelectReason(GC_REASON_USER);
+    old.Begin(2);
+    old.PublishPhase(ZGenerationPhase::Relocate);
+    old.Workers()->set_active_workers(2);
+
+    const auto after = young.Snapshot();
+    GC_EXPECT_EQ(after.sequence, before.sequence);
+    GC_EXPECT_TRUE(after.phase == ZGenerationPhase::Mark);
+    GC_EXPECT_EQ(after.reason, GC_REASON_YOUNG);
+    GC_EXPECT_TRUE(after.active);
+    GC_EXPECT_EQ(young.Workers()->active_workers(), 1u);
+    GC_EXPECT_EQ(old.Workers()->active_workers(), 2u);
+    GC_EXPECT_TRUE(young.StatHeap() != old.StatHeap());
+    GC_EXPECT_TRUE(&young.CycleStats() != &old.CycleStats());
+
+    old.End();
+    GC_EXPECT_TRUE(young.Snapshot().active);
+    young.End();
+}
+
+GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
+{
+    class Probe : public ZGenerationYoung {
+    public:
+        Probe() : ZGenerationYoung(&Heap::page_table(), &Heap::GetHeap().old().forwarding_table(),
+                                  &Heap::GetHeap().page_allocator()) {}
+        bool should_record_stats() override { return false; }
+    };
+    Probe young;
+    TenuringInputs inputs;
+    inputs.softMaxCapacity = 64 * 1024 * 1024;
+    inputs.youngAllocated = 4096;
+    inputs.youngGarbage = 1024;
+    inputs.liveByAge[1] = 1024;
+    {
+        YoungTypeSetter type(young, ZYoungType::major_full_preclean);
+        inputs.promoteAll = true;
+        young.SelectTenuringThreshold(inputs);
+        GC_EXPECT_EQ(young.tenuring_threshold(), 0u);
+        GC_EXPECT_FALSE(young.IsMajorRoots());
+    }
+    GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);
+    {
+        YoungTypeSetter type(young, ZYoungType::major_full_roots);
+        inputs.promoteAll = false;
+        young.SelectTenuringThreshold(inputs);
+        GC_EXPECT_TRUE(young.tenuring_threshold() > 0u);
+        GC_EXPECT_TRUE(young.IsMajorRoots());
+    }
+    GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);
+}
+
+
+// #906: InitCJRuntime produces the effective flag values in the product SO.
+// Explicitness is independent from the value: zero and -1 are real inputs.
+#include "Heap/z/zHeuristics.hpp"
+#include "CjScheduler.h"
+#include <sys/wait.h>
+#include <unistd.h>
+#include "Heap/z/zPage.hpp"
+namespace {
+extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
+struct TenuringCollectionResult {
+    uint32_t threshold = 0;
+    PageAge survivorAge = PageAge::eden;
+    bool full = false;
+};
+void* CollectWithTenuringFlags(void* context)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    const U64 root = Heap::GetHeap().RegisterExportRoot(MCC_NewObject(type, 4096));
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    auto& result = *static_cast<TenuringCollectionResult*>(context);
+    if (result.full) { Heap::GetHeap().RequestGC(GC_REASON_USER, false); }
+    result.threshold = Heap::GetHeap().young().tenuring_threshold();
+    auto* survivor = Heap::GetHeap().GetExportObject(root);
+    result.survivorAge = Heap::page(reinterpret_cast<uintptr_t>(survivor))->age();
+    Heap::GetHeap().RemoveExportObject(root);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return nullptr;
+}
+
+void CheckTenuringResult(const TenuringCollectionResult& result, uint32_t selected)
+{
+    std::fprintf(stderr, "TENURING_CONSUMER_TARGET actual=%u expected=%u\n", result.threshold, selected);
+    const bool thresholdMatches = result.threshold == selected;
+    const PageAge expectedAge = result.full || selected == 0 ? PageAge::old : PageAge::survivor1;
+    std::fprintf(stderr, "TENURING_PROMOTION_TARGET actual=%u expected=%u\n",
+                 untype(result.survivorAge), untype(expectedAge));
+    const bool promotionMatches = result.survivorAge == expectedAge;
+    // Evaluate both product results before the single invariant assertion so
+    // a threshold failure cannot hide the actual promotion observation.
+    std::fprintf(stderr, "TENURING_RESULT_ASSERT threshold_match=%d promotion_match=%d\n",
+                 thresholdMatches, promotionMatches);
+    GC_EXPECT_TRUE(thresholdMatches && promotionMatches);
+}
+uint32_t environmentSelected;
+int32_t RunEnvironmentTenuringMain()
+{
+    try {
+        TenuringCollectionResult result;
+        CollectWithTenuringFlags(&result);
+        CheckTenuringResult(result, environmentSelected);
+        return 0;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "TENURING_ENV_ASSERT_FAILED %s\n", error.what());
+        return 1;
+    }
+}
+
+void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t maximum,
+                        bool overrideSet, int32_t overrideValue, bool environment = false, bool full = false)
+{
+    // The managed executable entry exits with its main result. Isolate that
+    // normal product lifecycle in a child and assert its actual exit status.
+    if (environment) {
+        const pid_t child = fork();
+        GC_EXPECT_TRUE(child >= 0);
+        if (child != 0) {
+            int status = 0;
+            GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+            std::fprintf(stderr, "TENURING_MANAGED_EXIT status=%d\n", status);
+            GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            return;
+        }
+    }
+    RuntimeParam params{};
+    params.heapParam.heapSize = heapKB;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = workers;
+    params.gcParam.maxTenuringThresholdSet = maxSet;
+    params.gcParam.maxTenuringThreshold = maximum;
+    params.gcParam.zTenuringThresholdSet = overrideSet;
+    params.gcParam.zTenuringThreshold = overrideValue;
+    if (environment) {
+        setenv("cjHeapSize", (std::to_string(heapKB) + "KB").c_str(), 1);
+        setenv("cjProcessorNum", "1", 1);
+        setenv("cjConcGCThreads", std::to_string(workers).c_str(), 1);
+        if (maxSet) {
+            setenv("cjMaxTenuringThreshold", std::to_string(maximum).c_str(), 1);
+        } else {
+            unsetenv("cjMaxTenuringThreshold");
+        }
+        if (overrideSet) {
+            setenv("cjZTenuringThreshold", std::to_string(overrideValue).c_str(), 1);
+        } else {
+            unsetenv("cjZTenuringThreshold");
+        }
+        MRT_CjRuntimeInit();
+    } else {
+        GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    }
+    const size_t overhead = ZHeuristics::relocation_headroom();
+    const size_t budget = ZHeuristics::significant_young_overhead();
+    const uint32_t actual = MaxTenuringThreshold;
+    const bool fixed = maxSet || (overrideSet && overrideValue != -1);
+    const uint32_t expected = maxSet ? maximum : static_cast<uint32_t>(overrideValue);
+    const bool thresholdMatches = fixed ? actual == expected :
+        actual <= 15 && (actual == 15 || overhead * actual >= budget) &&
+        (actual == 0 || overhead * (actual - 1) < budget);
+    std::fprintf(stderr, "TENURING_INIT_TARGET actual=%u fixed=%d expected=%u overhead=%zu budget=%zu match=%d\n",
+                 actual, fixed, expected, overhead, budget, thresholdMatches);
+    GC_EXPECT_TRUE(thresholdMatches);
+    GC_EXPECT_EQ(ZTenuringThreshold, overrideSet ? overrideValue : -1);
+    const uint32_t selected = overrideSet && overrideValue != -1 ?
+        static_cast<uint32_t>(overrideValue) : std::min(1u, actual);
+    if (environment) {
+        environmentSelected = selected;
+        MRT_CjRuntimeStart(reinterpret_cast<void*>(&RunEnvironmentTenuringMain));
+        _exit(2); // The product main must terminate with its own result.
+    }
+    {
+        TenuringCollectionResult result;
+        result.full = full;
+        CJThreadHandle task = RunCJTask(CollectWithTenuringFlags, &result);
+        GC_EXPECT_TRUE(task != nullptr);
+        void* taskResult = nullptr;
+        GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
+        ReleaseHandle(task);
+        CheckTenuringResult(result, selected);
+    }
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultSmallHeap) { CheckTenuringFlags(64 * 1024, 2, false, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultLargeHeap) { CheckTenuringFlags(512 * 1024, 2, false, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultCeiling) { CheckTenuringFlags(2048 * 1024, 2, false, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultManyWorkers) { CheckTenuringFlags(64 * 1024, 8, false, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, ExplicitAutomatic) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, -1); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, ExplicitMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 12, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumZero) { CheckTenuringFlags(64 * 1024, 2, true, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideZero) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverridePositive) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumAndOverride) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 9); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverride) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 9, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentAutomatic) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, -1, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentZero) { CheckTenuringFlags(64 * 1024, 2, true, 0, true, 0, true); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumOne) { CheckTenuringFlags(64 * 1024, 2, true, 1, false, 0); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, PrecleanOverridesFlag) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9, false, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumBoundary) { CheckTenuringFlags(64 * 1024, 2, true, 16, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideBoundary) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 15); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultBoundaryFourteen) { CheckTenuringFlags(112 * 1024, 1, false, 0, false, 0); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringGeometry, ConfiguredMaximumSurvivesInitialization)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 512 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t configured = params.heapParam.heapSize * 1024;
+    const size_t effective = ZHeuristics::max_heap_size();
+    const size_t medium = ZPageSizeMediumMax;
+    const size_t budget = ZHeuristics::significant_young_overhead();
+    std::fprintf(stderr, "TENURING_GEOMETRY_TARGET configured=%zu effective=%zu medium=%zu budget=%zu\n",
+                 configured, effective, medium, budget);
+    // The input identity and power-of-two tier are checked independently of
+    // the headroom outputs used by the threshold tests above.
+    GC_EXPECT_TRUE(effective == configured && medium == 16 * 1024 * 1024 && budget == configured / 4);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}

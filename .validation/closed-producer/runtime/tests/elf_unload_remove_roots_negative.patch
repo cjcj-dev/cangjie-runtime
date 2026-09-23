@@ -1,0 +1,7 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -408,2 +408,2 @@ void CJFileLoader::UnlinkLoadedFile(BaseFile* baseFile)
+-    baseFile->UnregisterFile();
++    // Fault injection: retain the unloaded image's static-root registration.
+ }

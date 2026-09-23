@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -426,7 +426,8 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
+     // A public unload callback runs on the same thread and inside the exact
+     // pending/active/STW scopes that authorized this image. A direct callback
+     // has no authorization and must establish all three protections itself.
+-    bool authorizedByCaller = ElfUnloadQuiescence::IsPurgeAuthorized(imageAddress);
++    bool authorizedByCaller = ElfUnloadQuiescence::IsPurgeAuthorized(imageAddress) ||
++        (!ElfUnloadQuiescence::HasCallerPurgeProtection() && MutatorManager::Instance().WorldStopped());
+     std::unique_ptr<ElfUnloadQuiescence::PurgeAuthorizationScope> callbackAuthorization;
+     if (!authorizedByCaller && ElfUnloadQuiescence::HasCallerPurgeProtection()) {
+         CHECK_DETAIL(!ElfUnloadQuiescence::CallerProtectionHasPendingForImage(imageAddress),

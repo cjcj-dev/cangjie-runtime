@@ -1,0 +1,11 @@
+--- a/state/nwdet_qualification.json
++++ b/state/nwdet_qualification.json
+@@ -1 +1,7 @@
+-{"schema":"nwdet-qualification/v1","qualified":false,"reason":"canonical 负载对当前色代不兼容（rc=134 / 0-records），等 stage2 复跑后负载重建","since":"2026-09-10T02:00:00+08:00","workloads":[]}
++{
++  "schema": "nwdet-qualification/v1",
++  "qualified": false,
++  "reason": "负载链接了无色官方 std: retained NW ELF 4930d5e7995f4c3b079689dfe042486c59d520e87cd78a753951c03a10e27bf6 links official nightly core archive 9619dc3e2b3ab335a340d9d7b2e6e86c8e0103704a152b953a20a56bf5eab9cb. NOT_RUN for new qualification. Blocked-by cjcj#32 for complete stage1-produced coloured std; cangjie-runtime#233 must rebuild and requalify with that closure and frozen runtime/bounds pair. Historical sample records remain in manifest.json; they do not qualify this mixed input.",
++  "since": "2026-09-10T02:00:00+08:00",
++  "workloads": []
++}

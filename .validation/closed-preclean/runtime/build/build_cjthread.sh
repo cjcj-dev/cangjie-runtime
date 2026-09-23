@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+# This source file is part of the Cangjie project, licensed under Apache-2.0
+# with Runtime Library Exception.
+#
+# See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+# CI shell script for calling build.py
+set -e
+
+MACHINE="$(uname -m)"
+
+if [ "${MACHINE}" = "x86_64" ]; then
+    platform="linux_x86_64"
+elif [ "${MACHINE}" = "aarch64" ]; then
+    platform="linux_aarch64"
+fi
+
+script_abs="$(readlink -f "$0")"
+export PROJECT_PATH="$(dirname $script_abs)/../"
+export CJTHREAD_PATH="${PROJECT_PATH}/src/CJThread"
+export BUILD_PATH="${CJTHREAD_BUILD_PATH:-${PROJECT_PATH}/build/cjthread_build}"
+
+# Example
+# 1. make static lib
+# sh build/build_cjthread.sh -p linux_x86_64 Debug SHARED
+# sh build/build_cjthread.sh -p linux_x86_64 Debug SHARED asan
+# sh build/build_cjthread.sh -p linux_x86_64_gcov Debug SHARED
+# 2. make test
+# sh build/build_cjthread.sh -t cjthread_sdv -s src -a linux_x86_64 -m Debug
+
+if [ "$1" = "clean" ];then
+    cd "${PROJECT_PATH}"
+    /bin/bash ./build/scripts/clean_history.sh
+elif [ "$1" = "-t" ];then
+    cd "${PROJECT_PATH}"/test_tools/tests/cjthread_test/cjthread_sdv/src
+    /bin/bash build_test.sh "$@"
+elif [ "$1" = "lcov" ];then
+    cd "${PROJECT_PATH}"/test_tools/tests/cjthread_test/cjthread_sdv/src
+    /bin/bash build_lcov.sh "$@"
+elif [ "$1" = "-p" ];then
+    if [ -d "${BUILD_PATH}" ]; then
+      rm -r ${BUILD_PATH}
+    fi
+    if [ ! -d "${BUILD_PATH}" ]; then
+      mkdir ${BUILD_PATH}
+    fi
+
+    # DO NOT remove install prefix directory ($7)
+
+    cd "${BUILD_PATH}"
+    echo "CJTHREAD BUILDING: target:$2, build type: $3, libtype: $4, building stage: $5, other definitions: $6, path: ${CJTHREAD_PATH}"
+    if [ "$2" = linux_x86_64_cangjie ]; then
+      cmake -DTARGET="$2" -DCMAKE_BUILD_TYPE="$3" -DLIBTYPE="$4" -DBUILDING_STAGE="$5" $6 -DCMAKE_INSTALL_PREFIX="$7" -DTARGET_ARCH="$8" \
+        -DCJTHREAD_PARENT_SOURCE_DIR="${CJTHREAD_PARENT_SOURCE_DIR:-$(readlink -f "${PROJECT_PATH}")}" \
+        -DCJTHREAD_PARENT_BINARY_DIR="${CJTHREAD_PARENT_BINARY_DIR:-$(readlink -f "${BUILD_PATH}")}" \
+        -DCMAKE_C_COMPILER_LAUNCHER="${CJTHREAD_C_LAUNCHER}" \
+        -DCMAKE_CXX_COMPILER_LAUNCHER="${CJTHREAD_CXX_LAUNCHER}" \
+        -DCMAKE_ASM_COMPILER_LAUNCHER="${CJTHREAD_ASM_LAUNCHER}" "${CJTHREAD_PATH}"
+    elif [ -n "$9" ]; then
+      cmake -DTARGET="$2" -DCMAKE_BUILD_TYPE="$3" -DLIBTYPE="$4" -DBUILDING_STAGE="$5" $6 -DCMAKE_INSTALL_PREFIX="$7" -DTARGET_ARCH="$8" -DBUILD_APPLE_STATIC="$9" ${CJTHREAD_PATH}
+    else
+      cmake -DTARGET="$2" -DCMAKE_BUILD_TYPE="$3" -DLIBTYPE="$4" -DBUILDING_STAGE="$5" $6 -DCMAKE_INSTALL_PREFIX="$7" -DTARGET_ARCH="$8" ${CJTHREAD_PATH}
+    fi
+    make -j"$(getconf _NPROCESSORS_ONLN)"
+    make install
+fi
+
+exit 0

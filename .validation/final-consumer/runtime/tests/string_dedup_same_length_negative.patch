@@ -1,0 +1,11 @@
+diff --git a/stdlib/libs/std/core/string_dedup.cj b/stdlib/libs/std/core/string_dedup.cj
+--- a/stdlib/libs/std/core/string_dedup.cj
++++ b/stdlib/libs/std/core/string_dedup.cj
+@@ -44,6 +44,6 @@ private class StringCanonicalTable {
+             for (i in 0..entryCount) {
+                 let known = entries[i]
+-                if (known == candidate) {
++                if (known.size == candidate.size) {
+                     return known
+                 }
+             }

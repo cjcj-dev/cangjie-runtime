@@ -1,0 +1,8 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -444,3 +444,3 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
+ #endif
+         directAdmission = std::make_unique<ElfUnloadQuiescence::TaskAdmissionScope>();
+-        directAdmission->WaitUntilNoPendingForImage(imageAddress);
++        // Fault injection: omit the direct callback's pending-task wait.

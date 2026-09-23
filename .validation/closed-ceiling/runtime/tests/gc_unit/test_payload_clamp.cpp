@@ -1,0 +1,210 @@
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <csignal>
+#include <functional>
+#include <string>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "gc_heap_fixture.hpp"
+
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zBarrier.hpp"
+#define private public
+#include "Heap/z/zRememberedSet.hpp"
+#undef private
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zBarrier.hpp"
+#include "ObjectModel/MArray.inline.h"
+#include "gc_unittest.hpp"
+
+using namespace MapleRuntime;
+using namespace MapleRuntime::GcUnit;
+
+extern "C" void CJ_MCC_WriteGenericPayload(MapleRuntime::ObjectPtr dst, MapleRuntime::MAddress srcField,
+                                           size_t srcSize);
+extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, MapleRuntime::ObjectPtr obj, size_t size);
+
+namespace {
+
+struct PayloadFixture {
+    PayloadFixture()
+    {
+        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
+        auto& heapRemset = HeapTestRemset();
+        if (!heapRemset.initialized) {
+            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
+        }
+        heap.typeInfo->SetFlag(0);
+        heap.typeInfo->SetInstanceSize(sizeof(uint64_t));
+    }
+
+    GcHeapFixture heap;
+    RememberedSet rememberedSet;
+};
+
+struct ArrayPayloadFixture {
+    ArrayPayloadFixture() : payload()
+    {
+        std::memset(componentStorage, 0, sizeof(componentStorage));
+        component = reinterpret_cast<TypeInfo*>(componentStorage);
+        component->SetType(TypeKind::TYPE_KIND_UINT8);
+        component->SetInstanceSize(sizeof(uint8_t));
+
+        std::memset(arrayStorage, 0, sizeof(arrayStorage));
+        arrayType = reinterpret_cast<TypeInfo*>(arrayStorage);
+        arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+        arrayType->SetComponentTypeInfo(component);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(componentStorage), sizeof(componentStorage));
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(arrayStorage), sizeof(arrayStorage));
+
+        array = reinterpret_cast<MArray*>(payload.heap.obj1);
+        array->SetClassInfo(arrayType);
+        array->SetLength(kLength);
+        limit = array->GetMArraySize() - TYPEINFO_PTR_SIZE;
+    }
+
+    static constexpr MIndex kLength = 32;
+    PayloadFixture payload;
+    alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)];
+    alignas(TypeInfo) unsigned char arrayStorage[sizeof(TypeInfo)];
+    TypeInfo* component = nullptr;
+    TypeInfo* arrayType = nullptr;
+    MArray* array = nullptr;
+    size_t limit = 0;
+};
+
+std::array<uint8_t, 64> MakeArrayPayload(const ArrayPayloadFixture& fx)
+{
+    std::array<uint8_t, 64> bytes{};
+    for (size_t i = 0; i < fx.limit; ++i) {
+        bytes[i] = static_cast<uint8_t>(0x40U + i);
+    }
+    const MIndex length = ArrayPayloadFixture::kLength;
+    std::memcpy(bytes.data(), &length, sizeof(length));
+    return bytes;
+}
+
+void ExpectControlledAbort(const std::function<void()>& body, const std::string& expectedDiagnostic = {})
+{
+    int stderrPipe[2] = { -1, -1 };
+    if (!expectedDiagnostic.empty()) {
+        GC_EXPECT_EQ(pipe(stderrPipe), 0);
+    }
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        if (!expectedDiagnostic.empty()) {
+            (void)close(stderrPipe[0]);
+            (void)dup2(stderrPipe[1], STDERR_FILENO);
+            (void)close(stderrPipe[1]);
+        }
+        (void)signal(SIGABRT, SIG_DFL);
+        body();
+        _exit(0);
+    }
+    std::string stderrOutput;
+    if (!expectedDiagnostic.empty()) {
+        (void)close(stderrPipe[1]);
+        std::array<char, 256> chunk{};
+        ssize_t bytes = 0;
+        while ((bytes = read(stderrPipe[0], chunk.data(), chunk.size())) > 0) {
+            stderrOutput.append(chunk.data(), static_cast<size_t>(bytes));
+        }
+        (void)close(stderrPipe[0]);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    if (!expectedDiagnostic.empty()) {
+        GC_EXPECT_TRUE(stderrOutput.find(expectedDiagnostic) != std::string::npos);
+    }
+}
+
+} // namespace
+
+GC_TEST(PayloadClamp, ReadAtLimitCopies)
+{
+    PayloadFixture fx;
+    const size_t limit = fx.heap.typeInfo->GetInstanceSize();
+    const uint64_t expected = 0x1122334455667788ULL;
+    std::memcpy(reinterpret_cast<void*>(reinterpret_cast<MAddress>(fx.heap.obj1) + TYPEINFO_PTR_SIZE),
+                &expected, sizeof(expected));
+    uint64_t got = 0;
+    CJ_MCC_ReadGenericPayload(&got, fx.heap.obj1, limit);
+    GC_EXPECT_EQ(got, expected);
+}
+
+GC_TEST(PayloadClamp, WriteAtLimitCopies)
+{
+    PayloadFixture fx;
+    const size_t limit = fx.heap.typeInfo->GetInstanceSize();
+    const uint64_t expected = 0xaabbccddeeff0011ULL;
+    CJ_MCC_WriteGenericPayload(fx.heap.obj1, reinterpret_cast<MAddress>(&expected), limit);
+    uint64_t got = 0;
+    std::memcpy(&got, reinterpret_cast<void*>(reinterpret_cast<MAddress>(fx.heap.obj1) + TYPEINFO_PTR_SIZE),
+                sizeof(got));
+    GC_EXPECT_EQ(got, expected);
+}
+
+GC_OTHER_VM_TEST(PayloadClamp, ReadOverLimitAborts)
+{
+    PayloadFixture fx;
+    const size_t limit = fx.heap.typeInfo->GetInstanceSize();
+    uint64_t buf[2] = {};
+    ExpectControlledAbort([&]() { CJ_MCC_ReadGenericPayload(buf, fx.heap.obj1, limit + 1); });
+}
+
+GC_OTHER_VM_TEST(PayloadClamp, WriteOverLimitAborts)
+{
+    PayloadFixture fx;
+    const size_t limit = fx.heap.typeInfo->GetInstanceSize();
+    uint64_t src[2] = { 1, 2 };
+    ExpectControlledAbort([&]() {
+        CJ_MCC_WriteGenericPayload(fx.heap.obj1, reinterpret_cast<MAddress>(src), limit + 1);
+    });
+}
+
+GC_TEST(PayloadClamp, ReadArrayAtLimitCopies)
+{
+    ArrayPayloadFixture fx;
+    const auto expected = MakeArrayPayload(fx);
+    std::memcpy(reinterpret_cast<void*>(reinterpret_cast<MAddress>(fx.array) + TYPEINFO_PTR_SIZE),
+                expected.data(), fx.limit);
+    std::array<uint8_t, 64> got{};
+    CJ_MCC_ReadGenericPayload(got.data(), fx.array, fx.limit);
+    GC_EXPECT_EQ(std::memcmp(got.data(), expected.data(), fx.limit), 0);
+}
+
+GC_TEST(PayloadClamp, WriteArrayAtLimitCopies)
+{
+    ArrayPayloadFixture fx;
+    const auto expected = MakeArrayPayload(fx);
+    CJ_MCC_WriteGenericPayload(fx.array, reinterpret_cast<MAddress>(expected.data()), fx.limit);
+    std::array<uint8_t, 64> got{};
+    std::memcpy(got.data(), reinterpret_cast<void*>(reinterpret_cast<MAddress>(fx.array) + TYPEINFO_PTR_SIZE),
+                fx.limit);
+    GC_EXPECT_EQ(std::memcmp(got.data(), expected.data(), fx.limit), 0);
+}
+
+GC_OTHER_VM_TEST(PayloadClamp, ReadArrayOverLimitAborts)
+{
+    ArrayPayloadFixture fx;
+    std::array<uint8_t, 64> buf{};
+    ExpectControlledAbort([&]() { CJ_MCC_ReadGenericPayload(buf.data(), fx.array, fx.limit + 1); },
+                          "object payload " + std::to_string(fx.limit));
+}
+
+GC_OTHER_VM_TEST(PayloadClamp, WriteArrayOverLimitAborts)
+{
+    ArrayPayloadFixture fx;
+    std::array<uint8_t, 64> src{};
+    ExpectControlledAbort([&]() {
+        CJ_MCC_WriteGenericPayload(fx.array, reinterpret_cast<MAddress>(src.data()), fx.limit + 1);
+    }, "object payload " + std::to_string(fx.limit));
+}

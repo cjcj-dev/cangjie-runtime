@@ -1,0 +1,14 @@
+// Synthetic heap setup only. No product implementation is compiled here.
+#define MRT_GENERATION_SEQUENCE_FIXTURE 1
+#include "gc_cycle_sequence_fixture.hpp"
+#undef MRT_GENERATION_SEQUENCE_FIXTURE
+
+namespace MapleRuntime {
+void GenerationSequenceFixture::Advance(ZGeneration& cycle)
+{
+    std::lock_guard<std::mutex> lock(cycle.mutex);
+    CHECK(cycle.active);
+    CHECK(cycle.sequence != UINT32_MAX);
+    ++cycle.sequence;
+}
+}
