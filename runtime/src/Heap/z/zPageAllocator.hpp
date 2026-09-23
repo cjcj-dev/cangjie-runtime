@@ -541,7 +541,6 @@ public:
 
     void SetGarbageThreshold(double garbageThreshold);
 
-    // Stamps `role` on the page when the matching trace cache is active.
 
 
 
