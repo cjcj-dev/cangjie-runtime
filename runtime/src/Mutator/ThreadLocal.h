@@ -60,6 +60,10 @@ public:
 };
 
 static_assert(offsetof(ThreadLocalData, buffer) == 0, "compiler TLS buffer ABI");
+#if UINTPTR_MAX == UINT64_MAX
+static_assert(offsetof(ThreadLocalData, gcData) == ThreadGCDataABI::GCDataPointer,
+              "ThreadLocalData ABI: gcData");
+#endif
 
 void MarkFlushOnEnterSaferegion();
 void MarkFlushBeginLeaveSaferegion();

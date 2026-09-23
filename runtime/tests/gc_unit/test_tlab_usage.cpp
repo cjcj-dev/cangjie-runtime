@@ -60,10 +60,12 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadStoreMask, YoungPhasePublishesToOwners)
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     std::atomic<Mutator*> owner{nullptr};
+    ThreadLocalData* carrier = nullptr;
     std::atomic<bool> finish{false};
     std::thread thread([&] {
         auto& manager = MutatorManager::Instance();
         Mutator* current = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        carrier = ThreadLocal::GetThreadLocalData();
         owner.store(current, std::memory_order_release);
         while (!finish.load(std::memory_order_acquire)) { std::this_thread::yield(); }
         manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
@@ -78,13 +80,18 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadStoreMask, YoungPhasePublishesToOwners)
     const uintptr_t published = ZPointerStoreBadMask;
     ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
     const uintptr_t after = current->GetGCData().storeBadMask;
+    // Consume the carrier slot and field through the fixed target ABI, as the
+    // paired compiler lowering does. Do not derive either offset from offsetof.
+    const auto* byCarrier = *reinterpret_cast<ThreadGCData* const*>(
+        reinterpret_cast<const unsigned char*>(carrier) + ThreadGCDataABI::GCDataPointer);
+    const bool sameOwner = byCarrier == &current->GetGCData();
     const uintptr_t byOffset = *reinterpret_cast<const uintptr_t*>(
-        reinterpret_cast<const unsigned char*>(&current->GetGCData()) + ThreadGCData::store_bad_mask_offset());
+        reinterpret_cast<const unsigned char*>(byCarrier) + ThreadGCDataABI::StoreBadMask);
     finish.store(true, std::memory_order_release);
     thread.join();
-    std::fprintf(stderr, "THREAD_STORE_MASK_TARGET executed=1 before=%zx published=%zx after=%zx offset_value=%zx\n",
-                 before, published, after, byOffset);
-    GC_EXPECT_TRUE(before != published && after == published && byOffset == published);
+    std::fprintf(stderr, "THREAD_STORE_MASK_TARGET executed=1 before=%zx published=%zx after=%zx offset_value=%zx same_owner=%d\n",
+                 before, published, after, byOffset, sameOwner);
+    GC_EXPECT_TRUE(before != published && after == published && byOffset == published && sameOwner);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 

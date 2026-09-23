@@ -85,6 +85,9 @@ extern "C" MRT_EXPORT void CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(volatile zp
     ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing_no_keep_alive(slot);
 }
 
+// Transitional exports for existing compiler artifacts. The 64-bit layout is
+// pinned by ThreadGCDataABI and static assertions in the owning headers.
+// Remove these exports with the paired LLVM constant-offset lowering.
 extern "C" MRT_EXPORT const uintptr_t g_cjThreadGCDataOffset = offsetof(ThreadLocalData, gcData);
 extern "C" MRT_EXPORT const uintptr_t g_cjLoadBadMaskOffset = ThreadGCData::load_bad_mask_offset();
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBadMaskOffset = ThreadGCData::store_bad_mask_offset();

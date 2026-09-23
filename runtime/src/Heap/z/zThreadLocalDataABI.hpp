@@ -10,6 +10,8 @@ namespace MapleRuntime {
 // ZGC zThreadLocalData.hpp:36-41,115-133: field offsets are added to the
 // owning thread's inline GC data offset. These are offsets within GC data.
 namespace ThreadGCDataABI {
+// Carrier ThreadLocalData points at the current logical thread's inline data.
+constexpr size_t GCDataPointer = 96;
 constexpr size_t LoadGoodMask = 0;
 constexpr size_t LoadBadMask = 8;
 constexpr size_t MarkBadMask = 16;
