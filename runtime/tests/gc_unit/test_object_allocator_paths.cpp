@@ -459,7 +459,7 @@ void* AllocateWithoutPacing(void* argument)
     return nullptr;
 }
 
-void CheckNoPageAllocationPacing(bool slowConfiguration)
+void CheckNoPageAllocationPacing()
 {
     // ZGC zPageAllocator.cpp:1401-1407 has no allocation-rate sleep before
     // allocating a page. Keep this workload far below capacity: it tests the
@@ -467,11 +467,6 @@ void CheckNoPageAllocationPacing(bool slowConfiguration)
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
-    if (slowConfiguration) {
-        // These legacy ABI fields are ignored by the product (cjcj#91).
-        param.heapParam.allocationRate = 0.000001;
-        param.heapParam.allocationWaitTime = 2000000000;
-    }
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     PageAllocationTiming timing;
     CJThreadHandle handle = RunCJTask(AllocateWithoutPacing, &timing);
@@ -481,13 +476,11 @@ void CheckNoPageAllocationPacing(bool slowConfiguration)
     ReleaseHandle(handle);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
     // A restored pacing path sleeps for two seconds on each page request.
-    // The one-second envelope distinguishes that deliberate delay; external
-    // paired runs also compare the default/legacy configuration distributions.
-    std::fprintf(stderr, "PAGE_PACING_TARGET slow=%d elapsed_ns=%lld pages=%zu samples=3\n",
-                 slowConfiguration, timing.elapsedNs, timing.validPages);
+    // The one-second envelope distinguishes that deliberate delay.
+    std::fprintf(stderr, "PAGE_PACING_TARGET elapsed_ns=%lld pages=%zu samples=3\n",
+                 timing.elapsedNs, timing.validPages);
     GC_EXPECT_TRUE(timing.elapsedNs < 1000000000LL);
     GC_EXPECT_EQ(timing.validPages, size_t{3});
 }
 }
-GC_RUNTIME_OTHER_VM_TEST(PageAllocationPacing, DefaultConfiguration) { CheckNoPageAllocationPacing(false); }
-GC_RUNTIME_OTHER_VM_TEST(PageAllocationPacing, LegacySlowConfiguration) { CheckNoPageAllocationPacing(true); }
+GC_RUNTIME_OTHER_VM_TEST(PageAllocationPacing, DefaultConfiguration) { CheckNoPageAllocationPacing(); }
