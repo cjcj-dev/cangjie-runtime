@@ -112,8 +112,10 @@ inline bool WaitChildExit(pid_t child, int& status,
         const pid_t result = waitpid(child, &status, WNOHANG);
         if (result == child) {
             if (ownsGroup && kill(-child, 0) == 0) {
+                // Cleanup is independent of the direct child's result. Like
+                // HotSpot TEST_OTHER_VM (unittest.hpp:98), the caller judges
+                // that child's exit status plus its completion sentinel.
                 TerminateChildVmGroup(child);
-                return false;
             }
             return true;
         }
