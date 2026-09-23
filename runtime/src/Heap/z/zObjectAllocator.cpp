@@ -251,11 +251,19 @@ size_t ZObjectAllocator::fast_available(PageAge age) const
     return page == nullptr ? 0 : page->remaining();
 }
 
-uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking)
+// ZGC zObjectAllocator.cpp:238-241.
+uintptr_t ZObjectAllocator::alloc(size_t size)
+{
+    ZAllocationFlags flags;
+    return allocator(PageAge::eden)->alloc_object(size, flags);
+}
+
+// ZGC zObjectAllocator.cpp:243-250.
+uintptr_t ZObjectAllocator::alloc_for_relocation(size_t size, PageAge age)
 {
     CHECK(untype(age) < kPageAgeCount);
     ZAllocationFlags flags;
-    if (nonBlocking) { flags.set_non_blocking(); }
+    flags.set_non_blocking();
     return allocator(age)->alloc_object(size, flags);
 }
 
@@ -306,7 +314,7 @@ namespace MapleRuntime {
 MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
 {
     if (allocSize > ZObjectSizeLimitSmall || ThreadLocal::GetMutator() == nullptr) {
-        return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden);
+        return Heap::GetHeap().object_allocator().alloc(allocSize);
     }
     AllocBuffer* allocBuffer = ThreadLocal::GetMutator()->tlab();
     return allocBuffer->Allocate(allocSize, allocType);

@@ -477,7 +477,7 @@ size_t Heap::unsafe_max_tlab_alloc() const
 uintptr_t Heap::alloc_tlab(size_t size)
 {
     CHECK(size <= ZObjectSizeLimitSmall);
-    return object_allocator().alloc(size, PageAge::eden);
+    return object_allocator().alloc(size);
 }
 
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion, PageAge age, ZAllocationFlags flags)

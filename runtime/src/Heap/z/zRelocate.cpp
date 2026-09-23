@@ -749,7 +749,7 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge toAge = forwarding_for_page(copyPage)->to_age();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc(size, toAge, true));
+    BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc_for_relocation(size, toAge));
     if (toObj == nullptr) return nullptr;
     BaseObject* result = nullptr;
     ZForwarding* publication = forwarding_for_page(copyPage);

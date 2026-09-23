@@ -396,6 +396,10 @@ void RunRelocateLiveness(bool worker, bool marked)
         result = generation.relocate().relocate_object(owner, source);
     }
     GC_EXPECT_TRUE(result != nullptr && result != source);
+    const PageAge resultAge = Heap::page(reinterpret_cast<uintptr_t>(result))->age();
+    std::fprintf(stderr, "RELOCATION_AGE_TARGET worker=%d actual=%u expected=%u\n",
+                 worker, unsigned(untype(resultAge)), unsigned(untype(PageAge::old)));
+    GC_EXPECT_TRUE(resultAge == PageAge::old);
     GC_EXPECT_EQ(*reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(result) + 8), 0x869u);
     std::fprintf(stderr, "RELOCATE_LIVE_RESULT worker=%d marked=%d source=%p result=%p payload=0x869\n",
                  worker, marked, source, result);
