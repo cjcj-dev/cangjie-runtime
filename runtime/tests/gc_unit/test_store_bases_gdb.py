@@ -5,6 +5,8 @@ import gdb
 import json
 import os
 
+observed = {'worker': 0, 'pause': 0, 'bad_color': 0}
+
 def cmd(s):
     return gdb.execute(s, to_string=True)
 
@@ -19,13 +21,20 @@ class Installed(gdb.FinishBreakpoint):
         after = int(gdb.parse_and_eval('((MapleRuntime::StoreBarrierBuffer*)%d)->lastInstalledColor' % self.pointer))
         expected = int(gdb.parse_and_eval('g_cjStoreGoodMask'))
         emit('INSTALL_RESULT', before=self.before, after=after, expected=expected, stack=self.stack)
+        if after != expected:
+            observed['bad_color'] += 1
         return False
 
 class Install(gdb.Breakpoint):
     def stop(self):
         pointer = int(gdb.parse_and_eval('this'))
         before = int(gdb.parse_and_eval('this->lastInstalledColor'))
-        Installed(pointer, before, cmd('bt 8'))
+        stack = cmd('bt 12')
+        if 'ZRelocateStoreBufferInstallBasePointersTask::work' in stack:
+            observed['worker'] += 1
+        if 'VM_ZRelocateStartOld::do_operation' in stack or 'VM_ZRelocateStartYoung::do_operation' in stack:
+            observed['pause'] += 1
+        Installed(pointer, before, stack)
         return False
 
 try:
@@ -37,7 +46,9 @@ try:
     cmd('start')
     Install('MapleRuntime::StoreBarrierBuffer::install_base_pointers()')
     cmd('continue')
-    cmd('quit 0')
+    passed = observed['worker'] > 0 and observed['pause'] == 0 and observed['bad_color'] == 0
+    emit('ASSERT_CONCURRENT_BASE_INSTALL', passed=passed, **observed)
+    cmd('quit ' + ('0' if passed else '1'))
 except Exception as e:
     emit('HARNESS_ERROR', error=repr(e))
     cmd('quit 2')
