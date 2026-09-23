@@ -33,17 +33,25 @@ inline bool ZIterator::is_invisible_object_array(BaseObject* object, TypeInfo* k
     return referenceArray && is_invisible_object(object);
 }
 
+inline BaseObject* OopIteratorClosureDispatch::load_referent(BaseObject* object, ReferenceType type)
+{
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+    if (type == ReferenceType::PHANTOM) {
+        return HeapAccess<ON_PHANTOM_OOP_REF | AS_NO_KEEPALIVE>::oop_load(field);
+    }
+    return HeapAccess<ON_WEAK_OOP_REF | AS_NO_KEEPALIVE>::oop_load(field);
+}
+
 template <typename OopClosureT>
-bool OopIteratorClosureDispatch::try_discover(BaseObject* object, OopClosureT* closure)
+bool OopIteratorClosureDispatch::try_discover(BaseObject* object, ReferenceType type, OopClosureT* closure)
 {
     ReferenceDiscoverer* rd = closure->ref_discoverer();
     if (rd != nullptr) {
-        auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-        BaseObject* referent = HeapAccess<ON_WEAK_OOP_REF | AS_NO_KEEPALIVE>::oop_load(field);
+        BaseObject* referent = load_referent(object, type);
         if (referent != nullptr) {
             // HotSpot's is_gc_marked() tests markWord, not ZGC's live map.
             // Cangjie has no markWord GC mark; do not substitute page liveness.
-            return rd->discover_reference(object, ReferenceType::WEAK);
+            return rd->discover_reference(object, type);
         }
     }
     return false;
@@ -57,7 +65,7 @@ void OopIteratorClosureDispatch::oop_oop_iterate_ref_processing(OopClosureT* clo
     // have already been visited, excluding that slot.
     switch (closure->reference_iteration_mode()) {
         case OopIterateClosure::DO_DISCOVERY:
-            if (try_discover(object, closure)) {
+            if (try_discover(object, ReferenceType::WEAK, closure)) {
                 return;
             }
             break;

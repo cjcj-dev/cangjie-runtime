@@ -42,8 +42,9 @@ public:
 };
 
 class OopIteratorClosureDispatch {
+    static BaseObject* load_referent(BaseObject* object, ReferenceType type);
     template <typename OopClosureT>
-    static bool try_discover(BaseObject* object, OopClosureT* closure);
+    static bool try_discover(BaseObject* object, ReferenceType type, OopClosureT* closure);
     template <typename OopClosureT>
     static void oop_oop_iterate_ref_processing(OopClosureT* closure, BaseObject* object);
 public:

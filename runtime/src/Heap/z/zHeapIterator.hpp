@@ -79,12 +79,12 @@ private:
     void Push(BaseObject* object, const ObjectVisitor& objectVisitor);
     template <bool VisitReferents>
     class OopClosure : public OopIterateClosure {
-        HeapIterator& iter;
+        HeapIterator* const iter;
         const HeapIteratorContext& context;
         BaseObject* const base;
         BaseObject* load_oop(RefField<>* field);
     public:
-        OopClosure(HeapIterator& iter, const HeapIteratorContext& context, BaseObject* base)
+        OopClosure(HeapIterator* iter, const HeapIteratorContext& context, BaseObject* base)
             : iter(iter), context(context), base(base) {}
         ReferenceIterationMode reference_iteration_mode() override
         {

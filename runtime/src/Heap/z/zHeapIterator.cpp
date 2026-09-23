@@ -99,6 +99,7 @@ void HeapIterator::Push(BaseObject* object, const ObjectVisitor& objectVisitor)
 template <bool VisitReferents>
 BaseObject* HeapIterator::OopClosure<VisitReferents>::load_oop(RefField<>* field)
 {
+    DCHECK(Heap::IsHeapAddress(field));
     if constexpr (VisitReferents) {
         return HeapAccess<AS_NO_KEEPALIVE | ON_UNKNOWN_OOP_REF>::oop_load_at(
             base, BaseObject::FieldOffset(base, field));
@@ -118,7 +119,7 @@ void HeapIterator::OopClosure<VisitReferents>::do_oop(RefField<>* field)
 template <bool VisitReferents>
 void HeapIterator::follow_object(const HeapIteratorContext& context, BaseObject* object)
 {
-    OopClosure<VisitReferents> closure(*this, context, object);
+    OopClosure<VisitReferents> closure(this, context, object);
     ZIterator::oop_iterate(object, &closure);
 }
 
@@ -136,7 +137,7 @@ void HeapIterator::follow_array_chunk(const HeapIteratorContext& context, const 
     if (end < length) {
         context.push_array_chunk({ array.object, end });
     }
-    OopClosure<false> closure(*this, context, array.object);
+    OopClosure<false> closure(this, context, array.object);
     ZIterator::oop_iterate_elements_range(array.object, &closure, start, end);
 }
 
