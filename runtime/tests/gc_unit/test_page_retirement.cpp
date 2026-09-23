@@ -49,7 +49,7 @@ void CheckAllocationPreservesOwnedPage(bool allowSaferegion, bool nonBlocking)
     MapleRuntime::GcUnit::CreateStandaloneHeap(16);
     ZStat::Initialize();
     RegionManager& manager = Heap::GetHeap().page_allocator();
-    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, false, false);
+    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, false);
     GC_EXPECT_TRUE(owned != nullptr);
     const uintptr_t address = owned->GetRegionStart();
     // Model a page awaiting GC reclamation. Allocation must not claim it
@@ -62,7 +62,7 @@ void CheckAllocationPreservesOwnedPage(bool allowSaferegion, bool nonBlocking)
         flags.set_non_blocking();
     }
     ZPage* allocated = Heap::alloc_page(ZGranuleSize, ZPageType::large, false,
-                                      allowSaferegion, false, PageAge::eden, flags);
+                                      allowSaferegion, PageAge::eden, flags);
     ZPage* current = Heap::page(address);
     const bool retained = current == owned && current->IsGarbageRegion();
     const size_t usedAfter = manager.GetAllocatedSize();
@@ -348,7 +348,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, ExplicitFreeWithdrawsOwnedPage)
     ZStat::Initialize();
     RegionManager& manager = Heap::GetHeap().page_allocator();
     const size_t used = manager.GetAllocatedSize();
-    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, false, false);
+    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, false);
     GC_EXPECT_TRUE(owned != nullptr);
     const uintptr_t address = owned->GetRegionStart();
     owned->SetRegionRole(ZPageRole::Garbage);
