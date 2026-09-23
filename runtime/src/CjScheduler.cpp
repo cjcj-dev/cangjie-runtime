@@ -25,6 +25,7 @@
 #include "CangjieRuntime.h"
 #include "Mutator/MutatorManager.h"
 #include "RuntimeConfig.h"
+#include "Heap/shared/gcArguments.hpp"
 #include "schedule.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "ExceptionManager.h"
@@ -764,6 +765,8 @@ static RuntimeParam InitRuntimeParam()
 void MRT_CjRuntimeInit()
 {
     RuntimeParam param = InitRuntimeParam();
+    CHECK_DETAIL(GCArguments::initialize_heap_flags_and_sizes(param.heapParam),
+                 "Invalid heap size flags");
     CangjieRuntime::CreateAndInit(param);
     RTErrorCode rtCode = SetRuntimeInitFlag();
     if (rtCode != E_OK) {

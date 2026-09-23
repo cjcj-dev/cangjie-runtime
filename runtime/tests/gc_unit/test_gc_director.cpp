@@ -21,6 +21,7 @@
 #include <cstring>
 #include <cmath>
 #include <thread>
+#include <limits>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -967,4 +968,136 @@ GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ManagedExplicitMax)
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ManagedExplicitSoft)
 {
     CheckSoftMax(0, "128MB", 0, false, size_t(128) * MB, true);
+}
+
+namespace {
+void CheckSoftConfig(size_t softKB, const char* env, RTErrorCode expected, bool explicitZero = false)
+{
+    if (env == nullptr) {
+        unsetenv("cjSoftMaxHeapSize");
+    } else {
+        setenv("cjSoftMaxHeapSize", env, 1);
+    }
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.heapParam.softHeapSize = softKB;
+    params.heapParam.softHeapSizeSet = explicitZero || softKB != 0;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    const RTErrorCode actual = InitCJRuntime(&params);
+    std::fprintf(stderr, "SOFT_CONSTRAINT_ASSERT soft_kb=%zu env=%s actual=%d expected=%d\n",
+                 softKB, env == nullptr ? "unset" : env, actual, expected);
+    GC_EXPECT_EQ(actual, expected);
+    if (actual == E_OK) {
+        GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    }
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, BelowMaximum)
+{
+    CheckSoftConfig(32 * 1024, nullptr, E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EqualsMaximum)
+{
+    CheckSoftConfig(64 * 1024, nullptr, E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ExplicitZero)
+{
+    CheckSoftConfig(0, nullptr, E_OK, true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, AboveMaximum)
+{
+    CheckSoftConfig(128 * 1024, nullptr, E_ARGS);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ParameterOverflow)
+{
+    CheckSoftConfig(std::numeric_limits<size_t>::max() / KB + 1, nullptr, E_ARGS);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentAboveMaximum)
+{
+    CheckSoftConfig(32 * 1024, "128MB", E_ARGS);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentOverridesInvalidParameter)
+{
+    CheckSoftConfig(128 * 1024, "32MB", E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentOverridesOverflowParameter)
+{
+    CheckSoftConfig(std::numeric_limits<size_t>::max(), "32MB", E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentZero)
+{
+    CheckSoftConfig(0, "0KB", E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentByteOverflow)
+{
+    CheckSoftConfig(0, "18014398509481984KB", E_ARGS);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentUnitOverflow)
+{
+    CheckSoftConfig(0, "18446744073709551615GB", E_ARGS);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentNumberOverflow)
+{
+    CheckSoftConfig(0, "18446744073709551616KB", E_ARGS);
+}
+
+namespace {
+void CheckManagedSoftConstraint(const char* soft, const char* diagnostic)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        setenv("cjHeapSize", "64MB", 1);
+        setenv("cjProcessorNum", "1", 1);
+        setenv("cjConcGCThreads", "2", 1);
+        setenv("cjSoftMaxHeapSize", soft, 1);
+        MRT_CjRuntimeInit();
+        std::fprintf(stderr, "SOFT_CONSTRAINT_ACCEPTED soft=%s\n", soft);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char buffer[512];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) { transcript.append(buffer, count); }
+    close(output[0]);
+    std::fwrite(transcript.data(), 1, transcript.size(), stderr);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find(diagnostic) != std::string::npos;
+    std::fprintf(stderr, "SOFT_MANAGED_CONSTRAINT_ASSERT soft=%s status=%d rejected=%d\n", soft, status, rejected);
+    GC_EXPECT_TRUE(rejected);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedAboveMaximum)
+{
+    CheckManagedSoftConstraint("128MB", "SoftMaxHeapSize must be less than or equal");
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedByteOverflow)
+{
+    CheckManagedSoftConstraint("18014398509481984KB", "Heap size conversion overflows bytes");
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedUnitOverflow)
+{
+    CheckManagedSoftConstraint("18446744073709551615GB", "Invalid cjSoftMaxHeapSize");
 }

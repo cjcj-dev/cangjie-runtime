@@ -45,6 +45,7 @@
 #include "Heap/z/zDriverPort.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "Common/ColourEncoding.h"
+#include "Heap/shared/gcArguments.hpp"
 #include "HeapManager.h"
 #include "HeapManager.inline.h"
 
@@ -272,6 +273,10 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
             .processorNum = param->coParam.processorNum == 0 ? defaultProcs : param->coParam.processorNum,
         }
     };
+
+    if (!MapleRuntime::GCArguments::initialize_heap_flags_and_sizes(config.heapParam)) {
+        return E_ARGS;
+    }
 
     pthread_t thread;
     pthread_attr_t attr;
