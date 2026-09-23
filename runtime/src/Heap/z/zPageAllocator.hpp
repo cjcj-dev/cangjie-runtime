@@ -469,10 +469,7 @@ public:
 
     void RestoreToSpaceStateWords();
 
-    void CountLiveObject(const BaseObject* obj);
 
-    void AssembleSmallGarbageCandidates();
-    void AssembleLargeGarbageCandidates();
 
 
     size_t GetYoungAllocatedSize() const;

@@ -68,7 +68,7 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, boo
         GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], object));
     }
     GC_EXPECT_EQ(manager.GetUsedBytes(), 2 * pageSize);
-    ZRelocationSetSelector selector;
+    ZRelocationSetSelector selector(0.0);
     for (ZPage* page : pages) {
         ZPageTest::MakeRelocatable(*page);
         selector.register_live_page(page);
@@ -222,7 +222,7 @@ static void CheckInPlaceRemset()
     GC_EXPECT_FALSE(pages[0]->is_remset_cleared_current());
     GC_EXPECT_TRUE(pages[0]->is_remset_cleared_previous());
     GC_EXPECT_TRUE(heap.OldActiveRemsetIsCurrent());
-    ZRelocationSetSelector selector;
+    ZRelocationSetSelector selector(0.0);
     for (ZPage* page : pages) {
         ZPageTest::MakeRelocatable(*page);
         selector.register_live_page(page);
@@ -274,7 +274,7 @@ static void CheckMutatorRelocation(bool stopped)
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZRelocationSetSelector selector;
+    ZRelocationSetSelector selector(0.0);
     ZPage* pages[2];
     BaseObject* objects[2][2];
     for (size_t i = 0; i < 2; ++i) {
@@ -367,7 +367,7 @@ void RunRelocateLiveness(bool worker, bool marked)
     ZPage* pages[2];
     BaseObject* live[2];
     BaseObject* dead[2];
-    ZRelocationSetSelector selector;
+    ZRelocationSetSelector selector(0.0);
     for (size_t i = 0; i < 2; ++i) {
         pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
@@ -488,7 +488,7 @@ static void CheckRelocationRemsetOwnership(bool worker)
     HeapSlotAt<>(reinterpret_cast<MAddress>(object) + 8).StoreColoured(StoreGoodPointer(child));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(source, object));
     ZPageTest::MakeRelocatable(*source);
-    ZRelocationSetSelector selector;
+    ZRelocationSetSelector selector(0.0);
     selector.register_live_page(source);
     // The selector needs two sparse pages to reclaim a whole page.
     ZPage* peer = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, PageAge::survivor1, flags);
@@ -564,7 +564,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     flags.set_non_blocking();
     BaseObject* objects[2];
     ZPage* pages[2];
-    ZRelocationSetSelector selector;
+    ZRelocationSetSelector selector(0.0);
     for (size_t i = 0; i < 2; ++i) {
         pages[i] = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, false, false, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);

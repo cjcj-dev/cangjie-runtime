@@ -177,7 +177,12 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     const uintptr_t before = raw(slot.GetFieldValue());
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, { region }));
+    // Two real sparse pages satisfy the selector's strict reclaimable-page test.
+    fx.region1->reset(PageAge::eden);
+    BaseObject* companion = fx.PlaceObject(fx.region1->GetRegionStart());
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, companion));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {region, fx.region1}));
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(collector);
     if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
@@ -280,7 +285,12 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page}));
+    // Two real sparse pages satisfy the selector's strict reclaimable-page test.
+    fx.region1->reset(PageAge::eden);
+    BaseObject* companion = fx.PlaceObject(fx.region1->GetRegionStart());
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, companion));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page, fx.region1}));
     heap.young().set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(heap);
     // Compact via the product implementation. Keep another live object at the
@@ -339,7 +349,12 @@ GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page}));
+    // Two real sparse pages satisfy the selector's strict reclaimable-page test.
+    fx.region1->reset(PageAge::eden);
+    BaseObject* companion = fx.PlaceObject(fx.region1->GetRegionStart());
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, companion));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page, fx.region1}));
     heap.young().set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(heap);
     if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
@@ -366,7 +381,8 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, YoungRelocateSkipsForeignIncompleteFrom)
     BaseObject* held = fx.PlaceObject(fx.region1->GetRegionStart());
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(held) + held->GetSize());
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, held));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region1}));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region0, fx.region1}));
     GC_EXPECT_TRUE(!fx.region1->IsForwardingDone());
     GC_EXPECT_TRUE(forwarding_for_page(fx.region1) != nullptr);
     heap.young().set_phase(ZGenerationPhase::Relocate);

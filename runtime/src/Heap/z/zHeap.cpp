@@ -147,17 +147,9 @@ void Heap::Fini()
 }
 
 
-void Heap::RequestGC(GCReason reason, bool async) { ZCollectedHeap::heap()->collect(reason, async); }
+void Heap::RequestGC(GCReason reason) { ZCollectedHeap::heap()->collect(reason); }
 
 void Heap::ResolveCycleRef() { cross_vm().ResolveCycleRef(); }
-
-void Heap::MarkYoungRootObject(BaseObject* object)
-{
-    // #596's barrier already established current and selected young. Keep the
-    // generation mark-phase assertion at ZGeneration::mark_object's entry.
-    auto& cycle = GetZGeneration(ZGenerationId::young);
-    cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
-}
 
 void Heap::MarkObjectIfActive(BaseObject* object)
 {
@@ -226,11 +218,6 @@ bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
 
 bool Heap::IsGhostFromObject(BaseObject* obj) const { return ZRelocate::IsFromObject(obj); }
 
-
-BaseObject* Heap::ForwardObject(BaseObject* fromVersion, Generation generation)
-{
-    return ZRelocate::ForwardObject(fromVersion, generation);
-}
 
 BaseObject* Heap::relocate_or_remap_object(BaseObject* object, ZGenerationId generation)
 {

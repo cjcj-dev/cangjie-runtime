@@ -320,7 +320,7 @@ void ZBarrier::WriteStaticRef(NativeSlot& field, BaseObject* ref)
 BaseObject* ZBarrier::ReadStaticRef(NativeSlot& field)
 {
     const zpointer observed = field.GetFieldValue();
-    return LoadBarrier(nullptr, field, observed, ReferenceStrength::Strong);
+    return to_object(load_barrier_on_oop_field_preloaded(reinterpret_cast<volatile zpointer*>(&field), observed));
 }
 
 // ZBarrier::mark, zBarrier.inline.hpp:742-751.
@@ -435,106 +435,138 @@ void ZBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size
 #endif
 }
 
-// ZZBarrier::barrier and weak/phantom slow paths, zBarrier.inline.hpp:319-343,484-565.
-zaddress ZBarrier::load_good_slow_path(zaddress addr)
-{
-    return addr;
-}
-
+// ZGC zBarrier.cpp:280-285: keep-alive loads publish resurrecting marks.
 zaddress ZBarrier::keep_alive_slow_path(zaddress addr)
 {
     if (!is_null(addr)) {
-        Heap::GetHeap().MarkObjectIfActive(to_object(addr));
+        Mark<true, false, true, false>(addr);
     }
     return addr;
 }
 
-zaddress ZBarrier::blocking_keep_alive_on_weak_slow_path(zaddress addr)
+// ZGC zBarrier.cpp:61-144: distinct weak/phantom keep-alive and load slow paths.
+static void keep_alive_young(zaddress addr)
+{
+    auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+    if (young.IsPhaseMark()) {
+        ZBarrier::MarkYoung<true, false, true>(addr);
+    }
+}
+
+zaddress ZBarrier::blocking_keep_alive_on_weak_slow_path(volatile zpointer* p, zaddress addr)
 {
     if (is_null(addr)) {
         return zaddress::null;
     }
-    BaseObject* target = to_object(addr);
-    if (!Heap::IsHeapAddress(target)) {
+    // Cangjie stack objects and headerless records have no heap generation.
+    if (!Heap::IsHeapAddress(to_object(addr))) {
         return addr;
     }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
-    if (region->IsYoungRegion()) {
-        Heap::GetHeap().MarkYoungObjectIfActive(target);
-        return addr;
-    }
-    if (!region->is_object_strongly_live(addr)) {
-        return zaddress::null;
+    ZPage* page = Heap::page(raw(addr));
+    if (!page->IsYoungRegion()) {
+        if (!page->is_object_strongly_live(addr)) {
+            return zaddress::null;
+        }
+    } else {
+        keep_alive_young(addr);
     }
     return addr;
 }
 
-zaddress ZBarrier::blocking_keep_alive_on_phantom_slow_path(zaddress addr)
+zaddress ZBarrier::blocking_keep_alive_on_phantom_slow_path(volatile zpointer* p, zaddress addr)
 {
     if (is_null(addr)) {
         return zaddress::null;
     }
-    BaseObject* target = to_object(addr);
-    if (!Heap::IsHeapAddress(target)) {
+    // Cangjie stack objects and headerless records have no heap generation.
+    if (!Heap::IsHeapAddress(to_object(addr))) {
         return addr;
     }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
-    if (region->IsYoungRegion()) {
-        Heap::GetHeap().MarkYoungObjectIfActive(target);
-        return addr;
-    }
-    if (!region->is_object_live(addr)) {
-        return zaddress::null;
+    ZPage* page = Heap::page(raw(addr));
+    if (!page->IsYoungRegion()) {
+        if (!page->is_object_live(addr)) {
+            return zaddress::null;
+        }
+    } else {
+        keep_alive_young(addr);
     }
     return addr;
 }
 
-zaddress ZBarrier::blocking_load_barrier_on_phantom_slow_path(zaddress addr)
+zaddress ZBarrier::blocking_load_barrier_on_weak_slow_path(volatile zpointer* p, zaddress addr)
 {
-    return blocking_keep_alive_on_phantom_slow_path(addr);
+    if (is_null(addr)) {
+        return zaddress::null;
+    }
+    // Cangjie stack objects and headerless records have no heap generation.
+    if (!Heap::IsHeapAddress(to_object(addr))) {
+        return addr;
+    }
+    ZPage* page = Heap::page(raw(addr));
+    if (!page->IsYoungRegion()) {
+        if (!page->is_object_strongly_live(addr)) {
+            return zaddress::null;
+        }
+    } else {
+        keep_alive_young(addr);
+    }
+    return addr;
 }
+
+zaddress ZBarrier::blocking_load_barrier_on_phantom_slow_path(volatile zpointer* p, zaddress addr)
+{
+    if (is_null(addr)) {
+        return zaddress::null;
+    }
+    // Cangjie stack objects and headerless records have no heap generation.
+    if (!Heap::IsHeapAddress(to_object(addr))) {
+        return addr;
+    }
+    ZPage* page = Heap::page(raw(addr));
+    if (!page->IsYoungRegion()) {
+        if (!page->is_object_live(addr)) {
+            return zaddress::null;
+        }
+    } else {
+        keep_alive_young(addr);
+    }
+    return addr;
+}
+
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+// ZGC zBarrier.cpp:291-299. The Cangjie referent follows the type-info word.
+void ZBarrier::verify_on_weak(volatile zpointer* referent_addr)
+{
+    if (referent_addr != nullptr) {
+        const uintptr_t base = reinterpret_cast<uintptr_t>(referent_addr) - TYPEINFO_PTR_SIZE;
+        const BaseObject* obj = reinterpret_cast<const BaseObject*>(base);
+        ASSERT(obj->IsValidObject());
+        ASSERT(obj->IsWeakRef());
+    }
+}
+#endif
 
 zpointer ZBarrier::ColorLoadGood(zaddress address, zpointer previous)
 {
     return ZAddress::load_good(address, previous);
 }
 
-template<bool atomic>
-BaseObject* ZBarrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpointer observed,
-                                 ReferenceStrength strength)
-{
-    (void)obj;
-    volatile zpointer* p = reinterpret_cast<volatile zpointer*>(&field);
-    if (strength == ReferenceStrength::Strong) {
-        return to_object(barrier(is_load_good_or_null_fast_path, &ZBarrier::load_good_slow_path,
-                                 ColorLoadGood, p, observed, false));
-    }
-    const bool blocked = ZResurrection::is_blocked();
-    if (!blocked) {
-        return to_object(barrier(is_mark_good_fast_path, &ZBarrier::keep_alive_slow_path,
-                                 ColorMarkGood, p, observed, false));
-    }
-    if (strength == ReferenceStrength::Weak) {
-        return to_object(barrier(is_mark_good_fast_path, &ZBarrier::blocking_keep_alive_on_weak_slow_path,
-                                 ColorMarkGood, p, observed, false));
-    }
-    return to_object(barrier(is_mark_good_fast_path, &ZBarrier::blocking_keep_alive_on_phantom_slow_path,
-                             ColorMarkGood, p, observed, false));
-}
-
 BaseObject* ZBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
 {
-    return LoadBarrier(obj, field, field.GetFieldValue(), ReferenceStrength::Strong);
+    return to_object(load_barrier_on_oop_field_preloaded(
+        reinterpret_cast<volatile zpointer*>(&field), field.GetFieldValue()));
 }
 
 BaseObject* ZBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field)
 {
-    return LoadBarrier(obj, field, field.GetFieldValue(), ReferenceStrength::Weak);
+    return to_object(load_barrier_on_weak_oop_field_preloaded(
+        reinterpret_cast<volatile zpointer*>(&field), field.GetFieldValue()));
 }
 
 BaseObject* ZBarrier::ReadPhantomRef(BaseObject* obj, RefField<false>& field)
 {
-    return LoadBarrier(obj, field, field.GetFieldValue(), ReferenceStrength::Phantom);
+    return to_object(load_barrier_on_phantom_oop_field_preloaded(
+        reinterpret_cast<volatile zpointer*>(&field), field.GetFieldValue()));
 }
 
 // barrier for atomic operation.
@@ -575,7 +607,8 @@ BaseObject* ZBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& f
 
 BaseObject* ZBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order)
 {
-    return LoadBarrier(obj, field, field.GetFieldValue(order), ReferenceStrength::Strong);
+    return to_object(load_barrier_on_oop_field_preloaded(
+        reinterpret_cast<volatile zpointer*>(&field), field.GetFieldValue(order)));
 }
 
 bool ZBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
@@ -898,48 +931,15 @@ void ZBarrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseOb
     mark_and_remember(reinterpret_cast<volatile zpointer*>(fieldAddress), make_load_good(prev));
 }
 
-zaddress ZBarrier::load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o)
-{
-    // ZGC zBarrier.inline.hpp:461-466: a preloaded value may have no slot.
-    // Keep the nullable pointer through barrier() so verification resolves the
-    // value without requesting self-healing (zBarrier.inline.hpp:334).
-    return barrier(is_load_good_or_null_fast_path, &ZBarrier::load_good_slow_path,
-                   ColorLoadGood, p, o, false);
-}
-
-zaddress ZBarrier::load_barrier_on_oop_field(volatile zpointer* p)
-{
-    return load_barrier_on_oop_field_preloaded(p, load_atomic(p));
-}
-
-zaddress ZBarrier::load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o)
-{
-    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
-    return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Weak));
-}
-
-zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o)
-{
-    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
-    return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Phantom));
-}
-
-zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o)
-{
-    if (ZResurrection::is_blocked()) {
-        return barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
-                       ColorMarkGood, p, o, false);
-    }
-    return load_barrier_on_oop_field_preloaded(p, o);
-}
-
 bool ZBarrier::clean_barrier_on_phantom_oop_field(volatile zpointer* p)
 {
     CHECK_DETAIL(ZResurrection::is_blocked(),
                  "phantom clean is only valid when resurrection is blocked");
     const zpointer o = load_atomic(p);
-    return is_null(barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
-                           ColorMarkGood, p, o, true));
+    auto slow_path = [=](zaddress addr) {
+        return blocking_load_barrier_on_phantom_slow_path(p, addr);
+    };
+    return is_null(barrier(is_mark_good_fast_path, slow_path, ColorMarkGood, p, o, true));
 }
 
 void ZBarrier::load_barrier_on_oop_array(volatile zpointer* p, size_t length)
@@ -975,7 +975,7 @@ RefField<> ZBarrier::GetAndTryTagRefField(BaseObject* target)
         return RefField<>(ZAddress::store_good(from_object(target)));
     }
     // ZPointer::uncolor is the sole producer accepted by ZAddress::store_good
-    // (zAddress.inline.hpp:609-624,806-811). ResolveStoreValue is our
+    // (zAddress.inline.hpp:609-624,806-811). ValidateCurrentValue is our
     // make-load-good producer: a relocation-set address is looked up or copied
     // by this thread; an unresolved address never reaches colouring.
     target = ZBarrier::ValidateCurrentValue(target);

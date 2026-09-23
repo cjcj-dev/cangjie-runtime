@@ -1248,14 +1248,11 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager10InitializeEyy @1409
     _ZN12MapleRuntime13RegionManager13ReclaimRegionEPNS_10ZPageE @1417
     _ZN12MapleRuntime13RegionManager13ReleaseRegionEPNS_10ZPageE @1418
-    _ZN12MapleRuntime13RegionManager15CountLiveObjectEPKNS_10BaseObjectE @1419
     _ZN12MapleRuntime13RegionManager17PromoteAllRegionsEv @1423
     _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEv @1425
     _ZN12MapleRuntime13RegionManager19ReassembleFromSpaceEv @1428
     _ZN12MapleRuntime13RegionManager19SetGarbageThresholdEv @1429
     _ZN12MapleRuntime13RegionManager21StampCensusBoundariesEv @1434
-    _ZN12MapleRuntime13RegionManager30AssembleLargeGarbageCandidatesEv @1453
-    _ZN12MapleRuntime13RegionManager30AssembleSmallGarbageCandidatesEv @1454
     _ZN12MapleRuntime13RegionManager33ClearNotRelocatableThisCycleFlagsEv @1459
     _ZN12MapleRuntime13RegionManager9HUGE_PAGEE @1460 DATA
     _ZN12MapleRuntime13RememberedSet10InitializeEyy @1461

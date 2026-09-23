@@ -62,7 +62,7 @@ private:
     ValueRootSet resurrectedExportObjectesForwardPhase;
 
     // Value-only root containers have no addressable RootSlot to heal. Keep
-    // their RootObligation on the existing ResolveStoreValue authority and
+    // their RootObligation on the existing load barrier authority and
     // rebuild key-bearing containers while their owner lock is held.
     BaseObject* ResolveCurrentValueRoot(const ValueRoot& root) const;
     void CurrentizeValueRootSet(ValueRootSet& roots) const;

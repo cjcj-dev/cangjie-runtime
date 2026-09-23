@@ -79,7 +79,7 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType);
 
-    void RequestGC(GCReason reason, bool async);
+    void RequestGC(GCReason reason);
     void ResolveCycleRef();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     void DumpRoots(LogType logType);
@@ -97,7 +97,6 @@ public:
     ZObjectAllocator& object_allocator() { return _object_allocator; }
     ZCrossVM& cross_vm() { return _cross_vm; }
     const ZCrossVM& cross_vm() const { return _cross_vm; }
-    void MarkYoungRootObject(BaseObject* object);
     void MarkObjectIfActive(BaseObject* object);
     void MarkYoungObjectIfActive(BaseObject* object);
     void MarkNewObject(BaseObject* object);
@@ -118,7 +117,6 @@ public:
     bool FlushGCDataMarkProducers(ThreadGCData& data);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
     bool IsGhostFromObject(BaseObject* obj) const;
-    BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation);
     ZGenerationYoung& young() { return *ZGeneration::young(); }
     const ZGenerationYoung& young() const { return *ZGeneration::young(); }
     ZGenerationOld& old() { return *ZGeneration::old(); }

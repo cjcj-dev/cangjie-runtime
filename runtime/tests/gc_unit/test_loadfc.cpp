@@ -88,6 +88,7 @@ GC_TEST(LoadFc, OrdinaryReadHealthyTargetReturnsNormally)
 GC_TEST(LoadFc, WeakReadHealthyTargetReturnsNormally)
 {
     LoadFcFixture fx;
+    fx.heap.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
     GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
     RefField<>* field = fx.MakePlainField();
 
