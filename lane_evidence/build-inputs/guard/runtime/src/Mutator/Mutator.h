@@ -1,0 +1,594 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+
+#ifndef MRT_MUTATOR_H
+#define MRT_MUTATOR_H
+
+#include <deque>
+#include <climits>
+#include "Common/OopStorage.h"
+#include <tuple>
+#include <vector>
+
+#include "Exception/Exception.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
+#include "Heap/z/zRememberedSet.hpp"
+#include "LoaderManager.h"
+#include "Mutator/ThreadLocal.h"
+#include "schedule.h"
+#ifdef _WIN64
+#include "UnwindWin.h"
+#endif
+#include "Interpreter/Options.h"
+#include "Interpreter/RTInterface.h"
+#include "ObjectModel/RefField.h"
+#include "Heap/z/zStackWatermark.hpp"
+
+
+namespace MapleRuntime {
+extern "C" MRT_EXPORT bool MRT_EnterSaferegion(bool updateUnwindContext);
+extern "C" MRT_EXPORT bool MRT_LeaveSaferegion();
+extern "C" MRT_EXPORT bool MRT_CheckRuntimeFinished();
+
+class BaseObject;
+class Mutator {
+    friend class StackWatermark;
+    friend class StackWatermarkSet;
+public:
+    // flag which indicates the reason why mutator should suspend. flag is set by some external thread.
+    enum SuspensionType : uint32_t {
+        SUSPENSION_FOR_SYNC = 2,
+        SUSPENSION_FOR_EXIT = 4,
+        SUSPENSION_FOR_CPU_PROFILE = 8,
+    };
+
+    enum CpuProfileState : uint32_t {
+        NO_CPUPROFILE,
+        NEED_CPUPROFILE,
+        IN_CPUPROFILING,
+        FINISH_CPUPROFILE,
+    };
+
+    // Indicate whether mutator is in saferegion
+    enum SaferegionState : uint32_t {
+        SAFE_REGION_TRUE = 0x17161514,
+        SAFE_REGION_FALSE = 0x03020100,
+    };
+
+    // Called when a mutator starts and finishes, respectively.
+    void Init()
+    {
+        // JavaThread construction initializes its TLAB before publication
+        // (javaThread.cpp:600). A parked owner can be scanned immediately.
+        allocBuffer.Init();
+        gcData.Attach(this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));
+        observerCnt = 0;
+        inManagedContext.store(true);
+        stackWatermark.Reset();
+
+#ifdef INTERPRETER_ENABLED
+        InitInterpreterPart();
+#endif
+    }
+
+    ~Mutator()
+    {
+        // Wait for target inventory users while the lock and roots are still
+        // alive, before any Mutator member destruction can begin.
+        gcData.Detach();
+        ReleaseAllocBuffer();
+        tid = 0;
+        stackBoundAddr = nullptr;
+
+#ifdef INTERPRETER_ENABLED
+        DestroyInterpreterPart();
+#endif
+    }
+
+    static Mutator* NewMutator()
+    {
+        Mutator* mutator = new (std::nothrow) Mutator();
+        CHECK_DETAIL(mutator != nullptr, "new Mutator failed");
+        mutator->Init();
+        return mutator;
+    }
+
+    ThreadGCData& GetGCData() { return gcData; }
+    const ThreadGCData& GetGCData() const { return gcData; }
+    void ResetMutator();
+
+    static Mutator* GetMutator() noexcept;
+    void StackGuardExpand() const;
+    void StackGuardRecover() const;
+
+    bool IsStackAddr(uintptr_t addr);
+    void RecordStackPtrs(std::set<RootSlot*>& rootSlots,
+                         std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>>& derivedSlots);
+    intptr_t FixExtendedStack(intptr_t frameBase = 0, uint32_t adjustedSize = 0, void* ip = nullptr);
+
+    void InitTid()
+    {
+        tid = ThreadLocal::GetThreadLocalData()->tid;
+        if (tid == 0) {
+            tid = static_cast<uint32_t>(MapleRuntime::GetTid());
+            ThreadLocal::GetThreadLocalData()->tid = tid;
+        }
+    }
+    void SetCjthreadPtr(void* cjthreadPtr) { this->cjthread = cjthreadPtr;}
+    uint32_t GetTid() const { return tid; }
+    void* GetCjthreadPtr() const {return cjthread;}
+    void InitProtectStackAddr();
+
+    // Sets saferegion state of this mutator.
+    __attribute__((always_inline)) inline void SetInSaferegion(SaferegionState state)
+    {
+        // assure sequential execution of setting insaferegion state and checking suspended state.
+        inSaferegion.store(state, std::memory_order_seq_cst);
+    }
+
+    // Returns true if this mutator is in saferegion, otherwise false.
+    __attribute__((always_inline)) inline bool InSaferegion() const
+    {
+        return inSaferegion.load(std::memory_order_seq_cst) != SAFE_REGION_FALSE;
+    }
+
+    inline void IncObserver() { observerCnt.fetch_add(1); }
+
+    inline void DecObserver() { observerCnt.fetch_sub(1); }
+
+    // Return true indicate there are some observer is visitting this mutator
+    inline bool HasObserver() { return observerCnt.load() != 0; }
+
+    inline size_t GetObserverCount() const { return observerCnt.load(); }
+
+    // This interface can only be invoked in current thread environment.
+#ifdef _WIN64
+    __attribute__((always_inline)) void UpdateUnwindContext()
+    {
+        Runtime& runtime = Runtime::Current();
+        WinModuleManager& winModuleManager = runtime.GetWinModuleManager();
+        Uptr rip = 0;
+        Uptr rsp = 0;
+        GetContextWin64(&rip, &rsp);
+        FrameInfo curFrame = GetCurFrameInfo(winModuleManager, rip, rsp);
+        UnwindContextStatus ucs = uwContext.GetUnwindContextStatus();
+        uwContext.frameInfo = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs);
+    }
+#else
+    __attribute__((always_inline)) void UpdateUnwindContext()
+    {
+        void* ip = __builtin_return_address(0);
+        void* fa = __builtin_frame_address(0);
+        uwContext.frameInfo.mFrame.SetIP(static_cast<uint32_t*>(ip));
+        uwContext.frameInfo.mFrame.SetFA(static_cast<FrameAddress*>(fa)->callerFrameAddress);
+    }
+#endif
+
+    // Force current mutator enter saferegion, internal use only.
+    __attribute__((always_inline)) inline void DoEnterSaferegion();
+    // Force current mutator leave saferegion, internal use only.
+    __attribute__((always_inline)) inline void DoLeaveSaferegion()
+    {
+        for (;;) {
+            MarkFlushBeginLeaveSaferegion();
+            MutatorLock();
+            SetInSaferegion(SAFE_REGION_FALSE);
+            MarkFlushEndLeaveSaferegion();
+            MutatorUnlock();
+            break;
+        }
+        if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
+            HandleSuspensionRequest();
+        }
+        StackWatermarkSet::on_safepoint(*this);
+    }
+
+    // If current mutator is not in saferegion, enter and return true
+    // If current mutator has been in saferegion, return false
+    __attribute__((always_inline)) inline bool EnterSaferegion(bool updateUnwindContext) noexcept;
+    // If current mutator is in saferegion, leave and return true
+    // If current mutator has left saferegion, return false
+    __attribute__((always_inline)) inline bool LeaveSaferegion() noexcept;
+
+    // Called if current mutator should do corresponding task by suspensionFlag value
+    void HandleSuspensionRequest();
+    // Called if current mutator should handle stw request
+    void SuspendForSync();
+    void SuspendForPreempt()
+    {
+        uwContext.SetUnwindContextStatus(UnwindContextStatus::RELIABLE);
+        CJThreadPreemptResched();
+    }
+
+    bool IsVaildCJThread()
+    {
+        if (cjthread == nullptr) {
+            return false;
+        }
+        return true;
+    }
+    unsigned long long int GetCJThreadId()
+    {
+        unsigned long long int id = CJThreadGetId(cjthread);
+        return id;
+    }
+
+    char* GetCJThreadName()
+    {
+        char* name = CJThreadGetName(cjthread);
+        if (name == nullptr || name[0] == '\0') {
+            return nullptr;
+        }
+        return name;
+    }
+
+    int GetCJThreadState()
+    {
+        return CJThreadGetState(cjthread);
+    }
+
+    __attribute__((always_inline)) inline bool FinishedCpuProfile() const
+    {
+        return cpuProfileState.load(std::memory_order_acquire) == FINISH_CPUPROFILE &&
+               !CpuProfileRequestQueued(this);
+    }
+
+    __attribute__((always_inline)) inline CpuProfileState GetCpuProfileState() const
+    {
+        return cpuProfileState.load(std::memory_order_acquire);
+    }
+
+    __attribute__((always_inline)) inline void SetCpuProfileState(CpuProfileState state)
+    {
+        cpuProfileState.store(state, std::memory_order_relaxed);
+    }
+
+    __attribute__((always_inline)) inline void SetSuspensionFlag(SuspensionType flag)
+    {
+        if (flag == SUSPENSION_FOR_CPU_PROFILE) {
+            cpuProfileState.store(NEED_CPUPROFILE, std::memory_order_relaxed);
+        }
+        suspensionFlag.fetch_or(flag, std::memory_order_seq_cst);
+    }
+
+    __attribute__((always_inline)) inline void ClearSuspensionFlag(SuspensionType flag)
+    {
+        suspensionFlag.fetch_and(~flag, std::memory_order_seq_cst);
+    }
+
+    __attribute__((always_inline)) inline uint32_t GetSuspensionFlag() const
+    {
+        return suspensionFlag.load(std::memory_order_acquire);
+    }
+
+    __attribute__((always_inline)) inline bool HasSuspensionRequest(SuspensionType flag) const
+    {
+        return (suspensionFlag.load(std::memory_order_acquire) & flag) != 0;
+    }
+
+    // should be merged to SuspensionType.
+    __attribute__((always_inline)) inline bool HasPreemptRequest() const
+    {
+        if (uwContext.GetUnwindContextStatus() == UnwindContextStatus::SIGNAL_STATUS) {
+            return reinterpret_cast<uintptr_t>(ThreadLocal::GetPreemptFlag()) == PREEMPT_DO_FLAG;
+        }
+        return false;
+    }
+
+    // Check whether current mutator needs to be suspended for GC or other request
+    __attribute__((always_inline)) inline bool HasAnySuspensionRequest() const
+    {
+        return (suspensionFlag.load(std::memory_order_acquire) != 0) || HasPreemptRequest();
+    }
+
+    void SetSafepointActive(bool value)
+    {
+        if (value) {
+            ArmAllThreadPolls();
+        } else {
+            ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+            UpdatePollValues(tls);
+        }
+    }
+
+    void SetEnumYoung(bool young)
+    {
+        enumYoung.store(young ? 1 : 0, std::memory_order_release);
+    }
+
+    bool EnumYoung() const
+    {
+        return enumYoung.load(std::memory_order_acquire) != 0;
+    }
+
+    void WaitForCpuProfiling() const;
+
+    bool GcPhaseEnum(bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
+                     size_t* scannedFrames = nullptr);
+    AllocBuffer* tlab() { return &allocBuffer; }
+    static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
+
+    inline void HandleCpuProfile();
+
+    void TransitionToCpuProfileExclusive();
+
+    bool TransitionToCpuProfile(bool bySelf);
+
+    void VisitProcessedRoots(const RootVisitor& visitor);
+    void VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor);
+
+    void VisitMutatorRoots(const RootVisitor& visitor)
+    {
+        VisitMutatorRoots(visitor, visitor);
+    }
+
+    void VisitMutatorRoots(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor)
+    {
+        VisitExceptionRoots(visitor);
+        VisitNativeFrameRoots(visitor);
+        VisitStackRoots(visitor, invisibleRootVisitor);
+    }
+
+    ObjectRef* AddNativeFrameRoot(BaseObject* obj);
+    size_t NativeFrameRootCount() const { return nativeFrameRoots.size(); }
+    void PopNativeFrameRootsTo(size_t mark);
+
+    void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+                             bool young = false);
+    void VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                             const DerivedPtrVisitor& derivedPtrVisitor, const RootVisitor& exceptionRootVisitor,
+                             const RootVisitor& rawObjectVisitor, bool young = false);
+
+    void DumpMutator() const
+    {
+        LOG(RTLOG_ERROR, "mutator %p: inSaferegion %x, tid %u, observerCnt %zu, suspension request %u",
+            this, inSaferegion.load(std::memory_order_relaxed), tid, observerCnt.load(),
+            suspensionFlag.load());
+    }
+
+    // Init after fork.
+    void InitAfterFork()
+    {
+        // tid changed after fork, so we re-initialize it.
+        InitTid();
+    }
+
+    const void* GetSafepointPage() const
+    {
+        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+        if (tls != nullptr && tls->mutator == this) {
+            return &tls->safepointState;
+        }
+        return nullptr;
+    }
+
+    UnwindContext& GetUnwindContext() { return uwContext; }
+
+    ExceptionWrapper& GetExceptionWrapper() { return exceptionWrapper; }
+
+
+    bool IsManagedContext() const { return inManagedContext.load(std::memory_order_acquire); }
+
+    void SetManagedContext(bool isManagedContext);
+
+    // An already painted allocation still owes a field-follow entry.
+    inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
+    inline void SetStackTopAddr(uintptr_t sta) { stackTopAddr = sta; }
+    inline uintptr_t GetStackSize() { return stackSize; }
+    inline void SetStackSize(uintptr_t ss) { stackSize = ss; }
+    inline uintptr_t GetStackBaseAddr() { return stackBaseAddr; }
+    inline void SetStackBaseAddr(uintptr_t sba) { stackBaseAddr = sba; }
+    void InitStackInfo(ThreadLocalData* threadData);
+#ifdef _WIN64
+    uint32_t GetStackGrowFrameSize() { return stackGrowFrameSize; }
+    void SetStackGrowFrameSize(uint32_t sgfs) { stackGrowFrameSize = sgfs; }
+#endif
+
+    // A newly allocated large reference array publishes its parseable header before
+    // yielding, but is not a normal object until all of its slots have been cleared.
+    // Keep liveness in this mutator-owned side slot; the orthogonal StateWord
+    // invisible bit tells heap iterators not to visit the incomplete payload.
+    // VisitRawObjects is the GC consumer of the slot.
+    void PublishInvisibleRoot(BaseObject* obj)
+    {
+        CHECK_DETAIL(obj != nullptr, "cannot publish a null invisible root");
+        CHECK_DETAIL(is_null(rawObject.LoadPlain(std::memory_order_acquire)),
+                     "nested invisible roots are not supported");
+        StorePlain(rawObject, from_object(obj), std::memory_order_release);
+    }
+
+    BaseObject* LoadInvisibleRoot() const
+    {
+        zaddress_unsafe value = rawObject.LoadPlain(std::memory_order_acquire);
+        return is_null(value) ? nullptr : to_object(safe(value));
+    }
+
+    BaseObject* WithdrawInvisibleRoot()
+    {
+        BaseObject* obj = LoadInvisibleRoot();
+        CHECK_DETAIL(obj != nullptr, "cannot withdraw an unpublished invisible root");
+        // The release store is the complete-state publication point. A root scan
+        // that no longer observes this side slot must also observe every null slot.
+        StorePlain(rawObject, zaddress::null, std::memory_order_release);
+        return obj;
+    }
+
+
+    void MutatorLock() { mutatorLock.lock(); }
+
+    void MutatorUnlock() { mutatorLock.unlock(); }
+
+    void PreparedToRun(ThreadLocalData* tlData)
+    {
+        RegisterCurrentMarkFlushThread();
+        UpdatePollValues(tlData);
+        DoLeaveSaferegion();
+    }
+
+    void PreparedToPark(void* pc, void* fa)
+    {
+        if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
+            SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+            MarkFlushOnEnterSaferegion();
+            return;
+        }
+#if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
+        if (LIKELY(uwContext.GetUnwindContextStatus() != UnwindContextStatus::RISKY)) {
+            uwContext.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(pc));
+            uwContext.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(fa));
+        }
+#elif defined(_WIN64)
+        if (LIKELY(uwContext.GetUnwindContextStatus() != UnwindContextStatus::RISKY)) {
+            Uptr rip = reinterpret_cast<Uptr>(pc);
+            Uptr rsp = reinterpret_cast<Uptr>(fa);
+            Runtime& runtime = Runtime::Current();
+            WinModuleManager& winModuleManager = runtime.GetWinModuleManager();
+            FrameInfo curFrame = GetCurFrameInfo(winModuleManager, rip, rsp);
+            UnwindContextStatus ucs = uwContext.GetUnwindContextStatus();
+            uwContext.frameInfo = GetCallerFrameInfo(winModuleManager, curFrame.mFrame, ucs);
+        }
+#endif // platform
+        SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+        MarkFlushOnEnterSaferegion();
+    }
+
+    // This interface is used for initiating the mutator who is created by foreign thread.
+    // This interface must be called by the foreign thread after the tl data is initialized.
+    void InitForeignCJThread()
+    {
+        InitTid();
+        foreignThreadInfo.isForeignThread = true;
+        foreignThreadInfo.isExit = false;
+        foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
+        RegisterCurrentMarkFlushThread();
+    }
+
+
+    bool IsForeignThreadExit() const
+    {
+        return foreignThreadInfo.isForeignThread && foreignThreadInfo.isExit;
+    }
+
+    bool IsForeignThread() const
+    {
+        return foreignThreadInfo.isForeignThread;
+    }
+
+    void SetForeignCJThreadExit()
+    {
+        foreignThreadInfo.isExit = true;
+    }
+
+    void ReleaseAllocBuffer();
+
+    // Observe-only: in-flight SATB node (not yet FlushQueue'd).
+    // ZMark::flush publishes this thread's single store buffer.
+    void FlushStoreBarrierBuffer(bool flushStoreBarrier = true)
+    {
+        std::lock_guard<std::mutex> lg(mutatorLock);
+        if (flushStoreBarrier) {
+            gcData.storeBarrierBuffer->Flush();
+        }
+    }
+
+protected:
+    // for managed stack
+    void VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor);
+    void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+                                    bool young = false);
+    void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                                    const DerivedPtrVisitor& derivedPtrVisitor,
+                                    const RootVisitor& rawObjectVisitor, bool young = false);
+    // for exception ref
+    void VisitExceptionRoots(const RootVisitor& func);
+    void VisitRawObjects(const RootVisitor& func);
+    void VisitNativeFrameRoots(const RootVisitor& func);
+    void CreateCurrentGCInfo();
+
+private:
+    // thread id
+    uint32_t tid = 0;
+    // cjthread ptr
+    void* cjthread;
+    // in saferegion, it will not access any managed objects and can be visitted by observer
+    std::atomic<uint32_t> inSaferegion = { SAFE_REGION_TRUE };
+    // Protect observerCnt
+    std::mutex observeCntMutex;
+    // Increase when this mutator is observed by some observer
+    std::atomic<size_t> observerCnt = { 0 };
+    // context for unwinding stack
+    UnwindContext uwContext;
+    // exception object wrapper
+    ExceptionWrapper exceptionWrapper;
+#ifndef __WIN64
+    void* unuse = nullptr; // reusable placeholder
+#endif // __WIN64
+
+    std::atomic<int> enumYoung = { 0 };
+#ifdef _WIN64
+    uint32_t stackGrowFrameSize = 0;
+#endif
+
+    // If set implies this mutator should process suspension requests
+    std::atomic<uint32_t> suspensionFlag = { 0 };
+    ObjectRef rawObject{};
+    ThreadGCData gcData;
+    std::deque<ObjectRef> nativeFrameRoots;
+
+
+    // this flag is used for gc unwind stack, when runtime-thread stack doesn't include managed frame,
+    // we don't need to scan it.
+    std::atomic<bool> inManagedContext = { true };
+    void* stackBoundAddr = { nullptr };
+    std::mutex mutatorLock;
+
+    uintptr_t stackBaseAddr = 0;
+    uintptr_t stackTopAddr = 0;
+    uintptr_t stackSize = 0;
+
+    std::atomic<CpuProfileState> cpuProfileState = { NO_CPUPROFILE };
+    struct ForeignThreadInfo {
+        bool isForeignThread = { false };
+        bool isExit = { false };
+        ScheduleHandle schedule = { nullptr };
+    } foreignThreadInfo;
+
+
+
+    AllocBuffer allocBuffer; // HotSpot Thread::_tlab, thread.hpp:258.
+    StackWatermark stackWatermark;
+
+public:
+    StackWatermark& GetStackWatermark() { return stackWatermark; }
+    const StackWatermark& GetStackWatermark() const { return stackWatermark; }
+    friend class StackWatermarkSet;
+
+#ifdef INTERPRETER_ENABLED
+    void InitInterpreterPart();
+    void DestroyInterpreterPart();
+
+    // Pointer to data used during hotfix interpreter execution
+    DYN_CJThreadSpecificData interpreterCJThreadData;
+    bool isRuntimeMutator = false;
+
+    void markAsRuntimeMutator()
+    {
+        isRuntimeMutator = true;
+    }
+#endif
+};
+
+// This function is mainly used to initialize the context of mutator.
+// Ensured that updated fa is the caller layer of the managed function to be called.
+extern "C" void MRT_PreRunManagedCode(Mutator* mutator, int layers,
+                                      ThreadLocalData* threadData);
+extern "C" void MRT_SetStackGrow(bool enableStackScale);
+
+extern "C" int8_t MRT_StopSubScheduler(void* schedule);
+} // namespace MapleRuntime
+
+#endif // MRT_MUTATOR_H

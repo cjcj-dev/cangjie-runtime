@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""Strict, fail-closed readers for the GCLOG v4 and ZSTAT v1 ledgers."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+
+
+U64_MAX = (1 << 64) - 1
+TOKEN = r"[A-Za-z0-9._-]+"
+PATH = r"[-A-Za-z0-9._>]+"
+
+# Candidate discovery deliberately does not require a numeric version.  A malformed
+# ``v=x rec=phase`` line must reach dispatch and fail the exact record fullmatch.
+RECORD_TOKENS = re.compile(r"(?:^| )rec=([^ ]+)")
+
+GC_CYCLE = re.compile(
+    rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "
+    r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+) collected=(\S+) "
+    r"heap_used=(\S+) rss_kb=(\S+)$"
+)
+# v=4 layout (historical logs): threshold= field between heap_used= and rss_kb=.
+GC_CYCLE_V4 = re.compile(
+    rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "
+    r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+) collected=(\S+) "
+    r"heap_used=(\S+) threshold=(\S+) rss_kb=(\S+)$"
+)
+GC_GENERATION = re.compile(
+    rf"^\[GCLOG\] v=(\S+) rec=generation seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) "
+    r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+)$"
+)
+GC_PHASE = re.compile(
+    rf"^\[GCLOG\] v=(\S+) rec=phase seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) kind=(pause|conc|subphase|unknown) "
+    r"start_ns=(\S+) ns=(\S+)$"
+)
+GC_PHASE_LEAF = re.compile(
+    rf"^\[GCLOG\] v=(\S+) rec=phase_leaf seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) ns=(\S+) "
+    rf"kind=(pause|conc|unknown) depth=(\S+) path_ok=(\S+) path=({PATH})$"
+)
+GC_STW = re.compile(
+    rf"^\[GCLOG\] v=(\S+) rec=stw seq=(\S+) gc_tag=([yYO-]) reason=({TOKEN}) start_ns=(\S+) wait_ns=(\S+) held_ns=(\S+)$"
+)
+ZSTAT_PHASE = re.compile(
+    rf"^\[ZSTAT\] v=(\S+) rec=zphase seq=(\S+) name=({TOKEN}) pause_ns=(\S+) "
+    r"conc_ns=(\S+) n=(\S+)$"
+)
+ZSTAT_CYCLE = re.compile(
+    r"^\[ZSTAT\] v=(\S+) rec=zcycle seq=(\S+) pause_ns=(\S+) conc_ns=(\S+) "
+    r"max_pause_ns=(\S+) phases=(\S+)$"
+)
+
+
+PILLARS = (
+    ("ref_fix", re.compile(r"ref.?fix|fix.?ref|FixRef|ref_fix", re.I)),
+    ("mark", re.compile(r"mark", re.I)),
+    ("evac_finish", re.compile(r"evac_finish|evac.?finish", re.I)),
+    ("drain", re.compile(r"drain|remset", re.I)),
+    ("copy", re.compile(r"copy|reloc|evac(?!_finish)", re.I)),
+)
+
+
+@dataclass(frozen=True)
+class CycleRecord:
+    seq: int
+    gc_tag: str
+    kind: str
+    reason: str
+    start_ns: int
+    dur_ns: int
+    live_before: int
+    live_after: int
+    collected: int
+    heap_used: int
+    rss_kb: int
+
+
+@dataclass(frozen=True)
+class GenerationRecord:
+    seq: int
+    gc_tag: str
+    name: str
+    start_ns: int
+    dur_ns: int
+    live_before: int
+    live_after: int
+
+
+@dataclass(frozen=True)
+class PhaseRecord:
+    seq: int
+    gc_tag: str
+    name: str
+    kind: str
+    start_ns: int
+    ns: int
+
+
+@dataclass(frozen=True)
+class PhaseLeafRecord:
+    seq: int
+    gc_tag: str
+    name: str
+    ns: int
+    kind: str
+    depth: int
+    path_ok: int
+    path: str
+    components: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class StwRecord:
+    seq: int
+    gc_tag: str
+    reason: str
+    start_ns: int
+    wait_ns: int
+    held_ns: int
+
+
+@dataclass
+class GcLogRecords:
+    cycles: list[CycleRecord] = field(default_factory=list)
+    generations: list[GenerationRecord] = field(default_factory=list)
+    phases: list[PhaseRecord] = field(default_factory=list)
+    phase_leaves: list[PhaseLeafRecord] = field(default_factory=list)
+    stw: list[StwRecord] = field(default_factory=list)
+
+    def any(self) -> bool:
+        return bool(self.cycles or self.generations or self.phases or self.phase_leaves or self.stw)
+
+
+@dataclass(frozen=True)
+class ZPhaseRecord:
+    seq: int
+    name: str
+    pause_ns: int
+    conc_ns: int
+    n: int
+
+
+@dataclass(frozen=True)
+class ZCycleRecord:
+    seq: int
+    pause_ns: int
+    conc_ns: int
+    max_pause_ns: int
+    phases: int
+
+
+@dataclass
+class ZStatRecords:
+    phases: list[ZPhaseRecord] = field(default_factory=list)
+    cycles: list[ZCycleRecord] = field(default_factory=list)
+
+
+def _u64(value: str, field_name: str, line: str) -> int:
+    try:
+        number = int(value, 10)
+    except ValueError as exc:
+        raise ValueError(f"non-numeric {field_name} in structured record: {line}") from exc
+    if not 0 <= number <= U64_MAX:
+        raise ValueError(f"{field_name} outside uint64 range: {number}")
+    return number
+
+
+def _version_any(value: str, expected: tuple[int, ...], family: str, line: str) -> None:
+    version = _u64(value, "v", line)
+    if version not in expected:
+        raise ValueError(f"unsupported {family} schema v={version}; expected one of {expected}")
+
+
+def _version(value: str, expected: int, family: str, line: str) -> None:
+    version = _u64(value, "v", line)
+    if version != expected:
+        raise ValueError(f"unsupported {family} schema v={version}; expected v={expected}")
+
+
+def _exact(pattern: re.Pattern[str], line: str, family: str) -> re.Match[str]:
+    match = pattern.fullmatch(line)
+    if match is None:
+        raise ValueError(f"malformed {family} record: {line}")
+    return match
+
+
+def parse_gclog(text: str) -> GcLogRecords:
+    """Parse every supported GCLOG record, rejecting any malformed candidate."""
+    records = GcLogRecords()
+    for line in text.splitlines():
+        if not line.startswith("[GCLOG]"):
+            continue
+        rec_tokens = RECORD_TOKENS.findall(line)
+        phase_candidates = [token for token in rec_tokens if token.startswith("phase")]
+        if phase_candidates:
+            if len(rec_tokens) != 1 or len(phase_candidates) != 1:
+                raise ValueError(f"malformed GCLOG phase-family dispatch: {line}")
+            family = phase_candidates[0]
+            if family == "phase":
+                match = _exact(GC_PHASE, line, "GCLOG phase")
+                _version_any(match.group(1), (4, 5), "GCLOG phase", line)
+                records.phases.append(PhaseRecord(
+                    _u64(match.group(2), "seq", line), match.group(3), match.group(4), match.group(5),
+                    _u64(match.group(6), "start_ns", line),
+                    _u64(match.group(7), "ns", line)))
+                continue
+            if family == "phase_leaf":
+                match = _exact(GC_PHASE_LEAF, line, "GCLOG phase_leaf")
+                _version(match.group(1), 4, "GCLOG phase_leaf", line)
+                seq = _u64(match.group(2), "seq", line)
+                ns = _u64(match.group(5), "ns", line)
+                depth = _u64(match.group(7), "depth", line)
+                path_ok = _u64(match.group(8), "path_ok", line)
+                components = tuple(match.group(9).split(">"))
+                if any(not component or re.fullmatch(TOKEN, component) is None for component in components):
+                    raise ValueError(f"invalid phase_leaf path component: {line}")
+                if match.group(4) != components[0]:
+                    raise ValueError(
+                        f"phase_leaf name/path mismatch: name={match.group(4)} path={match.group(9)}")
+                if depth != len(components):
+                    raise ValueError(
+                        f"phase_leaf depth mismatch: depth={depth} components={len(components)}")
+                if path_ok not in (0, 1):
+                    raise ValueError(f"invalid phase_leaf path_ok={path_ok}")
+                if path_ok == 0:
+                    raise ValueError(f"phase_leaf path overflow marker: {line}")
+                records.phase_leaves.append(PhaseLeafRecord(
+                    seq, match.group(3), match.group(4), ns, match.group(6), depth, path_ok,
+                    match.group(9), components))
+                continue
+            raise ValueError(f"unknown GCLOG phase-family record rec={family}")
+
+        if "generation" in rec_tokens:
+            match = _exact(GC_GENERATION, line, "GCLOG generation")
+            _version(match.group(1), 5, "GCLOG generation", line)
+            records.generations.append(GenerationRecord(
+                _u64(match.group(2), "seq", line), match.group(3), match.group(4),
+                *[_u64(match.group(index), name, line) for index, name in zip(
+                    range(5, 9), ("start_ns", "dur_ns", "live_before", "live_after"))]))
+            continue
+        if "cycle" in rec_tokens:
+            match = GC_CYCLE.fullmatch(line)
+            if match is not None:
+                _version(match.group(1), 5, "GCLOG cycle", line)
+                seq = _u64(match.group(2), "seq", line)
+                if seq == 0:
+                    raise ValueError("GCLOG cycle seq must be greater than zero")
+                numbers = [_u64(match.group(index), name, line) for index, name in zip(
+                    range(6, 12),
+                    ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used"))]
+                rss_kb = _u64(match.group(12), "rss_kb", line)
+                records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5),
+                                                  *numbers, rss_kb))
+                continue
+            match = _exact(GC_CYCLE_V4, line, "GCLOG cycle")
+            _version(match.group(1), 4, "GCLOG cycle", line)
+            seq = _u64(match.group(2), "seq", line)
+            if seq == 0:
+                raise ValueError("GCLOG cycle seq must be greater than zero")
+            numbers = [_u64(match.group(index), name, line) for index, name in zip(
+                (6, 7, 8, 9, 10, 11, 13),
+                ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used", "rss_kb"))]
+            records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5), *numbers))
+            continue
+        if "stw" in rec_tokens:
+            match = _exact(GC_STW, line, "GCLOG stw")
+            _version_any(match.group(1), (4, 5), "GCLOG stw", line)
+            records.stw.append(StwRecord(
+                _u64(match.group(2), "seq", line), match.group(3), match.group(4),
+                _u64(match.group(5), "start_ns", line),
+                _u64(match.group(6), "wait_ns", line), _u64(match.group(7), "held_ns", line)))
+    return records
+
+
+def parse_zstat(text: str) -> ZStatRecords:
+    """Parse every ZSTAT v1 candidate with exact field order and uint64 values."""
+    records = ZStatRecords()
+    for line in text.splitlines():
+        if not line.startswith("[ZSTAT]"):
+            continue
+        rec_tokens = RECORD_TOKENS.findall(line)
+        candidates = [token for token in rec_tokens if token.startswith("zphase") or token.startswith("zcycle")]
+        if not candidates:
+            continue
+        if len(rec_tokens) != 1 or len(candidates) != 1:
+            raise ValueError(f"malformed ZSTAT dispatch: {line}")
+        family = candidates[0]
+        if family == "zphase":
+            match = _exact(ZSTAT_PHASE, line, "ZSTAT zphase")
+            _version(match.group(1), 1, "ZSTAT zphase", line)
+            records.phases.append(ZPhaseRecord(
+                _u64(match.group(2), "seq", line), match.group(3),
+                _u64(match.group(4), "pause_ns", line), _u64(match.group(5), "conc_ns", line),
+                _u64(match.group(6), "n", line)))
+            continue
+        if family == "zcycle":
+            match = _exact(ZSTAT_CYCLE, line, "ZSTAT zcycle")
+            _version(match.group(1), 1, "ZSTAT zcycle", line)
+            records.cycles.append(ZCycleRecord(
+                _u64(match.group(2), "seq", line), _u64(match.group(3), "pause_ns", line),
+                _u64(match.group(4), "conc_ns", line), _u64(match.group(5), "max_pause_ns", line),
+                _u64(match.group(6), "phases", line)))
+            continue
+        raise ValueError(f"unknown ZSTAT record rec={family}")
+    return records
+
+
+def phase_ns_records(text: str) -> list[tuple[int, str, int]]:
+    return [(record.seq, record.name, record.ns) for record in parse_gclog(text).phases]
+
+
+def pillar_for(path: str) -> str | None:
+    """Apply fixed pillar priority to the complete leaf-to-root path."""
+    for pillar, pattern in PILLARS:
+        if pattern.search(path):
+            return pillar
+    return None

@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zObjectAllocator.cpp
++++ b/runtime/src/Heap/z/zObjectAllocator.cpp
+@@ -260,7 +260,7 @@
+ // ZGC zObjectAllocator.cpp:226-236.
+ size_t ZObjectAllocator::fast_available(PageAge age) const
+ {
+-    CHECK_DETAIL(ThreadLocal::GetMutator() != nullptr, "Should be a mutator thread");
++
+ 
+     ZPage* const* shared = allocator(age)->shared_small_page_addr();
+     ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);

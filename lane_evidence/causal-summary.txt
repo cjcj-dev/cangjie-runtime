@@ -1,0 +1,10 @@
+green-default tests= 9 failed= [] loaded= True
+green-testable tests= 9 failed= [] loaded= True
+guard-default tests= 9 failed= ['ObjectAllocator917.OldPhaseRequiresSafepoint', 'ObjectAllocator917.RetireOldRequiresSafepoint', 'ObjectAllocator917.RetireYoungRequiresSafepoint', 'ObjectAllocator917.YoungPhaseRequiresSafepoint'] loaded= True
+guard-testable tests= 9 failed= ['ObjectAllocator917.OldPhaseRequiresSafepoint', 'ObjectAllocator917.RetireOldRequiresSafepoint', 'ObjectAllocator917.RetireYoungRequiresSafepoint', 'ObjectAllocator917.YoungPhaseRequiresSafepoint'] loaded= True
+thread-default tests= 9 failed= ['ObjectAllocator917.FastAvailableRequiresMutator', 'ObjectAllocator917.TLABEntryRequiresMutator'] loaded= True
+thread-testable tests= 9 failed= ['ObjectAllocator917.FastAvailableRequiresMutator', 'ObjectAllocator917.TLABEntryRequiresMutator'] loaded= True
+phase-default tests= 9 failed= ['ObjectAllocator917.OldPhaseRequiresSafepoint', 'ObjectAllocator917.TLABEntryRequiresMutator', 'ObjectAllocator917.YoungPhaseRequiresSafepoint'] loaded= True
+phase-testable tests= 9 failed= ['ObjectAllocator917.OldPhaseRequiresSafepoint', 'ObjectAllocator917.TLABEntryRequiresMutator', 'ObjectAllocator917.YoungPhaseRequiresSafepoint'] loaded= True
+restored-default tests= 9 failed= [] loaded= True
+restored-testable tests= 9 failed= [] loaded= True

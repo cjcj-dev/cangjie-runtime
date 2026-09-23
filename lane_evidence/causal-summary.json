@@ -1,0 +1,1096 @@
+{
+  "root": "/root/sym917_r2_green",
+  "arms": {
+    "green-default": {
+      "identities": {
+        "/root/sym917_r2_green/unit-final-default/cj_gc_unit": "2b21770df3c1a1817887eed37f162d0bc160c5c33c4bfef1733496ec7a07f7a4",
+        "/root/sym917_r2_green/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "1e57dc1c1dce9a4e16721262432fe94391c7070aec5c5c86a235cb5d62c756dd",
+        "/root/sym917_r2_green/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a"
+      },
+      "tests": {
+        "ObjectAllocator917.FastAvailableRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.659830 1996889 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.OldPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.677448 1996954 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireOldRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.661947 1996922 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireYoungRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.722227 1997029 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.TLABEntryRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.682415 1997237 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.YoungPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.733852 1996896 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocatorPaths.TLABsShareSmallPage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "TLAB_SHARED_TARGET first=0x40000000000 second=0x40000000900 shared=1 requested=2304 actual=2304 descriptor=1"
+          ]
+        },
+        "SharedSmallPage.AgeRefillAndRetirement": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        },
+        "ZValue.shared_small_page_is_per_cpu_storage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        }
+      },
+      "uptime_before": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "uptime_after": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "wall": "0",
+      "cores": "16-31",
+      "product_definitions": [
+        "00000000005005f0 T MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)",
+        "00000000004e7f10 T MapleRuntime::ZGenerationOld::mark_start()",
+        "00000000004e6a60 T MapleRuntime::ZGenerationYoung::mark_start()",
+        "00000000004ba4d0 T MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)",
+        "00000000004ba420 T MapleRuntime::ZObjectAllocator::PerAge::retire_pages()",
+        "00000000004ba1d0 T MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const"
+      ],
+      "test_definitions": [],
+      "test_main_control": [
+        "0000000000023980 T main"
+      ]
+    },
+    "green-testable": {
+      "identities": {
+        "/root/sym917_r2_green/unit-final-testable/cj_gc_unit": "a089a894a24efb3be7e197516c90ceff4a2a276323abd7d83f52cb5f75d02dea",
+        "/root/sym917_r2_green/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "91046a93b0eefe9730c843d5af8be6b9769155f14d12962e4d22e809ff44aeaf",
+        "/root/sym917_r2_green/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a"
+      },
+      "tests": {
+        "ObjectAllocator917.FastAvailableRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.732009 1998196 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.OldPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.767578 1997878 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireOldRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.718376 1998385 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireYoungRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.701981 1997923 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.TLABEntryRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.705082 1997951 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.YoungPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.723144 1998103 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocatorPaths.TLABsShareSmallPage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "TLAB_SHARED_TARGET first=0x40000000000 second=0x40000000900 shared=1 requested=2304 actual=2304 descriptor=1"
+          ]
+        },
+        "SharedSmallPage.AgeRefillAndRetirement": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        },
+        "ZValue.shared_small_page_is_per_cpu_storage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        }
+      },
+      "uptime_before": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "uptime_after": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "wall": "0",
+      "cores": "16-31",
+      "product_definitions": [
+        "000000000050b060 T MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)",
+        "00000000004eec40 T MapleRuntime::ZGenerationOld::mark_start()",
+        "00000000004ed9a0 T MapleRuntime::ZGenerationYoung::mark_start()",
+        "00000000004bd730 T MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)",
+        "00000000004bd680 T MapleRuntime::ZObjectAllocator::PerAge::retire_pages()",
+        "00000000004bd330 T MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const"
+      ],
+      "test_definitions": [],
+      "test_main_control": [
+        "00000000000285e0 T main"
+      ]
+    },
+    "guard-default": {
+      "identities": {
+        "/root/sym917_r2_green/unit-final-default/cj_gc_unit": "2b21770df3c1a1817887eed37f162d0bc160c5c33c4bfef1733496ec7a07f7a4",
+        "/root/sym917_r2_guard/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "9c40b4c22d97b5c22912ad221003b3d26ce5319744f8aa91b615ae51f0d25730",
+        "/root/sym917_r2_guard/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a"
+      },
+      "tests": {
+        "ObjectAllocator917.FastAvailableRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.690184 1997473 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.OldPhaseRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=0"
+          ]
+        },
+        "ObjectAllocator917.RetireOldRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=0 matched=0"
+          ]
+        },
+        "ObjectAllocator917.RetireYoungRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=0 matched=0"
+          ]
+        },
+        "ObjectAllocator917.TLABEntryRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.722065 1998313 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.YoungPhaseRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=0"
+          ]
+        },
+        "ObjectAllocatorPaths.TLABsShareSmallPage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "TLAB_SHARED_TARGET first=0x40000000000 second=0x40000000900 shared=1 requested=2304 actual=2304 descriptor=1"
+          ]
+        },
+        "SharedSmallPage.AgeRefillAndRetirement": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        },
+        "ZValue.shared_small_page_is_per_cpu_storage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        }
+      },
+      "uptime_before": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "uptime_after": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "wall": "0",
+      "cores": "16-31",
+      "product_definitions": [
+        "00000000005005a0 T MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)",
+        "00000000004e7ec0 T MapleRuntime::ZGenerationOld::mark_start()",
+        "00000000004e6a10 T MapleRuntime::ZGenerationYoung::mark_start()",
+        "00000000004ba460 T MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)",
+        "00000000004ba420 T MapleRuntime::ZObjectAllocator::PerAge::retire_pages()",
+        "00000000004ba1d0 T MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const"
+      ],
+      "test_definitions": [],
+      "test_main_control": [
+        "0000000000023980 T main"
+      ]
+    },
+    "guard-testable": {
+      "identities": {
+        "/root/sym917_r2_green/unit-final-testable/cj_gc_unit": "a089a894a24efb3be7e197516c90ceff4a2a276323abd7d83f52cb5f75d02dea",
+        "/root/sym917_r2_guard/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "a9bf04ea75f23bead0f7f4001ea38c79a18a6b5b4d93299994164ada5c72e52e",
+        "/root/sym917_r2_guard/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a"
+      },
+      "tests": {
+        "ObjectAllocator917.FastAvailableRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.730741 1998562 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.OldPhaseRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=0"
+          ]
+        },
+        "ObjectAllocator917.RetireOldRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=0 matched=0"
+          ]
+        },
+        "ObjectAllocator917.RetireYoungRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=0 matched=0"
+          ]
+        },
+        "ObjectAllocator917.TLABEntryRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.723419 1998414 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.YoungPhaseRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=0"
+          ]
+        },
+        "ObjectAllocatorPaths.TLABsShareSmallPage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "TLAB_SHARED_TARGET first=0x40000000000 second=0x40000000900 shared=1 requested=2304 actual=2304 descriptor=1"
+          ]
+        },
+        "SharedSmallPage.AgeRefillAndRetirement": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        },
+        "ZValue.shared_small_page_is_per_cpu_storage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        }
+      },
+      "uptime_before": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "uptime_after": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "wall": "0",
+      "cores": "16-31",
+      "product_definitions": [
+        "000000000050b020 T MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)",
+        "00000000004eec00 T MapleRuntime::ZGenerationOld::mark_start()",
+        "00000000004ed960 T MapleRuntime::ZGenerationYoung::mark_start()",
+        "00000000004bd6c0 T MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)",
+        "00000000004bd680 T MapleRuntime::ZObjectAllocator::PerAge::retire_pages()",
+        "00000000004bd330 T MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const"
+      ],
+      "test_definitions": [],
+      "test_main_control": [
+        "00000000000285e0 T main"
+      ]
+    },
+    "thread-default": {
+      "identities": {
+        "/root/sym917_r2_green/unit-final-default/cj_gc_unit": "2b21770df3c1a1817887eed37f162d0bc160c5c33c4bfef1733496ec7a07f7a4",
+        "/root/sym917_r2_thread/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "04dd45cdd31da42b18c1ecc8619d0bd50ccbe3b7bd33cea1265791dad6f42e7e",
+        "/root/sym917_r2_thread/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a"
+      },
+      "tests": {
+        "ObjectAllocator917.FastAvailableRequiresMutator": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=0 matched=0"
+          ]
+        },
+        "ObjectAllocator917.OldPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.738737 1997498 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireOldRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.712689 1997819 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireYoungRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.699934 1997178 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.TLABEntryRequiresMutator": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=0 matched=0"
+          ]
+        },
+        "ObjectAllocator917.YoungPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.688133 1997196 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocatorPaths.TLABsShareSmallPage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "TLAB_SHARED_TARGET first=0x40000000000 second=0x40000000900 shared=1 requested=2304 actual=2304 descriptor=1"
+          ]
+        },
+        "SharedSmallPage.AgeRefillAndRetirement": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        },
+        "ZValue.shared_small_page_is_per_cpu_storage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        }
+      },
+      "uptime_before": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "uptime_after": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "wall": "0",
+      "cores": "16-31",
+      "product_definitions": [
+        "0000000000500590 T MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)",
+        "00000000004e7eb0 T MapleRuntime::ZGenerationOld::mark_start()",
+        "00000000004e6a00 T MapleRuntime::ZGenerationYoung::mark_start()",
+        "00000000004ba470 T MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)",
+        "00000000004ba3c0 T MapleRuntime::ZObjectAllocator::PerAge::retire_pages()",
+        "00000000004ba1d0 T MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const"
+      ],
+      "test_definitions": [],
+      "test_main_control": [
+        "0000000000023980 T main"
+      ]
+    },
+    "thread-testable": {
+      "identities": {
+        "/root/sym917_r2_green/unit-final-testable/cj_gc_unit": "a089a894a24efb3be7e197516c90ceff4a2a276323abd7d83f52cb5f75d02dea",
+        "/root/sym917_r2_thread/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "b8aa0a5c052f561a55430f58d5de228728a7d3e81ab178acd6dfd7627f6ca6d6",
+        "/root/sym917_r2_thread/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a"
+      },
+      "tests": {
+        "ObjectAllocator917.FastAvailableRequiresMutator": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=0 matched=0"
+          ]
+        },
+        "ObjectAllocator917.OldPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.765344 1999261 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireOldRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.704468 1997979 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireYoungRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.722097 1998421 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.TLABEntryRequiresMutator": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=0 matched=0"
+          ]
+        },
+        "ObjectAllocator917.YoungPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.699392 1997504 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocatorPaths.TLABsShareSmallPage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "TLAB_SHARED_TARGET first=0x40000000000 second=0x40000000900 shared=1 requested=2304 actual=2304 descriptor=1"
+          ]
+        },
+        "SharedSmallPage.AgeRefillAndRetirement": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        },
+        "ZValue.shared_small_page_is_per_cpu_storage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        }
+      },
+      "uptime_before": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "uptime_after": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "wall": "0",
+      "cores": "16-31",
+      "product_definitions": [
+        "000000000050b000 T MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)",
+        "00000000004eebe0 T MapleRuntime::ZGenerationOld::mark_start()",
+        "00000000004ed940 T MapleRuntime::ZGenerationYoung::mark_start()",
+        "00000000004bd6d0 T MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)",
+        "00000000004bd620 T MapleRuntime::ZObjectAllocator::PerAge::retire_pages()",
+        "00000000004bd330 T MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const"
+      ],
+      "test_definitions": [],
+      "test_main_control": [
+        "00000000000285e0 T main"
+      ]
+    },
+    "phase-default": {
+      "identities": {
+        "/root/sym917_r2_green/unit-final-default/cj_gc_unit": "2b21770df3c1a1817887eed37f162d0bc160c5c33c4bfef1733496ec7a07f7a4",
+        "/root/sym917_r2_phase/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "01a565f0aaf60fef419706e56b04bdd1194229ac772ee26f3fb5b5fa9dd35d98",
+        "/root/sym917_r2_phase/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a"
+      },
+      "tests": {
+        "ObjectAllocator917.FastAvailableRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.724048 1998093 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.OldPhaseRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=0"
+          ]
+        },
+        "ObjectAllocator917.RetireOldRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.689604 1997370 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireYoungRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.727027 1998572 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.TLABEntryRequiresMutator": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=0 matched=0"
+          ]
+        },
+        "ObjectAllocator917.YoungPhaseRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=0"
+          ]
+        },
+        "ObjectAllocatorPaths.TLABsShareSmallPage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "TLAB_SHARED_TARGET first=0x40000000000 second=0x40000000900 shared=1 requested=2304 actual=2304 descriptor=1"
+          ]
+        },
+        "SharedSmallPage.AgeRefillAndRetirement": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        },
+        "ZValue.shared_small_page_is_per_cpu_storage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        }
+      },
+      "uptime_before": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "uptime_after": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "wall": "0",
+      "cores": "16-31",
+      "product_definitions": [
+        "00000000005005c0 T MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)",
+        "00000000004e7ef0 T MapleRuntime::ZGenerationOld::mark_start()",
+        "00000000004e6a60 T MapleRuntime::ZGenerationYoung::mark_start()",
+        "00000000004ba4d0 T MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)",
+        "00000000004ba420 T MapleRuntime::ZObjectAllocator::PerAge::retire_pages()",
+        "00000000004ba1d0 T MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const"
+      ],
+      "test_definitions": [],
+      "test_main_control": [
+        "0000000000023980 T main"
+      ]
+    },
+    "phase-testable": {
+      "identities": {
+        "/root/sym917_r2_green/unit-final-testable/cj_gc_unit": "a089a894a24efb3be7e197516c90ceff4a2a276323abd7d83f52cb5f75d02dea",
+        "/root/sym917_r2_phase/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "1c0f2f995a959546e8a8310adf19327c01d928eb8c9378d3d6c47cdbd5487c20",
+        "/root/sym917_r2_phase/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a"
+      },
+      "tests": {
+        "ObjectAllocator917.FastAvailableRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.728130 1998389 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.OldPhaseRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=0"
+          ]
+        },
+        "ObjectAllocator917.RetireOldRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.755632 1999268 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireYoungRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.729327 1998467 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.TLABEntryRequiresMutator": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=0 matched=0"
+          ]
+        },
+        "ObjectAllocator917.YoungPhaseRequiresSafepoint": {
+          "rc": 1,
+          "target_matched": false,
+          "target_missed": true,
+          "loaded_product": true,
+          "diagnostics": [
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=0"
+          ]
+        },
+        "ObjectAllocatorPaths.TLABsShareSmallPage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "TLAB_SHARED_TARGET first=0x40000000000 second=0x40000000900 shared=1 requested=2304 actual=2304 descriptor=1"
+          ]
+        },
+        "SharedSmallPage.AgeRefillAndRetirement": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        },
+        "ZValue.shared_small_page_is_per_cpu_storage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        }
+      },
+      "uptime_before": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "uptime_after": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "wall": "0",
+      "cores": "16-31",
+      "product_definitions": [
+        "000000000050b030 T MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)",
+        "00000000004eec20 T MapleRuntime::ZGenerationOld::mark_start()",
+        "00000000004ed9a0 T MapleRuntime::ZGenerationYoung::mark_start()",
+        "00000000004bd730 T MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)",
+        "00000000004bd680 T MapleRuntime::ZObjectAllocator::PerAge::retire_pages()",
+        "00000000004bd330 T MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const"
+      ],
+      "test_definitions": [],
+      "test_main_control": [
+        "00000000000285e0 T main"
+      ]
+    },
+    "restored-default": {
+      "identities": {
+        "/root/sym917_r2_green/unit-final-default/cj_gc_unit": "2b21770df3c1a1817887eed37f162d0bc160c5c33c4bfef1733496ec7a07f7a4",
+        "/root/sym917_r2_restored/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "1e57dc1c1dce9a4e16721262432fe94391c7070aec5c5c86a235cb5d62c756dd",
+        "/root/sym917_r2_restored/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a"
+      },
+      "tests": {
+        "ObjectAllocator917.FastAvailableRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.702123 1997285 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.OldPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.766507 1999182 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireOldRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.759633 1999338 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireYoungRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.729449 1997604 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.TLABEntryRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.721435 1998020 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.YoungPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.750583 1998942 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocatorPaths.TLABsShareSmallPage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "TLAB_SHARED_TARGET first=0x40000000000 second=0x40000000900 shared=1 requested=2304 actual=2304 descriptor=1"
+          ]
+        },
+        "SharedSmallPage.AgeRefillAndRetirement": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        },
+        "ZValue.shared_small_page_is_per_cpu_storage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        }
+      },
+      "uptime_before": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "uptime_after": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "wall": "0",
+      "cores": "16-31",
+      "product_definitions": [
+        "00000000005005f0 T MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)",
+        "00000000004e7f10 T MapleRuntime::ZGenerationOld::mark_start()",
+        "00000000004e6a60 T MapleRuntime::ZGenerationYoung::mark_start()",
+        "00000000004ba4d0 T MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)",
+        "00000000004ba420 T MapleRuntime::ZObjectAllocator::PerAge::retire_pages()",
+        "00000000004ba1d0 T MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const"
+      ],
+      "test_definitions": [],
+      "test_main_control": [
+        "0000000000023980 T main"
+      ]
+    },
+    "restored-testable": {
+      "identities": {
+        "/root/sym917_r2_green/unit-final-testable/cj_gc_unit": "a089a894a24efb3be7e197516c90ceff4a2a276323abd7d83f52cb5f75d02dea",
+        "/root/sym917_r2_restored/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "91046a93b0eefe9730c843d5af8be6b9769155f14d12962e4d22e809ff44aeaf",
+        "/root/sym917_r2_restored/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a"
+      },
+      "tests": {
+        "ObjectAllocator917.FastAvailableRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.757623 1999264 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.OldPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.753532 1997360 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireOldRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.687938 1997502 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocator917.RetireYoungRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.737689 1997667 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.TLABEntryRequiresMutator": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.740011 1998976 F Should be a mutator thread",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1"
+          ]
+        },
+        "ObjectAllocator917.YoungPhaseRequiresSafepoint": {
+          "rc": 0,
+          "target_matched": true,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "2026-09-23 07:44:16.742069 1997876 F Should be at safepoint",
+            "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1"
+          ]
+        },
+        "ObjectAllocatorPaths.TLABsShareSmallPage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": [
+            "TLAB_SHARED_TARGET first=0x40000000000 second=0x40000000900 shared=1 requested=2304 actual=2304 descriptor=1"
+          ]
+        },
+        "SharedSmallPage.AgeRefillAndRetirement": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        },
+        "ZValue.shared_small_page_is_per_cpu_storage": {
+          "rc": 0,
+          "target_matched": false,
+          "target_missed": false,
+          "loaded_product": true,
+          "diagnostics": []
+        }
+      },
+      "uptime_before": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "uptime_after": "07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57",
+      "wall": "0",
+      "cores": "16-31",
+      "product_definitions": [
+        "000000000050b060 T MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)",
+        "00000000004eec40 T MapleRuntime::ZGenerationOld::mark_start()",
+        "00000000004ed9a0 T MapleRuntime::ZGenerationYoung::mark_start()",
+        "00000000004bd730 T MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)",
+        "00000000004bd680 T MapleRuntime::ZObjectAllocator::PerAge::retire_pages()",
+        "00000000004bd330 T MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const"
+      ],
+      "test_definitions": [],
+      "test_main_control": [
+        "00000000000285e0 T main"
+      ]
+    }
+  },
+  "unit_default": {
+    "rc": 0,
+    "summary": [
+      "[========] 574 tests: 574 passed, 0 failed"
+    ],
+    "failed": []
+  },
+  "unit_testable": {
+    "rc": 1,
+    "summary": [
+      "[========] 691 tests: 689 passed, 2 failed"
+    ],
+    "failed": [
+      "PackageInit.PublicUnloadDropsStwBeforePlatform",
+      "PackageInit.PublicUnloadAllowsPendingOwnerAndIdleU"
+    ]
+  },
+  "unit_filler": {
+    "rc": 0,
+    "summary": [
+      "[========] 574 tests: 574 passed, 0 failed"
+    ],
+    "failed": []
+  },
+  "ohos": {
+    "rc": 0,
+    "configure": "0",
+    "build": "0"
+  }
+}

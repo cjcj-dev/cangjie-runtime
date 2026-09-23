@@ -1,0 +1,31 @@
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -403,7 +403,7 @@
+     {
+         ZStatTimerYoung zstatTimer(PYoungFlushAlloc);
+         manager.ResetTLABUsage();
+-        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
++
+     }
+     reset_statistics();
+     {
+@@ -848,7 +848,7 @@
+     CHECK(Snapshot().active);
+     ZGlobalsPointers::flip_old_mark_start();
+     ZVerify::OnColorFlip();
+-    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
++
+     {
+         std::lock_guard<std::mutex> lock(mutex);
+         CHECK(sequence != UINT32_MAX);
+--- a/runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp
++++ b/runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp
+@@ -145,7 +145,7 @@
+ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
+ {
+     (void)allocType;
+-    const size_t tlabSize = ComputeTLABSize(totalSize, Heap::GetHeap().unsafe_max_tlab_alloc());
++    const size_t tlabSize = ComputeTLABSize(totalSize, Heap::GetHeap().max_tlab_size());
+     if (tlabSize == 0) {
+         return Heap::GetHeap().object_allocator().alloc(totalSize, PageAge::eden);
+     }

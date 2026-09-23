@@ -1,0 +1,31 @@
+COMMAND: git grep -n -E 'retire_pages\\(' HEAD -- runtime/src
+RC=0
+HEAD:runtime/src/Heap/z/zGeneration.cpp:406:        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+HEAD:runtime/src/Heap/z/zGeneration.cpp:851:    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+HEAD:runtime/src/Heap/z/zObjectAllocator.cpp:279:void ZObjectAllocator::PerAge::retire_pages()
+HEAD:runtime/src/Heap/z/zObjectAllocator.cpp:290:void ZObjectAllocator::retire_pages(PageAgeRange ages)
+HEAD:runtime/src/Heap/z/zObjectAllocator.cpp:293:        allocator(age)->retire_pages();
+HEAD:runtime/src/Heap/z/zObjectAllocator.hpp:39:        void retire_pages();
+HEAD:runtime/src/Heap/z/zObjectAllocator.hpp:51:    void retire_pages(PageAgeRange ages);
+
+COMMAND: git grep -n -E 'fast_available\\(' HEAD -- runtime/src
+RC=0
+HEAD:runtime/src/Heap/z/zHeap.cpp:471:    size_t size = _object_allocator.fast_available(PageAge::eden);
+HEAD:runtime/src/Heap/z/zObjectAllocator.cpp:261:size_t ZObjectAllocator::fast_available(PageAge age) const
+HEAD:runtime/src/Heap/z/zObjectAllocator.hpp:49:    size_t fast_available(PageAge age) const;
+
+COMMAND: git grep -n -E 'unsafe_max_tlab_alloc\\(' HEAD -- runtime/src
+RC=0
+HEAD:runtime/src/Heap/z/zHeap.cpp:469:size_t Heap::unsafe_max_tlab_alloc() const
+HEAD:runtime/src/Heap/z/zHeap.hpp:95:    size_t unsafe_max_tlab_alloc() const;
+HEAD:runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:148:    const size_t tlabSize = ComputeTLABSize(totalSize, Heap::GetHeap().unsafe_max_tlab_alloc());
+
+COMMAND: git grep -n -E '(\\.|->)mark_start\\(' HEAD -- runtime/src
+RC=0
+HEAD:runtime/src/Heap/z/zGeneration.cpp:232:        ZGeneration::young()->mark_start();
+HEAD:runtime/src/Heap/z/zGeneration.cpp:245:        ZGeneration::young()->mark_start();
+HEAD:runtime/src/Heap/z/zGeneration.cpp:246:        ZGeneration::old()->mark_start();
+
+COMMAND: git grep -n -E 'allocBuffer->Allocate\\(' HEAD -- runtime/src
+RC=0
+HEAD:runtime/src/Heap/z/zObjectAllocator.cpp:365:    return allocBuffer->Allocate(allocSize, allocType);

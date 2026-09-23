@@ -1,0 +1,53 @@
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zRelocate.hpp"
+#include "Heap/Allocator/RegionSpace.h"
+
+
+namespace MapleRuntime {
+
+void ZForwardingTable::insert(ZForwarding* forwarding)
+{
+    const zoffset offset = ZAddress::offset(to_zaddress_unsafe(forwarding->start()));
+    CHECK(_map.get(offset) == nullptr);
+    _map.put(offset, forwarding->size(), forwarding);
+}
+
+void ZForwardingTable::remove(ZForwarding* forwarding)
+{
+    const zoffset offset = ZAddress::offset(to_zaddress_unsafe(forwarding->start()));
+    CHECK(_map.get(offset) == forwarding);
+    _map.put(offset, forwarding->size(), nullptr);
+}
+
+ZForwardingTable& generation_forwarding_table(Generation generation)
+{
+    return Heap::GetHeap().GetZGeneration(generation).forwarding_table();
+}
+
+ZRelocateQueue& generation_relocate_queue(Generation generation)
+{
+    return *Heap::GetHeap().GetZGeneration(generation).relocate().queue();
+}
+
+ZForwarding* forwarding_for_page(const ZPage* page)
+{
+    if (page == nullptr || page->GetRegionStart() == 0) {
+        return nullptr;
+    }
+    return generation_forwarding_table(page->GetOwnerGeneration()).get(page->GetRegionStart());
+}
+
+MAddress forwarding_find(Generation generation, MAddress from)
+{
+    if (from == 0) {
+        return 0;
+    }
+    ZForwarding* forwarding = generation_forwarding_table(generation).get(from);
+    return forwarding != nullptr ? forwarding->find(from) : 0;
+}
+
+} // namespace MapleRuntime
