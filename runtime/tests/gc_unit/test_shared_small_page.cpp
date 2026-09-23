@@ -376,7 +376,8 @@ GC_OTHER_VM_TEST(ObjectAllocator917, TLABEntryRequiresMutator)
         GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
         AllocBuffer buffer;
         buffer.ClearRegion();
-        (void)buffer.Allocate(16, AllocType::MOVEABLE_OBJECT);
+        // HotSpot memAllocator.cpp:287-294: the refill slow path queries capacity.
+        (void)buffer.AllocateImpl(16, AllocType::MOVEABLE_OBJECT);
     });
 }
 #endif
