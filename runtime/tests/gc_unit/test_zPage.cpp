@@ -1173,7 +1173,7 @@ void* AllocateForSequenceRead(void* context)
 }
 
 namespace {
-void CheckLiveQueryWithoutSnapshotLock(bool collected)
+void CheckLiveQueryWithGenerationSequence(bool collected)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -1189,52 +1189,24 @@ void CheckLiveQueryWithoutSnapshotLock(bool collected)
     GC_EXPECT_TRUE(result.object != nullptr);
     ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(result.object));
     ZGeneration& generation = *page->generation();
-    const auto expected = generation.Snapshot().sequence;
-    std::atomic<bool> snapshotStarted{false}, snapshotDone{false}, readStarted{false}, readDone{false};
-    bool live = false, allocating = false, relocatable = true;
-    uint64_t sequence = 0;
-    auto lock = ZGenerationTest::LockSnapshot(generation);
-    std::thread control([&] {
-        snapshotStarted.store(true, std::memory_order_release);
-        (void)generation.Snapshot();
-        snapshotDone.store(true, std::memory_order_release);
-    });
-    std::thread reader([&] {
-        readStarted.store(true, std::memory_order_release);
-        live = Heap::GetHeap().IsSurvivedObject(result.object);
-        allocating = page->IsAllocating();
-        relocatable = page->IsRelocatable();
-        sequence = generation.Sequence();
-        readDone.store(true, std::memory_order_release);
-    });
-    while (!readStarted.load(std::memory_order_acquire) || !snapshotStarted.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (!readDone.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::yield();
-    }
-    const bool completedWhileLocked = readDone.load(std::memory_order_acquire);
-    const bool controlBlocked = !snapshotDone.load(std::memory_order_acquire);
-    lock.unlock();
-    reader.join();
-    control.join();
-    std::fprintf(stderr, "SEQNUM_LOCK_ASSERT completed=%u control_blocked=%u control_resumed=%u live=%u allocating=%u relocatable=%u sequence=%llu expected=%llu\n",
-        completedWhileLocked, controlBlocked, snapshotDone.load(), live, allocating, relocatable,
-        static_cast<unsigned long long>(sequence), static_cast<unsigned long long>(expected));
-    GC_EXPECT_TRUE(completedWhileLocked);
-    GC_EXPECT_TRUE(controlBlocked && snapshotDone.load());
+    const auto expected = generation.seqnum();
+    const bool live = Heap::GetHeap().IsSurvivedObject(result.object);
+    const bool allocating = page->IsAllocating();
+    const bool relocatable = page->IsRelocatable();
+    const uint32_t sequence = generation.seqnum();
+    std::fprintf(stderr, "SEQNUM_LIVE_ASSERT live=%u allocating=%u relocatable=%u sequence=%u expected=%u\n",
+        live, allocating, relocatable, sequence, expected);
     GC_EXPECT_TRUE(live && allocating == !collected && relocatable == collected);
     GC_EXPECT_EQ(sequence, expected);
 }
 }
-GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, LiveQueryDoesNotAcquireSnapshotLock)
+GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, LiveQueryUsesGenerationSequence)
 {
-    CheckLiveQueryWithoutSnapshotLock(false);
+    CheckLiveQueryWithGenerationSequence(false);
 }
-GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, MarkedLiveQueryDoesNotAcquireSnapshotLock)
+GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, MarkedLiveQueryUsesGenerationSequence)
 {
-    CheckLiveQueryWithoutSnapshotLock(true);
+    CheckLiveQueryWithGenerationSequence(true);
 }
 
 namespace {
@@ -1252,8 +1224,8 @@ void* CollectForSequenceRead(void* context)
     heap.RequestGC(GC_REASON_USER);
     result.youngAfter = heap.young().seqnum();
     result.oldAfter = heap.old().seqnum();
-    result.snapshotYoung = heap.young().Snapshot().sequence;
-    result.snapshotOld = heap.old().Snapshot().sequence;
+    result.snapshotYoung = heap.young().seqnum();
+    result.snapshotOld = heap.old().seqnum();
     Mutator::GetMutator()->SetManagedContext(true);
     return nullptr;
 }

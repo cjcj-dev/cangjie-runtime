@@ -195,7 +195,7 @@ void RunProductStallWaiters(bool stopping = false)
             ScopedObjectAccess access;
             waitingMutators[index].store(Mutator::GetMutator(), std::memory_order_release);
             results[index] = Heap::alloc_page(bytes, ZPageType::large);
-            completedSequence[index] = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+            completedSequence[index] = heap.GetZGeneration(ZGenerationId::old).seqnum();
         }
         done[index].store(true, std::memory_order_release);
         // The controller reads the published mutator state until both results
@@ -213,7 +213,7 @@ void RunProductStallWaiters(bool stopping = false)
     // Existing ZGC breakpoint stops the real old mark-start, before the late
     // request snapshots its sequence. No diagnostic callback supplies the input.
     const bool markStopped = stopping || ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
-    const uint64_t firstMark = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    const uint64_t firstMark = heap.GetZGeneration(ZGenerationId::old).seqnum();
     std::thread late(allocate, 1);
     deadline = std::chrono::steady_clock::now() + kHangLimit;
     while (std::chrono::steady_clock::now() < deadline) {

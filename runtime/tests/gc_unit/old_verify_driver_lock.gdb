@@ -14,14 +14,14 @@ young_active_samples = []
 
 class VerifyEntry(gdb.Breakpoint):
     def stop(self):
-        active = bool(gdb.parse_and_eval('observed_young->active'))
+        active = int(gdb.parse_and_eval('observed_young->_phase')) != 2
         samples.append(active)
         print('OLD_VERIFY_TARGET sample=%d young_active=%d' % (len(samples), active))
         return False
 
 class YoungEntry(gdb.Breakpoint):
     def stop(self):
-        active = bool(gdb.parse_and_eval('observed_young->active'))
+        active = int(gdb.parse_and_eval('observed_young->_phase')) != 2
         young_active_samples.append(active)
         return False
 

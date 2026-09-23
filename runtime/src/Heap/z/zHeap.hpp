@@ -72,7 +72,6 @@ public:
     bool IsSurvivedObject(const BaseObject*) const;
     bool IsGarbage(const BaseObject* obj) const { return !IsSurvivedObject(obj); }
 
-    bool IsGcStarted() const;
 
     bool IsGCEnabled() const;
     void EnableGC(bool val);
@@ -103,10 +102,6 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId generation);
     BaseObject* make_load_good(RefField<>& ref);
     Generation ObjectGeneration(BaseObject* object) const;
-    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
-    {
-        return GetZGeneration(generation).Snapshot();
-    }
     bool OldActiveRemsetIsCurrent() const
     {
         return GetZGeneration(ZGenerationId::old).ActiveRemsetIsCurrent(

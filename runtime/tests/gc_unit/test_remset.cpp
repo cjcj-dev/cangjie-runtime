@@ -86,9 +86,8 @@ struct RemsetRearmTestAccess {
             Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
             Heap::GetHeap().young().Mark().Start();
             MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
-            Heap::GetHeap().young().Begin(0);
         }
-        Heap::GetHeap().young().PublishPhase(ZGenerationPhase::Mark);
+        Heap::GetHeap().young().set_phase(ZGenerationPhase::Mark);
         ZGlobalsPointers::flip_young_mark_start();
     }
 
@@ -1008,7 +1007,6 @@ GC_TEST(Remset, YoungMarkStartAdvancesSequenceAndFlipsTogether)
         const uint64_t sequence = young.Sequence();
         const uint8_t face = rs.activeBuffer.load(std::memory_order_acquire);
         old.RecordYoungSequenceAtRelocateStart(sequence);
-        young.Begin(cycle + 1);
         GC_EXPECT_EQ(young.Sequence(), sequence);
         GC_EXPECT_EQ(rs.activeBuffer.load(std::memory_order_acquire), face);
         GenerationSequenceFixture::AdvanceYoung(young);
@@ -1018,7 +1016,6 @@ GC_TEST(Remset, YoungMarkStartAdvancesSequenceAndFlipsTogether)
         std::unordered_set<MAddress> previous;
         rs.ScanPreviousForMinor(previous);
         GC_EXPECT_TRUE(previous.empty());
-        young.End();
     }
 }
 
@@ -1032,11 +1029,8 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
     RememberedSet& rs = HeapTestRemset();
     // The fixture may leave its liveness-setup cycle active. Complete that
     // setup before issuing the first independent mark-start request.
-    if (young.Snapshot().active) young.End();
     auto markStart = [&] {
-        young.Begin(young.Sequence() + 1);
         GenerationSequenceFixture::AdvanceYoung(young);
-        young.End();
     };
     const MAddress from = heap.heapStart + 256;
     const MAddress to = heap.heapStart + 128;

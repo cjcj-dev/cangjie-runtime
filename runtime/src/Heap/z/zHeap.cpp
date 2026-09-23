@@ -189,7 +189,7 @@ void Heap::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase val
         value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
         Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(Heap::GetHeap().young().Sequence());
     }
-    cycle.PublishPhase(value);
+    cycle.set_phase(value);
 }
 
 Generation Heap::ObjectGeneration(BaseObject* object) const
@@ -227,11 +227,6 @@ BaseObject* Heap::relocate_or_remap_object(BaseObject* object, ZGenerationId gen
 bool Heap::IsSurvivedObject(const BaseObject* obj) const
 {
     return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
-}
-
-bool Heap::IsGcStarted() const
-{
-    return GetCycleSnapshot(ZGenerationId::young).active || GetCycleSnapshot(ZGenerationId::old).active;
 }
 
 bool Heap::IsGCEnabled() const { return isGCEnabled.load(); }

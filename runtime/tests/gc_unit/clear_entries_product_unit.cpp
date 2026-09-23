@@ -84,7 +84,6 @@ public:
         for (ZGenerationId generation : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = Heap::GetHeap().GetZGeneration(generation);
             if (cycle.Sequence() != 0) continue;
-            if (!cycle.Snapshot().active) cycle.Begin(0);
             if (generation == ZGenerationId::young) {
                 alignas(8) uint64_t storage[16] {};
                 RememberedSet empty;
@@ -269,7 +268,7 @@ struct LoadHealDeliveryTestAccess {
         Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
         Heap::GetHeap().young().Mark().Start();
         GC_EXPECT_TRUE(Heap::GetHeap().young().Mark().Stripes().IsEmpty());
-        young.PublishPhase(ZGenerationPhase::Mark);
+        young.set_phase(ZGenerationPhase::Mark);
         ZGlobalsPointers::flip_young_mark_start();
         WorkStack workStack = WorkStack{};
         std::unordered_set<MAddress> reachableSlots;
@@ -1265,7 +1264,6 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     // This fixture invokes the old body without the driver's young prelude.
     // Supply the product mark-start sequence event before publishing old roots.
     auto& oldCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-    if (oldCycle.Snapshot().active) oldCycle.End();
     // Enter the actual old mark-start producer; a bare ZMark::Start only
     // initializes stacks and does not publish the generation's Mark phase.
     {

@@ -341,7 +341,6 @@ void ZGeneration::at_collection_end()
     CycleStats().AtEnd(TimeUtil::NanoSeconds(), StatWorkers(),
                        reason == GC_REASON_WARMUP, should_record_stats());
     set_gc_timer(nullptr);
-    End();
 }
 
 // ZGC zGeneration.cpp:514-532: collection state belongs to the scope.
@@ -406,9 +405,7 @@ bool ZGenerationYoung::pause_mark_end()
 void ZGenerationYoung::mark_start()
 {
     uint64_t start = TimeUtil::NanoSeconds();
-    if (!Snapshot().active) Begin(Snapshot().requestIndex);
     CHECK(_cycle == ZGenerationId::young);
-    CHECK(Snapshot().active);
     ZGlobalsPointers::flip_young_mark_start();
     ZVerify::OnColorFlip();
 
@@ -420,11 +417,7 @@ void ZGenerationYoung::mark_start()
         Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
     }
     reset_statistics();
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        CHECK(sequence != UINT32_MAX);
-        ++sequence;
-    }
+    _seqnum++;
     set_phase(Phase::Mark);
     Mark().BindWorkers(Workers());
     Mark().Start();
@@ -744,33 +737,6 @@ namespace MapleRuntime {
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
-GCCycleSnapshot ZGeneration::Snapshot() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return { _cycle, sequence, requestIndex, reason.load(std::memory_order_relaxed), _phase, active };
-}
-
-void ZGeneration::SelectReason(GCReason value, uint64_t index)
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    CHECK(!active);
-    requestIndex = index;
-    reason.store(value, std::memory_order_release);
-}
-
-void ZGeneration::Begin(uint64_t index)
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    CHECK(!active);
-    requestIndex = index;
-    active = true;
-}
-
-void ZGeneration::PublishPhase(ZGenerationPhase value)
-{
-    set_phase(value);
-}
-
 void ZGeneration::log_phase_switch(Phase from, Phase to)
 {
     const char* const str[] = {
@@ -824,11 +790,6 @@ const char* ZGeneration::phase_to_string() const
     return "Unknown";
 }
 
-void ZGeneration::End()
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    active = false;
-}
 
 }
 
@@ -877,18 +838,12 @@ void ZGenerationOld::mark_start()
 {
     // zGeneration.cpp:1248
     _total_collections_at_start = Heap::GetHeap().total_collections();
-    Begin(Snapshot().requestIndex);
     CHECK(_cycle == ZGenerationId::old);
-    CHECK(Snapshot().active);
     ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();
     Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
     reset_statistics();
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        CHECK(sequence != UINT32_MAX);
-        ++sequence;
-    }
+    _seqnum++;
     set_phase(Phase::Mark);
     // zReferenceProcessor.cpp:347-359, zGeneration.cpp:1228: owner-cycle reset.
     CHECK(discoveredExternObjects.empty());

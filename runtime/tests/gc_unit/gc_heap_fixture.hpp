@@ -224,10 +224,6 @@ struct GcHeapFixture {
         // Construct the Heap before reading the generation singleton pointers.
         (void)Heap::GetHeap();
         auto& cycle = (*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old())));
-        if (cycle.Snapshot().active) {
-            cycle.End();
-        }
-        cycle.Begin(0);
         if (generation == Generation::Young) {
             GenerationSequenceFixture::AdvanceYoung(cycle);
         } else {
@@ -289,7 +285,7 @@ struct GcHeapFixture {
         // Some life-clock tests intentionally keep several fixtures alive.
         // ZPage's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
-        if ((*ZGeneration::young()).Snapshot().active) {
+        {
             (*ZGeneration::young()).reset_relocation_set();
             (*ZGeneration::old()).reset_relocation_set();
         }

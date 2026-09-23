@@ -63,17 +63,17 @@ extern "C" int p1MarkStartExercise()
                                                const ZMark* domain) {
         const size_t index = generation == ZGenerationId::young ? 0 : 1;
         auto& before = state[index];
-        const auto snapshot = Heap::GetHeap().GetCycleSnapshot(generation);
+        const auto& generationState = Heap::GetHeap().GetZGeneration(generation);
         const uintptr_t mask = index == 0 ? ZPointerMarkedYoungMask : ZPointerMarkedOldMask;
         const uintptr_t color = ::g_cjMarkBadMask & mask;
         const unsigned face = ZGenerationRootTestAccess::RemsetFace();
         const unsigned workers = Heap::GetHeap().GetZGeneration(generation).Workers()->ActiveWorkers();
         std::printf("P1_PRODUCT_STATE gen=%zu point=%u seq=%llu phase=%u color=%zx face=%u domain=%p domain_workers=%zu workers=%u\n",
-                    index, static_cast<unsigned>(point), static_cast<unsigned long long>(snapshot.sequence),
-                    static_cast<unsigned>(snapshot.phase), color, face, domain,
+                    index, static_cast<unsigned>(point), static_cast<unsigned long long>(generationState.seqnum()),
+                    static_cast<unsigned>(generationState.phase()), color, face, domain,
                     domain == nullptr ? size_t(0) : domain->NWorkers(), workers);
         if (point == MarkStartPoint::Begin) {
-            before.sequence = snapshot.sequence;
+            before.sequence = generationState.seqnum();
             before.color = color;
             before.finalizable = ZPointerFinalizable;
             before.face = face;
@@ -84,22 +84,22 @@ extern "C" int p1MarkStartExercise()
             Expect(color != before.color, index == 0 ? "young_color_before_retire" : "old_color_before_retire");
             Expect(ZPointerFinalizable == (before.finalizable ^ (index == 0 ? 0 : ZPointerFinalizableMask)),
                    index == 0 ? "young_preserves_finalizable_epoch" : "old_finalizable_before_retire");
-            Expect(snapshot.sequence == before.sequence, "retirement_precedes_sequence");
+            Expect(generationState.seqnum() == before.sequence, "retirement_precedes_sequence");
         } else if (point == MarkStartPoint::BeforeSequence) {
-            Expect(snapshot.sequence == before.sequence, "sequence_unchanged_while_retiring");
+            Expect(generationState.seqnum() == before.sequence, "sequence_unchanged_while_retiring");
             // TLAB retirement belongs to concurrent watermark processing,
             // not this pause. TLABOwnership.ParkedRootDoesNotRetireRunningOwner
             // and YoungMarkStart.ParkedRootDeferredToConcurrentMark cover it.
 
         } else if (point == MarkStartPoint::BeforeDomain) {
-            Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == ZGenerationPhase::Mark,
+            Expect(generationState.seqnum() == before.sequence + 1 && generationState.phase() == ZGenerationPhase::Mark,
                    "sequence_and_mark_phase_before_domain");
             if (index == 0) Expect(face == before.face, "young_remset_unchanged_before_domain");
         } else if (point == MarkStartPoint::BeforeRemembered) {
             Expect(domain != nullptr && domain->NWorkers() == workers, "young_domain_ready_before_remset");
             Expect(face == before.face, "young_remset_unchanged_after_domain_start");
         } else if (point == MarkStartPoint::Complete) {
-            Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == ZGenerationPhase::Mark,
+            Expect(generationState.seqnum() == before.sequence + 1 && generationState.phase() == ZGenerationPhase::Mark,
                    "completed_start_has_new_identity_and_mark_phase");
             Expect(domain != nullptr && domain->NWorkers() == workers, "completed_start_has_prepared_domain");
             Expect(face == (before.face ^ (index == 0 ? 1U : 0U)), "only_young_start_flips_remset");
@@ -110,19 +110,19 @@ extern "C" int p1MarkStartExercise()
             std::fflush(stdout);
         }
     };
-    const auto youngBefore = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
-    const auto oldBefore = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
+    const auto youngBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::young).seqnum();
+    const auto oldBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).seqnum();
     Heap::GetHeap().RequestGC(GC_REASON_USER);
-    const auto oldAfterMajor = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
+    const auto oldAfterMajor = Heap::GetHeap().GetZGeneration(ZGenerationId::old).seqnum();
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
-    const auto youngAfter = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
-    const auto oldAfter = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
+    const auto youngAfter = Heap::GetHeap().GetZGeneration(ZGenerationId::young).seqnum();
+    const auto oldAfter = Heap::GetHeap().GetZGeneration(ZGenerationId::old).seqnum();
     ZGeneration::testMarkStartState = nullptr;
-    Expect(oldAfterMajor.sequence > oldBefore.sequence, "major_request_started_old");
-    Expect(oldAfter.sequence == oldAfterMajor.sequence, "minor_preserves_old_identity");
-    Expect(state[0].starts == youngAfter.sequence - youngBefore.sequence && state[0].starts != 0,
+    Expect(oldAfterMajor > oldBefore, "major_request_started_old");
+    Expect(oldAfter == oldAfterMajor, "minor_preserves_old_identity");
+    Expect(state[0].starts == youngAfter - youngBefore && state[0].starts != 0,
            "young_sequence_delta_matches_real_starts");
-    Expect(state[1].starts == oldAfter.sequence - oldBefore.sequence && state[1].starts != 0,
+    Expect(state[1].starts == oldAfter - oldBefore && state[1].starts != 0,
            "old_sequence_delta_matches_real_starts");
     Expect(state[0].starts == state[0].completes && state[1].starts == state[1].completes,
            "every_started_generation_completed");

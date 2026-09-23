@@ -8,6 +8,8 @@
 
 #include "gc_heap_fixture.hpp"
 #include "Interpreter/Options.h"
+#include "Cangjie.h"
+#include "Heap/z/zDriver.hpp"
 #include "Interpreter/RTInterface.h"
 #include "Heap/z/zThreadLocalData.hpp"
 
@@ -229,6 +231,40 @@ GC_TEST(LoadPreloaded, ExportedMarkBadOffsetMatchesThreadData)
 #ifdef INTERPRETER_ENABLED
 namespace MapleRuntime {
 DYN_CJNativeInterface CreateCJNativeInterface(void* symbolHandle);
+}
+
+namespace {
+void* CheckInterpreterBarrierGate(void*)
+{
+    const DYN_CJNativeInterface interface = CreateCJNativeInterface(nullptr);
+    const auto tls = interface.getThreadLocalData();
+    const int attached = interface.isActiveGcPhase(tls);
+    const int detached = interface.isActiveGcPhase(nullptr);
+    ThreadLocalData noMutator{};
+    const int withoutMutator = interface.isActiveGcPhase(&noMutator);
+    const bool idle = ZDriver::minor()->gc_cause() == GC_REASON_INVALID &&
+                      ZDriver::major()->gc_cause() == GC_REASON_INVALID;
+    std::fprintf(stderr, "INTERPRETER_BARRIER_GATE_TARGET idle=%d attached=%d detached=%d no_mutator=%d\n",
+        idle, attached, detached, withoutMutator);
+    // Read the callback installed by the product ABI table, including both
+    // null guards. The barrier obligation survives completion of a GC cycle.
+    return reinterpret_cast<void*>(static_cast<uintptr_t>(
+        !idle || attached != 1 || detached != 0 || withoutMutator != 0));
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(GenerationState, InterpreterBarrierGateBetweenCollections)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    CJThreadHandle task = RunCJTask(CheckInterpreterBarrierGate, nullptr);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &result), E_OK);
+    ReleaseHandle(task);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(result), 0u);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
 GC_TEST(LoadPreloaded, InterpreterHeapFieldUsesAccessBarrier)

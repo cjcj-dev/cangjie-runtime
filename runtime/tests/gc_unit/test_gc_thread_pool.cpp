@@ -42,7 +42,6 @@ public:
     }
     static void ForwardYoungFromRuntimeEntry(Heap& collector)
     {
-        Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
         auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
         ZRelocate::StartRelocationTasks(young.id());
         young.relocate().relocate(&young.relocation_set());

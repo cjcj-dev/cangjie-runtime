@@ -76,7 +76,6 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadStoreMask, YoungPhasePublishesToOwners)
     const uintptr_t before = current->GetGCData().storeBadMask;
     auto& young = Heap::GetHeap().young();
     young.Workers()->set_active_workers(1);
-    young.Begin(1);
     young.pause_mark_start();
     const uintptr_t published = ZPointerStoreBadMask;
     ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
@@ -408,7 +407,6 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
            state.owner[1].load(std::memory_order_acquire) == nullptr) { std::this_thread::yield(); }
     auto& heap = Heap::GetHeap();
     heap.young().Workers()->set_active_workers(workers);
-    heap.young().Begin(1);
     heap.young().pause_mark_start();
     const auto initialTLABSize = [] {
         size_t size = 0;
@@ -578,7 +576,6 @@ GC_RUNTIME_OTHER_VM_TEST(TLABOwnership, ParkedRootDoesNotRetireRunningOwner)
     auto second = RunCJTask(RunNewTLABOwner, &state);
     while (!state.ready.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     auto& young = Heap::GetHeap().young();
-    young.Begin(1);
     young.pause_mark_start();
     state.flipped.store(true, std::memory_order_release);
     while (!state.refilled.load(std::memory_order_acquire)) { std::this_thread::yield(); }
@@ -648,7 +645,6 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
     Mutator* identity = state.owner[1].load();
     auto& young = Heap::GetHeap().young();
     young.Workers()->set_active_workers(1);
-    young.Begin(1);
     young.pause_mark_start();
     const uint32_t epoch = StackWatermark::epoch_id();
     std::atomic<bool> rootObserved{false};
@@ -898,7 +894,6 @@ GC_RUNTIME_OTHER_VM_TEST(TLABTail, RetiredTailSurvivesMarkEntry)
     while (!state.allocated.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     auto& young = Heap::GetHeap().young();
     young.Workers()->set_active_workers(1);
-    young.Begin(1);
     young.pause_mark_start();
     state.retire.store(true, std::memory_order_release);
     while (!state.retired.load(std::memory_order_acquire)) { std::this_thread::yield(); }

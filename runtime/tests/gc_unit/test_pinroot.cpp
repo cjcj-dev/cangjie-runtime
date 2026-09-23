@@ -36,7 +36,6 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, boo
                                      : static_cast<ZGeneration&>(heap.old());
     generation.InitializeWorkers(workers);
     generation.Workers()->set_active_workers(workers);
-    generation.Begin(1);
     GenerationSequenceFixture::Advance(generation);
     if (promote) { ZGenerationTest::SetTenuringThreshold(heap.young(), 1); }
 
@@ -185,7 +184,6 @@ static void CheckInPlaceRemset()
                                      : static_cast<ZGeneration&>(heap.old());
     generation.InitializeWorkers(workers);
     generation.Workers()->set_active_workers(workers);
-    generation.Begin(1);
     generation.RecordYoungSequenceAtRelocateStart(heap.young().Sequence());
     GenerationSequenceFixture::Advance(generation);
     if (promote) { ZGenerationTest::SetTenuringThreshold(heap.young(), 1); }
@@ -261,7 +259,6 @@ static void CheckMutatorRelocation(bool stopped)
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
     auto& generation = heap.old();
-    generation.Begin(1);
     GenerationSequenceFixture::Advance(generation);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
@@ -351,7 +348,6 @@ void RunRelocateLiveness(bool worker, bool marked)
     auto& generation = heap.old();
     generation.InitializeWorkers(1);
     generation.Workers()->set_active_workers(1);
-    generation.Begin(1);
     GenerationSequenceFixture::Advance(generation);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
@@ -462,7 +458,6 @@ static void CheckRelocationRemsetOwnership(bool worker)
     auto& young = heap.young();
     young.InitializeWorkers(1);
     young.Workers()->set_active_workers(1);
-    young.Begin(1);
     GenerationSequenceFixture::Advance(young);
     ZGenerationTest::SetTenuringThreshold(young, 1);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
@@ -547,7 +542,6 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     auto& generation = heap.old();
     generation.InitializeWorkers(1);
     generation.Workers()->set_active_workers(1);
-    generation.Begin(1);
     GenerationSequenceFixture::Advance(generation);
     const size_t size = ZObjectSizeLimitSmall + ZObjectAlignmentMedium;
     GC_EXPECT_TRUE(size <= ZObjectSizeLimitMedium);

@@ -530,11 +530,10 @@ int IsActiveGCPhase(DYN_ThreadLocalData tld)
     if (mutator == nullptr) {
         return 0;
     }
-    // This callback asks whether either generation needs GC barriers, not
-    // which operation this thread acknowledged most recently.
-    Heap& heap = Heap::GetHeap();
-    return heap.GetCycleSnapshot(ZGenerationId::young).active ||
-            heap.GetCycleSnapshot(ZGenerationId::old).active ? 1 : 0;
+    // ZGC zBarrier.inline.hpp: load/store barriers always check pointer colors.
+    // The official interpreter ABI still gates its barriers through this
+    // callback, so every attached mutator requires barriers, even between GCs.
+    return 1;
 }
 
 DYN_ExceptionWrapper GetExceptionWrapper()

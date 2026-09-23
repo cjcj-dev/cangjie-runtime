@@ -8,7 +8,7 @@
 #include <thread>
 using namespace MapleRuntime;
 
-// Debugger observation of the same product state returned by Snapshot().
+// Debugger observation of the product generation phase.
 // This pointer owns no state and installs no callback in the runtime.
 const ZGeneration* observed_young = nullptr;
 int main(int argc, char** argv)

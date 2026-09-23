@@ -144,15 +144,15 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     const auto stats = heap.old().CycleStats().Stats(TimeUtil::NanoSeconds());
-    const auto before = heap.old().Snapshot();
+    const auto before = heap.old().seqnum();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    const auto after = heap.old().Snapshot();
+    const auto after = heap.old().seqnum();
     std::fprintf(stderr, "DIRECTOR_WARMUP_TARGET cycles=%u warm=%d trustable=%d before=%llu after=%llu\n",
         stats.warmupCycles, stats.isWarm, stats.isTimeTrustable,
-        static_cast<unsigned long long>(before.sequence), static_cast<unsigned long long>(after.sequence));
+        static_cast<unsigned long long>(before), static_cast<unsigned long long>(after));
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_EQ(stats.warmupCycles, 3u);
-    GC_EXPECT_EQ(after.sequence, before.sequence);
+    GC_EXPECT_EQ(after, before);
     GC_EXPECT_TRUE(stats.isWarm);
     GC_EXPECT_TRUE(stats.isTimeTrustable);
 }
@@ -200,30 +200,21 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
     Probe old(ZGenerationId::old);
     young.InitializeWorkers(2);
     old.InitializeWorkers(2);
-    young.SelectReason(GC_REASON_YOUNG);
-    young.Begin(1);
-    young.PublishPhase(ZGenerationPhase::Mark);
+    young.set_phase(ZGenerationPhase::Mark);
     young.Workers()->set_active_workers(1);
-    const auto before = young.Snapshot();
+    const auto before = young.seqnum();
 
-    old.SelectReason(GC_REASON_USER);
-    old.Begin(2);
-    old.PublishPhase(ZGenerationPhase::Relocate);
+    old.set_phase(ZGenerationPhase::Relocate);
     old.Workers()->set_active_workers(2);
 
-    const auto after = young.Snapshot();
-    GC_EXPECT_EQ(after.sequence, before.sequence);
-    GC_EXPECT_TRUE(after.phase == ZGenerationPhase::Mark);
-    GC_EXPECT_EQ(after.reason, GC_REASON_YOUNG);
-    GC_EXPECT_TRUE(after.active);
+    const auto after = young.seqnum();
+    GC_EXPECT_EQ(after, before);
+    GC_EXPECT_TRUE(young.is_phase_mark());
     GC_EXPECT_EQ(young.Workers()->active_workers(), 1u);
     GC_EXPECT_EQ(old.Workers()->active_workers(), 2u);
     GC_EXPECT_TRUE(young.StatHeap() != old.StatHeap());
     GC_EXPECT_TRUE(&young.CycleStats() != &old.CycleStats());
 
-    old.End();
-    GC_EXPECT_TRUE(young.Snapshot().active);
-    young.End();
 }
 
 GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
@@ -560,8 +551,8 @@ void CheckDriverCauseResult(GCReason cause, bool minor, bool clearSoft, bool pre
 {
     auto* collected = ZCollectedHeap::heap();
     auto& heap = Heap::GetHeap();
-    const auto youngBefore = heap.young().Snapshot().sequence;
-    const auto oldBefore = heap.old().Snapshot().sequence;
+    const auto youngBefore = heap.young().seqnum();
+    const auto oldBefore = heap.old().seqnum();
     ZDriverPort& port = minor ? collected->driver_minor()->port() : collected->driver_major()->port();
     {
         ScopedEnterSaferegion safe(false);
@@ -576,8 +567,8 @@ void CheckDriverCauseResult(GCReason cause, bool minor, bool clearSoft, bool pre
     // Completion and policy assertions are independent: the target policy is
     // always printed, even if the request did not complete as expected.
     const bool done = !port.is_busy();
-    const auto youngAfter = heap.young().Snapshot().sequence;
-    const auto oldAfter = heap.old().Snapshot().sequence;
+    const auto youngAfter = heap.young().seqnum();
+    const auto oldAfter = heap.old().seqnum();
     const bool actualClear = heap.GetFinalizerProcessor().GetReferenceProcessor().uses_clear_all_soft_reference_policy();
     const auto expectedYoung = minor ? 1u : (preclean ? 2u : 1u);
     std::fprintf(stderr, "DRIVER_CAUSE_TARGET cause=%u minor=%d done=%d young=%llu old=%llu clear=%d expected_clear=%d expected_young=%u\n",
@@ -683,16 +674,16 @@ GC_RUNTIME_OTHER_VM_TEST(DriverCause, ProfilerDiagnosticCommand)
     params.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto& heap = Heap::GetHeap();
-    const auto before = heap.old().Snapshot().sequence;
+    const auto before = heap.old().seqnum();
     bool response = false;
     ProfilerAgentImpl(R"({"id":1,"method":"HeapProfiler.collectGarbage"})",
         [&](const std::string&) { response = true; });
-    const auto result = heap.old().Snapshot();
+    const auto result = heap.old().seqnum();
     std::fprintf(stderr, "PROFILER_CAUSE_TARGET cause=%u expected=%u completed=%llu response=%d\n",
-        result.reason, GC_REASON_DCMD_GC_RUN,
-        static_cast<unsigned long long>(result.sequence - before), response);
-    GC_EXPECT_EQ(result.reason, GC_REASON_DCMD_GC_RUN);
-    GC_EXPECT_EQ(result.sequence - before, 1u);
+        ZDriver::major()->gc_cause(), GC_REASON_INVALID,
+        static_cast<unsigned long long>(result - before), response);
+    GC_EXPECT_EQ(ZDriver::major()->gc_cause(), GC_REASON_INVALID);
+    GC_EXPECT_EQ(result - before, 1u);
     GC_EXPECT_TRUE(response);
 }
 #endif
@@ -709,23 +700,23 @@ void CheckExternalRequestWorkers(GCReason cause)
     params.gcParam.staticGCThreads = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto& heap = Heap::GetHeap();
-    const auto youngBefore = heap.young().Snapshot().sequence;
-    const auto oldBefore = heap.old().Snapshot().sequence;
+    const auto youngBefore = heap.young().seqnum();
+    const auto oldBefore = heap.old().seqnum();
     heap.RequestGC(cause);
-    const auto young = heap.young().Snapshot();
-    const auto old = heap.old().Snapshot();
+    const auto young = heap.young().seqnum();
+    const auto old = heap.old().seqnum();
     const auto youngWorkers = heap.young().Workers()->active_workers();
     const auto oldWorkers = heap.old().Workers()->active_workers();
     std::fprintf(stderr,
         "REQUEST_WORKERS_TARGET cause=%u young_workers=%u old_workers=%u young_cycles=%llu old_cycles=%llu\n",
         cause, youngWorkers, oldWorkers,
-        static_cast<unsigned long long>(young.sequence - youngBefore),
-        static_cast<unsigned long long>(old.sequence - oldBefore));
+        static_cast<unsigned long long>(young - youngBefore),
+        static_cast<unsigned long long>(old - oldBefore));
     // The result of the product request, not a separately executed driver.
     GC_EXPECT_EQ(youngWorkers, 2u);
     if (cause != GC_REASON_YOUNG) GC_EXPECT_EQ(oldWorkers, 3u);
-    GC_EXPECT_EQ(young.sequence - youngBefore, cause == GC_REASON_YOUNG ? 1u : 2u);
-    GC_EXPECT_EQ(old.sequence - oldBefore, cause == GC_REASON_YOUNG ? 0u : 1u);
+    GC_EXPECT_EQ(young - youngBefore, cause == GC_REASON_YOUNG ? 1u : 2u);
+    GC_EXPECT_EQ(old - oldBefore, cause == GC_REASON_YOUNG ? 0u : 1u);
 }
 }
 
