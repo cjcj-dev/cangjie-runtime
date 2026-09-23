@@ -40,6 +40,7 @@ def until(spec):
 
 try:
     source = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
+    allocator_source = Path(os.environ['DIRECTOR_SOURCE']).with_name('zPageAllocator.cpp').read_text().splitlines()
     fixture_source = Path(os.environ['STALL_FIXTURE_SOURCE']).read_text().splitlines()
     for setting in ('pagination off', 'confirm off', 'breakpoint pending on', 'print thread-events off'):
         cmd('set ' + setting)
@@ -75,7 +76,9 @@ try:
     emit('SAMPLED_BEFORE_ENQUEUE', library=library, stack=cmd('bt'))
     if stall:
         waiter.switch()
-        until('MapleRuntime::RegionManager::StallAllocation')
+        # ZGC zPageAllocator.cpp:1436-1445: enqueue precedes the stall request.
+        enqueue = line_in(allocator_source, 'bool RegionManager::StallAllocation', 'ZDriver::minor()->collect(')
+        until('zPageAllocator.cpp:' + str(enqueue))
         emit('REAL_ENQUEUE_RESULT', arguments=cmd('info args'), stack=cmd('bt'))
     director.switch()
     send = line_in(source, 'static void start_minor_gc', 'ZDriver::minor()->collect(')
