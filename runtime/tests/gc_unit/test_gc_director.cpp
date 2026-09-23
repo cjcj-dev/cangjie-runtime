@@ -590,6 +590,7 @@ void CheckDriverCause(GCReason cause, bool minor, bool clearSoft, bool preclean)
     GC_EXPECT_EQ(oldAfter - oldBefore, minor ? 0u : 1u);
     if (!minor) GC_EXPECT_EQ(actualClear, clearSoft);
     GC_EXPECT_TRUE(done);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 }
 
