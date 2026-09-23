@@ -61,7 +61,7 @@ void CheckSelection(bool medium, bool promote, uint32_t workers)
     flags.set_non_blocking();
     ZPage* pages[2];
     BaseObject* objects[2];
-    ZRelocationSetSelector selector;
+    ZRelocationSetSelector selector(ZFragmentationLimit);
     for (unsigned i = 0; i < 2; ++i) {
         pages[i] = Heap::alloc_page(size, medium ? ZPageType::medium : ZPageType::small,
                                     false, false, age, flags);
