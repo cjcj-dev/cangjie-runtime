@@ -79,6 +79,11 @@ def location():
 
 
 def advance(tag):
+    # Sampling now ends at the first decision instruction. Do not execute an
+    # extra tick when the requested boundary is already the current stop.
+    current = gdb.newest_frame().find_sal()
+    if current.symtab and current.symtab.filename.endswith('zDirector.cpp') and current.line == LINES[tag]:
+        return
     bp = gdb.Breakpoint('zDirector.cpp:' + str(LINES[tag]), temporary=True)
     command('continue')
     if bp.is_valid():

@@ -57,3 +57,19 @@ fixture after that boundary, then asserts the worker count in the product minor
 port request. `STALL_AFTER_SAMPLE=0` is the non-stall control. Required environment:
 `DIRECTOR_SOURCE`, `STALL_FIXTURE_SOURCE`, `GCV2_RUNTIME_LIB_DIR`; run via GDB on
 the matching gc_unit ELF with LD_LIBRARY_PATH pointing at the product SO.
+
+Q12 headroom coverage is in `../test_director_headroom_gdb.py`. Use the same
+`DIRECTOR_SOURCE`, `GCV2_RUNTIME_LIB_DIR`, and gc_unit ELF; select
+`HEADROOM_SITE=dynamic|static|high` and `HEADROOM_CHANGE=0|1`. An optional
+`HEADROOM_REPORT` chooses the existing runtime report path. The 64 MiB fixture
+has no medium-page tier: changing ConcGCThreads after sampling must change the
+free-space result emitted by the actual rule. Static coverage creates a real
+young page before sampling, since the first old cycle promoted the retained
+object. High-usage coverage stops the first old mark while cycle timing is not
+yet trustworthy, so the allocation-rate rule cannot mask high usage.
+
+Producer cut: use the fixed young-thread flag in `ZHeuristics::relocation_headroom`
+instead of ConcGCThreads. Consumer cut: restore the sampled headroom member.
+Both must fail changed-input cases in all three rules and preserve unchanged
+controls. The actual rule result is read from existing MRT_REPORT output; the
+debugger does not write heap statistics, free-space results, or decision outputs.
