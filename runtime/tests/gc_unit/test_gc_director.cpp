@@ -501,7 +501,8 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     const char* scenario = std::getenv("GC_UNIT_CAUSE_SCENARIO");
     if (scenario == nullptr) scenario = "warmup";
     const bool highUsage = std::strcmp(scenario, "high_usage") == 0;
-    const bool allocationRate = std::strcmp(scenario, "allocation_rate") == 0;
+    const bool majorAllocationRate = std::strcmp(scenario, "major_allocation_rate") == 0;
+    const bool allocationRate = majorAllocationRate || std::strncmp(scenario, "allocation_rate", 15) == 0;
     const bool proactive = std::strcmp(scenario, "proactive") == 0;
     const bool timer = std::strstr(scenario, "timer") != nullptr;
     RuntimeParam params{};
@@ -511,6 +512,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     params.gcParam.concGCThreads = 2;
     params.gcParam.youngGCThreads = 2;
     params.gcParam.oldGCThreads = 2;
+    params.gcParam.staticGCThreads = std::strcmp(scenario, "allocation_rate_static") == 0;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto& heap = Heap::GetHeap();
     auto& manager = MutatorManager::Instance();
@@ -531,6 +533,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    if (majorAllocationRate) heap.RequestGC(GC_REASON_YOUNG, false);
     if (allocationRate || proactive) {
         const size_t nextSize = heap.GetMaxCapacity() * (allocationRate ? 7 : 2) / 16;
         alignas(TypeInfo) static unsigned char secondStorage[sizeof(TypeInfo)]{};

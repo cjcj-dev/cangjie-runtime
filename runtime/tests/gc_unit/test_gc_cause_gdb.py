@@ -16,8 +16,9 @@ CASE = os.environ['CAUSE_CASE']
 ROOT = Path(os.environ['CAUSE_SOURCE_ROOT'])
 EXPECTED = {'major_timer': 'TIMER', 'minor_timer': 'TIMER',
             'warmup': 'WARMUP', 'high_usage': 'HIGH_USAGE',
-            'allocation_rate': 'ALLOCATION_RATE', 'proactive': 'PROACTIVE'}[CASE]
-MINOR = CASE in ('minor_timer', 'high_usage', 'allocation_rate')
+            'allocation_rate': 'ALLOCATION_RATE', 'allocation_rate_static': 'ALLOCATION_RATE',
+            'major_allocation_rate': 'ALLOCATION_RATE', 'proactive': 'PROACTIVE'}[CASE]
+MINOR = CASE in ('minor_timer', 'high_usage', 'allocation_rate', 'allocation_rate_static')
 RESULTS = []
 DYNAMIC_CAUSES = []
 
@@ -48,6 +49,14 @@ def until(spec):
 def expect(tag, passed, **fields):
     RESULTS.append(bool(passed))
     emit(tag, passed=bool(passed), **fields)
+
+
+class WarmupDelay(gdb.Breakpoint):
+    def stop(self):
+        if int(val('reason')) == int(val('MapleRuntime::GC_REASON_WARMUP')):
+            # Extend a real measured old cycle; do not edit its statistics.
+            time.sleep(0.15)
+        return False
 
 
 class DynamicReturn(gdb.FinishBreakpoint):
@@ -83,7 +92,9 @@ try:
     main = gdb.selected_thread()
     cmd('set scheduler-locking on')
     until('test_gc_director.cpp:' + str(ready))
-    if CASE in ('allocation_rate', 'proactive'):
+    if CASE in ('allocation_rate', 'allocation_rate_static', 'major_allocation_rate', 'proactive'):
+        if CASE == 'major_allocation_rate':
+            WarmupDelay('MapleRuntime::ZDriver::RunGarbageCollection', internal=True)
         cmd('set scheduler-locking off')
         second = next(i + 1 for i, s in enumerate(tests) if 'const size_t nextSize =' in s)
         until('test_gc_director.cpp:' + str(second))

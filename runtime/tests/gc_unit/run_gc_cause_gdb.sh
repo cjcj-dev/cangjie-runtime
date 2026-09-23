@@ -18,7 +18,7 @@ run_case() {
   echo "$?" > "$CAUSE_OUT/$1.rc"
 }
 pids=()
-for scenario in ${CAUSE_CASES:-major_timer minor_timer high_usage allocation_rate proactive warmup}; do
+for scenario in ${CAUSE_CASES:-major_timer minor_timer high_usage allocation_rate allocation_rate_static major_allocation_rate proactive warmup}; do
   run_case "$scenario" & pids+=("$!")
 done
 for pid in "${pids[@]}"; do wait "$pid"; done
