@@ -41,8 +41,6 @@ namespace MapleRuntime {
 
 static const ZStatPhaseCollection ZPhaseCollectionMajor("Major Collection", false);
 static const ZStatPhaseCollection ZPhaseCollectionMinor("Minor Collection", true);
-static const ZStatPhaseGeneration ZPhaseGenerationOld("Old Generation", ZGenerationId::old);
-static const ZStatPhaseGeneration ZPhaseGenerationYoung("Young Generation", ZGenerationId::young);
 std::mutex ZDriver::driverLock;
 
 static bool ShouldPrecleanYoung(GCReason reason);
@@ -159,24 +157,6 @@ void ZDriverMajor::collect(const ZDriverRequest& request)
     }
 }
 
-void ZDriver::RunCollection(uint64_t index, GCReason reason, bool warmup)
-{
-    const bool isYoung = reason == GC_REASON_YOUNG;
-    ZGeneration& generation = Heap::GetHeap().GetZGeneration(isYoung
-        ? ZGenerationId::young : ZGenerationId::old);
-    ZStatCycle& cycle = generation.CycleStats();
-    const uint64_t start = TimeUtil::NanoSeconds();
-    const ZYoungType type = Heap::GetHeap().GetZGeneration(ZGenerationId::young).YoungType();
-    // zGeneration.cpp:381,388: at_start/at_end(stat_workers, should_record_stats)
-    // bracket the collection; the parallel share is read from ZStatWorkers.
-    const bool recordStats = !isYoung || type == ZYoungType::minor || type == ZYoungType::major_partial_roots;
-    cycle.AtStart(start);
-    ZDriver::RunGarbageCollection(index, reason);
-    const uint64_t end = TimeUtil::NanoSeconds();
-    cycle.AtEnd(end, generation.StatWorkers(), warmup, recordStats);
-    (isYoung ? ZPhaseGenerationYoung : ZPhaseGenerationOld).RegisterEnd(start, end);
-}
-
 bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
 {
     CHECK(request.cause() < GC_REASON_MAX);
@@ -207,7 +187,6 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
         ? ZCollectedHeap::heap()->concurrent_gc_threads() : request.young_nworkers();
     const uint32_t oldCount = request.old_nworkers() == 0
         ? ZCollectedHeap::heap()->concurrent_gc_threads() : request.old_nworkers();
-    const bool warmup = request.cause() == GC_REASON_WARMUP;
     // zDriver.cpp:166-176 / zGeneration.cpp:154: the request carries the
     // selected worker counts into each generation's ZWorkers.
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()->set_active_workers(youngCount);
@@ -226,7 +205,7 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
         const bool preclean = ShouldPrecleanYoung(request.cause());
         if (preclean) {
             ZCollectedHeap::heap()->driver_major()->RunYoungCollection(
-                GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
+                GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean);
             accumulate(ZGenerationId::young);
             if (ZAbort::should_abort()) {
                 Heap::GetHeap().GetZGeneration(kind == GCDriverKind::MINOR
@@ -235,7 +214,7 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
             }
         }
         ZCollectedHeap::heap()->driver_major()->RunYoungCollection(GCTask::ASYNC_TASK_INDEX,
-            preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
+            preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots);
         accumulate(ZGenerationId::young);
         if (ZAbort::should_abort()) {
             Heap::GetHeap().GetZGeneration(kind == GCDriverKind::MINOR
@@ -253,11 +232,11 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
     const uint64_t index = GCTask::ASYNC_TASK_INDEX;
     if (kind == GCDriverKind::MINOR) {
         ZGCIdMinor minorId(GCIdMark::Current());
-        ZCollectedHeap::heap()->driver_minor()->RunYoungCollection(index, ZYoungType::minor, warmup);
+        ZCollectedHeap::heap()->driver_minor()->RunYoungCollection(index, ZYoungType::minor);
         accumulate(ZGenerationId::young);
     } else {
         ZGCIdMajor majorId(GCIdMark::Current(), 'O');
-        ZCollectedHeap::heap()->driver_major()->RunCollection(index, request.cause(), warmup);
+        ZCollectedHeap::heap()->driver_major()->RunGarbageCollection(index, request.cause());
         accumulate(ZGenerationId::old);
     }
     (kind == GCDriverKind::MINOR ? ZPhaseCollectionMinor : ZPhaseCollectionMajor)
@@ -279,7 +258,7 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
+void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason, ZYoungType type)
 {
 
     const ZGenerationId generation = reason == GC_REASON_YOUNG
@@ -298,7 +277,7 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     // and major root visitors, including concurrent stack enumeration.  Close
     // after the collector has joined all root work (zVerify.cpp:363-384).
     if (generation == ZGenerationId::young) {
-        ZGeneration::young()->collect();
+        ZGeneration::young()->collect(type);
     } else {
         ZGeneration::old()->collect();
     }
@@ -314,7 +293,7 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     const uint64_t gcEndTimeNs = TimeUtil::NanoSeconds();
     const char* phaseName = "major.old";
     if (generation == ZGenerationId::young) {
-        switch (cycle.YoungType()) {
+        switch (type) {
             case ZYoungType::none: phaseName = "young"; break;
             case ZYoungType::minor: phaseName = "minor.young"; break;
             case ZYoungType::major_full_preclean: phaseName = "major.preclean"; break;
@@ -335,20 +314,14 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     if (reason != GC_REASON_YOUNG) {
         ZStat::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
     }
-    // zStatHeap::at_relocate_end (zGeneration.cpp:935-940): publish only to
-    // the generation being collected; the account reads the allocator stats.
-    statHeap->AtRelocateEnd(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(&cycle),
-        cycle.should_record_stats());
     cycle.End();
 }
 }
 
 namespace MapleRuntime {
-void ZDriver::RunYoungCollection(uint64_t index, ZYoungType type, bool warmup)
+void ZDriver::RunYoungCollection(uint64_t index, ZYoungType type)
 {
-    YoungTypeSetter typeSetter(Heap::GetHeap().GetZGeneration(ZGenerationId::young), type);
-    RunCollection(index, GC_REASON_YOUNG, warmup);
+    RunGarbageCollection(index, GC_REASON_YOUNG, type);
 }
 
 static bool ShouldClearAllSoftReferences(GCReason reason)
@@ -393,7 +366,16 @@ static bool ShouldPrecleanYoung(GCReason reason)
     }
     // ZGC zDriver.cpp:294-299: requests that have seen young but not old.
     const auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    return manager.IsAllocationStallingForOld();
+    if (manager.IsAllocationStallingForOld()) {
+        return true;
+    }
+
+    // ZGC zDriver.cpp:301-312: clearing all soft references is the last
+    // attempt before OOM, so it must also preclean young. The driver locker
+    // keeps allocation stalls stable between the two policy decisions.
+    MRT_ASSERT(!ShouldClearAllSoftReferences(reason),
+               "Clearing all soft references without pre-cleaning young gen");
+    return false;
 }
 
 

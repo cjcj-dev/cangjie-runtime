@@ -555,12 +555,8 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
 }
 
 namespace {
-void CheckDriverCause(GCReason cause, bool minor, bool clearSoft, bool preclean)
+void CheckDriverCauseResult(GCReason cause, bool minor, bool clearSoft, bool preclean)
 {
-    RuntimeParam params{};
-    params.heapParam.heapSize = 64 * 1024;
-    params.coParam.processorNum = 1;
-    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto* collected = ZCollectedHeap::heap();
     auto& heap = Heap::GetHeap();
     const auto youngBefore = heap.young().Snapshot().sequence;
@@ -591,7 +587,76 @@ void CheckDriverCause(GCReason cause, bool minor, bool clearSoft, bool preclean)
     if (!minor) GC_EXPECT_EQ(actualClear, clearSoft);
     GC_EXPECT_TRUE(done);
 }
+
+void CheckDriverCause(GCReason cause, bool minor, bool clearSoft, bool preclean)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    CheckDriverCauseResult(cause, minor, clearSoft, preclean);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+struct PrecleanTask {
+    GCReason cause;
+    bool clearSoft;
+    bool preclean;
+    int result = 1;
+};
+
+void* CollectForPrecleanInvariant(void* argument)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    auto& task = *static_cast<PrecleanTask*>(argument);
+    try {
+        CheckDriverCauseResult(task.cause, false, task.clearSoft, task.preclean);
+        task.result = 0;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "PRECLEAN_TASK_ASSERT_FAILED %s\n", error.what());
+    }
+    return nullptr;
+}
+
+void CheckPrecleanWithoutShutdown(GCReason cause, bool clearSoft, bool preclean)
+{
+    // This fixture tests collection, not shutdown. The child completes a real
+    // runtime task, then _exit skips shutdown (Debug native detach: #935).
+    // Existing DriverCause fixtures still exercise FiniCJRuntime separately.
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        int result = 1;
+        try {
+            RuntimeParam params{};
+            params.heapParam.heapSize = 64 * 1024;
+            params.coParam.processorNum = 1;
+            GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+            PrecleanTask input{cause, clearSoft, preclean};
+            CJThreadHandle task = RunCJTask(CollectForPrecleanInvariant, &input);
+            GC_EXPECT_TRUE(task != nullptr);
+            void* taskResult = nullptr;
+            GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
+            ReleaseHandle(task);
+            result = input.result;
+            std::fprintf(stderr, "PRECLEAN_TASK_COMPLETED cause=%u result=%d shutdown=excluded\n", cause, result);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "PRECLEAN_TASK_SETUP_FAILED %s\n", error.what());
+        }
+        std::fflush(nullptr);
+        _exit(result);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "PRECLEAN_CHILD_EXIT cause=%u status=%d\n", cause, status);
+    GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+}
+
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, WhiteBox) { CheckPrecleanWithoutShutdown(GC_REASON_FORCE, true, true); }
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, Timer) { CheckPrecleanWithoutShutdown(GC_REASON_TIMER, false, false); }
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, AllocationStall) { CheckPrecleanWithoutShutdown(GC_REASON_ALLOCATION_STALL, true, true); }
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, User) { CheckPrecleanWithoutShutdown(GC_REASON_USER, false, true); }
 
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorTimer) { CheckDriverCause(GC_REASON_TIMER, true, false, false); }
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorAllocationRate) { CheckDriverCause(GC_REASON_ALLOCATION_RATE, true, false, false); }
