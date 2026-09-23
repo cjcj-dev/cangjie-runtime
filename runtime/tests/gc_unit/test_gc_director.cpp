@@ -695,3 +695,40 @@ GC_RUNTIME_OTHER_VM_TEST(DriverCause, ProfilerDiagnosticCommand)
     GC_EXPECT_TRUE(response);
 }
 #endif
+
+// ZGC zHeuristics.cpp:114-116 and zArguments.cpp:160-174: the same flag
+// supplies the young budget and the initialization-time tenuring bound.
+GC_RUNTIME_OTHER_VM_TEST(YoungCompactionLimit, BudgetUsesFlag)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t configured = params.heapParam.heapSize * 1024;
+    const size_t expected = static_cast<size_t>(configured * (ZYoungCompactionLimit / 100));
+    const size_t actual = ZHeuristics::significant_young_overhead();
+    std::fprintf(stderr, "YOUNG_BUDGET_TARGET flag=%.1f heap=%zu expected=%zu actual=%zu\n",
+                 ZYoungCompactionLimit, configured, expected, actual);
+    GC_EXPECT_EQ(actual, expected);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(YoungCompactionLimit, InitializationUsesFlagBudget)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t configured = params.heapParam.heapSize * 1024;
+    const size_t budget = static_cast<size_t>(configured * (ZYoungCompactionLimit / 100));
+    const size_t perAge = ZHeuristics::relocation_headroom();
+    const uint32_t actual = MaxTenuringThreshold;
+    const bool matches = actual <= 15 && (actual == 15 || perAge * actual >= budget) &&
+                         (actual == 0 || perAge * (actual - 1) < budget);
+    std::fprintf(stderr, "YOUNG_INIT_TARGET flag=%.1f budget=%zu per_age=%zu actual=%u matches=%d\n",
+                 ZYoungCompactionLimit, budget, perAge, actual, matches);
+    GC_EXPECT_TRUE(matches);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
