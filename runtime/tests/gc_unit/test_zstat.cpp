@@ -15,6 +15,7 @@ extern "C" int CJ_ScheduleManagerInit();
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Mutator/ThreadLocal.h"
+#include <algorithm>
 #include <cstring>
 #include <chrono>
 #include <thread>
@@ -47,14 +48,17 @@ void CheckPageAllocationRate(bool relocation, bool initialized)
     ZAllocationFlags flags;
     flags.set_non_blocking();
     if (relocation) flags.set_gc_relocation();
-    // Exceed the sampling granule even with the runner's 1024-granule heap.
-    const size_t allocationSize = 16 * ZGranuleSize;
+    // zStat.cpp:951-961: sampling starts at an aligned 1/128 of the soft
+    // maximum heap. Runtime initialization can inherit cjHeapSize (12GB in
+    // the producer), independently of the standalone runner's heap size.
+    const size_t samplingGranule = AlignUp(Heap::GetHeap().soft_max_capacity() / 128, ZGranuleSize);
+    const size_t allocationSize = std::max(16 * ZGranuleSize, samplingGranule);
     ZPage* page = Heap::alloc_page(allocationSize, ZPageType::large, false, PageAge::eden, flags);
     GC_EXPECT_TRUE(page != nullptr);
     const auto bytes = ZStatMutatorAllocRate::counter().GetAndReset().counter;
     const auto after = ZStatMutatorAllocRate::stats();
-    std::fprintf(stderr, "ALLOC_RATE_TARGET initialized=%d relocation=%d bytes=%llu avg_before=%g avg_after=%g\n",
-                 initialized, relocation, static_cast<unsigned long long>(bytes), before.avg, after.avg);
+    std::fprintf(stderr, "ALLOC_RATE_TARGET initialized=%d relocation=%d bytes=%llu avg_before=%g avg_after=%g allocation=%zu sampling_granule=%zu\n",
+                 initialized, relocation, static_cast<unsigned long long>(bytes), before.avg, after.avg, allocationSize, samplingGranule);
     const bool excluded = relocation || !initialized;
     const bool counterCorrect = bytes == (excluded ? 0U : allocationSize);
     const bool samplerCorrect = excluded
