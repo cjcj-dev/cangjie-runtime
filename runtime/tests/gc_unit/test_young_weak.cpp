@@ -42,6 +42,7 @@
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "ObjectModel/RefField.inline.h"
+#include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
 
 
