@@ -29,7 +29,7 @@ def emit(tag, **fields):
 
 class ExitPublication(gdb.Breakpoint):
     def stop(self):
-        return 'MapleRuntime::Mutator::ResetMutator' in cmd('bt')
+        return gdb.selected_thread().num == EXIT_THREAD
 
 
 try:
@@ -38,8 +38,14 @@ try:
     fixture = 'ThreadLifecycle.ManagedDetachMarksBothGenerations'
     cmd('set environment GC_UNIT_FILTER ' + fixture)
     cmd('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
-    boundary = ExitPublication('MapleRuntime::MarkStripeStackList::Push')
+    entry = gdb.Breakpoint('MapleRuntime::Mutator::ResetMutator', temporary=True)
     cmd('run')
+    if entry.is_valid():
+        raise RuntimeError('Real ResetMutator entry was not reached')
+    EXIT_THREAD = gdb.selected_thread().num
+    cmd('set $owner = this')
+    boundary = ExitPublication('MapleRuntime::MarkStripeStackList::Push')
+    cmd('continue')
     if not gdb.selected_inferior().threads():
         raise RuntimeError('Product exit publication was not reached')
     exiting = gdb.selected_thread()
@@ -51,13 +57,6 @@ try:
     cmd('set $published = this')
     cmd('set $chunk = stack')
     emit('PRODUCT_EXIT_PUBLICATION', library=product, chunk=int(val('$chunk')), stack=cmd('bt'))
-    frame = gdb.newest_frame()
-    while frame and 'Mutator::ResetMutator' not in frame.name():
-        frame = frame.older()
-    if frame is None:
-        raise RuntimeError('No real ResetMutator caller')
-    frame.select()
-    cmd('set $owner = this')
     cmd('set $mutex = (pthread_mutex_t*)&$owner->mutatorLock')
     boundary.enabled = False
     observer = next(t for t in gdb.selected_inferior().threads() if t.num == 1)
@@ -68,13 +67,24 @@ try:
         cmd('call (int)pthread_mutex_unlock($mutex)')
         # Run the actual inventory consumer on a second thread while the
         # exiting thread still holds the stack argument for its publication.
-        cmd('call MapleRuntime::ZMark::FlushAllGenerations()')
+        cmd('call ((bool (*)()) &_ZN12MapleRuntime5ZMark19FlushAllGenerationsEv)()')
         emit('CONCURRENT_INVENTORY_FLUSH', completed=True)
     elif lock_rc != 16:  # Linux EBUSY
         raise RuntimeError('Unexpected mutex result: ' + str(lock_rc))
     exiting.switch()
     gdb.newest_frame().select()
     cmd('finish')
+    if lock_rc == 16:
+        # The inventory consumer can run once final publication relinquishes
+        # the mutex, before unbinding/removal destroys the owner's identity.
+        unlocked = gdb.Breakpoint('MapleRuntime::MutatorManager::UnbindMutator', temporary=True)
+        cmd('continue')
+        if unlocked.is_valid():
+            raise RuntimeError('Owner did not reach the post-reset boundary')
+        observer.switch()
+        cmd('call ((bool (*)()) &_ZN12MapleRuntime5ZMark19FlushAllGenerationsEv)()')
+        emit('SERIALIZED_INVENTORY_FLUSH', completed=True)
+        exiting.switch()
     count = int(val('$published->length._M_i'))
     # Count actual references to this same stack, not call/hit counts.
     node = val('$published->head._M_b._M_p')
