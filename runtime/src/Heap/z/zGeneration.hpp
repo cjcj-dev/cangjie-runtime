@@ -29,7 +29,7 @@ class ZRelocationSetSelector;
 enum class zaddress : Uptr;
 struct TenuringInputs;
 // ZGC zGeneration.hpp:79-80: phase and sequence are generation-owned.
-enum class ZGenerationPhase : uint8_t { Mark, MarkComplete, Relocate };
+enum class ZGenerationPhase { Mark, MarkComplete, Relocate };
 class ScopedStopTheWorld;
 class ZGeneration;
 class ZGenerationYoung;
