@@ -1101,3 +1101,48 @@ GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedUnitOverflow)
 {
     CheckManagedSoftConstraint("17592186044416GB", "Invalid cjSoftMaxHeapSize");
 }
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, Decimal)
+{
+    CheckSoftMax(64 * 1024, "40MB", 0, false, size_t(40) * MB);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, LeadingZeroDecimal)
+{
+    CheckSoftMax(64 * 1024, "040MB", 0, false, size_t(40) * MB);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, DecimalEight)
+{
+    CheckSoftMax(64 * 1024, "8MB", 0, false, size_t(8) * MB);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, LeadingZeroEight)
+{
+    CheckSoftMax(64 * 1024, "08MB", 0, false, size_t(8) * MB);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, Hexadecimal)
+{
+    CheckSoftMax(64 * 1024, "0x20MB", 0, false, size_t(32) * MB);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, UppercaseHexadecimal)
+{
+    CheckSoftMax(64 * 1024, "0X20MB", 0, false, size_t(32) * MB);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, DecimalHexControl)
+{
+    CheckSoftMax(64 * 1024, "32MB", 0, false, size_t(32) * MB);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, AboveMaximum)
+{
+    CheckSoftConfig(0, "100MB", E_ARGS);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, LeadingZeroAboveMaximum)
+{
+    CheckSoftConfig(0, "0100MB", E_ARGS);
+}

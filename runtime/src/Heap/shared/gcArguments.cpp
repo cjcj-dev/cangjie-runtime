@@ -13,7 +13,7 @@
 
 namespace MapleRuntime {
 namespace {
-// Arguments::atojulong (arguments.cpp:744): validate conversion and scaling
+// parse_integer (parseInteger.hpp:126-153): select hex/decimal, validate conversion and scaling
 // before publishing a size flag. Cangjie size options use KB/MB/GB units.
 bool ParseSoftHeapSize(const char* value, size_t& kb)
 {
@@ -30,7 +30,9 @@ bool ParseSoftHeapSize(const char* value, size_t& kb)
     }
     char* end = nullptr;
     errno = 0;
-    const unsigned long long parsed = std::strtoull(number.Str(), &end, 0);
+    const bool isHex = number.Str()[0] == '0' &&
+        (number.Str()[1] == 'x' || number.Str()[1] == 'X');
+    const unsigned long long parsed = std::strtoull(number.Str(), &end, isHex ? 16 : 10);
     if (errno == ERANGE || *end != '\0' || parsed > std::numeric_limits<size_t>::max()) {
         return false;
     }
