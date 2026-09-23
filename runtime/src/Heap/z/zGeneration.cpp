@@ -1106,9 +1106,14 @@ void ZGenerationYoung::register_flip_promoted(const ZArray<ZPage*>& pages)
 
 void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)
 {
-    // zGeneration.cpp:704-715: preclean promotes all, other types compute.
-    _tenuring_threshold = YoungType() == ZYoungType::major_full_preclean
-        ? 0 : ComputeTenuringThreshold(inputs);
+    // ZGC zGeneration.cpp:704-715: promote-all precedes an explicit override.
+    if (inputs.promoteAll) {
+        _tenuring_threshold = 0;
+    } else if (ZTenuringThreshold != -1) {
+        _tenuring_threshold = static_cast<uint32_t>(ZTenuringThreshold);
+    } else {
+        _tenuring_threshold = ComputeTenuringThreshold(inputs);
+    }
 }
 
 void ZGeneration::free_empty_pages(ZRelocationSetSelector* selector, int bulk)

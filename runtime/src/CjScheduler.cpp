@@ -282,6 +282,20 @@ static uint32_t InitGCWorkerCount(const char* name)
     return static_cast<uint32_t>(count);
 }
 
+// ZGC z_globals.hpp: ZTenuringThreshold accepts -1 for automatic selection.
+static int32_t InitTenuringThreshold(const char* name, int32_t minimum, int32_t maximum, int32_t fallback)
+{
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return fallback;
+    }
+    char* end = nullptr;
+    const long threshold = std::strtol(value, &end, 10);
+    CHECK_DETAIL(end != value && *end == '\0' && threshold >= minimum && threshold <= maximum,
+                 "Tenuring threshold outside supported range");
+    return static_cast<int32_t>(threshold);
+}
+
 static bool InitStaticGCThreads()
 {
     const char* value = std::getenv("cjUseDynamicNumberOfGCThreads");
@@ -725,6 +739,11 @@ static RuntimeParam InitRuntimeParam()
                 .youngGCThreads = InitGCWorkerCount("cjYoungGCThreads"),
                 .oldGCThreads = InitGCWorkerCount("cjOldGCThreads"),
                 .staticGCThreads = InitStaticGCThreads(),
+                .maxTenuringThreshold = static_cast<uint32_t>(
+                    InitTenuringThreshold("cjMaxTenuringThreshold", 0, 16, 15)),
+                .zTenuringThreshold = InitTenuringThreshold("cjZTenuringThreshold", -1, 15, -1),
+                .maxTenuringThresholdSet = std::getenv("cjMaxTenuringThreshold") != nullptr,
+                .zTenuringThresholdSet = std::getenv("cjZTenuringThreshold") != nullptr,
             },
         .logParam = {
             .logLevel = LogFile::GetLogLevel(),
