@@ -231,15 +231,24 @@ inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortD
     const bool waited = WaitChildExit(child, status, deadline, supervisor.OwnsGroup());
     const std::string sentinel = "GC_UNIT_OTHER_VM_OKIDOKI " + fullName + "\n";
     const bool exitedCleanly = waited && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    const bool sawSentinel = transcript.find(sentinel) != std::string::npos;
+    const auto failureDiagnostic = [&] {
+        constexpr size_t tailLimit = 4096;
+        const size_t tailStart = transcript.size() > tailLimit ? transcript.size() - tailLimit : 0;
+        return ": " + ChildExitSummary(waited, status) +
+            "; sentinel=" + (sawSentinel ? "seen" : "missing") +
+            "; stderr_read=" + (readOk ? "complete" : "incomplete") +
+            "\nChild stderr tail (<=4096 bytes):\n" + transcript.substr(tailStart);
+    };
     if (expectedAbortDiagnostic != nullptr) {
         const bool target = readOk && waited && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
             transcript.find(expectedAbortDiagnostic) != std::string::npos;
         std::fprintf(stderr, "VERIFY_SHARED_STACK_ASSERT_EXECUTED status=%d matched=%d\n", status, target);
-        if (!target) { throw AssertFailure("other-vm child missed expected abort for " + fullName); }
+        if (!target) { throw AssertFailure("other-vm child missed expected abort for " + fullName + failureDiagnostic()); }
         return;
     }
-    if (!readOk || !exitedCleanly || transcript.find(sentinel) == std::string::npos) {
-        throw AssertFailure("other-vm child did not exit cleanly with sentinel for " + fullName);
+    if (!readOk || !exitedCleanly || !sawSentinel) {
+        throw AssertFailure("other-vm child did not exit cleanly with sentinel for " + fullName + failureDiagnostic());
     }
 #else
     throw AssertFailure("other-vm tests require Linux exec isolation: " + fullName);
