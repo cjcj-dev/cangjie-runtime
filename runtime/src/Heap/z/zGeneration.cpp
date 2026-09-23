@@ -435,7 +435,6 @@ void ZGenerationYoung::concurrent_mark()
     ZStatTimerYoung timer(ZPhaseConcurrentMarkYoung);
     youngWeakSlots.clear();
     youngFullScan = false;
-    reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
     // ZGC zGeneration.cpp:665-669: roots, then combined scan and follow.
     produceYoungRoots();
     mark_follow();
@@ -947,7 +946,6 @@ void ZGenerationOld::concurrent_mark()
 
     {
         ZStatTimerOld zstatTimer(PTraceLiveObjectsUpdateOldPointersInRefFields);
-        reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
         Mark().MarkFollow(false);
         ZBreakpoint::AtBeforeMarkingCompleted();
         if (ZAbort::should_abort()) {
