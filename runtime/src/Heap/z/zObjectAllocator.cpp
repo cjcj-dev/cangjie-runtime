@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -55,7 +54,6 @@ namespace MapleRuntime {
 // starts with the published allocation fraction instead of a fixed extent.
 void RegionManager::InitializeTLAB(AllocBuffer& buffer)
 {
-    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
     buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads,
                       ZObjectSizeLimitSmall);
@@ -65,7 +63,6 @@ void RegionManager::InitializeTLAB(AllocBuffer& buffer)
 // regions in young mark-start (zGeneration.cpp:862).
 void RegionManager::ResetTLABUsage()
 {
-    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
     if (used != 0) {
         // TruncatedSeq::davg uses AbsSeq's exponential average, alpha=0.3;
@@ -77,13 +74,9 @@ void RegionManager::ResetTLABUsage()
 
 // ZThreadLocalAllocBuffer::publish_statistics (zThreadLocalAllocBuffer.cpp:52).
 // Thread retirement statistics consume the already published backing history.
-void RegionManager::PublishTLABStatistics(const TLABStatistics& statistics)
+void RegionManager::PublishTLABStatistics(const TLABStatistics& total)
 {
-    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t capacity = GetTLABCapacity();
-    TLABStatistics total = retiredTLABStatistics;
-    retiredTLABStatistics = TLABStatistics{};
-    total.Update(statistics);
     if (total.Used() != 0) {
         tlabAllocatingThreads.Sample(total.allocatingThreads);
         if (lastTLABUsed > 0.5 * capacity) {
@@ -100,18 +93,11 @@ void RegionManager::PublishTLABStatistics(const TLABStatistics& statistics)
 // The caller owns the mutator (watermark processing or thread exit).
 void RegionManager::RetireTLAB(AllocBuffer& buffer, TLABStatistics& statistics)
 {
-    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     statistics = TLABStatistics{};
     buffer.RetireTLAB(true);
     buffer.AccumulateTLABStatistics(statistics, GetTLABUsed(), GetTLABCapacity());
     const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
     buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads, ZObjectSizeLimitSmall);
-}
-
-void RegionManager::RetireTLABStatistics(AllocBuffer& buffer)
-{
-    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
-    buffer.AccumulateTLABStatistics(retiredTLABStatistics, GetTLABUsed(), GetTLABCapacity());
 }
 
 // zObjectAllocator.cpp:40-45
@@ -286,36 +272,6 @@ void ZObjectAllocator::retire_pages(PageAgeRange ages)
     }
 }
 
-void RegionManager::RequestForRegion(size_t size)
-{
-    if (IsGcThread()) {
-        // gc thread is always permitted for allocation.
-        return;
-    }
-
-    Heap& heap = Heap::GetHeap();
-    const size_t liveAfterGC = lastLiveBytesAfterGC.load(std::memory_order_acquire);
-    size_t allocatedBytes = GetAllocatedSize() - liveAfterGC;
-    constexpr double pi = 3.14;
-    size_t availableBytesAfterGC = heap.GetMaxCapacity() - liveAfterGC;
-    double heuAllocRate = std::cos((pi / 2.0) * allocatedBytes / availableBytesAfterGC) *
-        lastCollectionRate.load(std::memory_order_acquire);
-    // for maximum performance, choose the larger one.
-    double allocRate = std::max(
-        static_cast<double>(CangjieRuntime::GetHeapParam().allocationRate) * MB / SECOND_TO_NANO_SECOND, heuAllocRate);
-    size_t waitTime = static_cast<size_t>(size / allocRate);
-    uint64_t now = TimeUtil::NanoSeconds();
-    if (prevRegionAllocTime + waitTime <= now) {
-        prevRegionAllocTime = TimeUtil::NanoSeconds();
-        return;
-    }
-
-    uint64_t sleepTime = std::min<uint64_t>(CangjieRuntime::GetHeapParam().allocationWaitTime,
-                                  prevRegionAllocTime + waitTime - now);
-    DLOG(ALLOC, "wait %zu ns to alloc %zu(B)", sleepTime, size);
-    std::this_thread::sleep_for(std::chrono::nanoseconds{ sleepTime });
-    prevRegionAllocTime = TimeUtil::NanoSeconds();
-}
 
 } // namespace MapleRuntime
 

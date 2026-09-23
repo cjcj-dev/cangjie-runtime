@@ -1,0 +1,28 @@
+1c47d4bdce82ee29515b6cf3218a2dbc68f7b1467be3c917c8323a515ddf0fda  default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+lane=sym_cangjie_runtime_919_implement_r5786193802-baseline arm=default nm_rc=0
+0
+removed_symbol_grep_rc=1
+1
+positive_control_grep_rc=0
+d7765007f63ede96804780c36c2bea5e0aea529673aa02ae35ae9a502e21c939  testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+lane=sym_cangjie_runtime_919_implement_r5786193802-baseline arm=testable nm_rc=0
+0
+removed_symbol_grep_rc=1
+1
+positive_control_grep_rc=0
+ 07:42:31 up 13 days,  7:50,  1 user,  load average: 22.53, 24.98, 31.72
+ 07:42:42 up 13 days,  7:50,  1 user,  load average: 21.35, 24.65, 31.54
+d79d0a1fe60a5c1e38264beea4fef0bb84fcaedb1923c7b0bf0f2ddc9d80d160  default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+lane=sym_cangjie_runtime_919_implement_r5786193802 arm=default nm_rc=0
+0
+removed_symbol_grep_rc=1
+1
+positive_control_grep_rc=0
+3176ceb50400501d9a6e796ca5b756e4c599007ad0d357e5bccd3e5d4dcc353d  testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+lane=sym_cangjie_runtime_919_implement_r5786193802 arm=testable nm_rc=0
+0
+removed_symbol_grep_rc=1
+1
+positive_control_grep_rc=0
+ 07:43:42 up 13 days,  7:51,  1 user,  load average: 43.09, 29.83, 32.85
+ 07:44:16 up 13 days,  7:52,  1 user,  load average: 80.64, 41.18, 36.57
