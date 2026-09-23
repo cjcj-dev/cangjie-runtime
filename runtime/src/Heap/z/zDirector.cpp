@@ -443,10 +443,10 @@ static bool rule_major_proactive(const ZDirectorStats& stats)
 
 static GCReason make_minor_gc_decision(const ZDirectorStats& stats)
 {
-    if (ZCollectedHeap::heap()->driver_minor()->port().is_busy()) {
+    if (ZDriver::minor()->is_busy()) {
         return GC_REASON_INVALID;
     }
-    if (ZCollectedHeap::heap()->driver_major()->port().is_busy() && !stats.old_stats.resize.is_active) {
+    if (ZDriver::major()->is_busy() && !stats.old_stats.resize.is_active) {
         return GC_REASON_INVALID;
     }
     if (rule_minor_timer(stats)) {
@@ -463,7 +463,7 @@ static GCReason make_minor_gc_decision(const ZDirectorStats& stats)
 
 static GCReason make_major_gc_decision(const ZDirectorStats& stats)
 {
-    if (ZCollectedHeap::heap()->driver_major()->port().is_busy()) {
+    if (ZDriver::major()->is_busy()) {
         return GC_REASON_INVALID;
     }
     if (rule_major_timer(stats)) {
@@ -575,17 +575,17 @@ static ZWorkerCounts initial_workers(const ZDirectorStats& stats, ZWorkerSelecti
 static void start_major_gc(const ZDirectorStats& stats, GCReason cause)
 {
     const ZWorkerCounts selection = initial_workers(stats, ZWorkerSelectionType::start_major);
-    ZCollectedHeap::heap()->driver_major()->collect(
+    ZDriver::major()->collect(
         ZDriverRequest(cause, selection.young_workers, selection.old_workers));
 }
 
 static void start_minor_gc(const ZDirectorStats& stats, GCReason cause)
 {
     const ZWorkerSelectionType type =
-        ZCollectedHeap::heap()->driver_major()->port().is_busy() ? ZWorkerSelectionType::minor_during_old :
+        ZDriver::major()->is_busy() ? ZWorkerSelectionType::minor_during_old :
                                                                 ZWorkerSelectionType::normal;
     const ZWorkerCounts selection = initial_workers(stats, type);
-    if (UseDynamicNumberOfGCThreads && ZCollectedHeap::heap()->driver_major()->port().is_busy()) {
+    if (UseDynamicNumberOfGCThreads && ZDriver::major()->is_busy()) {
         const ZWorkerResizeStats old_resize_stats = stats.old_stats.resize;
         const uint32_t old_current_workers = old_resize_stats.nworkers_current;
 
@@ -593,7 +593,7 @@ static void start_minor_gc(const ZDirectorStats& stats, GCReason cause)
             Heap::GetHeap().old().Workers()->request_resize_workers(selection.old_workers);
         }
     }
-    ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(cause, selection.young_workers, 0));
+    ZDriver::minor()->collect(ZDriverRequest(cause, selection.young_workers, 0));
 }
 
 static bool start_gc(const ZDirectorStats& stats)
@@ -605,7 +605,7 @@ static bool start_gc(const ZDirectorStats& stats)
     }
     const GCReason minor_cause = make_minor_gc_decision(stats);
     if (minor_cause != GC_REASON_INVALID) {
-        if (!ZCollectedHeap::heap()->driver_major()->port().is_busy() && rule_major_allocation_rate(stats)) {
+        if (!ZDriver::major()->is_busy() && rule_major_allocation_rate(stats)) {
             start_major_gc(stats, GC_REASON_ALLOCATION_RATE);
         } else {
             start_minor_gc(stats, minor_cause);

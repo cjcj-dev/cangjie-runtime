@@ -2,6 +2,7 @@
 #include "Mutator/ThreadLocal.h"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zCPU.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zLargePages.hpp"
 #include "Heap/z/zStat.hpp"
@@ -28,6 +29,7 @@ void ZInitialize::initialize(ZBarrierSet*)
     ZThreadLocalAllocBuffer::initialize();
     ZLargePages::initialize();
     ZJNICritical::initialize();
+    ZDriver::initialize();
 }
 
 void ZInitialize::register_error(bool debug, const char* error_msg)

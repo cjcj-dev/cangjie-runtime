@@ -23,13 +23,15 @@ EQUAL = int(os.environ.get('BUSY_EQUAL', '0'))
 DYNAMIC = int(os.environ.get('BUSY_DYNAMIC', '1'))
 SOURCE = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
 READS = []
+DRIVER_READS = []
+DRIVER_RETURNS = set()
 RETURNS = set()
 RULE_RESULTS = []
 
 
-def line_in(function, text):
-    start = next(i for i, line in enumerate(SOURCE) if function in line)
-    return next(i + 1 for i in range(start + 1, len(SOURCE)) if text in SOURCE[i])
+def line_in(function, text, source=SOURCE):
+    start = next(i for i, line in enumerate(source) if function in line)
+    return next(i + 1 for i in range(start + 1, len(source)) if text in source[i])
 
 
 LINES = {
@@ -38,7 +40,7 @@ LINES = {
     'minor_major': line_in('static GCReason make_minor_gc_decision', 'resize.is_active'),
     'select': line_in('static void start_minor_gc', '? ZWorkerSelectionType'),
     'resize': line_in('static void start_minor_gc', 'if ('),
-    'send': line_in('static void start_minor_gc', 'driver_minor()->collect'),
+    'send': line_in('static void start_minor_gc', 'ZDriver::minor()->collect'),
     'merge': line_in('static bool start_gc', 'rule_major_allocation_rate(stats)'),
     'sample': line_in('static ZDirectorStats sample_stats', 'stats.mutator_alloc_rate'),
     'tick': line_in('static ZDirectorStats sample_stats', 'const uint64_t now'),
@@ -131,6 +133,32 @@ class BusyRead(gdb.Breakpoint):
         return False
 
 
+class DriverBusyReturn(gdb.Breakpoint):
+    def __init__(self):
+        self.driver = gdb.newest_frame().name()
+        # is_busy tail-calls the port in Release. Observe the caller return
+        # PC instead of FinishBreakpoint, whose frame leaves scope on the jump.
+        self.return_pc = gdb.newest_frame().older().pc()
+        self.recorded = False
+        DRIVER_RETURNS.add(self.return_pc)
+        super().__init__('*' + str(self.return_pc), internal=True, temporary=True)
+
+    def stop(self):
+        if not self.recorded:
+            DRIVER_READS.append({'driver': self.driver, 'busy': int(value('$rax')) & 255})
+            self.recorded = True
+            DRIVER_RETURNS.discard(self.return_pc)
+        return False
+
+
+class DriverBusyRead(gdb.Breakpoint):
+    def stop(self):
+        if (gdb.selected_thread().name == 'ZDirector' and
+                gdb.newest_frame().older().pc() not in DRIVER_RETURNS):
+            DriverBusyReturn()
+        return False
+
+
 class MajorRule(gdb.Breakpoint):
     def stop(self):
         if gdb.selected_thread().name == 'ZDirector':
@@ -156,7 +184,11 @@ try:
     fixture = 'GcDirector.ProductWarmupStopsAfterThreeCycles'
     command('set environment GC_UNIT_FILTER ' + fixture)
     command('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
-    gdb.Breakpoint('test_gc_director.cpp:121', temporary=True)
+    fixture_source = Path(os.environ['DIRECTOR_SOURCE']).parents[3].joinpath(
+        'tests/gc_unit/test_gc_director.cpp').read_text().splitlines()
+    fixture_name = 'GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)'
+    init_line = line_in(fixture_name, 'GC_EXPECT_EQ(InitCJRuntime', fixture_source)
+    gdb.Breakpoint('test_gc_director.cpp:' + str(init_line), temporary=True)
     command('run')
     command('set var params.gcParam.backupGCInterval=1')
     command('set var params.gcParam.concGCThreads=2')
@@ -164,7 +196,8 @@ try:
     command('set var params.gcParam.oldGCThreads=2')
     command('set var params.gcParam.staticGCThreads=' + str(1 - DYNAMIC))
     if SITE == 'merge':
-        gdb.Breakpoint('test_gc_director.cpp:142', temporary=True)
+        stats_line = line_in(fixture_name, 'const auto before', fixture_source)
+        gdb.Breakpoint('test_gc_director.cpp:' + str(stats_line), temporary=True)
         command('continue')
         emit('REAL_WARMUP', trustable=bool(value('stats.isTimeTrustable')),
              cycles=int(value('stats.warmupCycles')))
@@ -200,7 +233,10 @@ try:
     port_lines = Path(os.environ['DIRECTOR_SOURCE']).with_name('zDriverPort.cpp').read_text().splitlines()
     port_return = next(i + 1 for i, text in enumerate(port_lines) if 'return _has_message;' in text)
     BusyRead('zDriverPort.cpp:' + str(port_return), internal=True)
-    advance('entry')
+    DriverBusyRead('MapleRuntime::ZDriverMinor::is_busy() const', internal=True)
+    DriverBusyRead('MapleRuntime::ZDriverMajor::is_busy() const', internal=True)
+    if SITE != 'entry':
+        advance('entry')
     emit('SAMPLED', resize=diagnostic('stats.old_stats.resize.is_active'),
          workers=diagnostic('stats.old_stats.resize.nworkers_current'),
          interval=diagnostic('MapleRuntime::ZCollectionIntervalMinor'),
@@ -208,7 +244,7 @@ try:
          old_major_snapshot=diagnostic('stats.major_busy'))
     if SITE == 'entry':
         set_busy('$major', CURRENT)
-        for _ in range(64):
+        for _ in range(128):
             command('next')
             here=location()
             if (LINES['loop'] <= here['line'] <= LINES['loop'] + 3 and
@@ -244,6 +280,7 @@ try:
                         set_busy('$major', CURRENT)
     if SITE == 'merge':
         MajorRule('zDirector.cpp:' + str(LINES['rule']), internal=True)
+    driver_reads_before = len(DRIVER_READS)
     emit('TARGET_BEFORE', site=SITE, initial=INITIAL, current=CURRENT, location=location())
     if SITE == 'resize':
         actual_dynamic = bool(value('MapleRuntime::UseDynamicNumberOfGCThreads'))
@@ -261,7 +298,9 @@ try:
     else:
         command('next')
     after = location()
-    emit('TARGET_AFTER', location=after, product_busy_returns=READS)
+    target_driver_reads = DRIVER_READS[driver_reads_before:]
+    emit('TARGET_AFTER', location=after, product_busy_returns=READS,
+         driver_busy_returns=target_driver_reads)
     if SITE == 'merge':
         check('ASSERT_MERGE_GATE', bool(RULE_RESULTS) == (not bool(CURRENT)),
               rule_results=RULE_RESULTS, expected_enter=not bool(CURRENT))
@@ -289,7 +328,14 @@ try:
     else:
         rejected = after['function'] == 'MapleRuntime::ZDirector::run_thread'
     expected = bool(CURRENT) and not (SITE == 'minor_major' and RESIZE)
-    check('ASSERT_GATE', rejected == expected, expected_reject=expected, actual_reject=rejected)
+    driver_result_ok = True
+    if SITE in ('minor', 'major'):
+        target_driver = 'ZDriver' + SITE.title() + '::is_busy'
+        matching = [read for read in target_driver_reads if target_driver in read['driver']]
+        driver_result_ok = len(matching) == 1 and matching[0]['busy'] == CURRENT
+    check('ASSERT_GATE', rejected == expected and driver_result_ok,
+          expected_reject=expected, actual_reject=rejected,
+          driver_result_ok=driver_result_ok, driver_busy_returns=target_driver_reads)
 except Exception as error:
     emit('HARNESS_ERROR', error=str(error))
     command('quit 2')

@@ -4,16 +4,21 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// gc/z/zLock.hpp:30-78. I14 (PLAN §5): there is no HotSpot Mutex rank/safepoint
-// protocol here, so ZLock/ZConditionLock are the C++ primitives of the same
-// layer. ZLocker (zLock.hpp:70-78) keeps the nullable-lock scope that
-// ZActivatedArray(locked = false) relies on (zArray.inline.hpp:196,209).
+// gc/z/zLock.hpp:31-39: ZLock owns its platform mutex.
 #pragma once
 #include <condition_variable>
 #include <mutex>
 
 namespace MapleRuntime {
-using ZLock = std::mutex;
+class ZLock {
+private:
+    std::mutex _lock;
+
+public:
+    void lock();
+    bool try_lock();
+    void unlock();
+};
 
 class ZConditionLock {
 private:

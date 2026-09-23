@@ -30,7 +30,16 @@
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zDriverPort.hpp"
+#include "Heap/z/zLock.hpp"
 #include "Heap/z/zResurrection.inline.hpp"
+
+// ZGC zDriver.hpp:32-41: system headers may define these names as macros.
+#ifdef minor
+#undef minor
+#endif
+#ifdef major
+#undef major
+#endif
 
 namespace MapleRuntime {
 
@@ -332,14 +341,21 @@ enum class GCDriverKind : uint8_t { MINOR, MAJOR };
 
 // zDriver.hpp:48-119: ZDriverMinor/ZDriverMajor are ZThreads whose run_thread
 // receives requests from their port and whose terminate closes that port.
+class ZDriverMinor;
+class ZDriverMajor;
+
 class ZDriver : public ZThread {
 public:
+    static void initialize();
+    static void set_minor(ZDriverMinor* minor);
+    static void set_major(ZDriverMajor* major);
+    static ZDriverMinor* minor();
+    static ZDriverMajor* major();
     static void lock();
     static void unlock();
     ZDriver(GCDriverKind kind, ZDriverPort& port);
     void run_thread() override;
     void terminate() override;
-    bool is_busy() const;
     MRT_EXPORT static void RunGarbageCollection(uint64_t gcIndex, GCReason reason,
                                                ZYoungType type = ZYoungType::minor);
     void RunYoungCollection(uint64_t index, ZYoungType type);
@@ -349,12 +365,15 @@ protected:
     const GCDriverKind kind;
     ZDriverPort& port;
 private:
-    static std::mutex driverLock;
+    static ZLock* _lock;
+    static ZDriverMinor* _minor;
+    static ZDriverMajor* _major;
 };
 
 class ZDriverMinor final : public ZDriver {
 public:
-    ZDriverMinor() : ZDriver(GCDriverKind::MINOR, _port) { create_and_start(); }
+    ZDriverMinor();
+    bool is_busy() const;
     void collect(const ZDriverRequest& request);
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
@@ -365,7 +384,8 @@ private:
 
 class ZDriverMajor final : public ZDriver {
 public:
-    ZDriverMajor() : ZDriver(GCDriverKind::MAJOR, _port) { create_and_start(); }
+    ZDriverMajor();
+    bool is_busy() const;
     void collect(const ZDriverRequest& request);
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
