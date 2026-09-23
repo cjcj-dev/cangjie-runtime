@@ -47,9 +47,7 @@ void CheckSelection(bool medium, bool promote, uint32_t workers)
     generation.Workers()->set_active_workers(workers);
     generation.Begin(1);
     GenerationSequenceFixture::Advance(generation);
-    if (promote) {
-        ZGenerationTest::SetTenuringThreshold(generation, 1);
-    }
+    ZGenerationTest::SetTenuringThreshold(generation, promote ? 1u : 15u);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
