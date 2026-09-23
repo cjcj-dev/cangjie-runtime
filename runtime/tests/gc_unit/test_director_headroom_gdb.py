@@ -41,9 +41,9 @@ try:
     source = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
     report = Path(os.environ.get('HEADROOM_REPORT', './director-headroom')).resolve()
 
-    def line_in(function, text):
-        start = next(i for i, line in enumerate(source) if function in line)
-        return next(i + 1 for i in range(start + 1, len(source)) if text in source[i])
+    def line_in(function, text, lines=source):
+        start = next(i for i, line in enumerate(lines) if function in line)
+        return next(i + 1 for i in range(start + 1, len(lines)) if text in lines[i])
 
     for setting in ('pagination off', 'confirm off', 'breakpoint pending on', 'print thread-events off'):
         command('set ' + setting)
@@ -51,7 +51,11 @@ try:
     command('set environment GC_UNIT_FILTER ' + fixture)
     command('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
     command('set environment MRT_REPORT ' + str(report))
-    gdb.Breakpoint('test_gc_director.cpp:121', temporary=True)
+    fixture_source = Path(os.environ['DIRECTOR_SOURCE']).parents[3].joinpath(
+        'tests/gc_unit/test_gc_director.cpp').read_text().splitlines()
+    fixture_name = 'GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)'
+    init_line = line_in(fixture_name, 'GC_EXPECT_EQ(InitCJRuntime', fixture_source)
+    gdb.Breakpoint('test_gc_director.cpp:' + str(init_line), temporary=True)
     command('run')
     parameters = [('backupGCInterval', 1 if mode == 'dynamic' else 0),
                   ('staticGCThreads', 0 if mode == 'dynamic' else 1),
