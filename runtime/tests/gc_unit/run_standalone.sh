@@ -344,6 +344,7 @@ MAIN_SOURCES=(
   "$SRC/test_young_conc.cpp"
   "$SRC/test_alloc_buffer_handoff.cpp"
   "$SRC/test_tlab_usage.cpp"
+  "$SRC/test_raw_null_allocation.cpp"
   "$SRC/test_object_allocator_paths.cpp"
   "$SRC/test_shared_small_page.cpp"
   "$SRC/test_young_weak.cpp"

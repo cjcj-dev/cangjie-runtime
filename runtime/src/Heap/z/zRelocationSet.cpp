@@ -95,6 +95,15 @@ private:
     ZArrayParallelIterator<ZPage*> _small_iter;
     ZArrayParallelIterator<ZPage*> _medium_iter;
 
+    // ZGC zRelocationSet.cpp:72-77.
+    void track_if_promoted(ZPage* page, ZForwarding* forwarding, ZArray<ZPage*>& relocate_promoted)
+    {
+        if (forwarding->is_promotion()) {
+            page->set_is_relocate_promoted();
+            relocate_promoted.push(page);
+        }
+    }
+
     void install(ZForwarding* forwarding, size_t index)
     {
         MRT_ASSERT(index < _nforwardings, "Invalid index");
@@ -130,17 +139,13 @@ public:
             ZPage* page = _small->at(static_cast<int>(page_index));
             ZForwarding* const forwarding = ZForwarding::alloc(_allocator, page, ZRelocate::compute_to_age(page->age()));
             install(forwarding, static_cast<size_t>(_medium->length()) + page_index);
-            if (forwarding->is_promotion()) {
-                relocate_promoted.push(page);
-            }
+            track_if_promoted(page, forwarding, relocate_promoted);
         }
         for (size_t page_index; _medium_iter.next_index(&page_index);) {
             ZPage* page = _medium->at(static_cast<int>(page_index));
             ZForwarding* const forwarding = ZForwarding::alloc(_allocator, page, ZRelocate::compute_to_age(page->age()));
             install(forwarding, page_index);
-            if (forwarding->is_promotion()) {
-                relocate_promoted.push(page);
-            }
+            track_if_promoted(page, forwarding, relocate_promoted);
         }
         _relocation_set->register_relocate_promoted(relocate_promoted);
     }
