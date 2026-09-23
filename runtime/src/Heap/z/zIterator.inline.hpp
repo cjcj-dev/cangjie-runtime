@@ -48,9 +48,8 @@ bool OopIteratorClosureDispatch::try_discover(BaseObject* object, ReferenceType 
     ReferenceDiscoverer* rd = closure->ref_discoverer();
     if (rd != nullptr) {
         BaseObject* referent = load_referent(object, type);
-        if (referent != nullptr) {
-            // HotSpot's is_gc_marked() tests markWord, not ZGC's live map.
-            // Cangjie has no markWord GC mark; do not substitute page liveness.
+        // ZGC uses markWord's GC mark for an invisible, initializing array.
+        if (referent != nullptr && !referent->IsInvisibleObject()) {
             return rd->discover_reference(object, type);
         }
     }
