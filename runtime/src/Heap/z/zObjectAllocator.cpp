@@ -5,13 +5,13 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zGlobals.hpp"
 
 #include <algorithm>
 #include <atomic>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -55,7 +55,6 @@ namespace MapleRuntime {
 // starts with the published allocation fraction instead of a fixed extent.
 void RegionManager::InitializeTLAB(AllocBuffer& buffer)
 {
-    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
     buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads,
                       ZObjectSizeLimitSmall);
@@ -65,7 +64,6 @@ void RegionManager::InitializeTLAB(AllocBuffer& buffer)
 // regions in young mark-start (zGeneration.cpp:862).
 void RegionManager::ResetTLABUsage()
 {
-    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
     if (used != 0) {
         // TruncatedSeq::davg uses AbsSeq's exponential average, alpha=0.3;
@@ -77,13 +75,9 @@ void RegionManager::ResetTLABUsage()
 
 // ZThreadLocalAllocBuffer::publish_statistics (zThreadLocalAllocBuffer.cpp:52).
 // Thread retirement statistics consume the already published backing history.
-void RegionManager::PublishTLABStatistics(const TLABStatistics& statistics)
+void RegionManager::PublishTLABStatistics(const TLABStatistics& total)
 {
-    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t capacity = GetTLABCapacity();
-    TLABStatistics total = retiredTLABStatistics;
-    retiredTLABStatistics = TLABStatistics{};
-    total.Update(statistics);
     if (total.Used() != 0) {
         tlabAllocatingThreads.Sample(total.allocatingThreads);
         if (lastTLABUsed > 0.5 * capacity) {
@@ -100,18 +94,11 @@ void RegionManager::PublishTLABStatistics(const TLABStatistics& statistics)
 // The caller owns the mutator (watermark processing or thread exit).
 void RegionManager::RetireTLAB(AllocBuffer& buffer, TLABStatistics& statistics)
 {
-    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     statistics = TLABStatistics{};
     buffer.RetireTLAB(true);
     buffer.AccumulateTLABStatistics(statistics, GetTLABUsed(), GetTLABCapacity());
     const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
     buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads, ZObjectSizeLimitSmall);
-}
-
-void RegionManager::RetireTLABStatistics(AllocBuffer& buffer)
-{
-    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
-    buffer.AccumulateTLABStatistics(retiredTLABStatistics, GetTLABUsed(), GetTLABCapacity());
 }
 
 // zObjectAllocator.cpp:40-45
@@ -130,9 +117,9 @@ static bool IsSmallEdenPage(const ZPage* page)
 
 // ZObjectAllocator::PerAge::alloc_page, ZHeap::alloc_page/account_alloc_page.
 ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
-                                             PageAge age, ZAllocationFlags flags, bool clearPayload)
+                                             PageAge age, ZAllocationFlags flags)
 {
-    ZPage* page = Heap::alloc_page(size, role, false, !flags.non_blocking(), clearPayload, age, flags);
+    ZPage* page = Heap::alloc_page(size, role, false, !flags.non_blocking(), age, flags);
     if (page == nullptr) { return nullptr; }
     page->reset(age);
     if (IsSmallEdenPage(page)) {
@@ -170,10 +157,9 @@ void RegionManager::UndoSharedPage(ZPage* page)
 }
 
 // ZGC zObjectAllocator.cpp:56-64.
-ZPage* ZObjectAllocator::PerAge::alloc_page(ZPageType type, size_t size, ZAllocationFlags flags,
-                                          bool clearPayload)
+ZPage* ZObjectAllocator::PerAge::alloc_page(ZPageType type, size_t size, ZAllocationFlags flags)
 {
-    return Heap::GetHeap().page_allocator().AllocateSharedPage(size, type, age, flags, clearPayload);
+    return Heap::GetHeap().page_allocator().AllocateSharedPage(size, type, age, flags);
 }
 
 void ZObjectAllocator::PerAge::undo_alloc_page(ZPage* page)
@@ -230,9 +216,9 @@ uintptr_t ZObjectAllocator::PerAge::alloc_object_in_medium_page(size_t size, ZAl
     return addr;
 }
 
-uintptr_t ZObjectAllocator::PerAge::alloc_large_object(size_t size, ZAllocationFlags flags, bool clearPayload)
+uintptr_t ZObjectAllocator::PerAge::alloc_large_object(size_t size, ZAllocationFlags flags)
 {
-    ZPage* page = alloc_page(ZPageType::large, AlignUp(size, ZGranuleSize), flags, clearPayload);
+    ZPage* page = alloc_page(ZPageType::large, AlignUp(size, ZGranuleSize), flags);
     return page == nullptr ? 0 : page->alloc_object(size);
 }
 
@@ -246,14 +232,14 @@ uintptr_t ZObjectAllocator::PerAge::alloc_small_object(size_t size, ZAllocationF
     return alloc_object_in_shared_page(shared_small_page_addr(), ZPageType::small, ZPageSizeSmall, size, flags);
 }
 
-uintptr_t ZObjectAllocator::PerAge::alloc_object(size_t size, ZAllocationFlags flags, bool clearPayload)
+uintptr_t ZObjectAllocator::PerAge::alloc_object(size_t size, ZAllocationFlags flags)
 {
     if (size <= ZObjectSizeLimitSmall) {
         return alloc_small_object(size, flags);
     } else if (size <= ZObjectSizeLimitMedium) {
         return alloc_medium_object(size, flags);
     } else {
-        return alloc_large_object(size, flags, clearPayload);
+        return alloc_large_object(size, flags);
     }
 }
 
@@ -265,12 +251,12 @@ size_t ZObjectAllocator::fast_available(PageAge age) const
     return page == nullptr ? 0 : page->remaining();
 }
 
-uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking, bool clearPayload)
+uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking)
 {
     CHECK(untype(age) < kPageAgeCount);
     ZAllocationFlags flags;
     if (nonBlocking) { flags.set_non_blocking(); }
-    return allocator(age)->alloc_object(size, flags, clearPayload);
+    return allocator(age)->alloc_object(size, flags);
 }
 
 // ZObjectAllocator::retire_pages / PerAge::retire_pages (cpp:208-237).
@@ -286,36 +272,6 @@ void ZObjectAllocator::retire_pages(PageAgeRange ages)
     }
 }
 
-void RegionManager::RequestForRegion(size_t size)
-{
-    if (IsGcThread()) {
-        // gc thread is always permitted for allocation.
-        return;
-    }
-
-    Heap& heap = Heap::GetHeap();
-    const size_t liveAfterGC = lastLiveBytesAfterGC.load(std::memory_order_acquire);
-    size_t allocatedBytes = GetAllocatedSize() - liveAfterGC;
-    constexpr double pi = 3.14;
-    size_t availableBytesAfterGC = heap.GetMaxCapacity() - liveAfterGC;
-    double heuAllocRate = std::cos((pi / 2.0) * allocatedBytes / availableBytesAfterGC) *
-        lastCollectionRate.load(std::memory_order_acquire);
-    // for maximum performance, choose the larger one.
-    double allocRate = std::max(
-        static_cast<double>(CangjieRuntime::GetHeapParam().allocationRate) * MB / SECOND_TO_NANO_SECOND, heuAllocRate);
-    size_t waitTime = static_cast<size_t>(size / allocRate);
-    uint64_t now = TimeUtil::NanoSeconds();
-    if (prevRegionAllocTime + waitTime <= now) {
-        prevRegionAllocTime = TimeUtil::NanoSeconds();
-        return;
-    }
-
-    uint64_t sleepTime = std::min<uint64_t>(CangjieRuntime::GetHeapParam().allocationWaitTime,
-                                  prevRegionAllocTime + waitTime - now);
-    DLOG(ALLOC, "wait %zu ns to alloc %zu(B)", sleepTime, size);
-    std::this_thread::sleep_for(std::chrono::nanoseconds{ sleepTime });
-    prevRegionAllocTime = TimeUtil::NanoSeconds();
-}
 
 } // namespace MapleRuntime
 
@@ -364,8 +320,8 @@ MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
 // HotSpot memAllocator.cpp:235-247: one outside-TLAB allocation operation.
 MAddress RegionSpace::AllocateOutsideTLAB(size_t allocSize, AllocType allocType)
 {
-    return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden, false,
-        allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
+    (void)allocType;
+    return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden);
 }
 
 MAddress RegionSpace::Allocate(size_t size, AllocType allocType)

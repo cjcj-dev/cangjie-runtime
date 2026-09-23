@@ -58,7 +58,6 @@ namespace MapleRuntime {
 void FreeRegionManager::Initialize(ZVirtualMemoryManager& virtualMemoryManager,
                                    ZPhysicalMemoryManager& physicalMemoryManager, size_t maxCapacity)
 {
-    markQuarantineMemory.clear();
     partitions.clear();
     nextPartition = 0;
     virtualMemory = &virtualMemoryManager;
@@ -228,20 +227,6 @@ void FreeRegionManager::AddGarbageMemory(size_t index, size_t count, bool allowS
     FreeMemory(index, count);
 }
 
-size_t FreeRegionManager::ReleaseMarkQuarantineToDirty()
-{
-    ScopedEnterSaferegion saferegion(true);
-    std::lock_guard<std::mutex> quarantineLock(markQuarantineTreeMutex);
-    std::lock_guard<std::mutex> cacheLock(cacheMutex);
-    size_t count = 0;
-    for (const auto& memory : markQuarantineMemory) {
-        FreeMemory(IndexOf(memory), memory.size());
-        count += memory.size();
-    }
-    markQuarantineMemory.clear();
-    return count;
-}
-
 // ZGC zPageAllocator.cpp:764-785: no virtual-memory or physical-memory work.
 bool FreeRegionManager::ZPartition::claim_capacity_fast_medium(PageMemory& memory)
 {
@@ -373,7 +358,7 @@ bool FreeRegionManager::PreparePageMemory(PageMemory& memory)
 // (:1761-1780), commit_and_map_single_partition (:1792-1806), map_committed
 // (:1878-1887), cleanup_failed_commit_single_partition (:1906-1932), create_page.
 ZPage* FreeRegionManager::MaterializePageMemory(PageMemory& memory, ZPageType role,
-                                                     bool expectPhysicalMem, bool clearPayload, size_t& committedBytes,
+                                                     bool expectPhysicalMem, size_t& committedBytes,
                                                      PageAge age)
 {
     (void)expectPhysicalMem;
@@ -425,14 +410,8 @@ ZPage* FreeRegionManager::MaterializePageMemory(PageMemory& memory, ZPageType ro
         }
         memory.committed = true;
     }
-    if ((fromCache || memory.harvestedBytes != 0) && clearPayload) {
-        ZPage::ClearPageMemory(idx, num);
-    }
-    ZPage* region = ZPage::InitRegion(idx, num, role, age);
-    if (!fromCache) {
-        ClearReleasedMemory(clearPayload, idx, num);
-    }
-    return region;
+    // ZGC zPageAllocator.cpp:1489-1492,1515: page creation does not initialize objects.
+    return ZPage::InitRegion(idx, num, role, age);
 }
 
 // ZPartition::free_memory_alloc_failed (zPageAllocator.cpp:1079-1101): the
@@ -664,9 +643,6 @@ void RegionManager::ReclaimRetiredRegion(ZPage* region)
     DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
-    // STEER3: scrub is at CollectRegion only (see header). Reclaim/TakeRegion reuse
-    // must not re-scan O(N) under remset mutex.
-
     {
         ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_DIRTY);
     }
@@ -675,9 +651,9 @@ void RegionManager::ReclaimRetiredRegion(ZPage* region)
 }
 
 // ZGC zPageAllocator.cpp:426-440: capture generation epochs at request construction.
-ZPageAllocation::ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear, ZAllocationFlags flags)
+ZPageAllocation::ZPageAllocation(size_t size, uint8_t role, bool physical, ZAllocationFlags flags)
     : size(size), youngSeqnum(ZGeneration::young()->seqnum()), oldSeqnum(ZGeneration::old()->seqnum()),
-      role(role), physical(physical), clear(clear), flags(flags) {}
+      role(role), physical(physical), flags(flags) {}
 
 // ZGC zPageAllocator.cpp:1518-1542: a single decision owns both enqueue and wait.
 bool RegionManager::ClaimCapacityOrStall(AllocationStallRequest& request)
@@ -842,31 +818,6 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     return true;
 }
 
-void RegionManager::ReclaimRegionToMarkQuarantine(ZPage* region)
-{
-    NoteUsedGenerationDelta(region->GetOwnerGeneration(), -static_cast<ssize_t>(region->GetRegionSize()));
-    ZPage::RetirePage(region, [this, region] { ReclaimRetiredRegionToMarkQuarantine(region); });
-}
-
-void RegionManager::ReclaimRetiredRegionToMarkQuarantine(ZPage* region)
-{
-    // routedest: census only, see ReclaimRegion.
-    size_t num = region->GetRegionSize();
-    size_t unitIndex = region->granule_index();
-    DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
-    {
-        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_MARK_QUARANTINE);
-    }
-    region->RetirePageMemory();
-    ScopedEnterSaferegion enterSaferegion(true);
-    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
-    freeRegionManager.AddMarkQuarantineMemory(unitIndex, num);
-    CHECK(pageAllocatorUsed >= num);
-    pageAllocatorUsed -= num;
-    TrackUsedPeakLocked();
-}
-
 size_t RegionManager::ReleaseRegion(ZPage* region)
 {
     const size_t size = region->GetRegionSize();
@@ -879,12 +830,8 @@ void RegionManager::ReleaseRetiredRegion(ZPage* region)
 {
     // routedest: census only, see ReclaimRegion.
 
-    // holdercapture: large regions above the release threshold never reach CollectRegion,
-    // so the snapshot has to be taken on this path too or the face is lost unrecorded.
-
     size_t num = region->GetRegionSize();
     size_t unitIndex = region->granule_index();
-    // Large regions above the release threshold bypass CollectRegion. Invalidate
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
@@ -913,33 +860,20 @@ void RegionManager::PromoteAllRegions()
 }
 
 ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysicalMem,
-                                       bool allowSaferegion, bool clearPayload, PageAge age, ZAllocationFlags flags)
+                                       bool allowSaferegion, PageAge age, ZAllocationFlags flags)
 {
     allowSaferegion = allowSaferegion && !flags.non_blocking();
     if (!allowSaferegion || IsGcThread()) { flags.set_non_blocking(); }
     size_t size = num;
-    if (allowSaferegion) {
-        RequestForRegion(size);
-    }
-
-#if !defined(__OHOS__)
-    size_t gatedBytes = 0;
-    ZPage* garbage = allowSaferegion ? TakeReclaimableGarbageRegion(&gatedBytes) : nullptr;
-    if (garbage != nullptr) {
-        ReclaimRegion(garbage);
-    }
-#else
-    size_t gatedBytes = GetGatedGarbageBytes();
-#endif
 
 retry:
-    ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload, flags);
+    ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, flags);
     const bool claimed = ClaimCapacityOrStall(request);
     if (claimed) {
         size = request.Memory().size;
         size_t committedBytes = 0;
         ZPage* region = freeRegionManager.MaterializePageMemory(
-            request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedBytes, age);
+            request.Memory(), type, request.ExpectsPhysicalMemory(), committedBytes, age);
         if (request.Memory().virtualClaimed) {
             std::lock_guard<std::mutex> lock(pageAllocatorMutex);
             const uintptr_t end = ZPage::GranuleAddress(request.Memory().index) + size;
@@ -970,49 +904,8 @@ retry:
         return region;
     }
 
-    if (gatedBytes > 0) {
-        static std::atomic<size_t> supplyGatedPressureCount { 0 };
-        size_t n = supplyGatedPressureCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if ((n & (n - 1)) == 0) {
-            VLOG(REPORT, "[Alloc] supply_gated_pressure gated_bytes=%zu n=%zu", gatedBytes, n);
-        }
-    }
     return nullptr;
 }
-
-size_t RegionManager::CollectLargeGarbage()
-{
-    size_t garbageSize = 0;
-    std::vector<ZPage*> largePages;
-    {
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            if (region->GetRegionRole() == ZPageRole::OldLarge) {
-                largePages.push_back(region);
-            }
-        }
-    }
-    for (ZPage* region : largePages) {
-        // for large region, the object is the page start (zPage.inline.hpp:254-256).
-        if (!region->is_object_live(to_zaddress(region->GetRegionStart()))) {
-            DLOG(REGION, "reclaim large region %p@[0x%zx+%zu, 0x%zx) type %u", region, region->GetRegionStart(),
-                 region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
-
-            ZPage* del = region;
-            del->SetRegionRole(ZPageRole::None);
-            if (del->GetRegionSize() > ZPage::LARGE_OBJECT_RELEASE_THRESHOLD) {
-                garbageSize += ReleaseRegion(del);
-            } else {
-
-                garbageSize += CollectRegion<Generation::Old>(del);
-            }
-        }
-    }
-
-    return garbageSize;
-}
-
 
 void RegionManager::DumpRegionStats(const char* msg) const
 {
@@ -1177,17 +1070,8 @@ size_t RegionManager::GetAllocatedSize() const
 {
         // zPageAllocator.cpp:1311 ZPageAllocator::used: page-granular committed
         // counter maintained at TakeRegion/ReturnPageMemory/reclaim, not a
-        // list sum. Garbage-pending pages count as used until reclaim, as
-        // ZGC's _used does until free_page.
+        // list sum. Pages count as used until free_page.
         return pageAllocatorUsed;
-    }
-
-
-void FreeRegionManager::AddMarkQuarantineMemory(size_t idx, size_t num)
-{
-        ScopedEnterSaferegion enterSaferegion(true);
-        std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
-        markQuarantineMemory.push_back(VirtualMemoryOf(idx, num));
     }
 
 

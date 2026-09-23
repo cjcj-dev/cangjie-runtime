@@ -388,7 +388,7 @@ void SnapshotOwner(TLABSnapshotCase& state, unsigned index)
 
 // ZGC zStackWatermark.cpp:197 and zMark.cpp:703: a retired snapshot is
 // consumed after finish_processing, while that owner may already allocate again.
-GC_RUNTIME_OTHER_VM_TEST(TLABSnapshot, RootPublicationPreservesLaterRefills)
+static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -400,7 +400,7 @@ GC_RUNTIME_OTHER_VM_TEST(TLABSnapshot, RootPublicationPreservesLaterRefills)
     while (state.owner[0].load(std::memory_order_acquire) == nullptr ||
            state.owner[1].load(std::memory_order_acquire) == nullptr) { std::this_thread::yield(); }
     auto& heap = Heap::GetHeap();
-    heap.young().Workers()->set_active_workers(1);
+    heap.young().Workers()->set_active_workers(workers);
     heap.young().Begin(1);
     heap.young().pause_mark_start();
     const auto initialTLABSize = [] {
@@ -453,6 +453,17 @@ GC_RUNTIME_OTHER_VM_TEST(TLABSnapshot, RootPublicationPreservesLaterRefills)
     GC_EXPECT_TRUE(initial > beforePublication);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+GC_RUNTIME_OTHER_VM_TEST(TLABSnapshot, RootPublicationPreservesLaterRefills)
+{
+    CheckRootPublicationPreservesLaterRefills(1);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(TLABSnapshot, ParallelRootPublicationPreservesLaterRefills)
+{
+    CheckRootPublicationPreservesLaterRefills(2);
+}
+
 #endif
 
 #if defined(__linux__)

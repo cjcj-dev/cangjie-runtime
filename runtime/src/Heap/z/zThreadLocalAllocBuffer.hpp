@@ -10,8 +10,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <mutex>
-#include <unordered_set>
 
 #include "Common/TypeDef.h"
 #include "Common/MarkWorkStack.h"
@@ -83,14 +81,6 @@ private:
     TLABAllocationAverage tlabAllocationFraction;
     std::atomic<size_t> desiredTLABSize{ MinTLABSize };
     std::atomic<size_t> tlabRefills{ 0 };
-
-    // Allocation work is handed to marking as an atomic batch.
-    mutable std::mutex handoffLock;
-
-    // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
-    mutable std::mutex y2yDirtyLock;
-    std::unordered_set<BaseObject*> y2yDirtyHolders;
-    std::unordered_set<MAddress> y2yDirtySlots;
 };
 } // namespace MapleRuntime
 #endif // MRT_ALLOC_BUFFER_H
