@@ -518,12 +518,19 @@ void ZGenerationYoung::pause_relocate_start()
     (void)op.pause();
 }
 
+// ZGC zGeneration.cpp:650-654.
+void ZGenerationYoung::flip_relocate_start()
+{
+    ZGlobalsPointers::flip_young_relocate_start();
+    ZVerify::OnColorFlip();
+}
+
 // ZGC zGeneration.cpp:918-931: publish the phase and activate its queue
 // before the relocate-start pause releases mutators.
 void ZGenerationYoung::relocate_start()
 {
-    ZGlobalsPointers::flip_young_relocate_start();
-    ZVerify::OnColorFlip();
+    CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "Should be at safepoint");
+    flip_relocate_start();
     set_phase(Phase::Relocate);
     StatHeap()->AtRelocateStart(
         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));

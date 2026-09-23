@@ -235,6 +235,7 @@ public:
     void pause_relocate_start();
     void concurrent_relocate();
 private:
+    void flip_relocate_start();
     using MinorObjectSet = std::unordered_set<BaseObject*>;
     using MinorSlotSet = std::unordered_set<MAddress>;
     using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
