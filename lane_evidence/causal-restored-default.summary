@@ -1,9 +1,0 @@
-ObjectAllocator917.FastAvailableRequiresMutator.rc=0
-ObjectAllocator917.OldPhaseRequiresSafepoint.rc=0
-ObjectAllocator917.RetireOldRequiresSafepoint.rc=0
-ObjectAllocator917.RetireYoungRequiresSafepoint.rc=0
-ObjectAllocator917.TLABEntryRequiresMutator.rc=0
-ObjectAllocator917.YoungPhaseRequiresSafepoint.rc=0
-ObjectAllocatorPaths.TLABsShareSmallPage.rc=0
-SharedSmallPage.AgeRefillAndRetirement.rc=0
-ZValue.shared_small_page_is_per_cpu_storage.rc=0
