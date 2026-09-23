@@ -235,6 +235,8 @@ public:
     bool should_record_stats() override;
     void collect(void* timer = nullptr);
     void mark_start();
+    void mark_roots();
+    void mark_follow();
     void concurrent_mark();
     bool mark_end();
     bool pause_mark_end();

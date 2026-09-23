@@ -102,8 +102,13 @@ static const ZStatPhaseConcurrent ZPhaseConcurrentRelocateOld("Concurrent Reloca
 static const ZStatPhaseConcurrent ZPhaseConcurrentProcessNonStrongOld("Concurrent Process Non-Strong", ZGenerationId::old);
 static const ZStatPhaseConcurrent ZPhaseConcurrentRemapRootsOld("Concurrent Remap Roots", ZGenerationId::old);
 
-static const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
-static const ZStatSubPhase PYoungRootEnum("young.root_enum", ZGenerationId::young);
+static const ZStatSubPhase ZSubPhaseConcurrentMarkFollowYoung("Concurrent Mark Follow", ZGenerationId::young);
+static const ZStatSubPhase ZSubPhaseConcurrentMarkRootsYoung("Concurrent Mark Roots", ZGenerationId::young);
+static const ZStatSubPhase ZSubPhaseConcurrentMarkRootsOld("Concurrent Mark Roots", ZGenerationId::old);
+static const ZStatSubPhase ZSubPhaseConcurrentMarkFollowOld("Concurrent Mark Follow", ZGenerationId::old);
+static const ZStatSubPhase ZSubPhaseConcurrentRemapRootsColoredOld("Concurrent Remap Roots Colored", ZGenerationId::old);
+static const ZStatSubPhase ZSubPhaseConcurrentRemapRootsUncoloredOld("Concurrent Remap Roots Uncolored", ZGenerationId::old);
+static const ZStatSubPhase ZSubPhaseConcurrentRemapRememberedOld("Concurrent Remap Remembered", ZGenerationId::old);
 ZGenerationYoung* ZGeneration::_young = nullptr;
 ZGenerationOld* ZGeneration::_old = nullptr;
 
@@ -414,7 +419,7 @@ void ZGenerationYoung::mark_start()
 
 void ZGenerationYoung::produceYoungRoots()
 {
-    ZStatTimerYoung timer(PYoungRootEnum);
+    ZStatTimerYoung timer(ZSubPhaseConcurrentMarkRootsYoung);
     // ZGC zMark.cpp:932-936: the root task publishes its worker stacks.
     ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
 }
@@ -423,7 +428,7 @@ void ZGenerationYoung::mark_follow()
 {
     // ZGC zGeneration.cpp:891-895: scan remembered slots and follow root
     // work in the same worker task, including on mark-end continuation.
-    ZStatTimerYoung timer(PYoungMarkFollow);
+    ZStatTimerYoung timer(ZSubPhaseConcurrentMarkFollowYoung);
     _remembered.scan_and_follow(MarkPtr());
 }
 
@@ -906,29 +911,27 @@ void ZGenerationOld::collect(void* timer)
     concurrent_relocate();
 }
 
+void ZGenerationOld::mark_roots()
+{
+    ZStatTimerOld timer(ZSubPhaseConcurrentMarkRootsOld);
+    oldMarkWorkStack.clear();
+    oldExportOwners.clear();
+    ZMark::DoEnumeration(oldMarkWorkStack, oldExportOwners);
+}
+
+void ZGenerationOld::mark_follow()
+{
+    ZStatTimerOld timer(ZSubPhaseConcurrentMarkFollowOld);
+    Mark().MarkFollow(false);
+}
+
 void ZGenerationOld::concurrent_mark()
 {
     ZStatTimerOld timer(ZPhaseConcurrentMarkOld);
     ZBreakpoint::AtAfterMarkingStarted();
-    oldMarkWorkStack.clear();
-    oldExportOwners.clear();
-    WorkStack& workStack = oldMarkWorkStack;
-    ValueRootList& foreignStack = oldExportOwners;
-    // ZGC zGeneration.cpp:1086-1092: the roots task owns thread completion.
-    // Its common MarkThreadClosure absorbs already completed handshakes.
-    {
-        ZMark::DoEnumeration(workStack, foreignStack);
-    }
-
-    {
-        Mark().MarkFollow(false);
-        ZBreakpoint::AtBeforeMarkingCompleted();
-        if (ZAbort::should_abort()) {
-            return;
-        }
-
-    }
-
+    mark_roots();
+    mark_follow();
+    ZBreakpoint::AtBeforeMarkingCompleted();
 }
 
 bool ZGenerationOld::pause_mark_end()
@@ -940,7 +943,7 @@ bool ZGenerationOld::pause_mark_end()
 void ZGenerationOld::concurrent_mark_continue()
 {
     ZStatTimerOld timer(ZPhaseConcurrentMarkContinueOld);
-    Mark().MarkFollow(false);
+    mark_follow();
 }
 void ZGenerationOld::concurrent_mark_free()
 {
@@ -978,8 +981,6 @@ void ZGenerationOld::concurrent_select_relocation_set()
     select_relocation_set(false);
 }
 
-static const ZStatSubPhase PRemapYoungRoots("RemapYoungRoots", ZGenerationId::old);
-
 // zGeneration.cpp:1470-1527: shared iterators, one worker task, then restore
 // the old generation's active worker budget. Native stack/record expansion is
 // the Cangjie adapter for the ZGC uncolored-root closure.
@@ -993,31 +994,39 @@ public:
           colored(workers, ZGenerationIdOptional::old), uncolored(ZGenerationIdOptional::old) {}
     void work() override
     {
-        colored.Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
-        uncolored.Apply([] { Runtime::Current().GetConcurrencyModel().VisitGCRoots(); });
-        uncolored.ApplyThreads([&](Mutator& mutator) {
-        // ZGC ZRemapThreadClosure (zGeneration.cpp:1419-1424): only
-        // StackWatermarkSet::finish_processing. Slot heal uses the saved
-        // watermark color via ZUncoloredRoot::process. Cangjie still expands
-        // headerless records (no return statepoint).
-        RootVisitor heapRoots = [&](ObjectRef& root) {
-            StackWatermarkProcessOopClosure closure(nullptr, mutator.GetStackWatermark().uncolored_root_color());
-            mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-                closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
+        {
+            ZStatTimerWorker timer(ZSubPhaseConcurrentRemapRootsColoredOld);
+            colored.Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
+        }
+        {
+            ZStatTimerWorker timer(ZSubPhaseConcurrentRemapRootsUncoloredOld);
+            uncolored.Apply([] { Runtime::Current().GetConcurrencyModel().VisitGCRoots(); });
+            uncolored.ApplyThreads([&](Mutator& mutator) {
+            // ZGC ZRemapThreadClosure (zGeneration.cpp:1419-1424): only
+            // StackWatermarkSet::finish_processing. Slot heal uses the saved
+            // watermark color via ZUncoloredRoot::process. Cangjie still expands
+            // headerless records (no return statepoint).
+            RootVisitor heapRoots = [&](ObjectRef& root) {
+                StackWatermarkProcessOopClosure closure(nullptr, mutator.GetStackWatermark().uncolored_root_color());
+                mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
+                    closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
+                });
+            };
+            DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(heapRoots);
+            size_t frames = 0;
+            (void)StackWatermarkSet::finish_processing(mutator, heapRoots, heapRoots,
+                    StackWatermark::epoch_id(), &derived, frames);
             });
-        };
-        DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(heapRoots);
-        size_t frames = 0;
-        (void)StackWatermarkSet::finish_processing(mutator, heapRoots, heapRoots,
-                StackWatermark::epoch_id(), &derived, frames);
-        });
-        Heap::GetHeap().remembered().remap_current(&remset);
+        }
+        {
+            ZStatTimerWorker timer(ZSubPhaseConcurrentRemapRememberedOld);
+            Heap::GetHeap().remembered().remap_current(&remset);
+        }
     }
 };
 
 void ZRelocate::RemapYoungRoots()
 {
-    ZStatTimerOld timer(PRemapYoungRoots);
     ZWorkers& workers = *Heap::GetHeap().old().Workers();
     const uint32_t previous = workers.active_workers();
     const uint32_t requested = std::min(std::max(Heap::GetHeap().young().Workers()->active_workers() + previous,
