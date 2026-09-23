@@ -608,6 +608,8 @@ GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorUser) { CheckDriverCause(GC_REASON_US
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorDiagnosticCommand) { CheckDriverCause(GC_REASON_DCMD_GC_RUN, false, false, true); }
 
 
+#if defined(__OHOS__) && (__OHOS__ == 1)
+// ProfilerAgent is an OHOS-only product entry (CangjieRuntimeApi.cpp).
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, ProfilerDiagnosticCommand)
 {
     RuntimeParam params{};
@@ -627,3 +629,4 @@ GC_RUNTIME_OTHER_VM_TEST(DriverCause, ProfilerDiagnosticCommand)
     GC_EXPECT_EQ(result.sequence - before, 1u);
     GC_EXPECT_TRUE(response);
 }
+#endif
