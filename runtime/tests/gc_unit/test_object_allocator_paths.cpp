@@ -9,6 +9,7 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
 #include "gc_unittest.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
@@ -311,6 +312,7 @@ void* AllocateFromDirtyCache(void*)
     buffer->RetireTLAB(false);
     {
         // ZGC zObjectAllocator.cpp:196-202: retire shared pages only in a pause.
+        ScopedEnterSaferegion saferegion(false);
         ScopedStopTheWorld stopped("allocation zeroing fixture retirement");
         heap.object_allocator().retire_pages(kPageAgeRangeEden);
     }
