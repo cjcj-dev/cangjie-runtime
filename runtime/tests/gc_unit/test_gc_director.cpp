@@ -791,3 +791,62 @@ GC_RUNTIME_OTHER_VM_TEST(DriverRegistration, ProductOwnedMajor)
     GC_EXPECT_TRUE(registered == owned);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+namespace {
+struct GenerationStateResult {
+    uint32_t youngBefore = 0, youngAfter = 0, oldBefore = 0, oldAfter = 0;
+};
+void* CollectForGenerationState(void* context)
+{
+    auto& result = *static_cast<GenerationStateResult*>(context);
+    auto& heap = Heap::GetHeap();
+    auto* mutator = Mutator::GetMutator();
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    constexpr size_t size = 1024;
+    type->SetInstanceSize(size - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    std::vector<U64> roots;
+    const size_t count = 3 * ZPageSizeSmall / size;
+    for (size_t i = 0; i < count; ++i) {
+        roots.push_back(heap.RegisterExportRoot(MObject::NewObject(type, size, AllocType::MOVEABLE_OBJECT)));
+    }
+    mutator->SetManagedContext(false);
+    result.youngBefore = heap.young().seqnum();
+    result.oldBefore = heap.old().seqnum();
+    heap.RequestGC(GC_REASON_USER);
+    // First retain the entire allocation through promotion, then retain one
+    // object per source page. The second real old collection has sparse pages.
+    for (size_t i = 0; i < count; ++i) {
+        if (i % (ZPageSizeSmall / size) != 0) heap.RemoveExportObject(roots[i]);
+    }
+    heap.RequestGC(GC_REASON_USER);
+    result.youngAfter = heap.young().seqnum();
+    result.oldAfter = heap.old().seqnum();
+    for (size_t i = 0; i < count; i += ZPageSizeSmall / size) heap.RemoveExportObject(roots[i]);
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(GenerationState, ProductSequenceAndForwarding)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    GenerationStateResult result;
+    CJThreadHandle task = RunCJTask(CollectForGenerationState, &result);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "GENERATION_SEQUENCE_TARGET young=%u->%u old=%u->%u\n",
+        result.youngBefore, result.youngAfter, result.oldBefore, result.oldAfter);
+    GC_EXPECT_EQ(result.youngAfter, result.youngBefore + 4);
+    GC_EXPECT_EQ(result.oldAfter, result.oldBefore + 2);
+    GC_EXPECT_TRUE(Heap::GetHeap().young().is_phase_relocate());
+    GC_EXPECT_TRUE(Heap::GetHeap().old().is_phase_relocate());
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
