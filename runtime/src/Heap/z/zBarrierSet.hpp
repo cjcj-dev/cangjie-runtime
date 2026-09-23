@@ -8,6 +8,7 @@
 #include "Heap/z/zThreadLocalData.hpp"
 
 namespace MapleRuntime {
+class MArray;
 class ZBarrierSet {
 public:
     static bool barrier_needed(bool isReference);
@@ -18,9 +19,16 @@ public:
     static zaddress oop_load_in_heap(volatile zpointer* p);
     static void oop_store_in_heap(volatile zpointer* p, zaddress value);
     static zaddress oop_xchg_in_heap(volatile zpointer* p, zaddress value);
-    static zaddress oop_copy_one_barriers(volatile zpointer* dst, volatile zpointer* src);
-    static void oop_copy_one(volatile zpointer* dst, volatile zpointer* src);
-    static void oop_clear_one(volatile zpointer* dst);
+    class AccessBarrier {
+    public:
+        static zaddress oop_copy_one_barriers(volatile zpointer* dst, volatile zpointer* src);
+        static void oop_copy_one(volatile zpointer* dst, volatile zpointer* src);
+        static void oop_clear_one(volatile zpointer* dst);
+        static void oop_arraycopy_in_heap_no_check_cast(zpointer* dst, zpointer* src, size_t length);
+        // Cangjie inline structs contain primitive bytes as well as oop slots.
+        static void struct_copy_one(MArray* layout, MAddress dst, MAddress src);
+        static void struct_arraycopy_in_heap_no_check_cast(MArray* layout, MAddress dst, MAddress src, size_t length);
+    };
 };
 
 class ZBarrierSetRuntime {
