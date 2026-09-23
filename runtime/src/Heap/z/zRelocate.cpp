@@ -376,7 +376,7 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 //   ③ never return a from address or a null-tip geometric address.
 // Distinct from 4e75f2cc: that path is RouteObject *miss* (no plan) on a ghost about to
 // be reclaimed — returning from there reinstalls a dying address. Here RouteObject *hit*
-// with no tip yet: while still ROUTED/ROUTING, from is not yet CollectRegion'd.
+// with no tip yet: while forwarding is incomplete, the source page is retained.
 // After object/region publish (FORWARDED|COMPACTED) tip must exist if the plan was real;
 // missing tip = permanent hole = invariant violation → CHECK (not hang, not geometric to).
 //
@@ -662,7 +662,7 @@ BaseObject* ZRelocate::ForwardObject(BaseObject* obj, Generation generation)
     }
     // GetRoute survivor gate / exclusive soft-miss: a movable ghost-from with no
     // to-version is not a stable address. Returning `obj` here reinstalls a from
-    // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
+    // pointer whose source page is about to be released.
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
     if (IsFromObject(obj)) {
         ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
@@ -749,7 +749,7 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge toAge = forwarding_for_page(copyPage)->to_age();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc(size, toAge, true));
+    BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc_for_relocation(size, toAge));
     if (toObj == nullptr) return nullptr;
     BaseObject* result = nullptr;
     ZForwarding* publication = forwarding_for_page(copyPage);
@@ -803,8 +803,7 @@ static ZPage* AllocateRelocationTarget(ZForwarding* forwarding)
     flags.set_non_blocking();
     flags.set_gc_relocation();
     ZPage* source = forwarding->page();
-    ZPage* page = Heap::alloc_page(forwarding->size(), source->type(), false, false,
-                                  true, forwarding->to_age(), flags);
+    ZPage* page = Heap::alloc_page(forwarding->size(), source->type(), false, false, forwarding->to_age(), flags);
     if (page == nullptr) {
         Heap::GetHeap().page_allocator().NoteInPlaceRelocated(source);
     }

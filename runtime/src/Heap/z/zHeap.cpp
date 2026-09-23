@@ -460,7 +460,7 @@ thread_local ZPage* g_prematerializedPage = nullptr;
 ZPage* Heap::alloc_page(ZPage* page)
 {
     g_prematerializedPage = page;
-    ZPage* published = alloc_page(0, ZPageType::small, false, false, false);
+    ZPage* published = alloc_page(0, ZPageType::small, false, false);
     g_prematerializedPage = nullptr;
     return published;
 }
@@ -477,16 +477,15 @@ size_t Heap::unsafe_max_tlab_alloc() const
 uintptr_t Heap::alloc_tlab(size_t size)
 {
     CHECK(size <= ZObjectSizeLimitSmall);
-    return object_allocator().alloc(size, PageAge::eden);
+    return object_allocator().alloc(size);
 }
 
-ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
-                             bool clearPayload, PageAge age, ZAllocationFlags flags)
+ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion, PageAge age, ZAllocationFlags flags)
 {
     RegionManager& manager = GetHeap().page_allocator();
     ZPage* page = g_prematerializedPage;
     if (page == nullptr && num > 0) {
-        page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age, flags);
+        page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, age, flags);
     }
     if (page != nullptr) {
         page_table().insert(page);

@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -116,9 +117,9 @@ static bool IsSmallEdenPage(const ZPage* page)
 
 // ZObjectAllocator::PerAge::alloc_page, ZHeap::alloc_page/account_alloc_page.
 ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
-                                             PageAge age, ZAllocationFlags flags, bool clearPayload)
+                                             PageAge age, ZAllocationFlags flags)
 {
-    ZPage* page = Heap::alloc_page(size, role, false, !flags.non_blocking(), clearPayload, age, flags);
+    ZPage* page = Heap::alloc_page(size, role, false, !flags.non_blocking(), age, flags);
     if (page == nullptr) { return nullptr; }
     page->reset(age);
     if (IsSmallEdenPage(page)) {
@@ -156,10 +157,9 @@ void RegionManager::UndoSharedPage(ZPage* page)
 }
 
 // ZGC zObjectAllocator.cpp:56-64.
-ZPage* ZObjectAllocator::PerAge::alloc_page(ZPageType type, size_t size, ZAllocationFlags flags,
-                                          bool clearPayload)
+ZPage* ZObjectAllocator::PerAge::alloc_page(ZPageType type, size_t size, ZAllocationFlags flags)
 {
-    return Heap::GetHeap().page_allocator().AllocateSharedPage(size, type, age, flags, clearPayload);
+    return Heap::GetHeap().page_allocator().AllocateSharedPage(size, type, age, flags);
 }
 
 void ZObjectAllocator::PerAge::undo_alloc_page(ZPage* page)
@@ -216,9 +216,9 @@ uintptr_t ZObjectAllocator::PerAge::alloc_object_in_medium_page(size_t size, ZAl
     return addr;
 }
 
-uintptr_t ZObjectAllocator::PerAge::alloc_large_object(size_t size, ZAllocationFlags flags, bool clearPayload)
+uintptr_t ZObjectAllocator::PerAge::alloc_large_object(size_t size, ZAllocationFlags flags)
 {
-    ZPage* page = alloc_page(ZPageType::large, AlignUp(size, ZGranuleSize), flags, clearPayload);
+    ZPage* page = alloc_page(ZPageType::large, AlignUp(size, ZGranuleSize), flags);
     return page == nullptr ? 0 : page->alloc_object(size);
 }
 
@@ -232,14 +232,14 @@ uintptr_t ZObjectAllocator::PerAge::alloc_small_object(size_t size, ZAllocationF
     return alloc_object_in_shared_page(shared_small_page_addr(), ZPageType::small, ZPageSizeSmall, size, flags);
 }
 
-uintptr_t ZObjectAllocator::PerAge::alloc_object(size_t size, ZAllocationFlags flags, bool clearPayload)
+uintptr_t ZObjectAllocator::PerAge::alloc_object(size_t size, ZAllocationFlags flags)
 {
     if (size <= ZObjectSizeLimitSmall) {
         return alloc_small_object(size, flags);
     } else if (size <= ZObjectSizeLimitMedium) {
         return alloc_medium_object(size, flags);
     } else {
-        return alloc_large_object(size, flags, clearPayload);
+        return alloc_large_object(size, flags);
     }
 }
 
@@ -251,12 +251,20 @@ size_t ZObjectAllocator::fast_available(PageAge age) const
     return page == nullptr ? 0 : page->remaining();
 }
 
-uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking, bool clearPayload)
+// ZGC zObjectAllocator.cpp:238-241.
+uintptr_t ZObjectAllocator::alloc(size_t size)
+{
+    ZAllocationFlags flags;
+    return allocator(PageAge::eden)->alloc_object(size, flags);
+}
+
+// ZGC zObjectAllocator.cpp:243-250.
+uintptr_t ZObjectAllocator::alloc_for_relocation(size_t size, PageAge age)
 {
     CHECK(untype(age) < kPageAgeCount);
     ZAllocationFlags flags;
-    if (nonBlocking) { flags.set_non_blocking(); }
-    return allocator(age)->alloc_object(size, flags, clearPayload);
+    flags.set_non_blocking();
+    return allocator(age)->alloc_object(size, flags);
 }
 
 // ZObjectAllocator::retire_pages / PerAge::retire_pages (cpp:208-237).
@@ -306,8 +314,7 @@ namespace MapleRuntime {
 MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
 {
     if (allocSize > ZObjectSizeLimitSmall || ThreadLocal::GetMutator() == nullptr) {
-        return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden, false,
-            allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
+        return Heap::GetHeap().object_allocator().alloc(allocSize);
     }
     AllocBuffer* allocBuffer = ThreadLocal::GetMutator()->tlab();
     return allocBuffer->Allocate(allocSize, allocType);

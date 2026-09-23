@@ -82,7 +82,6 @@ static const ZStatPhaseConcurrent ZPhaseConcurrentRelocateOld("Concurrent Reloca
 static const ZStatPhaseConcurrent ZPhaseConcurrentProcessNonStrongOld("Concurrent Process Non-Strong", ZGenerationId::old);
 static const ZStatPhaseConcurrent ZPhaseConcurrentRemapRootsOld("Concurrent Remap Roots", ZGenerationId::old);
 
-static const ZStatSubPhase PCollectLargeGarbage("Collect large garbage", ZGenerationId::old);
 static const ZStatSubPhase PEnumRootsUpdateOldPointersWithin("enum roots & update old pointers within", ZGenerationId::old);
 static const ZStatSubPhase PIdentifyUselessExternRef("identify useless extern ref", ZGenerationId::old);
 static const ZStatSubPhase PTraceLiveObjectsUpdateOldPointersInRefFields("trace live objects & update old pointers in ref-fields", ZGenerationId::old);
@@ -1030,7 +1029,6 @@ void ZGenerationOld::concurrent_relocate()
     relocate().relocate(&relocation_set());
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
     Heap::GetHeap().cross_vm().PostResolveCycleTask();
-    CollectSmallSpace();
 }
 
 }
@@ -1267,13 +1265,6 @@ BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object)
 }
 
 namespace MapleRuntime {
-void ZGenerationOld::CollectLargeGarbage()
-{
-    ZStatTimerOld zstatTimer(PCollectLargeGarbage);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    ZGeneration::old()->increase_freed(space.CollectLargeGarbage());
-}
-
 void ZGenerationYoung::EvacuateYoungRegions(std::unique_ptr<ScopedStopTheWorld>* stw)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();

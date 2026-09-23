@@ -90,8 +90,8 @@ GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWai
     fixture.PublishCapacity();
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* first = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, true, PageAge::eden, flags);
-    ZPage* second = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, true, PageAge::eden, flags);
+    ZPage* first = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, PageAge::eden, flags);
+    ZPage* second = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, PageAge::eden, flags);
     const size_t count = (first != nullptr) + (second != nullptr);
     std::fprintf(stderr, "ALLOCATION_CAPACITY_TARGET count=%zu first=%p second=%p\n", count, first, second);
     GC_EXPECT_EQ(count, size_t{1});
@@ -262,7 +262,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     // Large movable objects use the product object allocator; the pinned-page
     // API is limited to its fixed-size page and cannot represent these sizes.
     auto allocateObject = [&](TypeInfo* type, size_t bytes) -> BaseObject* {
-        const uintptr_t address = heap.object_allocator().alloc(bytes, PageAge::eden, false);
+        const uintptr_t address = heap.object_allocator().alloc(bytes);
         if (address == 0) { return nullptr; }
         auto* object = reinterpret_cast<BaseObject*>(address);
         object->SetClassInfo(type);
@@ -328,7 +328,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     }
     ZAllocationFlags nonBlocking;
     nonBlocking.set_non_blocking();
-    ZPage* competing = Heap::alloc_page(requestedBytes, ZPageType::large, false, true, true,
+    ZPage* competing = Heap::alloc_page(requestedBytes, ZPageType::large, false, true,
                                       PageAge::eden, nonBlocking);
     ConcurrentGCBreakpoints::ReleaseControl();
     deadline = std::chrono::steady_clock::now() + kHangLimit;

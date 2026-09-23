@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "Heap/Allocator/RegionSpace.h"
+#include "Base/MemUtils.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/shared/collectedHeap.hpp"
 #include "Mutator/Mutator.h"
@@ -148,7 +149,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     (void)allocType;
     const size_t tlabSize = ComputeTLABSize(totalSize, Heap::GetHeap().unsafe_max_tlab_alloc());
     if (tlabSize == 0) {
-        return Heap::GetHeap().object_allocator().alloc(totalSize, PageAge::eden);
+        return Heap::GetHeap().object_allocator().alloc(totalSize);
     }
     RetireTLAB(false);
     // Cangjie tasks can migrate while page allocation enters a saferegion.
@@ -157,6 +158,8 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     const uintptr_t start = ZCollectedHeap::heap()->allocate_new_tlab(totalSize, tlabSize, &actualSize);
     CJThreadPreemptOffCntSub();
     if (start == 0) { return 0; }
+    // HotSpot memAllocator.cpp:312-324: initialize the refill before publishing its bounds.
+    MemorySet(start, actualSize, 0, actualSize);
     FillTLAB(start, actualSize);
     return AllocateInTLAB(totalSize);
 }

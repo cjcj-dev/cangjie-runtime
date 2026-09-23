@@ -243,7 +243,7 @@ struct GcHeapFixture {
         ZStat::Initialize();
         (void)Heap::GetHeap();
         RegionManager& manager = Heap::GetHeap().page_allocator();
-        committedSpan = manager.TakeRegion(kUnits * ZGranuleSize, ZPageType::large, false, false, true);
+        committedSpan = manager.TakeRegion(kUnits * ZGranuleSize, ZPageType::large, false, false);
         CHECK(committedSpan != nullptr);
         heapStart = committedSpan->GetRegionStart();
         mapping = reinterpret_cast<void*>(heapStart);
