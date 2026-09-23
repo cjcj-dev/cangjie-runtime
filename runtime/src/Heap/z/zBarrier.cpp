@@ -746,7 +746,7 @@ void ZBarrier::CopyStructArrayColouredToHeap(BaseObject* dstObj, MAddress dst, s
             offsets.push_back(static_cast<size_t>(reinterpret_cast<MAddress>(&field) - dst));
         }, dst, dst + srcLen);
     CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
-        Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
+        CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
 void ZBarrier::CopyRefArrayColouredToHeap(MAddress dst, size_t dstLen, MAddress src, size_t srcLen)
@@ -765,7 +765,7 @@ void ZBarrier::CopyRefArrayColouredToHeap(MAddress dst, size_t dstLen, MAddress 
         offsets.push_back(offset);
     }
     CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
-        Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
+        CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
 void ZBarrierSet::AccessBarrier::struct_copy_one(MArray* layout, MAddress dst, MAddress src)
