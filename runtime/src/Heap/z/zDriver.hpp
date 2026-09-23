@@ -33,6 +33,14 @@
 #include "Heap/z/zLock.hpp"
 #include "Heap/z/zResurrection.inline.hpp"
 
+// ZGC zDriver.hpp:32-41: system headers may define these names as macros.
+#ifdef minor
+#undef minor
+#endif
+#ifdef major
+#undef major
+#endif
+
 namespace MapleRuntime {
 
 class GCTask {

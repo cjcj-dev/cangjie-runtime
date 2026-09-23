@@ -779,7 +779,7 @@ GC_RUNTIME_TEST(DriverRegistration, ProductOwnedMinor)
     auto* owned = ZCollectedHeap::heap()->driver_minor();
     std::fprintf(stderr, "REGISTRATION_TARGET minor registered=%p owned=%p\n",
         static_cast<void*>(registered), static_cast<void*>(owned));
-    GC_EXPECT_EQ(registered, owned);
+    GC_EXPECT_TRUE(registered == owned);
 }
 
 GC_RUNTIME_TEST(DriverRegistration, ProductOwnedMajor)
@@ -788,5 +788,5 @@ GC_RUNTIME_TEST(DriverRegistration, ProductOwnedMajor)
     auto* owned = ZCollectedHeap::heap()->driver_major();
     std::fprintf(stderr, "REGISTRATION_TARGET major registered=%p owned=%p\n",
         static_cast<void*>(registered), static_cast<void*>(owned));
-    GC_EXPECT_EQ(registered, owned);
+    GC_EXPECT_TRUE(registered == owned);
 }
