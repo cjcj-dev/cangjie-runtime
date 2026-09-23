@@ -38,7 +38,7 @@ LINES = {
     'minor_major': line_in('static GCReason make_minor_gc_decision', 'resize.is_active'),
     'select': line_in('static void start_minor_gc', '? ZWorkerSelectionType'),
     'resize': line_in('static void start_minor_gc', 'if ('),
-    'send': line_in('static void start_minor_gc', 'driver_minor()->port().send_async'),
+    'send': line_in('static void start_minor_gc', 'driver_minor()->collect'),
     'merge': line_in('static bool start_gc', 'rule_major_allocation_rate(stats)'),
     'sample': line_in('static ZDirectorStats sample_stats', 'stats.mutator_alloc_rate'),
     'tick': line_in('void ZDirector::run_thread', 'const ZDirectorStats stats'),
@@ -180,7 +180,7 @@ try:
     command('set $req = (MapleRuntime::ZDriverRequest*)malloc(sizeof(MapleRuntime::ZDriverRequest))')
     # Call the product constructor symbol, not an inline declaration from the ELF.
     command('call ((void (*)(void*, unsigned int, unsigned int, unsigned int)) '
-            '&_ZN12MapleRuntime14ZDriverRequestC1ENS_8GCReasonEjj)($req, 3, 1, 1)')
+            '&_ZN12MapleRuntime14ZDriverRequestC1ENS_8GCReasonEjj)($req, MapleRuntime::GC_REASON_ALLOCATION_RATE, 1, 1)')
     workers = 'MapleRuntime::ZCollectedHeap::_collected_heap->_heap._old.workers.get()'
     if not DYNAMIC or EQUAL:
         active_workers = (2 if EQUAL else 1) if not DYNAMIC else 1
@@ -213,7 +213,8 @@ try:
             raise RuntimeError('Director loop boundary not observed')
         observed = {'busy': bool(value('$major->_has_message')),
                     'cause': int(value('$major->_message._cause'))}
-        expected_cause = 3 if CURRENT else 2  # existing HEU / newly sent BACKUP
+        expected_cause = int(value('MapleRuntime::GC_REASON_ALLOCATION_RATE' if CURRENT else
+                                   'MapleRuntime::GC_REASON_TIMER'))
         check('ASSERT_ENTRY', observed['busy'] and observed['cause'] == expected_cause,
               observed=observed, expected_cause=expected_cause)
     advance('major')

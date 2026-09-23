@@ -120,12 +120,13 @@ void ZDriverMinor::collect(const ZDriverRequest& request)
 {
     switch (request.cause()) {
         case GC_REASON_YOUNG:
-        case GC_REASON_ALLOCATION_STALL:
-            _port.send_async(request);
-            break;
-        case GC_REASON_HEU_SYNC:
-        case GC_REASON_NATIVE_SYNC:
             _port.send_sync(request);
+            break;
+        case GC_REASON_TIMER:
+        case GC_REASON_ALLOCATION_RATE:
+        case GC_REASON_ALLOCATION_STALL:
+        case GC_REASON_HIGH_USAGE:
+            _port.send_async(request);
             break;
         default:
             CHECK(false);
@@ -137,13 +138,13 @@ void ZDriverMajor::collect(const ZDriverRequest& request)
 {
     switch (request.cause()) {
         case GC_REASON_USER:
+        case GC_REASON_DCMD_GC_RUN:
         case GC_REASON_FORCE:
-        case GC_REASON_OOM:
             _port.send_sync(request);
             break;
-        case GC_REASON_BACKUP:
-        case GC_REASON_HEU:
-        case GC_REASON_NATIVE:
+        case GC_REASON_TIMER:
+        case GC_REASON_ALLOCATION_RATE:
+        case GC_REASON_PROACTIVE:
         case GC_REASON_WARMUP:
         case GC_REASON_ALLOCATION_STALL:
             _port.send_async(request);
@@ -354,16 +355,14 @@ static bool ShouldClearAllSoftReferences(GCReason reason)
 {
     // ZGC zDriver.cpp:232-268: stall and explicit full collections clear soft refs.
     switch (reason) {
-        case GC_REASON_OOM:
         case GC_REASON_FORCE:
         case GC_REASON_ALLOCATION_STALL:
             return true;
         case GC_REASON_USER:
-        case GC_REASON_BACKUP:
-        case GC_REASON_HEU:
-        case GC_REASON_HEU_SYNC:
-        case GC_REASON_NATIVE:
-        case GC_REASON_NATIVE_SYNC:
+        case GC_REASON_DCMD_GC_RUN:
+        case GC_REASON_TIMER:
+        case GC_REASON_ALLOCATION_RATE:
+        case GC_REASON_PROACTIVE:
         case GC_REASON_WARMUP:
         case GC_REASON_WB_BREAKPOINT:
             break;
@@ -379,16 +378,14 @@ static bool ShouldPrecleanYoung(GCReason reason)
     // ZGC zDriver.cpp:270-299: explicit full collections, including breakpoints.
     switch (reason) {
         case GC_REASON_USER:
-        case GC_REASON_OOM:
+        case GC_REASON_DCMD_GC_RUN:
         case GC_REASON_FORCE:
         case GC_REASON_WB_BREAKPOINT:
         case GC_REASON_ALLOCATION_STALL:
             return true;
-        case GC_REASON_BACKUP:
-        case GC_REASON_HEU:
-        case GC_REASON_HEU_SYNC:
-        case GC_REASON_NATIVE:
-        case GC_REASON_NATIVE_SYNC:
+        case GC_REASON_TIMER:
+        case GC_REASON_ALLOCATION_RATE:
+        case GC_REASON_PROACTIVE:
         case GC_REASON_WARMUP:
             break;
         default:
@@ -411,14 +408,6 @@ bool GCExecutor::Execute(void* owner)
     switch (taskType) {
         case GCTask::TaskType::TASK_TYPE_TERMINATE_GC: {
             return false;
-        }
-        case GCTask::TaskType::TASK_TYPE_TIMEOUT_GC: {
-            uint64_t curTime = TimeUtil::NanoSeconds();
-            if ((curTime - ZStat::GetPrevGCStartTime()) > CangjieRuntime::GetGCParam().backupGCInterval) {
-                ZStat::SetPrevGCStartTime(curTime);
-                ZDriver::RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_BACKUP);
-            }
-            break;
         }
         case GCTask::TaskType::TASK_TYPE_INVOKE_GC: {
             ZStat::SetPrevGCStartTime(TimeUtil::NanoSeconds());
