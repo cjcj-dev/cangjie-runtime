@@ -107,6 +107,7 @@ public:
     // ~WorkerThreads for why a destroy path exists at all).
     void InitializeWorkers(uint32_t capacity);
     void StopWorkers();
+    void set_active_workers(uint32_t nworkers);
     ZWorkers* Workers() const { return workers.get(); }
     bool should_worker_resize();
     ZWeakRootsProcessor* WeakRootsProcessor() const { return weakRootsProcessor.get(); }
@@ -260,6 +261,8 @@ public:
     ZGenerationOld();
     // zGeneration.cpp:1248,1526: young-count snapshot at major start.
     uint32_t total_collections_at_start() const { return _total_collections_at_start; }
+    void set_soft_reference_policy(bool clear);
+    bool uses_clear_all_soft_reference_policy() const;
     void PostTrace();
     ~ZGenerationOld();
     bool should_record_stats() override;

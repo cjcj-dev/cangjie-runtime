@@ -844,6 +844,12 @@ void ZGeneration::InitializeWorkers(uint32_t capacity)
     }
 }
 
+// ZGC zGeneration.cpp:153-155.
+void ZGeneration::set_active_workers(uint32_t nworkers)
+{
+    Workers()->set_active_workers(nworkers);
+}
+
 void ZGeneration::StopWorkers()
 {
     mark->BindWorkers(nullptr);
@@ -854,6 +860,18 @@ void ZGeneration::StopWorkers()
 
 namespace MapleRuntime {
 
+
+// ZGC zGeneration.cpp:1296-1302: policy access belongs to the old generation.
+void ZGenerationOld::set_soft_reference_policy(bool clear)
+{
+    Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().set_soft_reference_policy(clear);
+}
+
+bool ZGenerationOld::uses_clear_all_soft_reference_policy() const
+{
+    return Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor()
+        .uses_clear_all_soft_reference_policy();
+}
 
 void ZGenerationOld::mark_start()
 {

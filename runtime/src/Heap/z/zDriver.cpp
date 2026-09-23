@@ -84,7 +84,7 @@ extern "C" uintptr_t MRT_StopGCWork()
 
 // zDriver.cpp:118-127,319-328: each driver names itself and starts in its
 // constructor; run_thread is the request loop (zDriver.cpp:201-225,463-488)
-// and terminate closes the port so the loop's receive returns (:227-231).
+// and terminate wakes receive after the VM stop path sets ZAbort (:227-231).
 ZDriver::ZDriver() : _gc_cause(GC_REASON_INVALID) {}
 
 void ZDriver::set_gc_cause(GCReason cause) { _gc_cause = cause; }
@@ -119,16 +119,26 @@ void ZDriverMajor::run_thread()
     }
 }
 
-// ZGC zDriver.cpp:193-198,454-460: generation-specific stall ownership.
-void ZDriverMinor::handle_alloc_stalls() const
+// ZGC zDriver.cpp:193-198,451-460: generation-specific stall ownership.
+static void handle_alloc_stalling_for_young()
 {
     Heap::GetHeap().page_allocator().HandleAllocStallingForYoung();
 }
 
+void ZDriverMinor::handle_alloc_stalls() const
+{
+    handle_alloc_stalling_for_young();
+}
+
+static void handle_alloc_stalling_for_old()
+{
+    const bool cleared_all = ZGeneration::old()->uses_clear_all_soft_reference_policy();
+    Heap::GetHeap().page_allocator().HandleAllocStallingForOld(cleared_all);
+}
+
 void ZDriverMajor::handle_alloc_stalls() const
 {
-    Heap::GetHeap().page_allocator().HandleAllocStallingForOld(Heap::GetHeap().GetFinalizerProcessor()
-        .GetReferenceProcessor().uses_clear_all_soft_reference_policy());
+    handle_alloc_stalling_for_old();
 }
 
 void ZDriverMinor::terminate()
@@ -219,7 +229,7 @@ public:
           _gc_cause_setter(ZDriver::minor(), _gc_cause),
           _stat_timer(ZPhaseCollectionMinor)
     {
-        ZGeneration::young()->Workers()->set_active_workers(request.young_nworkers());
+        ZGeneration::young()->set_active_workers(request.young_nworkers());
     }
 };
 
@@ -235,10 +245,9 @@ public:
           _gc_cause_setter(ZDriver::major(), _gc_cause),
           _stat_timer(ZPhaseCollectionMajor)
     {
-        ZGeneration::young()->Workers()->set_active_workers(request.young_nworkers());
-        ZGeneration::old()->Workers()->set_active_workers(request.old_nworkers());
-        Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor()
-            .set_soft_reference_policy(ShouldClearAllSoftReferences(request.cause()));
+        ZGeneration::young()->set_active_workers(request.young_nworkers());
+        ZGeneration::old()->set_active_workers(request.old_nworkers());
+        ZGeneration::old()->set_soft_reference_policy(ShouldClearAllSoftReferences(request.cause()));
     }
 };
 
@@ -260,7 +269,7 @@ void ZDriverMajor::collect_young(const ZDriverRequest& request)
         ZGeneration::young()->collect(ZYoungType::major_partial_roots);
     }
     abortpoint();
-    Heap::GetHeap().page_allocator().HandleAllocStallingForYoung();
+    handle_alloc_stalling_for_young();
 }
 
 void ZDriverMajor::collect_old()
