@@ -368,7 +368,10 @@ static void RemapAndMaybeAddRemset(RefField<>& field)
     if (is_null(address)) {
         return;
     }
-    AddRemsetIfYoung(p, address);
+    if (Heap::is_old(untype(address))) {
+        return;
+    }
+    Heap::page(reinterpret_cast<MAddress>(p))->remember(p);
 }
 
 void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
