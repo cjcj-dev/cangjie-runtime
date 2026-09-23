@@ -77,11 +77,6 @@ BaseObject* ZBarrierSetRuntime::load_barrier_on_phantom_oop_field_preloaded(Base
     return to_object(ZBarrier::load_barrier_on_phantom_oop_field_preloaded(p, to_zpointer(reinterpret_cast<uintptr_t>(o))));
 }
 
-void ZBarrierSetRuntime::store_barrier_on_oop_field_with_healing(volatile zpointer* p)
-{
-    ZBarrier::store_barrier_on_heap_oop_field(p, true);
-}
-
 void ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing(volatile zpointer* p)
 {
     ZBarrier::store_barrier_on_heap_oop_field(p, false);
@@ -92,42 +87,4 @@ void ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing_no_keep_aliv
     ZBarrier::no_keep_alive_store_barrier_on_heap_oop_field(p);
 }
 
-void ZBarrierSetRuntime::store_barrier_on_native_oop_field_without_healing(volatile zpointer* p)
-{
-    ZBarrier::store_barrier_on_native_oop_field(p, false);
-}
-
-void ZBarrierSetRuntime::load_barrier_on_oop_array(volatile zpointer* p, size_t length)
-{
-    ZBarrier::load_barrier_on_oop_array(p, length);
-}
-
-void* ZBarrierSetRuntime::load_barrier_on_oop_field_preloaded_addr()
-{
-    return reinterpret_cast<void*>(load_barrier_on_oop_field_preloaded);
-}
-void* ZBarrierSetRuntime::load_barrier_on_weak_oop_field_preloaded_addr()
-{
-    return reinterpret_cast<void*>(load_barrier_on_weak_oop_field_preloaded);
-}
-void* ZBarrierSetRuntime::load_barrier_on_phantom_oop_field_preloaded_addr()
-{
-    return reinterpret_cast<void*>(load_barrier_on_phantom_oop_field_preloaded);
-}
-void* ZBarrierSetRuntime::store_barrier_on_oop_field_with_healing_addr()
-{
-    return reinterpret_cast<void*>(store_barrier_on_oop_field_with_healing);
-}
-void* ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing_addr()
-{
-    return reinterpret_cast<void*>(store_barrier_on_oop_field_without_healing);
-}
-void* ZBarrierSetRuntime::store_barrier_on_native_oop_field_without_healing_addr()
-{
-    return reinterpret_cast<void*>(store_barrier_on_native_oop_field_without_healing);
-}
-void* ZBarrierSetRuntime::load_barrier_on_oop_array_addr()
-{
-    return reinterpret_cast<void*>(load_barrier_on_oop_array);
-}
 } // namespace MapleRuntime
