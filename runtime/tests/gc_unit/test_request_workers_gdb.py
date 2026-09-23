@@ -24,6 +24,7 @@ def observe(stage, major):
         raise RuntimeError('Unexpected product SO: ' + str(actual))
     request = gdb.parse_and_eval('request')
     payload = tuple(int(request[field]) for field in ('_cause', '_young_nworkers', '_old_nworkers'))
+    stack = ''
     if stage == 'collect':
         stack = gdb.execute('bt', to_string=True)
         if 'ZCollectedHeap::collect' in stack or 'RegionManager::' in stack:
@@ -41,7 +42,7 @@ def observe(stage, major):
             failures.append('collect_route')
         received.append(payload)
     print('REQUEST_PAYLOAD_TARGET ' + json.dumps(dict(stage=stage, payload=payload,
-          product=str(actual), failures=failures)), flush=True)
+          product=str(actual), origin=stack, failures=failures)), flush=True)
     return bool(failures)
 
 

@@ -97,6 +97,63 @@ GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWai
     GC_EXPECT_EQ(count, size_t{1});
 }
 #if defined(MRT_TESTABLE_INTERNALS)
+// A single allocation enters after the major's young prelude. The non-stop
+// debugger may park the minor driver before its lock to deterministically let
+// old completion consume this queue first. No product state is injected.
+GC_RUNTIME_OTHER_VM_TEST(RequestWorkers, StallAfterYoungPrelude)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 4;
+    params.gcParam.youngGCThreads = 2;
+    params.gcParam.oldGCThreads = 3;
+    params.gcParam.staticGCThreads = true;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(void*));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    U64 root;
+    {
+        ScopedObjectAccess access;
+        root = heap.RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
+    }
+    ConcurrentGCBreakpoints::AcquireControl();
+    const bool stopped = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
+    std::atomic<bool> done{false};
+    ZPage* result = nullptr;
+    std::thread waiter([&] {
+        manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        {
+            ScopedObjectAccess access;
+            result = Heap::alloc_page(heap.GetMaxCapacity(), ZPageType::large);
+        }
+        done.store(true, std::memory_order_release);
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    auto deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while (!heap.page_allocator().IsAllocationStalling() && !done.load() &&
+           std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
+    const bool queued = heap.page_allocator().IsAllocationStalling();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while (!done.load() && std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
+    std::fprintf(stderr, "REQUEST_STALL_COMPLETION_TARGET stopped=%d queued=%d done=%d\n",
+                 stopped, queued, done.load());
+    if (!done.load()) { std::_Exit(1); }
+    waiter.join();
+    GC_EXPECT_TRUE(stopped && queued);
+    GC_EXPECT_TRUE(result == nullptr);
+    heap.RemoveExportObject(root);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
 // zPageAllocator.cpp:2320-2362: a request arriving after old mark-start
 // cannot be failed by that collection; the remaining queue drives another GC.
 // Both waiters enter via Heap::alloc_page, not by constructing queue requests.

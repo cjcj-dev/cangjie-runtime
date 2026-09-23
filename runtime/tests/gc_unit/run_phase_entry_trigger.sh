@@ -54,10 +54,10 @@ if [[ "${PHASE_ENTRY_REUSE_ELFS:-0}" != 1 ]]; then
     -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -lcangjie-runtime -lboundscheck \
     -o "$REQUEST_LIB" >"$BUILD_LOG" 2>&1
   LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR to the compiler host runtime}:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    "$CJC_BIN" "$MINOR_SRC" -O0 --static-std -L"$OUT" -lphase_entry_request \
+    "$CJC_BIN" "$MINOR_SRC" -O0 --static-std -L"$RUNTIME_LIB_DIR" -L"$OUT" -lphase_entry_request \
     -o "$MINOR_BIN" >>"$BUILD_LOG" 2>&1
   LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR to the compiler host runtime}:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    "$CJC_BIN" "$MAJOR_SRC" -O0 --static-std -o "$MAJOR_BIN" >>"$BUILD_LOG" 2>&1
+    "$CJC_BIN" "$MAJOR_SRC" -O0 --static-std -L"$RUNTIME_LIB_DIR" -o "$MAJOR_BIN" >>"$BUILD_LOG" 2>&1
 else
   if [[ ! -f "$REQUEST_LIB" ]]; then
     echo "PHASE_ENTRY_TRIGGER_FAIL: missing $REQUEST_LIB" >&2
