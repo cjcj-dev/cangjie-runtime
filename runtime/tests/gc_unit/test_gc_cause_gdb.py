@@ -135,7 +135,9 @@ try:
     dispatch = gdb.Breakpoint(target, temporary=True)
     other_target = 'MapleRuntime::ZDriverMajor::collect' if MINOR else 'MapleRuntime::ZDriverMinor::collect'
     other_dispatch = gdb.Breakpoint(other_target, temporary=True)
-    idle = gdb.Breakpoint('zDirector.cpp:' + str(line('Heap/z/zDirector.cpp', '            adjust_gc(stats);')), temporary=True)
+    # Observe the next real loop boundary. Optimized inline adjust_gc source
+    # lines need not execute when all rules decline the collection.
+    idle = gdb.Breakpoint('MapleRuntime::ZDirector::wait_for_tick', temporary=True)
     cmd('continue')
     if dispatch.is_valid() and other_dispatch.is_valid():
         # The phase-entry cut can leave the actual port without a request.
