@@ -65,12 +65,14 @@ ZDriverMajor* ZDriver::major() { return _major; }
 ZDriverMinor::ZDriverMinor() : ZDriver(GCDriverKind::MINOR, _port)
 {
     ZDriver::set_minor(this);
+    set_name("ZDriverMinor");
     create_and_start();
 }
 
 ZDriverMajor::ZDriverMajor() : ZDriver(GCDriverKind::MAJOR, _port)
 {
     ZDriver::set_major(this);
+    set_name("ZDriverMajor");
     create_and_start();
 }
 
@@ -86,7 +88,6 @@ extern "C" uintptr_t MRT_StopGCWork()
 ZDriver::ZDriver(GCDriverKind kind, ZDriverPort& port)
     : kind(kind), port(port)
 {
-    set_name(kind == GCDriverKind::MINOR ? "ZDriverMinor" : "ZDriverMajor");
 }
 
 void ZDriver::run_thread()

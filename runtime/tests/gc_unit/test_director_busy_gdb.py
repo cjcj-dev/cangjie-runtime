@@ -27,9 +27,9 @@ RETURNS = set()
 RULE_RESULTS = []
 
 
-def line_in(function, text):
-    start = next(i for i, line in enumerate(SOURCE) if function in line)
-    return next(i + 1 for i in range(start + 1, len(SOURCE)) if text in SOURCE[i])
+def line_in(function, text, source=SOURCE):
+    start = next(i for i, line in enumerate(source) if function in line)
+    return next(i + 1 for i in range(start + 1, len(source)) if text in source[i])
 
 
 LINES = {
@@ -156,7 +156,11 @@ try:
     fixture = 'GcDirector.ProductWarmupStopsAfterThreeCycles'
     command('set environment GC_UNIT_FILTER ' + fixture)
     command('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
-    gdb.Breakpoint('test_gc_director.cpp:121', temporary=True)
+    fixture_source = Path(os.environ['DIRECTOR_SOURCE']).parents[3].joinpath(
+        'tests/gc_unit/test_gc_director.cpp').read_text().splitlines()
+    fixture_name = 'GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)'
+    init_line = line_in(fixture_name, 'GC_EXPECT_EQ(InitCJRuntime', fixture_source)
+    gdb.Breakpoint('test_gc_director.cpp:' + str(init_line), temporary=True)
     command('run')
     command('set var params.gcParam.backupGCInterval=1')
     command('set var params.gcParam.concGCThreads=2')
@@ -164,7 +168,8 @@ try:
     command('set var params.gcParam.oldGCThreads=2')
     command('set var params.gcParam.staticGCThreads=' + str(1 - DYNAMIC))
     if SITE == 'merge':
-        gdb.Breakpoint('test_gc_director.cpp:142', temporary=True)
+        stats_line = line_in(fixture_name, 'const auto before', fixture_source)
+        gdb.Breakpoint('test_gc_director.cpp:' + str(stats_line), temporary=True)
         command('continue')
         emit('REAL_WARMUP', trustable=bool(value('stats.isTimeTrustable')),
              cycles=int(value('stats.warmupCycles')))
@@ -200,7 +205,8 @@ try:
     port_lines = Path(os.environ['DIRECTOR_SOURCE']).with_name('zDriverPort.cpp').read_text().splitlines()
     port_return = next(i + 1 for i, text in enumerate(port_lines) if 'return _has_message;' in text)
     BusyRead('zDriverPort.cpp:' + str(port_return), internal=True)
-    advance('entry')
+    if SITE != 'entry':
+        advance('entry')
     emit('SAMPLED', resize=diagnostic('stats.old_stats.resize.is_active'),
          workers=diagnostic('stats.old_stats.resize.nworkers_current'),
          interval=diagnostic('MapleRuntime::ZCollectionIntervalMinor'),
@@ -208,7 +214,7 @@ try:
          old_major_snapshot=diagnostic('stats.major_busy'))
     if SITE == 'entry':
         set_busy('$major', CURRENT)
-        for _ in range(64):
+        for _ in range(128):
             command('next')
             here=location()
             if (LINES['loop'] <= here['line'] <= LINES['loop'] + 3 and

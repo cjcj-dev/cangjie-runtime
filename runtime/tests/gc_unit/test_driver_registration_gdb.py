@@ -20,6 +20,7 @@ try:
     for setting in ('pagination off', 'confirm off', 'breakpoint pending on', 'print thread-events off'):
         gdb.execute('set ' + setting)
     gdb.execute('set environment GC_UNIT_FILTER DriverRegistration.ProductOwned' + kind.title())
+    gdb.execute('set environment GC_UNIT_OTHER_VM_CHILD DriverRegistration.ProductOwned' + kind.title())
     gdb.Breakpoint('zDriver.cpp:' + str(line), temporary=True)
     gdb.execute('run')
     frame = gdb.newest_frame()
