@@ -35,15 +35,15 @@ inline const ZRelocationSetSelectorGroupStats& ZRelocationSetSelectorStats::larg
 inline bool ZRelocationSetSelectorGroup::pre_filter_page(const ZPage* page, size_t live_bytes) const
 {
     if (page->is_small()) {
-        const size_t garbage = page->size() - live_bytes;
+        DCHECK(page->size() == ZPageSizeSmall);
+        const size_t garbage = ZPageSizeSmall - live_bytes;
         return garbage > _page_fragmentation_limit;
     }
     if (page->is_medium()) {
         const size_t size = page->size();
+        const int shift = ZPageSizeMediumMaxShift - Log2Exact(size);
+        const size_t page_fragmentation_limit = _page_fragmentation_limit >> shift;
         const size_t garbage = size - live_bytes;
-        const size_t page_fragmentation_limit =
-            _max_page_size == 0 ? 0 : static_cast<size_t>(static_cast<double>(_page_fragmentation_limit) *
-                                                          (static_cast<double>(size) / static_cast<double>(_max_page_size)));
         return garbage > page_fragmentation_limit;
     }
     return false;
