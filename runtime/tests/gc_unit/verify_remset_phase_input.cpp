@@ -3,6 +3,7 @@
 // Phase-unit input, not a complete driver/managed workload.
 #include "gc_verify_fixture.hpp"
 #include "Heap/z/zCPU.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zRemembered.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -23,8 +24,16 @@ int main(int argc, char** argv)
     const bool young = scan || std::strcmp(argv[1], "young") == 0;
     ConcGCThreads = 64;
     ZGlobalsPointers::initialize();
-    ThreadLocal::InitializeCleaner();
     ZCPU::initialize();
+    // Reserve exactly the fixture's pages: relocation must reuse its source
+    // in place, while scan explicitly supplies its destination page below.
+    HeapParam params{};
+    params.heapSize = GcHeapFixture::kUnits * ZGranuleSize / 1024;
+    params.regionSize = ZGranuleSize / 1024;
+    params.exemptionThreshold = 0.8;
+    ZHeuristics::set_max_heap_size(params.heapSize * 1024);
+    ZCollectedHeap::create(params, 0.5);
+    ThreadLocal::InitializeCleaner();
     WorkerFixture worker;
     GcVerifyFixture fixture;
     auto& heap = Heap::GetHeap();
@@ -37,7 +46,6 @@ int main(int argc, char** argv)
     const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
     HeapSlotAt<>(from + TYPEINFO_PTR_SIZE).StoreColoured(
         to_zpointer(raw(StoreGoodPointer(nullptr)) | ZPointerRememberedMask));
-    heap.old().pause_relocate_start();
     if (young) {
         // Register before the actual mark-start flip so the real remset-table
         // iterator finds the source in the previous found-old set.
@@ -45,6 +53,12 @@ int main(int argc, char** argv)
         ScopedStopTheWorld stopped("VerifyRemsetPhaseInput");
         heap.young().mark_start();
     }
+    // Start young marking before activating the old relocation queue. A
+    // phase-only input has no concurrent old worker to acknowledge a later
+    // young safepoint while that queue is active.
+    heap.old().Workers()->set_active_workers(1);
+    heap.old().Workers()->set_active();
+    heap.old().pause_relocate_start();
     if (heap.young().is_phase_mark() != young || !heap.old().is_phase_relocate()) { return 79; }
     BaseObject* destination = fixture.obj0;
     if (scan) {
@@ -71,9 +85,6 @@ int main(int argc, char** argv)
         // ZGC zRelocate.cpp:1289: submit the installed relocation set through
         // the generation's active workers, as the product phase does.
         auto& old = heap.old();
-        old.Workers()->set_active_workers(1);
-        old.Workers()->set_active();
-        ZRelocate::StartRelocationTasks(old.id());
         old.relocate().relocate(&old.relocation_set());
         old.Workers()->set_inactive();
     }
