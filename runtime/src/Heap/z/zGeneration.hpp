@@ -108,6 +108,7 @@ public:
     void InitializeWorkers(uint32_t capacity);
     void StopWorkers();
     ZWorkers* Workers() const { return workers.get(); }
+    bool should_worker_resize();
     ZWeakRootsProcessor* WeakRootsProcessor() const { return weakRootsProcessor.get(); }
     ZStatCycle& CycleStats() { return cycleStats; }
     ZStatWorkers* StatWorkers() { return &statWorkers; }

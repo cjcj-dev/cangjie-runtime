@@ -287,6 +287,10 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     auto& queue = generation_relocate_queue(Generation::Old);
     queue.BeginWorkers(1);
     const auto request = queue.Add(owner);
+    // ForwardTask polls the owning generation's workers, as the runtime entry
+    // does. This component fixture must provide that existing dependency.
+    auto& old = Heap::GetHeap().old();
+    if (old.Workers() == nullptr) old.InitializeWorkers(1);
     ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
     WorkerFixture workerIdentity;
     task.work();
@@ -309,6 +313,8 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     auto& queue = generation_relocate_queue(Generation::Old);
     queue.BeginWorkers(2);
     const auto request = queue.Add(owner);
+    auto& old = Heap::GetHeap().old();
+    if (old.Workers() == nullptr) old.InitializeWorkers(1);
     std::atomic<MAddress> answer{ 0 };
     std::thread waiter([&] {
         (void)queue.Wait(request.forwarding);
@@ -343,6 +349,155 @@ GC_OTHER_VM_TEST(RelocateWorkers, ProductParallelEntryRegistersWorkersAndClosesG
 GC_OTHER_VM_TEST(RelocateWorkers, ProductSerialEntryRegistersWorkerAndClosesGeneration)
 {
     GC_EXPECT_TRUE(RunSerialProductEntryClosesGeneration());
+}
+
+namespace {
+// Park the real relocation workers using the queue's normal GC synchronization
+// protocol, then request resize while that product task is already running.
+// No test callback or timing race decides when the request is issued.
+void ResizeRunningRelocation(ZGeneration& generation, uint32_t initial = 1, uint32_t requested = 3)
+{
+    auto* queue = generation.relocate().queue();
+    queue->synchronize();
+    std::thread relocating([&] { generation.relocate().relocate(&generation.relocation_set()); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (queue->SynchronizedWorkerCount() != initial && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool running = queue->SynchronizedWorkerCount() == initial;
+    generation.Workers()->request_resize_workers(requested);
+    queue->desynchronize();
+    relocating.join();
+    GC_EXPECT_TRUE(running);
+}
+}
+
+// ZGC zRelocate.cpp:1193-1224 and zWorkers.cpp:108-124. A request made
+// during the real relocation task must restart it with the new worker budget.
+GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
+{
+    GcHeapFixture fx;
+    PrepareOwnerRegion(fx);
+    auto& old = Heap::GetHeap().old();
+    auto& manager = Heap::GetHeap().page_allocator();
+    RelocationReceiptTest::ParkFrom(manager, fx.region0);
+    if (old.Workers() == nullptr) old.InitializeWorkers(3);
+    old.Workers()->set_active_workers(1);
+    old.Workers()->set_active();
+    ResizeRunningRelocation(old);
+    const auto active = old.Workers()->active_workers();
+    old.Workers()->set_inactive();
+    GC_EXPECT_EQ(active, 3u);
+    GC_EXPECT_TRUE(forwarding_for_page(fx.region0)->is_done());
+    GC_EXPECT_FALSE(old.relocate().queue()->is_active());
+}
+
+// The young branch must also select ZWorkers::run(ZRestartableTask*),
+// including an empty installed set at the end of a relocation cycle.
+GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryRestartsWithRequestedWorkers)
+{
+    GcHeapFixture fx;
+    auto& young = Heap::GetHeap().young();
+    if (young.Workers() == nullptr) young.InitializeWorkers(3);
+    young.Workers()->set_active_workers(1);
+    young.Workers()->set_active();
+    ResizeRunningRelocation(young);
+    const auto active = young.Workers()->active_workers();
+    young.Workers()->set_inactive();
+    GC_EXPECT_EQ(active, 3u);
+    GC_EXPECT_FALSE(young.relocate().queue()->is_active());
+}
+
+namespace {
+// Retained source pages stop real workers in detach_page (or the in-place
+// claim wait). Three pages hold the initial batch; the fourth holds its
+// successor. This leaves ordinary forwarding work pending at the observation
+// point, so ZWorkers' end-of-task resize cannot satisfy the assertion.
+// ZGC zRelocate.cpp:1206-1214, zForwarding.cpp:86-157.
+void CheckResizeBeforeRemainingForwarding(Generation id)
+{
+    GcHeapFixture fx;
+    ZPage* pages[4] = {fx.region0, fx.region1, nullptr, nullptr};
+    const PageAge age = id == Generation::Young ? PageAge::eden : PageAge::old;
+    for (size_t i = 0; i < 4; ++i) {
+        if (pages[i] == nullptr) {
+            pages[i] = ZPage::InitRegion(ZPage::GranuleIndex(fx.heapStart) + i,
+                                       ZGranuleSize, ZPageType::small);
+            PublishAllocatedPage(pages[i]);
+        }
+        pages[i]->reset(age);
+        auto* object = fx.PlaceObject(pages[i]->GetRegionStart());
+        pages[i]->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
+        GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], object));
+    }
+    GC_EXPECT_TRUE(BeginForwardingArena(id, {pages[0], pages[1], pages[2], pages[3]}));
+    auto& generation = Heap::GetHeap().GetZGeneration(id);
+    auto* queue = generation.relocate().queue();
+    ZForwarding* owners[4] = {};
+    ZRelocationSetIterator iterator(&generation.relocation_set());
+    for (auto& owner : owners) {
+        GC_EXPECT_TRUE(iterator.next(&owner));
+        GC_EXPECT_TRUE(owner->retain_page(queue));
+    }
+    if (generation.Workers() == nullptr) generation.InitializeWorkers(3);
+    auto* workers = generation.Workers();
+    workers->set_active_workers(3);
+    workers->set_active();
+    std::thread relocating([&] { generation.relocate().relocate(&generation.relocation_set()); });
+    const auto waitUntil = [](const auto& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        return predicate();
+    };
+    const bool initialBatch = waitUntil([&] {
+        return owners[0]->is_claimed() && owners[1]->is_claimed() && owners[2]->is_claimed();
+    });
+    const bool remainingUnclaimed = !owners[3]->is_claimed();
+    workers->request_resize_workers(1);
+    for (size_t i = 0; i < 3; ++i) owners[i]->release_page();
+    const bool remainingClaimed = waitUntil([&] { return owners[3]->is_claimed(); });
+    uint32_t activeWhilePending;
+    {
+        // Same lock as the product resize writer, avoiding an unsynchronized
+        // read of WorkerThreads' active count while a batch is restarting.
+        std::lock_guard<std::mutex> lock(*workers->resizing_lock());
+        activeWhilePending = workers->active_workers();
+    }
+    const bool remainingPending = !owners[3]->is_done();
+    owners[3]->release_page();
+    relocating.join();
+    const auto finalActive = workers->active_workers();
+    workers->set_inactive();
+    bool completed = true;
+    for (auto* owner : owners) completed = completed && owner->is_done();
+    std::fprintf(stderr,
+        "RELOCATE_RESIZE_PENDING generation=%s initial_batch=%d remaining_unclaimed=%d "
+        "remaining_claimed=%d remaining_pending=%d active_while_pending=%u final_active=%u\n",
+        id == Generation::Young ? "young" : "old", initialBatch, remainingUnclaimed,
+        remainingClaimed, remainingPending, activeWhilePending, finalActive);
+    GC_EXPECT_TRUE(initialBatch);
+    GC_EXPECT_TRUE(remainingUnclaimed);
+    GC_EXPECT_TRUE(remainingClaimed);
+    GC_EXPECT_TRUE(remainingPending);
+    std::fprintf(stderr, "ASSERT_RELOCATE_RESIZE_BEFORE_COMPLETION executed=1 active=%u expected=1\n",
+                 activeWhilePending);
+    GC_EXPECT_EQ(activeWhilePending, 1u);
+    GC_EXPECT_EQ(finalActive, 1u);
+    GC_EXPECT_TRUE(completed);
+    GC_EXPECT_FALSE(queue->is_active());
+}
+}
+
+GC_OTHER_VM_TEST(RelocateWorkers, OldProductEntryReducesWorkersDuringRelocation)
+{
+    CheckResizeBeforeRemainingForwarding(Generation::Old);
+}
+
+GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryReducesWorkersDuringRelocation)
+{
+    CheckResizeBeforeRemainingForwarding(Generation::Young);
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
