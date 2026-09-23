@@ -60,6 +60,7 @@ try:
     if bp.is_valid():
         raise RuntimeError('Real allocation request not reached')
     waiter = gdb.selected_thread()
+    cmd('set $stall_allocator = this')
     emit('REAL_ALLOCATION', stack=cmd('bt'), arguments=cmd('info args'))
     cmd('set scheduler-locking on')
     director = next(t for t in gdb.selected_inferior().threads() if t.name == 'ZDirector')
@@ -80,17 +81,27 @@ try:
         enqueue = line_in(allocator_source, 'bool RegionManager::StallAllocation', 'ZDriver::minor()->collect(')
         until('zPageAllocator.cpp:' + str(enqueue))
         emit('REAL_ENQUEUE_RESULT', arguments=cmd('info args'), stack=cmd('bt'))
+    queued = int(val('$stall_allocator->stalled._size'))
+    emit('ASSERT_STALL_QUEUE_STATE', queued=queued, stall=stall, passed=(queued > 0) == stall)
     director.switch()
     send = line_in(source, 'static void start_minor_gc', 'ZDriver::minor()->collect(')
     until('zDirector.cpp:' + str(send))
     emit('PRODUCT_SELECTION', young=str(val('selection.young_workers')), old=str(val('selection.old_workers')))
-    cmd('next')
     port = 'MapleRuntime::ZDriver::_minor->_port'
+    pending_before = bool(val(port + '._has_message'))
+    expected_cause = int(val('cause'))
+    cmd('next')
     actual = int(val(port + '._message._young_nworkers'))
     expected_workers = int(val('MapleRuntime::ZYoungGCThreads'))
+    pending = bool(val(port + '._has_message'))
+    cause = int(val(port + '._message._cause'))
+    old = int(val(port + '._message._old_nworkers'))
+    dispatched = not pending_before and pending and cause == expected_cause and old == 0
+    emit('ASSERT_MINOR_DISPATCH', pending_before=pending_before, pending=pending, cause=cause,
+         expected_cause=expected_cause, old=old, passed=dispatched)
     passed = actual == expected_workers if stall else actual < expected_workers
     emit('ASSERT_STALL_AFTER_SAMPLE_BOOSTS_REQUEST', actual=actual, limit=expected_workers, stall=stall, passed=passed)
-    cmd('quit ' + ('0' if passed else '1'))
+    cmd('quit ' + ('0' if passed and dispatched and (queued > 0) == stall else '1'))
 except Exception as error:
     emit('HARNESS_ERROR', error=str(error))
     cmd('quit 2')

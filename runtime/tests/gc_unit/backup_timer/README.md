@@ -53,8 +53,14 @@ instruction shape only and does not claim portability to another code generator.
 Q12 changes sample-boundary stops to the first decision entry: Release emits no
 instruction for the aggregate return or assignment. The stall observer
 `../test_director_stall_gdb.py` schedules the existing real blocked-allocation
-fixture after that boundary, then asserts the worker count in the product minor
-port request. `STALL_AFTER_SAMPLE=0` is the non-stall control. Required environment:
+fixture after that boundary, stopping at `RegionManager::StallAllocation` in
+`zPageAllocator.cpp` immediately before `ZDriver::minor()->collect` (ZGC
+`zPageAllocator.cpp:1436-1445`). It observes the actual stall queue, then resumes
+the director to `start_minor_gc` and its current `ZDriver::minor()->collect` call
+(ZGC `zDirector.cpp:801-817`). The observer asserts the worker count in
+`ZDriver::_minor->_port`, alongside the empty-to-pending transition, request cause,
+and zero old-worker count. No allocator request is dispatched while the director
+request is observed: the allocation thread remains stopped at the collect line. `STALL_AFTER_SAMPLE=0` is the non-stall control. Required environment:
 `DIRECTOR_SOURCE`, `STALL_FIXTURE_SOURCE`, `GCV2_RUNTIME_LIB_DIR`; run via GDB on
 the matching gc_unit ELF with LD_LIBRARY_PATH pointing at the product SO.
 
