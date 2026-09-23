@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "RuntimeConfig.h"
 #include "MutatorManager.h"
 #include "ThreadSMR.h"
 
@@ -36,7 +37,7 @@ namespace MapleRuntime {
 static uint64_t GetWaitLockTimeoutSec()
 {
     static const uint64_t timeout = []() -> uint64_t {
-        const char* env = std::getenv("cjMutatorLockTimeout");
+        const char* env = GetRuntimeConfigValue("cjMutatorLockTimeout");
         if (env != nullptr) {
             char* end = nullptr;
             unsigned long long parsed = std::strtoull(env, &end, 10);

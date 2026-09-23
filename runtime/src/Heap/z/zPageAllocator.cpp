@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "RuntimeConfig.h"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zFuture.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -481,7 +482,7 @@ void RegionManager::SetGarbageThreshold(double garbageThreshold)
 #if defined(__EULER__)
 void RegionManager::SetCacheRatio(double minSize, double maxSize, double defaultParam)
 {
-    auto env = std::getenv("cjCacheRatio");
+    auto env = GetRuntimeConfigValue("cjCacheRatio");
     if (env == nullptr) {
         cacheRatio = defaultParam;
         return;
@@ -558,7 +559,7 @@ void RegionManager::Initialize(size_t pageSize, uintptr_t regionInfoAddr, ZVirtu
     this->regionHeapEnd = segments.back().End();
     heapCapacity = pageSize;
     size_t soft = pageSize;
-    if (const char* env = std::getenv("cjSoftMaxHeapSize")) {
+    if (const char* env = GetRuntimeConfigValue("cjSoftMaxHeapSize")) {
         const size_t parsedKb = CString::ParseSizeFromEnv(env);
         if (parsedKb > 0) {
             soft = parsedKb * KB;

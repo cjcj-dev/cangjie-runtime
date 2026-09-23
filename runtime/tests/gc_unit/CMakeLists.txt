@@ -67,6 +67,7 @@ set(GC_UNIT_SOURCES
 
     test_string_dedup.cpp
     test_concurrent_gc_breakpoints.cpp
+    test_runtime_config.cpp
     test_uncommitter.cpp
     test_gc_thread_pool.cpp
     test_zWorkers.cpp
@@ -249,6 +250,7 @@ add_executable(cj_gc_uncommit_unit
     gc_cycle_sequence_fixture.cpp
     test_string_dedup.cpp
     test_concurrent_gc_breakpoints.cpp
+    test_runtime_config.cpp
     test_uncommitter.cpp
 )
 target_include_directories(cj_gc_uncommit_unit PRIVATE

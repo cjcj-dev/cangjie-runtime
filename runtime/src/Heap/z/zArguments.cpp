@@ -69,7 +69,7 @@ bool ZArguments::gc_enabled() { return g_gcEnabled; }
 void ZArguments::initialize()
 {
     initialize_alignments();
-    const char* enableGC = std::getenv("cjEnableGC");
+    const char* enableGC = GetRuntimeConfigValue("cjEnableGC");
     if (enableGC != nullptr) {
         if (std::strlen(enableGC) == 1 && enableGC[0] == '0') {
             g_gcEnabled = false;

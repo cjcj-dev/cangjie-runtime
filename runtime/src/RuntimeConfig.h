@@ -24,6 +24,13 @@ enum LibraryKind {
     APP,
 };
 
+struct RuntimeConfigEntryV1 {
+    const char* name;
+    const char* value;
+};
+
+const char* GetRuntimeConfigValue(const char* name);
+
 struct BinLoadApi {
     void* (*binLoadLib)(LibraryKind, const char*);
     void* (*binLoad)(const char*);

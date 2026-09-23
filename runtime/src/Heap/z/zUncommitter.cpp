@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "RuntimeConfig.h"
 #include "Heap/z/zUncommitter.hpp"
 
 #include <algorithm>
@@ -62,14 +63,14 @@ uint64_t Uncommitter::ParseDelayNs(const char* env)
 
 static std::atomic<uint64_t>& UncommitDelayNsStorage()
 {
-    static std::atomic<uint64_t> delayNs{ Uncommitter::ParseDelayNs(std::getenv("cjUncommitDelay")) };
+    static std::atomic<uint64_t> delayNs{ Uncommitter::ParseDelayNs(GetRuntimeConfigValue("cjUncommitDelay")) };
     return delayNs;
 }
 
 static std::atomic<bool>& UncommitFlagStorage()
 {
     static std::atomic<bool> enabled{ [] {
-        const char* env = std::getenv("cjUncommit");
+        const char* env = GetRuntimeConfigValue("cjUncommit");
         return env == nullptr || std::strcmp(env, "0") != 0;
     }() };
     return enabled;

@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
+#include "RuntimeConfig.h"
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Common/Runtime.h"
@@ -45,14 +46,14 @@ void ExceptionManager::OutOfMemory()
 
         // ohos Fork child process to perform heap dump asynchronously
         // check environment variable cjHeapDumpOnOOM=on/off
-        const char* env = std::getenv("cjHeapDumpOnOOM");
+        const char* env = GetRuntimeConfigValue("cjHeapDumpOnOOM");
         CString s = CString(env).RemoveBlankSpace();
         env = s.Str();
         if (env && !strcmp(env, "on")) {
 #if defined(__OHOS__) && (__OHOS__ == 1)
             // Check cjHeapDumpLog environment variable to trigger oom file dump event
             LOG(RTLOG_INFO, "Check cjHeapDumpLog environment variable to trigger oom file dump event");
-            const char* cjHeapDumpLogEnv = std::getenv("cjHeapDumpLog");
+            const char* cjHeapDumpLogEnv = GetRuntimeConfigValue("cjHeapDumpLog");
             if (cjHeapDumpLogEnv == nullptr || strlen(cjHeapDumpLogEnv) == 0) {
                 LOG(RTLOG_INFO, "prepare to report OOM FILEDUMPTASK");
                 const char* domain = "FRAMEWORK";

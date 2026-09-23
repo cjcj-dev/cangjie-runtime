@@ -367,6 +367,7 @@ MAIN_SOURCES=(
 
   "$SRC/test_string_dedup.cpp"
   "$SRC/test_concurrent_gc_breakpoints.cpp"
+  "$SRC/test_runtime_config.cpp"
   "$SRC/test_uncommitter.cpp"
   "$SRC/test_gc_thread_pool.cpp"
   "$SRC/test_zWorkers.cpp"
