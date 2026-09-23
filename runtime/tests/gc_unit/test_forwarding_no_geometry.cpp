@@ -75,7 +75,7 @@ GC_TEST(ForwardingNoGeometry, ExclusiveVtableFindHitSkipsCopy)
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
     Heap& collector = Heap::GetHeap();
-    GC_EXPECT_TRUE(ZRelocate::ForwardObjectExclusive(heap.obj0) == heap.obj1);
+    GC_EXPECT_TRUE(Heap::GetHeap().relocate_or_remap_object(heap.obj0, ZGenerationId::old) == heap.obj1);
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }
 #endif // MRT_TESTABLE_INTERNALS

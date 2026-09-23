@@ -173,17 +173,11 @@ private:
 class ZRelocate {
 public:
     void relocate(ZRelocationSet* relocation_set);
-    static BaseObject* ForwardObject(BaseObject* object, Generation generation);
-    static BaseObject* ForwardObjectExclusive(BaseObject* object);
     static void UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
     static bool IsFromObject(BaseObject* object);
     static void RemapYoungRoots();
     static void StartRelocationTasks(ZGenerationId generation);
 
-    // Raw historical carriers have no source color; use the owning generation.
-    static BaseObject* ResolveStoreValue(BaseObject* ref,
-                                         Generation generation);
-    static bool IsAlreadyToStoreValue(BaseObject* target, Generation generation);
     explicit ZRelocate(ZGeneration* generation) : generation(generation) {}
     BaseObject* forward_object(ZForwarding* forwarding, BaseObject* object);
     BaseObject* relocate_object(ZForwarding* forwarding, BaseObject* object);
@@ -208,17 +202,6 @@ private:
     ZPerWorker<ZRelocationTargets> mediumTargets;
     ZRelocationTargets sharedMediumTargets;
 };
-
-template <typename SetT, typename KeyT>
-bool LedgerInsert(SetT& set, const KeyT& key)
-{
-    return set.insert(key).second;
-}
-template <typename SetT, typename KeyT>
-size_t LedgerCount(const SetT& set, const KeyT& key)
-{
-    return set.count(key);
-}
 
 } // namespace MapleRuntime
 

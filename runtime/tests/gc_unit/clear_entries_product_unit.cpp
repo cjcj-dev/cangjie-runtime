@@ -101,11 +101,6 @@ public:
         return ZBarrier::GetAndTryTagRefField(value);
     }
 
-    static BaseObject* ResolveStoreValue(Heap& collector, BaseObject* value)
-    {
-        return ZRelocate::ResolveStoreValue(value, Generation::Old);
-    }
-
     static void CheckStoreGoodTarget(Heap& collector, BaseObject* value)
     {
         ZBarrier::CheckStoreGoodTarget("ForwardingLookupWitness", value);
@@ -162,12 +157,6 @@ public:
             (void)dlclose(handle);
         }
         return result;
-    }
-
-    static BaseObject* ForwardExclusive(
-        Heap& collector, BaseObject* from)
-    {
-        return ZRelocate::ForwardObjectExclusive(from);
     }
 
     static BaseObject* ForwardImpl(Heap& collector, BaseObject* from, ZPage* copyPage)
@@ -1047,20 +1036,6 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
 // A non-LookupUnavailable route may carry lookup-shaped fields from a caller,
 // but with the snapshot validity bit cleared they must never be rendered as
 // legal-looking zero values.
-
-
-
-
-// SD forwarding consumer gate: a compacted destination can be classified as
-// kAlreadyToStart by reverse geometry, but that classification is not a
-// load-good receipt. Make the destination header FORWARDED and drive the
-// product ResolveStoreValue entry; the only legal result is fail-closed.
-
-
-
-
-
-
 
 
 

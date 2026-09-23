@@ -4,14 +4,12 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
-
 #include <array>
 #include <cassert>
 #include <atomic>
@@ -30,7 +28,6 @@
 #include <unordered_set>
 #include <vector>
 #include <unistd.h>
-
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zThreadLocalData.hpp"
@@ -57,51 +54,37 @@
 #include "Heap/z/zRemembered.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zRelocate.hpp"
-
 #include "Heap/z/zPageAllocator.hpp"
-
-#include <algorithm>
-#include <atomic>
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <limits>
 #include <sched.h>
-#include <unistd.h>
-#include <vector>
 #if defined(_WIN64)
 #include <processthreadsapi.h>
 #endif
-
 #include "Heap/Allocator/RegionSpace.h"
 #include "Base/CString.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/z/zMark.hpp"
-#include "Heap/z/zDirector.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zStat.hpp"
-#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zUtils.inline.hpp"
-#include "Heap/z/zArray.inline.hpp"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
-#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Mutator/Mutator.inline.h"
-#include "Mutator/MutatorManager.h"
-#include "ObjectModel/RefField.inline.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "Sync/Sync.h"
+#include <chrono>
+#include "Heap/z/zPage.hpp"
+#include "Base/Log.h"
+#include "Heap/z/zGeneration.hpp"
+
+
 
 
 namespace MapleRuntime {
@@ -163,18 +146,8 @@ bool ZRelocate::IsFromObject(BaseObject* obj)
                Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
     }
 
-
-
-
 // installdomain: positive control — how often Resolve/Fix would install a ghost-from that is
 // outside GetRoute's liveInfo0 survivor domain. Grant paints that bit before route geometry.
-
-
-
-
-
-
-
 
 // this api untags current pointer as well as old pointer, caller should take care of this.
 
@@ -237,68 +210,6 @@ void ZRelocate::StartRelocationTasks(ZGenerationId generation)
     manager.ResetInPlaceRelocatedCounts();
     queue.BeginWorkers(workers.active_workers());
 }
-
-// N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.
-// Same-value concurrent writes converge; first writer wins. Counters for positive control.
-namespace {
-
-void EnsureRouteDomainMembership(BaseObject* obj)
-{
-    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-        return;
-    }
-    if (!obj->IsValidObject()) {
-        return;
-    }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
-    if (region == nullptr) {
-        return;
-    }
-    const bool isGhost = ZRelocate::IsFromObject(obj);
-    const bool isFrom = ZRelocate::IsFromObject(obj);
-    if (!isGhost && !isFrom) {
-        return;
-    }
-    const zaddress addr = from_object(obj);
-    const bool alreadyInDomain = region->is_object_live(addr);
-    if (alreadyInDomain) {
-        return;
-    }
-    if (isGhost) {
-        // Only paint while FORWARDABLE: relocation freezes liveByteCount.
-        if (region->IsForwardingDone() || region->IsRoutingState()) {
-            return;
-        }
-    }
-    // Mark the source page livemap.
-    (void)ZMark::MarkEntryObject(obj,
-        MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), nullptr);
-
-}
-
-// statresid: force ghost livemap paint while still FORWARDABLE (before any Route
-// freezes geometry). Used by the root grant pass and as last-chance before Forward.
-// Returns true when AdmitForRoute would accept `obj` after the paint attempt.
-bool ForceRootRouteDomainWhileForwardable(BaseObject* obj)
-{
-    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-        return false;
-    }
-    EnsureRouteDomainMembership(obj);
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
-    if (region == nullptr || !region->IsYoungRegion()) {
-        return false;
-    }
-    // Only paint while FORWARDABLE — after ROUTING/ROUTED/COMPACTED liveByteCount is
-    // frozen (S2); late marking would desync Admit from geometry.
-    if (region->IsForwardingDone() || region->IsRoutingState()) {
-        return region->is_object_live(from_object(obj));
-    }
-    (void)ZMark::MarkEntryObject(obj,
-        MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), nullptr);
-    return region->is_object_live(from_object(obj));
-}
-} // namespace
 
 // ZGC zRelocate.cpp:733-740.
 static bool AddRemsetIfYoung(volatile zpointer* field, zaddress address)
@@ -412,109 +323,6 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 // missing tip = permanent hole = invariant violation → CHECK (not hang, not geometric to).
 //
 
-// inplaceto: after an in-place compaction the from-layout and the to-layout occupy the *same*
-// page span, so the page-scoped ghost-from predicate cannot tell a stale from-address from an
-// address that has already been relocated.  ZGC never has to tell them apart: a to-pointer
-// carries the remapped colour, its barrier fast path returns before the forwarding table is
-// consulted, and zRelocate.cpp:382-389 is therefore only ever entered with a from-address.
-// Our root words are plain (no colour), so the discriminator has to be rebuilt from the page's
-// own geometry -- the same geometry ZGC records for this exact overlap in
-// ZForwarding::in_place_relocation_start (zForwarding.cpp:55-64, _in_place_top_at_start) and
-// consumes in ZHeap::is_in (zHeap.cpp:202-208).
-//
-// The three cases are mutually exclusive and jointly exhaustive for a compacted page whose
-// forwarding lookup missed:
-//
-//   survived(off)              the from-livemap covers this offset, so compact insert
-//                              owed a receipt for it and there is none -> refuse.
-//   off < allocPtr             the in-place compaction wrote the to-layout over this offset; no
-//                              from object is covered here and none ever was, so the address is
-//                              a to-address (or an interior of one) and is already current.
-//   off >= allocPtr            the abandoned tail above the new top: the from copy is gone and no
-//                              to-object was written here -> nothing can be named, refuse.
-//
-// Measured on NW256/256MB, 3/3 verbatim: a base register root held from-offset 33480 at mark and
-// to-offset 27320+2048 at the major PreForward, with the table mapping 33480 onto 27320
-// (revBaseHit=1 revBaseFromOff=33480).  The root was current; the walk asked anyway.
-// kAlreadyTo is split by what the page's own size walk says the address *is*.  ZGC's heap oop
-// fields hold object starts by construction -- interior pointers exist only as derived oops
-// paired with a base in an oop map (oopMap.cpp:404-424) and never in a field -- so an interior
-// reaching a heap-field consumer is not a to-address that needs recognising, it is a value that
-// names nothing.  Only the root-side consumers, where an interior is a legal register value, may
-// take kAlreadyToInterior.
-enum class CompactedMissClass : uint8_t { kReceiptOwed, kAlreadyToStart, kAlreadyToInterior,
-                                          kAbandonedTail };
-
-static CompactedMissClass ClassifyCompactedMiss(ZPage* region, BaseObject* obj)
-{
-    const MAddress addr = reinterpret_cast<MAddress>(obj);
-    const MAddress start = region->GetRegionStart();
-    const MAddress allocPtr = region->GetRegionAllocPtr();
-    if (addr < start) {
-        return CompactedMissClass::kAbandonedTail;
-    }
-    const size_t off = static_cast<size_t>(addr - start);
-    // Inside an in-place compaction the from- and to-layouts share one span, so
-    // "the from-livemap covers off" and "off is a published destination" are both true of the
-    // same address whenever some from-object landed on top of another from-object's start.  The
-    // three cases above are therefore NOT disjoint in that overlap, and asking the livemap first
-    // classified a live to-object start as an owed receipt: measured on NW256/256MB, a root at
-    // to-offset 18584 with survived=1 isStart=1 whose reverse lookup named from-offset 37256 as
-    // the object copied there (revHit=1 revBaseHit=1) was refused as try.compacted-no-receipt.
-    // Provenance is a claim only the page's own table can attest, so ask the table before the
-    // livemap -- ZGC resolves the identical overlap from ZForwarding::_in_place_top_at_start plus
-    // the forwarding entry, never from liveness (zForwarding.cpp:55-64; zHeap.cpp:202-208).
-    if (addr < allocPtr) {
-        ZForwarding* provenance = forwarding_for_page(region);
-        MAddress revFrom = 0;
-        if (provenance != nullptr && provenance->find_from_by_to(addr, &revFrom) && revFrom >= start) {
-            return CompactedMissClass::kAlreadyToStart;
-        }
-    }
-    if (region->is_object_live(to_zaddress(region->GetRegionStart() + off))) {
-        return CompactedMissClass::kReceiptOwed;
-    }
-    if (addr >= allocPtr) {
-        return CompactedMissClass::kAbandonedTail;
-    }
-    // The to-layout size walk is the discriminator, so it runs before the class is decided, not
-    // only for the diagnostic below.  A page whose walk cannot name a container for this address
-    // has published nothing that covers it: refuse.
-    size_t contOff = 0;
-    size_t contSize = 0;
-    size_t contDelta = 0;
-    unsigned contFound = 0;
-    if (region->IsLargeRegion()) {
-        contFound = 1;
-        contOff = 0;
-        contSize = static_cast<size_t>(allocPtr - start);
-        contDelta = off;
-    } else {
-        MAddress position = start;
-        for (size_t steps = 0; position < allocPtr && steps < (1u << 20); ++steps) {
-            BaseObject* o = reinterpret_cast<BaseObject*>(position);
-            const size_t allocSize = RegionSpace::GetAllocSize(*o);
-            if (allocSize == 0) {
-                break;
-            }
-            if (addr >= position && addr < position + allocSize) {
-                contFound = 1;
-                contOff = static_cast<size_t>(position - start);
-                contSize = allocSize;
-                contDelta = static_cast<size_t>(addr - position);
-                break;
-            }
-            position += allocSize;
-        }
-    }
-    if (contFound == 0) {
-        return CompactedMissClass::kAbandonedTail;
-    }
-    return contDelta == 0 ? CompactedMissClass::kAlreadyToStart
-                          : CompactedMissClass::kAlreadyToInterior;
-}
-
-
 // portmutreloc: ZRelocate::relocate_object's retain/copy/release leg (zRelocate.cpp:391-406).
 //
 // The three pieces map one-to-one onto machinery that already exists here:
@@ -538,194 +346,6 @@ BaseObject* ZRelocate::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner
     CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
     queue.Wait(request.forwarding);
     return reinterpret_cast<BaseObject*>(owner->find(from));
-}
-
-bool ZRelocate::IsAlreadyToStoreValue(BaseObject* target, Generation generation)
-{
-    return target != nullptr && Heap::IsHeapAddress(target) &&
-        ZBarrier::JudgeHandOutTarget(target) == HandVerdict::Usable &&
-        generation_forwarding_table(generation).get(reinterpret_cast<MAddress>(target)) == nullptr;
-}
-
-BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref,
-                                         Generation generation)
-{
-    // zBarrier.inline.hpp:695-716 store_barrier_on_heap_oop_field:
-    // color_store_good includes remap. A movable ghost-from value must go
-    // through the same relocate_or_remap funnel as the load barrier
-    // (zRelocate.cpp:382-416) before it is painted store-good.
-    BaseObject* current = ref;
-    for (;;) {
-        if (current == nullptr || !Heap::IsHeapAddress(current)) {
-            return current;
-        }
-        if (ZRelocate::IsAlreadyToStoreValue(current, generation)) {
-            return current;
-        }
-        const MAddress currentAddr = reinterpret_cast<MAddress>(current);
-        ZPage* currentRegion = Heap::page(currentAddr);
-        if (currentRegion != nullptr && currentRegion->IsCompactRouteDestination(currentAddr) &&
-            ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
-            // Dense in-place destinations share the from page's address range.
-            // Their presence in the completed compact route table is the
-            // positive relocation receipt; region membership alone must not
-            // reinterpret the packed to-address as another from-address.
-            return current;
-        }
-        // inplaceto: the test above pairs a structural question (is this a compact-route
-        // destination?) with a content heuristic on the header word, so an *interior* of a
-        // relocated object -- whose header word is zero by construction, HandVerdict::ZeroHeader
-        // -- can never satisfy it.  Measured, NW256/256MB 3/3: regionStart+4856 refused here with
-        // verdict=2, while the table maps from 4872 onto to 4840 and the page layout holds a
-        // 48-byte object at 4840 containing it (revBaseHit=1 revBaseFromOff=4872 contDelta=16).
-        // The page geometry answers the structural question without reading the payload, which is
-        // the order ZGC uses: the forwarding read never depends on the from copy's bytes
-        // (zRelocate.cpp:382-389).
-        if (currentRegion != nullptr && currentRegion->IsCompacted() &&
-            ClassifyCompactedMiss(currentRegion, current) == CompactedMissClass::kAlreadyToStart) {
-            // An address-shaped compact destination is not, by itself, a
-            // load-good value.  In particular the from header may be a zero
-            // header for an interior-shaped probe, so
-            // kAlreadyToStart is only a geometric classification.  The
-            // resolve postcondition is the same as every other receipt hop:
-            // only a Usable object may leave this function.  Keep the
-            // non-Usable case on the receipt/relocate path below, which either
-            // finds the explicit identity receipt or fails closed.
-            if (ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
-                return current;
-            }
-        }
-        const MAddress found = forwarding_find(generation, currentAddr);
-        // A forwarding entry qualifies one hop, not necessarily the final
-        // load-good value. The destination can already belong to the next
-        // relocation set; follow that address-keyed forwarding generation too.
-        // ZGC's load barrier returns only after remap/relocate has produced the
-        // current address (zBarrier.inline.hpp:294-343; zRelocate.cpp:382-416).
-        if (BaseObject* to = reinterpret_cast<BaseObject*>(found)) {
-            const HandVerdict verdict = ZBarrier::JudgeHandOutTarget(to);
-            if (verdict == HandVerdict::Usable) {
-                // from->from is the explicit whole-page in-place receipt
-                // (zRelocate.cpp:862-925,1013-1037), not a lookup miss.
-                return to;
-            }
-            if (to != current) {
-                current = to;
-                continue;
-            }
-            // Identity with a still-forwarded header is not a hop. Finish
-            // relocate_or_remap (zRelocate.cpp:382-416).
-        }
-
-        // A missing receipt is not a terminal miss while the from-region is
-        // retained: the current thread completes relocation before publishing
-        // the healed value (zBarrier.inline.hpp:294-343).
-        ZPage* ghost = currentRegion;
-        if (ghost == nullptr) {
-            ZPage* live = Heap::page(currentAddr);
-            if (live != nullptr && live->IsCompacted()) {
-                const CompactedMissClass cls = ClassifyCompactedMiss(live, current);
-                if (cls == CompactedMissClass::kAlreadyToStart &&
-                    ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
-                    return current;
-                }
-            }
-            if (live != nullptr && !live->IsFreeRegion() && !live->IsGarbageRegion() &&
-                ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
-                return current;
-            }
-            const MAddress lookupTo = forwarding_find(generation, currentAddr);
-            LOG(RTLOG_ERROR,
-                "[FWDTABLE][resolve-miss] site=no-forwarding consumer=ZRelocate::ResolveStoreValue "
-                "from=%p from_region=%p region_type=%u generation=%u "
-                "in_current_relocation_set=%u table_id=%#zx lookup_state=%u "
-                "from_page_epoch=%llu lifeId=%llu "
-                "gc_phase=%u ghost=0 compacted=%u route=%u lookup.to=%p "
-                " verdict=%u",
-                static_cast<void*>(current), static_cast<void*>(live),
-                live != nullptr ? 0u : 0xffu,
-                live != nullptr ? static_cast<unsigned>(live->generation_id()) : 0xffu,
-                (currentAddr != 0 && generation_forwarding_table(generation).get(currentAddr) != nullptr) ? 1u : 0u, 0zu,
-                0u,
-                0ull,
-                0ull,
-                ZGeneration::old() != nullptr ? static_cast<unsigned>(ZGeneration::old()->Snapshot().phase) : 0xffu,
-                live != nullptr && live->IsCompacted() ? 1u : 0u,
-                live != nullptr ? live->RelocateObserve() : 0u,
-                reinterpret_cast<void*>(lookupTo),
-                static_cast<unsigned>(ZBarrier::JudgeHandOutTarget(current)));
-            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.no-forwarding", current, 0);
-        }
-        // A pointer with ghost membership belongs to a published forwarding
-        // generation. Even after its route state changes it cannot be
-        // reclassified as a non-member; only an explicit receipt or completed
-        // relocation qualifies a value (zRelocate.cpp:408-415).
-        BaseObject* resolved = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate_or_remap_object(current);
-        if (resolved == nullptr) {
-            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.unresolved", current, 0);
-        }
-        if (resolved == current) {
-            // In-place completion must have published its identity receipt;
-            // without it, returning current would recreate the removed
-            // lookup-miss fallback.
-            const MAddress identity = forwarding_find(generation, currentAddr);
-            if (identity == currentAddr &&
-                ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
-                return current;
-            }
-            // zGeneration.inline.hpp:131-135: forwarding table gone → safe(addr).
-            // Ghost can be dispelled between the membership check and
-            // relocate_or_remap; that is not a missing identity receipt.
-            if (ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable &&
-                Heap::page(currentAddr) == nullptr) {
-                return current;
-            }
-            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.missing-identity", current, 0);
-        }
-        current = resolved;
-    }
-}
-
-BaseObject* ZRelocate::ForwardObject(BaseObject* obj, Generation generation)
-{
-    BaseObject* to = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate_or_remap_object(obj);
-    if (to != nullptr && to != obj) {
-        return to;
-    }
-    // GetRoute survivor gate / exclusive soft-miss: a movable ghost-from with no
-    // to-version is not a stable address. Returning `obj` here reinstalls a from
-    // pointer whose source page is about to be released.
-    // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
-    if (IsFromObject(obj)) {
-        ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
-        BaseObject* waited = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate()
-            .WaitForPageForwarding(obj, forwarding_for_page(region));
-        if (waited != nullptr) {
-            return waited;
-        }
-        if (const MAddress hit = forwarding_find(generation, reinterpret_cast<MAddress>(obj))) {
-            return reinterpret_cast<BaseObject*>(hit);
-        }
-        // zRelocate.cpp:412-415: after wait, the table holds the winner. The page
-        // worker copying this object (CurrentPageWork) must not wait on itself.
-        if (ZForwarding::CurrentPageWork() != nullptr) {
-            return nullptr;
-        }
-        CHECK_DETAIL(false, "should be forwarded from=%p", obj);
-        return nullptr;
-    }
-    return obj;
-}
-
-BaseObject* ZRelocate::ForwardObjectExclusive(BaseObject* obj)
-{
-    ZPage* page = Heap::page(reinterpret_cast<MAddress>(obj));
-    if (page == nullptr) {
-        page = Heap::page(reinterpret_cast<MAddress>(obj));
-    }
-    if (page == nullptr) {
-        return nullptr;
-    }
-    return ZGeneration::generation(page->generation_id())->relocate().relocate_object(forwarding_for_page(page), obj);
 }
 
 void ZRelocate::UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to)
@@ -1047,59 +667,7 @@ void ForwardTask<G>::work()
 template class ForwardTask<Generation::Young>;
 template class ForwardTask<Generation::Old>;
 
-
-namespace {
-void WaitCopiedObjectsUnlocked(ZPage* region)
-{
-    if (region == nullptr || region->IsFreeRegion()) {
-        return;
-    }
-    ZForwarding::WaitPageDone(forwarding_for_page(region));
-}
-
-template<typename Fn>
-void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn&& fn)
-{
-    // ZPage::object_iterate (zPage.inline.hpp:319-331) over the original page's
-    // livemap, retained until in_place_relocation_finish.
-    const ZGenerationId id = region->generation_id();
-    ZLiveMap* map = &region->livemap();
-    if (map == nullptr) {
-        return;
-    }
-    const int shift = region->object_alignment_shift();
-    map->iterate(id, [&](BitMap::idx_t index) -> bool {
-        const size_t offset = (index / 2) << shift;
-        if (start + offset < allocPtr) {
-            fn(from_region_addr(start + offset), offset);
-        }
-        return true;
-    });
-}
-
-} // namespace
-
 } // namespace MapleRuntime
-
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-#include "Heap/z/zRelocate.hpp"
-#include "Heap/z/zJNICritical.hpp"
-
-#include <atomic>
-#include <chrono>
-#include "Heap/Allocator/RegionSpace.h"
-#include "Heap/z/zArray.inline.hpp"
-#include "Heap/z/zBarrier.inline.hpp"
-#include "Heap/z/zIterator.inline.hpp"
-#include "Heap/z/zPage.hpp"
-#include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/z/zTask.hpp"
-#include "Heap/z/zWorkers.inline.hpp"
 
 namespace MapleRuntime {
 
@@ -1496,212 +1064,9 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
 }
 }
 
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-
-#include <atomic>
-#include <cstdio>
-#include <cstdlib>
-#include "Base/Log.h"
-#include "Heap/z/zHeap.hpp"
-#include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/z/zGeneration.hpp"
-
-namespace MapleRuntime {
-} // namespace MapleRuntime
-
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-
-#include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
-#include "Heap/z/zMark.hpp"
-
-#include <array>
-#include <atomic>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <algorithm>
-#include <iterator>
-#include <limits>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
-#include <unistd.h>
-
-#include "Concurrency/Concurrency.h"
-#include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/z/zDirector.hpp"
-#include "Heap/z/zMarkPartialArray.hpp"
-#include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/z/zWorkers.inline.hpp"
-#include "Heap/z/zAddress.inline.hpp"
-#include "Mutator/MutatorManager.h"
-#include "ObjectModel/MArray.inline.h"
-#include "UnwindStack/StackFrameCursor.h"
-#include "ObjectModel/RefField.inline.h"
-#include "TypeInfoManager.h"
-#include "Heap/z/zThreadLocalAllocBuffer.hpp"
-#include "Heap/z/zRememberedSet.hpp"
-#include "Heap/z/zForwarding.hpp"
-#include "Heap/z/zRelocate.hpp"
-
-#include "Heap/z/zPageAllocator.hpp"
-
-#include <algorithm>
-#include <atomic>
-#include <cmath>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <limits>
-#include <sched.h>
-#include <unistd.h>
-#include <vector>
-#if defined(_WIN64)
-#include <processthreadsapi.h>
-#endif
-
-#include "Heap/Allocator/RegionSpace.h"
-#include "Base/CString.h"
-#include "Base/LogFile.h"
-#include "Base/TimeUtils.h"
-#include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/z/zForwarding.hpp"
-#include "Heap/z/zDriver.hpp"
-#include "Heap/z/zMark.hpp"
-#include "Heap/z/zDirector.hpp"
-#include "Heap/z/zUncommitter.hpp"
-#include "Heap/z/zStat.hpp"
-#include "Heap/z/zRelocationSetSelector.hpp"
-#include "Common/BaseObject.h"
-#include "Common/ScopedObjectAccess.h"
-#include "Heap/z/zHeap.hpp"
-#include "Heap/z/zRememberedSet.hpp"
-#include "Heap/shared/collectedHeap.hpp"
-#include "Heap/z/zForwardingTable.hpp"
-#include "Heap/z/zRelocationSetSelector.hpp"
-#include "Mutator/Mutator.inline.h"
-#include "Mutator/MutatorManager.h"
-#include "ObjectModel/RefField.inline.h"
-#if defined(CANGJIE_TSAN_SUPPORT)
-#include "Sanitizer/SanitizerInterface.h"
-#endif
-#include "Sync/Sync.h"
-
-
-namespace MapleRuntime {
-}
-
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-
-#include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
-#include "Heap/z/zMark.hpp"
-
-#include <array>
-#include <atomic>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <algorithm>
-#include <iterator>
-#include <limits>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
-#include <unistd.h>
-
-#include "Concurrency/Concurrency.h"
-#include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/z/zDirector.hpp"
-#include "Heap/z/zMarkPartialArray.hpp"
-#include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/z/zWorkers.inline.hpp"
-#include "Heap/z/zAddress.inline.hpp"
-#include "Mutator/MutatorManager.h"
-#include "ObjectModel/MArray.inline.h"
-#include "UnwindStack/StackFrameCursor.h"
-#include "ObjectModel/RefField.inline.h"
-#include "TypeInfoManager.h"
-#include "Heap/z/zThreadLocalAllocBuffer.hpp"
-#include "Heap/z/zRememberedSet.hpp"
-#include "Heap/z/zForwarding.hpp"
-#include "Heap/z/zRelocate.hpp"
-
-#include "Heap/z/zPageAllocator.hpp"
-
-#include <algorithm>
-#include <atomic>
-#include <cmath>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <limits>
-#include <sched.h>
-#include <unistd.h>
-#include <vector>
-#if defined(_WIN64)
-#include <processthreadsapi.h>
-#endif
-
-#include "Heap/Allocator/RegionSpace.h"
-#include "Base/CString.h"
-#include "Base/LogFile.h"
-#include "Base/TimeUtils.h"
-#include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/z/zForwarding.hpp"
-#include "Heap/z/zDriver.hpp"
-#include "Heap/z/zMark.hpp"
-#include "Heap/z/zDirector.hpp"
-#include "Heap/z/zUncommitter.hpp"
-#include "Heap/z/zStat.hpp"
-#include "Heap/z/zRelocationSetSelector.hpp"
-#include "Common/BaseObject.h"
-#include "Common/ScopedObjectAccess.h"
-#include "Heap/z/zHeap.hpp"
-#include "Heap/z/zRememberedSet.hpp"
-#include "Heap/shared/collectedHeap.hpp"
-#include "Heap/z/zForwardingTable.hpp"
-#include "Heap/z/zRelocationSetSelector.hpp"
-#include "Mutator/Mutator.inline.h"
-#include "Mutator/MutatorManager.h"
-#include "ObjectModel/RefField.inline.h"
-#if defined(CANGJIE_TSAN_SUPPORT)
-#include "Sanitizer/SanitizerInterface.h"
-#endif
-#include "Sync/Sync.h"
 
 
 
-
-namespace MapleRuntime {
-
-}
 
 namespace MapleRuntime {
 // ZGC zRelocate.cpp:1412-1418.

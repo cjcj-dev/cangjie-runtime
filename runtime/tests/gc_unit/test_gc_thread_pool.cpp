@@ -69,7 +69,8 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
     // Relocation may compact in place and transfer remembered slots.
     ZPage* region = fx.region0;
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, { region }));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, fx.obj1));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {region, fx.region1}));
         region->MarkForwardingDone();
 }
 
@@ -84,7 +85,8 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     from = reinterpret_cast<MAddress>(fx.obj0);
     to = reinterpret_cast<MAddress>(fx.obj1);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, { region }));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, fx.obj1));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {region, fx.region1}));
         ForwardingEntries* entries = generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart());
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;

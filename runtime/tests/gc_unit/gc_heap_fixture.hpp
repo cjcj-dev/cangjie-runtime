@@ -137,7 +137,7 @@ inline bool InitFwdTables()
 
 inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZPage*> pages)
 {
-    ZRelocationSetSelector selector;
+    ZRelocationSetSelector selector(0.0);
     for (ZPage* page : pages) {
         if (page == nullptr) {
             continue;
@@ -145,10 +145,11 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
         if (page->IsAllocating()) {
             ZPageTest::MakeRelocatable(*page);
         }
-        selector.add_selected_small(page, ZForwarding::nentries(page));
+        selector.register_live_page(page);
     }
     auto& gen = *(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young())
                                                  : static_cast<ZGeneration*>(ZGeneration::old()));
+    selector.select();
     gen.relocation_set().install(&selector);
     // Explicit fixture input for isolated barrier/table cases. This helper is
     // not evidence for the generation entry; SelectionPublishesPreparedForwardingOnce

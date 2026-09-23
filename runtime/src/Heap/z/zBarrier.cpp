@@ -975,7 +975,7 @@ RefField<> ZBarrier::GetAndTryTagRefField(BaseObject* target)
         return RefField<>(ZAddress::store_good(from_object(target)));
     }
     // ZPointer::uncolor is the sole producer accepted by ZAddress::store_good
-    // (zAddress.inline.hpp:609-624,806-811). ResolveStoreValue is our
+    // (zAddress.inline.hpp:609-624,806-811). ValidateCurrentValue is our
     // make-load-good producer: a relocation-set address is looked up or copied
     // by this thread; an unresolved address never reaches colouring.
     target = ZBarrier::ValidateCurrentValue(target);

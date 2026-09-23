@@ -178,10 +178,6 @@ void ZRelocationSetSelectorGroup::select()
     }
 }
 
-ZRelocationSetSelector::ZRelocationSetSelector()
-    : ZRelocationSetSelector(0.0)
-{}
-
 ZRelocationSetSelector::ZRelocationSetSelector(double fragmentation_limit)
     : _small("Small", ZPageType::small, ZPageSizeSmall, ZObjectSizeLimitSmall, fragmentation_limit),
       _medium("Medium", ZPageType::medium, ZPageSizeMediumMax, ZObjectSizeLimitMedium, fragmentation_limit),
@@ -196,22 +192,6 @@ void ZRelocationSetSelector::select()
     _small.select();
 }
 
-void ZRelocationSetSelector::check_selected_relocatable() const
-{
-    auto check = [](const ZArray<ZPage*>* pages) {
-        if (pages == nullptr) {
-            return;
-        }
-        for (int i = 0; i < pages->length(); ++i) {
-            ZPage* page = pages->at(i);
-            CHECK_DETAIL(page->is_relocatable(),
-                         "selected page must be relocatable start=%#zx", page->GetRegionStart());
-        }
-    };
-    check(selected_small());
-    check(selected_medium());
-}
-
 ZRelocationSetSelectorStats ZRelocationSetSelector::stats() const
 {
     ZRelocationSetSelectorStats stats;
@@ -224,15 +204,5 @@ ZRelocationSetSelectorStats ZRelocationSetSelector::stats() const
     stats._has_relocatable_pages = total() > 0 ? 1 : 0;
     return stats;
 }
-
-void RegionManager::CountLiveObject(const BaseObject* obj)
-{
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
-    region->inc_live(1, obj->GetSize());
-}
-
-void RegionManager::AssembleSmallGarbageCandidates() {}
-
-void RegionManager::AssembleLargeGarbageCandidates() {}
 
 } // namespace MapleRuntime
