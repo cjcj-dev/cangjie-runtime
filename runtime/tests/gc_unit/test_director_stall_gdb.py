@@ -12,8 +12,6 @@ import time
 from pathlib import Path
 
 stall = os.environ.get('STALL_AFTER_SAMPLE', '1') == '1'
-source = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
-fixture_source = Path(os.environ['STALL_FIXTURE_SOURCE']).read_text().splitlines()
 
 
 def cmd(command):
@@ -41,6 +39,8 @@ def until(spec):
 
 
 try:
+    source = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
+    fixture_source = Path(os.environ['STALL_FIXTURE_SOURCE']).read_text().splitlines()
     for setting in ('pagination off', 'confirm off', 'breakpoint pending on', 'print thread-events off'):
         cmd('set ' + setting)
     fixture = 'GcDirector.OldStallSuppressesMinorAllocationRate'

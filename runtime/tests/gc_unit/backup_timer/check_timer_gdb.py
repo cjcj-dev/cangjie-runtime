@@ -12,7 +12,6 @@ import os
 import time
 from pathlib import Path
 
-source = Path(os.environ['TIMER_SOURCE']).read_text().splitlines()
 generation = os.environ['TIMER_GENERATION']
 explicit = os.environ['TIMER_EXPLICIT'] == '1'
 changed = os.environ.get('TIMER_CHANGE', '0') == '1'
@@ -98,6 +97,7 @@ def observe_timer_result():
 
 
 try:
+    source = Path(os.environ['TIMER_SOURCE']).read_text().splitlines()
     for setting in ('pagination off', 'confirm off', 'breakpoint pending on',
                     'print thread-events off'):
         command('set ' + setting)
