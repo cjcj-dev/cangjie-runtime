@@ -4,11 +4,23 @@
 #include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zPage.inline.hpp"
 #include "Mutator/Mutator.h"
 #include "Common/BaseObject.inline.h"
 #include <algorithm>
 
 namespace MapleRuntime {
+void ZBarrierSet::on_slowpath_allocation_exit(BaseObject* new_obj)
+{
+    const ZPage* const page = Heap::page(reinterpret_cast<MAddress>(new_obj));
+    if (!page->allows_raw_null()) {
+        // ZGC zBarrierSet.cpp:293-301 deoptimizes here. AOT has no deopt;
+        // cjcj-llvm#15 only admits allocations that cannot yield after allocation.
+        CHECK_DETAIL(false, "allocation exit must allow raw null");
+    }
+}
+
 ValuePayload::ValuePayload(MAddress address, size_t size)
     : ValuePayload(address, size, Heap::IsHeapAddress(address) ? Kind::Heap : Kind::Uncolored) {}
 

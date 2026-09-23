@@ -52,6 +52,17 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+// ZGC zPage.cpp:74-80: promotion installation revokes the raw-null promise.
+bool ZPage::allows_raw_null() const
+{
+    return is_young() && !__atomic_load_n(&_relocate_promoted, __ATOMIC_RELAXED);
+}
+
+void ZPage::set_is_relocate_promoted()
+{
+    __atomic_store_n(&_relocate_promoted, true, __ATOMIC_RELAXED);
+}
+
 // Keep the empty allocation page identity in the product DSO. An inline
 // function-local object gives callers in another DSO a different sentinel.
 ZPage* ZPage::NullRegion()
