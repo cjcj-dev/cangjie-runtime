@@ -37,32 +37,28 @@ def young_collections():
         selected.switch()
     return active
 
-class VerifyEntry(gdb.Breakpoint):
-    def stop(self):
-        active = young_collections()
+# Enumerate threads only after GDB has completed its all-stop transition;
+# Breakpoint.stop() runs before that transition and cannot inspect other threads.
+gdb.Breakpoint('MapleRuntime::VM_ZVerifyOld::name() const')
+gdb.Breakpoint('MapleRuntime::ZGenerationYoung::concurrent_mark()')
+gdb.Breakpoint('MapleRuntime::ZGenerationYoung::concurrent_relocate()')
+gdb.execute('run')
+while gdb.selected_inferior().threads():
+    name = gdb.newest_frame().name() or ''
+    active = young_collections()
+    if name == 'MapleRuntime::VM_ZVerifyOld::name':
         samples.append(bool(active))
         print('OLD_VERIFY_TARGET sample=%d young_active=%d frames=%s' %
               (len(samples), bool(active), active))
-        return False
-
-class YoungEntry(gdb.Breakpoint):
-    def __init__(self, phase, symbol):
-        super().__init__(symbol)
-        self.phase = phase
-
-    def stop(self):
-        active = young_collections()
+    else:
+        phase = {'MapleRuntime::ZGenerationYoung::concurrent_mark': 'mark',
+                 'MapleRuntime::ZGenerationYoung::concurrent_relocate': 'relocate'}[name]
         current = gdb.selected_thread().num
-        observed = (current, self.phase) in active
-        young_positive[self.phase].append(observed)
+        observed = (current, phase) in active
+        young_positive[phase].append(observed)
         print('OLD_VERIFY_POSITIVE phase=%s young_active=%d frames=%s' %
-              (self.phase, observed, active))
-        return False
-
-VerifyEntry('MapleRuntime::VM_ZVerifyOld::name() const')
-YoungEntry('mark', 'MapleRuntime::ZGenerationYoung::concurrent_mark()')
-YoungEntry('relocate', 'MapleRuntime::ZGenerationYoung::concurrent_relocate()')
-gdb.execute('run')
+              (phase, observed, active))
+    gdb.execute('continue')
 exit_code = int(gdb.parse_and_eval('$_exitcode'))
 expected = os.environ.get('ZVerifyRoots') == '1' or os.environ.get('ZVerifyObjects') == '1'
 qualified = exit_code == 0 and all(len(values) >= 50 and all(values)
