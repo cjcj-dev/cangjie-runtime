@@ -1,4 +1,6 @@
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zStat.hpp"
@@ -547,3 +549,56 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_EQ(completed.warmupCycles, 3u);
 }
+
+namespace {
+void CheckDriverCause(GCReason cause, bool minor, bool clearSoft, bool preclean)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto* collected = ZCollectedHeap::heap();
+    auto& heap = Heap::GetHeap();
+    const auto youngBefore = heap.young().Snapshot().sequence;
+    const auto oldBefore = heap.old().Snapshot().sequence;
+    ZDriverPort& port = minor ? collected->driver_minor()->port() : collected->driver_major()->port();
+    {
+        ScopedEnterSaferegion safe(false);
+        const ZDriverRequest request(cause, 2, minor ? 0 : 2);
+        if (minor) collected->driver_minor()->collect(request);
+        else collected->driver_major()->collect(request);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (port.is_busy() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    // Completion and policy assertions are independent: the target policy is
+    // always printed, even if the request did not complete as expected.
+    const bool done = !port.is_busy();
+    const auto youngAfter = heap.young().Snapshot().sequence;
+    const auto oldAfter = heap.old().Snapshot().sequence;
+    const bool actualClear = heap.GetFinalizerProcessor().GetReferenceProcessor().uses_clear_all_soft_reference_policy();
+    const auto expectedYoung = minor ? 1u : (preclean ? 2u : 1u);
+    std::fprintf(stderr, "DRIVER_CAUSE_TARGET cause=%u minor=%d done=%d young=%llu old=%llu clear=%d expected_clear=%d expected_young=%u\n",
+        cause, minor, done, static_cast<unsigned long long>(youngAfter - youngBefore),
+        static_cast<unsigned long long>(oldAfter - oldBefore), actualClear, clearSoft, expectedYoung);
+    GC_EXPECT_EQ(youngAfter - youngBefore, expectedYoung);
+    GC_EXPECT_EQ(oldAfter - oldBefore, minor ? 0u : 1u);
+    if (!minor) GC_EXPECT_EQ(actualClear, clearSoft);
+    GC_EXPECT_TRUE(done);
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorTimer) { CheckDriverCause(GC_REASON_TIMER, true, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorAllocationRate) { CheckDriverCause(GC_REASON_ALLOCATION_RATE, true, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorHighUsage) { CheckDriverCause(GC_REASON_HIGH_USAGE, true, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorAllocationStall) { CheckDriverCause(GC_REASON_ALLOCATION_STALL, true, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorWhiteBox) { CheckDriverCause(GC_REASON_YOUNG, true, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorTimer) { CheckDriverCause(GC_REASON_TIMER, false, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorAllocationRate) { CheckDriverCause(GC_REASON_ALLOCATION_RATE, false, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorProactive) { CheckDriverCause(GC_REASON_PROACTIVE, false, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorWarmup) { CheckDriverCause(GC_REASON_WARMUP, false, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorAllocationStall) { CheckDriverCause(GC_REASON_ALLOCATION_STALL, false, true, true); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorWhiteBox) { CheckDriverCause(GC_REASON_FORCE, false, true, true); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorUser) { CheckDriverCause(GC_REASON_USER, false, false, true); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorDiagnosticCommand) { CheckDriverCause(GC_REASON_DCMD_GC_RUN, false, false, true); }
