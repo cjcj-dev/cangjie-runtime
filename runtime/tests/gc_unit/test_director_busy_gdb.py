@@ -23,6 +23,7 @@ EQUAL = int(os.environ.get('BUSY_EQUAL', '0'))
 DYNAMIC = int(os.environ.get('BUSY_DYNAMIC', '1'))
 SOURCE = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
 READS = []
+DRIVER_READS = []
 RETURNS = set()
 RULE_RESULTS = []
 
@@ -131,6 +132,23 @@ class BusyRead(gdb.Breakpoint):
         return False
 
 
+class DriverBusyReturn(gdb.FinishBreakpoint):
+    def __init__(self):
+        self.driver = gdb.newest_frame().name()
+        super().__init__(gdb.newest_frame(), internal=True)
+
+    def stop(self):
+        DRIVER_READS.append({'driver': self.driver, 'busy': int(value('$rax')) & 255})
+        return False
+
+
+class DriverBusyRead(gdb.Breakpoint):
+    def stop(self):
+        if gdb.selected_thread().name == 'ZDirector':
+            DriverBusyReturn()
+        return False
+
+
 class MajorRule(gdb.Breakpoint):
     def stop(self):
         if gdb.selected_thread().name == 'ZDirector':
@@ -205,6 +223,8 @@ try:
     port_lines = Path(os.environ['DIRECTOR_SOURCE']).with_name('zDriverPort.cpp').read_text().splitlines()
     port_return = next(i + 1 for i, text in enumerate(port_lines) if 'return _has_message;' in text)
     BusyRead('zDriverPort.cpp:' + str(port_return), internal=True)
+    DriverBusyRead('MapleRuntime::ZDriverMinor::is_busy() const', internal=True)
+    DriverBusyRead('MapleRuntime::ZDriverMajor::is_busy() const', internal=True)
     if SITE != 'entry':
         advance('entry')
     emit('SAMPLED', resize=diagnostic('stats.old_stats.resize.is_active'),
@@ -250,6 +270,7 @@ try:
                         set_busy('$major', CURRENT)
     if SITE == 'merge':
         MajorRule('zDirector.cpp:' + str(LINES['rule']), internal=True)
+    driver_reads_before = len(DRIVER_READS)
     emit('TARGET_BEFORE', site=SITE, initial=INITIAL, current=CURRENT, location=location())
     if SITE == 'resize':
         actual_dynamic = bool(value('MapleRuntime::UseDynamicNumberOfGCThreads'))
@@ -267,7 +288,9 @@ try:
     else:
         command('next')
     after = location()
-    emit('TARGET_AFTER', location=after, product_busy_returns=READS)
+    target_driver_reads = DRIVER_READS[driver_reads_before:]
+    emit('TARGET_AFTER', location=after, product_busy_returns=READS,
+         driver_busy_returns=target_driver_reads)
     if SITE == 'merge':
         check('ASSERT_MERGE_GATE', bool(RULE_RESULTS) == (not bool(CURRENT)),
               rule_results=RULE_RESULTS, expected_enter=not bool(CURRENT))
@@ -295,7 +318,14 @@ try:
     else:
         rejected = after['function'] == 'MapleRuntime::ZDirector::run_thread'
     expected = bool(CURRENT) and not (SITE == 'minor_major' and RESIZE)
-    check('ASSERT_GATE', rejected == expected, expected_reject=expected, actual_reject=rejected)
+    driver_result_ok = True
+    if SITE in ('minor', 'major'):
+        target_driver = 'ZDriver' + SITE.title() + '::is_busy'
+        matching = [read for read in target_driver_reads if target_driver in read['driver']]
+        driver_result_ok = len(matching) == 1 and matching[0]['busy'] == CURRENT
+    check('ASSERT_GATE', rejected == expected and driver_result_ok,
+          expected_reject=expected, actual_reject=rejected,
+          driver_result_ok=driver_result_ok, driver_busy_returns=target_driver_reads)
 except Exception as error:
     emit('HARNESS_ERROR', error=str(error))
     command('quit 2')
