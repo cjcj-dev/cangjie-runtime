@@ -105,6 +105,23 @@ inline void TerminateChildVmGroup(pid_t group)
     while (waitpid(-group, &status, 0) > 0 || errno == EINTR) {}
 }
 
+// Match the status vocabulary used by gtest death-test failure reports.
+inline std::string ChildExitSummary(bool waited, int status)
+{
+    if (!waited) { return "waitpid status unavailable (wait failed or deadline exceeded)"; }
+    if (WIFEXITED(status)) {
+        return "Exited with exit status " + std::to_string(WEXITSTATUS(status));
+    }
+    if (WIFSIGNALED(status)) {
+        std::string result = "Terminated by signal " + std::to_string(WTERMSIG(status));
+#ifdef WCOREDUMP
+        result += WCOREDUMP(status) ? " (core dumped)" : " (core not dumped)";
+#endif
+        return result;
+    }
+    return "Unexpected waitpid status " + std::to_string(status);
+}
+
 inline bool WaitChildExit(pid_t child, int& status,
                           std::chrono::steady_clock::time_point deadline, bool ownsGroup = false)
 {

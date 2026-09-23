@@ -50,6 +50,22 @@ GC_OTHER_VM_TEST(OtherVmExit, SignalAfterSentinel)
     if (std::atexit([] { raise(SIGKILL); }) != 0) { throw AssertFailure("atexit failed"); }
 }
 
+GC_OTHER_VM_TEST(OtherVmExit, ExitStatus3)
+{
+    std::fprintf(stderr, "exit-three-stderr\n");
+    _exit(3);
+}
+GC_OTHER_VM_TEST(OtherVmExit, Signal11)
+{
+    // Exercise tail truncation, with a recognizable final diagnostic.
+    const std::string output(5000, 'x');
+    std::fprintf(stderr, "%s\nsignal-eleven-stderr\n", output.c_str());
+    std::fflush(stderr);
+    signal(SIGSEGV, SIG_DFL);
+    raise(SIGSEGV);
+    _exit(125);
+}
+
 int main(int argc, char** argv)
 {
     if (std::getenv("GC_UNIT_OTHER_VM_CHILD") != nullptr) {
@@ -63,9 +79,11 @@ int main(int argc, char** argv)
         const bool expected = std::strcmp(test.name, "Clean") == 0 ||
             std::strcmp(test.name, "GroupMemberAfterSentinel") == 0;
         bool accepted = true;
+        std::string diagnostic;
         try { RunInOtherVm(name); }
         catch (const AssertFailure& failure) {
             accepted = false;
+            diagnostic = failure.what();
             std::fprintf(stderr, "OBSERVED %s: %s\n", name.c_str(), failure.what());
         }
         // RunInOtherVm must consume its descendants before relinquishing its
@@ -74,7 +92,24 @@ int main(int argc, char** argv)
         errno = 0;
         const pid_t remaining = waitpid(-1, &status, WNOHANG);
         const bool reaped = remaining == -1 && errno == ECHILD;
-        const bool pass = accepted == expected && reaped;
+        bool diagnosticOk = true;
+        const bool exitThree = std::strcmp(test.name, "ExitStatus3") == 0;
+        const bool signalEleven = std::strcmp(test.name, "Signal11") == 0;
+        if (exitThree || signalEleven) {
+            const std::string marker = "Child stderr tail (<=4096 bytes):\n";
+            const size_t tail = diagnostic.find(marker);
+            diagnosticOk = diagnostic.find(exitThree ? "Exited with exit status 3" :
+                "Terminated by signal 11") != std::string::npos &&
+                diagnostic.find("sentinel=missing") != std::string::npos &&
+                diagnostic.find(exitThree ? "exit-three-stderr\n" : "signal-eleven-stderr\n") != std::string::npos &&
+                tail != std::string::npos && diagnostic.size() - tail - marker.size() <= 4096;
+            if (signalEleven) {
+                diagnosticOk = diagnosticOk && diagnostic.size() - tail - marker.size() == 4096 &&
+                    diagnostic.find("(core ") != std::string::npos;
+            }
+            std::printf("ASSERT_DIAGNOSTIC %s %s\n", name.c_str(), diagnosticOk ? "PASS" : "FAIL");
+        }
+        const bool pass = accepted == expected && reaped && diagnosticOk;
         std::printf("ASSERT %s accepted=%d expected=%d reaped=%d %s\n",
                     name.c_str(), accepted, expected, reaped, pass ? "PASS" : "FAIL");
         failed += !pass;
