@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # Licensed under Apache-2.0 with Runtime Library Exception.
-"""Observe real timer dispatch; do not write clock/statistics/decision results.
+"""Observe real timer results and dispatch; do not write clock/statistics/decision results.
 
 Normal public configuration selects env/API and default/explicit interval.
 For the minor case, product port and worker methods hold a major request busy,
@@ -44,6 +44,56 @@ def advance(line):
         raise RuntimeError('Director boundary was not reached: ' + str(line))
 
 
+def observe_timer_result():
+    # Release inlines these static bool functions into run_thread. The return
+    # value therefore lives in condition flags, not in an ABI return register.
+    # Read the actual comparison result and execute its consuming branch; never
+    # recompute the rule from the sampled interval or infer it from the port.
+    function = 'static bool rule_' + generation + '_timer'
+    guard = line_in(function, 'if (stats.collection_interval_sec <= 0)')
+    expiry = line_in(function, 'return time_until_gc <= 0')
+    advance(guard)
+    architecture = gdb.selected_frame().architecture()
+    if architecture.name() != 'i386:x86-64':
+        raise RuntimeError('Timer result decoder requires x86-64')
+    for comparison in ('disabled', 'expired'):
+        for _ in range(40):
+            pc = int(value('$pc'))
+            instruction = architecture.disassemble(pc, count=1)[0]
+            if instruction['asm'].startswith('ucomisd'):
+                break
+            command('nexti')
+        else:
+            raise RuntimeError('Timer comparison was not reached')
+        location = gdb.find_pc_line(pc)
+        expected_line = guard if comparison == 'disabled' else expiry
+        if location.line != expected_line:
+            raise RuntimeError('Unexpected timer comparison source: ' + str(location.line))
+        emit('RULE_COMPARISON', generation=generation, comparison=comparison,
+             pc=hex(pc), line=location.line, instruction=instruction['asm'])
+        command('stepi')
+        flags = int(value('$eflags'))
+        branch_pc = int(value('$pc'))
+        branch = architecture.disassemble(branch_pc, count=1)[0]
+        if not branch['asm'].startswith('jae '):
+            raise RuntimeError('Unsupported timer result branch: ' + branch['asm'])
+        branch_target = int(branch['asm'].split()[1], 16)
+        result = not bool(flags & 1)  # JAE consumes CF=0, including ordered equality.
+        command('stepi')
+        next_pc = int(value('$pc'))
+        if (next_pc == branch_target) != result:
+            raise RuntimeError('CPU branch does not match observed comparison flags')
+        emit('RULE_RESULT_BRANCH', comparison=comparison, flags=flags,
+             branch=branch['asm'], pc=hex(branch_pc), next_pc=hex(next_pc), taken=result)
+        if comparison == 'expired' or result:
+            returned = result if comparison == 'expired' else False
+            passed = returned == explicit
+            emit('ASSERT_TIMER_RULE_RETURN', generation=generation, explicit=explicit,
+                 returned=returned, exit=comparison, passed=passed)
+            return passed
+    raise RuntimeError('Timer rule did not return')
+
+
 try:
     for setting in ('pagination off', 'confirm off', 'breakpoint pending on',
                     'print thread-events off'):
@@ -82,6 +132,7 @@ try:
     emit('SAMPLED', interval=float(value('stats.collection_interval_sec')),
          young_elapsed=float(value('stats.young_stats.cycle.timeSinceLast')),
          old_elapsed=float(value('stats.old_stats.cycle.timeSinceLast')))
+    rule_passed = observe_timer_result()
     # Observe the complete real decision and send path up to the next loop tick.
     for _ in range(80):
         command('next')
@@ -98,7 +149,25 @@ try:
     passed = backup == explicit
     emit('ASSERT_TIMER_DISPATCH', generation=generation, explicit=explicit,
          busy=busy, cause=cause, backup=backup, passed=passed)
-    command('quit ' + ('0' if passed else '1'))
+    if explicit and generation == 'minor' and backup:
+        minor_driver = next(t for t in gdb.selected_inferior().threads() if t.name == 'ZDriverMinor')
+        minor_driver.switch()
+        bp = gdb.Breakpoint('MapleRuntime::ZDriver::ExecuteDriverRequest', temporary=True)
+        command('continue')
+        if bp.is_valid():
+            raise RuntimeError('Minor driver did not consume timer request')
+        received_cause = int(value('request._cause'))
+        emit('ASSERT_MINOR_REQUEST', cause=received_cause, passed=received_cause == 2)
+        bp = gdb.Breakpoint('MapleRuntime::ZDriver::RunYoungCollection', temporary=True)
+        command('continue')
+        if bp.is_valid():
+            raise RuntimeError('Minor collection entry was not reached')
+        young_type = int(value('type'))
+        minor_type = int(value('MapleRuntime::ZYoungType::minor'))
+        minor_started = young_type == minor_type and received_cause == 2
+        emit('ASSERT_MINOR_COLLECTION', young_type=young_type, passed=minor_started)
+        passed = passed and minor_started
+    command('quit ' + ('0' if rule_passed and passed else '1'))
 except Exception as error:
     emit('HARNESS_ERROR', error=str(error))
     command('quit 2')
