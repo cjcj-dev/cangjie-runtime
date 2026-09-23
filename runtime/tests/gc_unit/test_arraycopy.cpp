@@ -302,7 +302,7 @@ void CheckPrimitivePayload976(bool references, bool trailer)
     GC_EXPECT_TRUE(payloadMatches);
     GC_EXPECT_EQ(*reinterpret_cast<unsigned char*>(destination + size), 0);
     if (references) {
-        GC_EXPECT_EQ(ZBarrier::ReadReference(heap.obj0, HeapSlotAt<>(destination + 8)), heap.obj0);
+        GC_EXPECT_TRUE(ZBarrier::ReadReference(heap.obj0, HeapSlotAt<>(destination + 8)) == heap.obj0);
     }
 }
 }

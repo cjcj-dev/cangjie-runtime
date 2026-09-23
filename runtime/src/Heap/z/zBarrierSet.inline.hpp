@@ -377,31 +377,31 @@ inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::value_copy_in_h
 {
     CHECK(src.size <= dst.size);
     const auto& offsets = src.offsets.empty() ? dst.offsets : src.offsets;
-    if (offsets.empty()) {
-        Raw::value_copy(src, dst);
-        return;
-    }
-    size_t copied = 0;
-    for (size_t offset : offsets) {
-        if (offset >= src.size) { break; }
-        CHECK(copied <= offset && offset + sizeof(zpointer) <= src.size);
-        copy_primitive_payload(src.address, dst.address, offset - copied, copied);
-        auto* const srcSlot = reinterpret_cast<volatile zpointer*>(src.address + offset);
-        auto* const dstSlot = reinterpret_cast<volatile zpointer*>(dst.address + offset);
-        if (src.kind == ValuePayload::Kind::Heap && dst.kind == ValuePayload::Kind::Heap) {
-            oop_copy_one(dstSlot, srcSlot);
-        } else {
-            if (dst.kind == ValuePayload::Kind::Heap) { store_barrier_heap_without_healing(dstSlot); }
-            else if (dst.kind == ValuePayload::Kind::Native) { store_barrier_native_without_healing(dstSlot); }
-            const zaddress value = src.kind == ValuePayload::Kind::Uncolored ?
-                safe(RootSlotAt(src.address + offset).LoadPlain()) :
-                ZBarrier::load_barrier_on_oop_field(srcSlot);
-            if (dst.kind == ValuePayload::Kind::Uncolored) { StorePlain(RootSlotAt(dst.address + offset), value); }
-            else { Raw::store(dstSlot, ZAddress::store_good(value)); }
+    if (!offsets.empty()) {
+        size_t copied = 0;
+        for (size_t offset : offsets) {
+            if (offset >= src.size) { break; }
+            CHECK(copied <= offset && offset + sizeof(zpointer) <= src.size);
+            copy_primitive_payload(src.address, dst.address, offset - copied, copied);
+            auto* const srcSlot = reinterpret_cast<volatile zpointer*>(src.address + offset);
+            auto* const dstSlot = reinterpret_cast<volatile zpointer*>(dst.address + offset);
+            if (src.kind == ValuePayload::Kind::Heap && dst.kind == ValuePayload::Kind::Heap) {
+                oop_copy_one(dstSlot, srcSlot);
+            } else {
+                if (dst.kind == ValuePayload::Kind::Heap) { store_barrier_heap_without_healing(dstSlot); }
+                else if (dst.kind == ValuePayload::Kind::Native) { store_barrier_native_without_healing(dstSlot); }
+                const zaddress value = src.kind == ValuePayload::Kind::Uncolored ?
+                    safe(RootSlotAt(src.address + offset).LoadPlain()) :
+                    ZBarrier::load_barrier_on_oop_field(srcSlot);
+                if (dst.kind == ValuePayload::Kind::Uncolored) { StorePlain(RootSlotAt(dst.address + offset), value); }
+                else { Raw::store(dstSlot, ZAddress::store_good(value)); }
+            }
+            copied = offset + sizeof(zpointer);
         }
-        copied = offset + sizeof(zpointer);
+        copy_primitive_payload(src.address, dst.address, src.size - copied, copied);
+    } else {
+        Raw::value_copy(src, dst);
     }
-    copy_primitive_payload(src.address, dst.address, src.size - copied, copied);
 }
 
 template<DecoratorSet decorators, typename BarrierSetT>
