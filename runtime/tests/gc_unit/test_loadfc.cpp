@@ -7,6 +7,8 @@
 
 
 #include "gc_heap_fixture.hpp"
+#include "CompilerCalls.h"
+#include "Heap/z/zThreadLocalData.hpp"
 
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.hpp"
@@ -78,7 +80,8 @@ GC_TEST(LoadFc, OrdinaryReadHealthyTargetReturnsNormally)
     GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
     RefField<>* field = fx.MakePlainField();
 
-    ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, field);
+    ObjectPtr got = CJ_MCC_LoadBarrierOnOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(field->GetFieldValue())), reinterpret_cast<volatile zpointer*>(field));
 
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
@@ -92,7 +95,8 @@ GC_TEST(LoadFc, WeakReadHealthyTargetReturnsNormally)
     GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
     RefField<>* field = fx.MakePlainField();
 
-    ObjectPtr got = CJ_MCC_ReadWeakRef(fx.heap.obj1, field);
+    ObjectPtr got = CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(field->GetFieldValue())), reinterpret_cast<volatile zpointer*>(field));
 
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
@@ -105,7 +109,8 @@ GC_TEST(LoadFc, StaticReadHealthyTargetReturnsNormally)
     GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
     NativeSlot root(StoreGoodPointer(fx.heap.obj0));
 
-    ObjectPtr got = CJ_MCC_ReadStaticRef(&root);
+    ObjectPtr got = CJ_MCC_LoadBarrierOnOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(root.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&root));
 
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
@@ -118,7 +123,9 @@ GC_TEST(LoadFc, AtomicReadHealthyTargetReturnsNormally)
     GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
     RefField<true> field(StoreGoodPointer(fx.heap.obj0));
 
-    ObjectPtr got = CJ_MCC_AtomicReadReference(fx.heap.obj1, &field, std::memory_order_seq_cst);
+    ObjectPtr got = CJ_MCC_LoadBarrierOnOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue(std::memory_order_seq_cst))),
+        reinterpret_cast<volatile zpointer*>(&field));
 
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
@@ -149,4 +156,75 @@ GC_TEST(LoadFc, BulkCopyHealthySourceReturnsNormally)
                         reinterpret_cast<MAddress>(field), sizeof(*field));
 
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+// zBarrierSetRuntime.cpp:29-39 and zBarrier.inline.hpp:319-343: the
+// preloaded value selects the result; p only participates in self-healing.
+GC_TEST(LoadPreloaded, StrongCompetingStoreReturnsObservedValue)
+{
+    LoadFcFixture fx;
+    const zpointer observed = StoreGoodPointer(fx.heap.obj0);
+    ZGlobalsPointers::flip_young_relocate_start();
+    const zpointer replacement = StoreGoodPointer(fx.heap.obj1);
+    auto* field = fx.MakePlainField();
+    field->StoreColoured(replacement);
+    GC_EXPECT_TRUE(ZPointer::is_load_bad(observed));
+    const ObjectPtr result = CJ_MCC_LoadBarrierOnOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(observed)), reinterpret_cast<volatile zpointer*>(field));
+    std::printf("PRELOADED_STRONG_RESULT actual=%p expected=%p\n", result, fx.heap.obj0);
+    GC_EXPECT_EQ(result, fx.heap.obj0);
+    GC_EXPECT_EQ(raw(field->GetFieldValue()), raw(replacement));
+}
+
+GC_TEST(LoadPreloaded, WeakCompetingStoreReturnsObservedValue)
+{
+    LoadFcFixture fx;
+    fx.heap.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    const zpointer observed = StoreGoodPointer(fx.heap.obj0);
+    ZGlobalsPointers::flip_young_relocate_start();
+    const zpointer replacement = StoreGoodPointer(fx.heap.obj1);
+    auto* field = fx.MakePlainField();
+    field->StoreColoured(replacement);
+    GC_EXPECT_TRUE(ZPointer::is_mark_bad(observed));
+    const ObjectPtr result = CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(observed)), reinterpret_cast<volatile zpointer*>(field));
+    std::printf("PRELOADED_WEAK_RESULT actual=%p expected=%p\n", result, fx.heap.obj0);
+    GC_EXPECT_EQ(result, fx.heap.obj0);
+    GC_EXPECT_EQ(raw(field->GetFieldValue()), raw(replacement));
+}
+
+GC_TEST(LoadPreloaded, StrongHealsObservedSlot)
+{
+    LoadFcFixture fx;
+    auto* field = fx.MakePlainField();
+    const zpointer observed = field->GetFieldValue();
+    ZGlobalsPointers::flip_young_relocate_start();
+    const ObjectPtr result = CJ_MCC_LoadBarrierOnOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(observed)), reinterpret_cast<volatile zpointer*>(field));
+    GC_EXPECT_EQ(result, fx.heap.obj0);
+    const zpointer healed = field->GetFieldValue();
+    std::printf("PRELOADED_STRONG_HEALED before=%lx after=%lx\n", raw(observed), raw(healed));
+    GC_EXPECT_TRUE(ZPointer::is_load_good(healed));
+    GC_EXPECT_EQ(to_object(field->GetTargetObject()), fx.heap.obj0);
+}
+
+GC_TEST(LoadPreloaded, WeakHealsObservedSlot)
+{
+    LoadFcFixture fx;
+    fx.heap.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    auto* field = fx.MakePlainField();
+    const zpointer observed = field->GetFieldValue();
+    ZGlobalsPointers::flip_young_relocate_start();
+    const ObjectPtr result = CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(observed)), reinterpret_cast<volatile zpointer*>(field));
+    GC_EXPECT_EQ(result, fx.heap.obj0);
+    const zpointer healed = field->GetFieldValue();
+    std::printf("PRELOADED_WEAK_HEALED before=%lx after=%lx\n", raw(observed), raw(healed));
+    GC_EXPECT_TRUE(ZPointer::is_mark_good(healed));
+    GC_EXPECT_EQ(to_object(field->GetTargetObject()), fx.heap.obj0);
+}
+
+GC_TEST(LoadPreloaded, ExportedMarkBadOffsetMatchesThreadData)
+{
+    GC_EXPECT_EQ(g_cjMarkBadMaskOffset, ThreadGCData::mark_bad_mask_offset());
 }
