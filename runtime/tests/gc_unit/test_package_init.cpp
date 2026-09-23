@@ -229,7 +229,7 @@ void Witness(void* p)
     // yielded or returned. A real collection also rendezvous with both parked
     // logical threads; the task data has no native pointer in managed slots.
     Target("not-ready-before-complete", !c.waiterDone.load(std::memory_order_acquire));
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     c.witnessDone.store(true, std::memory_order_release);
 }
 void AggregateOwner(void* p)
@@ -394,7 +394,7 @@ void AdmissionWitness(void* p)
 {
     auto& race = *static_cast<AdmissionRace*>(p);
     Target("admission-wait-yields-worker", !race.done.load(std::memory_order_acquire));
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     race.witness.store(true, std::memory_order_release);
 }
 } // namespace

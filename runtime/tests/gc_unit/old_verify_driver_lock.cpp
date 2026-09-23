@@ -24,7 +24,7 @@ int main(int argc, char** argv)
         while (!start.load(std::memory_order_acquire)) { std::this_thread::yield(); }
         if (concurrent) {
             for (unsigned i = 0; i < 100; ++i) {
-                Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+                Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
             }
         }
     });

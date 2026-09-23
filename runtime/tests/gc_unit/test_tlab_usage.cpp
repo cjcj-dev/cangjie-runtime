@@ -162,7 +162,7 @@ void* AllocateThroughCycle(void*)
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
     const size_t maximum = ZObjectSizeLimitSmall;
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     buffer = AllocBuffer::GetAllocBuffer();
     const size_t initial = buffer->ComputeTLABSize(objectSize, maximum);
     size_t backingBytes = 0;
@@ -179,7 +179,7 @@ void* AllocateThroughCycle(void*)
         }
         requestedBytes += objectSize;
     }
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     buffer = AllocBuffer::GetAllocBuffer();
     // ZHeap::account_alloc_page: the cycle denominator retains backing
     // capacity, including unused TLAB tails. These values come from actual

@@ -115,7 +115,7 @@ void* RunEmptyPageCycles(void* context)
         HandleMark roots(*mutator);
         Handle root(mutator, MCC_NewObject(type, result.objectSize));
         if (result.promote) {
-            heap.RequestGC(GC_REASON_USER, false);
+            heap.RequestGC(GC_REASON_USER);
         }
         address = reinterpret_cast<uintptr_t>(root());
         ZPage* page = Heap::page(address);
@@ -132,7 +132,7 @@ void* RunEmptyPageCycles(void* context)
         : static_cast<ZGeneration*>(ZGeneration::young());
     result.sequenceBefore = generation->seqnum();
     for (unsigned cycle = 0; cycle < 2; ++cycle) {
-        heap.RequestGC(reason, false);
+        heap.RequestGC(reason);
         ZPage* observed = Heap::page(address);
         result.withdrawn[cycle] = observed == nullptr;
         if (observed != nullptr) {

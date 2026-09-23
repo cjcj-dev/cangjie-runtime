@@ -20,12 +20,12 @@
 #include "HeapManager.h"
 
 namespace MapleRuntime {
-inline void HeapManager::RequestGC(GCReason reason, bool async)
+inline void HeapManager::RequestGC(GCReason reason)
 {
     if (!Heap::GetHeap().IsGCEnabled()) {
         return;
     }
-    Heap::GetHeap().RequestGC(reason, async);
+    Heap::GetHeap().RequestGC(reason);
 }
 } // namespace MapleRuntime
 

@@ -82,8 +82,8 @@ int main(int argc, char** argv)
         }
     }
     const size_t before = heap.page_allocator().GetUsedBytes();
-    heap.RequestGC(GC_REASON_YOUNG, false);
-    heap.RequestGC(GC_REASON_USER, false);
+    heap.RequestGC(GC_REASON_YOUNG);
+    heap.RequestGC(GC_REASON_USER);
     const size_t after = heap.page_allocator().GetUsedBytes();
     size_t moved = 0, valid = 0, reclaimed = 0;
     {

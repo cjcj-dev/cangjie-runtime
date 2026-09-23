@@ -1,4 +1,5 @@
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -281,9 +282,9 @@ void* CollectWithTenuringFlags(void* context)
     type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     const U64 root = Heap::GetHeap().RegisterExportRoot(MCC_NewObject(type, 4096));
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     auto& result = *static_cast<TenuringCollectionResult*>(context);
-    if (result.full) { Heap::GetHeap().RequestGC(GC_REASON_USER, false); }
+    if (result.full) { Heap::GetHeap().RequestGC(GC_REASON_USER); }
     result.threshold = Heap::GetHeap().young().tenuring_threshold();
     auto* survivor = Heap::GetHeap().GetExportObject(root);
     result.survivorAge = Heap::page(reinterpret_cast<uintptr_t>(survivor))->age();
@@ -534,7 +535,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    if (majorAllocationRate) heap.RequestGC(GC_REASON_YOUNG, false);
+    if (majorAllocationRate) heap.RequestGC(GC_REASON_YOUNG);
     if (allocationRate || proactive) {
         const size_t nextSize = heap.GetMaxCapacity() * (allocationRate ? 7 : 2) / 16;
         alignas(TypeInfo) static unsigned char secondStorage[sizeof(TypeInfo)]{};
@@ -630,3 +631,40 @@ GC_RUNTIME_OTHER_VM_TEST(DriverCause, ProfilerDiagnosticCommand)
     GC_EXPECT_TRUE(response);
 }
 #endif
+
+namespace {
+void CheckExternalRequestWorkers(GCReason cause)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 4;
+    params.gcParam.youngGCThreads = 2;
+    params.gcParam.oldGCThreads = 3;
+    params.gcParam.staticGCThreads = true;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    const auto youngBefore = heap.young().Snapshot().sequence;
+    const auto oldBefore = heap.old().Snapshot().sequence;
+    heap.RequestGC(cause);
+    const auto young = heap.young().Snapshot();
+    const auto old = heap.old().Snapshot();
+    const auto youngWorkers = heap.young().Workers()->active_workers();
+    const auto oldWorkers = heap.old().Workers()->active_workers();
+    std::fprintf(stderr,
+        "REQUEST_WORKERS_TARGET cause=%u young_workers=%u old_workers=%u young_cycles=%llu old_cycles=%llu\n",
+        cause, youngWorkers, oldWorkers,
+        static_cast<unsigned long long>(young.sequence - youngBefore),
+        static_cast<unsigned long long>(old.sequence - oldBefore));
+    // The result of the product request, not a separately executed driver.
+    GC_EXPECT_EQ(youngWorkers, 2u);
+    if (cause != GC_REASON_YOUNG) GC_EXPECT_EQ(oldWorkers, 3u);
+    GC_EXPECT_EQ(young.sequence - youngBefore, cause == GC_REASON_YOUNG ? 1u : 2u);
+    GC_EXPECT_EQ(old.sequence - oldBefore, cause == GC_REASON_YOUNG ? 0u : 1u);
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RequestWorkers, ExternalYoung) { CheckExternalRequestWorkers(GC_REASON_YOUNG); }
+GC_RUNTIME_OTHER_VM_TEST(RequestWorkers, ExternalUser) { CheckExternalRequestWorkers(GC_REASON_USER); }
+GC_RUNTIME_OTHER_VM_TEST(RequestWorkers, ExternalForce) { CheckExternalRequestWorkers(GC_REASON_FORCE); }
+GC_RUNTIME_OTHER_VM_TEST(RequestWorkers, ExternalDiagnostic) { CheckExternalRequestWorkers(GC_REASON_DCMD_GC_RUN); }

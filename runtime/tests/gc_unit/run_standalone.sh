@@ -54,7 +54,7 @@ run_ohos_host_arm() {
       'ResolveCycleRefStub' \
       'MapleRuntime::ZCrossVM::ResolveCycleRef()' \
       'MapleRuntime::ZCrossVM::GetCrossRefHandler(MapleRuntime::BaseObject*)' \
-      'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason)' \
       'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
       'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
@@ -107,7 +107,7 @@ run_ohos_host_arm() {
       'ResolveCycleRefStub' \
       'MapleRuntime::ZCrossVM::ResolveCycleRef()' \
       'MapleRuntime::ZCrossVM::GetCrossRefHandler(MapleRuntime::BaseObject*)' \
-      'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason)' \
       'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
       'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do

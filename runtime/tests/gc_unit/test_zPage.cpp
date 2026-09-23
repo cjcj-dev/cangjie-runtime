@@ -302,7 +302,7 @@ void* SelectRealLivePages(void* context)
         // an uncooperative mutator preventing the pause from starting.
         mutator->EnterSaferegion(false);
         std::thread collector([&] {
-            Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+            Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
             finished.store(true, std::memory_order_release);
         });
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -327,7 +327,7 @@ void* SelectRealLivePages(void* context)
         result.movedAfterRelease = reinterpret_cast<uintptr_t>(
             Heap::GetHeap().GetExportObject(roots[0])) != starts[0];
     } else {
-        Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+        Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     }
     for (size_t i = 0; i < result.roots; ++i) {
         ZForwarding* forwarding = Heap::GetHeap().young().forwarding_table().get(starts[i]);
@@ -467,7 +467,7 @@ void* RunRealOldCycle(void* context)
     auto& result = *static_cast<OldCyclePhaseResult*>(context);
     result.before = ZPointerRemappedOldMask;
     Mutator::GetMutator()->SetManagedContext(false);
-    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER);
     result.after = ZPointerRemappedOldMask;
     result.relocate = Heap::GetHeap().old().is_phase_relocate();
     Mutator::GetMutator()->SetManagedContext(true);
@@ -537,7 +537,7 @@ void* HoldArrayForMovingEnter(void* context)
             std::memset(array->ConvertToCArray(), 0x5a, 4096);
             allRoots.emplace_back(mutator, array);
         }
-        Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+        Heap::GetHeap().RequestGC(GC_REASON_USER);
         // Retain one array per old page for the measured collection.
         ZPage* previous = nullptr;
         size_t roots = 0;
@@ -837,7 +837,7 @@ extern "C" void AnnotationCollect(uintptr_t* result)
                 previous = page;
             }
         }
-        Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+        Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
         r.after = registeredSlot == nullptr ? 0 : raw(registeredSlot->LoadPlain());
         auto* forwarding = Heap::GetHeap().young().forwarding_table().get(r.before);
         std::fprintf(stderr, "ANNOTATION_FORWARDING from=%zx winner=%zx root=%zx\n", r.before,
@@ -946,7 +946,7 @@ void CollectSparsePages()
             previous = page;
         }
     }
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     for (size_t i = 0; i < count; ++i) { Heap::GetHeap().RemoveExportObject(roots[i]); }
 }
 struct ArgumentResult {
@@ -1163,8 +1163,8 @@ void* AllocateForSequenceRead(void* context)
     result.root = Heap::GetHeap().RegisterExportRoot(result.object);
     if (result.collected) {
         Mutator::GetMutator()->SetManagedContext(false);
-        Heap::GetHeap().RequestGC(GC_REASON_USER, false);
-        Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+        Heap::GetHeap().RequestGC(GC_REASON_USER);
+        Heap::GetHeap().RequestGC(GC_REASON_USER);
         result.object = Heap::GetHeap().GetExportObject(result.root);
         Mutator::GetMutator()->SetManagedContext(true);
     }
@@ -1249,7 +1249,7 @@ void* CollectForSequenceRead(void* context)
     Mutator::GetMutator()->SetManagedContext(false);
     result.youngBefore = heap.young().seqnum();
     result.oldBefore = heap.old().seqnum();
-    heap.RequestGC(GC_REASON_USER, false);
+    heap.RequestGC(GC_REASON_USER);
     result.youngAfter = heap.young().seqnum();
     result.oldAfter = heap.old().seqnum();
     result.snapshotYoung = heap.young().Snapshot().sequence;

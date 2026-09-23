@@ -124,7 +124,7 @@ void* AllocateSparseExportRoot(void* argument)
             objects.emplace_back(mutator, static_cast<BaseObject*>(MCC_NewObject(type, 4096)));
         }
         objects.emplace_back(mutator, static_cast<BaseObject*>(MCC_NewObject(type, 4096)));
-        Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+        Heap::GetHeap().RequestGC(GC_REASON_USER);
         BaseObject* selected = objects.front()();
         ZPage* selectedPage = Heap::page(reinterpret_cast<uintptr_t>(selected));
         for (const auto& handle : objects) {
@@ -156,7 +156,7 @@ void* AllocateSparseExportRoot(void* argument)
     Heap::GetHeap().EnableGC(true);
     std::fprintf(stderr, "VALUE_ROOT_CAPACITY used=%zu large_roots=%zu\n",
         Heap::GetHeap().page_allocator().GetUsedBytes(), capacityRoots.size());
-    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER);
     result.to = reinterpret_cast<uintptr_t>(Heap::GetHeap().GetExportObject(result.root));
     auto* forwarding = Heap::GetHeap().old().forwarding_table().get(result.to);
     result.table = forwarding != nullptr;
@@ -214,7 +214,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, YoungFlipBetweenEnumerationAndConsumption)
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"));
     const uintptr_t savedColor = g_cjLoadGoodMask;
     BaseObject* before = Heap::GetHeap().GetExportObject(root);
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     const bool colorChanged = !ZPointer::is_load_good(ZAddress::color(zaddress::null, savedColor));
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
     BaseObject* after = Heap::GetHeap().GetExportObject(root);
@@ -282,7 +282,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, MinorPreservesOldDiscoveredOwnership)
     const bool produced = RelocationReceiptTest::DiscoveredOwnership(before);
     const auto oldSequence = Heap::GetHeap().old().seqnum();
     const auto youngSequence = Heap::GetHeap().young().seqnum();
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     BaseObject* after = Heap::GetHeap().GetExportObject(root);
     const bool preserved = RelocationReceiptTest::DiscoveredOwnership(after);
     const bool minorCompleted = Heap::GetHeap().young().seqnum() > youngSequence &&
