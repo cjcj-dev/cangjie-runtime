@@ -486,6 +486,15 @@ static void CheckRelocationRemsetOwnership(bool worker)
     ZPageTest::MakeRelocatable(*source);
     ZRelocationSetSelector selector;
     selector.register_live_page(source);
+    // The selector needs two sparse pages to reclaim a whole page.
+    ZPage* peer = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, PageAge::survivor1, flags);
+    GC_EXPECT_TRUE(peer != nullptr);
+    auto* peerObject = reinterpret_cast<BaseObject*>(peer->alloc_object(16));
+    peerObject->SetClassInfo(type);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(peerObject) + 8).StoreColoured(StoreGoodPointer(child));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(peer, peerObject));
+    ZPageTest::MakeRelocatable(*peer);
+    selector.register_live_page(peer);
     selector.select();
     young.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&young.relocation_set());
