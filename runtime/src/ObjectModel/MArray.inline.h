@@ -8,6 +8,7 @@
 #ifndef MRT_MARRAY_INLINE_H
 #define MRT_MARRAY_INLINE_H
 
+#include "Heap/z/zAccess.hpp"
 #include "ObjectModel/Field.inline.h"
 #include "Inspector/CjAllocData.h"
 // model interface
@@ -87,13 +88,13 @@ void MArray::ForEachRefFieldInRange(const Visitor& visitor, MAddress fieldStart,
 inline ObjectPtr MArray::GetRefElement(MIndex index)
 {
     RefField<>& ref = GetRefField(MArray::GetContentOffset() + RefField<>::GetSize() * index);
-    return ZBarrier::ReadReference(this, ref);
+    return HeapAccess<>::oop_load(&(ref));
 }
 
 inline void MArray::SetRefElement(MIndex index, const ObjectPtr mObj)
 {
     RefField<>& ref = GetRefField(MArray::GetContentOffset() + RefField<>::GetSize() * index);
-    ZBarrier::WriteReference(this, ref, mObj);
+    HeapAccess<>::oop_store(&(ref), mObj);
 }
 
 template<typename T>

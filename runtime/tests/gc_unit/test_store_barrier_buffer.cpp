@@ -1232,3 +1232,142 @@ GC_OTHER_VM_TEST(ThreadLifecycle, ManagedDetachMarksBothGenerations)
 {
     CheckThreadDetachMarksObjects(true);
 }
+
+// #976: exported compiler ABI -> AccessBarrier store -> real TLS buffer.
+extern "C" void CJ_MCC_AtomicWriteReference(BaseObject*, BaseObject*, HeapSlot<true>*, MemoryOrder);
+extern "C" BaseObject* CJ_MCC_AtomicSwapReference(BaseObject*, BaseObject*, HeapSlot<true>*, MemoryOrder);
+
+GC_TEST(AccessBarrier976, AtomicReleaseStoreBuffersWithoutHealing)
+{
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    Mutator mutator;
+    InstalledMutatorScope installed(mutator);
+    auto& buffer = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    buffer.clear();
+    buffer.Initialize(ZPointerStoreGoodMask);
+    auto& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const zpointer previous = StoreBadPointer(fx.obj0);
+    field.StoreColoured(previous);
+    const size_t before = buffer.Pending();
+    CJ_MCC_AtomicWriteReference(fx.obj1, fx.obj0, &field, std::memory_order_release);
+    const size_t after = buffer.Pending();
+    std::fprintf(stderr, "ACCESS976_STORE_ASSERT before=%zu after=%zu raw=%zx\n", before, after, raw(field.GetFieldValue()));
+    GC_EXPECT_EQ(after, before + 1);
+    GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(fx.obj1));
+    const StoreBarrierEntry& entry = buffer.buffer[buffer.Current()];
+    GC_EXPECT_EQ(entry.prev, previous);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(entry.p), reinterpret_cast<uintptr_t>(&field));
+    buffer.Flush();
+}
+
+GC_TEST(AccessBarrier976, AtomicExchangeHealsWithoutBufferingControl)
+{
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    Mutator mutator;
+    InstalledMutatorScope installed(mutator);
+    auto& buffer = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    buffer.clear();
+    buffer.Initialize(ZPointerStoreGoodMask);
+    auto& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj0));
+    const size_t before = buffer.Pending();
+    BaseObject* result = CJ_MCC_AtomicSwapReference(fx.obj1, fx.obj0, &field, std::memory_order_seq_cst);
+    const size_t after = buffer.Pending();
+    std::fprintf(stderr, "ACCESS976_XCHG_ASSERT before=%zu after=%zu result=%p\n", before, after, result);
+    GC_EXPECT_EQ(after, before);
+    GC_EXPECT_TRUE(result == fx.obj0);
+    GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(fx.obj1));
+}
+
+extern "C" bool CJ_MCC_AtomicCompareAndSwapReference(BaseObject*, BaseObject*, BaseObject*, HeapSlot<true>*, MemoryOrder, MemoryOrder);
+extern "C" BaseObject* CJ_MCC_AtomicReadReference(BaseObject*, HeapSlot<true>*, MemoryOrder);
+
+GC_TEST(AccessBarrier976, NativeAtomicCompareSuccessFailureAndExchange)
+{
+    GcHeapFixture fx;
+    HeapSlot<true> field(zpointer::null);
+    CJ_MCC_AtomicWriteReference(fx.obj0, nullptr, &field, std::memory_order_release);
+    GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(fx.obj0));
+    GC_EXPECT_TRUE(CJ_MCC_AtomicReadReference(nullptr, &field, std::memory_order_acquire) == fx.obj0);
+    const bool failed = CJ_MCC_AtomicCompareAndSwapReference(fx.obj1, nullptr, nullptr, &field,
+        std::memory_order_seq_cst, std::memory_order_seq_cst);
+    const bool succeeded = CJ_MCC_AtomicCompareAndSwapReference(fx.obj0, fx.obj1, nullptr, &field,
+        std::memory_order_seq_cst, std::memory_order_seq_cst);
+    BaseObject* exchanged = CJ_MCC_AtomicSwapReference(nullptr, nullptr, &field, std::memory_order_seq_cst);
+    std::fprintf(stderr, "ACCESS976_NATIVE_ASSERT failed=%d succeeded=%d exchanged=%p raw=%zx\n",
+        failed, succeeded, exchanged, raw(field.GetFieldValue()));
+    GC_EXPECT_FALSE(failed);
+    GC_EXPECT_TRUE(succeeded);
+    GC_EXPECT_TRUE(exchanged == fx.obj1);
+    GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(nullptr));
+}
+
+GC_TEST(AccessBarrier976, HeapAtomicCompareSuccessFailure)
+{
+    GcHeapFixture fx;
+    auto& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj1));
+    const bool failed = CJ_MCC_AtomicCompareAndSwapReference(fx.obj0, nullptr, fx.obj0, &field,
+        std::memory_order_seq_cst, std::memory_order_seq_cst);
+    const zpointer afterFailure = field.GetFieldValue();
+    const bool succeeded = CJ_MCC_AtomicCompareAndSwapReference(fx.obj1, fx.obj0, fx.obj0, &field,
+        std::memory_order_seq_cst, std::memory_order_seq_cst);
+    std::fprintf(stderr, "ACCESS976_CAS_ASSERT failed=%d succeeded=%d raw=%zx\n", failed, succeeded, raw(field.GetFieldValue()));
+    GC_EXPECT_FALSE(failed);
+    GC_EXPECT_EQ(afterFailure, StoreGoodPointer(fx.obj1));
+    GC_EXPECT_TRUE(succeeded);
+    GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(fx.obj0));
+}
+
+extern "C" void MCC_WriteRefField(BaseObject*, BaseObject*, HeapSlot<>*);
+extern "C" void MCC_WriteRefField_Strong(BaseObject*, BaseObject*, HeapSlot<>*);
+
+GC_TEST(AccessBarrier976, UnknownWeakStoreResolvesAtFieldOffset)
+{
+    GcHeapFixture fx;
+    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    Mutator mutator;
+    InstalledMutatorScope installed(mutator);
+    auto& buffer = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    buffer.clear();
+    buffer.Initialize(ZPointerStoreGoodMask);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj1));
+    MCC_WriteRefField(nullptr, fx.obj0, &field);
+    std::fprintf(stderr, "ACCESS976_UNKNOWN_ASSERT pending=%zu remembered=%d raw=%zx\n",
+        static_cast<size_t>(buffer.Pending()), SlotPageRemembered(reinterpret_cast<MAddress>(&field)), raw(field.GetFieldValue()));
+    GC_EXPECT_EQ(buffer.Pending(), 0u);
+    GC_EXPECT_TRUE(SlotPageRemembered(reinterpret_cast<MAddress>(&field)));
+    GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(nullptr));
+}
+
+GC_TEST(AccessBarrier976, KnownStrongStoreIgnoresWeakHolderControl)
+{
+    GcHeapFixture fx;
+    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    Mutator mutator;
+    InstalledMutatorScope installed(mutator);
+    auto& buffer = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    buffer.clear();
+    buffer.Initialize(ZPointerStoreGoodMask);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj1));
+    MCC_WriteRefField_Strong(nullptr, fx.obj0, &field);
+    std::fprintf(stderr, "ACCESS976_STRONG_ASSERT pending=%zu raw=%zx\n",
+        static_cast<size_t>(buffer.Pending()), raw(field.GetFieldValue()));
+    GC_EXPECT_EQ(buffer.Pending(), 1u);
+    GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(nullptr));
+    buffer.Flush();
+}
