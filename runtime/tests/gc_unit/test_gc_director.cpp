@@ -236,6 +236,7 @@ GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
     inputs.liveByAge[1] = 1024;
     {
         YoungTypeSetter type(young, ZYoungType::major_full_preclean);
+        inputs.promoteAll = true;
         young.SelectTenuringThreshold(inputs);
         GC_EXPECT_EQ(young.tenuring_threshold(), 0u);
         GC_EXPECT_FALSE(young.IsMajorRoots());
@@ -243,9 +244,248 @@ GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
     GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);
     {
         YoungTypeSetter type(young, ZYoungType::major_full_roots);
+        inputs.promoteAll = false;
         young.SelectTenuringThreshold(inputs);
         GC_EXPECT_TRUE(young.tenuring_threshold() > 0u);
         GC_EXPECT_TRUE(young.IsMajorRoots());
     }
     GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);
 }
+
+
+// #906: InitCJRuntime produces the effective flag values in the product SO.
+// Explicitness is independent from the value: zero and -1 are real inputs.
+#include "Heap/z/zHeuristics.hpp"
+#include "CjScheduler.h"
+#include <sys/wait.h>
+#include <unistd.h>
+#include "Heap/z/zPage.hpp"
+namespace {
+extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
+struct TenuringCollectionResult {
+    uint32_t threshold = 0;
+    PageAge survivorAge = PageAge::eden;
+    bool full = false;
+};
+void* CollectWithTenuringFlags(void* context)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    const U64 root = Heap::GetHeap().RegisterExportRoot(MCC_NewObject(type, 4096));
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    auto& result = *static_cast<TenuringCollectionResult*>(context);
+    if (result.full) { Heap::GetHeap().RequestGC(GC_REASON_USER, false); }
+    result.threshold = Heap::GetHeap().young().tenuring_threshold();
+    auto* survivor = Heap::GetHeap().GetExportObject(root);
+    result.survivorAge = Heap::page(reinterpret_cast<uintptr_t>(survivor))->age();
+    Heap::GetHeap().RemoveExportObject(root);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return nullptr;
+}
+
+void CheckTenuringResult(const TenuringCollectionResult& result, uint32_t selected)
+{
+    std::fprintf(stderr, "TENURING_CONSUMER_TARGET actual=%u expected=%u\n", result.threshold, selected);
+    const bool thresholdMatches = result.threshold == selected;
+    const PageAge expectedAge = result.full || selected == 0 ? PageAge::old : PageAge::survivor1;
+    std::fprintf(stderr, "TENURING_PROMOTION_TARGET actual=%u expected=%u\n",
+                 untype(result.survivorAge), untype(expectedAge));
+    const bool promotionMatches = result.survivorAge == expectedAge;
+    // Evaluate both product results before the single invariant assertion so
+    // a threshold failure cannot hide the actual promotion observation.
+    std::fprintf(stderr, "TENURING_RESULT_ASSERT threshold_match=%d promotion_match=%d\n",
+                 thresholdMatches, promotionMatches);
+    GC_EXPECT_TRUE(thresholdMatches && promotionMatches);
+}
+uint32_t environmentSelected;
+int32_t RunEnvironmentTenuringMain()
+{
+    try {
+        TenuringCollectionResult result;
+        CollectWithTenuringFlags(&result);
+        CheckTenuringResult(result, environmentSelected);
+        return 0;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "TENURING_ENV_ASSERT_FAILED %s\n", error.what());
+        return 1;
+    }
+}
+
+void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t maximum,
+                        bool overrideSet, int32_t overrideValue, bool environment = false, bool full = false)
+{
+    // The managed executable entry exits with its main result. Isolate that
+    // normal product lifecycle in a child and assert its actual exit status.
+    if (environment) {
+        const pid_t child = fork();
+        GC_EXPECT_TRUE(child >= 0);
+        if (child != 0) {
+            int status = 0;
+            GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+            std::fprintf(stderr, "TENURING_MANAGED_EXIT status=%d\n", status);
+            GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            return;
+        }
+    }
+    RuntimeParam params{};
+    params.heapParam.heapSize = heapKB;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = workers;
+    params.gcParam.maxTenuringThresholdSet = maxSet;
+    params.gcParam.maxTenuringThreshold = maximum;
+    params.gcParam.zTenuringThresholdSet = overrideSet;
+    params.gcParam.zTenuringThreshold = overrideValue;
+    if (environment) {
+        setenv("cjHeapSize", (std::to_string(heapKB) + "KB").c_str(), 1);
+        setenv("cjProcessorNum", "1", 1);
+        setenv("cjConcGCThreads", std::to_string(workers).c_str(), 1);
+        if (maxSet) {
+            setenv("cjMaxTenuringThreshold", std::to_string(maximum).c_str(), 1);
+        } else {
+            unsetenv("cjMaxTenuringThreshold");
+        }
+        if (overrideSet) {
+            setenv("cjZTenuringThreshold", std::to_string(overrideValue).c_str(), 1);
+        } else {
+            unsetenv("cjZTenuringThreshold");
+        }
+        MRT_CjRuntimeInit();
+    } else {
+        GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    }
+    const size_t overhead = ZHeuristics::relocation_headroom();
+    const size_t budget = ZHeuristics::significant_young_overhead();
+    const uint32_t actual = MaxTenuringThreshold;
+    const bool fixed = maxSet || (overrideSet && overrideValue != -1);
+    const uint32_t expected = maxSet ? maximum : static_cast<uint32_t>(overrideValue);
+    const bool thresholdMatches = fixed ? actual == expected :
+        actual <= 15 && (actual == 15 || overhead * actual >= budget) &&
+        (actual == 0 || overhead * (actual - 1) < budget);
+    std::fprintf(stderr, "TENURING_INIT_TARGET actual=%u fixed=%d expected=%u overhead=%zu budget=%zu match=%d\n",
+                 actual, fixed, expected, overhead, budget, thresholdMatches);
+    GC_EXPECT_TRUE(thresholdMatches);
+    GC_EXPECT_EQ(ZTenuringThreshold, overrideSet ? overrideValue : -1);
+    const uint32_t selected = overrideSet && overrideValue != -1 ?
+        static_cast<uint32_t>(overrideValue) : std::min(1u, actual);
+    if (environment) {
+        environmentSelected = selected;
+        MRT_CjRuntimeStart(reinterpret_cast<void*>(&RunEnvironmentTenuringMain));
+        _exit(2); // The product main must terminate with its own result.
+    }
+    {
+        TenuringCollectionResult result;
+        result.full = full;
+        CJThreadHandle task = RunCJTask(CollectWithTenuringFlags, &result);
+        GC_EXPECT_TRUE(task != nullptr);
+        void* taskResult = nullptr;
+        GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
+        ReleaseHandle(task);
+        CheckTenuringResult(result, selected);
+    }
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+void CheckConflictingTenuringFlags(bool environment)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        RuntimeParam params{};
+        params.heapParam.heapSize = 64 * 1024;
+        params.coParam.processorNum = 1;
+        params.gcParam.concGCThreads = 2;
+        params.gcParam.maxTenuringThresholdSet = true;
+        params.gcParam.maxTenuringThreshold = 4;
+        params.gcParam.zTenuringThresholdSet = true;
+        params.gcParam.zTenuringThreshold = 9;
+        if (environment) {
+            setenv("cjHeapSize", "64MB", 1);
+            setenv("cjProcessorNum", "1", 1);
+            setenv("cjConcGCThreads", "2", 1);
+            setenv("cjMaxTenuringThreshold", "4", 1);
+            setenv("cjZTenuringThreshold", "9", 1);
+            MRT_CjRuntimeInit();
+        } else {
+            if (InitCJRuntime(&params) != E_OK) { _exit(125); }
+        }
+        std::fprintf(stderr, "TENURING_CONFLICT_ACCEPTED maximum=%u override=%d\n",
+                     MaxTenuringThreshold, ZTenuringThreshold);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char buffer[512];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) { transcript.append(buffer, count); }
+    close(output[0]);
+    std::fwrite(transcript.data(), 1, transcript.size(), stderr);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    // ZGC zArguments.cpp:188-191 rejects this combination at initialization.
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find("ZTenuringThreshold must be within bounds of MaxTenuringThreshold") != std::string::npos;
+    std::fprintf(stderr, "TENURING_CONFLICT_TARGET environment=%d status=%d rejected=%d\n",
+                 environment, status, rejected);
+    GC_EXPECT_TRUE(rejected);
+}
+
+}
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultSmallHeap) { CheckTenuringFlags(64 * 1024, 2, false, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultLargeHeap) { CheckTenuringFlags(512 * 1024, 2, false, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultCeiling) { CheckTenuringFlags(2048 * 1024, 2, false, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultManyWorkers) { CheckTenuringFlags(64 * 1024, 8, false, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, ExplicitAutomatic) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, -1); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, ExplicitMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 12, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumZero) { CheckTenuringFlags(64 * 1024, 2, true, 0, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideZero) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverridePositive) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumAndOverride) { CheckConflictingTenuringFlags(false); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverride) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentMaximum) { CheckConflictingTenuringFlags(true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentAutomatic) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, -1, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentZero) { CheckTenuringFlags(64 * 1024, 2, true, 0, true, 0, true); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumOne) { CheckTenuringFlags(64 * 1024, 2, true, 1, false, 0); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, PrecleanOverridesFlag) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9, false, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumBoundary) { CheckTenuringFlags(64 * 1024, 2, true, 16, false, 0); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideBoundary) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 15); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultBoundaryFourteen) { CheckTenuringFlags(112 * 1024, 1, false, 0, false, 0); }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringGeometry, ConfiguredMaximumSurvivesInitialization)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 512 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t configured = params.heapParam.heapSize * 1024;
+    const size_t effective = ZHeuristics::max_heap_size();
+    const size_t medium = ZPageSizeMediumMax;
+    const size_t budget = ZHeuristics::significant_young_overhead();
+    std::fprintf(stderr, "TENURING_GEOMETRY_TARGET configured=%zu effective=%zu medium=%zu budget=%zu\n",
+                 configured, effective, medium, budget);
+    // The input identity and power-of-two tier are checked independently of
+    // the headroom outputs used by the threshold tests above.
+    GC_EXPECT_TRUE(effective == configured && medium == 16 * 1024 * 1024 && budget == configured / 4);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideEqualsMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 4); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideBelowMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 3); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverrideEqualsMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 4, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverrideBelowMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 3, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumWithAutomatic) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, -1); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentMaximumWithAutomatic) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, -1, true); }
