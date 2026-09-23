@@ -8,6 +8,7 @@
 #define MRT_MOBJECT_INLINE_H
 
 // language dependence
+#include "Heap/z/zAccess.hpp"
 #include "ObjectModel/Field.inline.h"
 #include <type_traits>
 
@@ -69,13 +70,13 @@ inline void MObject::Store(size_t offset, T value)
 inline MObject* MObject::LoadRef(size_t offset)
 {
     RefField<>& ref = GetRefField<false>(offset);
-    return static_cast<MObject*>(ZBarrier::ReadReference(this, ref));
+    return static_cast<MObject*>(HeapAccess<>::oop_load(&(ref)));
 }
 
 inline void MObject::StoreRef(size_t offset, MObject* value)
 {
     RefField<>& ref = GetRefField<false>(offset);
-    ZBarrier::WriteReference(this, ref, value);
+    HeapAccess<>::oop_store(&(ref), value);
 }
 } // namespace MapleRuntime
 #endif // MRT_MOBJECT_INLINE_H

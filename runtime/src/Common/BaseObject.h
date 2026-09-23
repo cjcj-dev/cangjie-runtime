@@ -44,7 +44,6 @@ public:
 
     size_t GetSize(TypeInfo* kls) const;
 
-    bool CompareExchangeRefField(HeapSlot<>& field, const HeapSlot<> oldRef, const HeapSlot<> newRef);
 
     template<bool isVolatile = false>
     HeapSlot<isVolatile>& GetRefField(U32 offset) const
