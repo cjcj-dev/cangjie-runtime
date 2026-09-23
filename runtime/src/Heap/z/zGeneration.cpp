@@ -82,7 +82,6 @@ static const ZStatPhaseConcurrent ZPhaseConcurrentRelocateOld("Concurrent Reloca
 static const ZStatPhaseConcurrent ZPhaseConcurrentProcessNonStrongOld("Concurrent Process Non-Strong", ZGenerationId::old);
 static const ZStatPhaseConcurrent ZPhaseConcurrentRemapRootsOld("Concurrent Remap Roots", ZGenerationId::old);
 
-static const ZStatSubPhase PCollectLargeGarbage("Collect large garbage", ZGenerationId::old);
 static const ZStatSubPhase PEnumRootsUpdateOldPointersWithin("enum roots & update old pointers within", ZGenerationId::old);
 static const ZStatSubPhase PIdentifyUselessExternRef("identify useless extern ref", ZGenerationId::old);
 static const ZStatSubPhase PTraceLiveObjectsUpdateOldPointersInRefFields("trace live objects & update old pointers in ref-fields", ZGenerationId::old);
@@ -292,9 +291,6 @@ public:
     bool do_operation() override
     {
         ZStatTimerOld timer(ZPhasePauseRelocateStartOld);
-        ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
-            data.storeBarrierBuffer->install_base_pointers();
-        });
         ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         ZGeneration::old()->set_phase(ZGeneration::Phase::Relocate);
@@ -1030,7 +1026,6 @@ void ZGenerationOld::concurrent_relocate()
     relocate().relocate(&relocation_set());
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
     Heap::GetHeap().cross_vm().PostResolveCycleTask();
-    CollectSmallSpace();
 }
 
 }
@@ -1111,9 +1106,14 @@ void ZGenerationYoung::register_flip_promoted(const ZArray<ZPage*>& pages)
 
 void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)
 {
-    // zGeneration.cpp:704-715: preclean promotes all, other types compute.
-    _tenuring_threshold = YoungType() == ZYoungType::major_full_preclean
-        ? 0 : ComputeTenuringThreshold(inputs);
+    // ZGC zGeneration.cpp:704-715: promote-all precedes an explicit override.
+    if (inputs.promoteAll) {
+        _tenuring_threshold = 0;
+    } else if (ZTenuringThreshold != -1) {
+        _tenuring_threshold = static_cast<uint32_t>(ZTenuringThreshold);
+    } else {
+        _tenuring_threshold = ComputeTenuringThreshold(inputs);
+    }
 }
 
 void ZGeneration::free_empty_pages(ZRelocationSetSelector* selector, int bulk)
@@ -1262,13 +1262,6 @@ BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object)
 }
 
 namespace MapleRuntime {
-void ZGenerationOld::CollectLargeGarbage()
-{
-    ZStatTimerOld zstatTimer(PCollectLargeGarbage);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    ZGeneration::old()->increase_freed(space.CollectLargeGarbage());
-}
-
 void ZGenerationYoung::EvacuateYoungRegions(std::unique_ptr<ScopedStopTheWorld>* stw)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
@@ -1318,9 +1311,6 @@ void ZGenerationYoung::EvacuateYoungRegions(std::unique_ptr<ScopedStopTheWorld>*
             // (zGeneration.cpp:475-483, block_jni_critical at :832).
             ZJNICritical::block();
             if (doYoungFlip) {
-                ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
-                    data.storeBarrierBuffer->install_base_pointers();
-                });
                 ZGlobalsPointers::flip_young_relocate_start();
                 ZVerify::OnColorFlip();
             }

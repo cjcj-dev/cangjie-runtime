@@ -53,6 +53,8 @@ constexpr size_t ZMarkProactiveFlushMax = 10;
 constexpr uint64_t ZMarkCompleteTimeout = 200;
 // gc/shared/gc_globals.hpp ConcGCThreads; ZCollectedHeap::start_gc_threads
 // publishes the runtime budget after heap initialization.
+extern uint32_t MaxTenuringThreshold;
+extern int32_t ZTenuringThreshold;
 extern uint32_t ConcGCThreads;
 extern uint32_t ZYoungGCThreads;
 extern uint32_t ZOldGCThreads;

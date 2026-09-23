@@ -626,9 +626,6 @@ void RegionManager::ReclaimRetiredRegion(ZPage* region)
     DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
-    // STEER3: scrub is at CollectRegion only (see header). Reclaim/TakeRegion reuse
-    // must not re-scan O(N) under remset mutex.
-
     {
         ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_DIRTY);
     }
@@ -816,12 +813,8 @@ void RegionManager::ReleaseRetiredRegion(ZPage* region)
 {
     // routedest: census only, see ReclaimRegion.
 
-    // holdercapture: large regions above the release threshold never reach CollectRegion,
-    // so the snapshot has to be taken on this path too or the face is lost unrecorded.
-
     size_t num = region->GetRegionSize();
     size_t unitIndex = region->granule_index();
-    // Large regions above the release threshold bypass CollectRegion. Invalidate
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
@@ -855,16 +848,6 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
     allowSaferegion = allowSaferegion && !flags.non_blocking();
     if (!allowSaferegion || IsGcThread()) { flags.set_non_blocking(); }
     size_t size = num;
-
-#if !defined(__OHOS__)
-    size_t gatedBytes = 0;
-    ZPage* garbage = allowSaferegion ? TakeReclaimableGarbageRegion(&gatedBytes) : nullptr;
-    if (garbage != nullptr) {
-        ReclaimRegion(garbage);
-    }
-#else
-    size_t gatedBytes = GetGatedGarbageBytes();
-#endif
 
 retry:
     ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, flags);
@@ -904,49 +887,8 @@ retry:
         return region;
     }
 
-    if (gatedBytes > 0) {
-        static std::atomic<size_t> supplyGatedPressureCount { 0 };
-        size_t n = supplyGatedPressureCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if ((n & (n - 1)) == 0) {
-            VLOG(REPORT, "[Alloc] supply_gated_pressure gated_bytes=%zu n=%zu", gatedBytes, n);
-        }
-    }
     return nullptr;
 }
-
-size_t RegionManager::CollectLargeGarbage()
-{
-    size_t garbageSize = 0;
-    std::vector<ZPage*> largePages;
-    {
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            if (region->GetRegionRole() == ZPageRole::OldLarge) {
-                largePages.push_back(region);
-            }
-        }
-    }
-    for (ZPage* region : largePages) {
-        // for large region, the object is the page start (zPage.inline.hpp:254-256).
-        if (!region->is_object_live(to_zaddress(region->GetRegionStart()))) {
-            DLOG(REGION, "reclaim large region %p@[0x%zx+%zu, 0x%zx) type %u", region, region->GetRegionStart(),
-                 region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
-
-            ZPage* del = region;
-            del->SetRegionRole(ZPageRole::None);
-            if (del->GetRegionSize() > ZPage::LARGE_OBJECT_RELEASE_THRESHOLD) {
-                garbageSize += ReleaseRegion(del);
-            } else {
-
-                garbageSize += CollectRegion<Generation::Old>(del);
-            }
-        }
-    }
-
-    return garbageSize;
-}
-
 
 void RegionManager::DumpRegionStats(const char* msg) const
 {
@@ -1111,8 +1053,7 @@ size_t RegionManager::GetAllocatedSize() const
 {
         // zPageAllocator.cpp:1311 ZPageAllocator::used: page-granular committed
         // counter maintained at TakeRegion/ReturnPageMemory/reclaim, not a
-        // list sum. Garbage-pending pages count as used until reclaim, as
-        // ZGC's _used does until free_page.
+        // list sum. Pages count as used until free_page.
         return pageAllocatorUsed;
     }
 

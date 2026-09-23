@@ -29,7 +29,6 @@
 
 namespace MapleRuntime {
 
-const ZStatCriticalPhase PReclaimGarbageRegions("ReclaimGarbageRegions");
 RegionManager& RegionSpace::GetRegionManager() const noexcept
 {
     return Heap::GetHeap().page_allocator();

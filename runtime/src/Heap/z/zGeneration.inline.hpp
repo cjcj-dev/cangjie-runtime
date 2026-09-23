@@ -5,8 +5,15 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zMark.inline.hpp"
 #include "Heap/z/zRemembered.inline.hpp"
+#include "Heap/z/zWorkers.inline.hpp"
 
 namespace MapleRuntime {
+// ZGC zGeneration.inline.hpp:86-88.
+inline bool ZGeneration::should_worker_resize()
+{
+    return workers->should_worker_resize();
+}
+
 // ZGC zGeneration.inline.hpp:166-168.
 inline bool ZGenerationYoung::is_remembered(volatile zpointer* p) const
 {

@@ -36,6 +36,7 @@ public:
         uintptr_t alloc_medium_object(size_t size, ZAllocationFlags flags);
         uintptr_t alloc_large_object(size_t size, ZAllocationFlags flags);
         uintptr_t alloc_object(size_t size, ZAllocationFlags flags);
+        void retire_pages();
         ZPage** shared_small_page_addr();
         ZPage* const* shared_small_page_addr() const;
         ZPage** shared_medium_page_addr();
@@ -46,7 +47,8 @@ public:
     PerAge* allocator(PageAge age) { return objectAllocators[untype(age)].get(); }
     const PerAge* allocator(PageAge age) const { return objectAllocators[untype(age)].get(); }
     size_t fast_available(PageAge age) const;
-    uintptr_t alloc(size_t size, PageAge age, bool nonBlocking = false);
+    uintptr_t alloc(size_t size);
+    uintptr_t alloc_for_relocation(size_t size, PageAge age);
     void retire_pages(PageAgeRange ages);
 
 private:

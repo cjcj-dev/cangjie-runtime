@@ -243,32 +243,48 @@ uintptr_t ZObjectAllocator::PerAge::alloc_object(size_t size, ZAllocationFlags f
     }
 }
 
-// ZGC zObjectAllocator.cpp:228-239.
+// ZGC zObjectAllocator.cpp:226-236.
 size_t ZObjectAllocator::fast_available(PageAge age) const
 {
+    CHECK_DETAIL(ThreadLocal::GetMutator() != nullptr, "Should be a mutator thread");
+
     ZPage* const* shared = allocator(age)->shared_small_page_addr();
     ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
     return page == nullptr ? 0 : page->remaining();
 }
 
-uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking)
+// ZGC zObjectAllocator.cpp:238-241.
+uintptr_t ZObjectAllocator::alloc(size_t size)
+{
+    ZAllocationFlags flags;
+    return allocator(PageAge::eden)->alloc_object(size, flags);
+}
+
+// ZGC zObjectAllocator.cpp:243-250.
+uintptr_t ZObjectAllocator::alloc_for_relocation(size_t size, PageAge age)
 {
     CHECK(untype(age) < kPageAgeCount);
     ZAllocationFlags flags;
-    if (nonBlocking) { flags.set_non_blocking(); }
+    flags.set_non_blocking();
     return allocator(age)->alloc_object(size, flags);
 }
 
-// ZObjectAllocator::retire_pages / PerAge::retire_pages (cpp:208-237).
+// ZGC zObjectAllocator.cpp:196-202.
+void ZObjectAllocator::PerAge::retire_pages()
+{
+    CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "Should be at safepoint");
+
+    sharedMediumPage.set(nullptr);
+    sharedSmallPage.set_all(nullptr);
+}
+
+// ZObjectAllocator::retire_pages (zObjectAllocator.cpp:220-224).
 // Called in the corresponding generation's mark-start pause. The lifecycle
 // lists retain pages; retirement only removes allocation shortcuts.
 void ZObjectAllocator::retire_pages(PageAgeRange ages)
 {
-    // zObjectAllocator.cpp:198-203 PerAge::retire_pages: set_all(nullptr).
     for (PageAge age : ages) {
-        auto* perAge = allocator(age);
-        perAge->sharedSmallPage.set_all(nullptr);
-        perAge->sharedMediumPage.set(nullptr);
+        allocator(age)->retire_pages();
     }
 }
 
@@ -306,7 +322,7 @@ namespace MapleRuntime {
 MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
 {
     if (allocSize > ZObjectSizeLimitSmall || ThreadLocal::GetMutator() == nullptr) {
-        return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden);
+        return Heap::GetHeap().object_allocator().alloc(allocSize);
     }
     AllocBuffer* allocBuffer = ThreadLocal::GetMutator()->tlab();
     return allocBuffer->Allocate(allocSize, allocType);

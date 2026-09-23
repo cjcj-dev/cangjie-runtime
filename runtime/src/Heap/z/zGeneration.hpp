@@ -108,6 +108,7 @@ public:
     void InitializeWorkers(uint32_t capacity);
     void StopWorkers();
     ZWorkers* Workers() const { return workers.get(); }
+    bool should_worker_resize();
     ZWeakRootsProcessor* WeakRootsProcessor() const { return weakRootsProcessor.get(); }
     ZStatCycle& CycleStats() { return cycleStats; }
     ZStatWorkers* StatWorkers() { return &statWorkers; }
@@ -260,8 +261,6 @@ public:
     // zGeneration.cpp:1248,1526: young-count snapshot at major start.
     uint32_t total_collections_at_start() const { return _total_collections_at_start; }
     void PostTrace();
-    void CollectSmallSpace();
-    void CollectLargeGarbage();
     ~ZGenerationOld();
     bool should_record_stats() override;
     void collect();

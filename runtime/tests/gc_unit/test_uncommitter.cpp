@@ -287,9 +287,8 @@ static void ExercisePartitionWorker(bool enabled)
     const size_t n = 64 * MB / ZGranuleSize;
     ZPage* region = regions.TakeRegion((n) * ZGranuleSize, ZPageType::large, true, false);
     GC_EXPECT_TRUE(region != nullptr);
-    regions.ReturnPageMemory(PageMemory{region->granule_index(), n * ZGranuleSize, 0, true});
     const size_t beforeReclaim = regions.GetCommittedCapacity();
-    space.ReclaimGarbageMemory(true);
+    regions.ReturnPageMemory(PageMemory{region->granule_index(), n * ZGranuleSize, 0, true});
     GC_EXPECT_EQ(regions.GetCommittedCapacity(), beforeReclaim);
     const size_t before = regions.GetCommittedCapacity();
     const uint64_t start = TimeUtil::NanoSeconds();

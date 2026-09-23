@@ -23,7 +23,6 @@
 #include "Mutator/Mutator.h"
 #include "Heap/z/zPageAllocator.hpp"
 namespace MapleRuntime {
-extern const ZStatCriticalPhase PReclaimGarbageRegions;
 }
 
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
@@ -65,25 +64,6 @@ public:
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     bool IsHeapObject(MAddress addr) const;
 #endif
-
-    size_t ReclaimGarbageMemory(bool /* releaseAll */)
-    {
-        const size_t cachedBefore = GetRegionManager().GetCachedBytes();
-        ZStatTimerWorker zstatTimer(PReclaimGarbageRegions);
-        // zPageAllocator.cpp: free pages return to the mapped cache. Physical
-        // uncommit belongs to zUncommitter.cpp:367-421, including OOM reclaim.
-        GetRegionManager().ReclaimGarbageRegions();
-        const size_t cachedAfter = GetRegionManager().GetCachedBytes();
-        return cachedAfter > cachedBefore ? cachedAfter - cachedBefore : 0;
-    }
-#if defined(__EULER__)
-    void TryReclaimGarbageMemory()
-    {
-        ReclaimGarbageMemory(false);
-    }
-#endif
-    size_t CollectLargeGarbage() { return GetRegionManager().CollectLargeGarbage(); }
-
 
     void DumpRegionStats(const char* msg) const
     {

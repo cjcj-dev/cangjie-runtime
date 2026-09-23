@@ -477,15 +477,11 @@ public:
 
     size_t GetYoungAllocatedSize() const;
 
-    template<Generation G>
-    size_t CollectRegion(ZPage* region);
 
     void ReclaimRegion(ZPage* region);
     size_t ReleaseRegion(ZPage* region);
 
-    void ReclaimGarbageRegions();
 
-    size_t CollectLargeGarbage();
 
 
     // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).
@@ -566,11 +562,8 @@ private:
 
 
 
-    ZPage* TakeReclaimableGarbageRegion(size_t* gatedBytes = nullptr);
 
-    bool TryTakeGarbageRegionAfterDispel(ZPage* target);
 
-    size_t GetGatedGarbageBytes();
 
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 

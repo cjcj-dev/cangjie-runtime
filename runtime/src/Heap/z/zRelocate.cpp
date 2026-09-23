@@ -41,6 +41,7 @@
 #include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Common/SuspendibleThreadSet.h"
@@ -107,12 +108,40 @@ namespace MapleRuntime {
 
 static const ZStatSubPhase PRemapYoungRoots("RemapYoungRoots", ZGenerationId::old);
 
+// ZGC zRelocate.cpp:1051-1078: claim each thread once across the workers.
+class ZRelocateStoreBufferInstallBasePointersThreadClosure {
+public:
+    void do_thread(Mutator& mutator)
+    {
+        mutator.GetGCData().storeBarrierBuffer->install_base_pointers();
+    }
+};
+
+class ZRelocateStoreBufferInstallBasePointersTask final : public ZTask {
+    JavaThreadsIterator threads;
+public:
+    explicit ZRelocateStoreBufferInstallBasePointersTask(ZGeneration* generation)
+        : ZTask("ZRelocateStoreBufferInstallBasePointersTask"), threads(generation->id_optional()) {}
+
+    void work() override
+    {
+        ZRelocateStoreBufferInstallBasePointersThreadClosure closure;
+        threads.Apply([&](Mutator& mutator) { closure.do_thread(mutator); });
+    }
+};
+
 // ZGC zRelocate.cpp:1289: both generations submit their installed set.
 void ZRelocate::relocate(ZRelocationSet* relocation_set)
 {
     CHECK(relocation_set->generation() == generation);
     auto& manager = Heap::GetHeap().page_allocator();
     ZWorkers& workers = *generation->Workers();
+    {
+        // ZGC zRelocate.cpp:1289-1296: preserve object starts before page
+        // relocation destroys the liveness information used to find them.
+        ZRelocateStoreBufferInstallBasePointersTask bufferTask(generation);
+        workers.run(&bufferTask);
+    }
     if (!relocateQueue.IsActive()) {
         StartRelocationTasks(generation->id());
     }
@@ -376,7 +405,7 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 //   ③ never return a from address or a null-tip geometric address.
 // Distinct from 4e75f2cc: that path is RouteObject *miss* (no plan) on a ghost about to
 // be reclaimed — returning from there reinstalls a dying address. Here RouteObject *hit*
-// with no tip yet: while still ROUTED/ROUTING, from is not yet CollectRegion'd.
+// with no tip yet: while forwarding is incomplete, the source page is retained.
 // After object/region publish (FORWARDED|COMPACTED) tip must exist if the plan was real;
 // missing tip = permanent hole = invariant violation → CHECK (not hang, not geometric to).
 //
@@ -662,7 +691,7 @@ BaseObject* ZRelocate::ForwardObject(BaseObject* obj, Generation generation)
     }
     // GetRoute survivor gate / exclusive soft-miss: a movable ghost-from with no
     // to-version is not a stable address. Returning `obj` here reinstalls a from
-    // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
+    // pointer whose source page is about to be released.
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
     if (IsFromObject(obj)) {
         ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
@@ -749,7 +778,7 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge toAge = forwarding_for_page(copyPage)->to_age();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc(size, toAge, true));
+    BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc_for_relocation(size, toAge));
     if (toObj == nullptr) return nullptr;
     BaseObject* result = nullptr;
     ZForwarding* publication = forwarding_for_page(copyPage);
@@ -1034,13 +1063,15 @@ void ForwardTask<G>::work()
         if (owner->page()->is_small()) { small.do_forwarding(owner); }
         else { medium.do_forwarding(owner); }
         owner->mark_done();
-        (void)queue.Complete(owner);
     };
     for (;;) {
         for (ZForwarding* owner; (owner = queue.synchronize_poll()) != nullptr;) { doForwarding(owner); }
         ZForwarding* owner = nullptr;
         if (!iter.next(&owner)) { break; }
         if (owner->claim()) { doForwarding(owner); }
+        // ZGC zRelocate.cpp:1206-1214: finish one ordinary forwarding before
+        // yielding the worker. The shared iterator survives the restart.
+        if (generation->should_worker_resize()) { break; }
     }
     queue.leave();
 }
@@ -1146,6 +1177,9 @@ void ZRelocateQueue::join(uint32_t workers)
 
 void ZRelocateQueue::resize_workers(uint32_t workers)
 {
+    CHECK_DETAIL(workers != 0 && nworkers == 0 && nsynchronized == 0,
+                 "invalid relocate queue resize workers=%u nworkers=%u nsync=%u",
+                 workers, nworkers, nsynchronized);
     std::lock_guard<std::mutex> guard(lock);
     nworkers = workers;
 }
@@ -1173,7 +1207,7 @@ void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
         attention.notify_all();
     }
     while (!forwarding->is_done()) {
-        attention.wait_for(guard, std::chrono::milliseconds(1));
+        attention.wait(guard);
     }
 }
 

@@ -13,6 +13,10 @@
 #include <csignal>
 #include <cstring>
 #include <dlfcn.h>
+#include <fstream>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
 #include <mutex>
 #include <sys/wait.h>
 #include <thread>
@@ -1279,7 +1283,10 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     if (oldCycle.Snapshot().active) oldCycle.End();
     // Enter the actual old mark-start producer; a bare ZMark::Start only
     // initializes stacks and does not publish the generation's Mark phase.
-    Heap::GetHeap().old().mark_start();
+    {
+        ScopedStopTheWorld stopped("old mark-start fixture");
+        Heap::GetHeap().old().mark_start();
+    }
     {
         DriverLocker driver;
         ZDriver::RunGarbageCollection(1, GC_REASON_USER);
@@ -1518,6 +1525,31 @@ GC_TEST(RelocateMiss782, RetainedPageCopiesAndPublishes)
 }
 
 namespace {
+#if defined(__linux__)
+struct RelocationWaitSample {
+    bool sleeping = false;
+    long switches = -1;
+};
+
+// Read the kernel's counter for the actual product waiter, not a test counter.
+RelocationWaitSample ReadRelocationWaitSample(long tid)
+{
+    RelocationWaitSample sample;
+    std::ifstream status("/proc/self/task/" + std::to_string(tid) + "/status");
+    std::string line;
+    while (std::getline(status, line)) {
+        if (line.compare(0, 6, "State:") == 0) {
+            sample.sleeping = line.find('S', 6) != std::string::npos;
+        }
+        constexpr const char* key = "voluntary_ctxt_switches:";
+        if (line.compare(0, std::strlen(key), key) == 0) {
+            sample.switches = std::stol(line.substr(std::strlen(key)));
+        }
+    }
+    return sample;
+}
+#endif
+
 void ExerciseRelocationWait782(bool claimedPage)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -1551,8 +1583,14 @@ void ExerciseRelocationWait782(bool claimedPage)
     }
     ZRelocateQueue* queue = generation.relocate().queue();
     std::atomic<bool> returned{false};
+#if defined(__linux__)
+    std::atomic<long> waiterTid{0};
+#endif
     BaseObject* result = nullptr;
     std::thread mutator([&] {
+#if defined(__linux__)
+        waiterTid.store(syscall(SYS_gettid), std::memory_order_release);
+#endif
         result = RelocationReceiptTest::ProductRelocateOrRemap(heap, from, ZGenerationId::old);
         returned.store(true, std::memory_order_release);
     });
@@ -1564,6 +1602,45 @@ void ExerciseRelocationWait782(bool claimedPage)
     const bool queued = queue->PendingCount() != 0;
     const bool blocked = !returned.load(std::memory_order_acquire);
     const MAddress before = forwarding->find(reinterpret_cast<MAddress>(from));
+#if defined(__linux__)
+    // No worker is started until after this window, so neither leave nor
+    // prune can notify. Queue membership was observed through its mutex.
+    // ZGC zRelocate.cpp:134-151 waits without a timeout during this stall.
+    const long tid = waiterTid.load(std::memory_order_acquire);
+    RelocationWaitSample idleBegin;
+    do {
+        idleBegin = ReadRelocationWaitSample(tid);
+        if (idleBegin.sleeping && idleBegin.switches >= 0) break;
+        std::this_thread::yield();
+    } while (std::chrono::steady_clock::now() < deadline);
+    const auto idleStart = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    const auto idleEnd = ReadRelocationWaitSample(tid);
+    const auto idleMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - idleStart).count();
+    const long idleWakeups = idleEnd.switches - idleBegin.switches;
+    // Positive control: the normal synchronization protocol emits exactly
+    // one notification. The unfinished forwarding must wait again afterward.
+    // This counter measures scheduling: reacquiring the notifying mutex
+    // can add a second switch before the thread resumes its condition wait.
+    queue->synchronize();
+    queue->desynchronize();
+    RelocationWaitSample notifiedSample;
+    const auto controlDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        notifiedSample = ReadRelocationWaitSample(tid);
+        if (notifiedSample.sleeping && notifiedSample.switches > idleEnd.switches) break;
+        std::this_thread::yield();
+    } while (std::chrono::steady_clock::now() < controlDeadline);
+    const long controlWakeups = notifiedSample.switches - idleEnd.switches;
+    const bool idleObserved = queued && blocked && idleBegin.sleeping &&
+        idleBegin.switches >= 0 && idleEnd.switches >= idleBegin.switches && idleMs >= 500;
+    std::fprintf(stderr,
+        "RELOCATE_WAIT_WINDOW tid=%ld observed=%d ms=%lld begin=%ld end=%ld wakeups=%ld "
+        "notify_wakeups=%ld still_waiting=%d\n",
+        tid, idleObserved, static_cast<long long>(idleMs), idleBegin.switches,
+        idleEnd.switches, idleWakeups, controlWakeups, !returned.load(std::memory_order_acquire));
+#endif
     // Give the worker ordinary allocation space only after observing the
     // request. Both the table entry and completion are produced by relocate().
     destination->SetRegionAllocPtr(destination->GetRegionStart());
@@ -1571,6 +1648,20 @@ void ExerciseRelocationWait782(bool claimedPage)
     generation.Workers()->set_active_workers(2);
     generation.Workers()->set_active();
     generation.relocate().relocate(&generation.relocation_set());
+    // ZGC zRelocate.cpp:116-151,177-180: worker pruning must notify the
+    // waiting mutator. Bound the observation independently of cleanup so a
+    // missing notification reaches the result assertion instead of hanging.
+    const auto wakeDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!returned.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < wakeDeadline) {
+        std::this_thread::yield();
+    }
+    const bool notified = returned.load(std::memory_order_acquire);
+    if (!notified) {
+        // All workers have left. Release the waiter through the normal queue
+        // synchronization protocol, without changing the observed verdict.
+        queue->synchronize();
+        queue->desynchronize();
+    }
     mutator.join();
     const MAddress mapping = forwarding->find(reinterpret_cast<MAddress>(from));
     // ZGC zRelocate.cpp:906-927: workers use relocation targets, not the
@@ -1587,6 +1678,15 @@ void ExerciseRelocationWait782(bool claimedPage)
         claimedPage, queued, blocked, before, reinterpret_cast<MAddress>(result), mapping,
         expected, forwarding->is_done(), valid);
     GC_EXPECT_TRUE(valid);
+    std::fprintf(stderr, "RELOCATE_QUEUE_NOTIFICATION notified=%d\n", notified);
+    GC_EXPECT_TRUE(notified);
+#if defined(__linux__)
+    GC_EXPECT_TRUE(idleObserved);
+    std::fprintf(stderr, "ASSERT_RELOCATE_WAIT_NO_PERIODIC_WAKEUPS executed=1 wakeups=%ld limit=5\n", idleWakeups);
+    GC_EXPECT_TRUE(idleWakeups <= 5L);
+    std::fprintf(stderr, "ASSERT_RELOCATE_WAIT_NOTIFY_CONTROL executed=1 switches=%ld range=1..5\n", controlWakeups);
+    GC_EXPECT_TRUE(controlWakeups >= 1L && controlWakeups <= 5L);
+#endif
     for (ZPage* page : occupied) Heap::free_page(page);
     generation.reset_relocation_set();
 }

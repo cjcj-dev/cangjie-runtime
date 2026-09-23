@@ -12,11 +12,13 @@
 #include <thread>
 #include <vector>
 #include "gc_heap_fixture.hpp"
+#include "gc_verify_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
+#include "Mutator/MutatorManager.h"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/z_globals.hpp"
 #if defined(__linux__)
@@ -122,6 +124,7 @@ private:
 
 GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
 {
+    VerifyRuntime runtime;
     CPUAffinity affinity;
     SharedPageFixture fixture;
     auto& manager = fixture.manager;
@@ -129,7 +132,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     ZPage* pages[kPageAgeCount]{};
     for (PageAge age : kPageAgeRangeAll) {
-        const uintptr_t address = Heap::GetHeap().object_allocator().alloc(16, age, true);
+        const uintptr_t address = Heap::GetHeap().object_allocator().alloc_for_relocation(16, age);
         GC_EXPECT_TRUE(address != 0);
         ZPage* page = Heap::page(address);
         pages[untype(age)] = page;
@@ -140,24 +143,27 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
         GC_EXPECT_EQ(page->IsYoungRegion(), age != PageAge::old);
         GC_EXPECT_EQ(page->GetYoungAge(), age == PageAge::old ? uint8_t{0} : static_cast<uint8_t>(untype(age)));
         GC_EXPECT_TRUE(page->GetRegionRole() == ZPageRole::RecentFull);
-        GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(16, age, true), address + 16);
+        GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc_for_relocation(16, age), address + 16);
         for (uint32_t previous = 0; previous < untype(age); ++previous) {
             GC_EXPECT_TRUE(pages[previous] != page);
         }
     }
     ZPage* eden = pages[untype(PageAge::eden)];
-    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(std::min(eden->remaining(), ZObjectSizeLimitSmall), PageAge::eden, true),
+    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc_for_relocation(std::min(eden->remaining(), ZObjectSizeLimitSmall), PageAge::eden),
                  eden->GetRegionStart() + 32);
     while (eden->remaining() >= 16) {
         const size_t chunk = std::min(eden->remaining(), ZObjectSizeLimitSmall);
-        GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().alloc(chunk, PageAge::eden, true) != 0);
+        GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().alloc_for_relocation(chunk, PageAge::eden) != 0);
     }
-    const uintptr_t refilled = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
+    const uintptr_t refilled = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::eden);
     GC_EXPECT_TRUE(refilled != 0);
     GC_EXPECT_TRUE(Heap::page(refilled) != eden);
-    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+    {
+        ScopedStopTheWorld stopped("object allocator retirement");
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+    }
     GcHeapFixture::AdvanceGeneration(Generation::Young);
-    const uintptr_t retired = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
+    const uintptr_t retired = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::eden);
     GC_EXPECT_TRUE(retired != 0);
     auto* retiredPage = Heap::page(retired);
     std::fprintf(stderr, "P1_SHARED_BIRTH_ASSERT generation=young birth=%llu owner=%llu\n",
@@ -166,11 +172,14 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     GC_EXPECT_TRUE(retiredPage->IsAllocating());
     GC_EXPECT_TRUE(Heap::page(retired) != Heap::page(refilled));
     ZPage* old = pages[untype(PageAge::old)];
-    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(16, PageAge::old, true), old->GetRegionStart() + 32);
+    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::old), old->GetRegionStart() + 32);
     GC_EXPECT_TRUE(old->IsAllocating());
-    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+    {
+        ScopedStopTheWorld stopped("object allocator retirement");
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+    }
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    const uintptr_t newOld = Heap::GetHeap().object_allocator().alloc(16, PageAge::old, true);
+    const uintptr_t newOld = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::old);
     GC_EXPECT_TRUE(newOld != 0);
     auto* newOldPage = Heap::page(newOld);
     std::fprintf(stderr, "P1_SHARED_BIRTH_ASSERT generation=old birth=%llu owner=%llu\n",
@@ -189,14 +198,14 @@ GC_OTHER_VM_TEST(SharedSmallPage, TLABAccountingOnlySmallEden)
     auto& manager = fixture.manager;
     size_t expected = 0;
     for (PageAge age : kPageAgeRangeAll) {
-        const uintptr_t address = Heap::GetHeap().object_allocator().alloc(16, age, true);
+        const uintptr_t address = Heap::GetHeap().object_allocator().alloc_for_relocation(16, age);
         GC_EXPECT_TRUE(address != 0);
         if (age == PageAge::eden) {
             expected += Heap::page(address)->GetRegionSize();
         }
     }
-    const uintptr_t large = Heap::GetHeap().object_allocator().alloc(std::max(ZObjectSizeLimitSmall, ZObjectSizeLimitMedium) + 16,
-                                                      PageAge::eden, true);
+    const uintptr_t large = Heap::GetHeap().object_allocator().alloc_for_relocation(std::max(ZObjectSizeLimitSmall, ZObjectSizeLimitMedium) + 16,
+                                                                     PageAge::eden);
     GC_EXPECT_TRUE(large != 0);
     GC_EXPECT_TRUE(!Heap::page(large)->IsSmallRegion());
     GC_EXPECT_TRUE(expected != 0);
@@ -224,7 +233,7 @@ GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     affinity.Select(cpuA);
     // Fresh thread state: the first id() takes the slow path and reads cpuA.
     GC_EXPECT_EQ(ZCPU::id(), cpuA);
-    const uintptr_t first = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
+    const uintptr_t first = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::eden);
     GC_EXPECT_TRUE(first != 0);
     const bool firstPublished = Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(
         static_cast<uint32_t>(cpuA)) == Heap::page(first);
@@ -232,7 +241,7 @@ GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     affinity.Select(cpuB);
     // Fast path: the affinity entry for cpuA still names this thread.
     GC_EXPECT_EQ(ZCPU::id(), cpuA);
-    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true), first + 16);
+    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::eden), first + 16);
 
     // Another thread pinned to cpuA claims cpuA's entry (zCPU.cpp:62-64) ...
     std::thread claimer([&] {
@@ -247,7 +256,7 @@ GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     claimer.join();
     // ... so this thread's next id() falls to the slow path and reads cpuB.
     GC_EXPECT_EQ(ZCPU::id(), cpuB);
-    const uintptr_t second = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
+    const uintptr_t second = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::eden);
     GC_EXPECT_TRUE(second != 0);
     std::fprintf(stderr, "CPU_MIGRATION_TARGET cpu_a=%zu cpu_b=%zu first=%p second=%p per_cpu=%d first_slot=%d\n",
                  cpuA, cpuB, Heap::page(first), Heap::page(second),
@@ -264,7 +273,7 @@ GC_COMPONENT_OTHER_VM_TEST(P13Heuristics, FragmentationBudgetSelectsSharedSlot)
     // Construct the product heap so PerAge consumes the decision itself.
     CreateStandaloneHeap(10 * static_cast<size_t>(ZCPU::count()));
     auto& allocator = Heap::GetHeap().object_allocator();
-    const uintptr_t address = allocator.alloc(16, PageAge::eden, true);
+    const uintptr_t address = allocator.alloc_for_relocation(16, PageAge::eden);
     const bool perCpu = allocator.allocator(PageAge::eden)->usePerCpuSharedSmallPages;
     std::fprintf(stderr, "FRAGMENTATION_ROUTE address=%zx per_cpu=%d\n", address, perCpu);
     GC_EXPECT_FALSE(perCpu);
@@ -284,13 +293,90 @@ GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
     GC_EXPECT_FALSE(ZHeuristics::use_per_cpu_shared_small_pages());
     GC_EXPECT_FALSE(allocator.allocator(PageAge::eden)->usePerCpuSharedSmallPages);
     affinity.Select(affinity.available.front());
-    const uintptr_t first = allocator.alloc(16, PageAge::eden, true);
+    const uintptr_t first = allocator.alloc_for_relocation(16, PageAge::eden);
     affinity.Select(affinity.available.back());
-    const uintptr_t second = allocator.alloc(16, PageAge::eden, true);
+    const uintptr_t second = allocator.alloc_for_relocation(16, PageAge::eden);
     ZPage* slot = allocator.allocator(PageAge::eden)->sharedSmallPage.get(0);
     std::fprintf(stderr, "CPU_SLOT_ZERO_TARGET first=%zx second=%zx slot=%p\n", first, second, slot);
     GC_EXPECT_TRUE(first != 0);
     GC_EXPECT_EQ(second, first + 16);
     GC_EXPECT_TRUE(slot == Heap::page(first));
+}
+#endif
+
+#if defined(__linux__)
+namespace {
+template<class Action>
+void ExpectAllocatorAbort(const char* test, const char* diagnostic, Action action)
+{
+    VerifyRuntime runtime;
+    if (std::getenv("GC_UNIT_ALLOCATOR917_SCENE") == nullptr) {
+        GC_EXPECT_EQ(setenv("GC_UNIT_ALLOCATOR917_SCENE", "1", 1), 0);
+        try {
+            RunInOtherVm(test, diagnostic);
+        } catch (...) {
+            unsetenv("GC_UNIT_ALLOCATOR917_SCENE");
+            throw;
+        }
+        GC_EXPECT_EQ(unsetenv("GC_UNIT_ALLOCATOR917_SCENE"), 0);
+        return;
+    }
+    GC_EXPECT_TRUE(!MutatorManager::Instance().WorldStopped());
+    (void)signal(SIGABRT, SIG_DFL);
+    action();
+}
+}
+
+// ZGC zObjectAllocator.cpp:196-202: retirement is legal only in a pause.
+GC_OTHER_VM_TEST(ObjectAllocator917, RetireYoungRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.RetireYoungRequiresSafepoint", "Should be at safepoint", [] {
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, RetireOldRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.RetireOldRequiresSafepoint", "Should be at safepoint", [] {
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, YoungPhaseRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.YoungPhaseRequiresSafepoint", "Should be at safepoint", [] {
+        GcHeapFixture fixture;
+        Heap::GetHeap().young().mark_start();
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, OldPhaseRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.OldPhaseRequiresSafepoint", "Should be at safepoint", [] {
+        GcHeapFixture fixture;
+        Heap::GetHeap().old().End();
+        Heap::GetHeap().old().mark_start();
+    });
+}
+#endif
+
+#if defined(__linux__)
+// ZGC zObjectAllocator.cpp:227: only a mutator queries its allocation page.
+GC_OTHER_VM_TEST(ObjectAllocator917, FastAvailableRequiresMutator)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.FastAvailableRequiresMutator", "Should be a mutator thread", [] {
+        GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
+        (void)Heap::GetHeap().object_allocator().fast_available(PageAge::eden);
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, TLABEntryRequiresMutator)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.TLABEntryRequiresMutator", "Should be a mutator thread", [] {
+        GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
+        AllocBuffer buffer;
+        buffer.ClearRegion();
+        (void)buffer.Allocate(16, AllocType::MOVEABLE_OBJECT);
+    });
 }
 #endif

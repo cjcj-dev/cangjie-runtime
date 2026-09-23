@@ -75,7 +75,10 @@ public:
         // establish colors and sequence before the real concurrent root task.
         auto& old = Heap::GetHeap().old();
         old.End();
-        old.mark_start();
+        {
+            ScopedStopTheWorld stopped("native-root old mark-start");
+            old.mark_start();
+        }
         old.concurrent_mark();
     }
     static size_t PendingYoungRootWork(Heap& collector)
@@ -526,7 +529,10 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     Heap& collector = heap;
     RelocationReceiptTest::BindNativeRootFixture(collector);
     fx.region0->reset(PageAge::eden);
-    Heap::GetHeap().young().mark_start();
+    {
+        ScopedStopTheWorld stopped("native-root young mark-start");
+        Heap::GetHeap().young().mark_start();
+    }
     Heap::GetHeap().young().Mark().verify_all_stacks_empty();
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.
