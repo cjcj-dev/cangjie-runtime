@@ -52,7 +52,6 @@ public:
     static constexpr size_t ALLOC_ALIGN = 8;
     static constexpr size_t HEADER_SIZE = 0;
     RegionSpace() = default;
-    Uncommitter& GetUncommitter() { return uncommitter; }
     bool IsHeapAddress(MAddress addr) const { return is_heap_address(addr); }
     ~RegionSpace() = default;
 
@@ -109,8 +108,8 @@ public:
 
 
 private:
-    Uncommitter uncommitter{*this};
     MAddress TryAllocateOnce(size_t allocSize, AllocType allocType);
+    MAddress AllocateOutsideTLAB(size_t allocSize, AllocType allocType);
 
 };
 } // namespace MapleRuntime

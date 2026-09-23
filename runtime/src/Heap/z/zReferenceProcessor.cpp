@@ -455,7 +455,7 @@ extern "C" MRT_EXPORT void* MRT_ProcessFinalizers(void* arg)
 
 void FinalizerProcessor::Start()
 {
-    Heap::GetHeap().GetAllocator().GetUncommitter().Start();
+    Heap::GetHeap().GetAllocator().GetRegionManager().StartUncommitters();
     pthread_t thread;
     pthread_attr_t attr;
     size_t stackSize = CangjieRuntime::GetConcurrencyParam().thStackSize * KB; // default 1MB stacksize
@@ -485,7 +485,7 @@ void FinalizerProcessor::Start()
 void FinalizerProcessor::Stop()
 {
     CHECK_DETAIL(running.load(std::memory_order_acquire), "invalid finalizerProcessor status");
-    Heap::GetHeap().GetAllocator().GetUncommitter().Stop();
+    Heap::GetHeap().GetAllocator().GetRegionManager().StopUncommitters();
     running.store(false, std::memory_order_release);
     Notify();
     WaitStop();
