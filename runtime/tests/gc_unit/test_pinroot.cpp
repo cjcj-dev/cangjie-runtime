@@ -275,7 +275,7 @@ static void CheckMutatorRelocation(bool stopped)
     ZPage* pages[2];
     BaseObject* objects[2][2];
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, true, PageAge::old, flags);
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         for (size_t j = 0; j < 2; ++j) {
             objects[i][j] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
