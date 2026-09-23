@@ -1066,7 +1066,7 @@ void CheckManagedSoftConstraint(const char* soft, const char* diagnostic)
         if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
         close(output[1]);
         signal(SIGABRT, SIG_DFL);
-        setenv("cjHeapSize", "64M", 1);
+        setenv("cjHeapSize", "64MB", 1);
         setenv("cjProcessorNum", "1", 1);
         setenv("cjConcGCThreads", "2", 1);
         setenv("cjSoftMaxHeapSize", soft, 1);
@@ -1095,7 +1095,7 @@ GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedAboveMaximum)
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedByteOverflow)
 {
-    CheckManagedSoftConstraint("18014398509481984K", "Heap size conversion overflows bytes");
+    CheckManagedSoftConstraint("18014398509481984K", "Invalid cjSoftMaxHeapSize");
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedUnitOverflow)
 {
