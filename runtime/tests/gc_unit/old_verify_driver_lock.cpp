@@ -8,16 +8,12 @@
 #include <thread>
 using namespace MapleRuntime;
 
-// Debugger observation of the product generation phase.
-// This pointer owns no state and installs no callback in the runtime.
-const ZGeneration* observed_young = nullptr;
 int main(int argc, char** argv)
 {
     RuntimeParam param{};
     param.coParam.processorNum = 1;
     param.heapParam.heapSize = 32 * 1024;
     if (InitCJRuntime(&param) != E_OK) { return 79; }
-    observed_young = &Heap::GetHeap().young();
     const bool concurrent = argc == 2 && std::strcmp(argv[1], "concurrent") == 0;
     std::atomic<bool> start{false};
     std::thread young([&] {
