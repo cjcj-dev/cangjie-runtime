@@ -11,6 +11,9 @@
     product(bool, ZCollectionIntervalOnly, false)
 namespace MapleRuntime {
 extern bool UseDynamicNumberOfGCThreads;
+// ZGC z_globals.hpp:62-66: independent minor/major timer flags, disabled by default.
+extern double ZCollectionIntervalMinor;
+extern double ZCollectionIntervalMajor;
 #define DECLARE_Z_FLAG(type, name, value) constexpr type name = value;
 Z_FLAGS(DECLARE_Z_FLAG)
 #undef DECLARE_Z_FLAG

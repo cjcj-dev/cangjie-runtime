@@ -85,6 +85,11 @@ void ZArguments::initialize()
     // zArguments.cpp: medium sizing precedes relocation-headroom ergonomics.
     ZHeuristics::set_medium_page_size();
     const GCParam param = CangjieRuntime::GetGCParam();
+    // Map the public interval once; director rules consume the independent ZGC flags.
+    const double collection_interval = param.backupGCInterval == 0 ? -1.0 :
+        static_cast<double>(param.backupGCInterval) / SECOND_TO_NANO_SECOND;
+    ZCollectionIntervalMinor = collection_interval;
+    ZCollectionIntervalMajor = collection_interval;
     bool max_threshold_is_default = !param.maxTenuringThresholdSet;
     MaxTenuringThreshold = max_threshold_is_default ? 15 : param.maxTenuringThreshold;
     ZTenuringThreshold = param.zTenuringThresholdSet ? param.zTenuringThreshold : -1;

@@ -220,7 +220,7 @@ public:
     void EvacuateYoungRegions();
     ~ZGenerationYoung();
     bool should_record_stats() override;
-    void collect();
+    void collect(ZYoungType type, void* timer = nullptr);
     void mark_start();
     void pause_mark_start();
     void produceYoungRoots();
@@ -265,7 +265,7 @@ public:
     void PostTrace();
     ~ZGenerationOld();
     bool should_record_stats() override;
-    void collect();
+    void collect(void* timer = nullptr);
     void mark_start();
     void concurrent_mark();
     bool mark_end();
