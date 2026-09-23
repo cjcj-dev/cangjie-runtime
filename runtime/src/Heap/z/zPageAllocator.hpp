@@ -113,6 +113,26 @@ using AllocationStallRequest = ZPageAllocation;
 namespace MapleRuntime {
 class RegionManager;
 
+class FreeRegionManager;
+
+// ZGC zPageAllocator.cpp:628-637: each partition owns its cache and worker.
+class ZPartition {
+public:
+    RegionManager& regionManager;
+    uint32_t numaId;
+    ZMappedCache cache;
+    Uncommitter uncommitter;
+    size_t minCapacity{0};
+    size_t capacity{0};
+    size_t claimed{0};
+    size_t used{0};
+    size_t currentMaxCapacity{0};
+    ZPartition(uint32_t id, RegionManager& manager)
+        : regionManager(manager), numaId(id), uncommitter(*this) {}
+    size_t available() const { return currentMaxCapacity - used - claimed; }
+    bool claim_capacity_fast_medium(PageMemory& memory);
+};
+
 // This class is and should be accessed only for region allocation. we do not rely on it to check region status.
 class FreeRegionManager {
 
@@ -120,7 +140,10 @@ public:
 
     explicit FreeRegionManager(RegionManager& manager) : regionManager(manager) {}
 
+    friend class Uncommitter;
     virtual ~FreeRegionManager() = default;
+    void StartUncommitters();
+    void StopUncommitters();
     // ZPageAllocator(min/initial/max capacity) owns _virtual/_physical and one
     // ZPartition per NUMA id (zPageAllocator.cpp:1201-1260); the partitions
     // here consume the two managers the same way.
@@ -174,31 +197,11 @@ public:
     size_t GetCachedBytes() const;
     // ZPartition::print_cache_on (zPageAllocator.cpp:1118-1121) for every partition.
     void PrintCacheOn() const;
-    // zUncommitter.cpp:395-403: flush from the mapped cache under the page
-    // allocator lock and record the flushed amount as claimed.
-    size_t RemoveForUncommit(size_t flush, ZArray<ZVirtualMemory>* out);
-    // zUncommitter.cpp:417-419: the flushed memory left the cache and was
-    // uncommitted; adjust claimed and capacity.
-    void UncommitFlushed(size_t flushed);
 
 private:
 
     RegionManager& regionManager;
 
-    // ZPartition (zPageAllocator.hpp:57-141): numa id, mapped cache and the
-    // capacity account; virtual/physical memory is reached through the managers.
-    class ZPartition {
-    public:
-        uint32_t numaId;
-        ZMappedCache cache;
-        size_t capacity{ 0 };
-        size_t claimed{ 0 };
-        size_t used{ 0 };
-        size_t currentMaxCapacity{ 0 };
-        explicit ZPartition(uint32_t id) : numaId(id) {}
-        size_t available() const { return currentMaxCapacity - used - claimed; }
-        bool claim_capacity_fast_medium(PageMemory& memory);
-    };
     using Partition = ZPartition;
     void InsertCommitted(Partition& partition, size_t index, size_t count);
     void FreeMemory(size_t index, size_t count);
@@ -345,6 +348,8 @@ public:
 
     // ZPageAllocator::capacity(): sum of ZPartition::_capacity.
     size_t GetCommittedCapacity() const { return freeRegionManager.capacity(); }
+    void StartUncommitters() { freeRegionManager.StartUncommitters(); }
+    void StopUncommitters() { freeRegionManager.StopUncommitters(); }
 
     size_t GetHeapCapacity() const { return heapCapacity; }
     size_t soft_max_capacity() const;
