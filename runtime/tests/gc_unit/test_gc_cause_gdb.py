@@ -133,9 +133,11 @@ try:
         DynamicEntry('MapleRuntime::ZDriverRequest::ZDriverRequest(MapleRuntime::GCReason, unsigned int, unsigned int)', internal=True)
     target = 'MapleRuntime::ZDriverMinor::collect' if MINOR else 'MapleRuntime::ZDriverMajor::collect'
     dispatch = gdb.Breakpoint(target, temporary=True)
+    other_target = 'MapleRuntime::ZDriverMajor::collect' if MINOR else 'MapleRuntime::ZDriverMinor::collect'
+    other_dispatch = gdb.Breakpoint(other_target, temporary=True)
     idle = gdb.Breakpoint('zDirector.cpp:' + str(line('Heap/z/zDirector.cpp', '            adjust_gc(stats);')), temporary=True)
     cmd('continue')
-    if dispatch.is_valid():
+    if dispatch.is_valid() and other_dispatch.is_valid():
         # The phase-entry cut can leave the actual port without a request.
         # Observe that product state and execute the cause assertion itself.
         port = '$minor->_port' if MINOR else '$major->_port'
@@ -144,19 +146,23 @@ try:
         expect('ASSERT_DIRECTOR_CAUSE', False, observed=observed, expected=expected,
                dispatched=False, busy=bool(val(port + '._has_message')))
         cmd('quit 1')
+    expected_driver = not dispatch.is_valid()
+    actual_minor = MINOR if expected_driver else not MINOR
+    if dispatch.is_valid(): dispatch.delete()
+    if other_dispatch.is_valid(): other_dispatch.delete()
     if idle.is_valid(): idle.delete()
     observed = int(val('request._cause'))
     expected = int(val('MapleRuntime::GC_REASON_' + EXPECTED))
     stack = cmd('bt')
-    expect('ASSERT_DIRECTOR_CAUSE', observed == expected and 'ZDirector::run_thread' in stack,
-           observed=observed, expected=expected, stack=stack)
+    expect('ASSERT_DIRECTOR_CAUSE', observed == expected and expected_driver and 'ZDirector::run_thread' in stack,
+           observed=observed, expected=expected, expected_driver=expected_driver, stack=stack)
     if CASE == 'allocation_rate':
         valid_causes = [c for c in DYNAMIC_CAUSES if c != 0xffffffff]
         expect('ASSERT_DYNAMIC_ALLOCATION_CAUSE', bool(valid_causes) and all(c == expected for c in valid_causes),
                causes=DYNAMIC_CAUSES, expected=expected)
     # This output remains observable with a producer mutation; it must not be
     # hidden by an earlier fatal assertion.
-    port = '$minor->_port' if MINOR else '$major->_port'
+    port = '$minor->_port' if actual_minor else '$major->_port'
     async_bp = gdb.Breakpoint('MapleRuntime::ZDriverPort::send_async', temporary=True)
     sync_bp = gdb.Breakpoint('MapleRuntime::ZDriverPort::send_sync', temporary=True)
     cmd('continue')
