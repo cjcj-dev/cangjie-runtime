@@ -24,7 +24,6 @@
 #pragma once
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zGlobals.hpp"
-#include "Base/Panic.h"
 namespace MapleRuntime {
 constexpr Uptr raw(zpointer p) { return static_cast<Uptr>(p); }
 constexpr Uptr raw(zaddress p) { return static_cast<Uptr>(p); }
@@ -720,7 +719,9 @@ inline void assert_is_oop_or_null(zaddress a)
 
 inline void assert_is_oop(zaddress a)
 {
-    ASSERT(!is_null(a));
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+    assert(!is_null(a));
+#endif
     assert_is_oop_or_null(a);
 }
 
