@@ -11,6 +11,22 @@
 #include <chrono>
 
 namespace MapleRuntime {
+// gc/z/zLock.inline.hpp:33-42
+inline void ZLock::lock()
+{
+    _lock.lock();
+}
+
+inline bool ZLock::try_lock()
+{
+    return _lock.try_lock();
+}
+
+inline void ZLock::unlock()
+{
+    _lock.unlock();
+}
+
 // zLock.inline.hpp:76-78 (PlatformMonitor::wait on the held lock; 0 == forever)
 inline bool ZConditionLock::wait(uint64_t millis)
 {

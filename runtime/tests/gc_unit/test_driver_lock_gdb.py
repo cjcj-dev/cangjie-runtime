@@ -25,7 +25,7 @@ try:
     if not product or Path(product).resolve() != expected_product:
         raise RuntimeError('Request entry is not from requested product SO: ' + str(product))
     lock = gdb.parse_and_eval('MapleRuntime::ZDriver::_lock')
-    owner = int(lock.dereference()['_M_mutex']['__data']['__owner']) if int(lock) else 0
+    owner = int(lock.dereference()['_lock']['_M_mutex']['__data']['__owner']) if int(lock) else 0
     tid = gdb.selected_thread().ptid[1]
     thread = gdb.selected_thread().name
     passed = owner == tid and thread in ('ZDriverMinor', 'ZDriverMajor')
