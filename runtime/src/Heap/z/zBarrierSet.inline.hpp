@@ -27,9 +27,6 @@ inline void ZBarrierSet::AccessBarrier::oop_arraycopy_in_heap_no_check_cast(
     zpointer* dst, zpointer* src, size_t length)
 {
     // ZGC zBarrierSet.inline.hpp:395-424. These entry points permit overlap.
-    if (length == 0) {
-        return;
-    }
     if (src > dst) {
         for (const zpointer* const end = src + length; src < end; src++, dst++) {
             oop_copy_one(dst, src);

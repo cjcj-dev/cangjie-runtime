@@ -734,7 +734,7 @@ void ZBarrier::CopyStructArrayColouredToHeap(BaseObject* dstObj, MAddress dst, s
     CHECK(dstObj != nullptr && Heap::IsHeapAddress(dstObj));
     auto* array = static_cast<MArray*>(dstObj);
     const size_t stride = array->GetElementSize();
-    CHECK(srcLen <= dstLen && stride != 0 && srcLen % stride == 0);
+    CHECK(srcLen <= dstLen && stride != 0);
     if (Heap::IsHeapAddress(src)) {
         ZBarrierSet::AccessBarrier::struct_arraycopy_in_heap_no_check_cast(array, dst, src, srcLen / stride);
         return;
@@ -790,9 +790,6 @@ void ZBarrierSet::AccessBarrier::struct_arraycopy_in_heap_no_check_cast(
 {
     // Same direction selection as oop_arraycopy, with the inline-value stride.
     const size_t stride = layout->GetElementSize();
-    if (length == 0) {
-        return;
-    }
     if (src > dst) {
         for (const MAddress end = src + length * stride; src < end; src += stride, dst += stride) {
             struct_copy_one(layout, dst, src);
