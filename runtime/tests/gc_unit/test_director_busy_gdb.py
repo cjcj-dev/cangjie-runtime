@@ -41,9 +41,9 @@ LINES = {
     'send': line_in('static void start_minor_gc', 'driver_minor()->collect'),
     'merge': line_in('static bool start_gc', 'rule_major_allocation_rate(stats)'),
     'sample': line_in('static ZDirectorStats sample_stats', 'stats.mutator_alloc_rate'),
-    'tick': line_in('void ZDirector::run_thread', 'const ZDirectorStats stats'),
+    'tick': line_in('static ZDirectorStats sample_stats', 'const uint64_t now'),
     'loop': line_in('void ZDirector::run_thread', 'while (wait_for_tick())'),
-    'entry': line_in('static ZDirectorStats sample_stats', 'stats.relocation_headroom'),
+    'entry': line_in('static GCReason make_major_gc_decision', 'if ('),
     'rule': line_in('static bool rule_major_allocation_rate', 'VLOG(REPORT'),
 }
 
@@ -79,6 +79,11 @@ def location():
 
 
 def advance(tag):
+    # Sampling now ends at the first decision instruction. Do not execute an
+    # extra tick when the requested boundary is already the current stop.
+    current = gdb.newest_frame().find_sal()
+    if current.symtab and current.symtab.filename.endswith('zDirector.cpp') and current.line == LINES[tag]:
+        return
     bp = gdb.Breakpoint('zDirector.cpp:' + str(LINES[tag]), temporary=True)
     command('continue')
     if bp.is_valid():
@@ -198,7 +203,7 @@ try:
     advance('entry')
     emit('SAMPLED', resize=diagnostic('stats.old_stats.resize.is_active'),
          workers=diagnostic('stats.old_stats.resize.nworkers_current'),
-         interval=diagnostic('stats.collection_interval_sec'),
+         interval=diagnostic('MapleRuntime::ZCollectionIntervalMinor'),
          old_minor_snapshot=diagnostic('stats.minor_busy'),
          old_major_snapshot=diagnostic('stats.major_busy'))
     if SITE == 'entry':
@@ -206,7 +211,7 @@ try:
         for _ in range(64):
             command('next')
             here=location()
-            if (LINES['loop'] <= here['line'] < LINES['tick'] and
+            if (LINES['loop'] <= here['line'] <= LINES['loop'] + 3 and
                     here['function']=='MapleRuntime::ZDirector::run_thread'):
                 break
         else:
