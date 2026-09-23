@@ -449,7 +449,7 @@ static void keep_alive_young(zaddress addr)
 {
     auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     if (young.IsPhaseMark()) {
-        young.MarkObject<true, false, true, false>(addr);
+        ZBarrier::MarkYoung<true, false, true>(addr);
     }
 }
 

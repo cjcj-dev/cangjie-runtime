@@ -17,6 +17,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zGenerationId.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
 #include "ObjectModel/RefField.inline.h"
@@ -39,14 +40,20 @@ inline void ZBarrier::MarkIfYoung(zaddress address)
     BaseObject* object = to_object(address);
     if (Heap::IsHeapAddress(object) &&
         Heap::page(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
-        MarkYoung(address);
+        MarkYoung<false, true, true>(address);
     }
 }
 
-// ZZBarrier::mark_young<DontResurrect, GCThread, Follow>, :754-759.
+// ZBarrier::mark_young, zBarrier.inline.hpp:753-759.
+template<bool resurrect, bool gcThread, bool follow>
 inline void ZBarrier::MarkYoung(zaddress address)
 {
-    Heap::GetHeap().MarkYoungRootObject(to_object(address));
+    auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+    ASSERT(young.IsPhaseMark());
+    assert_is_oop(address);
+    ASSERT(Heap::page(raw(address))->IsYoungRegion());
+
+    young.MarkObject<resurrect, gcThread, follow, false>(address);
 }
 
 // ZZBarrier::is_mark_young_good_fast_path, zBarrier.inline.hpp:392-394.
@@ -471,4 +478,3 @@ inline zaddress ZBarrier::blocking_load_barrier_on_phantom_oop_field_preloaded(v
 
 } // namespace MapleRuntime
 #endif // ~MRT_BARRIER_INLINE_H
-

@@ -182,6 +182,7 @@ public:
     static zpointer ColorMarkYoungGood(zaddress address, zpointer previous);
     static zaddress MarkYoungSlowPath(zaddress address);
     static void MarkIfYoung(zaddress address);
+    template<bool resurrect, bool gcThread, bool follow>
     static void MarkYoung(zaddress address);
 
     static zaddress relocate_or_remap(zaddress_unsafe addr, ZGeneration* generation);

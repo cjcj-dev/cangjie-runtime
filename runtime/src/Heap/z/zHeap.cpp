@@ -151,14 +151,6 @@ void Heap::RequestGC(GCReason reason, bool async) { ZCollectedHeap::heap()->coll
 
 void Heap::ResolveCycleRef() { cross_vm().ResolveCycleRef(); }
 
-void Heap::MarkYoungRootObject(BaseObject* object)
-{
-    // #596's barrier already established current and selected young. Keep the
-    // generation mark-phase assertion at ZGeneration::mark_object's entry.
-    auto& cycle = GetZGeneration(ZGenerationId::young);
-    cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
-}
-
 void Heap::MarkObjectIfActive(BaseObject* object)
 {
     if (!Heap::IsHeapAddress(object)) {

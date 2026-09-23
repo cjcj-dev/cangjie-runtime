@@ -24,6 +24,7 @@
 #pragma once
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zGlobals.hpp"
+#include "Base/Panic.h"
 namespace MapleRuntime {
 constexpr Uptr raw(zpointer p) { return static_cast<Uptr>(p); }
 constexpr Uptr raw(zaddress p) { return static_cast<Uptr>(p); }
@@ -709,12 +710,23 @@ inline zaddress safe(zaddress_unsafe value) { return to_zaddress(raw(value)); }
 extern const bool ZVerifyOops;
 void VerifyAccessedOop(zaddress address);
 #endif
-inline BaseObject* to_object(zaddress a)
+// ZGC zAddress.inline.hpp:505-518: shared oop checks for loads and marking.
+inline void assert_is_oop_or_null(zaddress a)
 {
 #if defined(MRT_DEBUG) && MRT_DEBUG == 1
-    // zAddress.inline.hpp:505-522: verify the actual accessed oop.
     if (ZVerifyOops && a != zaddress::null) { VerifyAccessedOop(a); }
 #endif
+}
+
+inline void assert_is_oop(zaddress a)
+{
+    ASSERT(!is_null(a));
+    assert_is_oop_or_null(a);
+}
+
+inline BaseObject* to_object(zaddress a)
+{
+    assert_is_oop_or_null(a);
     return reinterpret_cast<BaseObject*>(raw(a));
 }
 
