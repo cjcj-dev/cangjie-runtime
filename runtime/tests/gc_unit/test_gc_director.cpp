@@ -12,6 +12,8 @@
 #include "gc_unittest.hpp"
 
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <cmath>
 #include <thread>
 
@@ -489,3 +491,59 @@ GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverrideEqualsMaximum) { Chec
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverrideBelowMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 3, true); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumWithAutomatic) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, -1); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentMaximumWithAutomatic) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, -1, true); }
+
+// The debugger matrix observes real sampling and dispatch from this fixture.
+// Its inputs are allocations and RuntimeParam, never precomputed rule results.
+GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
+{
+    const char* scenario = std::getenv("GC_UNIT_CAUSE_SCENARIO");
+    if (scenario == nullptr) scenario = "warmup";
+    const bool highUsage = std::strcmp(scenario, "high_usage") == 0;
+    const bool allocationRate = std::strcmp(scenario, "allocation_rate") == 0;
+    const bool proactive = std::strcmp(scenario, "proactive") == 0;
+    const bool timer = std::strstr(scenario, "timer") != nullptr;
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.backupGCInterval = timer ? 1 : 240;
+    params.gcParam.concGCThreads = 2;
+    params.gcParam.youngGCThreads = 2;
+    params.gcParam.oldGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    const size_t firstSize = heap.GetMaxCapacity() * (highUsage ? 15 : 8) / 16;
+    type->SetInstanceSize(firstSize);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    {
+        ScopedObjectAccess access;
+        heap.RegisterExportRoot(MObject::NewPinnedObject(type, firstSize));
+    }
+    std::fprintf(stderr, "CAUSE_FIRST_ALLOCATION_READY scenario=%s\n", scenario);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (heap.old().CycleStats().Stats(TimeUtil::NanoSeconds()).warmupCycles < 3 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (allocationRate || proactive) {
+        const size_t nextSize = heap.GetMaxCapacity() * (allocationRate ? 7 : 2) / 16;
+        alignas(TypeInfo) static unsigned char secondStorage[sizeof(TypeInfo)]{};
+        auto* secondType = reinterpret_cast<TypeInfo*>(secondStorage);
+        secondType->SetType(TypeKind::TYPE_KIND_CLASS);
+        secondType->SetInstanceSize(nextSize);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(secondStorage), sizeof(secondStorage));
+        {
+            ScopedObjectAccess access;
+            heap.RegisterExportRoot(MObject::NewPinnedObject(secondType, nextSize));
+        }
+        std::fprintf(stderr, "CAUSE_SECOND_ALLOCATION_READY scenario=%s\n", scenario);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const auto completed = heap.old().CycleStats().Stats(TimeUtil::NanoSeconds());
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_EQ(completed.warmupCycles, 3u);
+}

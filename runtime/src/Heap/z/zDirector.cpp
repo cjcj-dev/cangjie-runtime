@@ -200,7 +200,7 @@ static ZDriverRequest rule_minor_allocation_rate_dynamic(const ZDirectorStats& s
     if (time_until_gc > time_until_oom * 0.05) {
         return ZDriverRequest(GC_REASON_INVALID, actual_gc_workers, 0);
     }
-    return ZDriverRequest(GC_REASON_HEU, actual_gc_workers, 0);
+    return ZDriverRequest(GC_REASON_ALLOCATION_RATE, actual_gc_workers, 0);
 }
 
 static ZDriverRequest rule_soft_minor_allocation_rate_dynamic(const ZDirectorStats& stats,
@@ -455,13 +455,13 @@ static GCReason make_minor_gc_decision(const ZDirectorStats& stats)
         return GC_REASON_INVALID;
     }
     if (rule_minor_timer(stats)) {
-        return GC_REASON_BACKUP;
+        return GC_REASON_TIMER;
     }
     if (rule_minor_allocation_rate(stats)) {
-        return GC_REASON_HEU;
+        return GC_REASON_ALLOCATION_RATE;
     }
     if (rule_minor_high_usage(stats)) {
-        return GC_REASON_HEU;
+        return GC_REASON_HIGH_USAGE;
     }
     return GC_REASON_INVALID;
 }
@@ -472,13 +472,13 @@ static GCReason make_major_gc_decision(const ZDirectorStats& stats)
         return GC_REASON_INVALID;
     }
     if (rule_major_timer(stats)) {
-        return GC_REASON_BACKUP;
+        return GC_REASON_TIMER;
     }
     if (rule_major_warmup(stats)) {
         return GC_REASON_WARMUP;
     }
     if (rule_major_proactive(stats)) {
-        return GC_REASON_HEU;
+        return GC_REASON_PROACTIVE;
     }
     return GC_REASON_INVALID;
 }
@@ -611,7 +611,7 @@ static bool start_gc(const ZDirectorStats& stats)
     const GCReason minor_cause = make_minor_gc_decision(stats);
     if (minor_cause != GC_REASON_INVALID) {
         if (!ZCollectedHeap::heap()->driver_major()->port().is_busy() && rule_major_allocation_rate(stats)) {
-            start_major_gc(stats, GC_REASON_HEU);
+            start_major_gc(stats, GC_REASON_ALLOCATION_RATE);
         } else {
             start_minor_gc(stats, minor_cause);
         }

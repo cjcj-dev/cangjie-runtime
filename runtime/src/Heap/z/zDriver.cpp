@@ -120,12 +120,13 @@ void ZDriverMinor::collect(const ZDriverRequest& request)
 {
     switch (request.cause()) {
         case GC_REASON_YOUNG:
-        case GC_REASON_ALLOCATION_STALL:
-            _port.send_async(request);
-            break;
-        case GC_REASON_HEU_SYNC:
-        case GC_REASON_NATIVE_SYNC:
             _port.send_sync(request);
+            break;
+        case GC_REASON_TIMER:
+        case GC_REASON_ALLOCATION_RATE:
+        case GC_REASON_ALLOCATION_STALL:
+        case GC_REASON_HIGH_USAGE:
+            _port.send_async(request);
             break;
         default:
             CHECK(false);
@@ -141,7 +142,9 @@ void ZDriverMajor::collect(const ZDriverRequest& request)
         case GC_REASON_OOM:
             _port.send_sync(request);
             break;
-        case GC_REASON_BACKUP:
+        case GC_REASON_TIMER:
+        case GC_REASON_ALLOCATION_RATE:
+        case GC_REASON_PROACTIVE:
         case GC_REASON_HEU:
         case GC_REASON_NATIVE:
         case GC_REASON_WARMUP:
@@ -359,7 +362,9 @@ static bool ShouldClearAllSoftReferences(GCReason reason)
         case GC_REASON_ALLOCATION_STALL:
             return true;
         case GC_REASON_USER:
-        case GC_REASON_BACKUP:
+        case GC_REASON_TIMER:
+        case GC_REASON_ALLOCATION_RATE:
+        case GC_REASON_PROACTIVE:
         case GC_REASON_HEU:
         case GC_REASON_HEU_SYNC:
         case GC_REASON_NATIVE:
@@ -384,7 +389,9 @@ static bool ShouldPrecleanYoung(GCReason reason)
         case GC_REASON_WB_BREAKPOINT:
         case GC_REASON_ALLOCATION_STALL:
             return true;
-        case GC_REASON_BACKUP:
+        case GC_REASON_TIMER:
+        case GC_REASON_ALLOCATION_RATE:
+        case GC_REASON_PROACTIVE:
         case GC_REASON_HEU:
         case GC_REASON_HEU_SYNC:
         case GC_REASON_NATIVE:
