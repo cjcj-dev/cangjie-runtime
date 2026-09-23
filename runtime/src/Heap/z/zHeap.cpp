@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Common/RunType.h"
@@ -614,7 +615,7 @@ void Heap::DumpRoots(LogType logType)
             return;
         }
         // StaticRootTable keeps the referent live while DumpRoots inspects it.
-        auto obj = ZBarrier::ReadStaticRef(ref);
+        auto obj = NativeAccess<>::oop_load(&(ref));
         if (obj == nullptr) {
             return;
         }

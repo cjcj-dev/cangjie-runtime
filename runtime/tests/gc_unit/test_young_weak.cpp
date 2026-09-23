@@ -1,3 +1,4 @@
+#include "Heap/z/zAccess.hpp"
 #include "marking_smr_test.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -421,7 +422,7 @@ void RunYoungWeakRemsetFlow()
     rememberedSet.Initialize(fx.heapStart, 2 * ZGranuleSize);
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
     referentField.StoreColoured(to_zpointer(raw(StoreGoodPointer(graph.referent)) ^ ZPointerMarkedYoungMask));
-    ZBarrier::WriteWeakReference(graph.weak, referentField, graph.referent);
+    HeapAccess<ON_WEAK_OOP_REF | AS_NO_KEEPALIVE>::oop_store(&(referentField), graph.referent);
     const MAddress weakSlot = reinterpret_cast<MAddress>(&referentField);
     const bool recordedBeforeMinor = rememberedSet.Contains(weakSlot);
 

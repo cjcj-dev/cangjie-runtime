@@ -12,6 +12,7 @@
 // standalone gate supplies MRT_TESTABLE_INTERNALS only when those product
 // hooks exist; the top-level guard makes the default build an empty TU.
 
+#include "Heap/z/zAccess.hpp"
 #include <algorithm>
 #include <dlfcn.h>
 #include <cstdint>
@@ -205,7 +206,7 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     std::unordered_set<MAddress> records;
     rs.DrainForMinor(records);
     GC_EXPECT_EQ(records.size(), 0u);
@@ -240,7 +241,7 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
     field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     if (Mutator* mutator = Mutator::GetMutator(); mutator != nullptr && mutator->GetGCData().storeBarrierBuffer != nullptr) {
         mutator->GetGCData().storeBarrierBuffer->Flush();
     }
@@ -263,8 +264,9 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     BaseObject* incoming = nullptr;
-    ZBarrier::WriteStruct(fx.obj0, reinterpret_cast<MAddress>(&field), sizeof(incoming),
-                        reinterpret_cast<MAddress>(&incoming), sizeof(incoming));
+    HeapAccess<>::value_copy(
+        ValuePayload(reinterpret_cast<MAddress>(&incoming), sizeof(incoming), fx.obj0, reinterpret_cast<MAddress>(&field)),
+        ValuePayload(reinterpret_cast<MAddress>(&field), sizeof(incoming), ValuePayload::Kind::Heap));
     if (Mutator* mutator = Mutator::GetMutator(); mutator != nullptr && mutator->GetGCData().storeBarrierBuffer != nullptr) {
         mutator->GetGCData().storeBarrierBuffer->Flush();
     }
@@ -291,7 +293,7 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     // ZBarrier::store_barrier_on_heap_oop_field reads prev before the store
     // (zBarrier.inline.hpp:695-705); stale mark colors force its slow path.
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
-    ZBarrier::WriteReference(fx.obj0, field, incoming);
+    HeapAccess<>::oop_store(&(field), incoming);
     if (Mutator* mutator = Mutator::GetMutator(); mutator != nullptr && mutator->GetGCData().storeBarrierBuffer != nullptr) {
         mutator->GetGCData().storeBarrierBuffer->Flush();
     }
@@ -317,7 +319,7 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).PublishPhase(ZGenerationPhase::Relocate);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
-    ZBarrier::WriteReference(fx.obj0, field, nullptr);
+    HeapAccess<>::oop_store(&(field), nullptr);
     if (Mutator* mutator = Mutator::GetMutator(); mutator != nullptr && mutator->GetGCData().storeBarrierBuffer != nullptr) {
         mutator->GetGCData().storeBarrierBuffer->Flush();
     }

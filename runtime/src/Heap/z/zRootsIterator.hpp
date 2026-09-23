@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #pragma once
+#include "Heap/z/zAccess.hpp"
 #include <array>
 #include "Common/Handle.h"
 #include <atomic>
@@ -240,7 +241,7 @@ public:
         if (!ResolveLiveIndex(handle, index)) {
             return nullptr;
         }
-        return ZBarrier::ReadStaticRef(*exportRoots[index].exportObj);
+        return NativeAccess<>::oop_load(&(*exportRoots[index].exportObj));
     }
     void RemoveExportRoot(U64 handle)
     {
@@ -249,7 +250,7 @@ public:
         if (!ResolveLiveIndex(handle, index)) {
             return;
         }
-        ZBarrier::WriteStaticRef(*exportRoots[index].exportObj, nullptr);
+        NativeAccess<>::oop_store(&(*exportRoots[index].exportObj), nullptr);
         weakStorage.Release(exportRoots[index].exportObj);
         exportRoots[index].exportObj = nullptr;
         exportRoots[index].occupied = false;
@@ -276,7 +277,7 @@ public:
         }
         auto info = exportRoots[index];
         // tableMutex protects handle ownership; slot access uses the native barrier.
-        if (ZBarrier::ReadStaticRef(*info.exportObj) != obj) {
+        if (NativeAccess<>::oop_load(&(*info.exportObj)) != obj) {
             return false;
         }
         return info.activeState;
@@ -288,7 +289,7 @@ private:
         // incoming reference (zBarrier.inline.hpp:709-715). The caller already
         // holds the incoming object; publish its handle before returning.
         slot.exportObj = weakStorage.Allocate();
-        ZBarrier::WriteStaticRef(*slot.exportObj, exportObj);
+        NativeAccess<>::oop_store(&(*slot.exportObj), exportObj);
     }
 
     bool ResolveLiveIndex(U64 handle, U64& index) const

@@ -655,7 +655,7 @@ fi
 # the product SO.  Full nm excludes even local/weak test copies; nm -u proves
 # the calls are imports.  main is the positive control above.
 PTRCOLOUR_PRODUCT_CONSUMERS=()
-PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::ZBarrier::ReadReference(')
+PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::ZBarrier::load_barrier_on_oop_field_preloaded(')
 for consumer in "${PTRCOLOUR_PRODUCT_CONSUMERS[@]}"; do
   if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then
     echo "GC_UNIT_PTRCOLOUR_LOCAL_DEFINITION symbol=$consumer" >&2

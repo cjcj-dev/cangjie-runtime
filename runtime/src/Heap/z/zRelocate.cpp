@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zJNICritical.hpp"
@@ -159,7 +160,7 @@ public:
           colored(workers, ZGenerationIdOptional::old), uncolored(ZGenerationIdOptional::old) {}
     void work() override
     {
-        colored.Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
+        colored.Apply([](NativeSlot& root) { (void)to_object(ZBarrier::load_barrier_on_oop_field(reinterpret_cast<volatile zpointer*>(&(root)))); });
         uncolored.Apply([] { Runtime::Current().GetConcurrencyModel().VisitGCRoots(); });
         uncolored.ApplyThreads([&](Mutator& mutator) {
         // ZGC ZRemapThreadClosure (zGeneration.cpp:1419-1424): only

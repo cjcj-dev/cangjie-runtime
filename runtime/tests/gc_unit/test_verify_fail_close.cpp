@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Heap/z/zAccess.hpp"
 #include "gc_verify_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Cangjie.h"
@@ -526,7 +527,7 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     }
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    BaseObject* result = ZBarrier::ReadStaticRef(*root);
+    BaseObject* result = NativeAccess<>::oop_load(&(*root));
     std::fprintf(stderr, "VERIFY_FIELD_CYCLE_COMPLETED mode=%u root=%p expected=%p\n",
                  unsigned(mode), result, holder);
     GC_EXPECT_TRUE(result == holder);

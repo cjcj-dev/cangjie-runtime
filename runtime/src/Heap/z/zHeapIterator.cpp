@@ -1,4 +1,5 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zMark.hpp"
@@ -143,9 +144,9 @@ void HeapIterator::ColoredRootOopClosure<Weak>::do_root(NativeSlot& root)
     BaseObject* object = nullptr;
     if constexpr (Weak) {
         // ZGC zHeapIterator.cpp:116-119 NativeAccess<AS_NO_KEEPALIVE | ON_PHANTOM_OOP_REF>
-        object = ZBarrier::ReadPhantomRef(nullptr, root);
+        object = NativeAccess<AS_NO_KEEPALIVE | ON_PHANTOM_OOP_REF>::oop_load(&root);
     } else {
-        object = ZBarrier::ReadStaticRef(root);
+        object = NativeAccess<AS_NO_KEEPALIVE>::oop_load(&root);
     }
     context.push(object);
 }
@@ -185,7 +186,9 @@ void HeapIterator::drain(const HeapIteratorContext& context)
         if (context.fieldVisitor != nullptr && *context.fieldVisitor) {
             (*context.fieldVisitor)(base, &field, raw(field.GetFieldValue()));
         }
-        context.push(ZBarrier::ReadReference(base, field));
+        context.push(visitWeaks
+            ? HeapAccess<AS_NO_KEEPALIVE | ON_UNKNOWN_OOP_REF>::oop_load_at(base, BaseObject::FieldOffset(base, &field))
+            : HeapAccess<AS_NO_KEEPALIVE>::oop_load(&field));
     };
     BaseObject* object = nullptr;
     ObjArrayTask array { nullptr, 0 };

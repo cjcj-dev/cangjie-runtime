@@ -8,6 +8,7 @@
 // selects the slow path from the previous colour and remembers old heap slots;
 // zRemembered.cpp:578-589 re-registers scanned slots whose target remains young.
 
+#include "Heap/z/zAccess.hpp"
 #include "gc_cycle_sequence_fixture.hpp"
 #include <algorithm>
 #include <cstdlib>
@@ -238,7 +239,7 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     GC_EXPECT_TRUE(ExpectRecorded(HeapTestRemset(), reinterpret_cast<MAddress>(field)));
 }
 
@@ -260,12 +261,12 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
 
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     GC_EXPECT_FALSE(SlotPageRemembered(slot));
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
@@ -285,19 +286,19 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     std::unordered_set<MAddress> firstMinor;
     HeapTestRemset().DrainForMinor(firstMinor);
     GC_EXPECT_TRUE(firstMinor.count(slot) == 1);
     GC_EXPECT_EQ(HeapTestRemset().Size(), 0u);
     GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
 
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
 
     GC_EXPECT_FALSE(SlotPageRemembered(slot));
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
@@ -329,7 +330,7 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     Heap& collector = Heap::GetHeap();
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     RemsetRearmTestAccess::BeginMinor(collector);
 #if defined(MRT_GC_UNIT_TESTS)
     ResetRemsetFilterTestReceipt();
@@ -425,7 +426,7 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
     Heap& collector = Heap::GetHeap();
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     std::unordered_set<MAddress> firstMinor;
     const size_t firstDrainCount = rs.DrainForMinor(firstMinor);
     const size_t firstCount = firstMinor.count(slot);
@@ -503,7 +504,7 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj0);
+    HeapAccess<>::oop_store(&(*field), fx.obj0);
     GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
     GC_EXPECT_FALSE(SlotPageRemembered(slot));
 
@@ -528,7 +529,7 @@ GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
-    ZBarrier::AtomicWriteReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
+    HeapAccess<MO_SEQ_CST>::oop_store(&(*field), fx.obj1);
     GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
@@ -545,7 +546,7 @@ GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
-    BaseObject* old = ZBarrier::AtomicSwapReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
+    BaseObject* old = HeapAccess<MO_SEQ_CST>::oop_atomic_xchg(&(*field), fx.obj1);
     GC_EXPECT_TRUE(old == nullptr);
     GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
@@ -563,15 +564,11 @@ GC_TEST(Remset, CompareAndSwapRemembersBeforeAttempt)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
-    GC_EXPECT_FALSE(ZBarrier::CompareAndSwapReference(fx.obj0, *field, fx.obj1, fx.obj1,
-                                                    std::memory_order_seq_cst,
-                                                    std::memory_order_seq_cst));
+    GC_EXPECT_FALSE((HeapAccess<MO_SEQ_CST>::oop_atomic_cmpxchg(&(*field), fx.obj1, fx.obj1) == fx.obj1));
     GC_EXPECT_TRUE(SlotPageRemembered(slot));
     GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == nullptr);
 
-    GC_EXPECT_TRUE(ZBarrier::CompareAndSwapReference(fx.obj0, *field, nullptr, fx.obj1,
-                                                   std::memory_order_seq_cst,
-                                                   std::memory_order_seq_cst));
+    GC_EXPECT_TRUE((HeapAccess<MO_SEQ_CST>::oop_atomic_cmpxchg(&(*field), nullptr, fx.obj1) == nullptr));
     GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
@@ -588,7 +585,7 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
 
     Heap& collector = Heap::GetHeap();
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     GC_EXPECT_TRUE(ExpectRecorded(HeapTestRemset(), reinterpret_cast<MAddress>(field)));
 }
 
@@ -605,7 +602,7 @@ GC_TEST(Remset, StaticRootNotRecorded)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     NativeSlot root(zpointer::null);
 
-    ZBarrier::WriteStaticRef(root, fx.obj1);
+    NativeAccess<>::oop_store(&(root), fx.obj1);
     std::unordered_set<MAddress> records;
     rs.DrainForMinor(records);
     GC_EXPECT_EQ(records.size(), 0u);
@@ -627,7 +624,7 @@ GC_TEST(Remset, YoungToYoungNotRecorded)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(zpointer::null);
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     std::unordered_set<MAddress> records;
     rs.DrainForMinor(records);
     GC_EXPECT_EQ(records.size(), 0u);
@@ -666,7 +663,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
     GC_EXPECT_TRUE(ExpectRecorded(HeapTestRemset(), reinterpret_cast<MAddress>(field)));
 }
 
@@ -707,7 +704,7 @@ GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
 
     std::unordered_set<MAddress> firstMinor;
     HeapTestRemset().DrainForMinor(firstMinor);
@@ -734,7 +731,7 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    HeapAccess<>::oop_store(&(*field), fx.obj1);
 
     auto& heapRs = HeapTestRemset();
     std::unordered_set<MAddress> firstMinor;

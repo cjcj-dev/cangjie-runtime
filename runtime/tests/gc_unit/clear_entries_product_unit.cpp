@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Heap/z/zAccess.hpp"
 #include "gc_cycle_sequence_fixture.hpp"
 #include <algorithm>
 #include <atomic>
@@ -339,7 +340,7 @@ public:
     {
         RefField<> field(StoreGoodPointer(from));
         ZGlobalsPointers::flip_old_relocate_start();
-        BaseObject* result = ZBarrier::ReadReference(nullptr, field);
+        BaseObject* result = HeapAccess<>::oop_load(&(field));
         ZGlobalsPointers::flip_old_relocate_start();
         return result;
     }
@@ -1484,7 +1485,7 @@ void CheckMinorFieldColour(bool stale)
         bits = ColouredPointer(fx.obj0, ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask);
     }
     RefField<> field(bits);
-    (void)ZBarrier::ReadReference(nullptr, field);
+    (void)HeapAccess<>::oop_load(&(field));
     const MAddress actual = untype(field.GetTargetObject());
     const MAddress expected = stale ? to : from;
     std::fprintf(stderr, "DETAIL minor_field_colour stale=%u actual=%#zx expected=%#zx\n",

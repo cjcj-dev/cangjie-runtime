@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.inline.hpp"
@@ -126,7 +127,7 @@ private:
 void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
 {
     CHECK(Heap::GetHeap().old().IsPhaseMark());
-    BaseObject* object = ZBarrier::ReadStaticRef(slot);
+    BaseObject* object = to_object(ZBarrier::load_barrier_on_oop_field(reinterpret_cast<volatile zpointer*>(&(slot))));
     object = ZBarrier::ValidateCurrentValue(object);
     if (object == nullptr) return;
     auto* page = Heap::page(reinterpret_cast<MAddress>(object));

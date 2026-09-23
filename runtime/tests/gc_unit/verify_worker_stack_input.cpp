@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 // GDB input fixture: all GC execution remains in the linked product SO.
+#include "Heap/z/zAccess.hpp"
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
@@ -49,7 +50,7 @@ int main()
                  p16_mark, p16_worker, p16_prepared, object);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    BaseObject* actual = ZBarrier::ReadStaticRef(*root);
+    BaseObject* actual = NativeAccess<>::oop_load(&(*root));
     const bool matched = actual == object && p16_worker->markStacks[1].IsEmpty();
     std::fprintf(stderr, "VERIFY_WORKER_COMPLETION_ASSERT_EXECUTED root=%p expected=%p matched=%d\n",
                  actual, object, matched);

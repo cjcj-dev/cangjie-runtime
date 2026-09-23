@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 
 
+#include "Heap/z/zAccess.hpp"
 #include <atomic>
 #include <algorithm>
 #include <array>
@@ -241,7 +242,7 @@ void* RunFlipPromotionCase(void* argument)
     // A non-null field is already colored by marking, independently of the
     // promotion barrier. It is the positive control in the debugger test.
     auto& selfField = array->GetRefField(reinterpret_cast<MAddress>(fields + 1) - address);
-    ZBarrier::WriteReference(array, selfField, array);
+    HeapAccess<>::oop_store(&(selfField), array);
     std::vector<U64> extraRoots;
     if (relocate) {
         // Sparsely live small pages provide a packing gain to the real
@@ -272,7 +273,7 @@ void* RunFlipPromotionCase(void* argument)
     if (mode == 3) {
         MArray* young = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
         auto& field = array->GetRefField(reinterpret_cast<MAddress>(fields) - reinterpret_cast<MAddress>(array));
-        ZBarrier::WriteReference(array, field, young);
+        HeapAccess<>::oop_store(&(field), young);
         // Same recorded-field invariant consumed by zVerify.cpp:221-228:
         // an old-to-young store is either in the page remset or pending buffer.
         remembered = Heap::page(reinterpret_cast<MAddress>(array))->is_remembered(
@@ -354,7 +355,7 @@ void* RunVisibleArrayGraph(void*)
     Mutator::GetMutator()->SetManagedContext(false);
     MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
     NativeSlot root(zpointer::null);
-    ZBarrier::WriteStaticRef(root, array);
+    NativeAccess<>::oop_store(&(root), array);
     NativeSlot* roots[] = { &root };
     Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::vector<size_t> visits(array->GetLength(), 0);
@@ -431,7 +432,7 @@ void* RunConcreteFieldYoungMark(void*)
     };
     for (size_t i = 0; i < 2; ++i) {
         auto& field = holder->GetRefField(TYPEINFO_PTR_SIZE + 2 * i * sizeof(void*));
-        ZBarrier::WriteReference(holder, field, targets[i]);
+        HeapAccess<>::oop_store(&(field), targets[i]);
     }
     auto& heap = Heap::GetHeap();
     const U64 root = heap.RegisterExportRoot(holder);
@@ -461,7 +462,7 @@ void* RunLargeYoungClosureCase(void*)
     MArray* holder = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
     MArray* target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
-    ZBarrier::WriteReference(holder, field, target);
+    HeapAccess<>::oop_store(&(field), target);
     const bool holderYoung = Heap::page(reinterpret_cast<uintptr_t>(holder))->IsYoungRegion();
     const U64 holderRoot = Heap::GetHeap().RegisterExportRoot(holder);
     Mutator* mutator = Mutator::GetMutator();
@@ -511,7 +512,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     if (!existing) target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     const U64 holderRoot = heap.RegisterExportRoot(holder);
     auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
-    ZBarrier::WriteReference(holder, field, target);
+    HeapAccess<>::oop_store(&(field), target);
     ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     ZPage* targetPage = Heap::page(reinterpret_cast<uintptr_t>(target));
     const bool implicit = page->IsAllocating();
@@ -544,7 +545,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
     page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
-    BaseObject* completedTarget = ZBarrier::ReadReference(holder, completedField);
+    BaseObject* completedTarget = HeapAccess<>::oop_load(&(completedField));
     // The request includes relocation. Check the actual field result here;
     // the mark-end predicate was observed before relocation at the success exit.
     const bool completedValue = completedTarget != nullptr &&
@@ -609,7 +610,7 @@ void* RunNativeTaskRootCase(void*)
     // Positive managed-object control through the production heap iterator.
     MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, 1);
     NativeSlot root(zpointer::null);
-    ZBarrier::WriteStaticRef(root, array);
+    NativeAccess<>::oop_store(&(root), array);
     NativeSlot* roots[] = { &root };
     Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     size_t objects = 0;

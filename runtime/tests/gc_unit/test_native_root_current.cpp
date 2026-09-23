@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
+#include "Heap/z/zAccess.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_generation_test.hpp"
 #include "b09_runtime_fixture.hpp"
@@ -533,10 +534,10 @@ GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
     Heap& collector = heap;
     RelocationReceiptTest::BindNativeRootFixture(collector);
     NativeSlot slot(zpointer::null);
-    ZBarrier::WriteStaticRef(slot, fx.obj0);
-    GC_EXPECT_TRUE(ZBarrier::ReadStaticRef(slot) == fx.obj0);
-    ZBarrier::WriteStaticRef(slot, nullptr);
-    GC_EXPECT_TRUE(ZBarrier::ReadStaticRef(slot) == nullptr);
+    NativeAccess<>::oop_store(&(slot), fx.obj0);
+    GC_EXPECT_TRUE(NativeAccess<>::oop_load(&(slot)) == fx.obj0);
+    NativeAccess<>::oop_store(&(slot), nullptr);
+    GC_EXPECT_TRUE(NativeAccess<>::oop_load(&(slot)) == nullptr);
     std::fprintf(stderr, "native_root_boundary executed=1 colored=1 null=1\n");
 }
 

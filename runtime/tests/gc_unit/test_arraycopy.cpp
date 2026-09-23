@@ -65,7 +65,7 @@ void CheckOverlap(bool structure, bool backwards, size_t length = 4, bool same =
     for (size_t i = 0; i < count; ++i) {
         const size_t expected = i >= dstIndex && i < dstIndex + length ? srcIndex + i - dstIndex : i;
         const MAddress destination = content + i * stride;
-        BaseObject* actual = ZBarrier::ReadReference(array, HeapSlotAt<>(destination + refOffset));
+        BaseObject* actual = HeapAccess<>::oop_load(&(HeapSlotAt<>(destination + refOffset)));
         referencesMatch &= actual == original[expected];
         if (structure) {
             primitivesMatch &= *reinterpret_cast<uintptr_t*>(destination) == 100 + expected;
@@ -304,7 +304,7 @@ void CheckPrimitivePayload976(bool references, bool trailer)
     GC_EXPECT_TRUE(payloadMatches);
     GC_EXPECT_EQ(*reinterpret_cast<unsigned char*>(destination + size), 0);
     if (references) {
-        GC_EXPECT_TRUE(ZBarrier::ReadReference(heap.obj0, HeapSlotAt<>(destination + 8)) == heap.obj0);
+        GC_EXPECT_TRUE(HeapAccess<>::oop_load(&(HeapSlotAt<>(destination + 8))) == heap.obj0);
     }
 }
 }
