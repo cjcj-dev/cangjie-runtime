@@ -115,25 +115,11 @@ ZGenerationYoung::ZGenerationYoung(ZPageTable* page_table, const ZForwardingTabl
                                      RegionManager* page_allocator)
     : ZGeneration(ZGenerationId::young), _remembered(page_table, old_forwarding_table, page_allocator)
 {
-    previousYoung = _young;
     _young = this;
-}
-ZGenerationYoung::~ZGenerationYoung()
-{
-    if (_young == this) {
-        _young = previousYoung;
-    }
 }
 ZGenerationOld::ZGenerationOld() : ZGeneration(ZGenerationId::old)
 {
-    previousOld = _old;
     _old = this;
-}
-ZGenerationOld::~ZGenerationOld()
-{
-    if (_old == this) {
-        _old = previousOld;
-    }
 }
 
 ZGenerationId ZGeneration::id() const { return _id; }
@@ -450,7 +436,6 @@ void ZGenerationYoung::mark_follow()
 void ZGenerationYoung::concurrent_mark()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentMarkYoung);
-    youngWeakSlots.clear();
     youngFullScan = false;
     // ZGC zGeneration.cpp:665-669: roots, then combined scan and follow.
     produceYoungRoots();
@@ -560,9 +545,9 @@ void ZGenerationYoung::concurrent_relocate()
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - youngStartNs) / NS_PER_US;
     VLOG(REPORT,
          "[GCV2Minor] run=%zu fallbackFullScan=%u liveBytes=%zu "
-         "remembered=%zu reclaimedBytes=%zu pause=%zu us",
+         "reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(youngFullScan),
-         statHeap.LiveAtMarkEnd(), youngLiveRememberedCount, reclaimedBytes,
+         statHeap.LiveAtMarkEnd(), reclaimedBytes,
          pauseUs);
     statHeap.AtRelocateEnd(space.GetRegionManager().Stats(this), should_record_stats());
 }
@@ -856,7 +841,6 @@ void ZGenerationOld::mark_start()
 bool ZGenerationOld::mark_end()
 {
     // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
-    MarkStripeSet& stripes = Mark().Stripes();
 
     const bool ended = Mark().TryEnd();
 

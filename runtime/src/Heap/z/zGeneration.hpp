@@ -196,7 +196,6 @@ public:
     void register_flip_promoted(const ZArray<ZPage*>& pages);
     void SelectTenuringThreshold(const TenuringInputs& inputs);
     void EvacuateYoungRegions();
-    ~ZGenerationYoung();
     bool should_record_stats() override;
     void collect(ZYoungType type, void* timer = nullptr);
     void mark_start();
@@ -215,21 +214,13 @@ public:
     void concurrent_relocate();
 private:
     void flip_relocate_start();
-    using MinorObjectSet = std::unordered_set<BaseObject*>;
-    using MinorSlotSet = std::unordered_set<MAddress>;
-    using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint32_t _tenuring_threshold = 0;
     uint64_t minorTotalRuns = 0;
-    MinorSlotSet youngConsumedSlots;
-    MinorInteriorBaseMap youngRemsetInteriorBases;
     uint64_t youngStartNs = 0;
-    size_t youngLiveRememberedCount = 0;
     bool youngFullScan = false;
     WorkStack youngWorkStack;
-    MinorSlotSet youngWeakSlots;
     ZRemembered _remembered;
-    ZGenerationYoung* previousYoung { nullptr };
 };
 
 class ZGenerationOld : public ZGeneration {
@@ -241,7 +232,6 @@ public:
     void set_soft_reference_policy(bool clear);
     bool uses_clear_all_soft_reference_policy() const;
     void PostTrace();
-    ~ZGenerationOld();
     bool should_record_stats() override;
     void collect(void* timer = nullptr);
     void mark_start();
@@ -265,7 +255,6 @@ private:
     // zGeneration.hpp:274: discovered references belong to their generation.
     // Foreign ownership discovery is performed only by the old cycle.
     ValueRootMap discoveredExternObjects;
-    ZGenerationOld* previousOld { nullptr };
 };
 
 }

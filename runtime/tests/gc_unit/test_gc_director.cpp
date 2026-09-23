@@ -1,3 +1,4 @@
+#include "gc_generation_test.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
@@ -225,6 +226,7 @@ GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
                                   &Heap::GetHeap().page_allocator()) {}
         bool should_record_stats() override { return false; }
     };
+    GenerationFixtureState::Scope generationState;
     Probe young;
     TenuringInputs inputs;
     inputs.softMaxCapacity = 64 * 1024 * 1024;

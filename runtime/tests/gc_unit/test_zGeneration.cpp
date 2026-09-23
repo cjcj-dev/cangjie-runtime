@@ -1,3 +1,4 @@
+#include "gc_generation_test.hpp"
 #include "CangjieRuntime.h"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
@@ -123,6 +124,7 @@ GC_TEST(RememberedLifecycle720, ConstructedGenerationPublishesHighestGranule)
     Heap::GetHeap();
     ZPageTable pages;
     RegionManager allocator;
+    GenerationFixtureState::Scope generationState;
     ZGenerationOld old;
     ZGenerationYoung young(&pages, &old.forwarding_table(), &allocator);
     const size_t last = ZAddressOffsetMax - ZGranuleSize;
