@@ -57,28 +57,55 @@ bool OopIteratorClosureDispatch::try_discover(BaseObject* object, ReferenceType 
 }
 
 template <typename OopClosureT>
+void OopIteratorClosureDispatch::do_referent(BaseObject* object, OopClosureT* closure)
+{
+    // Cangjie's referent is the first payload slot. ReferenceProcessor stores
+    // discovered links in native containers, not in reference-object fields.
+    closure->do_oop(&HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE));
+}
+
+template <typename OopClosureT>
+void OopIteratorClosureDispatch::oop_oop_iterate_discovery(BaseObject* object, ReferenceType type,
+                                                         OopClosureT* closure)
+{
+    if (try_discover(object, type, closure)) {
+        return;
+    }
+    do_referent(object, closure);
+}
+
+template <typename OopClosureT>
+void OopIteratorClosureDispatch::oop_oop_iterate_fields(BaseObject* object, OopClosureT* closure)
+{
+    DCHECK(closure->ref_discoverer() == nullptr);
+    do_referent(object, closure);
+}
+
+template <typename OopClosureT>
+void OopIteratorClosureDispatch::oop_oop_iterate_fields_except_referent(BaseObject*, OopClosureT* closure)
+{
+    DCHECK(closure->ref_discoverer() == nullptr);
+    // No discovered oop field: native discovered containers are traversed by
+    // ReferenceProcessor. The ordinary bitmap fields were visited by the VM.
+}
+
+template <typename OopClosureT>
 void OopIteratorClosureDispatch::oop_oop_iterate_ref_processing(OopClosureT* closure, BaseObject* object)
 {
-    // InstanceRefKlass::oop_oop_iterate_ref_processing. The Cangjie weak
-    // referent occupies the first payload slot; the ordinary bitmap fields
-    // have already been visited, excluding that slot.
     switch (closure->reference_iteration_mode()) {
         case OopIterateClosure::DO_DISCOVERY:
-            if (try_discover(object, ReferenceType::WEAK, closure)) {
-                return;
-            }
+            oop_oop_iterate_discovery(object, ReferenceType::WEAK, closure);
             break;
         case OopIterateClosure::DO_FIELDS:
-            DCHECK(closure->ref_discoverer() == nullptr);
+            oop_oop_iterate_fields(object, closure);
             break;
         case OopIterateClosure::DO_FIELDS_EXCEPT_REFERENT:
-            DCHECK(closure->ref_discoverer() == nullptr);
-            return;
+            oop_oop_iterate_fields_except_referent(object, closure);
+            break;
         default:
             LOG(RTLOG_FATAL, "invalid reference iteration mode");
             return;
     }
-    closure->do_oop(&HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE));
 }
 
 template <typename OopClosureT>
