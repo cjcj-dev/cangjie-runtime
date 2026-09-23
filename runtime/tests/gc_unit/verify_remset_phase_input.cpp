@@ -4,6 +4,7 @@
 #include "gc_verify_fixture.hpp"
 #include "Heap/z/zCPU.hpp"
 #include "Heap/z/zHeuristics.hpp"
+#include "Heap/z/zForwarding.inline.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zRemembered.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -93,7 +94,13 @@ int main(int argc, char** argv)
         (*p16_destination_field & ZPointerRememberedMask) == ZPointerRememberedMask;
     std::fprintf(stderr, "VERIFY_REMSET_COMPLETION_ASSERT_EXECUTED mode=%s actual=%#zx expected=%p matched=%d\n",
                  argv[1], actual, destination, matched);
+    // ZGC zRemembered.cpp:295 / zForwarding.inline.hpp:329: scanning the
+    // registered source must publish completion independently of its mapping.
+    const bool scanCompleted = !scan || p16_forwarding->relocated_remembered_fields_is_concurrently_scanned();
+    if (scan) {
+        std::fprintf(stderr, "VERIFY_REMSET_SCAN_COMPLETION_ASSERT_EXECUTED completed=%d\n", scanCompleted);
+    }
     std::fflush(nullptr);
     // This fixture owns a phase, not a runtime shutdown/allocator teardown.
-    _exit(matched ? 0 : 82);
+    _exit(matched && scanCompleted ? 0 : 82);
 }
