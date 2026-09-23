@@ -988,8 +988,10 @@ void ZGenerationOld::concurrent_reset_relocation_set()
 
 void ZGenerationOld::pause_verify()
 {
-    // ZGC zGeneration.cpp:1155-1168: verification has its own optional VM operation.
+    // ZGC zGeneration.cpp:1155-1168: exclude young collections while verifying
+    // old fields, so store barrier buffer lookup cannot race with base pointer installation.
     if (ZVerifyRoots || ZVerifyObjects) {
+        DriverLocker locker;
         VM_ZVerifyOld op;
         (void)op.pause();
     }
