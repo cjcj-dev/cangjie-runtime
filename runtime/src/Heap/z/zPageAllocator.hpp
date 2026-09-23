@@ -173,23 +173,6 @@ public:
 
     void AddGarbageMemory(size_t idx, size_t num, bool allowSaferegion = true);
 
-    // mark-epoch quarantine: units reclaimed after from-page reclaim must not enter the dirty
-    // tree (mutator TakeRegion → ClearPageMemory) until the next major concurrent mark ends.
-    // INV: concurrent mark may still hold plain strong refs into this range (SATB).
-    void AddMarkQuarantineMemory(size_t idx, size_t num);
-
-    // Release point = major PostTrace entry (TRACE+CLEAR_SATB done). Moves all quarantined
-    // units into the dirty tree so allocation may ClearPageMemory them again.
-    size_t ReleaseMarkQuarantineToDirty();
-
-    size_t GetMarkQuarantineBytes() const
-    {
-        std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
-        size_t bytes = 0;
-        for (const auto& memory : markQuarantineMemory) { bytes += memory.size(); }
-        return bytes;
-    }
-
     size_t GetCachedBytes() const;
     // ZPartition::print_cache_on (zPageAllocator.cpp:1118-1121) for every partition.
     void PrintCacheOn() const;
@@ -233,9 +216,6 @@ private:
     ZPhysicalMemoryManager* physicalMemory{ nullptr };
     size_t nextPartition{ 0 };
 
-    // Post-dispel units held until major mark ends (see AddMarkQuarantineMemory).
-    mutable std::mutex markQuarantineTreeMutex;
-    std::vector<ZVirtualMemory> markQuarantineMemory;
 
 };
 } // namespace MapleRuntime
@@ -459,18 +439,6 @@ public:
     void PromoteAllRegions();
     void CompactRegion(ZPage* region);
 
-    // Rehome onto unmovableFrom without publishing kept. PrepareYoung parks
-    // leftover from-pages here; they were expired at cycle start and must not
-    // be re-published as this cycle's done (zRelocationSetSelector.cpp:114-196).
-    // ZGC zRelocationSetSelector.cpp:114-196 / zGeneration.cpp:205-213: a page
-    // not in this cycle's relocation set is an ordinary candidate next cycle.
-    // Kept (IsForwardingDone via Exempt) is in-cycle only.
-    // zRelocate.cpp:1346-1352 flip_survived: keep the page, reset age, leave young.
-    // Must not remain LONE_FROM / FROM after TakeHead — barriers treat those as from-space.
-    void EnlistStayYoungSurvivor(ZPage* region, bool advanceAge = true);
-    static void BumpYoungSurvivorAge(ZPage* region);
-    static void FinishStayYoungInPlace(ZPage* region, bool advanceAge = true);
-
     // ZGeneration::select_relocation_set iterates only pages owned by that
     // generation (zGeneration.cpp:195-221).  An old relocation pass may
     // observe a young page in our shared list, but it must not relocate or
@@ -519,8 +487,6 @@ public:
 
 
     void ReclaimRegion(ZPage* region);
-    // Like ReclaimRegion but units enter mark-quarantine tree, not dirty tree.
-    void ReclaimRegionToMarkQuarantine(ZPage* region);
     size_t ReleaseRegion(ZPage* region);
 
 
@@ -581,18 +547,6 @@ public:
 
 
 
-    // wait for a period of time to allocate region which will avoid harm to gc
-    void RequestForRegion(size_t size);
-
-    // Pacing inputs of RequestForRegion, published at the end of each
-    // non-young collection (post-major live bytes and collection rate).
-    void SetLastCollectionStats(size_t liveBytes, double rate)
-    {
-        lastLiveBytesAfterGC.store(liveBytes, std::memory_order_release);
-        lastCollectionRate.store(rate, std::memory_order_release);
-    }
-
-
     void SetGarbageThreshold(double garbageThreshold);
 
     void HandleTraceRegions();
@@ -606,21 +560,11 @@ public:
 
 
 
-    // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
-    // Concurrent mark (TRACE+CLEAR_SATB) has finished; plain strong refs into quarantined
-    // ranges are no longer traced. Safe to publish units to dirty tree for ClearPageMemory reuse.
-    // Note: this major's just-installed quarantine (from PrepareForwardTable above) is also
-    // released here — mark is already done, so no TRACE can race those units. Units held from
-    // prior minor PrepareForwardTable are the ones that covered the TRACE window.
-    void ReleaseMarkQuarantine();
-
-
 
 private:
     // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the
     // page table no longer publishes the old descriptor.
     void ReclaimRetiredRegion(ZPage* region);
-    void ReclaimRetiredRegionToMarkQuarantine(ZPage* region);
     void ReleaseRetiredRegion(ZPage* region);
     void ReturnRetiredPageMemory(const PageMemory& memory, bool allowSaferegion = true);
 
@@ -686,11 +630,6 @@ private:
 
     uintptr_t regionHeapStart = 0; // the address of first region to allocate object
     uintptr_t regionHeapEnd = 0;
-
-    // the time when previous region was allocated, which is assigned with returned value by timeutil::NanoSeconds().
-    std::atomic<uint64_t> prevRegionAllocTime = { 0 };
-    std::atomic<size_t> lastLiveBytesAfterGC{ 0 };
-    std::atomic<double> lastCollectionRate{ 0.0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only
