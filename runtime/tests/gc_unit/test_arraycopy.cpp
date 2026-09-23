@@ -1,5 +1,6 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
+#include "Heap/z/zAccess.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "ObjectModel/MArray.inline.h"
@@ -160,3 +161,17 @@ GC_TEST(ArrayCopyBarrier, RefStorePreservesPrevious) { CheckBarriers(false, true
 GC_TEST(ArrayCopyBarrier, RefLoadHealsSource) { CheckBarriers(false, false); }
 GC_TEST(ArrayCopyBarrier, StructStorePreservesPrevious) { CheckBarriers(true, true); }
 GC_TEST(ArrayCopyBarrier, StructLoadHealsSource) { CheckBarriers(true, false); }
+
+// Header-only template arm: the product template itself supplies the slot bits.
+GC_TEST(AccessBarrier976, ClearOnePublishesColorNull)
+{
+    GcHeapFixture fx;
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreGoodPointer(fx.obj1));
+    ZBarrierSet::AccessBarrier<IN_HEAP | ON_STRONG_OOP_REF>::oop_clear_one(
+        reinterpret_cast<volatile zpointer*>(&field));
+    std::fprintf(stderr, "ACCESS976_CLEAR_ASSERT actual=%zx color_null=%zx store_good_null=%zx\n",
+        raw(field.GetFieldValue()), raw(color_null()), raw(ZAddress::store_good(zaddress::null)));
+    GC_EXPECT_EQ(field.GetFieldValue(), color_null());
+    GC_EXPECT_TRUE(color_null() != ZAddress::store_good(zaddress::null));
+}

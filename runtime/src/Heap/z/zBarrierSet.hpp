@@ -4,28 +4,72 @@
 #ifndef MRT_Z_BARRIER_SET_HPP
 #define MRT_Z_BARRIER_SET_HPP
 
+#include "Common/BaseObject.h"
 #include "Heap/z/zAddress.hpp"
+#include "Heap/z/zAccessBackend.hpp"
 #include "Heap/z/zThreadLocalData.hpp"
+#include <vector>
 
 namespace MapleRuntime {
 class MArray;
+// Cangjie values can be headerless or stack-resident. Their payload describes
+// storage separately from its oop map (ZGC oops/valuePayload.hpp).
+class ValuePayload {
+public:
+    enum class Kind { Heap, Native, Uncolored };
+    MAddress address;
+    size_t size;
+    Kind kind;
+    std::vector<size_t> offsets;
+    ValuePayload(MAddress address, size_t size);
+    ValuePayload(MAddress address, size_t size, Kind kind);
+    ValuePayload(MAddress address, size_t size, GCTib layout, Kind kind);
+    ValuePayload(MAddress address, size_t size, BaseObject* layout, MAddress layoutStart);
+    ValuePayload(MAddress address, size_t size, std::vector<size_t> offsets, Kind kind);
+};
 class ZBarrierSet {
 public:
-    static bool barrier_needed(bool isReference);
     static void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native, zaddress_unsafe* root);
     static void on_thread_detach(ThreadGCData& data);
     static void on_thread_destroy(ThreadGCData& data);
 
-    static zaddress oop_load_in_heap(volatile zpointer* p);
-    static void oop_store_in_heap(volatile zpointer* p, zaddress value);
-    static zaddress oop_xchg_in_heap(volatile zpointer* p, zaddress value);
+    template<DecoratorSet decorators, typename BarrierSetT = ZBarrierSet>
     class AccessBarrier {
+        using Raw = RawAccessBarrier<decorators>;
+        template<DecoratorSet expected> static void verify_decorators_present();
+        template<DecoratorSet expected> static void verify_decorators_absent();
+        static volatile zpointer* field_addr(BaseObject* base, ptrdiff_t offset);
+        static zaddress load_barrier(volatile zpointer* p, zpointer observed);
+        static zaddress load_barrier_on_unknown_oop_ref(BaseObject* base, ptrdiff_t offset,
+                                                       volatile zpointer* p, zpointer observed);
+        static void store_barrier_heap_with_healing(volatile zpointer* p);
+        static void store_barrier_heap_without_healing(volatile zpointer* p);
+        static void no_keep_alive_store_barrier_heap(volatile zpointer* p);
+        static void store_barrier_native_with_healing(volatile zpointer* p);
+        static void store_barrier_native_without_healing(volatile zpointer* p);
     public:
+        static BaseObject* oop_load_in_heap(volatile zpointer* p);
+        static BaseObject* oop_load_in_heap_at(BaseObject* base, ptrdiff_t offset);
+        static BaseObject* oop_load_not_in_heap(volatile zpointer* p);
+        static void oop_store_in_heap(volatile zpointer* p, BaseObject* value);
+        static void oop_store_in_heap_at(BaseObject* base, ptrdiff_t offset, BaseObject* value);
+        static void oop_store_not_in_heap(volatile zpointer* p, BaseObject* value);
+        static BaseObject* oop_atomic_cmpxchg_in_heap(volatile zpointer* p, BaseObject* compare, BaseObject* value);
+        static BaseObject* oop_atomic_cmpxchg_in_heap_at(BaseObject* base, ptrdiff_t offset, BaseObject* compare, BaseObject* value);
+        static BaseObject* oop_atomic_cmpxchg_not_in_heap(volatile zpointer* p, BaseObject* compare, BaseObject* value);
+        static BaseObject* oop_atomic_xchg_in_heap(volatile zpointer* p, BaseObject* value);
+        static BaseObject* oop_atomic_xchg_in_heap_at(BaseObject* base, ptrdiff_t offset, BaseObject* value);
+        static BaseObject* oop_atomic_xchg_not_in_heap(volatile zpointer* p, BaseObject* value);
         static zaddress oop_copy_one_barriers(volatile zpointer* dst, volatile zpointer* src);
         static void oop_copy_one(volatile zpointer* dst, volatile zpointer* src);
         static void oop_clear_one(volatile zpointer* dst);
         static void oop_arraycopy_in_heap_no_check_cast(zpointer* dst, zpointer* src, size_t length);
-        // Cangjie inline structs contain primitive bytes as well as oop slots.
+        static void oop_arraycopy_in_heap(zpointer* src, zpointer* dst, size_t length);
+        static void value_copy_in_heap(const ValuePayload& src, const ValuePayload& dst);
+        static void oop_arraycopy_in_heap(BaseObject* srcObj, MAddress src, size_t srcSize,
+                                         BaseObject* dstObj, MAddress dst, size_t dstSize);
+        static void value_arraycopy_in_heap(BaseObject* srcObj, MAddress src, size_t srcSize,
+                                           BaseObject* dstObj, MAddress dst, size_t dstSize);
         static void struct_copy_one(MArray* layout, MAddress dst, MAddress src);
         static void struct_arraycopy_in_heap_no_check_cast(MArray* layout, MAddress dst, MAddress src, size_t length);
     };

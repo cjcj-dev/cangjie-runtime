@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
+#include "Heap/z/zAccess.hpp"
 #include "InterpreterSpecific.h"
 #ifdef INTERPRETER_ENABLED
 
@@ -393,21 +394,21 @@ int IsSubType(struct DYN_TypeInfo* typeInfo, struct DYN_TypeInfo* superTypeInfo)
 DYN_ObjRef ReadStaticField(DYN_FieldRef source)
 {
     DLOG(INTERPRETER, "ReadStaticField %p", source);
-    BaseObject* res = ZBarrier::ReadStaticRef(NativeSlotAt(source));
+    BaseObject* res = NativeAccess<>::oop_load(&(NativeSlotAt(source)));
     return static_cast<DYN_ObjRef>(res);
 }
 
 void WriteStaticField(DYN_FieldRef destination, DYN_ObjRef new_value)
 {
     DLOG(INTERPRETER, "WriteStaticField %p %p", destination, new_value);
-    ZBarrier::WriteStaticRef(NativeSlotAt(destination), static_cast<BaseObject*>(new_value));
+    NativeAccess<>::oop_store(&(NativeSlotAt(destination)), static_cast<BaseObject*>(new_value));
 }
 
 DYN_ObjRef ReadInstanceField(DYN_ObjRef source, DYN_FieldRef field)
 {
     DLOG(INTERPRETER, "ReadInstanceField %p %p", source, field);
     if (Heap::IsHeapAddress(field)) {
-        return to_object(ZBarrierSet::oop_load_in_heap(static_cast<volatile zpointer*>(field)));
+        return HeapAccess<>::oop_load(static_cast<volatile zpointer*>(field));
     }
     return CJ_MCC_ReadRefField(static_cast<BaseObject*>(source), static_cast<RefField<false>*>(field));
 }
@@ -507,12 +508,12 @@ void WriteGenericField(DYN_ObjRef dstObj, uintptr_t dstField, DYN_ObjRef src, si
         return;
     }
     if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(from)) {
-        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(fp), from,
-                                      reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE, size);
+        HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE, size, from, reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE),
+        ValuePayload(reinterpret_cast<MAddress>(fp), size));
         return;
     }
-    ZBarrier::WriteStruct(dst, reinterpret_cast<MAddress>(fp), size,
-                                   reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE, size);
+    HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE, size),
+        ValuePayload(reinterpret_cast<MAddress>(fp), size, dst, reinterpret_cast<MAddress>(fp)));
 }
 
 DYN_ThreadLocalData GetThreadLocalData()

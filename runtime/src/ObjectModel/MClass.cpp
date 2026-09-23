@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include "ObjectModel/MClass.h"
 
@@ -911,8 +912,8 @@ static void* GetAnnotations(Uptr annotationMethod, TypeInfo* arrayTi)
     ApplyCangjieMethodStub(values.GetData(), values.GetStackSize(), annotationMethod, threadData);
 #endif
     obj = static_cast<MObject*>(objectHandle());
-    ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
-        size, reinterpret_cast<Uptr>(structRet), size);
+    HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<Uptr>(structRet), size),
+        ValuePayload(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE, size, obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE));
     return obj;
 }
 
