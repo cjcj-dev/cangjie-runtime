@@ -40,7 +40,7 @@
 #include "Heap/z/zArray.inline.hpp"
 #include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zTask.hpp"
-#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWorkers.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Common/SuspendibleThreadSet.h"
@@ -374,10 +374,10 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 {
     ZArray<ZPage*>* pages = Heap::GetHeap().GetZGeneration(ZGenerationId::young)
                                 .relocation_set().flip_promoted_pages();
-    class PageTask final : public ZTask {
+    class PageTask final : public ZRestartableTask {
     public:
         explicit PageTask(ZArray<ZPage*>* pages)
-            : ZTask("ZRelocateRemsetFlipPromotedPagesTask"), iter(pages) {}
+            : ZRestartableTask("ZRelocateAddRemsetForFlipPromoted"), iter(pages) {}
         void work() override
         {
             SuspendibleThreadSetJoiner stsJoiner;
@@ -386,6 +386,9 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
                     ZIterator::basic_oop_iterate_safe(object, object->GetTypeInfo(), RemapAndMaybeAddRemset);
                 });
                 SuspendibleThreadSet::yield();
+                if (ZGeneration::young()->Workers()->should_worker_resize()) {
+                    return;
+                }
             }
         }
     private:
@@ -1126,7 +1129,7 @@ void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zTask.hpp"
-#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWorkers.inline.hpp"
 
 namespace MapleRuntime {
 
@@ -1572,7 +1575,7 @@ namespace MapleRuntime {
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWorkers.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -1665,7 +1668,7 @@ namespace MapleRuntime {
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWorkers.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"

@@ -197,6 +197,44 @@ void* RunYoungSelectionLifetimeCase(void*)
     return reinterpret_cast<void*>((distinctYoungPages && emptyReleased && liveProcessed) ? 0 : 1);
 }
 
+// ZGC zGeneration.cpp:180-194 and zRelocate.cpp:1384-1387. A large page
+// stays out of the relocation set; its raw null fields must survive promotion
+// as colored nulls. Read the product result before any mutator load barrier.
+void* RunFlipPromotionCase(void* argument)
+{
+    const bool promote = reinterpret_cast<uintptr_t>(argument) == 0;
+    auto& heap = Heap::GetHeap();
+    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    if (array == nullptr) {
+        return reinterpret_cast<void*>(10);
+    }
+    const uintptr_t address = reinterpret_cast<uintptr_t>(array);
+    const U64 root = heap.RegisterExportRoot(array);
+    auto* fields = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
+    const zpointer before = fields[0].GetFieldValue();
+    // A non-null field is already colored by marking, independently of the
+    // promotion barrier. It is the positive control in the debugger test.
+    auto& selfField = array->GetRefField(reinterpret_cast<MAddress>(fields + 1) - address);
+    ZBarrier::WriteReference(array, selfField, array);
+    Mutator::GetMutator()->SetManagedContext(false);
+    heap.RequestGC(promote ? GC_REASON_USER : GC_REASON_YOUNG, false);
+    array = static_cast<MArray*>(heap.GetExportObject(root));
+    fields = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
+    const zpointer after = fields[0].GetFieldValue();
+    const bool sameAddress = reinterpret_cast<uintptr_t>(array) == address;
+    const bool old = !Heap::page(address)->IsYoungRegion();
+    // The full major cycle has since flipped old relocate colors (ZGC
+    // zAddress.cpp:149-152). The strict store-good assertion belongs before
+    // relocate start and is made by test_flip_promotion_gdb.py.
+    const bool target = promote ? (raw(after) != 0 && is_null_any(after)) : raw(after) == raw(before);
+    std::fprintf(stderr,
+        "FLIP_PROMOTION_TARGET promote=%d same_address=%d old=%d before=%zx after=%zx store_good=%d target=%d\n",
+        promote, sameAddress, old, raw(before), raw(after), ZPointer::is_store_good(after), target);
+    heap.RemoveExportObject(root);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>((sameAddress && old == promote && target) ? 0 : 1);
+}
+
 // ZGC zGeneration.cpp:1058-1063 and zStat.cpp:1789-1798:
 // an old collection publishes selector liveness before relocation starts.
 void* RunOldRelocationStatisticsCase(void*)
@@ -684,4 +722,13 @@ GC_RUNTIME_OTHER_VM_TEST(NativeTaskRoots, RunCJTaskKeepsNativeContextOutOfRoots)
 GC_RUNTIME_OTHER_VM_TEST(YoungSelectionLifetime, EmptyReleasedAndLivePageAged)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunYoungSelectionLifetimeCase, 0, 1, true), 0);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(FlipPromotion, NullFieldsStayColoredThroughCollection)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunFlipPromotionCase, 0, 1, true), 0);
+}
+GC_RUNTIME_OTHER_VM_TEST(FlipPromotion, SurvivingYoungFieldsAreNotRewritten)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunFlipPromotionCase, 1, 1, true), 0);
 }
