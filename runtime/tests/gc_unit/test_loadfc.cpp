@@ -8,6 +8,8 @@
 
 #include "gc_heap_fixture.hpp"
 #include "CompilerCalls.h"
+#include "Interpreter/Options.h"
+#include "Interpreter/RTInterface.h"
 #include "Heap/z/zThreadLocalData.hpp"
 
 #include "Heap/z/zAddress.inline.hpp"
@@ -172,7 +174,7 @@ GC_TEST(LoadPreloaded, StrongCompetingStoreReturnsObservedValue)
     const ObjectPtr result = CJ_MCC_LoadBarrierOnOopFieldPreloaded(
         reinterpret_cast<ObjectPtr>(raw(observed)), reinterpret_cast<volatile zpointer*>(field));
     std::printf("PRELOADED_STRONG_RESULT actual=%p expected=%p\n", result, fx.heap.obj0);
-    GC_EXPECT_EQ(result, fx.heap.obj0);
+    GC_EXPECT_TRUE(result == fx.heap.obj0);
     GC_EXPECT_EQ(raw(field->GetFieldValue()), raw(replacement));
 }
 
@@ -189,7 +191,7 @@ GC_TEST(LoadPreloaded, WeakCompetingStoreReturnsObservedValue)
     const ObjectPtr result = CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
         reinterpret_cast<ObjectPtr>(raw(observed)), reinterpret_cast<volatile zpointer*>(field));
     std::printf("PRELOADED_WEAK_RESULT actual=%p expected=%p\n", result, fx.heap.obj0);
-    GC_EXPECT_EQ(result, fx.heap.obj0);
+    GC_EXPECT_TRUE(result == fx.heap.obj0);
     GC_EXPECT_EQ(raw(field->GetFieldValue()), raw(replacement));
 }
 
@@ -201,11 +203,11 @@ GC_TEST(LoadPreloaded, StrongHealsObservedSlot)
     ZGlobalsPointers::flip_young_relocate_start();
     const ObjectPtr result = CJ_MCC_LoadBarrierOnOopFieldPreloaded(
         reinterpret_cast<ObjectPtr>(raw(observed)), reinterpret_cast<volatile zpointer*>(field));
-    GC_EXPECT_EQ(result, fx.heap.obj0);
+    GC_EXPECT_TRUE(result == fx.heap.obj0);
     const zpointer healed = field->GetFieldValue();
     std::printf("PRELOADED_STRONG_HEALED before=%lx after=%lx\n", raw(observed), raw(healed));
     GC_EXPECT_TRUE(ZPointer::is_load_good(healed));
-    GC_EXPECT_EQ(to_object(field->GetTargetObject()), fx.heap.obj0);
+    GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj0);
 }
 
 GC_TEST(LoadPreloaded, WeakHealsObservedSlot)
@@ -217,14 +219,43 @@ GC_TEST(LoadPreloaded, WeakHealsObservedSlot)
     ZGlobalsPointers::flip_young_relocate_start();
     const ObjectPtr result = CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
         reinterpret_cast<ObjectPtr>(raw(observed)), reinterpret_cast<volatile zpointer*>(field));
-    GC_EXPECT_EQ(result, fx.heap.obj0);
+    GC_EXPECT_TRUE(result == fx.heap.obj0);
     const zpointer healed = field->GetFieldValue();
     std::printf("PRELOADED_WEAK_HEALED before=%lx after=%lx\n", raw(observed), raw(healed));
     GC_EXPECT_TRUE(ZPointer::is_mark_good(healed));
-    GC_EXPECT_EQ(to_object(field->GetTargetObject()), fx.heap.obj0);
+    GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj0);
 }
 
 GC_TEST(LoadPreloaded, ExportedMarkBadOffsetMatchesThreadData)
 {
     GC_EXPECT_EQ(g_cjMarkBadMaskOffset, ThreadGCData::mark_bad_mask_offset());
 }
+
+#ifdef INTERPRETER_ENABLED
+namespace MapleRuntime {
+DYN_CJNativeInterface CreateCJNativeInterface(void* symbolHandle);
+}
+
+GC_TEST(LoadPreloaded, InterpreterHeapFieldUsesAccessBarrier)
+{
+    LoadFcFixture fx;
+    auto* field = fx.MakePlainField();
+    ZGlobalsPointers::flip_young_relocate_start();
+    const DYN_CJNativeInterface interface = CreateCJNativeInterface(nullptr);
+    const DYN_ObjRef result = interface.readInstanceField(fx.heap.obj1, field);
+    std::printf("INTERPRETER_HEAP_RESULT actual=%p expected=%p\n", result, fx.heap.obj0);
+    GC_EXPECT_TRUE(result == fx.heap.obj0);
+    GC_EXPECT_TRUE(ZPointer::is_load_good(field->GetFieldValue()));
+}
+
+GC_TEST(LoadPreloaded, InterpreterStackFieldUsesPlainAccessor)
+{
+    LoadFcFixture fx;
+    RootSlot slot;
+    slot.StorePlain(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(fx.heap.obj0)));
+    const DYN_CJNativeInterface interface = CreateCJNativeInterface(nullptr);
+    const DYN_ObjRef result = interface.readInstanceField(nullptr, &slot);
+    GC_EXPECT_TRUE(result == fx.heap.obj0);
+    GC_EXPECT_EQ(raw(slot.LoadPlain()), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+#endif

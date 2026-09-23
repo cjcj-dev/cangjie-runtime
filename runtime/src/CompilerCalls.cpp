@@ -1942,9 +1942,8 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
 
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
-    if (Heap::IsHeapAddress(field)) {
-        return ZBarrier::ReadReference(obj, *field);
-    }
+    // Non-heap value access only. Compiled heap loads use the preloaded
+    // ZBarrierSetRuntime entries; the interpreter uses ZBarrierSet.
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
         return ZBarrier::ReadStaticRef(NativeSlotAt(static_cast<void*>(field)));
     }
