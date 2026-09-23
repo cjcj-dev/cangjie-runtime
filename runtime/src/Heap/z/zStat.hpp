@@ -26,11 +26,6 @@
 #include "Heap/z/zThread.hpp"
 
 namespace MapleRuntime {
-struct YoungConcWindowStats {
-    uint64_t windowNs = 0;    // world-released → STW2 requested
-    size_t reenters = 0;      // ZGC pause_mark_end() == false → concurrent_mark_continue()
-};
-
 // zStat.hpp:449-452
 struct ZStatWorkersStats {
     double _accumulated_time;
