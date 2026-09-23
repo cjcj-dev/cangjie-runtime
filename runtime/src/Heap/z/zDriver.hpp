@@ -340,9 +340,9 @@ public:
     void run_thread() override;
     void terminate() override;
     bool is_busy() const;
-    MRT_EXPORT static void RunGarbageCollection(uint64_t gcIndex, GCReason reason);
-    void RunCollection(uint64_t index, GCReason reason, bool warmup);
-    void RunYoungCollection(uint64_t index, ZYoungType type, bool warmup);
+    MRT_EXPORT static void RunGarbageCollection(uint64_t gcIndex, GCReason reason,
+                                               ZYoungType type = ZYoungType::minor);
+    void RunYoungCollection(uint64_t index, ZYoungType type);
     bool ExecuteDriverRequest(const ZDriverRequest& request);
 protected:
     virtual void HandleAllocStalls() const = 0;
