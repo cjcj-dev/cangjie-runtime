@@ -868,3 +868,33 @@ GC_RUNTIME_OTHER_VM_TEST(GenerationState, DriverActivityABI)
     GC_EXPECT_FALSE(after);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+
+namespace {
+void CheckExplicitSoftMax(const char* configured, size_t expected)
+{
+    setenv("cjSoftMaxHeapSize", configured, 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 512 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t maximum = ZHeuristics::max_heap_size();
+    const size_t soft = Heap::GetHeap().soft_max_capacity();
+    std::fprintf(stderr, "SOFT_MAX_TARGET configured=%s max=%zu soft=%zu expected=%zu\n",
+                 configured, maximum, soft, expected);
+    // Independent observations: the hard limit must not inherit soft sizing.
+    GC_EXPECT_EQ(maximum, size_t(512) * MB);
+    GC_EXPECT_EQ(soft, expected);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ExplicitEnvironment)
+{
+    CheckExplicitSoftMax("128MB", size_t(128) * MB);
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ExplicitHardLimit)
+{
+    CheckExplicitSoftMax("512MB", size_t(512) * MB);
+}
