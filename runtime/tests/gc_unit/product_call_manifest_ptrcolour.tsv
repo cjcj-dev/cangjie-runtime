@@ -1,2 +1,2 @@
 test_name	stable_product_anchor	carrier	consumer_callsite	cut_site
-I2ReadRef.LoadBadHeapSlotIsHealedToCurrentColour	MapleRuntime::ZBarrier::self_heal	product_so	test_i2_readref.cpp:HeapAccess<>::oop_load	self_heal(is_load_good_or_null_fast_path
+I2ReadRef.LoadBadHeapSlotIsHealedToCurrentColour	MapleRuntime::ZBarrier::self_heal	header_template	test_i2_readref.cpp:HeapAccess<>::oop_load	self_heal(is_load_good_or_null_fast_path
