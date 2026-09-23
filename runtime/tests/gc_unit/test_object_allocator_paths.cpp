@@ -15,6 +15,7 @@
 #include "Heap/z/zGlobals.hpp"
 #include "TypeInfoManager.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/MArray.inline.h"
@@ -308,7 +309,11 @@ void* AllocateFromDirtyCache(void*)
     auto& heap = Heap::GetHeap();
     auto* buffer = AllocBuffer::GetAllocBuffer();
     buffer->RetireTLAB(false);
-    heap.object_allocator().retire_pages(kPageAgeRangeEden);
+    {
+        // ZGC zObjectAllocator.cpp:196-202: retire shared pages only in a pause.
+        ScopedStopTheWorld stopped("allocation zeroing fixture retirement");
+        heap.object_allocator().retire_pages(kPageAgeRangeEden);
+    }
     const bool small = kind == ZeroCase::TLAB;
     const bool medium = kind == ZeroCase::Medium || kind == ZeroCase::Array || kind == ZeroCase::Finalizer || kind == ZeroCase::SegmentedArray;
     const size_t bytes = small ? 256 : medium ? ZObjectSizeLimitSmall + 32 : ZObjectSizeLimitMedium + 32;
