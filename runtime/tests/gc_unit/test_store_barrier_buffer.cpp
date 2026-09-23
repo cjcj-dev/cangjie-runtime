@@ -1285,7 +1285,7 @@ GC_TEST(AccessBarrier976, AtomicExchangeHealsWithoutBufferingControl)
     GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(fx.obj1));
 }
 
-extern "C" bool CJ_MCC_AtomicCompareSwapReference(BaseObject*, BaseObject*, BaseObject*, HeapSlot<true>*, MemoryOrder, MemoryOrder);
+extern "C" bool CJ_MCC_AtomicCompareAndSwapReference(BaseObject*, BaseObject*, BaseObject*, HeapSlot<true>*, MemoryOrder, MemoryOrder);
 extern "C" BaseObject* CJ_MCC_AtomicReadReference(BaseObject*, HeapSlot<true>*, MemoryOrder);
 
 GC_TEST(AccessBarrier976, NativeAtomicCompareSuccessFailureAndExchange)
@@ -1295,9 +1295,9 @@ GC_TEST(AccessBarrier976, NativeAtomicCompareSuccessFailureAndExchange)
     CJ_MCC_AtomicWriteReference(fx.obj0, nullptr, &field, std::memory_order_release);
     GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(fx.obj0));
     GC_EXPECT_TRUE(CJ_MCC_AtomicReadReference(nullptr, &field, std::memory_order_acquire) == fx.obj0);
-    const bool failed = CJ_MCC_AtomicCompareSwapReference(fx.obj1, nullptr, nullptr, &field,
+    const bool failed = CJ_MCC_AtomicCompareAndSwapReference(fx.obj1, nullptr, nullptr, &field,
         std::memory_order_seq_cst, std::memory_order_seq_cst);
-    const bool succeeded = CJ_MCC_AtomicCompareSwapReference(fx.obj0, fx.obj1, nullptr, &field,
+    const bool succeeded = CJ_MCC_AtomicCompareAndSwapReference(fx.obj0, fx.obj1, nullptr, &field,
         std::memory_order_seq_cst, std::memory_order_seq_cst);
     BaseObject* exchanged = CJ_MCC_AtomicSwapReference(nullptr, nullptr, &field, std::memory_order_seq_cst);
     std::fprintf(stderr, "ACCESS976_NATIVE_ASSERT failed=%d succeeded=%d exchanged=%p raw=%zx\n",
@@ -1313,10 +1313,10 @@ GC_TEST(AccessBarrier976, HeapAtomicCompareSuccessFailure)
     GcHeapFixture fx;
     auto& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreBadPointer(fx.obj1));
-    const bool failed = CJ_MCC_AtomicCompareSwapReference(fx.obj0, nullptr, fx.obj0, &field,
+    const bool failed = CJ_MCC_AtomicCompareAndSwapReference(fx.obj0, nullptr, fx.obj0, &field,
         std::memory_order_seq_cst, std::memory_order_seq_cst);
     const zpointer afterFailure = field.GetFieldValue();
-    const bool succeeded = CJ_MCC_AtomicCompareSwapReference(fx.obj1, fx.obj0, fx.obj0, &field,
+    const bool succeeded = CJ_MCC_AtomicCompareAndSwapReference(fx.obj1, fx.obj0, fx.obj0, &field,
         std::memory_order_seq_cst, std::memory_order_seq_cst);
     std::fprintf(stderr, "ACCESS976_CAS_ASSERT failed=%d succeeded=%d raw=%zx\n", failed, succeeded, raw(field.GetFieldValue()));
     GC_EXPECT_FALSE(failed);
