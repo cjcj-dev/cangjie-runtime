@@ -252,7 +252,7 @@ GC_TEST(LoadPreloaded, InterpreterStackFieldUsesPlainAccessor)
 {
     LoadFcFixture fx;
     RootSlot slot;
-    slot.StorePlain(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(fx.heap.obj0)));
+    StorePlain(slot, from_object(fx.heap.obj0));
     const DYN_CJNativeInterface interface = CreateCJNativeInterface(nullptr);
     const DYN_ObjRef result = interface.readInstanceField(nullptr, &slot);
     GC_EXPECT_TRUE(result == fx.heap.obj0);
