@@ -83,6 +83,7 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, boo
     if (retain) {
         GC_EXPECT_TRUE(owners[0]->retain_page(generation.relocate().queue()) &&
             owners[1]->retain_page(generation.relocate().queue()));
+        ZRelocate::StartRelocationTasks(generation.id());
         std::thread worker([&] { generation.relocate().relocate(&generation.relocation_set()); });
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         bool claimedBeforeCopy = false;
@@ -104,6 +105,7 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, boo
             "claimed_before_copy=%d\n", counts[0], counts[1], published[0], published[1], claimedBeforeCopy);
         GC_EXPECT_TRUE(claimedBeforeCopy);
     } else {
+        ZRelocate::StartRelocationTasks(generation.id());
         generation.relocate().relocate(&generation.relocation_set());
     }
     const MAddress destinations[2] = {owners[0]->find(objects[0]), owners[1]->find(objects[1])};
@@ -232,6 +234,7 @@ static void CheckInPlaceRemset()
     ZForwarding* owners[2] = {forwarding_for_page(pages[0]), forwarding_for_page(pages[1])};
     GC_EXPECT_TRUE(owners[0] != nullptr && owners[1] != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
+    ZRelocate::StartRelocationTasks(generation.id());
     generation.relocate().relocate(&generation.relocation_set());
     std::fprintf(stderr, "REMSET_RESULT current_clear=%d previous_clear=%d done=%d\n",
         pages[0]->is_remset_cleared_current(), pages[0]->is_remset_cleared_previous(), owners[0]->is_done());
@@ -390,6 +393,7 @@ void RunRelocateLiveness(bool worker, bool marked)
     BaseObject* source = marked ? live[0] : dead[0];
     BaseObject* result;
     if (worker) {
+        ZRelocate::StartRelocationTasks(generation.id());
         generation.relocate().relocate(&generation.relocation_set());
         result = reinterpret_cast<BaseObject*>(owner->find(reinterpret_cast<uintptr_t>(source)));
     } else {

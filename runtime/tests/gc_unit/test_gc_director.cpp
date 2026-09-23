@@ -1,4 +1,6 @@
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zStat.hpp"
@@ -9,9 +11,12 @@
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
+#include "Inspector/ProfilerAgentImpl.h"
 #include "gc_unittest.hpp"
 
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <cmath>
 #include <thread>
 
@@ -489,6 +494,207 @@ GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverrideEqualsMaximum) { Chec
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverrideBelowMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 3, true); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumWithAutomatic) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, -1); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentMaximumWithAutomatic) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, -1, true); }
+
+// The debugger matrix observes real sampling and dispatch from this fixture.
+// Its inputs are allocations and RuntimeParam, never precomputed rule results.
+GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
+{
+    const char* scenario = std::getenv("GC_UNIT_CAUSE_SCENARIO");
+    if (scenario == nullptr) scenario = "warmup";
+    const bool highUsage = std::strcmp(scenario, "high_usage") == 0;
+    const bool majorAllocationRate = std::strcmp(scenario, "major_allocation_rate") == 0;
+    const bool allocationRate = majorAllocationRate || std::strncmp(scenario, "allocation_rate", 15) == 0;
+    const bool proactive = std::strcmp(scenario, "proactive") == 0;
+    const bool timer = std::strstr(scenario, "timer") != nullptr;
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.backupGCInterval = timer ? 1 : 240;
+    params.gcParam.concGCThreads = 2;
+    params.gcParam.youngGCThreads = 2;
+    params.gcParam.oldGCThreads = 2;
+    params.gcParam.staticGCThreads = std::strcmp(scenario, "allocation_rate_static") == 0;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    const size_t firstSize = heap.GetMaxCapacity() * (highUsage ? 15 : 8) / 16;
+    type->SetInstanceSize(firstSize);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    {
+        ScopedObjectAccess access;
+        heap.RegisterExportRoot(MObject::NewPinnedObject(type, firstSize));
+    }
+    std::fprintf(stderr, "CAUSE_FIRST_ALLOCATION_READY scenario=%s\n", scenario);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (heap.old().CycleStats().Stats(TimeUtil::NanoSeconds()).warmupCycles < 3 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (majorAllocationRate) heap.RequestGC(GC_REASON_YOUNG, false);
+    if (allocationRate || proactive) {
+        const size_t nextSize = heap.GetMaxCapacity() * (allocationRate ? 7 : 2) / 16;
+        alignas(TypeInfo) static unsigned char secondStorage[sizeof(TypeInfo)]{};
+        auto* secondType = reinterpret_cast<TypeInfo*>(secondStorage);
+        secondType->SetType(TypeKind::TYPE_KIND_CLASS);
+        secondType->SetInstanceSize(nextSize);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(secondStorage), sizeof(secondStorage));
+        {
+            ScopedObjectAccess access;
+            heap.RegisterExportRoot(MObject::NewPinnedObject(secondType, nextSize));
+        }
+        std::fprintf(stderr, "CAUSE_SECOND_ALLOCATION_READY scenario=%s\n", scenario);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const auto completed = heap.old().CycleStats().Stats(TimeUtil::NanoSeconds());
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_EQ(completed.warmupCycles, 3u);
+}
+
+namespace {
+void CheckDriverCauseResult(GCReason cause, bool minor, bool clearSoft, bool preclean)
+{
+    auto* collected = ZCollectedHeap::heap();
+    auto& heap = Heap::GetHeap();
+    const auto youngBefore = heap.young().Snapshot().sequence;
+    const auto oldBefore = heap.old().Snapshot().sequence;
+    ZDriverPort& port = minor ? collected->driver_minor()->port() : collected->driver_major()->port();
+    {
+        ScopedEnterSaferegion safe(false);
+        const ZDriverRequest request(cause, 2, minor ? 0 : 2);
+        if (minor) collected->driver_minor()->collect(request);
+        else collected->driver_major()->collect(request);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (port.is_busy() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    // Completion and policy assertions are independent: the target policy is
+    // always printed, even if the request did not complete as expected.
+    const bool done = !port.is_busy();
+    const auto youngAfter = heap.young().Snapshot().sequence;
+    const auto oldAfter = heap.old().Snapshot().sequence;
+    const bool actualClear = heap.GetFinalizerProcessor().GetReferenceProcessor().uses_clear_all_soft_reference_policy();
+    const auto expectedYoung = minor ? 1u : (preclean ? 2u : 1u);
+    std::fprintf(stderr, "DRIVER_CAUSE_TARGET cause=%u minor=%d done=%d young=%llu old=%llu clear=%d expected_clear=%d expected_young=%u\n",
+        cause, minor, done, static_cast<unsigned long long>(youngAfter - youngBefore),
+        static_cast<unsigned long long>(oldAfter - oldBefore), actualClear, clearSoft, expectedYoung);
+    GC_EXPECT_EQ(youngAfter - youngBefore, expectedYoung);
+    GC_EXPECT_EQ(oldAfter - oldBefore, minor ? 0u : 1u);
+    if (!minor) GC_EXPECT_EQ(actualClear, clearSoft);
+    GC_EXPECT_TRUE(done);
+}
+
+void CheckDriverCause(GCReason cause, bool minor, bool clearSoft, bool preclean)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    CheckDriverCauseResult(cause, minor, clearSoft, preclean);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+struct PrecleanTask {
+    GCReason cause;
+    bool clearSoft;
+    bool preclean;
+    int result = 1;
+};
+
+void* CollectForPrecleanInvariant(void* argument)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    auto& task = *static_cast<PrecleanTask*>(argument);
+    try {
+        CheckDriverCauseResult(task.cause, false, task.clearSoft, task.preclean);
+        task.result = 0;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "PRECLEAN_TASK_ASSERT_FAILED %s\n", error.what());
+    }
+    return nullptr;
+}
+
+void CheckPrecleanWithoutShutdown(GCReason cause, bool clearSoft, bool preclean)
+{
+    // This fixture tests collection, not shutdown. The child completes a real
+    // runtime task, then _exit skips shutdown (Debug native detach: #935).
+    // Existing DriverCause fixtures still exercise FiniCJRuntime separately.
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        int result = 1;
+        try {
+            RuntimeParam params{};
+            params.heapParam.heapSize = 64 * 1024;
+            params.coParam.processorNum = 1;
+            GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+            PrecleanTask input{cause, clearSoft, preclean};
+            CJThreadHandle task = RunCJTask(CollectForPrecleanInvariant, &input);
+            GC_EXPECT_TRUE(task != nullptr);
+            void* taskResult = nullptr;
+            GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
+            ReleaseHandle(task);
+            result = input.result;
+            std::fprintf(stderr, "PRECLEAN_TASK_COMPLETED cause=%u result=%d shutdown=excluded\n", cause, result);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "PRECLEAN_TASK_SETUP_FAILED %s\n", error.what());
+        }
+        std::fflush(nullptr);
+        _exit(result);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "PRECLEAN_CHILD_EXIT cause=%u status=%d\n", cause, status);
+    GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+}
+
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, WhiteBox) { CheckPrecleanWithoutShutdown(GC_REASON_FORCE, true, true); }
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, Timer) { CheckPrecleanWithoutShutdown(GC_REASON_TIMER, false, false); }
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, AllocationStall) { CheckPrecleanWithoutShutdown(GC_REASON_ALLOCATION_STALL, true, true); }
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, User) { CheckPrecleanWithoutShutdown(GC_REASON_USER, false, true); }
+
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorTimer) { CheckDriverCause(GC_REASON_TIMER, true, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorAllocationRate) { CheckDriverCause(GC_REASON_ALLOCATION_RATE, true, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorHighUsage) { CheckDriverCause(GC_REASON_HIGH_USAGE, true, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorAllocationStall) { CheckDriverCause(GC_REASON_ALLOCATION_STALL, true, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorWhiteBox) { CheckDriverCause(GC_REASON_YOUNG, true, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorTimer) { CheckDriverCause(GC_REASON_TIMER, false, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorAllocationRate) { CheckDriverCause(GC_REASON_ALLOCATION_RATE, false, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorProactive) { CheckDriverCause(GC_REASON_PROACTIVE, false, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorWarmup) { CheckDriverCause(GC_REASON_WARMUP, false, false, false); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorAllocationStall) { CheckDriverCause(GC_REASON_ALLOCATION_STALL, false, true, true); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorWhiteBox) { CheckDriverCause(GC_REASON_FORCE, false, true, true); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorUser) { CheckDriverCause(GC_REASON_USER, false, false, true); }
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorDiagnosticCommand) { CheckDriverCause(GC_REASON_DCMD_GC_RUN, false, false, true); }
+
+
+#if defined(__OHOS__) && (__OHOS__ == 1)
+// ProfilerAgent is an OHOS-only product entry (CangjieRuntimeApi.cpp).
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, ProfilerDiagnosticCommand)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    const auto before = heap.old().Snapshot().sequence;
+    bool response = false;
+    ProfilerAgentImpl(R"({"id":1,"method":"HeapProfiler.collectGarbage"})",
+        [&](const std::string&) { response = true; });
+    const auto result = heap.old().Snapshot();
+    std::fprintf(stderr, "PROFILER_CAUSE_TARGET cause=%u expected=%u completed=%llu response=%d\n",
+        result.reason, GC_REASON_DCMD_GC_RUN,
+        static_cast<unsigned long long>(result.sequence - before), response);
+    GC_EXPECT_EQ(result.reason, GC_REASON_DCMD_GC_RUN);
+    GC_EXPECT_EQ(result.sequence - before, 1u);
+    GC_EXPECT_TRUE(response);
+}
+#endif
 
 // ZGC zHeuristics.cpp:114-116 and zArguments.cpp:160-174: the same flag
 // supplies the young budget and the initialization-time tenuring bound.

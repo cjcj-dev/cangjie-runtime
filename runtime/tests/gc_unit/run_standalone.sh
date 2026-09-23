@@ -56,7 +56,7 @@ run_ohos_host_arm() {
       'MapleRuntime::ZCrossVM::GetCrossRefHandler(MapleRuntime::BaseObject*)' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
       'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
-      'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
+      'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason, MapleRuntime::ZYoungType)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$product_nm"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_SYMBOL_MISSING symbol=$symbol" >&2
@@ -109,7 +109,7 @@ run_ohos_host_arm() {
       'MapleRuntime::ZCrossVM::GetCrossRefHandler(MapleRuntime::BaseObject*)' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
       'MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)' \
-      'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
+      'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason, MapleRuntime::ZYoungType)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if /usr/bin/grep -F -q "$symbol" "$test_nm"; then
       echo "GC_UNIT_OHOS_HOST_LOCAL_PRODUCT_DEFINITION symbol=$symbol" >&2

@@ -66,8 +66,7 @@ public:
     {
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).End();
         auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-        YoungTypeSetter type(young, ZYoungType::major_partial_roots);
-        ZDriver::RunGarbageCollection(1, GC_REASON_YOUNG);
+        ZDriver::RunGarbageCollection(1, GC_REASON_YOUNG, ZYoungType::major_partial_roots);
     }
     static void NativeRootTrace(Heap& collector)
     {
@@ -183,6 +182,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     RelocationReceiptTest::FlipNativeRootYoung(collector);
     if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
     heap.young().Workers()->set_active_workers(1);
+    ZRelocate::StartRelocationTasks(heap.young().id());
     heap.young().relocate().relocate(&heap.young().relocation_set());
     auto forwarding = forwarding_for_page(region);
     BaseObject* to = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(from)));
@@ -290,6 +290,7 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     // Neither the forwarding value nor the root result is fabricated.
     if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
     heap.young().Workers()->set_active_workers(1);
+    ZRelocate::StartRelocationTasks(heap.young().id());
     heap.young().relocate().relocate(&heap.young().relocation_set());
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
@@ -343,6 +344,7 @@ GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
     RelocationReceiptTest::FlipNativeRootYoung(heap);
     if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
     heap.young().Workers()->set_active_workers(1);
+    ZRelocate::StartRelocationTasks(heap.young().id());
     heap.young().relocate().relocate(&heap.young().relocation_set());
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
@@ -368,7 +370,8 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, YoungRelocateSkipsForeignIncompleteFrom)
     GC_EXPECT_TRUE(!fx.region1->IsForwardingDone());
     GC_EXPECT_TRUE(forwarding_for_page(fx.region1) != nullptr);
     heap.young().set_phase(ZGenerationPhase::Relocate);
-    heap.young().EvacuateYoungRegions(nullptr);
+    ZRelocate::StartRelocationTasks(ZGenerationId::young);
+    heap.young().EvacuateYoungRegions();
     GC_EXPECT_TRUE(forwarding_for_page(fx.region1) != nullptr);
     GC_EXPECT_TRUE(!fx.region1->IsForwardingDone());
 }

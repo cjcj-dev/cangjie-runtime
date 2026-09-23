@@ -58,11 +58,6 @@ struct ZDirectorStats {
     ZDirectorHeapStats heap;
     ZDirectorGenerationStats young_stats;
     ZDirectorGenerationStats old_stats;
-    bool allocation_stalling = false;
-    uint32_t conc_gc_threads = 1;
-    double collection_interval_sec = 0.0;
-    size_t max_capacity = 0;
-    size_t relocation_headroom = 0;
 };
 
 ZDirector::ZDirector()
@@ -111,12 +106,12 @@ static uint32_t old_gc_threads(const ZDirectorStats&)
 
 static bool rule_minor_timer(const ZDirectorStats& stats)
 {
-    if (stats.collection_interval_sec <= 0) {
+    if (ZCollectionIntervalMinor <= 0) {
         return false;
     }
-    const double time_until_gc = stats.collection_interval_sec - stats.young_stats.cycle.timeSinceLast;
+    const double time_until_gc = ZCollectionIntervalMinor - stats.young_stats.cycle.timeSinceLast;
     VLOG(REPORT, "Rule Minor: Timer, Interval: %.3fs, TimeUntilGC: %.3fs\n",
-        stats.collection_interval_sec, time_until_gc);
+        ZCollectionIntervalMinor, time_until_gc);
     return time_until_gc <= 0;
 }
 
@@ -176,7 +171,7 @@ static ZDriverRequest rule_minor_allocation_rate_dynamic(const ZDirectorStats& s
     }
     const size_t used = stats.heap.used;
     const size_t free_including_headroom = capacity - std::min(capacity, used);
-    const size_t free = free_including_headroom - std::min(free_including_headroom, stats.relocation_headroom);
+    const size_t free = free_including_headroom - std::min(free_including_headroom, ZHeuristics::relocation_headroom());
     const auto alloc_rate_stats = stats.mutator_alloc_rate;
     const double alloc_rate_sd_percent = alloc_rate_stats.sd / (alloc_rate_stats.avg + 1.0);
     const double alloc_rate_conservative =
@@ -200,7 +195,7 @@ static ZDriverRequest rule_minor_allocation_rate_dynamic(const ZDirectorStats& s
     if (time_until_gc > time_until_oom * 0.05) {
         return ZDriverRequest(GC_REASON_INVALID, actual_gc_workers, 0);
     }
-    return ZDriverRequest(GC_REASON_HEU, actual_gc_workers, 0);
+    return ZDriverRequest(GC_REASON_ALLOCATION_RATE, actual_gc_workers, 0);
 }
 
 static ZDriverRequest rule_soft_minor_allocation_rate_dynamic(const ZDirectorStats& stats,
@@ -216,7 +211,7 @@ static ZDriverRequest rule_semi_hard_minor_allocation_rate_dynamic(const ZDirect
 {
     return rule_minor_allocation_rate_dynamic(stats, 0.0 /* serial_gc_time_passed */,
         0.0 /* parallel_gc_time_passed */, false,
-        stats.max_capacity);
+        Heap::GetHeap().GetMaxCapacity());
 }
 
 static ZDriverRequest rule_hard_minor_allocation_rate_dynamic(const ZDirectorStats& stats,
@@ -224,7 +219,7 @@ static ZDriverRequest rule_hard_minor_allocation_rate_dynamic(const ZDirectorSta
 {
     return rule_minor_allocation_rate_dynamic(stats, 0.0 /* serial_gc_time_passed */,
         0.0 /* parallel_gc_time_passed */, true,
-        stats.max_capacity);
+        Heap::GetHeap().GetMaxCapacity());
 }
 
 static bool rule_minor_allocation_rate_static(const ZDirectorStats& stats)
@@ -235,7 +230,7 @@ static bool rule_minor_allocation_rate_static(const ZDirectorStats& stats)
     const size_t soft_max_capacity = stats.heap.soft_max_heap_size;
     const size_t used = stats.heap.used;
     const size_t free_including_headroom = soft_max_capacity - std::min(soft_max_capacity, used);
-    const size_t free = free_including_headroom - std::min(free_including_headroom, stats.relocation_headroom);
+    const size_t free = free_including_headroom - std::min(free_including_headroom, ZHeuristics::relocation_headroom());
     const auto alloc_rate_stats = stats.mutator_alloc_rate;
     const double max_alloc_rate =
         (alloc_rate_stats.avg * ZAllocationSpikeTolerance) + (alloc_rate_stats.sd * one_in_1000);
@@ -271,7 +266,7 @@ static bool is_high_usage(const ZDirectorStats& stats, bool log = false)
     }
     const size_t used = stats.heap.used;
     const size_t free_including_headroom = soft_max_capacity - std::min(soft_max_capacity, used);
-    const size_t free = free_including_headroom - std::min(free_including_headroom, stats.relocation_headroom);
+    const size_t free = free_including_headroom - std::min(free_including_headroom, ZHeuristics::relocation_headroom());
     const double free_percent = 100.0 * static_cast<double>(free) / static_cast<double>(soft_max_capacity);
     if (log) {
         VLOG(REPORT, "Rule Minor: High Usage, Free: %zuMB(%.1f%%)\n", free / MB, free_percent);
@@ -292,11 +287,11 @@ static bool rule_minor_allocation_rate(const ZDirectorStats& stats)
     const bool stalling_for_old = Heap::GetHeap().page_allocator().IsAllocationStallingForOld();
     if (stalling_for_old) {
         VLOG(REPORT, "Rule Minor: Allocation Stall, StallingForOld: %d, Stalling: %d, Suppressed: 1\n",
-            stalling_for_old, stats.allocation_stalling);
+            stalling_for_old, Heap::GetHeap().page_allocator().IsAllocationStalling());
         return false;
     }
     VLOG(REPORT, "Rule Minor: Allocation Stall, StallingForOld: %d, Stalling: %d, Suppressed: 0\n",
-        stalling_for_old, stats.allocation_stalling);
+        stalling_for_old, Heap::GetHeap().page_allocator().IsAllocationStalling());
     if (is_young_small(stats)) {
         return false;
     }
@@ -325,12 +320,12 @@ static bool rule_minor_high_usage(const ZDirectorStats& stats)
 
 static bool rule_major_timer(const ZDirectorStats& stats)
 {
-    if (stats.collection_interval_sec <= 0) {
+    if (ZCollectionIntervalMajor <= 0) {
         return false;
     }
-    const double time_until_gc = stats.collection_interval_sec - stats.old_stats.cycle.timeSinceLast;
+    const double time_until_gc = ZCollectionIntervalMajor - stats.old_stats.cycle.timeSinceLast;
     VLOG(REPORT, "Rule Major: Timer, Interval: %.3fs, TimeUntilGC: %.3fs\n",
-        stats.collection_interval_sec, time_until_gc);
+        ZCollectionIntervalMajor, time_until_gc);
     return time_until_gc <= 0;
 }
 
@@ -455,13 +450,13 @@ static GCReason make_minor_gc_decision(const ZDirectorStats& stats)
         return GC_REASON_INVALID;
     }
     if (rule_minor_timer(stats)) {
-        return GC_REASON_BACKUP;
+        return GC_REASON_TIMER;
     }
     if (rule_minor_allocation_rate(stats)) {
-        return GC_REASON_HEU;
+        return GC_REASON_ALLOCATION_RATE;
     }
     if (rule_minor_high_usage(stats)) {
-        return GC_REASON_HEU;
+        return GC_REASON_HIGH_USAGE;
     }
     return GC_REASON_INVALID;
 }
@@ -472,13 +467,13 @@ static GCReason make_major_gc_decision(const ZDirectorStats& stats)
         return GC_REASON_INVALID;
     }
     if (rule_major_timer(stats)) {
-        return GC_REASON_BACKUP;
+        return GC_REASON_TIMER;
     }
     if (rule_major_warmup(stats)) {
         return GC_REASON_WARMUP;
     }
     if (rule_major_proactive(stats)) {
-        return GC_REASON_HEU;
+        return GC_REASON_PROACTIVE;
     }
     return GC_REASON_INVALID;
 }
@@ -508,7 +503,7 @@ static ZWorkerCounts select_worker_threads(const ZDirectorStats& stats, uint32_t
 {
     const uint32_t active_young_workers = stats.young_stats.resize.nworkers_current;
     const uint32_t active_old_workers = stats.old_stats.resize.nworkers_current;
-    if (stats.allocation_stalling) {
+    if (Heap::GetHeap().page_allocator().IsAllocationStalling()) {
         return {ZYoungGCThreads, ZOldGCThreads};
     }
     if (active_young_workers + active_old_workers > ConcGCThreads) {
@@ -580,7 +575,7 @@ static ZWorkerCounts initial_workers(const ZDirectorStats& stats, ZWorkerSelecti
 static void start_major_gc(const ZDirectorStats& stats, GCReason cause)
 {
     const ZWorkerCounts selection = initial_workers(stats, ZWorkerSelectionType::start_major);
-    ZCollectedHeap::heap()->driver_major()->port().send_async(
+    ZCollectedHeap::heap()->driver_major()->collect(
         ZDriverRequest(cause, selection.young_workers, selection.old_workers));
 }
 
@@ -598,7 +593,7 @@ static void start_minor_gc(const ZDirectorStats& stats, GCReason cause)
             Heap::GetHeap().old().Workers()->request_resize_workers(selection.old_workers);
         }
     }
-    ZCollectedHeap::heap()->driver_minor()->port().send_async(ZDriverRequest(cause, selection.young_workers, 0));
+    ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(cause, selection.young_workers, 0));
 }
 
 static bool start_gc(const ZDirectorStats& stats)
@@ -611,7 +606,7 @@ static bool start_gc(const ZDirectorStats& stats)
     const GCReason minor_cause = make_minor_gc_decision(stats);
     if (minor_cause != GC_REASON_INVALID) {
         if (!ZCollectedHeap::heap()->driver_major()->port().is_busy() && rule_major_allocation_rate(stats)) {
-            start_major_gc(stats, GC_REASON_HEU);
+            start_major_gc(stats, GC_REASON_ALLOCATION_RATE);
         } else {
             start_minor_gc(stats, minor_cause);
         }
@@ -633,12 +628,12 @@ static ZWorkerResizeStats sample_worker_resize_stats(const ZStatCycleStats& cycl
     return {true, serial_gc_time_passed, parallel_gc_time_passed, workers->active_workers()};
 }
 
-static ZDirectorStats sample_stats(uint64_t now, int32_t concurrentGcThreadCount)
+static ZDirectorStats sample_stats()
 {
+    const uint64_t now = TimeUtil::NanoSeconds();
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     ZDirectorStats stats;
     stats.mutator_alloc_rate = ZStatMutatorAllocRate::stats();
-    stats.max_capacity = Heap::GetHeap().GetMaxCapacity();
     stats.heap.soft_max_heap_size = Heap::GetHeap().soft_max_capacity();
     stats.heap.used = Heap::GetHeap().GetAllocator().AllocatedBytes();
     stats.heap.total_collections = Heap::GetHeap().total_collections();
@@ -655,11 +650,6 @@ static ZDirectorStats sample_stats(uint64_t now, int32_t concurrentGcThreadCount
     stats.young_stats.general.used = regions.used_generation(ZGenerationId::young);
     stats.old_stats.general.used = regions.used_generation(ZGenerationId::old);
     stats.old_stats.general.total_collections_at_start = Heap::GetHeap().old().total_collections_at_start();
-    stats.allocation_stalling = regions.IsAllocationStalling();
-    stats.conc_gc_threads = static_cast<uint32_t>(std::max(concurrentGcThreadCount, 1));
-    stats.collection_interval_sec =
-        static_cast<double>(CangjieRuntime::GetGCParam().backupGCInterval) / SECOND_TO_NANO_SECOND;
-    stats.relocation_headroom = ZHeuristics::relocation_headroom();
     return stats;
 }
 
@@ -670,8 +660,7 @@ void ZDirector::run_thread()
         if (Runtime::CurrentRef() == nullptr || !Heap::GetHeap().IsGCEnabled()) {
             continue;
         }
-        const ZDirectorStats stats = sample_stats(TimeUtil::NanoSeconds(),
-            ZCollectedHeap::heap()->concurrent_gc_threads());
+        const ZDirectorStats stats = sample_stats();
         if (!MapleRuntime::start_gc(stats)) {
             adjust_gc(stats);
         }

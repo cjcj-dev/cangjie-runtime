@@ -89,6 +89,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     heap.young().set_phase(ZGenerationPhase::Relocate);
     ZGlobalsPointers::flip_young_relocate_start();
     heap.young().Workers()->set_active_workers(1);
+    ZRelocate::StartRelocationTasks(heap.young().id());
     heap.young().relocate().relocate(&heap.young().relocation_set());
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
@@ -185,6 +186,7 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     heap.old().set_phase(ZGenerationPhase::Relocate);
     ZGlobalsPointers::flip_old_relocate_start();
     heap.old().Workers()->set_active_workers(1);
+    ZRelocate::StartRelocationTasks(heap.old().id());
     heap.old().relocate().relocate(&heap.old().relocation_set());
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));

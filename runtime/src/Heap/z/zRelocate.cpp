@@ -40,7 +40,7 @@
 #include "Heap/z/zArray.inline.hpp"
 #include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zTask.hpp"
-#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWorkers.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
@@ -141,9 +141,6 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set)
         // relocation destroys the liveness information used to find them.
         ZRelocateStoreBufferInstallBasePointersTask bufferTask(generation);
         workers.run(&bufferTask);
-    }
-    if (!relocateQueue.IsActive()) {
-        StartRelocationTasks(generation->id());
     }
     if (generation->is_young()) {
         ForwardTask<Generation::Young> task(manager, relocation_set);
@@ -303,96 +300,101 @@ bool ForceRootRouteDomainWhileForwardable(BaseObject* obj)
 }
 } // namespace
 
-// ZBarrier::barrier / remap_young_relocated (zBarrier.inline.hpp:318-361).
-// Resolve and heal the same preloaded word. Preserve mark/remember metadata;
-// another writer's load-good value terminates the shared self-heal CAS loop.
-static BaseObject* RemapPromotedField(RefField<>& field, zpointer observed)
+// ZGC zRelocate.cpp:733-740.
+static bool AddRemsetIfYoung(volatile zpointer* field, zaddress address)
 {
-    RefField<> value(observed);
-    auto loadGood = [](zpointer word) {
-        return ZPointer::is_load_good_or_null(to_zpointer(raw(word)));
-    };
-    if (loadGood(observed)) {
-        return to_object(value.GetTargetObject());
+    if (Heap::page(untype(address))->IsYoungRegion()) {
+        Heap::page(reinterpret_cast<MAddress>(field))->remember(field);
+        return true;
     }
-    BaseObject* target = to_object(ZBarrier::make_load_good(value.GetFieldValue()));
-    CHECK_DETAIL(target != nullptr || !(!is_null_any(to_zpointer(raw(observed)))),
-                 "promotion remap must preserve a non-null reference");
-    // ZAddress::load_good: upgrade remap bits without claiming a marking epoch.
-    const zpointer healed = ZAddress::load_good(from_object(target), observed);
-    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
-                        reinterpret_cast<volatile zpointer*>(&field), observed, healed, false);
-    return target;
+    return false;
 }
 
-// ZRelocateWork::update_remset_promoted_filter_and_remap_per_field
-// (zRelocate.cpp:741-794). Unfinished young relocation is remembered for
-// deferred remapping; a page worker must not wait on another page's work.
-void RegionManager::RememberPromotedObject(BaseObject* object)
+// ZGC zRelocate.cpp:742-794: defer unresolved young relocation; eagerly
+// remap null and old targets so they do not need a remembered-set entry.
+static void UpdateRemsetPromotedFilterAndRemapPerField(RefField<>& field)
 {
-    if (!object->HasRefField()) {
+    volatile zpointer* const p = reinterpret_cast<volatile zpointer*>(&field);
+    const zpointer ptr = field.GetFieldValue();
+    CHECK_DETAIL(ZPointer::is_old_load_good(ptr), "promoted field must be old load-good");
+    if (ZPointer::is_store_good(ptr)) {
         return;
     }
-    // zRelocate.cpp:798: this relocation-work consumer uses the unsafe entry.
-    ZIterator::basic_oop_iterate(object, [&](RefField<>& field) {
-        const zpointer observed = field.GetFieldValue();
-        RefField<> value(observed);
-        BaseObject* target = to_object(value.GetTargetObject());
-        if (target != nullptr && Heap::IsHeapAddress(target)) {
-            const MAddress address = reinterpret_cast<MAddress>(target);
-            ZForwarding* forwarding = ZPointer::is_load_good(value.GetFieldValue()) ? nullptr :
-                generation_forwarding_table(Generation::Young).get(address);
-            const MAddress to = forwarding == nullptr ? address : forwarding->find(address);
-            if (to == 0 || Heap::page(to)->IsYoungRegion()) {
-                ZPage* holder = Heap::page(reinterpret_cast<MAddress>(&field));
-                if (holder != nullptr) {
-                    holder->remember(reinterpret_cast<volatile zpointer*>(&field));
-                }
-                return;
-            }
+    if (ZPointer::is_load_good(ptr)) {
+        if (!is_null_any(ptr)) {
+            AddRemsetIfYoung(p, ZPointer::uncolor(ptr));
         }
-        // Only completed/non-relocating old targets reach eager remapping.
-        // Unfinished young forwarding above stays deferred in the remset.
-        RemapPromotedField(field, observed);
-    });
+        return;
+    }
+    if (is_null_any(ptr)) {
+        ZBarrier::remap_young_relocated(p, ptr);
+        return;
+    }
+    const zaddress_unsafe address = ZPointer::uncolor_unsafe(ptr);
+    ZForwarding* const forwarding = generation_forwarding_table(Generation::Young).get(untype(address));
+    if (forwarding == nullptr) {
+        if (!AddRemsetIfYoung(p, safe(address))) {
+            ZBarrier::remap_young_relocated(p, ptr);
+        }
+        return;
+    }
+    const MAddress to = forwarding->find(untype(address));
+    if (to != 0) {
+        if (!AddRemsetIfYoung(p, to_zaddress(to))) {
+            ZBarrier::remap_young_relocated(p, ptr);
+        }
+        return;
+    }
+    Heap::page(reinterpret_cast<MAddress>(p))->remember(p);
+}
+
+void RegionManager::RememberPromotedObject(BaseObject* object)
+{
+    ZIterator::basic_oop_iterate(object, UpdateRemsetPromotedFilterAndRemapPerField);
+}
+
+// ZGC zRelocate.cpp:1227-1255.
+static void RemapAndMaybeAddRemset(RefField<>& field)
+{
+    volatile zpointer* const p = reinterpret_cast<volatile zpointer*>(&field);
+    const zpointer ptr = field.GetFieldValue();
+    if (ZPointer::is_store_good(ptr)) {
+        return;
+    }
+    const zaddress address = ZBarrier::load_barrier_on_oop_field_preloaded(p, ptr);
+    if (is_null(address)) {
+        return;
+    }
+    if (Heap::is_old(untype(address))) {
+        return;
+    }
+    Heap::page(reinterpret_cast<MAddress>(p))->remember(p);
 }
 
 void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 {
     ZArray<ZPage*>* pages = Heap::GetHeap().GetZGeneration(ZGenerationId::young)
                                 .relocation_set().flip_promoted_pages();
-    class PageTask final : public ZTask {
+    class PageTask final : public ZRestartableTask {
     public:
-        PageTask(ZArray<ZPage*>* pages, const std::function<void(RefField<>&)>& remember)
-            : ZTask("ZRelocateRemsetFlipPromotedPagesTask"), iter(pages), remember(remember) {}
+        explicit PageTask(ZArray<ZPage*>* pages)
+            : ZRestartableTask("ZRelocateAddRemsetForFlipPromoted"), iter(pages) {}
         void work() override
         {
+            SuspendibleThreadSetJoiner stsJoiner;
             for (ZPage* page; iter.next(&page);) {
                 page->object_iterate([&](BaseObject* object) {
-                    auto remapAndRemember = [&](RefField<>& field) {
-                        const zpointer observed = field.GetFieldValue();
-                        BaseObject* target = RemapPromotedField(field, observed);
-                        if (target != nullptr && Heap::IsHeapAddress(target) &&
-                            Heap::page(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
-                            // RegionManager owns access to the remset producer.
-                            remember(field);
-                        }
-                    };
-                    // zRelocate.cpp:1275: flip promotion passes the known
-                    // klass through the safe entry before field dispatch.
-                    ZIterator::basic_oop_iterate_safe(object, object->GetTypeInfo(), remapAndRemember);
+                    ZIterator::basic_oop_iterate_safe(object, object->GetTypeInfo(), RemapAndMaybeAddRemset);
                 });
+                SuspendibleThreadSet::yield();
+                if (ZGeneration::young()->Workers()->should_worker_resize()) {
+                    return;
+                }
             }
         }
     private:
         ZArrayParallelIterator<ZPage*> iter;
-        const std::function<void(RefField<>&)> remember;
-    } task(pages, [](RefField<>& field) {
-        ZPage* holder = Heap::page(reinterpret_cast<MAddress>(&field));
-        if (holder != nullptr) {
-            holder->remember(reinterpret_cast<volatile zpointer*>(&field));
-        }
-    });
+    } task(pages);
     workers.run(&task);
 }
 
@@ -1130,7 +1132,7 @@ void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zTask.hpp"
-#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWorkers.inline.hpp"
 
 namespace MapleRuntime {
 
@@ -1419,6 +1421,7 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
         {}
         void work() override
         {
+            SuspendibleThreadSetJoiner stsJoiner;
             ZArray<ZPage*> promoted;
             for (ZPage* prev; iter.next(&prev);) {
                 const PageAge fromAge = prev->age();
@@ -1446,6 +1449,7 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                     ZGeneration::young()->flip_promote(prev, newPage);
                     promoted.append(prev);
                 }
+                SuspendibleThreadSet::yield();
             }
             // zRelocate.cpp:1363: registration goes through the generation.
             ZGeneration::young()->register_flip_promoted(promoted);
@@ -1467,6 +1471,7 @@ void ZRelocate::barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* 
         {}
         void work() override
         {
+            SuspendibleThreadSetJoiner stsJoiner;
             auto promoteBarriers = [](ZArrayParallelIterator<ZPage*>* iter) {
                 for (ZPage* page; iter->next(&page);) {
                     page->object_iterate([](BaseObject* obj) {
@@ -1475,6 +1480,7 @@ void ZRelocate::barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* 
                                 reinterpret_cast<volatile zpointer*>(&field));
                         });
                     });
+                    SuspendibleThreadSet::yield();
                 }
             };
             promoteBarriers(&flipIter);
@@ -1575,7 +1581,7 @@ namespace MapleRuntime {
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWorkers.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -1668,7 +1674,7 @@ namespace MapleRuntime {
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWorkers.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"

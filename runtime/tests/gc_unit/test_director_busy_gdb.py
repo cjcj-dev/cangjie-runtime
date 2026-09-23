@@ -38,12 +38,12 @@ LINES = {
     'minor_major': line_in('static GCReason make_minor_gc_decision', 'resize.is_active'),
     'select': line_in('static void start_minor_gc', '? ZWorkerSelectionType'),
     'resize': line_in('static void start_minor_gc', 'if ('),
-    'send': line_in('static void start_minor_gc', 'driver_minor()->port().send_async'),
+    'send': line_in('static void start_minor_gc', 'driver_minor()->collect'),
     'merge': line_in('static bool start_gc', 'rule_major_allocation_rate(stats)'),
     'sample': line_in('static ZDirectorStats sample_stats', 'stats.mutator_alloc_rate'),
-    'tick': line_in('void ZDirector::run_thread', 'const ZDirectorStats stats'),
+    'tick': line_in('static ZDirectorStats sample_stats', 'const uint64_t now'),
     'loop': line_in('void ZDirector::run_thread', 'while (wait_for_tick())'),
-    'entry': line_in('static ZDirectorStats sample_stats', 'stats.relocation_headroom'),
+    'entry': line_in('static GCReason make_major_gc_decision', 'if ('),
     'rule': line_in('static bool rule_major_allocation_rate', 'VLOG(REPORT'),
 }
 
@@ -79,6 +79,11 @@ def location():
 
 
 def advance(tag):
+    # Sampling now ends at the first decision instruction. Do not execute an
+    # extra tick when the requested boundary is already the current stop.
+    current = gdb.newest_frame().find_sal()
+    if current.symtab and current.symtab.filename.endswith('zDirector.cpp') and current.line == LINES[tag]:
+        return
     bp = gdb.Breakpoint('zDirector.cpp:' + str(LINES[tag]), temporary=True)
     command('continue')
     if bp.is_valid():
@@ -180,7 +185,7 @@ try:
     command('set $req = (MapleRuntime::ZDriverRequest*)malloc(sizeof(MapleRuntime::ZDriverRequest))')
     # Call the product constructor symbol, not an inline declaration from the ELF.
     command('call ((void (*)(void*, unsigned int, unsigned int, unsigned int)) '
-            '&_ZN12MapleRuntime14ZDriverRequestC1ENS_8GCReasonEjj)($req, 3, 1, 1)')
+            '&_ZN12MapleRuntime14ZDriverRequestC1ENS_8GCReasonEjj)($req, MapleRuntime::GC_REASON_ALLOCATION_RATE, 1, 1)')
     workers = 'MapleRuntime::ZCollectedHeap::_collected_heap->_heap._old.workers.get()'
     if not DYNAMIC or EQUAL:
         active_workers = (2 if EQUAL else 1) if not DYNAMIC else 1
@@ -198,7 +203,7 @@ try:
     advance('entry')
     emit('SAMPLED', resize=diagnostic('stats.old_stats.resize.is_active'),
          workers=diagnostic('stats.old_stats.resize.nworkers_current'),
-         interval=diagnostic('stats.collection_interval_sec'),
+         interval=diagnostic('MapleRuntime::ZCollectionIntervalMinor'),
          old_minor_snapshot=diagnostic('stats.minor_busy'),
          old_major_snapshot=diagnostic('stats.major_busy'))
     if SITE == 'entry':
@@ -206,14 +211,15 @@ try:
         for _ in range(64):
             command('next')
             here=location()
-            if (LINES['loop'] <= here['line'] < LINES['tick'] and
+            if (LINES['loop'] <= here['line'] <= LINES['loop'] + 3 and
                     here['function']=='MapleRuntime::ZDirector::run_thread'):
                 break
         else:
             raise RuntimeError('Director loop boundary not observed')
         observed = {'busy': bool(value('$major->_has_message')),
                     'cause': int(value('$major->_message._cause'))}
-        expected_cause = 3 if CURRENT else 2  # existing HEU / newly sent BACKUP
+        expected_cause = int(value('MapleRuntime::GC_REASON_ALLOCATION_RATE' if CURRENT else
+                                   'MapleRuntime::GC_REASON_TIMER'))
         check('ASSERT_ENTRY', observed['busy'] and observed['cause'] == expected_cause,
               observed=observed, expected_cause=expected_cause)
     advance('major')

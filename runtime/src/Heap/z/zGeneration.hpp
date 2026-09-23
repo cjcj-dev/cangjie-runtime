@@ -217,10 +217,10 @@ public:
     void register_in_place_relocate_promoted(ZPage* page);
     void register_flip_promoted(const ZArray<ZPage*>& pages);
     void SelectTenuringThreshold(const TenuringInputs& inputs);
-    void EvacuateYoungRegions(std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
+    void EvacuateYoungRegions();
     ~ZGenerationYoung();
     bool should_record_stats() override;
-    void collect();
+    void collect(ZYoungType type, void* timer = nullptr);
     void mark_start();
     void pause_mark_start();
     void produceYoungRoots();
@@ -232,16 +232,17 @@ public:
     void concurrent_mark_free();
     void concurrent_reset_relocation_set();
     void concurrent_select_relocation_set();
+    void relocate_start();
     void pause_relocate_start();
     void concurrent_relocate();
 private:
+    void flip_relocate_start();
     using MinorObjectSet = std::unordered_set<BaseObject*>;
     using MinorSlotSet = std::unordered_set<MAddress>;
     using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint32_t _tenuring_threshold = 0;
     uint64_t minorTotalRuns = 0;
-    std::unique_ptr<ScopedStopTheWorld> youngStw;
     MinorSlotSet youngConsumedSlots;
     MinorInteriorBaseMap youngRemsetInteriorBases;
     uint64_t youngStartNs = 0;
@@ -264,7 +265,7 @@ public:
     void PostTrace();
     ~ZGenerationOld();
     bool should_record_stats() override;
-    void collect();
+    void collect(void* timer = nullptr);
     void mark_start();
     void concurrent_mark();
     bool mark_end();
