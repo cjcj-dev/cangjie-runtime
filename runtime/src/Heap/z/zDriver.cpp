@@ -393,7 +393,16 @@ static bool ShouldPrecleanYoung(GCReason reason)
     }
     // ZGC zDriver.cpp:294-299: requests that have seen young but not old.
     const auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    return manager.IsAllocationStallingForOld();
+    if (manager.IsAllocationStallingForOld()) {
+        return true;
+    }
+
+    // ZGC zDriver.cpp:301-312: clearing all soft references is the last
+    // attempt before OOM, so it must also preclean young. The driver locker
+    // keeps allocation stalls stable between the two policy decisions.
+    MRT_ASSERT(!ShouldClearAllSoftReferences(reason),
+               "Clearing all soft references without pre-cleaning young gen");
+    return false;
 }
 
 
