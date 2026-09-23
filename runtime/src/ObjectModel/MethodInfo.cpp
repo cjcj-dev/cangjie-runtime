@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include "Base/Log.h"
 #include "Heap/z/zHeap.hpp"
@@ -17,7 +18,7 @@ CJRawArray* CJArray::GetRawArray()
 {
     auto* slot = &rawPtr;
     BaseObject* array = Heap::IsHeapAddress(slot) ?
-        ZBarrier::ReadReference(nullptr, HeapSlotAt<false>(slot)) :
+        HeapAccess<>::oop_load(&(HeapSlotAt<false>(slot))) :
         to_object(safe(RootSlotAt(slot).LoadPlain()));
     return reinterpret_cast<CJRawArray*>(array);
 }
@@ -47,7 +48,7 @@ void* ScopedAllocBuffer::CopyNativeStruct(TypeInfo* type, MAddress source)
                  "native value snapshot copy failed");
     if (type->HasRefField()) {
         type->GetGCTib().ForEachBitmapWordInRange(source, [&](RefField<>& field) {
-            BaseObject* value = Heap::IsHeapAddress(&field) ? ZBarrier::ReadReference(nullptr, field) :
+            BaseObject* value = Heap::IsHeapAddress(&field) ? HeapAccess<>::oop_load(&(field)) :
                 to_object(safe(RootSlotAt(reinterpret_cast<void*>(&field)).LoadPlain()));
             const size_t offset = reinterpret_cast<MAddress>(&field) - source;
             StorePlain(RootSlotAt(reinterpret_cast<MAddress>(copy) + offset), from_object(value));
@@ -99,8 +100,8 @@ void* ParameterInfo::GetAnnotations(TypeInfo* arrayTi)
 #endif
 
     obj = static_cast<MObject*>(objectHandle());
-    ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
-        size, reinterpret_cast<Uptr>(structRet), size);
+    HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<Uptr>(structRet), size),
+        ValuePayload(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE, size, obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE));
     return obj;
 }
 
@@ -175,8 +176,8 @@ void* MethodInfo::GetAnnotations(TypeInfo* arrayTi)
 #endif
 
     obj = static_cast<MObject*>(objectHandle());
-    ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
-        size, reinterpret_cast<Uptr>(structRet), size);
+    HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<Uptr>(structRet), size),
+        ValuePayload(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE, size, obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE));
     return obj;
 }
 
@@ -276,7 +277,7 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
     HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCnt; ++actualArgIdx) {
-        ObjRef argObj = static_cast<ObjRef>(ZBarrier::ReadReference(rawArray, *refField));
+        ObjRef argObj = static_cast<ObjRef>(HeapAccess<>::oop_load(&(*refField)));
         ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
         TypeInfo* argType = actualParameterInfo->GetType();
         if (argType->IsGeneric()) {
@@ -466,27 +467,17 @@ void MethodInfo::AddCJArg(ArgValue *argValues, TypeInfo *argType, ObjRef argObj,
                 Handle structHandle(Mutator::GetMutator(), structArgObj);
                 dst = reinterpret_cast<void*>(reinterpret_cast<Uptr>(structArgObj) + TYPEINFO_PTR_SIZE);
                 void* snapshot = MemoryAlloc(1, typeSize);
-                ZBarrier::ReadStruct(
-                    reinterpret_cast<MAddress>(snapshot),
-                    argObj,
-                    reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE),
-                    typeSize);
-                ZBarrier::WriteStruct(
-                    structArgObj,
-                    reinterpret_cast<MAddress>(dst),
-                    typeSize,
-                    reinterpret_cast<MAddress>(snapshot),
-                    typeSize);
+                HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE), typeSize, argObj, reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE)),
+        ValuePayload(reinterpret_cast<MAddress>(snapshot), typeSize));
+                HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(snapshot), typeSize),
+        ValuePayload(reinterpret_cast<MAddress>(dst), typeSize, structArgObj, reinterpret_cast<MAddress>(dst)));
                 MemoryFree(snapshot);
                 argValues->AddHandle(structHandle, TYPEINFO_PTR_SIZE);
             } else {
                 dst = MemoryAlloc(1, typeSize);
                 allocBuffer.GetArgBuffers().push_back(dst);
-                ZBarrier::ReadStruct(
-                    reinterpret_cast<MAddress>(dst),
-                    argObj,
-                    reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE),
-                    typeSize);
+                HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE), typeSize, argObj, reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE)),
+        ValuePayload(reinterpret_cast<MAddress>(dst), typeSize));
             }
             if (!argType->HasRefField()) { argValues->AddInt64(reinterpret_cast<Uptr>(dst)); }
             break;
@@ -511,7 +502,7 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
         rawArray = static_cast<MObject*>(arrayHandle());
         auto& refField = HeapSlotAt<false>(reinterpret_cast<Uptr>(rawArray) +
             offsetof(CJRawArray, data) + actualArgIdx * sizeof(Uptr));
-        ObjRef argObj = static_cast<ObjRef>(ZBarrier::ReadReference(rawArray, refField));
+        ObjRef argObj = static_cast<ObjRef>(HeapAccess<>::oop_load(&(refField)));
         ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
         TypeInfo* argType = actualParameterInfo->GetType();
         if (argType->IsGeneric() || actualParameterInfo->IsGeneric()) {
@@ -560,15 +551,15 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
             return obj;
         }
         if (HasSRetNotGeneric()) {
-            ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
-                                           typeSize, reinterpret_cast<Uptr>(valueSnapshot), typeSize);
+            HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<Uptr>(valueSnapshot), typeSize),
+        ValuePayload(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE, typeSize, obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE));
         } else if (retType->IsEnum() && !HasSRetWithKnowGenericStruct()) {
             // Return type is enum type, and don't have sret, function actually returns the object body.
-            ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
-                                           typeSize, reinterpret_cast<Uptr>(valueSnapshot), typeSize);
+            HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<Uptr>(valueSnapshot), typeSize),
+        ValuePayload(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE, typeSize, obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE));
         } else {
-            ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
-                                           typeSize, reinterpret_cast<Uptr>(valueSnapshot), typeSize);
+            HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<Uptr>(valueSnapshot), typeSize),
+        ValuePayload(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE, typeSize, obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE));
         }
         return obj;
     } else if (retType->IsPrimitiveType()) {
@@ -594,8 +585,8 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
         }
         MAddress dst = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE;
         if (retType->HasRefField()) {
-            ZBarrier::WriteStruct(obj, dst, vArraySize,
-                                           reinterpret_cast<Uptr>(valueSnapshot), vArraySize);
+            HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<Uptr>(valueSnapshot), vArraySize),
+        ValuePayload(dst, vArraySize, obj, dst));
         } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
                             valueSnapshot, vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "RetValueToAny memcpy_s fail");
@@ -733,11 +724,8 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
                 void* thisDst = MemoryAlloc(1, thisSize);
                 PRINT_FATAL_IF(thisDst == nullptr, "ApplyCJMethod struct this MemoryAlloc failed");
                 argBuffers.push_back(thisDst);
-                ZBarrier::ReadStruct(
-                    reinterpret_cast<MAddress>(thisDst),
-                    instanceObj,
-                    reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE),
-                    thisSize);
+                HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE), thisSize, instanceObj, reinterpret_cast<MAddress>(reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE)),
+        ValuePayload(reinterpret_cast<MAddress>(thisDst), thisSize));
                 scopedAllocBuffer.HoldNativeStruct(declaringTi, thisDst);
                 argValues.AddInt64(reinterpret_cast<Uptr>(thisDst));
             }
@@ -878,7 +866,7 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
     HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCount; ++actualArgIdx) {
-        ObjRef argObj = static_cast<ObjRef>(ZBarrier::ReadReference(rawArray, *refField));
+        ObjRef argObj = static_cast<ObjRef>(HeapAccess<>::oop_load(&(*refField)));
         argValues.AddReference(argObj);
         refField++;
     }

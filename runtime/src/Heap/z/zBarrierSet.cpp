@@ -7,6 +7,8 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.inline.hpp"
 #include "Mutator/Mutator.h"
+#include "Common/BaseObject.inline.h"
+#include <algorithm>
 
 namespace MapleRuntime {
 void ZBarrierSet::on_slowpath_allocation_exit(BaseObject* new_obj)
@@ -19,11 +21,35 @@ void ZBarrierSet::on_slowpath_allocation_exit(BaseObject* new_obj)
     }
 }
 
-// ZGC zBarrierSet.inline.hpp: AccessBarrier::barrier_needed is false for
-// primitive value_copy; only reference oop stores/loads need barriers.
-bool ZBarrierSet::barrier_needed(bool isReference)
+ValuePayload::ValuePayload(MAddress address, size_t size)
+    : ValuePayload(address, size, Heap::IsHeapAddress(address) ? Kind::Heap : Kind::Uncolored) {}
+
+ValuePayload::ValuePayload(MAddress address, size_t size, Kind kind)
+    : address(address), size(size), kind(kind) {}
+
+ValuePayload::ValuePayload(MAddress address, size_t size, GCTib layout, Kind kind)
+    : ValuePayload(address, size, kind)
 {
-    return isReference;
+    layout.ForEachBitmapWordInRange(address, [&](RefField<>& slot) {
+        offsets.push_back(reinterpret_cast<MAddress>(&slot) - address);
+    }, address, address + size);
+}
+
+ValuePayload::ValuePayload(MAddress address, size_t size, BaseObject* layout, MAddress layoutStart)
+    : ValuePayload(address, size)
+{
+    if (layout != nullptr) {
+        layout->ForEachRefInStruct([&](RefField<>& slot) {
+            offsets.push_back(reinterpret_cast<MAddress>(&slot) - layoutStart);
+        }, layoutStart, layoutStart + size);
+    }
+}
+
+ValuePayload::ValuePayload(MAddress address, size_t size, std::vector<size_t> offsets, Kind kind)
+    : address(address), size(size), kind(kind), offsets(std::move(offsets))
+{
+    std::sort(this->offsets.begin(), this->offsets.end());
+    this->offsets.erase(std::unique(this->offsets.begin(), this->offsets.end()), this->offsets.end());
 }
 
 void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native, zaddress_unsafe* root)
@@ -52,26 +78,6 @@ void ZBarrierSet::on_thread_destroy(ThreadGCData& data)
 {
     // ZGC zBarrierSet.cpp:248-251. GC data survives detach until SMR deletion.
     data.UnregisterOwner();
-}
-
-zaddress ZBarrierSet::oop_load_in_heap(volatile zpointer* p)
-{
-    return ZBarrier::load_barrier_on_oop_field(p);
-}
-
-void ZBarrierSet::oop_store_in_heap(volatile zpointer* p, zaddress value)
-{
-    ZBarrier::store_barrier_on_heap_oop_field(p, false);
-    *const_cast<zpointer*>(p) = ZAddress::store_good(value);
-}
-
-zaddress ZBarrierSet::oop_xchg_in_heap(volatile zpointer* p, zaddress value)
-{
-    ZBarrier::store_barrier_on_heap_oop_field(p, true);
-    zpointer next = ZAddress::store_good(value);
-    zpointer prev = *const_cast<zpointer*>(p);
-    *const_cast<zpointer*>(p) = next;
-    return ZBarrier::make_load_good(prev);
 }
 
 BaseObject* ZBarrierSetRuntime::load_barrier_on_oop_field_preloaded(BaseObject* o, volatile zpointer* p)

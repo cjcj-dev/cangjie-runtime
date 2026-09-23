@@ -934,7 +934,6 @@ EXPORTS
     _ZGVZN12MapleRuntime11CpuProfiler11GetInstanceEvE8instance @931 DATA
     _ZGVZN12MapleRuntime5GcLog7EnabledEvE7enabled @934 DATA
     _ZN12MapleRuntime10BaseObject18OnFinalizerCreatedEv @937
-    _ZN12MapleRuntime10BaseObject23CompareExchangeRefFieldERNS_8HeapSlotILb0EEES2_S2_ @938
     _ZN12MapleRuntime10CjHeapData10WriteClassEPNS_8TypeInfoEyh @940
     _ZN12MapleRuntime10CjHeapData11AddStringIdEy @941
     _ZN12MapleRuntime10CjHeapData11HandleAddU1EPKhy @942

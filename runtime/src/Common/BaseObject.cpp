@@ -89,12 +89,4 @@ bool BaseObject::IsInTraceRegion() const
     return region->IsTraceRegion();
 }
 
-bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> oldRef, const RefField<> newRef)
-{
-    if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
-        DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
-        return true;
-    }
-    return false;
-}
 } // namespace MapleRuntime

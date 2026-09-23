@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Heap/z/zBarrierSet.hpp"
+#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include "CompilerCalls.h"
 #include "Heap/z/zBarrierSet.hpp"
@@ -400,15 +400,15 @@ static void WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<fal
     // also fails safe for a malformed contradictory pair.
     if (Heap::IsHeapAddress(plainField)) {
         if constexpr (weak) {
-            ZBarrier::WriteWeakReference(plainObj, *plainField, plainRef);
+            HeapAccess<ON_WEAK_OOP_REF>::oop_store(&(*plainField), plainRef);
         } else {
-            ZBarrier::WriteReference(plainObj, *plainField, plainRef);
+            HeapAccess<>::oop_store(&(*plainField), plainRef);
         }
         return;
     }
     if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
         VLOG(REPORT, "found and writing a global struct ref field");
-        ZBarrier::WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
+        NativeAccess<>::oop_store(&(NativeSlotAt(static_cast<void*>(plainField))), plainRef); // Global field is root storage.
         return;
     }
     // The remaining value-type field is a stack/plain slot ($BP == 0).
@@ -431,12 +431,11 @@ extern "C" void MCC_WriteRefField_Weak(const ObjectPtr ref, const ObjectPtr obj,
 // the referent property at runtime, before selecting a barrier entry.
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
 {
-    const bool weakReferent = obj != nullptr && Heap::IsHeapAddress(obj) && obj->IsWeakRef() &&
-        reinterpret_cast<MAddress>(field) == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
-    if (weakReferent) {
-        MCC_WriteRefField_Weak(ref, obj, field);
+    if (Heap::IsHeapAddress(field)) {
+        HeapAccess<ON_UNKNOWN_OOP_REF>::oop_store_at(obj,
+            reinterpret_cast<uintptr_t>(field) - reinterpret_cast<uintptr_t>(obj), ref);
     } else {
-        MCC_WriteRefField_Strong(ref, obj, field);
+        WriteRefField<false>(ref, obj, field);
     }
 }
 
@@ -449,11 +448,13 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
     CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStructField wrong parameter, dst: %p src: %p", plainDst,
                  plainSrc);
     if (Heap::IsHeapAddress(plainDst)) {
-        ZBarrier::WriteStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
+        HeapAccess<>::value_copy(ValuePayload(plainSrc, srcLen),
+        ValuePayload(plainDst, dstLen, gctib, ValuePayload::Kind::Heap));
         return;
     }
     if (IsGlobalStruct(plainObj, plainDst)) {
-        ZBarrier::WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
+        NativeAccess<>::value_copy(ValuePayload(plainSrc, srcLen),
+        ValuePayload(plainDst, dstLen, gctib, ValuePayload::Kind::Native));
         return;
     }
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(plainDst), dstLen,
@@ -464,7 +465,7 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
 extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, NativeSlot* field)
 {
     MAddress address = reinterpret_cast<MAddress>(field);
-    ZBarrier::WriteStaticRef(NativeSlotAt(address), ref);
+    NativeAccess<>::oop_store(&(NativeSlotAt(address)), ref);
 }
 
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib)
@@ -473,7 +474,8 @@ extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src,
     MAddress plainSrc = src;
     CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStaticStruct wrong parameter, dst: %p src: %p", plainDst,
                  plainSrc);
-    ZBarrier::WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gcTib);
+    NativeAccess<>::value_copy(ValuePayload(plainSrc, srcLen),
+        ValuePayload(plainDst, dstLen, gcTib, ValuePayload::Kind::Native));
 }
 
 extern "C" TypeInfo* MCC_GetObjClass(const ObjectPtr obj)
@@ -505,8 +507,7 @@ extern "C" void CJ_MCC_ArrayCopyRef(const ObjectPtr dstObj, MAddress dstField, s
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    ZBarrier::CopyRefArray(dstObj, dstField, dstSize,
-                                    srcObj, srcField, srcSize);
+    HeapAccess<>::oop_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
 }
 
 extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField, size_t dstSize,
@@ -516,33 +517,55 @@ extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    ZBarrier::CopyStructArray(dstObj, dstField, dstSize,
-                                       srcObj, srcField, srcSize);
+    HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
 }
+template<typename Operation>
+static auto ReferenceAccessOrder(MemoryOrder order, Operation operation)
+{
+    switch (order) {
+        case std::memory_order_relaxed: return operation(std::integral_constant<DecoratorSet, MO_RELAXED>{});
+        case std::memory_order_consume:
+        case std::memory_order_acquire: return operation(std::integral_constant<DecoratorSet, MO_ACQUIRE>{});
+        case std::memory_order_release: return operation(std::integral_constant<DecoratorSet, MO_RELEASE>{});
+        default: return operation(std::integral_constant<DecoratorSet, MO_SEQ_CST>{});
+    }
+}
+
 extern "C" void MCC_AtomicWriteReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                          MemoryOrder order)
 {
-    ZBarrier::AtomicWriteReference(obj, *field, ref, order);
+    ReferenceAccessOrder(order, [&](auto mo) {
+        if (Heap::IsHeapAddress(field)) { HeapAccess<decltype(mo)::value>::oop_store(field, ref); }
+        else { NativeAccess<decltype(mo)::value>::oop_store(field, ref); }
+    });
 }
 
 extern "C" ObjectPtr MCC_AtomicReadReference(const ObjectPtr obj, RefField<true>* field, MemoryOrder order)
 {
-    return ZBarrier::AtomicReadReference(obj, *field, order);
+    return ReferenceAccessOrder(order, [&](auto mo) {
+        if (Heap::IsHeapAddress(field)) { return HeapAccess<decltype(mo)::value>::oop_load(field); }
+        return NativeAccess<decltype(mo)::value>::oop_load(field);
+    });
 }
 
 extern "C" ObjectPtr MCC_AtomicSwapReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                              MemoryOrder order)
 {
-    return ZBarrier::AtomicSwapReference(obj, *field, ref,
-                                                  order);
+    return ReferenceAccessOrder(order, [&](auto mo) {
+        if (Heap::IsHeapAddress(field)) { return HeapAccess<decltype(mo)::value>::oop_atomic_xchg(field, ref); }
+        return NativeAccess<decltype(mo)::value>::oop_atomic_xchg(field, ref);
+    });
 }
 
 extern "C" bool MCC_AtomicCompareSwapReference(const ObjectPtr oldRef, const ObjectPtr newRef, const ObjectPtr obj,
                                                RefField<true>* field, MemoryOrder succOrder, MemoryOrder failOrder)
 {
-    return ZBarrier::CompareAndSwapReference(obj, *field,
-                                                      oldRef, newRef, succOrder,
-                                                      failOrder);
+    // ZGC atomic access has one ordering decorator; seq_cst also covers the
+    // Cangjie ABI's separate success/failure orders.
+    if (Heap::IsHeapAddress(field)) {
+        return HeapAccess<MO_SEQ_CST>::oop_atomic_cmpxchg(field, oldRef, newRef) == oldRef;
+    }
+    return NativeAccess<MO_SEQ_CST>::oop_atomic_cmpxchg(field, oldRef, newRef) == oldRef;
 }
 
 extern "C" void MCC_InvokeGCImpl(bool) { HeapManager::RequestGC(GC_REASON_USER); }
@@ -872,8 +895,8 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
         trace = static_cast<MArray*>(traceHandle());
         MSize elementSize = trace->GetElementSize();
         MAddress dstAddr = reinterpret_cast<Uptr>(trace) + MArray::GetContentOffset() + elementSize * stackIndex;
-        ZBarrier::WriteStruct(trace, dstAddr, elementSize,
-                                       reinterpret_cast<MAddress>(&frameData), elementSize);
+        HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(&frameData), elementSize),
+        ValuePayload(dstAddr, elementSize, trace, dstAddr));
         stackIndex++;
     }
     return static_cast<MArray*>(traceHandle());
@@ -933,8 +956,8 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
         MSize elementSize = allRecords->GetElementSize();
         MAddress dstAddr =
             reinterpret_cast<Uptr>(allRecords) + MArray::GetContentOffset() + elementSize * recordIndex;
-        ZBarrier::WriteStruct(allRecords, dstAddr, elementSize,
-                                       reinterpret_cast<MAddress>(&snapshot), elementSize);
+        HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(&snapshot), elementSize),
+        ValuePayload(dstAddr, elementSize, allRecords, dstAddr));
         recordIndex++;
     }
 
@@ -1336,7 +1359,7 @@ extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arra
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
     MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::MOVEABLE_OBJECT);
     // set rawArray
-    ZBarrier::WriteReference(obj, obj->GetRefField(TYPEINFO_PTR_SIZE), rawHandle());
+    HeapAccess<>::oop_store(&(obj->GetRefField(TYPEINFO_PTR_SIZE)), rawHandle());
     CJArray* cjArray = reinterpret_cast<CJArray*>(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE);
     cjArray->start = 0;
     cjArray->length = subPkgCnt;
@@ -1837,8 +1860,7 @@ extern "C" ObjRef MCC_GetAssociatedValues(ObjRef obj, TypeInfo* arrayTi)
         VLOG(REPORT, "MCC_GetAssociatedValues new object failed and throw OutOfMemoryError");
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
     }
-    ZBarrier::WriteReference(
-        arrayObj, arrayObj->GetRefField(TYPEINFO_PTR_SIZE), arrayHandle());
+    HeapAccess<>::oop_store(&(arrayObj->GetRefField(TYPEINFO_PTR_SIZE)), arrayHandle());
     CJArray* cjArray = reinterpret_cast<CJArray*>(reinterpret_cast<Uptr>(arrayObj) + TYPEINFO_PTR_SIZE);
     cjArray->start = 0;
     cjArray->length = fieldNum;
@@ -1973,17 +1995,17 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
     // Existing compiled callers still use this entry until cjcj-llvm#18
     // switches their slow paths to the preloaded ZBarrierSetRuntime entries.
     if (Heap::IsHeapAddress(field)) {
-        return ZBarrier::ReadReference(obj, *field);
+        return HeapAccess<>::oop_load(&(*field));
     }
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
-        return ZBarrier::ReadStaticRef(NativeSlotAt(static_cast<void*>(field)));
+        return NativeAccess<>::oop_load(&(NativeSlotAt(static_cast<void*>(field))));
     }
     return to_object(safe(RootSlotAt(static_cast<void*>(field)).LoadPlain()));
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field)
 {
-    return ZBarrier::ReadWeakRef(obj, *field);
+    return HeapAccess<ON_WEAK_OOP_REF>::oop_load(&(*field));
 }
 extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress srcField, size_t size, GCTib gctib)
 {
@@ -1996,11 +2018,13 @@ extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress 
         return;
     }
     if (Heap::IsHeapAddress(srcField)) {
-        ZBarrier::ReadStruct(dstPtr, srcField, size, gctib);
+        HeapAccess<>::value_copy(ValuePayload(srcField, size, gctib, ValuePayload::Kind::Heap),
+        ValuePayload(dstPtr, size));
         return;
     }
     if (IsGlobalStruct(obj, srcField)) {
-        ZBarrier::ReadStaticStruct(dstPtr, srcField, size, gctib);
+        NativeAccess<>::value_copy(ValuePayload(srcField, size, gctib, ValuePayload::Kind::Native),
+        ValuePayload(dstPtr, size));
         return;
     }
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstPtr), size,
@@ -2009,11 +2033,12 @@ extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress 
 }
 extern "C" ObjectPtr CJ_MCC_ReadStaticRef(NativeSlot* field)
 {
-    return ZBarrier::ReadStaticRef(*field);
+    return NativeAccess<>::oop_load(&(*field));
 }
 extern "C" void CJ_MCC_ReadStaticStruct(MAddress dstPtr, size_t dstSize, MAddress srcPtr, size_t srcSize, GCTib gctib)
 {
-    ZBarrier::ReadStaticStruct(dstPtr, srcPtr, dstSize, gctib);
+    NativeAccess<>::value_copy(ValuePayload(srcPtr, dstSize, gctib, ValuePayload::Kind::Native),
+        ValuePayload(dstPtr, dstSize));
 }
 extern "C" void* MCC_GetTypeInfoAnnotations(TypeInfo* cls, TypeInfo* arrayTi) { return cls->GetAnnotations(arrayTi); }
 
@@ -2068,7 +2093,7 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
                 return false;
             }
             if (Heap::IsHeapAddress(obj)) {
-                curObj = ZBarrier::ReadReference(obj, obj->GetRefField(offset));
+                curObj = HeapAccess<>::oop_load(&(obj->GetRefField(offset)));
             } else {
                 curObj = to_object(obj->GetRefField(offset).GetTargetObject());
             }
@@ -2111,12 +2136,12 @@ static void CopyGenericField(const ObjectPtr obj, void* fieldPtr, const ObjectPt
         return;
     }
     if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(src)) {
-        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(fp), src,
-                                      reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size);
+        HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size, src, reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE),
+        ValuePayload(reinterpret_cast<MAddress>(fp), size));
         return;
     }
-    ZBarrier::WriteStruct(dst, reinterpret_cast<MAddress>(fp), size,
-                                   reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size);
+    HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size),
+        ValuePayload(reinterpret_cast<MAddress>(fp), size, dst, reinterpret_cast<MAddress>(fp)));
 }
 
 extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size)
@@ -2191,7 +2216,8 @@ extern "C" void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, siz
                      "MCC_WriteGenericPayload memcpy_s failed");
     } else {
         MAddress dstAddr = reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE;
-        ZBarrier::WriteStruct(dst, dstAddr, srcSize, srcField, srcSize);
+        HeapAccess<>::value_copy(ValuePayload(srcField, srcSize),
+        ValuePayload(dstAddr, srcSize, dst, dstAddr));
     }
 }
 
@@ -2212,7 +2238,8 @@ extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t
         CHECK_DETAIL(memcpy_s(dstNative, size, reinterpret_cast<void*>(srcPayload), size) == EOK,
                      "CJ_MCC_ReadGenericPayload memcpy_s failed");
     } else {
-        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(dstNative), obj, srcPayload, size);
+        HeapAccess<>::value_copy(ValuePayload(srcPayload, size, obj, srcPayload),
+        ValuePayload(reinterpret_cast<MAddress>(dstNative), size));
     }
 }
 
@@ -2225,8 +2252,8 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
         constexpr size_t stackCache = 256;
         if (size < stackCache) {
             char stackMem[stackCache]{ 0 };
-            ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(stackMem),
-                reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
+            NativeAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib(), ValuePayload::Kind::Native),
+        ValuePayload(reinterpret_cast<MAddress>(stackMem), size));
             CopyGenericField(dstPtr, reinterpret_cast<void*>(
                 reinterpret_cast<uintptr_t>(dstPtr) + TYPEINFO_PTR_SIZE),
                 reinterpret_cast<ObjectPtr>(stackMem - TYPEINFO_PTR_SIZE), size);
@@ -2235,8 +2262,8 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
             char* nativeHeapMem = (char*)malloc(size);
             CHECK_DETAIL(nativeHeapMem != nullptr, "malloc failed when read generic %p -> %p(%p) size %zu",
                          dstPtr, obj, fieldPtr, size);
-            ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(nativeHeapMem),
-                reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
+            NativeAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib(), ValuePayload::Kind::Native),
+        ValuePayload(reinterpret_cast<MAddress>(nativeHeapMem), size));
             CopyGenericField(dstPtr, reinterpret_cast<void*>(
                 reinterpret_cast<uintptr_t>(dstPtr) + TYPEINFO_PTR_SIZE),
                 reinterpret_cast<ObjectPtr>(nativeHeapMem - TYPEINFO_PTR_SIZE), size);
@@ -2251,12 +2278,12 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
         return;
     }
     if (!Heap::IsHeapAddress(dstPtr) && Heap::IsHeapAddress(obj)) {
-        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, obj,
-                                      reinterpret_cast<MAddress>(fieldPtr), size);
+        HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(fieldPtr), size, obj, reinterpret_cast<MAddress>(fieldPtr)),
+        ValuePayload(reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, size));
         return;
     }
-    ZBarrier::WriteStruct(dstPtr, reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, size,
-                                   reinterpret_cast<MAddress>(fieldPtr), size);
+    HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(fieldPtr), size),
+        ValuePayload(reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, size, dstPtr, reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE));
 }
 
 extern "C" FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf)
@@ -2382,7 +2409,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_TEMP_ENUM:
         case TypeKind::TYPE_KIND_RAWARRAY:
         case TypeKind::TYPE_KIND_FUNC: {
-            ZBarrier::CopyRefArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+            HeapAccess<>::oop_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
             break;
         }
         case TypeKind::TYPE_KIND_UNIT:
@@ -2414,7 +2441,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
             // VArray may embed managed refs (HasRefField recurses via component flag /
             // TypeGCInfo). Unconditional memmove skips remset post-record (G-C1).
             if (componentTypeInfo->HasRefField()) {
-                ZBarrier::CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+                HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
             } else {
                 CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                        reinterpret_cast<void*>(srcField), srcSize) == EOK,
@@ -2425,7 +2452,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_TUPLE:
         case TypeKind::TYPE_KIND_STRUCT:
         case TypeKind::TYPE_KIND_ENUM: {
-            ZBarrier::CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+            HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
             break;
         }
         default:
@@ -2472,8 +2499,7 @@ extern "C" uintptr_t CJ_MCC_GetJSLambdaAddr(const ObjectPtr obj)
 
     // Loop to check if it's a wrapper class, if so, get realAutoEnvObj until finding a non-wrapper class
     while (MCC_IsWrapperClassForAutoEnv(currentObj->GetTypeInfo())) {
-        currentObj = ZBarrier::ReadReference(currentObj,
-            currentObj->GetRefField(TYPEINFO_PTR_SIZE + realAutoEnvObjOffset));
+        currentObj = HeapAccess<>::oop_load(&(currentObj->GetRefField(TYPEINFO_PTR_SIZE + realAutoEnvObjOffset)));
     }
 
     // Access func1 directly from currentObj

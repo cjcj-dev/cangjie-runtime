@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAccess.hpp"
 #include "Sync.h"
 #include "Common/WeakHandle.inline.h"
 #include "Heap/z/zAddress.inline.hpp"
@@ -643,7 +644,7 @@ bool MCC_MonitorWait(const void* ptr, int64_t timeout)
     CJMonitor* monitor = CastToT<CJMonitor*>(ptr);
     // True read barrier (not uncolor_bits): pin must land on load-good / to-copy.
     BaseObject* mutexObj =
-        ZBarrier::ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
+        HeapAccess<>::oop_load(&(monitor->mutexPtr));
     CJMutex* mutex = reinterpret_cast<CJMutex*>(mutexObj);
     bool ret = MonitorWait(mutex, monitor->waitNative, timeout);
     return ret;
@@ -674,7 +675,7 @@ bool MCC_MultiConditionMonitorWait(const void* ptr, void* waitQueuePtr, int64_t 
     CJMultiConditionMonitor* monitor = CastToT<CJMultiConditionMonitor*>(ptr);
     // Same as MCC_MonitorWait: HeapSlot load must go through the real barrier.
     BaseObject* mutexObj =
-        ZBarrier::ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
+        HeapAccess<>::oop_load(&(monitor->mutexPtr));
     CJMutex* mutex = reinterpret_cast<CJMutex*>(mutexObj);
     bool ret = MonitorWait(mutex, CastToT<CJWaitQueue*>(waitQueuePtr)->waitNative, timeout);
     return ret;

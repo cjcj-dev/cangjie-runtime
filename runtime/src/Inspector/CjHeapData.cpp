@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "CjHeapData.h"
 #include <cerrno>
@@ -350,7 +351,7 @@ void CjHeapData::ProcessRootLocal()
 void CjHeapData::ProcessRootGlobal()
 {
     NativeSlotVisitor visitor = [this](NativeSlot& root) {
-        BaseObject* obj = ZBarrier::ReadStaticRef(root);
+        BaseObject* obj = NativeAccess<AS_NO_KEEPALIVE>::oop_load(&(root));
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return;
         }
@@ -383,7 +384,7 @@ void CjHeapData::ProcessRootFinalizer()
             return;
         }
         // FinalizerProcessor holds listLock while exposing each retained root.
-        BaseObject* obj = ZBarrier::ReadStaticRef(objRef);
+        BaseObject* obj = NativeAccess<AS_NO_KEEPALIVE>::oop_load(&(objRef));
         DumpObject dumpObject = { obj, TAG_ROOT_UNKNOWN, 0, 0 };
         dumpObjects.push_back(dumpObject);
     };
