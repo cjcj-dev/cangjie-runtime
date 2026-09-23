@@ -141,9 +141,6 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set)
         ZRelocateStoreBufferInstallBasePointersTask bufferTask(generation);
         workers.run(&bufferTask);
     }
-    if (!relocateQueue.IsActive()) {
-        StartRelocationTasks(generation->id());
-    }
     if (generation->is_young()) {
         ForwardTask<Generation::Young> task(manager, relocation_set);
         workers.run(&task);
