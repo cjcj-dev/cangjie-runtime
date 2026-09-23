@@ -192,7 +192,7 @@ public:
     static size_t IndexOf(const ZVirtualMemory& vmem);
     uint32_t PartitionIdOf(const ZVirtualMemory& vmem) const { return virtualMemory->lookup_partition_id(vmem); }
 
-    void AddGarbageMemory(size_t idx, size_t num, bool allowSaferegion = true);
+    void AddGarbageMemory(size_t idx, size_t num);
 
     size_t GetCachedBytes() const;
     // ZPartition::print_cache_on (zPageAllocator.cpp:1118-1121) for every partition.
@@ -367,7 +367,6 @@ public:
 
     RegionManager& operator=(const RegionManager&) = delete;
 
-    // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
 
 
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
@@ -455,9 +454,8 @@ public:
     ~RegionManager();
 
     // take a region with *num* units for allocation
-    // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
     ZPage* TakeRegion(size_t num, ZPageType, bool expectPhysicalMem = false,
-                           bool allowSaferegion = true, PageAge age = PageAge::old, ZAllocationFlags flags = {});
+                           PageAge age = PageAge::old, ZAllocationFlags flags = {});
 
 
 
@@ -552,7 +550,7 @@ private:
     // page table no longer publishes the old descriptor.
     void ReclaimRetiredRegion(ZPage* region);
     void ReleaseRetiredRegion(ZPage* region);
-    void ReturnRetiredPageMemory(const PageMemory& memory, bool allowSaferegion = true);
+    void ReturnRetiredPageMemory(const PageMemory& memory);
 
 
 

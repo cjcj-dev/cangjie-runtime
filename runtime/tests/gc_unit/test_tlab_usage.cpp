@@ -1,3 +1,4 @@
+#include "gc_allocation_flags.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -954,7 +955,7 @@ GC_RUNTIME_OTHER_VM_TEST(TLABRefill, FailureFallsBackOutsideTLAB)
     // Reserve every other page through the product page allocator. The shared
     // page stays installed; no synthetic result is passed to the consumer.
     std::vector<ZPage*> reserved;
-    while (ZPage* extra = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false)) {
+    while (ZPage* extra = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags())) {
         reserved.push_back(extra);
     }
     const uintptr_t before = page->GetRegionAllocPtr();

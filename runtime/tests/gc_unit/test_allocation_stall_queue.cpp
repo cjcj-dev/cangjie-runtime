@@ -1,3 +1,4 @@
+#include "gc_allocation_flags.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -32,6 +33,8 @@ extern "C" int CJ_ScheduleManagerInit();
 #include "Heap/z/zStat.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
+#include "Mutator/Handshake.h"
+#include "Heap/z/zDriverPort.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -72,7 +75,7 @@ public:
     OneUnitStallFixture()
         : manager((ZStat::Initialize(), CreateStandaloneHeap(1), Heap::GetHeap().page_allocator()))
     {
-        capacity = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false);
+        capacity = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     }
 
     void PublishCapacity()
@@ -90,8 +93,8 @@ GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWai
     fixture.PublishCapacity();
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* first = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, PageAge::eden, flags);
-    ZPage* second = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, PageAge::eden, flags);
+    ZPage* first = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, flags);
+    ZPage* second = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, flags);
     const size_t count = (first != nullptr) + (second != nullptr);
     std::fprintf(stderr, "ALLOCATION_CAPACITY_TARGET count=%zu first=%p second=%p\n", count, first, second);
     GC_EXPECT_EQ(count, size_t{1});
@@ -385,8 +388,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     }
     ZAllocationFlags nonBlocking;
     nonBlocking.set_non_blocking();
-    ZPage* competing = Heap::alloc_page(requestedBytes, ZPageType::large, false, true,
-                                      PageAge::eden, nonBlocking);
+    ZPage* competing = Heap::alloc_page(requestedBytes, ZPageType::large, false, PageAge::eden, nonBlocking);
     ConcurrentGCBreakpoints::ReleaseControl();
     deadline = std::chrono::steady_clock::now() + kHangLimit;
     while ((!done[0].load() || !done[1].load()) && std::chrono::steady_clock::now() < deadline) {
@@ -510,4 +512,122 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, OldStallSuppressesMinorAllocationRate)
 GC_RUNTIME_OTHER_VM_TEST(GcDirector, OtherStallDoesNotSuppressMinorAllocationRate)
 {
     CheckDirectorStallGate(false);
+}
+
+namespace {
+class FutureWaitHandshake final : public HandshakeClosure {
+public:
+    FutureWaitHandshake() : HandshakeClosure("future wait") {}
+    void do_thread(ThreadLocalData* tls) override
+    {
+        counted = tls->mutator != nullptr && tls->mutator->InSaferegion() &&
+                  Handshake::ForTls(tls)->observed_safe();
+    }
+    bool counted = false;
+};
+
+void CheckProductFutureWait(bool allocation)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    // Hold the real driver before it can finish the request and notify its future.
+    ZDriver::lock();
+    std::atomic<ThreadLocalData*> waiting{nullptr};
+    std::atomic<bool> done{false};
+    std::atomic<bool> release{false};
+    bool restored = false;
+    std::thread waiter([&] {
+        manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        {
+            ScopedObjectAccess access;
+            waiting.store(ThreadLocal::GetThreadLocalData(), std::memory_order_release);
+            if (allocation) {
+                (void)Heap::alloc_page(heap.GetMaxCapacity() + ZGranuleSize, ZPageType::large);
+            } else {
+                heap.RequestGC(GC_REASON_USER);
+            }
+            restored = !Mutator::GetMutator()->InSaferegion() && !Handshake::Current().observed_safe();
+        }
+        done.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    ThreadLocalData* tls = nullptr;
+    bool safe = false;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        tls = waiting.load(std::memory_order_acquire);
+        safe = tls != nullptr && tls->mutator->InSaferegion() && Handshake::ForTls(tls)->observed_safe() &&
+               !done.load(std::memory_order_acquire);
+        if (safe || done.load()) { break; }
+        std::this_thread::yield();
+    } while (std::chrono::steady_clock::now() < deadline);
+    FutureWaitHandshake operation;
+    if (safe) { Handshake::execute(&operation, tls); }
+    const bool queued = !allocation || heap.page_allocator().IsAllocationStalling();
+    std::fprintf(stderr, "FUTURE_HANDSHAKE_TARGET allocation=%d safe=%d counted=%d queued=%d done=%d\n",
+                 allocation, safe, operation.counted, queued, done.load());
+    // The product safe-state and actual handshake result enter this assertion.
+    // Exit this isolated VM before a broken waiter can prevent GC cleanup.
+    try { GC_EXPECT_TRUE(safe && operation.counted && queued && !done.load()); }
+    catch (const std::exception& error) {
+        std::fprintf(stderr, "FUTURE_HANDSHAKE_ASSERTION %s\n", error.what());
+        std::_Exit(1);
+    }
+    ZDriver::unlock();
+    deadline = std::chrono::steady_clock::now() + kHangLimit;
+    while (!done.load() && std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
+    if (!done.load()) {
+        std::fprintf(stderr, "FUTURE_COMPLETION_TARGET done=0\n");
+        std::_Exit(1);
+    }
+    release.store(true, std::memory_order_release);
+    waiter.join();
+    std::fprintf(stderr, "FUTURE_RESTORE_TARGET restored=%d\n", restored);
+    GC_EXPECT_TRUE(restored);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+} // namespace
+
+GC_RUNTIME_OTHER_VM_TEST(FutureWait966, StalledMutatorParticipatesInHandshake)
+{
+    CheckProductFutureWait(true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(FutureWait966, CollectionWaitParticipatesInHandshake)
+{
+    CheckProductFutureWait(false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(FutureWait966, GCThreadPreservesHandshakeState)
+{
+    ZDriverPort port;
+    std::atomic<HandshakeState*> state{nullptr};
+    std::atomic<bool> done{false};
+    std::atomic<bool> release{false};
+    bool unchanged = false;
+    std::thread gc([&] {
+        ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+        Handshake::Current().leave_safe();
+        state.store(&Handshake::Current(), std::memory_order_release);
+        port.send_sync(ZDriverRequest(GC_REASON_USER, 1, 1));
+        unchanged = !Handshake::Current().observed_safe() && ThreadLocal::GetMutator() == nullptr;
+        done.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        Handshake::Current().enter_safe();
+    });
+    const ZDriverRequest request = port.receive();
+    const bool blockedUnchanged = state.load() != nullptr && !state.load()->observed_safe() && !done.load();
+    port.ack();
+    while (!done.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    release.store(true, std::memory_order_release);
+    gc.join();
+    std::fprintf(stderr, "FUTURE_GC_CONTROL_TARGET blocked_unchanged=%d returned_unchanged=%d cause=%d\n",
+                 blockedUnchanged, unchanged, static_cast<int>(request.cause()));
+    GC_EXPECT_TRUE(blockedUnchanged && unchanged);
+    GC_EXPECT_EQ(request.cause(), GC_REASON_USER);
 }
