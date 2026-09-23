@@ -11,6 +11,7 @@ namespace MapleRuntime {
 class ZBarrierSet {
 public:
     static bool barrier_needed(bool isReference);
+    static void on_slowpath_allocation_exit(BaseObject* new_obj);
     static void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native, zaddress_unsafe* root);
     static void on_thread_detach(ThreadGCData& data);
 
