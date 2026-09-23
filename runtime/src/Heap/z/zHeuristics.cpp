@@ -13,11 +13,11 @@
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zNUMA.inline.hpp"
+#include "Heap/z/z_globals.hpp"
 
 namespace MapleRuntime {
 namespace {
 size_t g_maxHeapSize = 0;
-constexpr double kFragmentationLimit = 25.0;
 constexpr double kYoungCompactionLimit = 25.0;
 
 size_t round_down_pow2(size_t value)
@@ -96,7 +96,7 @@ uint32_t ZHeuristics::nconcurrent_workers() { return std::max(nworkers(25.0), 1u
 
 size_t ZHeuristics::significant_heap_overhead()
 {
-    return static_cast<size_t>(g_maxHeapSize * (kFragmentationLimit / 100));
+    return static_cast<size_t>(g_maxHeapSize * (ZFragmentationLimit / 100));
 }
 
 size_t ZHeuristics::significant_young_overhead()

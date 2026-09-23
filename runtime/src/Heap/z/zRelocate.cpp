@@ -530,18 +530,6 @@ BaseObject* ZRelocate::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner
     if (const MAddress found = owner->find(from)) {
         return reinterpret_cast<BaseObject*>(found);
     }
-    auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    if (MutatorManager::Instance().WorldStopped() && !owner->is_done()) {
-        // #498: without return barriers roots are completed eagerly. There is
-        // no concurrent page worker in this pause; reuse its in-place task.
-        ZPage* page = owner->page();
-        if (owner->from_age() != PageAge::old) {
-            manager.ForwardClaimedPage<Generation::Young>(page, owner, false, true);
-        } else {
-            manager.ForwardClaimedPage<Generation::Old>(page, owner, false, true);
-        }
-        if (const MAddress winner = owner->find(from)) return reinterpret_cast<BaseObject*>(winner);
-    }
     auto& queue = generation_relocate_queue((owner->from_age() == PageAge::old ? Generation::Old : Generation::Young));
     const auto request = queue.Add(owner);
     CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
@@ -934,27 +922,6 @@ public:
         generation->increase_compacted(otherCompacted);
     }
 
-    // The stack-root eager completion entry has no return statepoint in
-    // Cangjie. It uses this same in-place setup and object loop.
-    void compact(ZForwarding* owner)
-    {
-        forwarding = owner;
-        ZForwarding::PageWorkScope scope(owner, ZForwarding::CurrentPageWork() != owner);
-        ZPage* page = owner->page();
-        const MAddress start = page->GetRegionStart();
-        ZPage* target = start_in_place_relocation(start);
-        targets->set(page->partition_id(), owner->to_age(), target);
-        iterate_objects(page);
-        target->ResetCensusBoundary();
-        owner->in_place_relocation_finish();
-        page->MarkForwardingDone();
-        // ZGC zRelocate.cpp:1026-1037: the in-place page is retained as the
-        // relocation target and stays live; route it out of the From role at
-        // this completion branch so no later role scan can reclaim it.
-        ZPageRole expect = ZPageRole::From;
-        (void)page->CASRegionRole(expect, ZPageRole::None);
-    }
-
     // ZGC zRelocate.cpp:977-985,1031: detach before clearing the old bitmap.
     void clear_remset_before_in_place_reuse(ZPage* page)
     {
@@ -1041,9 +1008,7 @@ private:
     }
     ZPage* start_in_place_relocation(MAddress watermark)
     {
-        if (forwarding->ref_count().load(std::memory_order_acquire) > 0) {
-            forwarding->in_place_relocation_claim_page();
-        }
+        forwarding->in_place_relocation_claim_page();
         forwarding->in_place_relocation_start(watermark);
         ZPage* source = forwarding->page();
         ZPage* target = forwarding->is_promotion()
@@ -1111,30 +1076,6 @@ void ForwardTask<G>::work()
 template class ForwardTask<Generation::Young>;
 template class ForwardTask<Generation::Old>;
 
-template<Generation G>
-void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed, bool inPlace)
-{
-    if (!owner || (!claimed && !owner->claim())) { return; }
-    ZForwarding::PageWorkScope pageWork(owner);
-    ZGeneration* generation = &Heap::GetHeap().GetZGeneration(
-        G == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
-    ZRelocationTargets targets;
-    ZRelocateSmallAllocator allocator(generation);
-    ZRelocateWork<ZRelocateSmallAllocator> work(&allocator, &targets, generation);
-    if (inPlace) {
-        NoteInPlaceRelocated(region);
-        work.compact(owner);
-        if (owner->from_age() == PageAge::old) { owner->relocated_remembered_fields_after_relocate(); }
-        if (owner->ref_count().load(std::memory_order_acquire) != 0) { owner->release_page(); }
-        ZPage* source = owner->detach_page();
-        work.clear_remset_before_in_place_reuse(source);
-    } else {
-        work.do_forwarding(owner);
-    }
-    owner->mark_done();
-    (void)generation->relocate().queue()->Complete(owner);
-}
-
 
 namespace {
 void WaitCopiedObjectsUnlocked(ZPage* region)
@@ -1166,22 +1107,6 @@ void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn
 }
 
 } // namespace
-
-void RegionManager::CompactRegion(ZPage* region)
-{
-    ZForwarding* owner = forwarding_for_page(region);
-    CHECK(owner != nullptr);
-    ZGeneration* generation = &Heap::GetHeap().GetZGeneration(
-        owner->from_age() == PageAge::old ? ZGenerationId::old : ZGenerationId::young);
-    ZRelocationTargets targets;
-    ZRelocateSmallAllocator allocator(generation);
-    ZRelocateWork<ZRelocateSmallAllocator> work(&allocator, &targets, generation);
-    work.compact(owner);
-}
-
-
-template void RegionManager::ForwardClaimedPage<Generation::Young>(ZPage*, ZForwarding*, bool, bool);
-template void RegionManager::ForwardClaimedPage<Generation::Old>(ZPage*, ZForwarding*, bool, bool);
 
 } // namespace MapleRuntime
 
@@ -1575,13 +1500,6 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
     const MAddress from = reinterpret_cast<MAddress>(object);
     if (const MAddress to = forwarding->find(from)) {
         return reinterpret_cast<BaseObject*>(to);
-    }
-    // Cangjie has no return statepoints: eager root repair also enters through
-    // coloured static/export roots before concurrent workers are submitted.
-    // Reuse the existing stopped-world page completion adapter (ZGC's ordinary
-    // concurrent retain/wait path is zRelocate.cpp:382-410).
-    if (MutatorManager::Instance().WorldStopped()) {
-        return WaitForPageForwarding(object, forwarding);
     }
     ZPage::RetainScope lease{forwarding};
     if (lease.ok()) {
