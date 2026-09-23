@@ -46,6 +46,7 @@ public:
     static AllocBuffer* GetAllocBuffer();
 
     MAddress Allocate(size_t size, AllocType allocType);
+    MAddress AllocateImpl(size_t totalSize, AllocType allocType);
     ZPage* GetRegion() const;
     size_t TLABSize() const { return tlab.end - tlab.start; }
     void FillTLAB(uintptr_t start, size_t size);
@@ -61,10 +62,6 @@ public:
     void RetireTLAB(bool gcWaste);
 
 private:
-
-    // slow path
-    MAddress TryAllocateOnce(size_t totalSize, AllocType allocType);
-    MAddress AllocateImpl(size_t totalSize, AllocType allocType);
 
     // Inline TLAB bounds, as in HotSpot ThreadLocalAllocBuffer.
     // Compiler offsets are checked by check-cangjie-tlab-layout.py.

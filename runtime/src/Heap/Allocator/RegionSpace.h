@@ -111,6 +111,7 @@ public:
 private:
     Uncommitter uncommitter{*this};
     MAddress TryAllocateOnce(size_t allocSize, AllocType allocType);
+    MAddress AllocateOutsideTLAB(size_t allocSize, AllocType allocType);
 
 };
 } // namespace MapleRuntime
