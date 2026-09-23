@@ -206,21 +206,24 @@ static ZDriverRequest rule_minor_allocation_rate_dynamic(const ZDirectorStats& s
 static ZDriverRequest rule_soft_minor_allocation_rate_dynamic(const ZDirectorStats& stats,
     double serial_gc_time_passed, double parallel_gc_time_passed)
 {
-    return rule_minor_allocation_rate_dynamic(stats, serial_gc_time_passed, parallel_gc_time_passed, false,
+    return rule_minor_allocation_rate_dynamic(stats, 0.0 /* serial_gc_time_passed */,
+        0.0 /* parallel_gc_time_passed */, false,
         stats.heap.soft_max_heap_size);
 }
 
 static ZDriverRequest rule_semi_hard_minor_allocation_rate_dynamic(const ZDirectorStats& stats,
     double serial_gc_time_passed, double parallel_gc_time_passed)
 {
-    return rule_minor_allocation_rate_dynamic(stats, serial_gc_time_passed, parallel_gc_time_passed, false,
+    return rule_minor_allocation_rate_dynamic(stats, 0.0 /* serial_gc_time_passed */,
+        0.0 /* parallel_gc_time_passed */, false,
         stats.max_capacity);
 }
 
 static ZDriverRequest rule_hard_minor_allocation_rate_dynamic(const ZDirectorStats& stats,
     double serial_gc_time_passed, double parallel_gc_time_passed)
 {
-    return rule_minor_allocation_rate_dynamic(stats, serial_gc_time_passed, parallel_gc_time_passed, true,
+    return rule_minor_allocation_rate_dynamic(stats, 0.0 /* serial_gc_time_passed */,
+        0.0 /* parallel_gc_time_passed */, true,
         stats.max_capacity);
 }
 

@@ -107,12 +107,40 @@ namespace MapleRuntime {
 
 static const ZStatSubPhase PRemapYoungRoots("RemapYoungRoots", ZGenerationId::old);
 
+// ZGC zRelocate.cpp:1051-1078: claim each thread once across the workers.
+class ZRelocateStoreBufferInstallBasePointersThreadClosure {
+public:
+    void do_thread(Mutator& mutator)
+    {
+        mutator.GetGCData().storeBarrierBuffer->install_base_pointers();
+    }
+};
+
+class ZRelocateStoreBufferInstallBasePointersTask final : public ZTask {
+    JavaThreadsIterator threads;
+public:
+    explicit ZRelocateStoreBufferInstallBasePointersTask(ZGeneration* generation)
+        : ZTask("ZRelocateStoreBufferInstallBasePointersTask"), threads(generation->id_optional()) {}
+
+    void work() override
+    {
+        ZRelocateStoreBufferInstallBasePointersThreadClosure closure;
+        threads.Apply([&](Mutator& mutator) { closure.do_thread(mutator); });
+    }
+};
+
 // ZGC zRelocate.cpp:1289: both generations submit their installed set.
 void ZRelocate::relocate(ZRelocationSet* relocation_set)
 {
     CHECK(relocation_set->generation() == generation);
     auto& manager = Heap::GetHeap().page_allocator();
     ZWorkers& workers = *generation->Workers();
+    {
+        // ZGC zRelocate.cpp:1289-1296: preserve object starts before page
+        // relocation destroys the liveness information used to find them.
+        ZRelocateStoreBufferInstallBasePointersTask bufferTask(generation);
+        workers.run(&bufferTask);
+    }
     if (!relocateQueue.IsActive()) {
         StartRelocationTasks(generation->id());
     }
@@ -749,7 +777,7 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge toAge = forwarding_for_page(copyPage)->to_age();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc(size, toAge, true));
+    BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc_for_relocation(size, toAge));
     if (toObj == nullptr) return nullptr;
     BaseObject* result = nullptr;
     ZForwarding* publication = forwarding_for_page(copyPage);

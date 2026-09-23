@@ -13,9 +13,11 @@
 // gc_heap_fixture.hpp opens the product privates for the harness; it has to
 // come before every product header this file names.
 #include "gc_heap_fixture.hpp"
+#include "gc_verify_fixture.hpp"
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
+#include "Mutator/MutatorManager.h"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zValue.inline.hpp"
 #include "gc_unittest.hpp"
@@ -91,6 +93,7 @@ GC_TEST(ZValue, per_worker_slot_count_follows_conc_gc_threads)
 // zObjectAllocator.cpp:198-203).
 GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
 {
+    VerifyRuntime runtime;
     ZStat::Initialize();
 
     auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::eden);
@@ -102,7 +105,7 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     GC_EXPECT_TRUE(allocator.shared_small_page_addr() == allocator.sharedSmallPage.addr(expectedCpu));
 
     // An allocation installs the current CPU's slot and no other slot.
-    const uintptr_t first = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
+    const uintptr_t first = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::eden);
     GC_EXPECT_TRUE(first != 0);
     const uint32_t cpu = ZHeuristics::use_per_cpu_shared_small_pages() ? ZCPU::id() : 0;
     GC_EXPECT_TRUE(allocator.sharedSmallPage.get(cpu) == Heap::page(first));
@@ -113,7 +116,10 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     }
 
     // retire_pages: every slot of the age is cleared.
-    Heap::GetHeap().object_allocator().retire_pages(PageAgeRange::create<PageAge::eden, PageAge::survivor1>());
+    {
+        ScopedStopTheWorld stopped("object allocator retirement");
+        Heap::GetHeap().object_allocator().retire_pages(PageAgeRange::create<PageAge::eden, PageAge::survivor1>());
+    }
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(other) == nullptr);
     }
