@@ -16,21 +16,14 @@
 #include "Common/OopStorage.h"
 #include "Common/PageAllocator.h"
 #include "Heap/z/zValue.hpp"
+#include "Heap/z/zReferenceDiscoverer.hpp"
 #include "Heap/z/zValue.inline.hpp"
 
 namespace MapleRuntime {
 
-enum class ReferenceType : uint8_t {
-    SOFT = 0,
-    WEAK,
-    FINAL,
-    PHANTOM,
-    COUNT,
-};
-
 class ZWorkers;
 
-class ReferenceProcessor {
+class ReferenceProcessor : public ReferenceDiscoverer {
     friend class ZReferenceProcessorTask;
 
 public:
@@ -48,7 +41,7 @@ public:
     bool uses_clear_all_soft_reference_policy() const;
 
     void reset_statistics();
-    bool DiscoverReference(BaseObject* reference, ReferenceType type);
+    bool discover_reference(BaseObject* reference, ReferenceType type) override;
     void process_references();
     void ProcessReferences(const IsStronglyLive& isStronglyLive);
     void EnqueueReferences(const EnqueueFinal& enqueueFinal);

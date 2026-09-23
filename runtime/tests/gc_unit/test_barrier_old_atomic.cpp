@@ -52,6 +52,8 @@
 
 #include "gc_generation_test.hpp"
 
+#include "Heap/z/zAccess.hpp"
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -172,7 +174,7 @@ GC_TEST(BarrierOldAtomic, NoAllocBufferOverwriteRetiresOldValue)
     MutatorScope mutatorScope(mutator);
     AllocBufferScope noBuffer(nullptr);
 
-    ZBarrier::WriteReference(fixture.holder, *fixture.field, fixture.newValue);
+    HeapAccess<>::oop_store(&(*fixture.field), fixture.newValue);
     ThreadLocal::GetGCData().storeBarrierBuffer->Flush();
     const ReceiptCounts receipts = DrainReceipts(fixture.oldValue, fixture.newValue);
     const bool slotRemembered = SlotPageRemembered(reinterpret_cast<MAddress>(fixture.field));
@@ -197,7 +199,7 @@ GC_TEST(BarrierOldAtomic, AllocBufferOverwriteRetiresOldValueControl)
     AllocBuffer alloc;
     AllocBufferScope withBuffer(&alloc);
 
-    ZBarrier::WriteReference(fixture.holder, *fixture.field, fixture.newValue);
+    HeapAccess<>::oop_store(&(*fixture.field), fixture.newValue);
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
     ThreadLocal::GetGCData().storeBarrierBuffer->Flush();
     mutator.FlushStoreBarrierBuffer(false);
@@ -283,13 +285,15 @@ GC_TEST(BarrierOldAtomic, NativeBulkLoadBadSourceResolvesBeforeHeapPublication)
     HeapSlot<>& destination = HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     destination.StoreColoured(zpointer::null);
 
-    ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(&destination), reinterpret_cast<MAddress>(&source),
-                            sizeof(source), heap.typeInfo->GetGCTib());
+    NativeAccess<>::value_copy(
+        ValuePayload(reinterpret_cast<MAddress>(&source), sizeof(source), heap.typeInfo->GetGCTib(), ValuePayload::Kind::Native),
+        ValuePayload(reinterpret_cast<MAddress>(&destination), sizeof(source), ValuePayload::Kind::Heap));
 
     GC_EXPECT_EQ(destination.GetFieldValue(), StoreGoodPointer(heap.obj0));
     RootSlot local;
-    ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(&local), reinterpret_cast<MAddress>(&source),
-                            sizeof(source), heap.typeInfo->GetGCTib());
+    NativeAccess<>::value_copy(
+        ValuePayload(reinterpret_cast<MAddress>(&source), sizeof(source), heap.typeInfo->GetGCTib(), ValuePayload::Kind::Native),
+        ValuePayload(reinterpret_cast<MAddress>(&local), sizeof(source), ValuePayload::Kind::Uncolored));
     GC_EXPECT_EQ(raw(local.LoadPlain()), reinterpret_cast<uintptr_t>(heap.obj0));
 }
 

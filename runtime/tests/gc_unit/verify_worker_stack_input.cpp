@@ -10,6 +10,8 @@
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/RefField.inline.h"
 #include <cstdio>
+#include "Heap/z/zAccess.hpp"
+
 using namespace MapleRuntime;
 
 // Test ELF symbols name an already allocated input and its real owner. GDB
@@ -49,7 +51,7 @@ int main()
                  p16_mark, p16_worker, p16_prepared, object);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    BaseObject* actual = ZBarrier::ReadStaticRef(*root);
+    BaseObject* actual = NativeAccess<>::oop_load(&(*root));
     const bool matched = actual == object && p16_worker->markStacks[1].IsEmpty();
     std::fprintf(stderr, "VERIFY_WORKER_COMPLETION_ASSERT_EXECUTED root=%p expected=%p matched=%d\n",
                  actual, object, matched);

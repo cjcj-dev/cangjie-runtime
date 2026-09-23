@@ -35,8 +35,8 @@ GC_TEST(ReferenceProcessor, UnsupportedKindsFailClosed)
     alignas(8) unsigned char storage[16] = {};
     auto* object = reinterpret_cast<BaseObject*>(storage);
 
-    GC_EXPECT_TRUE(!processor.DiscoverReference(object, ReferenceType::SOFT));
-    GC_EXPECT_TRUE(!processor.DiscoverReference(object, ReferenceType::PHANTOM));
+    GC_EXPECT_TRUE(!processor.discover_reference(object, ReferenceType::SOFT));
+    GC_EXPECT_TRUE(!processor.discover_reference(object, ReferenceType::PHANTOM));
     GC_EXPECT_TRUE(processor.Empty());
     GC_EXPECT_EQ(processor.Discovered(ReferenceType::SOFT), static_cast<size_t>(0));
     GC_EXPECT_EQ(processor.Discovered(ReferenceType::PHANTOM), static_cast<size_t>(0));
@@ -49,7 +49,7 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
+    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
 
     processor.ProcessReferences([](BaseObject*) { return false; });
     BaseObject* enqueued = nullptr;
@@ -72,8 +72,8 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryIsClaimedOnce)
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
-    (void)processor.DiscoverReference(fx.obj0, ReferenceType::FINAL);
-    (void)processor.DiscoverReference(fx.obj0, ReferenceType::FINAL);
+    (void)processor.discover_reference(fx.obj0, ReferenceType::FINAL);
+    (void)processor.discover_reference(fx.obj0, ReferenceType::FINAL);
     const size_t discovered = processor.Discovered(ReferenceType::FINAL);
     processor.ProcessReferences([](BaseObject*) { return false; });
     size_t queued = 0;
@@ -92,7 +92,7 @@ GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
 
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
+    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
     processor.ProcessReferences([](BaseObject*) { return false; });
     size_t enqueued = 0;
     processor.EnqueueReferences([&](BaseObject*) {
@@ -115,7 +115,7 @@ GC_TEST(ReferenceProcessor, StrongWeakReferentIsNotCleared)
 
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
+    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([&](BaseObject* value) { return value == fx.obj1; });
     processor.EnqueueReferences([](BaseObject*) { return true; });
 
@@ -133,7 +133,7 @@ GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
 
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
+    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([](BaseObject*) { return false; });
     // Weak clearing precedes the rendezvous/unblock/enqueue boundary.
     GC_EXPECT_TRUE(is_null(referent.GetTargetObject()));
@@ -155,7 +155,7 @@ GC_TEST(ReferenceProcessor, ProcessConsumerPreservesReplacementReferent)
 
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
+    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::WEAK));
     // Publish a strongly live replacement through the normal liveness callback.
     // The consumer must reload the slot before deciding to clear/enqueue it.
     (void)RegionSpace::MarkObject<Generation::Old>(replacement);
@@ -186,8 +186,8 @@ GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
 
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
+    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::WEAK));
+    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([](BaseObject*) { return false; });
     processor.EnqueueReferences([](BaseObject*) { return true; });
 
@@ -204,7 +204,7 @@ GC_TEST(ReferenceProcessor, ProcessReferencesRunsOnBoundWorkers)
     GcHeapFixture fx;
     ReferenceProcessor processor(&pool);
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
+    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
     processor.ProcessReferences([](BaseObject*) { return false; });
     BaseObject* enqueued = nullptr;
     processor.EnqueueReferences([&](BaseObject* value) {
@@ -241,7 +241,7 @@ GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
         workers.emplace_back([&, worker] {
             WorkerFixture id(static_cast<uint32_t>(worker));
             for (size_t i = 0; i < kPerWorker; ++i) {
-                (void)processor.DiscoverReference(objects[worker * kPerWorker + i], ReferenceType::FINAL);
+                (void)processor.discover_reference(objects[worker * kPerWorker + i], ReferenceType::FINAL);
             }
         });
     }
@@ -267,7 +267,7 @@ GC_TEST(ReferenceProcessor, ProcessReferencesFromNonWorkerCaller)
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     {
         WorkerFixture discover(0);
-        GC_EXPECT_TRUE(bound.processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
+        GC_EXPECT_TRUE(bound.processor.discover_reference(fx.obj0, ReferenceType::FINAL));
     }
     GC_EXPECT_EQ(WorkerThread::worker_id(), UINT32_MAX);
     bound.processor.ProcessReferences([](BaseObject*) { return false; });

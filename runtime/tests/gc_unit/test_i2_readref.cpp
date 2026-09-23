@@ -16,6 +16,8 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
+#include "Heap/z/zAccess.hpp"
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -33,7 +35,7 @@ GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
     GC_EXPECT_TRUE(remap != 0);
     field->StoreColoured(GcUnit::ColouredPointer(fx.obj0, remap));
 
-    BaseObject* got = ZBarrier::ReadReference(fx.obj0, *field);
+    BaseObject* got = HeapAccess<>::oop_load(&(*field));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.obj0));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(to_object(field->GetTargetObject())),
                  reinterpret_cast<uintptr_t>(fx.obj0));
@@ -51,7 +53,7 @@ GC_TEST(I2ReadRef, LoadGoodColourSelectsFastPath)
     const uintptr_t remap = ZPointerRemapped;
     const auto good = GcUnit::ColouredPointer(fx.obj0, remap);
     field.StoreColoured(good);
-    GC_EXPECT_TRUE(ZBarrier::ReadReference(fx.obj1, field) == fx.obj0);
+    GC_EXPECT_TRUE(HeapAccess<>::oop_load(&(field)) == fx.obj0);
     GC_EXPECT_EQ(raw(field.GetFieldValue()), raw(good));
 }
 
@@ -67,7 +69,7 @@ GC_TEST(I2ReadRef, LoadBadHeapSlotIsHealedToCurrentColour)
     const auto previous = GcUnit::ColouredPointer(fx.obj0, stale & (~stale + 1));
     field->StoreColoured(previous);
 
-    BaseObject* got = ZBarrier::ReadReference(fx.obj1, *field);
+    BaseObject* got = HeapAccess<>::oop_load(&(*field));
     GC_EXPECT_TRUE(got == fx.obj0);
     GC_EXPECT_TRUE(ClassifySlotWord(static_cast<uintptr_t>(raw(field->GetFieldValue()))) ==
                    SlotWordVerdict::kColoured);
