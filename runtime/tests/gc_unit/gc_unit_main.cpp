@@ -68,5 +68,5 @@ int main(int argc, char** argv)
     if (MapleRuntime::Heap::heap() != nullptr) {
         MapleRuntime::Heap::GetHeap().StopGCWork();
     }
-    return result;
+    return MapleRuntime::GcUnit::CompleteTestRun(result);
 }

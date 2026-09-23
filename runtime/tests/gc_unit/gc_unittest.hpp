@@ -365,11 +365,22 @@ inline int RunAll()
             }
         }
     }
-    if (otherVmChild != nullptr && failed == 0) {
+    return failed == 0 && tallyWritten && (filter == nullptr || tests != 0) ? 0 : 1;
+}
+
+// HotSpot unittest.hpp:85-94: the caller completes ordered VM shutdown before
+// publishing completion. Return to libc exit, just like gtest_exit_from_child_vm
+// -> os::exit (unittest.cpp:28, os_posix.cpp:985); atexit remains enabled.
+inline int CompleteTestRun(int result)
+{
+    const char* otherVmChild = std::getenv("GC_UNIT_OTHER_VM_CHILD");
+    if (otherVmChild != nullptr && result == 0 && std::getenv("GC_UNIT_LIST_TESTS") == nullptr) {
+        std::fflush(stderr);
+        std::fflush(stdout);
         std::fprintf(stderr, "GC_UNIT_OTHER_VM_OKIDOKI %s\n", otherVmChild);
         std::fflush(stderr);
     }
-    return failed == 0 && tallyWritten && (filter == nullptr || tests != 0) ? 0 : 1;
+    return result;
 }
 
 } // namespace GcUnit

@@ -585,3 +585,15 @@ GC_OTHER_VM_TEST(RuntimeWorkers, HeapStopJoinsRuntimePool)
     GC_EXPECT_EQ(workers->created_workers(), 0u);
     GC_EXPECT_EQ(workers->active_workers(), 0u);
 }
+
+// The external teardown-order runner observes this real main/heap at the
+// shutdown and completion boundaries; the body never stops the pool itself.
+GC_OTHER_VM_TEST(RuntimeWorkers, ActivePoolBeforeHarnessShutdown)
+{
+    WorkerThreads* workers = ZCollectedHeap::heap()->safepoint_workers();
+    GC_EXPECT_TRUE(workers != nullptr);
+    GC_EXPECT_TRUE(workers->created_workers() > 0);
+    GC_EXPECT_TRUE(workers->active_workers() > 0);
+    std::fprintf(stderr, "RUNTIME_WORKERS_LIVE created=%u active=%u\n",
+                 workers->created_workers(), workers->active_workers());
+}
