@@ -74,6 +74,18 @@
 namespace MapleRuntime {
 
 
+// ZGC zBarrierSetRuntime.cpp:29-39: the slow tier consumes the value
+// already observed by the compiled load, even if another store changed *p.
+extern "C" MRT_EXPORT ObjectPtr CJ_MCC_LoadBarrierOnOopFieldPreloaded(ObjectPtr o, volatile zpointer* p)
+{
+    return ZBarrierSetRuntime::load_barrier_on_oop_field_preloaded(o, p);
+}
+
+extern "C" MRT_EXPORT ObjectPtr CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(ObjectPtr o, volatile zpointer* p)
+{
+    return ZBarrierSetRuntime::load_barrier_on_weak_oop_field_preloaded(o, p);
+}
+
 // ZGC zBarrierSetRuntime.cpp: store-only slow tiers return before the store.
 extern "C" MRT_EXPORT void CJ_MCC_StoreBarrierOnHeapField(volatile zpointer* slot)
 {
@@ -90,6 +102,7 @@ extern "C" MRT_EXPORT void CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(volatile zp
 // Remove these exports with the paired LLVM constant-offset lowering.
 extern "C" MRT_EXPORT const uintptr_t g_cjThreadGCDataOffset = offsetof(ThreadLocalData, gcData);
 extern "C" MRT_EXPORT const uintptr_t g_cjLoadBadMaskOffset = ThreadGCData::load_bad_mask_offset();
+extern "C" MRT_EXPORT const uintptr_t g_cjMarkBadMaskOffset = ThreadGCData::mark_bad_mask_offset();
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBadMaskOffset = ThreadGCData::store_bad_mask_offset();
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreGoodMaskOffset = ThreadGCData::store_good_mask_offset();
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferOffset = ThreadGCData::store_barrier_buffer_offset();
@@ -1929,6 +1942,8 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
 
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
+    // Existing compiled callers still use this entry until cjcj-llvm#18
+    // switches their slow paths to the preloaded ZBarrierSetRuntime entries.
     if (Heap::IsHeapAddress(field)) {
         return ZBarrier::ReadReference(obj, *field);
     }

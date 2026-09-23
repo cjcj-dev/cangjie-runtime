@@ -2753,3 +2753,6 @@ EXPORTS
     g_cjStoreBarrierEntrySize @3512 DATA
     g_cjStoreBarrierEntryPOffset @3513 DATA
     g_cjStoreBarrierEntryPrevOffset @3514 DATA
+    CJ_MCC_LoadBarrierOnOopFieldPreloaded @3515
+    CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded @3516
+    g_cjMarkBadMaskOffset @3517 DATA

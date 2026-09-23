@@ -72,11 +72,6 @@ BaseObject* ZBarrierSetRuntime::load_barrier_on_weak_oop_field_preloaded(BaseObj
     return to_object(ZBarrier::load_barrier_on_weak_oop_field_preloaded(p, to_zpointer(reinterpret_cast<uintptr_t>(o))));
 }
 
-BaseObject* ZBarrierSetRuntime::load_barrier_on_phantom_oop_field_preloaded(BaseObject* o, volatile zpointer* p)
-{
-    return to_object(ZBarrier::load_barrier_on_phantom_oop_field_preloaded(p, to_zpointer(reinterpret_cast<uintptr_t>(o))));
-}
-
 void ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing(volatile zpointer* p)
 {
     ZBarrier::store_barrier_on_heap_oop_field(p, false);

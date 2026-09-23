@@ -11,7 +11,7 @@
 #include <cstdio>
 #include <cstring>
 using namespace MapleRuntime;
-extern "C" BaseObject* CJ_MCC_ReadStaticRef(NativeSlot*);
+extern "C" BaseObject* CJ_MCC_LoadBarrierOnOopFieldPreloaded(BaseObject*, volatile zpointer*);
 int main(int argc, char** argv)
 {
     if (argc != 2 || !ZVerifyOops) { return 78; }
@@ -45,10 +45,12 @@ int main(int argc, char** argv)
     BaseObject* result;
     if (safe) {
         (void)mutator->EnterSaferegion(false);
-        result = CJ_MCC_ReadStaticRef(&slot);
+        result = CJ_MCC_LoadBarrierOnOopFieldPreloaded(
+            reinterpret_cast<BaseObject*>(raw(slot.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&slot));
     } else {
         ScopedObjectAccess access;
-        result = CJ_MCC_ReadStaticRef(&slot);
+        result = CJ_MCC_LoadBarrierOnOopFieldPreloaded(
+            reinterpret_cast<BaseObject*>(raw(slot.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&slot));
     }
     std::fprintf(stderr, "DEBUG_PRODUCT_ACCESS_RETURNED mode=%s result=%p\n", argv[1], result);
     if (!invalid && result != expected) { return 82; }

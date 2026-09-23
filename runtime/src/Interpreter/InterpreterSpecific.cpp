@@ -15,6 +15,7 @@
 #include "ExceptionManager.inline.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zMark.hpp"
 #include "securec.h"
 #include "Interpreter/RTInterface.h"
@@ -405,6 +406,9 @@ void WriteStaticField(DYN_FieldRef destination, DYN_ObjRef new_value)
 DYN_ObjRef ReadInstanceField(DYN_ObjRef source, DYN_FieldRef field)
 {
     DLOG(INTERPRETER, "ReadInstanceField %p %p", source, field);
+    if (Heap::IsHeapAddress(field)) {
+        return to_object(ZBarrierSet::oop_load_in_heap(static_cast<volatile zpointer*>(field)));
+    }
     return CJ_MCC_ReadRefField(static_cast<BaseObject*>(source), static_cast<RefField<false>*>(field));
 }
 
