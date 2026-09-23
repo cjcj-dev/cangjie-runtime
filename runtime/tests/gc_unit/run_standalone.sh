@@ -723,10 +723,17 @@ fi
 GC_UNIT_MAIN_ENV=''
 GC_UNIT_MAIN_ENV=${GC_UNIT_MAIN_ENV%$'\n'}
 export GC_UNIT_MAIN_ENV
+"$CXX" -std=c++17 -pthread "$SRC/test_other_vm_exit.cpp" -o "$OUT/cj_gc_other_vm_exit_unit"
+sha256sum "$OUT/cj_gc_other_vm_exit_unit" > "$OUT/other_vm_exit.sha256"
 set +e
+"$OUT/cj_gc_other_vm_exit_unit" > "$OUT/other_vm_exit.log" 2>&1
+other_vm_exit_rc=$?
+cat "$OUT/other_vm_exit.log"
+echo "GC_UNIT_OTHER_VM_EXIT_RC=$other_vm_exit_rc"
 bash "$SRC/run_parallel_tests.sh" \
   "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" "$OUT" "$RUNTIME_LIB_DIR"
 runner_rc=$?
 set -e
 
+if [[ "$other_vm_exit_rc" -ne 0 ]]; then exit "$other_vm_exit_rc"; fi
 exit "$runner_rc"
