@@ -41,14 +41,38 @@ namespace MapleRuntime {
 
 static const ZStatPhaseCollection ZPhaseCollectionMajor("Major Collection", false);
 static const ZStatPhaseCollection ZPhaseCollectionMinor("Minor Collection", true);
-std::mutex ZDriver::driverLock;
+ZLock* ZDriver::_lock;
+ZDriverMinor* ZDriver::_minor;
+ZDriverMajor* ZDriver::_major;
 
 static bool ShouldPrecleanYoung(GCReason reason);
 static bool ShouldClearAllSoftReferences(GCReason reason);
 
-void ZDriver::lock() { driverLock.lock(); }
+void ZDriver::initialize() { _lock = new ZLock(); }
 
-void ZDriver::unlock() { driverLock.unlock(); }
+void ZDriver::lock() { _lock->lock(); }
+
+void ZDriver::unlock() { _lock->unlock(); }
+
+void ZDriver::set_minor(ZDriverMinor* minor) { _minor = minor; }
+
+void ZDriver::set_major(ZDriverMajor* major) { _major = major; }
+
+ZDriverMinor* ZDriver::minor() { return _minor; }
+
+ZDriverMajor* ZDriver::major() { return _major; }
+
+ZDriverMinor::ZDriverMinor() : ZDriver(GCDriverKind::MINOR, _port)
+{
+    ZDriver::set_minor(this);
+    create_and_start();
+}
+
+ZDriverMajor::ZDriverMajor() : ZDriver(GCDriverKind::MAJOR, _port)
+{
+    ZDriver::set_major(this);
+    create_and_start();
+}
 
 extern "C" uintptr_t MRT_StopGCWork()
 {
@@ -109,9 +133,14 @@ void ZDriver::terminate()
     port.send_async(ZDriverRequest(GC_REASON_INVALID, 0, 0));
 }
 
-bool ZDriver::is_busy() const
+bool ZDriverMinor::is_busy() const
 {
-    return port.is_busy();
+    return _port.is_busy();
+}
+
+bool ZDriverMajor::is_busy() const
+{
+    return _port.is_busy();
 }
 
 void ZDriverMinor::collect(const ZDriverRequest& request)
@@ -202,7 +231,7 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
             request.cause(), GCTask::ASYNC_TASK_INDEX);
         const bool preclean = ShouldPrecleanYoung(request.cause());
         if (preclean) {
-            ZCollectedHeap::heap()->driver_major()->RunYoungCollection(
+            ZDriver::major()->RunYoungCollection(
                 GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean);
             accumulate(ZGenerationId::young);
             if (ZAbort::should_abort()) {
@@ -211,7 +240,7 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
                 return false;
             }
         }
-        ZCollectedHeap::heap()->driver_major()->RunYoungCollection(GCTask::ASYNC_TASK_INDEX,
+        ZDriver::major()->RunYoungCollection(GCTask::ASYNC_TASK_INDEX,
             preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots);
         accumulate(ZGenerationId::young);
         if (ZAbort::should_abort()) {
@@ -230,11 +259,11 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
     const uint64_t index = GCTask::ASYNC_TASK_INDEX;
     if (kind == GCDriverKind::MINOR) {
         ZGCIdMinor minorId(GCIdMark::Current());
-        ZCollectedHeap::heap()->driver_minor()->RunYoungCollection(index, ZYoungType::minor);
+        ZDriver::minor()->RunYoungCollection(index, ZYoungType::minor);
         accumulate(ZGenerationId::young);
     } else {
         ZGCIdMajor majorId(GCIdMark::Current(), 'O');
-        ZCollectedHeap::heap()->driver_major()->RunGarbageCollection(index, request.cause());
+        ZDriver::major()->RunGarbageCollection(index, request.cause());
         accumulate(ZGenerationId::old);
     }
     (kind == GCDriverKind::MINOR ? ZPhaseCollectionMinor : ZPhaseCollectionMajor)

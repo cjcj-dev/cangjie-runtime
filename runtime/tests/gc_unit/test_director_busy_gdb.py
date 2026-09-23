@@ -38,7 +38,7 @@ LINES = {
     'minor_major': line_in('static GCReason make_minor_gc_decision', 'resize.is_active'),
     'select': line_in('static void start_minor_gc', '? ZWorkerSelectionType'),
     'resize': line_in('static void start_minor_gc', 'if ('),
-    'send': line_in('static void start_minor_gc', 'driver_minor()->collect'),
+    'send': line_in('static void start_minor_gc', 'ZDriver::minor()->collect'),
     'merge': line_in('static bool start_gc', 'rule_major_allocation_rate(stats)'),
     'sample': line_in('static ZDirectorStats sample_stats', 'stats.mutator_alloc_rate'),
     'tick': line_in('static ZDirectorStats sample_stats', 'const uint64_t now'),
