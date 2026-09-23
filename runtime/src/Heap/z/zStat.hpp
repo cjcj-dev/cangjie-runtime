@@ -218,7 +218,6 @@ private:
     // Keep that link writable when constant initialization places its owner in RELRO.
     mutable ZStatSampler* next;
     const ZStatUnitPrinter printer;
-    void Sample(uint64_t value) const;
 };
 
 // zStat.hpp:285-303, zStat.cpp:460-487
@@ -479,7 +478,7 @@ public:
     size_t GarbageAtMarkEnd() const;
     size_t UsedAtRelocateEnd() const;
     size_t UsedAtCollectionEnd() const;
-    // Host pacing/readback (zDriver epilogue, rec=cycle): the reclaimed
+    // Host statistics readback (zDriver epilogue, rec=cycle): the reclaimed
     // figure of the finished collection.
     size_t ReclaimedAtRelocateEnd() const;
     size_t StallsAtMarkStart() const;

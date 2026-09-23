@@ -142,20 +142,6 @@ inline void RegionManager::PrepareTrace()
         // is_allocating (zPage.inline.hpp:180-186) is the only filter.
     }
 
-inline void RegionManager::ReleaseMarkQuarantine()
-    {
-        size_t heldBefore = freeRegionManager.GetMarkQuarantineBytes();
-        size_t bytes = freeRegionManager.ReleaseMarkQuarantineToDirty();
-        VLOG(REPORT,
-             "[MarkQuarantine] released_bytes=%zu held_before=%zu held_after=%zu",
-             bytes, heldBefore, freeRegionManager.GetMarkQuarantineBytes());
-        // Cost metric same family as ghostorder: peak retained bytes under mark-epoch gate.
-        VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", heldBefore,
-             heldBefore);
-        SatisfyStalledAllocations();
-    }
-
-
 inline ZPage* RegionManager::TakeReclaimableGarbageRegion(size_t* gatedBytes)
     {
         // #710: garbage pages are page-table entries with the Garbage role.
