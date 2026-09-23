@@ -309,10 +309,6 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         return;
     }
 
-    if (reason == GC_REASON_OOM) {
-        Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(true);
-    }
-
     cycle.PostGarbageCollection(gcIndex);
     const uint64_t gcEndTimeNs = TimeUtil::NanoSeconds();
     const char* phaseName = "major.old";

@@ -63,6 +63,29 @@ inline uintptr_t ZPage::alloc_object(size_t size)
     return untype(ZOffset::address_unsafe(to_zoffset(addr)));
 }
 
+// ZGC zPage.inline.hpp:451-479: page-local atomic allocation is visible to callers.
+inline uintptr_t ZPage::alloc_object_atomic(size_t size)
+{
+    MRT_ASSERT(is_allocating(), "Invalid state");
+    const size_t aligned = AlignUp<size_t>(size, object_alignment());
+    zoffset_end addr = top();
+    for (;;) {
+        zoffset_end newTop;
+        if (!to_zoffset_end(&newTop, addr, aligned)) {
+            return 0;
+        }
+        if (newTop > end()) {
+            return 0;
+        }
+        zoffset_end prevTop = addr;
+        __atomic_compare_exchange(&_top, &prevTop, &newTop, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+        if (prevTop == addr) {
+            return untype(ZOffset::address_unsafe(to_zoffset(addr)));
+        }
+        addr = prevTop;
+    }
+}
+
 // zPage.inline.hpp:72-101 object_alignment_shift: large pages hold one object
 // at start; small pages use the minimum object alignment.
 inline int ZPage::object_alignment_shift() const
@@ -706,13 +729,9 @@ inline void ZPage::InitZPage(size_t pageSize, ZPageType uClass, PageAge age, boo
         _scratch.regionRole.store(ZPageRole::None, std::memory_order_relaxed);
         _scratch.censusBoundaryOffset = 0;
 
-        // routedest: this is the reuse edge named in the defect. TakeRegion has already run
-        // ClearPageMemory over this payload; if a published route still names this region, the
-        // route now answers into zeroed (or freshly re-allocated) memory. Count it here
-        // rather than at ClearPageMemory because this is the one call that runs exactly once per
-        // reuse. The hold is deliberately NOT cleared: reaching this point while held means
-        // a reclaim gate was bypassed, and leaving the flag set keeps the region out of the
-        // next collection set instead of silently papering over the escape.
+        // This is the page reuse edge. A published route must not still name
+        // memory that can now be initialized for a different object. The hold
+        // remains set so an invalid reclamation cannot silently lose its evidence.
         SetInGhostRegion(0);
         (void)uClass;
         (void)live;
