@@ -277,9 +277,21 @@ GC_OTHER_VM_TEST(WeakLoadFamily, RejectsNonReferentSlot)
         std::fprintf(stderr, "WEAK_SLOT_TARGET_ASSERT_EXECUTED\n");
         return;
     }
+    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
     GcHeapFixture fx;
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreGoodPointer(fx.obj0));
     (void)CJ_MCC_ReadWeakRef(fx.obj1, &field);
+}
+GC_OTHER_VM_TEST(WeakLoadFamily, AcceptsReferentSlot)
+{
+    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+    GcHeapFixture fx;
+    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreGoodPointer(fx.obj0));
+    const ObjectPtr result = CJ_MCC_ReadWeakRef(fx.obj1, &field);
+    std::fprintf(stderr, "WEAK_SLOT_POSITIVE result=%p expected=%p\n", result, fx.obj0);
+    GC_EXPECT_TRUE(result == fx.obj0);
 }
 #endif

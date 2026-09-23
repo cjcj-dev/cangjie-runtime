@@ -435,12 +435,7 @@ void ZBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size
 #endif
 }
 
-// ZZBarrier::barrier and weak/phantom slow paths, zBarrier.inline.hpp:319-343,484-565.
-zaddress ZBarrier::load_good_slow_path(zaddress addr)
-{
-    return addr;
-}
-
+// ZGC zBarrier.cpp:280-285: keep-alive loads publish resurrecting marks.
 zaddress ZBarrier::keep_alive_slow_path(zaddress addr)
 {
     if (!is_null(addr)) {
