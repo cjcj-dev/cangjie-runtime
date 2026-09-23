@@ -59,6 +59,12 @@
 
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
+// ZGC zGeneration.cpp:161-163.
+void ZGeneration::mark_flush(ThreadGCData& data)
+{
+    mark->Flush(data);
+}
+
 
 // ZGC zGeneration.cpp:69-76: one generation timer per young collection type.
 static const ZStatPhaseGeneration ZPhaseGenerationYoung[] {
@@ -100,7 +106,6 @@ static const ZStatSubPhase PYoungEvacRetire("young.evac_retire", ZGenerationId::
 static const ZStatSubPhase PYoungFlushAlloc("young.flush_alloc", ZGenerationId::young);
 static const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
 static const ZStatSubPhase PYoungPostEvacFinish("young.post_evac_finish", ZGenerationId::young);
-static const ZStatSubPhase PYoungPreEvacClear("young.pre_evac_clear", ZGenerationId::young);
 static const ZStatSubPhase PYoungRefFixRootPass1("young.ref_fix_root_pass1", ZGenerationId::young);
 static const ZStatSubPhase PYoungRemsetDrain("young.remset_drain", ZGenerationId::young);
 static const ZStatSubPhase PYoungRootEnum("young.root_enum", ZGenerationId::young);
@@ -455,9 +460,6 @@ void ZGenerationYoung::concurrent_mark()
     ZStatTimerYoung timer(ZPhaseConcurrentMarkYoung);
     youngWeakSlots.clear();
     youngFullScan = false;
-    youngConcWindow = {};
-    reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
-    youngConcWindowStartNs = TimeUtil::NanoSeconds();
     // ZGC zGeneration.cpp:665-669: roots, then combined scan and follow.
     produceYoungRoots();
     mark_follow();
@@ -475,7 +477,6 @@ bool ZGenerationYoung::mark_end()
         return true;
     }
 
-    ++youngConcWindow.reenters;
     return false;
 }
 
@@ -498,29 +499,13 @@ void ZGenerationYoung::concurrent_mark_free()
     if (ZAbort::should_abort()) {
         return;
     }
-    RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    if (youngConcWindowStartNs != 0) {
-        youngConcWindow.windowNs = TimeUtil::NanoSeconds() - youngConcWindowStartNs;
-    }
-    VLOG(REPORT,
-         "[GCV2][youngconc][concwork] run=%zu conc=%d follow=%d window_ns=%llu reenters=%zu",
-         minorTotalRuns + 1, 1, 1,
-         static_cast<unsigned long long>(youngConcWindow.windowNs), youngConcWindow.reenters);
-    {
-        // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
-        ZStatTimerYoung zstatTimer(PYoungPreEvacClear);
-        // tracecache: PrepareTrace above switched the TRACE-phase region caches on
-        // (RegionManager.h:726-727), and this is the young mark's post-trace point -- the
-        // same place ZGenerationOld::PostTrace drains them for a major (RelocationSet.cpp:73-78).
-        space.GetRegionManager().HandleTraceRegions();
-        // zGeneration.cpp:563 / :699-701: after this young mark_end, reset
-        // the previous young relocation set. Independent of old remap.
-        StringDedup::Instance().Clean([this](BaseObject* object) {
-            ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-            return !region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Young>(object);
-        });
-    }
-
+    // Cangjie String values use an explicitly populated dedup table. Clean its
+    // weak entries here; ZGC processes weak OopStorage entries through
+    // ZWeakRootsProcessor (zWeakRootsProcessor.cpp:55-74).
+    StringDedup::Instance().Clean([this](BaseObject* object) {
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
+        return !region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Young>(object);
+    });
 }
 
 void ZGenerationYoung::concurrent_reset_relocation_set()
@@ -990,7 +975,6 @@ void ZGenerationOld::concurrent_mark()
 
     {
         ZStatTimerOld zstatTimer(PTraceLiveObjectsUpdateOldPointersInRefFields);
-        reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
         Mark().MarkFollow(false);
         ZBreakpoint::AtBeforeMarkingCompleted();
         if (ZAbort::should_abort()) {

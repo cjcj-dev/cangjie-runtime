@@ -18,7 +18,6 @@
 namespace MapleRuntime {
 namespace {
 size_t g_maxHeapSize = 0;
-constexpr double kYoungCompactionLimit = 25.0;
 
 size_t round_down_pow2(size_t value)
 {
@@ -101,6 +100,6 @@ size_t ZHeuristics::significant_heap_overhead()
 
 size_t ZHeuristics::significant_young_overhead()
 {
-    return static_cast<size_t>(g_maxHeapSize * (kYoungCompactionLimit / 100));
+    return static_cast<size_t>(g_maxHeapSize * (ZYoungCompactionLimit / 100));
 }
 }

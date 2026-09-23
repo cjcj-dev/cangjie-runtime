@@ -1066,7 +1066,7 @@ size_t RegionManager::GetLargeObjectSize() const
     ZPageTableIterator iter(&ZPageTable::heap_table());
     for (ZPage* region; iter.next(&region);) {
         const ZPageRole role = region->GetRegionRole();
-        if (role == ZPageRole::OldLarge || role == ZPageRole::RecentLarge || role == ZPageRole::LargeTrace) {
+        if (role == ZPageRole::OldLarge || role == ZPageRole::RecentLarge) {
             bytes += region->GetRegionSize();
         }
     }

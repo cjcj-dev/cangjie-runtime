@@ -71,11 +71,7 @@ void AllocBuffer::Fini()
 {
     if (!initialized) { return; }
     initialized = false;
-    // Finish allocation publications before releasing the current context.
-    // Mark stacks and SBB remain owned by the logical thread until detach.
-    if (GetAllocBuffer() == this) {
-        ThreadLocal::FlushCurrentThreadMarkStacks();
-    }
+    // Mark stacks and store buffers are flushed by on_thread_detach.
     FlushRegion();
     // JavaThread::exit calls retire_tlab() without a statistics destination
     // (javaThread.cpp:831). Only root workers contribute watermark snapshots

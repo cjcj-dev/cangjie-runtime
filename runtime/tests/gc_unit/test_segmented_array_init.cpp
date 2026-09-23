@@ -14,6 +14,7 @@
 #include <vector>
 #include <memory>
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zAddress.hpp"
 #if defined(__linux__)
 #include <sched.h>
 #include <sys/wait.h>
@@ -131,27 +132,49 @@ void* RunArrayCase(void* argument)
     } else {
         unsetenv("MRT_GC_UNIT_MANAGED_SEGMENTED");
     }
-    const MIndex length = small ? 16 : kLargeRefLength;
+    const MIndex length = small ? 16 : kLargeRefLength + ((mode & 32) != 0 ? 1 : 0);
     auto& heap = Heap::GetHeap();
     const ZGenerationId generation = young ? ZGenerationId::young : ZGenerationId::old;
     const uint64_t before = heap.GetCycleSnapshot(generation).sequence;
+    const uint64_t youngBefore = heap.GetCycleSnapshot(ZGenerationId::young).sequence;
+    const uint64_t oldBefore = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    const uintptr_t colorBefore = ::g_cjStoreGoodMask;
     MArray* array = primitive ? MCC_NewArray8(GetByteArrayTypeInfos().array, length) :
                                MCC_NewObjArray(GetReferenceArrayTypeInfos().array, length);
     unsetenv("MRT_GC_UNIT_MANAGED_SEGMENTED");
     if (array == nullptr) { return reinterpret_cast<void*>(1); }
-    size_t nonzero = 0;
-    for (size_t i = 0; i < array->GetContentSize(); ++i) {
-        nonzero += array->ConvertToCArray()[i] != 0;
+    size_t mismatches = 0;
+    const uintptr_t expected = primitive || small ? 0 :
+        (::g_cjStoreGoodMask | ((young || full) ? ZPointerRememberedMask : 0));
+    if (primitive) {
+        for (size_t i = 0; i < array->GetContentSize(); ++i) {
+            mismatches += array->ConvertToCArray()[i] != 0;
+        }
+    } else {
+        const uintptr_t* elements = reinterpret_cast<const uintptr_t*>(array->ConvertToCArray());
+        for (size_t i = 0; i < length; ++i) {
+            // ZGC zObjArrayAllocator.cpp:158-169: later GC flips during the
+            // second pass can change its per-segment store-good color, but
+            // every null must retain both remembered bits and a null address.
+            const bool valid = twice ?
+                ((elements[i] & ~ZPointerAllMetadataMask) == 0 &&
+                 (elements[i] & ZPointerRememberedMask) == ZPointerRememberedMask) :
+                elements[i] == expected;
+            mismatches += !valid;
+        }
     }
+    const bool uninterrupted = young || full ||
+        (youngBefore == heap.GetCycleSnapshot(ZGenerationId::young).sequence &&
+         oldBefore == heap.GetCycleSnapshot(ZGenerationId::old).sequence && colorBefore == ::g_cjStoreGoodMask);
     const bool published = !array->IsInvisibleObject() && mutator->LoadInvisibleRoot() == nullptr;
     const uint64_t after = heap.GetCycleSnapshot(generation).sequence;
     const bool gc = !(young || full) || after > before;
     const bool lengthValid = array->GetLength() == length;
-    std::fprintf(stderr, "SEGMENTED_RESULT_TARGET mode=%zu size=%zu length=%d published=%d nonzero=%zu before=%llu after=%llu gc=%d\n",
-                 mode, array->GetContentSize(), lengthValid, published, nonzero,
-                 (unsigned long long)before, (unsigned long long)after, gc);
+    std::fprintf(stderr, "SEGMENTED_RESULT_TARGET mode=%zu size=%zu length=%d published=%d mismatches=%zu before=%llu after=%llu gc=%d expected=0x%zx uninterrupted=%d\n",
+                 mode, array->GetContentSize(), lengthValid, published, mismatches,
+                 (unsigned long long)before, (unsigned long long)after, gc, expected, uninterrupted);
     mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>((nonzero == 0 && published && lengthValid && gc) ? 0 : 2);
+    return reinterpret_cast<void*>((mismatches == 0 && published && lengthValid && gc && uninterrupted) ? 0 : 2);
 }
 
 void* RunLargePageIdentityCase(void*)
@@ -675,6 +698,10 @@ GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, LargeReferenceArrayPublishesCleared
 GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, LargePrimitiveArrayUsesSegmentedClearing)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 1), 0);
+}
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, OddPrimitiveTailUsesSegmentedClearing)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 33), 0);
 }
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)

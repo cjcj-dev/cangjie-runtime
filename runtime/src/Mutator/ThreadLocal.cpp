@@ -29,9 +29,9 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
     // thread owns its TLAB; generated allocation code borrows this ABI slot.
     buffer = newMutator != nullptr ? newMutator->tlab() : nullptr;
     if (newMutator != nullptr) {
-        auto& data = newMutator->GetGCData();
-        data.Attach(newMutator, nullptr, data.invisibleRoot);
-        gcData = &data;
+        // Binding an already constructed logical thread is not attachment.
+        // Its masks, watermark and buffered stores survive carrier migration.
+        gcData = &newMutator->GetGCData();
     } else {
         gcData = nativeGCData;
     }
@@ -92,7 +92,7 @@ void ThreadLocal::InitializeCleaner()
 {
     (void)cleaner;
     ThreadLocalData* tls = GetThreadLocalData();
-    cleaner.nativeData.Attach(nullptr, tls, nullptr);
+    ZBarrierSet::on_thread_attach(cleaner.nativeData, nullptr, tls, nullptr);
     tls->nativeGCData = &cleaner.nativeData;
     if (tls->mutator == nullptr) {
         tls->gcData = tls->nativeGCData;
@@ -123,9 +123,12 @@ CleanThreadLocalData::~CleanThreadLocalData()
         // Foreign exit is the last possible producer. Publish before removing
         // the owner from the handshake inventory (ZMark::flush, zMark.cpp:998).
         MutatorManager::Instance().UnregisterMarkFlushThread(local);
-        ThreadLocal::FlushCurrentThreadMarkStacks();
     }
-    nativeData.Detach();
+    // Bootstrap storage which never acquired masks was never attached.
+    if (nativeData.storeGoodMask != 0) {
+        ZBarrierSet::on_thread_detach(nativeData);
+        ZBarrierSet::on_thread_destroy(nativeData);
+    }
     // gcData may borrow a parked/migrating Mutator. The cleaner owns only
     // nativeData, whose member destructor runs after this body.
     local->gcData = nullptr;

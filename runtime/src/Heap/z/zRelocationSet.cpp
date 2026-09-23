@@ -59,8 +59,6 @@ static const ZStatSubPhase PPostTrace("PostTrace", ZGenerationId::old);
 void ZGenerationOld::PostTrace()
 {
     ZStatTimerOld zstatTimer(PPostTrace);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().HandleTraceRegions();
     // Value-only cycle roots still depend on the preceding relocation receipts.
     // Complete their owner handoff while that authority is queryable.
     // zGeneration.cpp:1261 mark_end does not reset forwarding.

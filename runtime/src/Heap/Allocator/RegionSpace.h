@@ -70,7 +70,6 @@ public:
         GetRegionManager().DumpRegionStats(msg);
     }
 
-    void PrepareTrace() { GetRegionManager().PrepareTrace(); }
 
 
     // ZPage::mark_object + inc_live (zMark.cpp:405-425) for a caller without a

@@ -438,9 +438,7 @@ void MutatorManager::UnregisterMarkFlushThread(ThreadLocalData* tls)
     }
     HandshakeState* hs = target->handshake;
     if (hs != nullptr) {
-        hs->process_queued_then_detach([](ThreadLocalData* t) { (void)ZMark::FlushThread(t); });
-    } else {
-        (void)ZMark::FlushThread(tls);
+        hs->process_queued_then_detach();
     }
     target->bufferLive.store(0, std::memory_order_release);
     target->refs.fetch_sub(1, std::memory_order_acq_rel);

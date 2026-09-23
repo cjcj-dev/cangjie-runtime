@@ -40,10 +40,14 @@ struct ThreadGCData {
     static void PublishMasks(const Masks& masks);
     static Masks PublishedMasks();
     void InstallMasks(const Masks& masks);
-    void Attach(Mutator* owner, ThreadLocalData* nativeOwner, zaddress_unsafe* root);
-    void Detach();
     bool FlushMarkStacks(ZMark& domain);
     static void VisitOwners(const std::function<void(ThreadGCData&, Mutator*, ThreadLocalData*)>& visitor);
+private:
+    friend class ZBarrierSet;
+    // Container adaptation: initialization and publication share one lock.
+    void RegisterOwner(Mutator* owner, ThreadLocalData* nativeOwner, const std::function<void()>& initialize);
+    void UnregisterOwner();
+public:
     ThreadGCData(const ThreadGCData&) = delete;
     ThreadGCData& operator=(const ThreadGCData&) = delete;
 

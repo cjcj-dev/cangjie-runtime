@@ -1031,6 +1031,13 @@ bool ZMark::Flush()
     return HandshakeFlush(this);
 }
 
+// ZGC zMark.cpp:998-1004: buffer processing may produce more stack work.
+bool ZMark::Flush(ThreadGCData& data)
+{
+    data.storeBarrierBuffer->Flush();
+    return data.FlushMarkStacks(*this);
+}
+
 bool ZMark::Flush(ThreadLocalData* tls)
 {
     return FlushThreadLocal(tls, this);

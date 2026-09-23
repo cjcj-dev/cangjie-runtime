@@ -1115,3 +1115,120 @@ void CheckBarrierOnly856(bool weak)
 }
 GC_TEST(StoreBuffer856, StrongOnlyPublishesPrevious) { CheckBarrierOnly856(false); }
 GC_TEST(StoreBuffer856, WeakOnlyRemembersPreviousSlot) { CheckBarrierOnly856(true); }
+
+// ZGC zBarrierSet.cpp:253-273. Observe state produced by real lifecycle
+// entries in the runtime SO; no test copy of Mutator::Init or detach hooks.
+namespace {
+bool InitialThreadMasks(const ThreadGCData& data, const ThreadGCData::Masks& masks)
+{
+    return data.loadGoodMask == masks.loadGood && data.loadBadMask == masks.loadBad &&
+        data.markBadMask == masks.markBad && data.storeGoodMask == masks.storeGood &&
+        data.storeBadMask == masks.storeBad;
+}
+}
+
+GC_OTHER_VM_TEST(ThreadLifecycle, NativeAttachPublishesInitialState)
+{
+    GcHeapFixture heap;
+    const auto masks = ThreadGCData::PublishedMasks();
+    bool initialized = false;
+    std::thread owner([&] {
+        ThreadLocal::InitializeCleaner();
+        const auto& data = ThreadLocal::GetGCData();
+        initialized = InitialThreadMasks(data, masks) &&
+            data.storeBarrierBuffer->lastProcessedColor == masks.storeGood &&
+            data.storeBarrierBuffer->lastInstalledColor == masks.storeGood;
+    });
+    owner.join();
+    std::fprintf(stderr, "THREAD_ATTACH_NATIVE_TARGET executed=1 initialized=%d\n", initialized);
+    GC_EXPECT_TRUE(initialized);
+}
+
+GC_OTHER_VM_TEST(ThreadLifecycle, ManagedAttachAndRebindPreserveState)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    const auto masks = ThreadGCData::PublishedMasks();
+    bool initialized = false;
+    bool preserved = false;
+    std::thread thread([&] {
+        auto& manager = MutatorManager::Instance();
+        auto* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        auto& data = owner->GetGCData();
+        initialized = InitialThreadMasks(data, masks) &&
+            data.storeBarrierBuffer->lastProcessedColor == masks.storeGood &&
+            owner->GetStackWatermark().PackedState() == 0;
+        StackWatermarkSet::on_safepoint(*owner);
+        const auto watermark = owner->GetStackWatermark().PackedState();
+        const auto color = data.storeGoodMask;
+        manager.UnbindMutator(*owner);
+        manager.BindMutator(*owner);
+        preserved = owner->GetStackWatermark().PackedState() == watermark && data.storeGoodMask == color;
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    thread.join();
+    std::fprintf(stderr, "THREAD_ATTACH_MANAGED_TARGET executed=1 initialized=%d rebind_preserved=%d\n",
+                 initialized, preserved);
+    GC_EXPECT_TRUE(initialized);
+    GC_EXPECT_TRUE(preserved);
+}
+
+namespace {
+void CheckThreadDetachMarksObjects(bool managed)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    heap.region0->reset(PageAge::eden);
+    heap.region1->reset(PageAge::old);
+    MarkPublicationFixture marking;
+    size_t privateYoung = 0;
+    size_t privateOld = 0;
+    std::thread thread([&] {
+        auto& manager = MutatorManager::Instance();
+        Mutator* owner = nullptr;
+        if (managed) {
+            owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+            // Complete the last-transition watermark before producing the
+            // private work, so a root scan cannot mask a broken detach.
+            StackWatermarkSet::on_safepoint(*owner);
+        } else {
+            ThreadLocal::InitializeCleaner();
+        }
+        ZBarrier::Mark<false, false, false, false>(from_object(heap.obj0));
+        ZBarrier::Mark<false, false, false, false>(from_object(heap.obj1));
+        auto& data = ThreadLocal::GetGCData();
+        privateYoung = data.markStacks[0].Population();
+        privateOld = data.markStacks[1].Population();
+        if (managed) {
+            manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        }
+        // Native detach is the actual TLS destructor after this return.
+    });
+    thread.join();
+    auto& young = Heap::GetHeap().young().Mark();
+    auto& old = Heap::GetHeap().old().Mark();
+    young.MarkFollow();
+    old.MarkFollow();
+    const bool markedYoung = heap.region0->is_object_marked(from_object(heap.obj0), false);
+    const bool markedOld = heap.region1->is_object_marked(from_object(heap.obj1), false);
+    const bool ended = young.TryEnd() && old.TryEnd();
+    std::fprintf(stderr,
+        "THREAD_DETACH_TARGET executed=1 managed=%d private_young=%zu private_old=%zu marked_young=%d marked_old=%d ended=%d\n",
+        managed, privateYoung, privateOld, markedYoung, markedOld, ended);
+    // The target is evaluated before setup checks: a missing publication must
+    // fail here, not at an earlier existence assertion.
+    GC_EXPECT_TRUE(markedYoung && markedOld && ended);
+    GC_EXPECT_EQ(privateYoung, 1u);
+    GC_EXPECT_EQ(privateOld, 1u);
+}
+}
+
+GC_OTHER_VM_TEST(ThreadLifecycle, NativeDetachMarksBothGenerations)
+{
+    CheckThreadDetachMarksObjects(false);
+}
+
+GC_OTHER_VM_TEST(ThreadLifecycle, ManagedDetachMarksBothGenerations)
+{
+    CheckThreadDetachMarksObjects(true);
+}

@@ -52,25 +52,16 @@ void ThreadGCData::InstallMasks(const Masks& masks)
     storeBadMask = masks.storeBad;
 }
 
-// A managed owner is the logical CJThread/Mutator, not the OS thread on
-// which it happens to be executing. Native executors own a separate data.
-void ThreadGCData::Attach(Mutator* owner, ThreadLocalData* nativeOwner, zaddress_unsafe* root)
+// The registry represents logical owners rather than their scheduling carriers.
+void ThreadGCData::RegisterOwner(Mutator* owner, ThreadLocalData* nativeOwner,
+                                 const std::function<void()>& initialize)
 {
-    invisibleRoot = root;
-    const Masks masks = PublishedMasks();
-    if (masks.storeGood == 0) {
-        // Native allocation can bootstrap before pointer colors initialize.
-        // This storage is not attached to the GC inventory or managed code yet.
-        return;
-    }
     auto& registry = Owners();
     std::lock_guard<std::mutex> lock(registry.mutex);
     if (registry.owners.find(this) != registry.owners.end()) {
-        return; // Rebinding must not overwrite the owner's pending old color.
+        return;
     }
-    InstallMasks(masks);
-    storeBarrierBuffer->Initialize(masks.storeGood);
-    invisibleRoot = root;
+    initialize();
     registry.owners.emplace(this, std::make_unique<DataOwners::Owner>(this, owner, nativeOwner));
 }
 
@@ -80,7 +71,7 @@ bool ThreadGCData::FlushMarkStacks(ZMark& domain)
     return markStacks[index].Flush(domain.Stripes(), true);
 }
 
-void ThreadGCData::Detach()
+void ThreadGCData::UnregisterOwner()
 {
     auto& registry = Owners();
     std::unique_lock<std::mutex> lock(registry.mutex);
@@ -95,7 +86,7 @@ void ThreadGCData::Detach()
 
 ThreadGCData::~ThreadGCData()
 {
-    Detach();
+    UnregisterOwner();
     delete storeBarrierBuffer;
 }
 
