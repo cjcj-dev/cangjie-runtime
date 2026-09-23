@@ -1,7 +1,6 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
-#include "Heap/z/zAccess.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_generation_test.hpp"
 #include "b09_runtime_fixture.hpp"
@@ -96,6 +95,8 @@ public:
     }
 };
 }
+
+#include "Heap/z/zAccess.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

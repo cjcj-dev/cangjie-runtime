@@ -2,7 +2,6 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
-#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zCrossVM.hpp"
 #include <atomic>
 #include <cstdint>
@@ -22,6 +21,8 @@
 #include "gc_unittest.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "Heap/z/zPage.inline.hpp"
+
+#include "Heap/z/zAccess.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

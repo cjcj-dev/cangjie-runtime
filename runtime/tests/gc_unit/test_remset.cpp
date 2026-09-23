@@ -8,7 +8,6 @@
 // selects the slow path from the previous colour and remembers old heap slots;
 // zRemembered.cpp:578-589 re-registers scanned slots whose target remains young.
 
-#include "Heap/z/zAccess.hpp"
 #include "gc_cycle_sequence_fixture.hpp"
 #include <algorithm>
 #include <cstdlib>
@@ -50,6 +49,8 @@
 #include "gc_unittest.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Heap/z/zRelocate.hpp"
+
+#include "Heap/z/zAccess.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

@@ -1,7 +1,6 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 // GDB input fixture: all GC execution remains in the linked product SO.
-#include "Heap/z/zAccess.hpp"
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
@@ -11,6 +10,8 @@
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/RefField.inline.h"
 #include <cstdio>
+#include "Heap/z/zAccess.hpp"
+
 using namespace MapleRuntime;
 
 // Test ELF symbols name an already allocated input and its real owner. GDB

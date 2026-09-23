@@ -8,7 +8,6 @@
 // before self-healing; load-good words bypass forwarding-header inspection
 // (zBarrier.inline.hpp:319-343).
 
-#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
@@ -16,6 +15,8 @@
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+
+#include "Heap/z/zAccess.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

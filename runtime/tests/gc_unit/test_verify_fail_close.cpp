@@ -4,7 +4,6 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "Heap/z/zAccess.hpp"
 #include "gc_verify_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Cangjie.h"
@@ -24,6 +23,8 @@
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/RefField.inline.h"
+
+#include "Heap/z/zAccess.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

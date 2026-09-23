@@ -1,4 +1,3 @@
-#include "Heap/z/zAccess.hpp"
 #include "marking_smr_test.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -47,6 +46,8 @@
 
 #include "gc_generation_test.hpp"
 #include "gc_product_access_test.hpp"
+
+#include "Heap/z/zAccess.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -756,6 +757,29 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
+}
+
+// ZGC zHeapIterator.cpp:116-121: inspecting phantom roots must not keep them alive.
+GC_OTHER_VM_TEST(HeapIterator, PhantomRootDoesNotKeepAliveDuringOldMark)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager manager;
+    WeakClosureTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    fx.region0->reset(PageAge::old);
+    Heap& collector = Heap::GetHeap();
+    RelocationReceiptTest::BindCollector(&collector);
+    const U64 handle = collector.RegisterExportRoot(fx.obj0);
+    ScopedStopTheWorld stw("B10 phantom root iteration", false);
+    collector.old().mark_start();
+    GC_EXPECT_FALSE(fx.region0->is_object_live(from_object(fx.obj0)));
+    size_t visits = 0;
+    HeapIterator(true).Iterate([&](BaseObject* object) { visits += object == fx.obj0; });
+    const bool live = fx.region0->is_object_live(from_object(fx.obj0));
+    collector.RemoveExportObject(handle);
+    std::fprintf(stderr, "B10_ITERATOR_RESULT visits=%zu live=%d\n", visits, live);
+    GC_EXPECT_EQ(visits, size_t(1));
+    GC_EXPECT_FALSE(live);
 }
 
 #endif // MRT_TESTABLE_INTERNALS

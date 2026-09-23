@@ -2,7 +2,6 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
-#include "Heap/z/zAccess.hpp"
 #include <condition_variable>
 #include <cstdio>
 #include <mutex>
@@ -52,6 +51,8 @@
 
 
 #include "gc_generation_test.hpp"
+
+#include "Heap/z/zAccess.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

@@ -4,7 +4,6 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "Heap/z/zAccess.hpp"
 #include "gc_cycle_sequence_fixture.hpp"
 #include <algorithm>
 #include <atomic>
@@ -54,6 +53,8 @@
 #include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
+
+#include "Heap/z/zAccess.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

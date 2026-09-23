@@ -3,7 +3,6 @@
 // with Runtime Library Exception.
 
 
-#include "Heap/z/zAccess.hpp"
 #include <atomic>
 #include <algorithm>
 #include <array>
@@ -52,6 +51,8 @@ namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);
 extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems);
 }
+
+#include "Heap/z/zAccess.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

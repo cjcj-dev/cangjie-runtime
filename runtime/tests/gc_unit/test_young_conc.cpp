@@ -12,7 +12,6 @@
 // standalone gate supplies MRT_TESTABLE_INTERNALS only when those product
 // hooks exist; the top-level guard makes the default build an empty TU.
 
-#include "Heap/z/zAccess.hpp"
 #include <algorithm>
 #include <dlfcn.h>
 #include <cstdint>
@@ -60,6 +59,8 @@
 
 
 #include "gc_generation_test.hpp"
+
+#include "Heap/z/zAccess.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
