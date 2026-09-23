@@ -388,7 +388,6 @@ public:
 
     static void WaitCopiedBeforePayloadWipe(ZPage* region, const char* site);
 
-    static void ClearPageMemory(size_t idx, size_t cnt);
 
     BaseObject* GetFirstObject() const { return from_region_addr(GetRegionStart()); }
 

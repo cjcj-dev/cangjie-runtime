@@ -55,7 +55,7 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, boo
     MAddress starts[2];
     MAddress objects[2];
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(pageSize, medium ? ZPageType::medium : ZPageType::small, false, false, true, age, flags);
+        pages[i] = Heap::alloc_page(pageSize, medium ? ZPageType::medium : ZPageType::small, false, false, age, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         starts[i] = pages[i]->GetRegionStart();
         objects[i] = pages[i]->alloc_object(objectSize);
@@ -203,7 +203,7 @@ static void CheckInPlaceRemset()
     MAddress starts[2];
     MAddress objects[2];
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(pageSize, medium ? ZPageType::medium : ZPageType::small, false, false, true, age, flags);
+        pages[i] = Heap::alloc_page(pageSize, medium ? ZPageType::medium : ZPageType::small, false, false, age, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         starts[i] = pages[i]->GetRegionStart();
         objects[i] = pages[i]->alloc_object(objectSize);
@@ -275,7 +275,7 @@ static void CheckMutatorRelocation(bool stopped)
     ZPage* pages[2];
     BaseObject* objects[2][2];
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, true, PageAge::old, flags);
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         for (size_t j = 0; j < 2; ++j) {
             objects[i][j] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
@@ -366,7 +366,7 @@ void RunRelocateLiveness(bool worker, bool marked)
     BaseObject* dead[2];
     ZRelocationSetSelector selector;
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, true, PageAge::old, flags);
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         dead[i] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
         live[i] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
