@@ -58,7 +58,6 @@ namespace MapleRuntime {
 void FreeRegionManager::Initialize(ZVirtualMemoryManager& virtualMemoryManager,
                                    ZPhysicalMemoryManager& physicalMemoryManager, size_t maxCapacity)
 {
-    markQuarantineMemory.clear();
     partitions.clear();
     nextPartition = 0;
     virtualMemory = &virtualMemoryManager;
@@ -226,20 +225,6 @@ void FreeRegionManager::AddGarbageMemory(size_t index, size_t count, bool allowS
     if (allowSaferegion) { saferegion.reset(new ScopedEnterSaferegion(true)); }
     std::lock_guard<std::mutex> lock(cacheMutex);
     FreeMemory(index, count);
-}
-
-size_t FreeRegionManager::ReleaseMarkQuarantineToDirty()
-{
-    ScopedEnterSaferegion saferegion(true);
-    std::lock_guard<std::mutex> quarantineLock(markQuarantineTreeMutex);
-    std::lock_guard<std::mutex> cacheLock(cacheMutex);
-    size_t count = 0;
-    for (const auto& memory : markQuarantineMemory) {
-        FreeMemory(IndexOf(memory), memory.size());
-        count += memory.size();
-    }
-    markQuarantineMemory.clear();
-    return count;
 }
 
 // ZGC zPageAllocator.cpp:764-785: no virtual-memory or physical-memory work.
@@ -842,31 +827,6 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     return true;
 }
 
-void RegionManager::ReclaimRegionToMarkQuarantine(ZPage* region)
-{
-    NoteUsedGenerationDelta(region->GetOwnerGeneration(), -static_cast<ssize_t>(region->GetRegionSize()));
-    ZPage::RetirePage(region, [this, region] { ReclaimRetiredRegionToMarkQuarantine(region); });
-}
-
-void RegionManager::ReclaimRetiredRegionToMarkQuarantine(ZPage* region)
-{
-    // routedest: census only, see ReclaimRegion.
-    size_t num = region->GetRegionSize();
-    size_t unitIndex = region->granule_index();
-    DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
-    {
-        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_MARK_QUARANTINE);
-    }
-    region->RetirePageMemory();
-    ScopedEnterSaferegion enterSaferegion(true);
-    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
-    freeRegionManager.AddMarkQuarantineMemory(unitIndex, num);
-    CHECK(pageAllocatorUsed >= num);
-    pageAllocatorUsed -= num;
-    TrackUsedPeakLocked();
-}
-
 size_t RegionManager::ReleaseRegion(ZPage* region)
 {
     const size_t size = region->GetRegionSize();
@@ -918,9 +878,6 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
     allowSaferegion = allowSaferegion && !flags.non_blocking();
     if (!allowSaferegion || IsGcThread()) { flags.set_non_blocking(); }
     size_t size = num;
-    if (allowSaferegion) {
-        RequestForRegion(size);
-    }
 
 #if !defined(__OHOS__)
     size_t gatedBytes = 0;
@@ -1180,14 +1137,6 @@ size_t RegionManager::GetAllocatedSize() const
         // list sum. Garbage-pending pages count as used until reclaim, as
         // ZGC's _used does until free_page.
         return pageAllocatorUsed;
-    }
-
-
-void FreeRegionManager::AddMarkQuarantineMemory(size_t idx, size_t num)
-{
-        ScopedEnterSaferegion enterSaferegion(true);
-        std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
-        markQuarantineMemory.push_back(VirtualMemoryOf(idx, num));
     }
 
 
