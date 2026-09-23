@@ -5,6 +5,7 @@
 #define MRT_Z_ITERATOR_INLINE_HPP
 
 #include "Heap/z/zIterator.hpp"
+#include "Heap/z/zAccess.hpp"
 #include "Common/BaseObject.inline.h"
 #include "Heap/z/zVerify.hpp"
 #include "ObjectModel/MArray.inline.h"
@@ -32,12 +33,97 @@ inline bool ZIterator::is_invisible_object_array(BaseObject* object, TypeInfo* k
     return referenceArray && is_invisible_object(object);
 }
 
+inline BaseObject* OopIteratorClosureDispatch::load_referent(BaseObject* object, ReferenceType type)
+{
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+    if (type == ReferenceType::PHANTOM) {
+        return HeapAccess<ON_PHANTOM_OOP_REF | AS_NO_KEEPALIVE>::oop_load(field);
+    }
+    return HeapAccess<ON_WEAK_OOP_REF | AS_NO_KEEPALIVE>::oop_load(field);
+}
+
+template <typename OopClosureT>
+bool OopIteratorClosureDispatch::try_discover(BaseObject* object, ReferenceType type, OopClosureT* closure)
+{
+    ReferenceDiscoverer* rd = closure->ref_discoverer();
+    if (rd != nullptr) {
+        BaseObject* referent = load_referent(object, type);
+        // ZGC uses markWord's GC mark for an invisible, initializing array.
+        if (referent != nullptr && !referent->IsInvisibleObject()) {
+            return rd->discover_reference(object, type);
+        }
+    }
+    return false;
+}
+
+template <typename OopClosureT>
+void OopIteratorClosureDispatch::do_referent(BaseObject* object, OopClosureT* closure)
+{
+    // Cangjie's referent is the first payload slot. ReferenceProcessor stores
+    // discovered links in native containers, not in reference-object fields.
+    closure->do_oop(&HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE));
+}
+
+template <typename OopClosureT>
+void OopIteratorClosureDispatch::oop_oop_iterate_discovery(BaseObject* object, ReferenceType type,
+                                                         OopClosureT* closure)
+{
+    if (try_discover(object, type, closure)) {
+        return;
+    }
+    do_referent(object, closure);
+}
+
+template <typename OopClosureT>
+void OopIteratorClosureDispatch::oop_oop_iterate_fields(BaseObject* object, OopClosureT* closure)
+{
+    DCHECK(closure->ref_discoverer() == nullptr);
+    do_referent(object, closure);
+}
+
+template <typename OopClosureT>
+void OopIteratorClosureDispatch::oop_oop_iterate_fields_except_referent(BaseObject*, OopClosureT* closure)
+{
+    DCHECK(closure->ref_discoverer() == nullptr);
+    // No discovered oop field: native discovered containers are traversed by
+    // ReferenceProcessor. The ordinary bitmap fields were visited by the VM.
+}
+
+template <typename OopClosureT>
+void OopIteratorClosureDispatch::oop_oop_iterate_ref_processing(OopClosureT* closure, BaseObject* object)
+{
+    switch (closure->reference_iteration_mode()) {
+        case OopIterateClosure::DO_DISCOVERY:
+            oop_oop_iterate_discovery(object, ReferenceType::WEAK, closure);
+            break;
+        case OopIterateClosure::DO_FIELDS:
+            oop_oop_iterate_fields(object, closure);
+            break;
+        case OopIterateClosure::DO_FIELDS_EXCEPT_REFERENT:
+            oop_oop_iterate_fields_except_referent(object, closure);
+            break;
+        default:
+            LOG(RTLOG_FATAL, "invalid reference iteration mode");
+            return;
+    }
+}
+
 template <typename OopClosureT>
 void OopIteratorClosureDispatch::oop_oop_iterate(OopClosureT* closure, BaseObject* object, TypeInfo* klass)
 {
     // Cangjie's VM field-layout dispatch uses TypeInfo/GCTib. In particular,
     // honor the caller-supplied klass rather than reloading the object header.
-    object->ForEachRefField([&](RefField<>& field) { closure->do_oop(&field); }, klass);
+    if (!klass->IsWeakRefType()) {
+        object->ForEachRefField([&](RefField<>& field) { closure->do_oop(&field); }, klass);
+        return;
+    }
+    const MAddress referent = reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE;
+    object->ForEachRefField([&](RefField<>& field) {
+        if (reinterpret_cast<MAddress>(&field) != referent) {
+            closure->do_oop(&field);
+        }
+    }, klass);
+    oop_oop_iterate_ref_processing(closure, object);
 }
 
 template <typename OopClosureT>
@@ -64,7 +150,7 @@ void ZIterator::oop_iterate(BaseObject* object, OopClosureT* closure)
 {
     // zIterator.inline.hpp:74-77: this entry requires a visible object.
     DCHECK(!is_invisible_object_array(object));
-    object->ForEachRefField([&](RefField<>& field) { closure->do_oop(&field); });
+    OopIteratorClosureDispatch::oop_oop_iterate(closure, object, object->GetTypeInfo());
 }
 
 template <typename OopClosureT>

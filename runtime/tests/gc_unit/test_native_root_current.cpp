@@ -90,6 +90,8 @@ public:
 };
 }
 
+#include "Heap/z/zAccess.hpp"
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 namespace {
@@ -526,10 +528,10 @@ GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
     Heap& collector = heap;
     RelocationReceiptTest::BindNativeRootFixture(collector);
     NativeSlot slot(zpointer::null);
-    ZBarrier::WriteStaticRef(slot, fx.obj0);
-    GC_EXPECT_TRUE(ZBarrier::ReadStaticRef(slot) == fx.obj0);
-    ZBarrier::WriteStaticRef(slot, nullptr);
-    GC_EXPECT_TRUE(ZBarrier::ReadStaticRef(slot) == nullptr);
+    NativeAccess<>::oop_store(&(slot), fx.obj0);
+    GC_EXPECT_TRUE(NativeAccess<>::oop_load(&(slot)) == fx.obj0);
+    NativeAccess<>::oop_store(&(slot), nullptr);
+    GC_EXPECT_TRUE(NativeAccess<>::oop_load(&(slot)) == nullptr);
     std::fprintf(stderr, "native_root_boundary executed=1 colored=1 null=1\n");
 }
 

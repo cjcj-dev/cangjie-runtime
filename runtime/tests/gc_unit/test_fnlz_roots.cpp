@@ -85,7 +85,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
     FinalizerProcessor fp(&pool);
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
+    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
 
     fp.ProcessReferences([](BaseObject*) { return false; });
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
@@ -113,7 +113,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     fp.RegisterFinalizer(fx.obj0);
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
+    GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
 
     fp.ProcessReferences([](BaseObject*) { return false; });
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));

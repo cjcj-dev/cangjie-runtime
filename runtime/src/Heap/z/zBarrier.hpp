@@ -47,37 +47,15 @@ public:
 
 
 
-    static BaseObject* ReadReference(BaseObject* obj, RefField<false>& field);
-    static BaseObject* ReadStaticRef(NativeSlot& field);
     static void MarkYoungGoodBarrierOnOopField(NativeSlot& field);
     static void MarkFinalizableBarrierOnRoot(NativeSlot& field);
     static void MarkBarrierOnOldOopField(RefField<>& field, bool finalizable);
     static void MarkBarrierOnYoungOopField(RefField<>& field);
     static zaddress RemsetBarrierOnOopField(RefField<>& field);
-    static BaseObject* ReadPhantomRef(BaseObject* obj, RefField<false>& field);
-    static BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field);
-    static void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size);
-    static void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib);
 
-    static void WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref);
-    static void WriteWeakReference(BaseObject* obj, RefField<false>& field, BaseObject* ref);
-    static void WriteStaticRef(NativeSlot& field, BaseObject* ref);
-    static void WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen);
-    static void WriteStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, GCTib gctib);
-    static void ReadStruct(MAddress dst, MAddress src, size_t size, GCTib gctib);
-    static void WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib);
 
-    static void CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize,
-                      BaseObject* srcObj, MAddress srcField, MIndex srcSize);
-    static void CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize,
-                         BaseObject* srcObj, MAddress srcField, MIndex srcSize);
 
-    static BaseObject* AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order);
 
-    static void AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order);
-    static BaseObject* AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order);
-    static bool CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
-                                 MemoryOrder succOrder, MemoryOrder failOrder);
 
     static zpointer load_atomic(volatile zpointer* p);
     static ZGeneration* remap_generation(zpointer ptr);
@@ -112,33 +90,8 @@ public:
     static bool clean_barrier_on_phantom_oop_field(volatile zpointer* p);
     static void load_barrier_on_oop_array(volatile zpointer* p, size_t length);
 
-    static void WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref);
-    static void WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen);
-    static void CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize,
-                          BaseObject* srcObj, MAddress srcField, MIndex srcSize);
-    static void CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize,
-                             BaseObject* srcObj, MAddress srcField, MIndex srcSize);
-    static void AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
-                                  MemoryOrder order);
-    static BaseObject* AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
-                                        MemoryOrder order);
-    static bool CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
-                                     BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder);
 
-    static void CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, size_t size);
-    static void CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib);
-    static void CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcObj, MAddress srcField, size_t srcSize);
-    static void CopyRefArrayPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, MIndex dstSize, MIndex srcSize);
 
-    __attribute__((visibility("hidden"))) static void CopyObjectStructColouredToHeap(
-        BaseObject* layoutObj, MAddress layoutStart, MAddress dst, size_t dstLen,
-        MAddress src, size_t srcLen);
-    __attribute__((visibility("hidden"))) static void CopyStaticStructColouredToHeap(
-        MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib);
-    __attribute__((visibility("hidden"))) static void CopyStructArrayColouredToHeap(
-        BaseObject* dstObj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen);
-    __attribute__((visibility("hidden"))) static void CopyRefArrayColouredToHeap(
-        MAddress dst, size_t dstLen, MAddress src, size_t srcLen);
 
     static void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref,
                             zpointer prev = zpointer::null);

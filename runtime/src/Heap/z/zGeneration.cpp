@@ -996,7 +996,7 @@ public:
     {
         {
             ZStatTimerWorker timer(ZSubPhaseConcurrentRemapRootsColoredOld);
-            colored.Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
+            colored.Apply([](NativeSlot& root) { (void)to_object(ZBarrier::load_barrier_on_oop_field(reinterpret_cast<volatile zpointer*>(&(root)))); });
         }
         {
             ZStatTimerWorker timer(ZSubPhaseConcurrentRemapRootsUncoloredOld);

@@ -557,7 +557,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   suite="${test_name%%.*}"
   name="${test_name#*.}"
   /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_store_barrier_buffer.cpp"
-  /usr/bin/grep -F -q "$anchor" "$ROOT/runtime/src/Heap/z/zBarrier.cpp"
+  /usr/bin/grep -F -q "$anchor" "$ROOT/runtime/src/Heap/z/zBarrier.inline.hpp"
   /usr/bin/grep -F -q "$consumer" "$SRC/test_store_barrier_buffer.cpp"
   /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/z/zBarrier.cpp"
   oldvalue_rows=$((oldvalue_rows + 1))
@@ -570,12 +570,12 @@ done
   "$SRC/test_store_barrier_buffer.cpp") -eq "$oldvalue_rows" ]]
 OLDVALUE_UNDEFINED="$OUT/cj_gc_unit.undefined-oldvalue.txt"
 nm -u "$OUT/cj_gc_unit" >"$OLDVALUE_UNDEFINED"
-if ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$ROOT/runtime/src/Heap/z/zBarrier.cpp"; then
+if ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$ROOT/runtime/src/Heap/z/zBarrier.inline.hpp"; then
   echo "GC_UNIT_OLDVALUE_IMPORT_MISSING symbol=store_barrier_on_heap_oop_field" >&2
   exit 10
 fi
 if ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$OUT/runtime-dynamic-symbols.txt" &&
-   ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$ROOT/runtime/src/Heap/z/zBarrier.cpp"; then
+   ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$ROOT/runtime/src/Heap/z/zBarrier.inline.hpp"; then
   echo "GC_UNIT_OLDVALUE_EXPORT_MISSING symbol=store_barrier_on_heap_oop_field" >&2
   exit 10
 fi
@@ -599,7 +599,7 @@ echo "STALL_SUITE=PRODUCT_BOTH_CONFIGURATIONS"
 # full symbols (not only the dynamic table) so no local/weak test copy can
 # satisfy its consumers, then require the executable to import those methods.
 REFERENCE_PROCESSOR_CONSUMERS=(
-  'MapleRuntime::ReferenceProcessor::DiscoverReference('
+  'MapleRuntime::ReferenceProcessor::discover_reference('
   'MapleRuntime::ReferenceProcessor::ProcessReferences('
   'MapleRuntime::ReferenceProcessor::EnqueueReferences('
 )
@@ -651,11 +651,12 @@ fi
 
 # #711 D: LoadHealDeliveryProduct and its receipt manifest were removed with P16.
 
-# Pointer-colour barrier tests consume independently replaceable functions from
-# the product SO.  Full nm excludes even local/weak test copies; nm -u proves
+# Access API and self-heal are header templates; bind their out-of-line
+# resolution and transition checks to independently replaceable product functions.  Full nm excludes even local/weak test copies; nm -u proves
 # the calls are imports.  main is the positive control above.
 PTRCOLOUR_PRODUCT_CONSUMERS=()
-PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::ZBarrier::ReadReference(')
+PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::ZGeneration::relocate_or_remap_object(')
+PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::AssertBarrierTransitionMonotonicity(')
 for consumer in "${PTRCOLOUR_PRODUCT_CONSUMERS[@]}"; do
   if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then
     echo "GC_UNIT_PTRCOLOUR_LOCAL_DEFINITION symbol=$consumer" >&2
@@ -673,7 +674,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   if [[ "$test_name" == "test_name" ]]; then
     continue
   fi
-  [[ "$carrier" == "product_so" ]]
+  [[ "$carrier" == "header_template" ]]
   suite="${test_name%%.*}"
   name="${test_name#*.}"
   case "$test_name" in

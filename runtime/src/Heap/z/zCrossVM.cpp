@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAccess.hpp"
 #include "Common/BaseObject.inline.h"
 #include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zMark.hpp"
@@ -68,8 +69,7 @@ class CJInteropContext : public BaseObject {
 public:
     CJFunc* GetCJFunc()
     {
-        return static_cast<CJFunc*>(ZBarrier::ReadReference(this,
-            HeapSlotAt<false>(&cjFunc)));
+        return static_cast<CJFunc*>(HeapAccess<>::oop_load(&(HeapSlotAt<false>(&cjFunc))));
     }
 private:
     CJFunc* cjFunc = nullptr;
@@ -79,8 +79,7 @@ class CJForeignProxy : public BaseObject {
 public:
     CJInteropContext* GetCJInteropContext()
     {
-        return static_cast<CJInteropContext*>(ZBarrier::ReadReference(this,
-            HeapSlotAt<false>(&interopContext)));
+        return static_cast<CJInteropContext*>(HeapAccess<>::oop_load(&(HeapSlotAt<false>(&interopContext))));
     }
 private:
     CJInteropContext* interopContext = nullptr;
