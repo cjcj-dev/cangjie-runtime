@@ -166,6 +166,7 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
         if (UNLIKELY(useSegmentedClear)) {
             return ZObjArrayAllocator(address, arraySize, nElems, arrayClass).initialize();
         }
+        ClearMemory(address, arraySize);
         MArray* newArray = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));
         newArray->SetLength(nElems);
 #if defined(__OHOS__) && (__OHOS__ == 1)

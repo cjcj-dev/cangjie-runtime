@@ -86,7 +86,7 @@ void* RunMajorCycle(void*)
     type->SetInstanceSize(sizeof(uint64_t));
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
-    auto* object = reinterpret_cast<BaseObject*>(collector.object_allocator().alloc(16, PageAge::old));
+    auto* object = reinterpret_cast<BaseObject*>(collector.object_allocator().alloc_for_relocation(16, PageAge::old));
     object->SetClassInfo(type);
     // The ZGC breakpoint exposes the completed root+follow result before
     // mark-end and relocation (zGeneration.cpp:1086-1092).
@@ -154,7 +154,7 @@ void* RunHandlerChain(void*)
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
             reinterpret_cast<uintptr_t>(metadata[i]), sizeof(TypeInfo));
         const size_t size = kPayload + (i == 0 ? 16 : 8);
-        objects[i] = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc(size, PageAge::old));
+        objects[i] = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(size, PageAge::old));
         std::memset(objects[i], 0, size);
         objects[i]->SetClassInfo(type);
     }

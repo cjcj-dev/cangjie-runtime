@@ -932,7 +932,6 @@ EXPORTS
     _Z7fprintfP6_iobufPKcz @927
     _ZGVZN12MapleRuntime10ZPage10NullRegionEvE10nullRegion @928 DATA
     _ZGVZN12MapleRuntime11CpuProfiler11GetInstanceEvE8instance @931 DATA
-    _ZGVZN12MapleRuntime13RegionManager13CollectRegionEPNS_10ZPageEE5probe @932 DATA
     _ZGVZN12MapleRuntime5GcLog7EnabledEvE7enabled @934 DATA
     _ZN12MapleRuntime10BaseObject18OnFinalizerCreatedEv @937
     _ZN12MapleRuntime10BaseObject23CompareExchangeRefFieldERNS_8HeapSlotILb0EEES2_S2_ @938
@@ -1102,7 +1101,6 @@ EXPORTS
     _ZN12MapleRuntime11RegionSpace14IsMarkedObjectEPKNS_10BaseObjectE @1218
     _ZN12MapleRuntime11RegionSpace15TryAllocateOnceEyNS_9AllocTypeE @1219
     _ZN12MapleRuntime11RegionSpace19IsResurrectedObjectEPKNS_10BaseObjectE @1222
-    _ZN12MapleRuntime11RegionSpace20ReclaimGarbageMemoryEb @1223
     _ZN12MapleRuntime11RegionSpace4InitERK9HeapParam @1225
     _ZN12MapleRuntime11RegionSpace8AllocateEyNS_9AllocTypeE @1226
     _ZN12MapleRuntime11RegionSpaceD0Ev @1227
@@ -1248,20 +1246,16 @@ EXPORTS
     _ZN12MapleRuntime13ParameterInfo14GetAnnotationsEPNS_8TypeInfoE @1406
     _ZN12MapleRuntime13ParameterInfo7SetNameEPKc @1407
     _ZN12MapleRuntime13RegionManager10InitializeEyy @1409
-    _ZN12MapleRuntime13RegionManager13CollectRegionEPNS_10ZPageE @1413
     _ZN12MapleRuntime13RegionManager13ReclaimRegionEPNS_10ZPageE @1417
     _ZN12MapleRuntime13RegionManager13ReleaseRegionEPNS_10ZPageE @1418
     _ZN12MapleRuntime13RegionManager15CountLiveObjectEPKNS_10BaseObjectE @1419
     _ZN12MapleRuntime13RegionManager17PromoteAllRegionsEv @1423
     _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEv @1425
-    _ZN12MapleRuntime13RegionManager19CollectLargeGarbageEv @1427
     _ZN12MapleRuntime13RegionManager19ReassembleFromSpaceEv @1428
     _ZN12MapleRuntime13RegionManager19SetGarbageThresholdEv @1429
     _ZN12MapleRuntime13RegionManager21StampCensusBoundariesEv @1434
-    _ZN12MapleRuntime13RegionManager28TakeReclaimableGarbageRegionEPy @1450
     _ZN12MapleRuntime13RegionManager30AssembleLargeGarbageCandidatesEv @1453
     _ZN12MapleRuntime13RegionManager30AssembleSmallGarbageCandidatesEv @1454
-    _ZN12MapleRuntime13RegionManager31TryTakeGarbageRegionAfterDispelEPNS_10ZPageE @1457
     _ZN12MapleRuntime13RegionManager33ClearNotRelocatableThisCycleFlagsEv @1459
     _ZN12MapleRuntime13RegionManager9HUGE_PAGEE @1460 DATA
     _ZN12MapleRuntime13RememberedSet10InitializeEyy @1461
@@ -1529,7 +1523,6 @@ EXPORTS
     _ZN12MapleRuntime18FinalizerProcessor13NotifyStartedEv @1874
     _ZN12MapleRuntime18FinalizerProcessor19VisitNativePointersERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEE @1875
     _ZN12MapleRuntime18FinalizerProcessor17RegisterFinalizerEPNS_10BaseObjectE @1877
-    _ZN12MapleRuntime18FinalizerProcessor18ReclaimHeapGarbageEv @1878
     _ZN12MapleRuntime18FinalizerProcessor19ProcessFinalizablesEv @1881
     _ZN12MapleRuntime18FinalizerProcessor21InitFinalizerCJThreadEv @1882
     _ZN12MapleRuntime18FinalizerProcessor22ProcessFinalizableListEv @1883
@@ -2494,8 +2487,6 @@ EXPORTS
     _ZThn56_NK12MapleRuntime11EHFrameInfo5GetIPEv @3233
     _ZZN12MapleRuntime10ZPage10NullRegionEvE10nullRegion @3234 DATA
     _ZZN12MapleRuntime11CpuProfiler11GetInstanceEvE8instance @3238 DATA
-    _ZZN12MapleRuntime13RegionManager13CollectRegionEPNS_10ZPageEE5probe @3239 DATA
-    _ZZN12MapleRuntime13RegionManager13CollectRegionEPNS_10ZPageEENKUlvE_clEv @3240
     _ZZN12MapleRuntime5GcLog7EnabledEvE7enabled @3245 DATA
     _ZZN12MapleRuntime5GcLog8FatalLenEvE3len @3246 DATA
     _ZZN12MapleRuntime5GcLog9FatalSlotEvE4slot @3247 DATA

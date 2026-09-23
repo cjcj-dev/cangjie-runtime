@@ -231,7 +231,7 @@ private:
 class ZTestAllocatedMemory {
 public:
     explicit ZTestAllocatedMemory(size_t size)
-        : _owner(Heap::GetHeap().page_allocator().TakeRegion(size, ZPageType::large, false, false, true)),
+        : _owner(Heap::GetHeap().page_allocator().TakeRegion(size, ZPageType::large, false, false)),
           _size(size)
     {
         GC_EXPECT_TRUE(_owner != nullptr);

@@ -43,37 +43,6 @@ inline __attribute__((visibility("hidden"))) size_t RegionManager::GetMetadataSi
         return ZGranuleSize;
     }
 
-    template<Generation G>
-inline size_t RegionManager::CollectRegion(ZPage* region)
-    {
-        DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-             region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd(), 0u);
-        region->LockWriteRegion();
-        region->SetRegionRole(ZPageRole::Garbage);
-        region->UnlockWriteRegion();
-
-        if (region->IsLargeRegion()) {
-            return region->GetRegionSize();
-        } else {
-            return region->GetRegionSize() - (region->is_marked() ? region->live_bytes() : 0);
-        }
-    }
-
-
-
-
-
-inline void RegionManager::ReclaimGarbageRegions()
-    {
-        ZPage* garbage = TakeReclaimableGarbageRegion();
-        while (garbage != nullptr) {
-            ReclaimRegion(garbage);
-            garbage = TakeReclaimableGarbageRegion();
-        }
-        // STEER3: scrub runs here (async reclaim), not inside young STW.
-        SatisfyStalledAllocations();
-    }
-
 inline size_t RegionManager::SumAllocatedByRoles(std::initializer_list<ZPageRole> roles) const
     {
         size_t bytes = 0;
@@ -141,51 +110,6 @@ inline void RegionManager::PrepareTrace()
         // twoflags: notRelocatableThisCycle stamps do not exist as list state;
         // is_allocating (zPage.inline.hpp:180-186) is the only filter.
     }
-
-inline ZPage* RegionManager::TakeReclaimableGarbageRegion(size_t* gatedBytes)
-    {
-        // #710: garbage pages are page-table entries with the Garbage role.
-        // The claim is a role CAS (zPageTable.hpp:57-77 walk); the routedest
-        // defence-in-depth raw-pointer check is unchanged.
-        ZPage* candidate = nullptr;
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            if (region->GetRegionRole() != ZPageRole::Garbage) {
-                continue;
-            }
-            ZPageRole expect = ZPageRole::Garbage;
-            if (region->CASRegionRole(expect, ZPageRole::None)) {
-                candidate = region;
-                break;
-            }
-        }
-        if (gatedBytes != nullptr) {
-            *gatedBytes = 0;
-        }
-        return candidate;
-    }
-
-inline bool RegionManager::TryTakeGarbageRegionAfterDispel(ZPage* target)
-    {
-        CHECK_DETAIL(target == nullptr || target->IsGarbageRegion(),
-                     "TryTakeGarbageRegionAfterDispel region=%p type=%u "
-                     "(garbage role still names a non-GARBAGE region)",
-                     target, static_cast<unsigned>(0u));
-        if (target == nullptr) {
-            return false;
-        }
-        ZPageRole expect = ZPageRole::Garbage;
-        return target->CASRegionRole(expect, ZPageRole::None);
-    }
-
-inline size_t RegionManager::GetGatedGarbageBytes()
-    {
-        return 0;
-    }
-
-
-
 
 } // namespace MapleRuntime
 #endif
