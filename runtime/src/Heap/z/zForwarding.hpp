@@ -199,8 +199,6 @@ public:
         accept,
     };
 
-    static uint32_t young_seqnum();
-
     static bool young_marking()
     {
         return ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();

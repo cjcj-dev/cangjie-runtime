@@ -122,7 +122,6 @@ public:
     static void RunCollectionDispatch(Heap& collector)
     {
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-        if (!cycle.Snapshot().active) ZGenerationTest::SetReason(cycle, GC_REASON_YOUNG);
         Heap::GetHeap().young().collect(ZYoungType::minor);
     }
 };
@@ -279,7 +278,7 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
 }
 // mark_and_remember mark half (zBarrier.inline.hpp:735-739): TRACE + young GC
 // paints the new young target. STW/Idle TestBarrier must not (phase gate).
-// gc_unit never Heap::Init; IsGcStarted is the same fixture latch SATB uses.
+// Synthetic mark phases are installed directly on their owning generation.
 GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
@@ -316,8 +315,8 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).PublishPhase(ZGenerationPhase::Relocate);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).PublishPhase(ZGenerationPhase::Relocate);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     HeapAccess<>::oop_store(&(field), nullptr);
@@ -458,7 +457,7 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     GC_EXPECT_EQ(pending, 0u);
                     GC_EXPECT_FALSE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
                     GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
-                    cycle.PublishPhase(ZGenerationPhase::Mark);
+                    cycle.set_phase(ZGenerationPhase::Mark);
                     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, gcThread, follow, finalizable);
                     ZMark& domain = young ? *Heap::GetHeap().young().MarkPtr()
                                               : *Heap::GetHeap().old().MarkPtr();
@@ -498,7 +497,7 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     fx.region0->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-    cycle.PublishPhase(ZGenerationPhase::Mark);
+    cycle.set_phase(ZGenerationPhase::Mark);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
     Heap::GetHeap().young().mark_follow();
@@ -519,11 +518,11 @@ GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
     fx.region0->reset(PageAge::old);
     fx.region0->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    cycle.PublishPhase(ZGenerationPhase::MarkComplete);
+    cycle.set_phase(ZGenerationPhase::MarkComplete);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), true, true, true, false);
     GC_EXPECT_EQ(publication.OldPending(), 0u);
     GC_EXPECT_FALSE(domain.Terminate().Resurrected());
-    cycle.PublishPhase(ZGenerationPhase::Mark);
+    cycle.set_phase(ZGenerationPhase::Mark);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), true, true, true, false);
     std::fprintf(stderr, "P1_RESURRECT_ASSERT pending=%zu resurrected=%d\n",
                  publication.OldPending(), domain.Terminate().Resurrected());

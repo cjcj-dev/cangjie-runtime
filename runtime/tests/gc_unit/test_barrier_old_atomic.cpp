@@ -98,27 +98,16 @@ private:
 class MarkWindowScope final {
 public:
     MarkWindowScope()
-        : started(Heap::GetHeap().IsGcStarted()), reason(Heap::GetHeap().GetZGeneration(ZGenerationId::old).Snapshot().reason)
     {
         phase = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
-        activityCycle = &Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-        ownerWasActive = activityCycle->Snapshot().active;
-        if (!ownerWasActive) activityCycle->Begin(1);
-        ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(ZGenerationId::old), GC_REASON_USER);
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     }
     ~MarkWindowScope()
     {
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phase);
-        ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(ZGenerationId::old), reason);
-        if (!ownerWasActive) activityCycle->End();
     }
 
 private:
-    bool started;
-    ZGeneration* activityCycle = nullptr;
-    bool ownerWasActive = false;
-    GCReason reason;
     ZGenerationPhase phase = ZGenerationPhase::Relocate;
 };
 

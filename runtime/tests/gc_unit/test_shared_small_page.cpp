@@ -139,7 +139,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
         GC_EXPECT_EQ(page->BirthSequence(), page->generation()->seqnum());
         GC_EXPECT_TRUE(page->IsAllocating());
         const auto other = age == PageAge::old ? ZGenerationId::young : ZGenerationId::old;
-        GC_EXPECT_EQ(page->OtherSequence(), Heap::GetHeap().GetCycleSnapshot(other).sequence);
+        GC_EXPECT_EQ(page->OtherSequence(), Heap::GetHeap().GetZGeneration(other).seqnum());
         GC_EXPECT_EQ(page->IsYoungRegion(), age != PageAge::old);
         GC_EXPECT_EQ(page->GetYoungAge(), age == PageAge::old ? uint8_t{0} : static_cast<uint8_t>(untype(age)));
         GC_EXPECT_TRUE(page->GetRegionRole() == ZPageRole::RecentFull);
@@ -354,7 +354,6 @@ GC_OTHER_VM_TEST(ObjectAllocator917, OldPhaseRequiresSafepoint)
 {
     ExpectAllocatorAbort("ObjectAllocator917.OldPhaseRequiresSafepoint", "Should be at safepoint", [] {
         GcHeapFixture fixture;
-        Heap::GetHeap().old().End();
         Heap::GetHeap().old().mark_start();
     });
 }

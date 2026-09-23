@@ -177,10 +177,10 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
         ZGeneration* old = ZGeneration::old();
         const char* phaseName = old != nullptr ? old->phase_to_string() : "none";
         FoldToken(phaseName, phaseTok, sizeof(phaseTok));
-        if (old != nullptr && old->Snapshot().active && old->is_phase_relocate()) {
+        if (old != nullptr && old->is_phase_relocate()) {
             inParFix = 1;
             gcKind = "fix";
-        } else if (old == nullptr || !old->Snapshot().active) {
+        } else if (old == nullptr) {
             gcKind = "none";
         } else {
             gcKind = "active";

@@ -137,9 +137,9 @@ void* RunArrayCase(void* argument)
     const MIndex length = small ? 16 : kLargeRefLength + ((mode & 32) != 0 ? 1 : 0);
     auto& heap = Heap::GetHeap();
     const ZGenerationId generation = young ? ZGenerationId::young : ZGenerationId::old;
-    const uint64_t before = heap.GetCycleSnapshot(generation).sequence;
-    const uint64_t youngBefore = heap.GetCycleSnapshot(ZGenerationId::young).sequence;
-    const uint64_t oldBefore = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    const uint64_t before = heap.GetZGeneration(generation).seqnum();
+    const uint64_t youngBefore = heap.GetZGeneration(ZGenerationId::young).seqnum();
+    const uint64_t oldBefore = heap.GetZGeneration(ZGenerationId::old).seqnum();
     const uintptr_t colorBefore = ::g_cjStoreGoodMask;
     MArray* array = primitive ? MCC_NewArray8(GetByteArrayTypeInfos().array, length) :
                                MCC_NewObjArray(GetReferenceArrayTypeInfos().array, length);
@@ -166,10 +166,10 @@ void* RunArrayCase(void* argument)
         }
     }
     const bool uninterrupted = young || full ||
-        (youngBefore == heap.GetCycleSnapshot(ZGenerationId::young).sequence &&
-         oldBefore == heap.GetCycleSnapshot(ZGenerationId::old).sequence && colorBefore == ::g_cjStoreGoodMask);
+        (youngBefore == heap.GetZGeneration(ZGenerationId::young).seqnum() &&
+         oldBefore == heap.GetZGeneration(ZGenerationId::old).seqnum() && colorBefore == ::g_cjStoreGoodMask);
     const bool published = !array->IsInvisibleObject() && mutator->LoadInvisibleRoot() == nullptr;
-    const uint64_t after = heap.GetCycleSnapshot(generation).sequence;
+    const uint64_t after = heap.GetZGeneration(generation).seqnum();
     const bool gc = !(young || full) || after > before;
     const bool lengthValid = array->GetLength() == length;
     std::fprintf(stderr, "SEGMENTED_RESULT_TARGET mode=%zu size=%zu length=%d published=%d mismatches=%zu before=%llu after=%llu gc=%d expected=0x%zx uninterrupted=%d\n",
@@ -408,7 +408,6 @@ public:
     {
         auto& young = Heap::GetHeap().young();
         young.Workers()->set_inactive();
-        young.End();
     }
 };
 
@@ -532,8 +531,8 @@ void* RunMarkAllocationCase(void* rawExisting)
                  static_cast<unsigned long long>(page->BirthSequence()),
                  static_cast<unsigned long long>(page->generation()->seqnum()), noExplicitMark,
                  pendingBefore, pendingAfter);
-    const auto during = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
-    const auto phase = during.phase;
+    const auto during = Heap::GetHeap().young().seqnum();
+    const auto phase = Heap::GetHeap().young().phase();
     std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
                  "implicit=%d live=%d target_live=%d excluded=%d\n",                   existing, static_cast<unsigned>(phase),
                  page->IsYoungRegion(), page->IsLargeRegion(), implicit, live, targetLive, excluded);
@@ -556,11 +555,11 @@ void* RunMarkAllocationCase(void* rawExisting)
     // page. A newly initialized target may still be allocating in its domain.
     const bool resampled = page->age() != PageAge::eden &&
                            page->BirthSequence() <= page->generation()->seqnum();
-    const auto after = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
-    const bool nextCycle = after.sequence > during.sequence;
+    const auto after = Heap::GetHeap().young().seqnum();
+    const bool nextCycle = after > during;
     std::fprintf(stderr, "MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED before=%llu after=%llu resampled=%d\n",
-                 static_cast<unsigned long long>(during.sequence),
-                 static_cast<unsigned long long>(after.sequence), resampled);
+                 static_cast<unsigned long long>(during),
+                 static_cast<unsigned long long>(after), resampled);
     heap.RemoveExportObject(holderRoot);
     mutator->SetManagedContext(true);
     const uintptr_t status = (retiredTLAB ? 0 : 1024) | ((noExplicitMark && noPublication) ? 0 : 512) | (implicit ? 0 : 1) | (live ? 0 : 2) |

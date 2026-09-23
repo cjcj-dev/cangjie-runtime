@@ -45,7 +45,6 @@ void CheckSelection(bool medium, bool promote, uint32_t workers)
     auto& generation = Heap::GetHeap().young();
     generation.InitializeWorkers(workers);
     generation.Workers()->set_active_workers(workers);
-    generation.Begin(1);
     GenerationSequenceFixture::Advance(generation);
     ZGenerationTest::SetTenuringThreshold(generation, promote ? 1u : 15u);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};

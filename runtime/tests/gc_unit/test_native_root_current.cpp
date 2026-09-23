@@ -49,22 +49,17 @@ public:
         ZCollectedHeapTest::SetWorkers(workers);
         for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = Heap::GetHeap().GetZGeneration(gen);
-            if (cycle.Snapshot().active) {
-                cycle.End();
-            }
             if (cycle.Workers() == nullptr) {
                 cycle.InitializeWorkers(workers);
             } else {
                 cycle.Workers()->set_active_workers(workers);
             }
-            cycle.Begin(workers);
         }
         ZGlobalsPointers::initialize();
     }
     static void FlipNativeRootYoung(Heap& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
     static void NativeRootMajorPrelude(Heap& collector)
     {
-        Heap::GetHeap().GetZGeneration(ZGenerationId::old).End();
         auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
         ZGeneration::young()->collect(ZYoungType::major_partial_roots);
     }
@@ -73,7 +68,6 @@ public:
         // ZGC zGeneration.cpp:1212-1237: use the product mark-start to
         // establish colors and sequence before the real concurrent root task.
         auto& old = Heap::GetHeap().old();
-        old.End();
         {
             ScopedStopTheWorld stopped("native-root old mark-start");
             old.mark_start();
@@ -458,7 +452,6 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     GC_EXPECT_TRUE(root != nullptr);
     GC_EXPECT_TRUE(parked->InSaferegion());
 
-    heap.old().End();
     // zGeneration.cpp:1212-1237, zMark.cpp:797-834: mark-start establishes
     // the color/sequence before workers consume roots, then follow marks objects.
     {

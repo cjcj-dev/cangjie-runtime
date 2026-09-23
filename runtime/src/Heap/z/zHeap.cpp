@@ -190,7 +190,7 @@ void Heap::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase val
         value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
         Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(Heap::GetHeap().young().Sequence());
     }
-    cycle.PublishPhase(value);
+    cycle.set_phase(value);
 }
 
 Generation Heap::ObjectGeneration(BaseObject* object) const
@@ -230,9 +230,12 @@ bool Heap::IsSurvivedObject(const BaseObject* obj) const
     return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
 }
 
+// Standard-library ABI query. ZGC zDriver.cpp:43-57 scopes collection
+// activity with the driver's cause; generations own no second activity state.
 bool Heap::IsGcStarted() const
 {
-    return GetCycleSnapshot(ZGenerationId::young).active || GetCycleSnapshot(ZGenerationId::old).active;
+    return (ZDriver::minor() != nullptr && ZDriver::minor()->gc_cause() != GC_REASON_INVALID) ||
+           (ZDriver::major() != nullptr && ZDriver::major()->gc_cause() != GC_REASON_INVALID);
 }
 
 bool Heap::IsGCEnabled() const { return isGCEnabled.load(); }

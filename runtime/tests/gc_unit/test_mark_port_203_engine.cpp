@@ -411,7 +411,7 @@ void CheckYoungClosureAccounting(uint32_t workers)
     auto& young = Heap::GetHeap().young();
     young.InitializeWorkers(workers);
     young.Mark().Start();
-    young.PublishPhase(ZGenerationPhase::Mark);
+    young.set_phase(ZGenerationPhase::Mark);
     HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE)
         .StoreColoured(zpointer::null);
     const size_t expected = heap.obj0->GetSize();
@@ -456,7 +456,7 @@ GC_TEST(RememberedClear845, ConsumedPreviousSlotsAreAbsentOnRescan)
     young.InitializeWorkers(1);
     young.Mark().Start();
     // Old marking makes the scan independent of incomplete old live bits.
-    heap.old().PublishPhase(ZGenerationPhase::Mark);
+    heap.old().set_phase(ZGenerationPhase::Mark);
     auto* page = fixture.region0;
     auto* slot = reinterpret_cast<volatile zpointer*>(
         reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);

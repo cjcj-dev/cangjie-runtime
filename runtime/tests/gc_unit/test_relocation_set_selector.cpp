@@ -146,7 +146,6 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationSetSelector, GenerationSelectsAllPartitions
         GC_EXPECT_TRUE(page != nullptr);
         expected[index] = page;
     }
-    generation.Begin(0);
     GenerationSequenceFixture::Advance(generation);
     for (size_t index = 0; index < partitions; ++index) {
         ZPage* page = expected[index];
@@ -217,7 +216,6 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationSetSelector, GenerationMediumFilterBoundari
             if (extra != 0) { expected.push_back(page); }
         }
     }
-    generation.Begin(0);
     GenerationSequenceFixture::Advance(generation);
     for (size_t i = 0; i < pages.size(); ++i) {
         ZPage* page = pages[i];

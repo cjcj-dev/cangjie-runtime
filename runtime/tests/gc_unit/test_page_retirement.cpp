@@ -387,7 +387,7 @@ void CheckMarkReclaim(bool freePage)
     const uintptr_t start = first->GetRegionStart();
     const size_t capacity = manager.GetCommittedCapacity();
     const size_t cachedBefore = manager.GetCachedBytes();
-    const auto previousPhase = heap.old().Snapshot().phase;
+    const auto previousPhase = heap.old().phase();
     heap.old().set_phase(ZGenerationPhase::Mark);
     // ZGC zPageAllocator.cpp:692-699,2253-2266: returning memory has no
     // mark-epoch holding branch. Both existing product entry paths obey it.
@@ -400,7 +400,7 @@ void CheckMarkReclaim(bool freePage)
     const bool withdrawn = Heap::page(start) == nullptr;
     ZPage* reused = Heap::alloc_page(size, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     const bool sameRange = reused != nullptr && reused->GetRegionStart() == start;
-    const bool stillMark = heap.old().Snapshot().phase == ZGenerationPhase::Mark;
+    const bool stillMark = heap.old().phase() == ZGenerationPhase::Mark;
     const bool sameCapacity = manager.GetCommittedCapacity() == capacity;
     std::fprintf(stderr,
         "MARK_CACHE_TARGET path=%s before=%zu after=%zu size=%zu withdrawn=%d reused=%d mark=%d capacity_same=%d\n",

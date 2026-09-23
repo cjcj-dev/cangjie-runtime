@@ -515,8 +515,8 @@ HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
         : 0;
     // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
     // gc_unit other-vm children can enter before the generation cycle is active.
-    const unsigned gcPhase = Heap::GetHeap().IsGcStarted() && ZGeneration::old() != nullptr
-        ? static_cast<unsigned>(ZGeneration::old()->Snapshot().phase)
+    const unsigned gcPhase = ZGeneration::old() != nullptr
+        ? static_cast<unsigned>(ZGeneration::old()->phase())
         : 0xffu;
     std::fprintf(stderr,
                  "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "

@@ -6,7 +6,6 @@
 
 #pragma once
 #include <atomic>
-#include <mutex>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -29,18 +28,8 @@ class ZRelocate;
 class ZRelocationSetSelector;
 enum class zaddress : Uptr;
 struct TenuringInputs;
-// Per-generation execution state. The snapshot lock publishes cycle identity
-// and phase together; the phase atomic serves existing barrier readers.
-// ZGC: zGeneration.hpp:65-78 (generation-owned phase and sequence).
-enum class ZGenerationPhase : uint8_t { Mark, MarkComplete, Relocate };
-struct GCCycleSnapshot {
-    ZGenerationId generation;
-    uint64_t sequence;
-    uint64_t requestIndex;
-    GCReason reason;
-    ZGenerationPhase phase;
-    bool active;
-};
+// ZGC zGeneration.hpp:79-80: phase and sequence are generation-owned.
+enum class ZGenerationPhase { Mark, MarkComplete, Relocate };
 class ScopedStopTheWorld;
 class ZGeneration;
 class ZGenerationYoung;
@@ -63,8 +52,8 @@ public:
     static ZGenerationYoung* young();
     static ZGenerationOld* old();
     static ZGeneration* generation(ZGenerationId id);
-    uint32_t seqnum() const { return sequence; }
-    GCCycleSnapshot Snapshot() const;
+    uint32_t seqnum() const { return _seqnum; }
+    ZGenerationPhase phase() const { return _phase; }
     ZMark& Mark() { return *mark; }
     const ZMark& Mark() const { return *mark; }
     ZMark* MarkPtr() { return mark.get(); }
@@ -121,10 +110,6 @@ public:
     ZStatRelocation* StatRelocation() { return &statRelocation; }
     ZGenerationPhase GcPhase() const { return _phase; }
     uint64_t Sequence() const { return seqnum(); }
-    GCReason Reason() const { return reason.load(std::memory_order_acquire); }
-    void SelectReason(GCReason value, uint64_t index = 0);
-    // GCStats.reason write counterpart: tests override the reason of an
-    // already-active cycle without the !active constraint.
     friend class ZGenerationTest;
     ZYoungType YoungType() const { return youngType.load(std::memory_order_acquire); }
     void SetYoungType(ZYoungType type);
@@ -132,11 +117,8 @@ public:
     {
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
     }
-    void Begin(uint64_t index);
-    void PublishPhase(ZGenerationPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
-    void End();
     ZForwardingTable& forwarding_table() { return _forwarding_table; }
     const ZForwardingTable& forwarding_table() const { return _forwarding_table; }
     ZRelocationSet& relocation_set() { return _relocation_set; }
@@ -157,7 +139,6 @@ protected:
 #endif
     std::unique_ptr<ZMark> mark;
     const ZGenerationId _id;
-    const ZGenerationId _cycle;
     std::unique_ptr<ZWorkers> workers;
     std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
     ZStatHeap statHeap;
@@ -168,21 +149,17 @@ protected:
     ZStatCycle cycleStats;
     // zGeneration.hpp:_stat_workers, constructed before _workers points at it.
     ZStatWorkers statWorkers;
-    mutable std::mutex mutex;
     // ZGeneration::ZGeneration (zGeneration.cpp:137): _seqnum(1). ZLiveMap uses
     // seqnum 0 as "never marked" (zLiveMap.cpp:40, zLiveMap.inline.hpp:37-43),
     // so no generation may ever report sequence 0.
-    uint32_t sequence = 1;
-    uint64_t requestIndex = 0;
+    uint32_t _seqnum = 1;
     // ZGenerationOld::_young_seqnum_at_reloc_start (zGeneration.hpp:278).
     std::atomic<uint64_t> youngSequenceAtRelocateStart{ 0 };
     std::atomic<ZYoungType> youngType { ZYoungType::none };
-    std::atomic<GCReason> reason { GC_REASON_USER };
     ZGeneration::Phase _phase { ZGeneration::Phase::Relocate };
     std::atomic<size_t> _freed { 0 };
     std::atomic<size_t> _promoted { 0 };
     std::atomic<size_t> _compacted { 0 };
-    bool active = false;
     ZForwardingTable _forwarding_table;
     ZRelocationSet _relocation_set;
     std::unique_ptr<ZRelocate> _relocate;
