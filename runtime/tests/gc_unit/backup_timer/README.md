@@ -40,7 +40,7 @@ observer). Both rule and dispatch assertions execute even when the first fails.
 `TIMER_WAIT_SECONDS` may shorten a harness development run; only runs
 exceeding 240 seconds qualify the producer-cut assertion.
 
-The retired TaskQueue TIMEOUT path is outside this test: controller ruling
+The retired legacy queue timeout path is outside this test: controller ruling
 `sym_cangjie_runtime_910_implement_r5785397551-20260922T224228Z.md` assigns its
 removal to the #898 driver package and approves observing current director ports.
 

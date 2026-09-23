@@ -3,8 +3,6 @@
 
 #include "Heap/z/zDriverPort.hpp"
 #include "Base/Panic.h"
-#include "Base/TimeUtils.h"
-#include "Heap/z/zStat.hpp"
 #include "Heap/z/zFuture.inline.hpp"
 #include "Heap/z/zList.inline.hpp"
 #include "Heap/z/zLock.inline.hpp"
@@ -165,49 +163,18 @@ void ZDriverPort::ack()
     }
 }
 
-inline bool GCRequest::IsFrequentGC() const
-{
-    uint64_t intervalNs = minIntervelNs.load(std::memory_order_acquire);
-    if (intervalNs == 0) {
-        return false;
-    }
-    int64_t now = static_cast<int64_t>(TimeUtil::NanoSeconds());
-    return (now - static_cast<int64_t>(prevRequestTime.load(std::memory_order_acquire)) <
-            static_cast<int64_t>(intervalNs));
-}
-
-inline bool GCRequest::IsFrequentAsyncGC() const
-{
-    int64_t now = static_cast<int64_t>(TimeUtil::NanoSeconds());
-    return (now - ZStat::GetPrevGCFinishTime() < minIntervelNs.load(std::memory_order_acquire));
-}
-
-inline bool GCRequest::IsFrequentHeuristicGC() const { return IsFrequentAsyncGC(); }
-
-bool GCRequest::ShouldBeIgnored() const
-{
-    switch (reason) {
-        case GC_REASON_YOUNG:
-            return false;
-        case GC_REASON_FORCE:
-            return IsFrequentGC();
-        default:
-            return false;
-    }
-}
-
 GCRequest g_gcRequests[] = {
-    { GC_REASON_USER, "user", false, true, { 0 }, { 0 } },
-    { GC_REASON_FORCE, "force", true, false, { 0 }, { 0 } },
-    { GC_REASON_YOUNG, "young", false, false, { 0 }, { 0 } },
-    { GC_REASON_WB_BREAKPOINT, "wb_breakpoint", false, true, { 0 }, { 0 } },
-    { GC_REASON_WARMUP, "warmup", false, true, { 0 }, { 0 } },
-    { GC_REASON_ALLOCATION_STALL, "allocation_stall", false, false, { 0 }, { 0 } },
-    { GC_REASON_TIMER, "timer", false, true, { 0 }, { 0 } },
-    { GC_REASON_ALLOCATION_RATE, "allocation_rate", false, true, { 0 }, { 0 } },
-    { GC_REASON_HIGH_USAGE, "high_usage", false, true, { 0 }, { 0 } },
-    { GC_REASON_PROACTIVE, "proactive", false, true, { 0 }, { 0 } },
-    { GC_REASON_DCMD_GC_RUN, "diagnostic_command", true, true, { 0 }, { 0 } }
+    { GC_REASON_USER, "user" },
+    { GC_REASON_FORCE, "force" },
+    { GC_REASON_YOUNG, "young" },
+    { GC_REASON_WB_BREAKPOINT, "wb_breakpoint" },
+    { GC_REASON_WARMUP, "warmup" },
+    { GC_REASON_ALLOCATION_STALL, "allocation_stall" },
+    { GC_REASON_TIMER, "timer" },
+    { GC_REASON_ALLOCATION_RATE, "allocation_rate" },
+    { GC_REASON_HIGH_USAGE, "high_usage" },
+    { GC_REASON_PROACTIVE, "proactive" },
+    { GC_REASON_DCMD_GC_RUN, "diagnostic_command" }
 };
 
 } // namespace MapleRuntime
