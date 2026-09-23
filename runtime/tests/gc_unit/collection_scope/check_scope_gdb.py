@@ -79,6 +79,10 @@ pending = {}
 
 class Sample(gdb.Breakpoint):
     def stop(self):
+        # Keep the real sampler store and its read in one debugger scheduling
+        # interval: the service thread otherwise CollectAndReset()s the counter.
+        # This short path contains only atomic sampling, no cross-thread waits.
+        gdb.execute('set scheduler-locking on')
         sampler = val('this').dereference()['sampler']
         if sampler['group'].string() == 'Young Generation':
             kind = int(val('MapleRuntime::ZGeneration::_young->youngType._M_i'))
@@ -97,6 +101,7 @@ class SampleDone(gdb.Breakpoint):
             return False
         sampler, before, kind, expected, frames = item
         after = total(sampler)
+        gdb.execute('set scheduler-locking off')
         name = 'old' if kind == 4 else 'young'
         before_cycle = cycle_inputs[gdb.selected_thread().global_num][name]
         for index, field in enumerate(('start', 'end')):

@@ -11,6 +11,10 @@ It compares its address with the type-indexed generation sampler, including both
 old collections. A hardware watchpoint reads the actual old reset store and its
 VM-operation stack. Cycle end checks read the actual cycle start/end record.
 All target assertions print their inputs on both pass and failure.
+The debugger locks scheduling only across the atomic generation sample store
+and its immediate read; this prevents the statistics service from resetting
+the per-CPU counter between those observations. It releases scheduling before
+PrintStalls executes, and leaves collector phases unrestricted.
 
 Compile the fixture once on kkk2, with C++17, `-g -O0 -fno-rtti
 -fvisibility-inlines-hidden`, the same include roots as run_standalone.sh, and
