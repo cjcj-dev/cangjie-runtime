@@ -279,21 +279,7 @@ ZPage* ZPage::clone_for_promotion() const
     return page;
 }
 
-// zPage.inline.hpp:453-522: atomic allocation and allocation undo.
-uintptr_t ZPage::alloc_object_atomic(size_t size)
-{
-    MRT_ASSERT(is_allocating(), "Invalid state");
-    const size_t aligned = AlignUp<size_t>(size, object_alignment());
-    zoffset_end addr = top();
-    for (;;) {
-        zoffset_end newTop;
-        if (!to_zoffset_end(&newTop, addr, aligned) || newTop > end()) { return 0; }
-        if (__atomic_compare_exchange(&_top, &addr, &newTop, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-            return untype(ZOffset::address_unsafe(to_zoffset(addr)));
-        }
-    }
-}
-
+// zPage.inline.hpp:481-522: allocation undo.
 bool ZPage::undo_alloc_object(uintptr_t addr, size_t size)
 {
     MRT_ASSERT(is_allocating(), "Invalid state");
