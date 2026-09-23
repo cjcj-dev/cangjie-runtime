@@ -376,7 +376,7 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 //   ③ never return a from address or a null-tip geometric address.
 // Distinct from 4e75f2cc: that path is RouteObject *miss* (no plan) on a ghost about to
 // be reclaimed — returning from there reinstalls a dying address. Here RouteObject *hit*
-// with no tip yet: while still ROUTED/ROUTING, from is not yet CollectRegion'd.
+// with no tip yet: while forwarding is incomplete, the source page is retained.
 // After object/region publish (FORWARDED|COMPACTED) tip must exist if the plan was real;
 // missing tip = permanent hole = invariant violation → CHECK (not hang, not geometric to).
 //
@@ -662,7 +662,7 @@ BaseObject* ZRelocate::ForwardObject(BaseObject* obj, Generation generation)
     }
     // GetRoute survivor gate / exclusive soft-miss: a movable ghost-from with no
     // to-version is not a stable address. Returning `obj` here reinstalls a from
-    // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
+    // pointer whose source page is about to be released.
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
     if (IsFromObject(obj)) {
         ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));

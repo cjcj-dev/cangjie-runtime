@@ -260,8 +260,6 @@ public:
     // zGeneration.cpp:1248,1526: young-count snapshot at major start.
     uint32_t total_collections_at_start() const { return _total_collections_at_start; }
     void PostTrace();
-    void CollectSmallSpace();
-    void CollectLargeGarbage();
     ~ZGenerationOld();
     bool should_record_stats() override;
     void collect();

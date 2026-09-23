@@ -134,13 +134,6 @@ public:
 
     Mutator* GetMutator() const { return fpMutator; }
 
-    void NotifyToReclaimGarbage()
-    {
-        shouldReclaimHeapGarbage.store(true, std::memory_order_release);
-        Notify();
-    }
-
-
 private:
     U32 VisitRootLists(const NativeSlotVisitor& strong, const NativeSlotVisitor& weak)
     {
@@ -158,7 +151,6 @@ private:
     void FinishFinalizableBatch();
     void ProcessFinalizables();
     void ProcessFinalizableList();
-    void ReclaimHeapGarbage();
 
     std::mutex wakeLock;
     std::condition_variable wakeCondition; // notify finalizer processing continue
@@ -185,7 +177,6 @@ private:
     // Protected by listLock.  Queue non-emptiness and the cached predicate are
     // one synchronization decision, so a worker cannot clear a later enqueue.
     bool hasFinalizableJob = false;
-    std::atomic<bool> shouldReclaimHeapGarbage;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     // stats
     void LogAfterProcess();
