@@ -930,11 +930,11 @@ void CheckSoftMax(size_t heapKB, const char* configured, size_t softKB, bool sof
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ExplicitEnvironment)
 {
-    CheckSoftMax(512 * 1024, "128MB", 0, false, size_t(128) * MB);
+    CheckSoftMax(512 * 1024, "128M", 0, false, size_t(128) * MB);
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ExplicitHardLimit)
 {
-    CheckSoftMax(512 * 1024, "512MB", 0, false, size_t(512) * MB);
+    CheckSoftMax(512 * 1024, "512M", 0, false, size_t(512) * MB);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, DefaultErgonomics)
@@ -955,7 +955,7 @@ GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ExplicitParameter)
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, EnvironmentPrecedesParameter)
 {
-    CheckSoftMax(512 * 1024, "256MB", 128 * 1024, true, size_t(256) * MB);
+    CheckSoftMax(512 * 1024, "256M", 128 * 1024, true, size_t(256) * MB);
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ManagedDefaultErgonomics)
 {
@@ -967,7 +967,7 @@ GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ManagedExplicitMax)
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ManagedExplicitSoft)
 {
-    CheckSoftMax(0, "128MB", 0, false, size_t(128) * MB, true);
+    CheckSoftMax(0, "128M", 0, false, size_t(128) * MB, true);
 }
 
 namespace {
@@ -1021,37 +1021,37 @@ GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ParameterOverflow)
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentAboveMaximum)
 {
-    CheckSoftConfig(32 * 1024, "128MB", E_ARGS);
+    CheckSoftConfig(32 * 1024, "128M", E_ARGS);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentOverridesInvalidParameter)
 {
-    CheckSoftConfig(128 * 1024, "32MB", E_OK);
+    CheckSoftConfig(128 * 1024, "32M", E_OK);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentOverridesOverflowParameter)
 {
-    CheckSoftConfig(std::numeric_limits<size_t>::max(), "32MB", E_OK);
+    CheckSoftConfig(std::numeric_limits<size_t>::max(), "32M", E_OK);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentZero)
 {
-    CheckSoftConfig(0, "0KB", E_OK);
+    CheckSoftConfig(0, "0K", E_OK);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentByteOverflow)
 {
-    CheckSoftConfig(0, "18014398509481984KB", E_ARGS);
+    CheckSoftConfig(0, "18014398509481984K", E_ARGS);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentUnitOverflow)
 {
-    CheckSoftConfig(0, "17592186044416GB", E_ARGS);
+    CheckSoftConfig(0, "17592186044416G", E_ARGS);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentNumberOverflow)
 {
-    CheckSoftConfig(0, "18446744073709551616KB", E_ARGS);
+    CheckSoftConfig(0, "18446744073709551616K", E_ARGS);
 }
 
 namespace {
@@ -1066,7 +1066,7 @@ void CheckManagedSoftConstraint(const char* soft, const char* diagnostic)
         if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
         close(output[1]);
         signal(SIGABRT, SIG_DFL);
-        setenv("cjHeapSize", "64MB", 1);
+        setenv("cjHeapSize", "64M", 1);
         setenv("cjProcessorNum", "1", 1);
         setenv("cjConcGCThreads", "2", 1);
         setenv("cjSoftMaxHeapSize", soft, 1);
@@ -1091,58 +1091,139 @@ void CheckManagedSoftConstraint(const char* soft, const char* diagnostic)
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedAboveMaximum)
 {
-    CheckManagedSoftConstraint("128MB", "SoftMaxHeapSize must be less than or equal");
+    CheckManagedSoftConstraint("128M", "SoftMaxHeapSize must be less than or equal");
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedByteOverflow)
 {
-    CheckManagedSoftConstraint("18014398509481984KB", "Heap size conversion overflows bytes");
+    CheckManagedSoftConstraint("18014398509481984K", "Heap size conversion overflows bytes");
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedUnitOverflow)
 {
-    CheckManagedSoftConstraint("17592186044416GB", "Invalid cjSoftMaxHeapSize");
+    CheckManagedSoftConstraint("17592186044416G", "Invalid cjSoftMaxHeapSize");
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, Decimal)
 {
-    CheckSoftMax(64 * 1024, "40MB", 0, false, size_t(40) * MB);
+    CheckSoftMax(64 * 1024, "40M", 0, false, size_t(40) * MB);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, LeadingZeroDecimal)
 {
-    CheckSoftMax(64 * 1024, "040MB", 0, false, size_t(40) * MB);
+    CheckSoftMax(64 * 1024, "040M", 0, false, size_t(40) * MB);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, DecimalEight)
 {
-    CheckSoftMax(64 * 1024, "8MB", 0, false, size_t(8) * MB);
+    CheckSoftMax(64 * 1024, "8M", 0, false, size_t(8) * MB);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, LeadingZeroEight)
 {
-    CheckSoftMax(64 * 1024, "08MB", 0, false, size_t(8) * MB);
+    CheckSoftMax(64 * 1024, "08M", 0, false, size_t(8) * MB);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, Hexadecimal)
 {
-    CheckSoftMax(64 * 1024, "0x20MB", 0, false, size_t(32) * MB);
+    CheckSoftMax(64 * 1024, "0x20M", 0, false, size_t(32) * MB);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, UppercaseHexadecimal)
 {
-    CheckSoftMax(64 * 1024, "0X20MB", 0, false, size_t(32) * MB);
+    CheckSoftMax(64 * 1024, "0X20M", 0, false, size_t(32) * MB);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, DecimalHexControl)
 {
-    CheckSoftMax(64 * 1024, "32MB", 0, false, size_t(32) * MB);
+    CheckSoftMax(64 * 1024, "32M", 0, false, size_t(32) * MB);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, AboveMaximum)
 {
-    CheckSoftConfig(0, "100MB", E_ARGS);
+    CheckSoftConfig(0, "100M", E_ARGS);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxRadix, LeadingZeroAboveMaximum)
 {
-    CheckSoftConfig(0, "0100MB", E_ARGS);
+    CheckSoftConfig(0, "0100M", E_ARGS);
+}
+
+// HotSpot test_arguments.cpp:67-166 and INTEGER_TEST_TABLE unsigned size_t column.
+#include "Heap/shared/gcArguments.hpp"
+namespace {
+constexpr size_t k = 1024;
+constexpr size_t m = k * k;
+constexpr size_t g = m * k;
+constexpr size_t t = g * k;
+void CheckMemoryParser(const char* input, bool accepted, size_t expected, int referenceLine)
+{
+    size_t parsed = 4711;
+    const auto rc = GCArguments::parse_memory_size(input, &parsed, 0,
+                                                  std::numeric_limits<size_t>::max());
+    std::fprintf(stderr, "MEMORY_TABLE input=[%s] reference_line=%d rc=%d accepted=%d bytes=%zu expected=%zu\n",
+                 input, referenceLine, rc, accepted, parsed, expected);
+    GC_EXPECT_EQ(rc, accepted ? GCArguments::arg_in_range : GCArguments::arg_unreadable);
+    if (accepted) GC_EXPECT_EQ(parsed, expected);
+}
+void CheckMemoryRuntime(const char* input, bool accepted, size_t expected)
+{
+    setenv("cjSoftMaxHeapSize", input, 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    const auto rc = InitCJRuntime(&params);
+    const bool valid = accepted && expected <= 64 * MB;
+    std::fprintf(stderr, "MEMORY_RUNTIME input=[%s] rc=%d valid=%d expected=%zu\n", input, rc, valid, expected);
+    GC_EXPECT_EQ(rc, valid ? E_OK : E_ARGS);
+    if (rc == E_OK) {
+        const size_t actual = Heap::GetHeap().soft_max_capacity();
+        std::fprintf(stderr, "MEMORY_CONSUMER actual=%zu expected=%zu\n", actual, expected);
+        GC_EXPECT_EQ(actual, expected);
+        GC_EXPECT_EQ(ZHeuristics::max_heap_size(), 64 * MB);
+        GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    }
+}
+}
+#define SOFT_MEMORY_CASE(id, input, accepted, bytes, line) \
+    GC_TEST(SoftMemoryTable, id) { CheckMemoryParser(input, accepted, bytes, line); } \
+    GC_RUNTIME_OTHER_VM_TEST(SoftMemoryRuntime, id) { CheckMemoryRuntime(input, accepted, bytes); }
+#include "soft_memory_cases.inc"
+#undef SOFT_MEMORY_CASE
+
+GC_TEST(SoftMemoryTable, MemoryRangeBounds)
+{
+    constexpr size_t max_uintx = std::numeric_limits<size_t>::max();
+    constexpr size_t max_intx = std::numeric_limits<intptr_t>::max();
+    struct RangeCase { size_t value; size_t minimum; size_t maximum; GCArguments::ArgsRange expected; };
+    const RangeCase cases[] = {
+        { 999,  1000, max_uintx, GCArguments::arg_too_small },
+        { 1000, 1000, max_uintx, GCArguments::arg_in_range },
+        { 1001, 1000, max_uintx, GCArguments::arg_in_range },
+        { max_intx - 2, max_intx - 1, max_uintx, GCArguments::arg_too_small },
+        { max_intx - 1, max_intx - 1, max_uintx, GCArguments::arg_in_range },
+        { max_intx - 0, max_intx - 1, max_uintx, GCArguments::arg_in_range },
+        { max_intx - 1, max_intx, max_uintx, GCArguments::arg_too_small },
+        { max_intx    , max_intx, max_uintx, GCArguments::arg_in_range },
+        { max_uintx - 2, max_uintx - 1, max_uintx, GCArguments::arg_too_small },
+        { max_uintx - 1, max_uintx - 1, max_uintx, GCArguments::arg_in_range },
+        { max_uintx    , max_uintx - 1, max_uintx, GCArguments::arg_in_range },
+        { max_uintx - 1, max_uintx, max_uintx, GCArguments::arg_too_small },
+        { max_uintx    , max_uintx, max_uintx, GCArguments::arg_in_range },
+        { max_uintx - 1, 1000, max_uintx, GCArguments::arg_in_range },
+        { max_uintx    , 1000, max_uintx, GCArguments::arg_in_range },
+        { max_intx - 2     , 1000, max_intx - 1, GCArguments::arg_in_range },
+        { max_intx - 1     , 1000, max_intx - 1, GCArguments::arg_in_range },
+        { max_intx         , 1000, max_intx - 1, GCArguments::arg_too_big },
+        { max_intx - 1     , 1000, max_intx, GCArguments::arg_in_range },
+        { max_intx         , 1000, max_intx, GCArguments::arg_in_range },
+    };
+    size_t parsedRangeValue = 0;
+    for (const auto& entry : cases) {
+        const std::string input = std::to_string(entry.value);
+        const auto actual = GCArguments::parse_memory_size(input.c_str(), &parsedRangeValue,
+                                                           entry.minimum, entry.maximum);
+        std::fprintf(stderr, "MEMORY_RANGE value=%zu min=%zu max=%zu actual=%d expected=%d\n",
+                     entry.value, entry.minimum, entry.maximum, actual, entry.expected);
+        GC_EXPECT_EQ(actual, entry.expected);
+    }
 }

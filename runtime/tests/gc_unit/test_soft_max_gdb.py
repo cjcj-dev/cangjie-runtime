@@ -14,7 +14,7 @@ try:
     fixture = 'GcDirector.ProductWarmupStopsAfterThreeCycles'
     gdb.execute('set environment GC_UNIT_FILTER ' + fixture)
     gdb.execute('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
-    gdb.execute('set environment cjSoftMaxHeapSize 32MB')
+    gdb.execute('set environment cjSoftMaxHeapSize 32M')
     source = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
     start = next(i for i, line in enumerate(source) if 'static bool rule_major_warmup(' in line)
     target = next(i + 1 for i in range(start + 1, len(source))

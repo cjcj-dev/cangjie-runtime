@@ -23,7 +23,7 @@ void ZArguments::initialize_heap_flags_and_sizes()
 {
     const HeapParam param = CangjieRuntime::GetHeapParam();
     const bool soft_is_explicit = param.softHeapSizeSet;
-    size_t soft = param.softHeapSize * KB;
+    size_t soft = SoftMaxHeapSize.load(std::memory_order_acquire);
     // GCArguments:282-283 initializes default soft to max. ZArguments:43-50
     // applies ergonomics only without explicit sizing. No MaxRAMPercentage
     // parameter exists in this runtime, so that origin condition is true.
