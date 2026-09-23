@@ -305,7 +305,6 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     if (ZAbort::should_abort()) {
         // The phase owner already joined any submitted work. Keep mark and
         // forwarding storage alive for driver shutdown; skip normal reclaim.
-        cycle.Workers()->set_inactive();
         cycle.End();
         return;
     }
@@ -341,16 +340,9 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     }
     // zStatHeap::at_relocate_end (zGeneration.cpp:935-940): publish only to
     // the generation being collected; the account reads the allocator stats.
-    const bool young = reason == GC_REASON_YOUNG;
-    const size_t usedAfter = Heap::GetHeap().GetAllocatedSize();
     statHeap->AtRelocateEnd(
         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(&cycle),
         cycle.should_record_stats());
-    if (!young) {
-        // RegionManager's allocation pacing reads the post-major baseline.
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager()
-            .SetLastCollectionStats(usedAfter, rate);
-    }
     cycle.End();
 }
 }

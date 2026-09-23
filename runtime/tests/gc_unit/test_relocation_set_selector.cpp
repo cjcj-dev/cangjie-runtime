@@ -50,7 +50,7 @@ struct SelectorPageFixture {
     ZPage* takeSmall()
     {
         const size_t n = ZPageSizeSmall / ZGranuleSize;
-        return manager.TakeRegion((n) * ZGranuleSize, ZPageType::small, false, false, false);
+        return manager.TakeRegion((n) * ZGranuleSize, ZPageType::small, false, false);
     }
 };
 }
@@ -103,11 +103,9 @@ GC_TEST(RelocationSetSelector, FragmentationLimitStopsPrefix)
     GC_EXPECT_TRUE(loose.selected_small()->length() >= 1);
 }
 
-// TakeHeadRegion unlinks before ForwardClaimedPage (zPageAllocator.inline.hpp:317-330).
-// IsFromRegion is then false; relocatable pages remain IsLoneFromRegion.
-// Allocating pages match neither. Fail-closed is ZGeneration::select_relocation_set
-// skip (zGeneration.cpp:1471) plus check_selected_relocatable after select(),
-// not a silent skip at ForwardClaimedPage.
+// Unlinked relocatable pages remain IsLoneFromRegion; allocating pages do not.
+// Selection rejects allocating pages before installing relocation work
+// (ZGC zGeneration.cpp:1471).
 GC_TEST(RelocationSetSelector, AllocatingUnlinkedIsNotLoneFrom)
 {
     SelectorPageFixture fx;

@@ -42,7 +42,7 @@ class BaseObject;
 // guarantee. ZGC structurally cannot hand a from-address back after a slow-path miss
 // (zGeneration.inline.hpp:131-140 has no "lookup miss ⇒ return from" exit); detected shapes are:
 //   Forwarded   header stateCode=3, a to-version exists and must be found
-//   ZeroHeader  payload cleared by reclamation (ClearPageMemory reuse) -- nothing to resolve
+//   ZeroHeader  object header not yet initialized -- nothing to resolve
 enum class HandVerdict : uint8_t { Usable, Forwarded, ZeroHeader };
 
 // Provenance is captured by the runtime entry that owns the slot.  Resolution
@@ -68,7 +68,6 @@ public:
         DISPEL_GHOST = 0,
         TAKE_GARBAGE = 1,
         RECLAIM_DIRTY = 2,
-        RECLAIM_MARK_QUARANTINE = 3,
         RELEASE_REGION = 4,
     };
 
