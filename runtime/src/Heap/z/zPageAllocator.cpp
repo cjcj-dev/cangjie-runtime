@@ -66,11 +66,24 @@ void FreeRegionManager::Initialize(ZVirtualMemoryManager& virtualMemoryManager,
     // ZPartition per NUMA id, each with max_capacity's share.
     const uint32_t numaCount = ZPerNUMAStorage::count();
     for (uint32_t numaId = 0; numaId < numaCount; ++numaId) {
-        partitions.emplace_back(new Partition(numaId));
+        partitions.emplace_back(new Partition(numaId, regionManager));
         Partition& partition = *partitions.back();
+        // The allocator reports min_capacity=0 (no minimum-heap parameter).
+        partition.minCapacity = NumaTopology::calculate_share(numaId, 0, ZGranuleSize);
         partition.currentMaxCapacity =
             NumaTopology::calculate_share(numaId, maxCapacity, ZGranuleSize);
     }
+}
+
+// Partitions are initialized before the reference processor starts workers.
+void FreeRegionManager::StartUncommitters()
+{
+    for (auto& partition : partitions) { partition->uncommitter.Start(); }
+}
+
+void FreeRegionManager::StopUncommitters()
+{
+    for (auto& partition : partitions) { partition->uncommitter.Stop(); }
 }
 
 ZVirtualMemory FreeRegionManager::VirtualMemoryOf(size_t index, size_t count)
@@ -166,7 +179,7 @@ size_t FreeRegionManager::increase_capacity(uint32_t partition_id, size_t size)
     const size_t increased = std::min(size, partition.currentMaxCapacity - partition.capacity);
     if (increased > 0) {
         partition.capacity += increased;
-        Uncommitter::CancelCycleLocked();
+        partition.uncommitter.Cancel();
     }
     return increased;
 }
@@ -228,7 +241,7 @@ void FreeRegionManager::AddGarbageMemory(size_t index, size_t count, bool allowS
 }
 
 // ZGC zPageAllocator.cpp:764-785: no virtual-memory or physical-memory work.
-bool FreeRegionManager::ZPartition::claim_capacity_fast_medium(PageMemory& memory)
+bool ZPartition::claim_capacity_fast_medium(PageMemory& memory)
 {
     CHECK(ZPageSizeMediumEnabled);
     const ZVirtualMemory vmem = cache.remove_contiguous_power_of_2(ZPageSizeMediumMin, ZPageSizeMediumMax);
@@ -459,36 +472,6 @@ void FreeRegionManager::PrintCacheOn() const
              partition->used / MB, partition->capacity / MB, partition->currentMaxCapacity / MB);
         partition->cache.print_on();
     }
-}
-
-// zUncommitter.cpp:392-403.
-size_t FreeRegionManager::RemoveForUncommit(size_t flush, ZArray<ZVirtualMemory>* out)
-{
-    std::lock_guard<std::mutex> lock(cacheMutex);
-    size_t flushed = 0;
-    for (auto& partition : partitions) {
-        if (flush <= flushed) { break; }
-        const size_t partitionFlushed = partition->cache.remove_for_uncommit(flush - flushed, out);
-        // Record flushed memory as claimed
-        partition->claimed += partitionFlushed;
-        flushed += partitionFlushed;
-    }
-    return flushed;
-}
-
-// zUncommitter.cpp:414-420.
-void FreeRegionManager::UncommitFlushed(size_t flushed)
-{
-    std::lock_guard<std::mutex> lock(cacheMutex);
-    size_t remaining = flushed;
-    for (auto& partition : partitions) {
-        const size_t part = std::min(remaining, partition->claimed);
-        if (part == 0) { continue; }
-        partition->claimed -= part;
-        decrease_capacity(partition->numaId, part, false /* set_max_capacity */);
-        remaining -= part;
-    }
-    CHECK(remaining == 0);
 }
 
 void RegionManager::SetGarbageThreshold(double garbageThreshold)
