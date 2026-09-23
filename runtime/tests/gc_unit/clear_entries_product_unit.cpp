@@ -978,6 +978,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         if (old.Workers() == nullptr) old.InitializeWorkers(1);
         old.Workers()->set_active_workers(1);
         old.Workers()->set_active();
+        ZRelocate::StartRelocationTasks(old.id());
         old.relocate().relocate(&old.relocation_set());
         old.Workers()->set_inactive();
         auto owner = forwarding_for_page(state.region);
@@ -1647,6 +1648,7 @@ void ExerciseRelocationWait782(bool claimedPage)
     if (generation.Workers() == nullptr) generation.InitializeWorkers(2);
     generation.Workers()->set_active_workers(2);
     generation.Workers()->set_active();
+    ZRelocate::StartRelocationTasks(generation.id());
     generation.relocate().relocate(&generation.relocation_set());
     // ZGC zRelocate.cpp:116-151,177-180: worker pruning must notify the
     // waiting mutator. Bound the observation independently of cleanup so a

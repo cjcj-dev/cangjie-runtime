@@ -98,8 +98,6 @@ static const ZStatSubPhase PYoungFlushAlloc("young.flush_alloc", ZGenerationId::
 static const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
 static const ZStatSubPhase PYoungPostEvacFinish("young.post_evac_finish", ZGenerationId::young);
 static const ZStatSubPhase PYoungPreEvacClear("young.pre_evac_clear", ZGenerationId::young);
-static const ZStatSubPhase PYoungRefFix("young.ref_fix", ZGenerationId::young);
-static const ZStatSubPhase PYoungRefFixPrepare("young.ref_fix_prepare", ZGenerationId::young);
 static const ZStatSubPhase PYoungRefFixRootPass1("young.ref_fix_root_pass1", ZGenerationId::young);
 static const ZStatSubPhase PYoungRemsetDrain("young.remset_drain", ZGenerationId::young);
 static const ZStatSubPhase PYoungRootEnum("young.root_enum", ZGenerationId::young);
@@ -270,12 +268,7 @@ public:
     bool do_operation() override
     {
         ZStatTimerYoung timer(ZPhasePauseRelocateStartYoung);
-        ZGlobalsPointers::flip_young_relocate_start();
-        ZVerify::OnColorFlip();
-        ZGeneration::young()->set_phase(ZGeneration::Phase::Relocate);
-        ZGeneration::young()->StatHeap()->AtRelocateStart(
-            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(
-                ZGeneration::young()));
+        ZGeneration::young()->relocate_start();
         return true;
     }
     bool block_jni_critical() const override { return true; }
@@ -537,6 +530,25 @@ void ZGenerationYoung::pause_relocate_start()
     (void)op.pause();
 }
 
+// ZGC zGeneration.cpp:650-654.
+void ZGenerationYoung::flip_relocate_start()
+{
+    ZGlobalsPointers::flip_young_relocate_start();
+    ZVerify::OnColorFlip();
+}
+
+// ZGC zGeneration.cpp:918-931: publish the phase and activate its queue
+// before the relocate-start pause releases mutators.
+void ZGenerationYoung::relocate_start()
+{
+    CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "Should be at safepoint");
+    flip_relocate_start();
+    set_phase(Phase::Relocate);
+    StatHeap()->AtRelocateStart(
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+    ZRelocate::StartRelocationTasks(ZGenerationId::young);
+}
+
 void ZGenerationYoung::concurrent_relocate()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentRelocateYoung);
@@ -544,15 +556,11 @@ void ZGenerationYoung::concurrent_relocate()
     // must finish relocation, including when shutdown requests an abort.
     RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     size_t allocatedBefore = space.AllocatedBytes();
-    EvacuateYoungRegions(&youngStw);
+    EvacuateYoungRegions();
     size_t allocatedAfter = space.AllocatedBytes();
     const size_t reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     ZGeneration::young()->increase_freed(reclaimedBytes);
-
-    if (youngStw != nullptr) {
-        youngStw.reset();
-    }
 
     {
         ZStatTimerYoung zstatTimer(PYoungPostEvacFinish);
@@ -1275,91 +1283,18 @@ BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object)
 }
 
 namespace MapleRuntime {
-void ZGenerationYoung::EvacuateYoungRegions(std::unique_ptr<ScopedStopTheWorld>* stw)
+void ZGenerationYoung::EvacuateYoungRegions()
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
-    // is flip + set_phase(Relocate) + _relocate.start(); object copy is concurrent.
-    // Flip is the trap that makes mutator loads take the self-heal / relocate_object
-    // path; without it, concurrent copy is the empty window concreffix measured.
-    const bool doYoungFlip = !Heap::GetHeap().GetZGeneration(ZGenerationId::young).is_phase_relocate();
     ZWorkers& workers = *Workers();
-
     {
-        // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
-        ZStatTimerYoung zstatTimer(PYoungRefFix);
-
-        // ZGC relocate_start (zGeneration.cpp:918-931): flip remap colour then
-        // enter Relocate. Product path.
-        //
-        // fliporder: that citation covers only half of what ZGC does here.  ZGC installs the
-        // relocation set at zGeneration.cpp:254, inside the *concurrent* select_relocation_set,
-        // and only then runs pause_relocate_start -> relocate_start -> flip_relocate_start
-        // (:918 -> :922 -> :651).  So when ZGC's colour flips, the set of pages that will move is
-        // already fixed and published.
-        //
-        // Ours flipped first and prepared from-space afterwards (PrepareForwardTable<Young> below),
-        // which opens a window where the current remap colour is already the new one while no
-        // region is marked FROM yet.  Anything painted store-good in that window names an object
-        // whose region is about to become FROM: once it is copied the slot is load-good and names
-        // the from-version, so the read barrier's fast path hands it straight to the mutator with
-        // ObjectState::FORWARDED still in its header -- and the compiler reads that header as one
-        // 64-bit word, so (3 << 48) enters an address and faults non-canonically.
-        //
-        // target really was forwarded, is not in an unmovable region, and the slot was load-good --
-        // which after a flip can only mean it was written after that flip.
-        //
-        // Our own major path already has the ZGC order: PrepareForwardTable<Old> at :2533 runs
-        // before flip_young/old_relocate_start at :2552-2553.  The two paths disagreed.
-        {
-            ZStatTimerYoung zstatTimer(PYoungRefFixPrepare);
-
-            // iorfix: the forwarding table is installed by select_relocation_set
-            // (zGeneration.cpp:254) so liveInfo0 snapshots the closed mark
-            // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
-            // ZGC zGeneration.cpp:575-580: collect has already entered
-            // relocate-start; finish every selected page even on abort.
-            // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
-            // ZGC pause() wraps VMOp_ZRelocateStartYoung with JNICritical block
-            // (zGeneration.cpp:475-483, block_jni_critical at :832).
-            ZJNICritical::block();
-            if (doYoungFlip) {
-                ZGlobalsPointers::flip_young_relocate_start();
-                ZVerify::OnColorFlip();
-            }
-            // Publish the relocate phase and submit page work while the
-            // existing young pause still excludes mutator execution. Root
-            // transition may now wait for a real page task on allocation failure.
-            ZRelocate::StartRelocationTasks(ZGenerationId::young);
-            ZJNICritical::unblock();
-        }
-
-        // ZGC zGeneration.cpp:575-580: relocate-start activates the queue;
-        // concurrent_relocate must submit its workers before any concurrent
-        // root walk can wait for allocation-failure completion. Raw stack roots
-        // are completed by the pause watermark (Cangjie has no return statepoint).
-        // Coloured references are healed by load barriers and the remap phase.
-
-        // Reset CAS counters for this fix window (positive-control visibility).
-
-    }
-
-    {
-        {
-            if (stw != nullptr && *stw != nullptr) {
-                stw->reset();
-            }
-            ZStatTimerYoung zstatTimer(PYoungConcurrentRelocate);
-            VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start flip=1");
-            relocate().relocate(&relocation_set());
-        }
+        ZStatTimerYoung zstatTimer(PYoungConcurrentRelocate);
+        VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start flip=1");
+        relocate().relocate(&relocation_set());
     }
 
     // zRelocate.cpp:1289-1306: finish relocation before walking flip-promoted pages.
     // Keep forwarding entries available until every field has been remapped.
-    if (stw != nullptr && *stw != nullptr) {
-        stw->reset();
-    }
     {
         ZStatTimerYoung zstatTimer(PYoungConcPromoteWalk);
         manager.RememberFlipPromotedPages(workers);
