@@ -725,7 +725,7 @@ BaseObject* ZRelocate::ForwardObjectExclusive(BaseObject* obj)
     if (page == nullptr) {
         return nullptr;
     }
-    return ZGeneration::generation(page->generation_id())->relocate().relocate_object_inner(obj, page);
+    return ZGeneration::generation(page->generation_id())->relocate().relocate_object(forwarding_for_page(page), obj);
 }
 
 void ZRelocate::UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to)
@@ -766,59 +766,26 @@ void ZRelocate::UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from,
     RegionManager::RememberPromotedObject(to);
 }
 
-BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
+BaseObject* ZRelocate::relocate_object_inner(ZForwarding* forwarding, BaseObject* obj)
 {
-    // ZGC zRelocate.cpp:354-355: validate liveness before reading the object.
+    // ZGC zRelocate.cpp:354-380: allocation, disjoint copy, insert, undo.
     assert(Heap::GetHeap().IsSurvivedObject(obj) && "Should be live");
-    const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
-    if (const MAddress hit = (forwarding_for_page(copyPage) != nullptr ? forwarding_for_page(copyPage)->find(fromAddr) : 0)) {
-        BaseObject* to = reinterpret_cast<BaseObject*>(hit);
-        UpdateRemsetForFields(forwarding_for_page(copyPage), obj, to);
-        return to;
-    }
     const size_t size = RegionSpace::GetAllocSize(*obj);
-    // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
-    const PageAge toAge = forwarding_for_page(copyPage)->to_age();
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc_for_relocation(size, toAge));
-    if (toObj == nullptr) return nullptr;
-    BaseObject* result = nullptr;
-    ZForwarding* publication = forwarding_for_page(copyPage);
-    if (publication != nullptr) {
-        DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
-        // zRelocate.cpp:369: a fresh to-page copy is disjoint.
-        ZUtils::object_copy_disjoint(to_zaddress(reinterpret_cast<uintptr_t>(obj)),
-                                     to_zaddress(reinterpret_cast<uintptr_t>(toObj)), size);
-        if (toObj != obj) {
-            toObj->SetStateCode(ObjectState::NORMAL);
-        }
-        std::atomic_thread_fence(std::memory_order_release);
-        if (toObj == obj || (toObj != nullptr)) {
-            const MAddress mapped = publication->insert(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
-            if (mapped != 0) {
-                // ZGC keeps no FORWARDED header state: the forwarding table is
-                // the only truth (zRelocate.cpp:382-415; zForwarding has no
-                // header bit). The insert above is the whole publication.
-                result = reinterpret_cast<BaseObject*>(mapped);
-            }
-        }
-    } else {
-        const MAddress pageStart = copyPage == nullptr ? 0 : copyPage->GetRegionStart();
-        const uint64_t entries = forwarding_for_page(copyPage) == nullptr ? 0 : 1;
-        LOG(RTLOG_ERROR,
-            "[GCV2][first-visitor] publication refused obj=%p page=%p pageStart=%#zx entries=%llu route=%u done=%u ref=%d",
-            obj, copyPage, static_cast<size_t>(pageStart), static_cast<unsigned long long>(entries),
-            copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->RelocateObserve()),
-            copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->IsForwardingDone()),
-            copyPage == nullptr ? 0 : copyPage->ForwardingRefCount());
+    const PageAge toAge = forwarding->to_age();
+    BaseObject* toObj = reinterpret_cast<BaseObject*>(
+        Heap::GetHeap().object_allocator().alloc_for_relocation(size, toAge));
+    if (toObj == nullptr) {
+        return nullptr;
     }
+
+    ZUtils::object_copy_disjoint(to_zaddress(reinterpret_cast<uintptr_t>(obj)),
+                                 to_zaddress(reinterpret_cast<uintptr_t>(toObj)), size);
+    // Cangjie has no return statepoint; the new copy needs a normal header.
+    toObj->SetStateCode(ObjectState::NORMAL);
+    BaseObject* result = reinterpret_cast<BaseObject*>(forwarding->insert(
+        reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj)));
     if (result != toObj) {
-        if (ZPage* dest = Heap::page(reinterpret_cast<MAddress>(toObj))) {
-            (void)dest->undo_alloc_object_atomic(reinterpret_cast<uintptr_t>(toObj), size);
-        }
-    }
-    if (result != nullptr) {
-        UpdateRemsetForFields(publication, obj, result);
+        Heap::GetHeap().undo_alloc_object_for_relocation(reinterpret_cast<MAddress>(toObj), size);
     }
     return result;
 }
@@ -1515,7 +1482,7 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
     ZPage::RetainScope lease{forwarding};
     if (lease.ok()) {
         DCHECK(generation->is_phase_relocate());
-        BaseObject* to = relocate_object_inner(object, forwarding->page());
+        BaseObject* to = relocate_object_inner(forwarding, object);
         lease.Release();
         if (to != nullptr) {
             return to;
