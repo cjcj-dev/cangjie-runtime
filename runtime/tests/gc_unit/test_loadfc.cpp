@@ -7,7 +7,6 @@
 
 
 #include "gc_heap_fixture.hpp"
-#include "CompilerCalls.h"
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
 #include "Heap/z/zThreadLocalData.hpp"
@@ -30,6 +29,9 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+extern "C" ObjectPtr CJ_MCC_LoadBarrierOnOopFieldPreloaded(ObjectPtr, volatile zpointer*);
+extern "C" ObjectPtr CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(ObjectPtr, volatile zpointer*);
+extern "C" const uintptr_t g_cjMarkBadMaskOffset;
 extern "C" MapleRuntime::ObjectPtr CJ_MCC_AtomicSwapReference(
     MapleRuntime::ObjectPtr ref, MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<true>* field,
     MapleRuntime::MemoryOrder order);
