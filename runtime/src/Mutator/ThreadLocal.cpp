@@ -124,8 +124,11 @@ CleanThreadLocalData::~CleanThreadLocalData()
         // the owner from the handshake inventory (ZMark::flush, zMark.cpp:998).
         MutatorManager::Instance().UnregisterMarkFlushThread(local);
     }
-    ZBarrierSet::on_thread_detach(nativeData);
-    ZBarrierSet::on_thread_destroy(nativeData);
+    // Bootstrap storage which never acquired masks was never attached.
+    if (nativeData.storeGoodMask != 0) {
+        ZBarrierSet::on_thread_detach(nativeData);
+        ZBarrierSet::on_thread_destroy(nativeData);
+    }
     // gcData may borrow a parked/migrating Mutator. The cleaner owns only
     // nativeData, whose member destructor runs after this body.
     local->gcData = nullptr;

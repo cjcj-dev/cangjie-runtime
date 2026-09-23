@@ -33,12 +33,7 @@ void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLoc
 
 void ZBarrierSet::on_thread_detach(ThreadGCData& data)
 {
-    // Bootstrap/shutdown native storage can outlive the heap. Empty storage
-    // has no mark work; a nonempty owner must always take the heap path.
-    if (!data.markStacks[0].IsEmpty() || !data.markStacks[1].IsEmpty() ||
-        !data.storeBarrierBuffer->IsEmpty()) {
-        Heap::GetHeap().mark_flush(data);
-    }
+    Heap::GetHeap().mark_flush(data);
 }
 
 void ZBarrierSet::on_thread_destroy(ThreadGCData& data)
