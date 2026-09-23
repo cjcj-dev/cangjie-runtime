@@ -1,0 +1,62 @@
+[
+  {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "handoffLock|y2yDirtyLock|y2yDirtyHolders|y2yDirtySlots",
+      "ed74b464efc257cc884efd94d5ee923a970b6eab",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "stdout": "ed74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:91:    mutable std::mutex handoffLock;\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:94:    mutable std::mutex y2yDirtyLock;\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:95:    std::unordered_set<BaseObject*> y2yDirtyHolders;\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:96:    std::unordered_set<MAddress> y2yDirtySlots;\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "heap_store_slow_path|mark_and_remember",
+      "ed74b464efc257cc884efd94d5ee923a970b6eab",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "stdout": "ed74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zBarrier.cpp:251:zaddress ZBarrier::heap_store_slow_path(volatile zpointer* p, zaddress addr, zpointer prev, bool heal)\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zBarrier.cpp:257:        mark_and_remember(p, addr);\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zBarrier.cpp:262:zaddress ZBarrier::no_keep_alive_heap_store_slow_path(volatile zpointer* p, zaddress addr)\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zBarrier.cpp:898:    mark_and_remember(reinterpret_cast<volatile zpointer*>(fieldAddress), make_load_good(prev));\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zBarrier.hpp:89:    static void mark_and_remember(volatile zpointer* p, zaddress addr);\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zBarrier.hpp:93:    static zaddress heap_store_slow_path(volatile zpointer* p, zaddress addr, zpointer prev, bool heal);\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zBarrier.hpp:94:    static zaddress no_keep_alive_heap_store_slow_path(volatile zpointer* p, zaddress addr);\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zBarrier.inline.hpp:257:        return heap_store_slow_path(p, addr, prev, heal);\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zBarrier.inline.hpp:280:        return no_keep_alive_heap_store_slow_path(p, addr);\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zBarrier.inline.hpp:374:inline void ZBarrier::mark_and_remember(volatile zpointer* p, zaddress addr)\ned74b464efc257cc884efd94d5ee923a970b6eab:runtime/src/Heap/z/zStoreBarrierBuffer.cpp:164:        ZBarrier::mark_and_remember(reinterpret_cast<volatile zpointer*>(entry.p), addr);\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "handoffLock|y2yDirtyLock|y2yDirtyHolders|y2yDirtySlots",
+      "30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "heap_store_slow_path|mark_and_remember",
+      "30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "stdout": "30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zBarrier.cpp:251:zaddress ZBarrier::heap_store_slow_path(volatile zpointer* p, zaddress addr, zpointer prev, bool heal)\n30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zBarrier.cpp:257:        mark_and_remember(p, addr);\n30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zBarrier.cpp:262:zaddress ZBarrier::no_keep_alive_heap_store_slow_path(volatile zpointer* p, zaddress addr)\n30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zBarrier.cpp:898:    mark_and_remember(reinterpret_cast<volatile zpointer*>(fieldAddress), make_load_good(prev));\n30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zBarrier.hpp:89:    static void mark_and_remember(volatile zpointer* p, zaddress addr);\n30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zBarrier.hpp:93:    static zaddress heap_store_slow_path(volatile zpointer* p, zaddress addr, zpointer prev, bool heal);\n30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zBarrier.hpp:94:    static zaddress no_keep_alive_heap_store_slow_path(volatile zpointer* p, zaddress addr);\n30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zBarrier.inline.hpp:257:        return heap_store_slow_path(p, addr, prev, heal);\n30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zBarrier.inline.hpp:280:        return no_keep_alive_heap_store_slow_path(p, addr);\n30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zBarrier.inline.hpp:374:inline void ZBarrier::mark_and_remember(volatile zpointer* p, zaddress addr)\n30ca42f85bcf5f6ae34a702c0f1b06c890ee17f3:runtime/src/Heap/z/zStoreBarrierBuffer.cpp:164:        ZBarrier::mark_and_remember(reinterpret_cast<volatile zpointer*>(entry.p), addr);\n",
+    "stderr": ""
+  }
+]

@@ -1,0 +1,4 @@
+HEAD:runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:91:    mutable std::mutex handoffLock;
+HEAD:runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:94:    mutable std::mutex y2yDirtyLock;
+HEAD:runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:95:    std::unordered_set<BaseObject*> y2yDirtyHolders;
+HEAD:runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:96:    std::unordered_set<MAddress> y2yDirtySlots;
