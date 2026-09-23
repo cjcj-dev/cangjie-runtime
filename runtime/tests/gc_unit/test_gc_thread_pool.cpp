@@ -91,6 +91,14 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;
     }
+    // Only the source is pending in this claimant fixture. The second sparse
+    // page was needed for selection; publish its completed identity before
+    // exercising a worker with an externally claimed source.
+    auto* companion = forwarding_for_page(fx.region1);
+    GC_EXPECT_TRUE(companion != nullptr && companion->claim());
+    GC_EXPECT_EQ(companion->insert(to, to), to);
+    companion->release_page();
+    companion->mark_done();
     // The mapping is ready, but page completion belongs to the worker.
     // ZRelocateTask marks done after processing the claimed forwarding.
     region->SetInGhostRegion(1);

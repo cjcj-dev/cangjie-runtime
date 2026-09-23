@@ -500,7 +500,16 @@ ZLiveMap* PrepareForwardable(GcHeapFixture& fx, ZPage* region, MAddress liveObje
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, reinterpret_cast<BaseObject*>(liveObject)));
     // The product freezes the selected set before publishing any page view.
     if (generation_forwarding_table(generation).get(region->GetRegionStart()) == nullptr) {
-        GC_EXPECT_TRUE(BeginForwardingArena(generation, { region }));
+        // This fixture reserves unit 0 for a second sparse source; units 1/4/5
+        // hold the tested source and units 2/3 hold its allocation destination.
+        // Both pages go through the normal selector (ZGC strict savings > limit).
+        ZPage* companion = ResetDeliveryUnit(fx, 0);
+        fx.region0 = companion;
+        companion->reset(region->age());
+        BaseObject* object = fx.PlaceObject(companion->GetRegionStart());
+        companion->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
+        GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(companion, object));
+        GC_EXPECT_TRUE(BeginForwardingArena(generation, {region, companion}));
     }
     if (generation == Generation::Young) {
         RelocationReceiptTest::PrepareProductPage<Generation::Young>(region);
@@ -1458,6 +1467,9 @@ void CheckMinorFieldColour(bool stale)
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + fx.obj0->GetSize());
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
+    // Keep the installed-state colour test on the normal two-page selector path.
+    fx.region1->reset(PageAge::eden);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, fx.obj1));
     fx.InstallPageOwner(fx.region0);
     ZForwarding* forwarding = forwarding_for_page(fx.region0);
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);

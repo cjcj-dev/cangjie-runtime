@@ -70,7 +70,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplFindHitSkipsCopy)
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }
 
-GC_TEST(ForwardingNoGeometry, ExclusiveVtableFindHitSkipsCopy)
+GC_TEST(ForwardingNoGeometry, GenerationLookupFindHitSkipsCopy)
 {
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
