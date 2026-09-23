@@ -43,6 +43,7 @@ public:
     {
         Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
         auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+        ZRelocate::StartRelocationTasks(young.id());
         young.relocate().relocate(&young.relocation_set());
     }
 #endif
@@ -105,6 +106,7 @@ bool RunParallelProductEntryClosesGeneration()
     if (old.Workers() == nullptr) old.InitializeWorkers(3);
     old.Workers()->set_active_workers(3);
     old.Workers()->set_active();
+    ZRelocate::StartRelocationTasks(old.id());
     old.relocate().relocate(&old.relocation_set());
     old.Workers()->set_inactive();
     const bool closed = !queue.IsActive() && queue.PendingCount() == 0;
@@ -124,6 +126,7 @@ bool RunSerialProductEntryClosesGeneration()
     if (old.Workers() == nullptr) old.InitializeWorkers(1);
     old.Workers()->set_active_workers(1);
     old.Workers()->set_active();
+    ZRelocate::StartRelocationTasks(old.id());
     old.relocate().relocate(&old.relocation_set());
     old.Workers()->set_inactive();
     return !queue.IsActive() && queue.PendingCount() == 0;
@@ -356,6 +359,7 @@ void ResizeRunningRelocation(ZGeneration& generation, uint32_t initial = 1, uint
 {
     auto* queue = generation.relocate().queue();
     queue->synchronize();
+    ZRelocate::StartRelocationTasks(generation.id());
     std::thread relocating([&] { generation.relocate().relocate(&generation.relocation_set()); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (queue->SynchronizedWorkerCount() != initial && std::chrono::steady_clock::now() < deadline) {
@@ -440,6 +444,7 @@ void CheckResizeBeforeRemainingForwarding(Generation id)
     auto* workers = generation.Workers();
     workers->set_active_workers(3);
     workers->set_active();
+    ZRelocate::StartRelocationTasks(generation.id());
     std::thread relocating([&] { generation.relocate().relocate(&generation.relocation_set()); });
     const auto waitUntil = [](const auto& predicate) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
