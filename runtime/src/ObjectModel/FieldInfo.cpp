@@ -121,7 +121,7 @@ void InstanceFieldInfo::SetValue(TypeInfo* declaringTypeInfo, ObjRef instanceObj
             ExceptionManager::OutOfMemory();
             return;
         }
-        HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE, fieldSize, instanceObj, reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE),
+        HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE, fieldSize, newValue, reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE),
         ValuePayload(reinterpret_cast<MAddress>(tmp), fieldSize));
         HeapAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(tmp), fieldSize),
         ValuePayload(fieldAddr, fieldSize, instanceObj, fieldAddr));

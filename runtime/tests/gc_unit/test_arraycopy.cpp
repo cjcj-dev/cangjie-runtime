@@ -4,6 +4,7 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/FieldInfo.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Mutator/Mutator.h"
@@ -309,3 +310,45 @@ void CheckPrimitivePayload976(bool references, bool trailer)
 GC_TEST(AccessBarrier976, PrimitiveValueNoReferences) { CheckPrimitivePayload976(false, false); }
 GC_TEST(AccessBarrier976, PrimitiveValueLeadingGap) { CheckPrimitivePayload976(true, false); }
 GC_TEST(AccessBarrier976, PrimitiveValueTrailer) { CheckPrimitivePayload976(true, true); }
+
+// ZGC zBarrierSet.inline.hpp:477-479 obtains the oop layout from the source value.
+extern "C" void MCC_SetInstanceFieldValue(InstanceFieldInfo*, TypeInfo*, ObjRef, ObjRef);
+namespace {
+void CheckReflectionSourceLayout(bool aggregate)
+{
+    GcHeapFixture heap;
+    BaseObject* source = heap.PlaceObject(heap.heapStart + 128);
+    alignas(TypeInfo) unsigned char sourceTypeStorage[sizeof(TypeInfo)]{};
+    auto* sourceType = reinterpret_cast<TypeInfo*>(sourceTypeStorage);
+    sourceType->SetType(aggregate ? TypeKind::TYPE_KIND_STRUCT : TypeKind::TYPE_KIND_CLASS);
+    sourceType->SetInstanceSize(sizeof(uintptr_t));
+    sourceType->SetFlagHasRefField();
+    GCTib sourceLayout{};
+    sourceLayout.tag = SIGN_BIT | 1; // source: reference
+    sourceType->SetGCTib(sourceLayout);
+    *reinterpret_cast<uintptr_t*>(source) = reinterpret_cast<uintptr_t>(sourceType);
+
+    GCTib containerLayout{};
+    containerLayout.tag = SIGN_BIT | 2; // container: primitive, reference
+    heap.typeInfo->SetGCTib(containerLayout);
+    heap.typeInfo->SetInstanceSize(2 * sizeof(uintptr_t));
+    TypeInfo* fieldTypes[] = {sourceType};
+    U32 offsets[] = {sizeof(uintptr_t)};
+    heap.typeInfo->SetFieldNum(1);
+    heap.typeInfo->SetFieldAddr(fieldTypes);
+    heap.typeInfo->SetOffsets(offsets);
+    auto& sourceSlot = HeapSlotAt<>(reinterpret_cast<MAddress>(source) + TYPEINFO_PTR_SIZE);
+    auto& destination = HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE + sizeof(uintptr_t));
+    sourceSlot.StoreColoured(StoreGoodPointer(source));
+    destination.StoreColoured(StoreGoodPointer(heap.obj0));
+    InstanceFieldInfo field{};
+    MCC_SetInstanceFieldValue(&field, heap.typeInfo, static_cast<ObjRef>(heap.obj0), static_cast<ObjRef>(source));
+    const zpointer actual = destination.GetFieldValue();
+    const zpointer expected = StoreGoodPointer(source);
+    std::fprintf(stderr, "REFLECTION_LAYOUT_TARGET aggregate=%d actual=%lx expected=%lx\n",
+                 aggregate, raw(actual), raw(expected));
+    GC_EXPECT_EQ(actual, expected);
+}
+}
+GC_TEST(AccessBarrier976, ReflectionAggregateSourceLayout) { CheckReflectionSourceLayout(true); }
+GC_TEST(AccessBarrier976, ReflectionReferenceLayoutControl) { CheckReflectionSourceLayout(false); }
