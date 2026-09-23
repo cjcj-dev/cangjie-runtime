@@ -79,7 +79,7 @@ try:
             command('set language c++')
             command('set $flags=(MapleRuntime::ZAllocationFlags*)calloc(1,sizeof(MapleRuntime::ZAllocationFlags))')
             command('set $page=MapleRuntime::Heap::alloc_page(8388608,MapleRuntime::ZPageType::large,'
-                    'false,false,MapleRuntime::PageAge::eden,*$flags)')
+                    'false,MapleRuntime::PageAge::eden,*$flags)')
             emit('REAL_YOUNG_PAGE', page=str(value('$page')))
         next(t for t in gdb.selected_inferior().threads() if t.name == 'ZDirector').switch()
         advance('zDirector.cpp:' + str(sample_end))

@@ -1,3 +1,4 @@
+#include "gc_allocation_flags.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -285,7 +286,7 @@ static void ExercisePartitionWorker(bool enabled)
     RegionManager& regions = space.GetRegionManager();
     space.GetRegionManager().freeRegionManager.StopUncommitters();
     const size_t n = 64 * MB / ZGranuleSize;
-    ZPage* region = regions.TakeRegion((n) * ZGranuleSize, ZPageType::large, true, false);
+    ZPage* region = regions.TakeRegion((n) * ZGranuleSize, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(region != nullptr);
     const size_t beforeReclaim = regions.GetCommittedCapacity();
     regions.ReturnPageMemory(PageMemory{region->granule_index(), n * ZGranuleSize, 0, true});
@@ -359,7 +360,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CacheValleyLimitsActivationBudget)
 
     const size_t total = partition.capacity;
     const size_t allocated = total - 10 * ZGranuleSize;
-    ZPage* page = regions.TakeRegion(allocated, ZPageType::large, true, false);
+    ZPage* page = regions.TakeRegion(allocated, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(page != nullptr);
     regions.ReturnPageMemory(PageMemory{page->granule_index(), allocated, 0, true});
     UncommitterTestAccess::ResetCancel();
@@ -388,7 +389,7 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, FreshCacheWaitsForWatermarkCycle)
     auto& regions = Heap::GetHeap().GetAllocator().GetRegionManager();
     regions.freeRegionManager.StopUncommitters();
     auto& partition = UncommitterTestAccess::Partition();
-    ZPage* page = regions.TakeRegion(64 * MB, ZPageType::large, true, false);
+    ZPage* page = regions.TakeRegion(64 * MB, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(page != nullptr);
     UncommitterTestAccess::ResetCancel();
     const size_t before = regions.GetCommittedCapacity();
@@ -431,7 +432,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, AllocationDuringCycleLowersUncommitAllow
     GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
     const size_t before = partition.capacity;
     const size_t allocated = before - 2 * ZGranuleSize;
-    ZPage* page = regions.TakeRegion(allocated, ZPageType::large, true, false);
+    ZPage* page = regions.TakeRegion(allocated, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(page != nullptr);
     regions.ReturnPageMemory(PageMemory{page->granule_index(), allocated, 0, true});
     size_t released = 0;

@@ -119,7 +119,7 @@ static bool IsSmallEdenPage(const ZPage* page)
 ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
                                              PageAge age, ZAllocationFlags flags)
 {
-    ZPage* page = Heap::alloc_page(size, role, false, !flags.non_blocking(), age, flags);
+    ZPage* page = Heap::alloc_page(size, role, false, age, flags);
     if (page == nullptr) { return nullptr; }
     page->reset(age);
     if (IsSmallEdenPage(page)) {
@@ -152,7 +152,7 @@ void RegionManager::UndoSharedPage(ZPage* page)
         const size_t pageBytes = page->GetRegionSize();
         const size_t index = page->granule_index();
         page->RetirePageMemory();
-        ReturnRetiredPageMemory(PageMemory{index, pageBytes, 0, true}, false);
+        ReturnRetiredPageMemory(PageMemory{index, pageBytes, 0, true});
     });
 }
 

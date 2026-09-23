@@ -12,6 +12,7 @@
 #include <fstream>
 #include "Mutator/ThreadSMR.h"
 #include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/shared/collectedHeap.hpp"
@@ -22,6 +23,7 @@
 #include "ObjectModel/MObject.h"
 #include "gc_unittest.hpp"
 #if defined(__linux__)
+#include <sched.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -923,10 +925,8 @@ GC_RUNTIME_OTHER_VM_TEST(TLABTail, RetiredTailSurvivesMarkEntry)
 #endif
 
 #if defined(__linux__)
-// memAllocator.cpp:327-347: a failed TLAB refill still permits an object
-// allocation from the remaining shared-page tail. A registered GC thread
-// makes exhausted backing allocation non-blocking, and preserves the null
-// result on the broken arm so the target assertion observes it directly.
+// HotSpot memAllocator.cpp:288-291,335-345: a size-rejected refill falls
+// through to real outside-TLAB allocation. Heap capacity remains available.
 GC_RUNTIME_OTHER_VM_TEST(TLABRefill, FailureFallsBackOutsideTLAB)
 {
     RuntimeParam param{};
@@ -934,43 +934,54 @@ GC_RUNTIME_OTHER_VM_TEST(TLABRefill, FailureFallsBackOutsideTLAB)
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     Heap& heap = Heap::GetHeap();
-    heap.EnableGC(false);
     auto& threads = MutatorManager::Instance();
-    Mutator* owner = threads.CreateRuntimeMutator(ThreadType::GC_THREAD);
-    AllocBuffer* buffer = owner->tlab();
-    buffer->RetireTLAB(false);
-
-    constexpr size_t bytes = 256;
-    constexpr size_t tail = 1024;
-    auto& allocator = heap.object_allocator();
-    const uintptr_t seed = allocator.alloc(bytes);
-    GC_EXPECT_TRUE(seed != 0);
-    ZPage* page = Heap::page(seed);
-    while (page->GetRegionEnd() - page->GetRegionAllocPtr() > tail) {
-        const size_t remaining = page->GetRegionEnd() - page->GetRegionAllocPtr();
-        const size_t chunk = std::min(remaining - tail, ZObjectSizeLimitSmall);
-        GC_EXPECT_TRUE(allocator.alloc(chunk) != 0);
+    Mutator* owner = threads.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    cpu_set_t saved;
+    cpu_set_t selected;
+    GC_EXPECT_EQ(sched_getaffinity(0, sizeof(saved), &saved), 0);
+    CPU_ZERO(&selected);
+    CPU_SET(sched_getcpu(), &selected);
+    GC_EXPECT_EQ(sched_setaffinity(0, sizeof(selected), &selected), 0);
+    bool success = false;
+    {
+        ScopedObjectAccess access;
+        AllocBuffer* buffer = owner->tlab();
+        buffer->RetireTLAB(false);
+        constexpr size_t chunk = 4096;
+        constexpr size_t tail = chunk;
+        constexpr size_t bytes = 2 * chunk;
+        auto& allocator = heap.object_allocator();
+        TypeInfo* fillerType = TLABTestType(); // 4096-byte ordinary objects
+        auto fill = [&] {
+            const uintptr_t address = allocator.alloc(chunk);
+            GC_EXPECT_TRUE(address != 0);
+            std::memset(reinterpret_cast<void*>(address), 0, chunk);
+            reinterpret_cast<BaseObject*>(address)->SetClassInfo(fillerType);
+            return address;
+        };
+        ZPage* page = Heap::page(fill());
+        while (page->remaining() > tail) { (void)fill(); }
+        const uintptr_t before = page->GetRegionAllocPtr();
+        const size_t maximum = heap.unsafe_max_tlab_alloc();
+        const size_t refill = buffer->ComputeTLABSize(bytes, maximum);
+        alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+        auto* type = reinterpret_cast<TypeInfo*>(storage);
+        type->SetType(TypeKind::TYPE_KIND_CLASS);
+        type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+        auto* object = MObject::NewObject(type, bytes, AllocType::MOVEABLE_OBJECT);
+        const uintptr_t after = page->GetRegionAllocPtr();
+        // The request exceeds the actual shared-page tail, so the product
+        // computes no refill; the successful object must be outside the TLAB.
+        success = refill == 0 && maximum == tail && object != nullptr &&
+                  Heap::page(reinterpret_cast<MAddress>(object)) != page && after == before &&
+                  buffer->TLABSize() == 0;
+        std::fprintf(stderr, "TLAB_REFILL_FALLBACK_TARGET executed=1 refill=%zu maximum=%zu request=%zu "
+                     "object=%p before=%zx after=%zx tlab=%zu success=%d\n",
+                     refill, maximum, bytes, static_cast<void*>(object), before, after, buffer->TLABSize(), success);
     }
-    // Reserve every other page through the product page allocator. The shared
-    // page stays installed; no synthetic result is passed to the consumer.
-    std::vector<ZPage*> reserved;
-    while (ZPage* extra = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false)) {
-        reserved.push_back(extra);
-    }
-    const uintptr_t before = page->GetRegionAllocPtr();
-    const size_t refill = buffer->ComputeTLABSize(bytes, heap.unsafe_max_tlab_alloc());
-    GC_EXPECT_TRUE(refill > tail);
-    TypeInfo* type = TLABTestType();
-    type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
-    auto* object = MObject::NewObject(type, bytes, AllocType::MOVEABLE_OBJECT);
-    const uintptr_t after = page->GetRegionAllocPtr();
-    const bool success = reinterpret_cast<uintptr_t>(object) == before && after == before + bytes &&
-                         buffer->TLABSize() == 0;
-    std::fprintf(stderr, "TLAB_REFILL_FALLBACK_TARGET executed=1 refill=%zu tail=%zu object=%p before=%zx after=%zx tlab=%zu success=%d\n",
-                 refill, tail, static_cast<void*>(object), before, after, buffer->TLABSize(), success);
-    // Release the thread before an assertion can throw; the object and page
-    // state above are the actual result of the runtime allocation entry.
-    threads.DestroyRuntimeMutator(ThreadType::GC_THREAD);
+    GC_EXPECT_EQ(sched_setaffinity(0, sizeof(saved), &saved), 0);
+    threads.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(success);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

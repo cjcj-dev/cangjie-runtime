@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zFuture.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/concurrentGCThread.hpp"
 
@@ -37,7 +38,6 @@
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Common/BaseObject.h"
-#include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/shared/collectedHeap.hpp"
@@ -233,10 +233,8 @@ void FreeRegionManager::FreeMemory(size_t index, size_t count)
     partition.used -= vmem.size();
 }
 
-void FreeRegionManager::AddGarbageMemory(size_t index, size_t count, bool allowSaferegion)
+void FreeRegionManager::AddGarbageMemory(size_t index, size_t count)
 {
-    std::unique_ptr<ScopedEnterSaferegion> saferegion;
-    if (allowSaferegion) { saferegion.reset(new ScopedEnterSaferegion(true)); }
     std::lock_guard<std::mutex> lock(cacheMutex);
     FreeMemory(index, count);
 }
@@ -639,6 +637,17 @@ ZPageAllocation::ZPageAllocation(size_t size, uint8_t role, bool physical, ZAllo
     : size(size), youngSeqnum(ZGeneration::young()->seqnum()), oldSeqnum(ZGeneration::old()->seqnum()),
       role(role), physical(physical), flags(flags) {}
 
+// ZGC zPageAllocator.cpp:525-531.
+bool ZPageAllocation::Wait()
+{
+    return stallResult.get();
+}
+
+void ZPageAllocation::Satisfy(bool value)
+{
+    stallResult.set(value);
+}
+
 // ZGC zPageAllocator.cpp:1518-1542: a single decision owns both enqueue and wait.
 bool RegionManager::ClaimCapacityOrStall(AllocationStallRequest& request)
 {
@@ -656,9 +665,6 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request)
     // ZGC zPageAllocator.cpp:1443-1448: asynchronous minor request, then one wait.
     ZDriver::minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, ZYoungGCThreads, 0));
 
-    // zFuture.inline.hpp:47-53: a Java thread waits with a safepoint check;
-    // here the mutator enters its saferegion before ZFuture::get (I3/I4).
-    ScopedEnterSaferegion enterSaferegion(false);
     const bool satisfied = request.Wait();
     // Pair with the posting owner before the caller destroys its request.
     // zPageAllocator.cpp:1454-1464.
@@ -688,18 +694,13 @@ void RegionManager::ReturnPageMemory(const PageMemory& memory)
     ReturnRetiredPageMemory(memory);
 }
 
-void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory, bool allowSaferegion)
+void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory)
 {
-    // zPageAllocator.cpp:1999 / 2150: hand back memory, decrease used and
-    // satisfy the FIFO in one allocator-owner critical section. Enter the
-    // saferegion before the owner, including nested cache hand-back calls.
-    // A shared-page publication loser already has an object allocated in
-    // the winner. It must return its unused page without a safepoint.
-    std::unique_ptr<ScopedEnterSaferegion> enterSaferegion;
-    if (allowSaferegion) { enterSaferegion.reset(new ScopedEnterSaferegion(true)); }
+    // ZGC zPageAllocator.cpp:1999 / 2150: return memory, decrease used,
+    // and satisfy stalled requests under the allocator lock.
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
     CHECK(memory.committed);
-    freeRegionManager.AddGarbageMemory(memory.index, memory.size, allowSaferegion);
+    freeRegionManager.AddGarbageMemory(memory.index, memory.size);
     const size_t bytes = memory.size;
     CHECK(pageAllocatorUsed >= bytes);
     pageAllocatorUsed -= bytes;
@@ -844,10 +845,8 @@ void RegionManager::PromoteAllRegions()
 }
 
 ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysicalMem,
-                                       bool allowSaferegion, PageAge age, ZAllocationFlags flags)
+                                       PageAge age, ZAllocationFlags flags)
 {
-    allowSaferegion = allowSaferegion && !flags.non_blocking();
-    if (!allowSaferegion || IsGcThread()) { flags.set_non_blocking(); }
     size_t size = num;
 
 retry:
@@ -864,8 +863,6 @@ retry:
             inactiveZone.store(std::max(inactiveZone.load(std::memory_order_relaxed), end), std::memory_order_release);
         }
         if (region == nullptr) {
-            std::unique_ptr<ScopedEnterSaferegion> enterSaferegion;
-            if (allowSaferegion) { enterSaferegion.reset(new ScopedEnterSaferegion(true)); }
             std::lock_guard<std::mutex> lock(pageAllocatorMutex);
             (void)committedBytes;
             freeRegionManager.FreeMemoryAllocFailed(request.Memory());
@@ -873,10 +870,7 @@ retry:
             pageAllocatorUsed -= size;
             TrackUsedPeakLocked();
             SatisfyStalledAllocations();
-            if (allowSaferegion) {
-                goto retry;
-            }
-            return nullptr;
+            goto retry;
         }
         // ZGC zPageAllocator.cpp:1414-1418: relocation is not mutator allocation.
         if (!flags.gc_relocation() && ConcurrentGCThread::IsRuntimeInitialized()) {
@@ -939,7 +933,6 @@ void RegionManager::DumpRegionStats(const char* msg) const
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
-#include "Common/ScopedObjectAccess.h"
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"

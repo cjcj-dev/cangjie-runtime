@@ -20,7 +20,6 @@
 #include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Common/StateWord.h"
-#include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
@@ -120,7 +119,6 @@ void ZCollectedHeap::collect(GCReason reason)
     if (!_heap.IsGCEnabled()) return;
     // ZGC zCollectedHeap.cpp:174-205: external causes select the generation
     // budgets here; only the driver decides how to enqueue the request.
-    ScopedEnterSaferegion enterSaferegion(false);
     switch (reason) {
         case GC_REASON_YOUNG:
             _driver_minor->collect(ZDriverRequest(reason, ZYoungGCThreads, 0));
