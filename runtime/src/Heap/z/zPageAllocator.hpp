@@ -12,7 +12,7 @@
 #include <functional>
 #include <mutex>
 #include <vector>
-#include "Heap/z/zFuture.inline.hpp"
+#include "Heap/z/zFuture.hpp"
 #include "Heap/z/zList.inline.hpp"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zArray.inline.hpp"
@@ -57,15 +57,8 @@ public:
     const PageMemory& Memory() const { return memory; }
 
     // zPageAllocator.cpp:525-531 ZPageAllocation::wait/satisfy over ZFuture<bool>.
-    bool Wait()
-    {
-        return stallResult.get();
-    }
-
-    void Satisfy(bool value)
-    {
-        stallResult.set(value);
-    }
+    bool Wait();
+    void Satisfy(bool value);
 
 private:
     friend class RegionManager;

@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zFuture.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/concurrentGCThread.hpp"
 
@@ -636,6 +637,17 @@ void RegionManager::ReclaimRetiredRegion(ZPage* region)
 ZPageAllocation::ZPageAllocation(size_t size, uint8_t role, bool physical, ZAllocationFlags flags)
     : size(size), youngSeqnum(ZGeneration::young()->seqnum()), oldSeqnum(ZGeneration::old()->seqnum()),
       role(role), physical(physical), flags(flags) {}
+
+// ZGC zPageAllocator.cpp:525-531.
+bool ZPageAllocation::Wait()
+{
+    return stallResult.get();
+}
+
+void ZPageAllocation::Satisfy(bool value)
+{
+    stallResult.set(value);
+}
 
 // ZGC zPageAllocator.cpp:1518-1542: a single decision owns both enqueue and wait.
 bool RegionManager::ClaimCapacityOrStall(AllocationStallRequest& request)
