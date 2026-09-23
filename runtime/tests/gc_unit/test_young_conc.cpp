@@ -121,8 +121,7 @@ public:
     {
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
         if (!cycle.Snapshot().active) ZGenerationTest::SetReason(cycle, GC_REASON_YOUNG);
-        YoungTypeSetter type(cycle, ZYoungType::minor);
-        Heap::GetHeap().young().collect();
+        Heap::GetHeap().young().collect(ZYoungType::minor);
     }
 };
 } // namespace MapleRuntime
