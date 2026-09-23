@@ -1212,7 +1212,6 @@ GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, MarkedLiveQueryUsesGenerationSequence)
 namespace {
 struct CycleSequenceResult {
     uint32_t youngBefore = 0, youngAfter = 0, oldBefore = 0, oldAfter = 0;
-    uint64_t snapshotYoung = 0, snapshotOld = 0;
 };
 void* CollectForSequenceRead(void* context)
 {
@@ -1224,8 +1223,6 @@ void* CollectForSequenceRead(void* context)
     heap.RequestGC(GC_REASON_USER);
     result.youngAfter = heap.young().seqnum();
     result.oldAfter = heap.old().seqnum();
-    result.snapshotYoung = heap.young().seqnum();
-    result.snapshotOld = heap.old().seqnum();
     Mutator::GetMutator()->SetManagedContext(true);
     return nullptr;
 }
@@ -1243,13 +1240,10 @@ GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, CollectionPublishesBothGenerationSequenc
     void* taskResult = nullptr;
     GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
     ReleaseHandle(handle);
-    std::fprintf(stderr, "SEQNUM_PUBLISH_ASSERT young=%u->%u old=%u->%u snapshot_young=%llu snapshot_old=%llu\n",
-        result.youngBefore, result.youngAfter, result.oldBefore, result.oldAfter,
-        static_cast<unsigned long long>(result.snapshotYoung), static_cast<unsigned long long>(result.snapshotOld));
+    std::fprintf(stderr, "SEQNUM_PUBLISH_ASSERT young=%u->%u old=%u->%u \n",
+        result.youngBefore, result.youngAfter, result.oldBefore, result.oldAfter);
     // Explicit major request: young preclean + full roots; one old mark start.
     // ZGC zDriver.cpp:270-279,416-428; zGeneration.cpp:871,1231.
     GC_EXPECT_EQ(result.youngAfter, result.youngBefore + 2);
     GC_EXPECT_EQ(result.oldAfter, result.oldBefore + 1);
-    GC_EXPECT_EQ(result.snapshotYoung, result.youngAfter);
-    GC_EXPECT_EQ(result.snapshotOld, result.oldAfter);
 }

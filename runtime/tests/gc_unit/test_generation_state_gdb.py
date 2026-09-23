@@ -11,7 +11,9 @@ import os
 
 samples = []
 mode = os.environ.get('GENERATION_OBSERVE', 'forwarding')
-fixture = 'GenerationState.ProductSequenceAndForwarding'
+fixture = ('GenerationState.DriverActivityABI' if mode in ('phase', 'seqnum', 'activity')
+           else 'GenerationState.ProductSequenceAndForwarding')
+old_before = None
 
 
 def emit(tag, **fields):
@@ -40,6 +42,18 @@ class Publication(gdb.Breakpoint):
         return False
 
 
+class MarkStart(gdb.Breakpoint):
+    def stop(self):
+        global old_before
+        old_before = int(gdb.parse_and_eval('MapleRuntime::ZGeneration::_old->_seqnum'))
+        return False
+
+
+class MarkConsumer(gdb.Breakpoint):
+    def stop(self):
+        return True
+
+
 for command in ['set pagination off', 'set confirm off', 'set breakpoint pending on',
                 'set print thread-events off', 'handle SIGUSR1 nostop noprint pass',
                 'handle SIGUSR2 nostop noprint pass', 'handle SIGSEGV nostop noprint pass',
@@ -47,9 +61,29 @@ for command in ['set pagination off', 'set confirm off', 'set breakpoint pending
                 'set environment GC_UNIT_FILTER ' + fixture,
                 'set environment GC_UNIT_OTHER_VM_CHILD ' + fixture]:
     gdb.execute(command)
-Publication('MapleRuntime::ZForwarding::relocated_remembered_fields_after_relocate()')
+if mode in ('phase', 'seqnum', 'activity'):
+    MarkStart('MapleRuntime::ZGenerationOld::mark_start()')
+    MarkConsumer('MapleRuntime::ZGenerationOld::concurrent_mark()')
+else:
+    Publication('MapleRuntime::ZForwarding::relocated_remembered_fields_after_relocate()')
 gdb.execute('run')
-if mode == 'signal' and samples:
+if mode in ('phase', 'seqnum', 'activity'):
+    phase = int(gdb.parse_and_eval('MapleRuntime::ZGeneration::_old->_phase'))
+    sequence = int(gdb.parse_and_eval('MapleRuntime::ZGeneration::_old->_seqnum'))
+    if mode == 'activity':
+        # Call the actual standard-library ABI function in the stopped driver;
+        # do not reconstruct its result by reading driver fields in the test.
+        running = bool(gdb.parse_and_eval('((bool (*)())CJ_MCC_IsGCRunning)()'))
+        passed = running
+        emit('GENERATION_ACTIVITY_TARGET', passed=passed, running=running)
+    elif mode == 'phase':
+        passed = phase == 0
+        emit('GENERATION_PHASE_TARGET', passed=passed, phase=phase)
+    else:
+        passed = old_before is not None and sequence == old_before + 1
+        emit('GENERATION_SEQNUM_TARGET', passed=passed, before=old_before, after=sequence)
+    samples.append(passed)
+elif mode == 'signal' and samples:
     emit('GENERATION_SIGNAL_DELIVERY', old_phase=int(gdb.parse_and_eval('MapleRuntime::ZGeneration::_old->_phase')))
     gdb.execute('signal SIGABRT')
 else:

@@ -22,7 +22,6 @@
 #include <iterator>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -158,7 +157,6 @@ ZGeneration::ZGeneration(ZGenerationId generation)
           generation == ZGenerationId::young ? MarkingStacks::MarkingGeneration::YOUNG
                                                  : MarkingStacks::MarkingGeneration::MAJOR)),
       _id(generation == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old),
-      _cycle(generation),
       statHeap(),
       _relocation_set(this),
       _relocate(std::make_unique<ZRelocate>(this))
@@ -182,7 +180,7 @@ static double fragmentation_limit(ZGenerationId generation)
 }
 double ZGeneration::FragmentationLimit() const
 {
-    return fragmentation_limit(_cycle);
+    return fragmentation_limit(_id);
 }
 
 
@@ -191,13 +189,13 @@ double ZGeneration::FragmentationLimit() const
 // young sequence once for the whole old relocation, not once per forwarding.
 void ZGeneration::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
 {
-    CHECK(_cycle == ZGenerationId::old);
+    CHECK(_id == ZGenerationId::old);
     youngSequenceAtRelocateStart.store(youngSequence, std::memory_order_release);
 }
 
 bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 {
-    CHECK(_cycle == ZGenerationId::old);
+    CHECK(_id == ZGenerationId::old);
     // zGeneration.inline.hpp:174-182: each young mark start flips the faces.
     return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
 }
@@ -405,7 +403,7 @@ bool ZGenerationYoung::pause_mark_end()
 void ZGenerationYoung::mark_start()
 {
     uint64_t start = TimeUtil::NanoSeconds();
-    CHECK(_cycle == ZGenerationId::young);
+    CHECK(_id == ZGenerationId::young);
     ZGlobalsPointers::flip_young_mark_start();
     ZVerify::OnColorFlip();
 
@@ -797,9 +795,9 @@ namespace MapleRuntime {
 void ZGeneration::InitializeWorkers(uint32_t capacity)
 {
     CHECK(workers == nullptr);
-    workers = std::make_unique<ZWorkers>(_cycle, capacity, &statWorkers);
+    workers = std::make_unique<ZWorkers>(_id, capacity, &statWorkers);
     mark->BindWorkers(workers.get());
-    if (_cycle == ZGenerationId::old) {
+    if (_id == ZGenerationId::old) {
         weakRootsProcessor = std::make_unique<ZWeakRootsProcessor>(workers.get());
         Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().set_workers(workers.get());
     }
@@ -838,7 +836,7 @@ void ZGenerationOld::mark_start()
 {
     // zGeneration.cpp:1248
     _total_collections_at_start = Heap::GetHeap().total_collections();
-    CHECK(_cycle == ZGenerationId::old);
+    CHECK(_id == ZGenerationId::old);
     ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();
     Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
@@ -1038,7 +1036,7 @@ namespace MapleRuntime {
 namespace MapleRuntime {
 void ZGeneration::SetYoungType(ZYoungType type)
 {
-    CHECK(_cycle == ZGenerationId::young);
+    CHECK(_id == ZGenerationId::young);
     youngType.store(type, std::memory_order_release);
 }
 
@@ -1123,7 +1121,7 @@ void ZGeneration::flip_age_pages(const ZRelocationSetSelector* selector)
 void ZGeneration::select_relocation_set(bool promote_all)
 {
     ZRelocationSetSelector selector(FragmentationLimit());
-    const ZGenerationId id = _cycle == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old;
+    const ZGenerationId id = _id == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old;
     {
         ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, nullptr);
         for (ZPage* page; pt_iter.next(&page);) {
@@ -1140,7 +1138,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
         free_empty_pages(&selector, 0);
     }
     selector.select();
-    if (_cycle == ZGenerationId::young) {
+    if (_id == ZGenerationId::young) {
         TenuringInputs inputs;
         inputs.promoteAll = promote_all;
         inputs.youngGarbage = statHeap.GarbageAtMarkEnd();
@@ -1154,7 +1152,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
         ZGeneration::young()->SelectTenuringThreshold(inputs);
     }
     _relocation_set.install(&selector);
-    if (_cycle == ZGenerationId::young) {
+    if (_id == ZGenerationId::young) {
         flip_age_pages(&selector);
     }
     ZRelocationSetIterator rs_iter(&_relocation_set);
@@ -1274,7 +1272,6 @@ void ZGenerationYoung::EvacuateYoungRegions()
 #include <iterator>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>

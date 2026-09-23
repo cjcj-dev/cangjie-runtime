@@ -73,6 +73,7 @@ public:
     bool IsGarbage(const BaseObject* obj) const { return !IsSurvivedObject(obj); }
 
 
+    bool IsGcStarted() const;
     bool IsGCEnabled() const;
     void EnableGC(bool val);
 

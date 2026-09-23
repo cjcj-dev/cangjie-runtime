@@ -810,21 +810,21 @@ void* CollectForGenerationState(void* context)
     std::vector<U64> roots;
     const size_t count = 3 * ZPageSizeSmall / size;
     for (size_t i = 0; i < count; ++i) {
-        roots.push_back(heap.RegisterExportRoot(MObject::NewObject(type, size, AllocType::MOVEABLE_OBJECT)));
+        // Populate three old allocation pages using the product allocator.
+        // Keep one object per page so the real selector can reclaim pages.
+        const auto address = heap.object_allocator().alloc_for_relocation(size, PageAge::old);
+        auto* object = reinterpret_cast<BaseObject*>(address);
+        object->SetClassInfo(type);
+        if (i % (ZPageSizeSmall / size) == 0) roots.push_back(heap.RegisterExportRoot(object));
     }
     mutator->SetManagedContext(false);
     result.youngBefore = heap.young().seqnum();
     result.oldBefore = heap.old().seqnum();
     heap.RequestGC(GC_REASON_USER);
-    // First retain the entire allocation through promotion, then retain one
-    // object per source page. The second real old collection has sparse pages.
-    for (size_t i = 0; i < count; ++i) {
-        if (i % (ZPageSizeSmall / size) != 0) heap.RemoveExportObject(roots[i]);
-    }
     heap.RequestGC(GC_REASON_USER);
     result.youngAfter = heap.young().seqnum();
     result.oldAfter = heap.old().seqnum();
-    for (size_t i = 0; i < count; i += ZPageSizeSmall / size) heap.RemoveExportObject(roots[i]);
+    for (U64 root : roots) heap.RemoveExportObject(root);
     mutator->SetManagedContext(true);
     return nullptr;
 }
@@ -848,5 +848,21 @@ GC_RUNTIME_OTHER_VM_TEST(GenerationState, ProductSequenceAndForwarding)
     GC_EXPECT_EQ(result.oldAfter, result.oldBefore + 2);
     GC_EXPECT_TRUE(Heap::GetHeap().young().is_phase_relocate());
     GC_EXPECT_TRUE(Heap::GetHeap().old().is_phase_relocate());
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+extern "C" bool CJ_MCC_IsGCRunning();
+GC_RUNTIME_OTHER_VM_TEST(GenerationState, DriverActivityABI)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const bool before = CJ_MCC_IsGCRunning();
+    CheckDriverCauseResult(GC_REASON_TIMER, false, false, false);
+    const bool after = CJ_MCC_IsGCRunning();
+    std::fprintf(stderr, "GENERATION_ACTIVITY_IDLE_TARGET before=%d after=%d\n", before, after);
+    GC_EXPECT_FALSE(before);
+    GC_EXPECT_FALSE(after);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

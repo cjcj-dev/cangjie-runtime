@@ -6,7 +6,6 @@
 
 #pragma once
 #include <atomic>
-#include <mutex>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -140,7 +139,6 @@ protected:
 #endif
     std::unique_ptr<ZMark> mark;
     const ZGenerationId _id;
-    const ZGenerationId _cycle;
     std::unique_ptr<ZWorkers> workers;
     std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
     ZStatHeap statHeap;
