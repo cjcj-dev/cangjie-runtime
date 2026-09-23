@@ -13,6 +13,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zMark.hpp"
@@ -428,6 +429,12 @@ void CheckResizeBeforeRemainingForwarding(Generation id)
         }
         pages[i]->reset(age);
         auto* object = fx.PlaceObject(pages[i]->GetRegionStart());
+        // This isolated relocation fixture starts after the promotion barrier.
+        // Supply its input contract (ZGC zRelocate.cpp:742-749); the assertions
+        // below observe worker resizing, not promotion-barrier production.
+        ZIterator::basic_oop_iterate(object, [](RefField<>& field) {
+            field.StoreColoured(ZAddress::store_good(zaddress::null));
+        });
         pages[i]->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
         GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], object));
     }
