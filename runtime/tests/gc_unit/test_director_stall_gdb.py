@@ -78,11 +78,11 @@ try:
         until('MapleRuntime::RegionManager::StallAllocation')
         emit('REAL_ENQUEUE_RESULT', arguments=cmd('info args'), stack=cmd('bt'))
     director.switch()
-    send = line_in(source, 'static void start_minor_gc', 'driver_minor()->port().send_async')
+    send = line_in(source, 'static void start_minor_gc', 'ZDriver::minor()->collect(')
     until('zDirector.cpp:' + str(send))
     emit('PRODUCT_SELECTION', young=str(val('selection.young_workers')), old=str(val('selection.old_workers')))
     cmd('next')
-    port = 'MapleRuntime::ZCollectedHeap::_collected_heap->_driver_minor->_port'
+    port = 'MapleRuntime::ZDriver::_minor->_port'
     actual = int(val(port + '._message._young_nworkers'))
     expected_workers = int(val('MapleRuntime::ZYoungGCThreads'))
     passed = actual == expected_workers if stall else actual < expected_workers
