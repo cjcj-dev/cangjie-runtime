@@ -341,7 +341,7 @@ public:
     {
         RefField<> field(StoreGoodPointer(from));
         ZGlobalsPointers::flip_old_relocate_start();
-        BaseObject* result = HeapAccess<>::oop_load(&(field));
+        BaseObject* result = NativeAccess<>::oop_load(&field);
         ZGlobalsPointers::flip_old_relocate_start();
         return result;
     }
@@ -1486,7 +1486,7 @@ void CheckMinorFieldColour(bool stale)
         bits = ColouredPointer(fx.obj0, ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask);
     }
     RefField<> field(bits);
-    (void)HeapAccess<>::oop_load(&(field));
+    (void)NativeAccess<>::oop_load(&field);
     const MAddress actual = untype(field.GetTargetObject());
     const MAddress expected = stale ? to : from;
     std::fprintf(stderr, "DETAIL minor_field_colour stale=%u actual=%#zx expected=%#zx\n",
