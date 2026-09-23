@@ -247,7 +247,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationSetSelector, GenerationMediumFilterBoundari
     const size_t maximumLimit = static_cast<size_t>(maximum * (ZFragmentationLimit / 100.0));
     std::vector<ZPage*> pages;
     std::vector<ZPage*> expected;
-    for (int shift = 2; shift >= 0; --shift) {
+    for (int shift = 0; shift <= 2; ++shift) {
         const size_t size = maximum >> shift;
         for (size_t extra : {size_t(0), size_t(8)}) {
             ZPage* page = Heap::alloc_page(size, ZPageType::medium, false, false, PageAge::old);
@@ -262,7 +262,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationSetSelector, GenerationMediumFilterBoundari
         ZPage* page = pages[i];
         bool increment = false;
         page->livemap().set(ZGenerationId::old, 0, false, increment);
-        const int shift = 2 - static_cast<int>(i / 2);
+        const int shift = static_cast<int>(i / 2);
         page->inc_live(1, page->size() - (maximumLimit >> shift) - ((i % 2) * 8));
     }
     generation.select_relocation_set(false);
