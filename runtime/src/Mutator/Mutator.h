@@ -67,7 +67,7 @@ public:
     {
         // Wait for target inventory users while the lock and roots are still
         // alive, before any Mutator member destruction can begin.
-        ZBarrierSet::on_thread_detach(gcData);
+        ZBarrierSet::on_thread_destroy(gcData);
         ReleaseAllocBuffer();
         tid = 0;
         stackBoundAddr = nullptr;

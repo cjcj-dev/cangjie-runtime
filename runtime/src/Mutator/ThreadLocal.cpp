@@ -29,9 +29,9 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
     // thread owns its TLAB; generated allocation code borrows this ABI slot.
     buffer = newMutator != nullptr ? newMutator->tlab() : nullptr;
     if (newMutator != nullptr) {
-        auto& data = newMutator->GetGCData();
-        ZBarrierSet::on_thread_attach(data, newMutator, nullptr, data.invisibleRoot);
-        gcData = &data;
+        // Binding an already constructed logical thread is not attachment.
+        // Its masks, watermark and buffered stores survive carrier migration.
+        gcData = &newMutator->GetGCData();
     } else {
         gcData = nativeGCData;
     }
@@ -125,6 +125,7 @@ CleanThreadLocalData::~CleanThreadLocalData()
         MutatorManager::Instance().UnregisterMarkFlushThread(local);
     }
     ZBarrierSet::on_thread_detach(nativeData);
+    ZBarrierSet::on_thread_destroy(nativeData);
     // gcData may borrow a parked/migrating Mutator. The cleaner owns only
     // nativeData, whose member destructor runs after this body.
     local->gcData = nullptr;

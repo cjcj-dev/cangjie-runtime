@@ -39,6 +39,11 @@ void ZBarrierSet::on_thread_detach(ThreadGCData& data)
         !data.storeBarrierBuffer->IsEmpty()) {
         Heap::GetHeap().mark_flush(data);
     }
+}
+
+void ZBarrierSet::on_thread_destroy(ThreadGCData& data)
+{
+    // ZGC zBarrierSet.cpp:248-251. GC data survives detach until SMR deletion.
     data.UnregisterOwner();
 }
 
