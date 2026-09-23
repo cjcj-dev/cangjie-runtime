@@ -38,7 +38,6 @@
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Common/BaseObject.h"
-#include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/shared/collectedHeap.hpp"
@@ -934,7 +933,6 @@ void RegionManager::DumpRegionStats(const char* msg) const
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
-#include "Common/ScopedObjectAccess.h"
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"

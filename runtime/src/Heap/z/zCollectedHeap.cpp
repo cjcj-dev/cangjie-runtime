@@ -20,7 +20,6 @@
 #include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Common/StateWord.h"
-#include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
