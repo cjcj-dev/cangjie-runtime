@@ -603,7 +603,7 @@ GC_RUNTIME_OTHER_VM_TEST(FutureWait966, CollectionWaitParticipatesInHandshake)
     CheckProductFutureWait(false);
 }
 
-GC_RUNTIME_OTHER_VM_TEST(FutureWait966, GCThreadPreservesHandshakeState)
+GC_OTHER_VM_TEST(FutureWait966, GCThreadPreservesHandshakeState)
 {
     ZDriverPort port;
     std::atomic<HandshakeState*> state{nullptr};
