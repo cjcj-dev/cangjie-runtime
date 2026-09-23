@@ -19,6 +19,7 @@
 #include "Heap/z/zMark.hpp"
 #include "UnwindStack/StackFrameCursor.h"
 #include "TypeInfoManager.h"
+#include "ObjectModel/MObject.h"
 #include "gc_unittest.hpp"
 #if defined(__linux__)
 #include <sys/syscall.h>
@@ -917,6 +918,60 @@ GC_RUNTIME_OTHER_VM_TEST(TLABTail, RetiredTailSurvivesMarkEntry)
                  tail, bound, tailObj->GetSize(), obj->GetSize());
     state.release.store(true, std::memory_order_release);
     worker.join();
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif
+
+#if defined(__linux__)
+// memAllocator.cpp:327-347: a failed TLAB refill still permits an object
+// allocation from the remaining shared-page tail. A registered GC thread
+// makes exhausted backing allocation non-blocking, and preserves the null
+// result on the broken arm so the target assertion observes it directly.
+GC_RUNTIME_OTHER_VM_TEST(TLABRefill, FailureFallsBackOutsideTLAB)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 64 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    Heap& heap = Heap::GetHeap();
+    heap.EnableGC(false);
+    auto& threads = MutatorManager::Instance();
+    Mutator* owner = threads.CreateRuntimeMutator(ThreadType::GC_THREAD);
+    AllocBuffer* buffer = owner->tlab();
+    buffer->RetireTLAB(false);
+
+    constexpr size_t bytes = 256;
+    constexpr size_t tail = 1024;
+    auto& allocator = heap.object_allocator();
+    const uintptr_t seed = allocator.alloc(bytes);
+    GC_EXPECT_TRUE(seed != 0);
+    ZPage* page = Heap::page(seed);
+    while (page->GetRegionEnd() - page->GetRegionAllocPtr() > tail) {
+        const size_t remaining = page->GetRegionEnd() - page->GetRegionAllocPtr();
+        const size_t chunk = std::min(remaining - tail, ZObjectSizeLimitSmall);
+        GC_EXPECT_TRUE(allocator.alloc(chunk) != 0);
+    }
+    // Reserve every other page through the product page allocator. The shared
+    // page stays installed; no synthetic result is passed to the consumer.
+    std::vector<ZPage*> reserved;
+    while (ZPage* extra = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false)) {
+        reserved.push_back(extra);
+    }
+    const uintptr_t before = page->GetRegionAllocPtr();
+    const size_t refill = buffer->ComputeTLABSize(bytes, heap.unsafe_max_tlab_alloc());
+    GC_EXPECT_TRUE(refill > tail);
+    TypeInfo* type = TLABTestType();
+    type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
+    auto* object = MObject::NewObject(type, bytes, AllocType::MOVEABLE_OBJECT);
+    const uintptr_t after = page->GetRegionAllocPtr();
+    const bool success = reinterpret_cast<uintptr_t>(object) == before && after == before + bytes &&
+                         buffer->TLABSize() == 0;
+    std::fprintf(stderr, "TLAB_REFILL_FALLBACK_TARGET executed=1 refill=%zu tail=%zu object=%p before=%zx after=%zx tlab=%zu success=%d\n",
+                 refill, tail, static_cast<void*>(object), before, after, buffer->TLABSize(), success);
+    // Release the thread before an assertion can throw; the object and page
+    // state above are the actual result of the runtime allocation entry.
+    threads.DestroyRuntimeMutator(ThreadType::GC_THREAD);
+    GC_EXPECT_TRUE(success);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif
