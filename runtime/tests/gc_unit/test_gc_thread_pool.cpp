@@ -352,17 +352,17 @@ namespace {
 // Park the real relocation workers using the queue's normal GC synchronization
 // protocol, then request resize while that product task is already running.
 // No test callback or timing race decides when the request is issued.
-void ResizeRunningRelocation(ZGeneration& generation)
+void ResizeRunningRelocation(ZGeneration& generation, uint32_t initial = 1, uint32_t requested = 3)
 {
     auto* queue = generation.relocate().queue();
     queue->synchronize();
     std::thread relocating([&] { generation.relocate().relocate(&generation.relocation_set()); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (queue->SynchronizedWorkerCount() != 1 && std::chrono::steady_clock::now() < deadline) {
+    while (queue->SynchronizedWorkerCount() != initial && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
-    const bool running = queue->SynchronizedWorkerCount() == 1;
-    generation.Workers()->request_resize_workers(3);
+    const bool running = queue->SynchronizedWorkerCount() == initial;
+    generation.Workers()->request_resize_workers(requested);
     queue->desynchronize();
     relocating.join();
     GC_EXPECT_TRUE(running);
@@ -402,6 +402,41 @@ GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryRestartsWithRequestedWorkers)
     const auto active = young.Workers()->active_workers();
     young.Workers()->set_inactive();
     GC_EXPECT_EQ(active, 3u);
+    GC_EXPECT_FALSE(young.relocate().queue()->is_active());
+}
+
+// Exercise the decreasing budget as well as the existing increase, while
+// every original worker is parked inside the real relocation task.
+GC_OTHER_VM_TEST(RelocateWorkers, OldProductEntryReducesWorkersDuringRelocation)
+{
+    GcHeapFixture fx;
+    PrepareOwnerRegion(fx);
+    auto& old = Heap::GetHeap().old();
+    RelocationReceiptTest::ParkFrom(Heap::GetHeap().page_allocator(), fx.region0);
+    if (old.Workers() == nullptr) old.InitializeWorkers(3);
+    old.Workers()->set_active_workers(3);
+    old.Workers()->set_active();
+    ResizeRunningRelocation(old, 3, 1);
+    const auto active = old.Workers()->active_workers();
+    old.Workers()->set_inactive();
+    std::fprintf(stderr, "RELOCATE_RESIZE_DOWN generation=old active=%u expected=1\n", active);
+    GC_EXPECT_EQ(active, 1u);
+    GC_EXPECT_TRUE(forwarding_for_page(fx.region0)->is_done());
+    GC_EXPECT_FALSE(old.relocate().queue()->is_active());
+}
+
+GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryReducesWorkersDuringRelocation)
+{
+    GcHeapFixture fx;
+    auto& young = Heap::GetHeap().young();
+    if (young.Workers() == nullptr) young.InitializeWorkers(3);
+    young.Workers()->set_active_workers(3);
+    young.Workers()->set_active();
+    ResizeRunningRelocation(young, 3, 1);
+    const auto active = young.Workers()->active_workers();
+    young.Workers()->set_inactive();
+    std::fprintf(stderr, "RELOCATE_RESIZE_DOWN generation=young active=%u expected=1\n", active);
+    GC_EXPECT_EQ(active, 1u);
     GC_EXPECT_FALSE(young.relocate().queue()->is_active());
 }
 
