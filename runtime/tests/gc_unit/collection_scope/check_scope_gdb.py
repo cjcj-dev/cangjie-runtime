@@ -116,6 +116,33 @@ class CycleEndDone(gdb.FinishBreakpoint):
         return False
 
 
+class CollectionRecordDone(gdb.FinishBreakpoint):
+    def __init__(self, generation, field, before):
+        super().__init__(gdb.newest_frame(), internal=True)
+        self.generation = generation
+        self.field = field
+        self.before = before
+
+    def stop(self):
+        record = self.generation.dereference()['cycleStats']
+        after = int(record[self.field])
+        check('CYCLE_' + self.field.upper() + '_STORE', after > self.before,
+              before=self.before, after=after)
+        return False
+
+
+class CollectionRecord(gdb.Breakpoint):
+    def __init__(self, field, symbol):
+        super().__init__(symbol, internal=True)
+        self.field = field
+
+    def stop(self):
+        generation = val('this')
+        before = int(generation.dereference()['cycleStats'][self.field])
+        CollectionRecordDone(generation, self.field, before)
+        return False
+
+
 class CycleStart(gdb.Breakpoint):
     def stop(self):
         frames = stack()
@@ -153,6 +180,8 @@ try:
     Entry('MapleRuntime::ZDriver::RunGarbageCollection', internal=True)
     Sample('MapleRuntime::ZStatPhaseGeneration::RegisterEnd', internal=True)
     SampleDone('MapleRuntime::ZStatHeap::PrintStalls', internal=True)
+    CollectionRecord('start', 'MapleRuntime::ZGeneration::at_collection_start')
+    CollectionRecord('end', 'MapleRuntime::ZGeneration::at_collection_end')
     CycleStart('MapleRuntime::ZStatCycle::AtStart', internal=True)
     CycleEnd('MapleRuntime::ZStatCycle::AtEnd', internal=True)
     Complete('CollectionScopeFixtureComplete', internal=True)
