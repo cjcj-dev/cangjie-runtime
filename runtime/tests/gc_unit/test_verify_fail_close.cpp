@@ -146,6 +146,7 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsBadLiveAccounting)
         if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
         old.Workers()->set_active_workers(1);
         old.Workers()->set_active();
+        ZRelocate::StartRelocationTasks(old.id());
         old.relocate().relocate(&old.relocation_set());
         old.Workers()->set_inactive();
     });
@@ -226,6 +227,7 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
         if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
         old.Workers()->set_active_workers(1);
         old.Workers()->set_active();
+        ZRelocate::StartRelocationTasks(old.id());
         old.relocate().relocate(&old.relocation_set());
         old.Workers()->set_inactive();
     });
