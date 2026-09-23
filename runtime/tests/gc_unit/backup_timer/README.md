@@ -9,7 +9,11 @@ only the product `libcangjie-runtime.so`, as in `worker_config/README.md`.
 Reuse this same ELF across candidate, producer-cut, consumer-cut and restored SOs.
 Run `bash run.sh` with `TIMER_ELF`, `TIMER_SOURCE` (matching zDirector.cpp),
 `GCV2_RUNTIME_LIB_DIR` (runtime and boundscheck SOs), `TIMER_OUT`, and the leased
-`TIMER_CPUSET`. Eight cases run concurrently: env/API × default/1s × major/minor.
+`TIMER_CPUSET`. Sixteen cases run concurrently: env/API × default/1s × major/minor × unchanged/changed flag.
+After sampling, the changed cases flip only the selected generation timer flag
+between disabled (-1) and 1s; the public parameter and statistics remain unchanged.
+Initialization must map the public parameter to both flags, and the real rule
+result and dispatched request must follow the current flag.
 
 The debugger stops the real director before sampling, holds other threads,
 waits 241 seconds, then lets the real sampling, decision and port send complete.
@@ -45,3 +49,11 @@ for arbitrary elapsed times also relies on the product's nonpositive-interval
 early return, before either elapsed-time value is read. It is not inferred from
 an absence of messages. The observer supports the checked x86-64 Release
 instruction shape only and does not claim portability to another code generator.
+
+Q12 changes sample-boundary stops to the first decision entry: Release emits no
+instruction for the aggregate return or assignment. The stall observer
+`../test_director_stall_gdb.py` schedules the existing real blocked-allocation
+fixture after that boundary, then asserts the worker count in the product minor
+port request. `STALL_AFTER_SAMPLE=0` is the non-stall control. Required environment:
+`DIRECTOR_SOURCE`, `STALL_FIXTURE_SOURCE`, `GCV2_RUNTIME_LIB_DIR`; run via GDB on
+the matching gc_unit ELF with LD_LIBRARY_PATH pointing at the product SO.

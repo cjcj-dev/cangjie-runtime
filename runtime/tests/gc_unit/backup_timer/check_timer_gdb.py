@@ -101,9 +101,9 @@ try:
     for setting in ('pagination off', 'confirm off', 'breakpoint pending on',
                     'print thread-events off'):
         command('set ' + setting)
-    tick = line_in('void ZDirector::run_thread', 'stats = sample_stats')
+    tick = line_in('static ZDirectorStats sample_stats', 'const uint64_t now')
     loop = line_in('void ZDirector::run_thread', 'while (wait_for_tick())')
-    sample_end = line_in('static ZDirectorStats sample_stats', 'return stats')
+    sample_end = line_in('static GCReason make_major_gc_decision', 'if (')
     gdb.Breakpoint('zDirector.cpp:' + str(tick), temporary=True)
     command('run')
     director = gdb.selected_thread()
@@ -146,7 +146,7 @@ try:
         command('next')
         frame = gdb.newest_frame()
         location = frame.find_sal().line
-        if frame.name() == 'MapleRuntime::ZDirector::run_thread' and loop <= location < tick:
+        if frame.name() == 'MapleRuntime::ZDirector::run_thread' and loop <= location <= loop + 3:
             break
     else:
         raise RuntimeError('Director iteration did not finish')

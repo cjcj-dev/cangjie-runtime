@@ -41,9 +41,9 @@ LINES = {
     'send': line_in('static void start_minor_gc', 'driver_minor()->port().send_async'),
     'merge': line_in('static bool start_gc', 'rule_major_allocation_rate(stats)'),
     'sample': line_in('static ZDirectorStats sample_stats', 'stats.mutator_alloc_rate'),
-    'tick': line_in('void ZDirector::run_thread', 'const ZDirectorStats stats'),
+    'tick': line_in('static ZDirectorStats sample_stats', 'const uint64_t now'),
     'loop': line_in('void ZDirector::run_thread', 'while (wait_for_tick())'),
-    'entry': line_in('static ZDirectorStats sample_stats', 'return stats'),
+    'entry': line_in('static GCReason make_major_gc_decision', 'if ('),
     'rule': line_in('static bool rule_major_allocation_rate', 'VLOG(REPORT'),
 }
 
@@ -206,7 +206,7 @@ try:
         for _ in range(64):
             command('next')
             here=location()
-            if (LINES['loop'] <= here['line'] < LINES['tick'] and
+            if (LINES['loop'] <= here['line'] <= LINES['loop'] + 3 and
                     here['function']=='MapleRuntime::ZDirector::run_thread'):
                 break
         else:
