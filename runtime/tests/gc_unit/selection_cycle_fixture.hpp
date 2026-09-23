@@ -1,3 +1,4 @@
+#include "gc_allocation_flags.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #pragma once
@@ -16,8 +17,8 @@ struct SelectionCycleFixture {
         // RunAll creates the standalone heap before this fixture. Heap's
         // constructor initializes its allocator and injects it into young's
         // remembered set (ZGC zHeap.cpp:58-79, zGeneration.cpp:499-505).
-        region0 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, false);
-        region1 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, false, secondAge);
+        region0 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        region1 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, secondAge, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         GC_EXPECT_TRUE(region0 != nullptr && region1 != nullptr);
         starts[0] = region0->GetRegionStart();
         starts[1] = region1->GetRegionStart();

@@ -18,6 +18,7 @@ public:
 
     void signal(unsigned count = 1);
     void wait();
+    void wait_with_safepoint_check();
     bool trywait();
 };
 

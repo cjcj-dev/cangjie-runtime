@@ -1,3 +1,4 @@
+#include "gc_allocation_flags.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -65,7 +66,7 @@ struct LargeArrayFixture {
         mappedSize = units * ZGranuleSize;
         (void)Heap::GetHeap();
         RegionManager& manager = Heap::GetHeap().page_allocator();
-        committedSpan = manager.TakeRegion(mappedSize, ZPageType::large, false, false);
+        committedSpan = manager.TakeRegion(mappedSize, ZPageType::large, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         GC_EXPECT_TRUE(committedSpan != nullptr);
         mapping = reinterpret_cast<void*>(committedSpan->GetRegionStart());
         const MAddress start = committedSpan->GetRegionStart();

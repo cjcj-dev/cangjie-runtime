@@ -63,8 +63,7 @@ void CheckSelection(bool medium, bool promote, uint32_t workers)
     BaseObject* objects[2];
     ZRelocationSetSelector selector(ZFragmentationLimit);
     for (unsigned i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(size, medium ? ZPageType::medium : ZPageType::small,
-                                    false, false, age, flags);
+        pages[i] = Heap::alloc_page(size, medium ? ZPageType::medium : ZPageType::small, false, age, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         objects[i] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(objectSize));
         objects[i]->SetClassInfo(type);
@@ -201,8 +200,8 @@ GC_COMPONENT_OTHER_VM_TEST(RawNullPage, OldPageRejectsRawNull)
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* young = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, PageAge::eden, flags);
-    ZPage* old = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, PageAge::old, flags);
+    ZPage* young = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, flags);
+    ZPage* old = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags);
     GC_EXPECT_TRUE(young != nullptr && old != nullptr);
     const bool youngAllows = young->allows_raw_null();
     const bool oldAllows = old->allows_raw_null();

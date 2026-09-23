@@ -1,3 +1,4 @@
+#include "gc_allocation_flags.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -244,7 +245,7 @@ struct GcHeapFixture {
         ZStat::Initialize();
         (void)Heap::GetHeap();
         RegionManager& manager = Heap::GetHeap().page_allocator();
-        committedSpan = manager.TakeRegion(kUnits * ZGranuleSize, ZPageType::large, false, false);
+        committedSpan = manager.TakeRegion(kUnits * ZGranuleSize, ZPageType::large, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         CHECK(committedSpan != nullptr);
         heapStart = committedSpan->GetRegionStart();
         mapping = reinterpret_cast<void*>(heapStart);
