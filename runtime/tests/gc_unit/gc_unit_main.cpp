@@ -29,6 +29,9 @@ void MapleRuntime::GcUnit::CreateStandaloneHeap(size_t units)
         ZHeuristics::set_max_heap_size(params.heapSize * 1024);
         ZCollectedHeap::create(params, 0.5);
     }
+    // ZGC nonJavaThread.cpp:82 attaches only after the heap exists. Listing
+    // tests has no GC producer and must not create or attach one.
+    ThreadLocal::InitializeCleaner();
 }
 
 int main(int argc, char** argv)
@@ -37,7 +40,6 @@ int main(int argc, char** argv)
     // maximum before any ZPerWorker storage; logical active counts may vary.
     MapleRuntime::ConcGCThreads = 64;
     MapleRuntime::ZGlobalsPointers::initialize();
-    MapleRuntime::ThreadLocal::InitializeCleaner();
     // zInitialize.cpp:62: the CPU affinity table precedes any ZCPU::id() reader.
     MapleRuntime::ZCPU::initialize();
     MapleRuntime::GcUnit::InitializeStandaloneHeap = [] {

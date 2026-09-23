@@ -127,6 +127,7 @@ public:
     size_t TargetNStripes() const { return targetNStripes; }
     bool Flush();
     bool Flush(ThreadLocalData* tls);
+    bool Flush(ThreadGCData& data);
     static bool FlushThread(ThreadLocalData* tls);
     static bool FlushAllGenerations();
     bool FlushStacks();

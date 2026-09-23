@@ -62,8 +62,6 @@ namespace MapleRuntime {
 enum class ZPageRole : uint8_t {
     None = 0, // free, or a from-page claimed off its list ("lone")
     RecentFull,
-    FullTrace,
-    LargeTrace,
     From,
     Garbage,
     OldLarge,
@@ -75,8 +73,6 @@ inline const char* RegionRoleName(ZPageRole role)
     switch (role) {
         case ZPageRole::None: return "none";
         case ZPageRole::RecentFull: return "recent full regions";
-        case ZPageRole::FullTrace: return "full trace regions";
-        case ZPageRole::LargeTrace: return "large trace regions";
         case ZPageRole::From: return "from regions";
         case ZPageRole::Garbage: return "garbage regions";
         case ZPageRole::OldLarge: return "old large regions";

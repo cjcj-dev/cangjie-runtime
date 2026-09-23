@@ -173,16 +173,22 @@ void Mutator::InitProtectStackAddr()
     ThreadLocal::SetProtectAddr(reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(stackBoundAddr) + reversedSize));
 }
 
+void Mutator::Init()
+{
+    allocBuffer.Init();
+    ZBarrierSet::on_thread_attach(gcData, this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));
+    observerCnt = 0;
+    inManagedContext.store(true);
+#ifdef INTERPRETER_ENABLED
+    InitInterpreterPart();
+#endif
+}
+
 void Mutator::ResetMutator()
 {
     CHECK_DETAIL(nativeFrameRoots.empty(), "native frame roots are not released");
     SetManagedContext(false);
     StorePlain(rawObject, zaddress::null);
-    // Exit publishes the logical owner's private work before scheduler
-    // unbinding can expose another owner through this OS TLS binding.
-    Heap& heap = Heap::GetHeap();
-    gcData.storeBarrierBuffer->Flush();
-    (void)heap.FlushGCDataMarkProducers(gcData);
     ReleaseAllocBuffer();
     uwContext.Reset();
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
@@ -200,6 +206,11 @@ void Mutator::ResetMutator()
     exceptionWrapper.ClearInfo();
     // The detached identity's watermark/statistics belong to outstanding
     // ThreadsListHandles until smr_delete; only construction initializes them.
+    // ZGC threads.cpp:1090-1114: final GC-state processing belongs to the
+    // thread-removal critical section. Inventory flushing takes this same
+    // lock; detach must finish before another reader can flush our stacks.
+    // Registry-reader waiting belongs to on_thread_destroy, after unlocking.
+    ZBarrierSet::on_thread_detach(gcData);
     MutatorUnlock();
 }
 

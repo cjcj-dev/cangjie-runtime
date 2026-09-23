@@ -187,7 +187,7 @@ void HandshakeState::leave_safe()
     inSafe_.store(0, std::memory_order_release);
 }
 
-void HandshakeState::process_queued_then_detach(void (*flush)(ThreadLocalData*))
+void HandshakeState::process_queued_then_detach()
 {
     std::lock_guard<std::mutex> lock(lock_);
     for (;;) {
@@ -200,9 +200,6 @@ void HandshakeState::process_queued_then_detach(void (*flush)(ThreadLocalData*))
         }
         op->do_handshake(handshakee_);
         remove_op(op);
-    }
-    if (flush != nullptr) {
-        flush(handshakee_);
     }
     inSafe_.store(1, std::memory_order_release);
 }

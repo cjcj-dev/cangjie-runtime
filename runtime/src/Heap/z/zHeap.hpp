@@ -93,6 +93,7 @@ public:
     uintptr_t alloc_tlab(size_t size);
     size_t max_tlab_size() const { return ZObjectSizeLimitSmall; }
     size_t unsafe_max_tlab_alloc() const;
+    void undo_alloc_object_for_relocation(MAddress addr, size_t size);
     ZObjectAllocator& object_allocator() { return _object_allocator; }
     ZCrossVM& cross_vm() { return _cross_vm; }
     const ZCrossVM& cross_vm() const { return _cross_vm; }
@@ -113,6 +114,7 @@ public:
             GetZGeneration(ZGenerationId::young).Sequence());
     }
     void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
+    void mark_flush(ThreadGCData& data);
     bool FlushGCDataMarkProducers(ThreadGCData& data);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
     bool IsGhostFromObject(BaseObject* obj) const;

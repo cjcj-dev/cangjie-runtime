@@ -199,7 +199,7 @@ public:
     static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
                                        const ZArray<ZPage*>* relocatePromoted);
 private:
-    BaseObject* relocate_object_inner(BaseObject* obj, ZPage* copyPage);
+    BaseObject* relocate_object_inner(ZForwarding* forwarding, BaseObject* obj);
     static void UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
     BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     ZGeneration* const generation;

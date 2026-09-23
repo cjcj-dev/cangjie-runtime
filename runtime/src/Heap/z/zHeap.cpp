@@ -207,6 +207,12 @@ Generation Heap::ObjectGeneration(BaseObject* object) const
     return Heap::page(address)->GetOwnerGeneration();
 }
 
+void Heap::mark_flush(ThreadGCData& data)
+{
+    young().mark_flush(data);
+    old().mark_flush(data);
+}
+
 bool Heap::FlushGCDataMarkProducers(ThreadGCData& data)
 {
     return ZMark::FlushGCDataMarkProducers(data);
@@ -666,3 +672,17 @@ void Heap::DumpAfterGC()
     }
 #endif
 }
+
+namespace MapleRuntime {
+// ZGC zHeap.cpp:298-311: large allocations release the page; other sizes
+// attempt to roll back the shared page top.
+void Heap::undo_alloc_object_for_relocation(MAddress addr, size_t size)
+{
+    ZPage* const target = page(addr);
+    if (target->type() == ZPageType::large) {
+        object_allocator().allocator(target->age())->undo_alloc_page(target);
+    } else {
+        (void)target->undo_alloc_object_atomic(addr, size);
+    }
+}
+} // namespace MapleRuntime

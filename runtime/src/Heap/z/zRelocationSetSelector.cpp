@@ -82,11 +82,8 @@ bool ZRelocationSetSelectorGroup::is_selectable()
 size_t ZRelocationSetSelectorGroup::partition_index(const ZPage* page) const
 {
     const size_t partitionSize = page->size() >> NumPartitionsShift;
-    if (partitionSize == 0) {
-        return 0;
-    }
-    const size_t index = page->live_bytes() / partitionSize;
-    return index < static_cast<size_t>(NumPartitions) ? index : static_cast<size_t>(NumPartitions - 1);
+    const int partitionSizeShift = Log2Exact(partitionSize);
+    return page->live_bytes() >> partitionSizeShift;
 }
 
 void ZRelocationSetSelectorGroup::semi_sort()
@@ -108,6 +105,7 @@ void ZRelocationSetSelectorGroup::semi_sort()
     for (ZPage* page; iter2.next(&page);) {
         const size_t index = partition_index(page);
         const int dest = partitions[index]++;
+        DCHECK(sorted_live_pages.at(dest) == nullptr);
         sorted_live_pages.at_put(dest, page);
     }
     _live_pages.swap(&sorted_live_pages);

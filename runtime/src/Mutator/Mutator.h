@@ -27,6 +27,7 @@
 #include "Interpreter/RTInterface.h"
 #include "ObjectModel/RefField.h"
 #include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zBarrierSet.hpp"
 
 
 namespace MapleRuntime {
@@ -60,26 +61,13 @@ public:
     };
 
     // Called when a mutator starts and finishes, respectively.
-    void Init()
-    {
-        // JavaThread construction initializes its TLAB before publication
-        // (javaThread.cpp:600). A parked owner can be scanned immediately.
-        allocBuffer.Init();
-        gcData.Attach(this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));
-        observerCnt = 0;
-        inManagedContext.store(true);
-        stackWatermark.Reset();
-
-#ifdef INTERPRETER_ENABLED
-        InitInterpreterPart();
-#endif
-    }
+    void Init();
 
     ~Mutator()
     {
         // Wait for target inventory users while the lock and roots are still
         // alive, before any Mutator member destruction can begin.
-        gcData.Detach();
+        ZBarrierSet::on_thread_destroy(gcData);
         ReleaseAllocBuffer();
         tid = 0;
         stackBoundAddr = nullptr;

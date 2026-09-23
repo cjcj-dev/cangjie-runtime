@@ -555,12 +555,8 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
 }
 
 namespace {
-void CheckDriverCause(GCReason cause, bool minor, bool clearSoft, bool preclean)
+void CheckDriverCauseResult(GCReason cause, bool minor, bool clearSoft, bool preclean)
 {
-    RuntimeParam params{};
-    params.heapParam.heapSize = 64 * 1024;
-    params.coParam.processorNum = 1;
-    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto* collected = ZCollectedHeap::heap();
     auto& heap = Heap::GetHeap();
     const auto youngBefore = heap.young().Snapshot().sequence;
@@ -591,7 +587,76 @@ void CheckDriverCause(GCReason cause, bool minor, bool clearSoft, bool preclean)
     if (!minor) GC_EXPECT_EQ(actualClear, clearSoft);
     GC_EXPECT_TRUE(done);
 }
+
+void CheckDriverCause(GCReason cause, bool minor, bool clearSoft, bool preclean)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    CheckDriverCauseResult(cause, minor, clearSoft, preclean);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+struct PrecleanTask {
+    GCReason cause;
+    bool clearSoft;
+    bool preclean;
+    int result = 1;
+};
+
+void* CollectForPrecleanInvariant(void* argument)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    auto& task = *static_cast<PrecleanTask*>(argument);
+    try {
+        CheckDriverCauseResult(task.cause, false, task.clearSoft, task.preclean);
+        task.result = 0;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "PRECLEAN_TASK_ASSERT_FAILED %s\n", error.what());
+    }
+    return nullptr;
+}
+
+void CheckPrecleanWithoutShutdown(GCReason cause, bool clearSoft, bool preclean)
+{
+    // This fixture tests collection, not shutdown. The child completes a real
+    // runtime task, then _exit skips shutdown (Debug native detach: #935).
+    // Existing DriverCause fixtures still exercise FiniCJRuntime separately.
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        int result = 1;
+        try {
+            RuntimeParam params{};
+            params.heapParam.heapSize = 64 * 1024;
+            params.coParam.processorNum = 1;
+            GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+            PrecleanTask input{cause, clearSoft, preclean};
+            CJThreadHandle task = RunCJTask(CollectForPrecleanInvariant, &input);
+            GC_EXPECT_TRUE(task != nullptr);
+            void* taskResult = nullptr;
+            GC_EXPECT_EQ(GetTaskRet(task, &taskResult), E_OK);
+            ReleaseHandle(task);
+            result = input.result;
+            std::fprintf(stderr, "PRECLEAN_TASK_COMPLETED cause=%u result=%d shutdown=excluded\n", cause, result);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "PRECLEAN_TASK_SETUP_FAILED %s\n", error.what());
+        }
+        std::fflush(nullptr);
+        _exit(result);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "PRECLEAN_CHILD_EXIT cause=%u status=%d\n", cause, status);
+    GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+}
+
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, WhiteBox) { CheckPrecleanWithoutShutdown(GC_REASON_FORCE, true, true); }
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, Timer) { CheckPrecleanWithoutShutdown(GC_REASON_TIMER, false, false); }
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, AllocationStall) { CheckPrecleanWithoutShutdown(GC_REASON_ALLOCATION_STALL, true, true); }
+GC_RUNTIME_TEST(PrecleanWithoutShutdown, User) { CheckPrecleanWithoutShutdown(GC_REASON_USER, false, true); }
 
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorTimer) { CheckDriverCause(GC_REASON_TIMER, true, false, false); }
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorAllocationRate) { CheckDriverCause(GC_REASON_ALLOCATION_RATE, true, false, false); }
@@ -630,3 +695,40 @@ GC_RUNTIME_OTHER_VM_TEST(DriverCause, ProfilerDiagnosticCommand)
     GC_EXPECT_TRUE(response);
 }
 #endif
+
+// ZGC zHeuristics.cpp:114-116 and zArguments.cpp:160-174: the same flag
+// supplies the young budget and the initialization-time tenuring bound.
+GC_RUNTIME_OTHER_VM_TEST(YoungCompactionLimit, BudgetUsesFlag)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t configured = params.heapParam.heapSize * 1024;
+    const size_t expected = static_cast<size_t>(configured * (ZYoungCompactionLimit / 100));
+    const size_t actual = ZHeuristics::significant_young_overhead();
+    std::fprintf(stderr, "YOUNG_BUDGET_TARGET flag=%.1f heap=%zu expected=%zu actual=%zu\n",
+                 ZYoungCompactionLimit, configured, expected, actual);
+    GC_EXPECT_EQ(actual, expected);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(YoungCompactionLimit, InitializationUsesFlagBudget)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t configured = params.heapParam.heapSize * 1024;
+    const size_t budget = static_cast<size_t>(configured * (ZYoungCompactionLimit / 100));
+    const size_t perAge = ZHeuristics::relocation_headroom();
+    const uint32_t actual = MaxTenuringThreshold;
+    const bool matches = actual <= 15 && (actual == 15 || perAge * actual >= budget) &&
+                         (actual == 0 || perAge * (actual - 1) < budget);
+    std::fprintf(stderr, "YOUNG_INIT_TARGET flag=%.1f budget=%zu per_age=%zu actual=%u matches=%d\n",
+                 ZYoungCompactionLimit, budget, perAge, actual, matches);
+    GC_EXPECT_TRUE(matches);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}

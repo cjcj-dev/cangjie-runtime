@@ -6,6 +6,7 @@
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.inline.hpp"
+#include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
 void ZBarrierSet::on_slowpath_allocation_exit(BaseObject* new_obj)
@@ -27,12 +28,30 @@ bool ZBarrierSet::barrier_needed(bool isReference)
 
 void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native, zaddress_unsafe* root)
 {
-    data.Attach(owner, native, root);
+    data.invisibleRoot = root;
+    const auto masks = ThreadGCData::PublishedMasks();
+    // Native bootstrap may precede heap/color initialization. A later binding
+    // retries attachment before this owner can produce managed references.
+    if (masks.storeGood == 0) { return; }
+    data.RegisterOwner(owner, native, [&] {
+        // ZGC zBarrierSet.cpp:256-267. Publish only after all state is ready.
+        data.InstallMasks(masks);
+        if (owner != nullptr) {
+            owner->GetStackWatermark().Reset();
+        }
+        data.storeBarrierBuffer->Initialize(masks.storeGood);
+    });
 }
 
 void ZBarrierSet::on_thread_detach(ThreadGCData& data)
 {
-    data.Detach();
+    Heap::GetHeap().mark_flush(data);
+}
+
+void ZBarrierSet::on_thread_destroy(ThreadGCData& data)
+{
+    // ZGC zBarrierSet.cpp:248-251. GC data survives detach until SMR deletion.
+    data.UnregisterOwner();
 }
 
 zaddress ZBarrierSet::oop_load_in_heap(volatile zpointer* p)
