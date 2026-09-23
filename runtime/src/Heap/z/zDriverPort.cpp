@@ -165,11 +165,6 @@ void ZDriverPort::ack()
     }
 }
 
-namespace {
-uint64_t g_initHeuTriggerTimestamp = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
-uint64_t g_initNativeTriggerTimestamp = TimeUtil::NanoSeconds() - MIN_ASYNC_GC_INTERVAL_NS;
-}
-
 inline bool GCRequest::IsFrequentGC() const
 {
     uint64_t intervalNs = minIntervelNs.load(std::memory_order_acquire);
@@ -192,13 +187,8 @@ inline bool GCRequest::IsFrequentHeuristicGC() const { return IsFrequentAsyncGC(
 bool GCRequest::ShouldBeIgnored() const
 {
     switch (reason) {
-        case GC_REASON_HEU:
-            return IsFrequentHeuristicGC();
-        case GC_REASON_NATIVE:
-            return IsFrequentAsyncGC();
         case GC_REASON_YOUNG:
             return false;
-        case GC_REASON_OOM:
         case GC_REASON_FORCE:
             return IsFrequentGC();
         default:
@@ -208,12 +198,6 @@ bool GCRequest::ShouldBeIgnored() const
 
 GCRequest g_gcRequests[] = {
     { GC_REASON_USER, "user", false, true, { 0 }, { 0 } },
-    { GC_REASON_OOM, "oom", true, false, { 0 }, { 0 } },
-    { GC_REASON_BACKUP, "backup", true, false, { 0 }, { 0 } },
-    { GC_REASON_HEU, "heuristic", false, true, { LONG_MIN_HEU_GC_INTERVAL_NS }, { g_initHeuTriggerTimestamp } },
-    { GC_REASON_NATIVE, "native_alloc", false, true, { MIN_ASYNC_GC_INTERVAL_NS }, { g_initNativeTriggerTimestamp } },
-    { GC_REASON_HEU_SYNC, "heuristic_sync", true, true, { 0 }, { 0 } },
-    { GC_REASON_NATIVE_SYNC, "native_alloc_sync", true, true, { 0 }, { 0 } },
     { GC_REASON_FORCE, "force", true, false, { 0 }, { 0 } },
     { GC_REASON_YOUNG, "young", false, false, { 0 }, { 0 } },
     { GC_REASON_WB_BREAKPOINT, "wb_breakpoint", false, true, { 0 }, { 0 } },
@@ -222,7 +206,8 @@ GCRequest g_gcRequests[] = {
     { GC_REASON_TIMER, "timer", false, true, { 0 }, { 0 } },
     { GC_REASON_ALLOCATION_RATE, "allocation_rate", false, true, { 0 }, { 0 } },
     { GC_REASON_HIGH_USAGE, "high_usage", false, true, { 0 }, { 0 } },
-    { GC_REASON_PROACTIVE, "proactive", false, true, { 0 }, { 0 } }
+    { GC_REASON_PROACTIVE, "proactive", false, true, { 0 }, { 0 } },
+    { GC_REASON_DCMD_GC_RUN, "diagnostic_command", true, true, { 0 }, { 0 } }
 };
 
 } // namespace MapleRuntime

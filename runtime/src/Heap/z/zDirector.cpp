@@ -580,7 +580,7 @@ static ZWorkerCounts initial_workers(const ZDirectorStats& stats, ZWorkerSelecti
 static void start_major_gc(const ZDirectorStats& stats, GCReason cause)
 {
     const ZWorkerCounts selection = initial_workers(stats, ZWorkerSelectionType::start_major);
-    ZCollectedHeap::heap()->driver_major()->port().send_async(
+    ZCollectedHeap::heap()->driver_major()->collect(
         ZDriverRequest(cause, selection.young_workers, selection.old_workers));
 }
 
@@ -598,7 +598,7 @@ static void start_minor_gc(const ZDirectorStats& stats, GCReason cause)
             Heap::GetHeap().old().Workers()->request_resize_workers(selection.old_workers);
         }
     }
-    ZCollectedHeap::heap()->driver_minor()->port().send_async(ZDriverRequest(cause, selection.young_workers, 0));
+    ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(cause, selection.young_workers, 0));
 }
 
 static bool start_gc(const ZDirectorStats& stats)

@@ -19,12 +19,6 @@ constexpr uint64_t LONG_MIN_HEU_GC_INTERVAL_NS = 200 * MapleRuntime::MILLI_SECON
 
 enum GCReason : uint32_t {
     GC_REASON_USER = 0,
-    GC_REASON_OOM,
-    GC_REASON_BACKUP,
-    GC_REASON_HEU,
-    GC_REASON_NATIVE,
-    GC_REASON_HEU_SYNC,
-    GC_REASON_NATIVE_SYNC,
     GC_REASON_FORCE,
     GC_REASON_YOUNG,
     GC_REASON_WB_BREAKPOINT,
@@ -34,6 +28,7 @@ enum GCReason : uint32_t {
     GC_REASON_ALLOCATION_RATE,
     GC_REASON_HIGH_USAGE,
     GC_REASON_PROACTIVE,
+    GC_REASON_DCMD_GC_RUN,
     GC_REASON_MAX,
     GC_REASON_INVALID = std::numeric_limits<uint32_t>::max(),
 };
