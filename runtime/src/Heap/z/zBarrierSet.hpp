@@ -8,25 +8,9 @@
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zAccessBackend.hpp"
 #include "Heap/z/zThreadLocalData.hpp"
-#include <vector>
 
 namespace MapleRuntime {
 class MArray;
-// Cangjie values can be headerless or stack-resident. Their payload describes
-// storage separately from its oop map (ZGC oops/valuePayload.hpp).
-class ValuePayload {
-public:
-    enum class Kind { Heap, Native, Uncolored };
-    MAddress address;
-    size_t size;
-    Kind kind;
-    std::vector<size_t> offsets;
-    ValuePayload(MAddress address, size_t size);
-    ValuePayload(MAddress address, size_t size, Kind kind);
-    ValuePayload(MAddress address, size_t size, GCTib layout, Kind kind);
-    ValuePayload(MAddress address, size_t size, BaseObject* layout, MAddress layoutStart);
-    ValuePayload(MAddress address, size_t size, std::vector<size_t> offsets, Kind kind);
-};
 class ZBarrierSet {
 public:
     static void on_slowpath_allocation_exit(BaseObject* new_obj);

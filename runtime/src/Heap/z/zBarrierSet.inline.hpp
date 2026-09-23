@@ -82,13 +82,24 @@ inline zaddress ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::load_barrie
 {
     verify_decorators_present<ON_UNKNOWN_OOP_REF>();
     const DecoratorSet strength = AccessBarrierSupport::resolve_possibly_unknown_oop_ref_strength<decorators>(base, offset);
-    if (strength & ON_STRONG_OOP_REF) { return ZBarrier::load_barrier_on_oop_field_preloaded(p, observed); }
     if constexpr (decorators & AS_NO_KEEPALIVE) {
-        if (strength & ON_WEAK_OOP_REF) { return ZBarrier::no_keep_alive_load_barrier_on_weak_oop_field_preloaded(p, observed); }
-        return ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(p, observed);
+        if (strength & ON_STRONG_OOP_REF) {
+            return ZBarrier::load_barrier_on_oop_field_preloaded(p, observed);
+        } else if (strength & ON_WEAK_OOP_REF) {
+            return ZBarrier::no_keep_alive_load_barrier_on_weak_oop_field_preloaded(p, observed);
+        } else {
+            CHECK(strength & ON_PHANTOM_OOP_REF);
+            return ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(p, observed);
+        }
     } else {
-        if (strength & ON_WEAK_OOP_REF) { return ZBarrier::load_barrier_on_weak_oop_field_preloaded(p, observed); }
-        return ZBarrier::load_barrier_on_phantom_oop_field_preloaded(p, observed);
+        if (strength & ON_STRONG_OOP_REF) {
+            return ZBarrier::load_barrier_on_oop_field_preloaded(p, observed);
+        } else if (strength & ON_WEAK_OOP_REF) {
+            return ZBarrier::load_barrier_on_weak_oop_field_preloaded(p, observed);
+        } else {
+            CHECK(strength & ON_PHANTOM_OOP_REF);
+            return ZBarrier::load_barrier_on_phantom_oop_field_preloaded(p, observed);
+        }
     }
 }
 
@@ -258,7 +269,7 @@ inline BaseObject* ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::oop_atom
 template<DecoratorSet decorators, typename BarrierSetT>
 inline BaseObject* ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::oop_atomic_xchg_in_heap_at(BaseObject* base, ptrdiff_t offset, BaseObject* value)
 {
-    verify_decorators_present<ON_STRONG_OOP_REF | ON_UNKNOWN_OOP_REF>();
+    verify_decorators_present<ON_STRONG_OOP_REF>();
     verify_decorators_absent<AS_NO_KEEPALIVE>();
     volatile zpointer* const p = field_addr(base, offset);
     store_barrier_heap_with_healing(p);

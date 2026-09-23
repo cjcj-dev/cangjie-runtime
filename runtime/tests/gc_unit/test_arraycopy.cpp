@@ -175,3 +175,100 @@ GC_TEST(AccessBarrier976, ClearOnePublishesColorNull)
     GC_EXPECT_EQ(field.GetFieldValue(), color_null());
     GC_EXPECT_TRUE(color_null() != ZAddress::store_good(zaddress::null));
 }
+
+namespace {
+enum class BulkAccess976 { Slots, RefArray, Value, ValueArray };
+template<bool rawAccess>
+void CheckBulkBits976(BulkAccess976 kind)
+{
+    GcHeapFixture heap;
+    alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)]{};
+    alignas(TypeInfo) unsigned char arrayStorage[sizeof(TypeInfo)]{};
+    auto* component = reinterpret_cast<TypeInfo*>(componentStorage);
+    component->SetType(TypeKind::TYPE_KIND_STRUCT);
+    component->SetInstanceSize(sizeof(zpointer));
+    GCTib bitmap{};
+    bitmap.tag = SIGN_BIT | 1;
+    component->SetGCTib(bitmap);
+    component->SetFlagHasRefField();
+    auto* type = reinterpret_cast<TypeInfo*>(arrayStorage);
+    type->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    type->SetComponentTypeInfo(component);
+    auto* array = reinterpret_cast<MArray*>(heap.heapStart + 256);
+    *reinterpret_cast<uintptr_t*>(array) = reinterpret_cast<uintptr_t>(type);
+    array->SetLength(2);
+    auto* source = reinterpret_cast<zpointer*>(array->ConvertToCArray());
+    auto* destination = source + 1;
+    *source = color_null();
+    *destination = StoreGoodPointer(heap.obj0);
+    using Api = Access<IN_HEAP | (rawAccess ? AS_RAW : DECORATORS_NONE)>;
+    switch (kind) {
+        case BulkAccess976::Slots:
+            Api::oop_arraycopy(source, destination, 1);
+            break;
+        case BulkAccess976::RefArray:
+            Api::oop_arraycopy(array, reinterpret_cast<MAddress>(source), sizeof(zpointer),
+                              array, reinterpret_cast<MAddress>(destination), sizeof(zpointer));
+            break;
+        case BulkAccess976::Value:
+            Api::value_copy(ValuePayload(reinterpret_cast<MAddress>(source), sizeof(zpointer),
+                                        std::vector<size_t>{0}, ValuePayload::Kind::Heap),
+                            ValuePayload(reinterpret_cast<MAddress>(destination), sizeof(zpointer), ValuePayload::Kind::Heap));
+            break;
+        case BulkAccess976::ValueArray:
+            Api::value_arraycopy(array, reinterpret_cast<MAddress>(source), sizeof(zpointer),
+                                array, reinterpret_cast<MAddress>(destination), sizeof(zpointer));
+            break;
+    }
+    const zpointer expected = rawAccess ? color_null() : ZAddress::store_good(zaddress::null);
+    std::fprintf(stderr, "ACCESS976_BULK_ASSERT raw=%d api=%d actual=%zx expected=%zx\n",
+                 rawAccess, static_cast<int>(kind), raw(*destination), raw(expected));
+    GC_EXPECT_EQ(raw(*destination), raw(expected));
+    GC_EXPECT_TRUE(color_null() != ZAddress::store_good(zaddress::null));
+}
+}
+GC_TEST(AccessBarrier976, RawArrayCopyPreservesBits) { CheckBulkBits976<true>(BulkAccess976::Slots); }
+GC_TEST(AccessBarrier976, RawRefArrayCopyPreservesBits) { CheckBulkBits976<true>(BulkAccess976::RefArray); }
+GC_TEST(AccessBarrier976, RawValueCopyPreservesBits) { CheckBulkBits976<true>(BulkAccess976::Value); }
+GC_TEST(AccessBarrier976, RawValueArrayCopyPreservesBits) { CheckBulkBits976<true>(BulkAccess976::ValueArray); }
+GC_TEST(AccessBarrier976, NormalArrayCopyColorsControl) { CheckBulkBits976<false>(BulkAccess976::Slots); }
+GC_TEST(AccessBarrier976, NormalRefArrayCopyColorsControl) { CheckBulkBits976<false>(BulkAccess976::RefArray); }
+GC_TEST(AccessBarrier976, NormalValueCopyColorsControl) { CheckBulkBits976<false>(BulkAccess976::Value); }
+GC_TEST(AccessBarrier976, NormalValueArrayCopyColorsControl) { CheckBulkBits976<false>(BulkAccess976::ValueArray); }
+GC_TEST(AccessBarrier976, RawScalarPreservesZeroControl)
+{
+    GcHeapFixture heap;
+    zpointer source = to_zpointer(0);
+    zpointer destination = color_null();
+    RawAccess<>::oop_store(&destination, RawAccess<>::oop_load(&source));
+    std::fprintf(stderr, "ACCESS976_SCALAR_ASSERT actual=%zx expected=0\n", raw(destination));
+    GC_EXPECT_EQ(raw(destination), uintptr_t(0));
+}
+GC_TEST(AccessBarrier976, RawArrayCopyOverlapAndEmpty)
+{
+    for (bool backwards : {false, true}) {
+        zpointer slots[] = {to_zpointer(1), to_zpointer(2), to_zpointer(3), to_zpointer(4)};
+        RawAccess<>::oop_arraycopy(slots + !backwards, slots + backwards, 3);
+        for (size_t i = 0; i < 3; ++i) {
+            GC_EXPECT_EQ(raw(slots[i + backwards]), i + 1 + !backwards);
+        }
+        const auto before = slots[0];
+        RawAccess<>::oop_arraycopy(slots, slots + 1, 0);
+        RawAccess<>::oop_arraycopy(slots, slots, 4);
+        GC_EXPECT_EQ(slots[0], before);
+    }
+}
+GC_TEST(AccessBarrier976, RawValueCopyAlignedSegmentsAndTail)
+{
+    alignas(8) unsigned char source[32];
+    alignas(8) unsigned char destination[32];
+    for (size_t offset : {0, 4, 2, 1}) {
+        for (size_t i = 0; i < sizeof(source); ++i) { source[i] = i + 1; destination[i] = 0; }
+        RawAccess<>::value_copy(ValuePayload(reinterpret_cast<MAddress>(source + offset), 15,
+                                            ValuePayload::Kind::Uncolored),
+                               ValuePayload(reinterpret_cast<MAddress>(destination + offset), 15,
+                                            ValuePayload::Kind::Uncolored));
+        GC_EXPECT_EQ(std::memcmp(source + offset, destination + offset, 15), 0);
+        GC_EXPECT_EQ(destination[offset + 15], 0);
+    }
+}

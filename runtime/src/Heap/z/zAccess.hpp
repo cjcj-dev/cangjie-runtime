@@ -64,14 +64,28 @@ public:
         else if constexpr (decorators & IN_HEAP) { return Barrier::oop_atomic_cmpxchg_in_heap(field, compare, value); }
         else { return Barrier::oop_atomic_cmpxchg_not_in_heap(field, compare, value); }
     }
-    static void value_copy(const ValuePayload& src, const ValuePayload& dst) { Barrier::value_copy_in_heap(src, dst); }
+    static void value_copy(const ValuePayload& src, const ValuePayload& dst)
+    {
+        if constexpr (decorators & AS_RAW) { Raw::value_copy(src, dst); }
+        else { Barrier::value_copy_in_heap(src, dst); }
+    }
     static void oop_arraycopy(BaseObject* srcObj, MAddress src, size_t srcSize,
                               BaseObject* dstObj, MAddress dst, size_t dstSize)
-    { Barrier::oop_arraycopy_in_heap(srcObj, src, srcSize, dstObj, dst, dstSize); }
+    {
+        if constexpr (decorators & AS_RAW) { Raw::oop_arraycopy(srcObj, src, srcSize, dstObj, dst, dstSize); }
+        else { Barrier::oop_arraycopy_in_heap(srcObj, src, srcSize, dstObj, dst, dstSize); }
+    }
     static void value_arraycopy(BaseObject* srcObj, MAddress src, size_t srcSize,
                                 BaseObject* dstObj, MAddress dst, size_t dstSize)
-    { Barrier::value_arraycopy_in_heap(srcObj, src, srcSize, dstObj, dst, dstSize); }
-    static void oop_arraycopy(zpointer* src, zpointer* dst, size_t length) { Barrier::oop_arraycopy_in_heap(src, dst, length); }
+    {
+        if constexpr (decorators & AS_RAW) { Raw::value_arraycopy(srcObj, src, srcSize, dstObj, dst, dstSize); }
+        else { Barrier::value_arraycopy_in_heap(srcObj, src, srcSize, dstObj, dst, dstSize); }
+    }
+    static void oop_arraycopy(zpointer* src, zpointer* dst, size_t length)
+    {
+        if constexpr (decorators & AS_RAW) { Raw::oop_arraycopy(src, dst, length); }
+        else { Barrier::oop_arraycopy_in_heap(src, dst, length); }
+    }
 };
 template<DecoratorSet decorators = DECORATORS_NONE>
 class HeapAccess : public Access<IN_HEAP | decorators> {};
