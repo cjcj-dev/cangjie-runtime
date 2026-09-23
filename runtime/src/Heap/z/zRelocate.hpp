@@ -195,7 +195,6 @@ public:
 private:
     BaseObject* relocate_object_inner(ZForwarding* forwarding, BaseObject* obj);
     static void UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
-    BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     ZGeneration* const generation;
     ZRelocateQueue relocateQueue;
     ZPerWorker<ZRelocationTargets> smallTargets;

@@ -146,11 +146,6 @@ bool ZRelocate::IsFromObject(BaseObject* obj)
                Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
     }
 
-// installdomain: positive control — how often Resolve/Fix would install a ghost-from that is
-// outside GetRoute's liveInfo0 survivor domain. Grant paints that bit before route geometry.
-
-// this api untags current pointer as well as old pointer, caller should take care of this.
-
 // zGeneration.cpp:1470-1527: shared iterators, one worker task, then restore
 // the old generation's active worker budget. Native stack/record expansion is
 // the Cangjie adapter for the ZGC uncolored-root closure.
@@ -307,45 +302,6 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
         ZArrayParallelIterator<ZPage*> iter;
     } task(pages);
     workers.run(&task);
-}
-
-// permhole receiptization (steer1): RouteObject is geometric (ROUTED before Copy fills
-// tip). A tip-valid to is a *receipt* (copy happened). A geometric to with tip==0 is only
-//
-// Contract of this wait:
-//   ① return tip-valid to (receipt), or
-//   ② fail the relocation invariant;
-//   ③ never return a from address or a null-tip geometric address.
-// Distinct from 4e75f2cc: that path is RouteObject *miss* (no plan) on a ghost about to
-// be reclaimed — returning from there reinstalls a dying address. Here RouteObject *hit*
-// with no tip yet: while forwarding is incomplete, the source page is retained.
-// After object/region publish (FORWARDED|COMPACTED) tip must exist if the plan was real;
-// missing tip = permanent hole = invariant violation → CHECK (not hang, not geometric to).
-//
-
-// portmutreloc: ZRelocate::relocate_object's retain/copy/release leg (zRelocate.cpp:391-406).
-//
-// The three pieces map one-to-one onto machinery that already exists here:
-//
-//   forwarding->retain_page(&_queue)   ->  ZPage::TryLockReadFromRegion()
-//   relocate_object_inner(...)         ->  RelocateObjectInner
-//   forwarding->release_page()         ->  ZPage::UnlockReadFromRegion()
-//
-// nullptr means the current thread did not acquire the page. The caller may
-// consume a receipt installed by the owning copier, but may not use the from
-// address as an alternate result.
-BaseObject* ZRelocate::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const
-{
-    if (!owner || ZForwarding::CurrentPageWork() == owner) return nullptr;
-    const MAddress from = reinterpret_cast<MAddress>(obj);
-    if (const MAddress found = owner->find(from)) {
-        return reinterpret_cast<BaseObject*>(found);
-    }
-    auto& queue = generation_relocate_queue((owner->from_age() == PageAge::old ? Generation::Old : Generation::Young));
-    const auto request = queue.Add(owner);
-    CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
-    queue.Wait(request.forwarding);
-    return reinterpret_cast<BaseObject*>(owner->find(from));
 }
 
 void ZRelocate::UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to)
