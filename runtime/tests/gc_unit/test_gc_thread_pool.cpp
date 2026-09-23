@@ -358,6 +358,7 @@ namespace {
 void ResizeRunningRelocation(ZGeneration& generation, uint32_t initial = 1, uint32_t requested = 3)
 {
     auto* queue = generation.relocate().queue();
+    ZRelocate::StartRelocationTasks(generation.id());
     queue->synchronize();
     std::thread relocating([&] { generation.relocate().relocate(&generation.relocation_set()); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -443,6 +444,7 @@ void CheckResizeBeforeRemainingForwarding(Generation id)
     auto* workers = generation.Workers();
     workers->set_active_workers(3);
     workers->set_active();
+    ZRelocate::StartRelocationTasks(generation.id());
     std::thread relocating([&] { generation.relocate().relocate(&generation.relocation_set()); });
     const auto waitUntil = [](const auto& predicate) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
