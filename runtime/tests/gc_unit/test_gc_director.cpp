@@ -11,6 +11,7 @@
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
+#include "Inspector/ProfilerAgentImpl.h"
 #include "gc_unittest.hpp"
 
 #include <chrono>
@@ -605,3 +606,24 @@ GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorAllocationStall) { CheckDriverCause(G
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorWhiteBox) { CheckDriverCause(GC_REASON_FORCE, false, true, true); }
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorUser) { CheckDriverCause(GC_REASON_USER, false, false, true); }
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MajorDiagnosticCommand) { CheckDriverCause(GC_REASON_DCMD_GC_RUN, false, false, true); }
+
+
+GC_RUNTIME_OTHER_VM_TEST(DriverCause, ProfilerDiagnosticCommand)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    const auto before = heap.old().Snapshot().sequence;
+    bool response = false;
+    ProfilerAgentImpl(R"({"id":1,"method":"HeapProfiler.collectGarbage"})",
+        [&](const std::string&) { response = true; });
+    const auto result = heap.old().Snapshot();
+    std::fprintf(stderr, "PROFILER_CAUSE_TARGET cause=%u expected=%u completed=%llu response=%d\n",
+        result.reason, GC_REASON_DCMD_GC_RUN,
+        static_cast<unsigned long long>(result.sequence - before), response);
+    GC_EXPECT_EQ(result.reason, GC_REASON_DCMD_GC_RUN);
+    GC_EXPECT_EQ(result.sequence - before, 1u);
+    GC_EXPECT_TRUE(response);
+}

@@ -24,7 +24,10 @@ DYNAMIC_CAUSES = []
 
 
 def cmd(text):
-    return gdb.execute(text, to_string=True)
+    output = gdb.execute(text, to_string=True)
+    if 'Python Exception' in output:
+        raise RuntimeError(output)
+    return output
 
 
 def val(text):
@@ -60,10 +63,12 @@ class WarmupDelay(gdb.Breakpoint):
 
 
 class DynamicReturn(gdb.FinishBreakpoint):
+    def __init__(self):
+        self.address = int(val('this'))
+        super().__init__(gdb.newest_frame(), internal=True)
+
     def stop(self):
-        # x86_64 SysV: this 12-byte trivially-copyable request returns its
-        # first two uint32 fields in RAX. Observe the product return register.
-        cause = int(val('$rax')) & 0xffffffff
+        cause = int(val('((MapleRuntime::ZDriverRequest*)' + str(self.address) + ')->_cause'))
         DYNAMIC_CAUSES.append(cause)
         emit('DYNAMIC_PRODUCT_RETURN', cause=cause)
         return False
@@ -71,7 +76,8 @@ class DynamicReturn(gdb.FinishBreakpoint):
 
 class DynamicEntry(gdb.Breakpoint):
     def stop(self):
-        DynamicReturn(gdb.newest_frame(), internal=True)
+        if 'rule_minor_allocation_rate_dynamic' in cmd('bt'):
+            DynamicReturn()
         return False
 
 
@@ -124,9 +130,21 @@ try:
         raise RuntimeError('Loaded product identity mismatch: ' + str(product))
     emit('PRODUCT_IDENTITY', library=product, case=CASE, stack=cmd('bt'))
     if CASE == 'allocation_rate':
-        DynamicEntry('MapleRuntime::rule_minor_allocation_rate_dynamic', internal=True)
+        DynamicEntry('MapleRuntime::ZDriverRequest::ZDriverRequest(MapleRuntime::GCReason, unsigned int, unsigned int)', internal=True)
     target = 'MapleRuntime::ZDriverMinor::collect' if MINOR else 'MapleRuntime::ZDriverMajor::collect'
-    until(target)
+    dispatch = gdb.Breakpoint(target, temporary=True)
+    idle = gdb.Breakpoint('zDirector.cpp:' + str(line('Heap/z/zDirector.cpp', '            adjust_gc(stats);')), temporary=True)
+    cmd('continue')
+    if dispatch.is_valid():
+        # The phase-entry cut can leave the actual port without a request.
+        # Observe that product state and execute the cause assertion itself.
+        port = '$minor->_port' if MINOR else '$major->_port'
+        observed = int(val(port + '._message._cause'))
+        expected = int(val('MapleRuntime::GC_REASON_' + EXPECTED))
+        expect('ASSERT_DIRECTOR_CAUSE', False, observed=observed, expected=expected,
+               dispatched=False, busy=bool(val(port + '._has_message')))
+        cmd('quit 1')
+    if idle.is_valid(): idle.delete()
     observed = int(val('request._cause'))
     expected = int(val('MapleRuntime::GC_REASON_' + EXPECTED))
     stack = cmd('bt')
@@ -139,7 +157,14 @@ try:
     # This output remains observable with a producer mutation; it must not be
     # hidden by an earlier fatal assertion.
     port = '$minor->_port' if MINOR else '$major->_port'
-    until('MapleRuntime::ZDriverPort::send_async')
+    async_bp = gdb.Breakpoint('MapleRuntime::ZDriverPort::send_async', temporary=True)
+    sync_bp = gdb.Breakpoint('MapleRuntime::ZDriverPort::send_sync', temporary=True)
+    cmd('continue')
+    asynchronous = not async_bp.is_valid()
+    if sync_bp.is_valid(): sync_bp.delete()
+    if not asynchronous:
+        expect('ASSERT_ASYNC_CAUSE_PRESERVED', False, route='send_sync', request=observed)
+        cmd('quit 1')
     routed = int(val('message._cause'))
     cmd('finish')
     posted = int(val(port + '._message._cause'))
