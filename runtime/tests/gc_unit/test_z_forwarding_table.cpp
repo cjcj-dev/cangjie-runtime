@@ -255,6 +255,8 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
 GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 {
     GcHeapFixture heap;
+    auto& queue = generation_relocate_queue(Generation::Old);
+    queue.BeginWorkers(1);
     auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
     GC_EXPECT_TRUE(fwd->claim());
     fwd->in_place_relocation_claim_page();
@@ -265,7 +267,7 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     auto completed = completion.get_future();
     std::thread reader([&] {
         readerStarted.store(true, std::memory_order_release);
-        retained = fwd->retain_page(&generation_relocate_queue(Generation::Old));
+        retained = fwd->retain_page(&queue);
         returned.store(true, std::memory_order_release);
         completion.set_value();
     });
@@ -280,9 +282,11 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     fwd->release_page();
     const bool returnedAfterRelease = completed.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
     fwd->mark_done();
+    // ZGC zRelocate.cpp:116-131: the completing worker prunes and notifies
+    // before joining the waiting mutator. mark_done alone is not a wakeup.
+    queue.leave();
     reader.join();
-    auto& queue = generation_relocate_queue(Generation::Old);
-    (void)queue.Complete(fwd);
+    queue.deactivate();
     fwd->Destroy();
     GC_EXPECT_TRUE(queued);
     GC_EXPECT_FALSE(returnedBeforeDone);

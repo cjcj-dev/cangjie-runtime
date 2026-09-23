@@ -10,6 +10,7 @@
 #include <functional>
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zThreadLocalDataABI.hpp"
 namespace MapleRuntime {
 class Mutator;
 class ZMark;
@@ -52,5 +53,21 @@ struct ThreadGCData {
     static constexpr size_t store_good_mask_offset() { return offsetof(ThreadGCData, storeGoodMask); }
     static constexpr size_t store_barrier_buffer_offset() { return offsetof(ThreadGCData, storeBarrierBuffer); }
 };
+
+#if UINTPTR_MAX == UINT64_MAX
+// A layout change must fail here before a compiler can consume stale offsets.
+static_assert(offsetof(ThreadGCData, loadGoodMask) == ThreadGCDataABI::LoadGoodMask,
+              "ThreadGCData ABI: loadGoodMask");
+static_assert(offsetof(ThreadGCData, loadBadMask) == ThreadGCDataABI::LoadBadMask,
+              "ThreadGCData ABI: loadBadMask");
+static_assert(offsetof(ThreadGCData, markBadMask) == ThreadGCDataABI::MarkBadMask,
+              "ThreadGCData ABI: markBadMask");
+static_assert(offsetof(ThreadGCData, storeGoodMask) == ThreadGCDataABI::StoreGoodMask,
+              "ThreadGCData ABI: storeGoodMask");
+static_assert(offsetof(ThreadGCData, storeBadMask) == ThreadGCDataABI::StoreBadMask,
+              "ThreadGCData ABI: storeBadMask");
+static_assert(offsetof(ThreadGCData, storeBarrierBuffer) == ThreadGCDataABI::StoreBarrierBuffer,
+              "ThreadGCData ABI: storeBarrierBuffer");
+#endif
 
 } // namespace MapleRuntime

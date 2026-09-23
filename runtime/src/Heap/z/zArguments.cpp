@@ -19,14 +19,6 @@ bool g_gcEnabled = true;
 
 void ZArguments::initialize_alignments() {}
 
-void ZArguments::initialize_heap_flags_and_sizes()
-{
-    const size_t maxHeap = ZHeuristics::max_heap_size();
-    if (maxHeap > 0) {
-        ZHeuristics::set_max_heap_size(maxHeap * 90 / 100 + (maxHeap * 10 / 100));
-    }
-}
-
 void ZArguments::select_max_gc_threads()
 {
     // ZGC zArguments.cpp:67-118: explicit flags precede ergonomics at this entry.
@@ -88,8 +80,38 @@ void ZArguments::initialize()
             g_gcEnabled = true;
         }
     }
-    initialize_heap_flags_and_sizes();
     select_max_gc_threads();
+
+    // zArguments.cpp: medium sizing precedes relocation-headroom ergonomics.
+    ZHeuristics::set_medium_page_size();
+    const GCParam param = CangjieRuntime::GetGCParam();
+    bool max_threshold_is_default = !param.maxTenuringThresholdSet;
+    MaxTenuringThreshold = max_threshold_is_default ? 15 : param.maxTenuringThreshold;
+    ZTenuringThreshold = param.zTenuringThresholdSet ? param.zTenuringThreshold : -1;
+    CHECK_DETAIL(MaxTenuringThreshold <= 16, "MaxTenuringThreshold must be in [0, 16]");
+    CHECK_DETAIL(ZTenuringThreshold >= -1 && ZTenuringThreshold <= 15,
+                 "ZTenuringThreshold must be in [-1, 15]");
+
+    if (param.zTenuringThresholdSet && ZTenuringThreshold != -1) {
+        if (max_threshold_is_default) {
+            MaxTenuringThreshold = static_cast<uint32_t>(ZTenuringThreshold);
+            max_threshold_is_default = false;
+        }
+    }
+    if (max_threshold_is_default) {
+        uint32_t tenuring_threshold;
+        for (tenuring_threshold = 0; tenuring_threshold < MaxTenuringThreshold; ++tenuring_threshold) {
+            const size_t per_age_overhead = ZHeuristics::relocation_headroom();
+            if (per_age_overhead * tenuring_threshold >= ZHeuristics::significant_young_overhead()) {
+                break;
+            }
+        }
+        MaxTenuringThreshold = tenuring_threshold;
+    }
+    // ZGC zArguments.cpp:188-191: validate after deriving the maximum.
+    if (param.zTenuringThresholdSet && ZTenuringThreshold > static_cast<int32_t>(MaxTenuringThreshold)) {
+        CHECK_DETAIL(false, "ZTenuringThreshold must be within bounds of MaxTenuringThreshold");
+    }
 }
 
 Heap* ZArguments::create_heap() { return &Heap::GetHeap(); }

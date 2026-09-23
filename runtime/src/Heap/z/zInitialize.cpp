@@ -2,7 +2,6 @@
 #include "Mutator/ThreadLocal.h"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zCPU.hpp"
-#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zLargePages.hpp"
 #include "Heap/z/zStat.hpp"
@@ -29,7 +28,6 @@ void ZInitialize::initialize(ZBarrierSet*)
     ZThreadLocalAllocBuffer::initialize();
     ZLargePages::initialize();
     ZJNICritical::initialize();
-    ZHeuristics::set_medium_page_size();
 }
 
 void ZInitialize::register_error(bool debug, const char* error_msg)

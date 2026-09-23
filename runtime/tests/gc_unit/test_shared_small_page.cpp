@@ -12,11 +12,13 @@
 #include <thread>
 #include <vector>
 #include "gc_heap_fixture.hpp"
+#include "gc_verify_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
+#include "Mutator/MutatorManager.h"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/z_globals.hpp"
 #if defined(__linux__)
@@ -122,6 +124,7 @@ private:
 
 GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
 {
+    VerifyRuntime runtime;
     CPUAffinity affinity;
     SharedPageFixture fixture;
     auto& manager = fixture.manager;
@@ -155,7 +158,10 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     const uintptr_t refilled = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::eden);
     GC_EXPECT_TRUE(refilled != 0);
     GC_EXPECT_TRUE(Heap::page(refilled) != eden);
-    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+    {
+        ScopedStopTheWorld stopped("object allocator retirement");
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+    }
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     const uintptr_t retired = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::eden);
     GC_EXPECT_TRUE(retired != 0);
@@ -168,7 +174,10 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     ZPage* old = pages[untype(PageAge::old)];
     GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::old), old->GetRegionStart() + 32);
     GC_EXPECT_TRUE(old->IsAllocating());
-    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+    {
+        ScopedStopTheWorld stopped("object allocator retirement");
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+    }
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     const uintptr_t newOld = Heap::GetHeap().object_allocator().alloc_for_relocation(16, PageAge::old);
     GC_EXPECT_TRUE(newOld != 0);
@@ -292,5 +301,83 @@ GC_COMPONENT_OTHER_VM_TEST(SharedSmallPage, SmallHeapUsesSharedSlotZero)
     GC_EXPECT_TRUE(first != 0);
     GC_EXPECT_EQ(second, first + 16);
     GC_EXPECT_TRUE(slot == Heap::page(first));
+}
+#endif
+
+#if defined(__linux__)
+namespace {
+template<class Action>
+void ExpectAllocatorAbort(const char* test, const char* diagnostic, Action action)
+{
+    VerifyRuntime runtime;
+    if (std::getenv("GC_UNIT_ALLOCATOR917_SCENE") == nullptr) {
+        GC_EXPECT_EQ(setenv("GC_UNIT_ALLOCATOR917_SCENE", "1", 1), 0);
+        try {
+            RunInOtherVm(test, diagnostic);
+        } catch (...) {
+            unsetenv("GC_UNIT_ALLOCATOR917_SCENE");
+            throw;
+        }
+        GC_EXPECT_EQ(unsetenv("GC_UNIT_ALLOCATOR917_SCENE"), 0);
+        return;
+    }
+    GC_EXPECT_TRUE(!MutatorManager::Instance().WorldStopped());
+    (void)signal(SIGABRT, SIG_DFL);
+    action();
+}
+}
+
+// ZGC zObjectAllocator.cpp:196-202: retirement is legal only in a pause.
+GC_OTHER_VM_TEST(ObjectAllocator917, RetireYoungRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.RetireYoungRequiresSafepoint", "Should be at safepoint", [] {
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, RetireOldRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.RetireOldRequiresSafepoint", "Should be at safepoint", [] {
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, YoungPhaseRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.YoungPhaseRequiresSafepoint", "Should be at safepoint", [] {
+        GcHeapFixture fixture;
+        Heap::GetHeap().young().mark_start();
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, OldPhaseRequiresSafepoint)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.OldPhaseRequiresSafepoint", "Should be at safepoint", [] {
+        GcHeapFixture fixture;
+        Heap::GetHeap().old().End();
+        Heap::GetHeap().old().mark_start();
+    });
+}
+#endif
+
+#if defined(__linux__)
+// ZGC zObjectAllocator.cpp:227: only a mutator queries its allocation page.
+GC_OTHER_VM_TEST(ObjectAllocator917, FastAvailableRequiresMutator)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.FastAvailableRequiresMutator", "Should be a mutator thread", [] {
+        GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
+        (void)Heap::GetHeap().object_allocator().fast_available(PageAge::eden);
+    });
+}
+
+GC_OTHER_VM_TEST(ObjectAllocator917, TLABEntryRequiresMutator)
+{
+    ExpectAllocatorAbort("ObjectAllocator917.TLABEntryRequiresMutator", "Should be a mutator thread", [] {
+        GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
+        AllocBuffer buffer;
+        buffer.ClearRegion();
+        // HotSpot memAllocator.cpp:287-294: the refill slow path queries capacity.
+        (void)buffer.AllocateImpl(16, AllocType::MOVEABLE_OBJECT);
+    });
 }
 #endif

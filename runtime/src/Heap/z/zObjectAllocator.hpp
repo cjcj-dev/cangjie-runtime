@@ -36,6 +36,7 @@ public:
         uintptr_t alloc_medium_object(size_t size, ZAllocationFlags flags);
         uintptr_t alloc_large_object(size_t size, ZAllocationFlags flags);
         uintptr_t alloc_object(size_t size, ZAllocationFlags flags);
+        void retire_pages();
         ZPage** shared_small_page_addr();
         ZPage* const* shared_small_page_addr() const;
         ZPage** shared_medium_page_addr();

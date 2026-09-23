@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <chrono>
+#include <cstdio>
 
 #include "Heap/Allocator/RegionSpace.h"
 #include "Base/Globals.h"
@@ -107,29 +108,15 @@ size_t Uncommitter::ChunkLimit(size_t maxCapacity)
     return std::min(AlignUp(maxCapacity >> 7, ZGranuleSize), upper);
 }
 
-size_t Uncommitter::MinCapacity(size_t liveBytes, size_t youngReserve)
-{
-    size_t sum = liveBytes + youngReserve;
-    if (sum < liveBytes) {
-        return static_cast<size_t>(-1);
-    }
-    return sum;
-}
-
-Uncommitter& Uncommitter::Current()
-{
-    // Allocation currently selects logical partition 0. The worker itself is
-    // owned by that allocator, and receives its partition at construction.
-    return Heap::GetHeap().GetAllocator().GetUncommitter();
-}
-
 // zUncommitter.cpp:41-56: set_name + create_and_start.
 void Uncommitter::Start()
 {
     CHECK(!started);
     stopped.store(false, std::memory_order_release);
     started = true;
-    set_name("ZUncommitter#0");
+    char name[64];
+    std::snprintf(name, sizeof(name), "ZUncommitter#%u", partition.numaId);
+    set_name(name);
     create_and_start();
 }
 
@@ -174,7 +161,7 @@ bool Uncommitter::WaitUntil(uint64_t deadline)
 
 bool Uncommitter::Activate()
 {
-    RegionManager& regions = static_cast<RegionSpace&>(partition).GetRegionManager();
+    RegionManager& regions = partition.regionManager;
     ScopedObjectAccess participation;
     std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
     const uint64_t now = TimeUtil::NanoSeconds();
@@ -185,15 +172,19 @@ bool Uncommitter::Activate()
     cycleStart = now;
     nextUncommitNs = 0;
     uncommitted = 0;
-    const size_t committed = regions.GetCommittedCapacity();
-    const size_t retain = MinCapacity(regions.pageAllocatorUsed, 32 * MB);
-    toUncommit = committed > retain ? committed - retain : 0;
+    // ZGC zUncommitter.cpp:222-242: claim this partition's cache history.
+    std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
+    const size_t uncommitWatermark = partition.cache.min_size_watermark();
+    const size_t budget = AlignUp(static_cast<size_t>(double(uncommitWatermark) * 0.9), ZGranuleSize);
+    const size_t limit = partition.capacity - partition.minCapacity;
+    toUncommit = std::min(limit, budget);
+    partition.cache.reset_min_size_watermark();
     return true;
 }
 
 size_t Uncommitter::Uncommit()
 {
-    RegionManager& regions = static_cast<RegionSpace&>(partition).GetRegionManager();
+    RegionManager& regions = partition.regionManager;
     ZArray<ZVirtualMemory> flushedVmems;
     size_t flushed = 0;
     {
@@ -204,12 +195,17 @@ size_t Uncommitter::Uncommit()
         if (stopped.load(std::memory_order_acquire) || canceled) {
             return 0;
         }
-        const size_t committed = regions.GetCommittedCapacity();
-        const size_t retain = MinCapacity(regions.pageAllocatorUsed, 32 * MB);
-        const size_t release = committed > retain ? committed - retain : 0;
-        const size_t flush = std::min({release, toUncommit, ChunkLimit(Heap::GetHeap().GetMaxCapacity())});
+        std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
+        // ZGC zUncommitter.cpp:383-390: allocations during this cycle can
+        // lower the watermark further, even without increasing capacity.
+        const size_t allowed = std::max(partition.cache.min_size_watermark(), uncommitted) - uncommitted;
+        const size_t remaining = std::min(toUncommit, allowed);
+        const size_t retain = std::max(partition.used, partition.minCapacity);
+        const size_t release = partition.capacity - retain;
+        const size_t flush = std::min({release, remaining, ChunkLimit(partition.currentMaxCapacity)});
         // zUncommitter.cpp:395: flush memory from the mapped cache for uncommit.
-        flushed = regions.freeRegionManager.RemoveForUncommit(flush, &flushedVmems);
+        flushed = partition.cache.remove_for_uncommit(flush, &flushedVmems);
+        partition.claimed += flushed;
         if (flushed == 0) {
             Cancel();
             return 0;
@@ -220,7 +216,7 @@ size_t Uncommitter::Uncommit()
     // allocator owner and safepoint participation; the claimed extents are not
     // allocatable.
     for (const ZVirtualMemory vmem : flushedVmems) {
-        const uint32_t partitionId = regions.freeRegionManager.PartitionIdOf(vmem);
+        const uint32_t partitionId = partition.numaId;
         regions.freeRegionManager.unmap_virtual(vmem);
         regions.freeRegionManager.uncommit_physical(vmem);
         regions.freeRegionManager.free_physical(vmem, partitionId);
@@ -231,7 +227,9 @@ size_t Uncommitter::Uncommit()
         // zUncommitter.cpp:413-420: rejoin, adjust claimed and capacity.
         ScopedObjectAccess participation;
         std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
-        regions.freeRegionManager.UncommitFlushed(flushed);
+        std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
+        partition.claimed -= flushed;
+        regions.freeRegionManager.decrease_capacity(partition.numaId, flushed, false);
         RegisterUncommit(flushed);
         return flushed;
     }
@@ -291,7 +289,7 @@ void Uncommitter::run_thread()
             RunCycle();
         }
         ScopedObjectAccess participation;
-        RegionManager& regions = static_cast<RegionSpace&>(partition).GetRegionManager();
+        RegionManager& regions = partition.regionManager;
         std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
         deadline = (canceled ? cancelTime : cycleStart) + DelayNs();
         toUncommit = 0;
@@ -309,12 +307,8 @@ void Uncommitter::Cancel()
     canceled = true;
 }
 
-void Uncommitter::CancelCycleLocked()
-{
-    Current().Cancel();
-}
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-Uncommitter::Uncommitter(RegionSpace& partition) : partition(partition) {}
+Uncommitter::Uncommitter(ZPartition& partition) : partition(partition) {}
 }

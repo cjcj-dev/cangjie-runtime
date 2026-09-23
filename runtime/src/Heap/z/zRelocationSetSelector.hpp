@@ -14,13 +14,13 @@
 #include <cstdint>
 
 #include "Heap/z/zPageAge.hpp"
+#include "Heap/z/zGlobals.hpp"
 
 namespace MapleRuntime {
 
 // Act on the computed threshold: age < threshold stays young (in-place, no Route to old).
 // Copy dest is still old; stay-young is flip-survive (zRelocate.cpp:1346-1352), not per-age to-space.
 constexpr bool kPageAgeAdaptiveTenuring = true;
-constexpr uint32_t kMaxTenuringThreshold = untype(PageAge::survivor14);
 
 struct TenuringInputs {
     size_t liveByAge[kPageAgeCount]{};
@@ -72,7 +72,7 @@ inline uint32_t ComputeTenuringThreshold(const TenuringInputs& in)
     const double logResidency = std::log(residencyFactor) / std::log(youngLog);
     const double thresholdRaw = lifeDecayFactor * logResidency;
 
-    const uint32_t upperBound = std::min(lastPopulatedAge + 1u, kMaxTenuringThreshold);
+    const uint32_t upperBound = std::min(lastPopulatedAge + 1u, MaxTenuringThreshold);
     const uint32_t lowerBound = std::min(1u, upperBound);
     const uint32_t rounded = static_cast<uint32_t>(std::llround(thresholdRaw));
     return std::min(std::max(rounded, lowerBound), upperBound);
