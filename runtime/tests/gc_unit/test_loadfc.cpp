@@ -30,13 +30,6 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadRefField(
-    MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<false>* field);
-extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadWeakRef(
-    MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<false>* field);
-extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadStaticRef(MapleRuntime::NativeSlot* field);
-extern "C" MapleRuntime::ObjectPtr CJ_MCC_AtomicReadReference(
-    MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<true>* field, MapleRuntime::MemoryOrder order);
 extern "C" MapleRuntime::ObjectPtr CJ_MCC_AtomicSwapReference(
     MapleRuntime::ObjectPtr ref, MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<true>* field,
     MapleRuntime::MemoryOrder order);

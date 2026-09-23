@@ -29,7 +29,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 extern "C" int CJ_ScheduleManagerInit();
-extern "C" ObjectPtr CJ_MCC_ReadWeakRef(ObjectPtr, RefField<false>*);
+extern "C" ObjectPtr CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(ObjectPtr, volatile zpointer*);
 
 namespace {
 class GenerationMarkRuntime final : public Runtime {
@@ -122,11 +122,14 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
     field.StoreColoured(stored);
     mark.CompleteOldMarkForAdmissionTest();
     ZResurrection::block();
-    GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
+    GC_EXPECT_TRUE(CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&field)) == nullptr);
     (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
-    GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
+    GC_EXPECT_TRUE(CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&field)) == nullptr);
     (void)GcHeapFixture::MarkStrong(fx.region0, fx.obj0);
-    GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
+    GC_EXPECT_TRUE(CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&field)) == fx.obj0);
 }
 
 GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
@@ -147,7 +150,8 @@ GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(stored);
-    GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
+    GC_EXPECT_TRUE(CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&field)) == fx.obj0);
     std::vector<BaseObject*> published;
     mark.Drain([&](BaseObject* object, bool) { published.push_back(object); });
     GC_EXPECT_EQ(published.size(), 1u);
@@ -166,7 +170,8 @@ GC_TEST(GenerationMark, UnblockedWeakReadPublishesOldKeepAlive)
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(stored);
-    GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
+    GC_EXPECT_TRUE(CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&field)) == fx.obj0);
     std::vector<BaseObject*> published;
     mark.DrainOld([&](BaseObject* object, bool) { published.push_back(object); });
     GC_EXPECT_EQ(published.size(), 1u);
@@ -281,7 +286,8 @@ GC_OTHER_VM_TEST(WeakLoadFamily, RejectsNonReferentSlot)
     GcHeapFixture fx;
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreGoodPointer(fx.obj0));
-    (void)CJ_MCC_ReadWeakRef(fx.obj1, &field);
+    (void)CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&field));
 }
 GC_OTHER_VM_TEST(WeakLoadFamily, AcceptsReferentSlot)
 {
@@ -290,7 +296,8 @@ GC_OTHER_VM_TEST(WeakLoadFamily, AcceptsReferentSlot)
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreGoodPointer(fx.obj0));
-    const ObjectPtr result = CJ_MCC_ReadWeakRef(fx.obj1, &field);
+    const ObjectPtr result = CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
+        reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&field));
     std::fprintf(stderr, "WEAK_SLOT_POSITIVE result=%p expected=%p\n", result, fx.obj0);
     GC_EXPECT_TRUE(result == fx.obj0);
 }
