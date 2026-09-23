@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "Base/Log.h"
+#include "Base/CString.h"
 #include "CangjieRuntime.h"
 #include "Heap/z/z_globals.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -18,6 +19,27 @@ bool g_gcEnabled = true;
 }
 
 void ZArguments::initialize_alignments() {}
+
+void ZArguments::initialize_heap_flags_and_sizes()
+{
+    const HeapParam param = CangjieRuntime::GetHeapParam();
+    bool soft_is_explicit = param.softHeapSizeSet;
+    size_t soft = soft_is_explicit ? param.softHeapSize * KB : ZHeuristics::max_heap_size();
+    if (const char* env = std::getenv("cjSoftMaxHeapSize")) {
+        const size_t parsedKb = CString::ParseSizeFromEnv(env);
+        if (parsedKb > 0) {
+            soft = parsedKb * KB;
+            soft_is_explicit = true;
+        }
+    }
+    // GCArguments:282-283 initializes default soft to max. ZArguments:43-50
+    // applies ergonomics only without explicit sizing. No MaxRAMPercentage
+    // parameter exists in this runtime, so that origin condition is true.
+    if (!param.heapSizeSet && !soft_is_explicit) {
+        soft = ZHeuristics::max_heap_size() * 90 / 100;
+    }
+    SoftMaxHeapSize.store(soft, std::memory_order_release);
+}
 
 void ZArguments::select_max_gc_threads()
 {

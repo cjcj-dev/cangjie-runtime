@@ -27,6 +27,7 @@ bool UseDynamicNumberOfGCThreads = true;
 double ZCollectionIntervalMinor = -1.0;
 double ZCollectionIntervalMajor = -1.0;
 // gc_globals.hpp / z_globals.hpp defaults; ZArguments applies flag origins.
+std::atomic<size_t> SoftMaxHeapSize{0};
 uint32_t MaxTenuringThreshold = 15;
 int32_t ZTenuringThreshold = -1;
 uint32_t ConcGCThreads = 64;

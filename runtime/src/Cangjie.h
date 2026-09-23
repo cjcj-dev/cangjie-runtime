@@ -233,6 +233,12 @@ struct HeapParam {
     // remove together with the macro/option fields in cjcj#91.
     double allocationRate;
     size_t allocationWaitTime;
+
+    // Heap flag origins survive default expansion (ZGC FLAG_IS_CMDLINE).
+    bool heapSizeSet;
+    // Soft limit in KB. A set bit permits explicitly selecting zero.
+    size_t softHeapSize;
+    bool softHeapSizeSet;
 };
 
 /*

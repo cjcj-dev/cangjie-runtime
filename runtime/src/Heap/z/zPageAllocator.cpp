@@ -536,13 +536,9 @@ std::vector<ZPage::ReservedSegment> RegionManager::ReservedSegments(ZVirtualMemo
     return segments;
 }
 
-// The host configures SoftMaxHeapSize through cjSoftMaxHeapSize, rather than
-// HotSpot's flag table. Capacity clamping belongs to the allocator in both.
-static std::atomic<size_t> softMaxHeapSize{0};
-
 size_t RegionManager::soft_max_capacity() const
 {
-    return std::min(softMaxHeapSize.load(std::memory_order_acquire),
+    return std::min(SoftMaxHeapSize.load(std::memory_order_acquire),
                     freeRegionManager.current_max_capacity());
 }
 
@@ -557,14 +553,6 @@ void RegionManager::Initialize(size_t pageSize, uintptr_t regionInfoAddr, ZVirtu
     this->regionHeapStart = segments.front().start;
     this->regionHeapEnd = segments.back().End();
     heapCapacity = pageSize;
-    size_t soft = pageSize;
-    if (const char* env = std::getenv("cjSoftMaxHeapSize")) {
-        const size_t parsedKb = CString::ParseSizeFromEnv(env);
-        if (parsedKb > 0) {
-            soft = parsedKb * KB;
-        }
-    }
-    softMaxHeapSize.store(soft, std::memory_order_release);
     CHECK(pageSize <= span.size());
     this->inactiveZone = regionHeapStart;
     SetGarbageThreshold(garbageThreshold);

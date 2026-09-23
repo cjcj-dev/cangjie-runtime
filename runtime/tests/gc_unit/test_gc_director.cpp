@@ -871,30 +871,100 @@ GC_RUNTIME_OTHER_VM_TEST(GenerationState, DriverActivityABI)
 
 
 namespace {
-void CheckExplicitSoftMax(const char* configured, size_t expected)
+void CheckSoftMax(size_t heapKB, const char* configured, size_t softKB, bool softSet,
+                  size_t expected, bool managed = false)
 {
-    setenv("cjSoftMaxHeapSize", configured, 1);
+    if (configured != nullptr) {
+        setenv("cjSoftMaxHeapSize", configured, 1);
+    } else {
+        unsetenv("cjSoftMaxHeapSize");
+    }
     RuntimeParam params{};
-    params.heapParam.heapSize = 512 * 1024;
+    params.heapParam.heapSize = heapKB;
+    params.heapParam.softHeapSize = softKB;
+    params.heapParam.softHeapSizeSet = softSet;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
-    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    pid_t child = -1;
+    if (managed) {
+        child = fork();
+        GC_EXPECT_TRUE(child >= 0);
+        if (child != 0) {
+            int status = 0;
+            GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+            GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+            return;
+        }
+        if (heapKB == 0) {
+            unsetenv("cjHeapSize");
+        } else {
+            setenv("cjHeapSize", (std::to_string(heapKB) + "KB").c_str(), 1);
+        }
+        setenv("cjProcessorNum", "1", 1);
+        setenv("cjConcGCThreads", "2", 1);
+        MRT_CjRuntimeInit();
+    } else {
+        GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    }
     const size_t maximum = ZHeuristics::max_heap_size();
     const size_t soft = Heap::GetHeap().soft_max_capacity();
     std::fprintf(stderr, "SOFT_MAX_TARGET configured=%s max=%zu soft=%zu expected=%zu\n",
-                 configured, maximum, soft, expected);
-    // Independent observations: the hard limit must not inherit soft sizing.
-    GC_EXPECT_EQ(maximum, size_t(512) * MB);
-    GC_EXPECT_EQ(soft, expected);
+                 configured == nullptr ? "default" : configured, maximum, soft, expected);
+    const size_t expectedMaximum = heapKB != 0 ? heapKB * KB :
+        CangjieRuntime::GetHeapParam().heapSize * KB;
+    // expected=0 denotes the all-default ergonomics case, not explicit zero.
+    const size_t expectedSoft = expected == 0 ? maximum * 90 / 100 : expected;
+    const bool hardMatches = maximum == expectedMaximum;
+    const bool softMatches = soft == expectedSoft;
+    std::fprintf(stderr, "SOFT_MAX_ASSERT hard_match=%d soft_match=%d expected_soft=%zu\n",
+                 hardMatches, softMatches, expectedSoft);
+    if (managed) {
+        _exit(hardMatches && softMatches ? 0 : 1);
+    }
+    GC_EXPECT_TRUE(hardMatches);
+    GC_EXPECT_TRUE(softMatches);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ExplicitEnvironment)
 {
-    CheckExplicitSoftMax("128MB", size_t(128) * MB);
+    CheckSoftMax(512 * 1024, "128MB", 0, false, size_t(128) * MB);
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ExplicitHardLimit)
 {
-    CheckExplicitSoftMax("512MB", size_t(512) * MB);
+    CheckSoftMax(512 * 1024, "512MB", 0, false, size_t(512) * MB);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, DefaultErgonomics)
+{
+    CheckSoftMax(0, nullptr, 0, false, 0);
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ExplicitMaxEqualsDefault)
+{
+    CheckSoftMax(64 * 1024, nullptr, 0, false, size_t(64) * MB);
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ExplicitMax512)
+{
+    CheckSoftMax(512 * 1024, nullptr, 0, false, size_t(512) * MB);
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ExplicitParameter)
+{
+    CheckSoftMax(512 * 1024, nullptr, 128 * 1024, true, size_t(128) * MB);
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, EnvironmentPrecedesParameter)
+{
+    CheckSoftMax(512 * 1024, "256MB", 128 * 1024, true, size_t(256) * MB);
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ManagedDefaultErgonomics)
+{
+    CheckSoftMax(0, nullptr, 0, false, 0, true);
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ManagedExplicitMax)
+{
+    CheckSoftMax(256 * 1024, nullptr, 0, false, size_t(256) * MB, true);
+}
+GC_RUNTIME_OTHER_VM_TEST(SoftMaxHeapSize, ManagedExplicitSoft)
+{
+    CheckSoftMax(0, "128MB", 0, false, size_t(128) * MB, true);
 }

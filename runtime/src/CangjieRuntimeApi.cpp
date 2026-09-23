@@ -238,6 +238,9 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
                 0.8 : param->heapParam.heapUtilization,
             // Default value of heap growth is 1 + 0.15.
             .heapGrowth = param->heapParam.heapGrowth < ERRORESTIMATE ? 0.15 : param->heapParam.heapGrowth,
+            .heapSizeSet = param->heapParam.heapSizeSet || param->heapParam.heapSize != 0,
+            .softHeapSize = param->heapParam.softHeapSize,
+            .softHeapSizeSet = param->heapParam.softHeapSizeSet || param->heapParam.softHeapSize != 0,
         },
         .gcParam = {
             // Default value of gc threshold is heapSize.

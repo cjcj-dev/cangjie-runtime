@@ -85,7 +85,7 @@ static void CheckSysmemSize()
  * for example:
  *     export cjHeapSize = 32GB
  */
-static size_t InitHeapSize(size_t defaultParam)
+static size_t InitHeapSize(size_t defaultParam, bool& isExplicit)
 {
     auto env = std::getenv("cjHeapSize");
     if (env == nullptr) {
@@ -108,6 +108,7 @@ static size_t InitHeapSize(size_t defaultParam)
         maxSize = (g_sysmemSize * 2) / KB;
     }
     if (size >= minSize && size <= maxSize) {
+        isExplicit = true;
         return size;
     } else {
         LOG(RTLOG_ERROR,
@@ -701,7 +702,8 @@ void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* sche
 static RuntimeParam InitRuntimeParam()
 {
     CheckSysmemSize();
-    size_t initHeapSize = InitHeapSize(g_sysmemSize > 1 * GB ? 256 * KB : 64 * KB);
+    bool heapSizeSet = false;
+    size_t initHeapSize = InitHeapSize(g_sysmemSize > 1 * GB ? 256 * KB : 64 * KB, heapSizeSet);
     RuntimeParam param = {
         .heapParam = {
 #if defined(__OHOS__) || defined(__ANDROID__)
@@ -725,6 +727,7 @@ static RuntimeParam InitRuntimeParam()
                 .heapUtilization = InitPercentParameter("cjHeapUtilization", 0.0, 1.0, 0.8),
                 // Default heap growth is (1 + 0.15) = 1.15.
                 .heapGrowth = InitDecParameter("cjHeapGrowth", 0.0, 0.15),
+                .heapSizeSet = heapSizeSet,
             },
         .gcParam = {
                 // Default gc threshold is heapSize.
