@@ -153,7 +153,9 @@ try:
     if dispatch.is_valid(): dispatch.delete()
     if other_dispatch.is_valid(): other_dispatch.delete()
     if idle.is_valid(): idle.delete()
-    observed = int(val('MapleRuntime::ZDriver::_major->_gc_cause'))
+    # collect() routes the submitted request before the driver execution scope
+    # sets its cause (ZGC zDriver.cpp:133-146,175-190,334-357).
+    observed = int(val('request._cause'))
     expected = int(val('MapleRuntime::GC_REASON_' + EXPECTED))
     stack = cmd('bt')
     expect('ASSERT_DIRECTOR_CAUSE', observed == expected and expected_driver and 'ZDirector::run_thread' in stack,
