@@ -68,6 +68,52 @@ void ExpectSlots(const char* path, const std::vector<MAddress>& actual,
 }
 }
 
+namespace {
+template <OopIterateClosure::ReferenceIterationMode Mode>
+class ReferenceFieldsClosure : public BasicOopIterateClosure {
+    std::vector<MAddress>& fields;
+public:
+    explicit ReferenceFieldsClosure(std::vector<MAddress>& fields) : fields(fields) {}
+    ReferenceIterationMode reference_iteration_mode() override { return Mode; }
+    void do_oop(HeapSlot<>* field) override { fields.push_back(reinterpret_cast<MAddress>(field)); }
+};
+}
+
+// HotSpot instanceRefKlass.inline.hpp:107-124: the ordinary fields and
+// referent are distinct, and null discovery falls through to fields.
+GC_TEST(FieldIterator, ReferenceFieldsIncludesReferent)
+{
+    Layout layout;
+    layout.type->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    std::vector<MAddress> actual;
+    ReferenceFieldsClosure<OopIterateClosure::DO_FIELDS> closure(actual);
+    ZIterator::oop_iterate(layout.object, &closure);
+    ExpectSlots("reference-fields", actual, layout.payload(), {2, 5, 0});
+}
+
+GC_TEST(FieldIterator, ReferenceFieldsExceptReferent)
+{
+    Layout layout;
+    layout.type->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    std::vector<MAddress> actual;
+    ReferenceFieldsClosure<OopIterateClosure::DO_FIELDS_EXCEPT_REFERENT> closure(actual);
+    ZIterator::oop_iterate(layout.object, &closure);
+    ExpectSlots("reference-fields-except", actual, layout.payload(), {2, 5});
+}
+
+GC_TEST(FieldIterator, NullDiscovererUsesFields)
+{
+    Layout layout;
+    layout.type->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    std::vector<MAddress> actual;
+    auto visitor = [&](HeapSlot<>& field) { actual.push_back(reinterpret_cast<MAddress>(&field)); };
+    ZBasicOopIterateClosure<decltype(visitor)> closure(visitor);
+    GC_EXPECT_TRUE(closure.ref_discoverer() == nullptr);
+    GC_EXPECT_EQ(closure.reference_iteration_mode(), OopIterateClosure::DO_DISCOVERY);
+    ZIterator::oop_iterate(layout.object, &closure);
+    ExpectSlots("null-discoverer", actual, layout.payload(), {2, 5, 0});
+}
+
 GC_TEST(FieldIterator, ShortBitmapConcreteVisitor)
 {
     Layout layout;

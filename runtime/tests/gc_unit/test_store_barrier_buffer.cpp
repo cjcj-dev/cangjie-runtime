@@ -51,6 +51,8 @@
 #include "gc_generation_test.hpp"
 #include "ObjectModel/FieldInfo.h"
 
+#include "Heap/z/zAccess.hpp"
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -141,7 +143,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
 
     Mutator mutator;
     InstalledMutatorScope mutatorScope(mutator);
-    ZBarrier::WriteReference(fx.obj0, field, fx.obj1);
+    HeapAccess<>::oop_store(&(field), fx.obj1);
 
     StoreBarrierBuffer& buf = *ThreadLocal::GetGCData().storeBarrierBuffer;
     const size_t pending = buf.Pending();
@@ -183,7 +185,7 @@ GC_TEST(StoreBuf, ProductWriteFlushPublishesPreviousYoungValue)
     field.StoreColoured(StoreBadPointer(fx.obj1));
     Mutator mutator;
     InstalledMutatorScope mutatorScope(mutator);
-    ZBarrier::WriteReference(fx.obj0, field, incoming);
+    HeapAccess<>::oop_store(&(field), incoming);
     const size_t buffered = mutator.GetGCData().storeBarrierBuffer->Pending();
     const size_t youngBefore = markFixture.YoungPending();
     mutator.FlushStoreBarrierBuffer();
@@ -228,7 +230,7 @@ GC_TEST(StoreBuf, AllocatingPreviousValueIsImplicitlyLive)
         field.StoreColoured(StoreBadPointer(fx.obj1));
         Mutator mutator;
         InstalledMutatorScope mutatorScope(mutator);
-        ZBarrier::WriteReference(fx.obj0, field, nullptr);
+        HeapAccess<>::oop_store(&(field), nullptr);
         const size_t pending = mutator.GetGCData().storeBarrierBuffer->Pending();
         mutator.FlushStoreBarrierBuffer();
         std::vector<BaseObject*> retired;
@@ -275,7 +277,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
 
 #endif
     InstalledMutatorScope mutatorScope(mutator);
-    ZBarrier::WriteReference(fx.obj0, field, fx.obj1);
+    HeapAccess<>::oop_store(&(field), fx.obj1);
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 1u);
     mutator.FlushStoreBarrierBuffer();
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
@@ -309,7 +311,7 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     const zpointer prev = StoreBadPointer(fx.obj0);
     field.StoreColoured(prev);
 
-    ZBarrier::WriteReference(nullptr, field, fx.obj1);
+    HeapAccess<>::oop_store(&(field), fx.obj1);
 
     StoreBarrierBuffer& buf = *ThreadLocal::GetGCData().storeBarrierBuffer;
     GC_EXPECT_EQ(buf.Pending(), 1u);
@@ -341,7 +343,7 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     GC_EXPECT_TRUE(nonHeapHolder != nullptr);
     GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
 
-    ZBarrier::WriteReference(nonHeapHolder, field, fx.obj1);
+    HeapAccess<>::oop_store(&(field), fx.obj1);
 
     StoreBarrierBuffer& buf = *ThreadLocal::GetGCData().storeBarrierBuffer;
     GC_EXPECT_EQ(buf.Pending(), 1u);
@@ -448,7 +450,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
 
 #endif
     InstalledMutatorScope mutatorScope(mutator);
-    ZBarrier::WriteReference(fx.obj0, field, fx.obj1);
+    HeapAccess<>::oop_store(&(field), fx.obj1);
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 1u);
 
     // A GC worker assisting a saferegion transition must not consume the
@@ -806,15 +808,13 @@ GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     HeapSlot<true> native(zpointer::null);
-    ZBarrier::AtomicWriteReference(nullptr, native, nullptr, std::memory_order_seq_cst);
+    NativeAccess<MO_SEQ_CST>::oop_store(&(native), nullptr);
     GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(nullptr));
-    GC_EXPECT_TRUE(ZBarrier::CompareAndSwapReference(nullptr, native, nullptr, fx.obj0,
-        std::memory_order_seq_cst, std::memory_order_seq_cst));
+    GC_EXPECT_TRUE((NativeAccess<MO_SEQ_CST>::oop_atomic_cmpxchg(&(native), nullptr, fx.obj0) == nullptr));
     GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(fx.obj0));
-    GC_EXPECT_FALSE(ZBarrier::CompareAndSwapReference(nullptr, native, nullptr, fx.obj1,
-        std::memory_order_seq_cst, std::memory_order_seq_cst));
-    GC_EXPECT_TRUE(ZBarrier::AtomicSwapReference(nullptr, native, fx.obj1, std::memory_order_seq_cst) == fx.obj0);
-    GC_EXPECT_TRUE(ZBarrier::AtomicReadReference(nullptr, native, std::memory_order_seq_cst) == fx.obj1);
+    GC_EXPECT_FALSE((NativeAccess<MO_SEQ_CST>::oop_atomic_cmpxchg(&(native), nullptr, fx.obj1) == nullptr));
+    GC_EXPECT_TRUE(NativeAccess<MO_SEQ_CST>::oop_atomic_xchg(&(native), fx.obj1) == fx.obj0);
+    GC_EXPECT_TRUE(NativeAccess<MO_SEQ_CST>::oop_load(&(native)) == fx.obj1);
     GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(fx.obj1));
 }
 
@@ -829,17 +829,20 @@ GC_TEST(StoreBuf, BulkPreservesSourceStorageProtocol)
     StorePlain(local, from_object(fx.obj0));
     NativeSlot native(zpointer::null);
     const GCTib layout = fx.obj0->GetGCTib();
-    ZBarrier::WriteStaticStruct(reinterpret_cast<MAddress>(&native), sizeof(native),
-        reinterpret_cast<MAddress>(&local), sizeof(local), layout);
+    NativeAccess<>::value_copy(
+        ValuePayload(reinterpret_cast<MAddress>(&local), sizeof(local), layout, ValuePayload::Kind::Uncolored),
+        ValuePayload(reinterpret_cast<MAddress>(&native), sizeof(native), ValuePayload::Kind::Native));
     GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(fx.obj0));
     RootSlot result;
-    ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(&result), reinterpret_cast<MAddress>(&native),
-        sizeof(native), layout);
+    NativeAccess<>::value_copy(
+        ValuePayload(reinterpret_cast<MAddress>(&native), sizeof(native), layout, ValuePayload::Kind::Native),
+        ValuePayload(reinterpret_cast<MAddress>(&result), sizeof(native), ValuePayload::Kind::Uncolored));
     GC_EXPECT_EQ(raw(result.LoadPlain()), reinterpret_cast<uintptr_t>(fx.obj0));
     HeapSlot<>& heap = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     heap.StoreColoured(zpointer::null);
-    ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(&heap), reinterpret_cast<MAddress>(&native),
-        sizeof(native), layout);
+    NativeAccess<>::value_copy(
+        ValuePayload(reinterpret_cast<MAddress>(&native), sizeof(native), layout, ValuePayload::Kind::Native),
+        ValuePayload(reinterpret_cast<MAddress>(&heap), sizeof(native), ValuePayload::Kind::Heap));
     GC_EXPECT_EQ(heap.GetFieldValue(), StoreGoodPointer(fx.obj0));
     GC_EXPECT_EQ(raw(local.LoadPlain()), reinterpret_cast<uintptr_t>(fx.obj0));
 }

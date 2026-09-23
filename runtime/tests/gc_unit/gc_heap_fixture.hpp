@@ -66,11 +66,6 @@ inline bool SlotPageRemembered(MapleRuntime::MAddress slot)
 }
 
 struct RememberedSet {
-    static constexpr size_t kBufferCount = 2;
-    struct FlipTouchCounts { size_t bitmap = 0; size_t pageMap = 0; };
-    std::unique_ptr<std::atomic<uint64_t>> bitmaps[2];
-    std::unique_ptr<std::atomic<uint64_t>> rememberedPages[2];
-    std::atomic<int> activeBuffer { 0 };
     bool initialized = true;
     bool IsInitialized() const { return true; }
     void Initialize(MAddress, size_t) { initialized = true; }
@@ -82,7 +77,6 @@ struct RememberedSet {
             page->remember(reinterpret_cast<volatile zpointer*>(slot));
         }
     }
-    size_t Size() const { return 0; }
     template<typename C>
     size_t DrainForMinor(C& out)
     {
@@ -91,29 +85,8 @@ struct RememberedSet {
         return 0;
     }
     void FlipForMinor() { ZRememberedSet::flip(); }
-    bool ContainsPrevious(MAddress slot) const
-    {
-        ZPage* page = Heap::page(slot);
-        return page != nullptr && page->was_remembered(reinterpret_cast<volatile zpointer*>(slot));
-    }
-    bool IsClearInRange(MAddress, size_t, bool) const { return true; }
-    template<typename... A>
-    size_t ScanPreviousForMinor(A&&...) { return 0; }
-    void ClearRegion(MAddress, MAddress) {}
-    template<typename... A>
-    void VisitRememberedPages(A&&...) {}
-    template<typename... A>
-    size_t TransferObjectSlots(A&&...) { return 0; }
-    struct InPlaceSlot {};
-    size_t TakeInPlaceSlots(MAddress, MAddress, std::vector<InPlaceSlot>&) { return 0; }
-    size_t MoveInPlaceSlots(const std::vector<InPlaceSlot>&, MAddress, MAddress, size_t) { return 0; }
-    std::unordered_set<MAddress> Snapshot() const { return {}; }
-    size_t ClearBuffer(int) { return 0; }
 };
 
-
-enum class RemsetFilterReceiptReason : uint8_t { kNone=0, kStale=1, kDeadHolder=2, kNoOrigin=3, kBadTarget=4 };
-inline void NoteRemsetFilterTestReceipt(MAddress, RemsetFilterReceiptReason, bool) {}
 struct RemsetScanStats {
     size_t live=0;
     size_t consumed=0;

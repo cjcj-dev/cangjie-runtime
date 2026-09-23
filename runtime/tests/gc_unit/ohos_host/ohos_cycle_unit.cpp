@@ -22,6 +22,8 @@
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "Heap/z/zPage.inline.hpp"
 
+#include "Heap/z/zAccess.hpp"
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -125,7 +127,7 @@ void ObserveHandler(BaseObject* owner, BaseObject* proxy)
     auto& heap = Heap::GetHeap();
     BaseObject* expectedOwner = heap.GetExportObject(gExportHandle);
     BaseObject* expectedProxy = expectedOwner == nullptr ? nullptr :
-        ZBarrier::ReadReference(expectedOwner, expectedOwner->GetRefField<>(kPayload + sizeof(uint64_t)));
+        HeapAccess<>::oop_load(&(expectedOwner->GetRefField<>(kPayload + sizeof(uint64_t))));
     ++gHandlerCalls;
     gHandlerArguments = owner == expectedOwner && proxy == expectedProxy;
     std::vector<BaseObject*> roots;
@@ -161,8 +163,7 @@ void* RunHandlerChain(void*)
     // ExportObject(id, foreignProxy) -> CJForeignProxy(context) ->
     // CJInteropContext(cjFunc) -> CJFunc(handler).
     for (size_t i = 0; i < 3; ++i) {
-        ZBarrier::WriteReference(objects[i],
-            objects[i]->GetRefField<>(kPayload + (i == 0 ? sizeof(uint64_t) : 0)), objects[i + 1]);
+        HeapAccess<>::oop_store(&(objects[i]->GetRefField<>(kPayload + (i == 0 ? sizeof(uint64_t) : 0))), objects[i + 1]);
     }
     const CrossRefHandler handler = &ObserveHandler;
     std::memcpy(reinterpret_cast<char*>(objects[3]) + kPayload, &handler, sizeof(handler));
