@@ -62,10 +62,10 @@ namespace MapleRuntime {
 
 // ZGC zGeneration.cpp:69-76: one generation timer per young collection type.
 static const ZStatPhaseGeneration ZPhaseGenerationYoung[] {
-    ZStatPhaseGeneration("Young Generation", ZGenerationId::young),
-    ZStatPhaseGeneration("Young Generation (Promote All)", ZGenerationId::young),
-    ZStatPhaseGeneration("Young Generation (Collect Roots)", ZGenerationId::young),
-    ZStatPhaseGeneration("Young Generation", ZGenerationId::young)
+    {"Young Generation", ZGenerationId::young},
+    {"Young Generation (Promote All)", ZGenerationId::young},
+    {"Young Generation (Collect Roots)", ZGenerationId::young},
+    {"Young Generation", ZGenerationId::young}
 };
 static const ZStatPhaseGeneration ZPhaseGenerationOld("Old Generation", ZGenerationId::old);
 
