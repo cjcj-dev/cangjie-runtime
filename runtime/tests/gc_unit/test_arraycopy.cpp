@@ -11,6 +11,7 @@
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+extern "C" void MCC_WriteStructField(ObjectPtr, MAddress, size_t, MAddress, size_t, GCTib);
 extern "C" void CJ_MCC_ArrayCopyRef(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
 extern "C" void CJ_MCC_ArrayCopyStruct(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
 
@@ -272,3 +273,39 @@ GC_TEST(AccessBarrier976, RawValueCopyAlignedSegmentsAndTail)
         GC_EXPECT_EQ(destination[offset + 15], 0);
     }
 }
+
+namespace {
+// Exercise the compiler ABI; read the payload produced by the product SO.
+// These assertions establish copy wiring, not a concurrency/atomicity proof.
+void CheckPrimitivePayload976(bool references, bool trailer)
+{
+    GcHeapFixture heap;
+    alignas(8) unsigned char source[32]{};
+    const MAddress destination = heap.heapStart + 2048;
+    constexpr size_t size = 31; // long/int/short segments and a byte tail
+    std::memset(reinterpret_cast<void*>(destination), 0, 32);
+    for (size_t i = 0; i < size; ++i) { source[i] = static_cast<unsigned char>(i + 1); }
+    GCTib bitmap{};
+    bitmap.tag = SIGN_BIT | (references ? 2 : 0); // primitive, reference, primitive
+    if (references) {
+        *reinterpret_cast<BaseObject**>(source + 8) = heap.obj0;
+        HeapSlotAt<>(destination + 8).StoreColoured(StoreGoodPointer(nullptr));
+    }
+    MCC_WriteStructField(heap.obj0, destination, size,
+                         reinterpret_cast<MAddress>(source), size, bitmap);
+    const size_t begin = references && trailer ? 16 : 0;
+    const size_t end = references && !trailer ? 8 : size;
+    const bool payloadMatches = std::memcmp(reinterpret_cast<void*>(destination + begin),
+                                             source + begin, end - begin) == 0;
+    std::fprintf(stderr, "VALUE976_PAYLOAD_TARGET refs=%d begin=%zu end=%zu matches=%d\n",
+                 references, begin, end, payloadMatches);
+    GC_EXPECT_TRUE(payloadMatches);
+    GC_EXPECT_EQ(*reinterpret_cast<unsigned char*>(destination + size), 0);
+    if (references) {
+        GC_EXPECT_EQ(ZBarrier::ReadReference(heap.obj0, HeapSlotAt<>(destination + 8)), heap.obj0);
+    }
+}
+}
+GC_TEST(AccessBarrier976, PrimitiveValueNoReferences) { CheckPrimitivePayload976(false, false); }
+GC_TEST(AccessBarrier976, PrimitiveValueLeadingGap) { CheckPrimitivePayload976(true, false); }
+GC_TEST(AccessBarrier976, PrimitiveValueTrailer) { CheckPrimitivePayload976(true, true); }

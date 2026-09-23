@@ -327,22 +327,23 @@ inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::oop_arraycopy_i
     }
     // src and dst are the same; nothing to do.
 }
+// ZGC zBarrierSet.inline.hpp:451-459: each primitive segment shares the
+// atomic value-content backend with the no-oop Raw branch.
+static inline void copy_primitive_payload(MAddress src, MAddress dst, size_t size, size_t& copied)
+{
+    if (size == 0) { return; }
+    AccessInternal::value_copy_internal(src + copied, dst + copied, size);
+    copied += size;
+}
+
 template<DecoratorSet decorators, typename BarrierSetT>
 inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::struct_copy_one(MArray* layout, MAddress dst, MAddress src)
 {
+    // Cangjie inline array elements have no header; use their component bitmap.
     const size_t stride = layout->GetElementSize();
-    size_t cursor = 0;
-    layout->GetComponentTypeInfo()->GetGCTib().ForEachBitmapWord(dst, [&](RefField<>& field) {
-        const size_t offset = reinterpret_cast<MAddress>(&field) - dst;
-        if (cursor < offset) {
-            std::memmove(reinterpret_cast<void*>(dst + cursor), reinterpret_cast<void*>(src + cursor), offset - cursor);
-        }
-        oop_copy_one(reinterpret_cast<zpointer*>(dst + offset), reinterpret_cast<zpointer*>(src + offset));
-        cursor = offset + sizeof(zpointer);
-    });
-    if (cursor < stride) {
-        std::memmove(reinterpret_cast<void*>(dst + cursor), reinterpret_cast<void*>(src + cursor), stride - cursor);
-    }
+    ValuePayload source(src, stride, layout->GetComponentTypeInfo()->GetGCTib(), ValuePayload::Kind::Heap);
+    ValuePayload destination(dst, stride, ValuePayload::Kind::Heap);
+    value_copy_in_heap(source, destination);
 }
 
 template<DecoratorSet decorators, typename BarrierSetT>
@@ -376,12 +377,15 @@ inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::value_copy_in_h
 {
     CHECK(src.size <= dst.size);
     const auto& offsets = src.offsets.empty() ? dst.offsets : src.offsets;
+    if (offsets.empty()) {
+        Raw::value_copy(src, dst);
+        return;
+    }
     size_t copied = 0;
     for (size_t offset : offsets) {
         if (offset >= src.size) { break; }
         CHECK(copied <= offset && offset + sizeof(zpointer) <= src.size);
-        std::memmove(reinterpret_cast<void*>(dst.address + copied),
-                     reinterpret_cast<void*>(src.address + copied), offset - copied);
+        copy_primitive_payload(src.address, dst.address, offset - copied, copied);
         auto* const srcSlot = reinterpret_cast<volatile zpointer*>(src.address + offset);
         auto* const dstSlot = reinterpret_cast<volatile zpointer*>(dst.address + offset);
         if (src.kind == ValuePayload::Kind::Heap && dst.kind == ValuePayload::Kind::Heap) {
@@ -397,8 +401,7 @@ inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::value_copy_in_h
         }
         copied = offset + sizeof(zpointer);
     }
-    std::memmove(reinterpret_cast<void*>(dst.address + copied),
-                 reinterpret_cast<void*>(src.address + copied), src.size - copied);
+    copy_primitive_payload(src.address, dst.address, src.size - copied, copied);
 }
 
 template<DecoratorSet decorators, typename BarrierSetT>
@@ -426,7 +429,7 @@ inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::value_arraycopy
     CHECK(srcSize <= dstSize);
     auto* layout = static_cast<MArray*>(Heap::IsHeapAddress(dst) ? dstObj : srcObj);
     if (layout == nullptr) {
-        std::memmove(reinterpret_cast<void*>(dst), reinterpret_cast<void*>(src), srcSize);
+        Raw::value_arraycopy(srcObj, src, srcSize, dstObj, dst, dstSize);
         return;
     }
     const size_t stride = layout->GetElementSize();
