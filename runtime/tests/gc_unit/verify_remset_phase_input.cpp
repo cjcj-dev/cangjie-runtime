@@ -46,7 +46,6 @@ int main(int argc, char** argv)
         heap.young().mark_start();
     }
     if (heap.young().is_phase_mark() != young || !heap.old().is_phase_relocate()) { return 79; }
-    auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
     BaseObject* destination = fixture.obj0;
     if (scan) {
         // Ordinary allocator input only. The product performs the copy and
@@ -68,7 +67,16 @@ int main(int argc, char** argv)
                  argv[1], heap.young().is_phase_mark(), from, destination, p16_destination_field,
                  static_cast<uintptr_t>(*p16_destination_field));
     if (scan) { heap.remembered().scan_and_follow(&heap.young().Mark()); }
-    else { manager.ForwardFromRegions<Generation::Old>(); }
+    else {
+        // ZGC zRelocate.cpp:1289: submit the installed relocation set through
+        // the generation's active workers, as the product phase does.
+        auto& old = heap.old();
+        old.Workers()->set_active_workers(1);
+        old.Workers()->set_active();
+        ZRelocate::StartRelocationTasks(old.id());
+        old.relocate().relocate(&old.relocation_set());
+        old.Workers()->set_inactive();
+    }
     const MAddress actual = p16_forwarding->find(from);
     const bool matched = actual == reinterpret_cast<MAddress>(destination) &&
         (*p16_destination_field & ZPointerRememberedMask) == ZPointerRememberedMask;
