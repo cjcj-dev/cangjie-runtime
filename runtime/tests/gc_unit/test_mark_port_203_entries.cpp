@@ -549,8 +549,8 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
         for (size_t pos = 0; (pos = phases.find(token, pos)) != std::string::npos; pos += token.size()) ++count;
         return count;
     };
-    const size_t rootWindows = phaseCount("young.root_enum");
-    const size_t followWindows = phaseCount("young.mark_follow");
+    const size_t rootWindows = phaseCount("Concurrent_Mark_Roots");
+    const size_t followWindows = phaseCount("Concurrent_Mark_Follow");
     const size_t splitWindows = phaseCount("young.remset_rescan") + phaseCount("young.mark_closure");
     const bool rootLive = fx.region1->is_object_strongly_live(from_object(rootChild));
     const bool rememberedLive = fx.region1->is_object_strongly_live(from_object(rememberedChild));

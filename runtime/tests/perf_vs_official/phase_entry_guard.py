@@ -37,7 +37,7 @@ if mode == "minor":
         errors.append("minor_generation=0")
     for span in minor_spans:
         if not any(record.seq == span.seq and record.gc_tag == "y" and
-                   record.name == "young.flush_alloc" and
+                   record.name == "Pause_Mark_Start" and
                    span.start_ns <= record.start_ns and
                    record.start_ns + record.ns <= span.start_ns + span.dur_ns
                    for record in records.phases):
@@ -58,9 +58,12 @@ else:
         if any(left.start_ns + left.dur_ns > right.start_ns
                for left, right in zip(spans, spans[1:])):
             errors.append(f"major_span_order_seq={seq}")
-        for span, label in zip(spans[:2], ("major.preclean", "major.full_roots")):
+        # ZGC zGeneration.cpp:78-79: preclean enters the young pause;
+        # full roots enters the combined young/old mark-start pause.
+        for span, label, entry in zip(spans[:2], ("major.preclean", "major.full_roots"),
+                                      ("Pause_Mark_Start", "Pause_Mark_Start__Major_")):
             if not any(record.seq == span.seq and record.gc_tag == "Y" and
-                       record.name == "young.flush_alloc" and
+                       record.name == entry and
                        span.start_ns <= record.start_ns and
                        record.start_ns + record.ns <= span.start_ns + span.dur_ns
                        for record in records.phases):
