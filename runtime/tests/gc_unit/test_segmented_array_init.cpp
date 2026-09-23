@@ -44,6 +44,7 @@ extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void*
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);
@@ -202,9 +203,11 @@ void* RunYoungSelectionLifetimeCase(void*)
 // as colored nulls. Read the product result before any mutator load barrier.
 void* RunFlipPromotionCase(void* argument)
 {
-    const bool promote = reinterpret_cast<uintptr_t>(argument) == 0;
+    const uintptr_t mode = reinterpret_cast<uintptr_t>(argument);
+    const bool promote = mode != 1;
+    const bool relocate = mode == 2;
     auto& heap = Heap::GetHeap();
-    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, relocate ? 16 : kLargeRefLength);
     if (array == nullptr) {
         return reinterpret_cast<void*>(10);
     }
@@ -216,13 +219,25 @@ void* RunFlipPromotionCase(void* argument)
     // promotion barrier. It is the positive control in the debugger test.
     auto& selfField = array->GetRefField(reinterpret_cast<MAddress>(fields + 1) - address);
     ZBarrier::WriteReference(array, selfField, array);
+    std::vector<U64> extraRoots;
+    if (relocate) {
+        // Sparsely live small pages provide a packing gain to the real
+        // selector (ZGC zRelocationSetSelector.cpp:154-186).
+        for (size_t page = 0; page < 3; ++page) {
+            for (size_t i = 0; i < 40; ++i) {
+                (void)MCC_NewArray8(GetByteArrayTypeInfos().array, 64 * 1024);
+            }
+            extraRoots.push_back(heap.RegisterExportRoot(
+                MCC_NewObjArray(GetReferenceArrayTypeInfos().array, 16)));
+        }
+    }
     Mutator::GetMutator()->SetManagedContext(false);
     heap.RequestGC(promote ? GC_REASON_USER : GC_REASON_YOUNG, false);
     array = static_cast<MArray*>(heap.GetExportObject(root));
     fields = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
     const zpointer after = fields[0].GetFieldValue();
     const bool sameAddress = reinterpret_cast<uintptr_t>(array) == address;
-    const bool old = !Heap::page(address)->IsYoungRegion();
+    const bool old = !Heap::page(reinterpret_cast<uintptr_t>(array))->IsYoungRegion();
     // The full major cycle has since flipped old relocate colors (ZGC
     // zAddress.cpp:149-152). The strict store-good assertion belongs before
     // relocate start and is made by test_flip_promotion_gdb.py.
@@ -230,9 +245,25 @@ void* RunFlipPromotionCase(void* argument)
     std::fprintf(stderr,
         "FLIP_PROMOTION_TARGET promote=%d same_address=%d old=%d before=%zx after=%zx store_good=%d target=%d\n",
         promote, sameAddress, old, raw(before), raw(after), ZPointer::is_store_good(after), target);
+    bool remembered = true;
+    if (mode == 3) {
+        MArray* young = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
+        auto& field = array->GetRefField(reinterpret_cast<MAddress>(fields) - reinterpret_cast<MAddress>(array));
+        ZBarrier::WriteReference(array, field, young);
+        // Same recorded-field invariant consumed by zVerify.cpp:221-228:
+        // an old-to-young store is either in the page remset or pending buffer.
+        remembered = Heap::page(reinterpret_cast<MAddress>(array))->is_remembered(
+            reinterpret_cast<volatile zpointer*>(&field)) ||
+            StoreBarrierBuffer::is_in(reinterpret_cast<MAddress>(&field));
+        std::fprintf(stderr, "PROMOTION_REMEMBERED_STORE_TARGET remembered=%d value=%zx\n",
+                     remembered, raw(field.GetFieldValue()));
+    }
+    for (U64 extraRoot : extraRoots) {
+        heap.RemoveExportObject(extraRoot);
+    }
     heap.RemoveExportObject(root);
     Mutator::GetMutator()->SetManagedContext(true);
-    return reinterpret_cast<void*>((sameAddress && old == promote && target) ? 0 : 1);
+    return reinterpret_cast<void*>(((relocate || sameAddress) && old == promote && target && remembered) ? 0 : 1);
 }
 
 // ZGC zGeneration.cpp:1058-1063 and zStat.cpp:1789-1798:
@@ -731,4 +762,14 @@ GC_RUNTIME_OTHER_VM_TEST(FlipPromotion, NullFieldsStayColoredThroughCollection)
 GC_RUNTIME_OTHER_VM_TEST(FlipPromotion, SurvivingYoungFieldsAreNotRewritten)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunFlipPromotionCase, 1, 1, true), 0);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RelocatePromotion, NullFieldsStayColoredThroughCollection)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunFlipPromotionCase, 2, 1, true), 0);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(FlipPromotion, FirstYoungStoreIntoPromotedNullIsRemembered)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunFlipPromotionCase, 3, 1, true), 0);
 }
