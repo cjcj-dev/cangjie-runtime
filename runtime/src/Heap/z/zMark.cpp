@@ -696,7 +696,6 @@ ZMark::Result ZMark::FollowWork(MarkContext& context, MarkingSMR& smr, MarkStrip
         }
         if (terminate.TryTerminate(stripes, context.NStripes())) {
             context.Cache().Flush();
-            smr.reclaim();
             return Result::Completed;
         }
     }

@@ -63,4 +63,40 @@ GC_RUNTIME_OTHER_VM_TEST(GenerationMarkFree, OldCollectEmptyControl)
 {
     CollectAndCheck(ZGenerationId::old, false);
 }
+// ZGC zMark.cpp:660-663 returns directly on successful termination;
+// below-threshold retired nodes remain until zMarkingSMR.cpp:103 free().
+GC_RUNTIME_OTHER_VM_TEST(GenerationMarkFree, FollowTerminationDefersBelowThresholdNodes)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 4;
+    params.gcParam.youngGCThreads = 2;
+    params.gcParam.oldGCThreads = 2;
+    params.gcParam.staticGCThreads = true;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    ConcurrentGCBreakpoints::AcquireControl();
+    auto& smr = ZGeneration::old()->Mark().Smr();
+    MarkingSMRTest::prepare_protected_nodes(smr);
+    MarkingSMRTest::clear_fixture_hazards(smr);
+    const auto before = MarkingSMRTest::worker_pending_counts(smr);
+    const bool reached = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
+    const auto followed = MarkingSMRTest::worker_pending_counts(smr);
+    ConcurrentGCBreakpoints::RunToIdle();
+    const auto freed = MarkingSMRTest::worker_pending_counts(smr);
+    ConcurrentGCBreakpoints::ReleaseControl();
+    // Report product state before any assertion, including both cut arms.
+    for (size_t worker = 0; worker < followed.size(); ++worker) {
+        std::printf("FOLLOW_TERMINATION_TARGET worker=%zu before=%zu followed=%zu freed=%zu\n",
+                    worker, before[worker], followed[worker], freed[worker]);
+    }
+    std::fflush(stdout);
+    for (size_t worker = 0; worker < 2; ++worker) {
+        GC_EXPECT_TRUE(followed[worker] >= before[worker]);
+    }
+    for (size_t pending : freed) GC_EXPECT_EQ(pending, size_t{0});
+    GC_EXPECT_TRUE(reached);
+    GC_EXPECT_EQ(before[0], size_t{1});
+    GC_EXPECT_EQ(before[1], size_t{1});
+}
 #endif
