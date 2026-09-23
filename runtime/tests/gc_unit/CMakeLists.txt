@@ -41,6 +41,7 @@ set(GC_UNIT_SOURCES
     test_z_forwarding_table.cpp
     test_young_conc.cpp
     test_alloc_buffer_handoff.cpp
+    test_allocation_stall_queue.cpp
     test_tlab_usage.cpp
     test_raw_null_allocation.cpp
     test_object_allocator_paths.cpp
@@ -70,6 +71,7 @@ set(GC_UNIT_SOURCES
     test_gc_thread_pool.cpp
     test_zWorkers.cpp
     test_zGeneration.cpp
+    test_generation_mark_free.cpp
 
     test_exempt_unlock.cpp
     test_isfromreg.cpp
@@ -96,6 +98,7 @@ set(GC_UNIT_SOURCES
     test_colour_census.cpp
     test_payload_clamp.cpp
     test_write_generic.cpp
+    test_arraycopy.cpp
     test_cycle_ref_saferegion.cpp
     test_thread_smr_reclaim.cpp
 )
@@ -270,3 +273,11 @@ elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
         INSTALL_RPATH "${GCV2_RUNTIME_LIB_DIR}")
 endif()
 add_test(NAME cj_gc_uncommit_unit COMMAND cj_gc_uncommit_unit)
+
+# Standalone other-vm harness regression runner; owns main and needs no runtime SO.
+add_executable(cj_gc_other_vm_exit_unit test_other_vm_exit.cpp)
+target_compile_features(cj_gc_other_vm_exit_unit PRIVATE cxx_std_17)
+target_compile_options(cj_gc_other_vm_exit_unit PRIVATE -fexceptions)
+# Do not inherit the runtime tracing archive from the parent directory.
+set_property(TARGET cj_gc_other_vm_exit_unit PROPERTY LINK_LIBRARIES pthread)
+add_test(NAME cj_gc_other_vm_exit_unit COMMAND cj_gc_other_vm_exit_unit)
