@@ -6,7 +6,9 @@
 #include "Cangjie.h"
 #include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zHeuristics.hpp"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/MObject.h"
 #include <sys/wait.h>
@@ -30,22 +32,24 @@ namespace {
 // promotion tracking. Only the heap/mark state is fixture input.
 void CheckSelection(bool medium, bool promote, uint32_t workers)
 {
-    RuntimeParam param{};
-    param.heapParam.heapSize = 128 * 1024;
-    param.coParam.processorNum = 1;
-    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    CreateStandaloneHeap(medium ? 4 : 2);
     if (medium) {
         ZHeuristics::set_max_heap_size(128 * 1024 * 1024);
         ZHeuristics::set_medium_page_size();
     }
+    const size_t size = medium ? ZPageSizeMediumMax : ZPageSizeSmall;
+    const size_t objectSize = medium ? ZObjectAlignmentMedium : 24;
+    const PageAge age = promote ? PageAge::survivor1 : PageAge::eden;
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     auto& generation = Heap::GetHeap().young();
+    generation.InitializeWorkers(workers);
     generation.Workers()->set_active_workers(workers);
     generation.Begin(1);
     GenerationSequenceFixture::Advance(generation);
-    const size_t size = medium ? ZPageSizeMediumMax : ZPageSizeSmall;
-    const size_t objectSize = medium ? ZObjectAlignmentMedium : 24;
+    if (promote) {
+        ZGenerationTest::SetTenuringThreshold(generation, 1);
+    }
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
@@ -59,26 +63,32 @@ void CheckSelection(bool medium, bool promote, uint32_t workers)
     flags.set_non_blocking();
     ZPage* pages[2];
     BaseObject* objects[2];
+    ZRelocationSetSelector selector;
     for (unsigned i = 0; i < 2; ++i) {
         pages[i] = Heap::alloc_page(size, medium ? ZPageType::medium : ZPageType::small,
-                                    false, false, PageAge::eden, flags);
+                                    false, false, age, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         objects[i] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(objectSize));
         objects[i]->SetClassInfo(type);
         GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], objects[i]));
         GC_EXPECT_TRUE(pages[i]->allows_raw_null());
         ZPageTest::MakeRelocatable(*pages[i]);
+        selector.register_live_page(pages[i]);
     }
-    // Two sparse pages can reclaim a page; a single page is not selected.
-    generation.select_relocation_set(promote);
+    selector.select();
+    generation.relocation_set().install(&selector);
+    ZRelocationSetIterator installed(&generation.relocation_set());
+    for (ZForwarding* owner; installed.next(&owner);) {
+        generation.forwarding_table().insert(owner);
+    }
     for (unsigned i = 0; i < 2; ++i) {
         const bool allows = pages[i]->allows_raw_null();
         const auto* forwarding = generation.forwarding_table().get(reinterpret_cast<MAddress>(objects[i]));
-        const bool installed = forwarding != nullptr;
+        const bool installedPage = forwarding != nullptr;
         std::fprintf(stderr, "RAW_NULL_INSTALL_TARGET medium=%d promote=%d workers=%u page=%u allows=%d installed=%d\n",
-                     medium, promote, workers, i, allows, installed);
+                     medium, promote, workers, i, allows, installedPage);
         GC_EXPECT_EQ(allows, !promote);
-        GC_EXPECT_TRUE(installed);
+        GC_EXPECT_TRUE(installedPage);
     }
 }
 
