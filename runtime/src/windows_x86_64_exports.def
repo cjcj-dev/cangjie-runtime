@@ -1252,16 +1252,13 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager13ReclaimRegionEPNS_10ZPageE @1417
     _ZN12MapleRuntime13RegionManager13ReleaseRegionEPNS_10ZPageE @1418
     _ZN12MapleRuntime13RegionManager15CountLiveObjectEPKNS_10BaseObjectE @1419
-    _ZN12MapleRuntime13RegionManager16RequestForRegionEy @1421
     _ZN12MapleRuntime13RegionManager17PromoteAllRegionsEv @1423
     _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEv @1425
     _ZN12MapleRuntime13RegionManager19CollectLargeGarbageEv @1427
     _ZN12MapleRuntime13RegionManager19ReassembleFromSpaceEv @1428
     _ZN12MapleRuntime13RegionManager19SetGarbageThresholdEv @1429
-    _ZN12MapleRuntime13RegionManager21ReleaseMarkQuarantineEv @1433
     _ZN12MapleRuntime13RegionManager21StampCensusBoundariesEv @1434
     _ZN12MapleRuntime13RegionManager28TakeReclaimableGarbageRegionEPy @1450
-    _ZN12MapleRuntime13RegionManager29ReclaimRegionToMarkQuarantineEPNS_10ZPageE @1452
     _ZN12MapleRuntime13RegionManager30AssembleLargeGarbageCandidatesEv @1453
     _ZN12MapleRuntime13RegionManager30AssembleSmallGarbageCandidatesEv @1454
     _ZN12MapleRuntime13RegionManager31TryTakeGarbageRegionAfterDispelEPNS_10ZPageE @1457
@@ -1518,7 +1515,6 @@ EXPORTS
     _ZN12MapleRuntime17ExceptionHandling14ProcessEHFrameERKNS_9FrameInfoERNSt3__16vectorINS4_10unique_ptrINS_12IEHFrameInfoENS4_14default_deleteIS7_EEEENS4_9allocatorISA_EEEE @1811
     _ZN12MapleRuntime17ExceptionHandling16BuildEHFrameInfoEv @1812
     _ZN12MapleRuntime17FreeRegionManager10InitializeEj @1813
-    _ZN12MapleRuntime17FreeRegionManager28ReleaseMarkQuarantineToDirtyEv @1819
     _ZN12MapleRuntime17FreeRegionManagerD0Ev @1820
     _ZN12MapleRuntime17FreeRegionManagerD2Ev @1821
     _ZN12MapleRuntime17InstanceFieldInfo12GetFieldTypeEPNS_8TypeInfoE @1822

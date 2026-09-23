@@ -417,16 +417,6 @@ ZStatSamplerData ZStatSampler::CollectAndReset() const
     return result;
 }
 
-void ZStatSampler::Sample(uint64_t value) const
-{
-    if (!StorageReady()) return;
-    auto& data = *CpuLocal<CpuData>(ZCPU::id());
-    data.nsamples.fetch_add(1, std::memory_order_relaxed);
-    data.sum.fetch_add(value, std::memory_order_relaxed);
-    uint64_t maximum = data.max.load(std::memory_order_relaxed);
-    while (maximum < value && !data.max.compare_exchange_weak(maximum, value, std::memory_order_relaxed)) {}
-}
-
 void ZStatCounter::Increment(uint64_t value) const
 {
     if (!StorageReady()) return;
@@ -479,7 +469,20 @@ ZStatCounterData ZStatUnsampledCounter::GetAndReset() const
 // zStat.cpp:892-930
 void ZStatSample(const ZStatSampler& sampler, uint64_t value)
 {
-    ZStatSample(sampler, value);
+    auto* const cpuData = sampler.CpuLocal<ZStatSampler::CpuData>(ZCPU::id());
+    cpuData->nsamples.fetch_add(1, std::memory_order_relaxed);
+    cpuData->sum.fetch_add(value, std::memory_order_relaxed);
+
+    uint64_t maximum = cpuData->max.load(std::memory_order_relaxed);
+    for (;;) {
+        if (maximum >= value) {
+            break;
+        }
+        const uint64_t newMaximum = value;
+        if (cpuData->max.compare_exchange_strong(maximum, newMaximum, std::memory_order_relaxed)) {
+            break;
+        }
+    }
     ZTracer::report_stat_sampler(sampler, value);
 }
 
