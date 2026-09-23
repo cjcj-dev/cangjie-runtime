@@ -68,7 +68,6 @@ public:
         DISPEL_GHOST = 0,
         TAKE_GARBAGE = 1,
         RECLAIM_DIRTY = 2,
-        RECLAIM_MARK_QUARANTINE = 3,
         RELEASE_REGION = 4,
     };
 

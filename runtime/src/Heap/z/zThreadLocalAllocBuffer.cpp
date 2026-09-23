@@ -77,8 +77,9 @@ void AllocBuffer::Fini()
         ThreadLocal::FlushCurrentThreadMarkStacks();
     }
     FlushRegion();
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    manager.RetireTLABStatistics(*this);
+    // JavaThread::exit calls retire_tlab() without a statistics destination
+    // (javaThread.cpp:831). Only root workers contribute watermark snapshots
+    // to the cycle totals; exiting threads do not write a shared accumulator.
 }
 
 // ThreadLocalAllocBuffer::fill (threadLocalAllocBuffer.cpp:201).

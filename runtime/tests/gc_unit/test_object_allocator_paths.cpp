@@ -17,6 +17,7 @@
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/MArray.h"
+#include "ObjectModel/MArray.inline.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -399,3 +400,61 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, SegmentedArrayKeepsItsOwnInitializer
 {
     RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::SegmentedArray>);
 }
+namespace {
+struct PageAllocationTiming {
+    long long elapsedNs{0};
+    size_t validPages{0};
+};
+
+void* AllocateWithoutPacing(void* argument)
+{
+    auto& timing = *static_cast<PageAllocationTiming*>(argument);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    const size_t size = ZObjectSizeLimitMedium + 8;
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(size - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    for (size_t i = 0; i < 3; ++i) {
+        const auto start = std::chrono::steady_clock::now();
+        const auto object = reinterpret_cast<uintptr_t>(MCC_NewObject(type, size));
+        timing.elapsedNs += std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        const auto* page = object == 0 ? nullptr : Heap::page(object);
+        timing.validPages += page != nullptr && page->IsLargeRegion() && page->size() >= size;
+    }
+    return nullptr;
+}
+
+void CheckNoPageAllocationPacing(bool slowConfiguration)
+{
+    // ZGC zPageAllocator.cpp:1401-1407 has no allocation-rate sleep before
+    // allocating a page. Keep this workload far below capacity: it tests the
+    // removed fixed pacing delay, not the legitimate allocation-stall path.
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    if (slowConfiguration) {
+        // These legacy ABI fields are ignored by the product (cjcj#91).
+        param.heapParam.allocationRate = 0.000001;
+        param.heapParam.allocationWaitTime = 2000000000;
+    }
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    PageAllocationTiming timing;
+    CJThreadHandle handle = RunCJTask(AllocateWithoutPacing, &timing);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
+    ReleaseHandle(handle);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    // A restored pacing path sleeps for two seconds on each page request.
+    // The one-second envelope distinguishes that deliberate delay; external
+    // paired runs also compare the default/legacy configuration distributions.
+    std::fprintf(stderr, "PAGE_PACING_TARGET slow=%d elapsed_ns=%lld pages=%zu samples=3\n",
+                 slowConfiguration, timing.elapsedNs, timing.validPages);
+    GC_EXPECT_TRUE(timing.elapsedNs < 1000000000LL);
+    GC_EXPECT_EQ(timing.validPages, size_t{3});
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(PageAllocationPacing, DefaultConfiguration) { CheckNoPageAllocationPacing(false); }
+GC_RUNTIME_OTHER_VM_TEST(PageAllocationPacing, LegacySlowConfiguration) { CheckNoPageAllocationPacing(true); }
