@@ -387,7 +387,6 @@ public:
     void ResetTLABUsage();
     void PublishTLABStatistics(const TLABStatistics& statistics);
     void RetireTLAB(AllocBuffer& buffer, TLABStatistics& statistics);
-    void RetireTLABStatistics(AllocBuffer& buffer);
 
     bool StallAllocation(AllocationStallRequest& request);
     bool ClaimCapacityOrStall(AllocationStallRequest& request);
@@ -646,8 +645,6 @@ private:
     double tlabCapacity = 0;
     TLABAllocationAverage tlabAllocatingThreads;
     TLABAllocationAverage tlabRequestedFraction;
-    std::mutex tlabStatisticsLock;
-    TLABStatistics retiredTLABStatistics;
 
     double fromSpaceGarbageThreshold = 0.5; // 0.5: default garbage ratio.
     double exemptedRegionThreshold;
