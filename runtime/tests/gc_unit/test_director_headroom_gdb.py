@@ -60,7 +60,10 @@ try:
         command('set var params.gcParam.' + field + '=' + str(number))
     sample_end = line_in('static GCReason make_major_gc_decision', 'if (')
     if mode == 'dynamic':
-        advance('zDirector.cpp:' + str(sample_end), 'stats.old_stats.cycle.isTimeTrustable')
+        # Wait for an actual selected major request, so freezing the drivers
+        # cannot strand this case behind a busy-port guard on a sampled tick.
+        dynamic_entry = line_in('static void start_major_gc', 'const ZWorkerCounts selection')
+        advance('zDirector.cpp:' + str(dynamic_entry), 'stats.old_stats.cycle.isTimeTrustable')
         command('set scheduler-locking on')
     else:
         bp = gdb.Breakpoint('MapleRuntime::ZGenerationOld::concurrent_mark', temporary=True)
