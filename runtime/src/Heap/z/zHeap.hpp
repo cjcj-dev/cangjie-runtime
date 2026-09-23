@@ -93,6 +93,7 @@ public:
     uintptr_t alloc_tlab(size_t size);
     size_t max_tlab_size() const { return ZObjectSizeLimitSmall; }
     size_t unsafe_max_tlab_alloc() const;
+    void undo_alloc_object_for_relocation(MAddress addr, size_t size);
     ZObjectAllocator& object_allocator() { return _object_allocator; }
     ZCrossVM& cross_vm() { return _cross_vm; }
     const ZCrossVM& cross_vm() const { return _cross_vm; }

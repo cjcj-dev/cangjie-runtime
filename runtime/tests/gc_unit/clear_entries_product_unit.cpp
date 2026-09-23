@@ -135,7 +135,7 @@ public:
     {
         (void)to;
         ZPage::RetainScope lease(forwarding);
-        return ZGeneration::generation(forwarding->generation_id())->relocate().relocate_object_inner(from, forwarding);
+        return ZGeneration::generation(forwarding->generation_id())->relocate().relocate_object(forwarding_for_page(forwarding), from);
     }
 
     static bool TryUpdateRefField(Heap& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
@@ -173,7 +173,7 @@ public:
     static BaseObject* ForwardImpl(Heap& collector, BaseObject* from, ZPage* copyPage)
     {
         ZPage::RetainScope lease(copyPage);
-        return lease.ok() ? ZGeneration::generation(copyPage->generation_id())->relocate().relocate_object_inner(from, copyPage) : nullptr;
+        return lease.ok() ? ZGeneration::generation(copyPage->generation_id())->relocate().relocate_object(forwarding_for_page(copyPage), from) : nullptr;
     }
 
     static void RemapYoungRoots(Heap& collector) { ZRelocate::RemapYoungRoots(); }

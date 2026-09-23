@@ -40,19 +40,19 @@ namespace MapleRuntime {
 struct MutatorPublishTestAccess {
     static BaseObject* RelocateInner(Heap& collector, BaseObject* from, ZPage* page)
     {
-        return ZGeneration::generation(page->generation_id())->relocate().relocate_object_inner(from, page);
+        return ZGeneration::generation(page->generation_id())->relocate().relocate_object(forwarding_for_page(page), from);
     }
     static BaseObject* ForwardImpl(Heap& collector, BaseObject* from, ZPage* page)
     {
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
         ZPage::RetainScope lease(page);
         GC_EXPECT_TRUE(lease.ok());
-        return ZGeneration::generation(page->generation_id())->relocate().relocate_object_inner(from, page);
+        return ZGeneration::generation(page->generation_id())->relocate().relocate_object(forwarding_for_page(page), from);
     }
 };
 }
 
-GC_TEST(ForwardingNoGeometry, RelocateInnerFindHitSkipsCopy)
+GC_TEST(ForwardingNoGeometry, RelocateObjectFindHitSkipsCopy)
 {
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));

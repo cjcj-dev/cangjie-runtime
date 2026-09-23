@@ -60,6 +60,15 @@
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
 
+// ZGC zGeneration.cpp:69-76: one generation timer per young collection type.
+static const ZStatPhaseGeneration ZPhaseGenerationYoung[] {
+    {"Young Generation", ZGenerationId::young},
+    {"Young Generation (Promote All)", ZGenerationId::young},
+    {"Young Generation (Collect Roots)", ZGenerationId::young},
+    {"Young Generation", ZGenerationId::young}
+};
+static const ZStatPhaseGeneration ZPhaseGenerationOld("Old Generation", ZGenerationId::old);
+
 // ZGC zGeneration.cpp:78-98: phase identity is selected at the VM operation or concurrent entry.
 static const ZStatPhasePause ZPhasePauseMarkStartYoung("Pause Mark Start", ZGenerationId::young);
 static const ZStatPhasePause ZPhasePauseMarkStartYoungAndOld("Pause Mark Start (Major)", ZGenerationId::young);
@@ -312,7 +321,7 @@ public:
 void ZGeneration::at_collection_start(void* timer)
 {
     set_gc_timer(timer);
-    reset_statistics();
+    CycleStats().AtStart(TimeUtil::NanoSeconds());
     // zGeneration.cpp:380-385: the heap account opens at collection start.
     statHeap.AtCollectionStart(
         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
@@ -322,16 +331,26 @@ void ZGeneration::at_collection_start(void* timer)
 void ZGeneration::at_collection_end()
 {
     Workers()->set_inactive();
+    const GCReason reason = is_young() && YoungType() != ZYoungType::minor
+        ? ZGeneration::old()->Snapshot().reason : Snapshot().reason;
+    CycleStats().AtEnd(TimeUtil::NanoSeconds(), StatWorkers(),
+                       reason == GC_REASON_WARMUP, should_record_stats());
     set_gc_timer(nullptr);
     End();
 }
 
 // ZGC zGeneration.cpp:514-532: collection state belongs to the scope.
 class ZGenerationCollectionScopeYoung {
+private:
+    YoungTypeSetter _type_setter;
+    ZStatTimer _stat_timer;
+
 public:
-    ZGenerationCollectionScopeYoung()
+    ZGenerationCollectionScopeYoung(ZYoungType type, void* gc_timer)
+        : _type_setter(*ZGeneration::young(), type),
+          _stat_timer(ZPhaseGenerationYoung[static_cast<int>(type)])
     {
-        ZGeneration::young()->at_collection_start();
+        ZGeneration::young()->at_collection_start(gc_timer);
     }
 
     ~ZGenerationCollectionScopeYoung()
@@ -340,9 +359,9 @@ public:
     }
 };
 
-void ZGenerationYoung::collect()
+void ZGenerationYoung::collect(ZYoungType type, void* timer)
 {
-    ZGenerationCollectionScopeYoung scope;
+    ZGenerationCollectionScopeYoung scope(type, timer);
     pause_mark_start();
     // ZGC zGeneration.cpp:538-576: young keeps the driver lock throughout;
     // only the old collection scope releases it (zGeneration.cpp:995).
@@ -568,6 +587,7 @@ void ZGenerationYoung::concurrent_relocate()
          minorTotalRuns, static_cast<unsigned>(youngFullScan),
          statHeap.LiveAtMarkEnd(), youngLiveRememberedCount, reclaimedBytes,
          pauseUs);
+    statHeap.AtRelocateEnd(space.GetRegionManager().Stats(this), should_record_stats());
 }
 
 } // namespace MapleRuntime
@@ -859,6 +879,7 @@ void ZGenerationOld::mark_start()
     ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();
     Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+    reset_statistics();
     {
         std::lock_guard<std::mutex> lock(mutex);
         CHECK(sequence != UINT32_MAX);
@@ -909,12 +930,14 @@ bool ZGenerationOld::mark_end()
 // before the unlocker member reacquires the driver lock.
 class ZGenerationCollectionScopeOld {
 private:
+    ZStatTimer _stat_timer;
     DriverUnlocker _unlocker;
 
 public:
-    ZGenerationCollectionScopeOld() : _unlocker()
+    ZGenerationCollectionScopeOld(void* gc_timer)
+        : _stat_timer(ZPhaseGenerationOld), _unlocker()
     {
-        ZGeneration::old()->at_collection_start();
+        ZGeneration::old()->at_collection_start(gc_timer);
     }
 
     ~ZGenerationCollectionScopeOld()
@@ -923,9 +946,9 @@ public:
     }
 };
 
-void ZGenerationOld::collect()
+void ZGenerationOld::collect(void* timer)
 {
-    ZGenerationCollectionScopeOld scope;
+    ZGenerationCollectionScopeOld scope(timer);
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {
@@ -1043,6 +1066,9 @@ void ZGenerationOld::concurrent_relocate()
     relocate().relocate(&relocation_set());
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
     Heap::GetHeap().cross_vm().PostResolveCycleTask();
+    statHeap.AtRelocateEnd(
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this),
+        should_record_stats());
 }
 
 }
