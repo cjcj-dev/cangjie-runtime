@@ -89,8 +89,6 @@
 
 namespace MapleRuntime {
 
-static const ZStatSubPhase PRemapYoungRoots("RemapYoungRoots", ZGenerationId::old);
-
 // ZGC zRelocate.cpp:1051-1078: claim each thread once across the workers.
 class ZRelocateStoreBufferInstallBasePointersThreadClosure {
 public:
@@ -145,55 +143,6 @@ bool ZRelocate::IsFromObject(BaseObject* obj)
         return Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
                Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
     }
-
-// zGeneration.cpp:1470-1527: shared iterators, one worker task, then restore
-// the old generation's active worker budget. Native stack/record expansion is
-// the Cangjie adapter for the ZGC uncolored-root closure.
-class ZRemapYoungRootsTask final : public ZTask {
-    ZRemsetTableIterator remset;
-    RootsIteratorAllColored colored;
-    RootsIteratorAllUncolored uncolored;
-public:
-    explicit ZRemapYoungRootsTask(unsigned workers)
-        : ZTask("ZRemapYoungRootsTask"), remset(&Heap::GetHeap().remembered(), false),
-          colored(workers, ZGenerationIdOptional::old), uncolored(ZGenerationIdOptional::old) {}
-    void work() override
-    {
-        colored.Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
-        uncolored.Apply([] { Runtime::Current().GetConcurrencyModel().VisitGCRoots(); });
-        uncolored.ApplyThreads([&](Mutator& mutator) {
-        // ZGC ZRemapThreadClosure (zGeneration.cpp:1419-1424): only
-        // StackWatermarkSet::finish_processing. Slot heal uses the saved
-        // watermark color via ZUncoloredRoot::process. Cangjie still expands
-        // headerless records (no return statepoint).
-        RootVisitor heapRoots = [&](ObjectRef& root) {
-            StackWatermarkProcessOopClosure closure(nullptr, mutator.GetStackWatermark().uncolored_root_color());
-            mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-                closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
-            });
-        };
-        DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(heapRoots);
-        size_t frames = 0;
-        (void)StackWatermarkSet::finish_processing(mutator, heapRoots, heapRoots,
-                StackWatermark::epoch_id(), &derived, frames);
-        });
-        Heap::GetHeap().remembered().remap_current(&remset);
-    }
-};
-
-void ZRelocate::RemapYoungRoots()
-{
-    ZStatTimerOld timer(PRemapYoungRoots);
-    ZWorkers& workers = *Heap::GetHeap().old().Workers();
-    const uint32_t previous = workers.active_workers();
-    const uint32_t requested = std::min(std::max(Heap::GetHeap().young().Workers()->active_workers() + previous,
-                                                    uint32_t{1}), ZOldGCThreads);
-    workers.set_active_workers(requested);
-    SuspendibleThreadSetJoiner joiner;
-    ZRemapYoungRootsTask task(workers.active_workers());
-    workers.run(&task);
-    workers.set_active_workers(previous);
-}
 
 void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 {
