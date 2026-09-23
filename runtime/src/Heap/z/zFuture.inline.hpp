@@ -7,6 +7,7 @@
 // gc/z/zFuture.inline.hpp:24-59
 #pragma once
 #include "Heap/z/zFuture.hpp"
+#include "Base/Semaphore.inline.h"
 
 namespace MapleRuntime {
 template <typename T>
@@ -26,10 +27,13 @@ inline void ZFuture<T>::set(T value)
 template <typename T>
 inline T ZFuture<T>::get()
 {
-    // Wait for notification. zFuture.inline.hpp:47-53 branches on Java thread
-    // to wait_with_safepoint_check; here the mutator side enters its
-    // saferegion at the call site (ScopedEnterSaferegion, I3/I4 PLAN §5).
-    _sema.wait();
+    // ZGC zFuture.inline.hpp:46-52: route by the current thread's identity.
+    Mutator* const thread = ThreadLocal::GetMutator();
+    if (thread != nullptr) {
+        _sema.wait_with_safepoint_check();
+    } else {
+        _sema.wait();
+    }
 
     // Return value
     return _value;

@@ -1416,6 +1416,4 @@ void ZStatCriticalPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 namespace MapleRuntime {
 std::atomic<uint64_t> g_gcTotalTimeUs{ 0 };
 std::atomic<size_t> g_gcCollectedTotalBytes{ 0 };
-std::atomic<uint64_t> ZStat::prevGcStartTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
-std::atomic<uint64_t> ZStat::prevGcFinishTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
 }

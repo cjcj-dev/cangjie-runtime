@@ -181,7 +181,6 @@ public:
     static bool is_old(MAddress addr);
     static ZPageTable& page_table();
     static ZPage* alloc_page(size_t num, ZPageType role, bool expectPhysicalMem = false,
-                                  bool allowSaferegion = true,
                                   PageAge age = PageAge::eden, ZAllocationFlags flags = {});
     static ZPage* alloc_page(ZPage* page);
     static void free_page(ZPage* page);

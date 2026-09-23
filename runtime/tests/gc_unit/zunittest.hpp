@@ -1,3 +1,4 @@
+#include "gc_allocation_flags.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -231,7 +232,7 @@ private:
 class ZTestAllocatedMemory {
 public:
     explicit ZTestAllocatedMemory(size_t size)
-        : _owner(Heap::GetHeap().page_allocator().TakeRegion(size, ZPageType::large, false, false)),
+        : _owner(Heap::GetHeap().page_allocator().TakeRegion(size, ZPageType::large, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags())),
           _size(size)
     {
         GC_EXPECT_TRUE(_owner != nullptr);
