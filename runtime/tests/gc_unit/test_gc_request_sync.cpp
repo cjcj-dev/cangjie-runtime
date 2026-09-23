@@ -16,7 +16,7 @@ GC_TEST(ZDriverPort, AsyncSingleSlotDedup)
 {
     ZDriverPort port;
     port.send_async(ZDriverRequest(GC_REASON_YOUNG, 1, 0));
-    port.send_async(ZDriverRequest(GC_REASON_HEU, 2, 0));
+    port.send_async(ZDriverRequest(GC_REASON_ALLOCATION_RATE, 2, 0));
     const ZDriverRequest first = port.receive();
     GC_EXPECT_EQ(first.cause(), GC_REASON_YOUNG);
     port.ack();
