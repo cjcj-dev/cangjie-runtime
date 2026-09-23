@@ -137,6 +137,7 @@ GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
         ~RestoreBlock() { ZResurrection::unblock(); }
     } restore;
     fx.region0->reset(PageAge::eden);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
     ZResurrection::block();
     RestoreMarkFlips flips;
     const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, true, false);
@@ -222,6 +223,42 @@ GC_TEST(WeakLoadFamily, UnblockedNoKeepAliveDoesNotPublishMark)
     GC_EXPECT_TRUE(to_object(kept) == fx.obj0);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     mark.DrainOld([](BaseObject*, bool) {});
+}
+
+GC_TEST(WeakLoadFamily, BlockedPhantomSeparatesDeadAndFinalizable)
+{
+    GcHeapFixture fx;
+    MarkPublicationFixture mark;
+    RestoreMarkFlips flips;
+    const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(stored);
+    mark.CompleteOldMarkForAdmissionTest();
+    struct Unblock { ~Unblock() { ZResurrection::unblock(); } } unblock;
+    ZResurrection::block();
+    auto* slot = reinterpret_cast<volatile zpointer*>(&field);
+    GC_EXPECT_TRUE(is_null(ZBarrier::load_barrier_on_phantom_oop_field_preloaded(slot, stored)));
+    GC_EXPECT_TRUE(is_null(ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(slot, stored)));
+    (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
+    const zaddress kept = ZBarrier::load_barrier_on_phantom_oop_field_preloaded(slot, stored);
+    const zaddress loaded = ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(slot, stored);
+    const bool strong = fx.region0->is_object_strongly_live(from_object(fx.obj0));
+    std::fprintf(stderr, "PHANTOM_LOAD_RESULT kept=%zx loaded=%zx strong=%d\n", raw(kept), raw(loaded), strong);
+    GC_EXPECT_TRUE(to_object(kept) == fx.obj0);
+    GC_EXPECT_TRUE(to_object(loaded) == fx.obj0);
+    GC_EXPECT_FALSE(strong);
+}
+
+GC_TEST(WeakLoadFamily, NullPreloadedWithoutSlot)
+{
+    struct Unblock { ~Unblock() { ZResurrection::unblock(); } } unblock;
+    for (bool blocked : {false, true}) {
+        if (blocked) { ZResurrection::block(); } else { ZResurrection::unblock(); }
+        GC_EXPECT_TRUE(is_null(ZBarrier::load_barrier_on_weak_oop_field_preloaded(nullptr, zpointer::null)));
+        GC_EXPECT_TRUE(is_null(ZBarrier::no_keep_alive_load_barrier_on_weak_oop_field_preloaded(nullptr, zpointer::null)));
+        GC_EXPECT_TRUE(is_null(ZBarrier::load_barrier_on_phantom_oop_field_preloaded(nullptr, zpointer::null)));
+        GC_EXPECT_TRUE(is_null(ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(nullptr, zpointer::null)));
+    }
 }
 
 #if defined(MRT_DEBUG) && MRT_DEBUG == 1
