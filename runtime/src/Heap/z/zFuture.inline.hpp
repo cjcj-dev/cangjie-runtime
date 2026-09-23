@@ -29,7 +29,7 @@ inline T ZFuture<T>::get()
 {
     // ZGC zFuture.inline.hpp:46-52: route by the current thread's identity.
     Mutator* const thread = ThreadLocal::GetMutator();
-    if (thread != nullptr && ThreadLocal::GetThreadType() != ThreadType::GC_THREAD) {
+    if (thread != nullptr) {
         _sema.wait_with_safepoint_check();
     } else {
         _sema.wait();
