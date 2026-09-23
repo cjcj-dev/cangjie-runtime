@@ -147,7 +147,6 @@ struct MarkPort203TestAccess {
         if (major) {
             // The heap fixture has an active synthetic epoch. The real old
             // mark-start owns Begin (ZGC zGeneration.cpp:1212-1240).
-            if (collector.old().Snapshot().active) collector.old().End();
             ScopedStopTheWorld pause("P16 old mark-start fixture", false);
             collector.old().mark_start();
         } else {
@@ -316,7 +315,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
         Heap::GetHeap().GetZGeneration(generation).InitializeWorkers(helpers + 1);
     }
-    ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young), major ? GC_REASON_USER : GC_REASON_YOUNG);
     Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
@@ -335,13 +333,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     } else if (!markOnly && duplicateRootOrder == 0) {
         handle = Heap::GetHeap().RegisterExportRoot(array);
     }
-    const bool wasStarted = Heap::GetHeap().IsGcStarted();
-    const GCReason oldReason = Heap::GetHeap().GetZGeneration(
-        major ? ZGenerationId::old : ZGenerationId::young).Snapshot().reason;
-    auto& activityCycle = Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young);
-    const bool ownerWasActive = activityCycle.Snapshot().active;
-    if (!ownerWasActive) activityCycle.Begin(1);
-    ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young), major ? GC_REASON_USER : GC_REASON_YOUNG);
     ArrayClosureResult result;
     result.region = fx.region1;
     result.array = array;
@@ -369,8 +360,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     } else if (!markOnly && duplicateRootOrder == 0) {
         Heap::GetHeap().RemoveExportObject(handle);
     }
-    if (!ownerWasActive) activityCycle.End();
-    ZGenerationTest::SetReason(Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young), oldReason);
 
     // Worker TLS cleanup must finish while the heap generation owns publication.
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
@@ -507,8 +496,6 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     heap.old().InitializeWorkers(workers);
     heap.old().set_phase(ZGenerationPhase::Mark);
     young.set_phase(ZGenerationPhase::MarkComplete);
-    ZGenerationTest::SetReason(young, GC_REASON_YOUNG);
-    if (!young.Snapshot().active) young.Begin(1);
 
     MAddress next = reinterpret_cast<MAddress>(fx.obj1);
     auto object = [&]() {

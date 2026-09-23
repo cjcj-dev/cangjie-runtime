@@ -43,10 +43,9 @@ struct PartialArrayTestAccess {
     {
         auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         if (old.Workers() == nullptr) old.InitializeWorkers(1);
-        if (!old.Snapshot().active) old.Begin(0);
         Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
         Heap::GetHeap().old().Mark().Start();
-        old.PublishPhase(ZGenerationPhase::Mark);
+        old.set_phase(ZGenerationPhase::Mark);
     }
 
     static void ReadPublished(Heap& collector, WorkStack& result)

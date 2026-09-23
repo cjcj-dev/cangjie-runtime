@@ -52,8 +52,8 @@ MArray* ZObjArrayAllocator::initialize()
     // zObjArrayAllocator.cpp:132-141: a safepoint may change either
     // generation sequence before its collection has completed.
     Heap& heap = Heap::GetHeap();
-    const uint64_t youngSequenceBefore = heap.GetCycleSnapshot(ZGenerationId::young).sequence;
-    const uint64_t oldSequenceBefore = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
+    const uint64_t youngSequenceBefore = heap.GetZGeneration(ZGenerationId::young).seqnum();
+    const uint64_t oldSequenceBefore = heap.GetZGeneration(ZGenerationId::old).seqnum();
     const uintptr_t colorBefore = ::g_cjStoreGoodMask;
     bool seenGcSafepoint = false;
 #if defined(MRT_GC_UNIT_TESTS)
@@ -103,9 +103,9 @@ MArray* ZObjArrayAllocator::initialize()
                     ZIterator::oop_iterate_safe(observed, &closure);
                     CHECK_DETAIL(fields == 0, "incomplete array must not expose reference fields");
                     const ZGenerationId id = requestYoung ? ZGenerationId::young : ZGenerationId::old;
-                    const uint64_t before = heap.GetCycleSnapshot(id).sequence;
+                    const uint64_t before = heap.GetZGeneration(id).seqnum();
                     heap.RequestGC(requestYoung ? GC_REASON_YOUNG : GC_REASON_FORCE);
-                    const uint64_t after = heap.GetCycleSnapshot(id).sequence;
+                    const uint64_t after = heap.GetZGeneration(id).seqnum();
                     observed = static_cast<MArray*>(mutator->LoadInvisibleRoot());
                     const bool valid = observed != nullptr && observed->IsInvisibleObject() &&
                                        observed->GetLength() == nElems;
@@ -118,8 +118,8 @@ MArray* ZObjArrayAllocator::initialize()
             }
 
             if (isRefArray && !seenGcSafepoint &&
-                (heap.GetCycleSnapshot(ZGenerationId::young).sequence != youngSequenceBefore ||
-                 heap.GetCycleSnapshot(ZGenerationId::old).sequence != oldSequenceBefore ||
+                (heap.GetZGeneration(ZGenerationId::young).seqnum() != youngSequenceBefore ||
+                 heap.GetZGeneration(ZGenerationId::old).seqnum() != oldSequenceBefore ||
                  static_cast<uintptr_t>(::g_cjStoreGoodMask) != colorBefore)) {
                 seenGcSafepoint = true;
                 return false;

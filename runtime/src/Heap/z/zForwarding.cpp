@@ -20,10 +20,6 @@
 #include <vector>
 
 namespace MapleRuntime {
-uint32_t ZForwarding::young_seqnum()
-{
-    return static_cast<uint32_t>(Heap::GetHeap().young().Snapshot().sequence);
-}
 
 
 uint32_t ZForwarding::nentries(const ZPage* page)
@@ -222,7 +218,7 @@ bool ZForwarding::relocated_remembered_fields_published_contains(MAddress field)
 namespace MapleRuntime {
 void ZForwarding::relocated_remembered_fields_after_relocate()
     {
-        _relocated_remembered_fields_publish_young_seqnum = young_seqnum();
+        _relocated_remembered_fields_publish_young_seqnum = ZGeneration::young()->seqnum();
         if (young_marking()) {
             relocated_remembered_fields_publish();
         }

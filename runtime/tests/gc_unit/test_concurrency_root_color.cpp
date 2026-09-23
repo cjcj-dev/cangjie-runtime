@@ -50,15 +50,11 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     ZCollectedHeapTest::SetWorkers(1);
     for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
         auto& cycle = heap.GetZGeneration(gen);
-        if (cycle.Snapshot().active) {
-            cycle.End();
-        }
         if (cycle.Workers() == nullptr) {
             cycle.InitializeWorkers(1);
         } else {
             cycle.Workers()->set_active_workers(1);
         }
-        cycle.Begin(1);
     }
     ZGlobalsPointers::initialize();
     GcHeapFixture::AdvanceGeneration(Generation::Young);
@@ -130,7 +126,6 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
         std::fprintf(stderr, "CONCURRENCY_STORE_TARGET observed=%#lx expected=%#lx\n", stored, storedExpected);
         GC_EXPECT_EQ(stored, storedExpected);
     }
-    heap.old().End();
     {
         ScopedStopTheWorld stopped("old mark-start fixture");
         heap.old().mark_start();
@@ -153,15 +148,11 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     ZCollectedHeapTest::SetWorkers(1);
     for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
         auto& cycle = heap.GetZGeneration(gen);
-        if (cycle.Snapshot().active) {
-            cycle.End();
-        }
         if (cycle.Workers() == nullptr) {
             cycle.InitializeWorkers(1);
         } else {
             cycle.Workers()->set_active_workers(1);
         }
-        cycle.Begin(1);
     }
     ZGlobalsPointers::initialize();
     GcHeapFixture::AdvanceGeneration(Generation::Young);

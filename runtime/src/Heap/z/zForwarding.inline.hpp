@@ -231,7 +231,7 @@ inline
             }
             _relocated_remembered_fields_array.clear();
         }
-        if (_relocated_remembered_fields_publish_young_seqnum == young_seqnum()) {
+        if (_relocated_remembered_fields_publish_young_seqnum == ZGeneration::young()->seqnum()) {
             _relocated_remembered_fields_state.store(ZPublishState::reject, std::memory_order_relaxed);
         } else {
             _relocated_remembered_fields_state.store(ZPublishState::accept, std::memory_order_relaxed);
