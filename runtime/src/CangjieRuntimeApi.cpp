@@ -238,10 +238,6 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
                 0.8 : param->heapParam.heapUtilization,
             // Default value of heap growth is 1 + 0.15.
             .heapGrowth = param->heapParam.heapGrowth < ERRORESTIMATE ? 0.15 : param->heapParam.heapGrowth,
-            // Default value of allocation rate is 1024MB/s.
-            .allocationRate = param->heapParam.allocationRate < ERRORESTIMATE ? 10240 : param->heapParam.allocationRate,
-            // Default value of allocation wait time is 1000ns.
-            .allocationWaitTime = param->heapParam.allocationWaitTime == 0 ? 1000 : param->heapParam.allocationWaitTime,
         },
         .gcParam = {
             // Default value of gc threshold is heapSize.
