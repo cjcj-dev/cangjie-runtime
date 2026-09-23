@@ -1246,7 +1246,6 @@ EXPORTS
     _ZN12MapleRuntime13ParameterInfo14GetAnnotationsEPNS_8TypeInfoE @1406
     _ZN12MapleRuntime13ParameterInfo7SetNameEPKc @1407
     _ZN12MapleRuntime13RegionManager10InitializeEyy @1409
-    _ZN12MapleRuntime13RegionManager13CompactRegionEPNS_10ZPageE @1414
     _ZN12MapleRuntime13RegionManager13ReclaimRegionEPNS_10ZPageE @1417
     _ZN12MapleRuntime13RegionManager13ReleaseRegionEPNS_10ZPageE @1418
     _ZN12MapleRuntime13RegionManager15CountLiveObjectEPKNS_10BaseObjectE @1419

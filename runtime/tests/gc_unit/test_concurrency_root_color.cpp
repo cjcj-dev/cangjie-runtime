@@ -43,6 +43,7 @@ private:
 
 void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn = false)
 {
+    CreateStandaloneHeap(GcHeapFixture::kUnits);
     ConcurrencyRootRuntime runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
@@ -87,9 +88,8 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page}));
     heap.young().set_phase(ZGenerationPhase::Relocate);
     ZGlobalsPointers::flip_young_relocate_start();
-    auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
-    manager.CompactRegion(page);
-    page->MarkForwardingDone();
+    heap.young().Workers()->set_active_workers(1);
+    heap.young().relocate().relocate(&heap.young().relocation_set());
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
@@ -137,6 +137,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
 
 void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
 {
+    CreateStandaloneHeap(GcHeapFixture::kUnits);
     ConcurrencyRootRuntime runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
@@ -180,9 +181,8 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {page}));
     heap.old().set_phase(ZGenerationPhase::Relocate);
     ZGlobalsPointers::flip_old_relocate_start();
-    auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
-    manager.CompactRegion(page);
-    page->MarkForwardingDone();
+    heap.old().Workers()->set_active_workers(1);
+    heap.old().relocate().relocate(&heap.old().relocation_set());
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
@@ -223,10 +223,10 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
 
 } // namespace
 
-GC_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset) { CheckSavedColor(false); }
-GC_OTHER_VM_TEST(ConcurrencyRootColor, NoReturnSavedColorRemapsFromOffset) { CheckSavedColor(false, false, true); }
-GC_OTHER_VM_TEST(ConcurrencyRootColor, RemapYoungRootGroupOnce) { CheckSavedColor(false, true); }
-GC_OTHER_VM_TEST(ConcurrencyRootColor, ThreadObjectStorePreservesOtherRootEpoch) { CheckSavedColor(true); }
+GC_COMPONENT_OTHER_VM_TEST(ConcurrencyRootColor, SavedColorRemapsFromOffset) { CheckSavedColor(false); }
+GC_COMPONENT_OTHER_VM_TEST(ConcurrencyRootColor, NoReturnSavedColorRemapsFromOffset) { CheckSavedColor(false, false, true); }
+GC_COMPONENT_OTHER_VM_TEST(ConcurrencyRootColor, RemapYoungRootGroupOnce) { CheckSavedColor(false, true); }
+GC_COMPONENT_OTHER_VM_TEST(ConcurrencyRootColor, ThreadObjectStorePreservesOtherRootEpoch) { CheckSavedColor(true); }
 
 GC_OTHER_VM_TEST(ConcurrencyRootColor, RemapDuringYoungMarkPublishesFollowWork)
 {
@@ -366,10 +366,10 @@ GC_RUNTIME_OTHER_VM_TEST(ConcurrencyRootColor, ExclusiveProducerSeparatesTypeInf
     GC_EXPECT_TRUE(result == nullptr);
 }
 
-GC_OTHER_VM_TEST(ConcurrencyRootColor, OldRootReadBeforeGCVisit) { CheckOldRootRead(false); }
-GC_OTHER_VM_TEST(ConcurrencyRootColor, OldRootReadAfterGCVisit) { CheckOldRootRead(true); }
+GC_COMPONENT_OTHER_VM_TEST(ConcurrencyRootColor, OldRootReadBeforeGCVisit) { CheckOldRootRead(false); }
+GC_COMPONENT_OTHER_VM_TEST(ConcurrencyRootColor, OldRootReadAfterGCVisit) { CheckOldRootRead(true); }
 
-GC_OTHER_VM_TEST(ConcurrencyRootColor, DisarmedGroupRemainsDisarmedAfterGCVisit)
+GC_COMPONENT_OTHER_VM_TEST(ConcurrencyRootColor, DisarmedGroupRemainsDisarmedAfterGCVisit)
 {
     CheckOldRootRead(true, true);
 }
