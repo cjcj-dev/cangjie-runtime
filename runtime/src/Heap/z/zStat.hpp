@@ -574,11 +574,6 @@ class RegionManager;
 
 class ZStat final : public ZThread {
 public:
-    static uint64_t GetPrevGCStartTime() { return prevGcStartTime.load(std::memory_order_acquire); }
-    static void SetPrevGCStartTime(uint64_t timestamp) { prevGcStartTime.store(timestamp, std::memory_order_release); }
-    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime.load(std::memory_order_acquire); }
-    static void SetPrevGCFinishTime(uint64_t timestamp) { prevGcFinishTime.store(timestamp, std::memory_order_release); }
-
     ZStat();
     ~ZStat() override = default;
     void run_thread() override;
@@ -593,8 +588,6 @@ public:
     // zStat.hpp:387-389: the sampling thread ticks off a ZMetronome.
     static constexpr uint64_t SampleHz = 1;
     ZMetronome metronome;
-    static std::atomic<uint64_t> prevGcStartTime;
-    static std::atomic<uint64_t> prevGcFinishTime;
 };
 
 // zStat.hpp:484-487, zStat.cpp:1410-1420: system load average, printed as

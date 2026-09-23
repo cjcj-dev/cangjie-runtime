@@ -989,8 +989,6 @@ EXPORTS
     _ZN12MapleRuntime10CjHeapDataD2Ev @992
     _ZN12MapleRuntime10DerivedPtr15VisitDerivedPtrERKNSt3__18functionIFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEENS2_IFvS3_S3_EEERNS_11RegSlotsMapES3_y @993
     _ZN12MapleRuntime10DerivedPtr27VisitDerivedPtrForStackGrowERKNSt3__18functionIFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEENS2_IFvS3_S3_EEERNS_11RegSlotsMapES3_y @994
-    _ZN12MapleRuntime10GCExecutor7ExecuteEPv @995
-    _ZN12MapleRuntime10GCExecutorD0Ev @996
     _ZN12MapleRuntime10IsGcThreadEv @997
     _ZN12MapleRuntime10LogManager4FiniEv @1001
     _ZN12MapleRuntime10LogManager4InitEv @1002
@@ -1620,9 +1618,6 @@ EXPORTS
     _ZN12MapleRuntime6CJFile26GetOuterTypeExtensionsBaseEv @2019
     _ZN12MapleRuntime6CJFile26GetOuterTypeExtensionsSizeEv @2020
     _ZN12MapleRuntime6CJFileD0Ev @2021
-    _ZN12MapleRuntime6GCTaskD0Ev @2022
-    _ZN12MapleRuntime6GCTaskD2Ev @2023
-    _ZN12MapleRuntime6GCTaskaSERKS0_ @2024
     _ZN12MapleRuntime6GetPidEv @2025
     _ZN12MapleRuntime6GetTidEv @2026
     _ZN12MapleRuntime6Logger10GetLogPathEPKcRNS_7CStringE @2027
@@ -1828,10 +1823,6 @@ EXPORTS
     _ZN12MapleRuntime9StackInfo29GetStackTraceByLiteFrameInfosERKNSt3__16vectorIyNS1_9allocatorIyEEEERNS2_INS_17StackTraceElementENS3_IS8_EEEE @2301
     _ZN12MapleRuntime9StackInfoD0Ev @2302
     _ZN12MapleRuntime9StackInfoD2Ev @2303
-    _ZN12MapleRuntime9TaskQueueINS_10GCExecutorEE11EnqueueSyncERS1_RNSt3__18functionIFbS3_S3_EEE @2304
-    _ZN12MapleRuntime9TaskQueueINS_10GCExecutorEE12EnqueueAsyncERKS1_ @2305
-    _ZN12MapleRuntime9TaskQueueINS_10GCExecutorEE4FiniEv @2306
-    _ZN12MapleRuntime9TaskQueueINS_10GCExecutorEE7DequeueEv @2307
     _ZN7Cangjie12DemangleInfoIN12MapleRuntime7CStringEEC1ERKS2_NS_8TypeKindE @2309
     _ZN7Cangjie12DemangleInfoIN12MapleRuntime7CStringEEC1ERKS2_NS_8TypeKindEb @2310
     _ZN7Cangjie12DemangleInfoIN12MapleRuntime7CStringEEC2ERKS2_NS_8TypeKindE @2311
@@ -1938,7 +1929,6 @@ EXPORTS
     _ZNK12MapleRuntime10CjHeapData19SerializedIdWrapper7WriteIdERS0_y @2413
     _ZNK12MapleRuntime10DerivedPtr18VisitRegDerivedPtrERKNSt3__18functionIFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEENS2_IFvS3_S3_EEERNS_11RegSlotsMapES3_j @2414
     _ZNK12MapleRuntime10DerivedPtr19VisitSlotDerivedPtrERKNSt3__18functionIFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEENS2_IFvS3_S3_EEES3_yj @2415
-    _ZNK12MapleRuntime10GCExecutor10NeedFilterEv @2416
     _ZNK12MapleRuntime10ZPage13GetRegionSizeEv @2417
     _ZNK12MapleRuntime10ZPage14GetRegionStartEv @2418
     _ZNK12MapleRuntime10ZPage23ReportInvalidObjectSizeEPKNS_10BaseObjectEyyy @2420
@@ -2044,7 +2034,6 @@ EXPORTS
     _ZNK12MapleRuntime6CJFile14IsAddrInCJFileEy @2662
     _ZNK12MapleRuntime6CJFile15GetFileMetaAddrEv @2663
     _ZNK12MapleRuntime6CJFile17GetGlobalInitFuncERNSt3__16vectorIyNS1_9allocatorIyEEEE @2664
-    _ZNK12MapleRuntime6GCTask10NeedFilterEv @2665
     _ZNK12MapleRuntime6Logger18GetMinimumLogLevelEv @2666
     _ZNK12MapleRuntime6VarInt8GetValueEv @2668
     _ZNK12MapleRuntime7Barrier18RecordCrossGenEdgeEPNS_10BaseObjectEyS2_NS_8zpointerE @2686
@@ -2095,7 +2084,6 @@ EXPORTS
     _ZNK12MapleRuntime9FrameInfo14PrintFrameInfoEj @2781
     _ZNK12MapleRuntime9FrameInfo16GetPackClassNameEv @2782
     _ZNK12MapleRuntime9FrameInfo19GetFileNameForTraceEv @2783
-    _ZNK12MapleRuntime9GCRequest15ShouldBeIgnoredEv @2784
     _ZNK12MapleRuntime9MFuncDesc17GetStringFromDictEj @2785
     _ZNK12MapleRuntime9SlotTable13GetBaseOffsetEj @2786
     _ZNK12MapleRuntime9SlotTable13GetSlotBitMapEj @2787
@@ -2167,7 +2155,6 @@ EXPORTS
     _ZNSt3__110__function6__baseIFbPN12MapleRuntime10BaseObjectEEED2B6v15004Ev @2871
     _ZNSt3__110__function6__baseIFbPN12MapleRuntime13ExtensionDataEEED2B6v15004Ev @2872
     _ZNSt3__110__function6__baseIFbPN12MapleRuntime8BaseFileEEED2B6v15004Ev @2873
-    _ZNSt3__110__function6__baseIFbRN12MapleRuntime10GCExecutorES4_EED2B6v15004Ev @2874
     _ZNSt3__110__function6__baseIFbvEED2B6v15004Ev @2875
     _ZNSt3__110__function6__baseIFvN12MapleRuntime15zaddress_unsafeERNS2_11DerivedSlotEEED2B6v15004Ev @2876
     _ZNSt3__110__function6__baseIFvN12MapleRuntime23PrologueRegisterClosure4TypeEjEED2B6v15004Ev @2877
@@ -2398,7 +2385,6 @@ EXPORTS
     _ZTIN12MapleRuntime13UnwindContextE @3144 DATA
     _ZTSN12MapleRuntime12MachineFrameE @3145 DATA
     _ZTSN12MapleRuntime13UnwindContextE @3146 DATA
-    _ZTVN12MapleRuntime10GCExecutorE @3147 DATA
     _ZTVN12MapleRuntime11ConcurrencyE @3150 DATA
     _ZTVN12MapleRuntime11EHFrameInfoE @3151 DATA
     _ZTVN12MapleRuntime11EHStackInfoE @3152 DATA
@@ -2422,7 +2408,6 @@ EXPORTS
     _ZTVN12MapleRuntime19SigHandlerFrameinfoE @3182 DATA
     _ZTVN12MapleRuntime20PrintSignalStackInfoE @3183 DATA
     _ZTVN12MapleRuntime6CJFileE @3186 DATA
-    _ZTVN12MapleRuntime6GCTaskE @3187 DATA
     _ZTVN12MapleRuntime7BarrierE @3188 DATA
     _ZTVN12MapleRuntime7RootMapE @3189 DATA
     _ZTVN12MapleRuntime8BaseFileE @3190 DATA
