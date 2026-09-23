@@ -278,5 +278,6 @@ add_test(NAME cj_gc_uncommit_unit COMMAND cj_gc_uncommit_unit)
 add_executable(cj_gc_other_vm_exit_unit test_other_vm_exit.cpp)
 target_compile_features(cj_gc_other_vm_exit_unit PRIVATE cxx_std_17)
 target_compile_options(cj_gc_other_vm_exit_unit PRIVATE -fexceptions)
-target_link_libraries(cj_gc_other_vm_exit_unit PRIVATE pthread)
+# Do not inherit the runtime tracing archive from the parent directory.
+set_property(TARGET cj_gc_other_vm_exit_unit PROPERTY LINK_LIBRARIES pthread)
 add_test(NAME cj_gc_other_vm_exit_unit COMMAND cj_gc_other_vm_exit_unit)
