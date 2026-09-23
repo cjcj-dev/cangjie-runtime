@@ -773,20 +773,30 @@ GC_RUNTIME_OTHER_VM_TEST(YoungCompactionLimit, InitializationUsesFlagBudget)
 
 // ZGC zDriver.cpp:76-89,124,325: constructor registration identifies the
 // product-owned drivers before their thread starts.
-GC_RUNTIME_TEST(DriverRegistration, ProductOwnedMinor)
+GC_RUNTIME_OTHER_VM_TEST(DriverRegistration, ProductOwnedMinor)
 {
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto* registered = ZDriver::minor();
     auto* owned = ZCollectedHeap::heap()->driver_minor();
     std::fprintf(stderr, "REGISTRATION_TARGET minor registered=%p owned=%p\n",
         static_cast<void*>(registered), static_cast<void*>(owned));
     GC_EXPECT_TRUE(registered == owned);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
-GC_RUNTIME_TEST(DriverRegistration, ProductOwnedMajor)
+GC_RUNTIME_OTHER_VM_TEST(DriverRegistration, ProductOwnedMajor)
 {
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto* registered = ZDriver::major();
     auto* owned = ZCollectedHeap::heap()->driver_major();
     std::fprintf(stderr, "REGISTRATION_TARGET major registered=%p owned=%p\n",
         static_cast<void*>(registered), static_cast<void*>(owned));
     GC_EXPECT_TRUE(registered == owned);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
