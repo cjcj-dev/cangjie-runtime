@@ -4,6 +4,7 @@
 // with Runtime Library Exception.
 
 #include "gc_worker_fixture.hpp"
+#include <algorithm>
 #include <csignal>
 #include <cstdlib>
 #include <sys/wait.h>
@@ -725,6 +726,8 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
             visitedReferent = true;
         }
     }, [&](BaseObject*, const void* slot, uintptr_t) { edge = slot; });
+    std::fprintf(stderr, "B10_OBJECT_RESULT visited_referent=%d strong_referent=%zu inclusive_referent=%zu\n",
+                 visitedReferent, strong.count(graph.referent), inclusive.count(graph.referent));
     GC_EXPECT_TRUE(visitedReferent);
     Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     GC_EXPECT_TRUE(strong.count(graph.weak) == 1);
@@ -757,6 +760,63 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
+}
+
+// ZGC zHeapIterator.cpp:430-459: objects carry VisitReferents, array chunks
+// instantiate the strong closure even during a weak-inclusive traversal.
+GC_OTHER_VM_TEST(HeapIterator, ReferenceArrayChunksInBothModes)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager manager;
+    WeakClosureTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    WeakGraph graph(fx, fx.region0);
+    RelocationReceiptTest::BindCollector(&Heap::GetHeap());
+    Heap::GetHeap().old().set_phase(ZGenerationPhase::Relocate);
+
+    alignas(TypeInfo) unsigned char arrayTypeStorage[sizeof(TypeInfo)]{};
+    auto* arrayType = reinterpret_cast<TypeInfo*>(arrayTypeStorage);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetFlagHasRefField();
+    arrayType->SetComponentTypeInfo(fx.typeInfo);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(arrayTypeStorage), sizeof(arrayTypeStorage));
+    auto* array = reinterpret_cast<MArray*>(fx.region1->GetRegionStart() + 128);
+    array->SetClassInfo(arrayType);
+    constexpr MIndex length = 2049;
+    array->SetLength(length);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(array) + array->GetSize());
+    auto* slots = reinterpret_cast<HeapSlot<>*>(array->ConvertToCArray());
+    for (MIndex i = 0; i < length; ++i) {
+        slots[i].StoreColoured(zpointer::null);
+    }
+    // Only the continuation chunk can reach the weak object and its graph.
+    slots[length - 1].StoreColoured(StoreGoodPointer(graph.weak));
+    NativeSlot root(StoreGoodPointer(array));
+    NativeSlot* roots[] = { &root };
+    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    for (bool visitWeaks : {false, true}) {
+        std::unordered_set<BaseObject*> objects;
+        std::vector<size_t> edges(length, 0);
+        HeapIterator(visitWeaks).Iterate([&](BaseObject* object) { objects.insert(object); },
+            [&](BaseObject* base, const void* slot, uintptr_t) {
+                if (base == array) {
+                    const auto index = static_cast<const HeapSlot<>*>(slot) - slots;
+                    GC_EXPECT_TRUE(index >= 0 && index < length);
+                    ++edges[index];
+                }
+            });
+        const size_t exactEdges = std::count(edges.begin(), edges.end(), size_t(1));
+        std::fprintf(stderr, "B10_ARRAY_RESULT weak=%d edges=%zu length=%zu array=%zu tail=%zu referent=%zu child=%zu\n",
+                     visitWeaks, exactEdges, static_cast<size_t>(length), objects.count(array),
+                     objects.count(graph.weak), objects.count(graph.referent), objects.count(graph.child));
+        GC_EXPECT_EQ(exactEdges, static_cast<size_t>(length));
+        GC_EXPECT_EQ(objects.count(array), size_t(1));
+        GC_EXPECT_EQ(objects.count(graph.weak), size_t(1));
+        GC_EXPECT_EQ(objects.count(graph.referent), static_cast<size_t>(visitWeaks));
+        GC_EXPECT_EQ(objects.count(graph.child), static_cast<size_t>(visitWeaks));
+    }
+    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
 }
 
 // ZGC zHeapIterator.cpp:116-121: inspecting phantom roots must not keep them alive.

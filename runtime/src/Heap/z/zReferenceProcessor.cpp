@@ -224,7 +224,7 @@ void ReferenceProcessor::discover(BaseObject* reference, ReferenceType type)
     discovered_count.get(worker_index())[TypeIndex(type)]++;
 }
 
-bool ReferenceProcessor::DiscoverReference(BaseObject* reference, ReferenceType type)
+bool ReferenceProcessor::discover_reference(BaseObject* reference, ReferenceType type)
 {
     encountered_count.get(worker_index())[TypeIndex(type)]++;
     if (!should_discover(reference, type)) {

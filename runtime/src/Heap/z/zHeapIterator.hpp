@@ -33,7 +33,6 @@ public:
 class HeapIterator {
 public:
     using ObjectVisitor = std::function<void(BaseObject*)>;
-    using FieldVisitor = std::function<void(BaseObject*, RefField<>&)>;
     using EdgeVisitor = std::function<void(BaseObject*, const void*, uintptr_t)>;
     struct ObjArrayTask {
         MArray* object;
@@ -46,8 +45,10 @@ public:
                                   uint32_t worker_id);
     void push_strong_roots(const HeapIteratorContext& context);
     void push_weak_roots(const HeapIteratorContext& context);
+    template <bool VisitWeaks>
     void drain(const HeapIteratorContext& context);
     void steal(const HeapIteratorContext& context);
+    template <bool VisitWeaks>
     void drain_and_steal(const HeapIteratorContext& context);
     bool try_set_bit(BaseObject* object);
 
@@ -76,9 +77,31 @@ private:
     };
 
     void Push(BaseObject* object, const ObjectVisitor& objectVisitor);
-    void Follow(BaseObject* object, const FieldVisitor& visitor);
-    void FollowArray(MArray* object);
-    void FollowArrayChunk(const ObjArrayTask& array, const FieldVisitor& visitor);
+    template <bool VisitReferents>
+    class OopClosure : public OopIterateClosure {
+        HeapIterator& iter;
+        const HeapIteratorContext& context;
+        BaseObject* const base;
+        BaseObject* load_oop(RefField<>* field);
+    public:
+        OopClosure(HeapIterator& iter, const HeapIteratorContext& context, BaseObject* base)
+            : iter(iter), context(context), base(base) {}
+        ReferenceIterationMode reference_iteration_mode() override
+        {
+            return VisitReferents ? DO_FIELDS : DO_FIELDS_EXCEPT_REFERENT;
+        }
+        void do_oop(RefField<>* field) override;
+    };
+    template <bool VisitReferents>
+    void follow_object(const HeapIteratorContext& context, BaseObject* object);
+    template <bool VisitWeaks>
+    void follow(const HeapIteratorContext& context, BaseObject* object);
+    template <bool VisitWeaks>
+    void visit_and_follow(const HeapIteratorContext& context, BaseObject* object);
+    template <bool VisitWeaks>
+    void object_iterate_inner(const HeapIteratorContext& context);
+    void follow_array(const HeapIteratorContext& context, MArray* object);
+    void follow_array_chunk(const HeapIteratorContext& context, const ObjArrayTask& array);
     const bool visitWeaks;
     const bool forVerify;
     const unsigned nworkers;

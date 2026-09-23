@@ -96,43 +96,68 @@ void HeapIterator::Push(BaseObject* object, const ObjectVisitor& objectVisitor)
     context.push(object);
 }
 
-void HeapIterator::Follow(BaseObject* object, const FieldVisitor& visitor)
+template <bool VisitReferents>
+BaseObject* HeapIterator::OopClosure<VisitReferents>::load_oop(RefField<>* field)
 {
-    if (object->GetTypeInfo()->IsRawArray() && object->GetComponentTypeInfo()->IsRef()) {
-        FollowArray(static_cast<MArray*>(object));
-        return;
+    if constexpr (VisitReferents) {
+        return HeapAccess<AS_NO_KEEPALIVE | ON_UNKNOWN_OOP_REF>::oop_load_at(
+            base, BaseObject::FieldOffset(base, field));
     }
-    const uintptr_t referent = reinterpret_cast<uintptr_t>(object) + TYPEINFO_PTR_SIZE;
-    if (object->IsWeakRef() && visitWeaks) {
-        visitor(object, HeapSlotAt<>(referent));
+    return HeapAccess<AS_NO_KEEPALIVE>::oop_load(field);
+}
+
+template <bool VisitReferents>
+void HeapIterator::OopClosure<VisitReferents>::do_oop(RefField<>* field)
+{
+    if (context.fieldVisitor != nullptr && *context.fieldVisitor) {
+        (*context.fieldVisitor)(base, field, raw(field->GetFieldValue()));
     }
-    auto fields = [&](RefField<>& field) {
-        if (object->IsWeakRef() && reinterpret_cast<uintptr_t>(&field) == referent) {
-            return;
-        }
-        visitor(object, field);
-    };
-    ZBasicOopIterateClosure<decltype(fields)> closure(fields);
+    context.push(load_oop(field));
+}
+
+template <bool VisitReferents>
+void HeapIterator::follow_object(const HeapIteratorContext& context, BaseObject* object)
+{
+    OopClosure<VisitReferents> closure(*this, context, object);
     ZIterator::oop_iterate(object, &closure);
 }
 
-void HeapIterator::FollowArray(MArray* object)
+void HeapIterator::follow_array(const HeapIteratorContext& context, MArray* object)
 {
-    workerArrayQueues[0].push_back({ object, 0 });
+    context.push_array_chunk({ object, 0 });
 }
 
-void HeapIterator::FollowArrayChunk(const ObjArrayTask& array, const FieldVisitor& visitor)
+void HeapIterator::follow_array_chunk(const HeapIteratorContext& context, const ObjArrayTask& array)
 {
     constexpr MIndex strideLimit = 2048;
     const MIndex length = array.object->GetLength();
     const MIndex start = array.index;
     const MIndex end = start + std::min(length - start, strideLimit);
     if (end < length) {
-        workerArrayQueues[0].push_back({ array.object, end });
+        context.push_array_chunk({ array.object, end });
     }
-    auto fields = [&](RefField<>& field) { visitor(array.object, field); };
-    ZBasicOopIterateClosure<decltype(fields)> closure(fields);
+    OopClosure<false> closure(*this, context, array.object);
     ZIterator::oop_iterate_elements_range(array.object, &closure, start, end);
+}
+
+template <bool VisitWeaks>
+void HeapIterator::follow(const HeapIteratorContext& context, BaseObject* object)
+{
+    if (object->GetTypeInfo()->IsRawArray() && object->GetComponentTypeInfo()->IsRef()) {
+        follow_array(context, static_cast<MArray*>(object));
+    } else {
+        follow_object<VisitWeaks>(context, object);
+    }
+}
+
+template <bool VisitWeaks>
+void HeapIterator::visit_and_follow(const HeapIteratorContext& context, BaseObject* object)
+{
+    DCHECK(object->IsValidObject());
+    if (!forVerify) {
+        context.visit_object(object);
+    }
+    follow<VisitWeaks>(context, object);
 }
 
 template <bool Weak>
@@ -182,31 +207,19 @@ void HeapIterator::push_weak_roots(const HeapIteratorContext& context)
     RootsIteratorWeakColored().Apply([&](NativeSlot& root) { colored.do_root(root); });
 }
 
+template <bool VisitWeaks>
 void HeapIterator::drain(const HeapIteratorContext& context)
 {
-    FieldVisitor followField = [&](BaseObject* base, RefField<>& field) {
-        if (context.fieldVisitor != nullptr && *context.fieldVisitor) {
-            (*context.fieldVisitor)(base, &field, raw(field.GetFieldValue()));
-        }
-        context.push(visitWeaks
-            ? HeapAccess<AS_NO_KEEPALIVE | ON_UNKNOWN_OOP_REF>::oop_load_at(base, BaseObject::FieldOffset(base, &field))
-            : HeapAccess<AS_NO_KEEPALIVE>::oop_load(&field));
-    };
     BaseObject* object = nullptr;
     ObjArrayTask array { nullptr, 0 };
-    while (true) {
+    do {
         while (context.pop(object)) {
-            DCHECK(object->IsValidObject());
-            if (!forVerify) {
-                context.visit_object(object);
-            }
-            Follow(object, followField);
+            visit_and_follow<VisitWeaks>(context, object);
         }
-        if (!context.pop_array_chunk(array)) {
-            break;
+        if (context.pop_array_chunk(array)) {
+            follow_array_chunk(context, array);
         }
-        FollowArrayChunk(array, followField);
-    }
+    } while (!context.is_drained());
 }
 
 void HeapIterator::steal(const HeapIteratorContext& context)
@@ -234,12 +247,25 @@ void HeapIterator::steal(const HeapIteratorContext& context)
     }
 }
 
+template <bool VisitWeaks>
 void HeapIterator::drain_and_steal(const HeapIteratorContext& context)
 {
     do {
-        drain(context);
+        drain<VisitWeaks>(context);
         steal(context);
     } while (!context.is_drained());
+}
+
+template <bool VisitWeaks>
+void HeapIterator::object_iterate_inner(const HeapIteratorContext& context)
+{
+    if (context.worker_id() == 0) {
+        push_strong_roots(context);
+        if constexpr (VisitWeaks) {
+            push_weak_roots(context);
+        }
+    }
+    drain_and_steal<VisitWeaks>(context);
 }
 
 void HeapIterator::object_iterate(const ObjectVisitor& objectVisitor, uint32_t worker_id)
@@ -253,11 +279,11 @@ void HeapIterator::object_and_field_iterate(const ObjectVisitor& objectVisitor, 
     DCHECK(MutatorManager::Instance().WorldStopped());
     DCHECK(!ZResurrection::is_blocked());
     HeapIteratorContext context(*this, &objectVisitor, fieldVisitor ? &fieldVisitor : nullptr, worker_id);
-    if (worker_id == 0) {
-        push_strong_roots(context);
-        push_weak_roots(context);
+    if (visitWeaks) {
+        object_iterate_inner<true>(context);
+    } else {
+        object_iterate_inner<false>(context);
     }
-    drain_and_steal(context);
 }
 
 void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor)

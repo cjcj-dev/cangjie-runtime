@@ -132,7 +132,7 @@ void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
     auto* page = Heap::page(reinterpret_cast<MAddress>(object));
     if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
     auto& processor = Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
-    (void)processor.DiscoverReference(object, ReferenceType::FINAL);
+    (void)processor.discover_reference(object, ReferenceType::FINAL);
     ZBarrier::MarkFinalizableBarrierOnRoot(slot);
 }
 
@@ -144,7 +144,7 @@ void ZMark::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
     if (referent == nullptr) {
         return;
     }
-    (void)Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().DiscoverReference(reference, ReferenceType::WEAK);
+    (void)Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().discover_reference(reference, ReferenceType::WEAK);
     (void)workStack;
 }
 

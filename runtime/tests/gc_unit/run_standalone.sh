@@ -599,7 +599,7 @@ echo "STALL_SUITE=PRODUCT_BOTH_CONFIGURATIONS"
 # full symbols (not only the dynamic table) so no local/weak test copy can
 # satisfy its consumers, then require the executable to import those methods.
 REFERENCE_PROCESSOR_CONSUMERS=(
-  'MapleRuntime::ReferenceProcessor::DiscoverReference('
+  'MapleRuntime::ReferenceProcessor::discover_reference('
   'MapleRuntime::ReferenceProcessor::ProcessReferences('
   'MapleRuntime::ReferenceProcessor::EnqueueReferences('
 )

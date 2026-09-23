@@ -6,6 +6,7 @@
 
 #include "Common/BaseObject.h"
 #include "ObjectModel/MArray.h"
+#include "Heap/z/zReferenceDiscoverer.hpp"
 
 namespace MapleRuntime {
 
@@ -17,9 +18,34 @@ public:
     virtual void do_oop(RefField<>* field) = 0;
 };
 
-class BasicOopIterateClosure : public OopClosure {};
+// HotSpot memory/iterator.hpp:69-92: reference processing belongs to the
+// closure, independently of the VM's field bitmap representation.
+class OopIterateClosure : public OopClosure {
+    ReferenceDiscoverer* _ref_discoverer;
+protected:
+    explicit OopIterateClosure(ReferenceDiscoverer* rd) : _ref_discoverer(rd) {}
+    OopIterateClosure() : _ref_discoverer(nullptr) {}
+    void set_ref_discoverer_internal(ReferenceDiscoverer* rd) { _ref_discoverer = rd; }
+public:
+    ReferenceDiscoverer* ref_discoverer() const { return _ref_discoverer; }
+    enum ReferenceIterationMode {
+        DO_DISCOVERY,
+        DO_FIELDS,
+        DO_FIELDS_EXCEPT_REFERENT
+    };
+    virtual ReferenceIterationMode reference_iteration_mode() { return DO_DISCOVERY; }
+};
+
+class BasicOopIterateClosure : public OopIterateClosure {
+public:
+    explicit BasicOopIterateClosure(ReferenceDiscoverer* rd = nullptr) : OopIterateClosure(rd) {}
+};
 
 class OopIteratorClosureDispatch {
+    template <typename OopClosureT>
+    static bool try_discover(BaseObject* object, OopClosureT* closure);
+    template <typename OopClosureT>
+    static void oop_oop_iterate_ref_processing(OopClosureT* closure, BaseObject* object);
 public:
     template <typename OopClosureT>
     static void oop_oop_iterate(OopClosureT* closure, BaseObject* object, TypeInfo* klass);
