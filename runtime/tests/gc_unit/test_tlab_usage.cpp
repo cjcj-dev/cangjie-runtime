@@ -12,6 +12,7 @@
 #include <fstream>
 #include "Mutator/ThreadSMR.h"
 #include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/shared/collectedHeap.hpp"
