@@ -42,8 +42,8 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         // returning the page. Its address space must exist as after heap init.
         const auto role = ZPageType::large;
 
-        ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
-        ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
+        ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, false);
+        ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, false);
         if (first == nullptr || second == nullptr) {
             return 21;
         }
@@ -94,7 +94,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             }
             // All capacity is owned; a retired page is not available for
             // cache allocation while either iterator can still read it.
-            if (manager.TakeRegion((1) * ZGranuleSize, role, false, false, false) != nullptr) {
+            if (manager.TakeRegion((1) * ZGranuleSize, role, false, false) != nullptr) {
                 result = 26;
             }
             if (Heap::page(second->GetRegionStart()) != second) {
@@ -129,7 +129,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         if ((manager.GetCachedBytes() / ZGranuleSize) != 2 || manager.GetCommittedCapacity() != capacity) {
             result = 30;
         }
-        ZPage* reused = manager.TakeRegion((2) * ZGranuleSize, role, false, false, false);
+        ZPage* reused = manager.TakeRegion((2) * ZGranuleSize, role, false, false);
         PublishAllocatedPage(reused);
         if (reused == nullptr || reused->GetRegionStart() != start ||
             Heap::page(end - 1) != reused) {

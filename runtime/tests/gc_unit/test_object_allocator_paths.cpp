@@ -16,6 +16,8 @@
 #include "TypeInfoManager.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MObject.h"
+#include "ObjectModel/MArray.h"
+#include "ObjectModel/MArray.inline.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -227,14 +229,14 @@ void* AllocateNonBlockingCapacity(void*)
     auto& heap = Heap::GetHeap();
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* occupied = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, false, PageAge::eden, flags);
+    ZPage* occupied = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, true, PageAge::eden, flags);
     if (occupied == nullptr) { return reinterpret_cast<void*>(1); }
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
     const uint64_t before = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
     // A valid page size that cannot fit while occupied consumes part of capacity.
     // The non-blocking allocation must return its failure without starting a GC.
-    ZPage* result = Heap::alloc_page(heap.GetMaxCapacity(), ZPageType::large, false, true, false, PageAge::eden, flags);
+    ZPage* result = Heap::alloc_page(heap.GetMaxCapacity(), ZPageType::large, false, true, PageAge::eden, flags);
     const uint64_t after = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
     const bool valid = result == nullptr && after == before;
     std::fprintf(stderr, "NONBLOCKING_CAPACITY_TARGET result=%p before=%llu after=%llu valid=%d\n",
@@ -255,7 +257,7 @@ void* AllocateFastMedium(void*)
     ZAllocationFlags flags;
     flags.set_non_blocking();
     flags.set_fast_medium();
-    ZPage* result = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, false, true, true, PageAge::eden, flags);
+    ZPage* result = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, false, true, PageAge::eden, flags);
     const size_t actual = result == nullptr ? 0 : result->size();
     const bool valid = result != nullptr && actual == size && result->type() == ZPageType::medium &&
                        manager.GetCommittedBytes() == capacity && manager.GetUsedRegionSize() - before == actual;
@@ -283,6 +285,121 @@ GC_RUNTIME_OTHER_VM_TEST(ObjectAllocatorPaths, MediumBlockingFailureShutdownWith
 
 #endif
 
+// #905: dirty backing is a fixture input, never an alternate implementation of
+// allocation. MCC entries return the objects inspected below. Refilling must
+// initialize the entire TLAB, while page/object allocation leaves its suffix alone.
+namespace MapleRuntime {
+extern "C" ArrayRef MCC_NewArray8(const TypeInfo*, MIndex);
+extern "C" ObjRef MCC_NewFinalizer(const TypeInfo*, MSize);
+}
+namespace {
+enum class ZeroCase { Page, TLAB, Medium, Large, Array, Finalizer, SegmentedArray };
+bool BytesAre(uintptr_t begin, uintptr_t end, unsigned char value)
+{
+    for (; begin < end; ++begin) {
+        if (*reinterpret_cast<const unsigned char*>(begin) != value) { return false; }
+    }
+    return true;
+}
+
+template<ZeroCase kind>
+void* AllocateFromDirtyCache(void*)
+{
+    auto& heap = Heap::GetHeap();
+    auto* buffer = AllocBuffer::GetAllocBuffer();
+    buffer->RetireTLAB(false);
+    heap.object_allocator().retire_pages(kPageAgeRangeEden);
+    const bool small = kind == ZeroCase::TLAB;
+    const bool medium = kind == ZeroCase::Medium || kind == ZeroCase::Array || kind == ZeroCase::Finalizer || kind == ZeroCase::SegmentedArray;
+    const size_t bytes = small ? 256 : medium ? ZObjectSizeLimitSmall + 32 : ZObjectSizeLimitMedium + 32;
+    const auto pageType = small ? ZPageType::small : medium ? ZPageType::medium : ZPageType::large;
+    const size_t pageBytes = small ? ZPageSizeSmall : medium ? ZPageSizeMediumMin : AlignUp(bytes, ZGranuleSize);
+    ZPage* seed = Heap::alloc_page(pageBytes, pageType, false, false);
+    if (seed == nullptr) { return reinterpret_cast<void*>(1); }
+    const uintptr_t base = seed->GetRegionStart();
+    std::memset(reinterpret_cast<void*>(base), 0xa5, pageBytes);
+    const bool seeded = BytesAre(base, base + pageBytes, 0xa5);
+    Heap::free_page(seed);
+    // Mapped-cache metadata is spread across the last granule. Select an
+    // unchanged input span beyond the requested allocation, not that metadata.
+    const size_t expectedInitialized = small ? buffer->ComputeTLABSize(bytes, heap.unsafe_max_tlab_alloc()) : bytes;
+    size_t witness = expectedInitialized;
+    while (witness + 64 <= pageBytes && !BytesAre(base + witness, base + witness + 64, 0xa5)) { witness += 64; }
+    const bool dirtyWitness = witness + 64 <= pageBytes;
+
+    alignas(TypeInfo) static unsigned char storage[3 * sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    auto* component = reinterpret_cast<TypeInfo*>(storage + sizeof(TypeInfo));
+    auto* arrayType = reinterpret_cast<TypeInfo*>(storage + 2 * sizeof(TypeInfo));
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
+    // A one-byte value struct uses ordinary array initialization; the primitive
+    // case deliberately exercises the existing segmented initializer instead.
+    component->SetType(kind == ZeroCase::Array ? TypeKind::TYPE_KIND_STRUCT : TypeKind::TYPE_KIND_UINT8);
+    component->SetInstanceSize(1);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetComponentTypeInfo(component);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+
+    uintptr_t object = 0;
+    if (kind == ZeroCase::Page) {
+        ZPage* reused = Heap::alloc_page(pageBytes, pageType, false, false);
+        object = reused == nullptr ? 0 : reused->GetRegionStart();
+        // Observe the dirty input span selected outside cache metadata.
+        const bool preserved = object != 0 && dirtyWitness && BytesAre(object + witness, object + witness + 64, 0xa5);
+        std::fprintf(stderr, "CACHE_ZERO_TARGET kind=page seeded=%d reused=%d preserved=%d\n",
+                     seeded, object == base, preserved);
+        const bool valid = seeded && object == base && preserved;
+        if (reused != nullptr) { Heap::free_page(reused); }
+        return reinterpret_cast<void*>(valid ? 0 : 2);
+    }
+    if (kind == ZeroCase::Array || kind == ZeroCase::SegmentedArray) {
+        object = reinterpret_cast<uintptr_t>(MCC_NewArray8(arrayType, bytes - MArray::GetContentOffset()));
+    } else if (kind == ZeroCase::Finalizer) {
+        object = reinterpret_cast<uintptr_t>(MCC_NewFinalizer(type, bytes));
+    } else {
+        object = reinterpret_cast<uintptr_t>(MCC_NewObject(type, bytes));
+    }
+    const size_t initialized = small ? buffer->TLABSize() : bytes;
+    const size_t header = (kind == ZeroCase::Array || kind == ZeroCase::SegmentedArray) ? MArray::GetContentOffset() : sizeof(BaseObject);
+    const bool zero = object != 0 && BytesAre(object + header, object + initialized, 0);
+    const bool suffix = object != 0 && dirtyWitness && initialized <= witness &&
+                        BytesAre(object + witness, object + witness + 64, 0xa5);
+    const bool reused = object == base;
+    std::fprintf(stderr, "CACHE_ZERO_TARGET kind=%u seeded=%d reused=%d zero=%d suffix=%d initialized=%zu page=%zu\n",
+                 unsigned(kind), seeded, reused, zero, suffix, initialized, pageBytes);
+    return reinterpret_cast<void*>(seeded && reused && zero && suffix ? 0 : 3);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, CachedPagePreservesPayload)
+{
+    RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::Page>);
+}
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, RefillClearsOnlyTLAB)
+{
+    RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::TLAB>);
+}
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, MediumObjectClearsOnlyObject)
+{
+    RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::Medium>);
+}
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, LargeObjectClearsOnlyObject)
+{
+    RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::Large>);
+}
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, ArrayClearsOnlyObject)
+{
+    RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::Array>);
+}
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, FinalizerClearsOnlyObject)
+{
+    RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::Finalizer>);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(AllocationZeroing, SegmentedArrayKeepsItsOwnInitializer)
+{
+    RunAllocatorCase(AllocateFromDirtyCache<ZeroCase::SegmentedArray>);
+}
 namespace {
 struct PageAllocationTiming {
     long long elapsedNs{0};

@@ -371,7 +371,7 @@ bool FreeRegionManager::PreparePageMemory(PageMemory& memory)
 // (:1761-1780), commit_and_map_single_partition (:1792-1806), map_committed
 // (:1878-1887), cleanup_failed_commit_single_partition (:1906-1932), create_page.
 ZPage* FreeRegionManager::MaterializePageMemory(PageMemory& memory, ZPageType role,
-                                                     bool expectPhysicalMem, bool clearPayload, size_t& committedBytes,
+                                                     bool expectPhysicalMem, size_t& committedBytes,
                                                      PageAge age)
 {
     (void)expectPhysicalMem;
@@ -423,14 +423,8 @@ ZPage* FreeRegionManager::MaterializePageMemory(PageMemory& memory, ZPageType ro
         }
         memory.committed = true;
     }
-    if ((fromCache || memory.harvestedBytes != 0) && clearPayload) {
-        ZPage::ClearPageMemory(idx, num);
-    }
-    ZPage* region = ZPage::InitRegion(idx, num, role, age);
-    if (!fromCache) {
-        ClearReleasedMemory(clearPayload, idx, num);
-    }
-    return region;
+    // ZGC zPageAllocator.cpp:1489-1492,1515: page creation does not initialize objects.
+    return ZPage::InitRegion(idx, num, role, age);
 }
 
 // ZPartition::free_memory_alloc_failed (zPageAllocator.cpp:1079-1101): the
@@ -643,9 +637,9 @@ void RegionManager::ReclaimRetiredRegion(ZPage* region)
 }
 
 // ZGC zPageAllocator.cpp:426-440: capture generation epochs at request construction.
-ZPageAllocation::ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear, ZAllocationFlags flags)
+ZPageAllocation::ZPageAllocation(size_t size, uint8_t role, bool physical, ZAllocationFlags flags)
     : size(size), youngSeqnum(ZGeneration::young()->seqnum()), oldSeqnum(ZGeneration::old()->seqnum()),
-      role(role), physical(physical), clear(clear), flags(flags) {}
+      role(role), physical(physical), flags(flags) {}
 
 // ZGC zPageAllocator.cpp:1518-1542: a single decision owns both enqueue and wait.
 bool RegionManager::ClaimCapacityOrStall(AllocationStallRequest& request)
@@ -856,7 +850,7 @@ void RegionManager::PromoteAllRegions()
 }
 
 ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysicalMem,
-                                       bool allowSaferegion, bool clearPayload, PageAge age, ZAllocationFlags flags)
+                                       bool allowSaferegion, PageAge age, ZAllocationFlags flags)
 {
     allowSaferegion = allowSaferegion && !flags.non_blocking();
     if (!allowSaferegion || IsGcThread()) { flags.set_non_blocking(); }
@@ -873,13 +867,13 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
 #endif
 
 retry:
-    ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload, flags);
+    ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, flags);
     const bool claimed = ClaimCapacityOrStall(request);
     if (claimed) {
         size = request.Memory().size;
         size_t committedBytes = 0;
         ZPage* region = freeRegionManager.MaterializePageMemory(
-            request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedBytes, age);
+            request.Memory(), type, request.ExpectsPhysicalMemory(), committedBytes, age);
         if (request.Memory().virtualClaimed) {
             std::lock_guard<std::mutex> lock(pageAllocatorMutex);
             const uintptr_t end = ZPage::GranuleAddress(request.Memory().index) + size;
