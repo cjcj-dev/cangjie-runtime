@@ -142,6 +142,7 @@ public:
     ZForwarding* forwarding(MAddress addr) const { return addr == 0 ? nullptr : _forwarding_table.get(addr); }
     BaseObject* relocate_or_remap_object(BaseObject* object);
     BaseObject* remap_object(BaseObject* object);
+    void mark_free();
     void reset_relocation_set();
     void synchronize_relocation();
     void desynchronize_relocation();
