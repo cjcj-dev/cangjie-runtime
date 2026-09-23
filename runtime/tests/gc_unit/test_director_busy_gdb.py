@@ -24,6 +24,7 @@ DYNAMIC = int(os.environ.get('BUSY_DYNAMIC', '1'))
 SOURCE = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
 READS = []
 DRIVER_READS = []
+DRIVER_RETURNS = set()
 RETURNS = set()
 RULE_RESULTS = []
 
@@ -132,19 +133,28 @@ class BusyRead(gdb.Breakpoint):
         return False
 
 
-class DriverBusyReturn(gdb.FinishBreakpoint):
+class DriverBusyReturn(gdb.Breakpoint):
     def __init__(self):
         self.driver = gdb.newest_frame().name()
-        super().__init__(gdb.newest_frame(), internal=True)
+        # is_busy tail-calls the port in Release. Observe the caller return
+        # PC instead of FinishBreakpoint, whose frame leaves scope on the jump.
+        self.return_pc = gdb.newest_frame().older().pc()
+        self.recorded = False
+        DRIVER_RETURNS.add(self.return_pc)
+        super().__init__('*' + str(self.return_pc), internal=True, temporary=True)
 
     def stop(self):
-        DRIVER_READS.append({'driver': self.driver, 'busy': int(value('$rax')) & 255})
+        if not self.recorded:
+            DRIVER_READS.append({'driver': self.driver, 'busy': int(value('$rax')) & 255})
+            self.recorded = True
+            DRIVER_RETURNS.discard(self.return_pc)
         return False
 
 
 class DriverBusyRead(gdb.Breakpoint):
     def stop(self):
-        if gdb.selected_thread().name == 'ZDirector':
+        if (gdb.selected_thread().name == 'ZDirector' and
+                gdb.newest_frame().older().pc() not in DRIVER_RETURNS):
             DriverBusyReturn()
         return False
 
