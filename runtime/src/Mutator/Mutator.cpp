@@ -206,10 +206,12 @@ void Mutator::ResetMutator()
     exceptionWrapper.ClearInfo();
     // The detached identity's watermark/statistics belong to outstanding
     // ThreadsListHandles until smr_delete; only construction initializes them.
-    MutatorUnlock();
-    // The last transition is complete; detach before scheduler unbinding.
-    // Do not wait for registry readers while holding the mutator lock.
+    // ZGC threads.cpp:1090-1114: final GC-state processing belongs to the
+    // thread-removal critical section. Inventory flushing takes this same
+    // lock; detach must finish before another reader can flush our stacks.
+    // Registry-reader waiting belongs to on_thread_destroy, after unlocking.
     ZBarrierSet::on_thread_detach(gcData);
+    MutatorUnlock();
 }
 
 void Mutator::SetManagedContext(bool isManagedContext)
