@@ -248,9 +248,8 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
             // Default value of GC interval is 150ms.
             .gcInterval = param->gcParam.gcInterval == 0 ? 150 * MapleRuntime::MILLI_SECOND_TO_NANO_SECOND :
                 param->gcParam.gcInterval * MapleRuntime::MILLI_SECOND_TO_NANO_SECOND,
-            // Default value of backup GC interval is 240s.
-            .backupGCInterval = param->gcParam.backupGCInterval == 0 ? 240 * MapleRuntime::SECOND_TO_NANO_SECOND :
-                param->gcParam.backupGCInterval * MapleRuntime::SECOND_TO_NANO_SECOND,
+            // Zero disables timer collections (ZGC z_globals.hpp:62-66).
+            .backupGCInterval = param->gcParam.backupGCInterval * MapleRuntime::SECOND_TO_NANO_SECOND,
             .concGCThreads = param->gcParam.concGCThreads,
             .youngGCThreads = param->gcParam.youngGCThreads,
             .oldGCThreads = param->gcParam.oldGCThreads,
