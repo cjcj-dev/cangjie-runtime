@@ -71,7 +71,7 @@ run_ohos_host_arm() {
     return 22
   fi
   libc_real="$(readlink -f "$libc_real")"
-  ln -sfn "$libc_real" "$runroot/libc.so"
+  cp -f "$libc_real" "$runroot/libc.so"
 
   if [[ -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]]; then
     echo "GC_UNIT_OHOS_HOST_HEADER_ROOT=${runtime_include_flags[0]#-I}"

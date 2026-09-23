@@ -13,7 +13,10 @@ import os
 from pathlib import Path
 
 abort = os.environ.get('DRIVER_ABORT', '0') == '1'
-fixture = os.environ.get('DRIVER_FIXTURE', 'GcDirector.ProductWarmupStopsAfterThreeCycles')
+minor = os.environ.get('DRIVER_MINOR', '0') == '1'
+kind = 'Minor' if minor else 'Major'
+fixture = os.environ.get('DRIVER_FIXTURE', 'DriverCause.MinorTimer' if minor else
+                         'GcDirector.ProductWarmupStopsAfterThreeCycles')
 expected_so = Path(os.environ['GCV2_RUNTIME_LIB_DIR'], 'libcangjie-runtime.so').resolve()
 acks = 0
 failures = []
@@ -38,7 +41,7 @@ def product():
 class Ack(gdb.Breakpoint):
     def stop(self):
         global acks
-        if gdb.selected_thread().name != 'ZDriverMajor':
+        if gdb.selected_thread().name != 'ZDriver' + kind:
             return False
         product()
         acks += 1
@@ -52,14 +55,14 @@ try:
         gdb.execute('set ' + setting)
     gdb.execute('set environment GC_UNIT_FILTER ' + fixture)
     gdb.execute('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
-    gdb.Breakpoint('MapleRuntime::ZDriverMajor::gc', temporary=True, internal=True)
+    gdb.Breakpoint('MapleRuntime::ZDriver' + kind + '::gc', temporary=True, internal=True)
     gdb.execute('run')
     product()
     cause = int(val('request._cause'))
-    driver = int(val('this'))
-    gdb.execute('set $driver = (MapleRuntime::ZDriverMajor*)' + str(driver))
+    driver = int(val('MapleRuntime::ZDriver::_' + kind.lower()))
+    gdb.execute('set $driver = (MapleRuntime::ZDriver' + kind + '*)' + str(driver))
     Ack('MapleRuntime::ZDriverPort::ack', internal=True)
-    gdb.Breakpoint('MapleRuntime::ZGenerationOld::collect', temporary=True, internal=True)
+    gdb.Breakpoint('MapleRuntime::ZGeneration' + ('Young' if minor else 'Old') + '::collect', temporary=True, internal=True)
     gdb.execute('continue')
     product()
     during = int(val('$driver->_gc_cause'))
@@ -75,7 +78,7 @@ try:
         gdb.execute('continue')
         product()
         busy = bool(val('$driver->_port._has_message'))
-        returned = gdb.selected_thread().name == 'ZDriverMajor' and 'run_service' in gdb.newest_frame().name()
+        returned = gdb.selected_thread().name == 'ZDriver' + kind and 'run_service' in gdb.newest_frame().name()
         check('B_ABORT_NO_ACK', acks == 0 and busy and returned,
               ack=acks, busy=busy, returned_from_driver_loop=returned)
     else:
@@ -84,7 +87,7 @@ try:
     after = int(val('$driver->_gc_cause'))
     no_cause = int(val('MapleRuntime::GC_REASON_INVALID'))
     check('A_CAUSE_RESTORED', after == no_cause, actual=after, expected=no_cause)
-    print('DRIVER_RESULT ' + json.dumps(dict(abort=abort, failures=failures, product=str(expected_so))), flush=True)
+    print('DRIVER_RESULT ' + json.dumps(dict(kind=kind, abort=abort, failures=failures, product=str(expected_so))), flush=True)
     gdb.execute('quit ' + ('1' if failures else '0'))
 except Exception as error:
     print('DRIVER_HARNESS_ERROR ' + repr(error), flush=True)

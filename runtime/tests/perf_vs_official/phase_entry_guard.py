@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Validate the phase-entry runner logs, including per-cycle young entry evidence.
+"""Validate generation spans emitted at ZGC-shaped collection scope exits.
 
-P15: rec=phase_leaf and the Timer leaf-path tree were deleted (no ZGC
-counterpart); the guard now reads only rec=cycle / rec=phase / rec=stw.
-The timer contract mode went away with the mechanism it validated.
+#954 removes the legacy driver cycle and major.* records. The generation
+scope still reports each completed span (ZGC zStat.cpp:711-759); the same
+request id, ordered preclean/roots/old spans and enclosed young entries are
+checked here without depending on the removed driver logging wrapper.
 """
 
 import sys
@@ -18,8 +19,8 @@ from gclog_schema import parse_gclog
 text = log_path.read_text(encoding="utf-8", errors="replace")
 records = parse_gclog(text)
 errors = []
-if not records.cycles:
-    errors.append("cycle=0")
+if not records.generations:
+    errors.append("generation=0")
 if not records.stw:
     errors.append("stw=0")
 if not records.phases:
@@ -30,47 +31,43 @@ if records.phases and not any(0 < record.ns < 1000 for record in records.phases)
 marker = "PHASE_ENTRY_MINOR_OK checksum=" if mode == "minor" else "PHASE_ENTRY_MAJOR_OK checksum="
 if marker not in text:
     errors.append("completion=0")
-if not any(record.kind == mode for record in records.cycles):
-    errors.append(f"{mode}_cycle=0")
-# Cycle kind alone cannot prove that the young entry ran. Major preludes
-# now belong to the major request's id, not a separate minor cycle.
-young_entries = {record.seq for record in records.phases
-                 if record.name == "young.flush_alloc"}
-for cycle in records.cycles:
-    if cycle.kind == "minor" and cycle.seq not in young_entries:
-        errors.append(f"minor_entry_missing_seq={cycle.seq}")
-if mode == "major":
-    # ZGC zDriver.cpp:384-451: a user/full request owns two young spans
-    # (preclean, full roots), then old collection, under ONE request id.
-    cycle_kinds = [record.kind for record in records.cycles]
-    if cycle_kinds != ["major"]:
-        errors.append("major_explicit_shape=" + ",".join(cycle_kinds))
-    for cycle in records.cycles:
-        if cycle.kind != "major":
-            continue
-        names = ("major.preclean", "major.full_roots", "major.old")
-        spans = [record for record in records.phases
-                 if record.seq == cycle.seq and record.name.startswith("major.")]
-        if [record.name for record in spans] != list(names):
-            errors.append(f"major_spans_seq={cycle.seq}")
-            continue
-        if [record.gc_tag for record in spans] != ["Y", "Y", "O"]:
-            errors.append(f"major_span_tags_seq={cycle.seq}")
-        if (spans[0].start_ns < cycle.start_ns or
-                any(left.start_ns + left.ns > right.start_ns
-                    for left, right in zip(spans, spans[1:])) or
-                spans[-1].start_ns + spans[-1].ns > cycle.start_ns + cycle.dur_ns):
-            errors.append(f"major_span_order_seq={cycle.seq}")
-        for span in spans[:2]:
-            if not any(record.seq == cycle.seq and record.gc_tag == "Y" and
+minor_spans = [r for r in records.generations if r.gc_tag == "y"]
+if mode == "minor":
+    if not minor_spans:
+        errors.append("minor_generation=0")
+    for span in minor_spans:
+        if not any(record.seq == span.seq and record.gc_tag == "y" and
+                   record.name == "young.flush_alloc" and
+                   span.start_ns <= record.start_ns and
+                   record.start_ns + record.ns <= span.start_ns + span.dur_ns
+                   for record in records.phases):
+            errors.append(f"minor_entry_missing_seq={span.seq}")
+else:
+    # ZGC zDriver.cpp:416-449: preclean, roots, old share one driver GC id.
+    spans = records.generations
+    ids = {span.seq for span in spans}
+    if len(ids) != 1:
+        errors.append("major_request_ids=" + ",".join(map(str, sorted(ids))))
+    seq = spans[0].seq if spans else 0
+    names = ["Young_Generation__Promote_All_", "Young_Generation__Collect_Roots_", "Old_Generation"]
+    if [span.name for span in spans] != names:
+        errors.append(f"major_spans_seq={seq}")
+    elif [span.gc_tag for span in spans] != ["Y", "Y", "O"]:
+        errors.append(f"major_span_tags_seq={seq}")
+    else:
+        if any(left.start_ns + left.dur_ns > right.start_ns
+               for left, right in zip(spans, spans[1:])):
+            errors.append(f"major_span_order_seq={seq}")
+        for span, label in zip(spans[:2], ("major.preclean", "major.full_roots")):
+            if not any(record.seq == span.seq and record.gc_tag == "Y" and
                        record.name == "young.flush_alloc" and
                        span.start_ns <= record.start_ns and
-                       record.start_ns + record.ns <= span.start_ns + span.ns
+                       record.start_ns + record.ns <= span.start_ns + span.dur_ns
                        for record in records.phases):
-                errors.append(f"major_entry_missing_seq={cycle.seq}_span={span.name}")
+                errors.append(f"major_entry_missing_seq={span.seq}_span={label}")
 
 print(
-    f"SCHEMA_LEDGER_GUARD mode={mode} cycles={len(records.cycles)} stw={len(records.stw)} "
+    f"SCHEMA_LEDGER_GUARD mode={mode} generations={len(records.generations)} stw={len(records.stw)} "
     f"phase={len(records.phases)} errors={','.join(errors) if errors else 'none'}"
 )
 raise SystemExit(1 if errors else 0)
