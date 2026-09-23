@@ -10,6 +10,7 @@ starts = []
 ends = []
 resets = []
 watch = None
+cycle_inputs = {}
 finished = False
 
 
@@ -63,6 +64,9 @@ class ResetWatch(gdb.Breakpoint):
 class Entry(gdb.Breakpoint):
     def stop(self):
         global watch
+        cycle_inputs[gdb.selected_thread().global_num] = {
+            name: tuple(int(val('MapleRuntime::ZGeneration::_' + name + '->cycleStats.' + field))
+                        for field in ('start', 'end')) for name in ('young', 'old')}
         if watch is None:
             address = int(val('&MapleRuntime::ZGeneration::_old->_freed'))
             check('RESET_INPUT', int(val('*(unsigned long long*)' + str(address))) == 37)
@@ -93,6 +97,12 @@ class SampleDone(gdb.Breakpoint):
             return False
         sampler, before, kind, expected, frames = item
         after = total(sampler)
+        name = 'old' if kind == 4 else 'young'
+        before_cycle = cycle_inputs[gdb.selected_thread().global_num][name]
+        for index, field in enumerate(('start', 'end')):
+            current = int(val('MapleRuntime::ZGeneration::_' + name + '->cycleStats.' + field))
+            check('CYCLE_' + field.upper() + '_STORE', current > before_cycle[index],
+                  before=before_cycle[index], after=current, generation=name)
         address = int(sampler.address)
         samples.append((kind, address, after - before))
         check('TYPE_TIMER_SAMPLE', address == expected and after - before == 1,
@@ -113,33 +123,6 @@ class CycleEndDone(gdb.FinishBreakpoint):
         ends.append(result)
         check('CYCLE_END_RESULT', result and any('at_collection_end' in f for f in self.frames),
               start=int(record['start']), end=int(record['end']), stack=self.frames)
-        return False
-
-
-class CollectionRecordDone(gdb.FinishBreakpoint):
-    def __init__(self, generation, field, before):
-        super().__init__(gdb.newest_frame(), internal=True)
-        self.generation = generation
-        self.field = field
-        self.before = before
-
-    def stop(self):
-        record = self.generation.dereference()['cycleStats']
-        after = int(record[self.field])
-        check('CYCLE_' + self.field.upper() + '_STORE', after > self.before,
-              before=self.before, after=after)
-        return False
-
-
-class CollectionRecord(gdb.Breakpoint):
-    def __init__(self, field, symbol):
-        super().__init__(symbol, internal=True)
-        self.field = field
-
-    def stop(self):
-        generation = val('this')
-        before = int(generation.dereference()['cycleStats'][self.field])
-        CollectionRecordDone(generation, self.field, before)
         return False
 
 
@@ -180,8 +163,6 @@ try:
     Entry('MapleRuntime::ZDriver::RunGarbageCollection', internal=True)
     Sample('MapleRuntime::ZStatPhaseGeneration::RegisterEnd', internal=True)
     SampleDone('MapleRuntime::ZStatHeap::PrintStalls', internal=True)
-    CollectionRecord('start', 'MapleRuntime::ZGeneration::at_collection_start')
-    CollectionRecord('end', 'MapleRuntime::ZGeneration::at_collection_end')
     CycleStart('MapleRuntime::ZStatCycle::AtStart', internal=True)
     CycleEnd('MapleRuntime::ZStatCycle::AtEnd', internal=True)
     Complete('CollectionScopeFixtureComplete', internal=True)
