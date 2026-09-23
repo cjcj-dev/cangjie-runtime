@@ -445,3 +445,79 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateLiveness, MutatorRejectsUnmarkedSource) { Che
 GC_COMPONENT_OTHER_VM_TEST(RelocateLiveness, MutatorCopiesMarkedSource) { CheckRelocateLiveness(false, true); }
 GC_COMPONENT_OTHER_VM_TEST(RelocateLiveness, WorkerCopiesMarkedSource) { CheckRelocateLiveness(true, true); }
 #endif
+
+// ZGC zRelocate.cpp:354-380,801-835: mutator publishes a copy; only the
+// worker remembers promoted fields. Observe the product bitmap, not a counter.
+#include "Heap/z/zBarrier.hpp"
+static void CheckRelocationRemsetOwnership(bool worker)
+{
+    CreateStandaloneHeap(16);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    young.InitializeWorkers(1);
+    young.Workers()->set_active_workers(1);
+    young.Begin(1);
+    GenerationSequenceFixture::Advance(young);
+    ZGenerationTest::SetTenuringThreshold(young, 1);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetFlagHasRefField();
+    type->SetInstanceSize(sizeof(uintptr_t));
+    type->SetAlign(8);
+    GCTib tib{};
+    tib.tag = SIGN_BIT | 1;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZPage* source = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, PageAge::survivor1, flags);
+    ZPage* childPage = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, false, PageAge::eden, flags);
+    GC_EXPECT_TRUE(source != nullptr && childPage != nullptr);
+    auto* object = reinterpret_cast<BaseObject*>(source->alloc_object(16));
+    auto* child = reinterpret_cast<BaseObject*>(childPage->alloc_object(16));
+    object->SetClassInfo(type);
+    child->SetClassInfo(type);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(child) + 8).StoreColoured(StoreGoodPointer(nullptr));
+    HeapSlotAt<>(reinterpret_cast<MAddress>(object) + 8).StoreColoured(StoreGoodPointer(child));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(source, object));
+    ZPageTest::MakeRelocatable(*source);
+    ZRelocationSetSelector selector;
+    selector.register_live_page(source);
+    selector.select();
+    young.relocation_set().install(&selector);
+    ZRelocationSetIterator installed(&young.relocation_set());
+    for (ZForwarding* owner; installed.next(&owner);) { young.forwarding_table().insert(owner); }
+    auto* forwarding = forwarding_for_page(source);
+    GC_EXPECT_TRUE(forwarding != nullptr && forwarding->to_age() == PageAge::old);
+    zpointer root = StoreGoodPointer(object);
+    ZGlobalsPointers::flip_young_relocate_start();
+    young.set_phase(ZGenerationPhase::Relocate);
+    BaseObject* result;
+    if (worker) {
+        young.relocate().relocate(&young.relocation_set());
+        result = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(object)));
+    } else {
+        result = to_object(ZBarrier::load_barrier_on_oop_field(&root));
+    }
+    GC_EXPECT_TRUE(result != nullptr && result != object);
+    auto* target = Heap::page(reinterpret_cast<MAddress>(result));
+    auto* field = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(result) + 8);
+    const bool remembered = target->is_remembered(field);
+    const bool copied = to_object(RefField<>(*field).GetTargetObject()) == child;
+    const bool published = forwarding->find(reinterpret_cast<MAddress>(object)) == reinterpret_cast<MAddress>(result);
+    std::fprintf(stderr, "RELOCATE958_RESULT worker=%d remembered=%d copied=%d published=%d old=%d target_assertion=executed\n",
+                 worker, remembered, copied, published, target->age() == PageAge::old);
+    GC_EXPECT_EQ(remembered, worker);
+    GC_EXPECT_TRUE(copied && published && target->age() == PageAge::old);
+}
+GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, MutatorDoesNotRememberPromotion)
+{
+    CheckRelocationRemsetOwnership(false);
+}
+GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerRemembersPromotion)
+{
+    CheckRelocationRemsetOwnership(true);
+}

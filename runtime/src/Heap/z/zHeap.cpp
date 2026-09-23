@@ -674,7 +674,7 @@ void Heap::undo_alloc_object_for_relocation(MAddress addr, size_t size)
 {
     ZPage* const target = page(addr);
     if (target->type() == ZPageType::large) {
-        page_allocator().UndoSharedPage(target);
+        object_allocator().allocator(target->age())->undo_alloc_page(target);
     } else {
         (void)target->undo_alloc_object_atomic(addr, size);
     }
