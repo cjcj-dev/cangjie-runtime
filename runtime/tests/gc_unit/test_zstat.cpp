@@ -140,6 +140,74 @@ GC_RUNTIME_OTHER_VM_TEST(ZStat, ProductPhaseSamplesReachStatistics)
     GC_EXPECT_TRUE(before && changed && returned);
 }
 
+// ZGC zGeneration.cpp:100-107,887,893: the real collection must publish
+// roots/follow samples, while generation-private legacy subphases are absent.
+GC_RUNTIME_OTHER_VM_TEST(ZStat, GenerationSubphaseShape)
+{
+    FILE* transcript = std::tmpfile();
+    GC_EXPECT_TRUE(transcript != nullptr);
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        alarm(30);
+        if (dup2(fileno(transcript), STDOUT_FILENO) < 0 ||
+            dup2(fileno(transcript), STDERR_FILENO) < 0) _exit(126);
+        RuntimeParam params{};
+        params.heapParam.heapSize = 64 * 1024;
+        params.coParam.processorNum = 1;
+        params.logParam.logLevel = RTLOG_INFO;
+        if (InitCJRuntime(&params) != E_OK) _exit(125);
+        Heap::GetHeap().RequestGC(GC_REASON_USER);
+        std::this_thread::sleep_for(std::chrono::seconds(11));
+        std::fflush(nullptr);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::rewind(transcript);
+    const char* required[] = {
+        "Young Phase: Concurrent Mark ",
+        "Young Subphase: Concurrent Mark Roots ",
+        "Young Subphase: Concurrent Mark Follow ",
+        "Old Subphase: Concurrent Mark Roots ",
+        "Old Subphase: Concurrent Mark Follow "
+    };
+    bool sampled[5]{};
+    const char* removed[] = {
+        "young.conc_promote_walk", "young.concurrent_relocate", "young.evac_retire",
+        "young.flush_alloc", "young.mark_follow", "young.post_evac_finish",
+        "young.pre_evac_clear", "young.ref_fix", "young.ref_fix_prepare",
+        "young.ref_fix_root_pass1", "young.remset_drain", "young.root_enum",
+        "Collect large garbage", "enum roots & update old pointers within",
+        "identify useless extern ref", "trace live objects & update old pointers in ref-fields",
+        "Old Subphase: RemapYoungRoots "
+    };
+    bool legacy = false;
+    char line[2048];
+    while (std::fgets(line, sizeof(line), transcript) != nullptr) {
+        for (const char* name : removed) legacy |= std::strstr(line, name) != nullptr;
+        for (size_t i = 0; i < 5; ++i) {
+            const char* record = std::strstr(line, required[i]);
+            if (record == nullptr) continue;
+            unsigned long long values[8]{};
+            const int fields = std::sscanf(record + std::strlen(required[i]),
+                "%llu/%llu %llu/%llu %llu/%llu %llu/%llu ns",
+                &values[0], &values[1], &values[2], &values[3],
+                &values[4], &values[5], &values[6], &values[7]);
+            sampled[i] |= fields == 8 && values[6] > 0 && values[7] >= values[6];
+            std::fprintf(stderr, "GENERATION_SUBPHASE_RECORD %s", record);
+        }
+    }
+    std::fclose(transcript);
+    const bool returned = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    std::fprintf(stderr,
+        "GENERATION_SUBPHASE_TARGET executed=1 status=%d mark=%d roots=%d follow=%d old_roots=%d old_follow=%d legacy=%d returned=%d\n",
+        status, sampled[0], sampled[1], sampled[2], sampled[3], sampled[4], legacy, returned);
+    // One result assertion: an earlier existence assertion cannot mask it.
+    GC_EXPECT_TRUE(returned && sampled[0] && sampled[1] && sampled[2] && sampled[3] && sampled[4] && !legacy);
+}
+
 // ZStatIterableValue::sort rewrites registration links during initialization.
 // Keep the parent assertion observable if a const registry node is read-only.
 GC_TEST(ZStat, RegistryInitializationWritesConstLinks)

@@ -60,7 +60,6 @@
 
 namespace MapleRuntime {
 
-static const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
 // RefFieldRoot is root in tagged pointer format.
 void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
 {
