@@ -423,9 +423,6 @@ public:
     {
         return 0;
     }
-    template<Generation G>
-    void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
-                            bool inPlace = false);
     // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
     static void RememberPromotedObject(BaseObject* object);
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
@@ -436,7 +433,6 @@ public:
     void free_page(ZPage* page);
     void StampCensusBoundaries();
     void PromoteAllRegions();
-    void CompactRegion(ZPage* region);
 
     // ZGeneration::select_relocation_set iterates only pages owned by that
     // generation (zGeneration.cpp:195-221).  An old relocation pass may
