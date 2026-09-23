@@ -405,39 +405,96 @@ GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryRestartsWithRequestedWorkers)
     GC_EXPECT_FALSE(young.relocate().queue()->is_active());
 }
 
-// Exercise the decreasing budget as well as the existing increase, while
-// every original worker is parked inside the real relocation task.
-GC_OTHER_VM_TEST(RelocateWorkers, OldProductEntryReducesWorkersDuringRelocation)
+namespace {
+// Retained source pages stop real workers in detach_page (or the in-place
+// claim wait). Three pages hold the initial batch; the fourth holds its
+// successor. This leaves ordinary forwarding work pending at the observation
+// point, so ZWorkers' end-of-task resize cannot satisfy the assertion.
+// ZGC zRelocate.cpp:1206-1214, zForwarding.cpp:86-157.
+void CheckResizeBeforeRemainingForwarding(Generation id)
 {
     GcHeapFixture fx;
-    PrepareOwnerRegion(fx);
-    auto& old = Heap::GetHeap().old();
-    RelocationReceiptTest::ParkFrom(Heap::GetHeap().page_allocator(), fx.region0);
-    if (old.Workers() == nullptr) old.InitializeWorkers(3);
-    old.Workers()->set_active_workers(3);
-    old.Workers()->set_active();
-    ResizeRunningRelocation(old, 3, 1);
-    const auto active = old.Workers()->active_workers();
-    old.Workers()->set_inactive();
-    std::fprintf(stderr, "RELOCATE_RESIZE_DOWN generation=old active=%u expected=1\n", active);
-    GC_EXPECT_EQ(active, 1u);
-    GC_EXPECT_TRUE(forwarding_for_page(fx.region0)->is_done());
-    GC_EXPECT_FALSE(old.relocate().queue()->is_active());
+    ZPage* pages[4] = {fx.region0, fx.region1, nullptr, nullptr};
+    const PageAge age = id == Generation::Young ? PageAge::eden : PageAge::old;
+    for (size_t i = 0; i < 4; ++i) {
+        if (pages[i] == nullptr) {
+            pages[i] = ZPage::InitRegion(ZPage::GranuleIndex(fx.heapStart) + i,
+                                       ZGranuleSize, ZPageType::small);
+            PublishAllocatedPage(pages[i]);
+        }
+        pages[i]->reset(age);
+        auto* object = fx.PlaceObject(pages[i]->GetRegionStart());
+        pages[i]->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
+        GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], object));
+    }
+    GC_EXPECT_TRUE(BeginForwardingArena(id, {pages[0], pages[1], pages[2], pages[3]}));
+    auto& generation = Heap::GetHeap().GetZGeneration(id);
+    auto* queue = generation.relocate().queue();
+    ZForwarding* owners[4] = {};
+    ZRelocationSetIterator iterator(&generation.relocation_set());
+    for (auto& owner : owners) {
+        GC_EXPECT_TRUE(iterator.next(&owner));
+        GC_EXPECT_TRUE(owner->retain_page(queue));
+    }
+    if (generation.Workers() == nullptr) generation.InitializeWorkers(3);
+    auto* workers = generation.Workers();
+    workers->set_active_workers(3);
+    workers->set_active();
+    std::thread relocating([&] { generation.relocate().relocate(&generation.relocation_set()); });
+    const auto waitUntil = [](const auto& predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!predicate() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        return predicate();
+    };
+    const bool initialBatch = waitUntil([&] {
+        return owners[0]->is_claimed() && owners[1]->is_claimed() && owners[2]->is_claimed();
+    });
+    const bool remainingUnclaimed = !owners[3]->is_claimed();
+    workers->request_resize_workers(1);
+    for (size_t i = 0; i < 3; ++i) owners[i]->release_page();
+    const bool remainingClaimed = waitUntil([&] { return owners[3]->is_claimed(); });
+    uint32_t activeWhilePending;
+    {
+        // Same lock as the product resize writer, avoiding an unsynchronized
+        // read of WorkerThreads' active count while a batch is restarting.
+        std::lock_guard<std::mutex> lock(*workers->resizing_lock());
+        activeWhilePending = workers->active_workers();
+    }
+    const bool remainingPending = !owners[3]->is_done();
+    owners[3]->release_page();
+    relocating.join();
+    const auto finalActive = workers->active_workers();
+    workers->set_inactive();
+    bool completed = true;
+    for (auto* owner : owners) completed = completed && owner->is_done();
+    std::fprintf(stderr,
+        "RELOCATE_RESIZE_PENDING generation=%s initial_batch=%d remaining_unclaimed=%d "
+        "remaining_claimed=%d remaining_pending=%d active_while_pending=%u final_active=%u\n",
+        id == Generation::Young ? "young" : "old", initialBatch, remainingUnclaimed,
+        remainingClaimed, remainingPending, activeWhilePending, finalActive);
+    GC_EXPECT_TRUE(initialBatch);
+    GC_EXPECT_TRUE(remainingUnclaimed);
+    GC_EXPECT_TRUE(remainingClaimed);
+    GC_EXPECT_TRUE(remainingPending);
+    std::fprintf(stderr, "ASSERT_RELOCATE_RESIZE_BEFORE_COMPLETION executed=1 active=%u expected=1\n",
+                 activeWhilePending);
+    GC_EXPECT_EQ(activeWhilePending, 1u);
+    GC_EXPECT_EQ(finalActive, 1u);
+    GC_EXPECT_TRUE(completed);
+    GC_EXPECT_FALSE(queue->is_active());
+}
+}
+
+GC_OTHER_VM_TEST(RelocateWorkers, OldProductEntryReducesWorkersDuringRelocation)
+{
+    CheckResizeBeforeRemainingForwarding(Generation::Old);
 }
 
 GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryReducesWorkersDuringRelocation)
 {
-    GcHeapFixture fx;
-    auto& young = Heap::GetHeap().young();
-    if (young.Workers() == nullptr) young.InitializeWorkers(3);
-    young.Workers()->set_active_workers(3);
-    young.Workers()->set_active();
-    ResizeRunningRelocation(young, 3, 1);
-    const auto active = young.Workers()->active_workers();
-    young.Workers()->set_inactive();
-    std::fprintf(stderr, "RELOCATE_RESIZE_DOWN generation=young active=%u expected=1\n", active);
-    GC_EXPECT_EQ(active, 1u);
-    GC_EXPECT_FALSE(young.relocate().queue()->is_active());
+    CheckResizeBeforeRemainingForwarding(Generation::Young);
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
