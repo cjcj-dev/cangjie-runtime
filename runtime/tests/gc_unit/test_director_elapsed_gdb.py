@@ -81,18 +81,21 @@ try:
          sampled_serial=sampled_serial, sampled_parallel=sampled_parallel,
          dynamic_serial=actual_serial, dynamic_parallel=actual_parallel)
     # The fixture validity check is distinct from the target assertion.
-    if sampled_parallel <= 0.0:
-        raise RuntimeError('The real in-flight batch produced no elapsed parallel time')
+    if sampled_parallel <= 0.0 or sampled_serial <= 0.0:
+        raise RuntimeError('The real in-flight batch must produce both elapsed times')
     result_line = next(i + 1 for i, s in enumerate(director_source) if 'if (time_until_gc > time_until_oom * 0.05)' in s)
     until('zDirector.cpp:' + str(result_line))
     serial_time = float(value('serial_gc_time'))
     expected_serial = abs(float(value('stats.young_stats.cycle.serialTime')) +
                           float(value('stats.young_stats.cycle.serialTimeSd')) * 3.290527)
-    passed = (actual_serial == 0.0 and actual_parallel == 0.0 and
-              abs(serial_time - expected_serial) < 1e-12)
-    emit('ASSERT_DIRECTOR_ELAPSED_IGNORED', passed=passed,
-         serial=actual_serial, parallel=actual_parallel,
-         computed_serial_time=serial_time, expected_serial_time=expected_serial)
+    serial_passed = actual_serial == 0.0 and abs(serial_time - expected_serial) < 1e-12
+    parallel_passed = actual_parallel == 0.0
+    emit('ASSERT_DIRECTOR_SERIAL_ELAPSED_IGNORED', passed=serial_passed,
+         serial=actual_serial, computed_serial_time=serial_time,
+         expected_serial_time=expected_serial)
+    emit('ASSERT_DIRECTOR_PARALLEL_ELAPSED_IGNORED', passed=parallel_passed,
+         parallel=actual_parallel)
+    passed = serial_passed and parallel_passed
     cmd('quit ' + ('0' if passed else '1'))
 except Exception as error:
     emit('HARNESS_ERROR', error=repr(error))
