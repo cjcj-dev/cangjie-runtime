@@ -6,6 +6,7 @@
 
 #include "Common/BaseObject.inline.h"
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Base/Macros.h"
@@ -731,6 +732,14 @@ void ZBarrier::CopyStructArrayColouredToHeap(BaseObject* dstObj, MAddress dst, s
                                              MAddress src, size_t srcLen)
 {
     CHECK(dstObj != nullptr && Heap::IsHeapAddress(dstObj));
+    auto* array = static_cast<MArray*>(dstObj);
+    const size_t stride = array->GetElementSize();
+    CHECK(srcLen <= dstLen && stride != 0 && srcLen % stride == 0);
+    if (Heap::IsHeapAddress(src)) {
+        ZBarrierSet::AccessBarrier::struct_arraycopy_in_heap_no_check_cast(array, dst, src, srcLen / stride);
+        return;
+    }
+    // Stack arrays have uncolored slots (no ZGC heap-array counterpart).
     std::vector<size_t> offsets;
     static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(
         [&offsets, dst](RefField<>& field) {
@@ -745,12 +754,60 @@ void ZBarrier::CopyRefArrayColouredToHeap(MAddress dst, size_t dstLen, MAddress 
     CHECK(Heap::IsHeapAddress(dst));
     CHECK_DETAIL(srcLen <= dstLen && srcLen % sizeof(HeapSlot<>) == 0,
                  "full-colour ref-array copy shape invalid: dstLen=%zu srcLen=%zu", dstLen, srcLen);
+    if (Heap::IsHeapAddress(src)) {
+        ZBarrierSet::AccessBarrier::oop_arraycopy_in_heap_no_check_cast(
+            reinterpret_cast<zpointer*>(dst), reinterpret_cast<zpointer*>(src), srcLen / sizeof(zpointer));
+        return;
+    }
+    // Stack arrays have uncolored slots (no ZGC heap-array counterpart).
     std::vector<size_t> offsets;
     for (size_t offset = 0; offset < srcLen; offset += sizeof(HeapSlot<>)) {
         offsets.push_back(offset);
     }
     CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
+}
+
+void ZBarrierSet::AccessBarrier::struct_copy_one(MArray* layout, MAddress dst, MAddress src)
+{
+    const size_t stride = layout->GetElementSize();
+    size_t cursor = 0;
+    layout->GetComponentTypeInfo()->GetGCTib().ForEachBitmapWord(dst, [&](RefField<>& field) {
+        const size_t offset = reinterpret_cast<MAddress>(&field) - dst;
+        if (cursor < offset) {
+            std::memmove(reinterpret_cast<void*>(dst + cursor), reinterpret_cast<void*>(src + cursor), offset - cursor);
+        }
+        oop_copy_one(reinterpret_cast<zpointer*>(dst + offset), reinterpret_cast<zpointer*>(src + offset));
+        cursor = offset + sizeof(zpointer);
+    });
+    if (cursor < stride) {
+        std::memmove(reinterpret_cast<void*>(dst + cursor), reinterpret_cast<void*>(src + cursor), stride - cursor);
+    }
+}
+
+void ZBarrierSet::AccessBarrier::struct_arraycopy_in_heap_no_check_cast(
+    MArray* layout, MAddress dst, MAddress src, size_t length)
+{
+    // Same direction selection as oop_arraycopy, with the inline-value stride.
+    const size_t stride = layout->GetElementSize();
+    if (length == 0) {
+        return;
+    }
+    if (src > dst) {
+        for (const MAddress end = src + length * stride; src < end; src += stride, dst += stride) {
+            struct_copy_one(layout, dst, src);
+        }
+        return;
+    }
+    if (src < dst) {
+        const MAddress end = src;
+        src += (length - 1) * stride;
+        dst += (length - 1) * stride;
+        for (; src >= end; src -= stride, dst -= stride) {
+            struct_copy_one(layout, dst, src);
+        }
+        return;
+    }
 }
 
 void ZBarrier::CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib)

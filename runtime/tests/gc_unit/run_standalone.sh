@@ -377,6 +377,7 @@ MAIN_SOURCES=(
   "$SRC/test_current_object_ref.cpp"
   "$SRC/test_i2_readref.cpp"
   "$SRC/test_loadfc.cpp"
+  "$SRC/test_arraycopy.cpp"
   "$SRC/test_fnlz_roots.cpp"
   "$SRC/test_reference_processor.cpp"
   "$SRC/test_mark_stack_entry.cpp"
