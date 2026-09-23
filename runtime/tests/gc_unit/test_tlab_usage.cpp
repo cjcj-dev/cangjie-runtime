@@ -360,6 +360,7 @@ GC_RUNTIME_OTHER_VM_TEST(TLABOwnership, ParkResumeKeepsExclusiveBuffer)
 namespace {
 struct TLABSnapshotCase {
     TypeInfo* type;
+    int allocationCpu;
     std::atomic<Mutator*> owner[2]{};
     std::atomic<int> refillOwner{-1};
     std::atomic<uint32_t> epoch{0};
@@ -369,6 +370,13 @@ struct TLABSnapshotCase {
 };
 void SnapshotOwner(TLABSnapshotCase& state, unsigned index)
 {
+    // ZGC zHeuristics.cpp:69-75 selects either one shared page or per-CPU
+    // shared pages. Keep both owners on one CPU so the same allocation
+    // history has the same backing capacity in either product branch.
+    cpu_set_t allocationCpu;
+    CPU_ZERO(&allocationCpu);
+    CPU_SET(state.allocationCpu, &allocationCpu);
+    GC_EXPECT_EQ(sched_setaffinity(0, sizeof(allocationCpu), &allocationCpu), 0);
     auto& manager = MutatorManager::Instance();
     Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     owner->DoLeaveSaferegion();
@@ -402,7 +410,9 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
     param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    TLABSnapshotCase state{TLABTestType()};
+    const int allocationCpu = sched_getcpu();
+    GC_EXPECT_TRUE(allocationCpu >= 0 && allocationCpu < CPU_SETSIZE);
+    TLABSnapshotCase state{TLABTestType(), allocationCpu};
     std::thread a([&] { SnapshotOwner(state, 0); });
     std::thread b([&] { SnapshotOwner(state, 1); });
     while (state.owner[0].load(std::memory_order_acquire) == nullptr ||

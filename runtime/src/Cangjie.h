@@ -228,12 +228,6 @@ struct HeapParam {
      * It will be set to default value if assigned with 0.
      */
     double heapGrowth;
-
-    // No runtime readers. Retained for cjcj's RuntimeHeapParamC layout;
-    // remove together with the macro/option fields in cjcj#91.
-    double allocationRate;
-    size_t allocationWaitTime;
-
     // Heap flag origins survive default expansion (ZGC FLAG_IS_CMDLINE).
     bool heapSizeSet;
     // Soft limit in KB. A set bit permits explicitly selecting zero.
