@@ -1143,12 +1143,13 @@ void ZGeneration::free_empty_pages(ZRelocationSetSelector* selector, int bulk)
 void ZGeneration::flip_age_pages(const ZRelocationSetSelector* selector)
 {
     ZWorkers* w = Workers();
-    if (w == nullptr) {
-        return;
-    }
     ZRelocate::flip_age_pages(*w, selector->not_selected_small());
     ZRelocate::flip_age_pages(*w, selector->not_selected_medium());
     ZRelocate::flip_age_pages(*w, selector->not_selected_large());
+    // ZGC zGeneration.cpp:185-192: finish compiled stores that omitted barriers
+    // before making every promoted reference field store-good.
+    ZRendezvousHandshakeClosure rendezvous;
+    Handshake::execute(&rendezvous);
     ZRelocate::barrier_promoted_pages(*w, _relocation_set.flip_promoted_pages(),
                                      _relocation_set.relocate_promoted_pages());
 }
@@ -1189,12 +1190,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
     }
     _relocation_set.install(&selector);
     if (_cycle == ZGenerationId::young) {
-        ZWorkers* w = Workers();
-        if (w != nullptr) {
-            ZRelocate::flip_age_pages(*w, selector.not_selected_small());
-            ZRelocate::flip_age_pages(*w, selector.not_selected_medium());
-            ZRelocate::flip_age_pages(*w, selector.not_selected_large());
-        }
+        flip_age_pages(&selector);
     }
     ZRelocationSetIterator rs_iter(&_relocation_set);
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
