@@ -731,10 +731,14 @@ set +e
 other_vm_exit_rc=$?
 cat "$OUT/other_vm_exit.log"
 echo "GC_UNIT_OTHER_VM_EXIT_RC=$other_vm_exit_rc"
+bash "$SRC/run_other_vm_teardown.sh" "$OUT/cj_gc_unit" "$RUNTIME_LIB_DIR" "$OUT"
+teardown_rc=$?
+echo "GC_UNIT_OTHER_VM_TEARDOWN_RC=$teardown_rc"
 bash "$SRC/run_parallel_tests.sh" \
   "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" "$OUT" "$RUNTIME_LIB_DIR"
 runner_rc=$?
 set -e
 
 if [[ "$other_vm_exit_rc" -ne 0 ]]; then exit "$other_vm_exit_rc"; fi
+if [[ "$teardown_rc" -ne 0 ]]; then exit "$teardown_rc"; fi
 exit "$runner_rc"
