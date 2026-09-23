@@ -264,7 +264,7 @@ GC_COMPONENT_OTHER_VM_TEST(P13Heuristics, FragmentationBudgetSelectsSharedSlot)
     // Construct the product heap so PerAge consumes the decision itself.
     CreateStandaloneHeap(10 * static_cast<size_t>(ZCPU::count()));
     auto& allocator = Heap::GetHeap().object_allocator();
-    const uintptr_t address = allocator.alloc(16, PageAge::eden, true);
+    const uintptr_t address = allocator.alloc_for_relocation(16, PageAge::eden);
     const bool perCpu = allocator.allocator(PageAge::eden)->usePerCpuSharedSmallPages;
     std::fprintf(stderr, "FRAGMENTATION_ROUTE address=%zx per_cpu=%d\n", address, perCpu);
     GC_EXPECT_FALSE(perCpu);
