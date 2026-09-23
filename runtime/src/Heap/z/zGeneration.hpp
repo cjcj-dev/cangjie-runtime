@@ -57,8 +57,6 @@ public:
     ZGeneration(const ZGeneration&) = delete;
     ZGeneration& operator=(const ZGeneration&) = delete;
     ZGenerationId id() const;
-    void PreGarbageCollection(bool isConcurrent, uint64_t gcIndex);
-    void PostGarbageCollection(uint64_t gcIndex);
     ZGenerationIdOptional id_optional() const;
     bool is_young() const;
     bool is_old() const;

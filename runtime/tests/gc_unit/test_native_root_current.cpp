@@ -66,7 +66,7 @@ public:
     {
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).End();
         auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-        ZDriver::RunGarbageCollection(1, GC_REASON_YOUNG, ZYoungType::major_partial_roots);
+        ZGeneration::young()->collect(ZYoungType::major_partial_roots);
     }
     static void NativeRootTrace(Heap& collector)
     {

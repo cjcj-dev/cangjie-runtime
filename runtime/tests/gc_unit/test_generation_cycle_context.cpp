@@ -270,7 +270,6 @@ void* Exercise(void*)
         YoungTypeSetter type(heap.young(), major ? ZYoungType::major_partial_roots : ZYoungType::minor);
         ZGenerationTest::SetReason(heap.young(), major ? GC_REASON_USER : GC_REASON_YOUNG);
         if (major) ZGenerationTest::SetReason(heap.old(), GC_REASON_USER);
-        heap.young().PreGarbageCollection(true, heap.young().Snapshot().requestIndex);
         heap.young().pause_mark_start();
         checkYoungMarkStarted();
         checkCyclePrepared();
@@ -278,7 +277,6 @@ void* Exercise(void*)
         heap.young().End();
         heap.young().Workers()->set_inactive();
         if (major) {
-            heap.old().PreGarbageCollection(true, heap.old().Snapshot().requestIndex);
             checkCyclePrepared();
             heap.old().concurrent_mark();
             checkOldMarkResult();
