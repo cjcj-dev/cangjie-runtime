@@ -370,6 +370,7 @@ MAIN_SOURCES=(
   "$SRC/test_gc_thread_pool.cpp"
   "$SRC/test_zWorkers.cpp"
   "$SRC/test_zGeneration.cpp"
+  "$SRC/test_generation_mark_free.cpp"
 
   "$SRC/test_exempt_unlock.cpp"
   "$SRC/test_isfromreg.cpp"
