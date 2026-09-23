@@ -69,7 +69,8 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
     // Relocation may compact in place and transfer remembered slots.
     ZPage* region = fx.region0;
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, { region }));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, fx.obj1));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {region, fx.region1}));
         region->MarkForwardingDone();
 }
 
@@ -84,11 +85,20 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     from = reinterpret_cast<MAddress>(fx.obj0);
     to = reinterpret_cast<MAddress>(fx.obj1);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, { region }));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, fx.obj1));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {region, fx.region1}));
         ForwardingEntries* entries = generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart());
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;
     }
+    // Only the source is pending in this claimant fixture. The second sparse
+    // page was needed for selection; publish its completed identity before
+    // exercising a worker with an externally claimed source.
+    auto* companion = forwarding_for_page(fx.region1);
+    GC_EXPECT_TRUE(companion != nullptr && companion->claim());
+    GC_EXPECT_EQ(companion->insert(to, to), to);
+    companion->release_page();
+    companion->mark_done();
     // The mapping is ready, but page completion belongs to the worker.
     // ZRelocateTask marks done after processing the claimed forwarding.
     region->SetInGhostRegion(1);

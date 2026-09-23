@@ -79,7 +79,7 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType);
 
-    void RequestGC(GCReason reason, bool async);
+    void RequestGC(GCReason reason);
     void ResolveCycleRef();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     void DumpRoots(LogType logType);
@@ -117,7 +117,6 @@ public:
     bool FlushGCDataMarkProducers(ThreadGCData& data);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
     bool IsGhostFromObject(BaseObject* obj) const;
-    BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation);
     ZGenerationYoung& young() { return *ZGeneration::young(); }
     const ZGenerationYoung& young() const { return *ZGeneration::young(); }
     ZGenerationOld& old() { return *ZGeneration::old(); }

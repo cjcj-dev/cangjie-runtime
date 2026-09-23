@@ -541,17 +541,6 @@ inline void ZPage::RetirePageMemory()
 
 
 
-inline bool ZPage::IsCompactRouteDestination(MAddress address) const
-    {
-        // The generation relocation set owns the sole from-to mapping.
-        auto owner = forwarding_for_page(this);
-        return IsCompacted() && owner && owner->find_from_by_to(address, nullptr);
-    }
-
-
-
-
-
 inline bool ZPage::RetainForwarding()
     {
         auto owner = forwarding_for_page(this);

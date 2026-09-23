@@ -4,5 +4,5 @@
 
 extern "C" void PhaseEntryRequestMinor()
 {
-    MapleRuntime::HeapManager::RequestGC(MapleRuntime::GC_REASON_YOUNG, false);
+    MapleRuntime::HeapManager::RequestGC(MapleRuntime::GC_REASON_YOUNG);
 }

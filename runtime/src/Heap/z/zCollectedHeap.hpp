@@ -34,7 +34,7 @@ public:
     void initialize_gc_workers();
     void initialize_gc();
     void finalize_gc();
-    void collect(GCReason reason, bool async);
+    void collect(GCReason reason);
     void safepoint_synchronize_begin();
     void safepoint_synchronize_end();
     uintptr_t allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize);

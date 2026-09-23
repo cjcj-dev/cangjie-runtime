@@ -1186,7 +1186,6 @@ void ZGeneration::select_relocation_set(bool promote_all)
         free_empty_pages(&selector, 0);
     }
     selector.select();
-    selector.check_selected_relocatable();
     if (_cycle == ZGenerationId::young) {
         TenuringInputs inputs;
         inputs.promoteAll = promote_all;

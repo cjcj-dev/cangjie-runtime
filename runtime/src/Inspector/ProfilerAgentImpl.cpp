@@ -88,7 +88,7 @@ void StopTrackingHeapObjects(const std::string &message, SendMsgCB sendMsg)
 
 void CollectGarbage(const std::string &message, SendMsgCB sendMsg)
 {
-    MapleRuntime::Heap::GetHeap().RequestGC(MapleRuntime::GC_REASON_DCMD_GC_RUN, false);
+    MapleRuntime::Heap::GetHeap().RequestGC(MapleRuntime::GC_REASON_DCMD_GC_RUN);
     SetEnd(message, MapleRuntime::MsgType::END);
 }
 

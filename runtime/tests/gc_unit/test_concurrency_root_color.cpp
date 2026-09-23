@@ -85,7 +85,12 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page}));
+    // Two real sparse pages satisfy the selector's strict reclaimable-page test.
+    fx.region1->reset(PageAge::eden);
+    BaseObject* companion = fx.PlaceObject(fx.region1->GetRegionStart());
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, companion));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page, fx.region1}));
     heap.young().set_phase(ZGenerationPhase::Relocate);
     ZGlobalsPointers::flip_young_relocate_start();
     heap.young().Workers()->set_active_workers(1);
@@ -182,7 +187,12 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, earlier));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {page}));
+    // Two real sparse pages satisfy the selector's strict reclaimable-page test.
+    fx.region1->reset(PageAge::old);
+    BaseObject* companion = fx.PlaceObject(fx.region1->GetRegionStart());
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, companion));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {page, fx.region1}));
     heap.old().set_phase(ZGenerationPhase::Relocate);
     ZGlobalsPointers::flip_old_relocate_start();
     heap.old().Workers()->set_active_workers(1);

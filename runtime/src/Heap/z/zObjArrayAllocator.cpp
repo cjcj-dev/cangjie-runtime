@@ -104,7 +104,7 @@ MArray* ZObjArrayAllocator::initialize()
                     CHECK_DETAIL(fields == 0, "incomplete array must not expose reference fields");
                     const ZGenerationId id = requestYoung ? ZGenerationId::young : ZGenerationId::old;
                     const uint64_t before = heap.GetCycleSnapshot(id).sequence;
-                    heap.RequestGC(requestYoung ? GC_REASON_YOUNG : GC_REASON_FORCE, false);
+                    heap.RequestGC(requestYoung ? GC_REASON_YOUNG : GC_REASON_FORCE);
                     const uint64_t after = heap.GetCycleSnapshot(id).sequence;
                     observed = static_cast<MArray*>(mutator->LoadInvisibleRoot());
                     const bool valid = observed != nullptr && observed->IsInvisibleObject() &&

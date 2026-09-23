@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zGlobals.hpp"
 #include "Heap/z/concurrentGCThread.hpp"
 
 #include <algorithm>
@@ -653,7 +654,7 @@ bool RegionManager::ClaimCapacityOrStall(AllocationStallRequest& request)
 bool RegionManager::StallAllocation(AllocationStallRequest& request)
 {
     // ZGC zPageAllocator.cpp:1443-1448: asynchronous minor request, then one wait.
-    ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, 0, 0));
+    ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, ZYoungGCThreads, 0));
 
     // zFuture.inline.hpp:47-53: a Java thread waits with a safepoint check;
     // here the mutator enters its saferegion before ZFuture::get (I3/I4).
@@ -758,9 +759,9 @@ void RegionManager::RestartGC() const
     const ZPageAllocation* request = stalled.first();
     if (request == nullptr) { return; }
     if (!HasAllocSeenYoung(request)) {
-        ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, 0, 0));
+        ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, ZYoungGCThreads, 0));
     } else {
-        ZCollectedHeap::heap()->driver_major()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, 0, 0));
+        ZCollectedHeap::heap()->driver_major()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, ZYoungGCThreads, ZOldGCThreads));
     }
 }
 

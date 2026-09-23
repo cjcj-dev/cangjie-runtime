@@ -147,7 +147,7 @@ void Heap::Fini()
 }
 
 
-void Heap::RequestGC(GCReason reason, bool async) { ZCollectedHeap::heap()->collect(reason, async); }
+void Heap::RequestGC(GCReason reason) { ZCollectedHeap::heap()->collect(reason); }
 
 void Heap::ResolveCycleRef() { cross_vm().ResolveCycleRef(); }
 
@@ -218,11 +218,6 @@ bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
 
 bool Heap::IsGhostFromObject(BaseObject* obj) const { return ZRelocate::IsFromObject(obj); }
 
-
-BaseObject* Heap::ForwardObject(BaseObject* fromVersion, Generation generation)
-{
-    return ZRelocate::ForwardObject(fromVersion, generation);
-}
 
 BaseObject* Heap::relocate_or_remap_object(BaseObject* object, ZGenerationId generation)
 {

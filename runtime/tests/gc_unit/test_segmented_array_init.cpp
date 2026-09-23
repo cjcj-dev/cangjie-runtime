@@ -206,7 +206,7 @@ void* RunYoungSelectionLifetimeCase(void*)
     const PageAge beforeAge = livePage->age();
     const U64 root = heap.RegisterExportRoot(live);
     Mutator::GetMutator()->SetManagedContext(false);
-    heap.RequestGC(GC_REASON_YOUNG, false);
+    heap.RequestGC(GC_REASON_YOUNG);
     // Read through the page table, never through either saved descriptor.
     const bool emptyReleased = Heap::page(deadAddress) == nullptr;
     BaseObject* const survivor = heap.GetExportObject(root);
@@ -255,7 +255,7 @@ void* RunFlipPromotionCase(void* argument)
         }
     }
     Mutator::GetMutator()->SetManagedContext(false);
-    heap.RequestGC(promote ? GC_REASON_USER : GC_REASON_YOUNG, false);
+    heap.RequestGC(promote ? GC_REASON_USER : GC_REASON_YOUNG);
     array = static_cast<MArray*>(heap.GetExportObject(root));
     fields = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
     const zpointer after = fields[0].GetFieldValue();
@@ -302,7 +302,7 @@ void* RunOldRelocationStatisticsCase(void*)
     const size_t minimumLive = survivor->GetContentSize();
     const U64 root = heap.RegisterExportRoot(survivor);
     mutator->SetManagedContext(false);
-    heap.RequestGC(GC_REASON_USER, false);
+    heap.RequestGC(GC_REASON_USER);
     auto* current = heap.GetExportObject(root);
     const bool retainedOld = current != nullptr &&
         !Heap::page(reinterpret_cast<uintptr_t>(current))->IsYoungRegion();
@@ -330,7 +330,7 @@ void* RunOrdinaryBirthCase(void*)
     const bool shared = Heap::page(reinterpret_cast<uintptr_t>(survivor)) == oldPage;
     const U64 root = heap.RegisterExportRoot(survivor);
     mutator->SetManagedContext(false);
-    heap.RequestGC(GC_REASON_USER, false);
+    heap.RequestGC(GC_REASON_USER);
     mutator->SetManagedContext(true);
     MObject* fresh = MObject::NewPinnedObject(type, size);
     ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(fresh));
@@ -541,7 +541,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     mutator->SetManagedContext(false);
     markPhase.reset();
     // The next real driver cycle resamples allocation watermarks and relocates.
-    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
     page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
@@ -619,7 +619,7 @@ void* RunNativeTaskRootCase(void*)
         ScopedStopTheWorld stw("native task heap iteration", false);
         HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == array; });
     }
-    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER);
     Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::fprintf(stderr, "NATIVE_TASK_HEAP_TARGET managed_visits=%zu gc_returned=1\n", objects);
     Mutator::GetMutator()->SetManagedContext(true);

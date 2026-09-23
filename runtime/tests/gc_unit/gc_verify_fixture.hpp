@@ -76,7 +76,9 @@ struct GcVerifyFixture : GcHeapFixture {
             .PublishPhase(ZGenerationPhase::MarkComplete);
         // zRelocationSet.cpp:110-118: select pages and install the arena before
         // preparing a source page or verifying its forwarding entries.
-        CHECK(BeginForwardingArena(Generation::Old, { region0 }));
+        // A second actual live page permits the selector to reclaim one page.
+        (void)RegionSpace::MarkObject<Generation::Old>(obj1);
+        CHECK(BeginForwardingArena(Generation::Old, {region0, region1}));
     }
 };
 } // namespace MapleRuntime::GcUnit
