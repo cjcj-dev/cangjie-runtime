@@ -23,6 +23,9 @@ namespace MapleRuntime {
 // heap comes up. ZCollectedHeap::start_gc_threads publishes the concurrent budget
 // after heap initialization; this initial capacity covers early per-worker storage.
 bool UseDynamicNumberOfGCThreads = true;
+// gc_globals.hpp / z_globals.hpp defaults; ZArguments applies flag origins.
+uint32_t MaxTenuringThreshold = 15;
+int32_t ZTenuringThreshold = -1;
 uint32_t ConcGCThreads = 64;
 uint32_t ZYoungGCThreads = 64;
 uint32_t ZOldGCThreads = 64;
