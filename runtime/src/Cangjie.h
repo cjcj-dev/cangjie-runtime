@@ -229,22 +229,9 @@ struct HeapParam {
      */
     double heapGrowth;
 
-    /*
-     * The rate of allocating memory from heap.
-     * this value is the lower bound of the real allocation rate.
-     * allocator maybe wait some time if this value is set with an improperly small number.
-     * Mesured in MB/s, default to 10240 MB/s, must be > 0 MB/s.
-     * It will be set to default value if assigned with 0.
-     */
+    // No runtime readers. Retained for cjcj's RuntimeHeapParamC layout;
+    // remove together with the macro/option fields in cjcj#91.
     double allocationRate;
-
-    /*
-     * The maximum wait time when allocating memory from heap.
-     * The latter allocation will wait a number of time if the two allocation interval is less than the wait time.
-     * The real wait time is the minimum of allocationWaitTime and the wait time calculated from real allocation rate.
-     * Measured in ns, default to 1000 ns, must > 0 ns.
-     * It will be set to default value if assigned with 0.
-     */
     size_t allocationWaitTime;
 };
 
