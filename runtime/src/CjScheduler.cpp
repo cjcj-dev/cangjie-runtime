@@ -719,8 +719,8 @@ static RuntimeParam InitRuntimeParam()
                 .garbageThreshold = InitPercentParameterIncl("cjGarbageThreshold", 0.0, 1.0, 0.5),
                 // Default GC interval is 150ms.
                 .gcInterval = InitTimeParameter("cjGCInterval", 0, 150 * MILLI_SECOND_TO_NANO_SECOND),
-                // Default backup GC interval is 240s.
-                .backupGCInterval = InitTimeParameter("cjBackupGCInterval", 0, 240 * SECOND_TO_NANO_SECOND),
+                // Timer collections are disabled by default (ZGC z_globals.hpp:62-66).
+                .backupGCInterval = InitTimeParameter("cjBackupGCInterval", 0, 0),
                 .concGCThreads = InitGCWorkerCount("cjConcGCThreads"),
                 .youngGCThreads = InitGCWorkerCount("cjYoungGCThreads"),
                 .oldGCThreads = InitGCWorkerCount("cjOldGCThreads"),
