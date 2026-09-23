@@ -1,0 +1,146 @@
+[
+  {
+    "arm": "green",
+    "rc": 0,
+    "qualification": "QUALIFIED",
+    "reason": null,
+    "admission": {
+      "mode": "absolute",
+      "reason": "zero-deviations",
+      "status": "ACCEPTED"
+    },
+    "completion": {
+      "normal_exits": 1,
+      "records_complete": 1,
+      "requested_samples": 1,
+      "required_counts_complete": 1,
+      "started_samples": 1
+    }
+  },
+  {
+    "arm": "cut-wave8",
+    "rc": 1,
+    "qualification": "QUALIFIED",
+    "reason": null,
+    "admission": {
+      "mode": "absolute",
+      "reason": "absolute-deviation",
+      "status": "REJECTED"
+    },
+    "completion": {
+      "normal_exits": 1,
+      "records_complete": 1,
+      "requested_samples": 1,
+      "required_counts_complete": 1,
+      "started_samples": 1
+    }
+  },
+  {
+    "arm": "restored",
+    "rc": 0,
+    "qualification": "QUALIFIED",
+    "reason": null,
+    "admission": {
+      "mode": "absolute",
+      "reason": "zero-deviations",
+      "status": "ACCEPTED"
+    },
+    "completion": {
+      "normal_exits": 1,
+      "records_complete": 1,
+      "requested_samples": 1,
+      "required_counts_complete": 1,
+      "started_samples": 1
+    }
+  },
+  {
+    "arm": "missing-wave",
+    "rc": 1,
+    "qualification": "INVALID",
+    "reason": "records-wave-set",
+    "admission": {
+      "mode": "none",
+      "reason": "records-wave-set",
+      "status": "REJECTED"
+    },
+    "completion": {
+      "normal_exits": 1,
+      "records_complete": 0,
+      "requested_samples": 1,
+      "required_counts_complete": 0,
+      "started_samples": 1
+    }
+  },
+  {
+    "arm": "duplicate-wave",
+    "rc": 1,
+    "qualification": "INVALID",
+    "reason": "records-duplicate-wave",
+    "admission": {
+      "mode": "none",
+      "reason": "records-duplicate-wave",
+      "status": "REJECTED"
+    },
+    "completion": {
+      "normal_exits": 1,
+      "records_complete": 0,
+      "requested_samples": 1,
+      "required_counts_complete": 0,
+      "started_samples": 1
+    }
+  },
+  {
+    "arm": "missing-ok",
+    "rc": 1,
+    "qualification": "INVALID",
+    "reason": "records-token-count",
+    "admission": {
+      "mode": "none",
+      "reason": "records-token-count",
+      "status": "REJECTED"
+    },
+    "completion": {
+      "normal_exits": 1,
+      "records_complete": 0,
+      "requested_samples": 1,
+      "required_counts_complete": 0,
+      "started_samples": 1
+    }
+  },
+  {
+    "arm": "exit",
+    "rc": 1,
+    "qualification": "INVALID",
+    "reason": "abnormal-exit",
+    "admission": {
+      "mode": "none",
+      "reason": "abnormal-exit",
+      "status": "REJECTED"
+    },
+    "completion": {
+      "normal_exits": 0,
+      "records_complete": 0,
+      "requested_samples": 1,
+      "required_counts_complete": 0,
+      "started_samples": 1
+    }
+  },
+  {
+    "arm": "missing-count",
+    "rc": 1,
+    "qualification": "INVALID",
+    "reason": "required-count-heap-missing",
+    "admission": {
+      "mode": "none",
+      "reason": "required-count-heap-missing",
+      "status": "REJECTED"
+    },
+    "completion": {
+      "normal_exits": 1,
+      "records_complete": 1,
+      "requested_samples": 1,
+      "required_counts_complete": 0,
+      "started_samples": 1
+    }
+  }
+]

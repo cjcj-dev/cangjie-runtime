@@ -1,0 +1,10 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -413,6 +413,4 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile, bool handshakeMutators)
+     // GC code lookup readers are not mutators, so drain them explicitly before
+     // the mutator rendezvous. Admission remains closed through purge.
+     unload.Synchronize();
+-    TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
+-        baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
+     ElfUnloadQuiescence::UnlinkImage(imageAddress);

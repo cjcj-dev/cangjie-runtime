@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRelocationSetSelector.cpp
++++ b/runtime/src/Heap/z/zRelocationSetSelector.cpp
+@@ -121,7 +121,7 @@
+     size_t from_forwarding_entries = 0;
+     size_t live_bytes_per_age[kPageAgeCount] = {};
+     size_t npages_per_age[kPageAgeCount] = {};
+-    semi_sort();
++    // Controlled consumer disconnection.
+     const double denom = static_cast<double>(_max_page_size - _object_size_limit);
+     for (int from = 1; from <= npages; from++) {
+         ZPage* const page = _live_pages.at(from - 1);

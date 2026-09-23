@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -1156,7 +1156,7 @@
+                 continue;
+             }
+             if (page->is_marked()) {
+-                selector.register_live_page(page);
++                // Controlled phase-entry disconnection.
+             } else {
+                 selector.register_empty_page(page);
+                 pt_iter.yield([&]() { free_empty_pages(&selector, 64); });

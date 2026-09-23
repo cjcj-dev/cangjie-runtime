@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRelocationSetSelector.inline.hpp
++++ b/runtime/src/Heap/z/zRelocationSetSelector.inline.hpp
+@@ -42,7 +42,7 @@
+     if (page->is_medium()) {
+         const size_t size = page->size();
+         const int shift = ZPageSizeMediumMaxShift - Log2Exact(size);
+-        const size_t page_fragmentation_limit = _page_fragmentation_limit >> shift;
++        const size_t page_fragmentation_limit = _page_fragmentation_limit;
+         const size_t garbage = size - live_bytes;
+         return garbage > page_fragmentation_limit;
+     }

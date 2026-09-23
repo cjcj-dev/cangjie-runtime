@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRelocationSetSelector.cpp
++++ b/runtime/src/Heap/z/zRelocationSetSelector.cpp
+@@ -83,7 +83,7 @@
+ {
+     const size_t partitionSize = page->size() >> NumPartitionsShift;
+     const int partitionSizeShift = Log2Exact(partitionSize);
+-    return page->live_bytes() >> partitionSizeShift;
++    return (NumPartitions - 1) - (page->live_bytes() >> partitionSizeShift);
+ }
+ 
+ void ZRelocationSetSelectorGroup::semi_sort()

@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -602,7 +602,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
+         // therefore makes this unload ineligible.
+         ScopedEnterSaferegion enterSaferegion(false);
+         ScopedStopTheWorld stw("ELF unload active-image preflight", false);
+-        if (HasActiveImageFrames(baseFile)) {
++        if (false && HasActiveImageFrames(baseFile)) { // Fault injection: bypass rejection.
+             LOG(RTLOG_WARNING, "refuse to unload active Cangjie image %s", baseName.Str());
+             return -1;
+         }
