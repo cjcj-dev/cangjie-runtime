@@ -388,6 +388,57 @@ void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t m
     }
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+void CheckConflictingTenuringFlags(bool environment)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        RuntimeParam params{};
+        params.heapParam.heapSize = 64 * 1024;
+        params.coParam.processorNum = 1;
+        params.gcParam.concGCThreads = 2;
+        params.gcParam.maxTenuringThresholdSet = true;
+        params.gcParam.maxTenuringThreshold = 4;
+        params.gcParam.zTenuringThresholdSet = true;
+        params.gcParam.zTenuringThreshold = 9;
+        if (environment) {
+            setenv("cjHeapSize", "64MB", 1);
+            setenv("cjProcessorNum", "1", 1);
+            setenv("cjConcGCThreads", "2", 1);
+            setenv("cjMaxTenuringThreshold", "4", 1);
+            setenv("cjZTenuringThreshold", "9", 1);
+            MRT_CjRuntimeInit();
+        } else {
+            if (InitCJRuntime(&params) != E_OK) { _exit(125); }
+        }
+        std::fprintf(stderr, "TENURING_CONFLICT_ACCEPTED maximum=%u override=%d\n",
+                     MaxTenuringThreshold, ZTenuringThreshold);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char buffer[512];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) { transcript.append(buffer, count); }
+    close(output[0]);
+    std::fwrite(transcript.data(), 1, transcript.size(), stderr);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    // ZGC zArguments.cpp:188-191 rejects this combination at initialization.
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find("ZTenuringThreshold must be within bounds of MaxTenuringThreshold") != std::string::npos;
+    std::fprintf(stderr, "TENURING_CONFLICT_TARGET environment=%d status=%d rejected=%d\n",
+                 environment, status, rejected);
+    GC_EXPECT_TRUE(rejected);
+}
+
 }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultSmallHeap) { CheckTenuringFlags(64 * 1024, 2, false, 0, false, 0); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, DefaultLargeHeap) { CheckTenuringFlags(512 * 1024, 2, false, 0, false, 0); }
@@ -398,10 +449,10 @@ GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, ExplicitMaximum) { CheckTenuringFlags(64
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumZero) { CheckTenuringFlags(64 * 1024, 2, true, 0, false, 0); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideZero) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 0); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverridePositive) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9); }
-GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumAndOverride) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 9); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumAndOverride) { CheckConflictingTenuringFlags(false); }
 
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverride) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, 9, true); }
-GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 9, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentMaximum) { CheckConflictingTenuringFlags(true); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentAutomatic) { CheckTenuringFlags(64 * 1024, 2, false, 0, true, -1, true); }
 GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentZero) { CheckTenuringFlags(64 * 1024, 2, true, 0, true, 0, true); }
 
@@ -431,3 +482,10 @@ GC_RUNTIME_OTHER_VM_TEST(TenuringGeometry, ConfiguredMaximumSurvivesInitializati
     GC_EXPECT_TRUE(effective == configured && medium == 16 * 1024 * 1024 && budget == configured / 4);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideEqualsMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 4); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, OverrideBelowMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 3); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverrideEqualsMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 4, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentOverrideBelowMaximum) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, 3, true); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, MaximumWithAutomatic) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, -1); }
+GC_RUNTIME_OTHER_VM_TEST(TenuringFlags, EnvironmentMaximumWithAutomatic) { CheckTenuringFlags(64 * 1024, 2, true, 4, true, -1, true); }

@@ -108,6 +108,10 @@ void ZArguments::initialize()
         }
         MaxTenuringThreshold = tenuring_threshold;
     }
+    // ZGC zArguments.cpp:188-191: validate after deriving the maximum.
+    if (param.zTenuringThresholdSet && ZTenuringThreshold > static_cast<int32_t>(MaxTenuringThreshold)) {
+        CHECK_DETAIL(false, "ZTenuringThreshold must be within bounds of MaxTenuringThreshold");
+    }
 }
 
 Heap* ZArguments::create_heap() { return &Heap::GetHeap(); }
