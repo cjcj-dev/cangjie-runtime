@@ -530,3 +530,86 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerRemembersPromotion)
 {
     CheckRelocationRemsetOwnership(true);
 }
+
+#include "Heap/z/zObjectAllocator.hpp"
+GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation)
+{
+    CreateStandaloneHeap(64);
+    ZHeuristics::set_max_heap_size(128 * 1024 * 1024);
+    ZHeuristics::set_medium_page_size();
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& heap = Heap::GetHeap();
+    auto& generation = heap.old();
+    generation.InitializeWorkers(1);
+    generation.Workers()->set_active_workers(1);
+    generation.Begin(1);
+    GenerationSequenceFixture::Advance(generation);
+    const size_t size = ZObjectSizeLimitSmall + ZObjectAlignmentMedium;
+    GC_EXPECT_TRUE(size <= ZObjectSizeLimitMedium);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(size - sizeof(uintptr_t));
+    type->SetAlign(8);
+    GCTib tib{};
+    tib.tag = SIGN_BIT;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    BaseObject* objects[2];
+    ZPage* pages[2];
+    ZRelocationSetSelector selector;
+    for (size_t i = 0; i < 2; ++i) {
+        pages[i] = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, false, false, PageAge::old, flags);
+        GC_EXPECT_TRUE(pages[i] != nullptr);
+        objects[i] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(size));
+        objects[i]->SetClassInfo(type);
+        *reinterpret_cast<uint64_t*>(reinterpret_cast<MAddress>(objects[i]) + 8) = 0x958;
+        GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], objects[i]));
+        ZPageTest::MakeRelocatable(*pages[i]);
+        selector.register_live_page(pages[i]);
+    }
+    selector.select();
+    generation.relocation_set().install(&selector);
+    ZRelocationSetIterator installed(&generation.relocation_set());
+    for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
+    ZForwarding* owner = forwarding_for_page(pages[0]);
+    GC_EXPECT_TRUE(owner != nullptr);
+    zpointer root = StoreGoodPointer(objects[0]);
+    ZGlobalsPointers::flip_old_relocate_start();
+    generation.set_phase(ZGenerationPhase::Relocate);
+    auto* allocator = heap.object_allocator().allocator(PageAge::old);
+    GC_EXPECT_TRUE(*allocator->shared_medium_page_addr() == nullptr);
+    // Hold the existing product lock, so a retained mutator cannot allocate
+    // until the real worker has inserted the winning forwarding entry.
+    std::unique_lock<ZLock> lock(allocator->mediumPageAllocLock);
+    BaseObject* result = nullptr;
+    std::thread mutator([&] {
+        ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+        result = to_object(ZBarrier::load_barrier_on_oop_field(&root));
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (owner->ref_count().load(std::memory_order_acquire) != 2 &&
+           std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
+    const bool retained = owner->ref_count().load(std::memory_order_acquire) == 2;
+    std::thread worker([&] { generation.relocate().relocate(&generation.relocation_set()); });
+    const MAddress from = reinterpret_cast<MAddress>(objects[0]);
+    const auto publishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    MAddress winner = 0;
+    while ((winner = owner->find(from)) == 0 &&
+           std::chrono::steady_clock::now() < publishDeadline) { std::this_thread::yield(); }
+    lock.unlock();
+    mutator.join();
+    worker.join();
+    ZPage* unused = *allocator->shared_medium_page_addr();
+    const size_t allocated = unused == nullptr ? size : unused->GetRegionAllocatedSize();
+    const bool published = winner != 0 && reinterpret_cast<MAddress>(result) == winner;
+    const bool copied = result != nullptr && *reinterpret_cast<uint64_t*>(reinterpret_cast<MAddress>(result) + 8) == 0x958;
+    std::fprintf(stderr, "RELOCATE958_UNDO retained=%d winner=%zx result=%p copied=%d unused=%p allocated=%zu target_assertion=executed\n",
+                 retained, winner, result, copied, unused, allocated);
+    // Keep the result assertion independent of the scheduling preconditions.
+    GC_EXPECT_EQ(allocated, 0u);
+    GC_EXPECT_TRUE(retained && published && copied && unused != nullptr);
+}
