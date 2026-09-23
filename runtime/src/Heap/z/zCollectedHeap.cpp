@@ -115,23 +115,25 @@ uintptr_t ZCollectedHeap::allocate_new_tlab(size_t minSize, size_t requestedSize
     return addr;
 }
 
-void ZCollectedHeap::collect(GCReason reason, bool async)
+void ZCollectedHeap::collect(GCReason reason)
 {
-    CHECK(reason < GC_REASON_MAX);
     if (!_heap.IsGCEnabled()) return;
-    if (reason == GC_REASON_WB_BREAKPOINT) {
-        _driver_major->collect(ZDriverRequest(reason, 0, 0));
-        return;
-    }
-    ZDriverPort& port = reason == GC_REASON_YOUNG
-        ? _driver_minor->port() : _driver_major->port();
-    const ZDriverRequest request(reason, 0, 0);
-    if (async) {
-        CHECK(!g_gcRequests[reason].IsSyncGC());
-        port.send_async(request);
-    } else {
-        ScopedEnterSaferegion enterSaferegion(false);
-        port.send_sync(request);
+    // ZGC zCollectedHeap.cpp:174-205: external causes select the generation
+    // budgets here; only the driver decides how to enqueue the request.
+    ScopedEnterSaferegion enterSaferegion(false);
+    switch (reason) {
+        case GC_REASON_YOUNG:
+            _driver_minor->collect(ZDriverRequest(reason, ZYoungGCThreads, 0));
+            break;
+        case GC_REASON_USER:
+        case GC_REASON_DCMD_GC_RUN:
+        case GC_REASON_FORCE:
+        case GC_REASON_WB_BREAKPOINT:
+            _driver_major->collect(ZDriverRequest(reason, ZYoungGCThreads, ZOldGCThreads));
+            break;
+        default:
+            CHECK(false);
+            break;
     }
 }
 

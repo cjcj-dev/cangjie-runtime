@@ -183,10 +183,8 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
 
     // Set the request's generation budgets before mark-start can consume
     // them, including the old mark domain prepared by the young prelude.
-    const uint32_t youngCount = request.young_nworkers() == 0
-        ? ZCollectedHeap::heap()->concurrent_gc_threads() : request.young_nworkers();
-    const uint32_t oldCount = request.old_nworkers() == 0
-        ? ZCollectedHeap::heap()->concurrent_gc_threads() : request.old_nworkers();
+    const uint32_t youngCount = request.young_nworkers();
+    const uint32_t oldCount = request.old_nworkers();
     // zDriver.cpp:166-176 / zGeneration.cpp:154: the request carries the
     // selected worker counts into each generation's ZWorkers.
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()->set_active_workers(youngCount);

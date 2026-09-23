@@ -504,7 +504,7 @@ extern "C" bool MCC_AtomicCompareSwapReference(const ObjectPtr oldRef, const Obj
                                                       failOrder);
 }
 
-extern "C" void MCC_InvokeGCImpl(bool sync) { HeapManager::RequestGC(GC_REASON_USER, !sync); }
+extern "C" void MCC_InvokeGCImpl(bool) { HeapManager::RequestGC(GC_REASON_USER); }
 
 extern "C" ssize_t MCC_GetRealHeapSize() { return Heap::GetHeap().GetHeapPhysicalMemorySize(); }
 

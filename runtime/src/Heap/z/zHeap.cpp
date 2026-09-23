@@ -147,7 +147,7 @@ void Heap::Fini()
 }
 
 
-void Heap::RequestGC(GCReason reason, bool async) { ZCollectedHeap::heap()->collect(reason, async); }
+void Heap::RequestGC(GCReason reason) { ZCollectedHeap::heap()->collect(reason); }
 
 void Heap::ResolveCycleRef() { cross_vm().ResolveCycleRef(); }
 

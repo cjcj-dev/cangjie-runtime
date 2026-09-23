@@ -85,7 +85,7 @@ static void RunAllocatorCase(CJTaskFunc task, bool queuedCollectionAtShutdown = 
             // Queue a real collection while holding that same product lock;
             // release it only after Fini has published its stop request.
             ZDriver::lock();
-            ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, 0, 0));
+            ZCollectedHeap::heap()->driver_minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, ZYoungGCThreads, 0));
             queued.store(true, std::memory_order_release);
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
             while (!ZAbort::should_abort() && std::chrono::steady_clock::now() < deadline) {

@@ -108,7 +108,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZStat, ProductPhaseSamplesReachStatistics)
         // The product prints at ten-second intervals. Observe an initial
         // history, then a synchronous, real major collection and its history.
         std::this_thread::sleep_for(std::chrono::seconds(11));
-        Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+        Heap::GetHeap().RequestGC(GC_REASON_USER);
         std::this_thread::sleep_for(std::chrono::seconds(11));
         std::fflush(nullptr);
         _exit(0);

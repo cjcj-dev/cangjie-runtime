@@ -315,7 +315,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerify, RuntimeRejectsUnallocatedRootBeforeMark)
         if (root == nullptr) { _exit(123); }
         root->StoreColoured(ZAddress::store_good(static_cast<zaddress>(bad)));
         std::fprintf(stderr, "VERIFY_RUNTIME_REQUEST root=%p address=%#zx\n", root, bad);
-        heap.RequestGC(GC_REASON_USER, false);
+        heap.RequestGC(GC_REASON_USER);
     });
 }
 

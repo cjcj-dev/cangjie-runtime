@@ -79,7 +79,7 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType);
 
-    void RequestGC(GCReason reason, bool async);
+    void RequestGC(GCReason reason);
     void ResolveCycleRef();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     void DumpRoots(LogType logType);

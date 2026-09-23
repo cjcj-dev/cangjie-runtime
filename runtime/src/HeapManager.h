@@ -26,7 +26,7 @@ public:
 
     // alloc returns a memory address, not an "object" pointer that has not been initialized
     static MAddress Allocate(size_t allocSize, AllocType allocType = AllocType::MOVEABLE_OBJECT);
-    static inline void RequestGC(GCReason reason, bool async);
+    static inline void RequestGC(GCReason reason);
 };
 } // namespace MapleRuntime
 #endif // MRT_HEAP_MANAGER_H
