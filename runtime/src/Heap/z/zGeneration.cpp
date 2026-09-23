@@ -493,9 +493,15 @@ void ZGenerationYoung::concurrent_mark_continue()
     mark_follow();
 }
 
+void ZGeneration::mark_free()
+{
+    Mark().Free();
+}
+
 void ZGenerationYoung::concurrent_mark_free()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentMarkFreeYoung);
+    mark_free();
     if (ZAbort::should_abort()) {
         return;
     }
@@ -1001,6 +1007,7 @@ void ZGenerationOld::concurrent_mark_continue()
 void ZGenerationOld::concurrent_mark_free()
 {
     ZStatTimerOld timer(ZPhaseConcurrentMarkFreeOld);
+    mark_free();
 }
 
 void ZGenerationOld::concurrent_process_non_strong_references()
