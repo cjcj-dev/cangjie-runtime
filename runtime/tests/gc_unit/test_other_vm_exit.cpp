@@ -7,7 +7,7 @@ using namespace MapleRuntime::GcUnit;
 
 static void LeaveGroupMember()
 {
-    // RunAll has already flushed OKIDOKI. Synchronize the descendant's
+    // CompleteTestRun has already flushed OKIDOKI. Synchronize the descendant's
     // closed output descriptors before returning from this exit callback.
     int ready[2];
     if (pipe(ready) != 0) { _exit(125); }
@@ -71,7 +71,7 @@ int main(int argc, char** argv)
     if (std::getenv("GC_UNIT_OTHER_VM_CHILD") != nullptr) {
         if (argc != 2 || std::strncmp(argv[1], "--gtest_filter=", 15) != 0) { return 125; }
         setenv("GC_UNIT_FILTER", argv[1] + 15, 1);
-        return RunAll();
+        return CompleteTestRun(RunAll());
     }
     int failed = 0;
     for (const auto& test : Registry()) {
