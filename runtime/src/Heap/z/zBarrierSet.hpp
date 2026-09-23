@@ -13,6 +13,7 @@ public:
     static bool barrier_needed(bool isReference);
     static void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native, zaddress_unsafe* root);
     static void on_thread_detach(ThreadGCData& data);
+    static void on_thread_destroy(ThreadGCData& data);
 
     static zaddress oop_load_in_heap(volatile zpointer* p);
     static void oop_store_in_heap(volatile zpointer* p, zaddress value);

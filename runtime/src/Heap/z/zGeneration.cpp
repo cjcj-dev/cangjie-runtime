@@ -59,6 +59,12 @@
 
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
+// ZGC zGeneration.cpp:161-163.
+void ZGeneration::mark_flush(ThreadGCData& data)
+{
+    mark->Flush(data);
+}
+
 
 // ZGC zGeneration.cpp:69-76: one generation timer per young collection type.
 static const ZStatPhaseGeneration ZPhaseGenerationYoung[] {

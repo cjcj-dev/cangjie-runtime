@@ -114,6 +114,7 @@ public:
             GetZGeneration(ZGenerationId::young).Sequence());
     }
     void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
+    void mark_flush(ThreadGCData& data);
     bool FlushGCDataMarkProducers(ThreadGCData& data);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
     bool IsGhostFromObject(BaseObject* obj) const;
