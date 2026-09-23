@@ -13,7 +13,8 @@
 #include <cstdio>
 #include "Heap/z/zIterator.inline.hpp"
 
-#include "Base/MemUtils.h"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zUtils.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -46,7 +47,7 @@ MArray* ZObjArrayAllocator::initialize()
     CHECK_DETAIL(arraySize >= contentOffset, "large array size is smaller than its header");
     // Clear through the aligned object end, including tail padding. The allocator
     // deliberately leaves a reused extent dirty for this path.
-    const size_t contentSize = static_cast<size_t>(arraySize) - contentOffset;
+    const size_t contentSize = MRT_ALIGN(static_cast<size_t>(arraySize), sizeof(uintptr_t)) - contentOffset;
     const bool isRefArray = arrayClass.GetComponentTypeInfo()->IsRef();
     // zObjArrayAllocator.cpp:132-141: a safepoint may change either
     // generation sequence before its collection has completed.
@@ -78,9 +79,13 @@ MArray* ZObjArrayAllocator::initialize()
             const size_t segment = std::min(contentSize - processed,
                                             static_cast<size_t>(MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE));
             const MAddress start = reinterpret_cast<MAddress>(current->ConvertToCArray()) + processed;
-            // RefField raw null is the all-zero word (RefField.h:427-433); unlike ZGC,
-            // no epoch-coloured null fill is needed in this runtime.
-            MemorySet(start, segment, 0, segment);
+            // Invisible roots are hidden from marking. After a GC safepoint,
+            // both remembered bits force subsequent stores through the barrier.
+            // ZGC zObjArrayAllocator.cpp:146-161.
+            const uintptr_t coloredNull = seenGcSafepoint ? (::g_cjStoreGoodMask | ZPointerRememberedMask)
+                                                         : ::g_cjStoreGoodMask;
+            const uintptr_t fillValue = isRefArray ? coloredNull : 0;
+            ZUtils::fill(reinterpret_cast<uintptr_t*>(start), segment / sizeof(uintptr_t), fillValue);
 
             {
                 // Entering a saferegion is this runtime's mutator/GC handshake edge.
@@ -125,9 +130,8 @@ MArray* ZObjArrayAllocator::initialize()
     };
 
     if (!initializeMemory()) {
-        // Raw zero remains a legal null across every color flip in this runtime.
-        // The second pass therefore needs no remembered-bit fill, and cannot
-        // restart. Each segment still reloads the GC-healed invisible root.
+        // Refill the whole array with both remembered bits after a GC safepoint.
+        // ZGC zObjArrayAllocator.cpp:179-182.
         const bool complete = initializeMemory();
         CHECK_DETAIL(complete, "array initialization must complete on the second pass");
     }
