@@ -1046,7 +1046,7 @@ GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentByteOverflow)
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentUnitOverflow)
 {
-    CheckSoftConfig(0, "18446744073709551615GB", E_ARGS);
+    CheckSoftConfig(0, "17592186044416GB", E_ARGS);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, EnvironmentNumberOverflow)
@@ -1099,5 +1099,5 @@ GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedByteOverflow)
 }
 GC_RUNTIME_OTHER_VM_TEST(SoftMaxConstraint, ManagedUnitOverflow)
 {
-    CheckManagedSoftConstraint("18446744073709551615GB", "Invalid cjSoftMaxHeapSize");
+    CheckManagedSoftConstraint("17592186044416GB", "Invalid cjSoftMaxHeapSize");
 }
