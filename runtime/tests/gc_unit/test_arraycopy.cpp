@@ -5,6 +5,7 @@
 #include "gc_unittest.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/FieldInfo.h"
+#include "ObjectModel/MObject.inline.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Mutator/Mutator.h"
