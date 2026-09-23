@@ -284,14 +284,14 @@ template<DecoratorSet decorators, typename BarrierSetT>
 inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::oop_copy_one(volatile zpointer* dst, volatile zpointer* src)
 {
     const zaddress obj = oop_copy_one_barriers(dst, src);
-    *const_cast<zpointer*>(dst) = ZAddress::store_good(obj);
+    Raw::store(dst, ZAddress::store_good(obj));
 }
 
 template<DecoratorSet decorators, typename BarrierSetT>
 inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::oop_clear_one(volatile zpointer* dst)
 {
     store_barrier_heap_without_healing(dst);
-    *const_cast<zpointer*>(dst) = color_null();
+    Raw::store(dst, color_null());
 }
 
 template<DecoratorSet decorators, typename BarrierSetT>
