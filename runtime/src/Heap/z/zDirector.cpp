@@ -58,7 +58,6 @@ struct ZDirectorStats {
     ZDirectorHeapStats heap;
     ZDirectorGenerationStats young_stats;
     ZDirectorGenerationStats old_stats;
-    double collection_interval_sec = 0.0;
 };
 
 ZDirector::ZDirector()
@@ -107,12 +106,12 @@ static uint32_t old_gc_threads(const ZDirectorStats&)
 
 static bool rule_minor_timer(const ZDirectorStats& stats)
 {
-    if (stats.collection_interval_sec <= 0) {
+    if (ZCollectionIntervalMinor <= 0) {
         return false;
     }
-    const double time_until_gc = stats.collection_interval_sec - stats.young_stats.cycle.timeSinceLast;
+    const double time_until_gc = ZCollectionIntervalMinor - stats.young_stats.cycle.timeSinceLast;
     VLOG(REPORT, "Rule Minor: Timer, Interval: %.3fs, TimeUntilGC: %.3fs\n",
-        stats.collection_interval_sec, time_until_gc);
+        ZCollectionIntervalMinor, time_until_gc);
     return time_until_gc <= 0;
 }
 
@@ -321,12 +320,12 @@ static bool rule_minor_high_usage(const ZDirectorStats& stats)
 
 static bool rule_major_timer(const ZDirectorStats& stats)
 {
-    if (stats.collection_interval_sec <= 0) {
+    if (ZCollectionIntervalMajor <= 0) {
         return false;
     }
-    const double time_until_gc = stats.collection_interval_sec - stats.old_stats.cycle.timeSinceLast;
+    const double time_until_gc = ZCollectionIntervalMajor - stats.old_stats.cycle.timeSinceLast;
     VLOG(REPORT, "Rule Major: Timer, Interval: %.3fs, TimeUntilGC: %.3fs\n",
-        stats.collection_interval_sec, time_until_gc);
+        ZCollectionIntervalMajor, time_until_gc);
     return time_until_gc <= 0;
 }
 
@@ -651,8 +650,6 @@ static ZDirectorStats sample_stats()
     stats.young_stats.general.used = regions.used_generation(ZGenerationId::young);
     stats.old_stats.general.used = regions.used_generation(ZGenerationId::old);
     stats.old_stats.general.total_collections_at_start = Heap::GetHeap().old().total_collections_at_start();
-    stats.collection_interval_sec =
-        static_cast<double>(CangjieRuntime::GetGCParam().backupGCInterval) / SECOND_TO_NANO_SECOND;
     return stats;
 }
 

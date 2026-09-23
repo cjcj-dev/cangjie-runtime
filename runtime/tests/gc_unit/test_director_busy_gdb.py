@@ -43,7 +43,7 @@ LINES = {
     'sample': line_in('static ZDirectorStats sample_stats', 'stats.mutator_alloc_rate'),
     'tick': line_in('void ZDirector::run_thread', 'const ZDirectorStats stats'),
     'loop': line_in('void ZDirector::run_thread', 'while (wait_for_tick())'),
-    'entry': line_in('static ZDirectorStats sample_stats', 'stats.relocation_headroom'),
+    'entry': line_in('static ZDirectorStats sample_stats', 'return stats'),
     'rule': line_in('static bool rule_major_allocation_rate', 'VLOG(REPORT'),
 }
 
@@ -198,7 +198,7 @@ try:
     advance('entry')
     emit('SAMPLED', resize=diagnostic('stats.old_stats.resize.is_active'),
          workers=diagnostic('stats.old_stats.resize.nworkers_current'),
-         interval=diagnostic('stats.collection_interval_sec'),
+         interval=diagnostic('MapleRuntime::ZCollectionIntervalMinor'),
          old_minor_snapshot=diagnostic('stats.minor_busy'),
          old_major_snapshot=diagnostic('stats.major_busy'))
     if SITE == 'entry':

@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "Heap/z/zGlobals.hpp"
+#include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
 // ZGC zGlobals.cpp:26-37. Page-size policy initializes the medium tier;
 // pointer-sized object alignment is the runtime ABI's fixed minimum.
@@ -23,6 +24,8 @@ namespace MapleRuntime {
 // heap comes up. ZCollectedHeap::start_gc_threads publishes the concurrent budget
 // after heap initialization; this initial capacity covers early per-worker storage.
 bool UseDynamicNumberOfGCThreads = true;
+double ZCollectionIntervalMinor = -1.0;
+double ZCollectionIntervalMajor = -1.0;
 // gc_globals.hpp / z_globals.hpp defaults; ZArguments applies flag origins.
 uint32_t MaxTenuringThreshold = 15;
 int32_t ZTenuringThreshold = -1;

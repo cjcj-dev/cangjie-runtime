@@ -14,13 +14,13 @@ nm --defined-only "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" > "$TIMER_OUT/pr
 printf 'cpuset=%s\nwait=%s\nsource=%s\n' "$TIMER_CPUSET" "${TIMER_WAIT_SECONDS:-241}" "$TIMER_SOURCE" > "$TIMER_OUT/recipe.txt"
 start=$SECONDS
 run_case() {
-    local input=$1 explicit=$2 generation=$3
-    local name="$input-$explicit-$generation"
+    local input=$1 explicit=$2 generation=$3 change=$4
+    local name="$input-$explicit-$generation-change$change"
     (
         unset cjBackupGCInterval
         export cjHeapSize=64MB cjProcessorNum=1 cjConcGCThreads=2 cjYoungGCThreads=2 cjOldGCThreads=2
         if [[ "$input" == env && "$explicit" == 1 ]]; then export cjBackupGCInterval=1s; fi
-        TIMER_GENERATION=$generation TIMER_EXPLICIT=$explicit \
+        TIMER_GENERATION=$generation TIMER_EXPLICIT=$explicit TIMER_CHANGE=$change \
             timeout 290 taskset -c "$TIMER_CPUSET" gdb -nx -batch \
             -ex "source $script_dir/check_timer_gdb.py" --args "$TIMER_ELF" "$input" "$explicit"
     ) > "$TIMER_OUT/$name.log" 2>&1
@@ -30,21 +30,18 @@ pids=()
 for input in api env; do
     for explicit in 0 1; do
         for generation in major minor; do
-            run_case "$input" "$explicit" "$generation" & pids+=("$!")
+            for change in 0 1; do
+                run_case "$input" "$explicit" "$generation" "$change" & pids+=("$!")
+            done
         done
     done
 done
 for pid in "${pids[@]}"; do wait "$pid"; done
 rc=0
-for input in api env; do
-    for explicit in 0 1; do
-        for generation in major minor; do
-            name="$input-$explicit-$generation"
-            result=$(cat "$TIMER_OUT/$name.rc")
-            echo "$name rc=$result"
-            if [[ "$result" != 0 ]]; then rc=1; fi
-        done
-    done
+for result_file in "$TIMER_OUT"/*.rc; do
+    result=$(cat "$result_file")
+    echo "$(basename "$result_file" .rc) rc=$result"
+    if [[ "$result" != 0 ]]; then rc=1; fi
 done
 printf 'parallel_cases=%s wall=%ss\n' "${#pids[@]}" "$((SECONDS-start))" > "$TIMER_OUT/wall.txt"
 uptime > "$TIMER_OUT/uptime-after.txt"

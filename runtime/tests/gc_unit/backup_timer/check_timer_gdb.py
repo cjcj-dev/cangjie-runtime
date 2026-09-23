@@ -15,6 +15,9 @@ from pathlib import Path
 source = Path(os.environ['TIMER_SOURCE']).read_text().splitlines()
 generation = os.environ['TIMER_GENERATION']
 explicit = os.environ['TIMER_EXPLICIT'] == '1'
+changed = os.environ.get('TIMER_CHANGE', '0') == '1'
+expected_enabled = not explicit if changed else explicit
+flag = 'MapleRuntime::ZCollectionInterval' + generation.capitalize()
 
 
 def line_in(function, text):
@@ -50,7 +53,7 @@ def observe_timer_result():
     # Read the actual comparison result and execute its consuming branch; never
     # recompute the rule from the sampled interval or infer it from the port.
     function = 'static bool rule_' + generation + '_timer'
-    guard = line_in(function, 'if (stats.collection_interval_sec <= 0)')
+    guard = line_in(function, 'if (')
     expiry = line_in(function, 'return time_until_gc <= 0')
     advance(guard)
     architecture = gdb.selected_frame().architecture()
@@ -87,7 +90,7 @@ def observe_timer_result():
              branch=branch['asm'], pc=hex(branch_pc), next_pc=hex(next_pc), taken=result)
         if comparison == 'expired' or result:
             returned = result if comparison == 'expired' else False
-            passed = returned == explicit
+            passed = returned == expected_enabled
             emit('ASSERT_TIMER_RULE_RETURN', generation=generation, explicit=explicit,
                  returned=returned, exit=comparison, passed=passed)
             return passed
@@ -100,7 +103,7 @@ try:
         command('set ' + setting)
     tick = line_in('void ZDirector::run_thread', 'stats = sample_stats')
     loop = line_in('void ZDirector::run_thread', 'while (wait_for_tick())')
-    sample_end = line_in('static ZDirectorStats sample_stats', 'stats.relocation_headroom')
+    sample_end = line_in('static ZDirectorStats sample_stats', 'return stats')
     gdb.Breakpoint('zDirector.cpp:' + str(tick), temporary=True)
     command('run')
     director = gdb.selected_thread()
@@ -129,7 +132,12 @@ try:
     time.sleep(float(os.environ.get('TIMER_WAIT_SECONDS', '241')))
     emit('ELAPSED', seconds=time.monotonic() - start)
     advance(sample_end)
-    emit('SAMPLED', interval=float(value('stats.collection_interval_sec')),
+    mapped_interval = float(value(flag))
+    mapping_ok = mapped_interval == (1.0 if explicit else -1.0)
+    emit('ASSERT_TIMER_PARAMETER_MAPPING', interval=mapped_interval, passed=mapping_ok)
+    if changed:
+        command('set var ' + flag + '=' + ('1.0' if expected_enabled else '-1.0'))
+    emit('SAMPLED', interval=mapped_interval, current=float(value(flag)), changed=changed,
          young_elapsed=float(value('stats.young_stats.cycle.timeSinceLast')),
          old_elapsed=float(value('stats.old_stats.cycle.timeSinceLast')))
     rule_passed = observe_timer_result()
@@ -146,10 +154,10 @@ try:
     busy = bool(value(port + '->_has_message'))
     cause = int(value(port + '->_message._cause'))
     backup = busy and cause == 2
-    passed = backup == explicit
+    passed = backup == expected_enabled
     emit('ASSERT_TIMER_DISPATCH', generation=generation, explicit=explicit,
          busy=busy, cause=cause, backup=backup, passed=passed)
-    if explicit and generation == 'minor' and backup:
+    if expected_enabled and generation == 'minor' and backup:
         minor_driver = next(t for t in gdb.selected_inferior().threads() if t.name == 'ZDriverMinor')
         minor_driver.switch()
         bp = gdb.Breakpoint('MapleRuntime::ZDriver::ExecuteDriverRequest', temporary=True)
@@ -167,7 +175,7 @@ try:
         minor_started = young_type == minor_type and received_cause == 2
         emit('ASSERT_MINOR_COLLECTION', young_type=young_type, passed=minor_started)
         passed = passed and minor_started
-    command('quit ' + ('0' if rule_passed and passed else '1'))
+    command('quit ' + ('0' if mapping_ok and rule_passed and passed else '1'))
 except Exception as error:
     emit('HARNESS_ERROR', error=str(error))
     command('quit 2')
