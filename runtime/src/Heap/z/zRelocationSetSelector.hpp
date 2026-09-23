@@ -177,7 +177,6 @@ public:
                                 size_t object_size_limit, double fragmentation_limit);
     void register_live_page(ZPage* page);
     void register_empty_page(ZPage* page);
-    void append_selected(ZPage* page, size_t nentries);
     void select();
     const ZArray<ZPage*>* selected_pages() const;
     const ZArray<ZPage*>* not_selected_pages() const;
@@ -195,12 +194,9 @@ private:
     size_t empty() const;
     size_t relocate() const;
 public:
-    ZRelocationSetSelector();
     explicit ZRelocationSetSelector(double fragmentation_limit);
     void register_live_page(ZPage* page);
     void register_empty_page(ZPage* page);
-    void add_selected_small(ZPage* page, size_t nentries);
-    void check_selected_relocatable() const;
     bool should_free_empty_pages(int bulk) const;
     const ZArray<ZPage*>* empty_pages() const;
     void clear_empty_pages();

@@ -409,7 +409,6 @@ public:
 
 
 
-    bool IsCompactRouteDestination(MAddress address) const;
 
     ZGenerationId generation_id() const;
 

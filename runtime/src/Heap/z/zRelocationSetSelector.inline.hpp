@@ -64,12 +64,6 @@ inline void ZRelocationSetSelectorGroup::register_live_page(ZPage* page)
     _stats[age]._live += live;
 }
 
-inline void ZRelocationSetSelectorGroup::append_selected(ZPage* page, size_t nentries)
-{
-    _live_pages.append(page);
-    _forwarding_entries += nentries;
-}
-
 inline void ZRelocationSetSelectorGroup::register_empty_page(ZPage* page)
 {
     const size_t size = page->size();
@@ -97,11 +91,6 @@ inline void ZRelocationSetSelector::register_live_page(ZPage* page)
     } else {
         _large.register_live_page(page);
     }
-}
-
-inline void ZRelocationSetSelector::add_selected_small(ZPage* page, size_t nentries)
-{
-    _small.append_selected(page, nentries);
 }
 
 inline void ZRelocationSetSelector::register_empty_page(ZPage* page)

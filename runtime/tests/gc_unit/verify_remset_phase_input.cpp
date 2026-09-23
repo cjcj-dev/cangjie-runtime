@@ -56,7 +56,7 @@ int main(int argc, char** argv)
         auto& allocator = *heap.object_allocator().allocator(PageAge::old);
         ZPerCPUIterator<ZPage*> slots(&allocator.sharedSmallPage);
         for (ZPage** slot; slots.next(&slot);) { __atomic_store_n(slot, fixture.region1, __ATOMIC_RELEASE); }
-        destination = ZRelocate::ForwardObjectExclusive(fixture.obj0);
+        destination = Heap::GetHeap().relocate_or_remap_object(fixture.obj0, ZGenerationId::old);
         if (destination == nullptr || destination == fixture.obj0) { return 80; }
     }
     p16_destination_field = reinterpret_cast<volatile uintptr_t*>(
