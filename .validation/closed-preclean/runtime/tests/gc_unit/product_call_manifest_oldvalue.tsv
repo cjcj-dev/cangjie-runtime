@@ -1,2 +1,0 @@
-test_name	stable_product_anchor	carrier	consumer_callsite	cut_site
-StoreBuf.CompilerStoreBadOverwriteHandsObservedOldToMark	store_barrier_on_heap_oop_field	product_so	ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false); // oldvalue-anchor	buffer->add(reinterpret_cast<MAddress>(p), prev);

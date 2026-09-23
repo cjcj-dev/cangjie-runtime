@@ -1,2 +1,0 @@
-test_name	stable_product_anchor	carrier	consumer_callsite	cut_site
-Uncommitter.UncommitIdleUnitsReleasesPhysical	_ZN12MapleRuntime11Uncommitter8UncommitEv	product_so	UncommitterTestAccess::Uncommit	FreeRegionManager::UncommitFlushed
