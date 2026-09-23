@@ -30,7 +30,7 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
     buffer = newMutator != nullptr ? newMutator->tlab() : nullptr;
     if (newMutator != nullptr) {
         auto& data = newMutator->GetGCData();
-        data.Attach(newMutator, nullptr, data.invisibleRoot);
+        ZBarrierSet::on_thread_attach(data, newMutator, nullptr, data.invisibleRoot);
         gcData = &data;
     } else {
         gcData = nativeGCData;
@@ -92,7 +92,7 @@ void ThreadLocal::InitializeCleaner()
 {
     (void)cleaner;
     ThreadLocalData* tls = GetThreadLocalData();
-    cleaner.nativeData.Attach(nullptr, tls, nullptr);
+    ZBarrierSet::on_thread_attach(cleaner.nativeData, nullptr, tls, nullptr);
     tls->nativeGCData = &cleaner.nativeData;
     if (tls->mutator == nullptr) {
         tls->gcData = tls->nativeGCData;
@@ -123,9 +123,8 @@ CleanThreadLocalData::~CleanThreadLocalData()
         // Foreign exit is the last possible producer. Publish before removing
         // the owner from the handshake inventory (ZMark::flush, zMark.cpp:998).
         MutatorManager::Instance().UnregisterMarkFlushThread(local);
-        ThreadLocal::FlushCurrentThreadMarkStacks();
     }
-    nativeData.Detach();
+    ZBarrierSet::on_thread_detach(nativeData);
     // gcData may borrow a parked/migrating Mutator. The cleaner owns only
     // nativeData, whose member destructor runs after this body.
     local->gcData = nullptr;

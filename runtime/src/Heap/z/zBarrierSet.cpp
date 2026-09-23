@@ -4,6 +4,7 @@
 #include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
 // ZGC zBarrierSet.inline.hpp: AccessBarrier::barrier_needed is false for
@@ -15,12 +16,30 @@ bool ZBarrierSet::barrier_needed(bool isReference)
 
 void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native, zaddress_unsafe* root)
 {
-    data.Attach(owner, native, root);
+    data.invisibleRoot = root;
+    const auto masks = ThreadGCData::PublishedMasks();
+    // Native bootstrap may precede heap/color initialization. A later binding
+    // retries attachment before this owner can produce managed references.
+    if (masks.storeGood == 0) { return; }
+    data.RegisterOwner(owner, native, [&] {
+        // ZGC zBarrierSet.cpp:256-267. Publish only after all state is ready.
+        data.InstallMasks(masks);
+        if (owner != nullptr) {
+            owner->GetStackWatermark().Reset();
+        }
+        data.storeBarrierBuffer->Initialize(masks.storeGood);
+    });
 }
 
 void ZBarrierSet::on_thread_detach(ThreadGCData& data)
 {
-    data.Detach();
+    // Bootstrap/shutdown native storage can outlive the heap. Empty storage
+    // has no mark work; a nonempty owner must always take the heap path.
+    if (!data.markStacks[0].IsEmpty() || !data.markStacks[1].IsEmpty() ||
+        !data.storeBarrierBuffer->IsEmpty()) {
+        Heap::GetHeap().mark_flush(data);
+    }
+    data.UnregisterOwner();
 }
 
 zaddress ZBarrierSet::oop_load_in_heap(volatile zpointer* p)

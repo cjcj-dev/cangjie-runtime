@@ -59,6 +59,12 @@
 
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
+// ZGC zGeneration.cpp:161-163.
+void ZGeneration::mark_flush(ThreadGCData& data)
+{
+    mark->Flush(data);
+}
+
 
 // ZGC zGeneration.cpp:78-98: phase identity is selected at the VM operation or concurrent entry.
 static const ZStatPhasePause ZPhasePauseMarkStartYoung("Pause Mark Start", ZGenerationId::young);

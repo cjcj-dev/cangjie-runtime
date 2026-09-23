@@ -207,6 +207,12 @@ Generation Heap::ObjectGeneration(BaseObject* object) const
     return Heap::page(address)->GetOwnerGeneration();
 }
 
+void Heap::mark_flush(ThreadGCData& data)
+{
+    young().mark_flush(data);
+    old().mark_flush(data);
+}
+
 bool Heap::FlushGCDataMarkProducers(ThreadGCData& data)
 {
     return ZMark::FlushGCDataMarkProducers(data);

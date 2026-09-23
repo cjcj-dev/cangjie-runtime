@@ -24,6 +24,7 @@
 #include "Heap/z/zRemembered.hpp"
 namespace MapleRuntime {
 class ZMark;
+struct ThreadGCData;
 class ZRelocate;
 class ZRelocationSetSelector;
 enum class zaddress : Uptr;
@@ -95,6 +96,7 @@ public:
     bool is_phase_mark_complete() const { return _phase == Phase::MarkComplete; }
     const char* phase_to_string() const;
     bool IsPhaseMark() const;
+    void mark_flush(ThreadGCData& data);
     double FragmentationLimit() const;
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
     void MarkObject(zaddress address);
