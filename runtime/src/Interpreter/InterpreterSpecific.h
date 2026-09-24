@@ -34,6 +34,8 @@ void VisitInterpreterFrameRootsAdjusting(
 void InterpreterCJThreadStart(DYN_CJThreadSpecificData* mutator);
 void InterpreterCJThreadDestroy(DYN_CJThreadSpecificData* mutator);
 DYN_CJThreadHandle NewCJThread(void* execute, DYN_ObjRef future, void* scheduler);
+DYN_CJThreadHandle NewCJThreadNoReturn(
+    void* executeClosure, DYN_ObjRef closurePtr, void* scheduler, struct DYN_TypeInfo* futureTi);
 
 uint32_t GetFrameSize(uintptr_t fp);
 void FillInterpretedFrameInfo(uintptr_t fp, uintptr_t ip, INT_InterpretedFrameInfo* fInfo);

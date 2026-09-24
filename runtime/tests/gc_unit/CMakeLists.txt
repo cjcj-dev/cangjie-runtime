@@ -79,6 +79,7 @@ set(GC_UNIT_SOURCES
     test_current_object_ref.cpp
     test_i2_readref.cpp
     test_loadfc.cpp
+    test_upstream_demangle.cpp
     test_fnlz_roots.cpp
     test_reference_processor.cpp
     test_mark_stack_entry.cpp
