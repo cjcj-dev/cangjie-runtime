@@ -18,11 +18,13 @@ namespace {
 std::atomic<bool> nativeEntered { false };
 std::atomic<bool> nativeRelease { false };
 std::atomic<bool> nativeBlockEnabled { false };
+bool parkedMode = false;
 }
 
 extern "C" __attribute__((visibility("default"))) void MRT_TestElfUnloadNativeBlock()
 {
     nativeEntered.store(true, std::memory_order_release);
+    if (parkedMode) { return; }
     while (!nativeRelease.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
@@ -63,7 +65,7 @@ bool InitRuntime(uint32_t processorNum = 2)
 
 int RunNativeFrameReject(const char* plugin, const char* markerSymbol, const char* activeSymbol)
 {
-    if (!InitRuntime() || LoadCJLibraryWithInit(plugin) != E_OK) {
+    if (!InitRuntime(parkedMode ? 1 : 2) || LoadCJLibraryWithInit(plugin) != E_OK) {
         std::fprintf(stderr, "runtime or plugin initialization failed\n");
         return 2;
     }
@@ -79,11 +81,28 @@ int RunNativeFrameReject(const char* plugin, const char* markerSymbol, const cha
     }
     bool entered = starterReturned &&
         WaitFor([]() { return nativeEntered.load(std::memory_order_acquire); });
-    int firstUnload = entered ? UnloadCJLibrary(plugin) : E_ARGS;
-    bool rejected = entered && firstUnload != E_OK && marker != nullptr &&
+    bool switched = true;
+    if (parkedMode) {
+        // The completion of a different task, rather than elapsed time alone,
+        // proves that the sole carrier has replaced the plugin task in TLS.
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        CJThreadHandle replacement = RunCJTask(+[](void* p) -> void* { return p; }, nullptr);
+        void* result = nullptr;
+        switched = replacement != nullptr && GetTaskRet(replacement, &result) == E_OK;
+        if (replacement != nullptr) { ReleaseHandle(replacement); }
+        std::printf("CARRIER_REPLACEMENT completed=%d\n", switched);
+    }
+    int firstUnload = entered && switched ? UnloadCJLibrary(plugin) : E_ARGS;
+    bool rejected = entered && switched && firstUnload != E_OK && marker != nullptr &&
         (FindCJSymbol(plugin, markerSymbol) != nullptr);
     std::printf("ACTIVE_IMAGE_TARGET executed=1 entered=%d first_unload=%d rejected=%d\n",
                 entered, firstUnload, rejected);
+    if (parkedMode) {
+        Result("ElfUnload.ParkedFrameRejectPublic", rejected);
+        std::fflush(nullptr);
+        // The sleeping task must not resume if a cut arm unmapped its image.
+        std::_Exit(rejected ? 0 : 1);
+    }
     if (!rejected) {
         Result("ElfUnload.NativeFrameRejectPublic", false);
         std::printf("DETAIL entered=%d first_unload=%d\n", entered, firstUnload);
@@ -117,6 +136,7 @@ int RunNativeFrameReject(const char* plugin, const char* markerSymbol, const cha
 
 } // namespace
 int main(int argc, char** argv) {
-    if (argc != 4) { return 2; }
+    if (argc != 4 && argc != 5) { return 2; }
+    parkedMode = argc == 5 && std::strcmp(argv[4], "parked") == 0;
     return RunNativeFrameReject(argv[1], argv[2], argv[3]);
 }

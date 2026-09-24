@@ -21,3 +21,6 @@ sha256sum "$OUT/elf_unload_public_active" "$OUT/libelfunloadprobe.so" \
 LD_LIBRARY_PATH="$LIB:$SDK/runtime/lib/linux_x86_64_cjnative" \
     "$OUT/elf_unload_public_active" "$OUT/libelfunloadprobe.so" \
     _CN14elfunloadprobe12unloadMarkerHv _CN14elfunloadprobe17unloadSpawnActiveHPu
+LD_LIBRARY_PATH="$LIB:$SDK/runtime/lib/linux_x86_64_cjnative" \
+    "$OUT/elf_unload_public_active" "$OUT/libelfunloadprobe.so" \
+    _CN14elfunloadprobe12unloadMarkerHv _CN14elfunloadprobe17unloadSpawnParkedHPu parked
