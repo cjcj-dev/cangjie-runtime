@@ -462,7 +462,10 @@ static void CheckRelocateStartExitRemapsFrameRoot()
     GC_EXPECT_EQ(owner->find(reinterpret_cast<MAddress>(objects[0][0])), static_cast<MAddress>(0));
     ZGlobalsPointers::flip_old_relocate_start();
     generation.set_phase(ZGenerationPhase::Relocate);
-    StackWatermarkSet::on_safepoint(*parked);
+    // The phase has already installed the new thread masks. Frame roots still
+    // belong to the watermark's saved color (ZGC zStackWatermark.cpp:95-99).
+    parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
+    parked->DoLeaveSaferegion();
     const uintptr_t after = younger[2];
     const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
     std::fprintf(stderr,

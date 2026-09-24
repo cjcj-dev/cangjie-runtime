@@ -1128,7 +1128,8 @@ GC_OTHER_VM_TEST(ThreadLifecycle, ManagedAttachAndRebindPreserveState)
         auto& data = owner->GetGCData();
         initialized = InitialThreadMasks(data, masks) &&
             data.storeBarrierBuffer->lastProcessedColor == masks.storeGood &&
-            owner->GetStackWatermark().PackedState() == 0;
+            // ZGC stackWatermark.cpp:162-163 initializes current epoch + done.
+            owner->GetStackWatermark().IsDone(static_cast<uint32_t>(masks.storeGood));
         StackWatermarkSet::on_safepoint(*owner);
         const auto watermark = owner->GetStackWatermark().PackedState();
         const auto color = data.storeGoodMask;
