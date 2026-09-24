@@ -8,6 +8,7 @@
 
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zForwardingTable.hpp"
@@ -595,4 +596,90 @@ GC_OTHER_VM_TEST(RuntimeWorkers, ActivePoolBeforeHarnessShutdown)
     GC_EXPECT_TRUE(workers->active_workers() > 0);
     std::fprintf(stderr, "RUNTIME_WORKERS_LIVE created=%u active=%u\n",
                  workers->created_workers(), workers->active_workers());
+}
+
+namespace {
+// Exhaust real allocator capacity so relocation must use its in-place path.
+// The GDB companion reads the published statistics at queue deactivation.
+void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, bool exhaust = true)
+{
+    CreateStandaloneHeap(64);
+    ZHeuristics::set_medium_page_size();
+    GcHeapFixture fx;
+    auto& generation = Heap::GetHeap().GetZGeneration(id);
+    const PageAge age = id == Generation::Old ? PageAge::old : PageAge::survivor1;
+    const size_t size = type == ZPageType::small ? ZPageSizeSmall : ZPageSizeMediumMin;
+    GC_EXPECT_TRUE(size != 0);
+    ZPage* first = Heap::alloc_page(size, type, false, age, NonBlockingAllocationFlags());
+    ZPage* second = Heap::alloc_page(size, type, false, age, NonBlockingAllocationFlags());
+    GC_EXPECT_TRUE(first != nullptr && second != nullptr);
+    GcHeapFixture::AdvanceGeneration(id);
+    for (ZPage* page : {first, second}) {
+        BaseObject* object = fx.PlaceObject(page->GetRegionStart());
+        HeapSlotAt<>(page->GetRegionStart() + sizeof(BaseObject)).StoreColoured(StoreGoodPointer(nullptr));
+        page->SetRegionAllocPtr(page->GetRegionStart() + object->GetSize());
+        GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, object));
+    }
+    GC_EXPECT_TRUE(BeginForwardingArena(id, {first, second}));
+    std::vector<ZPage*> occupied;
+    if (exhaust) {
+        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false,
+                                             PageAge::old, NonBlockingAllocationFlags())) {
+            occupied.push_back(page);
+        }
+    }
+    if (generation.Workers() == nullptr) generation.InitializeWorkers(workers);
+    generation.Workers()->set_active_workers(workers);
+    generation.Workers()->set_active();
+    ZRelocate::StartRelocationTasks(generation.id());
+    generation.relocate().relocate(&generation.relocation_set());
+    generation.Workers()->set_inactive();
+    GC_EXPECT_FALSE(generation.relocate().queue()->is_active());
+    ZRelocationSetIterator iter(&generation.relocation_set());
+    size_t completed = 0;
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
+        GC_EXPECT_TRUE(forwarding->is_done());
+        GC_EXPECT_TRUE(forwarding->find(forwarding->start()) != 0);
+        ++completed;
+    }
+    std::fprintf(stderr, "RELOCATION_END_RESULT completed=%zu occupied=%zu\n", completed, occupied.size());
+    GC_EXPECT_EQ(completed, size_t{2});
+    // This isolated child owns the exhausted heap until process exit.
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, OldSmall)
+{
+    RunRelocationEndCounts(Generation::Old, ZPageType::small, 1);
+}
+GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, OldMedium)
+{
+    RunRelocationEndCounts(Generation::Old, ZPageType::medium, 3);
+}
+GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, YoungSmall)
+{
+    RunRelocationEndCounts(Generation::Young, ZPageType::small, 3);
+}
+GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, YoungMedium)
+{
+    RunRelocationEndCounts(Generation::Young, ZPageType::medium, 1);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, OldSmallAvailable)
+{
+    RunRelocationEndCounts(Generation::Old, ZPageType::small, 1, false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, OldMediumAvailable)
+{
+    RunRelocationEndCounts(Generation::Old, ZPageType::medium, 1, false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, YoungSmallAvailable)
+{
+    RunRelocationEndCounts(Generation::Young, ZPageType::small, 1, false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, YoungMediumAvailable)
+{
+    RunRelocationEndCounts(Generation::Young, ZPageType::medium, 1, false);
 }
