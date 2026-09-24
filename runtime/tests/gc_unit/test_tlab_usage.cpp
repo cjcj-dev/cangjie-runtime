@@ -380,14 +380,14 @@ void SnapshotOwner(TLABSnapshotCase& state, unsigned index)
     auto& manager = MutatorManager::Instance();
     Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     owner->DoLeaveSaferegion();
-    for (unsigned i = 0; i < 128; ++i) { (void)MCC_NewObject(state.type, 2048); }
+    for (unsigned i = 0; i < 256; ++i) { (void)MCC_NewObject(state.type, 2048); }
     owner->DoEnterSaferegion();
     state.owner[index].store(owner, std::memory_order_release);
     while (state.epoch.load(std::memory_order_acquire) == 0) { std::this_thread::yield(); }
     if (state.refillOwner.load(std::memory_order_acquire) == static_cast<int>(index)) {
         while (!owner->GetStackWatermark().IsDone(state.epoch.load())) { std::this_thread::yield(); }
         owner->DoLeaveSaferegion();
-        for (unsigned i = 0; i < 32; ++i) { (void)MCC_NewObject(state.type, 2048); }
+        for (unsigned i = 0; i < 64; ++i) { (void)MCC_NewObject(state.type, 2048); }
         owner->DoEnterSaferegion();
         state.refilled.store(true, std::memory_order_release);
     }
@@ -414,7 +414,8 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
     GC_EXPECT_TRUE(allocationCpu >= 0 && allocationCpu < CPU_SETSIZE);
     // memAllocator.cpp:273-278 retains useful tails. Use objects that fit the
     // minimum TLAB quantum so this history is allocated inside TLABs, instead
-    // of assuming every failed fit discards its tail.
+    // of assuming every failed fit discards its tail. Double the object count
+    // to preserve the original 512 KiB/128 KiB per-owner allocation volumes.
     alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
