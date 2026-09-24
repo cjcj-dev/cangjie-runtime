@@ -499,7 +499,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     const bool highUsage = std::strcmp(scenario, "high_usage") == 0;
     const bool majorAllocationRate = std::strcmp(scenario, "major_allocation_rate") == 0;
     const bool allocationRate = majorAllocationRate || std::strncmp(scenario, "allocation_rate", 15) == 0;
-    const bool proactive = std::strcmp(scenario, "proactive") == 0;
+    const bool proactive = std::strncmp(scenario, "proactive", 9) == 0;
     const bool timer = std::strstr(scenario, "timer") != nullptr;
     RuntimeParam params{};
     params.heapParam.heapSize = 64 * 1024;
