@@ -499,7 +499,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     const bool highUsage = std::strcmp(scenario, "high_usage") == 0;
     const bool majorAllocationRate = std::strcmp(scenario, "major_allocation_rate") == 0;
     const bool allocationRate = majorAllocationRate || std::strncmp(scenario, "allocation_rate", 15) == 0;
-    const bool proactive = std::strcmp(scenario, "proactive") == 0;
+    const bool proactive = std::strncmp(scenario, "proactive", 9) == 0;
     const bool timer = std::strstr(scenario, "timer") != nullptr;
     RuntimeParam params{};
     params.heapParam.heapSize = 64 * 1024;
@@ -517,7 +517,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     const size_t firstSize = heap.GetMaxCapacity() * (highUsage ? 15 : 8) / 16;
-    type->SetInstanceSize(firstSize);
+    type->SetInstanceSize(firstSize - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     {
         ScopedObjectAccess access;
@@ -535,7 +535,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
         alignas(TypeInfo) static unsigned char secondStorage[sizeof(TypeInfo)]{};
         auto* secondType = reinterpret_cast<TypeInfo*>(secondStorage);
         secondType->SetType(TypeKind::TYPE_KIND_CLASS);
-        secondType->SetInstanceSize(nextSize);
+        secondType->SetInstanceSize(nextSize - TYPEINFO_PTR_SIZE);
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(secondStorage), sizeof(secondStorage));
         {
             ScopedObjectAccess access;

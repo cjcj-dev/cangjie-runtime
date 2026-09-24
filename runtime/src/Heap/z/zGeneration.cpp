@@ -617,6 +617,10 @@ void ZGenerationOld::process_non_strong_references()
     }
     ZResurrection::unblock();
     Heap::GetHeap().GetFinalizerProcessor().EnqueueReferences();
+    PostTrace();
+    // ZGC zGeneration.cpp:1361-1372: publish non-strong work after
+    // resurrection is unblocked, before resetting the relocation set.
+    Heap::GetHeap().cross_vm().PostResolveCycleTask();
 }
 
 
@@ -962,7 +966,6 @@ void ZGenerationOld::concurrent_process_non_strong_references()
 {
     ZStatTimerOld timer(ZPhaseConcurrentProcessNonStrongOld);
     process_non_strong_references();
-    PostTrace();
 }
 
 void ZGenerationOld::concurrent_reset_relocation_set()
@@ -1062,7 +1065,6 @@ void ZGenerationOld::concurrent_relocate()
     ZStatTimerOld timer(ZPhaseConcurrentRelocateOld);
     relocate().relocate(&relocation_set());
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
-    Heap::GetHeap().cross_vm().PostResolveCycleTask();
     statHeap.AtRelocateEnd(
         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this),
         should_record_stats());
