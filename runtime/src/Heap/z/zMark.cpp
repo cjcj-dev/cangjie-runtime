@@ -135,17 +135,6 @@ void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
     ZBarrier::MarkFinalizableBarrierOnRoot(slot);
 }
 
-void ZMark::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
-{
-    HeapSlot<>& referentField =
-        HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
-    BaseObject* referent = ZBarrier::GetAndTryTagObj(ZBarrier::RefSlotKind::WEAK_REFERENT, reference, referentField);
-    if (referent == nullptr) {
-        return;
-    }
-    (void)Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().discover_reference(reference, ReferenceType::WEAK);
-    (void)workStack;
-}
 
 namespace {
 // ZMarkOopClosure (zMark.cpp:666-670). P08 owns the missing dedicated old
@@ -832,7 +821,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         if (!object->HasRefField() || !entry.follow()) {
             return;
         }
-        MarkPartialArray::FollowObjectReferences(object, entry.finalizable(), visitSlot, publish);
+        FollowObjectReferences(object, entry.finalizable(), visitSlot, publish);
         return;
     }
     auto publish = [this, &ctx](const MarkStackEntry& work) {
@@ -863,20 +852,11 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         if (!obj->HasRefField()) {
             return;
         }
-        if (UNLIKELY(obj->IsWeakRef())) {
-            WorkStack discovered;
-            ZMark::DiscoverWeakReference(obj, discovered);
-            while (!discovered.empty()) {
-                publish(discovered.back());
-                discovered.pop_back();
-            }
-            return;
-        }
         auto visitSlot = [obj, &entry](MAddress slot) {
             auto& field = HeapSlotAt<>(slot);
             ZBarrier::MarkBarrierOnOldOopField(field, entry.finalizable());
         };
-        MarkPartialArray::FollowObjectReferences(obj, entry.finalizable(), visitSlot, publish);
+        FollowObjectReferences(obj, entry.finalizable(), visitSlot, publish);
     }
 }
 
@@ -1204,8 +1184,57 @@ void FollowElements(MAddress start, size_t length, bool finalizable,
     }
 }
 
-void FollowObjectReferences(BaseObject* object, bool finalizable,
-                            const FieldVisitor& visit, const EntryPublisher& publish)
+} // namespace MarkPartialArray
+
+// ZGC zMark.cpp:273-313: discovery is closure state, not an object-kind
+// branch in mark_and_follow. Finalizable traversal follows the referent.
+template <bool finalizable, ZGenerationIdOptional generation>
+class ZMarkBarrierFollowOopClosure : public OopIterateClosure {
+    static ReferenceDiscoverer* discoverer()
+    {
+        if (!finalizable) {
+            return ZGeneration::old()->reference_discoverer();
+        } else {
+            return nullptr;
+        }
+    }
+public:
+    ZMarkBarrierFollowOopClosure() : OopIterateClosure(discoverer()) {}
+    void do_oop(RefField<>* field) override
+    {
+        switch (generation) {
+            case ZGenerationIdOptional::young:
+                ZBarrier::MarkBarrierOnYoungOopField(*field);
+                break;
+            case ZGenerationIdOptional::old:
+                ZBarrier::MarkBarrierOnOldOopField(*field, finalizable);
+                break;
+            case ZGenerationIdOptional::none:
+                ZBarrier::MarkBarrierOnOopField(*field, finalizable);
+                break;
+        }
+    }
+};
+
+// ZGC zMark.cpp:371-392: select the static closure before VM enumeration.
+void ZMark::follow_object(BaseObject* object, bool finalizable)
+{
+    if (generation == MarkingStacks::MarkingGeneration::MAJOR) {
+        if (finalizable) {
+            ZMarkBarrierFollowOopClosure<true, ZGenerationIdOptional::old> closure;
+            ZIterator::oop_iterate(object, &closure);
+        } else {
+            ZMarkBarrierFollowOopClosure<false, ZGenerationIdOptional::old> closure;
+            ZIterator::oop_iterate(object, &closure);
+        }
+    } else {
+        ZMarkBarrierFollowOopClosure<false, ZGenerationIdOptional::young> closure;
+        ZIterator::oop_iterate(object, &closure);
+    }
+}
+
+void ZMark::FollowObjectReferences(BaseObject* object, bool finalizable,
+                            const MarkPartialArray::FieldVisitor& visit, const MarkPartialArray::EntryPublisher& publish)
 {
     if (object->GetTypeInfo()->IsRawArray()) {
         MArray* array = reinterpret_cast<MArray*>(object);
@@ -1213,15 +1242,14 @@ void FollowObjectReferences(BaseObject* object, bool finalizable,
         if (component->IsObjectType() || component->IsArrayType() || component->IsInterface()) {
             // zMark.cpp:346-368: array following does not contain a safe
             // iterator split. Invisible roots carry DontFollow upstream.
-            FollowElements(reinterpret_cast<MAddress>(array->ConvertToCArray()), array->GetLength(), finalizable, visit, publish);
+            MarkPartialArray::FollowElements(reinterpret_cast<MAddress>(array->ConvertToCArray()), array->GetLength(), finalizable, visit, publish);
             return;
         }
     }
-    auto fields = [&](RefField<>& field) { visit(reinterpret_cast<MAddress>(&field)); };
-    ZBasicOopIterateClosure<decltype(fields)> closure(fields);
-    ZIterator::oop_iterate(object, &closure);
+    follow_object(object, finalizable);
 }
 
+namespace MarkPartialArray {
 void FollowPartialReferences(const MarkStackEntry& entry,
                              const FieldVisitor& visit, const EntryPublisher& publish)
 {

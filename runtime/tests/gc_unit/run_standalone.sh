@@ -386,6 +386,7 @@ MAIN_SOURCES=(
   "$SRC/test_mark_stripe.cpp"
   "$SRC/test_mark_port_203_storage.cpp"
   "$SRC/test_mark_port_203_entries.cpp"
+  "$SRC/test_mark_discovery.cpp"
   "$SRC/test_mark_port_203_engine.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"
@@ -604,10 +605,6 @@ REFERENCE_PROCESSOR_CONSUMERS=(
   'MapleRuntime::ReferenceProcessor::ProcessReferences('
   'MapleRuntime::ReferenceProcessor::EnqueueReferences('
 )
-# The direct weak-discovery test in test_young_conc.cpp is testable-only.
-if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::ZMark::DiscoverWeakReference(')
-fi
 REFERENCE_PROCESSOR_FULL="$OUT/cj_gc_unit.full-defined.txt"
 REFERENCE_PROCESSOR_UNDEFINED="$OUT/cj_gc_unit.undefined.txt"
 nm --defined-only "$OUT/cj_gc_unit" | c++filt >"$REFERENCE_PROCESSOR_FULL"
