@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include <cstdio>
+#include <dlfcn.h>
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -35,8 +36,23 @@ private:
 
 }
 
-// Product SO entry: this TU does not include zBarrier.inline.hpp, so the
-// call binds to the runtime export rather than a local inline copy.
+using PromoteFn = void (*)(volatile zpointer*);
+
+PromoteFn ProductPromoteBarrier()
+{
+    void* so = dlopen("libcangjie-runtime.so", RTLD_NOLOAD | RTLD_NOW);
+    if (so == nullptr) {
+        so = dlopen("libcangjie-runtime.so", RTLD_NOW);
+    }
+    if (so == nullptr) {
+        return nullptr;
+    }
+    return reinterpret_cast<PromoteFn>(dlsym(
+        so, "_ZN12MapleRuntime8ZBarrier34promote_barrier_on_young_oop_fieldEPVNS_8zpointerE"));
+}
+
+// Product SO entry. dlopen(NOLOAD) selects the loaded runtime, not a local
+// weak copy emitted because another header pulled the inline definition in.
 GC_TEST(OldToYoung1102, PromotedNullIsStoreBadAndSlowStoreRemembersSlot)
 {
     GcHeapFixture fx;
@@ -44,7 +60,13 @@ GC_TEST(OldToYoung1102, PromotedNullIsStoreBadAndSlowStoreRemembersSlot)
     rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
-    ZBarrier::promote_barrier_on_young_oop_field(reinterpret_cast<volatile zpointer*>(&field));
+    PromoteFn promote = ProductPromoteBarrier();
+    std::fprintf(stderr, "OLD_TO_YOUNG_1102_PROMOTE_FN fn=%p\n", reinterpret_cast<void*>(promote));
+    if (promote == nullptr) {
+        GC_EXPECT_TRUE(false);
+        return;
+    }
+    promote(reinterpret_cast<volatile zpointer*>(&field));
     const zpointer promoted = field.GetFieldValue();
     const zpointer storeGoodNull = ZAddress::store_good(zaddress::null);
     const bool promotedBad = (raw(promoted) & ::g_cjStoreBadMask) != 0;
