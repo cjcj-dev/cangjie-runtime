@@ -1194,17 +1194,24 @@ class ZMarkBarrierFollowOopClosure : public OopIterateClosure {
     {
         if (!finalizable) {
             return ZGeneration::old()->reference_discoverer();
+        } else {
+            return nullptr;
         }
-        return nullptr;
     }
 public:
     ZMarkBarrierFollowOopClosure() : OopIterateClosure(discoverer()) {}
     void do_oop(RefField<>* field) override
     {
-        if constexpr (generation == ZGenerationIdOptional::young) {
-            ZBarrier::MarkBarrierOnYoungOopField(*field);
-        } else {
-            ZBarrier::MarkBarrierOnOldOopField(*field, finalizable);
+        switch (generation) {
+            case ZGenerationIdOptional::young:
+                ZBarrier::MarkBarrierOnYoungOopField(*field);
+                break;
+            case ZGenerationIdOptional::old:
+                ZBarrier::MarkBarrierOnOldOopField(*field, finalizable);
+                break;
+            case ZGenerationIdOptional::none:
+                ZBarrier::MarkBarrierOnOopField(*field, finalizable);
+                break;
         }
     }
 };
