@@ -208,3 +208,54 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiEnvironmentBytes)
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TooSmall) { CheckMaximumRejected("1M"); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, AlignmentOverflow) { CheckMaximumRejected("18446744073709551615"); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Minimum) { CheckMaximumBytes("2M", 2UL * 1024 * 1024); }
+
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiMinimum)
+{
+    using namespace MapleRuntime;
+    unsetenv("cjHeapSize");
+    unsetenv("cjSoftMaxHeapSize");
+    RuntimeParam params{};
+    params.heapParam.heapSize = 2 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    const auto rc = InitCJRuntime(&params);
+    std::fprintf(stderr, "MAX_API_MINIMUM_ASSERT rc=%d expected=%d\n", rc, E_OK);
+    GC_EXPECT_EQ(rc, E_OK);
+    GC_EXPECT_EQ(ZHeuristics::max_heap_size(), 2UL * 1024 * 1024);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiTooSmall)
+{
+    using namespace MapleRuntime;
+    unsetenv("cjHeapSize");
+    RuntimeParam params{};
+    params.heapParam.heapSize = 1024;
+    const auto rc = InitCJRuntime(&params);
+    std::fprintf(stderr, "MAX_API_SMALL_ASSERT rc=%d expected=%d\n", rc, E_ARGS);
+    GC_EXPECT_EQ(rc, E_ARGS);
+}
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiOverflow)
+{
+    using namespace MapleRuntime;
+    unsetenv("cjHeapSize");
+    RuntimeParam params{};
+    params.heapParam.heapSize = SIZE_MAX;
+    const auto rc = InitCJRuntime(&params);
+    std::fprintf(stderr, "MAX_API_OVERFLOW_ASSERT rc=%d expected=%d\n", rc, E_ARGS);
+    GC_EXPECT_EQ(rc, E_ARGS);
+}
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, EnvironmentOverridesApiOverflow)
+{
+    using namespace MapleRuntime;
+    setenv("cjHeapSize", "64M", 1);
+    unsetenv("cjSoftMaxHeapSize");
+    RuntimeParam params{};
+    params.heapParam.heapSize = SIZE_MAX;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    const auto rc = InitCJRuntime(&params);
+    std::fprintf(stderr, "MAX_API_SOURCE_ASSERT rc=%d expected=%d\n", rc, E_OK);
+    GC_EXPECT_EQ(rc, E_OK);
+    GC_EXPECT_EQ(ZHeuristics::max_heap_size(), 64UL * 1024 * 1024);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
