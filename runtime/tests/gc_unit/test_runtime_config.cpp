@@ -181,8 +181,10 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiKilobytes)
     params.gcParam.concGCThreads = 2;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     const size_t actual = ZHeuristics::max_heap_size();
-    std::fprintf(stderr, "MAX_API_ASSERT actual=%zu expected=%zu\n", actual, 66UL * 1024 * 1024);
+    const size_t capacity = Heap::GetHeap().GetMaxCapacity();
+    std::fprintf(stderr, "MAX_API_ASSERT actual=%zu expected=%zu capacity=%zu\n", actual, 66UL * 1024 * 1024, capacity);
     GC_EXPECT_EQ(actual, 66UL * 1024 * 1024);
+    GC_EXPECT_EQ(capacity, 66UL * 1024 * 1024);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiEnvironmentBytes)
