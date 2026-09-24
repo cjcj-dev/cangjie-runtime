@@ -7,6 +7,7 @@
 
 #include "RuntimeConfig.h"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zFuture.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/concurrentGCThread.hpp"
