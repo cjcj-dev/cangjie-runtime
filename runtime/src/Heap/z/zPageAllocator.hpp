@@ -551,10 +551,6 @@ private:
     // #710: page lifecycle identity lives in ZPage's role word and the page
     // table (zPageTable.hpp:57-77); there are no page lists. The relocation
     // set (zRelocationSet.hpp) is the from-space work source.
-    // zRelocate.cpp:1121 shape: in-place relocated page counts by size class,
-    // accumulated while a from-space pass runs and read at its end. Host
-    // difference: ZGC counts these on ZRelocateSmall/MediumAllocator; here the
-    // in-place decision is made inside ZRelocateWork, so the counters live with that driver.
     // zPageAllocator.hpp:157-162 shape: per-generation used (region-granular)
     // and per-collection used high/low, updated at the pageAllocatorUsed
     // mutation points.

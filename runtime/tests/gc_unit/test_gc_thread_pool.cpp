@@ -633,6 +633,10 @@ void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, boo
     generation.Workers()->set_active();
     ZRelocate::StartRelocationTasks(generation.id());
     generation.relocate().relocate(&generation.relocation_set());
+    // A second task sees already claimed forwardings. Its freshly constructed
+    // allocators must publish zero, independent of the first task's failures.
+    ZRelocate::StartRelocationTasks(generation.id());
+    generation.relocate().relocate(&generation.relocation_set());
     generation.Workers()->set_inactive();
     GC_EXPECT_FALSE(generation.relocate().queue()->is_active());
     ZRelocationSetIterator iter(&generation.relocation_set());
