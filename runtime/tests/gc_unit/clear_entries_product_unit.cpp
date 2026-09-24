@@ -166,7 +166,7 @@ public:
         return lease.ok() ? ZGeneration::generation(copyPage->generation_id())->relocate().relocate_object(forwarding_for_page(copyPage), from) : nullptr;
     }
 
-    static void RemapYoungRoots(Heap& collector) { ZRelocate::RemapYoungRoots(); }
+    static void RemapYoungRoots(Heap& collector) { Heap::GetHeap().old().remap_young_roots(); }
 
     static void SeedValueRoots(Heap& collector, BaseObject* value)
     {
@@ -245,7 +245,7 @@ struct LoadHealDeliveryTestAccess {
             ~ZPointerRemappedOldMask;
     }
 
-    static void RemapYoungRoots(Heap& collector) { ZRelocate::RemapYoungRoots(); }
+    static void RemapYoungRoots(Heap& collector) { Heap::GetHeap().old().remap_young_roots(); }
 
     static void FlipYoungRelocateStart(Heap& collector)
     {

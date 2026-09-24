@@ -1025,9 +1025,9 @@ public:
     }
 };
 
-void ZRelocate::RemapYoungRoots()
+void ZGenerationOld::remap_young_roots()
 {
-    ZWorkers& workers = *Heap::GetHeap().old().Workers();
+    ZWorkers& workers = *Workers();
     const uint32_t previous = workers.active_workers();
     const uint32_t requested = std::min(std::max(Heap::GetHeap().young().Workers()->active_workers() + previous,
                                                     uint32_t{1}), ZOldGCThreads);
@@ -1041,7 +1041,7 @@ void ZRelocate::RemapYoungRoots()
 void ZGenerationOld::concurrent_remap_young_roots()
 {
     ZStatTimerOld timer(ZPhaseConcurrentRemapRootsOld);
-    ZRelocate::RemapYoungRoots();
+    remap_young_roots();
 }
 
 void ZGenerationOld::pause_relocate_start()
