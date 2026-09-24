@@ -50,7 +50,10 @@ GC_TEST(OldToYoung1102, YoungMarkPhaseFlushRemembersOldToYoungSlot)
 
     const bool published = SlotPageRemembered(slot);
     ZRememberedSet::flip();
-    const bool scanned = Heap::GetHeap().remembered().scan_page_and_clear_remset(fx.region0);
+    bool scanned = false;
+    fx.region0->oops_do_remembered([&](volatile zpointer* p) {
+        scanned = Heap::GetHeap().remembered().scan_field(p) || scanned;
+    });
     ZRememberedSet::flip();
     old.set_phase(phaseBefore);
 
