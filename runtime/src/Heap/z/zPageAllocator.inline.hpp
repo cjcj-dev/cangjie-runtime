@@ -114,7 +114,13 @@ public:
           smallAllocator(relocationSet->generation()),
           mediumAllocator(relocationSet->generation(),
                           relocationSet->generation()->relocate().shared_medium_targets()) {}
-    ~ForwardTask() override { relocationSet->generation()->relocate().queue()->deactivate(); }
+    ~ForwardTask() override
+    {
+        // ZGC zRelocate.cpp:1120-1124: publish task-local counts before deactivation.
+        relocationSet->generation()->StatRelocation()->AtRelocateEnd(
+            smallAllocator.in_place_count(), mediumAllocator.in_place_count());
+        relocationSet->generation()->relocate().queue()->deactivate();
+    }
     // ZGC zRelocate.cpp:1222-1224: all old workers have left before restart.
     void resize_workers(uint32_t nworkers) override
     {

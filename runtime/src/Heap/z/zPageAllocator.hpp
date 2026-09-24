@@ -386,26 +386,6 @@ public:
     void HandleAllocStallingForYoung();
     void StopStalledAllocations();
     void HandleAllocStallingForOld(bool clearedAllSoftRefs);
-    // In-place relocation account (feeds ZStatRelocation::AtRelocateEnd).
-    // Not observation-gated: the relocation report reads it in every build.
-    void ResetInPlaceRelocatedCounts()
-    {
-        inPlaceSmallCount.store(0, std::memory_order_relaxed);
-        inPlaceMediumCount.store(0, std::memory_order_relaxed);
-    }
-    void NoteInPlaceRelocated(const ZPage* region)
-    {
-        if (region->is_medium()) {
-            inPlaceMediumCount.fetch_add(1, std::memory_order_relaxed);
-        } else if (region->is_small()) {
-            inPlaceSmallCount.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-    std::pair<size_t, size_t> InPlaceRelocatedCounts() const
-    {
-        return { inPlaceSmallCount.load(std::memory_order_relaxed),
-                 inPlaceMediumCount.load(std::memory_order_relaxed) };
-    }
     // zPageAllocator.cpp:1362 stats field: currently stalled mutators. Host
     // difference: the current allocation adapter has no stalled-mutator census (#727).
     size_t AllocationStallsNow() const
@@ -571,12 +551,6 @@ private:
     // #710: page lifecycle identity lives in ZPage's role word and the page
     // table (zPageTable.hpp:57-77); there are no page lists. The relocation
     // set (zRelocationSet.hpp) is the from-space work source.
-    // zRelocate.cpp:1121 shape: in-place relocated page counts by size class,
-    // accumulated while a from-space pass runs and read at its end. Host
-    // difference: ZGC counts these on ZRelocateSmall/MediumAllocator; here the
-    // in-place decision is made inside ZRelocateWork, so the counters live with that driver.
-    std::atomic<size_t> inPlaceSmallCount{ 0 };
-    std::atomic<size_t> inPlaceMediumCount{ 0 };
     // zPageAllocator.hpp:157-162 shape: per-generation used (region-granular)
     // and per-collection used high/low, updated at the pageAllocatorUsed
     // mutation points.

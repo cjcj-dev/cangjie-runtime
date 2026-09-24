@@ -130,8 +130,6 @@ void ZRelocate::relocate(ZRelocationSet* relocation_set)
         ForwardTask<Generation::Old> task(manager, relocation_set);
         workers.run(&task);
     }
-    const auto inPlace = manager.InPlaceRelocatedCounts();
-    generation->StatRelocation()->AtRelocateEnd(inPlace.first, inPlace.second);
 }
 
 bool ZRelocate::IsFromObject(BaseObject* obj)
@@ -146,12 +144,9 @@ bool ZRelocate::IsFromObject(BaseObject* obj)
 
 void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 {
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RegionManager& manager = space.GetRegionManager();
     ZWorkers& workers = *Heap::GetHeap().GetZGeneration(generation).Workers();
     auto& queue = *Heap::GetHeap().GetZGeneration(generation).relocate().queue();
     CHECK(!queue.IsActive());
-    manager.ResetInPlaceRelocatedCounts();
     queue.BeginWorkers(workers.active_workers());
 }
 
@@ -326,11 +321,7 @@ static ZPage* AllocateRelocationTarget(ZForwarding* forwarding)
     flags.set_non_blocking();
     flags.set_gc_relocation();
     ZPage* source = forwarding->page();
-    ZPage* page = Heap::alloc_page(forwarding->size(), source->type(), false, forwarding->to_age(), flags);
-    if (page == nullptr) {
-        Heap::GetHeap().page_allocator().NoteInPlaceRelocated(source);
-    }
-    return page;
+    return Heap::alloc_page(forwarding->size(), source->type(), false, forwarding->to_age(), flags);
 }
 
 static void RetireRelocationTarget(ZGeneration* generation, ZPage* page)
@@ -346,6 +337,7 @@ static void RetireRelocationTarget(ZGeneration* generation, ZPage* page)
 ZPage* ZRelocateSmallAllocator::alloc_and_retire_target_page(ZForwarding* forwarding, ZPage* target)
 {
     ZPage* page = AllocateRelocationTarget(forwarding);
+    if (page == nullptr) { inPlaceCount.fetch_add(1, std::memory_order_relaxed); }
     if (target != nullptr) { RetireRelocationTarget(generation, target); }
     return page;
 }
@@ -379,7 +371,10 @@ ZPage* ZRelocateMediumAllocator::alloc_and_retire_target_page(ZForwarding* forwa
     if (sharedTargets->get(partition, age) == target) {
         ZPage* page = AllocateRelocationTarget(forwarding);
         sharedTargets->set(partition, age, page);
-        if (page == nullptr) { inPlace = true; }
+        if (page == nullptr) {
+            inPlaceCount.fetch_add(1, std::memory_order_relaxed);
+            inPlace = true;
+        }
         if (target != nullptr) { RetireRelocationTarget(generation, target); }
     }
     return sharedTargets->get(partition, age);
