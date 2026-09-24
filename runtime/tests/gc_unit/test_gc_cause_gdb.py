@@ -59,9 +59,19 @@ def expect(tag, passed, **fields):
 
 
 class WarmupDelay(gdb.Breakpoint):
+    def __init__(self, spec, **kwargs):
+        # Resolve symbols before collection: debugger lookup time must not
+        # dominate the measured pause or the runner's fixed timeout.
+        self.cause_address = val('&MapleRuntime::ZDriver::_major->_gc_cause')
+        self.warmup = int(val('MapleRuntime::GC_REASON_WARMUP'))
+        self.delays = 0
+        super().__init__(spec, **kwargs)
+
     def stop(self):
-        if int(val('MapleRuntime::ZDriver::_major->_gc_cause')) == int(val('MapleRuntime::GC_REASON_WARMUP')):
-            # Extend a real measured old cycle; do not edit its statistics.
+        if int(self.cause_address.dereference()) == self.warmup:
+            # The old collection scope has started its real cycle timer.
+            # Delay here is recorded by at_collection_end, without statistics writes.
+            self.delays += 1
             time.sleep(0.15)
         return False
 
@@ -104,11 +114,14 @@ try:
     until('test_gc_director.cpp:' + str(ready))
     if CASE in ('allocation_rate', 'allocation_rate_static', 'major_allocation_rate', 'proactive', 'proactive_time_closed'):
         if CASE == 'major_allocation_rate' or PROACTIVE:
-            WarmupDelay('MapleRuntime::ZDriverMajor::collect_old', internal=True)
+            warmup_delay = WarmupDelay('MapleRuntime::ZGenerationOld::concurrent_mark', internal=True)
         cmd('set scheduler-locking off')
         second = next(i + 1 for i, s in enumerate(tests) if 'const size_t nextSize =' in s)
         until('test_gc_director.cpp:' + str(second))
         emit('WARMUP_INPUT', completed=int(val('heap._old.cycleStats.warmupCycles')))
+        if CASE == 'major_allocation_rate' or PROACTIVE:
+            expect('ASSERT_MEASURED_WARMUP_PAUSES', warmup_delay.delays == 3, pauses=warmup_delay.delays)
+            warmup_delay.delete()
         cmd('set scheduler-locking on')
         second_ready = next(i + 1 for i, s in enumerate(tests) if 'CAUSE_SECOND_ALLOCATION_READY' in s)
         until('test_gc_director.cpp:' + str(second_ready))
@@ -152,7 +165,7 @@ try:
     emit('PRODUCT_IDENTITY', library=product, case=CASE, stack=cmd('bt'))
     if PROACTIVE or CASE == 'major_allocation_rate':
         # Inspect the actual sample consumed by start_gc, not a model request.
-        until('MapleRuntime::start_gc')
+        cmd('finish')
         interval = 49.0 * sum(float(val('stats.' + generation + '_stats.cycle.' + field)) * weight
             for generation in ('young', 'old')
             for field, weight in (('serialTime', 1.0), ('serialTimeSd', 3.290527),
@@ -162,6 +175,14 @@ try:
         threshold = int(val('stats.old_stats.stat_heap.usedAtRelocateEnd')) + int(
             int(val('stats.heap.soft_max_heap_size')) * 0.10)
         warm = bool(val('stats.old_stats.cycle.isWarm'))
+        if CASE == 'major_allocation_rate':
+            emit('MAJOR_ALLOCATION_INPUT',
+                 collections=int(val('stats.heap.total_collections')),
+                 old_start=int(val('stats.old_stats.general.total_collections_at_start')),
+                 old_used=int(val('stats.old_stats.general.used')),
+                 old_live=int(val('stats.old_stats.stat_heap.liveAtMarkEnd')),
+                 young_reclaimed=float(val('stats.young_stats.stat_heap.reclaimedAverage')),
+                 old_reclaimed=float(val('stats.old_stats.stat_heap.reclaimedAverage')))
         opened = CASE == 'proactive'
         expect('ASSERT_PROACTIVE_SAMPLED_TIME_GATE', warm and used >= threshold and
                ((elapsed >= interval) if opened else (elapsed < interval)),
