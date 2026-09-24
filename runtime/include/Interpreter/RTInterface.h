@@ -109,7 +109,7 @@ typedef struct INT_InterpretedFrameDesc {
 // endregion Calling Conventions
 
 #define INT_INTERPRETER_INTERFACE_VERSION 2
-#define DYN_CJNATIVE_INTERFACE_VERSION 3
+#define DYN_CJNATIVE_INTERFACE_VERSION 4
 
 // region interpreter interface
 
@@ -531,10 +531,6 @@ typedef DYN_ThreadLocalData (*DYN_GetThreadLocalDataFn)();
 // return: opaque cjThread handle for the created thread, or null if creation or scheduling fails.
 typedef DYN_CJThreadHandle (*DYN_NewCJThreadFn)(void* execute, DYN_ObjRef future, void* scheduler);
 
-// Returns non-zero if the GC is in an "active" phase.
-// In active phase fast-path write barriers can`t be used.
-typedef int (*DYN_IsActiveGcPhaseFn)(DYN_ThreadLocalData);
-
 // Runtime stack-growth entry used by interpreter-owned transition/prologue stubs.
 // `DYN_CJNativeInterface::stackGrowStub` is initialized by runtime with
 // `CJ_MCC_StackGrowStub`, an architecture-specific assembly stub. It is intended
@@ -685,7 +681,6 @@ struct DYN_CJNativeInterface {
     DYN_SetArrayRefElementFn setArrayRefElement;
 
     DYN_GetThreadLocalDataFn getThreadLocalData;
-    DYN_IsActiveGcPhaseFn isActiveGcPhase;
     DYN_StackGrowStubFn stackGrowStub;
     DYN_I2NStubFn i2nStub;
 

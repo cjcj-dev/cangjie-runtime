@@ -576,7 +576,6 @@ extern "C" size_t MCC_GetAllocatedHeapSize() { return Heap::GetHeap().GetAllocat
 
 extern "C" size_t MCC_GetMaxHeapSize() { return Heap::GetHeap().GetMaxCapacity(); }
 
-extern "C" bool MCC_IsGCRunning() { return Heap::GetHeap().IsGcStarted(); }
 
 extern "C" bool MCC_DumpCJHeapData(int fd)
 {

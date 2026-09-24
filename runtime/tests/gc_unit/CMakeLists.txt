@@ -79,6 +79,7 @@ set(GC_UNIT_SOURCES
     test_current_object_ref.cpp
     test_i2_readref.cpp
     test_loadfc.cpp
+    test_interpreter_version.cpp
     test_fnlz_roots.cpp
     test_reference_processor.cpp
     test_mark_stack_entry.cpp
@@ -146,7 +147,10 @@ add_library(cj_package_init_unrelated SHARED package_init_image.cpp)
 set_target_properties(cj_package_init_unrelated PROPERTIES OUTPUT_NAME cj_package_init_unrelated)
 target_include_directories(cj_package_init_unrelated PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
-add_dependencies(cj_gc_unit cj_package_init_fixture cj_package_init_unrelated)
+add_library(cj_interpreter_version_fixture SHARED interpreter_version_image.cpp)
+target_include_directories(cj_interpreter_version_fixture PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include)
+add_dependencies(cj_gc_unit cj_package_init_fixture cj_package_init_unrelated cj_interpreter_version_fixture)
 
 enable_testing()
 add_test(NAME cj_gc_unit COMMAND cj_gc_unit)

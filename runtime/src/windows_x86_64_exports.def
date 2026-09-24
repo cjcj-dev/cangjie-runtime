@@ -239,7 +239,6 @@ EXPORTS
     CJ_MCC_IsClass @233
     CJ_MCC_IsEnum @234
     CJ_MCC_IsFunction @235
-    CJ_MCC_IsGCRunning @236
     CJ_MCC_IsGeneric @237
     CJ_MCC_IsInterface @238
     CJ_MCC_IsPrimitive @239
@@ -685,7 +684,6 @@ EXPORTS
     MCC_IsClass @678
     MCC_IsEnum @679
     MCC_IsFunction @680
-    MCC_IsGCRunning @681
     MCC_IsGeneric @682
     MCC_IsInterface @683
     MCC_IsPrimitive @684

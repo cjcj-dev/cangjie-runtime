@@ -230,14 +230,6 @@ bool Heap::IsSurvivedObject(const BaseObject* obj) const
     return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
 }
 
-// Standard-library ABI query. ZGC zDriver.cpp:43-57 scopes collection
-// activity with the driver's cause; generations own no second activity state.
-bool Heap::IsGcStarted() const
-{
-    return (ZDriver::minor() != nullptr && ZDriver::minor()->gc_cause() != GC_REASON_INVALID) ||
-           (ZDriver::major() != nullptr && ZDriver::major()->gc_cause() != GC_REASON_INVALID);
-}
-
 bool Heap::IsGCEnabled() const { return isGCEnabled.load(); }
 
 void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
