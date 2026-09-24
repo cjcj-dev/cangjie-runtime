@@ -340,7 +340,7 @@ void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t m
     params.gcParam.zTenuringThresholdSet = overrideSet;
     params.gcParam.zTenuringThreshold = overrideValue;
     if (environment) {
-        setenv("cjHeapSize", (std::to_string(heapKB) + "KB").c_str(), 1);
+        setenv("cjHeapSize", (std::to_string(heapKB) + "K").c_str(), 1);
         setenv("cjProcessorNum", "1", 1);
         setenv("cjConcGCThreads", std::to_string(workers).c_str(), 1);
         if (maxSet) {
@@ -409,7 +409,7 @@ void CheckConflictingTenuringFlags(bool environment)
         params.gcParam.zTenuringThresholdSet = true;
         params.gcParam.zTenuringThreshold = 9;
         if (environment) {
-            setenv("cjHeapSize", "64MB", 1);
+            setenv("cjHeapSize", "64M", 1);
             setenv("cjProcessorNum", "1", 1);
             setenv("cjConcGCThreads", "2", 1);
             setenv("cjMaxTenuringThreshold", "4", 1);
@@ -882,7 +882,7 @@ void CheckSoftMax(size_t heapKB, const char* configured, size_t softKB, bool sof
         if (heapKB == 0) {
             unsetenv("cjHeapSize");
         } else {
-            setenv("cjHeapSize", (std::to_string(heapKB) + "KB").c_str(), 1);
+            setenv("cjHeapSize", (std::to_string(heapKB) + "K").c_str(), 1);
         }
         setenv("cjProcessorNum", "1", 1);
         setenv("cjConcGCThreads", "2", 1);
@@ -1049,7 +1049,7 @@ void CheckManagedSoftConstraint(const char* soft, const char* diagnostic)
         if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
         close(output[1]);
         signal(SIGABRT, SIG_DFL);
-        setenv("cjHeapSize", "64MB", 1);
+        setenv("cjHeapSize", "64M", 1);
         setenv("cjProcessorNum", "1", 1);
         setenv("cjConcGCThreads", "2", 1);
         setenv("cjSoftMaxHeapSize", soft, 1);
