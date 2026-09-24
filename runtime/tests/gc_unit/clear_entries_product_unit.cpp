@@ -1365,19 +1365,24 @@ void CheckMajorCurrentRemset(unsigned workers)
     *field = StoreGoodPointer(from);
     heap.remembered().remember(field);
     const uintptr_t before = raw(*field);
+    ZForwarding* forwarding = forwarding_for_page(source);
+    GC_EXPECT_TRUE(forwarding != nullptr);
     young.set_phase(ZGenerationPhase::Relocate);
     ZGlobalsPointers::flip_young_relocate_start();
     young.Workers()->set_active();
     ZRelocate::StartRelocationTasks(young.id());
     young.relocate().relocate(&young.relocation_set());
     // Read the product's winning address; never plant a forwarding result.
-    const uintptr_t expected = forwarding_for_page(source)->find(reinterpret_cast<MAddress>(from));
+    const uintptr_t expected = forwarding->find(reinterpret_cast<MAddress>(from));
     const uintptr_t pending = raw(*field);
     {
         DriverLocker driver;
         old.collect();
     }
-    const uintptr_t observed = raw(ZPointer::uncolor(*field));
+    // Old relocate-start has flipped the old color after the remap phase.
+    // Decode without healing, so a missing phase reaches the address assertion.
+    const uintptr_t word = raw(*field);
+    const uintptr_t observed = word >> ZPointer::load_shift_lookup(word);
     const bool updated = expected != 0 && expected != reinterpret_cast<uintptr_t>(from) &&
         pending == before && observed == expected;
     std::fprintf(stderr, "MAJOR_CURRENT_REMSET_TARGET workers=%u before=%zx pending=%zx "
