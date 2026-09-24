@@ -3,6 +3,7 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "gc_generation_test.hpp"
+#include "b09_runtime_fixture.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Heap/z/zRelocate.hpp"
@@ -11,6 +12,7 @@
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zThreadLocalData.hpp"
 #include "Mutator/Mutator.h"
+#include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include <cstdio>
 #include <chrono>
@@ -336,9 +338,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, RunningWorldCopiesOnlyRequestedObj
 // remap a plain root through the old forwarding table before it is read.
 static void CheckYoungPauseRemapsPlainRoot()
 {
-    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MutatorManager mutators;
-    InPlaceRemsetRuntime runtime(mutators);
+    B09RuntimeFixture runtime;
     CreateStandaloneHeap(8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
@@ -386,6 +386,10 @@ static void CheckYoungPauseRemapsPlainRoot()
     ZForwarding* owner = forwarding_for_page(pages[0]);
     GC_EXPECT_TRUE(owner != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
+    BaseObject* copied = generation.relocate().relocate_object(owner, objects[0][0]);
+    const MAddress relocated = reinterpret_cast<MAddress>(copied);
+    GC_EXPECT_TRUE(copied != nullptr && copied != objects[0][0]);
+    GC_EXPECT_EQ(owner->find(reinterpret_cast<MAddress>(objects[0][0])), relocated);
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(parked != nullptr);
     parked->SetManagedContext(false);
@@ -397,15 +401,12 @@ static void CheckYoungPauseRemapsPlainRoot()
     ObjectRef* kept = parked->AddNativeFrameRoot(nullptr);
     GC_EXPECT_TRUE(stale != nullptr && kept != nullptr);
     const uintptr_t before = raw(stale->LoadPlain());
+    GC_EXPECT_EQ(before, reinterpret_cast<uintptr_t>(objects[0][0]));
     ZGlobalsPointers::flip_old_relocate_start();
     heap.young().pause_mark_start();
     const uintptr_t after = raw(stale->LoadPlain());
-    const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
     std::fprintf(stderr, "PLAIN_ROOT_REMAP_ASSERT_EXECUTED before=%#zx after=%#zx relocated=%#zx null_kept=%d\n",
                  before, after, relocated, raw(kept->LoadPlain()) == 0);
-    GC_EXPECT_EQ(before, reinterpret_cast<uintptr_t>(objects[0][0]));
-    GC_EXPECT_NE(relocated, static_cast<MAddress>(0));
-    GC_EXPECT_NE(relocated, reinterpret_cast<MAddress>(objects[0][0]));
     GC_EXPECT_EQ(after, relocated);
     GC_EXPECT_EQ(raw(kept->LoadPlain()), static_cast<uintptr_t>(0));
     parked->PopNativeFrameRootsTo(0);
