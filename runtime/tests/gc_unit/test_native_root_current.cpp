@@ -699,12 +699,15 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
     fixture.region0->reset(PageAge::eden);
-    MarkPublicationFixture marking;
     Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     thread->SetManagedContext(false);
     (void)thread->EnterSaferegion(false);
     const size_t frameMark = thread->NativeFrameRootCount();
     ObjectRef* root = thread->AddNativeFrameRoot(fixture.obj0);
+    // A new watermark is current and done (ZGC stackWatermark.cpp:162).
+    // Start the phase after attachment so this thread actually needs processing.
+    MarkPublicationFixture marking;
+    ZGlobalsPointers::flip_young_mark_start();
     const uint64_t epoch = StackWatermark::epoch_id();
     const bool initiallyDone = thread->GetStackWatermark().IsDone(epoch);
     const bool initiallyLive = fixture.region0->is_object_strongly_live(from_object(fixture.obj0));
