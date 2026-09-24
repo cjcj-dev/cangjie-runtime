@@ -114,7 +114,7 @@ void CheckMaximumBytes(const char* input, size_t expected)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     CJ_MRT_CjRuntimeInit();
     const size_t actual = ZHeuristics::max_heap_size();
-    const size_t capacity = Heap::GetHeap().max_capacity();
+    const size_t capacity = Heap::GetHeap().GetMaxCapacity();
     const size_t expectedCapacity = (expected + ZGranuleSize - 1) / ZGranuleSize * ZGranuleSize;
     std::fprintf(stderr, "MAX_BYTES_ASSERT input=%s actual=%zu expected=%zu capacity=%zu expected_capacity=%zu\n",
                  input, actual, expected, capacity, expectedCapacity);
