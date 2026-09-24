@@ -110,7 +110,10 @@ void StoreBarrierBuffer::on_new_phase_remember(size_t i)
     }
     const uintptr_t lastMarkYoung = lastProcessedColor & (ZPointerMarkedYoung0 | ZPointerMarkedYoung1);
     if (lastMarkYoung != ZPointerMarkedYoung) {
-        (void)ZBarrier::RemsetBarrierOnOopField(HeapSlotAt<>(p));
+        // ZGC zStoreBarrierBuffer.cpp:173-182: the young-mark flip already
+        // published the previous remembered set. A buffered old slot is too
+        // late for that bitmap, so scan it now and remember it for the next.
+        ZGeneration::young()->scan_remembered_field(reinterpret_cast<volatile zpointer*>(p));
     } else {
         ZBarrier::remember(reinterpret_cast<volatile zpointer*>(p));
     }

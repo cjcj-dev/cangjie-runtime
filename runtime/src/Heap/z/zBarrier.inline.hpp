@@ -217,6 +217,9 @@ inline zaddress ZBarrier::promote_slow_path(zaddress addr)
 inline void ZBarrier::promote_barrier_on_young_oop_field(volatile zpointer* p)
 {
     const zpointer o = load_atomic(p);
+    // ZGC zBarrier.inline.hpp:668-678. Promoted fields, including null, are
+    // store-good before relocate start. The relocate-start color flip is what
+    // makes the next store miss the fast path; a store-bad null is not.
     barrier(is_store_good_fast_path, promote_slow_path, ColorStoreGood, p, o);
 }
 

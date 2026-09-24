@@ -20,6 +20,12 @@ inline bool ZGenerationYoung::is_remembered(volatile zpointer* p) const
     return remembered()->is_remembered(p);
 }
 
+// ZGC zGeneration.inline.hpp:162-164.
+inline void ZGenerationYoung::scan_remembered_field(volatile zpointer* p)
+{
+    (void)remembered()->scan_field(p);
+}
+
 inline bool ZGeneration::IsPhaseMark() const
 {
     return is_phase_mark();

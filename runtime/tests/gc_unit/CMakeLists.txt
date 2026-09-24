@@ -51,6 +51,7 @@ set(GC_UNIT_SOURCES
     test_concurrency_root_color.cpp
     test_relocation_set_selector.cpp
     test_store_barrier_buffer.cpp
+    test_old_to_young_1102.cpp
     test_barrier_old_atomic.cpp
     test_zPageAge.cpp
     test_zPage.cpp

@@ -168,6 +168,7 @@ static void UpdateRemsetPromotedFilterAndRemapPerField(RefField<>& field)
     const zpointer ptr = field.GetFieldValue();
     CHECK_DETAIL(ZPointer::is_old_load_good(ptr), "promoted field must be old load-good");
     if (ZPointer::is_store_good(ptr)) {
+        // ZGC zRelocate.cpp:747-749: store-good already has a remset entry.
         return;
     }
     if (ZPointer::is_load_good(ptr)) {
@@ -209,6 +210,7 @@ static void RemapAndMaybeAddRemset(RefField<>& field)
     volatile zpointer* const p = reinterpret_cast<volatile zpointer*>(&field);
     const zpointer ptr = field.GetFieldValue();
     if (ZPointer::is_store_good(ptr)) {
+        // ZGC zRelocate.cpp:1230-1232: store-good already has a remset entry.
         return;
     }
     const zaddress address = ZBarrier::load_barrier_on_oop_field_preloaded(p, ptr);
