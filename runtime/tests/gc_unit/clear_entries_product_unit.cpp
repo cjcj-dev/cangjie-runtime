@@ -36,6 +36,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zRememberedSet.hpp"
+#include "Heap/z/zRemembered.inline.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
@@ -1321,6 +1322,79 @@ void CheckMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bo
         unsigned(promoted), unsigned(managed), unsigned(oldPending), outcome.status, unsigned(completed));
     GC_EXPECT_TRUE(completed);
 }
+// ZGC zGeneration.cpp:1493-1497,1509: remap visits the current remembered
+// face even for an old page allocated after mark-start. Such a page is not
+// traced by old marking and is not selected for old relocation. Its field
+// therefore distinguishes this phase from the earlier root-marking pass.
+void CheckMajorCurrentRemset(unsigned workers)
+{
+    CreateStandaloneHeap(1024);
+    ZStat::Initialize();
+    GcHeapFixture& fx = ProductFixture();
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    auto& old = heap.old();
+    young.InitializeWorkers(workers);
+    old.InitializeWorkers(workers);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    ZPage* source = ResetDeliveryUnit(fx, 5);
+    source->reset(PageAge::eden);
+    BaseObject* dead = fx.PlaceObject(source->GetRegionStart());
+    BaseObject* from = fx.PlaceObject(source->GetRegionStart() + dead->GetSize());
+    source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    ZPage* companion = ResetDeliveryUnit(fx, 4);
+    companion->reset(PageAge::eden);
+    BaseObject* other = fx.PlaceObject(companion->GetRegionStart());
+    companion->SetRegionAllocPtr(reinterpret_cast<MAddress>(other) + other->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(source, from));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(companion, other));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {source, companion}));
+    {
+        ScopedStopTheWorld stopped("current remset old mark-start");
+        old.mark_start();
+    }
+    for (BaseObject* object : {from, other}) {
+        *reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(object) + sizeof(BaseObject)) =
+            StoreGoodPointer(nullptr);
+    }
+    ZPage* ownerPage = ResetDeliveryUnit(fx, 3);
+    ownerPage->reset(PageAge::old);
+    BaseObject* owner = fx.PlaceObject(ownerPage->GetRegionStart());
+    ownerPage->SetRegionAllocPtr(reinterpret_cast<MAddress>(owner) + owner->GetSize());
+    auto* field = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(owner) + sizeof(BaseObject));
+    *field = StoreGoodPointer(from);
+    heap.remembered().remember(field);
+    const uintptr_t before = raw(*field);
+    young.set_phase(ZGenerationPhase::Relocate);
+    ZGlobalsPointers::flip_young_relocate_start();
+    young.Workers()->set_active();
+    ZRelocate::StartRelocationTasks(young.id());
+    young.relocate().relocate(&young.relocation_set());
+    // Read the product's winning address; never plant a forwarding result.
+    const uintptr_t expected = forwarding_for_page(source)->find(reinterpret_cast<MAddress>(from));
+    const uintptr_t pending = raw(*field);
+    {
+        DriverLocker driver;
+        old.collect();
+    }
+    const uintptr_t observed = raw(ZPointer::uncolor(*field));
+    const bool updated = expected != 0 && expected != reinterpret_cast<uintptr_t>(from) &&
+        pending == before && observed == expected;
+    std::fprintf(stderr, "MAJOR_CURRENT_REMSET_TARGET workers=%u before=%zx pending=%zx "
+        "observed=%zx expected=%zx updated=%u\n", workers, before, pending, observed, expected, unsigned(updated));
+    GC_EXPECT_TRUE(updated);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RemapYoungRoots1039, MajorUpdatesCurrentRemsetSingleWorker)
+{
+    CheckMajorCurrentRemset(1);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RemapYoungRoots1039, MajorUpdatesCurrentRemsetMultipleWorkers)
+{
+    CheckMajorCurrentRemset(2);
+}
+
 GC_RUNTIME_OTHER_VM_TEST(RawRemapYoungProduct, MajorRemapsStackObjectField)
 {
     CheckMajorRawRemap(false, false, false, false, 1);
