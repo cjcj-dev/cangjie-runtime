@@ -357,6 +357,7 @@ MAIN_SOURCES=(
   "$SRC/test_concurrency_root_color.cpp"
   "$SRC/test_relocation_set_selector.cpp"
   "$SRC/test_store_barrier_buffer.cpp"
+  "$SRC/test_old_to_young_1102.cpp"
   "$SRC/test_barrier_old_atomic.cpp"
   "$SRC/test_zPageAge.cpp"
   "$SRC/test_zPage.cpp"
