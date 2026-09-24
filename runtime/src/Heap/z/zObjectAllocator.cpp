@@ -85,9 +85,9 @@ void RegionManager::PublishTLABStatistics(const TLABStatistics& total)
                                                  std::max(capacity, size_t{1}), 1.0));
         }
     }
-    VLOG(REPORT, "TLAB totals: used=%zu capacity=%zu allocated=%zu refills=%zu refill-waste=%zu gc-waste=%zu threads=%zu",
+    VLOG(REPORT, "TLAB totals: used=%zu capacity=%zu allocated=%zu refills=%zu refill-waste=%zu gc-waste=%zu threads=%zu slow-allocations=%zu",
          lastTLABUsed, capacity, total.allocatedSize, total.refills, total.refillWaste, total.gcWaste,
-         total.allocatingThreads);
+         total.allocatingThreads, total.slowAllocations);
 }
 
 // ZThreadLocalAllocBuffer::retire, zThreadLocalAllocBuffer.cpp:65-73.

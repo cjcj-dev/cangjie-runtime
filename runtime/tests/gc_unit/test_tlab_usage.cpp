@@ -996,7 +996,8 @@ GC_RUNTIME_OTHER_VM_TEST(TLABRefill, FailureFallsBackOutsideTLAB)
 // memAllocator.cpp:273-286; threadLocalAllocBuffer.inline.hpp:90-97.
 // Requests enter through the object allocator; only the compiler's existing
 // three-word TLAB ABI is read to observe the returned product state.
-GC_RUNTIME_OTHER_VM_TEST(TLABRefill, RetainsUsefulTailAndRaisesWasteLimit)
+namespace {
+void CheckTLABWasteLimit(bool excessive)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 64 * 1024;
@@ -1023,7 +1024,7 @@ GC_RUNTIME_OTHER_VM_TEST(TLABRefill, RetainsUsefulTailAndRaisesWasteLimit)
         uintptr_t bounds[3];
         std::memcpy(bounds, buffer, sizeof(bounds));
         const size_t initialLimit = buffer->RefillWasteLimit();
-        const size_t tail = initialLimit + 8;
+        const size_t tail = initialLimit + (excessive ? 8 : 0);
         // Construct the boundary with ordinary objects, never FillTLAB or a hook.
         GC_EXPECT_TRUE(seed != 0 && bounds[1] - bounds[0] > tail + 16);
         const uintptr_t fitting = allocate(1, bounds[1] - bounds[0] - tail);
@@ -1034,15 +1035,15 @@ GC_RUNTIME_OTHER_VM_TEST(TLABRefill, RetainsUsefulTailAndRaisesWasteLimit)
         const uintptr_t outside = allocate(2, request);
         uintptr_t after[3];
         std::memcpy(after, buffer, sizeof(after));
-        retained = outside != 0 && (outside < before[2] || outside >= before[1]) &&
+        retained = !excessive || (outside != 0 && (outside < before[2] || outside >= before[1]) &&
                    std::memcmp(before, after, sizeof(before)) == 0 &&
-                   buffer->RefillWasteLimit() == initialLimit + 4 * sizeof(uintptr_t);
+                   buffer->RefillWasteLimit() == initialLimit + 4 * sizeof(uintptr_t));
         std::fprintf(stderr, "TLAB_RETAIN_TARGET executed=1 outside=%zx before=%zx,%zx,%zx "
                      "after=%zx,%zx,%zx limit=%zu next_limit=%zu retained=%d\n",
                      outside, before[0], before[1], before[2], after[0], after[1], after[2],
                      initialLimit, buffer->RefillWasteLimit(), retained);
         // The raised limit now permits retirement. Same request, real entry.
-        const uintptr_t refill = allocate(3, request);
+        const uintptr_t refill = excessive ? allocate(3, request) : outside;
         uintptr_t finalBounds[3];
         std::memcpy(finalBounds, buffer, sizeof(finalBounds));
         refilled = refill != 0 && finalBounds[2] == refill && finalBounds[2] != before[2] &&
@@ -1052,7 +1053,7 @@ GC_RUNTIME_OTHER_VM_TEST(TLABRefill, RetainsUsefulTailAndRaisesWasteLimit)
         buffer->AccumulateTLABStatistics(total, 0, 1);
         TLABStatistics reset;
         buffer->AccumulateTLABStatistics(reset, 0, 1);
-        statistics = total.slowAllocations == 1 && total.refills == 2 &&
+        statistics = total.slowAllocations == (excessive ? 1u : 0u) && total.refills == 2 &&
                      total.refillWaste == tail && reset.slowAllocations == 0;
         std::fprintf(stderr, "TLAB_REFILL_LIMIT_TARGET executed=1 refill=%zx start=%zx refilled=%d "
                      "slow=%zu refills=%zu waste=%zu reset_slow=%zu statistics=%d\n",
@@ -1064,5 +1065,13 @@ GC_RUNTIME_OTHER_VM_TEST(TLABRefill, RetainsUsefulTailAndRaisesWasteLimit)
     GC_EXPECT_TRUE(refilled);
     GC_EXPECT_TRUE(statistics);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}}
+GC_RUNTIME_OTHER_VM_TEST(TLABRefill, RetainsUsefulTailAndRaisesWasteLimit)
+{
+    CheckTLABWasteLimit(true);
+}
+GC_RUNTIME_OTHER_VM_TEST(TLABRefill, WasteLimitEqualityRefills)
+{
+    CheckTLABWasteLimit(false);
 }
 #endif
