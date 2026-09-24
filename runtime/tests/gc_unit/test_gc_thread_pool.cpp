@@ -601,7 +601,7 @@ GC_OTHER_VM_TEST(RuntimeWorkers, ActivePoolBeforeHarnessShutdown)
 namespace {
 // Exhaust real allocator capacity so relocation must use its in-place path.
 // The GDB companion reads the published statistics at queue deactivation.
-void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, bool exhaust = true)
+void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, bool exhaust = true, bool interleaveYoung = false)
 {
     CreateStandaloneHeap(64);
     ZHeuristics::set_medium_page_size();
@@ -631,12 +631,38 @@ void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, boo
     if (generation.Workers() == nullptr) generation.InitializeWorkers(workers);
     generation.Workers()->set_active_workers(workers);
     generation.Workers()->set_active();
+    std::thread youngStart;
+    if (interleaveYoung) {
+        auto& young = Heap::GetHeap().GetZGeneration(Generation::Young);
+        if (young.Workers() == nullptr) young.InitializeWorkers(1);
+        young.Workers()->set_active_workers(1);
+        young.Workers()->set_active();
+        std::vector<ZForwarding*> sources;
+        ZRelocationSetIterator pending(&generation.relocation_set());
+        for (ZForwarding* forwarding; pending.next(&forwarding);) sources.push_back(forwarding);
+        youngStart = std::thread([sources, &young] {
+            pthread_setname_np(pthread_self(), "count-young");
+            // All old source results exist before young starts. The external
+            // observer can hold the old publishing thread while this thread
+            // runs; neither the fixture nor debugger writes product counters.
+            for (ZForwarding* source : sources) {
+                while (!source->is_done()) std::this_thread::yield();
+            }
+            ZRelocate::StartRelocationTasks(young.id());
+        });
+    }
     ZRelocate::StartRelocationTasks(generation.id());
     generation.relocate().relocate(&generation.relocation_set());
+    if (youngStart.joinable()) youngStart.join();
     // A second task sees already claimed forwardings. Its freshly constructed
     // allocators must publish zero, independent of the first task's failures.
     ZRelocate::StartRelocationTasks(generation.id());
     generation.relocate().relocate(&generation.relocation_set());
+    if (interleaveYoung) {
+        auto& young = Heap::GetHeap().GetZGeneration(Generation::Young);
+        young.relocate().relocate(&young.relocation_set());
+        young.Workers()->set_inactive();
+    }
     generation.Workers()->set_inactive();
     GC_EXPECT_FALSE(generation.relocate().queue()->is_active());
     ZRelocationSetIterator iter(&generation.relocation_set());
@@ -686,4 +712,14 @@ GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, YoungSmallAvailable)
 GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, YoungMediumAvailable)
 {
     RunRelocationEndCounts(Generation::Young, ZPageType::medium, 1, false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, OldSmallYoungStart)
+{
+    RunRelocationEndCounts(Generation::Old, ZPageType::small, 1, true, true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, OldMediumYoungStart)
+{
+    RunRelocationEndCounts(Generation::Old, ZPageType::medium, 3, true, true);
 }
