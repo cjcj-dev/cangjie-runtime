@@ -247,6 +247,7 @@ public:
     void concurrent_reset_relocation_set();
     void pause_verify();
     void concurrent_select_relocation_set();
+    void remap_young_roots();
     void concurrent_remap_young_roots();
     void pause_relocate_start();
     void concurrent_relocate();
