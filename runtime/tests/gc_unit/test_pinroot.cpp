@@ -473,6 +473,7 @@ static void CheckRelocateStartExitRemapsFrameRoot()
         startIP, before, after, relocated);
     GC_EXPECT_EQ(after, relocated);
     GC_EXPECT_TRUE(relocated != 0 && relocated != reinterpret_cast<MAddress>(objects[0][0]));
+    (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 #else
