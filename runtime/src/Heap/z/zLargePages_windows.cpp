@@ -6,6 +6,7 @@
 
 // ZGC os/windows/gc/z/zLargePages_windows.cpp:29-38.
 
+#include "RuntimeConfig.h"
 #include "Heap/z/zLargePages.hpp"
 #include "Heap/z/zSyscall_windows.hpp"
 
@@ -17,7 +18,7 @@ namespace MapleRuntime {
 void ZLargePages::pd_initialize() {
   ZSyscall::initialize();
   _os_enforced_transparent_mode = false;
-  const char* const value = getenv("cjUseLargePages");
+  const char* const value = GetRuntimeConfigValue("cjUseLargePages");
   if (value != nullptr && strcmp(value, "1") == 0) {
     if (ZSyscall::is_large_pages_supported()) {
       _state = Explicit;

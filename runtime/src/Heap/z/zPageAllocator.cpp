@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "RuntimeConfig.h"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zFuture.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -481,7 +482,7 @@ void RegionManager::SetGarbageThreshold(double garbageThreshold)
 #if defined(__EULER__)
 void RegionManager::SetCacheRatio(double minSize, double maxSize, double defaultParam)
 {
-    auto env = std::getenv("cjCacheRatio");
+    auto env = GetRuntimeConfigValue("cjCacheRatio");
     if (env == nullptr) {
         cacheRatio = defaultParam;
         return;

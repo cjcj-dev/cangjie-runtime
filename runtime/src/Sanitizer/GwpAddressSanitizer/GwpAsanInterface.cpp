@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "RuntimeConfig.h"
 #include "GwpAsanInterface.h"
 
 #include <climits>
@@ -51,12 +52,12 @@ static void PrintGwpAsanHelpMessage()
 
 void SetupGwpAsanAsNeeded()
 {
-    auto enabled = std::getenv("cjEnableGwpAsan");
+    auto enabled = GetRuntimeConfigValue("cjEnableGwpAsan");
     if (enabled != nullptr) {
         g_gwpEnabled = CString::ParseFlagFromEnv(enabled);
     }
 
-    auto sampling = std::getenv("cjGwpAsanSampleRate");
+    auto sampling = GetRuntimeConfigValue("cjGwpAsanSampleRate");
     if (sampling != nullptr) {
         char* pEnd{};
         auto val = std::strtol(sampling, &pEnd, 10);
@@ -69,7 +70,7 @@ void SetupGwpAsanAsNeeded()
     }
 
     // to show the configured value correctly, this must be the last one to do
-    auto help = std::getenv("cjGwpAsanHelp");
+    auto help = GetRuntimeConfigValue("cjGwpAsanHelp");
     if (help != nullptr && CString::ParseFlagFromEnv(help)) {
         PrintGwpAsanHelpMessage();
     }

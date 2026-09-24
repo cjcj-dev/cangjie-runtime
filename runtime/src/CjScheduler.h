@@ -9,6 +9,7 @@
 #define MRT_CJ_SCHEDULER_H
 
 #include "Base/Globals.h"
+#include "RuntimeConfig.h"
 #include "sema.h"
 #include "waitqueue.h"
 
@@ -24,6 +25,7 @@ struct UnitType {
 void* MCC_NewCJThread(void* execute, void* future, void* scheduler);
 void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* scheduler, void* futureTi);
 void MRT_CjRuntimeInit();
+void MRT_CjRuntimeInitWithConfigV1(const RuntimeConfigEntryV1* entries, size_t count);
 void MRT_SetCommandLineArgs(int argc, const char* argv[]);
 const char** MRT_GetCommandLineArgs();
 void MRT_CjRuntimeStart(void* execute);

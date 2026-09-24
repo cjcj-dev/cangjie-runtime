@@ -42,6 +42,37 @@ extern "C" {
 
 static size_t g_initStackSize = 0;
 static size_t g_sysmemSize = 1 * GB;
+static const RuntimeConfigEntryV1* g_runtimeConfigEntries = nullptr;
+static size_t g_runtimeConfigEntryCount = 0;
+
+const char* GetRuntimeConfigValue(const char* name)
+{
+    const char* env = std::getenv(name);
+    if (env != nullptr) {
+        return env;
+    }
+    for (size_t i = 0; i < g_runtimeConfigEntryCount; ++i) {
+        if (strcmp(g_runtimeConfigEntries[i].name, name) == 0) {
+            return g_runtimeConfigEntries[i].value;
+        }
+    }
+    return nullptr;
+}
+
+static void SetRuntimeConfigEntries(const RuntimeConfigEntryV1* entries, size_t count)
+{
+    CHECK_DETAIL(entries != nullptr || count == 0, "runtime config entries are null");
+    for (size_t i = 0; i < count; ++i) {
+        CHECK_DETAIL(entries[i].name != nullptr, "runtime config name is null");
+        CHECK_DETAIL(entries[i].value != nullptr, "runtime config value is null");
+        for (size_t j = 0; j < i; ++j) {
+            CHECK_DETAIL(strcmp(entries[i].name, entries[j].name) != 0,
+                "duplicate runtime config: %s", entries[i].name);
+        }
+    }
+    g_runtimeConfigEntries = entries;
+    g_runtimeConfigEntryCount = count;
+}
 
 enum TimeUnit : uint32_t {
     SECOND = 0,
@@ -88,7 +119,7 @@ static void CheckSysmemSize()
  */
 static size_t InitHeapSize(size_t defaultParam, bool& isExplicit)
 {
-    auto env = std::getenv("cjHeapSize");
+    auto env = GetRuntimeConfigValue("cjHeapSize");
     if (env == nullptr) {
         return defaultParam;
     }
@@ -104,7 +135,7 @@ static size_t InitHeapSize(size_t defaultParam, bool& isExplicit)
     size_t maxSize = g_sysmemSize / KB;
     // cjHeapSwap=on lifts the cap to twice physical memory for swap-backed heaps
     // (bootstrap builds compile the chir package with a heap larger than RAM).
-    const char* swapEnv = std::getenv("cjHeapSwap");
+    const char* swapEnv = GetRuntimeConfigValue("cjHeapSwap");
     if (swapEnv != nullptr && strcmp(swapEnv, "on") == 0) {
         maxSize = (g_sysmemSize * 2) / KB;
     }
@@ -122,7 +153,7 @@ static size_t InitHeapSize(size_t defaultParam, bool& isExplicit)
 
 static size_t InitRegionSize(size_t defaultParam)
 {
-    auto env = std::getenv("cjRegionSize");
+    auto env = GetRuntimeConfigValue("cjRegionSize");
     if (env == nullptr) {
         return defaultParam;
     }
@@ -143,7 +174,7 @@ static size_t InitRegionSize(size_t defaultParam)
 
 static double InitPercentParameterIncl(const char* name, double minSize, double maxSize, double defaultParam)
 {
-    auto env = std::getenv(name);
+    auto env = GetRuntimeConfigValue(name);
     if (env == nullptr) {
         return defaultParam;
     }
@@ -159,7 +190,7 @@ static double InitPercentParameterIncl(const char* name, double minSize, double 
 
 static double InitPercentParameter(const char* name, double minSize, double maxSize, double defaultParam)
 {
-    auto env = std::getenv(name);
+    auto env = GetRuntimeConfigValue(name);
     if (env != nullptr) {
         double parameter = CString::ParsePosDecFromEnv(env);
         if (parameter - minSize > 0 && maxSize - parameter >= 0) {
@@ -174,7 +205,7 @@ static double InitPercentParameter(const char* name, double minSize, double maxS
 
 static size_t InitSizeParameter(const char* name, size_t minSize, size_t defaultParam)
 {
-    auto env = std::getenv(name);
+    auto env = GetRuntimeConfigValue(name);
     if (env != nullptr) {
         size_t parameter = CString::ParseSizeFromEnv(env);
         if (parameter > minSize) {
@@ -191,7 +222,7 @@ static size_t InitSizeParameter(const char* name, size_t minSize, size_t default
 
 static uint64_t InitTimeParameter(const char* name, uint64_t minSize, uint64_t defaultParam)
 {
-    auto env = std::getenv(name);
+    auto env = GetRuntimeConfigValue(name);
     if (env != nullptr) {
         uint64_t parameter = CString::ParseTimeFromEnv(env);
         if (parameter > minSize) {
@@ -208,7 +239,7 @@ static uint64_t InitTimeParameter(const char* name, uint64_t minSize, uint64_t d
 
 static double InitDecParameter(const char* name, double minSize, double defaultParam)
 {
-    auto env = std::getenv(name);
+    auto env = GetRuntimeConfigValue(name);
     if (env != nullptr) {
         double parameter = CString::ParsePosDecFromEnv(env);
         if (parameter - minSize > 0) {
@@ -242,7 +273,7 @@ static size_t InitCoStackSize()
     size_t defaultStackSize = 128; // default 128KB, measured in KB
 #endif
     size_t stackSize = 0;
-    auto env = std::getenv("cjStackSize");
+    auto env = GetRuntimeConfigValue("cjStackSize");
     if (env == nullptr) {
         return defaultStackSize;
     }
@@ -273,7 +304,7 @@ static size_t InitCoStackSize()
 // Worker counts use the existing runtime environment configuration entry.
 static uint32_t InitGCWorkerCount(const char* name)
 {
-    const char* value = std::getenv(name);
+    const char* value = GetRuntimeConfigValue(name);
     if (value == nullptr) {
         return 0;
     }
@@ -287,7 +318,7 @@ static uint32_t InitGCWorkerCount(const char* name)
 // ZGC z_globals.hpp: ZTenuringThreshold accepts -1 for automatic selection.
 static int32_t InitTenuringThreshold(const char* name, int32_t minimum, int32_t maximum, int32_t fallback)
 {
-    const char* value = std::getenv(name);
+    const char* value = GetRuntimeConfigValue(name);
     if (value == nullptr) {
         return fallback;
     }
@@ -300,7 +331,7 @@ static int32_t InitTenuringThreshold(const char* name, int32_t minimum, int32_t 
 
 static bool InitStaticGCThreads()
 {
-    const char* value = std::getenv("cjUseDynamicNumberOfGCThreads");
+    const char* value = GetRuntimeConfigValue("cjUseDynamicNumberOfGCThreads");
     if (value == nullptr) {
         return false;
     }
@@ -313,7 +344,7 @@ static uint32_t InitProcessorNum()
 {
     unsigned int cpus = std::thread::hardware_concurrency();
     uint32_t defaultProcs = cpus != 0 ? static_cast<uint32_t>(cpus) : 8;
-    auto env = CString(std::getenv("cjProcessorNum"));
+    auto env = CString(GetRuntimeConfigValue("cjProcessorNum"));
     // ⛔ IsEmpty(), not Str() == nullptr: CString(nullptr) allocates an empty buffer, so
     // Str() is never null (CString.cpp:27-35). The old guard never fired; the fall-through
     // happened to give the same answer here because IsPosNumber("") is false.
@@ -746,8 +777,8 @@ static RuntimeParam InitRuntimeParam()
                 .maxTenuringThreshold = static_cast<uint32_t>(
                     InitTenuringThreshold("cjMaxTenuringThreshold", 0, 16, 15)),
                 .zTenuringThreshold = InitTenuringThreshold("cjZTenuringThreshold", -1, 15, -1),
-                .maxTenuringThresholdSet = std::getenv("cjMaxTenuringThreshold") != nullptr,
-                .zTenuringThresholdSet = std::getenv("cjZTenuringThreshold") != nullptr,
+                .maxTenuringThresholdSet = GetRuntimeConfigValue("cjMaxTenuringThreshold") != nullptr,
+                .zTenuringThresholdSet = GetRuntimeConfigValue("cjZTenuringThreshold") != nullptr,
             },
         .logParam = {
             .logLevel = LogFile::GetLogLevel(),
@@ -759,14 +790,26 @@ static RuntimeParam InitRuntimeParam()
                 .processorNum = InitProcessorNum(),
             },
     };
+    CHECK_DETAIL(GCArguments::initialize_heap_flags_and_sizes(param.heapParam),
+                 "Invalid heap size flags");
     return param;
 }
 
 void MRT_CjRuntimeInit()
 {
+    SetRuntimeConfigEntries(nullptr, 0);
     RuntimeParam param = InitRuntimeParam();
-    CHECK_DETAIL(GCArguments::initialize_heap_flags_and_sizes(param.heapParam),
-                 "Invalid heap size flags");
+    CangjieRuntime::CreateAndInit(param);
+    RTErrorCode rtCode = SetRuntimeInitFlag();
+    if (rtCode != E_OK) {
+        LOG(RTLOG_FATAL, "Init cj runtime failed for %d\n", rtCode);
+    }
+}
+
+void MRT_CjRuntimeInitWithConfigV1(const RuntimeConfigEntryV1* entries, size_t count)
+{
+    SetRuntimeConfigEntries(entries, count);
+    RuntimeParam param = InitRuntimeParam();
     CangjieRuntime::CreateAndInit(param);
     RTErrorCode rtCode = SetRuntimeInitFlag();
     if (rtCode != E_OK) {
@@ -955,6 +998,9 @@ const void* MRT_RuntimeNewSubScheduler()
 #ifdef __APPLE__
 MRT_EXPORT void CJ_MRT_CjRuntimeInit();
 __asm__(".global _CJ_MRT_CjRuntimeInit\n\t.set _CJ_MRT_CjRuntimeInit, _MRT_CjRuntimeInit");
+MRT_EXPORT void CJ_MRT_CjRuntimeInitWithConfigV1(const RuntimeConfigEntryV1* entries, size_t count);
+__asm__(".global _CJ_MRT_CjRuntimeInitWithConfigV1\n\t.set _CJ_MRT_CjRuntimeInitWithConfigV1, "
+    "_MRT_CjRuntimeInitWithConfigV1");
 MRT_EXPORT void CJ_MRT_CjRuntimeStart(void* execute);
 __asm__(".global _CJ_MRT_CjRuntimeStart\n\t.set _CJ_MRT_CjRuntimeStart, _MRT_CjRuntimeStart");
 MRT_EXPORT void* CJ_MCC_NewCJThread(void* execute, void* future, void* scheduler);
@@ -974,6 +1020,8 @@ MRT_EXPORT int8_t CJ_MRT_StopSubScheduler(void* schedule);
 __asm__(".global _CJ_MRT_StopSubScheduler\n\t.set _CJ_MRT_StopSubScheduler, _MRT_StopSubScheduler");
 #else
 MRT_EXPORT void CJ_MRT_CjRuntimeInit() __attribute__((alias("MRT_CjRuntimeInit")));
+MRT_EXPORT void CJ_MRT_CjRuntimeInitWithConfigV1(const RuntimeConfigEntryV1* entries, size_t count)
+    __attribute__((alias("MRT_CjRuntimeInitWithConfigV1")));
 MRT_EXPORT void CJ_MRT_CjRuntimeStart(void* execute)
     __attribute__((alias("MRT_CjRuntimeStart")));
 MRT_EXPORT void* CJ_MCC_NewCJThread(void* execute, void* future, void *scheduler)
