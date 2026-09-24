@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zHeuristics.hpp"
 #include "CangjieRuntime.h"
 
 #include "Base/Log.h"
@@ -154,7 +155,7 @@ inline T* NewAndInit(A arg)
 // HeapManager must be initialized before HeapManager because of inherited properties of signal handlers.
 void CangjieRuntime::Init()
 {
-    PagePool::Instance().Init(param.heapParam.heapSize * KB / MRT_PAGE_SIZE);
+    PagePool::Instance().Init(ZHeuristics::max_heap_size() / MRT_PAGE_SIZE);
 #ifdef CANGJIE_GWPASAN_SUPPORT
     // setup gwpasan before heap initialized
     MapleRuntime::Sanitizer::SetupGwpAsanAsNeeded();

@@ -110,47 +110,6 @@ static void CheckSysmemSize()
 #endif
 }
 
-/**
- * Init runtime's heap size from environment variable.
- * The unit must be added when configuring "cjHeapSize", it supports "kb", "mb", "gb".
- * Valid heap size range is [4MB, system memory size].
- * for example:
- *     export cjHeapSize = 32GB
- */
-static size_t InitHeapSize(size_t defaultParam, bool& isExplicit)
-{
-    auto env = GetRuntimeConfigValue("cjHeapSize");
-    if (env == nullptr) {
-        return defaultParam;
-    }
-    size_t size = CString::ParseSizeFromEnv(env);
-
-#if defined(__OHOS__) || defined(__ANDROID__)
-    // 64UL * KB: The minimum heap size in OHOS, measured in KB, the value is 64MB.
-    size_t minSize = 64UL * KB;
-#else
-    // 4UL * KB: The minimum heap size, measured in KB, the value is 4MB.
-    size_t minSize = 4UL * KB;
-#endif
-    size_t maxSize = g_sysmemSize / KB;
-    // cjHeapSwap=on lifts the cap to twice physical memory for swap-backed heaps
-    // (bootstrap builds compile the chir package with a heap larger than RAM).
-    const char* swapEnv = GetRuntimeConfigValue("cjHeapSwap");
-    if (swapEnv != nullptr && strcmp(swapEnv, "on") == 0) {
-        maxSize = (g_sysmemSize * 2) / KB;
-    }
-    if (size >= minSize && size <= maxSize) {
-        isExplicit = true;
-        return size;
-    } else {
-        LOG(RTLOG_ERROR,
-            "Unsupported cjHeapSize parameter. The unit must be added when configuring with positive integer value, "
-            "it supports 'KB', 'MB', 'GB'. Valid cjHeapSize range is [%zuMB, system memory size].\n",
-            minSize / KB);
-    }
-    return defaultParam;
-}
-
 static size_t InitRegionSize(size_t defaultParam)
 {
     auto env = GetRuntimeConfigValue("cjRegionSize");
@@ -734,8 +693,7 @@ void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* sche
 static RuntimeParam InitRuntimeParam()
 {
     CheckSysmemSize();
-    bool heapSizeSet = false;
-    size_t initHeapSize = InitHeapSize(g_sysmemSize > 1 * GB ? 256 * KB : 64 * KB, heapSizeSet);
+    size_t initHeapSize = g_sysmemSize > 1 * GB ? 256 * KB : 64 * KB;
     RuntimeParam param = {
         .heapParam = {
 #if defined(__OHOS__) || defined(__ANDROID__)
@@ -759,7 +717,7 @@ static RuntimeParam InitRuntimeParam()
                 .heapUtilization = InitPercentParameter("cjHeapUtilization", 0.0, 1.0, 0.8),
                 // Default heap growth is (1 + 0.15) = 1.15.
                 .heapGrowth = InitDecParameter("cjHeapGrowth", 0.0, 0.15),
-                .heapSizeSet = heapSizeSet,
+                .heapSizeSet = false,
             },
         .gcParam = {
                 // Default gc threshold is heapSize.
@@ -790,6 +748,7 @@ static RuntimeParam InitRuntimeParam()
                 .processorNum = InitProcessorNum(),
             },
     };
+    CHECK_DETAIL(GCArguments::parse_vm_init_args(param.heapParam), "Invalid heap size arguments");
     CHECK_DETAIL(GCArguments::initialize_heap_flags_and_sizes(param.heapParam),
                  "Invalid heap size flags");
     return param;

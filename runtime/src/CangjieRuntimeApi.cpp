@@ -97,15 +97,6 @@ static bool CheckInitConfig(const struct RuntimeParam& param)
         LOG(RTLOG_ERROR, "RuntimeParam.coParam.coStackSize must be in range [64KB, 1GB].\n");
         return false;
     }
-    size_t paramHeapSize = 0;
-    CHECK_DETAIL(MapleRuntime::CheckedMulSize(param.heapParam.heapSize, MapleRuntime::KB, paramHeapSize),
-                 "RuntimeParam.heapParam.heapSize overflows bytes: heapSizeKB=%zu",
-                 param.heapParam.heapSize);
-    // Check heap configuration, min heapsize 4MB.
-    if (paramHeapSize != 0 && (paramHeapSize < 4 * MapleRuntime::MB || paramHeapSize > g_sysmemSize)) {
-        LOG(RTLOG_ERROR, "RuntimeParam.heapParam.heapSize must be in range [4MB, system memory size].\n");
-        return false;
-    }
     // Region size must be in range [system page size, 2048KB].
     const size_t minRegionSize = MapleRuntime::MRT_PAGE_SIZE / MapleRuntime::KB;
     const size_t maxRegionSize = 2048; // 2048KB
@@ -274,6 +265,9 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
         }
     };
 
+    if (!MapleRuntime::GCArguments::parse_vm_init_args(config.heapParam)) {
+        return E_ARGS;
+    }
     if (!MapleRuntime::GCArguments::initialize_heap_flags_and_sizes(config.heapParam)) {
         return E_ARGS;
     }
