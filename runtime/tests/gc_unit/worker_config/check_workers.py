@@ -46,7 +46,7 @@ def run(case):
     env = dict(os.environ)
     for key in ('cjConcGCThreads', 'cjYoungGCThreads', 'cjOldGCThreads', 'cjUseDynamicNumberOfGCThreads'):
         env.pop(key, None)
-    env.update(LD_LIBRARY_PATH=str(so), MRT_REPORT=str(work / 'mrt_report.txt'), cjHeapSize='256MB', cjProcessorNum='1')
+    env.update(LD_LIBRARY_PATH=str(so), MRT_REPORT=str(work / 'mrt_report.txt'), cjHeapSize='256M', cjProcessorNum='1')
     if mode.startswith('env'):
         for key, value in zip(('cjConcGCThreads', 'cjYoungGCThreads', 'cjOldGCThreads'), values):
             if value: env[key] = str(value)

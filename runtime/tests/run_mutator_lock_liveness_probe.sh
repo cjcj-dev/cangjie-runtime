@@ -82,7 +82,7 @@ if ((post_finalizer_unlock >= post_finalizer_prerun)); then
 fi
 
 ulimit -v 1048576
-export cjHeapSize=512MB
+export cjHeapSize=512M
 g++ -std=c++17 -O2 -pthread -DMUTATOR_LOCK_POSTCHECK=0 "$harness" -o "$probe_tmp/pre"
 g++ -std=c++17 -O2 -pthread -DMUTATOR_LOCK_POSTCHECK=1 "$harness" -o "$probe_tmp/post"
 

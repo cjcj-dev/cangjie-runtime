@@ -41,7 +41,7 @@ LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR 
 if [[ "$MODE" == construct || "$MODE" == both ]]; then
   set +e
   LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    MRT_GC_UNIT_MANAGED_SEGMENTED=none MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64MB \
+    MRT_GC_UNIT_MANAGED_SEGMENTED=none MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64M \
     timeout 60s "$BIN" >"$OUT/segmented_array_managed.construct.log" 2>&1
   construct_rc=$?
   set -e
@@ -54,7 +54,7 @@ if [[ "$MODE" == both || "$MODE" == full ]]; then
   set +e
   LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     MRT_GC_UNIT_MANAGED_SEGMENTED=full \
-    MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64MB \
+    MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64M \
     timeout 60s "$BIN" >"$FULL_LOG" 2>&1
   full_rc=$?
   set -e
@@ -71,7 +71,7 @@ fi
 if [[ "$MODE" == both || "$MODE" == young ]]; then
   set +e
   LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    MRT_GC_UNIT_MANAGED_SEGMENTED=young MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64MB \
+    MRT_GC_UNIT_MANAGED_SEGMENTED=young MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64M \
     timeout 60s "$BIN" >"$YOUNG_LOG" 2>&1
   young_rc=$?
   set -e
