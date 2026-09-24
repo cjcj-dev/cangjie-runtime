@@ -18,6 +18,7 @@
 #include "schedule.h"
 #include "timer.h"
 #include "LoaderManager.h"
+#include "Mutator/Handshake.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectManager.inline.h"
@@ -434,9 +435,9 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
 {
     Uptr imageAddress = baseFile->GetFileMetaAddr();
 
-    // A public unload callback runs on the same thread and inside the exact
-    // pending/active/STW scopes that authorized this image. A direct callback
-    // has no authorization and must establish all three protections itself.
+    // A callback with image-specific authorization reuses its caller's
+    // protection. Otherwise establish pending-task and active-frame protection
+    // before unlinking the image.
     bool authorizedByCaller = ElfUnloadQuiescence::IsPurgeAuthorized(imageAddress);
     std::unique_ptr<ElfUnloadQuiescence::PurgeAuthorizationScope> callbackAuthorization;
     if (!authorizedByCaller && ElfUnloadQuiescence::HasCallerPurgeProtection()) {
@@ -460,13 +461,7 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
                 ElfUnloadQuiescence::WaitForPendingTasks(imageAddress);
                 continue;
             }
-            bool active = false;
-            {
-                ScopedEnterSaferegion enterSaferegion(false);
-                ScopedStopTheWorld preflight("direct ELF unload active-image preflight", false);
-                active = HasActiveImageFrames(baseFile);
-            }
-            if (!active) {
+            if (!HasActiveImageFrames(baseFile)) {
                 break;
             }
             directAdmission.reset();
@@ -492,9 +487,15 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
 
     if (!authorizedByCaller) {
         ScopedEnterSaferegion enterSaferegion(false);
-        ScopedStopTheWorld handshake("ELF unload quiescence", false);
-        CHECK_DETAIL(!HasActiveImageFrames(baseFile),
-                     "ELF image became active after direct unload preflight");
+        // zGeneration.cpp:1352-1358: after unlink, rendezvous without
+        // inspecting metadata whose reader admission is now closed.
+        class UnloadRendezvousClosure final : public HandshakeClosure {
+        public:
+            UnloadRendezvousClosure() : HandshakeClosure("ELF unload quiescence") {}
+            void do_thread(ThreadLocalData*) override {}
+        };
+        UnloadRendezvousClosure rendezvous;
+        Handshake::execute(&rendezvous);
         ElfUnloadQuiescence::PurgeAuthorizationScope authorization(imageAddress);
         PurgeLoadedFile(baseFile);
         unload.OpenAdmission();
@@ -722,45 +723,22 @@ int CJFileLoader::UnloadLibrary(const char* libName)
             return -1;
         }
         imageAddress = baseFile->GetFileMetaAddr();
-        bool holdAcrossPlatform = false;
-        if (holdAcrossPlatform) {
+        {
             ElfUnloadQuiescence::TaskAdmissionScope taskAdmission;
             if (taskAdmission.HasPendingForImage(imageAddress)) {
                 LOG(RTLOG_WARNING, "refuse to unload queued Cangjie image %s", baseName.Str());
-                ElfUnloadQuiescence::AbortImageClosing(imageAddress);
                 rollbackHandler();
                 return -1;
             }
-            ScopedEnterSaferegion enterSaferegion(false);
-            ScopedStopTheWorld stw("ELF unload active-image preflight", false);
             if (HasActiveImageFrames(baseFile)) {
                 LOG(RTLOG_WARNING, "refuse to unload active Cangjie image %s", baseName.Str());
-                ElfUnloadQuiescence::AbortImageClosing(imageAddress);
                 rollbackHandler();
                 return -1;
             }
             (void)ElfUnloadQuiescence::BeginImageClosing(imageAddress);
-            ElfUnloadQuiescence::PurgeAuthorizationScope authorization(imageAddress, taskAdmission);
-            ret = binLoadApi.binUnload(handlerIt->handler);
-        } else {
-            {
-                ElfUnloadQuiescence::TaskAdmissionScope taskAdmission;
-                if (taskAdmission.HasPendingForImage(imageAddress)) {
-                    LOG(RTLOG_WARNING, "refuse to unload queued Cangjie image %s", baseName.Str());
-                    rollbackHandler();
-                    return -1;
-                }
-                ScopedEnterSaferegion enterSaferegion(false);
-                ScopedStopTheWorld stw("ELF unload active-image preflight", false);
-                if (HasActiveImageFrames(baseFile)) {
-                    LOG(RTLOG_WARNING, "refuse to unload active Cangjie image %s", baseName.Str());
-                    rollbackHandler();
-                    return -1;
-                }
-                (void)ElfUnloadQuiescence::BeginImageClosing(imageAddress);
-            }
-        ret = binLoadApi.binUnload(handlerIt->handler);
         }
+        // zUnload.cpp:166: platform reclamation runs outside a safepoint.
+        ret = binLoadApi.binUnload(handlerIt->handler);
         imageClosed = GetBaseFile(baseName) == nullptr || !ElfUnloadQuiescence::IsLinkedAddress(imageAddress);
     } else {
         ret = binLoadApi.binUnload(handlerIt->handler);
@@ -800,26 +778,44 @@ int CJFileLoader::UnloadLibrary(const char* libName)
 
 bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
 {
-    ElfUnloadQuiescence::ReadScope metadataReader;
-    bool active = false;
-    const Uptr imageAddress = baseFile->GetFileMetaAddr();
-    MutatorManager::Instance().VisitAllMutatorsExceptFinalizer([&](Mutator& mutator) {
-        if (active || !mutator.IsManagedContext()) {
-            return;
-        }
-        GCStackInfo stackInfo(&mutator.GetUnwindContext());
-        stackInfo.FillInStackTrace();
-        for (const FrameInfo& frame : stackInfo.GetStack()) {
-            Uptr startPC = reinterpret_cast<Uptr>(frame.GetFuncStartPC());
-            Uptr framePC = reinterpret_cast<Uptr>(frame.mFrame.GetIP());
-            if (ElfUnloadQuiescence::IsAddressInImage(startPC, imageAddress) ||
-                ElfUnloadQuiescence::IsAddressInImage(framePC, imageAddress)) {
-                active = true;
+    class ActiveImageClosure final : public HandshakeClosure {
+    public:
+        explicit ActiveImageClosure(Uptr image) : HandshakeClosure("ELF active-image preflight"), imageAddress(image) {}
+
+        void do_thread(ThreadLocalData* tls) override
+        {
+            Mutator* mutator = tls->mutator;
+            if (active.load(std::memory_order_relaxed) || mutator == nullptr || !mutator->IsManagedContext()) {
                 return;
             }
+            ElfUnloadQuiescence::ReadScope metadataReader;
+            GCStackInfo stackInfo(&mutator->GetUnwindContext());
+            stackInfo.FillInStackTrace();
+            for (const FrameInfo& frame : stackInfo.GetStack()) {
+                Uptr startPC = reinterpret_cast<Uptr>(frame.GetFuncStartPC());
+                Uptr framePC = reinterpret_cast<Uptr>(frame.mFrame.GetIP());
+                if (ElfUnloadQuiescence::IsAddressInImage(startPC, imageAddress) ||
+                    ElfUnloadQuiescence::IsAddressInImage(framePC, imageAddress)) {
+                    active.store(true, std::memory_order_relaxed);
+                    return;
+                }
+            }
         }
-    });
-    return active;
+
+        bool HasActiveFrames() const { return active.load(std::memory_order_relaxed); }
+
+    private:
+        const Uptr imageAddress;
+        std::atomic<bool> active { false };
+    };
+
+    // Like zGeneration.cpp:1352-1358, rendezvous with mutators through
+    // handshake processing, including native threads processed by the caller.
+    // This preflight must precede UnloadScope's metadata admission closure.
+    ScopedEnterSaferegion enterSaferegion(false);
+    ActiveImageClosure closure(baseFile->GetFileMetaAddr());
+    Handshake::execute(&closure);
+    return closure.HasActiveFrames();
 }
 
 Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) const
