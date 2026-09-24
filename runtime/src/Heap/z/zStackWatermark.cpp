@@ -98,9 +98,21 @@ void StackWatermarkProcessOopClosure::do_root(zaddress_unsafe* p)
     function(p, color);
 }
 
-void StackWatermark::save_old_watermark(Mutator& mutator)
+uintptr_t StackWatermark::save_old_watermark(Mutator& mutator)
 {
-    headColor = mutator.GetGCData().storeGoodMask;
+    // zStackWatermark.cpp:95-99 saves the color from before this phase's epoch
+    // is published. A thread mask already equal to the post-flip store-good
+    // mask is load-good and would skip relocate_or_remap.
+    const uintptr_t threadMask = mutator.GetGCData().storeGoodMask;
+    const uint32_t previous = static_cast<uint32_t>(GetEpoch());
+    const uint32_t current = epoch_id();
+    if (threadMask != 0 && static_cast<uint32_t>(threadMask) != current) {
+        return threadMask;
+    }
+    if (previous != 0 && previous != current) {
+        return previous;
+    }
+    return threadMask;
 }
 
 void StackWatermark::process_head(Mutator& mutator, void* context, const RootVisitor& visitor,
@@ -121,10 +133,13 @@ void StackWatermark::process_head(Mutator& mutator, void* context, const RootVis
 bool StackWatermark::start_processing_impl(Mutator& mutator, void* context, uint64_t epoch, size_t totalFrames,
                                            const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor)
 {
+    // zStackWatermark.cpp:95-99,177-181: read the previous color before the
+    // epoch is published. Assign it only if this thread wins the start.
+    const uintptr_t savedColor = save_old_watermark(mutator);
     if (!TryBegin(epoch, totalFrames)) {
         return false;
     }
-    save_old_watermark(mutator);
+    headColor = savedColor;
     process_head(mutator, context, visitor, invisibleRootVisitor);
     // ZGC zStackWatermark.cpp:187-192: install this thread's new phase
     // masks after its old-color head, before retiring TLABs and buffers.

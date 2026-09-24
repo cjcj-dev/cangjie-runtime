@@ -11,11 +11,14 @@
 #include "Heap/z/zStackWatermark.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zThreadLocalData.hpp"
+#include "Loader/ElfUnloadQuiescence.h"
+#include "CangjieRuntime.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include <cstdio>
 #include <chrono>
+#include <cstring>
 #include <thread>
 
 using namespace MapleRuntime;
@@ -334,9 +337,54 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, RunningWorldCopiesOnlyRequestedObj
     CheckMutatorRelocation(false);
 }
 
-// zGeneration.cpp:211 and zUncoloredRoot.inline.hpp:62-68: a young pause must
-// remap a plain root through the old forwarding table before it is read.
-static void CheckYoungPauseRemapsPlainRoot()
+#if defined(__x86_64__) && defined(__linux__)
+namespace {
+struct FrameRootMapImage {
+    int32_t descriptorOffset;
+    uint32_t pc[4];
+    int32_t stackMapOffset;
+    uint32_t descriptorRest[6];
+    uint8_t bits[256];
+};
+FrameRootMapImage frameRootMapImage;
+
+void InitializeFrameRootMap()
+{
+    auto& image = frameRootMapImage;
+    std::memset(&image, 0, sizeof(image));
+    image.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&image.stackMapOffset) -
+        reinterpret_cast<char*>(&image.descriptorOffset));
+    image.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(image.bits) -
+        reinterpret_cast<char*>(&image.stackMapOffset));
+    ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(image.pc));
+    size_t bit = 0;
+    auto put = [&](uint32_t value, unsigned width) {
+        for (unsigned i = 0; i < width; ++i, ++bit) {
+            image.bits[bit / 8] |= static_cast<uint8_t>(((value >> i) & 1u) << (bit % 8));
+        }
+    };
+    auto var = [&](uint32_t value) {
+        if (value <= 11) { put(value, 4); }
+        else { put(12, 4); put(value, 8); }
+    };
+    // R13 is callee-saved index 2 (RegisterX86-64.h:78). Spill offset 2 → fp-16.
+    var(0); var(0); var(4); var(2);
+    var(1); var(4); var(1); var(1); var(1);
+    if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) { var(0); var(0); }
+    var(0);
+    put(0, 32); put(1, 4); put(0, 1); put(0, 1); put(0, 1);
+    var(1); var(16);
+    put(1u << 13, 16);
+    var(0); var(8); var(0);
+    var(0); var(0);
+    var(0);
+}
+}
+#endif
+
+// zUncoloredRoot.inline.hpp:62-68 and zGeneration.inline.hpp:131-139: relocate-start
+// exit processing writes the to-address of a cset frame slot before concurrent relocate.
+static void CheckRelocateStartExitRemapsFrameRoot()
 {
     B09RuntimeFixture runtime;
     CreateStandaloneHeap(8);
@@ -385,37 +433,47 @@ static void CheckYoungPauseRemapsPlainRoot()
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
     ZForwarding* owner = forwarding_for_page(pages[0]);
     GC_EXPECT_TRUE(owner != nullptr);
-    generation.set_phase(ZGenerationPhase::Relocate);
-    BaseObject* copied = generation.relocate().relocate_object(owner, objects[0][0]);
-    const MAddress relocated = reinterpret_cast<MAddress>(copied);
-    GC_EXPECT_TRUE(copied != nullptr && copied != objects[0][0]);
-    GC_EXPECT_EQ(owner->find(reinterpret_cast<MAddress>(objects[0][0])), relocated);
+#if defined(__x86_64__) && defined(__linux__)
+    InitializeFrameRootMap();
+    const uintptr_t startIP = reinterpret_cast<uintptr_t>(frameRootMapImage.pc);
+    uintptr_t frameWords[8] = {};
+    frameWords[1] = reinterpret_cast<uintptr_t>(objects[0][0]);
+    frameWords[2] = startIP + 9;
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(parked != nullptr);
-    parked->SetManagedContext(false);
+    parked->SetManagedContext(true);
     (void)parked->EnterSaferegion(false);
     if (parked->GetGCData().storeGoodMask == 0) {
         parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
     }
-    ObjectRef* stale = parked->AddNativeFrameRoot(objects[0][0]);
-    ObjectRef* kept = parked->AddNativeFrameRoot(nullptr);
-    GC_EXPECT_TRUE(stale != nullptr && kept != nullptr);
-    const uintptr_t before = raw(stale->LoadPlain());
+    auto& context = parked->GetUnwindContext();
+    context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP));
+    context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frameWords[3]));
+    context.anchorFA = nullptr;
+    const uintptr_t before = frameWords[1];
     GC_EXPECT_EQ(before, reinterpret_cast<uintptr_t>(objects[0][0]));
+    GC_EXPECT_EQ(owner->find(reinterpret_cast<MAddress>(objects[0][0])), static_cast<MAddress>(0));
     ZGlobalsPointers::flip_old_relocate_start();
-    heap.young().pause_mark_start();
-    const uintptr_t after = raw(stale->LoadPlain());
-    std::fprintf(stderr, "PLAIN_ROOT_REMAP_ASSERT_EXECUTED before=%#zx after=%#zx relocated=%#zx null_kept=%d\n",
-                 before, after, relocated, raw(kept->LoadPlain()) == 0);
+    generation.set_phase(ZGenerationPhase::Relocate);
+    StackWatermarkSet::on_safepoint(*parked);
+    const uintptr_t after = frameWords[1];
+    const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+    std::fprintf(stderr,
+        "FRAME_ROOT_REMAP_ASSERT_EXECUTED startIP=%#zx before=%#zx after=%#zx relocated=%#zx reg=r13\n",
+        startIP, before, after, relocated);
+    GC_EXPECT_TRUE(relocated != 0 && relocated != reinterpret_cast<MAddress>(objects[0][0]));
     GC_EXPECT_EQ(after, relocated);
-    GC_EXPECT_EQ(raw(kept->LoadPlain()), static_cast<uintptr_t>(0));
-    parked->PopNativeFrameRootsTo(0);
+    heap.young().pause_mark_start();
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+#else
+    (void)owner;
+    GC_EXPECT_TRUE(false);
+#endif
 }
 
-GC_COMPONENT_OTHER_VM_TEST(YoungPausePlainRoot, RemapsStaleRootBeforeMarkStart)
+GC_COMPONENT_OTHER_VM_TEST(RelocateStartFrameRoot, WritesToAddressBeforeConcurrentRelocate)
 {
-    CheckYoungPauseRemapsPlainRoot();
+    CheckRelocateStartExitRemapsFrameRoot();
 }
 
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)

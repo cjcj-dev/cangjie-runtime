@@ -208,13 +208,8 @@ public:
         bool success = false;
         {
             ScopedStopTheWorld stw(name(), false);
-            // ZGC stackWatermark.cpp:311-312 heals on safepoint exit, and
-            // ZRemapThreadClosure (zGeneration.cpp:1419-1424) finishes the same
-            // processing before old relocate. Cangjie plain slots are read by
-            // BeforeZOperation while mutators are still stopped.
-            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) {
-                StackWatermarkSet::on_safepoint(mutator);
-            });
+            // zGeneration.cpp:432-452: skip_thread_oop_barriers, then verify.
+            // Frame slots are healed on safepoint exit (Mutator.h:175), not here.
             ZVerify::BeforeZOperation();
             success = do_operation();
         }

@@ -80,7 +80,7 @@ public:
     bool IsDone() const { return UnpackDone(state.load(std::memory_order_acquire)); }
     bool IsDone(uint64_t scanEpoch) const;
 
-    void save_old_watermark(Mutator& mutator);
+    uintptr_t save_old_watermark(Mutator& mutator);
     void process_head(Mutator& mutator, void* context, const RootVisitor& visitor,
                       const RootVisitor& invisibleRootVisitor);
     bool start_processing_impl(Mutator& mutator, void* context, uint64_t epoch, size_t totalFrames,
