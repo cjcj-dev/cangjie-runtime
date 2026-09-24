@@ -1,0 +1,13 @@
+# MRT_GC_UNIT_TESTS-gated declarations in MAIN_SOURCES on Linux.
+# test_alloc_buffer_handoff.cpp
+AllocBufferHandoff.StackRootPublishedDuringMergeIsDelivered
+AllocBufferHandoff.StackRootPublishDuringRetireKeepsHeapIntact
+# test_gc_request_sync.cpp
+ZDriverPort.AsyncSingleSlotDedup
+ZDriverPort.SyncAckSatisfiesSameCauseSeqnum
+ZDriverPort.AckDoesNotSatisfyLaterSeqnum
+# test_cycle_ref_saferegion.cpp
+CycleRefSaferegion.ResolverParksBeforeCycleRootLock
+CycleRefSaferegion.CycleRootConsumerPublishesWorkStackRoots
+# test_store_barrier_buffer.cpp
+StoreBuf.YoungSlotExcludedFromOldPhaseSnapshot
