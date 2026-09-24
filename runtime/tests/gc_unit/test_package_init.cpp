@@ -27,6 +27,7 @@
 #include "Loader/PackageInit.h"
 #include "loader_access_test.hpp"
 #include "LoaderManager.h"
+#include "Mutator/Handshake.h"
 #include "schedule.h"
 #include "waitqueue.h"
 
@@ -821,6 +822,67 @@ std::string FixtureBesideExecutable(const char* name)
     std::string path(executable, static_cast<size_t>(length > 0 ? length : 0));
     return path.substr(0, path.find_last_of('/') + 1) + name;
 }
+}
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, DirectUnloadWaitsForPostUnlinkObserver)
+{
+    Init();
+    const std::string path = FixtureBesideExecutable("libcj_package_init_fixture.so");
+    void* library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("rendezvous-image-open", library != nullptr);
+    auto metadata = reinterpret_cast<void* (*)()>(dlsym(library, "PackageInitImageMetadata"));
+    auto arm = reinterpret_cast<void (*)(void (*)())>(dlsym(library, "PackageInitImageArmUnload"));
+    Target("rendezvous-image-symbols", metadata && arm);
+    auto* file = new CJFile(CString("rendezvous-image"), reinterpret_cast<Uptr>(metadata()));
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    loader->AddLoadedFiles(file);
+    loader->RegisterLoadFile(file->GetFileMetaAddr());
+    arm([]() {});
+
+    std::atomic<bool> ready { false }, activate { false }, active { false }, release { false };
+    std::atomic<HandshakeState*> state { nullptr };
+    std::thread observer([&]() {
+        Target("rendezvous-observer-attach", MRT_NewForeignCJThread());
+        auto* mutator = Mutator::GetMutator();
+        mutator->SetManagedContext(false);
+        mutator->EnterSaferegion(false);
+        state.store(&Handshake::Current(), std::memory_order_release);
+        ready.store(true, std::memory_order_release);
+        while (!activate.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        mutator->LeaveSaferegion();
+        active.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        mutator->EnterSaferegion(false);
+        Target("rendezvous-observer-detach", MRT_EndForeignCJThread());
+    });
+    Target("rendezvous-observer-ready", Await(ready));
+    auto reader = std::make_unique<ElfUnloadQuiescence::ReadScope>();
+    std::atomic<bool> closed { false };
+    std::thread closer([&]() {
+        Target("rendezvous-platform-close", dlclose(library) == 0);
+        closed.store(true, std::memory_order_release);
+    });
+    const auto drainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ElfUnloadQuiescenceTest::UnloadPending() && std::chrono::steady_clock::now() < drainDeadline) {
+        std::this_thread::yield();
+    }
+    Target("rendezvous-unlink-reached", ElfUnloadQuiescenceTest::UnloadPending());
+    // The preflight has finished. Start a managed observer before releasing
+    // the real metadata reader, so the post-unlink rendezvous must wait for it.
+    activate.store(true, std::memory_order_release);
+    Target("rendezvous-observer-active", Await(active));
+    reader.reset();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!closed.load(std::memory_order_acquire) &&
+           !state.load(std::memory_order_acquire)->has_operation() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool rendezvousPending = state.load(std::memory_order_acquire)->has_operation();
+    Target("rendezvous-before-purge", rendezvousPending && !closed.load(std::memory_order_acquire));
+    release.store(true, std::memory_order_release);
+    observer.join();
+    Target("rendezvous-close-after-observer", Await(closed));
+    closer.join();
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
 {
