@@ -1191,7 +1191,7 @@ class ZMarkBarrierFollowOopClosure : public OopIterateClosure {
     static ReferenceDiscoverer* discoverer()
     {
         if (!finalizable) {
-            return &Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
+            return ZGeneration::old()->reference_discoverer();
         }
         return nullptr;
     }

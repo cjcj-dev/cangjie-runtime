@@ -23,6 +23,7 @@
 #include "Heap/z/zRemembered.hpp"
 namespace MapleRuntime {
 class ZMark;
+class ReferenceDiscoverer;
 struct ThreadGCData;
 class ZRelocate;
 class ZRelocationSetSelector;
@@ -227,6 +228,7 @@ class ZGenerationOld : public ZGeneration {
     friend class RelocationReceiptTest;
 public:
     ZGenerationOld();
+    ReferenceDiscoverer* reference_discoverer();
     // zGeneration.cpp:1248,1526: young-count snapshot at major start.
     uint32_t total_collections_at_start() const { return _total_collections_at_start; }
     void set_soft_reference_policy(bool clear);
