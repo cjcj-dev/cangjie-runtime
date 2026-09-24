@@ -45,6 +45,7 @@
 #include "Heap/z/zDriverPort.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "Common/ColourEncoding.h"
+#include "Heap/shared/gcArguments.hpp"
 #include "HeapManager.h"
 #include "HeapManager.inline.h"
 
@@ -238,6 +239,9 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
                 0.8 : param->heapParam.heapUtilization,
             // Default value of heap growth is 1 + 0.15.
             .heapGrowth = param->heapParam.heapGrowth < ERRORESTIMATE ? 0.15 : param->heapParam.heapGrowth,
+            .heapSizeSet = param->heapParam.heapSizeSet || param->heapParam.heapSize != 0,
+            .softHeapSize = param->heapParam.softHeapSize,
+            .softHeapSizeSet = param->heapParam.softHeapSizeSet || param->heapParam.softHeapSize != 0,
         },
         .gcParam = {
             // Default value of gc threshold is heapSize.
@@ -269,6 +273,10 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
             .processorNum = param->coParam.processorNum == 0 ? defaultProcs : param->coParam.processorNum,
         }
     };
+
+    if (!MapleRuntime::GCArguments::initialize_heap_flags_and_sizes(config.heapParam)) {
+        return E_ARGS;
+    }
 
     pthread_t thread;
     pthread_attr_t attr;

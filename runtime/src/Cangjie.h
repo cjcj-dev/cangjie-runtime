@@ -228,6 +228,11 @@ struct HeapParam {
      * It will be set to default value if assigned with 0.
      */
     double heapGrowth;
+    // Heap flag origins survive default expansion (ZGC FLAG_IS_CMDLINE).
+    bool heapSizeSet;
+    // Soft limit in KB. A set bit permits explicitly selecting zero.
+    size_t softHeapSize;
+    bool softHeapSizeSet;
 };
 
 /*

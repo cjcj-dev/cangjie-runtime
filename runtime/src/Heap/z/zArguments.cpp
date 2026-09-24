@@ -19,6 +19,20 @@ bool g_gcEnabled = true;
 
 void ZArguments::initialize_alignments() {}
 
+void ZArguments::initialize_heap_flags_and_sizes()
+{
+    const HeapParam param = CangjieRuntime::GetHeapParam();
+    const bool soft_is_explicit = param.softHeapSizeSet;
+    size_t soft = SoftMaxHeapSize.load(std::memory_order_acquire);
+    // GCArguments:282-283 initializes default soft to max. ZArguments:43-50
+    // applies ergonomics only without explicit sizing. No MaxRAMPercentage
+    // parameter exists in this runtime, so that origin condition is true.
+    if (!param.heapSizeSet && !soft_is_explicit) {
+        soft = ZHeuristics::max_heap_size() * 90 / 100;
+    }
+    SoftMaxHeapSize.store(soft, std::memory_order_release);
+}
+
 void ZArguments::select_max_gc_threads()
 {
     // ZGC zArguments.cpp:67-118: explicit flags precede ergonomics at this entry.

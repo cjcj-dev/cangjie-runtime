@@ -634,7 +634,7 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
     if (child == 0) {
         (void)setenv("cjProcessorNum", processorCount == 1 ? "1" : "2", 1);
         if (task == RunOldRelocationStatisticsCase) {
-            (void)setenv("cjSoftMaxHeapSize", "128MB", 1);
+            (void)setenv("cjSoftMaxHeapSize", "128M", 1);
         }
         RuntimeParam param {};
         param.heapParam.heapSize = 512 * 1024;
