@@ -203,6 +203,14 @@ DYN_CJThreadHandle NewCJThread(void* execute, DYN_ObjRef future, void* scheduler
     return MCC_NewCJThread(execute, future, scheduler);
 }
 
+DYN_CJThreadHandle NewCJThreadNoReturn(
+    void* executeClosure, DYN_ObjRef closurePtr, void* scheduler, struct DYN_TypeInfo* futureTi)
+{
+    DLOG(INTERPRETER, "NewCJThreadNoReturn: executeClosure=%p, closurePtr=%p, scheduler=%p, futureTi=%p",
+        executeClosure, closurePtr, scheduler, futureTi);
+    return MCC_NewCJThreadNoReturn(executeClosure, closurePtr, scheduler, futureTi);
+}
+
 void VisitRootFromInterpreter(DYN_RootVisitor _visitor, DYN_Placeholder _placeholder)
 {
     const RootVisitor* visitor = static_cast<const RootVisitor*>(_visitor);
@@ -639,6 +647,7 @@ DYN_CJNativeInterface CreateCJNativeInterface(void* symbolHandle)
         .carrierSpecificOffset = offsetof(ThreadLocalData, mutator),
         .cjThreadSpecificOffset = ComputeCJThreadDataOffset(),
         .newCJThread = &NewCJThread,
+        .newCJThreadNoReturn = &NewCJThreadNoReturn,
         .typeInfo = &TypeInfoProvider,
         .typeTemplate = &FindTypeTemplate,
         .getOrCreateTypeInfo = &GetOrCreateTypeInfo,

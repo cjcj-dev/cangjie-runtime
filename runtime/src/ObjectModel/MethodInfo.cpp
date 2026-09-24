@@ -300,6 +300,10 @@ TypeInfo* MethodInfo::GetActualTypeFromGenericTypeImpl(GenericTypeInfo* genericT
     U8 argsCnt = genericTi->GetGenericArgsNum();
     void* tmp = MemoryAlloc(argsCnt, TYPEINFO_PTR_SIZE);
     TypeInfo** args = static_cast<TypeInfo**>(tmp);
+
+    CHECK_DETAIL(argsCnt <= 0 || args != nullptr,
+                 "GetActualTypeFromGenericType: allocate type args failed");
+
     for (U8 idx = 0; idx < argsCnt; ++idx) {
         TypeInfo* ti = reinterpret_cast<TypeInfo*>(genericTi->GetGenericArg(idx));
         if (ti->IsGeneric()) {
@@ -639,6 +643,9 @@ void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* re
     U32 size = retType->GetInstanceSize();
     sretSlot = static_cast<void**>(MemoryAlloc(1, sizeof(void*)));
     CHECK_DETAIL(sretSlot != nullptr, "PrepareSRet: allocate native sret slot failed");
+    if (sretSlot == nullptr) {
+        return;
+    }
     if (HasSRetNotGeneric() || HasSRetWithKnowGenericStruct()) {
         *sretSlot = MemoryAlloc(1, size);
         CHECK_DETAIL(size == 0 || *sretSlot != nullptr, "PrepareSRet: allocate native sret buffer failed");
@@ -777,6 +784,7 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     Value ret = ApplyCJMethodImpl(&argValues, sretSlot);
 
     if (HasSRetWithGeneric()) {
+        CHECK_DETAIL(sretSlot != nullptr, "ApplyCJMethod: sret slot is null");
         void* retObj = *sretSlot;
         MemoryFree(sretSlot);
         return retObj;
@@ -784,6 +792,7 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
     if (HasSRetWithUnknowGenericStruct()) {
         *sretSlot = sretHandle();
 #if defined(__aarch64__)
+        CHECK_DETAIL(sretSlot != nullptr, "ApplyCJMethod: sret slot is null");
         void* retObj = *sretSlot;
         MemoryFree(sretSlot);
         return retObj;
