@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # Licensed under Apache-2.0 with Runtime Library Exception.
-"""Read product allocation returns and published counts; never write inferior state.
+"""kkk2 x86-64 SysV observer: read product allocation returns and published counts; never write inferior state.
 
 Counts are derived independently from Heap::alloc_page return values, not from
 allocator increments. GDB serializes breakpoint callbacks, but workers remain
@@ -61,6 +61,7 @@ class AllocationReturn(ReturnBreakpoint):
 
     def stop(self):
         gdb.newest_frame().select()
+        self.enabled = False
         failed = int(self.return_value) == 0
         self.event['attempts'] += 1
         self.event['failures'] += int(failed)
@@ -95,6 +96,7 @@ class AllocatorReturn(ReturnBreakpoint):
 
     def stop(self):
         gdb.newest_frame().select()
+        self.enabled = False
         global reuses
         event = self.event
         after = count(self.allocator.dereference())
@@ -142,6 +144,7 @@ class TaskStart(gdb.Breakpoint):
 class Published(ReturnBreakpoint):
     def stop(self):
         gdb.newest_frame().select()
+        self.enabled = False
         global publications
         publications += 1
         actual = Path(gdb.solib_name(gdb.newest_frame().pc())).resolve()
@@ -169,6 +172,7 @@ class Published(ReturnBreakpoint):
 class YoungStarted(ReturnBreakpoint):
     def stop(self):
         gdb.newest_frame().select()
+        self.enabled = False
         global young_started
         young_started = True
         check('ASSERT_YOUNG_START_BETWEEN_OLD_COUNT_AND_PUBLICATION',
@@ -224,7 +228,12 @@ try:
     else:
         raise RuntimeError('Product load mapping missing')
     emit('PRODUCT_IDENTITY', library=library, base=product_base)
-    TaskStart('zRelocate.cpp:' + ('131' if case.startswith('Old') else '128'), internal=True)
+    source = Path(__file__).resolve().parents[2] / 'src/Heap/z/zRelocate.cpp'
+    generation_name = 'Old' if case.startswith('Old') else 'Young'
+    lines = source.read_text().splitlines()
+    task_line = next(i + 2 for i, line in enumerate(lines)
+                     if 'ForwardTask<Generation::' + generation_name + '> task(' in line)
+    TaskStart('zRelocate.cpp:' + str(task_line), internal=True)
     Allocator(0)
     Allocator(1)
     Allocation(address('MapleRuntime::Heap::alloc_page(unsigned long, MapleRuntime::ZPageType, bool, MapleRuntime::PageAge, MapleRuntime::ZAllocationFlags)'), internal=True)
