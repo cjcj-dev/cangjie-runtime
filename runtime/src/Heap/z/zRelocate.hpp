@@ -148,8 +148,10 @@ public:
     void free_target_page(ZPage* page);
     uintptr_t alloc_object(ZPage* page, size_t size) const;
     void undo_alloc_object(ZPage* page, uintptr_t addr, size_t size) const;
+    size_t in_place_count() const { return inPlaceCount.load(std::memory_order_relaxed); }
 private:
     ZGeneration* generation;
+    std::atomic<size_t> inPlaceCount{0};
 };
 
 class ZRelocateMediumAllocator {
@@ -162,8 +164,10 @@ public:
     void free_target_page(ZPage*) {}
     uintptr_t alloc_object(ZPage* page, size_t size) const;
     void undo_alloc_object(ZPage* page, uintptr_t addr, size_t size) const;
+    size_t in_place_count() const { return inPlaceCount.load(std::memory_order_relaxed); }
 private:
     ZGeneration* generation;
+    std::atomic<size_t> inPlaceCount{0};
     ZRelocationTargets* sharedTargets;
     std::mutex lock;
     std::condition_variable changed;
