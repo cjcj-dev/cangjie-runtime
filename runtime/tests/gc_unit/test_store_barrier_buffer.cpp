@@ -1346,21 +1346,25 @@ GC_TEST(AccessBarrier976, KnownStrongStoreIgnoresWeakHolderControl)
 #if defined(__linux__)
 GC_TEST(StoreAccess1085, ValueRecordNonReferentStore)
 {
-    // Observe the real compiler entry in a child so that an invalid holder
-    // interpretation is reported by the target assertion in the parent.
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
         GcHeapFixture fx;
         auto* record = reinterpret_cast<BaseObject*>(reinterpret_cast<MAddress>(fx.obj0) + 16);
-        // Token.kind=END, Token.delimiterNum=1: value-record data, not a header.
         *reinterpret_cast<uint64_t*>(record) = UINT64_C(0x100000090);
         auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(record) + 16);
+        const ptrdiff_t offset = reinterpret_cast<uintptr_t>(&field) - reinterpret_cast<uintptr_t>(record);
+        const bool heapField = Heap::IsHeapAddress(&field);
+        if (!heapField || offset == static_cast<ptrdiff_t>(TYPEINFO_PTR_SIZE)) {
+            std::fprintf(stderr, "STORE1085_PATH_MISS heap=%d offset=%ld\n",
+                heapField, static_cast<long>(offset));
+            _exit(2);
+        }
         field.StoreColoured(StoreGoodPointer(nullptr));
         CJ_MCC_WriteRefField(fx.obj1, record, &field);
         const bool installed = field.GetFieldValue() == StoreGoodPointer(fx.obj1);
-        std::fprintf(stderr, "STORE1085_PRODUCT_RESULT installed=%d raw=%zx\n",
-            installed, raw(field.GetFieldValue()));
+        std::fprintf(stderr, "STORE1085_PRODUCT_RESULT installed=%d raw=%zx offset=%ld\n",
+            installed, raw(field.GetFieldValue()), static_cast<long>(offset));
         _exit(installed ? 0 : 1);
     }
     int status = 0;
