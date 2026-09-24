@@ -11,7 +11,14 @@ TESTABLE_OUTPUT=${GC_MACRO_TESTABLE_OUTPUT:?set GC_MACRO_TESTABLE_OUTPUT to publ
 mkdir -p "$OUT"
 producer=$(mktemp "$SRC/run_standalone.producer.XXXXXX")
 consumer=$(mktemp "$SRC/run_standalone.consumer.XXXXXX")
-trap 'rm -f "$producer" "$consumer"' EXIT
+restore_source=0
+cleanup() {
+  if [[ "$restore_source" == 1 ]]; then
+    cp "$OUT/test_store_barrier_buffer.original.cpp" "$SRC/test_store_barrier_buffer.cpp"
+  fi
+  rm -f "$producer" "$consumer"
+}
+trap cleanup EXIT
 python3 - "$SRC/run_standalone.sh" "$producer" "$consumer" "$OUT" <<'PY'
 import difflib
 from pathlib import Path
@@ -55,6 +62,23 @@ run_arm default "$SRC/run_standalone.sh" "$DEFAULT_LIB" 0 "$DEFAULT_OUTPUT" &
 run_arm default-consumer "$consumer" "$DEFAULT_LIB" 0 "$DEFAULT_OUTPUT" &
 run_arm restored "$SRC/run_standalone.sh" "$TESTABLE_LIB" 1 "$TESTABLE_OUTPUT" &
 wait
+# Positive control of the per-name ruler: disable only the existing StoreBuf
+# declaration in this isolated tree, after the concurrent compilers finish.
+cp "$SRC/test_store_barrier_buffer.cpp" "$OUT/test_store_barrier_buffer.original.cpp"
+restore_source=1
+python3 - "$SRC/test_store_barrier_buffer.cpp" <<'PYONE'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+source = path.read_text()
+old = '#if defined(MRT_GC_UNIT_TESTS) && defined(__linux__)'
+assert source.count(old) == 1
+path.write_text(source.replace(old, '#if defined(MRT_GC_UNIT_TESTS_MISSPELLED) && defined(__linux__)'))
+PYONE
+run_arm missing-one "$SRC/run_standalone.sh" "$TESTABLE_LIB" 1 "$TESTABLE_OUTPUT"
+cp "$OUT/test_store_barrier_buffer.original.cpp" "$SRC/test_store_barrier_buffer.cpp"
+restore_source=0
+sha256sum "$OUT/test_store_barrier_buffer.original.cpp" "$SRC/test_store_barrier_buffer.cpp" >"$OUT/source-restored.sha256"
 python3 - "$OUT" "$SRC/gc_unit_macro_tests.txt" <<'PY'
 from pathlib import Path
 import sys
@@ -88,5 +112,11 @@ for arm in ('green', 'restored'):
         text = (out / arm / 'run.log').read_text()
         assert '[  PASS  ] ' + name in text, (arm, name)
     print(f'ASSERT_MACRO_EXECUTED arm={arm} passed={len(expected)}')
-print('ASSERT_MACRO_DEFAULT_CONTROL registry_unchanged=1')
+for arm in ('default', 'default-consumer'):
+    assert '[  PASS  ] StoreBuf.NullAndPreMarkPreviousAreNormalSkips' in (out / arm / 'run.log').read_text()
+print('ASSERT_MACRO_DEFAULT_CONTROL registry_unchanged=1 control_executed=1')
+assert (out / 'missing-one' / 'run.rc').read_text().strip() == '1'
+assert names('green') - names('missing-one') == {'StoreBuf.YoungSlotExcludedFromOldPhaseSnapshot'}
+assert not names('missing-one') - names('green')
+print('ASSERT_MACRO_ONE_MISSING_REACHED missing=StoreBuf.YoungSlotExcludedFromOldPhaseSnapshot rc=1')
 PY
