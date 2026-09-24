@@ -6,6 +6,8 @@ SRC=$(cd "$(dirname "$0")" && pwd)
 OUT=${GC_MACRO_TEST_OUT:?set GC_MACRO_TEST_OUT}
 DEFAULT_LIB=${GC_MACRO_DEFAULT_LIB:?set GC_MACRO_DEFAULT_LIB}
 TESTABLE_LIB=${GC_MACRO_TESTABLE_LIB:?set GC_MACRO_TESTABLE_LIB}
+DEFAULT_OUTPUT=${GC_MACRO_DEFAULT_OUTPUT:?set GC_MACRO_DEFAULT_OUTPUT to published headers and recipe}
+TESTABLE_OUTPUT=${GC_MACRO_TESTABLE_OUTPUT:?set GC_MACRO_TESTABLE_OUTPUT to published headers and recipe}
 mkdir -p "$OUT"
 producer=$(mktemp "$SRC/run_standalone.producer.XXXXXX")
 consumer=$(mktemp "$SRC/run_standalone.consumer.XXXXXX")
@@ -29,13 +31,13 @@ for name, path, old, new in (
         tofile='b/runtime/tests/gc_unit/run_standalone.sh')))
 PY
 run_arm() {
-  local name=$1 script=$2 lib=$3 testable=$4
+  local name=$1 script=$2 lib=$3 testable=$4 output=$5
   mkdir -p "$OUT/$name"
   uptime >"$OUT/$name/uptime-before.txt"
   sha256sum "$script" "$lib/libcangjie-runtime.so" "$lib/libboundscheck.so" >"$OUT/$name/inputs.sha256"
   local start=$SECONDS rc
   set +e
-  env -u GCV2_RUNTIME_OUTPUT_ROOT MRT_TESTABLE_INTERNALS="$testable" \
+  env GCV2_RUNTIME_OUTPUT_ROOT="$output" MRT_TESTABLE_INTERNALS="$testable" \
     GC_UNIT_OUT="$OUT/$name" GCV2_RUNTIME_LIB_DIR="$lib" \
     bash "$script" >"$OUT/$name/run.log" 2>&1
   rc=$?
@@ -46,12 +48,12 @@ run_arm() {
   sha256sum "$OUT/$name/cj_gc_unit" >"$OUT/$name/elf.sha256"
 }
 # Distinct output directories; compile and run independent arms concurrently.
-run_arm green "$SRC/run_standalone.sh" "$TESTABLE_LIB" 1 &
-run_arm producer "$producer" "$TESTABLE_LIB" 1 &
-run_arm consumer "$consumer" "$TESTABLE_LIB" 1 &
-run_arm default "$SRC/run_standalone.sh" "$DEFAULT_LIB" 0 &
-run_arm default-consumer "$consumer" "$DEFAULT_LIB" 0 &
-run_arm restored "$SRC/run_standalone.sh" "$TESTABLE_LIB" 1 &
+run_arm green "$SRC/run_standalone.sh" "$TESTABLE_LIB" 1 "$TESTABLE_OUTPUT" &
+run_arm producer "$producer" "$TESTABLE_LIB" 1 "$TESTABLE_OUTPUT" &
+run_arm consumer "$consumer" "$TESTABLE_LIB" 1 "$TESTABLE_OUTPUT" &
+run_arm default "$SRC/run_standalone.sh" "$DEFAULT_LIB" 0 "$DEFAULT_OUTPUT" &
+run_arm default-consumer "$consumer" "$DEFAULT_LIB" 0 "$DEFAULT_OUTPUT" &
+run_arm restored "$SRC/run_standalone.sh" "$TESTABLE_LIB" 1 "$TESTABLE_OUTPUT" &
 wait
 python3 - "$OUT" "$SRC/gc_unit_macro_tests.txt" <<'PY'
 from pathlib import Path
