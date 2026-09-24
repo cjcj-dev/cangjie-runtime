@@ -13,6 +13,7 @@
 #include "ObjectModel/Field.h"
 #include "ObjectModel/MClass.inline.h"
 #include "ObjectModel/RefField.h"
+#include <cstddef>
 
 // this is the Base class for "what's called a managed object" which can be collected.
 namespace MapleRuntime {
@@ -23,6 +24,9 @@ public:
     inline bool HasRefField() const { return GetTypeInfo()->HasRefField(); }
 
     inline bool IsWeakRef() const { return GetTypeInfo()->IsWeakRefType(); }
+
+    static ptrdiff_t referent_offset();
+    static bool is_referent_field(BaseObject* obj, ptrdiff_t offset);
 
     inline bool IsValidObject() const { return stateWord.IsValidStateWord(); }
 

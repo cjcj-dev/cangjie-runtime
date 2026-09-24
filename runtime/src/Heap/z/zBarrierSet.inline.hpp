@@ -3,22 +3,11 @@
 
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zBarrierSet.hpp"
+#include "Heap/z/accessBarrierSupport.inline.hpp"
 #include "ObjectModel/MArray.h"
 #include <algorithm>
 
 namespace MapleRuntime {
-namespace AccessBarrierSupport {
-template<DecoratorSet decorators>
-inline DecoratorSet resolve_possibly_unknown_oop_ref_strength(BaseObject* base, ptrdiff_t offset)
-{
-    if constexpr ((decorators & ON_UNKNOWN_OOP_REF) == 0) { return decorators; }
-    if (offset != TYPEINFO_PTR_SIZE) {
-        return (decorators & ~ON_UNKNOWN_OOP_REF) | ON_STRONG_OOP_REF;
-    }
-    const bool weak = base != nullptr && Heap::IsHeapAddress(base) && base->IsWeakRef();
-    return (decorators & ~ON_UNKNOWN_OOP_REF) | (weak ? ON_WEAK_OOP_REF : ON_STRONG_OOP_REF);
-}
-}
 
 template<DecoratorSet decorators>
 inline bool is_store_barrier_no_keep_alive()
