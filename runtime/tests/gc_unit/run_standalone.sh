@@ -386,6 +386,7 @@ MAIN_SOURCES=(
   "$SRC/test_mark_stripe.cpp"
   "$SRC/test_mark_port_203_storage.cpp"
   "$SRC/test_mark_port_203_entries.cpp"
+  "$SRC/test_mark_discovery.cpp"
   "$SRC/test_mark_port_203_engine.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"

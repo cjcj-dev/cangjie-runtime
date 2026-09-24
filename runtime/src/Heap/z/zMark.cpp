@@ -821,7 +821,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         if (!object->HasRefField() || !entry.follow()) {
             return;
         }
-        MarkPartialArray::FollowObjectReferences(object, entry.finalizable(), ZGenerationIdOptional::young, visitSlot, publish);
+        FollowObjectReferences(object, entry.finalizable(), visitSlot, publish);
         return;
     }
     auto publish = [this, &ctx](const MarkStackEntry& work) {
@@ -856,7 +856,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
             auto& field = HeapSlotAt<>(slot);
             ZBarrier::MarkBarrierOnOldOopField(field, entry.finalizable());
         };
-        MarkPartialArray::FollowObjectReferences(obj, entry.finalizable(), ZGenerationIdOptional::old, visitSlot, publish);
+        FollowObjectReferences(obj, entry.finalizable(), visitSlot, publish);
     }
 }
 
@@ -1184,6 +1184,8 @@ void FollowElements(MAddress start, size_t length, bool finalizable,
     }
 }
 
+} // namespace MarkPartialArray
+
 // ZGC zMark.cpp:273-313: discovery is closure state, not an object-kind
 // branch in mark_and_follow. Finalizable traversal follows the referent.
 template <bool finalizable, ZGenerationIdOptional generation>
@@ -1208,9 +1210,9 @@ public:
 };
 
 // ZGC zMark.cpp:371-392: select the static closure before VM enumeration.
-static void follow_object(BaseObject* object, bool finalizable, ZGenerationIdOptional generation)
+void ZMark::follow_object(BaseObject* object, bool finalizable)
 {
-    if (generation == ZGenerationIdOptional::old) {
+    if (generation == MarkingStacks::MarkingGeneration::OLD) {
         if (finalizable) {
             ZMarkBarrierFollowOopClosure<true, ZGenerationIdOptional::old> closure;
             ZIterator::oop_iterate(object, &closure);
@@ -1224,9 +1226,8 @@ static void follow_object(BaseObject* object, bool finalizable, ZGenerationIdOpt
     }
 }
 
-void FollowObjectReferences(BaseObject* object, bool finalizable,
-                            ZGenerationIdOptional generation,
-                            const FieldVisitor& visit, const EntryPublisher& publish)
+void ZMark::FollowObjectReferences(BaseObject* object, bool finalizable,
+                            const MarkPartialArray::FieldVisitor& visit, const MarkPartialArray::EntryPublisher& publish)
 {
     if (object->GetTypeInfo()->IsRawArray()) {
         MArray* array = reinterpret_cast<MArray*>(object);
@@ -1234,13 +1235,14 @@ void FollowObjectReferences(BaseObject* object, bool finalizable,
         if (component->IsObjectType() || component->IsArrayType() || component->IsInterface()) {
             // zMark.cpp:346-368: array following does not contain a safe
             // iterator split. Invisible roots carry DontFollow upstream.
-            FollowElements(reinterpret_cast<MAddress>(array->ConvertToCArray()), array->GetLength(), finalizable, visit, publish);
+            MarkPartialArray::FollowElements(reinterpret_cast<MAddress>(array->ConvertToCArray()), array->GetLength(), finalizable, visit, publish);
             return;
         }
     }
-    follow_object(object, finalizable, generation);
+    follow_object(object, finalizable);
 }
 
+namespace MarkPartialArray {
 void FollowPartialReferences(const MarkStackEntry& entry,
                              const FieldVisitor& visit, const EntryPublisher& publish)
 {

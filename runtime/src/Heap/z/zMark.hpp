@@ -38,6 +38,7 @@ enum class MarkingGeneration : uint8_t { MAJOR, YOUNG };
 #include "Heap/z/zForwardingTable.hpp"
 
 #include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Common/MarkWorkStack.h"
 #include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zAbort.hpp"
@@ -144,6 +145,9 @@ public:
                              std::atomic<size_t>* stealFailure = nullptr, ZMark* domain = nullptr);
 
 private:
+    void follow_object(BaseObject* object, bool finalizable);
+    void FollowObjectReferences(BaseObject* object, bool finalizable,
+        const MarkPartialArray::FieldVisitor& visit, const MarkPartialArray::EntryPublisher& publish);
     size_t CalculateNStripes(size_t nworkers) const;
     void EnsureWorkers(size_t nworkers);
     static bool HandshakeFlush(ZMark* domain);
