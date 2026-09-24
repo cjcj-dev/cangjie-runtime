@@ -1342,3 +1342,37 @@ GC_TEST(AccessBarrier976, KnownStrongStoreIgnoresWeakHolderControl)
     GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(nullptr));
     buffer.Flush();
 }
+
+#if defined(__linux__)
+GC_TEST(StoreAccess1085, ValueRecordNonReferentStore)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        GcHeapFixture fx;
+        auto* record = reinterpret_cast<BaseObject*>(reinterpret_cast<MAddress>(fx.obj0) + 16);
+        *reinterpret_cast<uint64_t*>(record) = UINT64_C(0x100000090);
+        auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(record) + 16);
+        const ptrdiff_t offset = reinterpret_cast<uintptr_t>(&field) - reinterpret_cast<uintptr_t>(record);
+        const bool heapField = Heap::IsHeapAddress(&field);
+        if (!heapField || offset == static_cast<ptrdiff_t>(TYPEINFO_PTR_SIZE)) {
+            std::fprintf(stderr, "STORE1085_PATH_MISS heap=%d offset=%ld\n",
+                heapField, static_cast<long>(offset));
+            _exit(2);
+        }
+        field.StoreColoured(StoreGoodPointer(nullptr));
+        CJ_MCC_WriteRefField(fx.obj1, record, &field);
+        const bool installed = field.GetFieldValue() == StoreGoodPointer(fx.obj1);
+        std::fprintf(stderr, "STORE1085_PRODUCT_RESULT installed=%d raw=%zx offset=%ld\n",
+            installed, raw(field.GetFieldValue()), static_cast<long>(offset));
+        _exit(installed ? 0 : 1);
+    }
+    int status = 0;
+    pid_t waited;
+    do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+    const bool stored = waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    std::fprintf(stderr, "STORE1085_TARGET_ASSERT waited=%d status=%d stored=%d\n",
+        static_cast<int>(waited), status, stored);
+    GC_EXPECT_TRUE(stored);
+}
+#endif

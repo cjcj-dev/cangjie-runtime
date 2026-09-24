@@ -29,6 +29,23 @@ template void HeapSlot<false>::StoreColoured(zpointer, std::memory_order);
 
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }
 
+ptrdiff_t BaseObject::referent_offset()
+{
+    return static_cast<ptrdiff_t>(TYPEINFO_PTR_SIZE);
+}
+
+bool BaseObject::is_referent_field(BaseObject* obj, ptrdiff_t offset)
+{
+    if (offset != referent_offset()) {
+        return false;
+    }
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return false;
+    }
+    TypeInfo* klass = obj->GetTypeInfo();
+    return klass->IsWeakRefType();
+}
+
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
 void BaseObject::DumpObject(int logtype, bool isSimple) const
 {
