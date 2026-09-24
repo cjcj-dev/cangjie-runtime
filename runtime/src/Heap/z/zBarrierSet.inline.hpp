@@ -12,7 +12,12 @@ template<DecoratorSet decorators>
 inline DecoratorSet resolve_possibly_unknown_oop_ref_strength(BaseObject* base, ptrdiff_t offset)
 {
     if constexpr ((decorators & ON_UNKNOWN_OOP_REF) == 0) { return decorators; }
-    const bool weak = base != nullptr && Heap::IsHeapAddress(base) && base->IsWeakRef() && offset == TYPEINFO_PTR_SIZE;
+    // ZGC javaClasses.cpp:3956-3960: reject non-referent offsets before
+    // inspecting the holder type. Cangjie value records have no object header.
+    if (offset != TYPEINFO_PTR_SIZE) {
+        return (decorators & ~ON_UNKNOWN_OOP_REF) | ON_STRONG_OOP_REF;
+    }
+    const bool weak = base != nullptr && Heap::IsHeapAddress(base) && base->IsWeakRef();
     return (decorators & ~ON_UNKNOWN_OOP_REF) | (weak ? ON_WEAK_OOP_REF : ON_STRONG_OOP_REF);
 }
 }
