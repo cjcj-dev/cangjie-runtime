@@ -169,3 +169,36 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, NumberOverflow) { CheckMaximumRejected("18
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, UnitOverflow) { CheckMaximumRejected("18014398509481984K"); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Negative) { CheckMaximumRejected("-64M"); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Zero) { CheckMaximumRejected("0"); }
+
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiKilobytes)
+{
+    using namespace MapleRuntime;
+    unsetenv("cjHeapSize");
+    unsetenv("cjSoftMaxHeapSize");
+    RuntimeParam params{};
+    params.heapParam.heapSize = 65537;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t actual = ZHeuristics::max_heap_size();
+    std::fprintf(stderr, "MAX_API_ASSERT actual=%zu expected=%zu\n", actual, 65537UL * 1024);
+    GC_EXPECT_EQ(actual, 65537UL * 1024);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiEnvironmentBytes)
+{
+    using namespace MapleRuntime;
+    setenv("cjHeapSize", "67108865", 1);
+    unsetenv("cjSoftMaxHeapSize");
+    RuntimeParam params{};
+    params.heapParam.heapSize = 128 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t actual = ZHeuristics::max_heap_size();
+    const size_t capacity = Heap::GetHeap().GetMaxCapacity();
+    std::fprintf(stderr, "MAX_API_ENV_ASSERT actual=%zu expected=67108865 capacity=%zu\n", actual, capacity);
+    GC_EXPECT_EQ(actual, 67108865UL);
+    GC_EXPECT_EQ(capacity, 66UL * 1024 * 1024);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
