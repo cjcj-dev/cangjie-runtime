@@ -207,8 +207,13 @@ void HandshakeState::process_queued_then_detach()
 namespace {
 void WaitHandshakeOps(std::list<HandshakeOperation*>& ops)
 {
-    HandshakeState& self = Handshake::Current();
-    self.process_by_self();
+    // handshake.cpp:255-295 processes the existing participant set. A native
+    // initiator need not become a handshake target just to wait for others.
+    // In particular, TLS destructor registration here can acquire the platform
+    // loader lock while an unrelated image is running its finalizer.
+    if (tlHandshakeState != nullptr) {
+        tlHandshakeState->process_by_self();
+    }
     while (!ops.empty()) {
         for (auto it = ops.begin(); it != ops.end();) {
             HandshakeOperation* op = *it;

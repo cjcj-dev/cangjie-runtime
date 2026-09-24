@@ -10,7 +10,16 @@
 namespace MapleRuntime {
 class Mutator;
 class SafeThreadsListPtr;
-struct SMRThread;
+// thread.hpp:174-175: hazard fields belong to an executor, while
+// threadSMR.hpp:251 scopes the handle that uses them. Native callers create
+// an executor explicitly for the outermost handle; nested handles share it.
+struct SMRThread {
+    std::atomic<uintptr_t> hazard{0};
+    SafeThreadsListPtr* listPtr = nullptr;
+    SMRThread* previousExecutor;
+    SMRThread();
+    ~SMRThread();
+};
 
 // HotSpot runtime/threadSMR.hpp:163: immutable membership, plus the retired
 // list link and the reference count used by nested handles.
@@ -46,6 +55,7 @@ public:
 // threadSMR.hpp:237: leaf hazard pointer; promote the previous handle to a
 // list reference count on nested acquisition. Handles stay on their creator.
 class SafeThreadsListPtr {
+    SMRThread executor;
     SafeThreadsListPtr* previous = nullptr;
     SMRThread* thread;
     ThreadsList* heldList = nullptr;

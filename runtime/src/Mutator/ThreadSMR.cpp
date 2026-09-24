@@ -9,14 +9,6 @@
 #include <vector>
 
 namespace MapleRuntime {
-// These are executor fields (HotSpot Thread), not logical Mutator fields
-// (JavaThread). GC/native executors can own handles without a Mutator.
-struct SMRThread {
-    std::atomic<uintptr_t> hazard{0};
-    SafeThreadsListPtr* listPtr = nullptr;
-    SMRThread();
-    ~SMRThread();
-};
 namespace {
 struct SMRState {
     std::mutex mutex;
@@ -31,10 +23,12 @@ SMRState& State()
     static SMRState state;
     return state;
 }
+// Trivial TLS identifies the explicitly scoped executor. No TLS destructor
+// registration (and therefore no platform loader lock) is needed here.
+thread_local SMRThread* currentExecutor = nullptr;
 SMRThread& CurrentExecutor()
 {
-    thread_local SMRThread thread;
-    return thread;
+    return *currentExecutor;
 }
 constexpr uintptr_t TAG = 1;
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -42,16 +36,20 @@ std::atomic<void (*)()> reclaimScanBreakpoint{nullptr};
 #endif
 }
 
-SMRThread::SMRThread()
+SMRThread::SMRThread() : previousExecutor(currentExecutor)
 {
+    if (previousExecutor != nullptr) { return; }
+    currentExecutor = this;
     std::lock_guard<std::mutex> lock(State().mutex);
     State().executors.push_back(this);
 }
 SMRThread::~SMRThread()
 {
+    if (previousExecutor != nullptr) { return; }
     CHECK_DETAIL(listPtr == nullptr && hazard.load() == 0, "thread exited with an SMR handle");
     std::lock_guard<std::mutex> lock(State().mutex);
     State().executors.remove(this);
+    currentExecutor = nullptr;
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)

@@ -40,3 +40,21 @@ public func unloadSpawnActive(arg: CPointer<Unit>): CPointer<Unit> {
     spawn { => unsafe { MRT_TestElfUnloadNativeBlock() } }
     return arg
 }
+
+// Keep a live image frame after its carrier has executed another task.
+public func unloadSpawnParked(arg: CPointer<Unit>): CPointer<Unit> {
+    spawn { =>
+        unsafe { MRT_TestElfUnloadNativeBlock() }
+        sleep(60 * Duration.second)
+    }
+    return arg
+}
+
+// Stay in managed code so the active-frame check must also service a carrier.
+public func unloadSpawnRunning(arg: CPointer<Unit>): CPointer<Unit> {
+    spawn { =>
+        unsafe { MRT_TestElfUnloadNativeBlock() }
+        while (true) { unloadInitSentinel += 1 }
+    }
+    return arg
+}
