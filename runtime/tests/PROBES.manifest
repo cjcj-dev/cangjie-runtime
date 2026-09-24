@@ -103,3 +103,5 @@ perf_vs_official                          manual     built subject/official SDKs
 interp_sentinel_probe.cpp                 manual     built runtime SO; hunt-stackmap BUG2 interpreter-sentinel decode (pre-fix SEGV / post-fix FillInterpretedFrameDesc)
 signal_stack_guard_preinit.cpp            manual     product runtime/boundscheck SO pair; run_signal_stack_guard_preinit.sh checks pre-TLS guard queries and separate native hard-fault cases
 run_signal_stack_guard_preinit.sh         manual     GCV2_RUNTIME_LIB_DIR and SIGNAL_TEST_OUTPUT; compiles and runs signal_stack_guard_preinit.cpp against the built product pair
+elf_unload_public_active.cpp             manual     run_elf_unload_public_active.sh public unload rejection through existing Cangjie native-call fixture; needs matching SDK and product SO
+run_elf_unload_public_active.sh           manual     compile and run public active-image rejection; matching Cangjie SDK, compiler host runtime and candidate runtime required
