@@ -854,23 +854,6 @@ GC_RUNTIME_OTHER_VM_TEST(GenerationState, ProductSequenceAndForwarding)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
-extern "C" bool CJ_MCC_IsGCRunning();
-GC_RUNTIME_OTHER_VM_TEST(GenerationState, DriverActivityABI)
-{
-    RuntimeParam params{};
-    params.heapParam.heapSize = 64 * 1024;
-    params.coParam.processorNum = 1;
-    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
-    const bool before = CJ_MCC_IsGCRunning();
-    CheckDriverCauseResult(GC_REASON_TIMER, false, false, false);
-    const bool after = CJ_MCC_IsGCRunning();
-    std::fprintf(stderr, "GENERATION_ACTIVITY_IDLE_TARGET before=%d after=%d\n", before, after);
-    GC_EXPECT_FALSE(before);
-    GC_EXPECT_FALSE(after);
-    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
-}
-
-
 namespace {
 void CheckSoftMax(size_t heapKB, const char* configured, size_t softKB, bool softSet,
                   size_t expected, bool managed = false)

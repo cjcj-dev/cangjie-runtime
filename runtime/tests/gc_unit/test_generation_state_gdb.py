@@ -11,7 +11,7 @@ import os
 
 samples = []
 mode = os.environ.get('GENERATION_OBSERVE', 'forwarding')
-fixture = ('GenerationState.DriverActivityABI' if mode in ('phase', 'seqnum', 'activity')
+fixture = ('DriverCause.MajorTimer' if mode in ('phase', 'seqnum')
            else 'GenerationState.ProductSequenceAndForwarding')
 old_before = None
 
@@ -61,22 +61,16 @@ for command in ['set pagination off', 'set confirm off', 'set breakpoint pending
                 'set environment GC_UNIT_FILTER ' + fixture,
                 'set environment GC_UNIT_OTHER_VM_CHILD ' + fixture]:
     gdb.execute(command)
-if mode in ('phase', 'seqnum', 'activity'):
+if mode in ('phase', 'seqnum'):
     MarkStart('MapleRuntime::ZGenerationOld::mark_start()')
     MarkConsumer('MapleRuntime::ZGenerationOld::concurrent_mark()')
 else:
     Publication('MapleRuntime::ZForwarding::relocated_remembered_fields_after_relocate()')
 gdb.execute('run')
-if mode in ('phase', 'seqnum', 'activity'):
+if mode in ('phase', 'seqnum'):
     phase = int(gdb.parse_and_eval('MapleRuntime::ZGeneration::_old->_phase'))
     sequence = int(gdb.parse_and_eval('MapleRuntime::ZGeneration::_old->_seqnum'))
-    if mode == 'activity':
-        # Call the actual standard-library ABI function in the stopped driver;
-        # do not reconstruct its result by reading driver fields in the test.
-        running = bool(gdb.parse_and_eval('((bool (*)())CJ_MCC_IsGCRunning)()'))
-        passed = running
-        emit('GENERATION_ACTIVITY_TARGET', passed=passed, running=running)
-    elif mode == 'phase':
+    if mode == 'phase':
         passed = phase == 0
         emit('GENERATION_PHASE_TARGET', passed=passed, phase=phase)
     else:

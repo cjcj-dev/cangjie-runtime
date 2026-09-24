@@ -308,6 +308,9 @@ PACKAGE_INIT_IMAGE_PID=$!
 "$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared "$SRC/package_init_image.cpp" \
   -o "$OUT/libcj_package_init_unrelated.so" > "$OUT/package-init-unrelated-build.log" 2>&1 &
 PACKAGE_INIT_UNRELATED_PID=$!
+"$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared "$SRC/interpreter_version_image.cpp" \
+  -o "$OUT/libcj_interpreter_version_fixture.so" > "$OUT/interpreter-version-image-build.log" 2>&1 &
+INTERPRETER_VERSION_IMAGE_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
@@ -379,6 +382,7 @@ MAIN_SOURCES=(
   "$SRC/test_current_object_ref.cpp"
   "$SRC/test_i2_readref.cpp"
   "$SRC/test_loadfc.cpp"
+  "$SRC/test_interpreter_version.cpp"
   "$SRC/test_arraycopy.cpp"
   "$SRC/test_fnlz_roots.cpp"
   "$SRC/test_reference_processor.cpp"
@@ -486,6 +490,7 @@ if [[ $main_link_rc -ne 0 || $publication_link_rc -ne 0 ]]; then
 fi
 wait "$PACKAGE_INIT_IMAGE_PID"
 wait "$PACKAGE_INIT_UNRELATED_PID"
+wait "$INTERPRETER_VERSION_IMAGE_PID"
 echo "GC_UNIT_COMPILE_PARALLEL jobs=$BUILD_JOBS tus=$((${#MAIN_SOURCES[@]} + ${#PUBLICATION_SOURCES[@]}))"
 # Capture the just-linked test identity before any case is executed.
 sha256sum "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" \

@@ -521,22 +521,6 @@ DYN_ThreadLocalData GetThreadLocalData()
     return reinterpret_cast<DYN_ThreadLocalData>(MRT_GetThreadLocalData());
 }
 
-int IsActiveGCPhase(DYN_ThreadLocalData tld)
-{
-    ThreadLocalData* threadLocalData = static_cast<ThreadLocalData*>(tld);
-    if (threadLocalData == nullptr) {
-        return 0;
-    }
-    Mutator* mutator = threadLocalData->mutator;
-    if (mutator == nullptr) {
-        return 0;
-    }
-    // ZGC zBarrier.inline.hpp: load/store barriers always check pointer colors.
-    // The official interpreter ABI still gates its barriers through this
-    // callback, so every attached mutator requires barriers, even between GCs.
-    return 1;
-}
-
 DYN_ExceptionWrapper GetExceptionWrapper()
 {
     DLOG(INTERPRETER, "GetExceptionWrapper");
@@ -676,7 +660,6 @@ DYN_CJNativeInterface CreateCJNativeInterface(void* symbolHandle)
         .getArrayRefElement = &GetArrayElement,
         .setArrayRefElement = &SetArrayElement,
         .getThreadLocalData = &GetThreadLocalData,
-        .isActiveGcPhase = &IsActiveGCPhase,
         .stackGrowStub = reinterpret_cast<DYN_StackGrowStubFn>(&CJ_MCC_StackGrowStub),
         .i2nStub = i2nStub,
         .nativeLogger = &NativeLogger,
