@@ -36,6 +36,7 @@ struct TLABStatistics {
     size_t refillWaste = 0;
     size_t gcWaste = 0;
     size_t refills = 0;
+    size_t slowAllocations = 0;
     size_t allocatingThreads = 0;
 
     size_t Used() const { return allocatedSize - refillWaste - gcWaste; }
@@ -45,6 +46,7 @@ struct TLABStatistics {
         refillWaste += other.refillWaste;
         gcWaste += other.gcWaste;
         refills += other.refills;
+        slowAllocations += other.slowAllocations;
         allocatingThreads += other.allocatingThreads;
     }
 };
