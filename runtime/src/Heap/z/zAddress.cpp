@@ -1,3 +1,4 @@
+#include "Heap/z/zHeuristics.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -144,7 +145,7 @@ size_t ZGlobalsPointers::min_address_offset_request()
     // A standalone native fixture has no Runtime instance; its configuration
     // starts at the same minimum address domain as an empty heap request.
     const size_t heapBytes = Runtime::CurrentRef() == nullptr ? 0
-        : CangjieRuntime::GetHeapParam().heapSize * size_t(1024);
+        : ZHeuristics::max_heap_size();
     const size_t multiplier = ZVirtualToPhysicalRatio *
         (NumaTopology::SealProcessTopology().Count() > 1 ? 2 : 1);
     CHECK(heapBytes <= (std::numeric_limits<size_t>::max() >> 1) / multiplier);

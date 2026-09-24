@@ -10,6 +10,7 @@
 #include "Common/ColourEncoding.h"
 #include "Heap/shared/jvmFlagConstraintsGC.hpp"
 #include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "RuntimeConfig.h"
 
 namespace MapleRuntime {
@@ -103,10 +104,19 @@ bool GCArguments::initialize_heap_flags_and_sizes(HeapParam& param)
 {
     size_t maximum = 0;
     size_t soft = 0;
-    if (!CheckedMulSize(param.heapSize, KB, maximum)) {
+    // HotSpot arguments.cpp:2112-2125: parse the selected maximum in bytes,
+    // then publish the flag before GC sizing and soft-limit constraints.
+    if (const char* value = GetRuntimeConfigValue("cjHeapSize")) {
+        if (parse_memory_size(value, &maximum, 1, std::numeric_limits<size_t>::max()) != arg_in_range) {
+            LOG(RTLOG_ERROR, "Invalid cjHeapSize");
+            return false;
+        }
+        param.heapSizeSet = true;
+    } else if (!CheckedMulSize(param.heapSize, KB, maximum)) {
         LOG(RTLOG_ERROR, "Heap size conversion overflows bytes");
         return false;
     }
+    ZHeuristics::set_max_heap_size(maximum);
     // Resolve the selected source before validating it: environment > embedded table / API > default.
     if (const char* value = GetRuntimeConfigValue("cjSoftMaxHeapSize")) {
         if (parse_memory_size(value, &soft, 0, std::numeric_limits<size_t>::max()) != arg_in_range) {

@@ -946,10 +946,7 @@ RegionManager::~RegionManager()
 
 RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThreshold) : RegionManager()
 {
-    size_t heapSize = 0;
-    CHECK_DETAIL(CheckedMulSize(vmHeapParam.heapSize, size_t{1024}, heapSize),
-                 "heap size overflows bytes before reservation: heapSizeKB=%zu", vmHeapParam.heapSize);
-    const size_t alignedHeapSize = RegionManager::GetAlignedHeapSize(heapSize);
+    const size_t alignedHeapSize = RegionManager::GetAlignedHeapSize(ZHeuristics::max_heap_size());
     const size_t maxCapacity = alignedHeapSize;
 
     // ZPageAllocator::ZPageAllocator (zPageAllocator.cpp:1201-1260): the
