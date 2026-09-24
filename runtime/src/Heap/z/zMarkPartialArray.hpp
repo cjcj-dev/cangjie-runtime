@@ -14,6 +14,7 @@
 #include "Common/TypeDef.h"
 #include "Heap/z/zMarkStackEntry.hpp"
 #include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zGenerationId.hpp"
 
 namespace MapleRuntime {
 class BaseObject;
@@ -40,6 +41,7 @@ using EntryPublisher = std::function<void(const MarkStackEntry&)>;
 // One producer/consumer implementation for both generations. Struct arrays
 // retain their GCTib walk; reference arrays publish typed continuations.
 void FollowObjectReferences(BaseObject* object, bool finalizable,
+                            ZGenerationIdOptional generation,
                             const FieldVisitor& visit, const EntryPublisher& publish);
 void FollowPartialReferences(const MarkStackEntry& entry,
                              const FieldVisitor& visit, const EntryPublisher& publish);

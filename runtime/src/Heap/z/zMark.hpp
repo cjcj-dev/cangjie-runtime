@@ -64,7 +64,6 @@ class ZMark {
 public:
     static void VisitStrongPlainRoots(const RootVisitor& visitor,
                               const std::function<void(Mutator&)>& threadVisitor);
-    static void DiscoverWeakReference(BaseObject* reference, WorkStack& workStack);
     static void EnumAllCommonRoots(ZWorkers& workers);
     static void EnumAllExportRoots(ValueRootList& exportOwners);
     static void DiscoverFinalizableRoot(NativeSlot& slot);

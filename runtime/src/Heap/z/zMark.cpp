@@ -135,17 +135,6 @@ void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
     ZBarrier::MarkFinalizableBarrierOnRoot(slot);
 }
 
-void ZMark::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
-{
-    HeapSlot<>& referentField =
-        HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
-    BaseObject* referent = ZBarrier::GetAndTryTagObj(ZBarrier::RefSlotKind::WEAK_REFERENT, reference, referentField);
-    if (referent == nullptr) {
-        return;
-    }
-    (void)Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().discover_reference(reference, ReferenceType::WEAK);
-    (void)workStack;
-}
 
 namespace {
 // ZMarkOopClosure (zMark.cpp:666-670). P08 owns the missing dedicated old
@@ -832,7 +821,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         if (!object->HasRefField() || !entry.follow()) {
             return;
         }
-        MarkPartialArray::FollowObjectReferences(object, entry.finalizable(), visitSlot, publish);
+        MarkPartialArray::FollowObjectReferences(object, entry.finalizable(), ZGenerationIdOptional::young, visitSlot, publish);
         return;
     }
     auto publish = [this, &ctx](const MarkStackEntry& work) {
@@ -863,20 +852,11 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         if (!obj->HasRefField()) {
             return;
         }
-        if (UNLIKELY(obj->IsWeakRef())) {
-            WorkStack discovered;
-            ZMark::DiscoverWeakReference(obj, discovered);
-            while (!discovered.empty()) {
-                publish(discovered.back());
-                discovered.pop_back();
-            }
-            return;
-        }
         auto visitSlot = [obj, &entry](MAddress slot) {
             auto& field = HeapSlotAt<>(slot);
             ZBarrier::MarkBarrierOnOldOopField(field, entry.finalizable());
         };
-        MarkPartialArray::FollowObjectReferences(obj, entry.finalizable(), visitSlot, publish);
+        MarkPartialArray::FollowObjectReferences(obj, entry.finalizable(), ZGenerationIdOptional::old, visitSlot, publish);
     }
 }
 
@@ -1204,7 +1184,48 @@ void FollowElements(MAddress start, size_t length, bool finalizable,
     }
 }
 
+// ZGC zMark.cpp:273-313: discovery is closure state, not an object-kind
+// branch in mark_and_follow. Finalizable traversal follows the referent.
+template <bool finalizable, ZGenerationIdOptional generation>
+class ZMarkBarrierFollowOopClosure : public OopIterateClosure {
+    static ReferenceDiscoverer* discoverer()
+    {
+        if (!finalizable) {
+            return &Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
+        }
+        return nullptr;
+    }
+public:
+    ZMarkBarrierFollowOopClosure() : OopIterateClosure(discoverer()) {}
+    void do_oop(RefField<>* field) override
+    {
+        if constexpr (generation == ZGenerationIdOptional::young) {
+            ZBarrier::MarkBarrierOnYoungOopField(*field);
+        } else {
+            ZBarrier::MarkBarrierOnOldOopField(*field, finalizable);
+        }
+    }
+};
+
+// ZGC zMark.cpp:371-392: select the static closure before VM enumeration.
+static void follow_object(BaseObject* object, bool finalizable, ZGenerationIdOptional generation)
+{
+    if (generation == ZGenerationIdOptional::old) {
+        if (finalizable) {
+            ZMarkBarrierFollowOopClosure<true, ZGenerationIdOptional::old> closure;
+            ZIterator::oop_iterate(object, &closure);
+        } else {
+            ZMarkBarrierFollowOopClosure<false, ZGenerationIdOptional::old> closure;
+            ZIterator::oop_iterate(object, &closure);
+        }
+    } else {
+        ZMarkBarrierFollowOopClosure<false, ZGenerationIdOptional::young> closure;
+        ZIterator::oop_iterate(object, &closure);
+    }
+}
+
 void FollowObjectReferences(BaseObject* object, bool finalizable,
+                            ZGenerationIdOptional generation,
                             const FieldVisitor& visit, const EntryPublisher& publish)
 {
     if (object->GetTypeInfo()->IsRawArray()) {
@@ -1217,9 +1238,7 @@ void FollowObjectReferences(BaseObject* object, bool finalizable,
             return;
         }
     }
-    auto fields = [&](RefField<>& field) { visit(reinterpret_cast<MAddress>(&field)); };
-    ZBasicOopIterateClosure<decltype(fields)> closure(fields);
-    ZIterator::oop_iterate(object, &closure);
+    follow_object(object, finalizable, generation);
 }
 
 void FollowPartialReferences(const MarkStackEntry& entry,
