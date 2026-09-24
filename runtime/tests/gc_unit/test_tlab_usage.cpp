@@ -991,3 +991,78 @@ GC_RUNTIME_OTHER_VM_TEST(TLABRefill, FailureFallsBackOutsideTLAB)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif
+
+#if defined(__linux__)
+// memAllocator.cpp:273-286; threadLocalAllocBuffer.inline.hpp:90-97.
+// Requests enter through the object allocator; only the compiler's existing
+// three-word TLAB ABI is read to observe the returned product state.
+GC_RUNTIME_OTHER_VM_TEST(TLABRefill, RetainsUsefulTailAndRaisesWasteLimit)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 64 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    auto& threads = MutatorManager::Instance();
+    Mutator* owner = threads.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    bool retained = false;
+    bool refilled = false;
+    bool statistics = false;
+    {
+        ScopedObjectAccess access;
+        AllocBuffer* buffer = owner->tlab();
+        alignas(TypeInfo) unsigned char storage[4][sizeof(TypeInfo)]{};
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+        auto allocate = [&](size_t index, size_t bytes) {
+            auto* type = reinterpret_cast<TypeInfo*>(storage[index]);
+            type->SetType(TypeKind::TYPE_KIND_CLASS);
+            type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
+            return reinterpret_cast<uintptr_t>(MObject::NewObject(type, bytes, AllocType::MOVEABLE_OBJECT));
+        };
+        const uintptr_t seed = allocate(0, 4096);
+        uintptr_t bounds[3];
+        std::memcpy(bounds, buffer, sizeof(bounds));
+        const size_t initialLimit = buffer->RefillWasteLimit();
+        const size_t tail = initialLimit + 8;
+        // Construct the boundary with ordinary objects, never FillTLAB or a hook.
+        GC_EXPECT_TRUE(seed != 0 && bounds[1] - bounds[0] > tail + 16);
+        const uintptr_t fitting = allocate(1, bounds[1] - bounds[0] - tail);
+        uintptr_t before[3];
+        std::memcpy(before, buffer, sizeof(before));
+        GC_EXPECT_TRUE(fitting == bounds[0] && before[1] - before[0] == tail);
+        const size_t request = tail + 8;
+        const uintptr_t outside = allocate(2, request);
+        uintptr_t after[3];
+        std::memcpy(after, buffer, sizeof(after));
+        retained = outside != 0 && (outside < before[2] || outside >= before[1]) &&
+                   std::memcmp(before, after, sizeof(before)) == 0 &&
+                   buffer->RefillWasteLimit() == initialLimit + 4 * sizeof(uintptr_t);
+        std::fprintf(stderr, "TLAB_RETAIN_TARGET executed=1 outside=%zx before=%zx,%zx,%zx "
+                     "after=%zx,%zx,%zx limit=%zu next_limit=%zu retained=%d\n",
+                     outside, before[0], before[1], before[2], after[0], after[1], after[2],
+                     initialLimit, buffer->RefillWasteLimit(), retained);
+        // The raised limit now permits retirement. Same request, real entry.
+        const uintptr_t refill = allocate(3, request);
+        uintptr_t finalBounds[3];
+        std::memcpy(finalBounds, buffer, sizeof(finalBounds));
+        refilled = refill != 0 && finalBounds[2] == refill && finalBounds[2] != before[2] &&
+                   buffer->RefillWasteLimit() == initialLimit;
+        buffer->RetireTLAB(true);
+        TLABStatistics total;
+        buffer->AccumulateTLABStatistics(total, 0, 1);
+        TLABStatistics reset;
+        buffer->AccumulateTLABStatistics(reset, 0, 1);
+        statistics = total.slowAllocations == 1 && total.refills == 2 &&
+                     total.refillWaste == tail && reset.slowAllocations == 0;
+        std::fprintf(stderr, "TLAB_REFILL_LIMIT_TARGET executed=1 refill=%zx start=%zx refilled=%d "
+                     "slow=%zu refills=%zu waste=%zu reset_slow=%zu statistics=%d\n",
+                     refill, finalBounds[2], refilled, total.slowAllocations, total.refills,
+                     total.refillWaste, reset.slowAllocations, statistics);
+    }
+    threads.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(retained);
+    GC_EXPECT_TRUE(refilled);
+    GC_EXPECT_TRUE(statistics);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif
