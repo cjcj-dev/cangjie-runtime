@@ -140,7 +140,9 @@ void AllocBuffer::ResizeTLAB(size_t capacity, double fallbackFraction, size_t ma
 size_t AllocBuffer::InitialRefillWasteLimit() const
 {
     constexpr size_t refillWasteFraction = 64;
-    return desiredTLABSize.load(std::memory_order_relaxed) / refillWasteFraction;
+    // HotSpot divides in HeapWords; preserve that rounding in byte units.
+    return (desiredTLABSize.load(std::memory_order_relaxed) / sizeof(uintptr_t) / refillWasteFraction) *
+           sizeof(uintptr_t);
 }
 
 // HotSpot threadLocalAllocBuffer.inline.hpp:90-97.
