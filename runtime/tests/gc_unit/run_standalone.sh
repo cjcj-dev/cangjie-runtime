@@ -248,19 +248,24 @@ esac
 
 TEST_DEFINES=()
 
-# Keep the standalone test translation units in the same compile-time
-# configuration as the product SO they bind. The default SO deliberately has
-# no GC-unit-only array hook; an MRT_GC_UNIT_TESTS SO must compile both integration
-# suites into this executable so a partial product configuration fails at link.
-nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
-if /usr/bin/grep -Eq \
-    'CJ_MRT_SetLargeArrayInitTestHooks' \
-    "$OUT/runtime-dynamic-symbols.txt"; then
+# Like HotSpot CompileGtest.gmk, inherit the linked product's compile-time
+# configuration. The published recipe is bound to both selected SO hashes;
+# a deleted test hook is not a configuration interface.
+PRODUCT_CONFIGURATION=$(python3 "$SRC/product_test_configuration.py" \
+  "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT")
+read -r SO_TESTABLE SO_GC_UNIT_TESTS <<<"$PRODUCT_CONFIGURATION"
+if [[ -n "${MRT_TESTABLE_INTERNALS:-}" && "$MRT_TESTABLE_INTERNALS" != "$SO_TESTABLE" ]]; then
+  echo "GC_UNIT_PRODUCT_CONFIGURATION_MISMATCH requested=$MRT_TESTABLE_INTERNALS product=$SO_TESTABLE" >&2
+  exit 2
+fi
+MRT_TESTABLE_INTERNALS=$SO_TESTABLE
+if [[ "$SO_GC_UNIT_TESTS" == 1 ]]; then
   TEST_DEFINES+=(-DMRT_GC_UNIT_TESTS=1)
   echo "GC_UNIT_PRODUCT_CONFIGURATION=MRT_GC_UNIT_TESTS"
 else
   echo "GC_UNIT_PRODUCT_CONFIGURATION=DEFAULT"
 fi
+nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
 if /usr/bin/grep -Eq 'PendingStalledAllocations' \
     "$OUT/runtime-dynamic-symbols.txt"; then
   STALL_PRODUCT_OBSERVE=1
@@ -646,6 +651,14 @@ if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   done
   echo "GATE_YOUNG_WEAK_PRODUCT_BINDING_OK elf=$OUT/cj_gc_unit"
 fi
+
+# Check the macro-gated registration before an unrelated tally can qualify
+# an executable with silently omitted tests. The manifest names existing
+# declarations; it never registers tests or changes their assertions.
+env LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  "$OUT/cj_gc_unit" --gtest_list_tests >"$OUT/configuration-registered.raw"
+python3 "$SRC/check_macro_registration.py" "$SO_GC_UNIT_TESTS" \
+  "$SRC/gc_unit_macro_tests.txt" "$OUT/configuration-registered.raw"
 
 # #711 D: LoadHealDeliveryProduct and its receipt manifest were removed with P16.
 
