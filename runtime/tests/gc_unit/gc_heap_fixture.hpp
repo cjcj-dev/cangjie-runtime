@@ -263,8 +263,13 @@ struct GcHeapFixture {
             (*ZGeneration::young()).reset_relocation_set();
             (*ZGeneration::old()).reset_relocation_set();
         }
-        // ~ZPage: the page livemaps go with the synthetic heap.
-        for (ZPage* region : {region0, region1}) {
+        // Relocation frees from-pages (ZGC zRelocate.cpp:1047; Heap::free_page
+        // drops the page-table entry before destroy, zHeap.cpp:498-502). The
+        // cached region0/region1 pointers do not survive that boundary.
+        // ZGC zHeap.inline.hpp:60 re-reads the current descriptor by address.
+        ZPage* const current0 = Heap::page(heapStart);
+        ZPage* const current1 = Heap::page(heapStart + ZGranuleSize);
+        for (ZPage* region : {current0, current1}) {
             if (region != nullptr) {
                 delete region->_scratch.retiredLivemap;
                 region->_scratch.retiredLivemap = nullptr;
@@ -273,11 +278,11 @@ struct GcHeapFixture {
         // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures
         // are mapped per test, so leaving their flags set before munmap makes
         // later tests observe young regions that no longer exist.
-        if (region0 != nullptr && region0->IsYoungRegion()) {
-            region0->reset(PageAge::old);
+        if (current0 != nullptr && current0->IsYoungRegion()) {
+            current0->reset(PageAge::old);
         }
-        if (region1 != nullptr && region1->IsYoungRegion()) {
-            region1->reset(PageAge::old);
+        if (current1 != nullptr && current1->IsYoungRegion()) {
+            current1->reset(PageAge::old);
         }
     }
 
