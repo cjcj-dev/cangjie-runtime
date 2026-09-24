@@ -75,19 +75,6 @@ var counter: Float64 = 0.0
 var prevGC = 0
 var o = Object()
 
-class TestNoGcRunning <: Measurement {
-    static var callCounter = 0
-    let result: Float64 = 0.0
-
-    public func setup() {
-        @Assert(!isGCRunning())
-    }
-
-    public func measure(): Float64 {
-        counter
-    }
-}
-
 @Test
 @Configure[explicitGC: Light]
 class BenchGCLight {
