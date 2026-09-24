@@ -7,6 +7,11 @@
 #include "Mutator/ThreadLocal.h"
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zThreadLocalData.hpp"
+#include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include <cstdio>
 #include <chrono>
 #include <thread>
@@ -325,6 +330,91 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, StoppedWorldCopiesOnlyRequestedObj
 GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, RunningWorldCopiesOnlyRequestedObject)
 {
     CheckMutatorRelocation(false);
+}
+
+// zGeneration.cpp:211 and zUncoloredRoot.inline.hpp:62-68: a young pause must
+// remap a plain root through the old forwarding table before it is read.
+static void CheckYoungPauseRemapsPlainRoot()
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager mutators;
+    InPlaceRemsetRuntime runtime(mutators);
+    CreateStandaloneHeap(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& heap = Heap::GetHeap();
+    auto& generation = heap.old();
+    GenerationSequenceFixture::Advance(generation);
+    if (heap.young().Workers() == nullptr) {
+        heap.young().InitializeWorkers(1);
+    }
+    heap.young().Workers()->set_active_workers(1);
+    if (generation.Workers() == nullptr) {
+        generation.InitializeWorkers(1);
+    }
+    generation.Workers()->set_active_workers(1);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(16);
+    type->SetAlign(8);
+    GCTib tib{};
+    tib.tag = SIGN_BIT;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZRelocationSetSelector selector(0.0);
+    ZPage* pages[2];
+    BaseObject* objects[2][2];
+    for (size_t i = 0; i < 2; ++i) {
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags);
+        GC_EXPECT_TRUE(pages[i] != nullptr);
+        for (size_t j = 0; j < 2; ++j) {
+            objects[i][j] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
+            objects[i][j]->SetClassInfo(type);
+            *reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(objects[i][j]) + 8) = 0x1104 + j;
+            GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], objects[i][j]));
+        }
+        ZPageTest::MakeRelocatable(*pages[i]);
+        selector.register_live_page(pages[i]);
+    }
+    selector.select();
+    generation.relocation_set().install(&selector);
+    ZRelocationSetIterator installed(&generation.relocation_set());
+    for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
+    ZForwarding* owner = forwarding_for_page(pages[0]);
+    GC_EXPECT_TRUE(owner != nullptr);
+    generation.set_phase(ZGenerationPhase::Relocate);
+    Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(parked != nullptr);
+    parked->SetManagedContext(false);
+    (void)parked->EnterSaferegion(false);
+    if (parked->GetGCData().storeGoodMask == 0) {
+        parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
+    }
+    ObjectRef* stale = parked->AddNativeFrameRoot(objects[0][0]);
+    ObjectRef* kept = parked->AddNativeFrameRoot(nullptr);
+    GC_EXPECT_TRUE(stale != nullptr && kept != nullptr);
+    const uintptr_t before = raw(stale->LoadPlain());
+    ZGlobalsPointers::flip_old_relocate_start();
+    heap.young().pause_mark_start();
+    const uintptr_t after = raw(stale->LoadPlain());
+    const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+    std::fprintf(stderr, "PLAIN_ROOT_REMAP_ASSERT_EXECUTED before=%#zx after=%#zx relocated=%#zx null_kept=%d\n",
+                 before, after, relocated, raw(kept->LoadPlain()) == 0);
+    GC_EXPECT_EQ(before, reinterpret_cast<uintptr_t>(objects[0][0]));
+    GC_EXPECT_NE(relocated, static_cast<MAddress>(0));
+    GC_EXPECT_NE(relocated, reinterpret_cast<MAddress>(objects[0][0]));
+    GC_EXPECT_EQ(after, relocated);
+    GC_EXPECT_EQ(raw(kept->LoadPlain()), static_cast<uintptr_t>(0));
+    parked->PopNativeFrameRootsTo(0);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(YoungPausePlainRoot, RemapsStaleRootBeforeMarkStart)
+{
+    CheckYoungPauseRemapsPlainRoot();
 }
 
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)

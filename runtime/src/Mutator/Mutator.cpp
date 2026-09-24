@@ -267,14 +267,16 @@ void Mutator::SuspendForSync()
 }
 
 
-// zVerify.cpp:323-342: verify only the roots whose watermark processing
-// has started, and never read frames still waiting for processing.
+// zVerify.cpp:329-340: a previous epoch's done bit is not a current address.
+// Only roots whose watermark processing has started for this epoch are readable,
+// and frames wait until that processing has completed.
 void Mutator::VisitProcessedRoots(const RootVisitor& visitor)
 {
-    if (!GetStackWatermark().IsDone() && GetStackWatermark().GetEpoch() == 0) { return; }
+    const uint32_t epoch = StackWatermark::epoch_id();
+    if (GetStackWatermark().GetEpoch() != epoch) { return; }
     VisitExceptionRoots(visitor);
     VisitNativeFrameRoots(visitor);
-    if (GetStackWatermark().IsDone()) { VisitStackRoots(visitor, visitor); }
+    if (GetStackWatermark().IsDone(epoch)) { VisitStackRoots(visitor, visitor); }
 }
 
 void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor)
