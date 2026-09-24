@@ -1212,7 +1212,7 @@ public:
 // ZGC zMark.cpp:371-392: select the static closure before VM enumeration.
 void ZMark::follow_object(BaseObject* object, bool finalizable)
 {
-    if (generation == MarkingStacks::MarkingGeneration::OLD) {
+    if (generation == MarkingStacks::MarkingGeneration::MAJOR) {
         if (finalizable) {
             ZMarkBarrierFollowOopClosure<true, ZGenerationIdOptional::old> closure;
             ZIterator::oop_iterate(object, &closure);
