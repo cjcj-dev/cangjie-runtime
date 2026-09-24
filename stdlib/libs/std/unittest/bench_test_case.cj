@@ -172,17 +172,6 @@ func measureInternal<T>(m: T, f:() -> Unit): Float64 where T <: Measurement{
     m.measure() - x
 }
 
-@When[env != "ohos"]
-func waitGCFinish() {
-    if (isGCRunning()) {
-        let gcCount = getGCCount()
-        while (getGCCount() <= gcCount) {}
-    }
-}
-
-@When[env == "ohos"]
-func waitGCFinish() { }
-
 class BenchRunner {
     var benchmark: BenchmarkWrapper = EmptyBenchmark()
     var measurements: ArrayList<BenchRawMeasurement> = ArrayList()
@@ -241,7 +230,6 @@ class BenchRunner {
     }
 
     private func ensureFullGcIfNecessary() {
-        waitGCFinish()
         if (!needFullGc) {
             return
         }
@@ -274,8 +262,6 @@ class BenchRunner {
     // Runs warmup and based on various warmup measurements selects best values for various parameters
     func warmupAndConfigure(): Unit {
         preWarmupConfig()
-
-        waitGCFinish()
 
         warmupAndEstimate()
         
@@ -475,8 +461,6 @@ Warning: Too many objects survive GC which causes unexpectedly long GC times.
     
         let gcCount = getGCCount()
         let dur = benchmark.measureLoopOnce(times, max, this.batchSize.end)
-        waitGCFinish()
-
         let gcPolluted = getGCCount() - gcCount
         let result = (Float64(times), dur, Float64(gcPolluted))
 
