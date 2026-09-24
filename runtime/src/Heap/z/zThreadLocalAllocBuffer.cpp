@@ -145,12 +145,17 @@ size_t AllocBuffer::InitialRefillWasteLimit() const
            sizeof(uintptr_t);
 }
 
+// HotSpot threadLocalAllocBuffer.cpp:68; convert HeapWords to byte units.
+size_t AllocBuffer::RefillWasteLimitIncrement()
+{
+    return 4 * sizeof(uintptr_t);
+}
+
 // HotSpot threadLocalAllocBuffer.inline.hpp:90-97.
 void AllocBuffer::RecordSlowAllocation(size_t objectSize)
 {
     (void)objectSize;
-    constexpr size_t wasteIncrement = 4 * sizeof(uintptr_t);
-    refillWasteLimit += wasteIncrement;
+    refillWasteLimit += RefillWasteLimitIncrement();
     ++tlabStatistics.slowAllocations;
 }
 

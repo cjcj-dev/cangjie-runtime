@@ -54,6 +54,7 @@ public:
 
     size_t RefillWasteLimit() const { return refillWasteLimit; }
     size_t InitialRefillWasteLimit() const;
+    static size_t RefillWasteLimitIncrement();
     void RecordSlowAllocation(size_t objectSize);
 
     size_t ComputeTLABSize(size_t objectSize, size_t maxSize) const;
