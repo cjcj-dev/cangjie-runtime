@@ -29,12 +29,23 @@ worker routing are owned by Q8, per advisor decision
 
 ## Product tests
 
-`run_gc_cause_gdb.sh` runs eight cases on the same standalone ELF and product SO.
-Allocations and RuntimeParam feed the actual director sampling entry. Minor-only
+`run_gc_cause_gdb.sh` runs nine cases on the same standalone ELF and product SO.
+Allocations and RuntimeParam feed the actual director sampling entry. Class
+instance sizes exclude TYPEINFO_PTR_SIZE while allocation sizes include it, so
+marking and allocation account for the same bytes (BaseObject::GetSize). Minor-only
 cases hold a major request in the product port and mark its product worker set
 active; the director obtains that state through its ordinary sampling path.
 The major allocation-rate case pauses actual warmup work and performs a real
-young collection to establish measured cost and lookahead inputs. No sampled
+young collection to establish measured cost and lookahead inputs.
+The proactive pair shares the same capacity-growth input: one observes the
+closed time gate, and one waits for the interval derived from completed product
+cycle statistics before scheduling the director. Both inspect the actual sample
+returned by `sample_stats`; the open case still requires PROACTIVE at the major
+driver and its asynchronous port. The closed case forbids PROACTIVE but allows
+other eligible causes (or an idle tick), so it does not invent a priority rule.
+ZGC anchors: zDirector.cpp:547-600 (eligibility), 612-646 (cause priority).
+A pause used to extend measured warmup time must occur after the old collection
+scope starts, rather than at the preceding `collect_old` call. No sampled
 statistics, rule return values, or dispatch instructions are written.
 
 The debugger reads the request entering collect and the message actually stored

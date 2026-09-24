@@ -8,6 +8,7 @@ and worker state using their public operations, as the busy-director matrix does
 """
 import gdb
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -17,7 +18,10 @@ ROOT = Path(os.environ['CAUSE_SOURCE_ROOT'])
 EXPECTED = {'major_timer': 'TIMER', 'minor_timer': 'TIMER',
             'warmup': 'WARMUP', 'high_usage': 'HIGH_USAGE',
             'allocation_rate': 'ALLOCATION_RATE', 'allocation_rate_static': 'ALLOCATION_RATE',
-            'major_allocation_rate': 'ALLOCATION_RATE', 'proactive': 'PROACTIVE'}[CASE]
+            'major_allocation_rate': 'ALLOCATION_RATE', 'proactive': 'PROACTIVE',
+            'proactive_time_closed': 'PROACTIVE'}[CASE]
+CLOSED = CASE == 'proactive_time_closed'
+PROACTIVE = CASE in ('proactive', 'proactive_time_closed')
 MINOR = CASE in ('minor_timer', 'high_usage', 'allocation_rate', 'allocation_rate_static')
 RESULTS = []
 DYNAMIC_CAUSES = []
@@ -55,9 +59,19 @@ def expect(tag, passed, **fields):
 
 
 class WarmupDelay(gdb.Breakpoint):
+    def __init__(self, spec, **kwargs):
+        # Resolve symbols before collection: debugger lookup time must not
+        # dominate the measured pause or the runner's fixed timeout.
+        self.cause_address = val('&MapleRuntime::ZDriver::_major->_gc_cause')
+        self.warmup = int(val('MapleRuntime::GC_REASON_WARMUP'))
+        self.delays = 0
+        super().__init__(spec, **kwargs)
+
     def stop(self):
-        if int(val('MapleRuntime::ZDriver::_major->_gc_cause')) == int(val('MapleRuntime::GC_REASON_WARMUP')):
-            # Extend a real measured old cycle; do not edit its statistics.
+        if int(self.cause_address.dereference()) == self.warmup:
+            # The old collection scope has started its real cycle timer.
+            # Delay here is recorded by at_collection_end, without statistics writes.
+            self.delays += 1
             time.sleep(0.15)
         return False
 
@@ -98,16 +112,36 @@ try:
     main = gdb.selected_thread()
     cmd('set scheduler-locking on')
     until('test_gc_director.cpp:' + str(ready))
-    if CASE in ('allocation_rate', 'allocation_rate_static', 'major_allocation_rate', 'proactive'):
-        if CASE == 'major_allocation_rate':
-            WarmupDelay('MapleRuntime::ZDriverMajor::collect_old', internal=True)
+    if CASE in ('allocation_rate', 'allocation_rate_static', 'major_allocation_rate', 'proactive', 'proactive_time_closed'):
+        if CASE == 'major_allocation_rate' or PROACTIVE:
+            warmup_delay = WarmupDelay('MapleRuntime::ZGenerationOld::concurrent_mark', internal=True)
         cmd('set scheduler-locking off')
         second = next(i + 1 for i, s in enumerate(tests) if 'const size_t nextSize =' in s)
         until('test_gc_director.cpp:' + str(second))
         emit('WARMUP_INPUT', completed=int(val('heap._old.cycleStats.warmupCycles')))
+        if CASE == 'major_allocation_rate' or PROACTIVE:
+            expect('ASSERT_MEASURED_WARMUP_PAUSES', warmup_delay.delays == 3, pauses=warmup_delay.delays)
+            warmup_delay.delete()
         cmd('set scheduler-locking on')
         second_ready = next(i + 1 for i, s in enumerate(tests) if 'CAUSE_SECOND_ALLOCATION_READY' in s)
         until('test_gc_director.cpp:' + str(second_ready))
+    if PROACTIVE:
+        # Read the real completed cycles. Python and TimeUtil::NanoSeconds use
+        # CLOCK_MONOTONIC on this host (TimeUtils.cpp). Only scheduling changes.
+        interval = 0.0
+        for generation in ('young', 'old'):
+            cycle = 'heap._' + generation + '.cycleStats'
+            for sequence in ('serial', 'parallel'):
+                interval += float(val(cycle + '.' + sequence + '.average')) + 3.290527 * math.sqrt(
+                    float(val(cycle + '.' + sequence + '.variance')))
+        interval *= 49.0  # ZGC zDirector.cpp:584-600
+        elapsed = (time.monotonic_ns() - int(val('heap._old.cycleStats.end'))) / 1e9
+        expect('ASSERT_PROACTIVE_TIME_CONSTRUCTED_CLOSED', interval > elapsed,
+               interval=interval, elapsed=elapsed)
+        if not CLOSED:
+            delay = max(0.0, interval - elapsed) + 0.05
+            emit('PROACTIVE_WAIT', seconds=delay)
+            time.sleep(delay)
     cmd('set $major = MapleRuntime::ZCollectedHeap::_collected_heap->_driver_major')
     cmd('set $minor = MapleRuntime::ZCollectedHeap::_collected_heap->_driver_minor')
     if MINOR:
@@ -129,6 +163,31 @@ try:
     if Path(product).resolve() != (Path(os.environ['GCV2_RUNTIME_LIB_DIR']) / 'libcangjie-runtime.so').resolve():
         raise RuntimeError('Loaded product identity mismatch: ' + str(product))
     emit('PRODUCT_IDENTITY', library=product, case=CASE, stack=cmd('bt'))
+    if PROACTIVE or CASE == 'major_allocation_rate':
+        # Inspect the actual sample consumed by start_gc, not a model request.
+        cmd('finish')
+        interval = 49.0 * sum(float(val('stats.' + generation + '_stats.cycle.' + field)) * weight
+            for generation in ('young', 'old')
+            for field, weight in (('serialTime', 1.0), ('serialTimeSd', 3.290527),
+                                  ('parallelTime', 1.0), ('parallelTimeSd', 3.290527)))
+        elapsed = float(val('stats.old_stats.cycle.timeSinceLast'))
+        used = int(val('stats.heap.used'))
+        threshold = int(val('stats.old_stats.stat_heap.usedAtRelocateEnd')) + int(
+            int(val('stats.heap.soft_max_heap_size')) * 0.10)
+        warm = bool(val('stats.old_stats.cycle.isWarm'))
+        if CASE == 'major_allocation_rate':
+            emit('MAJOR_ALLOCATION_INPUT',
+                 collections=int(val('stats.heap.total_collections')),
+                 old_start=int(val('stats.old_stats.general.total_collections_at_start')),
+                 old_used=int(val('stats.old_stats.general.used')),
+                 old_live=int(val('stats.old_stats.stat_heap.liveAtMarkEnd')),
+                 young_reclaimed=float(val('stats.young_stats.stat_heap.reclaimedAverage')),
+                 old_reclaimed=float(val('stats.old_stats.stat_heap.reclaimedAverage')))
+        opened = CASE == 'proactive'
+        expect('ASSERT_PROACTIVE_SAMPLED_TIME_GATE', warm and used >= threshold and
+               ((elapsed >= interval) if opened else (elapsed < interval)),
+               warm=warm, used=used, threshold=threshold, interval=interval,
+               elapsed=elapsed, expected_open=opened)
     if CASE == 'allocation_rate':
         DynamicEntry('MapleRuntime::ZDriverRequest::ZDriverRequest(MapleRuntime::GCReason, unsigned int, unsigned int)', internal=True)
     target = 'MapleRuntime::ZDriverMinor::collect' if MINOR else 'MapleRuntime::ZDriverMajor::collect'
@@ -145,9 +204,10 @@ try:
         port = '$minor->_port' if MINOR else '$major->_port'
         observed = int(val(port + '._message._cause'))
         expected = int(val('MapleRuntime::GC_REASON_' + EXPECTED))
-        expect('ASSERT_DIRECTOR_CAUSE', False, observed=observed, expected=expected,
-               dispatched=False, busy=bool(val(port + '._has_message')))
-        cmd('quit 1')
+        expect('ASSERT_DIRECTOR_CAUSE', CLOSED and not bool(val(port + '._has_message')),
+               observed=observed, expected=expected, dispatched=False,
+               busy=bool(val(port + '._has_message')), prohibited=CLOSED)
+        cmd('quit ' + ('0' if all(RESULTS) else '1'))
     expected_driver = not dispatch.is_valid()
     actual_minor = MINOR if expected_driver else not MINOR
     if dispatch.is_valid(): dispatch.delete()
@@ -158,7 +218,8 @@ try:
     observed = int(val('request._cause'))
     expected = int(val('MapleRuntime::GC_REASON_' + EXPECTED))
     stack = cmd('bt')
-    expect('ASSERT_DIRECTOR_CAUSE', observed == expected and expected_driver and 'ZDirector::run_thread' in stack,
+    cause_matches = observed != expected if CLOSED else observed == expected and expected_driver
+    expect('ASSERT_DIRECTOR_CAUSE', cause_matches and 'ZDirector::run_thread' in stack,
            observed=observed, expected=expected, expected_driver=expected_driver, stack=stack)
     if CASE == 'allocation_rate':
         valid_causes = [c for c in DYNAMIC_CAUSES if c != 0xffffffff]
