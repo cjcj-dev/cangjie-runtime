@@ -86,6 +86,7 @@ void AllocBuffer::FillTLAB(uintptr_t start, size_t size)
     tlab.end = start + size;
     tlabStatistics.allocatedSize += size;
     tlabRefills.fetch_add(1, std::memory_order_relaxed);
+    refillWasteLimit = InitialRefillWasteLimit();
 }
 
 ZPage* AllocBuffer::GetRegion() const
@@ -132,6 +133,30 @@ void AllocBuffer::ResizeTLAB(size_t capacity, double fallbackFraction, size_t ma
     const size_t allocation = static_cast<size_t>(fraction * capacity);
     const size_t desired = std::min(std::max(allocation / targetRefills, MinTLABSize), maxSize);
     desiredTLABSize.store(AlignUp(desired, size_t{8}), std::memory_order_relaxed);
+    refillWasteLimit = InitialRefillWasteLimit();
+}
+
+// HotSpot threadLocalAllocBuffer.cpp:62-68. This runtime stores byte sizes.
+size_t AllocBuffer::InitialRefillWasteLimit() const
+{
+    constexpr size_t refillWasteFraction = 64;
+    // HotSpot divides in HeapWords; preserve that rounding in byte units.
+    return (desiredTLABSize.load(std::memory_order_relaxed) / sizeof(uintptr_t) / refillWasteFraction) *
+           sizeof(uintptr_t);
+}
+
+// HotSpot threadLocalAllocBuffer.cpp:68; convert HeapWords to byte units.
+size_t AllocBuffer::RefillWasteLimitIncrement()
+{
+    return 4 * sizeof(uintptr_t);
+}
+
+// HotSpot threadLocalAllocBuffer.inline.hpp:90-97.
+void AllocBuffer::RecordSlowAllocation(size_t objectSize)
+{
+    (void)objectSize;
+    refillWasteLimit += RefillWasteLimitIncrement();
+    ++tlabStatistics.slowAllocations;
 }
 
 MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
@@ -143,6 +168,12 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
 MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
 {
     (void)allocType;
+    // HotSpot memAllocator.cpp:273-278: preserve a useful tail and let the
+    // allocation entry continue outside the TLAB.
+    if (tlab.end - tlab.top > RefillWasteLimit()) {
+        RecordSlowAllocation(totalSize);
+        return 0;
+    }
     // HotSpot memAllocator.cpp:282-296: retire before computing the refill;
     // the caller owns the outside-TLAB fallback for every slow-path failure.
     RetireTLAB(false);

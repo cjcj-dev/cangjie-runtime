@@ -13,7 +13,7 @@ trap 'rm -rf "$fixture"' EXIT
 unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
   GCV2_RUNTIME_OUTPUT_ROOT MRT_TESTABLE_INTERNALS \
   GC_UNIT_GATE_LANGUAGE_TESTS GC_UNIT_GATE_SKIP GC_UNIT_GATE_STATUS \
-  GC_UNIT_OUT GC_UNIT_TALLY_FILE \
+  GC_UNIT_OUT GC_UNIT_TALLY_FILE GC_UNIT_FILTER \
   MRT_GC_UNIT_OHOS_HOST GC_UNIT_OHOS_HOST_TEST_ELF \
   GC_UNIT_OHOS_HOST_RECEIPT GC_UNIT_OHOS_HEADER_ROOT_TOKEN
 # Synthetic gate arms likewise supply their own header root. The copied-pair
@@ -335,3 +335,38 @@ for mode in all only; do
   [[ "$host_rc" -eq 2 ]]
   /usr/bin/grep -qx 'REASON=LANGUAGE_HOST_RUNTIME_MISSING' "$fixture/host-missing-$mode.status"
 done
+
+# A completed tally cannot override the process status, and even a successful
+# process must have executed a nonempty suite. Run the real gate with controlled
+# runner outputs; each arm has its own output directory to force fresh execution.
+cp "$fixture/runtime/tests/gc_unit/run_standalone.sh" "$fixture/saved-runner.sh"
+contract_failures=0
+for arm in normal empty_success empty_failure process_failure; do
+  tests=1; suite_rc=0; expected_rc=0; expected_reason=LANGUAGE_DEFERRED
+  case "$arm" in
+    empty_success) tests=0; expected_rc=3; expected_reason=CPP_SUITE_EMPTY ;;
+    empty_failure) tests=0; suite_rc=1; expected_rc=1; expected_reason=CPP_SUITE_EXIT_FAILURE ;;
+    process_failure) suite_rc=7; expected_rc=1; expected_reason=CPP_SUITE_EXIT_FAILURE ;;
+  esac
+  cat >"$fixture/runtime/tests/gc_unit/run_standalone.sh" <<RUNNER
+#!/usr/bin/env bash
+# test_x.cpp
+printf '[========] $tests tests: $tests passed, 0 failed\n' >"\$GC_UNIT_TALLY_FILE"
+exit $suite_rc
+RUNNER
+  set +e
+  PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+    GC_UNIT_GATE_LANGUAGE_TESTS=defer GC_UNIT_OUT="$fixture/completion-$arm" \
+    GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/completion-$arm.status" \
+    bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/completion-$arm.log" 2>&1
+  gate_rc=$?
+  set -e
+  reason=$(sed -n 's/^REASON=//p' "$fixture/completion-$arm.status")
+  echo "COMPLETION_ASSERT arm=$arm suite_rc=$suite_rc tests=$tests gate_rc=$gate_rc reason=$reason expected_rc=$expected_rc expected_reason=$expected_reason"
+  if [[ "$gate_rc" != "$expected_rc" || "$reason" != "$expected_reason" ]]; then
+    echo "COMPLETION_FAIL arm=$arm"
+    contract_failures=$((contract_failures + 1))
+  fi
+done
+mv "$fixture/saved-runner.sh" "$fixture/runtime/tests/gc_unit/run_standalone.sh"
+[[ $contract_failures -eq 0 ]]

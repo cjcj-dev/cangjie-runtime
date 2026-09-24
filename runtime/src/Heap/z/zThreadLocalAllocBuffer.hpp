@@ -52,6 +52,11 @@ public:
     void FillTLAB(uintptr_t start, size_t size);
     void ClearRegion();
 
+    size_t RefillWasteLimit() const { return refillWasteLimit; }
+    size_t InitialRefillWasteLimit() const;
+    static size_t RefillWasteLimitIncrement();
+    void RecordSlowAllocation(size_t objectSize);
+
     size_t ComputeTLABSize(size_t objectSize, size_t maxSize) const;
     void AccumulateTLABStatistics(TLABStatistics& total, size_t used, size_t capacity);
     void ResizeTLAB(size_t capacity, double fallbackFraction, size_t maxSize);
@@ -77,6 +82,7 @@ private:
 
     // HotSpot ThreadLocalAllocBuffer: thread-owned statistics survive refills
     // and reset only at a young-cycle boundary.
+    size_t refillWasteLimit = 0;
     TLABStatistics tlabStatistics;
     TLABAllocationAverage tlabAllocationFraction;
     std::atomic<size_t> desiredTLABSize{ MinTLABSize };
