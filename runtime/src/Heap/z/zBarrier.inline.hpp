@@ -217,6 +217,16 @@ inline zaddress ZBarrier::promote_slow_path(zaddress addr)
 inline void ZBarrier::promote_barrier_on_young_oop_field(volatile zpointer* p)
 {
     const zpointer o = load_atomic(p);
+    // zObjArrayAllocator.cpp:146-158: a null that must catch the next store carries
+    // remembered bits 11 (color_null). store_good(null) is not store-bad, so the
+    // compiler fast path (zBarrierSetAssembler_x86.cpp:367-372) skips the buffer
+    // and the old slot never enters the remembered set.
+    if (is_null_any(o)) {
+        auto& field = *reinterpret_cast<RefField<>*>(const_cast<zpointer*>(p));
+        (void)field.CompareExchange(o, color_null(), std::memory_order_relaxed,
+                                    std::memory_order_relaxed, nullptr);
+        return;
+    }
     barrier(is_store_good_fast_path, promote_slow_path, ColorStoreGood, p, o);
 }
 
