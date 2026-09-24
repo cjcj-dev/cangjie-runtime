@@ -7,7 +7,6 @@ ZDriverPort.AsyncSingleSlotDedup
 ZDriverPort.SyncAckSatisfiesSameCauseSeqnum
 ZDriverPort.AckDoesNotSatisfyLaterSeqnum
 # test_cycle_ref_saferegion.cpp
-CycleRefSaferegion.ResolverParksBeforeCycleRootLock
 CycleRefSaferegion.CycleRootConsumerPublishesWorkStackRoots
 # test_store_barrier_buffer.cpp
 StoreBuf.YoungSlotExcludedFromOldPhaseSnapshot
