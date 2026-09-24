@@ -368,11 +368,14 @@ void InitializeFrameRootMap()
         else { put(12, 4); put(value, 8); }
     };
     // R13 is callee-saved index 2 (RegisterX86-64.h:78). Spill offset 2 → fp-16.
+    // PC 0 has no reg root so the younger frame can RecordCalleeSaved first.
+    // PC 16 names R13; VisitSingleSlotsRoot then heals that spill.
     var(0); var(0); var(4); var(2);
-    var(1); var(4); var(1); var(1); var(1);
+    var(2); var(4); var(1); var(1); var(1);
     if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) { var(0); var(0); }
     var(0);
-    put(0, 32); put(1, 4); put(0, 1); put(0, 1); put(0, 1);
+    put(0, 32); put(0, 4); put(0, 1); put(0, 1); put(0, 1);
+    put(16, 32); put(1, 4); put(0, 1); put(0, 1); put(0, 1);
     var(1); var(16);
     put(1u << 13, 16);
     var(0); var(8); var(0);
@@ -436,9 +439,13 @@ static void CheckRelocateStartExitRemapsFrameRoot()
 #if defined(__x86_64__) && defined(__linux__)
     InitializeFrameRootMap();
     const uintptr_t startIP = reinterpret_cast<uintptr_t>(frameRootMapImage.pc);
-    uintptr_t frameWords[8] = {};
-    frameWords[1] = reinterpret_cast<uintptr_t>(objects[0][0]);
-    frameWords[2] = startIP + 9;
+    uintptr_t younger[8] = {};
+    uintptr_t caller[8] = {};
+    younger[2] = reinterpret_cast<uintptr_t>(objects[0][0]);
+    younger[3] = startIP + 9;
+    younger[4] = reinterpret_cast<uintptr_t>(&caller[4]);
+    younger[5] = startIP + 16;
+    caller[3] = startIP + 9;
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(parked != nullptr);
     parked->SetManagedContext(true);
@@ -448,21 +455,21 @@ static void CheckRelocateStartExitRemapsFrameRoot()
     }
     auto& context = parked->GetUnwindContext();
     context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP));
-    context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frameWords[3]));
+    context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&younger[4]));
     context.anchorFA = nullptr;
-    const uintptr_t before = frameWords[1];
+    const uintptr_t before = younger[2];
     GC_EXPECT_EQ(before, reinterpret_cast<uintptr_t>(objects[0][0]));
     GC_EXPECT_EQ(owner->find(reinterpret_cast<MAddress>(objects[0][0])), static_cast<MAddress>(0));
     ZGlobalsPointers::flip_old_relocate_start();
     generation.set_phase(ZGenerationPhase::Relocate);
     StackWatermarkSet::on_safepoint(*parked);
-    const uintptr_t after = frameWords[1];
+    const uintptr_t after = younger[2];
     const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
     std::fprintf(stderr,
         "FRAME_ROOT_REMAP_ASSERT_EXECUTED startIP=%#zx before=%#zx after=%#zx relocated=%#zx reg=r13\n",
         startIP, before, after, relocated);
-    GC_EXPECT_TRUE(relocated != 0 && relocated != reinterpret_cast<MAddress>(objects[0][0]));
     GC_EXPECT_EQ(after, relocated);
+    GC_EXPECT_TRUE(relocated != 0 && relocated != reinterpret_cast<MAddress>(objects[0][0]));
     heap.young().pause_mark_start();
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 #else
