@@ -274,6 +274,9 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
         }
     };
 
+    if (!MapleRuntime::GCArguments::parse_vm_init_args(config.heapParam)) {
+        return E_ARGS;
+    }
     if (!MapleRuntime::GCArguments::initialize_heap_flags_and_sizes(config.heapParam)) {
         return E_ARGS;
     }

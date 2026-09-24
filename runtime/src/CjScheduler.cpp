@@ -748,6 +748,7 @@ static RuntimeParam InitRuntimeParam()
                 .processorNum = InitProcessorNum(),
             },
     };
+    CHECK_DETAIL(GCArguments::parse_vm_init_args(param.heapParam), "Invalid heap size arguments");
     CHECK_DETAIL(GCArguments::initialize_heap_flags_and_sizes(param.heapParam),
                  "Invalid heap size flags");
     return param;

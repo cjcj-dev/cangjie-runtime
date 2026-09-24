@@ -100,7 +100,7 @@ GCArguments::ArgsRange GCArguments::check_memory_size(size_t value, size_t minim
     return arg_in_range;
 }
 
-bool GCArguments::initialize_heap_flags_and_sizes(HeapParam& param)
+bool GCArguments::parse_vm_init_args(HeapParam& param)
 {
     size_t maximum = 0;
     size_t soft = 0;
@@ -128,6 +128,25 @@ bool GCArguments::initialize_heap_flags_and_sizes(HeapParam& param)
         LOG(RTLOG_ERROR, "Heap size conversion overflows bytes");
         return false;
     }
+    SoftMaxHeapSize.store(soft, std::memory_order_release);
+    return true;
+}
+
+bool GCArguments::initialize_heap_flags_and_sizes(HeapParam& param)
+{
+    size_t maximum = ZHeuristics::max_heap_size();
+    size_t soft = SoftMaxHeapSize.load(std::memory_order_acquire);
+    // HotSpot gc/shared/gcArguments.cpp:251-270: validate before alignment,
+    // then update the maximum flag before deriving the default soft maximum.
+    if (maximum < 2 * MB) {
+        LOG(RTLOG_ERROR, "Invalid cjHeapSize: too small maximum heap");
+        return false;
+    }
+    if (!CheckedRoundUpSize(maximum, ZGranuleSize, maximum)) {
+        LOG(RTLOG_ERROR, "Invalid cjHeapSize: maximum heap alignment overflows bytes");
+        return false;
+    }
+    ZHeuristics::set_max_heap_size(maximum);
     // gcArguments.cpp:282: the default soft flag first takes the hard limit.
     if (!param.softHeapSizeSet) {
         soft = maximum;

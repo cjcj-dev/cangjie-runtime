@@ -117,8 +117,8 @@ void CheckMaximumBytes(const char* input, size_t expected)
     const size_t capacity = Heap::GetHeap().GetMaxCapacity();
     const size_t expectedCapacity = (expected + ZGranuleSize - 1) / ZGranuleSize * ZGranuleSize;
     std::fprintf(stderr, "MAX_BYTES_ASSERT input=%s actual=%zu expected=%zu capacity=%zu expected_capacity=%zu\n",
-                 input, actual, expected, capacity, expectedCapacity);
-    GC_EXPECT_EQ(actual, expected);
+                 input, actual, expectedCapacity, capacity, expectedCapacity);
+    GC_EXPECT_EQ(actual, expectedCapacity);
     GC_EXPECT_EQ(capacity, expectedCapacity);
 }
 void CheckMaximumRejected(const char* input)
@@ -181,8 +181,8 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiKilobytes)
     params.gcParam.concGCThreads = 2;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     const size_t actual = ZHeuristics::max_heap_size();
-    std::fprintf(stderr, "MAX_API_ASSERT actual=%zu expected=%zu\n", actual, 65537UL * 1024);
-    GC_EXPECT_EQ(actual, 65537UL * 1024);
+    std::fprintf(stderr, "MAX_API_ASSERT actual=%zu expected=%zu\n", actual, 66UL * 1024 * 1024);
+    GC_EXPECT_EQ(actual, 66UL * 1024 * 1024);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiEnvironmentBytes)
@@ -197,8 +197,12 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiEnvironmentBytes)
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     const size_t actual = ZHeuristics::max_heap_size();
     const size_t capacity = Heap::GetHeap().GetMaxCapacity();
-    std::fprintf(stderr, "MAX_API_ENV_ASSERT actual=%zu expected=67108865 capacity=%zu\n", actual, capacity);
-    GC_EXPECT_EQ(actual, 67108865UL);
+    std::fprintf(stderr, "MAX_API_ENV_ASSERT actual=%zu expected=69206016 capacity=%zu\n", actual, capacity);
+    GC_EXPECT_EQ(actual, 66UL * 1024 * 1024);
     GC_EXPECT_EQ(capacity, 66UL * 1024 * 1024);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TooSmall) { CheckMaximumRejected("1M"); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, AlignmentOverflow) { CheckMaximumRejected("18446744073709551615"); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Minimum) { CheckMaximumBytes("2M", 2UL * 1024 * 1024); }
