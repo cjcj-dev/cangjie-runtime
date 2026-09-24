@@ -62,6 +62,13 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     if (finalizable) heap.GetFinalizerProcessor().RegisterFinalizer(fx.obj0);
     else handle = heap.RegisterExportRoot(cycle ? fx.obj1 : fx.obj0);
     if (young) {
+        if (oldReferent) {
+            // ZPage::is_object_strongly_live treats allocating pages as live.
+            // Start the old epoch before the minor phase so this old target
+            // is an unmarked survivor, not an implicitly-live allocation.
+            ScopedStopTheWorld pause("old epoch for young-reference test", false);
+            heap.old().mark_start();
+        }
         heap.young().set_phase(ZGenerationPhase::MarkComplete);
         YoungTypeSetter type(heap.young(), ZYoungType::minor);
         heap.young().pause_mark_start();
