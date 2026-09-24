@@ -3,6 +3,10 @@
 #include "gc_unittest.hpp"
 #include "CangjieRuntime.h"
 #include "RuntimeConfig.h"
+#include "Base/Log.h"
+#include <cstring>
+#include <string>
+#include <unistd.h>
 #include <cstdlib>
 #include <cstdio>
 
@@ -48,4 +52,45 @@ GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EmptyTableEnvironment)
     const size_t actual = CangjieRuntime::GetHeapParam().heapSize;
     std::printf("RUNTIME_CONFIG_HEAP actual_kib=%zu expected_kib=65536\n", actual);
     GC_EXPECT_EQ(actual, 64 * 1024UL);
+}
+
+namespace {
+void CheckHeapDumpPath(bool embedded, const char* environment, const char* expectedBase)
+{
+    using namespace MapleRuntime;
+    if (environment == nullptr) {
+        unsetenv("cjHeapDumpLog");
+    } else {
+        setenv("cjHeapDumpLog", environment, 1);
+    }
+    // Existing absolute directories: no temporary files or OOM trigger needed.
+    static const RuntimeConfigEntryV1 entries[] = {{"cjHeapDumpLog", "/usr/"}};
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    if (embedded) {
+        CJ_MRT_CjRuntimeInitWithConfigV1(entries, 1);
+    } else {
+        CJ_MRT_CjRuntimeInit();
+    }
+    CString actual;
+    Logger::GetLogPath("cjHeapDumpLog", actual);
+    const std::string expected = std::string(expectedBase) + "." + std::to_string(getpid());
+    std::printf("RUNTIME_CONFIG_HEAP_DUMP_PATH actual=%s expected=%s\n", actual.Str(), expected.c_str());
+    std::fflush(stdout);
+    GC_EXPECT_EQ(std::strcmp(actual.Str(), expected.c_str()), 0);
+}
+}
+
+// HotSpot heapDumper.cpp:2994 consumes the configured path. Exercise the real
+// product path consumer after startup; path parsing and validation stay intact.
+GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EmbeddedHeapDumpPath)
+{
+    CheckHeapDumpPath(true, nullptr, "/usr");
+}
+GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EnvironmentHeapDumpPath)
+{
+    CheckHeapDumpPath(false, "/usr/", "/usr");
+}
+GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EnvironmentOverridesEmbeddedHeapDumpPath)
+{
+    CheckHeapDumpPath(true, "/var/", "/var");
 }
