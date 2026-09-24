@@ -5,99 +5,62 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include <cstdio>
-#include <dlfcn.h>
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zAddress.inline.hpp"
-#include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
-#include "Mutator/Mutator.h"
-#include "Mutator/ThreadLocal.h"
+#include "Heap/z/zPage.inline.hpp"
+#include "Heap/z/zRemembered.hpp"
+#include "Heap/z/zRememberedSet.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "ObjectModel/RefField.inline.h"
-
-extern "C" void CJ_MCC_StoreBarrierOnHeapField(volatile MapleRuntime::zpointer* slot);
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-namespace {
-
-class InstalledMutatorScope final {
-public:
-    explicit InstalledMutatorScope(Mutator& mutator) : saved(ThreadLocal::GetMutator())
-    {
-        ThreadLocal::SetMutator(&mutator);
-    }
-    ~InstalledMutatorScope() { ThreadLocal::SetMutator(saved); }
-private:
-    Mutator* saved;
-};
-
-}
-
-using PromoteFn = void (*)(volatile zpointer*);
-
-PromoteFn ProductPromoteBarrier()
-{
-    void* so = dlopen("libcangjie-runtime.so", RTLD_NOLOAD | RTLD_NOW);
-    if (so == nullptr) {
-        so = dlopen("libcangjie-runtime.so", RTLD_NOW);
-    }
-    if (so == nullptr) {
-        return nullptr;
-    }
-    return reinterpret_cast<PromoteFn>(dlsym(
-        so, "_ZN12MapleRuntime8ZBarrier34promote_barrier_on_young_oop_fieldEPVNS_8zpointerE"));
-}
-
-// Product SO entry. dlopen(NOLOAD) selects the loaded runtime, not a local
-// weak copy emitted because another header pulled the inline definition in.
-GC_TEST(OldToYoung1102, PromotedNullIsStoreBadAndSlowStoreRemembersSlot)
+// ZGC zStoreBarrierBuffer.cpp:173-182. A store buffered before young-mark
+// start is too late for the bitmap that mark already published. The phase
+// flush must scan that old slot and remember it, so the next young mark still
+// resolves the young referent after the remembered-set flip.
+GC_TEST(OldToYoung1102, YoungMarkPhaseFlushRemembersOldToYoungSlot)
 {
     GcHeapFixture fx;
-    RememberedSet rs;
-    rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
-    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    field.StoreColoured(zpointer::null);
-    PromoteFn promote = ProductPromoteBarrier();
-    std::fprintf(stderr, "OLD_TO_YOUNG_1102_PROMOTE_FN fn=%p\n", reinterpret_cast<void*>(promote));
-    if (promote == nullptr) {
-        GC_EXPECT_TRUE(false);
-        return;
-    }
-    promote(reinterpret_cast<volatile zpointer*>(&field));
-    const zpointer promoted = field.GetFieldValue();
-    const zpointer storeGoodNull = ZAddress::store_good(zaddress::null);
-    const bool promotedBad = (raw(promoted) & ::g_cjStoreBadMask) != 0;
-    const bool storeGoodNotBad = (raw(storeGoodNull) & ::g_cjStoreBadMask) == 0;
-    const bool colored = promoted == color_null();
-    std::fprintf(stderr, "OLD_TO_YOUNG_1102_PROMOTED raw=%zx bad=%d store_good_null_not_bad=%d colored=%d\n",
-                 raw(promoted), promotedBad, storeGoodNotBad, colored);
-
-    Mutator mutator;
-    InstalledMutatorScope installed(mutator);
-    auto* buffer = ThreadLocal::GetGCData().storeBarrierBuffer;
-    buffer->clear();
-    buffer->Initialize(::g_cjStoreGoodMask);
-    CJ_MCC_StoreBarrierOnHeapField(reinterpret_cast<volatile zpointer*>(&field));
-    buffer->Flush();
-    const bool remembered = SlotPageRemembered(reinterpret_cast<MAddress>(&field));
-    std::fprintf(stderr, "OLD_TO_YOUNG_1102_REMEMBERED remembered=%d\n", remembered);
-    GC_EXPECT_TRUE(promotedBad && storeGoodNotBad && colored && remembered);
-}
-
-GC_TEST(OldToYoung1102, PromotedStoreGoodYoungTargetEntersRemset)
-{
-    GcHeapFixture fx;
+    fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
+
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreGoodPointer(fx.obj1));
-    Heap::GetHeap().page_allocator().RememberPromotedObject(fx.obj0);
-    const bool remembered = SlotPageRemembered(reinterpret_cast<MAddress>(&field));
-    std::fprintf(stderr, "OLD_TO_YOUNG_1102_PROMOTE_YOUNG remembered=%d young=%d\n",
-                 remembered, fx.region1->IsYoungRegion());
-    GC_EXPECT_TRUE(remembered && fx.region1->IsYoungRegion());
+    const MAddress slot = reinterpret_cast<MAddress>(&field);
+
+    StoreBarrierBuffer buffer;
+    buffer.Initialize(::g_cjStoreGoodMask);
+    buffer.add(slot, field.GetFieldValue());
+    buffer.lastProcessedColor = ::g_cjStoreGoodMask ^ ZPointerMarkedYoungMask;
+
+    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+    const auto phaseBefore = old.GcPhase();
+    old.set_phase(ZGenerationPhase::MarkComplete);
+    buffer.on_new_phase();
+    old.set_phase(ZGenerationPhase::Mark);
+
+    const bool published = SlotPageRemembered(slot);
+    ZRememberedSet::flip();
+    const bool scanned = Heap::GetHeap().remembered().scan_page_and_clear_remset(fx.region0);
+    ZRememberedSet::flip();
+    old.set_phase(phaseBefore);
+
+    const zaddress resolved = ZBarrier::load_barrier_on_oop_field(reinterpret_cast<volatile zpointer*>(&field));
+    BaseObject* target = to_object(resolved);
+    ZPage* page = Heap::page(reinterpret_cast<MAddress>(target));
+    std::fprintf(stderr,
+                 "OLD_TO_YOUNG_1102_RESOLVED published=%d scanned=%d target=%p young=%p page=%p\n",
+                 published, scanned, static_cast<void*>(target), static_cast<void*>(fx.obj1),
+                 static_cast<void*>(page));
+    std::fflush(stderr);
+    GC_EXPECT_TRUE(published && scanned && target == fx.obj1 && page != nullptr && page->IsYoungRegion());
 }

@@ -168,11 +168,7 @@ static void UpdateRemsetPromotedFilterAndRemapPerField(RefField<>& field)
     const zpointer ptr = field.GetFieldValue();
     CHECK_DETAIL(ZPointer::is_old_load_good(ptr), "promoted field must be old load-good");
     if (ZPointer::is_store_good(ptr)) {
-        // remember() is a no-op while the holder is young (zBarrier.inline.hpp:729-732).
-        // A store-good young target installed before promotion has no remset entry yet.
-        if (!is_null_any(ptr)) {
-            AddRemsetIfYoung(p, ZPointer::uncolor(ptr));
-        }
+        // ZGC zRelocate.cpp:747-749: store-good already has a remset entry.
         return;
     }
     if (ZPointer::is_load_good(ptr)) {
@@ -214,15 +210,7 @@ static void RemapAndMaybeAddRemset(RefField<>& field)
     volatile zpointer* const p = reinterpret_cast<volatile zpointer*>(&field);
     const zpointer ptr = field.GetFieldValue();
     if (ZPointer::is_store_good(ptr)) {
-        // Same hole as update_remset_promoted: the store happened on a young holder.
-        if (!is_null_any(ptr)) {
-            const zaddress young = ZPointer::uncolor(ptr);
-            ZPage* target = Heap::page(untype(young));
-            ZPage* holder = Heap::page(reinterpret_cast<MAddress>(p));
-            if (target != nullptr && target->IsYoungRegion() && holder != nullptr && !holder->IsYoungRegion()) {
-                holder->remember(p);
-            }
-        }
+        // ZGC zRelocate.cpp:1230-1232: store-good already has a remset entry.
         return;
     }
     const zaddress address = ZBarrier::load_barrier_on_oop_field_preloaded(p, ptr);
