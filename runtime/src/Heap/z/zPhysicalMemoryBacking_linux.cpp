@@ -11,6 +11,7 @@
 // safe fetch: the tmpfs compat touch is a plain volatile read); os::Linux
 // NUMA/THP helpers are the underlying syscalls.
 
+#include "RuntimeConfig.h"
 #include "Heap/z/zPhysicalMemoryBacking_linux.hpp"
 
 #include <cerrno>
@@ -290,7 +291,7 @@ int ZPhysicalMemoryBacking::create_file_fd(const char* name) const {
 }
 
 int ZPhysicalMemoryBacking::create_fd(const char* name) const {
-  if (getenv("cjAllocateHeapAt") == nullptr) {
+  if (GetRuntimeConfigValue("cjAllocateHeapAt") == nullptr) {
     // If the path is not explicitly specified, then we first try to create a memfd file
     // instead of looking for a tmpfd/hugetlbfs mount point. Note that memfd_create() might
     // not be supported at all (requires kernel >= 3.17), or it might not support large

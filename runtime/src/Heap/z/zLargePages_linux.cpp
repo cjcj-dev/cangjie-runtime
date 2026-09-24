@@ -11,6 +11,7 @@
 // HugePages::shmem_thp_info() is the /sys/kernel/mm/transparent_hugepage/
 // shmem_enabled file (hugepages.cpp ShmemTHPSupport::scan_os).
 
+#include "RuntimeConfig.h"
 #include "Heap/z/zLargePages.hpp"
 
 #include <cstdio>
@@ -58,7 +59,7 @@ static bool shmem_thp_is_forced() {
 }
 
 static bool env_flag(const char* name) {
-  const char* const value = getenv(name);
+  const char* const value = GetRuntimeConfigValue(name);
   return value != nullptr && strcmp(value, "1") == 0;
 }
 

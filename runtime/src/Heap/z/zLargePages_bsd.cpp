@@ -6,6 +6,7 @@
 
 // ZGC os/bsd/gc/z/zLargePages_bsd.cpp:27-32.
 
+#include "RuntimeConfig.h"
 #include "Heap/z/zLargePages.hpp"
 
 #include <cstdlib>
@@ -15,7 +16,7 @@ namespace MapleRuntime {
 
 void ZLargePages::pd_initialize() {
   _os_enforced_transparent_mode = false;
-  const char* const value = getenv("cjUseLargePages");
+  const char* const value = GetRuntimeConfigValue("cjUseLargePages");
   if (value != nullptr && strcmp(value, "1") == 0) {
     _state = Explicit;
   } else {

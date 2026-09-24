@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "RuntimeConfig.h"
 #include "StackManager.h"
 #include <cstdint>
 #include <cstring>
@@ -201,7 +202,7 @@ void StackManager::VisitStackPtrMap(const UnwindContext& topFrame, const StackPt
 
 void StackManager::InitStackGrowConfig()
 {
-    auto cjStackGrow = std::getenv("cjStackGrow");
+    auto cjStackGrow = GetRuntimeConfigValue("cjStackGrow");
     if (cjStackGrow == nullptr) {
         return;
     }

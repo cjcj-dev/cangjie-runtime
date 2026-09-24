@@ -7,6 +7,7 @@
 // ZGC os/linux/gc/z/zMountPoint_linux.cpp:37-158. AllocateHeapAt (a HotSpot
 // flag) arrives here as the cjAllocateHeapAt environment variable.
 
+#include "RuntimeConfig.h"
 #include "Heap/z/zMountPoint_linux.hpp"
 #include "Heap/z/zArray.inline.hpp"
 
@@ -24,7 +25,7 @@ namespace MapleRuntime {
 #define PROC_SELF_MOUNTINFO        "/proc/self/mountinfo"
 
 ZMountPoint::ZMountPoint(const char* filesystem, const char** preferred_mountpoints) {
-  const char* const allocate_heap_at = getenv("cjAllocateHeapAt");
+  const char* const allocate_heap_at = GetRuntimeConfigValue("cjAllocateHeapAt");
   if (allocate_heap_at != nullptr) {
     // Use specified path
     _path = strdup(allocate_heap_at);

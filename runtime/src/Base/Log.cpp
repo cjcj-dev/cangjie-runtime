@@ -19,6 +19,7 @@
 #include "os/Path.h"
 #include "securec.h"
 #include "Base/LogFile.h"
+#include "RuntimeConfig.h"
 namespace MapleRuntime {
 namespace {
 // Feed the crash-signature assert= slot. FAIL is recorded too so CHECK_DETAIL's
@@ -137,7 +138,7 @@ bool IsHaveCommandInjection(const CString& logPath)
 
 void Logger::GetLogPath(const char* env, CString& logPath)
 {
-    const char* envPath = ::getenv(env);
+    const char* envPath = GetRuntimeConfigValue(env);
     if (envPath == nullptr) {
         return;
     }
