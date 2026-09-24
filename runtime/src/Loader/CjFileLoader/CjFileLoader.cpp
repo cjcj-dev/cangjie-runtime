@@ -21,6 +21,8 @@
 #include "Mutator/Handshake.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
+#include "Mutator/ThreadSMR.h"
+#include <unordered_map>
 #include "ObjectManager.inline.h"
 #include "TypeInfoManager.h"
 #include "UnwindStack/GcStackInfo.h"
@@ -780,41 +782,83 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
 {
     class ActiveImageClosure final : public HandshakeClosure {
     public:
-        explicit ActiveImageClosure(Uptr image) : HandshakeClosure("ELF active-image preflight"), imageAddress(image) {}
+        ActiveImageClosure(Uptr image, const ThreadsListHandle& threads)
+            : HandshakeClosure("ELF active-image preflight"), imageAddress(image)
+        {
+            for (size_t i = 0; i < threads.length(); ++i) {
+                scanned.emplace(threads.thread_at(i), false);
+            }
+            remaining = scanned.size();
+        }
 
         void do_thread(ThreadLocalData* tls) override
         {
-            Mutator* mutator = tls->mutator;
-            if (active.load(std::memory_order_relaxed) || mutator == nullptr || !mutator->IsManagedContext()) {
-                return;
-            }
-            ElfUnloadQuiescence::ReadScope metadataReader;
-            GCStackInfo stackInfo(&mutator->GetUnwindContext());
-            stackInfo.FillInStackTrace();
-            for (const FrameInfo& frame : stackInfo.GetStack()) {
-                Uptr startPC = reinterpret_cast<Uptr>(frame.GetFuncStartPC());
-                Uptr framePC = reinterpret_cast<Uptr>(frame.mFrame.GetIP());
-                if (ElfUnloadQuiescence::IsAddressInImage(startPC, imageAddress) ||
-                    ElfUnloadQuiescence::IsAddressInImage(framePC, imageAddress)) {
-                    active.store(true, std::memory_order_relaxed);
-                    return;
-                }
+            // The handshake protects a running participant on its carrier.
+            // Membership comes from the logical task snapshot, never from TLS.
+            Scan(tls->mutator, false);
+        }
+
+        void ScanSafeThreads()
+        {
+            for (const auto& entry : scanned) {
+                Scan(entry.first, true);
             }
         }
 
-        bool HasActiveFrames() const { return active.load(std::memory_order_relaxed); }
+        bool IsComplete() const { return active || remaining == 0; }
+        bool HasActiveFrames() const { return active; }
 
     private:
+        void Scan(Mutator* mutator, bool requireSafe)
+        {
+            std::lock_guard<std::mutex> resultLock(lock);
+            auto it = scanned.find(mutator);
+            if (active || it == scanned.end() || it->second) { return; }
+            mutator->MutatorLock();
+            // Pairs with DoLeaveSaferegion: a parked participant cannot resume
+            // while its saved frames are being inspected by this executor.
+            if (requireSafe && !mutator->InSaferegion()) {
+                mutator->MutatorUnlock();
+                return;
+            }
+            if (mutator->IsManagedContext()) {
+                ElfUnloadQuiescence::ReadScope metadataReader;
+                GCStackInfo stackInfo(&mutator->GetUnwindContext());
+                stackInfo.FillInStackTrace();
+                for (const FrameInfo& frame : stackInfo.GetStack()) {
+                    Uptr startPC = reinterpret_cast<Uptr>(frame.GetFuncStartPC());
+                    Uptr framePC = reinterpret_cast<Uptr>(frame.mFrame.GetIP());
+                    if (ElfUnloadQuiescence::IsAddressInImage(startPC, imageAddress) ||
+                        ElfUnloadQuiescence::IsAddressInImage(framePC, imageAddress)) {
+                        active = true;
+                        break;
+                    }
+                }
+            }
+            it->second = true;
+            --remaining;
+            mutator->MutatorUnlock();
+        }
+
         const Uptr imageAddress;
-        std::atomic<bool> active { false };
+        std::unordered_map<Mutator*, bool> scanned;
+        std::mutex lock;
+        size_t remaining = 0;
+        bool active = false;
     };
 
-    // Like zGeneration.cpp:1352-1358, rendezvous with mutators through
-    // handshake processing, including native threads processed by the caller.
-    // This preflight must precede UnloadScope's metadata admission closure.
+    // zStackWatermark.cpp:43 / zNMethod.cpp:388: on-stack code stays alive,
+    // including unmounted tasks. Cangjie saves these stacks on logical Mutators
+    // rather than heap stackChunks, so retain their complete SMR membership.
     ScopedEnterSaferegion enterSaferegion(false);
-    ActiveImageClosure closure(baseFile->GetFileMetaAddr());
-    Handshake::execute(&closure);
+    ThreadsListHandle threads;
+    ActiveImageClosure closure(baseFile->GetFileMetaAddr(), threads);
+    for (;;) {
+        closure.ScanSafeThreads();
+        if (closure.IsComplete()) { break; }
+        Handshake::execute(&closure);
+        if (closure.IsComplete()) { break; }
+    }
     return closure.HasActiveFrames();
 }
 
