@@ -32,27 +32,35 @@ private:
 namespace {
 // Enter the old product mark phase with a weak-only referent. Discovery is
 // observed by consuming the product queue, never by calling discover_reference.
-void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, size_t workers = 1)
+void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, size_t workers = 1,
+                          bool oldReferent = false, bool cycle = false)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager manager;
     DiscoveryRuntime runtime(manager);
     GcHeapFixture fx;
     fx.region0->reset(young ? PageAge::eden : PageAge::old);
-    fx.region1->reset(young ? PageAge::eden : PageAge::old);
+    fx.region1->reset(young && !oldReferent ? PageAge::eden : PageAge::old);
     fx.region0->SetRegionRole(ZPageRole::RecentFull);
     fx.region1->SetRegionRole(ZPageRole::RecentFull);
+    alignas(TypeInfo) unsigned char targetTypeStorage[sizeof(TypeInfo)];
+    std::memcpy(targetTypeStorage, fx.typeInfo, sizeof(TypeInfo));
+    auto* targetType = reinterpret_cast<TypeInfo*>(targetTypeStorage);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(targetTypeStorage), sizeof(targetTypeStorage));
+    fx.obj1->SetClassInfo(targetType);
     if (!strong) fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
     auto& referent = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(StoreGoodPointer(fx.obj1));
-    HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE).StoreColoured(zpointer::null);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE)
+        .StoreColoured(cycle ? StoreGoodPointer(fx.obj0) : zpointer::null);
     auto& heap = Heap::GetHeap();
     heap.young().InitializeWorkers(workers);
     heap.old().InitializeWorkers(workers);
     heap.old().set_phase(ZGenerationPhase::Relocate);
     U64 handle = 0;
     if (finalizable) heap.GetFinalizerProcessor().RegisterFinalizer(fx.obj0);
-    else handle = heap.RegisterExportRoot(fx.obj0);
+    else handle = heap.RegisterExportRoot(cycle ? fx.obj1 : fx.obj0);
     if (young) {
         heap.young().set_phase(ZGenerationPhase::MarkComplete);
         YoungTypeSetter type(heap.young(), ZYoungType::minor);
@@ -60,9 +68,9 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
         heap.young().concurrent_mark();
     } else {
         {
-        ScopedStopTheWorld pause("reference discovery mark-start", false);
-        heap.old().mark_start();
-    }
+            ScopedStopTheWorld pause("reference discovery mark-start", false);
+            heap.old().mark_start();
+        }
         heap.old().concurrent_mark();
     }
     const bool targetStrong = fx.region1->is_object_strongly_live(from_object(fx.obj1));
@@ -79,9 +87,10 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
         });
     }
     std::fprintf(stderr,
-        "MARK1036_TARGET finalizable=%d strong=%d young=%d workers=%zu discovered=%zu target_live=%d target_strong=%d cleared=%d\n",
-        finalizable, strong, young, workers, discovered, targetLive, targetStrong, cleared);
-    GC_EXPECT_TRUE((strong || young) ? (targetStrong && targetLive && !cleared && discovered == 0) :
+        "MARK1036_TARGET finalizable=%d strong=%d young=%d workers=%zu old_referent=%d cycle=%d discovered=%zu target_live=%d target_strong=%d cleared=%d\n",
+        finalizable, strong, young, workers, oldReferent, cycle, discovered, targetLive, targetStrong, cleared);
+    GC_EXPECT_TRUE(oldReferent ? (!targetStrong && !targetLive && !cleared && discovered == 0) :
+        (strong || young || cycle) ? (targetStrong && targetLive && !cleared && discovered == 0) :
         finalizable ? (!targetStrong && targetLive && !cleared && discovered == 0) :
                       (!targetStrong && !targetLive && cleared && discovered == 1));
 }
@@ -111,4 +120,13 @@ GC_OTHER_VM_TEST(MarkDiscovery1036, YoungWeakReferentMultipleWorkers)
 GC_OTHER_VM_TEST(MarkDiscovery1036, OldWeakReferentMultipleWorkers)
 {
     RunMarkDiscovery1036(false, false, false, 2);
+}
+
+GC_OTHER_VM_TEST(MarkDiscovery1036, YoungReferenceToOldReferentNotDiscovered)
+{
+    RunMarkDiscovery1036(false, false, true, 1, true);
+}
+GC_OTHER_VM_TEST(MarkDiscovery1036, StronglyLiveReferentNotDiscovered)
+{
+    RunMarkDiscovery1036(false, false, false, 1, false, true);
 }

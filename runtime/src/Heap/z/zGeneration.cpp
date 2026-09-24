@@ -802,7 +802,6 @@ void ZGeneration::StopWorkers()
 namespace MapleRuntime {
 
 
-// ZGC zGeneration.cpp:1296-1302: policy access belongs to the old generation.
 // ZGC zGeneration.inline.hpp:170-172. The native finalizer owner stores
 // the old generation's existing reference processor.
 ReferenceDiscoverer* ZGenerationOld::reference_discoverer()
@@ -810,6 +809,7 @@ ReferenceDiscoverer* ZGenerationOld::reference_discoverer()
     return &Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
 }
 
+// ZGC zGeneration.cpp:1296-1302: policy access belongs to the old generation.
 void ZGenerationOld::set_soft_reference_policy(bool clear)
 {
     Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().set_soft_reference_policy(clear);
