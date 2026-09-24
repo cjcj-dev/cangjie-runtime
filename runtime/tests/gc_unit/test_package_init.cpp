@@ -836,6 +836,7 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, DirectUnloadWaitsForPostUnlinkObserver)
     auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
     loader->AddLoadedFiles(file);
     loader->RegisterLoadFile(file->GetFileMetaAddr());
+    const Uptr imageAddress = file->GetFileMetaAddr();
     arm([]() {});
 
     std::atomic<bool> ready { false }, activate { false }, active { false }, release { false };
@@ -877,11 +878,13 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, DirectUnloadWaitsForPostUnlinkObserver)
         std::this_thread::yield();
     }
     const bool rendezvousPending = state.load(std::memory_order_acquire)->has_operation();
-    Target("rendezvous-before-purge", rendezvousPending && !closed.load(std::memory_order_acquire));
+    Target("rendezvous-before-purge", rendezvousPending && !closed.load(std::memory_order_acquire) &&
+           ElfUnloadQuiescence::IsAddressInImage(imageAddress, imageAddress));
     release.store(true, std::memory_order_release);
     observer.join();
     Target("rendezvous-close-after-observer", Await(closed));
     closer.join();
+    Target("rendezvous-image-purged", !ElfUnloadQuiescence::IsAddressInImage(imageAddress, imageAddress));
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
