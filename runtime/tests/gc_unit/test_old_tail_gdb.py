@@ -43,8 +43,22 @@ try:
     fixture = 'GcDirector.ProductWarmupStopsAfterThreeCycles'
     cmd('set environment GC_UNIT_FILTER ' + fixture)
     cmd('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
-    gdb.Breakpoint('test_gc_director.cpp:121', temporary=True)
+    fixture_source = Path(os.environ['DIRECTOR_SOURCE']).parents[3].joinpath(
+        'tests/gc_unit/test_gc_director.cpp').read_text().splitlines()
+    fixture_name = 'GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)'
+    start = next(i for i, line in enumerate(fixture_source) if fixture_name in line)
+    init_line = next(i + 1 for i in range(start + 1, len(fixture_source))
+                     if 'GC_EXPECT_EQ(InitCJRuntime' in fixture_source[i])
+    init = gdb.Breakpoint('test_gc_director.cpp:' + str(init_line), temporary=True)
     cmd('run')
+    location = gdb.selected_frame().find_sal()
+    at_init = (not init.is_valid() and location.symtab is not None and
+               Path(location.symtab.filename).name == 'test_gc_director.cpp' and
+               location.line == init_line)
+    emit('ASSERT_FIXTURE_INIT_BOUNDARY', actual=location.line, expected=init_line,
+         passed=at_init)
+    if not at_init:
+        raise RuntimeError('Fixture did not stop before InitCJRuntime')
     cmd('set var params.gcParam.backupGCInterval=1')
     cmd('set var params.gcParam.concGCThreads=2')
     cmd('set var params.gcParam.youngGCThreads=2')
