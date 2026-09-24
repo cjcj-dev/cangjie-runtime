@@ -806,6 +806,13 @@ void ZGeneration::StopWorkers()
 namespace MapleRuntime {
 
 
+// ZGC zGeneration.inline.hpp:170-172. The native finalizer owner stores
+// the old generation's existing reference processor.
+ReferenceDiscoverer* ZGenerationOld::reference_discoverer()
+{
+    return &Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
+}
+
 // ZGC zGeneration.cpp:1296-1302: policy access belongs to the old generation.
 void ZGenerationOld::set_soft_reference_policy(bool clear)
 {
@@ -1028,9 +1035,9 @@ public:
     }
 };
 
-void ZRelocate::RemapYoungRoots()
+void ZGenerationOld::remap_young_roots()
 {
-    ZWorkers& workers = *Heap::GetHeap().old().Workers();
+    ZWorkers& workers = *Workers();
     const uint32_t previous = workers.active_workers();
     const uint32_t requested = std::min(std::max(Heap::GetHeap().young().Workers()->active_workers() + previous,
                                                     uint32_t{1}), ZOldGCThreads);
@@ -1044,7 +1051,7 @@ void ZRelocate::RemapYoungRoots()
 void ZGenerationOld::concurrent_remap_young_roots()
 {
     ZStatTimerOld timer(ZPhaseConcurrentRemapRootsOld);
-    ZRelocate::RemapYoungRoots();
+    remap_young_roots();
 }
 
 void ZGenerationOld::pause_relocate_start()

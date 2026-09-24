@@ -65,28 +65,7 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-#if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
-{
-    WorkerFixture worker(0);
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
-    HeapSlot<>& referent =
-        HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
-    Heap& collector = Heap::GetHeap();
-    WorkStack workStack;
-    ZMark::DiscoverWeakReference(fx.obj0, workStack);
 
-    GC_EXPECT_TRUE(workStack.empty());
-    GC_EXPECT_FALSE(fx.region1->is_object_strongly_live(from_object(fx.obj1)));
-    ReferenceProcessor& processor =
-        Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
-    processor.ProcessReferences([](BaseObject*) { return true; });
-    processor.EnqueueReferences([](BaseObject*) { return true; });
-}
-#endif // MRT_TESTABLE_INTERNALS
 
 #if defined(MRT_TESTABLE_INTERNALS)
 

@@ -41,7 +41,7 @@ public:
     {
         // Match the eager product ordering before the direct TraceHeap fixture.
         // Full driver-entry coverage lives in RawRemapYoungProduct.
-        ZRelocate::RemapYoungRoots();
+        Heap::GetHeap().old().remap_young_roots();
     }
     static void BindNativeRootFixture(Heap& collector, uint32_t workers = 1)
     {
@@ -359,7 +359,7 @@ GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
     heap.young().relocate().relocate(&heap.young().relocation_set());
     const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
-    ZRelocate::RemapYoungRoots();
+    Heap::GetHeap().old().remap_young_roots();
     const uintptr_t observed = raw(slot->LoadPlain());
     std::fprintf(stderr, "REMAP_YOUNG_ROOTS_THREAD from=%p observed=%#lx expected=%#lx\n", from, observed, expected);
     GC_EXPECT_EQ(observed, expected);

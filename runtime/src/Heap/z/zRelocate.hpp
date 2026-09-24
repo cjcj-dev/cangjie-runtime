@@ -179,7 +179,6 @@ public:
     void relocate(ZRelocationSet* relocation_set);
     static void UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
     static bool IsFromObject(BaseObject* object);
-    static void RemapYoungRoots();
     static void StartRelocationTasks(ZGenerationId generation);
 
     explicit ZRelocate(ZGeneration* generation) : generation(generation) {}

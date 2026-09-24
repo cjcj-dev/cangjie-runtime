@@ -146,6 +146,25 @@ bool ReferenceProcessor::should_discover(BaseObject* reference, ReferenceType ty
     if (type != ReferenceType::WEAK && type != ReferenceType::FINAL) {
         return false;
     }
+    if (type == ReferenceType::WEAK) {
+        // ZGC zReferenceProcessor.cpp:174-196. A declined discovery lets
+        // VM enumeration follow the referent as an ordinary strong field.
+        auto* field = reinterpret_cast<volatile zpointer*>(
+            reinterpret_cast<MAddress>(reference) + TYPEINFO_PTR_SIZE);
+        BaseObject* referent = to_object(ZBarrier::load_barrier_on_oop_field(field));
+        if (is_inactive(reference, referent, type)) {
+            return false;
+        }
+        if (Heap::page(reinterpret_cast<MAddress>(reference))->IsYoungRegion()) {
+            return false;
+        }
+        if (is_strongly_live(referent)) {
+            return false;
+        }
+        if (is_softly_live(reference, type)) {
+            return false;
+        }
+    }
     if (type == ReferenceType::FINAL) {
         Node* head = discovered_list.get(worker_index());
         for (Node* existing = head; existing != nullptr; existing = existing->next) {

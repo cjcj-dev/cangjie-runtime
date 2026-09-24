@@ -110,7 +110,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
         ThreadLocal::SetCJThread(previous);
     }
     if (remap) {
-        ZRelocate::RemapYoungRoots();
+        Heap::GetHeap().old().remap_young_roots();
     } else {
         runtime.GetConcurrencyModel().VisitGCRoots();
     }
@@ -253,7 +253,7 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, RemapDuringYoungMarkPublishesFollowWork)
     Heap::GetHeap().young().Workers()->set_active_workers(1);
     Heap::GetHeap().old().Workers()->set_active_workers(1);
 
-    ZRelocate::RemapYoungRoots();
+    Heap::GetHeap().old().remap_young_roots();
 
     class FlushMarkRootTask final : public ZTask {
     public:
