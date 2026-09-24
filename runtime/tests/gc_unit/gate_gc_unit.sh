@@ -532,9 +532,17 @@ if [[ $suite_rc -eq 124 ]]; then
 fi
 tail -20 "$OUT"
 
-# The suite's own exit code is not the gate's verdict: it is nonzero whenever anything fails,
-# including the failures that are written down.  The verdict is the set difference, in both
-# directions.
+# Like HotSpot gtestMain.cpp after RUN_ALL_TESTS(), preserve process failure:
+# a tally cannot prove that the runner's other required work completed.
+if [[ $suite_rc -ne 0 ]]; then
+  CPP_SUITE_STATE=FAIL
+  CPP_SUITE_SOURCE=FRESH
+  STATUS_REASON=CPP_SUITE_EXIT_FAILURE
+  echo "GC_UNIT_GATE_FAIL: suite exited unsuccessfully (rc=$suite_rc)" >&2
+  exit 1
+fi
+
+# The failure-set checks below additionally diagnose stale known-failure entries.
 # `|| true` on both: with zero failures grep exits 1, and under `set -e` + `pipefail` that kills the
 # gate *after* the suite has already printed a clean tally -- a guard that only survives when it has
 # something to complain about.  Observed here on the first all-green run.
@@ -562,6 +570,14 @@ fi
 tally_tests=$(sed -E 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\1/' "$TALLY")
 tally_passed=$(sed -E 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\2/' "$TALLY")
 tally_failed=$(sed -E 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\3/' "$TALLY")
+# Completion of an empty selection is not evidence that any test executed.
+if [[ $tally_tests -eq 0 ]]; then
+  CPP_SUITE_STATE=FAIL
+  CPP_SUITE_SOURCE=FRESH
+  STATUS_REASON=CPP_SUITE_EMPTY
+  echo "GC_UNIT_GATE_FAIL: suite executed no tests (tests=$tally_tests)" >&2
+  exit 3
+fi
 actual_count=0
 if [[ -n "$actual" ]]; then
   actual_count=$(echo "$actual" | wc -l)

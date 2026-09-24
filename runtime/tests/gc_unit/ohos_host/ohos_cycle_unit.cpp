@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 
 #include "Heap/z/zCrossVM.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -52,10 +53,15 @@ namespace {
 std::atomic<unsigned> gPosted{0};
 std::atomic<bool> gMajorRootObserved{false};
 void* gTask = nullptr;
+bool gPostedAtMarkComplete = false;
+bool gPostedAtRelocate = false;
 
 bool RecordPost(void* task)
 {
     gTask = task;
+    auto* old = ZGeneration::old();
+    gPostedAtMarkComplete = old != nullptr && old->is_phase_mark_complete();
+    gPostedAtRelocate = old != nullptr && old->is_phase_relocate();
     gPosted.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
@@ -207,6 +213,11 @@ GC_RUNTIME_TEST(OHOSCycle, HandlerChainThroughMajorEntry)
     std::fflush(stdout);
     // Always reach these target assertions even when a producer cut prevents
     // posting/handler delivery. No earlier presence assertion masks them.
+    std::printf("OHOS_POST_PHASE_ASSERT_REACHED mark_complete=%u relocate=%u posted=%u\n",
+                gPostedAtMarkComplete, gPostedAtRelocate, gPosted.load());
+    std::fflush(stdout);
+    GC_EXPECT_TRUE(gPostedAtMarkComplete);
+    GC_EXPECT_FALSE(gPostedAtRelocate);
     GC_EXPECT_EQ(gHandlerCalls, 1U);
     GC_EXPECT_TRUE(gHandlerArguments);
     GC_EXPECT_TRUE(gHandlerRoots);
