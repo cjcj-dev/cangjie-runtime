@@ -30,7 +30,9 @@ worker routing are owned by Q8, per advisor decision
 ## Product tests
 
 `run_gc_cause_gdb.sh` runs nine cases on the same standalone ELF and product SO.
-Allocations and RuntimeParam feed the actual director sampling entry. Minor-only
+Allocations and RuntimeParam feed the actual director sampling entry. Class
+instance sizes exclude TYPEINFO_PTR_SIZE while allocation sizes include it, so
+marking and allocation account for the same bytes (BaseObject::GetSize). Minor-only
 cases hold a major request in the product port and mark its product worker set
 active; the director obtains that state through its ordinary sampling path.
 The major allocation-rate case pauses actual warmup work and performs a real

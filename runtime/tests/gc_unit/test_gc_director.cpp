@@ -517,7 +517,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     const size_t firstSize = heap.GetMaxCapacity() * (highUsage ? 15 : 8) / 16;
-    type->SetInstanceSize(firstSize);
+    type->SetInstanceSize(firstSize - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     {
         ScopedObjectAccess access;
@@ -535,7 +535,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
         alignas(TypeInfo) static unsigned char secondStorage[sizeof(TypeInfo)]{};
         auto* secondType = reinterpret_cast<TypeInfo*>(secondStorage);
         secondType->SetType(TypeKind::TYPE_KIND_CLASS);
-        secondType->SetInstanceSize(nextSize);
+        secondType->SetInstanceSize(nextSize - TYPEINFO_PTR_SIZE);
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(secondStorage), sizeof(secondStorage));
         {
             ScopedObjectAccess access;
