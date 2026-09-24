@@ -49,3 +49,12 @@ public func unloadSpawnParked(arg: CPointer<Unit>): CPointer<Unit> {
     }
     return arg
 }
+
+// Stay in managed code so the active-frame check must also service a carrier.
+public func unloadSpawnRunning(arg: CPointer<Unit>): CPointer<Unit> {
+    spawn { =>
+        unsafe { MRT_TestElfUnloadNativeBlock() }
+        while (true) { unloadInitSentinel += 1 }
+    }
+    return arg
+}

@@ -19,12 +19,13 @@ std::atomic<bool> nativeEntered { false };
 std::atomic<bool> nativeRelease { false };
 std::atomic<bool> nativeBlockEnabled { false };
 bool parkedMode = false;
+bool runningMode = false;
 }
 
 extern "C" __attribute__((visibility("default"))) void MRT_TestElfUnloadNativeBlock()
 {
     nativeEntered.store(true, std::memory_order_release);
-    if (parkedMode) { return; }
+    if (parkedMode || runningMode) { return; }
     while (!nativeRelease.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
@@ -81,6 +82,7 @@ int RunNativeFrameReject(const char* plugin, const char* markerSymbol, const cha
     }
     bool entered = starterReturned &&
         WaitFor([]() { return nativeEntered.load(std::memory_order_acquire); });
+    if (runningMode) { std::this_thread::sleep_for(std::chrono::milliseconds(300)); }
     bool switched = true;
     if (parkedMode) {
         // The completion of a different task, rather than elapsed time alone,
@@ -97,8 +99,8 @@ int RunNativeFrameReject(const char* plugin, const char* markerSymbol, const cha
         (FindCJSymbol(plugin, markerSymbol) != nullptr);
     std::printf("ACTIVE_IMAGE_TARGET executed=1 entered=%d first_unload=%d rejected=%d\n",
                 entered, firstUnload, rejected);
-    if (parkedMode) {
-        Result("ElfUnload.ParkedFrameRejectPublic", rejected);
+    if (parkedMode || runningMode) {
+        Result(parkedMode ? "ElfUnload.ParkedFrameRejectPublic" : "ElfUnload.RunningFrameRejectPublic", rejected);
         std::fflush(nullptr);
         // The sleeping task must not resume if a cut arm unmapped its image.
         std::_Exit(rejected ? 0 : 1);
@@ -138,5 +140,6 @@ int RunNativeFrameReject(const char* plugin, const char* markerSymbol, const cha
 int main(int argc, char** argv) {
     if (argc != 4 && argc != 5) { return 2; }
     parkedMode = argc == 5 && std::strcmp(argv[4], "parked") == 0;
+    runningMode = argc == 5 && std::strcmp(argv[4], "running") == 0;
     return RunNativeFrameReject(argv[1], argv[2], argv[3]);
 }

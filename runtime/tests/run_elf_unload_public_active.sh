@@ -24,3 +24,6 @@ LD_LIBRARY_PATH="$LIB:$SDK/runtime/lib/linux_x86_64_cjnative" \
 LD_LIBRARY_PATH="$LIB:$SDK/runtime/lib/linux_x86_64_cjnative" \
     "$OUT/elf_unload_public_active" "$OUT/libelfunloadprobe.so" \
     _CN14elfunloadprobe12unloadMarkerHv _CN14elfunloadprobe17unloadSpawnParkedHPu parked
+LD_LIBRARY_PATH="$LIB:$SDK/runtime/lib/linux_x86_64_cjnative" \
+    "$OUT/elf_unload_public_active" "$OUT/libelfunloadprobe.so" \
+    _CN14elfunloadprobe12unloadMarkerHv _CN14elfunloadprobe18unloadSpawnRunningHPu running
