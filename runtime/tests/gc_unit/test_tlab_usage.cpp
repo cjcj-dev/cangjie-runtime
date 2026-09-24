@@ -380,14 +380,14 @@ void SnapshotOwner(TLABSnapshotCase& state, unsigned index)
     auto& manager = MutatorManager::Instance();
     Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     owner->DoLeaveSaferegion();
-    for (unsigned i = 0; i < 128; ++i) { (void)MCC_NewObject(state.type, 4096); }
+    for (unsigned i = 0; i < 128; ++i) { (void)MCC_NewObject(state.type, 2048); }
     owner->DoEnterSaferegion();
     state.owner[index].store(owner, std::memory_order_release);
     while (state.epoch.load(std::memory_order_acquire) == 0) { std::this_thread::yield(); }
     if (state.refillOwner.load(std::memory_order_acquire) == static_cast<int>(index)) {
         while (!owner->GetStackWatermark().IsDone(state.epoch.load())) { std::this_thread::yield(); }
         owner->DoLeaveSaferegion();
-        for (unsigned i = 0; i < 32; ++i) { (void)MCC_NewObject(state.type, 4096); }
+        for (unsigned i = 0; i < 32; ++i) { (void)MCC_NewObject(state.type, 2048); }
         owner->DoEnterSaferegion();
         state.refilled.store(true, std::memory_order_release);
     }
@@ -412,7 +412,15 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     const int allocationCpu = sched_getcpu();
     GC_EXPECT_TRUE(allocationCpu >= 0 && allocationCpu < CPU_SETSIZE);
-    TLABSnapshotCase state{TLABTestType(), allocationCpu};
+    // memAllocator.cpp:273-278 retains useful tails. Use objects that fit the
+    // minimum TLAB quantum so this history is allocated inside TLABs, instead
+    // of assuming every failed fit discards its tail.
+    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(2048 - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    TLABSnapshotCase state{type, allocationCpu};
     std::thread a([&] { SnapshotOwner(state, 0); });
     std::thread b([&] { SnapshotOwner(state, 1); });
     while (state.owner[0].load(std::memory_order_acquire) == nullptr ||
@@ -1065,7 +1073,8 @@ void CheckTLABWasteLimit(bool excessive)
     GC_EXPECT_TRUE(refilled);
     GC_EXPECT_TRUE(statistics);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
-}}
+}
+} // namespace
 GC_RUNTIME_OTHER_VM_TEST(TLABRefill, RetainsUsefulTailAndRaisesWasteLimit)
 {
     CheckTLABWasteLimit(true);
