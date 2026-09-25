@@ -525,8 +525,8 @@ GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryReducesWorkersDuringRelocatio
 // would hide a repeated index, so the assertion counts next() results.
 GC_OTHER_VM_TEST(RelocateWorkers, ParallelCursorClaimsEachIndexOnce)
 {
-    constexpr size_t kPages = 128;
-    constexpr unsigned kThreads = 16;
+    constexpr size_t kPages = 256;
+    constexpr unsigned kThreads = 64;
     CreateStandaloneHeap(kPages + 8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
@@ -555,10 +555,19 @@ GC_OTHER_VM_TEST(RelocateWorkers, ParallelCursorClaimsEachIndexOnce)
     std::vector<std::vector<ZForwarding*>> bags(kThreads);
     if (installed == pages.size()) {
         ZRelocationSetParallelIterator iter(&generation.relocation_set());
+        std::atomic<unsigned> arrived{0};
+        std::atomic<bool> go{false};
         std::vector<std::thread> threads;
         threads.reserve(kThreads);
         for (unsigned t = 0; t < kThreads; ++t) {
-            threads.emplace_back([&iter, &bags, t] {
+            threads.emplace_back([&iter, &bags, &arrived, &go, t] {
+                if (arrived.fetch_add(1u, std::memory_order_acq_rel) + 1u == kThreads) {
+                    go.store(true, std::memory_order_release);
+                } else {
+                    while (!go.load(std::memory_order_acquire)) {
+                        std::this_thread::yield();
+                    }
+                }
                 for (ZForwarding* owner = nullptr; iter.next(&owner);) {
                     bags[t].push_back(owner);
                 }
