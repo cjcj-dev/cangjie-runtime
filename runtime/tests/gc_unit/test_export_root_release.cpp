@@ -139,7 +139,7 @@ void CheckWorkerRelease(int obsolete)
         keepAlive = heap.RegisterExportRoot(object);
         // Existing fixture access prepares the queue through the product
         // registration/enqueue functions. The observed clear is executed by
-        // MRT_ProcessFinalizers -> Run -> ProcessFinalizables on its own thread.
+        // Run -> ProcessFinalizables on its own thread.
         GC_EXPECT_TRUE(FinalizerProcessorTest::Queue(fp, object));
         fp.VisitGCRoots([&](NativeSlot& slot) { queued = &slot; });
         GC_EXPECT_TRUE(queued != nullptr);
