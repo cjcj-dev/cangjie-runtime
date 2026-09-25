@@ -114,7 +114,7 @@ void ZCrossVM::ResolveCycleRef()
     for (;;) {
         auto it = cycleRefWorkStack.begin();
         while (it != cycleRefWorkStack.end()) {
-            BaseObject* candidate = it->first;
+            BaseObject* candidate = ResolveCurrentValueRoot(it->first);
             U32 candidateId = static_cast<ExportObject*>(candidate)->GetId();
             if (resolvedIds.find(candidateId) != resolvedIds.end()) {
                 ++it;
@@ -143,7 +143,7 @@ void ZCrossVM::ResolveCycleRef()
             return;
         }
 
-        U32 id = static_cast<ExportObject*>(it->first.object)->GetId();
+        U32 id = static_cast<ExportObject*>(ResolveCurrentValueRoot(it->first))->GetId();
         size_t externIndex = cycleRefProgress[id];
         void* returnUnit = nullptr;
         for (;;) {
@@ -151,8 +151,8 @@ void ZCrossVM::ResolveCycleRef()
             // while the callback is parked. Re-find by stable export id and
             // fetch the current addresses before each managed invocation.
             it = std::find_if(cycleRefWorkStack.begin(), cycleRefWorkStack.end(),
-                [id](const auto& entry) {
-                    return static_cast<ExportObject*>(entry.first.object)->GetId() == id;
+                [this, id](const auto& entry) {
+                    return static_cast<ExportObject*>(ResolveCurrentValueRoot(entry.first))->GetId() == id;
                 });
             if (it == cycleRefWorkStack.end() || externIndex >= it->second.size()) {
                 break;
@@ -163,10 +163,10 @@ void ZCrossVM::ResolveCycleRef()
                 CJ_MRT_RolveCycleRef();
                 return;
             }
-            BaseObject* exportObj = it->first;
+            BaseObject* exportObj = ResolveCurrentValueRoot(it->first);
             auto externIt = it->second.begin();
             std::advance(externIt, static_cast<ptrdiff_t>(externIndex));
-            BaseObject* externObj = *externIt;
+            BaseObject* externObj = ResolveCurrentValueRoot(*externIt);
             auto resolveHook = GetCrossRefHandler(externObj);
 
             // ResolveCycleRefStub enters managed code. A late safepoint can
