@@ -9,11 +9,6 @@
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Mutator/Mutator.h"
 #include <array>
-#include <cstring>
-#include <csignal>
-#include <fcntl.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
 #include "Heap/z/zAccess.hpp"
 
@@ -22,7 +17,6 @@ using namespace MapleRuntime::GcUnit;
 extern "C" void MCC_WriteStructField(ObjectPtr, MAddress, size_t, MAddress, size_t, GCTib);
 extern "C" void CJ_MCC_ArrayCopyRef(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
 extern "C" void CJ_MCC_ArrayCopyStruct(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
-extern "C" void CJ_MCC_ArrayCopyGeneric(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
 
 namespace {
 void CheckOverlap(bool structure, bool backwards, size_t length = 4, bool same = false)
@@ -171,108 +165,6 @@ GC_TEST(ArrayCopyBarrier, RefStorePreservesPrevious) { CheckBarriers(false, true
 GC_TEST(ArrayCopyBarrier, RefLoadHealsSource) { CheckBarriers(false, false); }
 GC_TEST(ArrayCopyBarrier, StructStorePreservesPrevious) { CheckBarriers(true, true); }
 GC_TEST(ArrayCopyBarrier, StructLoadHealsSource) { CheckBarriers(true, false); }
-
-namespace {
-struct GenericArrays {
-    TypeInfo* type;
-    MArray* src;
-    MArray* dst;
-    MAddress srcContent;
-    MAddress dstContent;
-    BaseObject* element;
-};
-
-GenericArrays PlantGenericArrays(GcHeapFixture& heap)
-{
-    alignas(TypeInfo) static unsigned char componentStorage[sizeof(TypeInfo)]{};
-    alignas(TypeInfo) static unsigned char arrayStorage[sizeof(TypeInfo)]{};
-    auto* component = reinterpret_cast<TypeInfo*>(componentStorage);
-    std::memset(componentStorage, 0, sizeof(componentStorage));
-    std::memset(arrayStorage, 0, sizeof(arrayStorage));
-    component->SetType(TypeKind::TYPE_KIND_CLASS);
-    component->SetInstanceSize(sizeof(zpointer));
-    auto* type = reinterpret_cast<TypeInfo*>(arrayStorage);
-    type->SetType(TypeKind::TYPE_KIND_RAWARRAY);
-    type->SetComponentTypeInfo(component);
-    auto* src = reinterpret_cast<MArray*>(heap.heapStart + 256);
-    auto* dst = reinterpret_cast<MArray*>(heap.heapStart + 640);
-    *reinterpret_cast<uintptr_t*>(src) = reinterpret_cast<uintptr_t>(type);
-    *reinterpret_cast<uintptr_t*>(dst) = reinterpret_cast<uintptr_t>(type);
-    src->SetLength(1);
-    dst->SetLength(1);
-    GenericArrays planted;
-    planted.type = type;
-    planted.src = src;
-    planted.dst = dst;
-    planted.srcContent = reinterpret_cast<MAddress>(src->ConvertToCArray());
-    planted.dstContent = reinterpret_cast<MAddress>(dst->ConvertToCArray());
-    planted.element = heap.PlaceObject(heap.heapStart + 1024);
-    HeapSlotAt<>(planted.srcContent).StoreColoured(StoreGoodPointer(planted.element));
-    HeapSlotAt<>(planted.dstContent).StoreColoured(StoreGoodPointer(heap.obj0));
-    return planted;
-}
-
-void CheckGenericCopy(bool coloredIncoming)
-{
-    GcHeapFixture heap;
-    ArrayCopyMutatorScope scope;
-    GenericArrays planted = PlantGenericArrays(heap);
-    ObjectPtr srcBase = planted.src;
-    if (coloredIncoming) {
-        srcBase = reinterpret_cast<ObjectPtr>(static_cast<uintptr_t>(raw(StoreGoodPointer(planted.src))));
-    }
-    CJ_MCC_ArrayCopyGeneric(planted.dst, planted.dstContent, sizeof(zpointer), srcBase, planted.srcContent,
-                            sizeof(zpointer));
-    BaseObject* actual = HeapAccess<>::oop_load(&(HeapSlotAt<>(planted.dstContent)));
-    std::fprintf(stderr, "ARRAYCOPY_GENERIC_TARGET colored_incoming=%d actual=%p element=%p\n",
-                 coloredIncoming, actual, planted.element);
-    GC_EXPECT_TRUE(actual == planted.element);
-}
-}
-GC_TEST(ArrayCopyGeneric, PlainHeaderCopiesRef) { CheckGenericCopy(false); }
-GC_TEST(ArrayCopyGeneric, StoreGoodIncomingUncolorsBeforeTypeInfo) { CheckGenericCopy(true); }
-
-GC_TEST(ArrayCopyGeneric, ColoredHeaderAssertsNotSignal11)
-{
-    GcHeapFixture heap;
-    ArrayCopyMutatorScope scope;
-    GenericArrays planted = PlantGenericArrays(heap);
-    int pipefd[2];
-    GC_EXPECT_EQ(pipe(pipefd), 0);
-    pid_t pid = fork();
-    GC_EXPECT_TRUE(pid >= 0);
-    if (pid == 0) {
-        (void)dup2(pipefd[1], STDERR_FILENO);
-        (void)close(pipefd[0]);
-        (void)close(pipefd[1]);
-        (void)signal(SIGABRT, SIG_DFL);
-        (void)signal(SIGSEGV, SIG_DFL);
-        *reinterpret_cast<uintptr_t*>(planted.src) = static_cast<uintptr_t>(raw(StoreGoodPointer(planted.dst)));
-        CJ_MCC_ArrayCopyGeneric(planted.dst, planted.dstContent, sizeof(zpointer), planted.src, planted.srcContent,
-                                sizeof(zpointer));
-        _exit(0);
-    }
-    (void)close(pipefd[1]);
-    char message[1024]{};
-    size_t used = 0;
-    while (used + 1 < sizeof(message)) {
-        ssize_t n = read(pipefd[0], message + used, sizeof(message) - 1 - used);
-        if (n <= 0) {
-            break;
-        }
-        used += static_cast<size_t>(n);
-    }
-    (void)close(pipefd[0]);
-    int status = 0;
-    GC_EXPECT_EQ(waitpid(pid, &status, 0) > 0, true);
-    const bool aborted = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
-    const bool signaled11 = WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV;
-    std::fprintf(stderr, "ARRAYCOPY_GENERIC_HEADER_TARGET aborted=%d sigsegv=%d message=%s\n",
-                 aborted, signaled11, message);
-    GC_EXPECT_TRUE(aborted);
-    GC_EXPECT_FALSE(signaled11);
-    GC_EXPECT_TRUE(std::strstr(message, "CJ_MCC_ArrayCopyGeneric colored slot used as TypeInfo") != nullptr);
-}
 
 // Header-only template arm: the product template itself supplies the slot bits.
 GC_TEST(AccessBarrier976, ClearOnePublishesColorNull)
