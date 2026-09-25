@@ -97,7 +97,7 @@ GC_OTHER_VM_TEST(ZVerify, SourcePreparationPreservesMarkedObjects)
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
     size_t visits = 0;
-    fixture.region0->object_iterate([&](BaseObject* object) {
+    fixture.region0()->object_iterate([&](BaseObject* object) {
         GC_EXPECT_TRUE(object == fixture.obj0);
         ++visits;
     });
@@ -111,20 +111,20 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
     auto publication = forwarding_for_page(
-        fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
+        fixture.region0(), reinterpret_cast<MAddress>(fixture.obj0));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
     GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1)),
         reinterpret_cast<MAddress>(fixture.obj1));
-    auto owner = forwarding_for_page(fixture.region0);
+    auto owner = forwarding_for_page(fixture.region0());
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     owner->verify();
     ExpectSceneAbort("Invalid number of live objects", [&] {
-        fixture.region0->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
+        fixture.region0()->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
         owner->verify();
     });
     owner->verify();
     ExpectSceneAbort("Invalid number of live bytes", [&] {
-        fixture.region0->inc_live(0, RegionSpace::GetAllocSize(*fixture.obj0));
+        fixture.region0()->inc_live(0, RegionSpace::GetAllocSize(*fixture.obj0));
         owner->verify();
     });
     owner->verify();
@@ -141,9 +141,9 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsBadLiveAccounting)
     }
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    fixture.region0->SetRegionRole(ZPageRole::From);
+    fixture.region0()->SetRegionRole(ZPageRole::From);
     ExpectSceneAbort("Invalid number of live objects", [&] {
-        fixture.region0->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
+        fixture.region0()->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
         auto& old = Heap::GetHeap().old();
         if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
         old.Workers()->set_active_workers(1);
@@ -166,9 +166,9 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
     auto publication = forwarding_for_page(
-        fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
+        fixture.region0(), reinterpret_cast<MAddress>(fixture.obj0));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    auto owner = forwarding_for_page(fixture.region0);
+    auto owner = forwarding_for_page(fixture.region0());
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
@@ -191,9 +191,9 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
     }
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    auto* owner = forwarding_for_page(fixture.region0);
+    auto* owner = forwarding_for_page(fixture.region0());
     GC_EXPECT_TRUE(owner != nullptr);
-    fixture.region0->SetRegionRole(ZPageRole::From);
+    fixture.region0()->SetRegionRole(ZPageRole::From);
     RememberedSet& remset = HeapTestRemset();
     remset.Initialize(fixture.heapStart, 2 * ZGranuleSize);
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
@@ -221,8 +221,8 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
     }
     ExpectSceneAbort(currentActive ? "previous remset bits should be cleared" :
                                     "current remset bits should be cleared", [&] {
-        rejectedPage = fixture.region0;
-        observed[0] = fixture.region0->GetRegionAllocPtr();
+        rejectedPage = fixture.region0();
+        observed[0] = fixture.region0()->GetRegionAllocPtr();
         rejectedTop = observed + 1;
         (void)signal(SIGABRT, RecordRejectedTop);
         auto& old = Heap::GetHeap().old();
@@ -253,7 +253,7 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
         return;
     }
     GcVerifyFixture fixture;
-    fixture.region0->reset(PageAge::old);
+    fixture.region0()->reset(PageAge::old);
     auto& cycle = Heap::GetHeap().GetZGeneration(Generation::Young);
     cycle.set_phase(ZGenerationPhase::Mark);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
@@ -275,7 +275,7 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
         return;
     }
     GcVerifyFixture fixture;
-    fixture.region0->reset(PageAge::old);
+    fixture.region0()->reset(PageAge::old);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     auto& cycle = Heap::GetHeap().GetZGeneration(Generation::Young);
     cycle.set_phase(ZGenerationPhase::MarkComplete);
@@ -286,10 +286,10 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
         fixture.VerifyObject(fixture.obj0, false);
     });
     // Reset establishes a new allocating page, independent of object offsets.
-    fixture.region0->ResetPageSequence();
-    const MAddress next = fixture.region0->GetRegionAllocPtr();
+    fixture.region0()->ResetPageSequence();
+    const MAddress next = fixture.region0()->GetRegionAllocPtr();
     BaseObject* fresh = fixture.PlaceObject(next);
-    fixture.region0->SetRegionAllocPtr(next + 64);
+    fixture.region0()->SetRegionAllocPtr(next + 64);
     RefField<>& freshField = HeapSlotAt<>(next + TYPEINFO_PTR_SIZE);
     freshField.StoreColoured(zpointer::null);
     fixture.VerifyObject(fresh, false);

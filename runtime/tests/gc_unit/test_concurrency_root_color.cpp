@@ -59,7 +59,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     ZGlobalsPointers::initialize();
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    ZPage* page = fx.region0;
+    ZPage* page = fx.region0();
     page->reset(PageAge::eden);
     ZGenerationTest::SetTenuringThreshold(heap.young(), 1);
     BaseObject* dead = fx.PlaceObject(page->GetRegionStart());
@@ -82,17 +82,22 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
     // Two real sparse pages satisfy the selector's strict reclaimable-page test.
-    fx.region1->reset(PageAge::eden);
-    BaseObject* companion = fx.PlaceObject(fx.region1->GetRegionStart());
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, companion));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page, fx.region1}));
+    fx.region1()->reset(PageAge::eden);
+    BaseObject* companion = fx.PlaceObject(fx.region1()->GetRegionStart());
+    fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), companion));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page, fx.region1()}));
     heap.young().set_phase(ZGenerationPhase::Relocate);
     ZGlobalsPointers::flip_young_relocate_start();
     heap.young().Workers()->set_active_workers(1);
     ZRelocate::StartRelocationTasks(heap.young().id());
+    // zForwardingTable.inline.hpp:43: after relocate, the from-page may have
+    // been removed (zRelocate.cpp:450). Read the table by address, not by the
+    // pre-relocate descriptor.
+    const MAddress forwardStart = page->GetRegionStart();
+    const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.young().relocate().relocate(&heap.young().relocation_set());
-    const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
     MAddress observed = 0;
@@ -103,7 +108,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     };
     MAddress storedExpected = 0;
     if (updateThreadObject) {
-        storedExpected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(second));
+        storedExpected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(second));
         auto* previous = CJThreadGetHandle();
         ThreadLocal::SetCJThread(thread);
         MCC_SetCurrentCJThreadObject(reinterpret_cast<void*>(storedExpected));
@@ -157,7 +162,7 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     ZGlobalsPointers::initialize();
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    ZPage* page = fx.region0;
+    ZPage* page = fx.region0();
     page->reset(PageAge::old);
     ZGenerationTest::SetTenuringThreshold(heap.young(), 1);
     BaseObject* dead = fx.PlaceObject(page->GetRegionStart());
@@ -179,17 +184,19 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
     // Two real sparse pages satisfy the selector's strict reclaimable-page test.
-    fx.region1->reset(PageAge::old);
-    BaseObject* companion = fx.PlaceObject(fx.region1->GetRegionStart());
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, companion));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {page, fx.region1}));
+    fx.region1()->reset(PageAge::old);
+    BaseObject* companion = fx.PlaceObject(fx.region1()->GetRegionStart());
+    fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), companion));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {page, fx.region1()}));
     heap.old().set_phase(ZGenerationPhase::Relocate);
     ZGlobalsPointers::flip_old_relocate_start();
     heap.old().Workers()->set_active_workers(1);
     ZRelocate::StartRelocationTasks(heap.old().id());
+    const MAddress forwardStart = page->GetRegionStart();
+    const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.old().relocate().relocate(&heap.old().relocation_set());
-    const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
     // The saved store-good color is from the previous epoch, so the group is armed.
@@ -239,8 +246,8 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, RemapDuringYoungMarkPublishesFollowWork)
     ConcurrencyRootRuntime runtime;
     GcHeapFixture fx;
     ZGlobalsPointers::initialize();
-    fx.region0->reset(PageAge::eden);
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + 64);
+    fx.region0()->reset(PageAge::eden);
+    fx.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + 64);
     auto* thread = MCC_NewCJThread(nullptr, fx.obj0,
                                   runtime.GetConcurrencyModel().GetThreadScheduler());
     GC_EXPECT_TRUE(thread != nullptr);
@@ -266,7 +273,7 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, RemapDuringYoungMarkPublishesFollowWork)
         found |= object == fx.obj0 && follow;
     });
     std::fprintf(stderr, "CONCURRENCY_REMAP_MARK young=%d found=%d object=%p\n",
-                 fx.region0->IsYoungRegion(), found, fx.obj0);
+                 fx.region0()->IsYoungRegion(), found, fx.obj0);
     GC_EXPECT_TRUE(found);
 }
 
@@ -304,8 +311,8 @@ GC_OTHER_VM_TEST(ConcurrencyRootColor, ThreadObjectOverwriteKeepsOldGroupAlive)
     MCC_SetCurrentCJThreadObject(fx.obj1);
     ThreadLocal::SetCJThread(previous);
     MarkPublicationFixture marking;
-    const bool beforeObj = fx.region0->is_object_marked_strong(from_object(fx.obj0));
-    const bool beforeThread = fx.region1->is_object_marked_strong(from_object(fx.obj1));
+    const bool beforeObj = fx.region0()->is_object_marked_strong(from_object(fx.obj0));
+    const bool beforeThread = fx.region1()->is_object_marked_strong(from_object(fx.obj1));
     std::fprintf(stderr, "CONCURRENCY_KEEPALIVE_BEFORE obj=%u thread=%u\n", beforeObj, beforeThread);
     GC_EXPECT_TRUE(!beforeObj && !beforeThread);
     ThreadLocal::SetCJThread(thread);

@@ -384,7 +384,7 @@ GC_TEST(ZSafeDelete, page_retirement_defers_until_page_walk_ends)
     std::atomic<int> retired{ 0 };
     int seenDuringWalk = -1;
     ZPage::VisitPageOwners([&](ZPage* page) {
-        if (page == fx.region0) {
+        if (page == fx.region0()) {
             ZPage::RetirePage(page, [&] { retired.fetch_add(1); });
             seenDuringWalk = retired.load();
         }
@@ -394,6 +394,6 @@ GC_TEST(ZSafeDelete, page_retirement_defers_until_page_walk_ends)
     // Target invariant: the deferred retirement ran once after the walk.
     GC_EXPECT_EQ(retired.load(), 1);
 
-    ZPage::RetirePage(fx.region1, [&] { retired.fetch_add(1); });
+    ZPage::RetirePage(fx.region1(), [&] { retired.fetch_add(1); });
     GC_EXPECT_EQ(retired.load(), 2);
 }

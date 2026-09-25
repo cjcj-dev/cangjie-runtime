@@ -17,8 +17,8 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 void InstallReceipt(GcHeapFixture& heap, MAddress from, MAddress to)
 {
-    heap.InstallPageOwner(heap.region0);
-    auto publication = forwarding_for_page(heap.region0, from);
+    heap.InstallPageOwner(heap.region0());
+    auto publication = forwarding_for_page(heap.region0(), from);
     GC_EXPECT_TRUE(static_cast<bool>(publication));
     GC_EXPECT_EQ(publication->insert(from, to), to);
 }
@@ -27,9 +27,9 @@ void InstallReceipt(GcHeapFixture& heap, MAddress from, MAddress to)
 GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
 {
     GcHeapFixture heap;
-    heap.InstallPageOwner(heap.region0);
+    heap.InstallPageOwner(heap.region0());
     const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
-    const Generation generation = heap.region0->GetOwnerGeneration();
+    const Generation generation = heap.region0()->GetOwnerGeneration();
     const MAddress result = generation_forwarding_table(generation).get(from)->find(from);
     GC_EXPECT_EQ(result, static_cast<MAddress>(0));
     GC_EXPECT_TRUE(generation_forwarding_table(generation).get(from) != nullptr);
@@ -57,7 +57,7 @@ GC_TEST(ForwardingNoGeometry, RelocateObjectFindHitSkipsCopy)
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
     Heap& collector = Heap::GetHeap();
-    GC_EXPECT_TRUE(MutatorPublishTestAccess::RelocateInner(collector, heap.obj0, heap.region0) == heap.obj1);
+    GC_EXPECT_TRUE(MutatorPublishTestAccess::RelocateInner(collector, heap.obj0, heap.region0()) == heap.obj1);
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }
 
@@ -66,7 +66,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplFindHitSkipsCopy)
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
     Heap& collector = Heap::GetHeap();
-    GC_EXPECT_TRUE(MutatorPublishTestAccess::ForwardImpl(collector, heap.obj0, heap.region0) == heap.obj1);
+    GC_EXPECT_TRUE(MutatorPublishTestAccess::ForwardImpl(collector, heap.obj0, heap.region0()) == heap.obj1);
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }
 

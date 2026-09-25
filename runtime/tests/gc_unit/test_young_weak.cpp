@@ -298,7 +298,7 @@ struct WeakGraph {
 
 struct ExportForeignGraph {
     template<typename Fixture>
-    explicit ExportForeignGraph(Fixture& fx) : owner(fx.region0)
+    explicit ExportForeignGraph(Fixture& fx) : owner(fx.region0())
     {
         std::memset(foreignTypeStorage, 0, sizeof(foreignTypeStorage));
         foreignType = reinterpret_cast<TypeInfo*>(foreignTypeStorage);
@@ -339,10 +339,10 @@ void RunYoungWeakVariant(size_t helpers)
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
-    fx.region1->reset(PageAge::eden);
-    WeakGraph graph(fx, fx.region1);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
+    fx.region1()->reset(PageAge::eden);
+    WeakGraph graph(fx, fx.region1());
 
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
     // zGeneration.cpp: each generation owns its worker pool before collection.
@@ -355,7 +355,7 @@ void RunYoungWeakVariant(size_t helpers)
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RelocationReceiptTest::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    fx.region1->SetRegionRole(ZPageRole::RecentFull);
+    fx.region1()->SetRegionRole(ZPageRole::RecentFull);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
 
@@ -393,10 +393,10 @@ void RunYoungWeakRemsetFlow()
     // a real old->young edge.  The holder then enters this young collection;
     // the remembered slot itself, rather than a test-built weakSlots ledger,
     // is what the product minor path receives.
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
-    fx.region1->reset(PageAge::eden);
-    WeakGraph graph(fx, fx.region0, fx.region1);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
+    fx.region1()->reset(PageAge::eden);
+    WeakGraph graph(fx, fx.region0(), fx.region1());
     *reinterpret_cast<uintptr_t*>(graph.referent) = reinterpret_cast<uintptr_t>(fx.typeInfo);
     *reinterpret_cast<uintptr_t*>(graph.child) = reinterpret_cast<uintptr_t>(fx.typeInfo);
     fx.typeInfo->SetUUID(1);
@@ -415,7 +415,7 @@ void RunYoungWeakRemsetFlow()
 
     RelocationReceiptTest::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    fx.region1->SetRegionRole(ZPageRole::RecentFull);
+    fx.region1()->SetRegionRole(ZPageRole::RecentFull);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     RelocationReceiptTest::RunYoungCollection(collector);
@@ -448,8 +448,8 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     Fixture fx;
-    fx.region0->reset(PageAge::old);
-    WeakGraph graph(fx, fx.region0);
+    fx.region0()->reset(PageAge::old);
+    WeakGraph graph(fx, fx.region0());
 
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
     // zGeneration.cpp: each generation owns its worker pool before collection.
@@ -462,7 +462,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::BindWorkerBudget(static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    fx.region0->SetRegionRole(ZPageRole::RecentFull);
+    fx.region0()->SetRegionRole(ZPageRole::RecentFull);
     if (runtimeEntry) {
     }
 
@@ -488,9 +488,9 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
             // Keep the export DFS cut independent from TracingImpl's root-family
             // admission cut. This sentinel has no edge into the weak graph; the
             // graph itself remains reachable only through the export root.
-            BaseObject* commonSentinel = fx.PlaceObject(fx.region0->GetRegionStart() + 320);
+            BaseObject* commonSentinel = fx.PlaceObject(fx.region0()->GetRegionStart() + 320);
             WeakGraph::Field(commonSentinel).StoreColoured(zpointer::null);
-            fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(commonSentinel) + 64);
+            fx.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(commonSentinel) + 64);
             commonRoots[0]->StoreColoured(StoreGoodPointer(commonSentinel));
             Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), 1);
             registeredCommonRootCount = 1;
@@ -648,8 +648,8 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    WeakGraph graph(fx, fx.region0);
+    fx.region0()->reset(PageAge::old);
+    WeakGraph graph(fx, fx.region0());
     // This grid is deliberately non-weak: the only edge must be followed by
     // the export root family even when the common root stack is empty.
     *reinterpret_cast<uintptr_t*>(graph.weak) = reinterpret_cast<uintptr_t>(fx.typeInfo);
@@ -660,7 +660,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::BindWorkerBudget();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    fx.region0->SetRegionRole(ZPageRole::RecentFull);
+    fx.region0()->SetRegionRole(ZPageRole::RecentFull);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     RelocationReceiptTest::RunMajorMark(collector);
@@ -684,7 +684,7 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
     MutatorManager manager;
     WeakClosureTestRuntime runtime(manager);
     GcHeapFixture fx;
-    WeakGraph graph(fx, fx.region0);
+    WeakGraph graph(fx, fx.region0());
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
     RelocationReceiptTest::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
@@ -723,7 +723,7 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     MutatorManager manager;
     WeakClosureTestRuntime runtime(manager);
     GcHeapFixture fx;
-    WeakGraph graph(fx, fx.region0);
+    WeakGraph graph(fx, fx.region0());
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
     RelocationReceiptTest::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
@@ -747,7 +747,7 @@ GC_OTHER_VM_TEST(HeapIterator, ReferenceArrayChunksInBothModes)
     MutatorManager manager;
     WeakClosureTestRuntime runtime(manager);
     GcHeapFixture fx;
-    WeakGraph graph(fx, fx.region0);
+    WeakGraph graph(fx, fx.region0());
     RelocationReceiptTest::BindCollector(&Heap::GetHeap());
     Heap::GetHeap().old().set_phase(ZGenerationPhase::Relocate);
 
@@ -758,11 +758,11 @@ GC_OTHER_VM_TEST(HeapIterator, ReferenceArrayChunksInBothModes)
     arrayType->SetComponentTypeInfo(fx.typeInfo);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(arrayTypeStorage), sizeof(arrayTypeStorage));
-    auto* array = reinterpret_cast<MArray*>(fx.region1->GetRegionStart() + 128);
+    auto* array = reinterpret_cast<MArray*>(fx.region1()->GetRegionStart() + 128);
     array->SetClassInfo(arrayType);
     constexpr MIndex length = 2049;
     array->SetLength(length);
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(array) + array->GetSize());
+    fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(array) + array->GetSize());
     auto* slots = reinterpret_cast<HeapSlot<>*>(array->ConvertToCArray());
     for (MIndex i = 0; i < length; ++i) {
         slots[i].StoreColoured(zpointer::null);
@@ -803,7 +803,7 @@ GC_OTHER_VM_TEST(HeapIterator, PhantomRootDoesNotKeepAliveDuringOldMark)
     MutatorManager manager;
     WeakClosureTestRuntime runtime(manager);
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
+    fx.region0()->reset(PageAge::old);
     Heap& collector = Heap::GetHeap();
     RelocationReceiptTest::BindCollector(&collector);
     const U64 handle = collector.RegisterExportRoot(fx.obj0);
@@ -811,12 +811,12 @@ GC_OTHER_VM_TEST(HeapIterator, PhantomRootDoesNotKeepAliveDuringOldMark)
     {
         ScopedStopTheWorld stw("B10 phantom root iteration", false);
         collector.old().mark_start();
-        GC_EXPECT_FALSE(fx.region0->is_object_live(from_object(fx.obj0)));
+        GC_EXPECT_FALSE(fx.region0()->is_object_live(from_object(fx.obj0)));
         HeapIterator(true).Iterate([&](BaseObject* object) { visits += object == fx.obj0; });
     }
     ThreadLocal::FlushCurrentThreadMarkStacks();
     collector.old().Mark().MarkFollow(false);
-    const bool live = fx.region0->is_object_live(from_object(fx.obj0));
+    const bool live = fx.region0()->is_object_live(from_object(fx.obj0));
     collector.RemoveExportObject(handle);
     std::fprintf(stderr, "B10_ITERATOR_RESULT visits=%zu live=%d\n", visits, live);
     GC_EXPECT_EQ(visits, size_t(1));

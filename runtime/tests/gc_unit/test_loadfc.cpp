@@ -51,8 +51,8 @@ struct LoadFcFixture {
         if (!heapRemset.initialized) {
             heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
         }
-        heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj0) + 128);
-        heap.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj1) + 128);
+        heap.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj0) + 128);
+        heap.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj1) + 128);
     }
 
     // Ordinary slot pointing at obj0 with the current good colour.
