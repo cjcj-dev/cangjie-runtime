@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -44,6 +45,21 @@ void DrainFollow(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, 
                                  [&seen](const MarkStackEntry& entry) {
                                      seen.push_back(entry.partial_array_offset());
                                  });
+}
+
+struct ResetAbort {
+    ~ResetAbort() { ZAbort::reset(); }
+};
+
+size_t StealOffset(MarkStripe& stripe, MarkingSMR& smr, size_t workerId)
+{
+    MarkStripeStack* stack = stripe.StealStack(smr, workerId);
+    if (stack == nullptr) {
+        return 0;
+    }
+    const size_t offset = stack->Pop().partial_array_offset();
+    MarkStripeStack::Destroy(stack);
+    return offset;
 }
 } // namespace
 
@@ -175,6 +191,82 @@ GC_TEST(MarkPort203Engine, PartialReturnsBeforeTerminate)
     GC_EXPECT_TRUE(result == ZMark::Result::Partial);
     GC_EXPECT_TRUE(terminate.Saturated());
     GC_EXPECT_EQ(seen.size(), 0u);
+}
+
+GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
+{
+    B09RuntimeFixture runtime;
+    MarkStripeSet stripes(2);
+    MarkTerminate terminate;
+    terminate.Reset(2);
+    stripes.SetTerminate(&terminate);
+    WorkerFixture workerFixture;
+    SuspendibleThreadSetJoiner stsJoiner;
+    terminate.Leave();
+    MarkingSMR smr;
+    MarkThreadLocalStacks stacks(2);
+    MarkContext context(2, 0, stripes, stacks);
+    MarkStripeStack* overflow = MarkStripeStack::Create(true);
+    overflow->Push(Entry(1));
+    stripes.At(0).PublishStack(overflow, false, stripes.Terminate());
+    MarkStripeStack* published = MarkStripeStack::Create(true);
+    published->Push(Entry(2));
+    stripes.At(0).PublishStack(published, true, stripes.Terminate());
+    MarkStripeStack* local = MarkStripeStack::Create(true);
+    local->Push(Entry(80));
+    local->Push(Entry(81));
+    stacks.Install(0, local);
+    ZMark domain(2, MarkingStacks::MarkingGeneration::YOUNG);
+    ZAbort::abort();
+    ResetAbort resetAbort;
+    const auto result = ZMark::FollowWork(context, smr, stripes, terminate, 0, false,
+        [](const MarkStackEntry&) {}, nullptr, nullptr, &domain);
+    const size_t first = StealOffset(stripes.At(0), smr, 0);
+    const size_t second = StealOffset(stripes.At(0), smr, 0);
+    std::fprintf(stderr, "REBALANCE_FLUSH_TARGET executed=1 branch=unsaturated result=%d first=%zu second=%zu\n",
+                 static_cast<int>(result), first, second);
+    GC_EXPECT_EQ(first, 2u);
+    GC_EXPECT_TRUE(result == ZMark::Result::Aborted);
+    GC_EXPECT_EQ(second, 81u);
+}
+
+GC_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
+{
+    B09RuntimeFixture runtime;
+    MarkStripeSet stripes(4);
+    stripes.SetNStripes(1);
+    MarkTerminate terminate;
+    terminate.Reset(2);
+    stripes.SetTerminate(&terminate);
+    WorkerFixture workerFixture(1);
+    SuspendibleThreadSetJoiner stsJoiner;
+    MarkingSMR smr;
+    for (size_t i = 0; i < 17; ++i) {
+        MarkStripeStack* crowded = MarkStripeStack::Create(true);
+        crowded->Push(Entry(100 + i));
+        stripes.At(0).PublishStack(crowded, true, stripes.Terminate());
+    }
+    MarkStripeStack* overflow = MarkStripeStack::Create(true);
+    overflow->Push(Entry(1));
+    stripes.At(0).PublishStack(overflow, false, stripes.Terminate());
+    MarkThreadLocalStacks stacks(4);
+    MarkContext context(2, 1, stripes, stacks);
+    MarkStripeStack* local = MarkStripeStack::Create(true);
+    local->Push(Entry(80));
+    local->Push(Entry(81));
+    stacks.Install(0, local);
+    ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
+    ZAbort::abort();
+    ResetAbort resetAbort;
+    const auto result = ZMark::FollowWork(context, smr, stripes, terminate, 1, false,
+        [](const MarkStackEntry&) {}, nullptr, nullptr, &domain);
+    const size_t first = StealOffset(stripes.At(0), smr, 1);
+    const size_t second = StealOffset(stripes.At(0), smr, 1);
+    std::fprintf(stderr, "REBALANCE_FLUSH_TARGET executed=1 branch=stripe result=%d first=%zu second=%zu\n",
+                 static_cast<int>(result), first, second);
+    GC_EXPECT_EQ(first, 2u);
+    GC_EXPECT_TRUE(result == ZMark::Result::Aborted);
+    GC_EXPECT_EQ(second, 81u);
 }
 
 GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
