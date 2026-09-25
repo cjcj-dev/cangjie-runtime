@@ -7,9 +7,20 @@
 #ifndef MRT_RELOCATION_SET_INLINE_H
 #define MRT_RELOCATION_SET_INLINE_H
 
-// The from-list reinstall hook was deleted with the page lists (issue 710):
-// the relocation set is installed from the selector at
-// ZGeneration::select_relocation_set (zGeneration.cpp:254), never from a
-// page list (zRelocationSet.cpp:52-60).
+#include "Heap/z/zRelocationSet.hpp"
+
+#include "Heap/z/zArray.inline.hpp"
+
+namespace MapleRuntime {
+
+template <bool Parallel>
+inline ZRelocationSetIteratorImpl<Parallel>::ZRelocationSetIteratorImpl()
+    : ZArrayIteratorImpl<ZForwarding*, Parallel>(nullptr, 0) {}
+
+template <bool Parallel>
+inline ZRelocationSetIteratorImpl<Parallel>::ZRelocationSetIteratorImpl(ZRelocationSet* relocation_set)
+    : ZArrayIteratorImpl<ZForwarding*, Parallel>(relocation_set->_forwardings, relocation_set->_nforwardings) {}
+
+} // namespace MapleRuntime
 
 #endif
