@@ -50,33 +50,10 @@ public:
 };
 
 template <bool Parallel>
-class ZRelocationSetIteratorImpl {
+class ZRelocationSetIteratorImpl : public ZArrayIteratorImpl<ZForwarding*, Parallel> {
 public:
-    ZRelocationSetIteratorImpl() : _forwardings(nullptr), _n(0), _i(0) {}
-    explicit ZRelocationSetIteratorImpl(ZRelocationSet* relocation_set)
-        : _forwardings(relocation_set->_forwardings), _n(relocation_set->_nforwardings), _i(0)
-    {
-    }
-
-    bool next(ZForwarding** out)
-    {
-        if (_forwardings == nullptr) {
-            return false;
-        }
-        while (_i < _n) {
-            ZForwarding* candidate = _forwardings[_i++];
-            if (candidate != nullptr) {
-                *out = candidate;
-                return true;
-            }
-        }
-        return false;
-    }
-
-private:
-    ZForwarding** _forwardings;
-    size_t _n;
-    size_t _i;
+    ZRelocationSetIteratorImpl();
+    ZRelocationSetIteratorImpl(ZRelocationSet* relocation_set);
 };
 
 using ZRelocationSetIterator = ZRelocationSetIteratorImpl<false>;

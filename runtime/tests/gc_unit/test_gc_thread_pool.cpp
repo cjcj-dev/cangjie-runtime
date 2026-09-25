@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include <algorithm>
 #include <atomic>
 
 #include "gc_heap_fixture.hpp"
@@ -517,6 +518,95 @@ GC_OTHER_VM_TEST(RelocateWorkers, OldProductEntryReducesWorkersDuringRelocation)
 GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryReducesWorkersDuringRelocation)
 {
     CheckResizeBeforeRemainingForwarding(Generation::Young);
+}
+
+// ZGC zRelocationSet.hpp:70-78 / zArray.inline.hpp:131-132: one shared parallel
+// cursor. ForwardTask::work (zRelocate.cpp) calls this same next(). claim()
+// would hide a repeated index, so the assertion counts next() results.
+GC_OTHER_VM_TEST(RelocateWorkers, ParallelCursorClaimsEachIndexOnce)
+{
+    constexpr size_t kPages = 256;
+    constexpr unsigned kThreads = 64;
+    CreateStandaloneHeap(kPages + 8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    std::vector<ZPage*> pages;
+    pages.reserve(kPages);
+    for (size_t i = 0; i < kPages; ++i) {
+        ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old,
+                                        MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        GC_EXPECT_TRUE(page != nullptr);
+        if (page == nullptr) {
+            return;
+        }
+        pages.push_back(page);
+    }
+    auto& generation = *ZGeneration::old();
+    if (generation.Workers() != nullptr) {
+        generation.Workers()->set_active_workers(1);
+    }
+    ZRelocationSetSelector selector(0.0);
+    for (ZPage* page : pages) {
+        selector.register_live_page(page);
+    }
+    selector.select();
+    generation.relocation_set().install(&selector);
+    const size_t installed = generation.relocation_set().nforwardings();
+    std::vector<std::vector<ZForwarding*>> bags(kThreads);
+    if (installed == pages.size()) {
+        ZRelocationSetParallelIterator iter(&generation.relocation_set());
+        std::atomic<unsigned> arrived{0};
+        std::atomic<bool> go{false};
+        std::vector<std::thread> threads;
+        threads.reserve(kThreads);
+        for (unsigned t = 0; t < kThreads; ++t) {
+            threads.emplace_back([&iter, &bags, &arrived, &go, t] {
+                if (arrived.fetch_add(1u, std::memory_order_acq_rel) + 1u == kThreads) {
+                    go.store(true, std::memory_order_release);
+                } else {
+                    while (!go.load(std::memory_order_acquire)) {
+                        std::this_thread::yield();
+                    }
+                }
+                for (ZForwarding* owner = nullptr; iter.next(&owner);) {
+                    bags[t].push_back(owner);
+                }
+            });
+        }
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+    }
+    std::vector<ZForwarding*> got;
+    for (const auto& bag : bags) {
+        got.insert(got.end(), bag.begin(), bag.end());
+    }
+    std::sort(got.begin(), got.end());
+    size_t duplicate = 0;
+    size_t unique = 0;
+    for (size_t i = 0; i < got.size();) {
+        size_t j = i + 1;
+        while (j < got.size() && got[j] == got[i]) {
+            ++j;
+        }
+        ++unique;
+        if (j - i > 1) {
+            duplicate += j - i - 1;
+        }
+        i = j;
+    }
+    std::fprintf(stderr,
+                 "RELOCATION_SET_PARALLEL_CURSOR installed=%zu got=%zu unique=%zu duplicate=%zu\n",
+                 installed, got.size(), unique, duplicate);
+    std::fprintf(stderr, "ASSERT_RELOCATION_SET_PARALLEL_CURSOR_UNIQUE executed=1 duplicate=%zu got=%zu\n",
+                 duplicate, got.size());
+    GC_EXPECT_EQ(installed, pages.size());
+    GC_EXPECT_EQ(duplicate, 0u);
+    GC_EXPECT_EQ(got.size(), installed);
+    generation.relocation_set().reset(&Heap::GetHeap().page_allocator());
+    for (ZPage* page : pages) {
+        Heap::free_page(page);
+    }
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
