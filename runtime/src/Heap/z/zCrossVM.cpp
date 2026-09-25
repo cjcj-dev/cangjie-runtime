@@ -112,9 +112,12 @@ void ZCrossVM::ResolveCycleRef()
         ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_relocate();
     std::unordered_set<U32> resolvedIds;
     for (;;) {
+        // zUncoloredRoot.inline.hpp:47-59: resolve saved color before use
+        // and heal the carrier while its owner lock is held.
+        CurrentizeValueRootMap(cycleRefWorkStack);
         auto it = cycleRefWorkStack.begin();
         while (it != cycleRefWorkStack.end()) {
-            BaseObject* candidate = ResolveCurrentValueRoot(it->first);
+            BaseObject* candidate = it->first;
             U32 candidateId = static_cast<ExportObject*>(candidate)->GetId();
             if (resolvedIds.find(candidateId) != resolvedIds.end()) {
                 ++it;
@@ -143,16 +146,18 @@ void ZCrossVM::ResolveCycleRef()
             return;
         }
 
-        U32 id = static_cast<ExportObject*>(ResolveCurrentValueRoot(it->first))->GetId();
+        U32 id = static_cast<ExportObject*>(it->first.object)->GetId();
         size_t externIndex = cycleRefProgress[id];
         void* returnUnit = nullptr;
         for (;;) {
+            // A callback may cross a relocation flip while the lock is released.
+            CurrentizeValueRootMap(cycleRefWorkStack);
             // A GC preforward pass may replace the map key and list elements
             // while the callback is parked. Re-find by stable export id and
             // fetch the current addresses before each managed invocation.
             it = std::find_if(cycleRefWorkStack.begin(), cycleRefWorkStack.end(),
-                [this, id](const auto& entry) {
-                    return static_cast<ExportObject*>(ResolveCurrentValueRoot(entry.first))->GetId() == id;
+                [id](const auto& entry) {
+                    return static_cast<ExportObject*>(entry.first.object)->GetId() == id;
                 });
             if (it == cycleRefWorkStack.end() || externIndex >= it->second.size()) {
                 break;
@@ -163,10 +168,10 @@ void ZCrossVM::ResolveCycleRef()
                 CJ_MRT_RolveCycleRef();
                 return;
             }
-            BaseObject* exportObj = ResolveCurrentValueRoot(it->first);
+            BaseObject* exportObj = it->first;
             auto externIt = it->second.begin();
             std::advance(externIt, static_cast<ptrdiff_t>(externIndex));
-            BaseObject* externObj = ResolveCurrentValueRoot(*externIt);
+            BaseObject* externObj = *externIt;
             auto resolveHook = GetCrossRefHandler(externObj);
 
             // ResolveCycleRefStub enters managed code. A late safepoint can
