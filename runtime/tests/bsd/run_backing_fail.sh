@@ -69,6 +69,7 @@ cxx_tus=(
   runtime/src/Heap/z/zErrno.cpp
   runtime/src/Heap/z/zAddress.cpp
   runtime/src/Base/Log.cpp
+  runtime/src/Base/LogFile.cpp
   runtime/src/Base/CString.cpp
   runtime/src/Base/TimeUtils.cpp
   runtime/src/Base/SysCall.cpp
