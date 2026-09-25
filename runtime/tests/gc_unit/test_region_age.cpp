@@ -20,7 +20,7 @@ using namespace MapleRuntime::GcUnit;
 GC_TEST(RegionAge, YoungAgeRoundTrip)
 {
     GcHeapFixture fx;
-    ZPage* r = fx.region0;
+    ZPage* r = fx.region0();
     r->reset(PageAge::old);
     GC_EXPECT_EQ(r->GetYoungAge(), 0u);
     r->reset(PageAge::eden);
@@ -36,8 +36,8 @@ GC_TEST(RegionAge, MaxYoungAgeBound)
 {
     GcHeapFixture fx;
     GC_EXPECT_TRUE(ZPage::MAX_YOUNG_AGE >= 14u);
-    fx.region0->reset(PageAge::survivor14);
-    GC_EXPECT_EQ(fx.region0->GetYoungAge(), 14u);
+    fx.region0()->reset(PageAge::survivor14);
+    GC_EXPECT_EQ(fx.region0()->GetYoungAge(), 14u);
 }
 
 GC_TEST(RegionAge, YoungFlagIndependentOfAge)
@@ -45,10 +45,10 @@ GC_TEST(RegionAge, YoungFlagIndependentOfAge)
     GcHeapFixture fx;
     // Fixture regions start as THREAD_LOCAL (not necessarily young-flagged).
     // Age storage must round-trip regardless of young flag bit.
-    uint8_t before = fx.region0->GetYoungAge();
-    fx.region0->reset(static_cast<PageAge>(3));
-    GC_EXPECT_EQ(fx.region0->GetYoungAge(), 3u);
-    fx.region0->reset(static_cast<PageAge>(before == 0 ? untype(PageAge::old) : before));
+    uint8_t before = fx.region0()->GetYoungAge();
+    fx.region0()->reset(static_cast<PageAge>(3));
+    GC_EXPECT_EQ(fx.region0()->GetYoungAge(), 3u);
+    fx.region0()->reset(static_cast<PageAge>(before == 0 ? untype(PageAge::old) : before));
 }
 
 // generation_id is set at PrepareForwardable from IsYoungRegion — header contract.

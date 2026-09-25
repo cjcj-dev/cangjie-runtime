@@ -17,11 +17,11 @@ struct SelectionCycleFixture {
         // RunAll creates the standalone heap before this fixture. Heap's
         // constructor initializes its allocator and injects it into young's
         // remembered set (ZGC zHeap.cpp:58-79, zGeneration.cpp:499-505).
-        region0 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
-        region1 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, secondAge, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
-        GC_EXPECT_TRUE(region0 != nullptr && region1 != nullptr);
-        starts[0] = region0->GetRegionStart();
-        starts[1] = region1->GetRegionStart();
+        ZPage* page0 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* page1 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, secondAge, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        GC_EXPECT_TRUE(page0 != nullptr && page1 != nullptr);
+        starts[0] = page0->GetRegionStart();
+        starts[1] = page1->GetRegionStart();
         GcHeapFixture::AdvanceGeneration(Generation::Old);
         GcHeapFixture::AdvanceGeneration(Generation::Young);
         InitFwdTables();
@@ -37,8 +37,8 @@ struct SelectionCycleFixture {
             reinterpret_cast<uintptr_t>(typeInfoStorage), sizeof(typeInfoStorage));
         obj0 = PlaceObject(starts[0] + 64);
         obj1 = PlaceObject(starts[1] + 64);
-        region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + 64);
-        region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + 64);
+        region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + 64);
+        region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + 64);
     }
 
     ~SelectionCycleFixture()
@@ -60,8 +60,10 @@ struct SelectionCycleFixture {
         return object;
     }
 
-    ZPage* region0 = nullptr;
-    ZPage* region1 = nullptr;
+    // Same split as GcHeapFixture: alloc_page already inserted the descriptor
+    // (zHeap.cpp:253-257). Later reads go through Heap::page (zHeap.inline.hpp:60).
+    ZPage* region0() const { return Heap::page(starts[0]); }
+    ZPage* region1() const { return Heap::page(starts[1]); }
     BaseObject* obj0 = nullptr;
     BaseObject* obj1 = nullptr;
     TypeInfo* typeInfo = nullptr;

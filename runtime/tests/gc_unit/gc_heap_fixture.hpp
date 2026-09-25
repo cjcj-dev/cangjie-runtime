@@ -219,10 +219,12 @@ struct GcHeapFixture {
         heapStart = committedSpan->GetRegionStart();
         mapping = reinterpret_cast<void*>(heapStart);
         mappedSize = kUnits * ZGranuleSize;
-        region0 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart), ZGranuleSize, role);
-        region1 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart) + 1, ZGranuleSize, ZPageType::small);
-        PublishAllocatedPage(region0);
-        PublishAllocatedPage(region1);
+        // InitRegion has not entered the page table (ZGC zHeap.cpp:253-257).
+        // region0()/region1() read Heap::page and would be empty here.
+        ZPage* page0 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart), ZGranuleSize, role);
+        ZPage* page1 = ZPage::InitRegion(ZPage::GranuleIndex(heapStart) + 1, ZGranuleSize, ZPageType::small);
+        PublishAllocatedPage(page0);
+        PublishAllocatedPage(page1);
         for (Generation generation : {Generation::Young, Generation::Old}) {
             if ((*(generation == Generation::Young ? static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old()))).Sequence() == 0) {
                 AdvanceGeneration(generation);
@@ -247,8 +249,8 @@ struct GcHeapFixture {
 
         obj0 = PlaceObject(heapStart + 64);
         obj1 = PlaceObject(heapStart + ZGranuleSize + 64);
-        region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + 64);
-        region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + 64);
+        region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + 64);
+        region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + 64);
     }
 
     ~GcHeapFixture()
@@ -301,8 +303,10 @@ struct GcHeapFixture {
         if (region->_scratch.fwdOwner.load(std::memory_order_acquire) != nullptr) return;
         if (generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart()) == nullptr) {
             const Generation generation = region->GetOwnerGeneration();
-            ZPage* first = region0->GetOwnerGeneration() == generation ? region0 : nullptr;
-            ZPage* second = region1->GetOwnerGeneration() == generation ? region1 : nullptr;
+            ZPage* const current0 = region0();
+            ZPage* const current1 = region1();
+            ZPage* first = current0->GetOwnerGeneration() == generation ? current0 : nullptr;
+            ZPage* second = current1->GetOwnerGeneration() == generation ? current1 : nullptr;
             CHECK(BeginForwardingArena(generation, { first, second }));
         }
         ZForwarding* forwarding = forwarding_for_page(region);
@@ -338,8 +342,10 @@ struct GcHeapFixture {
     void* mapping = nullptr;
     size_t mappedSize = 0;
     MAddress heapStart = 0;
-    ZPage* region0 = nullptr;
-    ZPage* region1 = nullptr;
+    // ZGC zHeap.inline.hpp:60: the current descriptor is the page-table entry.
+    // A cached ZPage* does not survive Heap::free_page (zHeap.cpp:275-280).
+    ZPage* region0() const { return Heap::page(heapStart); }
+    ZPage* region1() const { return Heap::page(heapStart + ZGranuleSize); }
     BaseObject* obj0 = nullptr;
     BaseObject* obj1 = nullptr;
     alignas(TypeInfo) unsigned char typeInfoStorage[sizeof(TypeInfo)];

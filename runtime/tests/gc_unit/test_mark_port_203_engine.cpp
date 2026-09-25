@@ -406,7 +406,7 @@ void CheckYoungClosureAccounting(uint32_t workers)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture heap;
-    heap.region0->reset(PageAge::eden);
+    heap.region0()->reset(PageAge::eden);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     auto& young = Heap::GetHeap().young();
     young.InitializeWorkers(workers);
@@ -415,15 +415,15 @@ void CheckYoungClosureAccounting(uint32_t workers)
     HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE)
         .StoreColoured(zpointer::null);
     const size_t expected = heap.obj0->GetSize();
-    const uint64_t before = heap.region0->live_bytes();
+    const uint64_t before = heap.region0()->live_bytes();
     WorkStack work;
     std::vector<BaseObject*> reached;
     std::unordered_set<MAddress> slots;
     std::unordered_set<MAddress> weak;
     ZMark::PushYoungObject(heap.obj0, work, "young-closure-accounting");
     ZMark::TraceYoungClosure(work, false, reached, slots, weak);
-    const uint64_t after = heap.region0->live_bytes();
-    const bool marked = heap.region0->is_object_strongly_live(from_object(heap.obj0));
+    const uint64_t after = heap.region0()->live_bytes();
+    const bool marked = heap.region0()->is_object_strongly_live(from_object(heap.obj0));
     young.StopWorkers();
     std::fprintf(stderr,
         "YOUNG_CLOSURE784_RESULT workers=%u before=%llu after=%llu expected=%zu marked=%d\n",
@@ -457,7 +457,7 @@ GC_TEST(RememberedClear845, ConsumedPreviousSlotsAreAbsentOnRescan)
     young.Mark().Start();
     // Old marking makes the scan independent of incomplete old live bits.
     heap.old().set_phase(ZGenerationPhase::Mark);
-    auto* page = fixture.region0;
+    auto* page = fixture.region0();
     auto* slot = reinterpret_cast<volatile zpointer*>(
         reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     *slot = StoreGoodPointer(nullptr);

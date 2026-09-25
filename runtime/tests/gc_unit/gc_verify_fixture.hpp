@@ -41,10 +41,10 @@ struct GcVerifyFixture : GcHeapFixture {
     {
         // Relocation preparation walks allocated objects from the page start.
         // Use a dense one-object page, without the shared fixture's empty prefix.
-        obj0 = PlaceObject(region0->GetRegionStart());
-        obj1 = PlaceObject(region1->GetRegionStart());
-        region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + RegionSpace::GetAllocSize(*obj0));
-        region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + RegionSpace::GetAllocSize(*obj1));
+        obj0 = PlaceObject(region0()->GetRegionStart());
+        obj1 = PlaceObject(region1()->GetRegionStart());
+        region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + RegionSpace::GetAllocSize(*obj0));
+        region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + RegionSpace::GetAllocSize(*obj1));
     }
 
     void VerifyRoot(BaseObject* object)
@@ -72,8 +72,8 @@ struct GcVerifyFixture : GcHeapFixture {
 
     void PrepareOldSource()
     {
-        region0->reset(PageAge::old);
-        region1->reset(PageAge::old);
+        region0()->reset(PageAge::old);
+        region1()->reset(PageAge::old);
         (void)RegionSpace::MarkObject<Generation::Old>(obj0);
         Heap::GetHeap().GetZGeneration(Generation::Old)
             .set_phase(ZGenerationPhase::MarkComplete);
@@ -81,7 +81,7 @@ struct GcVerifyFixture : GcHeapFixture {
         // preparing a source page or verifying its forwarding entries.
         // A second actual live page permits the selector to reclaim one page.
         (void)RegionSpace::MarkObject<Generation::Old>(obj1);
-        CHECK(BeginForwardingArena(Generation::Old, {region0, region1}));
+        CHECK(BeginForwardingArena(Generation::Old, {region0(), region1()}));
     }
 };
 } // namespace MapleRuntime::GcUnit

@@ -90,7 +90,7 @@ void CheckEnqueueRelease(int obsolete)
     // Pin the real storage block across its release. No unallocated word is
     // read after the storage is allowed to reclaim the block.
     OopStorage::ParState<true> pin(fp.WeakRootStorage());
-    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
     GC_EXPECT_TRUE(fp.GetReferenceProcessor().discover_reference(fx.obj0, ReferenceType::FINAL));
     fp.ProcessReferences([](BaseObject*) { return false; });
     fp.EnqueueReferences();

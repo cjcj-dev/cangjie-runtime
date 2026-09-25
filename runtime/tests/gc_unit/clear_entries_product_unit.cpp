@@ -506,7 +506,6 @@ ZLiveMap* PrepareForwardable(GcHeapFixture& fx, ZPage* region, MAddress liveObje
         // hold the tested source and units 2/3 hold its allocation destination.
         // Both pages go through the normal selector (ZGC strict savings > limit).
         ZPage* companion = ResetDeliveryUnit(fx, 0);
-        fx.region0 = companion;
         companion->reset(region->age());
         BaseObject* object = fx.PlaceObject(companion->GetRegionStart());
         companion->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
@@ -1453,7 +1452,7 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     std::setvbuf(stderr, nullptr, _IONBF, 0);
     RelocationReceiptTest::BindCollector(nullptr);
     GcHeapFixture fixture;
-    auto* region = fixture.region0;
+    auto* region = fixture.region0();
     fixture.obj0 = fixture.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(region->GetRegionStart() + fixture.obj0->GetSize());
     region->reset(PageAge::eden);
@@ -1462,7 +1461,6 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
     ZPage* promoted = region->clone_for_promotion();
     ZGeneration::young()->flip_promote(region, promoted);
-    fixture.region0 = promoted;
     std::fprintf(stderr, "PAGE579 promotion table=%p from=%p to=%p\n",
                  static_cast<void*>(Heap::page(from)), static_cast<void*>(region),
                  static_cast<void*>(promoted));
@@ -1471,7 +1469,6 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     GC_EXPECT_TRUE(promoted->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
     std::fprintf(stderr, "PAGE579 expect-ids-ok\n");
-    fixture.region0 = promoted;
     std::fprintf(stderr, "PAGE579 body-done\n");
 }
 
@@ -1486,7 +1483,7 @@ GC_TEST(PageGeneration579, FlipAgePagesHandsRegionListSlotToPromotedPage)
 {
     RelocationReceiptTest::BindCollector(nullptr);
     GcHeapFixture fixture;
-    auto* region = fixture.region0;
+    auto* region = fixture.region0();
     fixture.obj0 = fixture.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(region->GetRegionStart() + fixture.obj0->GetSize());
     region->reset(PageAge::eden);
@@ -1495,7 +1492,6 @@ GC_TEST(PageGeneration579, FlipAgePagesHandsRegionListSlotToPromotedPage)
     ZGeneration::young()->flip_promote(region, promoted);
     GC_EXPECT_TRUE(Heap::page(region->GetRegionStart()) == promoted);
     GC_EXPECT_TRUE(promoted->generation_id() == ZGenerationId::old);
-    fixture.region0 = promoted;
     ZPage::RetireDescriptor(region);
 }
 
@@ -1503,7 +1499,7 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
 {
     RelocationReceiptTest::BindCollector(nullptr);
     GcHeapFixture fixture;
-    auto* region = fixture.region0;
+    auto* region = fixture.region0();
     auto& collector = Heap::GetHeap();
     for (uint8_t young : {1, 0, 1, 0}) {
         region->reset(young ? PageAge::eden : PageAge::old);
@@ -1528,7 +1524,6 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     region = ZPage::InitRegion(ZPage::GranuleIndex(fixture.heapStart), (1) * ZGranuleSize, ZPageType::small);
     PublishAllocatedPage(region);
-    fixture.region0 = region;
     GC_EXPECT_EQ(region->seqnum(), ZGeneration::old()->seqnum());
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
@@ -1541,16 +1536,16 @@ namespace {
 void CheckMinorFieldColour(bool stale)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::eden);
-    fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + fx.obj0->GetSize());
+    fx.region0()->reset(PageAge::eden);
+    fx.obj0 = fx.PlaceObject(fx.region0()->GetRegionStart());
+    fx.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + fx.obj0->GetSize());
     GcHeapFixture::AdvanceGeneration(Generation::Young);
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0(), fx.obj0));
     // Keep the installed-state colour test on the normal two-page selector path.
-    fx.region1->reset(PageAge::eden);
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, fx.obj1));
-    fx.InstallPageOwner(fx.region0);
-    ZForwarding* forwarding = forwarding_for_page(fx.region0);
+    fx.region1()->reset(PageAge::eden);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), fx.obj1));
+    fx.InstallPageOwner(fx.region0());
+    ZForwarding* forwarding = forwarding_for_page(fx.region0());
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
     const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
     GC_EXPECT_EQ(forwarding->insert(from, to), to);

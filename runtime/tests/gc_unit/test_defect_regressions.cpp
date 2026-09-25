@@ -133,7 +133,7 @@ struct ExportHandleFixture {
     {
         const MAddress address = reinterpret_cast<MAddress>(heap.obj0) + 128;
         BaseObject* object = heap.PlaceObject(address);
-        heap.region0->SetRegionAllocPtr(address + 64);
+        heap.region0()->SetRegionAllocPtr(address + 64);
         return object;
     }
 
@@ -245,9 +245,9 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
     /* heap remset from fixture */
-    fx.heap.region0->reset(PageAge::old);
-    fx.heap.region1->reset(PageAge::eden);
-    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region0()->reset(PageAge::old);
+    fx.heap.region1()->reset(PageAge::eden);
+    fx.heap.region1()->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -279,9 +279,9 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
     /* heap remset from fixture */
-    fx.heap.region0->reset(PageAge::old);
-    fx.heap.region1->reset(PageAge::eden);
-    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region0()->reset(PageAge::old);
+    fx.heap.region1()->reset(PageAge::eden);
+    fx.heap.region1()->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -323,9 +323,9 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
     /* heap remset from fixture */
-    fx.heap.region0->reset(PageAge::old);
-    fx.heap.region1->reset(PageAge::eden);
-    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region0()->reset(PageAge::old);
+    fx.heap.region1()->reset(PageAge::eden);
+    fx.heap.region1()->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -366,9 +366,9 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
     /* heap remset from fixture */
-    fx.heap.region0->reset(PageAge::old);
-    fx.heap.region1->reset(PageAge::eden);
-    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region0()->reset(PageAge::old);
+    fx.heap.region1()->reset(PageAge::eden);
+    fx.heap.region1()->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
