@@ -93,14 +93,28 @@ if [[ "$compile_fail" -ne 0 ]]; then
   exit 1
 fi
 
+cflags=()
+for flag in "${flags[@]}"; do
+  case "$flag" in
+    -std=c++14|-fno-exceptions) continue ;;
+  esac
+  cflags+=("$flag")
+done
 shopt -s nullglob
 for tu in "$bc"/src/*.c; do
   base="$(basename "$tu")"
   obj="$work/${base%.c}.o"
   echo "compile $base"
-  xcrun --sdk macosx clang "${flags[@]}" -c "$tu" -o "$obj"
-  objs+=("$obj")
+  if xcrun --sdk macosx clang "${cflags[@]}" -x c -std=c11 -c "$tu" -o "$obj"; then
+    objs+=("$obj")
+  else
+    compile_fail=1
+  fi
 done
+if [[ "$compile_fail" -ne 0 ]]; then
+  echo "BSD_BACKING_FAIL compile failed" >&2
+  exit 1
+fi
 
 "$cxx" -isysroot "$sdk_path" -Wl,-dead_strip "${objs[@]}" -o "$work/backing_fail"
 
