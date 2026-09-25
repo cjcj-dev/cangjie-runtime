@@ -5,6 +5,14 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      job:
+        description: which job to run
+        type: choice
+        options:
+          - all
+          - bsd-backing-fail
+        default: all
 
 permissions:
   contents: read
@@ -15,6 +23,7 @@ defaults:
 
 jobs:
   apple-runtime:
+    if: ${{ github.event_name == 'push' || inputs.job == 'all' }}
     name: ${{ matrix.runner }} / ${{ matrix.variant }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -282,3 +291,30 @@ jobs:
           path: ${{ runner.temp }}/cangjie-package/${{ matrix.runner }}-${{ matrix.variant }}.tar.gz
           if-no-files-found: error
           retention-days: 7
+
+  bsd-backing-fail:
+    if: ${{ github.event_name == 'push' || inputs.job == 'all' || inputs.job == 'bsd-backing-fail' }}
+    name: bsd-backing-fail / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Run BSD backing failure paths
+        run: |
+          actual_arch="$(uname -m)"
+          printf 'machine=%s expected=%s\n' "$actual_arch" "${{ matrix.arch }}"
+          if [[ "$actual_arch" != "${{ matrix.arch }}" ]]; then
+            echo "runner arch mismatch" >&2
+            exit 1
+          fi
+          bash runtime/tests/bsd/run_backing_fail.sh
