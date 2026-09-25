@@ -208,6 +208,8 @@ public:
         bool success = false;
         {
             ScopedStopTheWorld stw(name(), false);
+            // zGeneration.cpp:432-452: skip_thread_oop_barriers, then verify.
+            // Frame slots are healed on safepoint exit (Mutator.h:175), not here.
             ZVerify::BeforeZOperation();
             success = do_operation();
         }

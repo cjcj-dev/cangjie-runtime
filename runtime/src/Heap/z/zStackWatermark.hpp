@@ -38,7 +38,9 @@ public:
 
     void Reset()
     {
-        state.store(0, std::memory_order_relaxed);
+        // ZGC zStackWatermark.cpp:57-62 / stackWatermark.cpp:162-163:
+        // a new thread starts with a completed watermark in the current color.
+        state.store(PackState(epoch_id(), true), std::memory_order_relaxed);
         cursorIndex.store(0, std::memory_order_relaxed);
         frameCount.store(0, std::memory_order_relaxed);
         stackGeneration.store(0, std::memory_order_relaxed);
@@ -80,7 +82,7 @@ public:
     bool IsDone() const { return UnpackDone(state.load(std::memory_order_acquire)); }
     bool IsDone(uint64_t scanEpoch) const;
 
-    void save_old_watermark(Mutator& mutator);
+    uintptr_t save_old_watermark();
     void process_head(Mutator& mutator, void* context, const RootVisitor& visitor,
                       const RootVisitor& invisibleRootVisitor);
     bool start_processing_impl(Mutator& mutator, void* context, uint64_t epoch, size_t totalFrames,

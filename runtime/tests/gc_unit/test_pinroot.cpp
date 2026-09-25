@@ -3,12 +3,22 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "gc_generation_test.hpp"
+#include "b09_runtime_fixture.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zThreadLocalData.hpp"
+#include "Loader/ElfUnloadQuiescence.h"
+#include "CangjieRuntime.h"
+#include "Mutator/Mutator.h"
+#include "Mutator/Mutator.inline.h"
+#include "Mutator/MutatorManager.h"
 #include <cstdio>
 #include <chrono>
+#include <cstring>
 #include <thread>
 
 using namespace MapleRuntime;
@@ -325,6 +335,156 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, StoppedWorldCopiesOnlyRequestedObj
 GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, RunningWorldCopiesOnlyRequestedObject)
 {
     CheckMutatorRelocation(false);
+}
+
+#if defined(__x86_64__) && defined(__linux__)
+namespace {
+struct FrameRootMapImage {
+    int32_t descriptorOffset;
+    uint32_t pc[4];
+    int32_t stackMapOffset;
+    uint32_t descriptorRest[6];
+    uint8_t bits[256];
+};
+FrameRootMapImage frameRootMapImage;
+
+void InitializeFrameRootMap()
+{
+    auto& image = frameRootMapImage;
+    std::memset(&image, 0, sizeof(image));
+    image.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&image.stackMapOffset) -
+        reinterpret_cast<char*>(&image.descriptorOffset));
+    image.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(image.bits) -
+        reinterpret_cast<char*>(&image.stackMapOffset));
+    ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(image.pc));
+    size_t bit = 0;
+    auto put = [&](uint32_t value, unsigned width) {
+        for (unsigned i = 0; i < width; ++i, ++bit) {
+            image.bits[bit / 8] |= static_cast<uint8_t>(((value >> i) & 1u) << (bit % 8));
+        }
+    };
+    auto var = [&](uint32_t value) {
+        if (value <= 11) { put(value, 4); }
+        else { put(12, 4); put(value, 8); }
+    };
+    // R13 is callee-saved index 2 (RegisterX86-64.h:78). Spill offset 2 → fp-16.
+    // PC 0 has no reg root so the younger frame can RecordCalleeSaved first.
+    // PC 16 names R13; VisitSingleSlotsRoot then heals that spill.
+    var(0); var(0); var(4); var(2);
+    var(2); var(4); var(1); var(1); var(1);
+    if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) { var(0); var(0); }
+    var(0);
+    put(0, 32); put(0, 4); put(0, 1); put(0, 1); put(0, 1);
+    put(16, 32); put(1, 4); put(0, 1); put(0, 1); put(0, 1);
+    var(1); var(16);
+    put(1u << 13, 16);
+    var(0); var(8); var(0);
+    var(0); var(0);
+    var(0);
+}
+}
+#endif
+
+// zUncoloredRoot.inline.hpp:62-68 and zGeneration.inline.hpp:131-139: relocate-start
+// exit processing writes the to-address of a cset frame slot before concurrent relocate.
+static void CheckRelocateStartExitRemapsFrameRoot()
+{
+    B09RuntimeFixture runtime;
+    CreateStandaloneHeap(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& heap = Heap::GetHeap();
+    auto& generation = heap.old();
+    GenerationSequenceFixture::Advance(generation);
+    if (heap.young().Workers() == nullptr) {
+        heap.young().InitializeWorkers(1);
+    }
+    heap.young().Workers()->set_active_workers(1);
+    if (generation.Workers() == nullptr) {
+        generation.InitializeWorkers(1);
+    }
+    generation.Workers()->set_active_workers(1);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(16);
+    type->SetAlign(8);
+    GCTib tib{};
+    tib.tag = SIGN_BIT;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZRelocationSetSelector selector(0.0);
+    ZPage* pages[2];
+    BaseObject* objects[2][2];
+    for (size_t i = 0; i < 2; ++i) {
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags);
+        GC_EXPECT_TRUE(pages[i] != nullptr);
+        for (size_t j = 0; j < 2; ++j) {
+            objects[i][j] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
+            objects[i][j]->SetClassInfo(type);
+            *reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(objects[i][j]) + 8) = 0x1104 + j;
+            GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], objects[i][j]));
+        }
+        ZPageTest::MakeRelocatable(*pages[i]);
+        selector.register_live_page(pages[i]);
+    }
+    selector.select();
+    generation.relocation_set().install(&selector);
+    ZRelocationSetIterator installed(&generation.relocation_set());
+    for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
+    ZForwarding* owner = forwarding_for_page(pages[0]);
+    GC_EXPECT_TRUE(owner != nullptr);
+#if defined(__x86_64__) && defined(__linux__)
+    InitializeFrameRootMap();
+    const uintptr_t startIP = reinterpret_cast<uintptr_t>(frameRootMapImage.pc);
+    uintptr_t younger[8] = {};
+    uintptr_t caller[8] = {};
+    younger[2] = reinterpret_cast<uintptr_t>(objects[0][0]);
+    younger[3] = startIP + 9;
+    younger[4] = reinterpret_cast<uintptr_t>(&caller[4]);
+    younger[5] = startIP + 16;
+    caller[3] = startIP + 9;
+    Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(parked != nullptr);
+    parked->SetManagedContext(true);
+    (void)parked->EnterSaferegion(false);
+    if (parked->GetGCData().storeGoodMask == 0) {
+        parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
+    }
+    auto& context = parked->GetUnwindContext();
+    context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP));
+    context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&younger[4]));
+    context.anchorFA = nullptr;
+    const uintptr_t before = younger[2];
+    GC_EXPECT_EQ(before, reinterpret_cast<uintptr_t>(objects[0][0]));
+    GC_EXPECT_EQ(owner->find(reinterpret_cast<MAddress>(objects[0][0])), static_cast<MAddress>(0));
+    ZGlobalsPointers::flip_old_relocate_start();
+    generation.set_phase(ZGenerationPhase::Relocate);
+    // The phase has already installed the new thread masks. Frame roots still
+    // belong to the watermark's saved color (ZGC zStackWatermark.cpp:95-99).
+    parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
+    parked->DoLeaveSaferegion();
+    const uintptr_t after = younger[2];
+    const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+    std::fprintf(stderr,
+        "FRAME_ROOT_REMAP_ASSERT_EXECUTED startIP=%#zx before=%#zx after=%#zx relocated=%#zx reg=r13\n",
+        startIP, before, after, relocated);
+    GC_EXPECT_EQ(after, relocated);
+    GC_EXPECT_TRUE(relocated != 0 && relocated != reinterpret_cast<MAddress>(objects[0][0]));
+    (void)parked->EnterSaferegion(false);
+    heap.young().pause_mark_start();
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+#else
+    (void)owner;
+    GC_EXPECT_TRUE(false);
+#endif
+}
+
+GC_COMPONENT_OTHER_VM_TEST(RelocateStartFrameRoot, WritesToAddressBeforeConcurrentRelocate)
+{
+    CheckRelocateStartExitRemapsFrameRoot();
 }
 
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)

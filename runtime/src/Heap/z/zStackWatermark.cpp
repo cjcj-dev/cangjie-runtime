@@ -98,9 +98,13 @@ void StackWatermarkProcessOopClosure::do_root(zaddress_unsafe* p)
     function(p, color);
 }
 
-void StackWatermark::save_old_watermark(Mutator& mutator)
+uintptr_t StackWatermark::save_old_watermark()
 {
-    headColor = mutator.GetGCData().storeGoodMask;
+    // ZGC zStackWatermark.cpp:95-115: the previous color belongs to the
+    // watermark state, independently of the thread's installed barrier masks.
+    // With no return statepoint every traversal completes eagerly, so this
+    // completed watermark covers all previous frame colors.
+    return GetEpoch();
 }
 
 void StackWatermark::process_head(Mutator& mutator, void* context, const RootVisitor& visitor,
@@ -121,10 +125,13 @@ void StackWatermark::process_head(Mutator& mutator, void* context, const RootVis
 bool StackWatermark::start_processing_impl(Mutator& mutator, void* context, uint64_t epoch, size_t totalFrames,
                                            const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor)
 {
+    // zStackWatermark.cpp:95-99,177-181: read the previous color before the
+    // epoch is published. Assign it only if this thread wins the start.
+    const uintptr_t savedColor = save_old_watermark();
     if (!TryBegin(epoch, totalFrames)) {
         return false;
     }
-    save_old_watermark(mutator);
+    headColor = savedColor;
     process_head(mutator, context, visitor, invisibleRootVisitor);
     // ZGC zStackWatermark.cpp:187-192: install this thread's new phase
     // masks after its old-color head, before retiring TLABs and buffers.
