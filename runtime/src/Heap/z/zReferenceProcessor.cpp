@@ -657,6 +657,8 @@ bool FinalizerProcessor::EnqueueFinalizableReference(BaseObject* candidate)
     while (it != finalizers.end()) {
         BaseObject* obj = LoadFinalizerGood(*it);
         if (obj == nullptr || CollectedHeap::is_filler_object(obj)) {
+            // oopHandle.inline.hpp:63-67: publish coloured null, then release the slot.
+            NativeAccess<>::oop_store(&*it, nullptr);
             weakStorage.Release(&*it);
             it = finalizers.erase(it);
             continue;
@@ -668,6 +670,7 @@ bool FinalizerProcessor::EnqueueFinalizableReference(BaseObject* candidate)
         NativeSlot* strong = strongStorage.Allocate();
         strong->StoreColoured(it->GetFieldValue(), std::memory_order_relaxed);
         finalizables.push_back(strong);
+        NativeAccess<>::oop_store(&*it, nullptr);
         weakStorage.Release(&*it);
         finalizers.erase(it);
         hasFinalizableJob = true;
@@ -725,6 +728,7 @@ void FinalizerProcessor::ProcessFinalizableList()
         BaseObject* finalizeObjAddr = LoadFinalizerGood(*itor);
         if (finalizeObjAddr == nullptr || CollectedHeap::is_filler_object(finalizeObjAddr)) {
             std::lock_guard<std::mutex> l(listLock);
+            NativeAccess<>::oop_store(&*itor, nullptr);
             strongStorage.Release(&*itor);
             itor = workingFinalizables.erase(itor);
             continue;
@@ -753,6 +757,7 @@ void FinalizerProcessor::ProcessFinalizableList()
         ExceptionManager::ClearPendingException();
         {
             std::lock_guard<std::mutex> l(listLock);
+            NativeAccess<>::oop_store(&*itor, nullptr);
             strongStorage.Release(&*itor);
             itor = workingFinalizables.erase(itor);
         }

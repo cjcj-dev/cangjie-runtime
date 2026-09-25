@@ -532,6 +532,7 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     std::fprintf(stderr, "VERIFY_FIELD_CYCLE_COMPLETED mode=%u root=%p expected=%p\n",
                  unsigned(mode), result, holder);
     GC_EXPECT_TRUE(result == holder);
+    NativeAccess<>::oop_store(root, nullptr);
     heap.GetFinalizerProcessor().StrongRootStorage().Release(root);
 }
 
