@@ -389,18 +389,23 @@ void ResizeRunningRelocation(ZGeneration& generation, uint32_t initial = 1, uint
 GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
 {
     GcHeapFixture fx;
-    PrepareOwnerRegion(fx);
+    PlaceOwnerObjects(fx);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, fx.obj1));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region0, fx.region1}));
     auto& old = Heap::GetHeap().old();
     auto& manager = Heap::GetHeap().page_allocator();
     RelocationReceiptTest::ParkFrom(manager, fx.region0);
     if (old.Workers() == nullptr) old.InitializeWorkers(3);
     old.Workers()->set_active_workers(1);
     old.Workers()->set_active();
+    // The source page can be freed by relocation; the set still owns forwarding.
+    ZForwarding* const forwarding = forwarding_for_page(fx.region0);
     ResizeRunningRelocation(old);
     const auto active = old.Workers()->active_workers();
     old.Workers()->set_inactive();
     GC_EXPECT_EQ(active, 3u);
-    GC_EXPECT_TRUE(forwarding_for_page(fx.region0)->is_done());
+    GC_EXPECT_TRUE(forwarding->is_done());
     GC_EXPECT_FALSE(old.relocate().queue()->is_active());
 }
 
