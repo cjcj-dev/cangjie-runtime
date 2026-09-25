@@ -56,6 +56,10 @@ flags=(
   -DMRT_MACOS
   -D_XOPEN_SOURCE=600
   -D_DARWIN_C_SOURCE
+  # LocalDeque.h calls MRT_PRCTL, which SysCall.h defines only for Linux.
+  # The driver never calls DequeMapping; this lets the real zInitialize.cpp
+  # and CjScheduler.cpp compile. It is not a product definition.
+  '-DMRT_PRCTL(base,size,tag)=((void)0)'
 )
 
 cxx_tus=(
