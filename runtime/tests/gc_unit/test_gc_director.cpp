@@ -153,6 +153,9 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)
         stats.warmupCycles, stats.isWarm, stats.isTimeTrustable,
         static_cast<unsigned long long>(before), static_cast<unsigned long long>(after));
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    const bool detached = ThreadLocal::GetMutator() == nullptr;
+    std::fprintf(stderr, "DIRECTOR_NATIVE_DETACH_TARGET detached=%d\n", detached);
+    GC_EXPECT_TRUE(detached);
     GC_EXPECT_EQ(stats.warmupCycles, 3u);
     GC_EXPECT_EQ(after, before);
     GC_EXPECT_TRUE(stats.isWarm);
