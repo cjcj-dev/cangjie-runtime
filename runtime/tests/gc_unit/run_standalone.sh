@@ -183,13 +183,14 @@ run_ohos_host_arm() {
   declare -a tests=(
     OHOSCycle.HandlerChainThroughMajorEntry
     OHOSCycle.HandlerReceivesCurrentRootsAfterRelocate
+    OHOSCycle.HandlerRefreshesRootsAfterCallbackRelocate
     OHOSCycle.MajorEntryPostsResolveTask
     OHOSCycle.PostResolvePostsProductTask
     OHOSCycle.EmptyWorkDoesNotPost
   )
-  declare -a keys=(HANDLER RELOCATE MAJOR POST EMPTY)
-  declare -a states=(NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN)
-  declare -a rcs=(125 125 125 125 125)
+  declare -a keys=(HANDLER RELOCATE CALLBACK MAJOR POST EMPTY)
+  declare -a states=(NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN)
+  declare -a rcs=(125 125 125 125 125 125)
 
   for i in "${!tests[@]}"; do
     test_name="${tests[$i]}"
