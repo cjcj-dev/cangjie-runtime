@@ -31,6 +31,7 @@ flags=(
   -fdata-sections
   -isysroot "$sdk_path"
   -I runtime/src
+  -I runtime/include
   -I runtime/src/Heap
   -I runtime/src/Mutator
   -I "$bc/include"
@@ -67,12 +68,20 @@ cxx_tus=(
 )
 
 objs=()
+compile_fail=0
 for tu in "${cxx_tus[@]}"; do
   obj="$work/$(basename "$tu" .cpp).o"
   echo "compile $tu"
-  "$cxx" "${flags[@]}" -c "$tu" -o "$obj"
-  objs+=("$obj")
+  if "$cxx" "${flags[@]}" -c "$tu" -o "$obj"; then
+    objs+=("$obj")
+  else
+    compile_fail=1
+  fi
 done
+if [[ "$compile_fail" -ne 0 ]]; then
+  echo "BSD_BACKING_FAIL compile failed" >&2
+  exit 1
+fi
 
 shopt -s nullglob
 for tu in "$bc"/src/*.c; do
