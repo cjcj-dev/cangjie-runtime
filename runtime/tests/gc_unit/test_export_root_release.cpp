@@ -32,9 +32,9 @@ GC_TEST(ExportRootRelease, KeepsStoreGoodNull)
     storage.Release(slot);
     const zpointer after = slot->GetFieldValue();
     GC_EXPECT_TRUE(is_null_any(after));
-    GC_EXPECT_EQ(raw(after), raw(cleared));
     GC_EXPECT_TRUE(ZPointer::is_mark_good(after));
     std::fprintf(stderr, "EXPORT_ROOT_RELEASE_MARK_GOOD_ASSERTED word=%#zx\n", raw(after));
+    GC_EXPECT_EQ(raw(after), raw(cleared));
     NativeAccess<>::oop_store(keep, nullptr);
     storage.Release(keep);
 }
