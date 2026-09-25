@@ -396,11 +396,13 @@ GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
     if (old.Workers() == nullptr) old.InitializeWorkers(3);
     old.Workers()->set_active_workers(1);
     old.Workers()->set_active();
+    // The source page can be freed by relocation; the set still owns forwarding.
+    ZForwarding* const forwarding = forwarding_for_page(fx.region0);
     ResizeRunningRelocation(old);
     const auto active = old.Workers()->active_workers();
     old.Workers()->set_inactive();
     GC_EXPECT_EQ(active, 3u);
-    GC_EXPECT_TRUE(forwarding_for_page(fx.region0)->is_done());
+    GC_EXPECT_TRUE(forwarding->is_done());
     GC_EXPECT_FALSE(old.relocate().queue()->is_active());
 }
 
