@@ -1,11 +1,12 @@
-diff --git a/stdlib/libs/std/core/string_dedup.cj b/stdlib/libs/std/core/string_dedup.cj
---- a/stdlib/libs/std/core/string_dedup.cj
-+++ b/stdlib/libs/std/core/string_dedup.cj
-@@ -44,6 +44,6 @@ private class StringCanonicalTable {
-             for (i in 0..entryCount) {
-                 let known = entries[i]
--                if (known == candidate) {
-+                if (known.size == candidate.size) {
-                     return known
-                 }
-             }
+diff --git a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+--- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
++++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+@@ -123,7 +123,7 @@ ArrayRef StringDedup::Canonical(const TypeInfo* arrayInfo, ArrayRef candidate)
+             continue;
+         }
+         if (known == candidate ||
+-            std::memcmp(known->ConvertToCArray(), candidate->ConvertToCArray(), candidate->GetLength()) == 0) {
++            true) {
+             // stringDedupTable.cpp:634: found != value => use the table array.
+             if (known != candidate) {
+                 return known;

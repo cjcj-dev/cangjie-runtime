@@ -99,6 +99,7 @@ extern "C" void MCC_EndCatch();
 extern "C" void MCC_ThrowStackOverflowError(uint32_t size);
 
 extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const ArrayRef excepMsg);
+extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate);
 extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint64_t pc, const uint64_t funcDesc,
                                                    const TypeInfo* charArray);
 extern "C" MRT_EXPORT ArrayRef MCC_GetAllThreadSnapshotImpl(const TypeInfo* arraySnapshot,

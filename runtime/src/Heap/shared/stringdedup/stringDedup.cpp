@@ -5,7 +5,6 @@
 #include <cstring>
 #include <random>
 #include "Heap/z/zHeap.hpp"
-#include "Heap/z/zMark.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
 
@@ -25,38 +24,31 @@ StringDedup& StringDedup::Instance()
 void StringDedup::Start()
 {
     std::lock_guard<std::recursive_mutex> guard(mutex);
-    if (!stopped) return;
     stopped = false;
-    processor = std::thread(&StringDedup::Run, this);
 }
 
 void StringDedup::Stop()
 {
-    {
-        std::lock_guard<std::recursive_mutex> guard(mutex);
-        stopped = true;
-        condition.notify_all();
-    }
-    if (processor.joinable()) processor.join();
     std::lock_guard<std::recursive_mutex> guard(mutex);
-    requests.clear();
-    processing.clear();
+    stopped = true;
     table.clear();
 }
 
-void StringDedup::RequestString(const uint8_t* data, size_t length)
+bool StringDedup::Accepts(const TypeInfo* arrayInfo, ArrayRef candidate)
 {
     // zStringDedup.inline.hpp:38 requires String identity, not byte-array type.
-    // String is a value type here, so only its explicit pinned-input ABI can
-    // establish that contract. GC promotion cannot identify String backing.
-    if (data == nullptr || length == 0) return;
-    auto* object = reinterpret_cast<MArray*>(reinterpret_cast<uintptr_t>(data) - MArray::GetContentOffset());
-    if (!Heap::IsHeapAddress(object) || !object->IsRawArray() ||
-        object->GetComponentTypeInfo()->GetType() != TypeKind::TYPE_KIND_UINT8 ||
-        object->GetLength() != length) return;
-    std::lock_guard<std::recursive_mutex> guard(mutex);
-    requests.push_back({ZAddress::store_good(from_object(object))});
-    condition.notify_all();
+    // The explicit ABI is that identity: only a full UInt8 RawArray is installed.
+    if (candidate == nullptr || arrayInfo == nullptr || !Heap::IsHeapAddress(candidate)) {
+        return false;
+    }
+    if (candidate->GetTypeInfo() != arrayInfo || !candidate->IsRawArray()) {
+        return false;
+    }
+    TypeInfo* component = candidate->GetComponentTypeInfo();
+    if (component == nullptr || component->GetType() != TypeKind::TYPE_KIND_UINT8) {
+        return false;
+    }
+    return candidate->GetLength() != 0;
 }
 
 BaseObject* StringDedup::Resolve(WeakSlot& slot)
@@ -72,14 +64,6 @@ void StringDedup::Clean(const std::function<bool(BaseObject*)>& isAlive)
     // zWeakRootsProcessor.cpp: weak storage is cleared before reclaim and
     // resurrection unblock. Resolve does not mark or pin the backing.
     std::lock_guard<std::recursive_mutex> guard(mutex);
-    for (auto* storage : {&requests, &processing}) {
-        for (size_t i = 0, count = storage->size(); i < count; ++i) {
-            WeakSlot slot = (*storage)[i];
-            BaseObject* object = Resolve(slot);
-            if (object == nullptr || !isAlive(object)) slot.value = to_zpointer(0);
-            (*storage)[i] = slot;
-        }
-    }
     for (auto it = table.begin(); it != table.end();) {
         BaseObject* object = Resolve(it->second);
         if (object == nullptr || !isAlive(object)) it = table.erase(it);
@@ -125,49 +109,36 @@ size_t StringDedup::Hash(BaseObject* object) const
     return b ^ d;
 }
 
-void StringDedup::Process(WeakSlot slot)
+ArrayRef StringDedup::Canonical(const TypeInfo* arrayInfo, ArrayRef candidate)
 {
-    BaseObject* object = Resolve(slot);
-    if (object == nullptr) return; // request was cleared by GC
-    auto* candidate = static_cast<MArray*>(object);
-    const size_t hash = Hash(object);
+    if (!Accepts(arrayInfo, candidate)) {
+        return candidate;
+    }
+    std::lock_guard<std::recursive_mutex> guard(mutex);
+    const size_t hash = Hash(candidate);
     const auto range = table.equal_range(hash);
     for (auto it = range.first; it != range.second; ++it) {
         auto* known = static_cast<MArray*>(Resolve(it->second));
-        if (known != nullptr && known->GetLength() == candidate->GetLength() &&
+        if (known == nullptr || known->GetLength() != candidate->GetLength()) {
+            continue;
+        }
+        if (known == candidate ||
             std::memcmp(known->ConvertToCArray(), candidate->ConvertToCArray(), candidate->GetLength()) == 0) {
-            // L01s: this String backing is known; registration is complete.
-            // Returning canonical managed backing needs a compiler intrinsic.
-            return;
+            // stringDedupTable.cpp:634: found != value => use the table array.
+            if (known != candidate) {
+                return known;
+            }
+            return candidate;
         }
     }
-    table.emplace(hash, slot);
+    table.emplace(hash, WeakSlot{ZAddress::store_good(from_object(candidate))});
+    return candidate;
 }
 
-void StringDedup::Run()
+// CJRuntimeLowering.cpp maps cj_fill_in_stack_trace to CJ_MCC_FillInStackTrace.
+// The dedup return uses the same stub name rule: CJ_MCC_StringDedupCanonical.
+extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate)
 {
-    std::unique_lock<std::recursive_mutex> guard(mutex);
-    while (!stopped) {
-        condition.wait(guard, [this] { return stopped || !requests.empty() || !processing.empty(); });
-        if (stopped) break;
-        // StringDedupProcessor::process_requests: release the request slot
-        // before table lookup; the mutex keeps GC from clearing this local.
-        // Swap producer/consumer weak storages after all producers release
-        // the mutex (StringDedupProcessor::wait_for_requests).
-        if (processing.empty()) processing.swap(requests);
-        WeakSlot slot = processing.back();
-        processing.pop_back();
-        Process(slot);
-        guard.unlock();
-        std::this_thread::yield();
-        guard.lock();
-    }
-}
-
-// Existing acquireRawData/releaseRawData ABI pins only for this call. The
-// stored reference is weak; it never retains that pin beyond registration.
-extern "C" MRT_EXPORT void CJ_MRT_RequestStringDedup(const uint8_t* data, size_t length)
-{
-    StringDedup::Instance().RequestString(data, length);
+    return StringDedup::Instance().Canonical(arrayInfo, candidate);
 }
 } // namespace MapleRuntime
