@@ -193,6 +193,11 @@ void MutatorManager::DestroyRuntimeMutator(ThreadType threadType)
     Mutator* mutator = ThreadLocal::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Fini UpdateThreads with null mutator");
 
+    // HotSpot jni.cpp:4027-4042 transitions from native to VM before exit.
+    // Complete the saferegion transition while roots and barrier state are
+    // still attached, so exit's root processing blocks safepoints.
+    (void)mutator->LeaveSaferegion();
+
     // A native logical thread has the same detach and SMR lifetime as a
     // scheduler-backed thread; the TLS binding is cleared before reclamation.
     TransitMutatorToExit();
