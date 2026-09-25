@@ -55,11 +55,13 @@ cd /d X:\
 set "CJTHREAD_BUILD_PATH=%BUILDDIR%"
 echo CASE=%CASE%>>%RUNLOG%
 cmd /c call "%PRODUCTBAT%" %BATARGS%
-echo CMDC_RC=%ERRORLEVEL%>>%RUNLOG%
+set "CMDC_RC=%ERRORLEVEL%"
+>>%RUNLOG% echo CMDC_RC=%CMDC_RC%
 cd /d X:\
 call "%PRODUCTBAT%" %BATARGS%
-echo CALL_RC=%ERRORLEVEL%>>%RUNLOG%
-echo AFTER=%CD%>>%RUNLOG%
+set "CALL_RC=%ERRORLEVEL%"
+>>%RUNLOG% echo CALL_RC=%CALL_RC%
+>>%RUNLOG% echo AFTER=%CD%
 exit /b 0
 '@ | Set-Content -Encoding ascii $driver
 $cases = @(
