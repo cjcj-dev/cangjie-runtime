@@ -586,10 +586,6 @@ GC_OTHER_VM_TEST(RelocateWorkers, ParallelCursorClaimsEachIndexOnce)
         }
         i = j;
     }
-    generation.reset_relocation_set();
-    for (ZPage* page : pages) {
-        Heap::free_page(page);
-    }
     std::fprintf(stderr,
                  "RELOCATION_SET_PARALLEL_CURSOR installed=%zu got=%zu unique=%zu duplicate=%zu\n",
                  installed, got.size(), unique, duplicate);
@@ -598,6 +594,10 @@ GC_OTHER_VM_TEST(RelocateWorkers, ParallelCursorClaimsEachIndexOnce)
     GC_EXPECT_EQ(installed, pages.size());
     GC_EXPECT_EQ(duplicate, 0u);
     GC_EXPECT_EQ(got.size(), installed);
+    generation.relocation_set().reset(&Heap::GetHeap().page_allocator());
+    for (ZPage* page : pages) {
+        Heap::free_page(page);
+    }
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
