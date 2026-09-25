@@ -59,6 +59,11 @@ NativeSlot* OopStorage::Allocate()
 
 void OopStorage::Release(NativeSlot* slot)
 {
+    // oopStorage.cpp:774-776: release does not write the slot. The caller has
+    // already published null through the store barrier. zCollectedHeap.cpp:334-336
+    // contains_null is is_null_any, which accepts a coloured null and rejects a live oop.
+    CHECK_DETAIL(slot != nullptr, "Releasing null");
+    CHECK_DETAIL(is_null_any(slot->GetFieldValue()), "Releasing uncleared entry");
     std::lock_guard<std::mutex> lock(mutex);
     const uintptr_t address = reinterpret_cast<uintptr_t>(slot);
     for (Block* block : activeArray->blocks) {
@@ -69,9 +74,6 @@ void OopStorage::Release(NativeSlot* slot)
         CHECK_DETAIL((block->allocatedBitmask.load(std::memory_order_relaxed) & bit) != 0,
                      "release of inactive native slot");
         const bool wasFull = block->IsFull();
-        // Native handle release publishes null before making the slot reusable.
-        // An iterator with an older bitmap may still visit that null slot.
-        slot->StoreColoured(zpointer::null, std::memory_order_relaxed);
         block->allocatedBitmask.fetch_and(~bit, std::memory_order_relaxed);
         --allocationCount;
         if (wasFull) { AddAllocationBlock(*block); }
