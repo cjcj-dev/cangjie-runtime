@@ -202,7 +202,6 @@ GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
     stripes.SetTerminate(&terminate);
     WorkerFixture workerFixture;
     SuspendibleThreadSetJoiner stsJoiner;
-    terminate.Leave();
     MarkingSMR smr;
     MarkThreadLocalStacks stacks(2);
     MarkContext context(2, 0, stripes, stacks);
@@ -216,6 +215,7 @@ GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
     local->Push(Entry(80));
     local->Push(Entry(81));
     stacks.Install(0, local);
+    terminate.Leave();
     ZMark domain(2, MarkingStacks::MarkingGeneration::YOUNG);
     ZAbort::abort();
     ResetAbort resetAbort;
