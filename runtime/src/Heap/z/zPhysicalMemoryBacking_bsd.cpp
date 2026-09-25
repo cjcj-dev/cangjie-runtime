@@ -104,10 +104,7 @@ size_t ZPhysicalMemoryBacking::uncommit(zbacking_offset offset, size_t length) c
 }
 
 void ZPhysicalMemoryBacking::map(zaddress_unsafe addr, size_t size, zbacking_offset offset) const {
-  const ZErrno err = mremap_mach(_base + untype(offset), untype(addr), size);
-  if (err) {
-    LOG(RTLOG_FATAL, "Failed to remap memory (%s)", err.to_string());
-  }
+  (void)mremap_mach(_base + untype(offset), untype(addr), size);
 }
 
 void ZPhysicalMemoryBacking::unmap(zaddress_unsafe addr, size_t size) const {
