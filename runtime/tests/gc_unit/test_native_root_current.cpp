@@ -121,7 +121,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     RelocationReceiptTest::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     region->reset(PageAge::eden);
     region->reset(PageAge::eden);
     ZGenerationTest::SetTenuringThreshold(*ZGeneration::young(), 1);
@@ -174,24 +174,31 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
     // Two real sparse pages satisfy the selector's strict reclaimable-page test.
-    fx.region1->reset(PageAge::eden);
-    BaseObject* companion = fx.PlaceObject(fx.region1->GetRegionStart());
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, companion));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {region, fx.region1}));
+    fx.region1()->reset(PageAge::eden);
+    BaseObject* companion = fx.PlaceObject(fx.region1()->GetRegionStart());
+    fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), companion));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {region, fx.region1()}));
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(collector);
     if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
     heap.young().Workers()->set_active_workers(1);
     ZRelocate::StartRelocationTasks(heap.young().id());
+    const MAddress forwardStart = region->GetRegionStart();
+    const Generation forwardGeneration = region->GetOwnerGeneration();
     heap.young().relocate().relocate(&heap.young().relocation_set());
-    auto forwarding = forwarding_for_page(region);
+    // zForwardingTable.inline.hpp:43. Do not pass the pre-relocate descriptor
+    // into forwarding_for_page: non-in-place completion frees it (zRelocate.cpp:450).
+    auto forwarding = generation_forwarding_table(forwardGeneration).get(forwardStart);
     BaseObject* to = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(from)));
     // Eden advances to survivor1 at this threshold. Preserve the fixture's
     // explicit promotion so the old root task observes an actual old page.
+    // clone_for_promotion needs the live from-page. flip_promote's replace
+    // (zPageTable.cpp:61) requires that page to still be the table entry, so
+    // this relocate did not take free_page; the descriptor was retained
+    // in place (zRelocate.cpp:438-448).
     ZPage* promoted = region->clone_for_promotion();
     heap.young().flip_promote(region, promoted);
-    fx.region0 = promoted;
     region = promoted;
     std::fprintf(stderr, "NATIVE_ROOT_ORACLE before=%#zx from=%p to=%p slot=%#zx young=%u\n",
                  before, from, to, raw(slot.GetFieldValue()), unsigned(region->IsYoungRegion()));
@@ -252,7 +259,7 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     RelocationReceiptTest::BindNativeRootFixture(heap);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    ZPage* page = fx.region0;
+    ZPage* page = fx.region0();
     page->reset(PageAge::eden);
     ZGenerationTest::SetTenuringThreshold(heap.young(), 1);
     BaseObject* dead = fx.PlaceObject(page->GetRegionStart());
@@ -282,11 +289,11 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
     // Two real sparse pages satisfy the selector's strict reclaimable-page test.
-    fx.region1->reset(PageAge::eden);
-    BaseObject* companion = fx.PlaceObject(fx.region1->GetRegionStart());
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, companion));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page, fx.region1}));
+    fx.region1()->reset(PageAge::eden);
+    BaseObject* companion = fx.PlaceObject(fx.region1()->GetRegionStart());
+    fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), companion));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page, fx.region1()}));
     heap.young().set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(heap);
     // Compact via the product implementation. Keep another live object at the
@@ -297,8 +304,10 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
     heap.young().Workers()->set_active_workers(1);
     ZRelocate::StartRelocationTasks(heap.young().id());
+    const MAddress forwardStart = page->GetRegionStart();
+    const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.young().relocate().relocate(&heap.young().relocation_set());
-    const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     const bool scanned = thread->GcPhaseEnum(false, watermark ? StackWatermark::epoch_id() : 0);
     const uintptr_t observed = raw(slot->LoadPlain());
@@ -329,7 +338,7 @@ GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
     RelocationReceiptTest::BindNativeRootFixture(heap);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    ZPage* page = fx.region0;
+    ZPage* page = fx.region0();
     page->reset(PageAge::eden);
     ZGenerationTest::SetTenuringThreshold(heap.young(), 1);
     BaseObject* dead = fx.PlaceObject(page->GetRegionStart());
@@ -346,18 +355,20 @@ GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(page, second));
     // Two real sparse pages satisfy the selector's strict reclaimable-page test.
-    fx.region1->reset(PageAge::eden);
-    BaseObject* companion = fx.PlaceObject(fx.region1->GetRegionStart());
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, companion));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page, fx.region1}));
+    fx.region1()->reset(PageAge::eden);
+    BaseObject* companion = fx.PlaceObject(fx.region1()->GetRegionStart());
+    fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), companion));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page, fx.region1()}));
     heap.young().set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(heap);
     if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
     heap.young().Workers()->set_active_workers(1);
     ZRelocate::StartRelocationTasks(heap.young().id());
+    const MAddress forwardStart = page->GetRegionStart();
+    const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.young().relocate().relocate(&heap.young().relocation_set());
-    const MAddress expected = forwarding_for_page(page)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     Heap::GetHeap().old().remap_young_roots();
     const uintptr_t observed = raw(slot->LoadPlain());
@@ -373,27 +384,27 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, YoungRelocateSkipsForeignIncompleteFrom)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     RelocationReceiptTest::BindNativeRootFixture(heap);
-    fx.region1->reset(PageAge::old);
-    BaseObject* held = fx.PlaceObject(fx.region1->GetRegionStart());
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(held) + held->GetSize());
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, held));
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region0, fx.region1}));
-    GC_EXPECT_TRUE(!fx.region1->IsForwardingDone());
-    GC_EXPECT_TRUE(forwarding_for_page(fx.region1) != nullptr);
+    fx.region1()->reset(PageAge::old);
+    BaseObject* held = fx.PlaceObject(fx.region1()->GetRegionStart());
+    fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(held) + held->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), held));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0(), fx.obj0));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region0(), fx.region1()}));
+    GC_EXPECT_TRUE(!fx.region1()->IsForwardingDone());
+    GC_EXPECT_TRUE(forwarding_for_page(fx.region1()) != nullptr);
     heap.young().set_phase(ZGenerationPhase::Relocate);
     ZRelocate::StartRelocationTasks(ZGenerationId::young);
     heap.young().EvacuateYoungRegions();
-    GC_EXPECT_TRUE(forwarding_for_page(fx.region1) != nullptr);
-    GC_EXPECT_TRUE(!fx.region1->IsForwardingDone());
+    GC_EXPECT_TRUE(forwarding_for_page(fx.region1()) != nullptr);
+    GC_EXPECT_TRUE(!fx.region1()->IsForwardingDone());
 }
 
 GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::eden);
-    fx.region1->reset(PageAge::old);
+    fx.region0()->reset(PageAge::eden);
+    fx.region1()->reset(PageAge::old);
     MarkPublicationFixture marking;
     size_t young = 0;
     size_t old = 0;
@@ -461,7 +472,7 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     heap.old().concurrent_mark();
 
     const bool watermarkDone = parked->GetStackWatermark().IsDone(StackWatermark::epoch_id());
-    const bool live = fx.region0->is_object_strongly_live(from_object(held));
+    const bool live = fx.region0()->is_object_strongly_live(from_object(held));
     std::fprintf(stderr, "P10_OLD_MARK_THREAD_ASSERT_EXECUTED live=%u done=%u epoch=%u\n",
                  unsigned(live), unsigned(watermarkDone), StackWatermark::epoch_id());
     GC_EXPECT_TRUE(live);
@@ -476,10 +487,10 @@ GC_OTHER_VM_TEST(YoungMarkStart, DoesNotParkPreviousFromPages)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     RelocationReceiptTest::BindNativeRootFixture(heap);
-    fx.region0->reset(PageAge::eden);
-    fx.region0->SetRegionRole(ZPageRole::From);
+    fx.region0()->reset(PageAge::eden);
+    fx.region0()->SetRegionRole(ZPageRole::From);
     heap.young().pause_mark_start();
-    const auto role = fx.region0->GetRegionRole();
+    const auto role = fx.region0()->GetRegionRole();
     std::fprintf(stderr, "YOUNG_PAGE_PHASE_ASSERT executed=1 role=%u expected=%u\n",
                  unsigned(role), unsigned(ZPageRole::From));
     GC_EXPECT_EQ(role, ZPageRole::From);
@@ -493,9 +504,9 @@ GC_OTHER_VM_TEST(YoungMarkStart, ParkedRootDeferredToConcurrentMark)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     RelocationReceiptTest::BindNativeRootFixture(heap);
-    fx.region0->reset(PageAge::eden);
-    fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart() + 64);
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + 64);
+    fx.region0()->reset(PageAge::eden);
+    fx.obj0 = fx.PlaceObject(fx.region0()->GetRegionStart() + 64);
+    fx.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + 64);
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     parked->SetManagedContext(false);
     (void)parked->EnterSaferegion(false);
@@ -505,10 +516,10 @@ GC_OTHER_VM_TEST(YoungMarkStart, ParkedRootDeferredToConcurrentMark)
     heap.young().pause_mark_start();
     const uint32_t epoch = StackWatermark::epoch_id();
     const bool doneAtStart = parked->GetStackWatermark().IsDone(epoch);
-    const bool liveAtStart = fx.region0->is_object_strongly_live(from_object(fx.obj0));
+    const bool liveAtStart = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
     heap.young().concurrent_mark();
     const bool doneAfterRoots = parked->GetStackWatermark().IsDone(epoch);
-    const bool liveAfterRoots = fx.region0->is_object_strongly_live(from_object(fx.obj0));
+    const bool liveAfterRoots = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
     parked->PopNativeFrameRootsTo(frameMark);
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     std::fprintf(stderr, "YOUNG_ROOT_PHASE_ASSERT executed=1 start_done=%u start_live=%u concurrent_done=%u concurrent_live=%u\n",
@@ -542,7 +553,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     auto& heap = Heap::GetHeap();
     Heap& collector = heap;
     RelocationReceiptTest::BindNativeRootFixture(collector);
-    fx.region0->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::eden);
     {
         ScopedStopTheWorld stopped("native-root young mark-start");
         Heap::GetHeap().young().mark_start();
@@ -553,7 +564,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     const size_t before = RelocationReceiptTest::PendingYoungRootWork(collector);
     ZBarrier::MarkYoungGoodBarrierOnOopField(root);
-    const bool marked = fx.region0->is_object_strongly_live(from_object(fx.obj0));
+    const bool marked = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
     const size_t first = RelocationReceiptTest::PendingYoungRootWork(collector);
     std::fprintf(stderr, "B19_YOUNG_MARK_BEFORE_HEAL executed=1 marked=%u before=%zu after=%zu word=%#lx\n",
                  unsigned(marked), before, first, raw(root.GetFieldValue()));
@@ -585,12 +596,12 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     RelocationReceiptTest::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    fixture.region0->reset(PageAge::old);
+    fixture.region0()->reset(PageAge::old);
     // Seed the real scheduling input through its existing fixture operation.
     // The root task and marker below are the product TraceHeap implementation.
     GC_EXPECT_TRUE(FinalizerProcessorTest::Queue(Heap::GetHeap().GetFinalizerProcessor(), fixture.obj0));
     RelocationReceiptTest::NativeRootTrace(collector);
-    const bool marked = fixture.region0->is_object_strongly_live(from_object(fixture.obj0));
+    const bool marked = fixture.region0()->is_object_strongly_live(from_object(fixture.obj0));
     std::fprintf(stderr, "ROOT_STORAGE_STRONG_TARGET executed=1 object=%p marked=%u\n",
                  fixture.obj0, unsigned(marked));
     // Both observations are read before either target assertion can fail.
@@ -609,7 +620,7 @@ void CheckRootStorageSegments(unsigned family)
     RelocationReceiptTest::BindNativeRootFixture(collector, 2);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    fixture.region0->reset(PageAge::eden);
+    fixture.region0()->reset(PageAge::eden);
     auto& finalizers = heap.GetFinalizerProcessor();
     // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
     constexpr size_t count = 24 * sizeof(uintptr_t) * CHAR_BIT;
@@ -667,7 +678,7 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     RelocationReceiptTest::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    fixture.region0->reset(PageAge::eden);
+    fixture.region0()->reset(PageAge::eden);
     std::vector<U64> original;
     for (size_t i = 0; i < sizeof(uintptr_t) * CHAR_BIT; ++i) {
         original.push_back(heap.RegisterExportRoot(fixture.obj0));
@@ -698,7 +709,7 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
     using namespace MapleRuntime::GcUnit;
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
-    fixture.region0->reset(PageAge::eden);
+    fixture.region0()->reset(PageAge::eden);
     Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     thread->SetManagedContext(false);
     (void)thread->EnterSaferegion(false);
@@ -710,7 +721,7 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
     ZGlobalsPointers::flip_young_mark_start();
     const uint64_t epoch = StackWatermark::epoch_id();
     const bool initiallyDone = thread->GetStackWatermark().IsDone(epoch);
-    const bool initiallyLive = fixture.region0->is_object_strongly_live(from_object(fixture.obj0));
+    const bool initiallyLive = fixture.region0()->is_object_strongly_live(from_object(fixture.obj0));
     size_t published = 0;
     auto readPublished = [&] {
         marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {

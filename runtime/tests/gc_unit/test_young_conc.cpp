@@ -142,7 +142,7 @@ GC_OTHER_VM_TEST(YoungConc, ExportRootRegistrationDoesNotMarkIncomingValue)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    fx.region1->reset(PageAge::eden);
+    fx.region1()->reset(PageAge::eden);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(fx.obj1);
     std::vector<BaseObject*> work;
     mark.DrainObjects(work);
@@ -158,7 +158,7 @@ GC_OTHER_VM_TEST(YoungConc, RemovingExportRootPublishesPreviousValue)
     MutatorManager manager;
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
-    fx.region1->reset(PageAge::eden);
+    fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture mark;
     const U64 handle = Heap::GetHeap().RegisterExportRoot(fx.obj1);
     RelocationReceiptTest::FlipYoungMarkForNativeBarrier(mark.collector);
@@ -175,10 +175,10 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->reset(PageAge::eden);
-    fx.region0->reset(PageAge::eden);
-    fx.region1->reset(PageAge::eden);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::eden);
+    fx.region1()->reset(PageAge::eden);
+    fx.region1()->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     RememberedSet rs;
@@ -213,9 +213,9 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
+    fx.region1()->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
@@ -237,8 +237,8 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     MutatorManager manager;
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::old);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::old);
     MarkPublicationFixture markFixture;
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
@@ -264,8 +264,8 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     MutatorManager manager;
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture markFixture;
     BaseObject* incoming = fx.PlaceObject(fx.heapStart + ZGranuleSize + 128);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
@@ -282,7 +282,7 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     GC_EXPECT_TRUE(work.front() == fx.obj1);
     GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == incoming);
     GC_EXPECT_TRUE(SlotPageRemembered(reinterpret_cast<MAddress>(&field)));
-    GC_EXPECT_FALSE(fx.region1->is_object_strongly_live(from_object(incoming)));
+    GC_EXPECT_FALSE(fx.region1()->is_object_strongly_live(from_object(incoming)));
 }
 
 GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
@@ -292,8 +292,8 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
@@ -321,7 +321,7 @@ GC_TEST(YoungConc, StackScanIsRequired)
 GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::eden);
     MarkPublicationFixture markFixture;
     GC_EXPECT_EQ(markFixture.YoungPending(), 0u);
     Heap::GetHeap().MarkYoungObjectIfActive(fx.obj0);
@@ -337,8 +337,8 @@ GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
 GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture markFixture;
     RememberedSet remembered;
     remembered.Initialize(fx.heapStart, 2 * ZGranuleSize);
@@ -426,15 +426,15 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     MarkPublicationFixture publication;
                     auto& cycle = Heap::GetHeap().GetZGeneration(
                         young ? ZGenerationId::young : ZGenerationId::old);
-                    fx.region0->reset(young ? PageAge::eden : PageAge::old);
-                    fx.region0->ResetPageSequence();
+                    fx.region0()->reset(young ? PageAge::eden : PageAge::old);
+                    fx.region0()->ResetPageSequence();
                     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, gcThread, follow, finalizable);
                     const size_t pending = young ? publication.YoungPending() : publication.OldPending();
                     std::fprintf(stderr, "P1_ALLOCATING_ASSERT young=%d gc=%d follow=%d finalizable=%d pending=%zu live=%zu\n",
                                  young, gcThread, follow, finalizable, pending,
-                                 static_cast<size_t>(fx.region0->live_bytes()));
+                                 static_cast<size_t>(fx.region0()->live_bytes()));
                     GC_EXPECT_EQ(pending, 0u);
-                    GC_EXPECT_FALSE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
+                    GC_EXPECT_FALSE(fx.region0()->livemap().is_marked(fx.region0()->generation_id()));
                     GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
                     cycle.set_phase(ZGenerationPhase::Mark);
                     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, gcThread, follow, finalizable);
@@ -472,8 +472,8 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture publication;
-    fx.region0->reset(PageAge::eden);
-    fx.region0->ResetPageSequence();
+    fx.region0()->reset(PageAge::eden);
+    fx.region0()->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     cycle.set_phase(ZGenerationPhase::Mark);
@@ -481,10 +481,10 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
     Heap::GetHeap().young().mark_follow();
     std::fprintf(stderr, "P1_CONSUMER_ASSERT live=%zu marked=%d\n",
-                 static_cast<size_t>(fx.region0->live_bytes()),
-                 fx.region0->livemap().is_marked(fx.region0->generation_id()) ? 1 : 0);
-    GC_EXPECT_EQ(fx.region0->live_bytes(), fx.obj0->GetSize());
-    GC_EXPECT_TRUE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
+                 static_cast<size_t>(fx.region0()->live_bytes()),
+                 fx.region0()->livemap().is_marked(fx.region0()->generation_id()) ? 1 : 0);
+    GC_EXPECT_EQ(fx.region0()->live_bytes(), fx.obj0->GetSize());
+    GC_EXPECT_TRUE(fx.region0()->livemap().is_marked(fx.region0()->generation_id()));
 }
 
 
@@ -494,8 +494,8 @@ GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
     MarkPublicationFixture publication;
     auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     auto& domain = *Heap::GetHeap().old().MarkPtr();
-    fx.region0->reset(PageAge::old);
-    fx.region0->ResetPageSequence();
+    fx.region0()->reset(PageAge::old);
+    fx.region0()->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     cycle.set_phase(ZGenerationPhase::MarkComplete);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), true, true, true, false);

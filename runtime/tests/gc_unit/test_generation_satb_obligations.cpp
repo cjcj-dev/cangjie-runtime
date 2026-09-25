@@ -58,8 +58,8 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     GenerationMarkRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     // reset() creates allocating pages; the mark input must predate its cycle.
     // ZGC zPage.inline.hpp:180-186, as in the P1Mark policy fixture.
     GcHeapFixture::AdvanceGeneration(Generation::Old);
@@ -70,7 +70,7 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     GC_EXPECT_EQ(mark.YoungPending(), 1u);
     // ZGC zGeneration.cpp:891-895: use the product combined follow task.
     Heap::GetHeap().young().mark_follow();
-    const size_t live = fx.region1->live_bytes();
+    const size_t live = fx.region1()->live_bytes();
     std::fprintf(stderr, "GENERATION_YOUNG_FOLLOW_ASSERT live=%zu expected=%zu\n",
                  live, static_cast<size_t>(fx.obj1->GetSize()));
     GC_EXPECT_EQ(live, fx.obj1->GetSize());
@@ -124,10 +124,10 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
     ZResurrection::block();
     GC_EXPECT_TRUE(CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
         reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&field)) == nullptr);
-    (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
+    (void)GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0);
     GC_EXPECT_TRUE(CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
         reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&field)) == nullptr);
-    (void)GcHeapFixture::MarkStrong(fx.region0, fx.obj0);
+    (void)GcHeapFixture::MarkStrong(fx.region0(), fx.obj0);
     GC_EXPECT_TRUE(CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(
         reinterpret_cast<ObjectPtr>(raw(field.GetFieldValue())), reinterpret_cast<volatile zpointer*>(&field)) == fx.obj0);
 }
@@ -139,7 +139,7 @@ GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
     struct RestoreBlock {
         ~RestoreBlock() { ZResurrection::unblock(); }
     } restore;
-    fx.region0->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::eden);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     ZResurrection::block();
     RestoreMarkFlips flips;
@@ -188,13 +188,13 @@ GC_TEST(WeakLoadFamily, BlockedNoKeepAliveRejectsFinalizableOld)
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(stored);
-    (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
+    (void)GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0);
     mark.CompleteOldMarkForAdmissionTest();
     struct Unblock { ~Unblock() { ZResurrection::unblock(); } } unblock;
     ZResurrection::block();
     const zaddress result = ZBarrier::no_keep_alive_load_barrier_on_weak_oop_field_preloaded(
         reinterpret_cast<volatile zpointer*>(&field), stored);
-    const bool strong = fx.region0->is_object_strongly_live(from_object(fx.obj0));
+    const bool strong = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
     std::fprintf(stderr, "WEAK_LOAD_RESULT blocked=1 result=%zx strong=%d\n", raw(result), strong);
     GC_EXPECT_TRUE(is_null(result));
     GC_EXPECT_FALSE(strong);
@@ -244,10 +244,10 @@ GC_TEST(WeakLoadFamily, BlockedPhantomSeparatesDeadAndFinalizable)
     auto* slot = reinterpret_cast<volatile zpointer*>(&field);
     GC_EXPECT_TRUE(is_null(ZBarrier::load_barrier_on_phantom_oop_field_preloaded(slot, stored)));
     GC_EXPECT_TRUE(is_null(ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(slot, stored)));
-    (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
+    (void)GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0);
     const zaddress kept = ZBarrier::load_barrier_on_phantom_oop_field_preloaded(slot, stored);
     const zaddress loaded = ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(slot, stored);
-    const bool strong = fx.region0->is_object_strongly_live(from_object(fx.obj0));
+    const bool strong = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
     std::fprintf(stderr, "PHANTOM_LOAD_RESULT kept=%zx loaded=%zx strong=%d\n", raw(kept), raw(loaded), strong);
     GC_EXPECT_TRUE(to_object(kept) == fx.obj0);
     GC_EXPECT_TRUE(to_object(loaded) == fx.obj0);

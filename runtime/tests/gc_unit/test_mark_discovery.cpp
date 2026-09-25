@@ -39,10 +39,10 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     MutatorManager manager;
     DiscoveryRuntime runtime(manager);
     GcHeapFixture fx;
-    fx.region0->reset(young ? PageAge::eden : PageAge::old);
-    fx.region1->reset(young && !oldReferent ? PageAge::eden : PageAge::old);
-    fx.region0->SetRegionRole(ZPageRole::RecentFull);
-    fx.region1->SetRegionRole(ZPageRole::RecentFull);
+    fx.region0()->reset(young ? PageAge::eden : PageAge::old);
+    fx.region1()->reset(young && !oldReferent ? PageAge::eden : PageAge::old);
+    fx.region0()->SetRegionRole(ZPageRole::RecentFull);
+    fx.region1()->SetRegionRole(ZPageRole::RecentFull);
     alignas(TypeInfo) unsigned char targetTypeStorage[sizeof(TypeInfo)];
     std::memcpy(targetTypeStorage, fx.typeInfo, sizeof(TypeInfo));
     auto* targetType = reinterpret_cast<TypeInfo*>(targetTypeStorage);
@@ -80,8 +80,8 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
         }
         heap.old().concurrent_mark();
     }
-    const bool targetStrong = fx.region1->is_object_strongly_live(from_object(fx.obj1));
-    const bool targetLive = fx.region1->is_object_live(from_object(fx.obj1));
+    const bool targetStrong = fx.region1()->is_object_strongly_live(from_object(fx.obj1));
+    const bool targetLive = fx.region1()->is_object_live(from_object(fx.obj1));
     auto& processor = heap.GetFinalizerProcessor().GetReferenceProcessor();
     const size_t discovered = processor.Discovered(ReferenceType::WEAK);
     processor.ProcessReferences([](BaseObject*) { return false; });

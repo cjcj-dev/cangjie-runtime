@@ -84,7 +84,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
     ZWorkers pool(ZGenerationId::old, 1, &stats);
     FinalizerProcessor fp(&pool);
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
-    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
     GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
 
     fp.ProcessReferences([](BaseObject*) { return false; });
@@ -112,7 +112,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
     FinalizerProcessor fp(&pool);
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     fp.RegisterFinalizer(fx.obj0);
-    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
     GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
 
     fp.ProcessReferences([](BaseObject*) { return false; });
@@ -193,7 +193,7 @@ GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)
     for (size_t i = 0; i < objects.size(); ++i) {
         objects[i] = fixture.PlaceObject(fixture.heapStart + 128 + i * 16);
     }
-    fixture.region0->SetRegionAllocPtr(fixture.heapStart + 128 + objects.size() * 16);
+    fixture.region0()->SetRegionAllocPtr(fixture.heapStart + 128 + objects.size() * 16);
     std::vector<U64> handles;
     NativeSlot* first = nullptr;
     for (size_t index = 0; index < 130; ++index) {

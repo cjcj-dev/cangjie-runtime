@@ -28,8 +28,8 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
     GcHeapFixture fx;
     if (large) {
         (void)ZPageType::large;
-        fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
-        fx.region0->SetRegionAllocPtr(fx.region0->GetRegionStart() + fx.obj0->GetSize());
+        fx.obj0 = fx.PlaceObject(fx.region0()->GetRegionStart());
+        fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + fx.obj0->GetSize());
     }
     const size_t size = fx.obj0->GetSize();
     if (finalizable) {
@@ -42,10 +42,10 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
     const bool secondAlready = repeat ? ZMark::MarkEntryObject(fx.obj0,
         MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache) : true;
     cache.Flush();
-    const uint64_t bytes = fx.region0->live_bytes();
-    const uint32_t objects = fx.region0->live_objects();
+    const uint64_t bytes = fx.region0()->live_bytes();
+    const uint32_t objects = fx.region0()->live_objects();
     // Do not place a transition assertion ahead of the accounting invariant.
-    const bool strong = fx.region0->is_object_strongly_live(from_object(fx.obj0));
+    const bool strong = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
     std::fprintf(stderr, "M2_LIVE_RESULT finalizable=%d repeat=%d bytes=%zu expected=%zu strong=%d\n",
                  finalizable, repeat, static_cast<size_t>(bytes), size, strong);
     GC_EXPECT_EQ(bytes, static_cast<uint64_t>(size));
@@ -93,7 +93,7 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
     // than assuming that mmap placed both pages below one bucket boundary.
     size_t stripes = 1;
     size_t shift = 20;
-    while ((fx.region0->GetRegionStart() >> shift) != (fx.region1->GetRegionStart() >> shift)) {
+    while ((fx.region0()->GetRegionStart() >> shift) != (fx.region1()->GetRegionStart() >> shift)) {
         stripes *= 2;
         ++shift;
     }
@@ -105,11 +105,11 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
             MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache);
         (void)ZMark::MarkEntryObject(fx.obj1,
             MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj1))), true, true, false, false), &cache);
-        evictedObjects = fx.region0->live_objects();
-        evictedBytes = fx.region0->live_bytes();
+        evictedObjects = fx.region0()->live_objects();
+        evictedBytes = fx.region0()->live_bytes();
     }
-    const auto exitObjects = fx.region1->live_objects();
-    const auto exitBytes = fx.region1->live_bytes();
+    const auto exitObjects = fx.region1()->live_objects();
+    const auto exitBytes = fx.region1()->live_bytes();
     const size_t size0 = fx.obj0->GetSize();
     const size_t size1 = fx.obj1->GetSize();
     std::fprintf(stderr, "M2_CACHE_RESULT collision_objects=%u collision_bytes=%zu exit_objects=%u exit_bytes=%zu\n",
@@ -245,7 +245,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     // The 2 MiB small page already covers the entire reference array.
-    fx.region1->reset(major ? PageAge::old : PageAge::eden);
+    fx.region1()->reset(major ? PageAge::old : PageAge::eden);
     // The product allocates and owns this page's livemap (InitRegion ->
     // InitializeLiveMap); promotion transfers that ownership
     // (ZPage::clone_for_promotion, zPage.cpp:64).
@@ -269,7 +269,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     arrayType->SetComponentTypeInfo(structArray ? structType : fx.typeInfo);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(arrayTypeStorage), sizeof(arrayTypeStorage));
-    auto* array = reinterpret_cast<MArray*>(fx.region1->GetRegionStart() + 64);
+    auto* array = reinterpret_cast<MArray*>(fx.region1()->GetRegionStart() + 64);
     *reinterpret_cast<uintptr_t*>(array) = reinterpret_cast<uintptr_t>(arrayType);
     array->SetLength(length);
     const size_t arrayBytes = array->GetSize();
@@ -306,8 +306,8 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         HeapSlotAt<>(next + TYPEINFO_PTR_SIZE).StoreColoured(StoreGoodPointer(array));
         next += finalizerRoot->GetSize();
     }
-    fx.region1->SetRegionAllocPtr(next);
-    GC_EXPECT_TRUE(next <= fx.region1->GetRegionEnd());
+    fx.region1()->SetRegionAllocPtr(next);
+    GC_EXPECT_TRUE(next <= fx.region1()->GetRegionEnd());
 
     Heap& collector = Heap::GetHeap();
     MarkPort203TestAccess::Bind(&collector, static_cast<int32_t>(helpers + 1));
@@ -317,7 +317,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     }
     Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    fx.region1->SetRegionRole(ZPageRole::RecentFull);
+    fx.region1()->SetRegionRole(ZPageRole::RecentFull);
     const size_t rootCount = commonRoot && helpers != 0 ? 17 * 64 : 1;
     std::vector<NativeSlot> rootSlots(rootCount, NativeSlot(zpointer::null));
     std::vector<NativeSlot*> roots(rootCount);
@@ -334,7 +334,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         handle = Heap::GetHeap().RegisterExportRoot(array);
     }
     ArrayClosureResult result;
-    result.region = fx.region1;
+    result.region = fx.region1();
     result.array = array;
     result.children = &children;
     result.finalizable = finalizable;
@@ -486,9 +486,9 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     MutatorManager manager;
     MarkPortRuntime runtime(manager);
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
-    fx.region1->SetRegionRole(ZPageRole::RecentFull);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
+    fx.region1()->SetRegionRole(ZPageRole::RecentFull);
     auto& heap = Heap::GetHeap();
     auto& young = heap.young();
     MarkPort203TestAccess::Bind(&heap, static_cast<int32_t>(workers));
@@ -508,7 +508,7 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     BaseObject* rootChild = object();
     BaseObject* remembered = object();
     BaseObject* rememberedChild = object();
-    fx.region1->SetRegionAllocPtr(next);
+    fx.region1()->SetRegionAllocPtr(next);
     HeapSlotAt<>(reinterpret_cast<MAddress>(root) + TYPEINFO_PTR_SIZE)
         .StoreColoured(StoreGoodPointer(rootChild));
     HeapSlotAt<>(reinterpret_cast<MAddress>(remembered) + TYPEINFO_PTR_SIZE)
@@ -516,8 +516,8 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     auto* oldSlot = reinterpret_cast<volatile zpointer*>(
         reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     HeapSlotAt<>(reinterpret_cast<MAddress>(oldSlot)).StoreColoured(StoreGoodPointer(remembered));
-    fx.region0->remember(oldSlot);
-    young.register_with_remset(fx.region0);
+    fx.region0()->remember(oldSlot);
+    young.register_with_remset(fx.region0());
     const U64 handle = heap.RegisterExportRoot(root);
     YoungTypeSetter type(young, ZYoungType::minor);
     young.pause_mark_start();
@@ -552,10 +552,10 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     const size_t rootWindows = phaseCount("Concurrent_Mark_Roots");
     const size_t followWindows = phaseCount("Concurrent_Mark_Follow");
     const size_t splitWindows = phaseCount("young.remset_rescan") + phaseCount("young.mark_closure");
-    const bool rootLive = fx.region1->is_object_strongly_live(from_object(rootChild));
-    const bool rememberedLive = fx.region1->is_object_strongly_live(from_object(rememberedChild));
-    const bool previousCleared = !fx.region0->was_remembered(oldSlot);
-    const bool rearmed = fx.region0->is_remembered(oldSlot);
+    const bool rootLive = fx.region1()->is_object_strongly_live(from_object(rootChild));
+    const bool rememberedLive = fx.region1()->is_object_strongly_live(from_object(rememberedChild));
+    const bool previousCleared = !fx.region0()->was_remembered(oldSlot);
+    const bool rearmed = fx.region0()->is_remembered(oldSlot);
     std::fprintf(stderr,
         "YOUNG828_RESULT workers=%zu continuation=%d root_child=%d remset_child=%d previous_cleared=%d rearmed=%d\n",
         workers, continuation, rootLive, rememberedLive, previousCleared, rearmed);

@@ -252,7 +252,7 @@ GC_TEST(ZLiveMapTest, concurrent_first_mark_resets_once)
 GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
 {
     GcHeapFixture fx;
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     GC_EXPECT_TRUE(region->IsRelocatable());
     GC_EXPECT_FALSE(region->is_marked());
     GC_EXPECT_FALSE(region->is_object_live(from_object(fx.obj0)));
@@ -273,8 +273,8 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 
     // An unmarked page has no live bytes to offer the selector.
-    GC_EXPECT_FALSE(fx.region1->is_marked());
-    GC_EXPECT_FALSE(fx.region1->is_object_live(from_object(fx.obj1)));
+    GC_EXPECT_FALSE(fx.region1()->is_marked());
+    GC_EXPECT_FALSE(fx.region1()->is_object_live(from_object(fx.obj1)));
 }
 
 // ZMark::MarkEntryObject (product SO) -> mark_object(finalizable = true):
@@ -282,7 +282,7 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
 GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
 {
     GcHeapFixture fx;
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
         MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), nullptr));
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
@@ -305,7 +305,7 @@ GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
 GC_TEST(ZLiveMapPage, object_iterate_visits_object_starts)
 {
     GcHeapFixture fx;
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     BaseObject* second = fx.PlaceObject(region->GetRegionStart() + 256);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
@@ -324,7 +324,7 @@ GC_TEST(ZLiveMapPage, object_iterate_visits_object_starts)
 GC_TEST(ZLiveMapPage, find_base_resolves_interior_field)
 {
     GcHeapFixture fx;
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     BaseObject* second = fx.PlaceObject(region->GetRegionStart() + 256);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
     // Nothing marked yet: no base (zaddress_unsafe::null).
@@ -346,7 +346,7 @@ GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
         const auto role = large ? ZPageType::large
                                 : ZPageType::small;
         GcHeapFixture fx(role);
-        ZPage* region = fx.region0;
+        ZPage* region = fx.region0();
         region->reset(PageAge::eden);
         region->reset(PageAge::eden);
         BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
@@ -371,7 +371,6 @@ GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
         visited.clear();
         originalPage->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
         GC_EXPECT_EQ(visited.size(), 0u);
-        fx.region0 = promoted;
         ZPage::RetireDescriptor(originalPage);
     }
 }
@@ -382,7 +381,7 @@ GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
 GC_TEST(ZLiveMapPage, allocating_page_is_implicitly_live)
 {
     GcHeapFixture fx;
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     region->ResetPageSequence();
     GC_EXPECT_TRUE(region->IsAllocating());
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
@@ -399,7 +398,7 @@ GC_TEST(ZLiveMapPage, allocating_page_is_implicitly_live)
 GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
 {
     GcHeapFixture fx;
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     const uint32_t smallSegment = ZLiveMapTest::segment_size(region->livemap());
     GC_EXPECT_TRUE(smallSegment > 2u);
     for (auto role : {ZPageType::large,
@@ -407,7 +406,6 @@ GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
                       ZPageType::large}) {
         ZPage::RetirePage(region, [] {});
         region = ZPage::InitRegion(ZPage::GranuleIndex(fx.heapStart), (1) * ZGranuleSize, role);
-        fx.region0 = region;
         PublishAllocatedPage(region);
         const uint32_t actual = ZLiveMapTest::segment_size(region->livemap());
         const uint32_t expected = role == ZPageType::large ? 2u : smallSegment;
@@ -450,7 +448,7 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
 {
     GcHeapFixture fx(large ? ZPageType::large
                                   : ZPageType::small);
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
     if (initiallyFinalizable) {
@@ -512,7 +510,7 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
 {
     GcHeapFixture fx;
     // A small page is now 2 MiB and contains both tested neighbour offsets.
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     const MAddress start = region->GetRegionStart();
     // Under the rejected geometry, 4KB has 16-bit segments and 8KB has
     // 32-bit segments. These are real object starts in separate old segments.
@@ -595,7 +593,7 @@ GC_TEST(ZLiveMapPage, separate_word_segment_clear_preserves_other_mark)
 GC_TEST(ZLiveMapPage, reset_publication_preserves_peer_mark)
 {
     GcHeapFixture fx;
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     BaseObject* other = fx.PlaceObject(region->GetRegionStart() + 256);
     BaseObject* seed = fx.PlaceObject(region->GetRegionStart() + 512);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(seed) + seed->GetSize());
