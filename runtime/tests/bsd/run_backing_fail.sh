@@ -23,6 +23,11 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 cj="runtime/src/CJThread/src"
+case "$(uname -m)" in
+  arm64) gas="arm/arm64" ;;
+  x86_64) gas="x86/x86_64" ;;
+  *) echo "BSD_BACKING_FAIL unknown arch $(uname -m)" >&2; exit 2 ;;
+esac
 flags=(
   -std=c++14
   -fno-exceptions
@@ -37,6 +42,7 @@ flags=(
   -I "$bc/include"
   -I "$cj/runtime/schedule/include"
   -I "$cj/runtime/schedule/include/inner"
+  -I "$cj/runtime/schedule/include/inner/gas/$gas"
   -I "$cj/sync/sema/include"
   -I "$cj/runtime/waitqueue/include"
   -I "$cj/base/log/include"
