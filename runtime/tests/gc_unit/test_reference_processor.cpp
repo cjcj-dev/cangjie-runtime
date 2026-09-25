@@ -48,7 +48,7 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
     GcHeapFixture fx;
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
-    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
     GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
 
     processor.ProcessReferences([](BaseObject*) { return false; });
@@ -71,7 +71,7 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryIsClaimedOnce)
     GcHeapFixture fx;
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
-    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
     (void)processor.discover_reference(fx.obj0, ReferenceType::FINAL);
     (void)processor.discover_reference(fx.obj0, ReferenceType::FINAL);
     const size_t discovered = processor.Discovered(ReferenceType::FINAL);
@@ -87,8 +87,8 @@ GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
 {
     WorkerFixture worker(0);
     GcHeapFixture fx;
-    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0(), fx.obj0));
 
     BoundRefProc bound;
     ReferenceProcessor& processor = bound.processor;
@@ -203,7 +203,7 @@ GC_TEST(ReferenceProcessor, ProcessReferencesRunsOnBoundWorkers)
     WorkerFixture worker(0);
     GcHeapFixture fx;
     ReferenceProcessor processor(&pool);
-    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
     GC_EXPECT_TRUE(processor.discover_reference(fx.obj0, ReferenceType::FINAL));
     processor.ProcessReferences([](BaseObject*) { return false; });
     BaseObject* enqueued = nullptr;
@@ -230,9 +230,9 @@ GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
     for (size_t index = 0; index < kWorkers * kPerWorker; ++index) {
         BaseObject* object = fx.PlaceObject(fx.heapStart + 64 + index * 64);
         objects.push_back(object);
-        GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, object));
+        GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), object));
     }
-    fx.region0->SetRegionAllocPtr(
+    fx.region0()->SetRegionAllocPtr(
         reinterpret_cast<MAddress>(objects.back()) + 64);
 
     std::vector<std::thread> workers;
@@ -264,7 +264,7 @@ GC_TEST(ReferenceProcessor, ProcessReferencesFromNonWorkerCaller)
 {
     BoundRefProc bound;
     GcHeapFixture fx;
-    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0));
     {
         WorkerFixture discover(0);
         GC_EXPECT_TRUE(bound.processor.discover_reference(fx.obj0, ReferenceType::FINAL));

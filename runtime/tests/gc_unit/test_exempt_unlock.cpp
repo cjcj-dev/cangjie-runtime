@@ -28,8 +28,8 @@ GC_TEST(ExemptLife, InPlaceCopyMustNotPaintNormalBeforeUnlock)
     // Exclusive CopyObject(from, from) then SetStateCode(NORMAL) clears LOCKED
     // and UnlockObject CHECK-fails (StateWord.h:183). Skip the paint when to==from.
     GcHeapFixture fx;
-    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + obj->GetSize());
+    BaseObject* obj = fx.PlaceObject(fx.region0()->GetRegionStart());
+    fx.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + obj->GetSize());
     StateWord word = obj->GetStateWord();
     GC_EXPECT_TRUE(obj->TryLockObject(word));
     GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
@@ -52,7 +52,7 @@ namespace {
 void ExerciseOverlappingCopy(intptr_t destinationDelta)
 {
     GcHeapFixture fx;
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     const MAddress fromAddress = region->GetRegionStart() + 128;
     BaseObject* from = fx.PlaceObject(fromAddress);
     constexpr size_t size = 0x18;

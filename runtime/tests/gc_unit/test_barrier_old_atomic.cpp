@@ -139,8 +139,8 @@ ReceiptCounts DrainReceipts(BaseObject* oldValue, BaseObject* newValue)
 struct StoreFixture {
     StoreFixture()
     {
-        regionOld = heap.region0;
-        regionNew = heap.region1;
+        regionOld = heap.region0();
+        regionNew = heap.region1();
         regionOld->reset(PageAge::old);
         regionNew->reset(PageAge::eden);
         // Page reset stamps allocation sequence; start the snapshot afterwards.
@@ -241,7 +241,7 @@ GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
 {
     GcHeapFixture heap;
     BaseObject* to = heap.PlaceObject(heap.heapStart + 256);
-    heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
+    heap.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     const zpointer before = LoadBadPointer(heap.obj0);
     field.StoreColoured(before);
@@ -263,7 +263,7 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
 {
     GcHeapFixture heap;
     BaseObject* const winner = heap.PlaceObject(heap.heapStart + 256);
-    heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(winner) + winner->GetSize());
+    heap.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(winner) + winner->GetSize());
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(LoadBadPointer(heap.obj0));
     BaseObject* const returned = CJ_MCC_AtomicReadReference(heap.obj1, &field, std::memory_order_seq_cst);
@@ -305,8 +305,8 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
     for (TypeKind kind : {TypeKind::TYPE_KIND_STRUCT, TypeKind::TYPE_KIND_TUPLE,
                           TypeKind::TYPE_KIND_ENUM, TypeKind::TYPE_KIND_VARRAY}) {
         GcHeapFixture heap;
-        heap.region0->reset(PageAge::old);
-        heap.region1->reset(PageAge::eden);
+        heap.region0()->reset(PageAge::old);
+        heap.region1()->reset(PageAge::eden);
         MarkPublicationFixture marking;
                 alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)] {};
         auto* component = reinterpret_cast<TypeInfo*>(componentStorage);

@@ -32,7 +32,7 @@ using namespace MapleRuntime::GcUnit;
 GC_OTHER_VM_TEST(SharedSmallPage, AtomicBoundsPreserveTop)
 {
     GcHeapFixture fixture;
-    ZPage* page = fixture.region0;
+    ZPage* page = fixture.region0();
     const uintptr_t start = page->GetRegionStart();
     page->SetRegionAllocPtr(start);
     const size_t capacity = page->GetRegionSize();
@@ -48,7 +48,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AtomicBoundsPreserveTop)
 GC_OTHER_VM_TEST(SharedSmallPage, AtomicReservationsDoNotOverlap)
 {
     GcHeapFixture fixture;
-    ZPage* page = fixture.region0;
+    ZPage* page = fixture.region0();
     page->SetRegionAllocPtr(page->GetRegionStart());
     constexpr size_t threads = 4;
     constexpr size_t perThread = 8;

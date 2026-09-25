@@ -24,7 +24,7 @@ struct PageQueueFixture {
     ZRelocateQueue queue;
     PageQueueFixture()
     {
-        auto* page = heap.region0;
+        auto* page = heap.region0();
         heap.InstallPageOwner(page);
         owner = forwarding_for_page(page);
         GC_EXPECT_TRUE(static_cast<bool>(owner));
@@ -33,13 +33,13 @@ struct PageQueueFixture {
     {
         if (owner->ref_count().load(std::memory_order_acquire) != 0) owner->release_page();
         owner->mark_done();
-        heap.region0->_scratch.fwdOwner.store(nullptr, std::memory_order_release);
+        heap.region0()->_scratch.fwdOwner.store(nullptr, std::memory_order_release);
         owner = {};
     }
     void Publish()
     {
         const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
-        auto publication = forwarding_for_page(heap.region0, from);
+        auto publication = forwarding_for_page(heap.region0(), from);
         GC_EXPECT_TRUE(static_cast<bool>(publication));
         GC_EXPECT_EQ(publication->insert(from,
                      reinterpret_cast<MAddress>(heap.obj1)), reinterpret_cast<MAddress>(heap.obj1));
@@ -149,8 +149,8 @@ GC_TEST(RelocationPageQueue, TwoObjectsShareOnePageClaim)
 {
     PageQueueFixture f;
     f.queue.BeginWorkers(1);
-    auto first = f.queue.Add(f.heap.region0, reinterpret_cast<MAddress>(f.heap.obj0));
-    auto second = f.queue.Add(f.heap.region0, reinterpret_cast<MAddress>(f.heap.obj0) + 8);
+    auto first = f.queue.Add(f.heap.region0(), reinterpret_cast<MAddress>(f.heap.obj0));
+    auto second = f.queue.Add(f.heap.region0(), reinterpret_cast<MAddress>(f.heap.obj0) + 8);
     GC_EXPECT_TRUE(first.accepted && first.inserted && second.accepted && !second.inserted);
     GC_EXPECT_TRUE(first.forwarding == second.forwarding);
     GC_EXPECT_EQ(f.queue.PendingCount(), 1U);
@@ -174,7 +174,7 @@ GC_TEST(RelocationPageQueue, EntryPublicationDoesNotCompleteThePage)
     f.queue.Wait(request.forwarding);
     GC_EXPECT_TRUE(timedOut);
     GC_EXPECT_FALSE(f.owner->is_done());
-    GC_EXPECT_EQ(forwarding_find(f.heap.region0->GetOwnerGeneration(), reinterpret_cast<MAddress>(f.heap.obj0)),
+    GC_EXPECT_EQ(forwarding_find(f.heap.region0()->GetOwnerGeneration(), reinterpret_cast<MAddress>(f.heap.obj0)),
                  reinterpret_cast<MAddress>(f.heap.obj1));
     f.Complete();
     f.queue.Wait(request.forwarding);
@@ -188,7 +188,7 @@ GC_TEST(RelocationPageQueue, ReleasedPageStillHasItsImmutableEntry)
     f.Publish();
     f.owner->release_page();
     GC_EXPECT_FALSE(f.owner->retain_page(&f.queue));
-    BaseObject* const answer = Heap::GetHeap().GetZGeneration(f.heap.region0->GetOwnerGeneration())
+    BaseObject* const answer = Heap::GetHeap().GetZGeneration(f.heap.region0()->GetOwnerGeneration())
         .remap_object(f.heap.obj0);
     GC_EXPECT_EQ(answer, f.heap.obj1);
     GC_EXPECT_FALSE(f.owner->is_done());

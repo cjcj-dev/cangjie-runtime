@@ -28,8 +28,8 @@ using namespace MapleRuntime::GcUnit;
 GC_TEST(OldToYoung1102, YoungMarkPhaseFlushRemembersOldToYoungSlot)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * ZGranuleSize);
 
@@ -51,7 +51,7 @@ GC_TEST(OldToYoung1102, YoungMarkPhaseFlushRemembersOldToYoungSlot)
     const bool published = SlotPageRemembered(slot);
     ZRememberedSet::flip();
     bool scanned = false;
-    fx.region0->oops_do_remembered([&](volatile zpointer* p) {
+    fx.region0()->oops_do_remembered([&](volatile zpointer* p) {
         scanned = Heap::GetHeap().remembered().scan_field(p) || scanned;
     });
     ZRememberedSet::flip();
