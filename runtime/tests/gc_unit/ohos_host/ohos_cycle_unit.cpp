@@ -22,6 +22,7 @@
 #include "gc_unittest.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "Heap/z/zPage.inline.hpp"
+#include "Heap/z/zForwarding.hpp"
 
 #include "Heap/z/zAccess.hpp"
 
@@ -127,6 +128,9 @@ unsigned gHandlerCalls = 0;
 bool gHandlerArguments = false;
 bool gHandlerRoots = false;
 bool gOwnerInactive = false;
+bool gRelocatedOwner = false;
+bool gRelocatedProxy = false;
+bool gFromPageReleased = false;
 
 void ObserveHandler(BaseObject* owner, BaseObject* proxy)
 {
@@ -144,7 +148,7 @@ void ObserveHandler(BaseObject* owner, BaseObject* proxy)
     std::fflush(stdout);
 }
 
-void* RunHandlerChain(void*)
+void* RunHandlerChain(void* argument)
 {
     auto& heap = Heap::GetHeap();
     alignas(TypeInfo) static unsigned char metadata[4][sizeof(TypeInfo)] {};
@@ -177,12 +181,41 @@ void* RunHandlerChain(void*)
     const U32 index = ExportRootTable::ExportHandleIndex(gExportHandle);
     std::memcpy(reinterpret_cast<char*>(objects[0]) + kPayload, &index, sizeof(index));
 
+    const uintptr_t ownerBefore = reinterpret_cast<uintptr_t>(objects[0]);
+    const uintptr_t proxyBefore = reinterpret_cast<uintptr_t>(objects[1]);
+    if (argument != nullptr) {
+        // Fill multiple old pages with unreachable ordinary objects so the
+        // real major selector sees sparse pages and relocates the live chain.
+        alignas(TypeInfo) static unsigned char fillerMetadata[sizeof(TypeInfo)] {};
+        auto* filler = reinterpret_cast<TypeInfo*>(fillerMetadata);
+        filler->SetType(TypeKind::TYPE_KIND_CLASS);
+        filler->SetInstanceSize(4096 - kPayload);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(filler), sizeof(TypeInfo));
+        for (size_t n = 0; n < 4 * ZPageSizeSmall / 4096; ++n) {
+            auto* dead = reinterpret_cast<BaseObject*>(
+                heap.object_allocator().alloc_for_relocation(4096, PageAge::old));
+            dead->SetClassInfo(filler);
+        }
+    }
+
     // The real major cycle owns export enumeration, foreign discovery,
     // PrepareCycleRef, and task posting. Do not seed its intermediate maps.
     ConcurrentGCBreakpoints::AcquireControl();
     const bool started = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
+    if (argument != nullptr) {
+        BaseObject* currentOwner = heap.GetExportObject(gExportHandle);
+        BaseObject* currentProxy = currentOwner == nullptr ? nullptr :
+            HeapAccess<>::oop_load(&(currentOwner->GetRefField<>(kPayload + sizeof(uint64_t))));
+        gRelocatedOwner = reinterpret_cast<uintptr_t>(currentOwner) != ownerBefore;
+        gRelocatedProxy = reinterpret_cast<uintptr_t>(currentProxy) != proxyBefore;
+        auto* forwarding = heap.old().forwarding_table().get(ownerBefore);
+        gFromPageReleased = forwarding != nullptr && forwarding->page() == nullptr;
+        std::printf("OHOS_RELOCATE_INPUT owner_moved=%u proxy_moved=%u from_released=%u\n",
+                    gRelocatedOwner, gRelocatedProxy, gFromPageReleased);
+    }
     void* postedTask = gTask;
     if (started && postedTask != nullptr) {
         reinterpret_cast<void(*)()>(postedTask)();
@@ -222,6 +255,34 @@ GC_RUNTIME_TEST(OHOSCycle, HandlerChainThroughMajorEntry)
     GC_EXPECT_TRUE(gHandlerArguments);
     GC_EXPECT_TRUE(gHandlerRoots);
     GC_EXPECT_TRUE(gOwnerInactive);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_TEST(OHOSCycle, HandlerReceivesCurrentRootsAfterRelocate)
+{
+    RuntimeParam param {};
+    param.heapParam.heapSize = 32 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
+    bool relocate = true;
+    CJThreadHandle handle = RunCJTask(RunHandlerChain, &relocate);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
+    ReleaseHandle(handle);
+    std::printf("OHOS_HOST_ASSERT_REACHED test=OHOSCycle.HandlerReceivesCurrentRootsAfterRelocate "
+                "calls=%u arguments=%u roots=%u inactive=%u owner_moved=%u proxy_moved=%u from_released=%u\n",
+                gHandlerCalls, gHandlerArguments, gHandlerRoots, gOwnerInactive,
+                gRelocatedOwner, gRelocatedProxy, gFromPageReleased);
+    std::fflush(stdout);
+    GC_EXPECT_TRUE(gHandlerArguments);
+    GC_EXPECT_EQ(gHandlerCalls, 1U);
+    GC_EXPECT_TRUE(gHandlerRoots);
+    GC_EXPECT_TRUE(gOwnerInactive);
+    GC_EXPECT_TRUE(gRelocatedOwner);
+    GC_EXPECT_TRUE(gRelocatedProxy);
+    GC_EXPECT_TRUE(gFromPageReleased);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
