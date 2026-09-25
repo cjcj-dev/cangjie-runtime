@@ -27,6 +27,7 @@
 #include "TypeInfoManager.h"
 #include "gc_generation_test.hpp"
 #include "Common/ScopedObjectAccess.h"
+#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zBarrier.hpp"
 
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -73,6 +74,7 @@ public:
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (NativeSlot*& slot : strongSlots) {
             if (slot == nullptr) continue;
+            NativeAccess<>::oop_store(slot, nullptr);
             storage.Release(slot);
             slot = nullptr;
         }

@@ -5,6 +5,7 @@
 #define MRT_GC_VERIFY_FIXTURE_HPP
 
 #include "gc_heap_fixture.hpp"
+#include "Heap/z/zAccess.hpp"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Common/Runtime.h"
@@ -52,6 +53,7 @@ struct GcVerifyFixture : GcHeapFixture {
         NativeSlot* root = storage.Allocate();
         root->StoreColoured(StoreGoodPointer(object));
         ZVerify::BeforeZOperation();
+        NativeAccess<>::oop_store(root, nullptr);
         storage.Release(root);
     }
 
@@ -64,6 +66,7 @@ struct GcVerifyFixture : GcHeapFixture {
         Heap::GetHeap().GetZGeneration(Generation::Old).set_phase(ZGenerationPhase::MarkComplete);
         if (weak) { ZVerify::AfterWeakProcessing(); }
         else { ZVerify::AfterMark(); }
+        NativeAccess<>::oop_store(root, nullptr);
         storage.Release(root);
     }
 
