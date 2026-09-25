@@ -2383,6 +2383,31 @@ extern "C" ArrayRef MCC_NewArrayGeneric(const TypeInfo* arrayInfo, MIndex nElems
     return array;
 }
 
+// ZGC zBarrierSet.inline.hpp:428: array oops are zaddresses before element_klass().
+// ZPointer::uncolor is zAddress.inline.hpp:499-502. is_store_good is true for any
+// non-null word that lacks store-bad bits, including a plain heap address
+// (zAddress.inline.hpp:576-584). A coloured store-good oop also carries
+// g_cjStoreGoodMask. SetClassInfo headers do not.
+static bool ArrayCopyStoreGoodColored(uintptr_t bits)
+{
+    const uintptr_t good = static_cast<uintptr_t>(::g_cjStoreGoodMask);
+    const zpointer pointer = to_zpointer(bits);
+    return good != 0 && (bits & good) == good && ZPointer::is_store_good(pointer);
+}
+
+static ObjectPtr ArrayCopyZAddress(ObjectPtr reported)
+{
+    if (reported == nullptr) {
+        return nullptr;
+    }
+    const uintptr_t bits = reinterpret_cast<uintptr_t>(reported);
+    if (ArrayCopyStoreGoodColored(bits)) {
+        return to_object(ZPointer::uncolor(to_zpointer(bits)));
+    }
+    CHECK_DETAIL((bits >> 48) == 0, "CJ_MCC_ArrayCopyGeneric src/dst is not a zaddress");
+    return reported;
+}
+
 extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstField, size_t dstSize,
                                         const ObjectPtr srcObj, MAddress srcField, size_t srcSize)
 {
@@ -2390,7 +2415,13 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in MCC_ArrayCopyGeneric");
-    TypeInfo* arrayInfo = srcObj->GetTypeInfo();
+    ObjectPtr dstBase = ArrayCopyZAddress(dstObj);
+    ObjectPtr srcBase = ArrayCopyZAddress(srcObj);
+    CHECK_DETAIL(srcBase != nullptr, "CJ_MCC_ArrayCopyGeneric missing source object");
+    const uintptr_t header = *reinterpret_cast<const uintptr_t*>(srcBase);
+    CHECK_DETAIL(!ArrayCopyStoreGoodColored(header),
+                 "CJ_MCC_ArrayCopyGeneric colored slot used as TypeInfo");
+    TypeInfo* arrayInfo = srcBase->GetTypeInfo();
 
     TypeInfo* componentTypeInfo = arrayInfo->GetComponentTypeInfo();
     I8 type = componentTypeInfo->GetType();
@@ -2409,7 +2440,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_TEMP_ENUM:
         case TypeKind::TYPE_KIND_RAWARRAY:
         case TypeKind::TYPE_KIND_FUNC: {
-            HeapAccess<>::oop_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+            HeapAccess<>::oop_arraycopy(srcBase, srcField, srcSize, dstBase, dstField, dstSize);
             break;
         }
         case TypeKind::TYPE_KIND_UNIT:
@@ -2441,7 +2472,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
             // VArray may embed managed refs (HasRefField recurses via component flag /
             // TypeGCInfo). Unconditional memmove skips remset post-record (G-C1).
             if (componentTypeInfo->HasRefField()) {
-                HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+                HeapAccess<>::value_arraycopy(srcBase, srcField, srcSize, dstBase, dstField, dstSize);
             } else {
                 CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                        reinterpret_cast<void*>(srcField), srcSize) == EOK,
@@ -2452,7 +2483,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_TUPLE:
         case TypeKind::TYPE_KIND_STRUCT:
         case TypeKind::TYPE_KIND_ENUM: {
-            HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+            HeapAccess<>::value_arraycopy(srcBase, srcField, srcSize, dstBase, dstField, dstSize);
             break;
         }
         default:
