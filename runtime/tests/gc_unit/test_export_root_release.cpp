@@ -128,11 +128,15 @@ void CheckWorkerRelease(int obsolete)
     // owns the runtime workers. Do not start a second set of uncommitters.
     auto& fp = *new FinalizerProcessor();
     NativeSlot* queued = nullptr;
+    U64 keepAlive = 0;
     {
         ScopedObjectAccess access;
         auto* object = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc(16));
         GC_EXPECT_TRUE(object != nullptr);
         object->SetClassInfo(type);
+        // The local processor is not part of the global heap root registry.
+        // Retain the object there too if an unrelated collection overlaps.
+        keepAlive = heap.RegisterExportRoot(object);
         // Existing fixture access prepares the queue through the product
         // registration/enqueue functions. The observed clear is executed by
         // MRT_ProcessFinalizers -> Run -> ProcessFinalizables on its own thread.
@@ -156,6 +160,10 @@ void CheckWorkerRelease(int obsolete)
     ExpectReleasedColour(obsolete == 0 ? "worker-finalized" : obsolete == 1 ? "worker-null" : "worker-filler", queued);
     GC_EXPECT_EQ(fp.StrongRootStorage().AllocationCount(), size_t(0));
     GC_EXPECT_EQ(finalizerCalls.load(std::memory_order_acquire), obsolete == 0 ? 1u : 0u);
+    {
+        ScopedObjectAccess access;
+        heap.RemoveExportObject(keepAlive);
+    }
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     // The child VM terminates the idle worker after the test completion sentinel.
 }
