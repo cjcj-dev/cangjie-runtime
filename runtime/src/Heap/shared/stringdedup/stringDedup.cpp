@@ -134,11 +134,4 @@ ArrayRef StringDedup::Canonical(const TypeInfo* arrayInfo, ArrayRef candidate)
     table.emplace(hash, WeakSlot{ZAddress::store_good(from_object(candidate))});
     return candidate;
 }
-
-// CJRuntimeLowering.cpp maps cj_fill_in_stack_trace to CJ_MCC_FillInStackTrace.
-// The dedup return uses the same stub name rule: CJ_MCC_StringDedupCanonical.
-extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate)
-{
-    return StringDedup::Instance().Canonical(arrayInfo, candidate);
-}
 } // namespace MapleRuntime
