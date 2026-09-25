@@ -5,6 +5,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      p04_bsd_tu_only:
+        description: 'Run only the P04 bsd TU compile job'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -15,6 +21,7 @@ defaults:
 
 jobs:
   apple-runtime:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.p04_bsd_tu_only != true }}
     name: ${{ matrix.runner }} / ${{ matrix.variant }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
