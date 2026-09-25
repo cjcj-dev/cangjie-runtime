@@ -389,7 +389,10 @@ void ResizeRunningRelocation(ZGeneration& generation, uint32_t initial = 1, uint
 GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
 {
     GcHeapFixture fx;
-    PrepareOwnerRegion(fx);
+    PlaceOwnerObjects(fx);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, fx.obj1));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region0, fx.region1}));
     auto& old = Heap::GetHeap().old();
     auto& manager = Heap::GetHeap().page_allocator();
     RelocationReceiptTest::ParkFrom(manager, fx.region0);
