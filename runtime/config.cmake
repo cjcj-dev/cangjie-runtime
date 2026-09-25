@@ -453,7 +453,12 @@ if (OHOS_PUBLIC_SDK AND OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
     set(_ohos_llvm_lib "${OHOS_PUBLIC_SDK}/llvm/lib/${_ohos_triple}")
     set(OHOS_LIB "${CMAKE_BINARY_DIR}/ohos_public_link")
     file(MAKE_DIRECTORY "${OHOS_LIB}")
-    file(CREATE_LINK "${_ohos_llvm_lib}/libc++.so" "${OHOS_LIB}/libstdc++.so" SYMBOLIC)
+    # Remove the link left by older configurations before copying: never write
+    # through it into the shared SDK. Reused libraries are independent files.
+    if(IS_SYMLINK "${OHOS_LIB}/libstdc++.so")
+        file(REMOVE "${OHOS_LIB}/libstdc++.so")
+    endif()
+    configure_file("${_ohos_llvm_lib}/libc++.so" "${OHOS_LIB}/libstdc++.so" COPYONLY)
     file(GLOB _ohos_clang_rt "${OHOS_PUBLIC_SDK}/llvm/lib/clang/*/lib/${_ohos_triple}")
     set(OHOS_PUBLIC_LINK_DIRS "${_ohos_ndk_lib}" "${_ohos_llvm_lib}" ${_ohos_clang_rt})
 elseif (OHOS_FLAG MATCHES 1 OR WINDOWS_FLAG MATCHES 1)
