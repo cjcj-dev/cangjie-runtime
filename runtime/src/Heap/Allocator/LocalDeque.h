@@ -35,9 +35,7 @@ public:
     {
         void* base = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         CHECK_DETAIL(base != MAP_FAILED, "%s: mmap of %zu bytes failed", tag, size);
-#if defined(__linux__) || defined(hongmeng)
         MRT_PRCTL(base, size, tag);
-#endif
         return new (std::nothrow) DequeMapping(base, size);
     }
 
