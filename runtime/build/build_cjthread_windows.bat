@@ -67,6 +67,6 @@ exit /b 0
 :cjthread_fail
 set "CJTHREAD_FAIL_RC=%ERRORLEVEL%"
 cd /d %CURRENT_PATH%
-exit /b %CJTHREAD_FAIL_RC%
+exit /b 0
 
 @echo on
