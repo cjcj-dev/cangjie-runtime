@@ -14,7 +14,7 @@ SRCROOT=${SRCROOT:-$LANE/default}
 OUT=${OUT:-$LANE/managed-runs}
 # Compiler/stdlib SDK for the inline TLAB ABI (top@0/end@8).
 COLORED_SDK=${COLORED_SDK:-/root/sdkdepot/b99430a618af-1ecb811801ca}
-H48_RT=${H48_RT:-/root/sym_cjcj_48_implement_r5685150408/host/runtime/lib/linux_x86_64_cjnative}
+H48_RT=${H48_RT:-/root/sharedbuild/h48-host-runtime/35da7be2434ad72348ed27e8a0bf599ec4e91524/linux_x86_64_cjnative}
 STAINED_RT=${STAINED_RT:-$SRCROOT/build/runtime-staging/lib/x86_64_Release}
 export CANGJIE_HOME=${CANGJIE_HOME:-$COLORED_SDK}
 export GC_UNIT_CJC_RUNTIME_LIB_DIR="$H48_RT"
