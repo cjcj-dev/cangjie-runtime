@@ -573,6 +573,7 @@ GC_TEST(RememberedClear845, ConsumedPreviousSlotsAreAbsentOnRescan)
 // ZGC zMarkStack.inline.hpp:66: publication owns the nonempty invariant.
 GC_TEST(MarkPublish1144, EmptyStackRejectedForBothRoutes)
 {
+    bool rejected[2] = {false, false};
     for (bool publish : {false, true}) {
         const pid_t child = fork();
         GC_EXPECT_TRUE(child >= 0);
@@ -585,8 +586,9 @@ GC_TEST(MarkPublish1144, EmptyStackRejectedForBothRoutes)
         int status = 0;
         GC_EXPECT_EQ(waitpid(child, &status, 0), child);
         std::fprintf(stderr, "MARK1144 publication publish=%d status=%d\n", publish, status);
-        GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+        rejected[publish ? 1 : 0] = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
     }
+    GC_EXPECT_TRUE(rejected[0] && rejected[1]);
 }
 
 // ZGC zMarkStack.cpp:78: list insertion does not inspect the stack payload.
