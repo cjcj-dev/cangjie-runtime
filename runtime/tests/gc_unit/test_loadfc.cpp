@@ -336,3 +336,12 @@ GC_TEST(ThreadOffsetABI1140, g_cjStoreGoodMaskOffsetIsNotExported)
     std::printf("OFFSET_ABI_TARGET symbol=g_cjStoreGoodMaskOffset exported=%d\n", exported != nullptr);
     GC_EXPECT_TRUE(exported == nullptr);
 }
+
+// ZGC zThreadLocalData.hpp:131-133; zBarrierSetAssembler_x86.cpp:478.
+GC_TEST(ThreadOffsetABI1158, g_cjStoreBarrierBufferOffsetIsNotExported)
+{
+    GC_EXPECT_TRUE(dlsym(RTLD_DEFAULT, "g_cjStoreBarrierBufferCurrentOffset") != nullptr);
+    void* exported = dlsym(RTLD_DEFAULT, "g_cjStoreBarrierBufferOffset");
+    std::printf("OFFSET_ABI_TARGET symbol=g_cjStoreBarrierBufferOffset exported=%d\n", exported != nullptr);
+    GC_EXPECT_TRUE(exported == nullptr);
+}

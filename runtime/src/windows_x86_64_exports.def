@@ -2698,7 +2698,6 @@ EXPORTS
 
     CJ_MCC_StoreBarrierOnHeapField @3503
     CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive @3504
-    g_cjStoreBarrierBufferOffset @3509 DATA
     g_cjStoreBarrierBufferCurrentOffset @3510 DATA
     g_cjStoreBarrierBufferBufferOffset @3511 DATA
     g_cjStoreBarrierEntrySize @3512 DATA
