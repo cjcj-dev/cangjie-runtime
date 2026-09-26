@@ -4,6 +4,7 @@
 
 #include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -14,6 +15,8 @@
 #include "Heap/z/zBarrier.hpp"
 
 #include "Cangjie.h"
+#include "Common/Handle.h"
+#include "Mutator/Mutator.inline.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
@@ -22,6 +25,7 @@
 #include "gc_unittest.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "Heap/z/zPage.inline.hpp"
+#include "Heap/z/zForwarding.hpp"
 
 #include "Heap/z/zAccess.hpp"
 
@@ -127,6 +131,30 @@ unsigned gHandlerCalls = 0;
 bool gHandlerArguments = false;
 bool gHandlerRoots = false;
 bool gOwnerInactive = false;
+bool gRelocatedOwner = false;
+bool gRelocatedProxy = false;
+bool gFromPageReleased = false;
+bool gRelocateInCallback = false;
+bool gCallbackRelocated = false;
+
+void FillSparsePages(std::vector<Handle>& roots)
+{
+    auto& heap = Heap::GetHeap();
+    alignas(TypeInfo) static unsigned char metadata[sizeof(TypeInfo)] {};
+    auto* type = reinterpret_cast<TypeInfo*>(metadata);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(4096 - kPayload);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(type), sizeof(TypeInfo));
+    for (size_t n = 0; n < 4 * ZPageSizeSmall / 4096; ++n) {
+        auto* object = reinterpret_cast<BaseObject*>(
+            heap.object_allocator().alloc_for_relocation(4096, PageAge::old));
+        object->SetClassInfo(type);
+        if (n % (ZPageSizeSmall / 4096) == 0) {
+            roots.emplace_back(Mutator::GetMutator(), object);
+        }
+    }
+}
 
 void ObserveHandler(BaseObject* owner, BaseObject* proxy)
 {
@@ -134,34 +162,54 @@ void ObserveHandler(BaseObject* owner, BaseObject* proxy)
     BaseObject* expectedOwner = heap.GetExportObject(gExportHandle);
     BaseObject* expectedProxy = expectedOwner == nullptr ? nullptr :
         HeapAccess<>::oop_load(&(expectedOwner->GetRefField<>(kPayload + sizeof(uint64_t))));
+    BaseObject* otherProxy = !gRelocateInCallback || expectedOwner == nullptr ? nullptr :
+        HeapAccess<>::oop_load(&(expectedOwner->GetRefField<>(kPayload + 2 * sizeof(uint64_t))));
+    const bool arguments = owner == expectedOwner && (proxy == expectedProxy || proxy == otherProxy);
+    gHandlerArguments = gHandlerCalls == 0 ? arguments : gHandlerArguments && arguments;
     ++gHandlerCalls;
-    gHandlerArguments = owner == expectedOwner && proxy == expectedProxy;
     std::vector<BaseObject*> roots;
     heap.cross_vm().VisitSurrectedExportRoots([&](BaseObject* object) { roots.push_back(object); });
-    gHandlerRoots = roots.size() == 2 && roots[0] == owner && roots[1] == proxy;
+    // The nested major rediscovers both foreign references. PrepareCycleRef
+    // splices those two new occurrences into the existing work list, so its
+    // product output contains each proxy twice after the first callback.
+    const size_t occurrences = gHandlerCalls == 1 ? 1 : 2;
+    const bool rootResult = gRelocateInCallback ?
+        roots.size() == 1 + 2 * occurrences && roots[0] == owner &&
+            std::count(roots.begin(), roots.end(), expectedProxy) == static_cast<ptrdiff_t>(occurrences) &&
+            std::count(roots.begin(), roots.end(), otherProxy) == static_cast<ptrdiff_t>(occurrences) :
+        roots.size() == 2 && roots[0] == owner && roots[1] == proxy;
+    gHandlerRoots = gHandlerCalls == 1 ? rootResult : gHandlerRoots && rootResult;
     std::printf("OHOS_HANDLER_TARGET_REACHED arguments=%u roots=%u count=%u\n",
                 gHandlerArguments, gHandlerRoots, gHandlerCalls);
     std::fflush(stdout);
+    if (gRelocateInCallback && gHandlerCalls == 1) {
+        HandleMark mark(*Mutator::GetMutator());
+        std::vector<Handle> roots;
+        FillSparsePages(roots);
+        heap.RequestGC(GC_REASON_USER);
+        gCallbackRelocated = heap.GetExportObject(gExportHandle) != expectedOwner;
+        std::printf("OHOS_CALLBACK_RELOCATE moved=%u\n", gCallbackRelocated);
+    }
 }
 
-void* RunHandlerChain(void*)
+void* RunHandlerChain(void* argument)
 {
     auto& heap = Heap::GetHeap();
-    alignas(TypeInfo) static unsigned char metadata[4][sizeof(TypeInfo)] {};
-    BaseObject* objects[4] {};
-    for (size_t i = 0; i < 4; ++i) {
+    alignas(TypeInfo) static unsigned char metadata[5][sizeof(TypeInfo)] {};
+    BaseObject* objects[5] {};
+    for (size_t i = 0; i < (gRelocateInCallback ? 5U : 4U); ++i) {
         auto* type = reinterpret_cast<TypeInfo*>(metadata[i]);
-        type->SetType(i == 1 ? TypeKind::TYPE_KIND_FOREIGN_PROXY : TypeKind::TYPE_KIND_CLASS);
-        type->SetInstanceSize(i == 0 ? 16 : 8);
-        if (i < 3) {
+        type->SetType((i == 1 || i == 4) ? TypeKind::TYPE_KIND_FOREIGN_PROXY : TypeKind::TYPE_KIND_CLASS);
+        type->SetInstanceSize(i == 0 ? (gRelocateInCallback ? 24 : 16) : 8);
+        if (i < 3 || i == 4) {
             type->SetFlagHasRefField();
             GCTib bitmap {};
-            bitmap.tag = SIGN_BIT | (i == 0 ? 2 : 1);
+            bitmap.tag = SIGN_BIT | (i == 0 ? (gRelocateInCallback ? 6 : 2) : 1);
             type->SetGCTib(bitmap);
         }
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
             reinterpret_cast<uintptr_t>(metadata[i]), sizeof(TypeInfo));
-        const size_t size = kPayload + (i == 0 ? 16 : 8);
+        const size_t size = kPayload + (i == 0 ? (gRelocateInCallback ? 24 : 16) : 8);
         objects[i] = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(size, PageAge::old));
         std::memset(objects[i], 0, size);
         objects[i]->SetClassInfo(type);
@@ -171,11 +219,24 @@ void* RunHandlerChain(void*)
     for (size_t i = 0; i < 3; ++i) {
         HeapAccess<>::oop_store(&(objects[i]->GetRefField<>(kPayload + (i == 0 ? sizeof(uint64_t) : 0))), objects[i + 1]);
     }
+    if (gRelocateInCallback) {
+        HeapAccess<>::oop_store(&(objects[0]->GetRefField<>(kPayload + 2 * sizeof(uint64_t))), objects[4]);
+        HeapAccess<>::oop_store(&(objects[4]->GetRefField<>(kPayload)), objects[2]);
+    }
     const CrossRefHandler handler = &ObserveHandler;
     std::memcpy(reinterpret_cast<char*>(objects[3]) + kPayload, &handler, sizeof(handler));
     gExportHandle = heap.RegisterExportRoot(objects[0]);
     const U32 index = ExportRootTable::ExportHandleIndex(gExportHandle);
     std::memcpy(reinterpret_cast<char*>(objects[0]) + kPayload, &index, sizeof(index));
+
+    HandleMark sparseMark(*Mutator::GetMutator());
+    std::vector<Handle> sparseRoots;
+    const uintptr_t ownerBefore = reinterpret_cast<uintptr_t>(objects[0]);
+    const uintptr_t proxyBefore = reinterpret_cast<uintptr_t>(objects[1]);
+    if (argument != nullptr) {
+        // Multiple sparse live pages make relocation profitable to the real selector.
+        FillSparsePages(sparseRoots);
+    }
 
     // The real major cycle owns export enumeration, foreign discovery,
     // PrepareCycleRef, and task posting. Do not seed its intermediate maps.
@@ -183,6 +244,17 @@ void* RunHandlerChain(void*)
     const bool started = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
+    if (argument != nullptr) {
+        BaseObject* currentOwner = heap.GetExportObject(gExportHandle);
+        BaseObject* currentProxy = currentOwner == nullptr ? nullptr :
+            HeapAccess<>::oop_load(&(currentOwner->GetRefField<>(kPayload + sizeof(uint64_t))));
+        gRelocatedOwner = reinterpret_cast<uintptr_t>(currentOwner) != ownerBefore;
+        gRelocatedProxy = reinterpret_cast<uintptr_t>(currentProxy) != proxyBefore;
+        auto* forwarding = heap.old().forwarding_table().get(ownerBefore);
+        gFromPageReleased = forwarding != nullptr && !forwarding->in_place() && Heap::page(ownerBefore) == nullptr;
+        std::printf("OHOS_RELOCATE_INPUT owner_moved=%u proxy_moved=%u from_released=%u\n",
+                    gRelocatedOwner, gRelocatedProxy, gFromPageReleased);
+    }
     void* postedTask = gTask;
     if (started && postedTask != nullptr) {
         reinterpret_cast<void(*)()>(postedTask)();
@@ -221,6 +293,62 @@ GC_RUNTIME_TEST(OHOSCycle, HandlerChainThroughMajorEntry)
     GC_EXPECT_EQ(gHandlerCalls, 1U);
     GC_EXPECT_TRUE(gHandlerArguments);
     GC_EXPECT_TRUE(gHandlerRoots);
+    GC_EXPECT_TRUE(gOwnerInactive);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_TEST(OHOSCycle, HandlerReceivesCurrentRootsAfterRelocate)
+{
+    RuntimeParam param {};
+    param.heapParam.heapSize = 32 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
+    bool relocate = true;
+    CJThreadHandle handle = RunCJTask(RunHandlerChain, &relocate);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
+    ReleaseHandle(handle);
+    std::printf("OHOS_HOST_ASSERT_REACHED test=OHOSCycle.HandlerReceivesCurrentRootsAfterRelocate "
+                "calls=%u arguments=%u roots=%u inactive=%u owner_moved=%u proxy_moved=%u from_released=%u\n",
+                gHandlerCalls, gHandlerArguments, gHandlerRoots, gOwnerInactive,
+                gRelocatedOwner, gRelocatedProxy, gFromPageReleased);
+    std::fflush(stdout);
+    GC_EXPECT_TRUE(gHandlerArguments);
+    GC_EXPECT_EQ(gHandlerCalls, 1U);
+    GC_EXPECT_TRUE(gHandlerRoots);
+    GC_EXPECT_TRUE(gOwnerInactive);
+    GC_EXPECT_TRUE(gRelocatedOwner);
+    GC_EXPECT_TRUE(gRelocatedProxy);
+    GC_EXPECT_TRUE(gFromPageReleased);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_TEST(OHOSCycle, HandlerRefreshesRootsAfterCallbackRelocate)
+{
+    RuntimeParam param {};
+    param.heapParam.heapSize = 32 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
+    gRelocateInCallback = true;
+    bool relocate = true;
+    CJThreadHandle handle = RunCJTask(RunHandlerChain, &relocate);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
+    ReleaseHandle(handle);
+    std::printf("OHOS_HOST_ASSERT_REACHED test=OHOSCycle.HandlerRefreshesRootsAfterCallbackRelocate "
+                "calls=%u arguments=%u roots=%u callback_moved=%u\n",
+                gHandlerCalls, gHandlerArguments, gHandlerRoots, gCallbackRelocated);
+    std::fflush(stdout);
+    GC_EXPECT_TRUE(gHandlerArguments);
+    // Initial discovery contributes two entries; the nested major contributes two more.
+    GC_EXPECT_EQ(gHandlerCalls, 4U);
+    GC_EXPECT_TRUE(gHandlerRoots);
+    GC_EXPECT_TRUE(gCallbackRelocated);
+    GC_EXPECT_TRUE(gFromPageReleased);
     GC_EXPECT_TRUE(gOwnerInactive);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

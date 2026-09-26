@@ -243,6 +243,12 @@ _CJ_MCC_FillInStackTrace:
 
     .text
     .align 2
+    .global _CJ_MCC_StringDedupCanonical
+_CJ_MCC_StringDedupCanonical:
+    CalleeSavedRegistersStub MCC_StringDedupCanonicalImpl
+
+    .text
+    .align 2
     .global _CJ_MCC_DecodeStackTrace
 _CJ_MCC_DecodeStackTrace:
     CalleeSavedRegistersStub MCC_DecodeStackTraceImpl

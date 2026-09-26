@@ -42,6 +42,7 @@ set(GC_UNIT_SOURCES
     test_young_conc.cpp
     test_alloc_buffer_handoff.cpp
     test_allocation_stall_queue.cpp
+    test_export_root_release.cpp
     test_tlab_usage.cpp
     test_raw_null_allocation.cpp
     test_object_allocator_paths.cpp

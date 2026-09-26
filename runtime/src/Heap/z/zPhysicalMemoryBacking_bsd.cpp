@@ -16,6 +16,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zErrno.hpp"
 #include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zLargePages.inline.hpp"
 
 namespace MapleRuntime {
@@ -51,6 +52,7 @@ ZPhysicalMemoryBacking::ZPhysicalMemoryBacking(size_t max_capacity)
     _initialized(false) {
   void* const res = mmap(nullptr, max_capacity, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
   if (res == MAP_FAILED) {
+    ZInitialize::error("Failed to reserve address space for backing memory");
     return;
   }
   _base = reinterpret_cast<uintptr_t>(res);
@@ -102,12 +104,19 @@ size_t ZPhysicalMemoryBacking::uncommit(zbacking_offset offset, size_t length) c
 }
 
 void ZPhysicalMemoryBacking::map(zaddress_unsafe addr, size_t size, zbacking_offset offset) const {
-  (void)mremap_mach(_base + untype(offset), untype(addr), size);
+  const ZErrno err = mremap_mach(_base + untype(offset), untype(addr), size);
+  if (err) {
+    LOG(RTLOG_FATAL, "Failed to remap memory (%s)", err.to_string());
+  }
 }
 
 void ZPhysicalMemoryBacking::unmap(zaddress_unsafe addr, size_t size) const {
-  mmap(reinterpret_cast<void*>(untype(addr)), size, PROT_NONE,
+  const void* const res = mmap(reinterpret_cast<void*>(untype(addr)), size, PROT_NONE,
        MAP_FIXED | MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
+  if (res == MAP_FAILED) {
+    ZErrno err;
+    LOG(RTLOG_FATAL, "Failed to map memory (%s)", err.to_string());
+  }
 }
 
 }

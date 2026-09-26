@@ -213,6 +213,7 @@ unwindPCForC2RStubStart:
     CalleeSavedRegistersStub MCC_NewArray64 CJ_MCC_NewArray64
     CalleeSavedRegistersStub MCC_InvokeGCImpl CJ_MCC_InvokeGC
     CalleeSavedRegistersStub MCC_FillInStackTraceImpl CJ_MCC_FillInStackTrace
+    CalleeSavedRegistersStub MCC_StringDedupCanonicalImpl CJ_MCC_StringDedupCanonical
     CalleeSavedRegistersStub MCC_DecodeStackTraceImpl CJ_MCC_DecodeStackTrace
     CalleeSavedRegistersStub MCC_GetAllThreadSnapshotImpl CJ_MCC_GetAllThreadSnapshot
     CalleeSavedRegistersStub MCC_GetCurrentThreadSnapshotImpl CJ_MCC_GetCurrentThreadSnapshot

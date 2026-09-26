@@ -182,13 +182,15 @@ run_ohos_host_arm() {
 
   declare -a tests=(
     OHOSCycle.HandlerChainThroughMajorEntry
+    OHOSCycle.HandlerReceivesCurrentRootsAfterRelocate
+    OHOSCycle.HandlerRefreshesRootsAfterCallbackRelocate
     OHOSCycle.MajorEntryPostsResolveTask
     OHOSCycle.PostResolvePostsProductTask
     OHOSCycle.EmptyWorkDoesNotPost
   )
-  declare -a keys=(HANDLER MAJOR POST EMPTY)
-  declare -a states=(NOT_RUN NOT_RUN NOT_RUN NOT_RUN)
-  declare -a rcs=(125 125 125 125)
+  declare -a keys=(HANDLER RELOCATE CALLBACK MAJOR POST EMPTY)
+  declare -a states=(NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN NOT_RUN)
+  declare -a rcs=(125 125 125 125 125 125)
 
   for i in "${!tests[@]}"; do
     test_name="${tests[$i]}"
@@ -345,6 +347,7 @@ MAIN_SOURCES=(
   "$SRC/test_zForwarding.cpp"
   "$SRC/test_z_forwarding_table.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
+  "$SRC/test_export_root_release.cpp"
   "$SRC/test_p05_heuristics.cpp"
   "$SRC/test_young_conc.cpp"
   "$SRC/test_alloc_buffer_handoff.cpp"

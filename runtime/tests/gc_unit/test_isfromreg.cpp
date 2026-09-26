@@ -51,10 +51,10 @@ GC_TEST(IsFromReg, UnlistedGarbageClaimIsRefusedUntilPrepend)
 {
     GcHeapFixture fx;
     RegionManager manager;
-    IsFromRegTestAccess::ParkFrom(manager, fx.region0);
-    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0, 0));
-    GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0, 0));
-    IsFromRegTestAccess::ParkGarbage(manager, fx.region0);
-    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0, 0));
-    GC_EXPECT_FALSE(IsFromRegTestAccess::OnGarbage(manager, fx.region0));
+    IsFromRegTestAccess::ParkFrom(manager, fx.region0());
+    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0(), 0));
+    GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0(), 0));
+    IsFromRegTestAccess::ParkGarbage(manager, fx.region0());
+    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0(), 0));
+    GC_EXPECT_FALSE(IsFromRegTestAccess::OnGarbage(manager, fx.region0()));
 }

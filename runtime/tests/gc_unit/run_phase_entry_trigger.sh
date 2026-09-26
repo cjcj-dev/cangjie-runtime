@@ -47,6 +47,7 @@ echo "$analyzer_unit_rc" >"$OUT/schema_ledger.unit.rc"
 
 if [[ "${PHASE_ENTRY_REUSE_ELFS:-0}" != 1 ]]; then
   "$CXX_BIN" -std=gnu++17 -O0 -fPIC -shared -I"$ROOT/runtime/src" -I"$ROOT/runtime/include" \
+    -I"$ROOT/runtime/src/Heap/z/os/linux" \
     -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
     -I"$RUNTIME_LIB_DIR/../../include" \
     -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \

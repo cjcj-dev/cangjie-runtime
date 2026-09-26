@@ -83,7 +83,7 @@ GC_TEST(WeakRootsProduct, PhantomCleanLiveRetainsSlot)
     RestoreMarkFlips flips;
     NativeSlot slot(zpointer::null);
     *SlotOf(slot) = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
-    (void)GcHeapFixture::MarkStrong(fx.region0, fx.obj0);
+    (void)GcHeapFixture::MarkStrong(fx.region0(), fx.obj0);
     ZResurrection::block();
     GC_EXPECT_FALSE(ZBarrier::clean_barrier_on_phantom_oop_field(SlotOf(slot)));
     GC_EXPECT_TRUE(to_object(ZPointer::uncolor(*SlotOf(slot))) == fx.obj0);
@@ -97,7 +97,7 @@ GC_TEST(WeakRootsProduct, PhantomCleanFinalizableRetainsSlot)
     RestoreMarkFlips flips;
     NativeSlot slot(zpointer::null);
     *SlotOf(slot) = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
-    (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
+    (void)GcHeapFixture::MarkFinalizable(fx.region0(), fx.obj0);
     ZResurrection::block();
     GC_EXPECT_FALSE(ZBarrier::clean_barrier_on_phantom_oop_field(SlotOf(slot)));
     GC_EXPECT_TRUE(to_object(ZPointer::uncolor(*SlotOf(slot))) == fx.obj0);
@@ -121,7 +121,7 @@ GC_TEST(WeakRootsProduct, YoungBlockedAccessDoesNotDeathClean)
 {
     GcHeapFixture fx;
     RestoreBlock restore;
-    fx.region0->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::eden);
     RestoreMarkFlips flips;
     NativeSlot slot(zpointer::null);
     *SlotOf(slot) = CaptureStoreGoodThenFlipMark(fx.obj0, flips, true, false);

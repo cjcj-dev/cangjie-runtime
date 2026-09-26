@@ -52,7 +52,7 @@ void CheckOverlap(bool structure, bool backwards, size_t length = 4, bool same =
         }
         HeapSlotAt<>(content + i * stride + refOffset).StoreColoured(StoreGoodPointer(original[i]));
     }
-    heap.region0->SetRegionAllocPtr(heap.heapStart + 2048);
+    heap.region0()->SetRegionAllocPtr(heap.heapStart + 2048);
     const size_t srcIndex = backwards ? 0 : 1;
     const size_t dstIndex = same ? srcIndex : backwards ? 1 : 0;
     // Diagnostic preconditions must not hide the result assertion below.
@@ -115,7 +115,7 @@ private:
 void CheckBarriers(bool structure, bool checkStore)
 {
     GcHeapFixture heap;
-    heap.region0->reset(PageAge::old);
+    heap.region0()->reset(PageAge::old);
     ArrayCopyMutatorScope scope;
     alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)]{};
     alignas(TypeInfo) unsigned char arrayStorage[sizeof(TypeInfo)]{};

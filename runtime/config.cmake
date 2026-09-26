@@ -44,6 +44,10 @@ if (NOT OHOS_FLAG)
 endif ()
 set(OHOS_FLAG_LIST "1" "2" "3")
 message(STATUS "OHOS_FLAG : ${OHOS_FLAG}")
+# Empty keeps the OHOS_ROOT prebuilts/clang + musl-sysroot layout. Set only by
+# the qemu user-mode arm; native and MRT_GC_UNIT_OHOS_HOST do not pass it.
+set(OHOS_PUBLIC_SDK "" CACHE PATH
+    "Public OpenHarmony Native SDK root containing llvm/ and sysroot/")
 
 if (NOT WINDOWS_FLAG)
     set(WINDOWS_FLAG 0 CACHE STRING "windows default is false" FORCE)
@@ -157,12 +161,21 @@ if("${cmake_host_system_processor}" STREQUAL "amd64")
 endif()
 
 if (OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
-    set(CMAKE_C_COMPILER "${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/clang")
-    set(CMAKE_ASM_COMPILER "${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/clang")
-    set(CMAKE_CXX_COMPILER "${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/clang++")
-    set(CMAKE_RANLIB "${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/llvm-ranlib")
-    set(CMAKE_AR_PATH "${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/llvm-ar")
-    message("set c/cxx ${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/clang/clang++")
+    if (OHOS_PUBLIC_SDK)
+        set(CMAKE_C_COMPILER "${OHOS_PUBLIC_SDK}/llvm/bin/clang")
+        set(CMAKE_ASM_COMPILER "${OHOS_PUBLIC_SDK}/llvm/bin/clang")
+        set(CMAKE_CXX_COMPILER "${OHOS_PUBLIC_SDK}/llvm/bin/clang++")
+        set(CMAKE_RANLIB "${OHOS_PUBLIC_SDK}/llvm/bin/llvm-ranlib")
+        set(CMAKE_AR_PATH "${OHOS_PUBLIC_SDK}/llvm/bin/llvm-ar")
+        message("set c/cxx ${OHOS_PUBLIC_SDK}/llvm/bin/clang (public SDK)")
+    else()
+        set(CMAKE_C_COMPILER "${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/clang")
+        set(CMAKE_ASM_COMPILER "${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/clang")
+        set(CMAKE_CXX_COMPILER "${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/clang++")
+        set(CMAKE_RANLIB "${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/llvm-ranlib")
+        set(CMAKE_AR_PATH "${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/llvm-ar")
+        message("set c/cxx ${OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/clang/clang++")
+    endif()
     add_definitions(-D__OHOS__)
 elseif (ANDROID_FLAG IN_LIST ANDROID_FLAG_LIST)
     set(CMAKE_C_COMPILER "${ANDROID_ROOT}/llvm/prebuilt/${cmake_host_system_name}-x86_64/bin/${ANDROID_ARCH}-${ANDROID_OS}-${ANDROID_TARGET_API}-clang")
@@ -274,6 +287,11 @@ if (OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
     set(OHOS_INCLUDE
         "-I${CMAKE_CURRENT_SOURCE_DIR}/third_party/third_party_bounds_checking_function/include"
     )
+    if (OHOS_PUBLIC_SDK)
+        set(OHOS_MUSL_SYSROOT "${OHOS_PUBLIC_SDK}/sysroot")
+    else()
+        set(OHOS_MUSL_SYSROOT "${OHOS_ROOT}/out/sdk/obj/third_party/musl/sysroot")
+    endif()
 
     set(CMAKE_INIT_FLAGS "-fPIC -Wdeprecated-copy -fno-strict-aliasing --param=ssp-buffer-size=4 -Wno-builtin-macro-redefined \
         -D__DATE__= -D__TIME__= -D__TIMESTAMP__= -funwind-tables -fcolor-diagnostics -fmerge-all-constants \
@@ -292,7 +310,7 @@ if (OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
         -Wno-unused-command-line-argument -fno-omit-frame-pointer -fvisibility=default -fno-exceptions -fno-rtti \
         -ffunction-sections -Wall -fstack-protector-strong -fno-emulated-tls \
         -Wl,--hash-style=gnu \
-        --sysroot=${OHOS_ROOT}/out/sdk/obj/third_party/musl/sysroot ${OHOS_INCLUDE}"
+        --sysroot=${OHOS_MUSL_SYSROOT} ${OHOS_INCLUDE}"
     )
 elseif (WINDOWS_FLAG MATCHES 1)
     # The DLL link relies on -Wl,--export-all-symbols for its export surface (the
@@ -422,7 +440,28 @@ endif()
 file(COPY build/cmake/CMakeLists.txt DESTINATION ${BOUNDSCHECK}/)
 set(BOUNDSCHECK_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/third_party/third_party_bounds_checking_function CACHE FILEPATH "" FORCE)
 set(BOUNDSCHECK_INCLUDE ${BOUNDSCHECK_ROOT}/include)
-if (OHOS_FLAG MATCHES 1 OR WINDOWS_FLAG MATCHES 1)
+set(OHOS_PUBLIC_LINK_DIRS "")
+if (OHOS_PUBLIC_SDK AND OHOS_FLAG MATCHES 1)
+    set(_ohos_triple aarch64-linux-ohos)
+elseif (OHOS_PUBLIC_SDK AND OHOS_FLAG MATCHES 2)
+    set(_ohos_triple x86_64-linux-ohos)
+elseif (OHOS_PUBLIC_SDK AND OHOS_FLAG MATCHES 3)
+    set(_ohos_triple arm-linux-ohos)
+endif()
+if (OHOS_PUBLIC_SDK AND OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
+    set(_ohos_ndk_lib "${OHOS_PUBLIC_SDK}/sysroot/usr/lib/${_ohos_triple}")
+    set(_ohos_llvm_lib "${OHOS_PUBLIC_SDK}/llvm/lib/${_ohos_triple}")
+    set(OHOS_LIB "${CMAKE_BINARY_DIR}/ohos_public_link")
+    file(MAKE_DIRECTORY "${OHOS_LIB}")
+    # Remove the link left by older configurations before copying: never write
+    # through it into the shared SDK. Reused libraries are independent files.
+    if(IS_SYMLINK "${OHOS_LIB}/libstdc++.so")
+        file(REMOVE "${OHOS_LIB}/libstdc++.so")
+    endif()
+    configure_file("${_ohos_llvm_lib}/libc++.so" "${OHOS_LIB}/libstdc++.so" COPYONLY)
+    file(GLOB _ohos_clang_rt "${OHOS_PUBLIC_SDK}/llvm/lib/clang/*/lib/${_ohos_triple}")
+    set(OHOS_PUBLIC_LINK_DIRS "${_ohos_ndk_lib}" "${_ohos_llvm_lib}" ${_ohos_clang_rt})
+elseif (OHOS_FLAG MATCHES 1 OR WINDOWS_FLAG MATCHES 1)
     set(OHOS_LIB ${OHOS_ROOT}/prebuilts/ohos-sdk/linux/11/native/sysroot/usr/lib/aarch64-linux-ohos)
 elseif (OHOS_FLAG MATCHES 2)
     set(OHOS_LIB ${OHOS_ROOT}/prebuilts/ohos-sdk/linux/11/native/sysroot/usr/lib/x86_64-linux-ohos)

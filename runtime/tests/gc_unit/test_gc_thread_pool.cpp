@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include <algorithm>
 #include <atomic>
 
 #include "gc_heap_fixture.hpp"
@@ -57,20 +58,20 @@ namespace {
 // zPage.inline.hpp object_iterate walks a dense allocation interval.
 void PlaceOwnerObjects(GcHeapFixture& fx)
 {
-    fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.obj1 = fx.PlaceObject(fx.region1->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + fx.obj0->GetSize());
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj1) + fx.obj1->GetSize());
+    fx.obj0 = fx.PlaceObject(fx.region0()->GetRegionStart());
+    fx.obj1 = fx.PlaceObject(fx.region1()->GetRegionStart());
+    fx.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + fx.obj0->GetSize());
+    fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj1) + fx.obj1->GetSize());
 }
 
 void PrepareOwnerRegion(GcHeapFixture& fx)
 {
     PlaceOwnerObjects(fx);
     // Relocation may compact in place and transfer remembered slots.
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, fx.obj1));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {region, fx.region1}));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), fx.obj1));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {region, fx.region1()}));
         region->MarkForwardingDone();
 }
 
@@ -81,12 +82,12 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     // ForwardingTable::FindTo.  Build that exact active product state instead
     // of planting a retired table (which FindTo deliberately stopped scanning
     // when relocation-set reset was aligned with ZGC).
-    ZPage* region = fx.region0;
+    ZPage* region = fx.region0();
     from = reinterpret_cast<MAddress>(fx.obj0);
     to = reinterpret_cast<MAddress>(fx.obj1);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
-    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1, fx.obj1));
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {region, fx.region1}));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), fx.obj1));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {region, fx.region1()}));
         ForwardingEntries* entries = generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart());
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;
@@ -94,7 +95,7 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     // Only the source is pending in this claimant fixture. The second sparse
     // page was needed for selection; publish its completed identity before
     // exercising a worker with an externally claimed source.
-    auto* companion = forwarding_for_page(fx.region1);
+    auto* companion = forwarding_for_page(fx.region1());
     GC_EXPECT_TRUE(companion != nullptr && companion->claim());
     GC_EXPECT_EQ(companion->insert(to, to), to);
     companion->release_page();
@@ -112,7 +113,7 @@ bool RunParallelProductEntryClosesGeneration()
     PrepareOwnerRegion(fx);
 
     ZRelocateQueue& queue = generation_relocate_queue(Generation::Old);
-    RelocationReceiptTest::ParkFrom(manager, fx.region0);
+    RelocationReceiptTest::ParkFrom(manager, fx.region0());
     auto& old = Heap::GetHeap().old();
     if (old.Workers() == nullptr) old.InitializeWorkers(3);
     old.Workers()->set_active_workers(3);
@@ -131,7 +132,7 @@ bool RunSerialProductEntryClosesGeneration()
     PrepareOwnerRegion(fx);
 
     ZRelocateQueue& queue = generation_relocate_queue(Generation::Old);
-    RelocationReceiptTest::ParkFrom(manager, fx.region0);
+    RelocationReceiptTest::ParkFrom(manager, fx.region0());
     // ZRelocate uses the generation worker entry even with one participant.
     auto& old = Heap::GetHeap().old();
     if (old.Workers() == nullptr) old.InitializeWorkers(1);
@@ -247,7 +248,7 @@ GC_TEST(RelocateWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
     ZRelocateQueue queue;
     constexpr size_t kWorkers = 3;
     queue.BeginWorkers(kWorkers);
-    const auto added = queue.Add(fx.region0, from);
+    const auto added = queue.Add(fx.region0(), from);
     GC_EXPECT_TRUE(added.accepted);
     GC_EXPECT_TRUE(queue.IsActive());
     std::atomic<size_t> completionOwners{ 0 };
@@ -292,7 +293,7 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     GcHeapFixture fx;
     MAddress from = 0, to = 0;
     GC_EXPECT_TRUE(InstallOwnerReceipt(fx, from, to));
-    auto owner = forwarding_for_page(fx.region0);
+    auto owner = forwarding_for_page(fx.region0());
     GC_EXPECT_TRUE(owner->claim());
     RegionManager manager;
     auto& queue = generation_relocate_queue(Generation::Old);
@@ -318,7 +319,7 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     GcHeapFixture fx;
     MAddress from = 0, to = 0;
     GC_EXPECT_TRUE(InstallOwnerReceipt(fx, from, to));
-    auto owner = forwarding_for_page(fx.region0);
+    auto owner = forwarding_for_page(fx.region0());
     GC_EXPECT_TRUE(owner->claim());
     RegionManager manager;
     auto& queue = generation_relocate_queue(Generation::Old);
@@ -392,7 +393,7 @@ GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
     PrepareOwnerRegion(fx);
     auto& old = Heap::GetHeap().old();
     auto& manager = Heap::GetHeap().page_allocator();
-    RelocationReceiptTest::ParkFrom(manager, fx.region0);
+    RelocationReceiptTest::ParkFrom(manager, fx.region0());
     if (old.Workers() == nullptr) old.InitializeWorkers(3);
     old.Workers()->set_active_workers(1);
     old.Workers()->set_active();
@@ -400,7 +401,7 @@ GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
     const auto active = old.Workers()->active_workers();
     old.Workers()->set_inactive();
     GC_EXPECT_EQ(active, 3u);
-    GC_EXPECT_TRUE(forwarding_for_page(fx.region0)->is_done());
+    GC_EXPECT_TRUE(forwarding_for_page(fx.region0())->is_done());
     GC_EXPECT_FALSE(old.relocate().queue()->is_active());
 }
 
@@ -429,7 +430,7 @@ namespace {
 void CheckResizeBeforeRemainingForwarding(Generation id)
 {
     GcHeapFixture fx;
-    ZPage* pages[4] = {fx.region0, fx.region1, nullptr, nullptr};
+    ZPage* pages[4] = {fx.region0(), fx.region1(), nullptr, nullptr};
     const PageAge age = id == Generation::Young ? PageAge::eden : PageAge::old;
     for (size_t i = 0; i < 4; ++i) {
         if (pages[i] == nullptr) {
@@ -517,6 +518,95 @@ GC_OTHER_VM_TEST(RelocateWorkers, OldProductEntryReducesWorkersDuringRelocation)
 GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryReducesWorkersDuringRelocation)
 {
     CheckResizeBeforeRemainingForwarding(Generation::Young);
+}
+
+// ZGC zRelocationSet.hpp:70-78 / zArray.inline.hpp:131-132: one shared parallel
+// cursor. ForwardTask::work (zRelocate.cpp) calls this same next(). claim()
+// would hide a repeated index, so the assertion counts next() results.
+GC_OTHER_VM_TEST(RelocateWorkers, ParallelCursorClaimsEachIndexOnce)
+{
+    constexpr size_t kPages = 256;
+    constexpr unsigned kThreads = 64;
+    CreateStandaloneHeap(kPages + 8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    std::vector<ZPage*> pages;
+    pages.reserve(kPages);
+    for (size_t i = 0; i < kPages; ++i) {
+        ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old,
+                                        MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        GC_EXPECT_TRUE(page != nullptr);
+        if (page == nullptr) {
+            return;
+        }
+        pages.push_back(page);
+    }
+    auto& generation = *ZGeneration::old();
+    if (generation.Workers() != nullptr) {
+        generation.Workers()->set_active_workers(1);
+    }
+    ZRelocationSetSelector selector(0.0);
+    for (ZPage* page : pages) {
+        selector.register_live_page(page);
+    }
+    selector.select();
+    generation.relocation_set().install(&selector);
+    const size_t installed = generation.relocation_set().nforwardings();
+    std::vector<std::vector<ZForwarding*>> bags(kThreads);
+    if (installed == pages.size()) {
+        ZRelocationSetParallelIterator iter(&generation.relocation_set());
+        std::atomic<unsigned> arrived{0};
+        std::atomic<bool> go{false};
+        std::vector<std::thread> threads;
+        threads.reserve(kThreads);
+        for (unsigned t = 0; t < kThreads; ++t) {
+            threads.emplace_back([&iter, &bags, &arrived, &go, t] {
+                if (arrived.fetch_add(1u, std::memory_order_acq_rel) + 1u == kThreads) {
+                    go.store(true, std::memory_order_release);
+                } else {
+                    while (!go.load(std::memory_order_acquire)) {
+                        std::this_thread::yield();
+                    }
+                }
+                for (ZForwarding* owner = nullptr; iter.next(&owner);) {
+                    bags[t].push_back(owner);
+                }
+            });
+        }
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+    }
+    std::vector<ZForwarding*> got;
+    for (const auto& bag : bags) {
+        got.insert(got.end(), bag.begin(), bag.end());
+    }
+    std::sort(got.begin(), got.end());
+    size_t duplicate = 0;
+    size_t unique = 0;
+    for (size_t i = 0; i < got.size();) {
+        size_t j = i + 1;
+        while (j < got.size() && got[j] == got[i]) {
+            ++j;
+        }
+        ++unique;
+        if (j - i > 1) {
+            duplicate += j - i - 1;
+        }
+        i = j;
+    }
+    std::fprintf(stderr,
+                 "RELOCATION_SET_PARALLEL_CURSOR installed=%zu got=%zu unique=%zu duplicate=%zu\n",
+                 installed, got.size(), unique, duplicate);
+    std::fprintf(stderr, "ASSERT_RELOCATION_SET_PARALLEL_CURSOR_UNIQUE executed=1 duplicate=%zu got=%zu\n",
+                 duplicate, got.size());
+    GC_EXPECT_EQ(installed, pages.size());
+    GC_EXPECT_EQ(duplicate, 0u);
+    GC_EXPECT_EQ(got.size(), installed);
+    generation.relocation_set().reset(&Heap::GetHeap().page_allocator());
+    for (ZPage* page : pages) {
+        Heap::free_page(page);
+    }
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)

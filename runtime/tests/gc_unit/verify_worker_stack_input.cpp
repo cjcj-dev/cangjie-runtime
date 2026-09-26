@@ -55,6 +55,7 @@ int main()
     const bool matched = actual == object && p16_worker->markStacks[1].IsEmpty();
     std::fprintf(stderr, "VERIFY_WORKER_COMPLETION_ASSERT_EXECUTED root=%p expected=%p matched=%d\n",
                  actual, object, matched);
+    NativeAccess<>::oop_store(root, nullptr);
     roots.Release(root);
     return matched ? 0 : 127;
 }

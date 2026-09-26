@@ -27,7 +27,7 @@ GC_TEST(ZPageType, EnumValues)
 GC_TEST(ZPage, AllocPagePublishedInTable)
 {
     GcHeapFixture fx;
-    ZPage* page = fx.region0;
+    ZPage* page = fx.region0();
     GC_EXPECT_TRUE(page != nullptr);
     GC_EXPECT_TRUE(ZPageTable::heap_table().get(page->GetRegionStart()) == page);
     GC_EXPECT_TRUE(Heap::page(page->GetRegionStart()) == page);
@@ -39,7 +39,7 @@ GC_TEST(ZPage, AllocPagePublishedInTable)
 GC_TEST(ZPage, ObjectAlignmentFollowsType)
 {
     GcHeapFixture fx;
-    ZPage* page = fx.region0;
+    ZPage* page = fx.region0();
     GC_EXPECT_EQ(page->object_alignment(), size_t(1) << page->object_alignment_shift());
     if (page->is_small()) {
         GC_EXPECT_EQ(page->object_alignment_shift(), ZObjectAlignmentSmallShift);
@@ -49,7 +49,7 @@ GC_TEST(ZPage, ObjectAlignmentFollowsType)
 GC_TEST(ZPage, AllocObjectRespectsAlignment)
 {
     GcHeapFixture fx;
-    ZPage* page = fx.region0;
+    ZPage* page = fx.region0();
     page->reset_seqnum();
     const uintptr_t addr = page->alloc_object(16);
     GC_EXPECT_TRUE(addr != 0);
@@ -213,6 +213,11 @@ struct ForwardingSelectionResult {
     size_t published{0};
     size_t retained{0};
     size_t retired{0};
+    size_t inPlaceCount{0};
+    size_t inPlaceRetained{0};
+    size_t copyCount{0};
+    size_t copyLeft{0};
+    size_t copyStillFrom{0};
     size_t receipts{0};
     size_t remapReceipts{0};
     bool verifyRetirement{false};
@@ -258,6 +263,8 @@ void* SelectRealLivePages(void* context)
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     uintptr_t starts[3]{};
     U64 roots[3]{};
+    ZPage* sourcePages[3]{};
+    MAddress sourceStarts[3]{};
     ZPage* previous = nullptr;
     for (size_t i = 0; i < 4 * ZPageSizeSmall / 4096 && result.roots < 3; ++i) {
         BaseObject* object = (result.verifyPin || result.verifyCritical) ? static_cast<BaseObject*>(MCC_NewArray8(type, 4096))
@@ -272,6 +279,8 @@ void* SelectRealLivePages(void* context)
                 *reinterpret_cast<uint64_t*>(starts[result.roots] + TYPEINFO_PTR_SIZE) = result.roots + 1;
             }
             roots[result.roots] = Heap::GetHeap().RegisterExportRoot(reinterpret_cast<BaseObject*>(object));
+            sourcePages[result.roots] = page;
+            sourceStarts[result.roots] = page->GetRegionStart();
             ++result.roots;
             previous = page;
         }
@@ -335,8 +344,26 @@ void* SelectRealLivePages(void* context)
             ++result.published;
             result.completed += forwarding->is_done() && forwarding->ref_count().load() == 0 &&
                 forwarding->find(starts[i]) != 0;
-            result.retired += Heap::page(starts[i]) == nullptr;
+            ZPage* now = Heap::page(starts[i]);
+            result.retired += now == nullptr;
             if (result.verifyRetirement) {
+                const bool inPlace = forwarding->in_place();
+                const bool slotEmpty = now == nullptr;
+                const bool samePage = now != nullptr && now == sourcePages[i];
+                const bool stillFrom = now != nullptr && now->IsFromRegion();
+                const bool startMatches = now != nullptr && now->GetRegionStart() == sourceStarts[i];
+                const int role = slotEmpty ? -1 : static_cast<int>(now->GetRegionRole());
+                std::fprintf(stderr,
+                             "SOURCE_PAGE index=%zu in_place=%d slot_empty=%d same_page=%d start_matches=%d role=%d\n",
+                             i, inPlace ? 1 : 0, slotEmpty ? 1 : 0, samePage ? 1 : 0, startMatches ? 1 : 0, role);
+                if (inPlace) {
+                    ++result.inPlaceCount;
+                    result.inPlaceRetained += startMatches ? 1 : 0;
+                } else {
+                    ++result.copyCount;
+                    result.copyStillFrom += stillFrom ? 1 : 0;
+                    result.copyLeft += ((slotEmpty || !samePage) && !stillFrom) ? 1 : 0;
+                }
                 // Observe the remap result before a second barrier consumes it.
                 // Otherwise a disconnected lookup fails in that barrier before
                 // the test can assert which product result was wrong.
@@ -435,8 +462,15 @@ GC_RUNTIME_OTHER_VM_TEST(ZRelocationRetirement, CopiedSourceLeavesPageTable)
     ReleaseHandle(handle);
     std::fprintf(stderr, "SOURCE_RETIREMENT_TARGET roots=%zu selected=%zu retired=%zu remapped_payloads=%zu\n",
                  result.roots, result.published, result.retired, result.receipts);
+    std::fprintf(stderr,
+                 "SOURCE_CLASS_TARGET in_place=%zu retained=%zu copy=%zu left=%zu still_from=%zu\n",
+                 result.inPlaceCount, result.inPlaceRetained, result.copyCount, result.copyLeft,
+                 result.copyStillFrom);
     GC_EXPECT_TRUE(result.published > 0);
-    GC_EXPECT_EQ(result.retired, result.published);
+    GC_EXPECT_EQ(result.inPlaceCount + result.copyCount, result.published);
+    GC_EXPECT_EQ(result.inPlaceRetained, result.inPlaceCount);
+    GC_EXPECT_EQ(result.copyStillFrom, 0u);
+    GC_EXPECT_EQ(result.copyLeft, result.copyCount);
     std::fprintf(stderr, "FORWARD_RESULT_TARGET relocated=%zu remapped=%zu expected=%zu\n",
                  result.receipts, result.remapReceipts, result.published);
     GC_EXPECT_EQ(result.receipts, result.published);

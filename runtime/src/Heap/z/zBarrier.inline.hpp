@@ -360,6 +360,8 @@ inline zaddress ZBarrier::barrier(ZBarrierFastPath fast_path, SlowPath slow_path
     const zaddress good_addr = slow_path(load_good_addr);
     if (p != nullptr) {
         const zpointer good_ptr = color(good_addr, o);
+        // zBarrier.inline.hpp:338: a heal word is never a raw null.
+        assert(!is_null(good_ptr));
         self_heal(fast_path, p, o, good_ptr, allow_null);
     }
     return good_addr;
@@ -369,6 +371,8 @@ inline void ZBarrier::remap_young_relocated(volatile zpointer* p, zpointer o)
 {
     const zaddress load_good_addr = make_load_good_no_relocate(o);
     const zpointer good_ptr = ZAddress::load_good(load_good_addr, o);
+    // zBarrier.inline.hpp:356: a heal word is never a raw null.
+    assert(!is_null(good_ptr));
     self_heal(is_load_good_or_null_fast_path, p, o, good_ptr, false);
 }
 

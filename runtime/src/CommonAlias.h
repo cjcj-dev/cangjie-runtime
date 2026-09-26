@@ -69,6 +69,8 @@ extern "C" MRT_EXPORT void CJ_MCC_EndCatch() __attribute__((alias("MCC_EndCatch"
 
 extern "C" MRT_EXPORT ArrayRef CJ_MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const ArrayRef exceptionMessage)
     __attribute__((alias("MCC_FillInStackTraceImpl")));
+extern "C" MRT_EXPORT ArrayRef CJ_MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate)
+    __attribute__((alias("MCC_StringDedupCanonicalImpl")));
 extern "C" MRT_EXPORT void CJ_MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     __attribute__((alias("MCC_ReleaseRawData")));
 
