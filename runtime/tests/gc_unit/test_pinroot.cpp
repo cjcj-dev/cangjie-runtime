@@ -669,8 +669,10 @@ static void CheckGrowCopiesHealedFrameRoot()
     stackContext.uc_stack.ss_size = reinterpret_cast<uintptr_t>(high) - reinterpret_cast<uintptr_t>(low);
     stackContext.uc_link = &g_growBack;
     makecontext(&stackContext, GrowCopyEntry, 0);
+    BaseObject* relocatedObject = generation.relocate().relocate_object(owner, objects[0][0]);
+    GC_EXPECT_TRUE(relocatedObject != nullptr && relocatedObject != objects[0][0]);
     GC_EXPECT_EQ(swapcontext(&g_growBack, &stackContext), 0);
-    const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+    const MAddress relocated = reinterpret_cast<MAddress>(relocatedObject);
     std::fprintf(stderr,
         "GROW_COPY_ROOT_RESULT offset=%ld before=%#zx oldAfter=%#zx copied=%#zx relocated=%#zx "
         "slot=%#zx sp=%#zx base=%#zx watermark=%#zx done=%d\n",
