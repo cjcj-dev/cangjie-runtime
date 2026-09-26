@@ -4,3 +4,6 @@ runtime/target/
 # Python analyzer bytecode (housekeeping only).
 __pycache__/
 *.pyc
+
+# lane working notes live outside the repository (agent_scratch)
+.lane-notes.md
