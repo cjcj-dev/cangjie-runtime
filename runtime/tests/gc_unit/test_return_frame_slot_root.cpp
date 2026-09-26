@@ -17,6 +17,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
+#include <atomic>
 #include <cstring>
 #include <setjmp.h>
 
@@ -123,6 +124,16 @@ uintptr_t ReturnPointStartPC()
     return reinterpret_cast<uintptr_t>(gReturnSlotDesc.pc);
 }
 
+// The stub register area is process-static: the product reads it after this
+// frame is gone, and a stack array would let the compiler reorder the clearing
+// against the slot stores.
+alignas(16) uint64_t gStubArea[64];
+
+volatile uint64_t* StubSlotStore(FrameAddress* fa, int index)
+{
+    return reinterpret_cast<volatile uint64_t*>(reinterpret_cast<uint64_t*>(fa) - 1 - index);
+}
+
 #if defined(__x86_64__)
 uint64_t* StubSlot(FrameAddress* fa, int index)
 {
@@ -203,23 +214,22 @@ GC_TEST(ReturnFrameSlotRoot, ReturnPointMapIsNotVisitedThroughStackBase)
     GC_EXPECT_EQ(counts.baseSlots, size_t {1});
     GC_EXPECT_EQ(counts.baseRegs, size_t {1});
 
-    // The stub register area reaches 11 slots below the frame address.
-    alignas(16) uint64_t raw[64];
-    std::memset(raw, 0, sizeof(raw));
+    std::memset(gStubArea, 0, sizeof(gStubArea));
     alignas(16) static char returnedBytes[16] {};
     alignas(16) static char spareBytes[16] {};
     BaseObject* returned = reinterpret_cast<BaseObject*>(returnedBytes);
     BaseObject* expected = reinterpret_cast<BaseObject*>(spareBytes);
-    FrameAddress* stub = reinterpret_cast<FrameAddress*>(&raw[32]);
+    FrameAddress* stub = reinterpret_cast<FrameAddress*>(&gStubArea[32]);
     stub->callerFrameAddress = nullptr;
     stub->returnAddress = nullptr;
-    *StubSlot(stub, kStartSlot) = startPC;
-    *StubSlot(stub, kSiteSlot) = sitePC;
+    *StubSlotStore(stub, kStartSlot) = startPC;
+    *StubSlotStore(stub, kSiteSlot) = sitePC;
     StorePlain(RootSlotAt(StubSlot(stub, kReturnSlot)), from_object(returned));
+    std::atomic_thread_fence(std::memory_order_seq_cst);
 
     MachineFrame machine;
     machine.SetFA(stub);
-    machine.SetSP(reinterpret_cast<uintptr_t>(&raw[0]));
+    machine.SetSP(reinterpret_cast<uintptr_t>(&gStubArea[0]));
     const FrameInfo frame(machine, FrameType::RETURN_SAFEPOINT);
     RegSlotsMap regSlotsMap;
     size_t rootVisits = 0;
