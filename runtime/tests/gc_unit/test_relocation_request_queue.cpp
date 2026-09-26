@@ -73,7 +73,7 @@ struct WaitContext {
     Mutator mutator;
     Mutator* savedMutator = ThreadLocal::GetMutator();
     ThreadType savedType = ThreadLocal::GetThreadType();
-    HandshakeState handshake{ThreadLocal::GetThreadLocalData()};
+    HandshakeState& handshake = mutator.GetHandshakeState();
     bool entered = false;
     bool mutatorSafe = true;
     bool handshakeSafe = true;
@@ -82,7 +82,6 @@ struct WaitContext {
 
     WaitContext()
     {
-        Handshake::BindCurrent(&handshake);
         ThreadLocal::SetMutator(&mutator);
         ThreadLocal::SetThreadType(ThreadType::CJ_PROCESSOR);
         mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
@@ -95,7 +94,6 @@ struct WaitContext {
         ZRelocateQueue::SetWaitEnterHook(nullptr);
         current = nullptr;
         ThreadLocal::SetMutator(savedMutator);
-        Handshake::BindCurrent(nullptr);
         ThreadLocal::SetThreadType(savedType);
     }
     static void Observe(ZForwarding* forwarding)

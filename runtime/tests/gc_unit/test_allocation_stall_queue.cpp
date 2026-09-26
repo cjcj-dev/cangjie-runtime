@@ -518,10 +518,10 @@ namespace {
 class FutureWaitHandshake final : public HandshakeClosure {
 public:
     FutureWaitHandshake() : HandshakeClosure("future wait") {}
-    void do_thread(ThreadLocalData* tls) override
+    void do_thread(Mutator* thread) override
     {
-        counted = tls->mutator != nullptr && tls->mutator->InSaferegion() &&
-                  Handshake::ForTls(tls)->observed_safe();
+        counted = thread != nullptr && thread->InSaferegion() &&
+                  thread->GetHandshakeState().observed_safe();
     }
     bool counted = false;
 };
@@ -561,13 +561,13 @@ void CheckProductFutureWait(bool allocation)
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     do {
         tls = waiting.load(std::memory_order_acquire);
-        safe = tls != nullptr && tls->mutator->InSaferegion() && Handshake::ForTls(tls)->observed_safe() &&
+        safe = tls != nullptr && tls->mutator->InSaferegion() && tls->mutator->GetHandshakeState().observed_safe() &&
                !done.load(std::memory_order_acquire);
         if (safe || done.load()) { break; }
         std::this_thread::yield();
     } while (std::chrono::steady_clock::now() < deadline);
     FutureWaitHandshake operation;
-    if (safe) { Handshake::execute(&operation, tls); }
+    if (safe) { Handshake::execute(&operation, tls->mutator); }
     const bool queued = !allocation || heap.page_allocator().IsAllocationStalling();
     std::fprintf(stderr, "FUTURE_HANDSHAKE_TARGET allocation=%d safe=%d counted=%d queued=%d done=%d\n",
                  allocation, safe, operation.counted, queued, done.load());

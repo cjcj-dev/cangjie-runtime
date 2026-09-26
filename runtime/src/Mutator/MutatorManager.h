@@ -285,30 +285,13 @@ public:
 
     CJThreadHandle GetMainThreadHandle() { return mainThreadHandle; }
 
-    struct MarkFlushThread {
-        ThreadLocalData* tls = nullptr;
-        std::atomic<int> refs = { 0 };
-        std::atomic<int> dying = { 0 };
-        std::atomic<int> bufferLive = { 1 };
-        HandshakeState* handshake = nullptr;
-        std::unique_ptr<HandshakeState> ownedHandshake;
-    };
-
-    HandshakeState* HandshakeStateForTls(ThreadLocalData* tls);
-    bool TlsObservedSafe(ThreadLocalData* tls);
-    void EnqueueHandshakeOnAll(HandshakeClosure* cl, std::list<HandshakeOperation*>& ops,
-                                std::vector<MarkFlushThread*>& handle);
-    void EnqueueHandshakeOn(ThreadLocalData* target, HandshakeClosure* cl, std::list<HandshakeOperation*>& ops,
-                            std::vector<MarkFlushThread*>& handle);
-    void ReleaseHandshakeHandle(std::vector<MarkFlushThread*>& handle);
-
     template<typename Fn>
     void ForEachMarkFlushTls(Fn&& fn)
     {
         std::lock_guard<std::mutex> lock(markFlushThreadMutex);
-        for (auto& kv : markFlushThreads) {
-            if (kv.first != nullptr) {
-                fn(kv.first);
+        for (auto* tls : markFlushThreads) {
+            if (tls != nullptr) {
+                fn(tls);
             }
         }
     }
@@ -341,7 +324,7 @@ public:
     // Runtime mutators are not necessarily owned by a scheduler CJThread, so
     // keep them in the same participant inventory explicitly.
     std::mutex markFlushThreadMutex;
-    std::unordered_map<ThreadLocalData*, std::unique_ptr<MarkFlushThread>> markFlushThreads;
+    std::unordered_set<ThreadLocalData*> markFlushThreads;
 
 #if defined(_WIN64) || defined (__APPLE__)
     std::condition_variable mutatorSuspensionCV;

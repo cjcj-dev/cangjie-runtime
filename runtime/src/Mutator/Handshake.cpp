@@ -8,50 +8,26 @@
 #include "Mutator.inline.h"
 #include "MutatorManager.h"
 #include "ThreadLocal.h"
+#include "ThreadSMR.h"
 #include "Common/Runtime.h"
 
 namespace MapleRuntime {
 namespace {
-thread_local HandshakeState* tlHandshakeState = nullptr;
+thread_local HandshakeState nativeHandshakeState{nullptr};
 std::mutex g_cpuProfilePendingLock;
 std::unordered_set<Mutator*> g_cpuProfilePending;
 }
 
 HandshakeState& Handshake::Current()
 {
-    if (tlHandshakeState != nullptr) {
-        tlHandshakeState->set_handshakee(ThreadLocal::GetThreadLocalData());
-        return *tlHandshakeState;
-    }
-    if (Runtime::CurrentRef() == nullptr) {
-        static HandshakeState fallback(ThreadLocal::GetThreadLocalData());
-        return fallback;
-    }
-    MutatorManager::Instance().RegisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
-    if (tlHandshakeState == nullptr) {
-        static HandshakeState fallback(ThreadLocal::GetThreadLocalData());
-        return fallback;
-    }
-    return *tlHandshakeState;
+    Mutator* thread = ThreadLocal::GetMutator();
+    return thread != nullptr ? thread->GetHandshakeState() : nativeHandshakeState;
 }
 
-void Handshake::BindCurrent(HandshakeState* state)
+void HandshakeOperation::do_handshake(Mutator* thread)
 {
-    tlHandshakeState = state;
-}
-
-HandshakeState* Handshake::ForTls(ThreadLocalData* tls)
-{
-    if (tls == nullptr) {
-        return nullptr;
-    }
-    if (tls == ThreadLocal::GetThreadLocalData()) {
-        return &Current();
-    }
-    if (Runtime::CurrentRef() == nullptr) {
-        return nullptr;
-    }
-    return MutatorManager::Instance().HandshakeStateForTls(tls);
+    cl_->do_thread(thread);
+    pending_.fetch_sub(1, std::memory_order_release);
 }
 
 void HandshakeState::add_operation(HandshakeOperation* op)
@@ -60,7 +36,8 @@ void HandshakeState::add_operation(HandshakeOperation* op)
         std::lock_guard<std::mutex> lock(lock_);
         queue_.push_back(op);
     }
-    ArmThreadPoll(handshakee_);
+    // A logical target may migrate between carriers while the poll is armed.
+    ArmAllThreadPolls();
 }
 
 bool HandshakeState::has_operation()
@@ -114,23 +91,21 @@ void HandshakeState::process_by_self()
         if (op->target() != nullptr && op->target() != handshakee_) {
             break;
         }
-        op->do_handshake(handshakee_);
         remove_op(op);
+        op->do_handshake(handshakee_);
     }
-    Mutator* mutator = handshakee_ != nullptr ? handshakee_->mutator : nullptr;
+    Mutator* mutator = handshakee_;
     if (mutator != nullptr && mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
         (void)mutator->TransitionToCpuProfile(true);
     }
-    UpdatePollValues(handshakee_);
+    UpdatePollValues(ThreadLocal::GetThreadLocalData());
 }
 
 bool HandshakeState::possibly_can_process()
 {
-    if (observed_safe()) {
-        return true;
-    }
-    Mutator* mutator = handshakee_ != nullptr ? handshakee_->mutator : nullptr;
-    return mutator != nullptr && mutator->InSaferegion();
+    // Rechecked while holding lock_: leave_safe must acquire the same lock
+    // before the owner resumes or migrates into managed execution.
+    return observed_safe();
 }
 
 bool HandshakeState::claim_handshake()
@@ -169,8 +144,8 @@ bool HandshakeState::try_process()
         lock_.unlock();
         return false;
     }
-    op->do_handshake(handshakee_);
     remove_op(op);
+    op->do_handshake(handshakee_);
     lock_.unlock();
     return true;
 }
@@ -198,67 +173,54 @@ void HandshakeState::process_queued_then_detach()
         if (op->target() != nullptr && op->target() != handshakee_) {
             break;
         }
-        op->do_handshake(handshakee_);
         remove_op(op);
+        op->do_handshake(handshakee_);
     }
     inSafe_.store(1, std::memory_order_release);
 }
 
 namespace {
-void WaitHandshakeOps(std::list<HandshakeOperation*>& ops)
+void WaitHandshakeOperation(HandshakeOperation& op, const ThreadsListHandle& threads)
 {
-    // handshake.cpp:255-295 processes the existing participant set. A native
-    // initiator need not become a handshake target just to wait for others.
-    // In particular, TLS destructor registration here can acquire the platform
-    // loader lock while an unrelated image is running its finalizer.
-    if (tlHandshakeState != nullptr) {
-        tlHandshakeState->process_by_self();
-    }
-    while (!ops.empty()) {
-        for (auto it = ops.begin(); it != ops.end();) {
-            HandshakeOperation* op = *it;
-            HandshakeState* state = Handshake::ForTls(op->target());
-            if (state == nullptr || !state->operation_pending(op)) {
-                delete op;
-                it = ops.erase(it);
-                continue;
+    Mutator* current = ThreadLocal::GetMutator();
+    while (!op.is_completed()) {
+        for (size_t i = 0; i < threads.length(); ++i) {
+            Mutator* target = threads.thread_at(i);
+            if (op.target() != nullptr && target != op.target()) { continue; }
+            if (target == current) {
+                target->GetHandshakeState().process_by_self();
+            } else {
+                (void)target->GetHandshakeState().try_process();
             }
-            if (op->target() == ThreadLocal::GetThreadLocalData()) {
-                state->process_by_self();
-                continue;
-            }
-            (void)state->try_process();
-            ++it;
         }
-        if (!ops.empty()) {
-            std::this_thread::yield();
-        }
+        if (!op.is_completed()) { std::this_thread::yield(); }
     }
 }
 } // namespace
 
 void Handshake::execute(HandshakeClosure* cl)
 {
-    if (cl == nullptr) {
-        return;
+    if (cl == nullptr) { return; }
+    // HotSpot handshake.cpp:257-260: pin and enqueue every logical thread,
+    // including unmounted Cangjie tasks, not only the current carrier owners.
+    ThreadsListHandle threads;
+    if (threads.length() == 0) { return; }
+    HandshakeOperation op(cl, nullptr);
+    op.add_target_count(threads.length() - 1);
+    for (size_t i = 0; i < threads.length(); ++i) {
+        threads.thread_at(i)->GetHandshakeState().add_operation(&op);
     }
-    std::list<HandshakeOperation*> ops;
-    std::vector<MutatorManager::MarkFlushThread*> handle;
-    MutatorManager::Instance().EnqueueHandshakeOnAll(cl, ops, handle);
-    WaitHandshakeOps(ops);
-    MutatorManager::Instance().ReleaseHandshakeHandle(handle);
+    WaitHandshakeOperation(op, threads);
 }
 
-void Handshake::execute(HandshakeClosure* cl, ThreadLocalData* target)
+void Handshake::execute(HandshakeClosure* cl, Mutator* target)
 {
-    if (cl == nullptr || target == nullptr) {
-        return;
-    }
-    std::list<HandshakeOperation*> ops;
-    std::vector<MutatorManager::MarkFlushThread*> handle;
-    MutatorManager::Instance().EnqueueHandshakeOn(target, cl, ops, handle);
-    WaitHandshakeOps(ops);
-    MutatorManager::Instance().ReleaseHandshakeHandle(handle);
+    if (cl == nullptr || target == nullptr) { return; }
+    ThreadsListHandle threads;
+    if (!threads.includes(target)) { return; }
+    HandshakeOperation op(cl, target);
+    target->GetHandshakeState().add_operation(&op);
+    WaitHandshakeOperation(op, threads);
 }
 
 void ArmThreadPoll(ThreadLocalData* tls)
@@ -350,7 +312,8 @@ bool HasPendingSafepoint(ThreadLocalData* tls)
     if (GlobalPoll()) {
         return true;
     }
-    HandshakeState* state = Handshake::ForTls(tls);
+    HandshakeState* state = tls != nullptr && tls->mutator != nullptr
+        ? &tls->mutator->GetHandshakeState() : nullptr;
     if (state != nullptr && state->has_operation()) {
         return true;
     }

@@ -19,6 +19,7 @@
 #include "Heap/z/zRememberedSet.hpp"
 #include "LoaderManager.h"
 #include "Mutator/ThreadLocal.h"
+#include "Mutator/Handshake.h"
 #include "schedule.h"
 #ifdef _WIN64
 #include "UnwindWin.h"
@@ -90,6 +91,7 @@ public:
     void ResetMutator();
 
     static Mutator* GetMutator() noexcept;
+    HandshakeState& GetHandshakeState() { return handshakeState; }
     void StackGuardExpand() const;
     void StackGuardRecover() const;
 
@@ -421,7 +423,7 @@ public:
     {
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
             SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
-            MarkFlushOnEnterSaferegion();
+            handshakeState.enter_safe();
             return;
         }
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
@@ -441,7 +443,7 @@ public:
         }
 #endif // platform
         SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
-        MarkFlushOnEnterSaferegion();
+        handshakeState.enter_safe();
     }
 
     // This interface is used for initiating the mutator who is created by foreign thread.
@@ -568,6 +570,9 @@ public:
         isRuntimeMutator = true;
     }
 #endif
+private:
+    HandshakeState handshakeState{this};
+
 };
 
 // This function is mainly used to initialize the context of mutator.
