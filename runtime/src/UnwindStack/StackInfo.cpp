@@ -240,7 +240,11 @@ void StackFrameStream::Rebase(intptr_t offset)
 void StackInfo::ProcessOnIteration(const FrameInfo& frame)
 {
     if (processingOwner != nullptr && frame.GetFrameType() == FrameType::MANAGED) {
-        StackWatermarkSet::start_processing(*processingOwner);
+        // stackWatermark.inline.hpp:127-131: on_iteration only runs the barrier,
+        // it never starts processing. The exclusive right to start belongs to
+        // on_safepoint (stackWatermark.cpp:311-318) and to the STW safepoint /
+        // handshake paths (stackWatermarkSet.cpp:121-130,163-170), so a
+        // diagnostic walk of another thread must not advance its epoch here.
         StackWatermarkSet::on_iteration(*processingOwner, frame);
     }
 }
