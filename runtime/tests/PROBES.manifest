@@ -105,3 +105,4 @@ signal_stack_guard_preinit.cpp            manual     product runtime/boundscheck
 run_signal_stack_guard_preinit.sh         manual     GCV2_RUNTIME_LIB_DIR and SIGNAL_TEST_OUTPUT; compiles and runs signal_stack_guard_preinit.cpp against the built product pair
 elf_unload_public_active.cpp             manual     run_elf_unload_public_active.sh public unload rejection for native, running and parked/carrier-replaced Cangjie frames; needs matching SDK and product SO
 run_elf_unload_public_active.sh           manual     compile and run public active-image rejection; matching Cangjie SDK, compiler host runtime and candidate runtime required
+bsd                                       manual     macOS xcrun clang++ plus boundscheck; apple.yml bsd-backing-fail runs runtime/tests/bsd/run_backing_fail.sh, Linux configure cannot
