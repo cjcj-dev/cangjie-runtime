@@ -151,7 +151,7 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
         // take the global steal path; flush converts private tails to nodes.
         seed.Push(stripes, 0, MarkStackEntry(uintptr_t(value), true, true, true, false), true);
     }
-    GC_EXPECT_TRUE(seed.Flush(stripes, true));
+    GC_EXPECT_TRUE(seed.Flush(stripes));
 
     std::unique_ptr<std::atomic<unsigned>[]> seen(new std::atomic<unsigned>[entries]);
     for (size_t i = 0; i < entries; ++i) {

@@ -151,7 +151,7 @@ public:
              MarkStackEntry& entry);
     MarkStripeStack* StealLocal(size_t stripeId);
     void Install(size_t stripeId, MarkStripeStack* stack);
-    bool Flush(MarkStripeSet& stripes, bool publish);
+    bool Flush(MarkStripeSet& stripes);
 
 private:
     std::vector<MarkStripeStack*> stacks;

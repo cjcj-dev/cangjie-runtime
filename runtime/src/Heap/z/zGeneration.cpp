@@ -584,7 +584,7 @@ namespace MapleRuntime {
 class ZRendezvousHandshakeClosure final : public HandshakeClosure {
 public:
     ZRendezvousHandshakeClosure() : HandshakeClosure("ZRendezvous") {}
-    void do_thread(ThreadLocalData*) override {}
+    void do_thread(Mutator*) override {}
 };
 
 void ZGenerationOld::process_non_strong_references()

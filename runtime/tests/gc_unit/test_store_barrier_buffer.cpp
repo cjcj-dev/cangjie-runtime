@@ -1201,6 +1201,141 @@ GC_OTHER_VM_TEST(ThreadLifecycle, ManagedDetachMarksBothGenerations)
     CheckThreadDetachMarksObjects(true);
 }
 
+namespace {
+// The real native attach/detach entry owns the Mutator and its GC data. An
+// unbound logical owner models the same identity transition used by CJThread
+// scheduling; the handshake must retain it in the SMR target snapshot.
+void CheckLogicalMarkHandshake(bool unbound, bool selfProcess)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    heap.region0()->reset(PageAge::eden);
+    heap.region1()->reset(PageAge::old);
+    MarkPublicationFixture marking;
+    std::atomic<bool> ready{false}, release{false};
+    size_t privateYoung = 0, privateOld = 0;
+    std::thread producer([&] {
+        auto& manager = MutatorManager::Instance();
+        auto* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        StackWatermarkSet::on_safepoint(*owner);
+        if (selfProcess) { owner->DoLeaveSaferegion(); }
+        ZBarrier::Mark<false, false, false, false>(from_object(heap.obj0));
+        ZBarrier::Mark<false, false, false, false>(from_object(heap.obj1));
+        privateYoung = owner->GetGCData().markStacks[0].Population();
+        privateOld = owner->GetGCData().markStacks[1].Population();
+        if (unbound) { manager.UnbindMutator(*owner); }
+        ready.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire)) {
+            if (selfProcess) { owner->GetHandshakeState().process_by_self(); }
+            std::this_thread::yield();
+        }
+        if (unbound) { manager.BindMutator(*owner); }
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    while (!ready.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    // These product worker tasks call proactive/termination handshakes and
+    // consume the resulting stacks. Read mark bits before producer detach,
+    // whose final publication must not mask a missing handshake target.
+    auto& young = Heap::GetHeap().young().Mark();
+    auto& old = Heap::GetHeap().old().Mark();
+    young.MarkFollow();
+    old.MarkFollow();
+    const bool markedYoung = heap.region0()->is_object_marked(from_object(heap.obj0), false);
+    const bool markedOld = heap.region1()->is_object_marked(from_object(heap.obj1), false);
+    release.store(true, std::memory_order_release);
+    producer.join();
+    std::fprintf(stderr,
+        "LOGICAL_HANDSHAKE_TARGET executed=1 unbound=%d self=%d private_young=%zu private_old=%zu marked_young=%d marked_old=%d\n",
+        unbound, selfProcess, privateYoung, privateOld, markedYoung, markedOld);
+    GC_EXPECT_TRUE(markedYoung && markedOld);
+    GC_EXPECT_EQ(privateYoung, 1u);
+    GC_EXPECT_EQ(privateOld, 1u);
+}
+}
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, UnboundOwnerPublishesBothGenerations)
+{
+    CheckLogicalMarkHandshake(true, false);
+}
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, SafeOwnerPublishesBothGenerations)
+{
+    CheckLogicalMarkHandshake(false, false);
+}
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, RunningOwnerPublishesBothGenerations)
+{
+    CheckLogicalMarkHandshake(false, true);
+}
+
+namespace {
+class RetainedSyncHandshake1145 final : public HandshakeClosure {
+public:
+    RetainedSyncHandshake1145() : HandshakeClosure("RetainedSyncHandshake1145") {}
+    void do_thread(Mutator* thread) override
+    {
+        if (thread != target) { return; }
+        // The product invokes this closure while holding the queue lock.
+        // Inspect its existing accessor here; operation_pending would relock.
+        HandshakeOperation* op = thread->GetHandshakeState().get_op();
+        retained = op != nullptr && op->closure() == this && !op->is_completed();
+        executed = true;
+    }
+    Mutator* target = nullptr;
+    bool retained = false;
+    bool executed = false;
+};
+
+void CheckSynchronousHandshakeQueue(bool self, bool broadcast)
+{
+    B09RuntimeFixture runtime;
+    RetainedSyncHandshake1145 closure;
+    std::atomic<bool> ready{false}, release{false};
+    bool removed = false;
+    auto execute = [&] {
+        if (broadcast) { Handshake::execute(&closure); }
+        else { Handshake::execute(&closure, closure.target); }
+    };
+    std::thread owner([&] {
+        auto& manager = MutatorManager::Instance();
+        closure.target = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        if (self) {
+            execute();
+            removed = !closure.target->GetHandshakeState().has_operation();
+        } else {
+            ready.store(true, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        }
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    if (!self) {
+        while (!ready.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        execute();
+        removed = !closure.target->GetHandshakeState().has_operation();
+        release.store(true, std::memory_order_release);
+    }
+    owner.join();
+    std::fprintf(stderr,
+        "SYNC_HANDSHAKE_QUEUE_TARGET executed=%d self=%d broadcast=%d retained=%d removed=%d\n",
+        closure.executed, self, broadcast, closure.retained, removed);
+    GC_EXPECT_TRUE(closure.executed && closure.retained && removed);
+}
+}
+
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, SelfTargetRetainsOperationDuringClosure)
+{
+    CheckSynchronousHandshakeQueue(true, false);
+}
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, SelfBroadcastRetainsOperationDuringClosure)
+{
+    CheckSynchronousHandshakeQueue(true, true);
+}
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, SafeTargetRetainsOperationDuringClosure)
+{
+    CheckSynchronousHandshakeQueue(false, false);
+}
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, SafeBroadcastRetainsOperationDuringClosure)
+{
+    CheckSynchronousHandshakeQueue(false, true);
+}
+
 // #976: exported compiler ABI -> AccessBarrier store -> real TLS buffer.
 extern "C" void CJ_MCC_AtomicWriteReference(BaseObject*, BaseObject*, HeapSlot<true>*, MemoryOrder);
 extern "C" BaseObject* CJ_MCC_AtomicSwapReference(BaseObject*, BaseObject*, HeapSlot<true>*, MemoryOrder);
