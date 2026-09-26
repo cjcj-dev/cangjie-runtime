@@ -35,7 +35,6 @@ extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* classInfo, MSize size, boo
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field);
 extern "C" MRT_EXPORT ObjectPtr CJ_MCC_LoadBarrierOnOopFieldPreloaded(ObjectPtr o, volatile zpointer* p);
 extern "C" MRT_EXPORT ObjectPtr CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(ObjectPtr o, volatile zpointer* p);
-extern "C" MRT_EXPORT const uintptr_t g_cjMarkBadMaskOffset;
 extern "C" MRT_EXPORT void CJ_MCC_StoreBarrierOnHeapField(volatile zpointer* slot);
 extern "C" MRT_EXPORT void CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(volatile zpointer* slot);
 extern "C" void MCC_WriteRefField_Strong(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field);

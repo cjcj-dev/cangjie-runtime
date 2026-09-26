@@ -971,10 +971,6 @@ namespace MapleRuntime {
 extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
 extern "C" void CJ_MCC_StoreBarrierOnHeapField(volatile zpointer*);
 extern "C" void CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(volatile zpointer*);
-extern "C" const uintptr_t g_cjThreadGCDataOffset;
-extern "C" const uintptr_t g_cjLoadBadMaskOffset;
-extern "C" const uintptr_t g_cjStoreBadMaskOffset;
-extern "C" const uintptr_t g_cjStoreGoodMaskOffset;
 extern "C" const uintptr_t g_cjStoreBarrierBufferOffset;
 extern "C" const uintptr_t g_cjStoreBarrierBufferCurrentOffset;
 extern "C" const uintptr_t g_cjStoreBarrierBufferBufferOffset;
@@ -1004,10 +1000,10 @@ void* FillByteBuffer(void* context)
     auto* slot = reinterpret_cast<volatile zpointer*>(reinterpret_cast<uintptr_t>(object) + TYPEINFO_PTR_SIZE);
     auto& data = ThreadLocal::GetGCData();
     auto& buffer = *data.storeBarrierBuffer;
-    result.offsets = g_cjThreadGCDataOffset == offsetof(ThreadLocalData, gcData) &&
-        g_cjLoadBadMaskOffset == offsetof(ThreadGCData, loadBadMask) &&
-        g_cjStoreBadMaskOffset == offsetof(ThreadGCData, storeBadMask) &&
-        g_cjStoreGoodMaskOffset == offsetof(ThreadGCData, storeGoodMask) &&
+    result.offsets = ThreadGCDataABI::GCDataPointer == offsetof(ThreadLocalData, gcData) &&
+        ThreadGCDataABI::LoadBadMask == offsetof(ThreadGCData, loadBadMask) &&
+        ThreadGCDataABI::StoreBadMask == offsetof(ThreadGCData, storeBadMask) &&
+        ThreadGCDataABI::StoreGoodMask == offsetof(ThreadGCData, storeGoodMask) &&
         g_cjStoreBarrierBufferOffset == offsetof(ThreadGCData, storeBarrierBuffer) &&
         g_cjStoreBarrierBufferCurrentOffset == offsetof(StoreBarrierBuffer, current) &&
         g_cjStoreBarrierBufferBufferOffset == offsetof(StoreBarrierBuffer, buffer) &&
