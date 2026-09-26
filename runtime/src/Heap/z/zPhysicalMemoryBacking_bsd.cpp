@@ -43,7 +43,7 @@ static ZErrno mremap_mach(uintptr_t from_addr, uintptr_t to_addr, size_t size) {
                                           FALSE,
                                           &remap_cur_prot,
                                           &remap_max_prot,
-                                          VM_INHERIT_COPY);
+                                          VM_INHERIT_COPY)
   return (res == KERN_SUCCESS) ? ZErrno(0) : ZErrno(EINVAL);
 }
 
