@@ -162,23 +162,6 @@ void HandshakeState::leave_safe()
     inSafe_.store(0, std::memory_order_release);
 }
 
-void HandshakeState::process_queued_then_detach()
-{
-    std::lock_guard<std::mutex> lock(lock_);
-    for (;;) {
-        HandshakeOperation* op = get_op_for_self();
-        if (op == nullptr) {
-            break;
-        }
-        if (op->target() != nullptr && op->target() != handshakee_) {
-            break;
-        }
-        remove_op(op);
-        op->do_handshake(handshakee_);
-    }
-    inSafe_.store(1, std::memory_order_release);
-}
-
 namespace {
 void WaitHandshakeOperation(HandshakeOperation& op, const ThreadsListHandle& threads)
 {
