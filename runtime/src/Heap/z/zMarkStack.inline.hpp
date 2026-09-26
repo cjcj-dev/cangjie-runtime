@@ -42,6 +42,7 @@ MarkStackEntry MarkStripeStack::Pop()
 
 void MarkStripe::PublishStack(MarkStripeStack* stack, bool publish, MarkTerminate* terminate)
 {
+    CHECK_DETAIL(!stack->IsEmpty(), "never publish an empty mark stripe stack");
     if (publish) {
         published.Push(stack);
     } else {
