@@ -569,3 +569,39 @@ GC_TEST(RememberedClear845, ConsumedPreviousSlotsAreAbsentOnRescan)
     GC_EXPECT_EQ(repeated, size_t{0});
     GC_EXPECT_EQ(published, true);
 }
+
+// ZGC zMarkStack.inline.hpp:66: publication owns the nonempty invariant.
+GC_TEST(MarkPublish1144, EmptyStackRejectedForBothRoutes)
+{
+    bool rejected[2] = {false, false};
+    for (bool publish : {false, true}) {
+        const pid_t child = fork();
+        GC_EXPECT_TRUE(child >= 0);
+        if (child == 0) {
+            signal(SIGABRT, SIG_DFL);
+            MarkStripe stripe;
+            stripe.PublishStack(MarkStripeStack::Create(true), publish);
+            _exit(0);
+        }
+        int status = 0;
+        GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+        std::fprintf(stderr, "MARK1144 publication publish=%d status=%d\n", publish, status);
+        rejected[publish ? 1 : 0] = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+    }
+    GC_EXPECT_TRUE(rejected[0] && rejected[1]);
+}
+
+// ZGC zMarkStack.cpp:78: list insertion does not inspect the stack payload.
+GC_TEST(MarkPublish1144, ListPreservesEmptyPayload)
+{
+    WorkerFixture worker;
+    MarkingSMR smr;
+    MarkStripeStackList list;
+    MarkStripeStack* stack = MarkStripeStack::Create(true);
+    list.Push(stack);
+    MarkStripeStack* observed = list.Pop(smr, 0);
+    std::fprintf(stderr, "MARK1144 list payload preserved=%d\n", observed == stack);
+    GC_EXPECT_TRUE(observed == stack);
+    GC_EXPECT_TRUE(observed->IsEmpty());
+    MarkStripeStack::Destroy(observed);
+}
