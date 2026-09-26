@@ -55,8 +55,9 @@ int main() {
  Rewrite change(from,to); HandshakeOperation op(&change,tls);
  Handshake::Current().add_operation(&op);
  auto result=Invoke(tls,from);
- bool good=change.seen && result==to;
- std::fprintf(stderr,"PAIR_RETURN_TARGET seen=%d result=%p expected=%p poll=%lx pass=%d\n",change.seen,result,to,tls->GetPollWord(),good);
+ const bool safeRegion = owner.InSaferegion();
+ bool good=change.seen && result==to && !safeRegion;
+ std::fprintf(stderr,"PAIR_RETURN_TARGET seen=%d result=%p expected=%p poll=%lx saferegion=%d pass=%d\n",change.seen,result,to,tls->GetPollWord(),safeRegion,good);
  tls->SetMutator(nullptr);
  return good?0:1;
 }
