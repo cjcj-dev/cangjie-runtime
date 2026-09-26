@@ -615,7 +615,7 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
             // Verification of the other generation has not flushed this stack.
             GC_EXPECT_FALSE(stacks.IsEmpty());
             GC_EXPECT_TRUE(current.Stripes().IsEmpty());
-            GC_EXPECT_TRUE(stacks.Flush(current.Stripes(), true));
+            GC_EXPECT_TRUE(stacks.Flush(current.Stripes()));
             MapleRuntime::GcUnit::WorkerFixture workerFixture;
     MarkingSMR smr;
             MarkStripeStack* published = current.Stripes().At(0).StealStack(smr, 0);

@@ -245,7 +245,7 @@ size_t MarkThreadLocalStacks::Population() const
     return population;
 }
 
-bool MarkThreadLocalStacks::Flush(MarkStripeSet& stripes, bool publish)
+bool MarkThreadLocalStacks::Flush(MarkStripeSet& stripes)
 {
     bool flushed = false;
     for (size_t i = 0; i < stacks.size(); ++i) {
@@ -253,7 +253,7 @@ bool MarkThreadLocalStacks::Flush(MarkStripeSet& stripes, bool publish)
         if (stack == nullptr) {
             continue;
         }
-        stripes.At(i).PublishStack(stack, publish, stripes.Terminate());
+        stripes.At(i).PublishStack(stack, true, stripes.Terminate());
         stack = nullptr;
         flushed = true;
     }

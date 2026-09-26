@@ -77,7 +77,7 @@ GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
         for (size_t i = 0; i < count; ++i) {
             seed.Push(stripes, i % 4, Entry(i), true);
         }
-        (void)seed.Flush(stripes, true);
+        (void)seed.Flush(stripes);
         std::vector<std::vector<size_t>> seen(workers);
         std::vector<std::unique_ptr<MarkThreadLocalStacks>> stacks;
         std::vector<std::unique_ptr<MarkContext>> contexts;
@@ -411,7 +411,7 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
         }, nullptr, nullptr, &domain);
     GC_EXPECT_TRUE(result == ZMark::Result::Aborted);
     GC_EXPECT_EQ(followed, 1u);
-    (void)stacks.Flush(domain.Stripes(), true);
+    (void)stacks.Flush(domain.Stripes());
     context.Cache().Flush();
     // zMarkStack.cpp: ZMarkStackList::length counts segments, not entries.
     // The resume below proves every remaining entry is still owned and consumed.
@@ -568,4 +568,42 @@ GC_TEST(RememberedClear845, ConsumedPreviousSlotsAreAbsentOnRescan)
     GC_EXPECT_EQ(remaining, false);
     GC_EXPECT_EQ(repeated, size_t{0});
     GC_EXPECT_EQ(published, true);
+}
+
+// ZGC zMarkStack.cpp:313: flush always publishes, even for worker overflow
+// producers. Overflow must therefore be consumed before the flushed segment.
+GC_TEST(MarkFlush1146, FlushPublishesForBothGenerations)
+{
+    WorkerFixture worker;
+    for (const auto generation : {MarkingStacks::MarkingGeneration::YOUNG,
+                                  MarkingStacks::MarkingGeneration::MAJOR}) {
+        ZMark domain(16, generation);
+        ThreadGCData data;
+        const size_t index = generation == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
+        auto& local = data.markStacks[index];
+        // A full first segment overflows on the 129th push; the last entry
+        // remains owned by the thread until the real ZMark flush entry runs.
+        for (size_t i = 0; i < 129; ++i) {
+            local.Push(domain.Stripes(), 0, Entry(i), false);
+        }
+        (void)domain.Flush(data);
+        std::vector<size_t> observed;
+        while (auto* stack = domain.Stripes().At(0).StealStack(domain.Smr(), 0)) {
+            while (!stack->IsEmpty()) {
+                observed.push_back(stack->Pop().partial_array_offset());
+            }
+            MarkStripeStack::Destroy(stack);
+        }
+        // One target assertion observes both ownership transfer and list order;
+        // no earlier existence assertion can hide it on the disconnected arm.
+        std::vector<size_t> expected;
+        for (size_t i = 128; i > 0; --i) {
+            expected.push_back(i);
+        }
+        expected.push_back(129);
+        std::printf("MARK_FLUSH_1146 generation=%zu observed=%zu target=published-order\n", index, observed.size());
+        GC_EXPECT_TRUE(observed == expected);
+        GC_EXPECT_TRUE(local.IsEmpty());
+        GC_EXPECT_FALSE(domain.Flush(data));
+    }
 }
