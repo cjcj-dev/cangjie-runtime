@@ -1973,12 +1973,21 @@ void CJThreadStackGuardRecover(void)
     // compiler-specific frame-address builtin.
     char *currentSp = nullptr;
     currentSp = reinterpret_cast<char *>(&currentSp);
-    if (currentSp >= cjthread->stack.stackGuard) {
-        LOG(RTLOG_FATAL,
-            "not enough space to reguard - the clearer is running inside the reserved zone "
-            "(sp %p, reserved zone base %p)",
-            currentSp, cjthread->stack.stackGuard);
-        return;
+    // The reserved zone is the headroom between stackTopAddr and the birth guard, and a
+    // cjthread stack grows up from stackTopAddr, so a frame that belongs to this stack
+    // is inside [stackTopAddr, stackTopAddr + stackSize). A frame outside that mapping is
+    // not executing in the reserved zone at all and comparing it with the guard would
+    // compare two unrelated addresses, so the guarantee below is stated for the frames it
+    // is about.
+    if (currentSp >= cjthread->stack.stackTopAddr &&
+        currentSp < cjthread->stack.stackTopAddr + cjthread->stack.stackSize) {
+        if (currentSp >= cjthread->stack.stackGuard) {
+            LOG(RTLOG_FATAL,
+                "not enough space to reguard - the clearer is running inside the reserved zone "
+                "(sp %p, reserved zone base %p)",
+                currentSp, cjthread->stack.stackGuard);
+            return;
+        }
     }
     uintptr_t reguarded = reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard) + CJThreadStackReservedFreeze();
     ProtectAddrSet(reguarded);

@@ -23,6 +23,8 @@
 #include <unistd.h>
 
 #include "Common/Runtime.h"
+#include "Common/BaseObject.h"
+#include "Concurrency/ConcurrencyModel.h"
 #include "ExceptionManager.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -35,10 +37,9 @@
 class FixtureConcurrencyModel final : public MapleRuntime::ConcurrencyModel
 {
 public:
-    FixtureConcurrencyModel() { stackGuardCheck = true; }
-    void VisitGCRoots(RootVisitor*) override {}
-    size_t GetReservedStackSize() const override { return reservedStackSize; }
-    bool GetStackGuardCheckFlag() const override { return stackGuardCheck; }
+    void VisitGCRoots(MapleRuntime::RootVisitor*) override {}
+    size_t GetReservedStackSize() const override { return 0; }
+    bool GetStackGuardCheckFlag() const override { return true; }
 };
 
 // The product's own scheduler entry, called the way CJThreadModel::Init calls it
@@ -62,16 +63,18 @@ public:
         // two this path reads and nothing else.
         exceptionManager = new MapleRuntime::ExceptionManager();
         concurrencyModel = new FixtureConcurrencyModel();
+        mutatorManager = new MapleRuntime::MutatorManager();
     }
-    ~PublishedRuntime() override { runtime = nullptr; }
+    ~PublishedRuntime() { runtime = nullptr; }
     RuntimeParam GetRuntimeParam() const override { return {}; }
     void SetGCThreshold(uint64_t) override {}
 };
 
 // The scheduler calls the registered TLS hook when it hands a cjthread the runtime
-// thread-local block (schedule.h:1265 ScheduleGetTlsHookRegister, registered by
-// CJThreadModel::Init at CJThreadModel.cpp:203 with this very function).
-extern "C" uintptr_t *MRT_GetThreadLocalData(void);
+// thread-local block (schedule.h:1265 ScheduleGetTlsHookRegister). The product
+// registers MRT_GetThreadLocalData for it, with the same cast the product's own
+// registration uses (CJThreadModel.cpp:203, CangjieRuntime.cpp:237); the function
+// itself is declared by RuntimeConfig.h:53.
 
 struct ScheduleAttr;
 extern "C" {
@@ -119,7 +122,7 @@ void *SetupScheduler()
 {
     // ScheduleAttr is an opaque blob to the caller; the product reads it through
     // ScheduleAttrCheck, so the same size the product's own caller uses is enough.
-    if (CJ_ScheduleGetTlsHookRegister(MRT_GetThreadLocalData) != 0) {
+    if (CJ_ScheduleGetTlsHookRegister(reinterpret_cast<uintptr_t *(*)()>(MapleRuntime::MRT_GetThreadLocalData)) != 0) {
         return nullptr;
     }
     alignas(16) unsigned char attr[256] = {};
@@ -349,7 +352,8 @@ int ExpandCycle()
     g_cycleGuardLowest = reinterpret_cast<uintptr_t>(before);
     CycleRaiser(0, nullptr);
     void *after = CJ_CJThreadStackGuardGet();
-    intptr_t walked = static_cast<intptr_t>(g_cycleGuardLowest) - static_cast<intptr_t>(after);
+    intptr_t walked = static_cast<intptr_t>(g_cycleGuardLowest) -
+        reinterpret_cast<intptr_t>(after);
     std::fprintf(stderr,
         "SO_REENTRY_CYCLE_TURNS turns=%d deepest=%d guard_first_turn=%p guard_after=%p walked=%zd\n",
         kCycleTurns, g_cycleTurnsDone, g_cycleGuardFirstTurn, after, static_cast<ssize_t>(walked));
