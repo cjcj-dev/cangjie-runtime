@@ -1,0 +1,30 @@
+name: cjthread windows bat rc
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "sym/650-*"
+    paths:
+      - runtime/build/build_cjthread_windows.bat
+      - .github/workflows/cjthread-windows-bat-rc.yml
+      - .github/workflows/cjthread-windows-bat-rc.ps1
+
+permissions:
+  contents: read
+
+jobs:
+  bat-rc:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: run product bat four arms
+        shell: pwsh
+        run: pwsh -File .github/workflows/cjthread-windows-bat-rc.ps1
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bat-rc-logs
+          path: bat-rc-logs
