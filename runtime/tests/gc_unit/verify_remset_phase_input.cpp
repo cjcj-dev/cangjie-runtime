@@ -41,7 +41,7 @@ int main(int argc, char** argv)
     heap.old().InitializeWorkers(1);
     heap.young().InitializeWorkers(1);
     fixture.PrepareOldSource();
-    p16_forwarding = forwarding_for_page(fixture.region0);
+    p16_forwarding = forwarding_for_page(fixture.region0());
     p16_young = &heap.young();
     p16_remset_mask = ZPointerRememberedMask;
     const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
@@ -50,7 +50,7 @@ int main(int argc, char** argv)
     if (young) {
         // Register before the actual mark-start flip so the real remset-table
         // iterator finds the source in the previous found-old set.
-        heap.remembered().register_found_old(fixture.region0);
+        heap.remembered().register_found_old(fixture.region0());
         ScopedStopTheWorld stopped("VerifyRemsetPhaseInput");
         heap.young().mark_start();
     }
@@ -65,11 +65,11 @@ int main(int argc, char** argv)
     if (scan) {
         // Ordinary allocator input only. The product performs the copy and
         // publishes its own mapping, while its source still has an owner.
-        fixture.region1->reset(PageAge::old);
-        fixture.region1->SetRegionAllocPtr(fixture.region1->GetRegionStart());
+        fixture.region1()->reset(PageAge::old);
+        fixture.region1()->SetRegionAllocPtr(fixture.region1()->GetRegionStart());
         auto& allocator = *heap.object_allocator().allocator(PageAge::old);
         ZPerCPUIterator<ZPage*> slots(&allocator.sharedSmallPage);
-        for (ZPage** slot; slots.next(&slot);) { __atomic_store_n(slot, fixture.region1, __ATOMIC_RELEASE); }
+        for (ZPage** slot; slots.next(&slot);) { __atomic_store_n(slot, fixture.region1(), __ATOMIC_RELEASE); }
         destination = Heap::GetHeap().relocate_or_remap_object(fixture.obj0, ZGenerationId::old);
         if (destination == nullptr || destination == fixture.obj0) { return 80; }
     }

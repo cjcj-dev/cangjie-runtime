@@ -112,6 +112,9 @@ void ZCrossVM::ResolveCycleRef()
         ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_relocate();
     std::unordered_set<U32> resolvedIds;
     for (;;) {
+        // zUncoloredRoot.inline.hpp:47-59: resolve saved color before use
+        // and heal the carrier while its owner lock is held.
+        CurrentizeValueRootMap(cycleRefWorkStack);
         auto it = cycleRefWorkStack.begin();
         while (it != cycleRefWorkStack.end()) {
             BaseObject* candidate = it->first;
@@ -147,6 +150,8 @@ void ZCrossVM::ResolveCycleRef()
         size_t externIndex = cycleRefProgress[id];
         void* returnUnit = nullptr;
         for (;;) {
+            // A callback may cross a relocation flip while the lock is released.
+            CurrentizeValueRootMap(cycleRefWorkStack);
             // A GC preforward pass may replace the map key and list elements
             // while the callback is parked. Re-find by stable export id and
             // fetch the current addresses before each managed invocation.

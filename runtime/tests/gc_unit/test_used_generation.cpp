@@ -32,11 +32,11 @@ GC_TEST(UsedGeneration, CounterMatchesPageTableNonFreeSum)
 {
     GcHeapFixture fx;
     RegionManager& manager = Heap::GetHeap().page_allocator();
-    fx.region0->SetRegionRole(ZPageRole::RecentFull);
+    fx.region0()->SetRegionRole(ZPageRole::RecentFull);
     const size_t young = manager.used_generation(ZGenerationId::young);
     const size_t table = PageTableUsed(ZGenerationId::young);
     std::printf("USED_GENERATION young_counter=%zu page_table=%zu region0_size=%zu\n",
-                young, table, fx.region0->size());
+                young, table, fx.region0()->size());
     GC_EXPECT_EQ(young, table);
 }
 
@@ -45,8 +45,8 @@ GC_TEST(UsedGeneration, DecreaseMovesCounter)
     GcHeapFixture fx;
     RegionManager& manager = Heap::GetHeap().page_allocator();
     const size_t before = manager.used_generation(ZGenerationId::young);
-    manager.increase_used_generation(ZGenerationId::young, fx.region0->size());
-    GC_EXPECT_EQ(manager.used_generation(ZGenerationId::young), before + fx.region0->size());
-    manager.decrease_used_generation(ZGenerationId::young, fx.region0->size());
+    manager.increase_used_generation(ZGenerationId::young, fx.region0()->size());
+    GC_EXPECT_EQ(manager.used_generation(ZGenerationId::young), before + fx.region0()->size());
+    manager.decrease_used_generation(ZGenerationId::young, fx.region0()->size());
     GC_EXPECT_EQ(manager.used_generation(ZGenerationId::young), before);
 }

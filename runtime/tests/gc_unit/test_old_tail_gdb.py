@@ -87,8 +87,18 @@ try:
     director = next(t for t in gdb.selected_inferior().threads() if t.name == 'ZDirector')
     director.switch()
     source = Path(os.environ['DIRECTOR_SOURCE']).read_text().splitlines()
-    tick = next(i+1 for i,s in enumerate(source) if 'stats = sample_stats' in s)
+    # Release inlines sample_stats: its call-site line can resolve to the
+    # run_thread epilogue. Stop at the timestamp producer inside the sample,
+    # before the decision consumes it (ZGC zDirector.cpp:919, :612).
+    sample = next(i for i, line in enumerate(source)
+                  if line.startswith('static ZDirectorStats sample_stats('))
+    end = next(i for i in range(sample + 1, len(source)) if source[i] == '}')
+    tick = next(i + 1 for i in range(sample + 1, end)
+                if 'const uint64_t now' in source[i])
     until('zDirector.cpp:' + str(tick))
+    location = gdb.selected_frame().find_sal()
+    emit('SAMPLE_BOUNDARY', requested=tick, actual=location.line,
+         pc=hex(gdb.selected_frame().pc()), thread=gdb.selected_thread().num)
     # Let the public timer expire before the real sample obtains its timestamp.
     time.sleep(1.1)
     until('MapleRuntime::make_minor_gc_decision(MapleRuntime::ZDirectorStats const&)')

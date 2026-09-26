@@ -162,7 +162,7 @@ GC_TEST(ValueSlotABI, NullHolderHeapStructStaysColored)
     GcHeapFixture fixture;
     struct Payload { uintptr_t reference; uint64_t primitive; };
     fixture.typeInfo->SetInstanceSize(sizeof(Payload));
-    fixture.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(fixture.obj1) + fixture.obj1->GetSize());
+    fixture.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(fixture.obj1) + fixture.obj1->GetSize());
     Payload source {reinterpret_cast<uintptr_t>(fixture.obj0), 0x12345678}, copy {};
     const MAddress destination = reinterpret_cast<MAddress>(fixture.obj1) + TYPEINFO_PTR_SIZE;
     GCTib layout {}; layout.tag = SIGN_BIT | 1;

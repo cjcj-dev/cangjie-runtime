@@ -43,6 +43,7 @@ LINES = {
     'send': line_in('static void start_minor_gc', 'ZDriver::minor()->collect'),
     'merge': line_in('static bool start_gc', 'rule_major_allocation_rate(stats)'),
     'sample': line_in('static ZDirectorStats sample_stats', 'stats.mutator_alloc_rate'),
+    'sample_complete': line_in('static ZDirectorStats sample_stats', 'stats.young_stats.general.used'),
     'tick': line_in('static ZDirectorStats sample_stats', 'const uint64_t now'),
     'loop': line_in('void ZDirector::run_thread', 'while (wait_for_tick())'),
     'entry': line_in('static GCReason make_major_gc_decision', 'if ('),
@@ -226,6 +227,21 @@ try:
     if RESIZE:
         command('call ' + workers + '->set_active()')
     director.switch()
+    # ZGC zDirector.cpp:875-919: finish synchronized sampling before freezing
+    # the decision interleaving. A stopped allocator/worker may own a sampling
+    # lock, so it must be allowed to release it while the director samples.
+    command('set scheduler-locking off')
+    emit('SAMPLING_CONTINUE', scheduler_locking=gdb.parameter('scheduler-locking'),
+         location=location())
+    advance('sample_complete')
+    sampled = location()
+    if (gdb.selected_thread() != director or
+            sampled['function'] != 'MapleRuntime::sample_stats' or
+            sampled['line'] != LINES['sample_complete']):
+        raise RuntimeError('Post-lock sampling boundary not observed: ' + str(sampled))
+    command('set scheduler-locking on')
+    emit('SAMPLING_COMPLETE', scheduler_locking=gdb.parameter('scheduler-locking'),
+         location=sampled)
     set_busy('$major', INITIAL if SITE != 'minor' else 1)
     set_busy('$minor', INITIAL if SITE == 'minor' else 0)
     emit('SAMPLE_INPUT', site=SITE, initial=INITIAL, resize=RESIZE, equal=EQUAL)

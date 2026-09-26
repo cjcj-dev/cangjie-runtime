@@ -123,8 +123,8 @@ GC_TEST(StoreBuf, EntryCarriesPairedPrevAndInstallColour)
 GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     // SATB previous values must predate mark start (ZGC zMark.inline.hpp:51-55).
     MarkPublicationFixture markFixture;
 
@@ -177,8 +177,8 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
 GC_TEST(StoreBuf, ProductWriteFlushPublishesPreviousYoungValue)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture markFixture;
     BaseObject* incoming = fx.PlaceObject(fx.heapStart + ZGranuleSize + 128);
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
@@ -222,10 +222,10 @@ GC_TEST(StoreBuf, AllocatingPreviousValueIsImplicitlyLive)
 {
     for (PageAge age : {PageAge::old, PageAge::eden}) {
         GcHeapFixture fx;
-        fx.region0->reset(PageAge::old);
+        fx.region0()->reset(PageAge::old);
         MarkPublicationFixture markFixture;
         // Deliberately allocate the previous value's page after mark start.
-        fx.region1->reset(age);
+        fx.region1()->reset(age);
         HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
         field.StoreColoured(StoreBadPointer(fx.obj1));
         Mutator mutator;
@@ -237,11 +237,11 @@ GC_TEST(StoreBuf, AllocatingPreviousValueIsImplicitlyLive)
         DrainPublishedMarkObjects(retired);
         const bool remembered = SlotPageRemembered(reinterpret_cast<MAddress>(&field));
         std::fprintf(stderr, "DETAIL allocating age=%u allocating=%u pending=%zu retired=%zu remset=%u\n",
-                     static_cast<unsigned>(age), static_cast<unsigned>(fx.region1->IsAllocating()),
+                     static_cast<unsigned>(age), static_cast<unsigned>(fx.region1()->IsAllocating()),
                      pending, retired.size(), static_cast<unsigned>(remembered));
         GC_EXPECT_EQ(pending, 1u);
-        GC_EXPECT_TRUE(fx.region1->IsAllocating());
-        GC_EXPECT_TRUE(fx.region1->is_object_strongly_live(from_object(fx.obj1)));
+        GC_EXPECT_TRUE(fx.region1()->IsAllocating());
+        GC_EXPECT_TRUE(fx.region1()->is_object_strongly_live(from_object(fx.obj1)));
         GC_EXPECT_TRUE(retired.empty());
         GC_EXPECT_TRUE(remembered);
         GC_EXPECT_TRUE(is_null(field.GetTargetObject()));
@@ -251,8 +251,8 @@ GC_TEST(StoreBuf, AllocatingPreviousValueIsImplicitlyLive)
 GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     // SATB previous values must predate mark start (ZGC zMark.inline.hpp:51-55).
     MarkPublicationFixture markFixture;
 
@@ -299,8 +299,8 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     AllocBuffer alloc;
@@ -327,8 +327,8 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     AllocBuffer alloc;
@@ -361,8 +361,8 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
 GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     // SATB previous values must predate mark start (ZGC zMark.inline.hpp:51-55).
     MarkPublicationFixture markFixture;
 
@@ -429,8 +429,8 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
@@ -577,7 +577,7 @@ GC_TEST(StoreBuf, YoungSlotExcludedFromOldPhaseSnapshot)
     HeapSlotAt<>(slot).StoreColoured(zpointer::null);
     const uintptr_t saved = ::g_cjStoreGoodMask;
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
-    fx.region0->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::eden);
     buf.add(slot, previous);
     ::g_cjStoreGoodMask ^= ZPointerMarkedYoungMask;
     buf.Flush();
@@ -594,7 +594,7 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region1->reset(PageAge::eden);
+    fx.region1()->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     StoreBarrierBuffer buf;
@@ -771,8 +771,8 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
 {
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     GcHeapFixture heap;
-    heap.region0->reset(PageAge::eden);
-    heap.region1->reset(PageAge::old);
+    heap.region0()->reset(PageAge::eden);
+    heap.region1()->reset(PageAge::old);
     MarkPublicationFixture marking;
     std::thread owner([&] {
         ThreadLocal::GetThreadLocalData()->buffer = nullptr;
@@ -901,8 +901,8 @@ using StoreEntry = void (*)(ObjectPtr, ObjectPtr, RefField<false>*);
 void CheckStoreAccessor(StoreEntry entry, bool weak, bool weakHolder, bool reflection = false)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
     if (weakHolder) {
         fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
@@ -1062,8 +1062,8 @@ namespace {
 void CheckBarrierOnly856(bool weak)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const zpointer previous = StoreBadPointer(fx.obj0);
@@ -1150,8 +1150,8 @@ void CheckThreadDetachMarksObjects(bool managed)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture heap;
-    heap.region0->reset(PageAge::eden);
-    heap.region1->reset(PageAge::old);
+    heap.region0()->reset(PageAge::eden);
+    heap.region1()->reset(PageAge::old);
     MarkPublicationFixture marking;
     size_t privateYoung = 0;
     size_t privateOld = 0;
@@ -1181,8 +1181,8 @@ void CheckThreadDetachMarksObjects(bool managed)
     auto& old = Heap::GetHeap().old().Mark();
     young.MarkFollow();
     old.MarkFollow();
-    const bool markedYoung = heap.region0->is_object_marked(from_object(heap.obj0), false);
-    const bool markedOld = heap.region1->is_object_marked(from_object(heap.obj1), false);
+    const bool markedYoung = heap.region0()->is_object_marked(from_object(heap.obj0), false);
+    const bool markedOld = heap.region1()->is_object_marked(from_object(heap.obj1), false);
     const bool ended = young.TryEnd() && old.TryEnd();
     std::fprintf(stderr,
         "THREAD_DETACH_TARGET executed=1 managed=%d private_young=%zu private_old=%zu marked_young=%d marked_old=%d ended=%d\n",
@@ -1212,8 +1212,8 @@ extern "C" BaseObject* CJ_MCC_AtomicSwapReference(BaseObject*, BaseObject*, Heap
 GC_TEST(AccessBarrier976, AtomicReleaseStoreBuffersWithoutHealing)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
     Mutator mutator;
     InstalledMutatorScope installed(mutator);
@@ -1238,8 +1238,8 @@ GC_TEST(AccessBarrier976, AtomicReleaseStoreBuffersWithoutHealing)
 GC_TEST(AccessBarrier976, AtomicExchangeHealsWithoutBufferingControl)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
     Mutator mutator;
     InstalledMutatorScope installed(mutator);
@@ -1304,8 +1304,8 @@ GC_TEST(AccessBarrier976, UnknownWeakStoreResolvesAtFieldOffset)
 {
     GcHeapFixture fx;
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
     Mutator mutator;
     InstalledMutatorScope installed(mutator);
@@ -1326,8 +1326,8 @@ GC_TEST(AccessBarrier976, KnownStrongStoreIgnoresWeakHolderControl)
 {
     GcHeapFixture fx;
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
     Mutator mutator;
     InstalledMutatorScope installed(mutator);

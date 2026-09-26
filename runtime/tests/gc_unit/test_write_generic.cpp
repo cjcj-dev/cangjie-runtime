@@ -60,8 +60,8 @@ private:
 GC_TEST(WriteGeneric, CopiesRefSlotThroughStoreBarrier)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    fx.region1->reset(PageAge::eden);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
     Mutator mutator;
@@ -88,7 +88,7 @@ GC_TEST(WriteGeneric, CopiesRefSlotThroughStoreBarrier)
 GC_TEST(WriteGeneric, PayloadSharesWriteStructStoreBarrier)
 {
     GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
+    fx.region0()->reset(PageAge::old);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
     Mutator mutator;
