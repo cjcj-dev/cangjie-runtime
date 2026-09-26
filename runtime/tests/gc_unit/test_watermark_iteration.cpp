@@ -76,13 +76,15 @@ GC_OTHER_VM_TEST(WatermarkIteration, DiagnosticWalkLeavesEpochUnstarted)
         precondition = stale;
         targetHeld = stillStale && stateSame && noPhaseEffect;
 
-        // Positive control: the legal safepoint entry does start processing and
-        // does install the masks, so the observed state is not a constant.
+        // Positive control: the legal safepoint entry does start processing on
+        // the same owner, and the epoch it publishes is the current one, so the
+        // state read by the target assertion is not a constant.
         StackWatermarkSet::on_safepoint(*owner);
         const bool started = watermark.processing_started();
-        const bool installed = owner->GetGCData().storeGoodMask != installedBefore;
-        std::fprintf(stderr, "WM_ITERATION_CONTROL executed=1 started=%d masks_installed=%d\n", started, installed);
-        controlStarted = started && installed;
+        const bool advanced = watermark.GetEpoch() != StackWatermark::UnpackEpoch(stateBefore);
+        std::fprintf(stderr, "WM_ITERATION_CONTROL executed=1 started=%d epoch_advanced=%d epoch_now=%u\n", started,
+            advanced, watermark.GetEpoch());
+        controlStarted = started && advanced;
 
         ::g_cjStoreGoodMask = published;
         manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
