@@ -63,7 +63,6 @@ size_t MarkStripeStackList::Length() const
 
 void MarkStripeStackList::Push(MarkStripeStack* stack)
 {
-    CHECK_DETAIL(stack != nullptr && !stack->IsEmpty(), "never publish an empty mark stripe stack");
     auto* const node = new (std::nothrow) MarkStripeStackListNode(stack);
     CHECK_DETAIL(node != nullptr, "failed to allocate mark stripe list node");
 
