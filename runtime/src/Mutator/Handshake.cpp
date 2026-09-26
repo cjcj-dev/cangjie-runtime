@@ -264,7 +264,7 @@ void Handshake::execute(HandshakeClosure* cl, ThreadLocalData* target)
 void ArmThreadPoll(ThreadLocalData* tls)
 {
     if (tls != nullptr) {
-        tls->safepointState = 1;
+        tls->SetPollWord(ThreadLocalData::PollBit);
     }
 }
 
@@ -371,7 +371,12 @@ void UpdatePollValues(ThreadLocalData* tls)
     }
     for (;;) {
         const bool armed = HasPendingSafepoint(tls);
-        tls->safepointState = armed ? 1 : 0;
+        const uintptr_t watermark = tls->mutator == nullptr ? 0 :
+            StackWatermarkSet::lowest_watermark(*tls->mutator);
+        // HotSpot safepointMechanism.cpp:81-94: same word, three states.
+        const uintptr_t pollWord = armed ? ThreadLocalData::PollBit :
+            (watermark == 0 ? ThreadLocalData::DisarmedPollWord : watermark);
+        tls->SetPollWord(pollWord);
         std::atomic_thread_fence(std::memory_order_seq_cst);
         if (!armed && HasPendingSafepoint(tls)) {
             continue;

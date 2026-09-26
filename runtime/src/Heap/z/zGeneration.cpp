@@ -1014,20 +1014,8 @@ public:
             ZStatTimerWorker timer(ZSubPhaseConcurrentRemapRootsUncoloredOld);
             uncolored.Apply([] { Runtime::Current().GetConcurrencyModel().VisitGCRoots(); });
             uncolored.ApplyThreads([&](Mutator& mutator) {
-            // ZGC ZRemapThreadClosure (zGeneration.cpp:1419-1424): only
-            // StackWatermarkSet::finish_processing. Slot heal uses the saved
-            // watermark color via ZUncoloredRoot::process. Cangjie still expands
-            // headerless records (no return statepoint).
-            RootVisitor heapRoots = [&](ObjectRef& root) {
-                StackWatermarkProcessOopClosure closure(nullptr, mutator.GetStackWatermark().uncolored_root_color());
-                mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-                    closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
-                });
-            };
-            DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(heapRoots);
-            size_t frames = 0;
-            (void)StackWatermarkSet::finish_processing(mutator, heapRoots, heapRoots,
-                    StackWatermark::epoch_id(), &derived, frames);
+                // ZGC ZRemapThreadClosure (zGeneration.cpp:1419-1424).
+                StackWatermarkSet::finish_processing(mutator);
             });
         }
         {

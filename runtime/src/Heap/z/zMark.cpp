@@ -84,6 +84,19 @@ void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
 // Shared by mark roots and Cangjie foreign-root traversal.
 
 namespace {
+// VisitMinorRoots reports the same slots the watermark marks. ZGC publishes
+// only into the mark stack (zMark.cpp:706); the product visitor is extra state
+// the root-function pointer cannot carry.
+thread_local const RootVisitor* markResultVisitor = nullptr;
+
+void MarkAndReportRoot(zaddress_unsafe* p, uintptr_t color)
+{
+    ZUncoloredRoot::mark(p, color);
+    if (markResultVisitor != nullptr) {
+        (*markResultVisitor)(*reinterpret_cast<RootSlot*>(p));
+    }
+}
+
 // ZGC zMark.cpp:703-708,827-828,883: both generations use this thread closure.
 // Cangjie has no return statepoint: retain the saved head color for the full
 // scan and expand stack objects/headerless records before visiting heap slots.
@@ -101,17 +114,12 @@ public:
     static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }
     void DoThread(Mutator& mutator)
     {
-        RootVisitor markRoot = [&](ObjectRef& root) {
-            const uintptr_t color = mutator.GetStackWatermark().uncolored_root_color();
-            mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
-                ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&slot), color);
-                if (result != nullptr) (*result)(slot);
-            });
-        };
-        DerivedPtrVisitor derivedVisitor = Mutator::MakeDerivedRootVisitor(markRoot);
-        size_t frames = 0;
-        (void)StackWatermarkSet::finish_processing(mutator, markRoot, markRoot, StackWatermark::epoch_id(),
-                                                   &derivedVisitor, frames, reinterpret_cast<void*>(root_function()));
+        const RootVisitor* const previous = markResultVisitor;
+        markResultVisitor = result;
+        StackWatermarkProcessOopClosure::RootFunction const function =
+            result == nullptr ? root_function() : MarkAndReportRoot;
+        StackWatermarkSet::finish_processing(mutator, reinterpret_cast<void*>(function));
+        markResultVisitor = previous;
         ZThreadLocalAllocBuffer::update_stats(mutator);
     }
 private:

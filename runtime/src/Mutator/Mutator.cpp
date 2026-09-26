@@ -676,9 +676,10 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 
         uwContext.anchorFA = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
 
-        // stackwm #7: publish movable-stack generation. cursorIndex is logical — not rebased.
+        // Cangjie movable stacks: relocate the persistent stream and all historical SP frontiers.
         stackWatermark.OnStackGrow(stackOffset);
         MutatorUnlock();
+        UpdatePollValues(ThreadLocal::GetThreadLocalData());
 
         return stackOffset;
     }
@@ -792,33 +793,24 @@ static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool
 
 bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
-    // ZGC zStackWatermark.cpp:163-214: the closure reads the color saved in
-    // start_processing_impl, not the previous epoch's headColor.
-    RootVisitor visitor = [this, young, stackScanEpoch](ObjectRef& root) {
-        const uintptr_t rootColor = stackScanEpoch == 0 ? GetGCData().storeGoodMask
-            : GetStackWatermark().uncolored_root_color();
-        VisitHeapRootSlots(root, [young, rootColor](ObjectRef& slot) {
-            (void)PushHeapRoot(slot, young, rootColor);
-        });
-    };
-    RootVisitor invisibleRootVisitor = [this, young, stackScanEpoch](ObjectRef& root) {
-        const uintptr_t rootColor = stackScanEpoch == 0 ? GetGCData().storeGoodMask
-            : GetStackWatermark().uncolored_root_color();
-        (void)PushHeapRoot(root, young, rootColor, false);
-    };
-    DerivedPtrVisitor derivedVisitor = MakeDerivedRootVisitor(visitor);
-    if (stackScanEpoch == 0) {
-        VisitHeapReferences(visitor, visitor, derivedVisitor, visitor, invisibleRootVisitor, young);
+    (void)bySelf;
+    if (stackScanEpoch != 0) {
+        StackWatermarkSet::finish_processing(*this, reinterpret_cast<void*>(ZUncoloredRoot::mark));
         return true;
     }
-    size_t frames = 0;
-    (void)bySelf;
-    bool scanned = StackWatermarkSet::finish_processing(*this, visitor, invisibleRootVisitor, stackScanEpoch,
-                                                        &derivedVisitor, frames);
-    if (scannedFrames != nullptr) {
-        *scannedFrames = frames;
-    }
-    return scanned;
+    const uintptr_t color = GetGCData().storeGoodMask;
+    RootVisitor visitor = [this, young, color](ObjectRef& root) {
+        VisitHeapRootSlots(root, [young, color](ObjectRef& slot) {
+            (void)PushHeapRoot(slot, young, color);
+        });
+    };
+    RootVisitor invisible = [this, young, color](ObjectRef& root) {
+        (void)PushHeapRoot(root, young, color, false);
+    };
+    DerivedPtrVisitor derived = MakeDerivedRootVisitor(visitor);
+    VisitHeapReferences(visitor, visitor, derived, visitor, invisible, young);
+    (void)scannedFrames;
+    return true;
 }
 
 DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor)

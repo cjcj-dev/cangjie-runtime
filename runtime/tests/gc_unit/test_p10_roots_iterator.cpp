@@ -37,13 +37,13 @@ GC_TEST(P10Roots, HeapIteratorBitMapTrySetOnce)
 
 GC_TEST(P10Roots, PackedWatermarkState)
 {
-    StackWatermark watermark;
-    GC_EXPECT_TRUE(watermark.TryBegin(11, 0));
-    GC_EXPECT_EQ(StackWatermark::UnpackEpoch(watermark.PackedState()), 11u);
-    GC_EXPECT_FALSE(StackWatermark::UnpackDone(watermark.PackedState()));
-    watermark.Finish();
-    GC_EXPECT_TRUE(StackWatermark::UnpackDone(watermark.PackedState()));
-    std::fprintf(stderr, "P10_WATERMARK_PACK_ASSERT_EXECUTED state=%u\n", watermark.PackedState());
+    const uint32_t pending = StackWatermark::PackState(11, false);
+    GC_EXPECT_EQ(StackWatermark::UnpackEpoch(pending), 11u);
+    GC_EXPECT_FALSE(StackWatermark::UnpackDone(pending));
+    const uint32_t completed = StackWatermark::PackState(11, true);
+    GC_EXPECT_TRUE(StackWatermark::UnpackDone(completed));
+    GC_EXPECT_EQ(StackWatermark::UnpackEpoch(completed), 11u);
+    std::fprintf(stderr, "P10_WATERMARK_PACK_ASSERT_EXECUTED state=%u\n", completed);
 }
 
 GC_TEST(P10Roots, HandleMarkPopsNativeRoots)

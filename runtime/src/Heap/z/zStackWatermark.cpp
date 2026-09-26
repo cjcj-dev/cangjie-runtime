@@ -1,199 +1,350 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-
 #include "Heap/z/zStackWatermark.hpp"
 #include "Heap/z/zAddress.hpp"
-#include "Heap/z/zHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zThreadLocalData.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
-#include "ObjectModel/MArray.h"
 #include "Mutator/Mutator.h"
 #include "UnwindStack/StackFrameCursor.h"
 
 namespace MapleRuntime {
 
-StackWatermark::StackWatermark() { Reset(); }
+// runtime/stackWatermark.cpp:44-153. The stream owns its register locations,
+// and caller/callee identify the two processed frames guarding the frontier.
+class StackWatermarkFramesIterator {
+public:
+    explicit StackWatermarkFramesIterator(StackWatermark& owner)
+        : owner(owner), cursor(owner.owner.GetUnwindContext()) {}
+    bool has_next() const { return !cursor.Done(); }
+    uintptr_t caller() const { return callerSP; }
+    uintptr_t callee() const { return calleeSP; }
+    void process_one(void* context)
+    {
+        while (has_next()) {
+            const FrameInfo frame = *cursor.CurrentFrame();
+            const bool barrier = has_barrier(frame);
+            owner.process(frame, cursor.RegMap(), context);
+            cursor.Advance();
+            if (barrier) {
+                set_watermark(frame.mFrame.GetSP());
+                break;
+            }
+        }
+    }
+    void process_all(void* context)
+    {
+        unsigned processed = 0;
+        while (has_next()) {
+            const FrameInfo frame = *cursor.CurrentFrame();
+            const bool barrier = has_barrier(frame);
+            owner.process(frame, cursor.RegMap(), context);
+            cursor.Advance();
+            if (barrier) {
+                set_watermark(frame.mFrame.GetSP());
+                if (++processed == 5) {
+                    processed = 0;
+                    owner.yield_processing();
+                }
+            }
+        }
+    }
+    void rebase(intptr_t offset)
+    {
+        if (callerSP != 0) { callerSP += offset; }
+        if (calleeSP != 0) { calleeSP += offset; }
+        cursor.Rebase(offset);
+    }
+private:
+    static bool has_barrier(const FrameInfo& frame)
+    {
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+        // Other compiler targets have not yet supplied a return barrier ABI.
+        return frame.GetFrameType() == FrameType::MANAGED && frame.mFrame.GetSP() != 0;
+#else
+        return false;
+#endif
+    }
+    void set_watermark(uintptr_t sp)
+    {
+        if (!has_next()) { return; }
+        if (calleeSP == 0) { calleeSP = sp; }
+        else if (callerSP == 0) { callerSP = sp; }
+        else { calleeSP = callerSP; callerSP = sp; }
+    }
+    StackWatermark& owner;
+    StackFrameCursor cursor;
+    uintptr_t callerSP = 0;
+    uintptr_t calleeSP = 0;
+};
 
 uint32_t StackWatermark::epoch_id()
 {
     return __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
 }
 
-// HotSpot stackWatermarkSet.cpp:114 and stackWatermark.cpp:311.
-void StackWatermarkSet::on_safepoint(Mutator& mutator)
+StackWatermark::StackWatermark(Mutator& thread) : owner(thread), state(PackState(epoch_id(), true)) {}
+StackWatermark::~StackWatermark() = default;
+
+void StackWatermark::Reset()
 {
-    mutator.GetStackWatermark().on_safepoint(mutator);
+    iterator.reset();
+    waterMark.store(0, std::memory_order_relaxed);
+    state.store(PackState(epoch_id(), true), std::memory_order_relaxed);
 }
 
-void StackWatermark::on_safepoint(Mutator& mutator)
+void StackWatermark::OnStackGrow(intptr_t offset)
 {
-    start_processing(mutator);
+    if (offset == 0) { return; }
+    if (iterator != nullptr) { iterator->rebase(offset); }
+    const uintptr_t old = watermark();
+    if (old != 0) { waterMark.store(old + offset, std::memory_order_release); }
 }
 
-void StackWatermark::start_processing(Mutator& mutator)
+uintptr_t StackWatermark::last_processed_raw() const
 {
-    const uint64_t epoch = epoch_id();
-    if (epoch == 0 || IsDone(epoch)) { return; }
-    RootVisitor visitor = [&](RootSlot& root) {
-        StackWatermarkProcessOopClosure closure(nullptr, uncolored_root_color());
-        mutator.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-            closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
-        });
-    };
-    DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
-    size_t frames = 0;
-    // Cangjie has no return statepoint (#498). Keep the existing eager frame
-    // traversal; the no-frame head still uses the single start_processing_impl.
-    (void)StackWatermarkSet::finish_processing(mutator, visitor, visitor, epoch, &derived, frames);
+    return iterator == nullptr ? 0 : iterator->caller();
 }
 
-bool StackWatermark::IsDone(uint64_t scanEpoch) const
+void StackWatermark::update_watermark()
 {
-    const uint32_t packed = state.load(std::memory_order_acquire);
-    return UnpackDone(packed) && UnpackEpoch(packed) == static_cast<uint32_t>(scanEpoch);
+    if (iterator != nullptr && iterator->has_next()) {
+        waterMark.store(iterator->callee(), std::memory_order_release);
+        state.store(PackState(epoch_id(), false), std::memory_order_release);
+    } else {
+        waterMark.store(0, std::memory_order_release);
+        state.store(PackState(epoch_id(), true), std::memory_order_release);
+    }
 }
 
-bool StackWatermark::TryBegin(uint64_t scanEpoch, size_t totalFrames)
+void StackWatermark::start_processing_impl(void* context)
 {
-    CHECK_DETAIL(scanEpoch != 0, "[GCV2][stack-watermark] epoch must not be zero");
-    const uint32_t packed = state.load(std::memory_order_acquire);
-    if (UnpackDone(packed) && UnpackEpoch(packed) == static_cast<uint32_t>(scanEpoch)) {
+    iterator.reset();
+    if (owner.IsManagedContext()) {
+        iterator.reset(new StackWatermarkFramesIterator(*this));
+        // runtime/stackWatermark.cpp:205-228: callee, caller, unwind margin.
+        iterator->process_one(context);
+        iterator->process_one(context);
+        iterator->process_one(context);
+    }
+    update_watermark();
+}
+
+void StackWatermark::yield_processing()
+{
+    update_watermark();
+    lock.unlock();
+    lock.lock();
+}
+
+void StackWatermark::start_processing()
+{
+    if (processing_started()) { return; }
+    lock.lock();
+    if (!processing_started()) { start_processing_impl(nullptr); }
+    lock.unlock();
+}
+
+void StackWatermark::finish_processing(void* context)
+{
+    lock.lock();
+    if (!processing_started()) { start_processing_impl(context); }
+    if (!IsDone()) {
+        iterator->process_all(context);
+        update_watermark();
+    }
+    lock.unlock();
+}
+
+void StackWatermark::process_one()
+{
+    lock.lock();
+    if (!processing_started()) { start_processing_impl(nullptr); }
+    else if (!IsDone()) {
+        iterator->process_one(nullptr);
+        update_watermark();
+    }
+    lock.unlock();
+}
+
+bool StackWatermark::is_frame_safe(const FrameInfo& frame) const
+{
+    if (!processing_started()) { return false; }
+    if (IsDone()) { return true; }
+    return frame.mFrame.GetSP() < iterator->caller();
+}
+
+void StackWatermark::ensure_safe(const FrameInfo& frame)
+{
+    if (IsDone(epoch_id())) { return; }
+    // real_fp in HotSpot is the sender's SP, not the machine frame pointer.
+    const uintptr_t senderSP = frame.CallerSP();
+    const uintptr_t boundary = watermark();
+    if (boundary != 0 && senderSP > boundary) { process_one(); }
+}
+
+void StackWatermark::on_safepoint() { start_processing(); }
+
+namespace {
+bool HasExposableFrame(Mutator& owner)
+{
+    if (!owner.IsManagedContext()) {
         return false;
     }
-    if (!UnpackDone(packed) && UnpackEpoch(packed) == static_cast<uint32_t>(scanEpoch) && packed != 0) {
-        return false;
-    }
-    uint32_t expected = packed;
-    const uint32_t started = PackState(static_cast<uint32_t>(scanEpoch), false);
-    if (!state.compare_exchange_strong(expected, started, std::memory_order_acq_rel, std::memory_order_acquire)) {
-        return false;
-    }
-    cursorIndex.store(0, std::memory_order_relaxed);
-    frameCount.store(totalFrames, std::memory_order_relaxed);
-    return true;
+    const MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
+    return top.GetFA() != nullptr && top.GetIP() != nullptr;
+}
 }
 
-void StackWatermark::Finish()
+void StackWatermark::before_unwind()
 {
-    const uint32_t packed = state.load(std::memory_order_relaxed);
-    state.store(PackState(UnpackEpoch(packed), true), std::memory_order_release);
+    // stackWatermark.inline.hpp:86-106. Processing was started by on_safepoint
+    // (javaThread.cpp:1112). A finished watermark has nothing to expose, and a
+    // runtime leave has no Java frame: do not classify it.
+    if (!processing_started() || IsDone() || !HasExposableFrame(owner)) {
+        return;
+    }
+    StackFrameStream frames(&owner.GetUnwindContext());
+    frames.Start();
+    while (!frames.IsDone() && frames.Current().GetFrameType() != FrameType::MANAGED) { frames.Next(); }
+    if (frames.IsDone()) { return; }
+    frames.Next();
+    while (!frames.IsDone() && frames.Current().GetFrameType() != FrameType::MANAGED) { frames.Next(); }
+    if (!frames.IsDone()) { ensure_safe(frames.Current()); }
 }
+
+void StackWatermark::after_unwind()
+{
+    // stackWatermark.inline.hpp:109-124.
+    if (!processing_started() || IsDone() || !HasExposableFrame(owner)) {
+        return;
+    }
+    StackFrameStream frames(&owner.GetUnwindContext());
+    frames.Start();
+    while (!frames.IsDone() && frames.Current().GetFrameType() != FrameType::MANAGED) { frames.Next(); }
+    if (!frames.IsDone()) { ensure_safe(frames.Current()); }
+}
+
+void StackWatermark::on_iteration(const FrameInfo& frame) { ensure_safe(frame); }
 
 StackWatermarkProcessOopClosure::RootFunction StackWatermarkProcessOopClosure::select_function(void* context)
 {
-    if (context == nullptr) {
-        return ZUncoloredRoot::process;
-    }
-    return reinterpret_cast<RootFunction>(context);
+    return context == nullptr ? ZUncoloredRoot::process : reinterpret_cast<RootFunction>(context);
 }
-
 StackWatermarkProcessOopClosure::StackWatermarkProcessOopClosure(void* context, uintptr_t color)
-    : function(select_function(context)), color(color)
+    : function(select_function(context)), color(color) {}
+void StackWatermarkProcessOopClosure::do_root(zaddress_unsafe* p) { function(p, color); }
+
+bool ZColorWatermark::covers(const ZColorWatermark& other) const
 {
+    if (watermark == 0) { return true; }
+    if (other.watermark == 0) { return false; }
+    return watermark >= other.watermark;
 }
 
-void StackWatermarkProcessOopClosure::do_root(zaddress_unsafe* p)
+ZStackWatermark::ZStackWatermark(Mutator& owner) : StackWatermark(owner) { Reset(); }
+void ZStackWatermark::Reset()
 {
-    function(p, color);
+    StackWatermark::Reset();
+    oldWatermarks[0] = { ZPointerStoreBadMask, 1 };
+    oldWatermarks[1] = {};
+    oldWatermarks[2] = {};
+    newest = 0;
+    allocStats = TLABStatistics{};
 }
-
-uintptr_t StackWatermark::save_old_watermark()
+uintptr_t ZStackWatermark::prev_head_color() const { return oldWatermarks[newest].color; }
+uintptr_t ZStackWatermark::prev_frame_color(const FrameInfo& frame) const
 {
-    // ZGC zStackWatermark.cpp:95-115: the previous color belongs to the
-    // watermark state, independently of the thread's installed barrier masks.
-    // With no return statepoint every traversal completes eagerly, so this
-    // completed watermark covers all previous frame colors.
-    return GetEpoch();
-}
-
-void StackWatermark::process_head(Mutator& mutator, void* context, const RootVisitor& visitor,
-                                  const RootVisitor& invisibleRootVisitor)
-{
-    (void)context;
-    mutator.VisitExceptionRoots(visitor);
-    mutator.VisitNativeFrameRoots(visitor);
-    // ZGC zStackWatermark.cpp:164-174: the invisible slot is processed once,
-    // below, with the saved head color. VisitRawObjects names that same slot.
-    (void)invisibleRootVisitor;
-    zaddress_unsafe* invisible = mutator.GetGCData().invisibleRoot;
-    if (invisible != nullptr) {
-        ZUncoloredRoot::process_invisible(invisible, uncolored_root_color());
-    }
-}
-
-bool StackWatermark::start_processing_impl(Mutator& mutator, void* context, uint64_t epoch, size_t totalFrames,
-                                           const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor)
-{
-    // zStackWatermark.cpp:95-99,177-181: read the previous color before the
-    // epoch is published. Assign it only if this thread wins the start.
-    const uintptr_t savedColor = save_old_watermark();
-    if (!TryBegin(epoch, totalFrames)) {
-        return false;
-    }
-    headColor = savedColor;
-    process_head(mutator, context, visitor, invisibleRootVisitor);
-    // ZGC zStackWatermark.cpp:187-192: install this thread's new phase
-    // masks after its old-color head, before retiring TLABs and buffers.
-    mutator.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
-    const bool youngMark = ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();
-    const bool oldMark = ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark();
-    if (youngMark || oldMark) {
-        ZThreadLocalAllocBuffer::retire(mutator, allocStats);
-    }
-    if (mutator.GetGCData().storeBarrierBuffer != nullptr) {
-        mutator.GetGCData().storeBarrierBuffer->on_new_phase();
-    }
-    return true;
-}
-
-void StackWatermark::process(const FrameInfo& frame, Mutator& mutator, void* context, const RootVisitor& visitor,
-                             const DerivedPtrVisitor* derivedPtrVisitor, RegSlotsMap& regSlotsMap)
-{
-    StackFrameCursor::ProcessFrame(frame, regSlotsMap, visitor, mutator, derivedPtrVisitor, false);
-    (void)context;
-}
-
-bool StackWatermarkSet::finish_processing(Mutator& mutator, const RootVisitor& visitor,
-                                          const RootVisitor& invisibleRootVisitor, uint64_t epoch,
-                                          const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames,
-                                          void* context)
-{
-    scannedFrames = 0;
-    mutator.MutatorLock();
-    if (mutator.stackWatermark.IsDone(epoch)) {
-        mutator.MutatorUnlock();
-        return true;
-    }
-    if (!mutator.IsManagedContext()) {
-        bool began = mutator.stackWatermark.start_processing_impl(mutator, context, epoch, 0, visitor,
-                                                                  invisibleRootVisitor);
-        if (began) {
-            mutator.stackWatermark.finish_processing();
+    for (int i = newest; i >= 0; --i) {
+        if (oldWatermarks[i].watermark == 0 || frame.mFrame.GetSP() <= oldWatermarks[i].watermark) {
+            return oldWatermarks[i].color;
         }
-        mutator.MutatorUnlock();
-        return began;
     }
-    mutator.IncObserver();
-    StackFrameCursor cursor(mutator.uwContext);
-    bool began = mutator.stackWatermark.start_processing_impl(mutator, context, epoch, cursor.FrameCount(), visitor,
-                                                              invisibleRootVisitor);
-    if (began) {
-        while (!cursor.Done()) {
-            const FrameInfo* frame = cursor.CurrentFrame();
-            if (frame != nullptr) {
-                mutator.stackWatermark.process(*frame, mutator, context, visitor, derivedPtrVisitor,
-                                               cursor.RegMap());
-            }
-            cursor.Advance();
-            mutator.stackWatermark.AdvanceTo(cursor.Cursor());
-        }
-        scannedFrames = cursor.Cursor();
-        mutator.stackWatermark.finish_processing();
-    }
-    mutator.DecObserver();
-    mutator.MutatorUnlock();
-    return began;
+    LOG(RTLOG_FATAL, "Found no matching previous color for the frame");
+    return 0;
 }
 
+void ZStackWatermark::save_old_watermark()
+{
+    const uintptr_t previousColor = GetEpoch();
+    if (previousColor == prev_head_color()) { return; }
+    const ZColorWatermark previous { previousColor, IsDone() ? 0 : last_processed_raw() };
+    int replace = -1;
+    for (int i = 0; i <= newest; ++i) {
+        if (previous.covers(oldWatermarks[i])) { replace = i; break; }
+    }
+    newest = replace == -1 ? newest + 1 : replace;
+    CHECK_DETAIL(newest < OldWatermarksMax, "Unexpected amount of old watermarks");
+    oldWatermarks[newest] = previous;
+}
+
+void ZStackWatermark::process_head(void* context)
+{
+    StackWatermarkProcessOopClosure closure(context, prev_head_color());
+    RootVisitor roots = [&](RootSlot& root) {
+        owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
+            closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
+        });
+    };
+    owner.VisitExceptionRoots(roots);
+    owner.VisitNativeFrameRoots(roots);
+    zaddress_unsafe* invisible = owner.GetGCData().invisibleRoot;
+    if (invisible != nullptr) { ZUncoloredRoot::process_invisible(invisible, prev_head_color()); }
+}
+
+void ZStackWatermark::start_processing_impl(void* context)
+{
+    save_old_watermark();
+    process_head(context);
+    owner.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
+    if ((ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark()) ||
+        (ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark())) {
+        ZThreadLocalAllocBuffer::retire(owner, allocStats);
+    }
+    if (owner.GetGCData().storeBarrierBuffer != nullptr) { owner.GetGCData().storeBarrierBuffer->on_new_phase(); }
+    StackWatermark::start_processing_impl(context);
+}
+
+void ZStackWatermark::process(const FrameInfo& frame, RegSlotsMap& registers, void* context)
+{
+    StackWatermarkProcessOopClosure closure(context, prev_frame_color(frame));
+    RootVisitor roots = [&](RootSlot& root) {
+        owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
+            closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
+        });
+    };
+    DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(roots);
+    StackFrameCursor::ProcessFrame(frame, registers, roots, owner, &derived, false);
+}
+
+void ZStackWatermark::OnStackGrow(intptr_t offset)
+{
+    std::lock_guard<std::mutex> guard(lock);
+    StackWatermark::OnStackGrow(offset);
+    for (int i = 0; i <= newest; ++i) {
+        if (oldWatermarks[i].watermark > 1) { oldWatermarks[i].watermark += offset; }
+    }
+}
+
+void StackWatermarkSet::on_safepoint(Mutator& mutator) { mutator.GetStackWatermark().on_safepoint(); }
+void StackWatermarkSet::start_processing(Mutator& mutator) { mutator.GetStackWatermark().start_processing(); }
+void StackWatermarkSet::finish_processing(Mutator& mutator, void* context)
+{
+    mutator.GetStackWatermark().finish_processing(context);
+}
+void StackWatermarkSet::before_unwind(Mutator& mutator)
+{
+    mutator.GetStackWatermark().before_unwind();
+    UpdatePollValues(ThreadLocal::GetThreadLocalData());
+}
+void StackWatermarkSet::after_unwind(Mutator& mutator)
+{
+    mutator.GetStackWatermark().after_unwind();
+    UpdatePollValues(ThreadLocal::GetThreadLocalData());
+}
+void StackWatermarkSet::on_iteration(Mutator& mutator, const FrameInfo& frame)
+{
+    mutator.GetStackWatermark().on_iteration(frame);
+}
+uintptr_t StackWatermarkSet::lowest_watermark(Mutator& mutator) { return mutator.GetStackWatermark().watermark(); }
 } // namespace MapleRuntime

@@ -18,28 +18,35 @@ namespace MapleRuntime {
 
 class Mutator;
 
-// Frame-scoped stack-root cursor (stackwm Step 1).
-// Pre-fills under a stable top UnwindContext (STW), then process_one / process_all
-// with the same per-frame dispatch + RegSlotsMap carry as GCStackInfo::VisitStackRoots.
-// Product path stays on the legacy full-stack visitor; this is the oracle substrate.
+// Persistent frame stream shared by eager drains and watermark iteration.
 class StackFrameCursor {
 public:
     explicit StackFrameCursor(const UnwindContext& topFrame);
 
-    size_t FrameCount() const { return frames.size(); }
     size_t Cursor() const { return index; }
-    bool Done() const { return index >= frames.size(); }
+    bool Done() const { return stream.IsDone(); }
     const FrameInfo* CurrentFrame() const
     {
-        return Done() ? nullptr : &frames[index];
+        return Done() ? nullptr : &stream.Current();
     }
     void Advance()
     {
         if (!Done()) {
+            stream.Next();
             ++index;
         }
     }
     RegSlotsMap& RegMap() { return regSlotsMap; }
+    void Rebase(intptr_t offset)
+    {
+        stream.Rebase(offset);
+        for (size_t i = 0; i < REGISTERS_COUNT; ++i) {
+            if (regSlotsMap.isRecorded[i] && regSlotsMap.addrMap[i] != nullptr) {
+                regSlotsMap.addrMap[i] = reinterpret_cast<SlotAddress>(
+                    reinterpret_cast<uintptr_t>(regSlotsMap.addrMap[i]) + offset);
+            }
+        }
+    }
 
     // Process exactly one frame (barrier-frame or stub bookkeeping), advance cursor.
     // Returns false when already done.
@@ -62,6 +69,14 @@ public:
     // ProcessOne drain that stopped at resumeIndex; then leaves index at resumeIndex.
     // Returns false if resumeIndex is out of range.
     // Shared per-frame dispatch used by the legacy full-stack loop and this cursor.
+    struct ReturnRegisterRoot {
+        ObjectRef* slot;
+        BaseObject* object;
+    };
+    // safepoint.cpp:818-824: return oops are named before the request is processed.
+    static void CollectReturnRegisterRoots(const FrameInfo& frame, std::vector<ReturnRegisterRoot>& roots);
+    static void ProcessReturnFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
+                                   RegSlotsMap& regSlotsMap, const FrameInfo& frame);
     static void ProcessManagedFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
                                     RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
     static void ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
@@ -69,7 +84,7 @@ public:
                              bool young = false);
 
 private:
-    std::vector<FrameInfo> frames;
+    StackFrameStream stream;
     RegSlotsMap regSlotsMap;
     size_t index = 0;
 };

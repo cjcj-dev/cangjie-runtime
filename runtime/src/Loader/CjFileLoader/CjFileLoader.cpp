@@ -824,6 +824,7 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
             if (mutator->IsManagedContext()) {
                 ElfUnloadQuiescence::ReadScope metadataReader;
                 GCStackInfo stackInfo(&mutator->GetUnwindContext());
+                stackInfo.SetProcessingOwner(mutator);
                 stackInfo.FillInStackTrace();
                 for (const FrameInfo& frame : stackInfo.GetStack()) {
                     Uptr startPC = reinterpret_cast<Uptr>(frame.GetFuncStartPC());

@@ -36,6 +36,7 @@ enum class FrameType {
     NATIVE = 7,
     STACKGROW = 8,
     EXSLUSIVE = 9,
+    RETURN_SAFEPOINT = 14,
 #ifdef INTERPRETER_ENABLED
     INTERPRETER = 10,
     INTERPRETER_C2I = 11,
@@ -122,6 +123,7 @@ public:
 
     MachineFrame(const MachineFrame& mFrame)
     {
+        this->sp = mFrame.sp;
         this->fa = mFrame.fa;
         this->ip = mFrame.ip;
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
@@ -132,6 +134,7 @@ public:
     MachineFrame& operator=(const MachineFrame& mFrame)
     {
         if (this != &mFrame) {
+            this->sp = mFrame.sp;
             this->fa = mFrame.fa;
             this->ip = mFrame.ip;
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
@@ -149,6 +152,9 @@ public:
         ptrAuthRAMod = nullptr;
 #endif
     }
+
+    inline uintptr_t GetSP() const { return sp; }
+    inline void SetSP(uintptr_t value) { sp = value; }
 
     inline const uint32_t* GetIP() const { return ip; }
 
@@ -190,6 +196,7 @@ public:
     bool IsStackGrowStubFrame() const;
 
     bool IsSafepointHandlerStubFrame() const;
+    bool IsReturnSafepointHandlerStubFrame() const;
 
     bool IsAnchorFrame(const uint32_t* anchorFA) const;
 
@@ -197,6 +204,7 @@ public:
     {
         fa = nullptr;
         ip = nullptr;
+        sp = 0;
     }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -217,6 +225,8 @@ public:
     friend class FrameInfo;
 
 protected:
+    uintptr_t sp = 0;
+
     // fa: frame address of this frame, for now this is frame pointer
     FrameAddress* fa;
 
@@ -281,6 +291,7 @@ public:
 
     // Get startProc and lsdaStart by parsing the ip.
     void ResolveProcInfo();
+    uintptr_t CallerSP() const;
 
     // print this frame symbol
     virtual void PrintFrameInfo(uint32_t frameIdx = 0) const;
@@ -319,6 +330,9 @@ public:
 #if defined(_WIN64)
         return startProc;
 #else
+        if (mFrame.fa == nullptr) {
+            return nullptr;
+        }
         return reinterpret_cast<const uint32_t*>(*(reinterpret_cast<ArchUInt*>(mFrame.fa) - 1) -
                                                  START_PC_OFFSET_IN_STACK);
 #endif

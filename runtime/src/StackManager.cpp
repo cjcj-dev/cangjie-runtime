@@ -147,6 +147,7 @@ void StackManager::PrintStackTraceForCpuProfile(UnwindContext* unContext, unsign
 void StackManager::RecordLiteFrameInfos(std::vector<uint64_t>& liteFrameInfos, size_t steps)
 {
     PrintStackInfo printStackInfo;
+    printStackInfo.SetProcessingOwner(Mutator::GetMutator());
     printStackInfo.FillInStackTrace();
     printStackInfo.ExtractLiteFrameInfoFromStack(liteFrameInfos, steps);
 }
@@ -167,6 +168,7 @@ void StackManager::VisitStackRoots(const UnwindContext& topFrame, const RootVisi
 {
     ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
     GCStackInfo gcStackInfo(&topFrame);
+    gcStackInfo.SetProcessingOwner(&mutator);
     gcStackInfo.FillInStackTrace();
     ElfUnloadQuiescence::AssertReaderActive();
     gcStackInfo.VisitStackRoots(func, mutator);
@@ -183,6 +185,7 @@ void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, con
 {
     ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
     GCStackInfo gcStackInfo(&topFrame);
+    gcStackInfo.SetProcessingOwner(&mutator);
     gcStackInfo.FillInStackTrace();
     ElfUnloadQuiescence::AssertReaderActive();
     gcStackInfo.VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, mutator, young);
@@ -195,6 +198,7 @@ void StackManager::VisitStackPtrMap(const UnwindContext& topFrame, const StackPt
     ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
     // Reuse gcStackInfo for stack unwind.
     StackGrowStackInfo stackInfo(&topFrame);
+    stackInfo.SetProcessingOwner(&mutator);
     stackInfo.FillInStackTrace();
     ElfUnloadQuiescence::AssertReaderActive();
     stackInfo.RecordStackPtrs(traceAndFixPtrVisitor, fixPtrVisitor, derivedPtrVisitor, mutator);
@@ -240,6 +244,7 @@ std::vector<FrameInfo> GetCurrentStack(StackMode mode)
         }
         case StackMode::PRINT: {
             PrintStackInfo printStackInfo;
+    printStackInfo.SetProcessingOwner(Mutator::GetMutator());
             printStackInfo.FillInStackTrace();
             return printStackInfo.GetStack();
         }

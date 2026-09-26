@@ -49,6 +49,8 @@ extern "C" uintptr_t MRT_GetTopManagedPC()
 
 void ExceptionWrapper::RestoreContext(CalleeSavedRegisterContext& context)
 {
+    Mutator& owner = *Mutator::GetMutator();
+    StackWatermarkSet::start_processing(owner);
 #ifdef GENERAL_ASAN_SUPPORT_INTERFACE
 #if defined(__x86_64__)
     auto oldRsp = context.rsp;
@@ -59,6 +61,13 @@ void ExceptionWrapper::RestoreContext(CalleeSavedRegisterContext& context)
 #endif
 #endif
     for (const auto& framePtr : ehFrameInfos) {
+        // sharedRuntime.cpp:573-636: make the exposed frame safe before its
+        // saved registers are restored and before the landing pad executes.
+        FrameInfo frame(framePtr->GetMachineFrame(), FrameType::MANAGED);
+        if (frame.mFrame.GetFA() != nullptr) {
+            frame.ResolveProcInfo();
+        }
+        StackWatermarkSet::on_iteration(owner, frame);
         DLOG(EXCEPTION, "RestoreContext: fa=%p, ip=%p, funcName=%s, isCatchException=%s",
             framePtr->GetFA(), framePtr->GetIP(), framePtr->GetFunctionName().GetStr(),
             framePtr->IsCatchException() ? "true" : "false");
@@ -94,6 +103,7 @@ void ExceptionWrapper::RestoreContext(CalleeSavedRegisterContext& context)
 void ExceptionHandling::BuildEHFrameInfo()
 {
     EHStackInfo ehStackInfo;
+    ehStackInfo.SetProcessingOwner(Mutator::GetMutator());
     ehStackInfo.FillInStackTrace();
     std::vector<FrameInfo>& stackInfo = ehStackInfo.GetStack();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
