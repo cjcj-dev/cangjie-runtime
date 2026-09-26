@@ -28,13 +28,17 @@ cp "$ROOT/runtime/build/resolve_runtime_output.sh" "$fixture/runtime/build/"
 printf '#!/usr/bin/env bash\n# test_x.cpp\necho CPP_SUITE >>"${GC_UNIT_GATE_TRACE:?}"\nmkdir -p "$(dirname "${GC_UNIT_TALLY_FILE:?}")"\necho "[========] 1 tests: 1 passed, 0 failed" >"$GC_UNIT_TALLY_FILE"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_standalone.sh"
 printf '#!/usr/bin/env bash\necho FINALIZER_TRIGGER >>"${GC_UNIT_GATE_TRACE:?}"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_finalizer_trigger.sh"
 printf '#!/usr/bin/env bash\necho PHASE_ENTRY_TRIGGER >>"${GC_UNIT_GATE_TRACE:?}"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_phase_entry_trigger.sh"
+printf '#!/usr/bin/env bash\necho SO_REENTRY_BOUNDED\nexit 0\n' \
+  >"$fixture/runtime/tests/gc_unit/run_so_reentry_bounded.sh"
 chmod +x "$fixture/runtime/tests/gc_unit/run_standalone.sh" \
   "$fixture/runtime/tests/gc_unit/run_finalizer_trigger.sh" \
-  "$fixture/runtime/tests/gc_unit/run_phase_entry_trigger.sh"
+  "$fixture/runtime/tests/gc_unit/run_phase_entry_trigger.sh" \
+  "$fixture/runtime/tests/gc_unit/run_so_reentry_bounded.sh"
 printf 'int main() {}\n' >"$fixture/runtime/tests/gc_unit/test_defect_regressions.cpp"
 printf 'placeholder\n' >"$fixture/runtime/tests/gc_unit/finalizer_trigger.cj"
 printf 'placeholder\n' >"$fixture/runtime/tests/gc_unit/phase_entry_trigger.cj"
 printf 'placeholder\n' >"$fixture/runtime/tests/gc_unit/phase_entry_major.cj"
+printf 'placeholder\n' >"$fixture/runtime/tests/gc_unit/so_reentry_probe.cpp"
 printf 'test_x.cpp\n' >"$fixture/runtime/tests/gc_unit/CMakeLists.txt"
 touch "$fixture/runtime/tests/gc_unit/known_failures.txt"
 printf 'placeholder\n' >"$fixture/lib/libcangjie-runtime.so"
@@ -335,6 +339,22 @@ for mode in all only; do
   [[ "$host_rc" -eq 2 ]]
   /usr/bin/grep -qx 'REASON=LANGUAGE_HOST_RUNTIME_MISSING' "$fixture/host-missing-$mode.status"
 done
+
+# The bounded stack-overflow recovery arm's two files are a precondition of the
+# gate, not an optional extra: a gate that silently skipped the arm because the
+# product entry it measures is absent would report a pass it never earned.
+mv "$fixture/runtime/tests/gc_unit/so_reentry_probe.cpp" "$fixture/so_reentry_probe.cpp"
+set +e
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+  GC_UNIT_GATE_LANGUAGE_TESTS=defer GC_UNIT_OUT="$fixture/so-reentry-missing-out" \
+  GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/so-reentry-missing.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/so-reentry-missing.log" 2>&1
+so_reentry_missing_rc=$?
+set -e
+echo "SO_REENTRY_MISSING_ASSERT rc=$so_reentry_missing_rc"
+[[ $so_reentry_missing_rc -eq 2 ]]
+/usr/bin/grep -q 'missing bounded stack-overflow recovery test' "$fixture/so-reentry-missing.log"
+mv "$fixture/so_reentry_probe.cpp" "$fixture/runtime/tests/gc_unit/so_reentry_probe.cpp"
 
 # A completed tally cannot override the process status, and even a successful
 # process must have executed a nonempty suite. Run the real gate with controlled

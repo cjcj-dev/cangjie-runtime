@@ -80,16 +80,19 @@ struct CJThreadStack {
                                         * equal to stackBaseAddr does not belong to the stack. */
     size_t stackSize;                  /* Specifies the stack size for creating a cjthread,
                                         * excluding the stack protection size. */
-    /* Whether stackGuard currently sits one reserved step below its birth value.
-     * HotSpot StackOverflow::_stack_guard_state (stackOverflow.hpp:41-45) records the
-     * guard state as a state, "stack_guard_yellow_reserved_disabled" being "disabled
-     * (temporarily) after stack overflow", and StackOverflow::reguard_stack
-     * (stackOverflow.cpp:220-223) returns early when the state is not one of the two
-     * disabled states. Applying a transition that already holds is therefore a no-op
-     * there, never a second step. This flag is that state: it makes the expand/recover
-     * pair a transition instead of an unconditional arithmetic step, so the re-entrant
-     * stack-overflow recovery cycle cannot walk the guard below the stack end. */
-    bool stackGuardExpanded;
+    /* Whether the reserved zone is currently unguarded, i.e. whether stackGuard sits one
+     * reserved step below its birth value. HotSpot records this as a guard state:
+     * StackOverflow::_stack_guard_state (stackOverflow.hpp:41-45) enumerates
+     * stack_guard_enabled, stack_guard_reserved_disabled and
+     * stack_guard_yellow_reserved_disabled, the last named "disabled (temporarily) after
+     * stack overflow". The two transitions are keyed on it — the disable side returns
+     * early when the zone is already disabled (stackOverflow.cpp:197-198) and the enable
+     * side returns early when it is already enabled (stackOverflow.cpp:220-223) — so a
+     * transition that already holds is a no-op there, never a second step, and the state
+     * is committed only after the unguard/guard call succeeded (:203-206, :150-155).
+     * This flag is that state: the expand/recover pair is a state transition rather than
+     * an unconditional arithmetic step, so the re-entrant stack-overflow recovery cycle
+     * cannot walk the guard below the end of the stack. */
     char *cjthreadStackBaseAddr;       /* Actual stack bottom of cjthread stack. It is equal
                                         * to stackAddr+stackAlign and is 16 bytes down. */
     unsigned int stackGrowCnt;         /* whether to enable cjthread stack scaling.
