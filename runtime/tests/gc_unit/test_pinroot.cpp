@@ -492,8 +492,11 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateStartFrameRoot, WritesToAddressBeforeConcurre
 extern "C" {
 struct CJThread;
 typedef uintptr_t* (*GrowTlsHook)();
+#ifndef ScheduleGetTlsHookRegister
 int CJ_ScheduleGetTlsHookRegister(GrowTlsHook func);
+#endif
 uintptr_t MRT_GetThreadLocalData();
+#ifndef CJThreadNew
 void* CJ_CJThreadNew(void* schedule, const void* attr, void* (*func)(void*, unsigned int), const void* arg,
     unsigned int argSize, int createSource, uintptr_t rootColor);
 void CJ_CJThreadAttrInit(struct CJThreadAttr* attr);
@@ -501,6 +504,7 @@ void CJ_CJThreadAttrStackSizeSet(struct CJThreadAttr* attr, unsigned int size);
 void* CJ_CJThreadStackAddrGetByCJThrd(struct CJThread* cjthread);
 void* CJ_CJThreadStackBaseAddrGetByCJThrd(struct CJThread* cjthread);
 size_t CJ_CJThreadStackSizeGetByCJThrd(struct CJThread* cjthread);
+#endif
 intptr_t MRT_StackGrow(intptr_t frameBase, uint32_t adjustedSize, void* ip);
 }
 
@@ -652,7 +656,11 @@ static void CheckGrowCopiesHealedFrameRoot()
     CJ_CJThreadAttrInit(&attr);
     CJ_CJThreadAttrStackSizeSet(&attr, 1024 * 1024);
     void* scheduler = runtime.GetConcurrencyModel().GetThreadScheduler();
+#ifdef CJThreadNew
+    void* created = CJThreadNew(scheduler, &attr, GrowCopyUnused, nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT, 0);
+#else
     void* created = CJ_CJThreadNew(scheduler, &attr, GrowCopyUnused, nullptr, 0, 0, 0);
+#endif
     GC_EXPECT_TRUE(created != nullptr);
     auto* thread = reinterpret_cast<struct CJThread*>(created);
     void* low = CJ_CJThreadStackAddrGetByCJThrd(thread);
