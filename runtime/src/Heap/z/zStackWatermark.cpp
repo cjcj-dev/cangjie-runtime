@@ -49,6 +49,21 @@ public:
             }
         }
     }
+    // continuationFreezeThaw.cpp:595-598 flushes every frame that the copy will
+    // publish. yield_processing (stackWatermark.cpp:225) would let a concurrent
+    // watermark write land between the healed slot and the bytes that are copied.
+    void process_all_no_yield(void* context)
+    {
+        while (has_next()) {
+            const FrameInfo frame = *cursor.CurrentFrame();
+            const bool barrier = has_barrier(frame);
+            owner.process(frame, cursor.RegMap(), context);
+            cursor.Advance();
+            if (barrier) {
+                set_watermark(frame.mFrame.GetSP());
+            }
+        }
+    }
     void rebase(intptr_t offset)
     {
         if (callerSP != 0) { callerSP += offset; }
@@ -99,6 +114,28 @@ void StackWatermark::OnStackGrow(intptr_t offset)
     if (iterator != nullptr) { iterator->rebase(offset); }
     const uintptr_t old = watermark();
     if (old != 0) { waterMark.store(old + offset, std::memory_order_release); }
+}
+
+void StackWatermark::BeginGrowFlush()
+{
+    lock.lock();
+    if (!processing_started()) {
+        start_processing_impl(nullptr);
+    }
+    if (!IsDone() && iterator != nullptr) {
+        iterator->process_all_no_yield(nullptr);
+        update_watermark();
+    }
+}
+
+void StackWatermark::EndGrowFlush()
+{
+    lock.unlock();
+}
+
+void StackWatermark::ShiftForGrow(intptr_t offset)
+{
+    OnStackGrow(offset);
 }
 
 uintptr_t StackWatermark::last_processed_raw() const
@@ -317,13 +354,18 @@ void ZStackWatermark::process(const FrameInfo& frame, RegSlotsMap& registers, vo
     StackFrameCursor::ProcessFrame(frame, registers, roots, owner, &derived, false);
 }
 
-void ZStackWatermark::OnStackGrow(intptr_t offset)
+void ZStackWatermark::ShiftForGrow(intptr_t offset)
 {
-    std::lock_guard<std::mutex> guard(lock);
     StackWatermark::OnStackGrow(offset);
     for (int i = 0; i <= newest; ++i) {
         if (oldWatermarks[i].watermark > 1) { oldWatermarks[i].watermark += offset; }
     }
+}
+
+void ZStackWatermark::OnStackGrow(intptr_t offset)
+{
+    std::lock_guard<std::mutex> guard(lock);
+    ShiftForGrow(offset);
 }
 
 void StackWatermarkSet::on_safepoint(Mutator& mutator) { mutator.GetStackWatermark().on_safepoint(); }

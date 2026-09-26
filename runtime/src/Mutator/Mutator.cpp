@@ -578,6 +578,23 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             }
             return 0;
         }
+        // continuationFreezeThaw.cpp:748 unwind_frames() before :787 copy_to_chunk.
+        // The lock stays held through the copy, the historical-colour shift and
+        // the poll publication (stackWatermark.cpp:184-196).
+        struct StackGrowRootFlush {
+            explicit StackGrowRootFlush(StackWatermark& owner) : owner(owner) { owner.BeginGrowFlush(); }
+            ~StackGrowRootFlush() { End(); }
+            void Shift(intptr_t offset) { owner.ShiftForGrow(offset); }
+            void End()
+            {
+                if (!ended) {
+                    owner.EndGrowFlush();
+                    ended = true;
+                }
+            }
+            StackWatermark& owner;
+            bool ended = false;
+        } flush(stackWatermark);
         intptr_t stackOffset;
         // When frameBase is 0, it is actively invoked in the FFI. In this case, the stack is expanded to the maximum.
         // When frameBase != 0, the stack check is invoked. In this case, the stack is expanded by two times by default.
@@ -656,6 +673,13 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>> derivedSlots;
         RecordStackPtrs(rootSlots, derivedSlots);
 
+        // Publish the shifted watermark before dropping its lock. VisitStackRoots
+        // takes MutatorLock and then the watermark lock, so this lock cannot be
+        // held across MutatorLock.
+        flush.Shift(stackOffset);
+        UpdatePollValues(ThreadLocal::GetThreadLocalData());
+        flush.End();
+
         // Serialize against VisitStackRoots / concurrent GC stack fill (stackwm #7 Q4):
         // absolute-FA caches must not be built against a half-moved stack.
         MutatorLock();
@@ -675,11 +699,7 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         }
 
         uwContext.anchorFA = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
-
-        // Cangjie movable stacks: relocate the persistent stream and all historical SP frontiers.
-        stackWatermark.OnStackGrow(stackOffset);
         MutatorUnlock();
-        UpdatePollValues(ThreadLocal::GetThreadLocalData());
 
         return stackOffset;
     }

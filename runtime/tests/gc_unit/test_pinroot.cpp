@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstring>
 #include <thread>
+#include <ucontext.h>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -485,6 +486,215 @@ static void CheckRelocateStartExitRemapsFrameRoot()
 GC_COMPONENT_OTHER_VM_TEST(RelocateStartFrameRoot, WritesToAddressBeforeConcurrentRelocate)
 {
     CheckRelocateStartExitRemapsFrameRoot();
+}
+
+#if defined(__x86_64__) && defined(__linux__)
+extern "C" {
+struct CJThread;
+typedef uintptr_t* (*GrowTlsHook)();
+int CJ_ScheduleGetTlsHookRegister(GrowTlsHook func);
+uintptr_t MRT_GetThreadLocalData();
+void* CJ_CJThreadNew(void* schedule, const void* attr, void* (*func)(void*, unsigned int), const void* arg,
+    unsigned int argSize, int createSource, uintptr_t rootColor);
+void CJ_CJThreadAttrInit(struct CJThreadAttr* attr);
+void CJ_CJThreadAttrStackSizeSet(struct CJThreadAttr* attr, unsigned int size);
+void* CJ_CJThreadStackAddrGetByCJThrd(struct CJThread* cjthread);
+void* CJ_CJThreadStackBaseAddrGetByCJThrd(struct CJThread* cjthread);
+size_t CJ_CJThreadStackSizeGetByCJThrd(struct CJThread* cjthread);
+intptr_t MRT_StackGrow(intptr_t frameBase, uint32_t adjustedSize, void* ip);
+}
+
+struct GrowCopyObserved {
+    intptr_t offset;
+    uintptr_t before;
+    uintptr_t oldAfter;
+    uintptr_t copied;
+    uintptr_t slot;
+    uintptr_t sp;
+    uintptr_t base;
+    uintptr_t watermark;
+    bool done;
+};
+
+static GrowCopyObserved g_growCopy;
+static Mutator* g_growMutator;
+static struct CJThread* g_growThread;
+static BaseObject* g_growObject;
+static ucontext_t g_growBack;
+
+static void* GrowCopyUnused(void*, unsigned int)
+{
+    return nullptr;
+}
+
+static void GrowCopyBody();
+extern "C" void GrowCopyEntry()
+{
+    GrowCopyBody();
+}
+
+static void GrowCopyBody()
+{
+    ThreadLocal::SetThreadType(ThreadType::CJ_PROCESSOR);
+    (void)CJ_ScheduleGetTlsHookRegister(reinterpret_cast<GrowTlsHook>(MRT_GetThreadLocalData));
+    ThreadLocal::SetCJThread(g_growThread);
+    ThreadLocal::SetMutator(g_growMutator);
+    g_growMutator->InitStackInfo(ThreadLocal::GetThreadLocalData());
+    g_growMutator->SetManagedContext(true);
+    InitializeFrameRootMap();
+    const uintptr_t startIP = reinterpret_cast<uintptr_t>(frameRootMapImage.pc);
+    uintptr_t younger[8] = {};
+    uintptr_t caller[8] = {};
+    younger[2] = reinterpret_cast<uintptr_t>(g_growObject);
+    younger[3] = startIP + 9;
+    younger[4] = reinterpret_cast<uintptr_t>(&caller[4]);
+    younger[5] = startIP + 16;
+    caller[3] = startIP + 9;
+    auto& context = g_growMutator->GetUnwindContext();
+    context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP));
+    context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&younger[4]));
+    context.frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(&younger[0]));
+    context.anchorFA = nullptr;
+    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    uintptr_t sp = 0;
+    asm volatile("mov %%rsp, %0" : "=r"(sp));
+    g_growCopy.sp = sp;
+    g_growCopy.base = g_growMutator->GetStackBaseAddr();
+    g_growCopy.slot = reinterpret_cast<uintptr_t>(&younger[2]);
+    g_growCopy.before = younger[2];
+    const intptr_t offset = MRT_StackGrow(0, 0, nullptr);
+    g_growCopy.offset = offset;
+    g_growCopy.oldAfter = younger[2];
+    if (offset != 0) {
+        g_growCopy.copied = *reinterpret_cast<uintptr_t*>(
+            static_cast<uintptr_t>(static_cast<intptr_t>(g_growCopy.slot) + offset));
+    }
+    g_growCopy.watermark = g_growMutator->GetStackWatermark().watermark();
+    g_growCopy.done = g_growMutator->GetStackWatermark().IsDone();
+}
+
+class GrowCopyRuntime final : public Runtime {
+public:
+    GrowCopyRuntime()
+    {
+        runtime = this;
+        mutatorManager = &manager;
+        concurrencyModel = &concurrency;
+        manager.Init();
+        concurrency.Init(ConcurrencyParam{1024, 1024, 1});
+    }
+    ~GrowCopyRuntime() override { runtime = nullptr; }
+    RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
+    void SetGCThreshold(uint64_t) override {}
+private:
+    MutatorManager manager;
+    Concurrency concurrency;
+};
+
+static void CheckGrowCopiesHealedFrameRoot()
+{
+    GrowCopyRuntime runtime;
+    CreateStandaloneHeap(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& heap = Heap::GetHeap();
+    auto& generation = heap.old();
+    GenerationSequenceFixture::Advance(generation);
+    if (heap.young().Workers() == nullptr) {
+        heap.young().InitializeWorkers(1);
+    }
+    heap.young().Workers()->set_active_workers(1);
+    if (generation.Workers() == nullptr) {
+        generation.InitializeWorkers(1);
+    }
+    generation.Workers()->set_active_workers(1);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(16);
+    type->SetAlign(8);
+    GCTib tib{};
+    tib.tag = SIGN_BIT;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZRelocationSetSelector selector(0.0);
+    ZPage* pages[2];
+    BaseObject* objects[2][2];
+    for (size_t i = 0; i < 2; ++i) {
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags);
+        GC_EXPECT_TRUE(pages[i] != nullptr);
+        for (size_t j = 0; j < 2; ++j) {
+            objects[i][j] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
+            objects[i][j]->SetClassInfo(type);
+            *reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(objects[i][j]) + 8) = 0x4980 + j;
+            GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], objects[i][j]));
+        }
+        ZPageTest::MakeRelocatable(*pages[i]);
+        selector.register_live_page(pages[i]);
+    }
+    selector.select();
+    generation.relocation_set().install(&selector);
+    ZRelocationSetIterator installed(&generation.relocation_set());
+    for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
+    ZForwarding* owner = forwarding_for_page(pages[0]);
+    GC_EXPECT_TRUE(owner != nullptr);
+    Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(parked != nullptr);
+    if (parked->GetGCData().storeGoodMask == 0) {
+        parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
+    }
+    ZGlobalsPointers::flip_old_relocate_start();
+    generation.set_phase(ZGenerationPhase::Relocate);
+    parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
+    CJThreadAttr attr{};
+    CJ_CJThreadAttrInit(&attr);
+    CJ_CJThreadAttrStackSizeSet(&attr, 1024 * 1024);
+    void* scheduler = runtime.GetConcurrencyModel().GetThreadScheduler();
+    void* created = CJ_CJThreadNew(scheduler, &attr, GrowCopyUnused, nullptr, 0, 0, 0);
+    GC_EXPECT_TRUE(created != nullptr);
+    auto* thread = reinterpret_cast<struct CJThread*>(created);
+    void* low = CJ_CJThreadStackAddrGetByCJThrd(thread);
+    void* high = CJ_CJThreadStackBaseAddrGetByCJThrd(thread);
+    const size_t stackBytes = CJ_CJThreadStackSizeGetByCJThrd(thread);
+    GC_EXPECT_TRUE(low != nullptr && high != nullptr && stackBytes > 64 * 1024);
+    g_growCopy = {};
+    g_growMutator = parked;
+    g_growThread = thread;
+    g_growObject = objects[0][0];
+    ucontext_t stackContext{};
+    GC_EXPECT_EQ(getcontext(&stackContext), 0);
+    stackContext.uc_stack.ss_sp = low;
+    stackContext.uc_stack.ss_size = reinterpret_cast<uintptr_t>(high) - reinterpret_cast<uintptr_t>(low);
+    stackContext.uc_link = &g_growBack;
+    makecontext(&stackContext, GrowCopyEntry, 0);
+    GC_EXPECT_EQ(swapcontext(&g_growBack, &stackContext), 0);
+    const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+    std::fprintf(stderr,
+        "GROW_COPY_ROOT_RESULT offset=%ld before=%#zx oldAfter=%#zx copied=%#zx relocated=%#zx "
+        "slot=%#zx sp=%#zx base=%#zx watermark=%#zx done=%d\n",
+        static_cast<long>(g_growCopy.offset), g_growCopy.before, g_growCopy.oldAfter, g_growCopy.copied,
+        static_cast<uintptr_t>(relocated), g_growCopy.slot, g_growCopy.sp, g_growCopy.base,
+        g_growCopy.watermark, g_growCopy.done ? 1 : 0);
+    GC_EXPECT_TRUE(g_growCopy.offset != 0);
+    GC_EXPECT_EQ(g_growCopy.before, reinterpret_cast<uintptr_t>(objects[0][0]));
+    GC_EXPECT_TRUE(g_growCopy.slot > g_growCopy.sp && g_growCopy.slot < g_growCopy.base);
+    GC_EXPECT_TRUE(relocated != 0 && relocated != reinterpret_cast<MAddress>(objects[0][0]));
+    GC_EXPECT_EQ(g_growCopy.copied, static_cast<uintptr_t>(relocated));
+    GC_EXPECT_EQ(g_growCopy.oldAfter, static_cast<uintptr_t>(relocated));
+    GC_EXPECT_TRUE(g_growCopy.done || g_growCopy.watermark == 0);
+    (void)parked->EnterSaferegion(false);
+    heap.young().pause_mark_start();
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+#else
+static void CheckGrowCopiesHealedFrameRoot() {}
+#endif
+
+GC_COMPONENT_OTHER_VM_TEST(StackGrowCopy, HealsFrameRootBeforeCopy)
+{
+    CheckGrowCopiesHealedFrameRoot();
 }
 
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)

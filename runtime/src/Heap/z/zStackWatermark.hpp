@@ -53,6 +53,12 @@ public:
     void ensure_safe(const FrameInfo& frame);
     bool is_frame_safe(const FrameInfo& frame) const;
     void process_one();
+    // continuationEntry.cpp:79-98 walks frames before continuationFreezeThaw.cpp:787
+    // copies. stackWatermark.cpp:225 yield_processing must not drop this lock
+    // between the heal and the copy.
+    void BeginGrowFlush();
+    void EndGrowFlush();
+    virtual void ShiftForGrow(intptr_t offset);
     virtual void Reset();
     virtual void OnStackGrow(intptr_t offset);
 
@@ -83,6 +89,7 @@ public:
     explicit ZStackWatermark(Mutator& owner);
     void Reset() override;
     void OnStackGrow(intptr_t offset) override;
+    void ShiftForGrow(intptr_t offset) override;
     TLABStatistics& stats() { return allocStats; }
     uintptr_t prev_head_color() const;
     uintptr_t prev_frame_color(const FrameInfo& frame) const;
