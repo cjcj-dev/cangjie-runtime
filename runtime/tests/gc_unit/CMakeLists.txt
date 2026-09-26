@@ -31,6 +31,7 @@ set(GC_UNIT_SOURCES
     test_zLiveMap.cpp
     test_region_age.cpp
     test_unwind_regressions.cpp
+    test_return_frame_slot_root.cpp
     test_stackmap_base_capture.cpp
     test_gctibzero.cpp
     test_field_iterator.cpp
