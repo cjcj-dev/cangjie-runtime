@@ -1969,9 +1969,9 @@ void CJThreadStackGuardRecover(void)
     if (!cjthread->stack.stackGuardExpanded) {
         return;
     }
-    char currentSp = 0;
-    // The address of a local is this frame's stack pointer, without a compiler-specific
-    // frame-address builtin.
+    // The address of a local is this frame's stack pointer, without a
+    // compiler-specific frame-address builtin.
+    char *currentSp = nullptr;
     currentSp = reinterpret_cast<char *>(&currentSp);
     if (currentSp >= cjthread->stack.stackGuard) {
         LOG(RTLOG_FATAL,

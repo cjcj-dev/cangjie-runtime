@@ -93,6 +93,7 @@ struct CJThreadStack {
      * This flag is that state: the expand/recover pair is a state transition rather than
      * an unconditional arithmetic step, so the re-entrant stack-overflow recovery cycle
      * cannot walk the guard below the end of the stack. */
+    bool stackGuardExpanded;
     char *cjthreadStackBaseAddr;       /* Actual stack bottom of cjthread stack. It is equal
                                         * to stackAddr+stackAlign and is 16 bytes down. */
     unsigned int stackGrowCnt;         /* whether to enable cjthread stack scaling.
