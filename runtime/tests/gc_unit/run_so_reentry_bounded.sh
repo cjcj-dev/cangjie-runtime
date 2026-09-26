@@ -37,9 +37,10 @@ declare -A TARGET=(
   [once]=SO_REENTRY_EXPAND_ONCE_OK
   [bounded]=SO_REENTRY_EXPAND_BOUNDED_OK
   [recover]=SO_REENTRY_EXPAND_RECOVER_OK
+  [reentry]=SO_REENTRY_EXPAND_REENTRY_OK
 )
 overall=0
-for case_name in once bounded recover; do
+for case_name in once bounded recover reentry; do
   log="$SIGNAL_TEST_OUTPUT/so_reentry_$case_name.log"
   set +e
   "$SIGNAL_TEST_OUTPUT/so-reentry-bounded" "$case_name" >"$log" 2>&1
@@ -63,4 +64,4 @@ done
 if [[ $overall -ne 0 ]]; then
   exit 1
 fi
-echo "SO_REENTRY_BOUNDED_OK cases=3 target_assertions=3"
+echo "SO_REENTRY_BOUNDED_OK cases=4 target_assertions=4"

@@ -167,6 +167,50 @@ int ExpandBounded()
     return ok ? 0 : 1;
 }
 
+// The re-entrant cycle itself, constructed rather than waited for.
+// ExceptionManager::StackOverflow (ExceptionManager.cpp:154) expands the guard on the way
+// in and the clearer that ends the throw recovers it; a re-entry that happens before any
+// clearer has run reaches the expand again with the expansion still applied. This case
+// performs that unpaired sequence kReentryTurns times over, which is the shape the
+// cangjie-runtime#1167 core shows ~1100 times before the wild dispatch, at a count above
+// the issue's N>=3000 so the verdict does not depend on how deep a real overflow went.
+constexpr int kReentryTurns = 4096;
+
+int ExpandReentry()
+{
+    void *before = CJ_CJThreadStackGuardGet();
+    void *stackEnd = CJ_CJThreadStackAddrGet();
+    uintptr_t reserved = CJ_CJThreadStackReversedGet();
+    if (!Preconditions(before, stackEnd, reserved)) {
+        Report("EXPAND_REENTRY", 0);
+        return 2;
+    }
+    void *afterFirst = nullptr;
+    for (int turn = 0; turn < kReentryTurns; ++turn) {
+        CJ_CJThreadStackGuardExpand();
+        if (turn == 0) {
+            afterFirst = CJ_CJThreadStackGuardGet();
+        }
+    }
+    void *afterAll = CJ_CJThreadStackGuardGet();
+    intptr_t walked = reinterpret_cast<intptr_t>(afterFirst) - reinterpret_cast<intptr_t>(afterAll);
+    std::fprintf(stderr, "SO_REENTRY_EXPAND_TURNS turns=%d guard_first=%p guard_last=%p walked=%zd\n",
+        kReentryTurns, afterFirst, afterAll, static_cast<ssize_t>(walked));
+    // Target: after N unpaired re-entry turns the guard is still the one the first turn
+    // installed, and it is still at or above the end of the allocated stack. Both halves
+    // matter: the first is the boundedness of the cycle, the second is that the
+    // threshold the product installs still names an address inside the mapping.
+    bool stable = afterAll == afterFirst;
+    bool inside = reinterpret_cast<uintptr_t>(afterAll) >= reinterpret_cast<uintptr_t>(stackEnd);
+    int ok = stable && inside ? 1 : 0;
+    std::fprintf(stderr,
+        "SO_REENTRY_EXPAND_REENTRY_OK turns=%d stable=%d above_stack_end=%d walked=%zd ok=%d\n",
+        kReentryTurns, stable ? 1 : 0, inside ? 1 : 0, static_cast<ssize_t>(walked), ok);
+    CJ_CJThreadStackGuardRecover();
+    Report("EXPAND_REENTRY", ok);
+    return ok ? 0 : 1;
+}
+
 int ExpandRecover()
 {
     void *before = CJ_CJThreadStackGuardGet();
@@ -198,7 +242,8 @@ int main(int argc, char **argv)
     }
     int caseId = std::strcmp(argv[1], "once") == 0 ? 1
         : std::strcmp(argv[1], "bounded") == 0 ? 2
-        : std::strcmp(argv[1], "recover") == 0 ? 3 : 0;
+        : std::strcmp(argv[1], "recover") == 0 ? 3
+        : std::strcmp(argv[1], "reentry") == 0 ? 4 : 0;
     if (caseId == 0) {
         std::fprintf(stderr, "SO_REENTRY_UNKNOWN_CASE name=%s\n", argv[1]);
         Finish(2);
@@ -218,6 +263,8 @@ int main(int argc, char **argv)
             Finish(ExpandBounded());
         case 3:
             Finish(ExpandRecover());
+        case 4:
+            Finish(ExpandReentry());
         default:
             Finish(2);
     }
