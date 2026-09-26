@@ -1265,6 +1265,77 @@ GC_OTHER_VM_TEST(LogicalMarkHandshake1145, RunningOwnerPublishesBothGenerations)
     CheckLogicalMarkHandshake(false, true);
 }
 
+namespace {
+class RetainedSyncHandshake1145 final : public HandshakeClosure {
+public:
+    RetainedSyncHandshake1145() : HandshakeClosure("RetainedSyncHandshake1145") {}
+    void do_thread(Mutator* thread) override
+    {
+        if (thread != target) { return; }
+        // The product invokes this closure while holding the queue lock.
+        // Inspect its existing accessor here; operation_pending would relock.
+        HandshakeOperation* op = thread->GetHandshakeState().get_op();
+        retained = op != nullptr && op->closure() == this && !op->is_completed();
+        executed = true;
+    }
+    Mutator* target = nullptr;
+    bool retained = false;
+    bool executed = false;
+};
+
+void CheckSynchronousHandshakeQueue(bool self, bool broadcast)
+{
+    B09RuntimeFixture runtime;
+    RetainedSyncHandshake1145 closure;
+    std::atomic<bool> ready{false}, release{false};
+    bool removed = false;
+    auto execute = [&] {
+        if (broadcast) { Handshake::execute(&closure); }
+        else { Handshake::execute(&closure, closure.target); }
+    };
+    std::thread owner([&] {
+        auto& manager = MutatorManager::Instance();
+        closure.target = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        if (self) {
+            execute();
+            removed = !closure.target->GetHandshakeState().has_operation();
+        } else {
+            ready.store(true, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        }
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    if (!self) {
+        while (!ready.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        execute();
+        removed = !closure.target->GetHandshakeState().has_operation();
+        release.store(true, std::memory_order_release);
+    }
+    owner.join();
+    std::fprintf(stderr,
+        "SYNC_HANDSHAKE_QUEUE_TARGET executed=%d self=%d broadcast=%d retained=%d removed=%d\n",
+        closure.executed, self, broadcast, closure.retained, removed);
+    GC_EXPECT_TRUE(closure.executed && closure.retained && removed);
+}
+}
+
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, SelfTargetRetainsOperationDuringClosure)
+{
+    CheckSynchronousHandshakeQueue(true, false);
+}
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, SelfBroadcastRetainsOperationDuringClosure)
+{
+    CheckSynchronousHandshakeQueue(true, true);
+}
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, SafeTargetRetainsOperationDuringClosure)
+{
+    CheckSynchronousHandshakeQueue(false, false);
+}
+GC_OTHER_VM_TEST(LogicalMarkHandshake1145, SafeBroadcastRetainsOperationDuringClosure)
+{
+    CheckSynchronousHandshakeQueue(false, true);
+}
+
 // #976: exported compiler ABI -> AccessBarrier store -> real TLS buffer.
 extern "C" void CJ_MCC_AtomicWriteReference(BaseObject*, BaseObject*, HeapSlot<true>*, MemoryOrder);
 extern "C" BaseObject* CJ_MCC_AtomicSwapReference(BaseObject*, BaseObject*, HeapSlot<true>*, MemoryOrder);

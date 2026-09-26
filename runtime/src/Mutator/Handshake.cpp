@@ -91,8 +91,8 @@ void HandshakeState::process_by_self()
         if (op->target() != nullptr && op->target() != handshakee_) {
             break;
         }
-        remove_op(op);
         op->do_handshake(handshakee_);
+        remove_op(op);
     }
     Mutator* mutator = handshakee_;
     if (mutator != nullptr && mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
@@ -144,8 +144,8 @@ bool HandshakeState::try_process()
         lock_.unlock();
         return false;
     }
-    remove_op(op);
     op->do_handshake(handshakee_);
+    remove_op(op);
     lock_.unlock();
     return true;
 }
