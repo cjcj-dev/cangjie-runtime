@@ -633,11 +633,9 @@ static bool RebalanceWork(MarkContext& context, MarkStripeSet& stripes, MarkTerm
     const size_t stripe = stripes.StripeForWorker(nworkers, workerId);
     if (context.StripeId() != stripe) {
         context.SetStripeId(stripe);
-        (void)context.Stacks().Flush(stripes, false);
-        terminate.Wake();
+        (void)context.Stacks().Flush(stripes, true);
     } else if (!terminate.Saturated()) {
-        (void)context.Stacks().Flush(stripes, false);
-        terminate.Wake();
+        (void)context.Stacks().Flush(stripes, true);
     }
     return domain != nullptr && domain->PollStop();
 }
@@ -671,10 +669,6 @@ ZMark::Result ZMark::FollowWork(MarkContext& context, MarkingSMR& smr, MarkStrip
         }
         if (StealLocalRound(context, stripes) ||
             StealGlobalRound(context, smr, stripes, workerId, stealSuccess, stealFailure)) {
-            continue;
-        }
-        if (context.Stacks().Flush(stripes, false)) {
-            terminate.Wake();
             continue;
         }
         if (partial) {
