@@ -24,6 +24,7 @@ void EHStackInfo::FillInStackTrace()
 
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
         AnalyseAndSetFrameType(uwContext);
+        ProcessOnIteration(uwContext.frameInfo);
         if (n2cCount == 1) {
             return;
         }
@@ -41,6 +42,7 @@ void EHStackInfo::FillInStackTrace()
 #endif
             return;
         }
+        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 }

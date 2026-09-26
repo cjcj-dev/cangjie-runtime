@@ -1356,11 +1356,8 @@ EXPORTS
     _ZN12MapleRuntime14STACK_ADDR_MAXE @1606 DATA
     _ZN12MapleRuntime14StackWatermark11OnStackGrowEx @1607
     _ZN12MapleRuntime14StackWatermark16FinishIncompleteENS0_5OwnerE @1609
-    _ZN12MapleRuntime14StackWatermark6FinishENS0_5OwnerE @1610
     _ZN12MapleRuntime14StackWatermark6OnExitEv @1611
     _ZN12MapleRuntime14StackWatermark8OnCreateEv @1612
-    _ZN12MapleRuntime14StackWatermark8TryBeginEyNS0_5OwnerEy @1613
-    _ZN12MapleRuntime14StackWatermark9AdvanceToEyNS0_5OwnerE @1614
     _ZN12MapleRuntime15DerivedPtrTableD0Ev @1615
     _ZN12MapleRuntime15EmitPhaseRecordEPKcy @1616
     _ZN12MapleRuntime15ExportRootTable12VisitGCRootsERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEE @1617
@@ -1474,8 +1471,6 @@ EXPORTS
     _ZN12MapleRuntime16StackFrameCursor10ProcessAllERKNSt3__18functionIFvRNS_8RootSlotEEEERNS_7MutatorE @1736
     _ZN12MapleRuntime16StackFrameCursor10ProcessOneERKNSt3__18functionIFvRNS_8RootSlotEEEERNS_7MutatorE @1737
     _ZN12MapleRuntime16StackFrameCursor12ProcessFrameERKNS_9FrameInfoERNS_11RegSlotsMapERKNSt3__18functionIFvRNS_8RootSlotEEEERNS_7MutatorE @1738
-    _ZN12MapleRuntime16StackFrameCursor20SkipNextManagedFrameEv @1739
-    _ZN12MapleRuntime16StackFrameCursor8ResumeAtEyRNS_7MutatorE @1740
     _ZN12MapleRuntime16StackFrameCursorC1ERKNS_13UnwindContextE @1741
     _ZN12MapleRuntime16StackFrameCursorC2ERKNS_13UnwindContextE @1742
 

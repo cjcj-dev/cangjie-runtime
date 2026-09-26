@@ -36,6 +36,7 @@ void StackGrowStackInfo::FillInStackTrace()
     while (reinterpret_cast<uintptr_t>(uwContext.frameInfo.mFrame.GetFA()) != 0) {
 #endif
         AnalyseAndSetFrameType(uwContext);
+        ProcessOnIteration(uwContext.frameInfo);
         stack.emplace_back(uwContext.frameInfo);
         UnwindContext caller;
         lastFrameType = uwContext.frameInfo.GetFrameType();
@@ -46,6 +47,7 @@ void StackGrowStackInfo::FillInStackTrace()
 #endif
             return;
         }
+        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 }

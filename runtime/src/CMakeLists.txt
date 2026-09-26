@@ -112,6 +112,7 @@ elseif ((CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64") AND (WINDOWS_FLAG MATCHES 0) A
         "arch/x86_64_linux/StackGrowStub.S"
         "arch/x86_64_linux/I2NStub.S"
         "arch/x86_64_linux/HandleSafepointStub.S"
+        "arch/x86_64_linux/HandleReturnSafepointStub.S"
         "os/Linux/Loader.cpp"
         "os/Linux/Path.cpp"
     )
@@ -183,6 +184,7 @@ elseif ((CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64") AND (WINDOWS_FLAG MATCHES 0))
         "arch/aarch64_linux/CalleeSavedStub.S"
         "arch/aarch64_linux/StackGrowStub.S"
         "arch/aarch64_linux/HandleSafepointStub.S"
+        "arch/aarch64_linux/HandleReturnSafepointStub.S"
         "os/Linux/Loader.cpp"
         "os/Linux/Path.cpp"
     )

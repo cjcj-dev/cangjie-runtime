@@ -39,6 +39,7 @@ extern "C" MRT_EXPORT bool MRT_CheckRuntimeFinished();
 class BaseObject;
 class Mutator {
     friend class StackWatermark;
+    friend class ZStackWatermark;
     friend class StackWatermarkSet;
 public:
     // flag which indicates the reason why mutator should suspend. flag is set by some external thread.
@@ -174,7 +175,10 @@ public:
         if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
             HandleSuspensionRequest();
         }
+        // javaThread.cpp:1112 then stackWatermark.inline.hpp:86. Start processing
+        // first; before_unwind only exposes a frame when one is still open.
         StackWatermarkSet::on_safepoint(*this);
+        StackWatermarkSet::before_unwind(*this);
     }
 
     // If current mutator is not in saferegion, enter and return true
@@ -351,7 +355,7 @@ public:
     {
         ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
         if (tls != nullptr && tls->mutator == this) {
-            return &tls->safepointState;
+            return &tls->pollingWord;
         }
         return nullptr;
     }
@@ -550,11 +554,11 @@ private:
 
 
     AllocBuffer allocBuffer; // HotSpot Thread::_tlab, thread.hpp:258.
-    StackWatermark stackWatermark;
+    ZStackWatermark stackWatermark { *this };
 
 public:
-    StackWatermark& GetStackWatermark() { return stackWatermark; }
-    const StackWatermark& GetStackWatermark() const { return stackWatermark; }
+    ZStackWatermark& GetStackWatermark() { return stackWatermark; }
+    const ZStackWatermark& GetStackWatermark() const { return stackWatermark; }
     friend class StackWatermarkSet;
 
 #ifdef INTERPRETER_ENABLED

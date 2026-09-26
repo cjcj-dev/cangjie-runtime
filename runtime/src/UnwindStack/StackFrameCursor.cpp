@@ -6,48 +6,15 @@
 
 #include "UnwindStack/StackFrameCursor.h"
 
+#include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
 
-namespace {
-// Local fill that mirrors GCStackInfo::FillInStackTrace without depending on GCStackInfo layout.
-class CursorFillStackInfo : public StackInfo {
-public:
-    explicit CursorFillStackInfo(const UnwindContext* context) : StackInfo(context) {}
-    void FillInStackTrace() override
-    {
-        ElfUnloadQuiescence::ReadScope metadataReader;
-        UnwindContext uwContext;
-        CheckTopUnwindContextAndInit(uwContext);
-        while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
-            AnalyseAndSetFrameType(uwContext);
-            stack.emplace_back(uwContext.frameInfo);
-            UnwindContext caller;
-            lastFrameType = uwContext.frameInfo.GetFrameType();
-#ifndef _WIN64
-            if (uwContext.UnwindToCallerContext(caller) == false) {
-#else
-            if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
-#endif
-                LOG(RTLOG_ERROR,
-                    "StackFrameCursor unwind truncated at frames=%zu ip=%p fa=%p",
-                    stack.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
-                return;
-            }
-            uwContext = caller;
-        }
-    }
-    using StackInfo::stack;
-};
-} // namespace
-
-StackFrameCursor::StackFrameCursor(const UnwindContext& topFrame)
+StackFrameCursor::StackFrameCursor(const UnwindContext& topFrame) : stream(&topFrame)
 {
-    CursorFillStackInfo filler(&topFrame);
-    filler.FillInStackTrace();
-    frames = std::move(filler.stack);
+    stream.Start();
 }
 
 void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
@@ -62,6 +29,9 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
         }
         case FrameType::STACKGROW:
             LOG(RTLOG_FATAL, "STACKGROW frame is not supported in Process");
+            break;
+        case FrameType::RETURN_SAFEPOINT:
+            ProcessReturnFrame(visitor, derivedPtrVisitor, regSlotsMap, frame);
             break;
         case FrameType::SAFEPOINT:
             RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
@@ -86,6 +56,9 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
             StackFrameCursor::ProcessManagedFrame(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
             break;
         }
+        case FrameType::RETURN_SAFEPOINT:
+            ProcessReturnFrame(visitor, derivedPtrVisitor, regSlotsMap, frame);
+            break;
         case FrameType::SAFEPOINT:
         case FrameType::STACKGROW:
             RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
@@ -105,6 +78,77 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 #endif
 }
 
+void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::vector<ReturnRegisterRoot>& roots)
+{
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+    RegSlotsMap regSlotsMap;
+    RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+#if defined(__x86_64__)
+    constexpr RegisterNum startRegister = R10;
+    constexpr RegisterNum siteRegister = R11;
+#else
+    constexpr RegisterNum startRegister = X17;
+    constexpr RegisterNum siteRegister = X16;
+#endif
+    if (regSlotsMap.addrMap[startRegister] == nullptr || regSlotsMap.addrMap[siteRegister] == nullptr) {
+        return;
+    }
+    const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[startRegister]);
+    const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[siteRegister]);
+    if (startPC == 0 || sitePC == 0) {
+        return;
+    }
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    StackMapBuilder builder(startPC, sitePC, 0);
+    HeapReferenceMap map = builder.Build<HeapReferenceMap>();
+    if (!map.IsValid()) {
+        return;
+    }
+    RootVisitor capture = [&roots](RootSlot& slot) {
+        BaseObject* object = to_object(safe(slot.LoadPlain()));
+        if (object != nullptr) {
+            roots.push_back(ReturnRegisterRoot { &slot, object });
+        }
+    };
+    RegSlotsMap returned = regSlotsMap;
+    (void)map.VisitRegRoots(capture, nullptr, returned);
+#else
+    (void)frame;
+    (void)roots;
+#endif
+}
+
+void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
+                                         RegSlotsMap& regSlotsMap, const FrameInfo& frame)
+{
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+#if defined(__x86_64__)
+    constexpr RegisterNum startRegister = R10;
+    constexpr RegisterNum siteRegister = R11;
+#else
+    constexpr RegisterNum startRegister = X17;
+    constexpr RegisterNum siteRegister = X16;
+#endif
+    const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[startRegister]);
+    const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[siteRegister]);
+    StackMapBuilder builder(startPC, sitePC, 0);
+    HeapReferenceMap roots = builder.Build<HeapReferenceMap>();
+    // The returned frame is gone. Only the dedicated register map is legal;
+    // neither spill slots nor its prologue's saved-register map may be used.
+    if (roots.IsValid()) {
+        RegSlotsMap returnedRegisters = regSlotsMap;
+        DerivedPtrVisitor derived = derivedPtrVisitor != nullptr ? *derivedPtrVisitor :
+            Mutator::MakeDerivedRootVisitor(visitor);
+        roots.VisitDerivedPtr(derived, nullptr, returnedRegisters);
+        roots.VisitRegRoots(visitor, nullptr, returnedRegisters);
+    }
+#else
+    (void)visitor; (void)derivedPtrVisitor; (void)regSlotsMap; (void)frame;
+#endif
+}
+
 bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
                                   const DerivedPtrVisitor* derivedPtrVisitor, bool young)
 {
@@ -112,8 +156,8 @@ bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
         return false;
     }
 
-    ProcessFrame(frames[index], regSlotsMap, visitor, mutator, derivedPtrVisitor, young);
-    ++index;
+    ProcessFrame(*CurrentFrame(), regSlotsMap, visitor, mutator, derivedPtrVisitor, young);
+    Advance();
     return true;
 }
 

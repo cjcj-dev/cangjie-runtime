@@ -1003,6 +1003,7 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* array
     state = state == 4 ? 2 : state;
 
     RecordStackInfo record(&(mutator->GetUnwindContext()), threadId, threadName, state);
+    record.SetProcessingOwner(mutator);
     record.FillInStackTrace();
     mutator->LeaveSaferegion();
 

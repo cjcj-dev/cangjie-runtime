@@ -18,7 +18,13 @@
 
 namespace MapleRuntime {
 RwLock ThreadLocal::tlEnableLock;
-MRT_EXPORT thread_local uint64_t threadLocalData[sizeof(ThreadLocalData) / sizeof(uint64_t)];
+MRT_EXPORT thread_local uint64_t threadLocalData[sizeof(ThreadLocalData) / sizeof(uint64_t)] = {
+#if UINTPTR_MAX == UINT64_MAX
+    0, 0, 0, 0, 0, 0, ThreadLocalData::DisarmedPollWord
+#else
+    0, 0, 0, ThreadLocalData::DisarmedPollWord
+#endif
+};
 thread_local CleanThreadLocalData cleaner;
 
 void ThreadLocalData::SetMutator(Mutator* newMutator)
@@ -153,7 +159,7 @@ extern "C" void MCC_CheckThreadLocalDataOffset()
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
     static_assert(offsetof(ThreadLocalData, protectAddr) == sizeof(void*) * 5,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
-    static_assert(offsetof(ThreadLocalData, safepointState) == sizeof(void*) * 6,
+    static_assert(offsetof(ThreadLocalData, pollingWord) == sizeof(void*) * 6,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
 #if defined(__arm__)
     static_assert(offsetof(ThreadLocalData, tid) == sizeof(void*) * 6 + sizeof(uint64_t),

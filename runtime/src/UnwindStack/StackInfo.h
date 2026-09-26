@@ -21,73 +21,64 @@ constexpr int INTERPRETED_FRAME_FDESC = 0;
 #endif
 
 class Mutator;
-class StackInfo {
+// Shared frame stream and classifier. The watermark retains only the current
+// unwind context; diagnostic consumers may still collect a vector of frames.
+// HotSpot stackFrameStream.hpp and stackWatermark.cpp:44-63.
+class StackFrameStream {
 public:
-    explicit StackInfo(const UnwindContext* context = nullptr)
+    explicit StackFrameStream(const UnwindContext* context = nullptr)
         : n2cCount(0), lastFrameType(FrameType::UNKNOWN), topContext(context), isReliableN2CStub(false)
     {
-        if (context == nullptr) {
-            anchorFA = GetAnchorFAFromMutatorContext();
-        } else {
-            anchorFA = context->anchorFA;
-        }
-        constexpr int presetStackLength = 32;
-        stack.reserve(presetStackLength);
+        anchorFA = context == nullptr ? GetAnchorFAFromMutatorContext() : context->anchorFA;
     }
-
-    virtual ~StackInfo()
-    {
-        topContext = nullptr;
-        anchorFA = nullptr;
-    }
-
-    // Check whether topContext is empty, if it is empty, initialize it.
-    void CheckTopUnwindContextAndInit(UnwindContext& uwContext);
-
-    bool IsN2CContext(const UnwindContext& uwContext) const;
-
-    // Confirm a frameType of context.
-    void AnalyseAndSetFrameType(UnwindContext& uwContext);
-
-    std::vector<FrameInfo>& GetStack() { return stack; }
-
-    // Function PC and startpc form one pair in liteFrameInfos
-    // pc1 func1start pc2 func2start pc3 func3start ...
-    void ExtractLiteFrameInfoFromStack(std::vector<uint64_t>& liteFrameInfos,
-                                       size_t steps = STACK_UNWIND_STEP_MAX) const;
-
-    static void GetStackTraceByLiteFrameInfos(const std::vector<uint64_t>& liteFrameInfos,
-                                              std::vector<StackTraceElement>& stackTrace);
-    static void GetStackTraceByLiteFrameInfo(const uint64_t ip, const uint64_t pc, const uint64_t fa,
-                                             StackTraceElement& ste);
-    virtual void FillInStackTrace() = 0;
-
-    static const int NEED_FILTED_FLAG;
+    void CheckTopUnwindContextAndInit(UnwindContext& context);
+    bool IsN2CContext(const UnwindContext& context) const;
+    void AnalyseAndSetFrameType(UnwindContext& context);
+    void Start();
+    void Next();
+    void Rebase(intptr_t offset);
+    bool IsDone() const { return done; }
+    const FrameInfo& Current() const { return current.frameInfo; }
 
 protected:
-    // frame info stack vector
-    std::vector<FrameInfo> stack;
-
-    // native to cj counts
     uint32_t n2cCount;
-
-    // Bottom fa mark
     uint32_t* anchorFA = nullptr;
-
-    // callee frame type
     FrameType lastFrameType;
 #ifdef _WIN64
-    // Import UnwindContextStatus of Unwinding, it is different from status in the uwContext.
     UnwindContextStatus uwCtxStatus;
 #endif
 
 private:
     uint32_t* GetAnchorFAFromMutatorContext() const;
-    // The top context can be passed in. If it is empty, it means to
-    // unwind stack from the current state
     const UnwindContext* topContext;
-    // n2cstub status
     bool isReliableN2CStub;
+    UnwindContext current;
+    bool done = true;
+};
+
+class StackInfo : public StackFrameStream {
+public:
+    explicit StackInfo(const UnwindContext* context = nullptr) : StackFrameStream(context)
+    {
+        constexpr int presetStackLength = 32;
+        stack.reserve(presetStackLength);
+    }
+    virtual ~StackInfo() = default;
+    void SetProcessingOwner(Mutator* owner) { processingOwner = owner; }
+    std::vector<FrameInfo>& GetStack() { return stack; }
+    void ExtractLiteFrameInfoFromStack(std::vector<uint64_t>& liteFrameInfos,
+                                      size_t steps = STACK_UNWIND_STEP_MAX) const;
+    static void GetStackTraceByLiteFrameInfos(const std::vector<uint64_t>& liteFrameInfos,
+                                            std::vector<StackTraceElement>& stackTrace);
+    static void GetStackTraceByLiteFrameInfo(uint64_t ip, uint64_t pc, uint64_t fa,
+                                           StackTraceElement& ste);
+    virtual void FillInStackTrace() = 0;
+    static const int NEED_FILTED_FLAG;
+
+protected:
+    void ProcessOnIteration(const FrameInfo& frame);
+    Mutator* processingOwner = nullptr;
+    std::vector<FrameInfo> stack;
 };
 
 // Get current context frame info and fill to FrameInfo struct object.

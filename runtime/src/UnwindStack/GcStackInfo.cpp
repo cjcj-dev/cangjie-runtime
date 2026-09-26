@@ -61,6 +61,9 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
             case FrameType::STACKGROW:
                 LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitHeapReferencesOnStack");
                 break;
+            case FrameType::RETURN_SAFEPOINT:
+                StackFrameCursor::ProcessReturnFrame(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame);
+                break;
             case FrameType::SAFEPOINT:
 
                 RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
@@ -86,6 +89,9 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
             }
             case FrameType::STACKGROW:
                 LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitStackRoots");
+                break;
+            case FrameType::RETURN_SAFEPOINT:
+                StackFrameCursor::ProcessReturnFrame(func, nullptr, regSlotsMap, ref);
                 break;
             case FrameType::SAFEPOINT:
                 RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
@@ -172,6 +178,9 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
                 RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
+            case FrameType::RETURN_SAFEPOINT:
+                StackFrameCursor::ProcessReturnFrame(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame);
+                break;
             case FrameType::SAFEPOINT:
             case FrameType::STACKGROW:
 
@@ -219,6 +228,9 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
                 StackFrameCursor::ProcessManagedFrame(func, nullptr, regSlotsMap, ref, mutator);
                 break;
             }
+            case FrameType::RETURN_SAFEPOINT:
+                StackFrameCursor::ProcessReturnFrame(func, nullptr, regSlotsMap, ref);
+                break;
             case FrameType::SAFEPOINT:
             case FrameType::STACKGROW:
                 RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
@@ -245,6 +257,7 @@ void GCStackInfo::FillInStackTrace()
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
         AnalyseAndSetFrameType(uwContext);
+        ProcessOnIteration(uwContext.frameInfo);
         stack.emplace_back(uwContext.frameInfo);
         UnwindContext caller;
         lastFrameType = uwContext.frameInfo.GetFrameType();
@@ -259,6 +272,7 @@ void GCStackInfo::FillInStackTrace()
                 stack.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
+        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 }
@@ -271,6 +285,7 @@ void RecordStackInfo::FillInStackTrace()
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
         AnalyseAndSetFrameType(uwContext);
+        ProcessOnIteration(uwContext.frameInfo);
         FrameInfo* f = new FrameInfo(uwContext.frameInfo);
         stacks.emplace_back(f);
         UnwindContext caller;
@@ -285,6 +300,7 @@ void RecordStackInfo::FillInStackTrace()
                 stacks.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
+        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 }
@@ -297,6 +313,7 @@ void CJThreadStackInfo::FillInStackTrace()
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
         AnalyseAndSetFrameType(uwContext);
+        ProcessOnIteration(uwContext.frameInfo);
         stack.emplace_back(uwContext.frameInfo);
         UnwindContext caller;
         lastFrameType = uwContext.frameInfo.GetFrameType();
@@ -310,6 +327,7 @@ void CJThreadStackInfo::FillInStackTrace()
                 stack.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
+        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
     filledStackSize = stack.size();
@@ -406,6 +424,7 @@ int InitCJThreadStackInfoFromCurrFunc(uint32_t maxStrSize,
     unwindCxt.frameInfo = frameInfo;
 #endif
     CJThreadStackInfo stackInfo(&unwindCxt, maxStrSize);
+    stackInfo.SetProcessingOwner(Mutator::GetMutator());
     stackInfo.FillInStackTrace();
     stackInfo.GetInfoFromStackTrace(framePcArr, funcNameArr, fileNameArr, lineNumberArr);
     int realStackSize = stackInfo.GetRealStackSize();
@@ -424,6 +443,7 @@ extern "C" MRT_EXPORT int CJ_MCC_InitCJthreadStackInfo(uint32_t maxStrSize, void
     } else {
         UnwindContext unwindCxt = mutator->GetUnwindContext();
         CJThreadStackInfo stackInfo(&unwindCxt, maxStrSize);
+        stackInfo.SetProcessingOwner(mutator);
         stackInfo.FillInStackTrace();
         stackInfo.GetInfoFromStackTrace(framePcArr, funcNameArr, fileNameArr, lineNumberArr);
         realStackSize = stackInfo.GetRealStackSize();

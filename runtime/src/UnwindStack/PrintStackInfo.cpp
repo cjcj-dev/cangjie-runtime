@@ -18,6 +18,7 @@ void PrintStackInfo::FillInStackTrace()
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
         AnalyseAndSetFrameType(uwContext);
+        ProcessOnIteration(uwContext.frameInfo);
 
         FrameType currentFrameType = uwContext.frameInfo.GetFrameType();
         if (currentFrameType == FrameType::MANAGED) {
@@ -38,6 +39,7 @@ void PrintStackInfo::FillInStackTrace()
 #endif
             return;
         }
+        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 }
@@ -61,6 +63,7 @@ CString PrintStackInfo::GetStackTraceString()
     CheckTopUnwindContextAndInit(uwContext);
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
         AnalyseAndSetFrameType(uwContext);
+        ProcessOnIteration(uwContext.frameInfo);
         stack.emplace_back(uwContext.frameInfo);
 
         UnwindContext caller;
@@ -68,6 +71,7 @@ CString PrintStackInfo::GetStackTraceString()
         if (uwContext.UnwindToCallerContext(caller) == false) {
             break;
         }
+        caller.frameInfo.mFrame.SetSP(uwContext.frameInfo.CallerSP());
         uwContext = caller;
     }
 

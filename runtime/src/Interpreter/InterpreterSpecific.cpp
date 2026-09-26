@@ -333,7 +333,7 @@ int IsPendingSafePoint(DYN_ThreadLocalData tlData)
         return 0;
     }
     ThreadLocalData* threadLocalData = reinterpret_cast<ThreadLocalData*>(tlData);
-    return threadLocalData->safepointState != 0 ? 1 : 0;
+    return threadLocalData->IsPollArmed() ? 1 : 0;
 }
 
 void ThrowException(DYN_ObjRef exception)
