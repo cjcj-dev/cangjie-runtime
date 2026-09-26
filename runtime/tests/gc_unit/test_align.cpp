@@ -53,10 +53,10 @@ GC_TEST(Align, pointer_delegates_to_integer_alignment)
 {
     alignas(64) unsigned char bytes[128] = {};
     volatile unsigned alignment = 64;
-    GC_EXPECT_EQ(AlignUp(bytes + 1, alignment), bytes + 64);
-    GC_EXPECT_EQ(AlignUp(bytes, alignment), bytes);
+    GC_EXPECT_TRUE(AlignUp(bytes + 1, alignment) == bytes + 64);
+    GC_EXPECT_TRUE(AlignUp(bytes, alignment) == bytes);
     const unsigned char* ptr = bytes + 1;
-    GC_EXPECT_EQ(AlignUp(ptr, alignment), bytes + 64);
+    GC_EXPECT_TRUE(AlignUp(ptr, alignment) == bytes + 64);
 }
 
 GC_TEST(Align, overflow_precondition)
