@@ -38,7 +38,7 @@ add_subdirectory("${RUNTIME_SOURCE}/src/Heap" heap)
 get_directory_property(shared DIRECTORY "${RUNTIME_SOURCE}/src" INCLUDE_DIRECTORIES)
 get_target_property(headers Heap INCLUDE_DIRECTORIES)
 get_target_property(sources Heap SOURCES)
-get_target_property(definitions Heap COMPILE_DEFINITIONS)
+get_directory_property(definitions DIRECTORY "${RUNTIME_SOURCE}/src/Heap" COMPILE_DEFINITIONS)
 file(WRITE "${CMAKE_BINARY_DIR}/selection.txt" "${shared}\\n${headers}\\n${sources}\\n${definitions}\\n")
 ''')
     command = ['cmake', '-S', str(root), '-B', str(root / 'build'),
