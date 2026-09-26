@@ -17,8 +17,8 @@ class Rewrite final : public HandshakeClosure {
 public:
  BaseObject *from, *to; bool seen=false;
  Rewrite(BaseObject* a, BaseObject* b):HandshakeClosure("return-pair"),from(a),to(b){}
- void do_thread(ThreadLocalData* tls) override {
-  tls->mutator->VisitMutatorRoots([&](RootSlot& slot) {
+ void do_thread(Mutator* thread) override {
+  thread->VisitMutatorRoots([&](RootSlot& slot) {
    if (to_object(safe(slot.LoadPlain()))==from) { StorePlain(slot,from_object(to)); seen=true; }
   });
  }
@@ -52,7 +52,7 @@ int main() {
  auto from=reinterpret_cast<BaseObject*>(a), to=reinterpret_cast<BaseObject*>(b);
  auto disarmed = Invoke(tls,from);
  if (disarmed != from) return 2;
- Rewrite change(from,to); HandshakeOperation op(&change,tls);
+ Rewrite change(from,to); HandshakeOperation op(&change,&owner);
  Handshake::Current().add_operation(&op);
  auto result=Invoke(tls,from);
  const bool safeRegion = owner.InSaferegion();

@@ -152,20 +152,20 @@ class RewriteReturnRoot : public HandshakeClosure {
 public:
     RewriteReturnRoot(BaseObject* from, BaseObject* to)
         : HandshakeClosure("return-root-scope"), from(from), to(to) {}
-    void do_thread(ThreadLocalData* tls) override
+    void do_thread(Mutator* thread) override
     {
-        if (tls == nullptr || tls->mutator == nullptr) {
+        if (thread == nullptr) {
             return;
         }
-        const bool managed = tls->mutator->IsManagedContext();
-        tls->mutator->SetManagedContext(false);
-        tls->mutator->VisitMutatorRoots([&](RootSlot& slot) {
+        const bool managed = thread->IsManagedContext();
+        thread->SetManagedContext(false);
+        thread->VisitMutatorRoots([&](RootSlot& slot) {
             if (to_object(safe(slot.LoadPlain())) == from) {
                 StorePlain(slot, from_object(to));
                 rewritten = true;
             }
         });
-        tls->mutator->SetManagedContext(managed);
+        thread->SetManagedContext(managed);
     }
     BaseObject* from;
     BaseObject* to;
@@ -230,9 +230,9 @@ GC_TEST(StackWatermark, SharedPollWordArmAndDisarm)
     class PollOperation : public HandshakeClosure {
     public:
         PollOperation() : HandshakeClosure("return-poll-ABI") {}
-        void do_thread(ThreadLocalData*) override {}
+        void do_thread(Mutator*) override {}
     } closure;
-    HandshakeOperation operation(&closure, tls);
+    HandshakeOperation operation(&closure, nullptr);
     HandshakeState& state = Handshake::Current();
     state.add_operation(&operation);
     const uintptr_t armed = tls->GetPollWord();
@@ -351,7 +351,7 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     const FrameInfo callerFrame(callerMachine, FrameType::MANAGED);
     GC_EXPECT_FALSE(owner.GetStackWatermark().is_frame_safe(callerFrame));
     RewriteReturnRoot cold(original, replaced);
-    HandshakeOperation coldOp(&cold, tls);
+    HandshakeOperation coldOp(&cold, &owner);
     Handshake::Current().add_operation(&coldOp);
     HandleReturnSafepoint(tls);
     const BaseObject* coldValue = to_object(safe(RootSlotAt(StubSlot(stub, kReturnSlot)).LoadPlain()));
@@ -361,7 +361,7 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     std::fprintf(stderr, "RETURN_ROOT_RESULT phase=cold value=%p safe=1\n", coldValue);
     StorePlain(RootSlotAt(StubSlot(stub, kReturnSlot)), from_object(original));
     RewriteReturnRoot warm(original, replaced);
-    HandshakeOperation warmOp(&warm, tls);
+    HandshakeOperation warmOp(&warm, &owner);
     Handshake::Current().add_operation(&warmOp);
     HandleReturnSafepoint(tls);
     const BaseObject* warmValue = to_object(safe(RootSlotAt(StubSlot(stub, kReturnSlot)).LoadPlain()));
