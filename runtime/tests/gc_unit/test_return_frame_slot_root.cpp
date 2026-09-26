@@ -203,12 +203,14 @@ GC_TEST(ReturnFrameSlotRoot, ReturnPointMapIsNotVisitedThroughStackBase)
     GC_EXPECT_EQ(counts.baseSlots, size_t {1});
     GC_EXPECT_EQ(counts.baseRegs, size_t {1});
 
-    alignas(16) uint64_t raw[48];
+    // The stub register area reaches 11 slots below the frame address.
+    alignas(16) uint64_t raw[64];
     std::memset(raw, 0, sizeof(raw));
     alignas(16) static char returnedBytes[16] {};
     alignas(16) static char spareBytes[16] {};
     BaseObject* returned = reinterpret_cast<BaseObject*>(returnedBytes);
-    FrameAddress* stub = reinterpret_cast<FrameAddress*>(&raw[8]);
+    BaseObject* expected = reinterpret_cast<BaseObject*>(spareBytes);
+    FrameAddress* stub = reinterpret_cast<FrameAddress*>(&raw[32]);
     stub->callerFrameAddress = nullptr;
     stub->returnAddress = nullptr;
     *StubSlot(stub, kStartSlot) = startPC;
@@ -225,7 +227,7 @@ GC_TEST(ReturnFrameSlotRoot, ReturnPointMapIsNotVisitedThroughStackBase)
     const RootVisitor roots = [&](RootSlot& slot) {
         ++rootVisits;
         if (to_object(safe(slot.LoadPlain())) == returned) {
-            StorePlain(slot, from_object(reinterpret_cast<BaseObject*>(spareBytes)));
+            StorePlain(slot, from_object(expected));
         }
     };
     const DerivedPtrVisitor derived = [&](BasePtrType, DerivedSlot&) { ++derivedVisits; };
@@ -248,6 +250,8 @@ GC_TEST(ReturnFrameSlotRoot, ReturnPointMapIsNotVisitedThroughStackBase)
     GC_EXPECT_FALSE(gFaulted != 0);
     GC_EXPECT_EQ(derivedVisits, size_t {0});
     GC_EXPECT_EQ(rootVisits, size_t {1});
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(kept), reinterpret_cast<uintptr_t>(returned));
+    // The register root the product protected and rewrote is read back from the
+    // stub frame: the returned value is the one this visitor published.
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(kept), reinterpret_cast<uintptr_t>(expected));
 }
 #endif
