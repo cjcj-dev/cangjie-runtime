@@ -350,7 +350,9 @@ int ExpandCycle()
     std::fprintf(stderr, "SO_REENTRY_CYCLE_ARM mutator=%p raiser=registered turns=%d\n",
         static_cast<void *>(g_cycleMutator), kCycleTurns);
     g_cycleGuardLowest = reinterpret_cast<uintptr_t>(before);
-    CycleRaiser(0, nullptr);
+    // The first turn is the product's own entry, exactly as the fault path reaches it:
+    // the raiser below only ever re-enters it, so the whole cycle is product code.
+    MapleRuntime::ExceptionManager::StackOverflow(0, reinterpret_cast<void *>(&CycleRaiser));
     void *after = CJ_CJThreadStackGuardGet();
     intptr_t walked = static_cast<intptr_t>(g_cycleGuardLowest) -
         reinterpret_cast<intptr_t>(after);
