@@ -1,10 +1,8 @@
 #include "Heap/shared/gcArguments.hpp"
 
-#include <cerrno>
-#include <cctype>
-#include <cstdlib>
 #include <limits>
 
+#include "Base/CString.h"
 #include "Base/Log.h"
 #include "Base/Globals.h"
 #include "Common/ColourEncoding.h"
@@ -14,82 +12,14 @@
 #include "RuntimeConfig.h"
 
 namespace MapleRuntime {
-namespace {
-// HotSpot utilities/parseInteger.hpp:80-89, unsigned 64-bit specialization.
-bool parse_integer_impl(const char* s, char** endptr, int base, size_t* result)
-{
-    if (s[0] == '-') {
-        return false;
-    }
-    errno = 0;
-    *result = std::strtoull(s, endptr, base);
-    return errno == 0;
-}
-
-// HotSpot utilities/parseInteger.hpp:94-103.
-bool multiply_by_1k(size_t& n)
-{
-    if (n >= std::numeric_limits<size_t>::min() / 1024 &&
-        n <= std::numeric_limits<size_t>::max() / 1024) {
-        n *= 1024;
-        return true;
-    } else {
-        return false;
-    }
-}
-
-// HotSpot utilities/parseInteger.hpp:120-166. No whitespace normalization.
-bool parse_integer(const char* s, char** endptr, size_t* result)
-{
-    if (!std::isdigit(static_cast<unsigned char>(s[0])) && s[0] != '-') {
-        return false;
-    }
-    size_t n = 0;
-    const bool is_hex = (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) ||
-        (s[0] == '-' && s[1] == '0' && (s[2] == 'x' || s[2] == 'X'));
-    char* remainder;
-    if (!parse_integer_impl(s, &remainder, is_hex ? 16 : 10, &n)) {
-        return false;
-    }
-    if (remainder == s) {
-        return false;
-    }
-    switch (*remainder) {
-        case 'T': case 't':
-            if (!multiply_by_1k(n)) return false;
-            [[fallthrough]];
-        case 'G': case 'g':
-            if (!multiply_by_1k(n)) return false;
-            [[fallthrough]];
-        case 'M': case 'm':
-            if (!multiply_by_1k(n)) return false;
-            [[fallthrough]];
-        case 'K': case 'k':
-            if (!multiply_by_1k(n)) return false;
-            ++remainder;
-            break;
-        default:
-            break;
-    }
-    *result = n;
-    *endptr = remainder;
-    return true;
-}
-
-bool parse_integer(const char* s, size_t* result)
-{
-    char* remainder;
-    bool rc = parse_integer(s, &remainder, result);
-    rc = rc && (*remainder == '\0');
-    return rc;
-}
-}
-
-// HotSpot runtime/arguments.cpp:1669-1674; constraints are a separate stage.
+// Cangjie environment syntax is defined by CString::ParseSizeFromEnv
+// (upstream Base/CString.cpp:394-423), not HotSpot's -Xmx parser.
+// The official parser returns KB; GC flags and their constraints use bytes.
 GCArguments::ArgsRange GCArguments::parse_memory_size(const char* s, size_t* value,
                                                      size_t minimum, size_t maximum)
 {
-    if (!parse_integer(s, value)) return arg_unreadable;
+    const size_t kilobytes = CString::ParseSizeFromEnv(CString(s));
+    if (kilobytes == 0 || !CheckedMulSize(kilobytes, KB, *value)) return arg_unreadable;
     return check_memory_size(*value, minimum, maximum);
 }
 
