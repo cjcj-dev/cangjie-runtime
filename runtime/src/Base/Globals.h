@@ -9,6 +9,8 @@
 #define MRT_GLOBALS_H
 
 #include <cstddef>
+#include <limits>
+#include <type_traits>
 
 #include "Base/Log.h"
 
@@ -102,22 +104,62 @@ constexpr T RoundUp(T x, typename std::remove_reference<T>::type n)
     return RoundDown(x + n - 1, n);
 }
 
-template<typename T>
-inline T* AlignUp(T* x, uintptr_t n)
+// ZGC utilities/align.hpp:35-108: deduce the value and alignment separately.
+template<typename T, std::enable_if_t<std::is_integral<T>::value, int> = 0>
+constexpr T AlignmentMask(T alignment)
 {
-    return reinterpret_cast<T*>(RoundUp(reinterpret_cast<uintptr_t>(x), n));
+    DCHECK(IsPowerOfTwo(alignment));
+    return alignment - 1;
 }
 
-template<class T>
-constexpr T AlignUp(T size, T alignment)
+template<typename T, std::enable_if_t<std::is_enum<T>::value, int> = 0>
+constexpr auto AlignmentMask(T alignment)
 {
-    return ((size + alignment - 1) & ~static_cast<T>(alignment - 1));
+    return AlignmentMask(static_cast<std::underlying_type_t<T>>(alignment));
 }
 
-template<class T>
-constexpr T AlignDown(T size, T alignment)
+template<typename T, typename A, std::enable_if_t<std::is_integral<T>::value, int> = 0>
+constexpr bool IsAligned(T size, A alignment)
 {
-    return (size & ~static_cast<T>(alignment - 1));
+    return (size & AlignmentMask(alignment)) == 0;
+}
+
+template<typename T, typename A, std::enable_if_t<std::is_integral<T>::value, int> = 0>
+constexpr T AlignDown(T size, A alignment)
+{
+    // Convert before complementing so a narrow alignment preserves high bits.
+    T result = static_cast<T>(size & ~static_cast<T>(AlignmentMask(alignment)));
+    DCHECK(IsAligned(result, alignment));
+    return result;
+}
+
+template<typename T, typename A, std::enable_if_t<std::is_integral<T>::value, int> = 0>
+constexpr bool CanAlignUp(T size, A alignment)
+{
+    return AlignDown(std::numeric_limits<T>::max(), alignment) >= size;
+}
+
+// ZGC utilities/checkedCast.hpp:38-43.
+template<typename T, typename U>
+constexpr T CheckedCast(U value)
+{
+    T result = static_cast<T>(value);
+    DCHECK(static_cast<U>(result) == value);
+    return result;
+}
+
+template<typename T, typename A, std::enable_if_t<std::is_integral<T>::value, int> = 0>
+constexpr T AlignUp(T size, A alignment)
+{
+    DCHECK(CanAlignUp(size, alignment));
+    T adjusted = CheckedCast<T>(size + AlignmentMask(alignment));
+    return AlignDown(adjusted, alignment);
+}
+
+template<typename T, typename A>
+inline T* AlignUp(T* ptr, A alignment)
+{
+    return reinterpret_cast<T*>(AlignUp(reinterpret_cast<uintptr_t>(ptr), alignment));
 }
 } // namespace MapleRuntime
 
