@@ -387,22 +387,43 @@ void ResizeRunningRelocation(ZGeneration& generation, uint32_t initial = 1, uint
 
 // ZGC zRelocate.cpp:1193-1224 and zWorkers.cpp:108-124. A request made
 // during the real relocation task must restart it with the new worker budget.
+// zRelocate.cpp:1152 publishes done on the forwarding after the page may have
+// been freed (zRelocate.cpp:1047). Observe that object, not the cached page.
+// zRelocationSetSelector.cpp:155-156: one live page is not selected at
+// fragmentation limit 0. region1 is installed only so the selector keeps
+// region0. It is claimed and marked done first, so ForwardTask::work does
+// not process it (zRelocate.cpp:562).
 GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
 {
     GcHeapFixture fx;
-    PrepareOwnerRegion(fx);
+    PlaceOwnerObjects(fx);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0(), fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), fx.obj1));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region0(), fx.region1()}));
+    ZForwarding* const companion = forwarding_for_page(fx.region1());
+    const MAddress companionTo = reinterpret_cast<MAddress>(fx.obj1);
+    GC_EXPECT_TRUE(companion != nullptr && companion->claim());
+    GC_EXPECT_EQ(companion->insert(companionTo, companionTo), companionTo);
+    companion->release_page();
+    companion->mark_done();
     auto& old = Heap::GetHeap().old();
     auto& manager = Heap::GetHeap().page_allocator();
     RelocationReceiptTest::ParkFrom(manager, fx.region0());
     if (old.Workers() == nullptr) old.InitializeWorkers(3);
     old.Workers()->set_active_workers(1);
     old.Workers()->set_active();
+    ZForwarding* const forwarding = forwarding_for_page(fx.region0());
+    GC_EXPECT_TRUE(forwarding != nullptr);
     ResizeRunningRelocation(old);
     const auto active = old.Workers()->active_workers();
     old.Workers()->set_inactive();
+    const bool done = forwarding->is_done();
+    const bool queueActive = old.relocate().queue()->is_active();
+    std::fprintf(stderr, "ASSERT_RELOCATE_RESTART executed=1 active=%u done=%d queue_active=%d\n",
+                 active, done ? 1 : 0, queueActive ? 1 : 0);
     GC_EXPECT_EQ(active, 3u);
-    GC_EXPECT_TRUE(forwarding_for_page(fx.region0())->is_done());
-    GC_EXPECT_FALSE(old.relocate().queue()->is_active());
+    GC_EXPECT_TRUE(done);
+    GC_EXPECT_FALSE(queueActive);
 }
 
 // The young branch must also select ZWorkers::run(ZRestartableTask*),
