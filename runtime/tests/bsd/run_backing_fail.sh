@@ -84,7 +84,7 @@ compile_fail=0
 for tu in "${cxx_tus[@]}"; do
   obj="$work/$(basename "$tu" .cpp).o"
   echo "compile $tu"
-  if "$cxx" "${flags[@]}" -c "$tu" -o "$obj"; then
+  if "$cxx" "${flags[@]/runtime\/src\/Heap\/z\/os\/bsd/runtime\/src\/Heap\/z\/os\/missing}" -c "$tu" -o "$obj"; then
     objs+=("$obj")
   else
     compile_fail=1
