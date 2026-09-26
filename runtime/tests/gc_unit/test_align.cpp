@@ -26,8 +26,8 @@ GC_TEST(Align, narrow_alignment_preserves_high_bits)
 {
     volatile uint64_t address = UINT64_C(0x123456780009);
     volatile uint32_t alignment = 8;
-    GC_EXPECT_EQ(AlignUp(address, alignment), UINT64_C(0x123456780010));
     GC_EXPECT_EQ(AlignDown(address, alignment), UINT64_C(0x123456780008));
+    GC_EXPECT_EQ(AlignUp(address, alignment), UINT64_C(0x123456780010));
 }
 
 GC_TEST(Align, same_type_boundaries)
