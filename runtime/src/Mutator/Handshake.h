@@ -15,7 +15,7 @@ public:
     explicit HandshakeClosure(const char* name) : name_(name) {}
     virtual ~HandshakeClosure() = default;
     const char* name() const { return name_; }
-    virtual void do_thread(ThreadLocalData* tls) = 0;
+    virtual void do_thread(Mutator* thread) = 0;
 
 private:
     const char* name_;
@@ -23,27 +23,24 @@ private:
 
 class HandshakeOperation {
 public:
-    HandshakeOperation(HandshakeClosure* cl, ThreadLocalData* target) : cl_(cl), target_(target) {}
+    HandshakeOperation(HandshakeClosure* cl, Mutator* target) : cl_(cl), target_(target) {}
     HandshakeClosure* closure() const { return cl_; }
-    ThreadLocalData* target() const { return target_; }
-    void do_handshake(ThreadLocalData* tls)
-    {
-        if (cl_ != nullptr) {
-            cl_->do_thread(tls);
-        }
-    }
+    Mutator* target() const { return target_; }
+    void do_handshake(Mutator* thread);
+    void add_target_count(size_t count) { pending_.fetch_add(count, std::memory_order_relaxed); }
+    bool is_completed() const { return pending_.load(std::memory_order_acquire) == 0; }
 
 private:
     HandshakeClosure* cl_;
-    ThreadLocalData* target_;
+    Mutator* target_;
+    std::atomic<size_t> pending_{1};
 };
 
 class HandshakeState {
 public:
-    explicit HandshakeState(ThreadLocalData* handshakee) : handshakee_(handshakee) {}
+    explicit HandshakeState(Mutator* handshakee) : handshakee_(handshakee) {}
 
-    void set_handshakee(ThreadLocalData* tls) { handshakee_ = tls; }
-    ThreadLocalData* handshakee() const { return handshakee_; }
+    Mutator* handshakee() const { return handshakee_; }
 
     void add_operation(HandshakeOperation* op);
     bool has_operation();
@@ -55,14 +52,13 @@ public:
     bool try_process();
     bool claim_handshake();
     bool possibly_can_process();
-    void process_queued_then_detach();
 
     void enter_safe();
     void leave_safe();
     bool observed_safe() const { return inSafe_.load(std::memory_order_acquire) != 0; }
 
 private:
-    ThreadLocalData* handshakee_;
+    Mutator* const handshakee_;
     std::mutex lock_;
     std::list<HandshakeOperation*> queue_;
     std::atomic<int> inSafe_ = { 1 };
@@ -71,10 +67,8 @@ private:
 class Handshake {
 public:
     static HandshakeState& Current();
-    static void BindCurrent(HandshakeState* state);
-    static HandshakeState* ForTls(ThreadLocalData* tls);
     static void execute(HandshakeClosure* cl);
-    static void execute(HandshakeClosure* cl, ThreadLocalData* target);
+    static void execute(HandshakeClosure* cl, Mutator* target);
 };
 
 void ArmThreadPoll(ThreadLocalData* tls);

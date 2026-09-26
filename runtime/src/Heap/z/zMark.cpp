@@ -935,11 +935,8 @@ bool ZMark::HandshakeFlush(ZMark* domain)
     if (manager.WorldStopped()) {
         {
             std::lock_guard<std::mutex> lock(manager.markFlushThreadMutex);
-            for (auto& entry : manager.markFlushThreads) {
-                if (entry.second->bufferLive.load(std::memory_order_acquire) == 0) {
-                    continue;
-                }
-                if (FlushThreadLocal(entry.first, domain)) {
+            for (auto* tls : manager.markFlushThreads) {
+                if (FlushThreadLocal(tls, domain)) {
                     flushed = true;
                 }
             }
@@ -955,11 +952,13 @@ bool ZMark::HandshakeFlush(ZMark* domain)
     public:
         explicit ZMarkFlushStacksHandshakeClosure(ZMark* d)
             : HandshakeClosure("ZMarkFlushStacks"), domain_(d), flushed_(false) {}
-        void do_thread(ThreadLocalData* tls) override
+        void do_thread(Mutator* thread) override
         {
-            if (FlushThreadLocal(tls, domain_)) {
+            thread->MutatorLock();
+            if (FlushTargetGCData(thread->GetGCData(), domain_)) {
                 flushed_ = true;
             }
+            thread->MutatorUnlock();
         }
         bool flushed() const { return flushed_.load(std::memory_order_relaxed); }
     private:
@@ -970,30 +969,11 @@ bool ZMark::HandshakeFlush(ZMark* domain)
         Heap::GetHeap().GetFinalizerProcessor().Notify();
         Handshake::execute(&cl);
     } else {
-        cl.do_thread(ThreadLocal::GetThreadLocalData());
+        flushed = FlushThreadLocal(ThreadLocal::GetThreadLocalData(), domain);
     }
-    ThreadGCData::VisitOwners([&](ThreadGCData& data, Mutator* target, ThreadLocalData*) {
-        if (target == nullptr) { return; }
-        target->MutatorLock();
-        if (target->InSaferegion()) {
-            flushed = FlushTargetGCData(data, domain) || flushed;
-        }
-        target->MutatorUnlock();
-    });
     flushed = FlushThreadLocal(ThreadLocal::GetThreadLocalData(), domain) || flushed;
     if (cl.flushed()) {
         flushed = true;
-    }
-    {
-        std::lock_guard<std::mutex> lock(manager.markFlushThreadMutex);
-        for (auto it = manager.markFlushThreads.begin(); it != manager.markFlushThreads.end();) {
-            if (it->second->dying.load(std::memory_order_acquire) != 0 &&
-                it->second->refs.load(std::memory_order_acquire) == 0) {
-                it = manager.markFlushThreads.erase(it);
-            } else {
-                ++it;
-            }
-        }
     }
     return flushed;
 }

@@ -494,7 +494,7 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
         class UnloadRendezvousClosure final : public HandshakeClosure {
         public:
             UnloadRendezvousClosure() : HandshakeClosure("ELF unload quiescence") {}
-            void do_thread(ThreadLocalData*) override {}
+            void do_thread(Mutator*) override {}
         };
         UnloadRendezvousClosure rendezvous;
         Handshake::execute(&rendezvous);
@@ -791,11 +791,10 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
             remaining = scanned.size();
         }
 
-        void do_thread(ThreadLocalData* tls) override
+        void do_thread(Mutator* thread) override
         {
-            // The handshake protects a running participant on its carrier.
-            // Membership comes from the logical task snapshot, never from TLS.
-            Scan(tls->mutator, false);
+            // The handshake protects the logical target even while it is parked.
+            Scan(thread, false);
         }
 
         void ScanSafeThreads()
