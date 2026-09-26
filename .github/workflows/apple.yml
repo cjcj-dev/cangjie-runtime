@@ -6,6 +6,12 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      p04_bsd_tu_only:
+        description: 'Run only the P04 bsd TU compile job'
+        required: false
+        default: false
+        type: boolean
+
       job:
         description: which job to run
         type: choice
@@ -23,7 +29,7 @@ defaults:
 
 jobs:
   apple-runtime:
-    if: ${{ github.event_name == 'push' || inputs.job == 'all' }}
+    if: ${{ (github.event_name == 'push' || inputs.job == 'all') && inputs.p04_bsd_tu_only != true }}
     name: ${{ matrix.runner }} / ${{ matrix.variant }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -293,7 +299,7 @@ jobs:
           retention-days: 7
 
   bsd-backing-fail:
-    if: ${{ github.event_name == 'push' || inputs.job == 'all' || inputs.job == 'bsd-backing-fail' }}
+    if: ${{ (github.event_name == 'push' || inputs.job == 'all' || inputs.job == 'bsd-backing-fail') && inputs.p04_bsd_tu_only != true }}
     name: bsd-backing-fail / ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -318,3 +324,85 @@ jobs:
             exit 1
           fi
           bash runtime/tests/bsd/run_backing_fail.sh
+
+  # P04 bsd TUs are selected only when MACOS_FLAG=1 (Heap/CMakeLists.txt).
+  # The matrix job above dies in LocalDeque.h on MRT_PRCTL before those TUs
+  # are compiled. This job does not call build.py and does not build CJThread.
+  p04-bsd-tu:
+    if: ${{ github.event_name == 'push' || inputs.job == 'all' || inputs.p04_bsd_tu_only == true }}
+    name: p04-bsd-tu / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Compile P04 bsd translation units
+        run: |
+          actual_arch="$(uname -m)"
+          printf 'machine=%s expected=%s\n' "$actual_arch" "${{ matrix.arch }}"
+          if [[ "$actual_arch" != "${{ matrix.arch }}" ]]; then
+            echo "runner arch mismatch" >&2
+            exit 1
+          fi
+          sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+          cxx="$(xcrun --sdk macosx --find clang++)"
+          printf 'sdk=%s\n' "$sdk_path"
+          printf 'cxx=%s\n' "$cxx"
+          "$cxx" --version
+          bc="runtime/third_party/third_party_bounds_checking_function"
+          if [[ ! -f "$bc/include/securec.h" ]]; then
+            git clone --depth 1 --branch OpenHarmony-v6.0-Release \
+              https://gitcode.com/openharmony/third_party_bounds_checking_function \
+              "$bc"
+          fi
+          test -f "$bc/include/securec.h"
+          flags=(
+            -std=c++14
+            -fno-exceptions
+            -fno-strict-aliasing
+            -fPIC
+            -isysroot "$sdk_path"
+            -I runtime/src
+            -I "$bc/include"
+            -D_LARGEFILE_SOURCE
+            -D_FILE_OFFSET_BITS=64
+            -DCANGJIE
+            -DMRT_MACOS
+            -D_XOPEN_SOURCE=600
+            -D_DARWIN_C_SOURCE
+          )
+          probe_rc=0
+          printf 'int p04_bsd_compiler_probe(){return 0;}\n' >"$RUNNER_TEMP/p04_empty.cpp"
+          "$cxx" "${flags[@]}" -c "$RUNNER_TEMP/p04_empty.cpp" -o "$RUNNER_TEMP/p04_empty.o" || probe_rc=$?
+          printf 'P04_BSD_TU file=empty.cpp sample=0 arch=%s rc=%s\n' "$actual_arch" "$probe_rc"
+          tus=(
+            runtime/src/Heap/z/zPhysicalMemoryBacking_bsd.cpp
+            runtime/src/Heap/z/zLargePages_bsd.cpp
+            runtime/src/Heap/z/zNUMA_bsd.cpp
+          )
+          fail=0
+          if [[ "$probe_rc" -ne 0 ]]; then
+            fail=1
+          fi
+          for sample in 1 2 3; do
+            for tu in "${tus[@]}"; do
+              base="$(basename "$tu" .cpp)"
+              obj="$RUNNER_TEMP/${base}.s${sample}.o"
+              rc=0
+              "$cxx" "${flags[@]}" -c "$tu" -o "$obj" || rc=$?
+              printf 'P04_BSD_TU file=%s sample=%s arch=%s rc=%s\n' "$(basename "$tu")" "$sample" "$actual_arch" "$rc"
+              if [[ "$rc" -ne 0 ]]; then
+                fail=1
+              fi
+            done
+          done
+          exit "$fail"
