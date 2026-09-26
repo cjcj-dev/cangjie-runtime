@@ -259,3 +259,41 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, EnvironmentOverridesApiOverflow)
     GC_EXPECT_EQ(ZHeuristics::max_heap_size(), 64UL * 1024 * 1024);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+namespace {
+// Cangjie upstream CString.cpp:394-423: case-insensitive kb/mb/gb, in KB.
+// Exercise the API entry and observe the actual heap consumer after startup.
+void CheckOfficialHeapUnit(const char* input, size_t expected, bool soft)
+{
+    using namespace MapleRuntime;
+    unsetenv("cjHeapSize");
+    unsetenv("cjSoftMaxHeapSize");
+    setenv(soft ? "cjSoftMaxHeapSize" : "cjHeapSize", input, 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 32UL * 1024 * 1024;
+    params.coParam.processorNum = 1;
+    params.gcParam.concGCThreads = 2;
+    const auto rc = InitCJRuntime(&params);
+    const auto expectedRc = expected == 0 ? E_ARGS : E_OK;
+    std::fprintf(stderr, "OFFICIAL_UNIT_ACCEPT input=%s soft=%d actual=%d expected=%d\n",
+                 input, soft, rc, expectedRc);
+    GC_EXPECT_EQ(rc, expectedRc);
+    if (rc == E_OK) {
+        const size_t actual = soft ? Heap::GetHeap().soft_max_capacity() : Heap::GetHeap().GetMaxCapacity();
+        std::fprintf(stderr, "OFFICIAL_UNIT_CAPACITY input=%s soft=%d actual=%zu expected=%zu\n",
+                     input, soft, actual, expected);
+        GC_EXPECT_EQ(actual, expected);
+        GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    }
+}
+}
+#define OFFICIAL_HEAP_UNIT(id, input, bytes) \
+    GC_RUNTIME_OTHER_VM_TEST(OfficialHeapUnit, Hard##id) { CheckOfficialHeapUnit(input, bytes, false); } \
+    GC_RUNTIME_OTHER_VM_TEST(OfficialHeapUnit, Soft##id) { CheckOfficialHeapUnit(input, bytes, true); }
+OFFICIAL_HEAP_UNIT(GB, "20GB", 20UL * 1024 * 1024 * 1024)
+OFFICIAL_HEAP_UNIT(MB, "32768MB", 32UL * 1024 * 1024 * 1024)
+OFFICIAL_HEAP_UNIT(kb, "20480kb", 20UL * 1024 * 1024)
+OFFICIAL_HEAP_UNIT(Invalid, "20XB", 0)
+OFFICIAL_HEAP_UNIT(MixedCase, "20mB", 20UL * 1024 * 1024)
+OFFICIAL_HEAP_UNIT(SingleLetter, "20M", 0)
+#undef OFFICIAL_HEAP_UNIT
