@@ -82,11 +82,11 @@ done
 
 set +e
 LD_LIBRARY_PATH="$OUT:$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1G \
+  MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
   python3 "$ROOT/runtime/tests/gc_unit/wait_phase_entry_cycle.py" "$MINOR_BIN" "$MINOR_RUN_LOG"
 minor_rc=$?
 LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1G \
+  MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
   timeout 60s "$MAJOR_BIN" >"$MAJOR_RUN_LOG" 2>&1
 major_rc=$?
 set -e

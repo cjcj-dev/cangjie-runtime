@@ -29,7 +29,7 @@ void CheckHeap(bool embedded, const char* environment, size_t expected)
         setenv("cjHeapSize", environment, 1);
     }
     // Keep the configuration alive for the runtime's lifetime, as codegen does.
-    static const RuntimeConfigEntryV1 entries[] = {{"cjHeapSize", "64M"}};
+    static const RuntimeConfigEntryV1 entries[] = {{"cjHeapSize", "64MB"}};
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     if (embedded) {
         CJ_MRT_CjRuntimeInitWithConfigV1(entries, 1);
@@ -46,12 +46,12 @@ void CheckHeap(bool embedded, const char* environment, size_t expected)
 // Startup argument delivery corresponds to HotSpot threads.cpp:495, before
 // heap initialization. Each case executes the real exported product entry.
 GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EmbeddedHeap) { CheckHeap(true, nullptr, 64 * 1024); }
-GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EnvironmentHeap) { CheckHeap(false, "64M", 64 * 1024); }
-GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EnvironmentOverridesEmbedded) { CheckHeap(true, "128M", 128 * 1024); }
+GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EnvironmentHeap) { CheckHeap(false, "64MB", 64 * 1024); }
+GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EnvironmentOverridesEmbedded) { CheckHeap(true, "128MB", 128 * 1024); }
 GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EmptyTableEnvironment)
 {
     using namespace MapleRuntime;
-    setenv("cjHeapSize", "64M", 1);
+    setenv("cjHeapSize", "64MB", 1);
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     CJ_MRT_CjRuntimeInitWithConfigV1(nullptr, 0);
     const size_t actual = ZHeuristics::max_heap_size() / 1024;
@@ -100,7 +100,7 @@ GC_RUNTIME_OTHER_VM_TEST(RuntimeConfigV1, EnvironmentOverridesEmbeddedHeapDumpPa
     CheckHeapDumpPath(true, "/var/", "/var");
 }
 
-// HotSpot arguments.cpp:2112-2125 and parseInteger.hpp:120-176.
+// Cangjie upstream Base/CString.cpp:394-423; GC sizing remains ZGC-shaped.
 // Observe the maximum produced by the exported managed runtime entry, not a
 // separately compiled parser. Each registered case runs in a fresh process.
 namespace {
@@ -155,18 +155,18 @@ void CheckMaximumRejected(const char* input)
     GC_EXPECT_TRUE(rejected && diagnosed);
 }
 }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, LeadingZeroEight) { CheckMaximumBytes("08M", 8UL * 1024 * 1024); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, LeadingZeroDecimal) { CheckMaximumBytes("040M", 40UL * 1024 * 1024); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, SingleUnit) { CheckMaximumBytes("64M", 64UL * 1024 * 1024); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Hexadecimal) { CheckMaximumBytes("0x40M", 64UL * 1024 * 1024); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ExactBytes) { CheckMaximumBytes("67108865", 67108865); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, LowercaseUnit) { CheckMaximumBytes("65537k", 65537UL * 1024); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TwoCharacterUnit) { CheckMaximumRejected("64MB"); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, InteriorWhitespace) { CheckMaximumRejected("6 4MB"); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, LeadingWhitespace) { CheckMaximumRejected(" 64M"); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TrailingWhitespace) { CheckMaximumRejected("64M "); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, LeadingZeroEight) { CheckMaximumRejected("08MB"); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, LeadingZeroDecimal) { CheckMaximumBytes("040MB", 32UL * 1024 * 1024); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, SingleUnit) { CheckMaximumBytes("64MB", 64UL * 1024 * 1024); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Hexadecimal) { CheckMaximumRejected("0x40MB"); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ExactBytes) { CheckMaximumRejected("67108865"); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, LowercaseUnit) { CheckMaximumBytes("65537kB", 65537UL * 1024); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TwoCharacterUnit) { CheckMaximumBytes("64MB", 64UL * 1024 * 1024); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, InteriorWhitespace) { CheckMaximumBytes("6 4MB", 64UL * 1024 * 1024); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, LeadingWhitespace) { CheckMaximumBytes(" 64MB", 64UL * 1024 * 1024); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TrailingWhitespace) { CheckMaximumBytes("64MB ", 64UL * 1024 * 1024); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, NumberOverflow) { CheckMaximumRejected("18446744073709551616"); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, UnitOverflow) { CheckMaximumRejected("18014398509481984K"); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, UnitOverflow) { CheckMaximumRejected("18014398509481984KB"); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Negative) { CheckMaximumRejected("-64M"); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Zero) { CheckMaximumRejected("0"); }
 
@@ -190,7 +190,7 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiKilobytes)
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiEnvironmentBytes)
 {
     using namespace MapleRuntime;
-    setenv("cjHeapSize", "67108865", 1);
+    setenv("cjHeapSize", "65537KB", 1);
     unsetenv("cjSoftMaxHeapSize");
     RuntimeParam params{};
     params.heapParam.heapSize = 128 * 1024;
@@ -205,9 +205,9 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiEnvironmentBytes)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TooSmall) { CheckMaximumRejected("1M"); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TooSmall) { CheckMaximumRejected("1MB"); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, AlignmentOverflow) { CheckMaximumRejected("18446744073709551615"); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Minimum) { CheckMaximumBytes("2M", 2UL * 1024 * 1024); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Minimum) { CheckMaximumBytes("2MB", 2UL * 1024 * 1024); }
 
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiMinimum)
 {
@@ -247,7 +247,7 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiOverflow)
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, EnvironmentOverridesApiOverflow)
 {
     using namespace MapleRuntime;
-    setenv("cjHeapSize", "64M", 1);
+    setenv("cjHeapSize", "64MB", 1);
     unsetenv("cjSoftMaxHeapSize");
     RuntimeParam params{};
     params.heapParam.heapSize = SIZE_MAX;

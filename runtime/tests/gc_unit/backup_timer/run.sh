@@ -18,7 +18,7 @@ run_case() {
     local name="$input-$explicit-$generation-change$change"
     (
         unset cjBackupGCInterval
-        export cjHeapSize=64M cjProcessorNum=1 cjConcGCThreads=2 cjYoungGCThreads=2 cjOldGCThreads=2
+        export cjHeapSize=64MB cjProcessorNum=1 cjConcGCThreads=2 cjYoungGCThreads=2 cjOldGCThreads=2
         if [[ "$input" == env && "$explicit" == 1 ]]; then export cjBackupGCInterval=1s; fi
         TIMER_GENERATION=$generation TIMER_EXPLICIT=$explicit TIMER_CHANGE=$change \
             timeout 290 taskset -c "$TIMER_CPUSET" gdb -nx -batch \
