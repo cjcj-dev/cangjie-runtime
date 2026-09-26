@@ -80,6 +80,20 @@ struct CJThreadStack {
                                         * equal to stackBaseAddr does not belong to the stack. */
     size_t stackSize;                  /* Specifies the stack size for creating a cjthread,
                                         * excluding the stack protection size. */
+    /* Whether the reserved zone is currently unguarded, i.e. whether stackGuard sits one
+     * reserved step below its birth value. HotSpot records this as a guard state:
+     * StackOverflow::_stack_guard_state (stackOverflow.hpp:41-45) enumerates
+     * stack_guard_enabled, stack_guard_reserved_disabled and
+     * stack_guard_yellow_reserved_disabled, the last named "disabled (temporarily) after
+     * stack overflow". The two transitions are keyed on it — the disable side returns
+     * early when the zone is already disabled (stackOverflow.cpp:197-198) and the enable
+     * side returns early when it is already enabled (stackOverflow.cpp:220-223) — so a
+     * transition that already holds is a no-op there, never a second step, and the state
+     * is committed only after the unguard/guard call succeeded (:203-206, :150-155).
+     * This flag is that state: the expand/recover pair is a state transition rather than
+     * an unconditional arithmetic step, so the re-entrant stack-overflow recovery cycle
+     * cannot walk the guard below the end of the stack. */
+    bool stackGuardExpanded;
     char *cjthreadStackBaseAddr;       /* Actual stack bottom of cjthread stack. It is equal
                                         * to stackAddr+stackAlign and is 16 bytes down. */
     unsigned int stackGrowCnt;         /* whether to enable cjthread stack scaling.

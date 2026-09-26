@@ -249,6 +249,7 @@ MRT_STATIC_INLINE void CJThreadStackAttrInit(struct CJThread *cjthread, size_t t
         // nullptr: the arithmetic is undefined, and its garbage results used to escape
         // through the getters looking like real addresses.
         cjthread->stack.stackGuard = nullptr;
+        cjthread->stack.stackGuardExpanded = false;
         cjthread->stack.stackBaseAddr = nullptr;
         cjthread->stack.cjthreadStackBaseAddr = nullptr;
         cjthread->stack.stackGrowCnt = stackAttr->stackGrow ? 0 : 1;
@@ -259,6 +260,7 @@ MRT_STATIC_INLINE void CJThreadStackAttrInit(struct CJThread *cjthread, size_t t
     // reserved size for the whole process lifetime, so expand/recover/the reuse check
     // move the guard by the same amount this line used.
     cjthread->stack.stackGuard = stackAddr + CJThreadStackReservedFreeze();
+    cjthread->stack.stackGuardExpanded = false;
     cjthread->stack.stackBaseAddr = stackAddr + stackAttr->stackSizeAlign;
     // 16-byte-aligned. Note that the 64 KB lower stack address is not 0x0 - 0x100000000,
     // but 0x0 - 0xffffff, and the 16 bytes are aligned to 0x0 - 0xfffffff0. The stack
@@ -531,6 +533,11 @@ struct CJThread *CJThreadAlloc(struct Schedule *schedule, struct ArgAttr *argAtt
                 newCJThread->stack.stackGuard, birthGuard,
                 static_cast<size_t>(CJThreadStackReservedFreeze()));
         }
+        // A guard back at its birth value means the expansion was recovered, so the
+        // transition state must be back at its birth value too. Restoring it here rather
+        // than trusting the pair discipline keeps a stack whose expansion was unpaired
+        // from refusing the first legitimate expand of its next task.
+        newCJThread->stack.stackGuardExpanded = false;
     }
     if (newCJThread == nullptr) {
         newCJThread = CJThreadMemAlloc(schedule, stackAttr);
@@ -1893,8 +1900,48 @@ void CJThreadStackGuardExpand(void)
     }
     // The frozen value, not the settable global: recover and the reuse check must
     // undo/verify exactly what this expand did.
-    cjthread->stack.stackGuard -= CJThreadStackReservedFreeze();
-    ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
+    //
+    // This is the disable side of the guard state machine. HotSpot
+    // StackOverflow::disable_stack_yellow_reserved_zone (stackOverflow.cpp:191-207)
+    // asserts it is not already disabled, returns for a thread that does not use guard
+    // pages, guarantees base < stack_base() (:182 is the same guarantee on the enable
+    // side), calls os::unguard_memory, and only then commits
+    // _stack_guard_state = stack_guard_yellow_reserved_disabled — on failure it warns and
+    // the state stays enabled (stackOverflow.hpp:41-45 names that state 'disabled
+    // (temporarily) after stack overflow'). The three steps are kept in that order and
+    // that granularity here:
+    //
+    //   1. already in the target state -> no-op, not a second step (:197-198);
+    //   2. the expanded threshold must stay above the end of the allocated stack,
+    //      the guarantee at :182; one turn's worth of headroom is the whole
+    //      reservation, so a guard that is not above the stack end has none left;
+    //   3. commit the state only after the unguard took effect — ProtectAddrSet is
+    //      this side's os::unguard_memory, and ProtectAddrGet reads the threshold
+    //      back the way HotSpot's branch reads the mprotect result (:203-206).
+    //
+    // Without step 1 and step 2 the guard walks one reserved step per turn of the
+    // re-entrant stack-overflow recovery cycle, from stackTopAddr + reserved at birth to
+    // stackTopAddr on the first turn and then below the allocated stack, where it guards
+    // nothing and ProtectAddrSet installs a threshold outside the mapping.
+    if (cjthread->stack.stackGuardExpanded) {
+        return;
+    }
+    if (cjthread->stack.stackGuard < cjthread->stack.stackTopAddr + CJThreadStackReservedFreeze()) {
+        LOG(RTLOG_FATAL, "Error calculating stack reserved zone: guard %p is not above the stack end %p",
+            cjthread->stack.stackGuard, cjthread->stack.stackTopAddr);
+        return;
+    }
+    uintptr_t expanded = reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard) - CJThreadStackReservedFreeze();
+    ProtectAddrSet(expanded);
+    if (ProtectAddrGet() != expanded) {
+        // The unguard did not take effect: restore the threshold, leave the state at its
+        // birth value so the next turn can try again, and say so the way HotSpot warns.
+        ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
+        LOG(RTLOG_ERROR, "Attempt to unguard cjthread stack reserved zone failed, threshold %p", expanded);
+        return;
+    }
+    cjthread->stack.stackGuard = reinterpret_cast<char *>(expanded);
+    cjthread->stack.stackGuardExpanded = true;
 }
 
 /* This function is used for the exception try catch mechanism of cangjie. After the stack
@@ -1905,8 +1952,52 @@ void CJThreadStackGuardRecover(void)
     if (cjthread->stack.stackTopAddr == nullptr) {
         return;
     }
-    cjthread->stack.stackGuard += CJThreadStackReservedFreeze();
-    ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
+    // The recover is the enable side of the same state machine, and follows HotSpot
+    // StackOverflow::reguard_stack (stackOverflow.cpp:220-246) step for step:
+    //
+    //   1. reguard_stack returns true immediately when the state is not one of the two
+    //      disabled states (:220-223, "Stack already guarded or guard pages not
+    //      needed") — a transition that already holds is not applied again;
+    //   2. it then guarantees cur_sp > stack_reserved_zone_base() (:229): managed code
+    //      never executes inside the reserved zone, so a clearer that is itself running
+    //      there has not unwound out of it yet and must not re-guard under itself. Here
+    //      the expanded guard is that reserved-zone base, and the clearer runs on this
+    //      cjthread's own stack, so its own stack pointer is the cur_sp;
+    //   3. only after the re-guard took effect is the state committed back to enabled,
+    //      the way enable_stack_reserved_zone (:150-155) commits after a successful
+    //      os::guard_memory and warns without committing when it fails.
+    if (!cjthread->stack.stackGuardExpanded) {
+        return;
+    }
+    // The address of a local is this frame's stack pointer, without a
+    // compiler-specific frame-address builtin.
+    char *currentSp = nullptr;
+    currentSp = reinterpret_cast<char *>(&currentSp);
+    // The reserved zone is the headroom between stackTopAddr and the birth guard, and a
+    // cjthread stack grows up from stackTopAddr, so a frame that belongs to this stack
+    // is inside [stackTopAddr, stackTopAddr + stackSize). A frame outside that mapping is
+    // not executing in the reserved zone at all and comparing it with the guard would
+    // compare two unrelated addresses, so the guarantee below is stated for the frames it
+    // is about.
+    if (currentSp >= cjthread->stack.stackTopAddr &&
+        currentSp < cjthread->stack.stackTopAddr + cjthread->stack.stackSize) {
+        if (currentSp >= cjthread->stack.stackGuard) {
+            LOG(RTLOG_FATAL,
+                "not enough space to reguard - the clearer is running inside the reserved zone "
+                "(sp %p, reserved zone base %p)",
+                currentSp, cjthread->stack.stackGuard);
+            return;
+        }
+    }
+    uintptr_t reguarded = reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard) + CJThreadStackReservedFreeze();
+    ProtectAddrSet(reguarded);
+    if (ProtectAddrGet() != reguarded) {
+        ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
+        LOG(RTLOG_ERROR, "Attempt to guard cjthread stack reserved zone failed, threshold %p", reguarded);
+        return;
+    }
+    cjthread->stack.stackGuard = reinterpret_cast<char *>(reguarded);
+    cjthread->stack.stackGuardExpanded = false;
 }
 
 int CJBindOSThread(void)

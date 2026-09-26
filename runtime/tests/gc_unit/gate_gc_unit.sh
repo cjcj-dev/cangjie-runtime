@@ -10,6 +10,7 @@ SCRIPT="$SRC/run_standalone.sh"
 FINALIZER_SCRIPT="$SRC/run_finalizer_trigger.sh"
 PHASE_ENTRY_SCRIPT="$SRC/run_phase_entry_trigger.sh"
 SEGMENTED_MANAGED_SCRIPT="$SRC/run_segmented_array_managed.sh"
+SO_REENTRY_SCRIPT="$SRC/run_so_reentry_bounded.sh"
 STATUS_FILE="${GC_UNIT_GATE_STATUS:-}"
 if [[ -z "$STATUS_FILE" && -n "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
   STATUS_FILE="$GCV2_RUNTIME_LIB_DIR/gc_unit_gate.status"
@@ -28,6 +29,9 @@ FINALIZER_SOURCE=NOT_RUN
 PHASE_ENTRY_STATE=NOT_RUN
 PHASE_ENTRY_SOURCE=NOT_RUN
 SEGMENTED_MANAGED_STATE=NOT_RUN
+SO_REENTRY_STATE=NOT_RUN
+SO_REENTRY_SOURCE=NOT_RUN
+SO_REENTRY_CAN_RUN=0
 SEGMENTED_MANAGED_SOURCE=NOT_RUN
 SEGMENTED_MANAGED_CAN_RUN=0
 OHOS_HOST_STATE=NOT_RUN
@@ -65,6 +69,9 @@ write_status() {
     echo "FINALIZER_TRIGGER_SOURCE=$FINALIZER_SOURCE"
     echo "PHASE_ENTRY_TRIGGER=$PHASE_ENTRY_STATE"
     echo "PHASE_ENTRY_TRIGGER_SOURCE=$PHASE_ENTRY_SOURCE"
+    echo "SO_REENTRY_BOUNDED=$SO_REENTRY_STATE"
+    echo "SO_REENTRY_BOUNDED_SOURCE=$SO_REENTRY_SOURCE"
+    echo "SO_REENTRY_BOUNDED_CAN_RUN=$SO_REENTRY_CAN_RUN"
     echo "SEGMENTED_ARRAY_MANAGED=$SEGMENTED_MANAGED_STATE"
     echo "SEGMENTED_ARRAY_MANAGED_SOURCE=$SEGMENTED_MANAGED_SOURCE"
     echo "SEGMENTED_ARRAY_MANAGED_CAN_RUN=$SEGMENTED_MANAGED_CAN_RUN"
@@ -165,6 +172,10 @@ if [[ ! -d "$SRC" ]]; then
 fi
 if [[ "$LANGUAGE_TEST_MODE" != "only" && ! -f "$SCRIPT" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing run_standalone.sh" >&2
+  exit 2
+fi
+if [[ ! -f "$SO_REENTRY_SCRIPT" || ! -f "$SRC/so_reentry_probe.cpp" ]]; then
+  echo "GC_UNIT_GATE_FAIL: missing bounded stack-overflow recovery test" >&2
   exit 2
 fi
 if [[ ! -f "$FINALIZER_SCRIPT" || ! -f "$SRC/finalizer_trigger.cj" ||
@@ -337,6 +348,14 @@ elif [[ "$TESTABLE_INTERNALS" == "1" ]]; then
   exit 2
 fi
 
+# The bounded stack-overflow recovery assertion reaches the product through the
+# cjthread guard ABI. Probe the product SO for it rather than assuming a shape.
+if nm -D "$SO" 2>/dev/null | /usr/bin/grep -qE 'CJ_CJThreadStackGuardExpand' &&
+   nm -D "$SO" 2>/dev/null | /usr/bin/grep -qE 'CJ_CJThreadStackGuardRecover' &&
+   nm -D "$SO" 2>/dev/null | /usr/bin/grep -qE 'CJ_CJThreadStackGuardGet'; then
+  SO_REENTRY_CAN_RUN=1
+fi
+
 # The SDK is also a cache input: --static-std embeds archives into every
 # managed executable. Hash every installed std archive, not just std.core.
 LANGUAGE_IDENTITY_FILE="$GC_UNIT_OUT/.gate_language_identity"
@@ -401,6 +420,17 @@ run_language_tests() {
     return 1
   fi
   PHASE_ENTRY_STATE=PASS
+
+  if [[ $SO_REENTRY_CAN_RUN -eq 1 ]]; then
+    SO_REENTRY_STATE=FAIL
+    SO_REENTRY_SOURCE=FRESH
+    STATUS_REASON=SO_REENTRY_BOUNDED_FAILURE
+    if ! bash "$SO_REENTRY_SCRIPT"; then
+      echo "GC_UNIT_GATE_FAIL: bounded stack-overflow recovery test failed" >&2
+      return 1
+    fi
+    SO_REENTRY_STATE=PASS
+  fi
 
   if [[ $SEGMENTED_MANAGED_CAN_RUN -eq 1 ]]; then
     SEGMENTED_MANAGED_STATE=FAIL
@@ -491,6 +521,10 @@ if [[ -f "$STAMP" && "$STAMP" -nt "$SO" ]]; then
     FINALIZER_SOURCE=CACHE
     PHASE_ENTRY_STATE=PASS
     PHASE_ENTRY_SOURCE=CACHE
+    if [[ $SO_REENTRY_CAN_RUN -eq 1 ]]; then
+      SO_REENTRY_STATE=PASS
+      SO_REENTRY_SOURCE=CACHE
+    fi
     if [[ $SEGMENTED_MANAGED_CAN_RUN -eq 1 ]]; then
       SEGMENTED_MANAGED_STATE=PASS
       SEGMENTED_MANAGED_SOURCE=CACHE
