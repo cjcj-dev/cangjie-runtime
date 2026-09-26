@@ -68,7 +68,7 @@ void ThreadGCData::RegisterOwner(Mutator* owner, ThreadLocalData* nativeOwner,
 bool ThreadGCData::FlushMarkStacks(ZMark& domain)
 {
     const size_t index = domain.Generation() == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
-    return markStacks[index].Flush(domain.Stripes(), true);
+    return markStacks[index].Flush(domain.Stripes());
 }
 
 void ThreadGCData::UnregisterOwner()

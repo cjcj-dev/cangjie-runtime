@@ -368,7 +368,7 @@ void ZMark::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
     const size_t dispelAtEntry = ZPage::GetTdWindowCount();
     ZMark& domain = Heap::GetHeap().young().Mark();
     (void)ZMark::PublishHandshakeMarkWork(workStack, &domain);
-    (void)domain.Stacks().Flush(domain.Stripes(), true);
+    (void)domain.Stacks().Flush(domain.Stripes());
     // ZGC zMark.cpp:944-952: concurrent follow includes termination flush.
     // Mutators can publish after worker termination; only mark-end decides
     // completion, so there is no concurrent stripes-empty assertion here.
@@ -438,7 +438,7 @@ bool ZMark::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
         published = true;
     }
     if (published) {
-        (void)seed.Flush(domain->Stripes(), true);
+        (void)seed.Flush(domain->Stripes());
         domain->Terminate().Wake();
     }
     return published;
@@ -633,9 +633,9 @@ static bool RebalanceWork(MarkContext& context, MarkStripeSet& stripes, MarkTerm
     const size_t stripe = stripes.StripeForWorker(nworkers, workerId);
     if (context.StripeId() != stripe) {
         context.SetStripeId(stripe);
-        (void)context.Stacks().Flush(stripes, true);
+        (void)context.Stacks().Flush(stripes);
     } else if (!terminate.Saturated()) {
-        (void)context.Stacks().Flush(stripes, true);
+        (void)context.Stacks().Flush(stripes);
     }
     return domain != nullptr && domain->PollStop();
 }
@@ -745,7 +745,7 @@ void ZMark::FollowWorkComplete(bool partial)
     (void)FollowWork(local, smr, stripes, terminate, workerId, partial,
                      [this, &local](const MarkStackEntry& entry) { MarkAndFollow(local, entry); },
                      nullptr, nullptr, this);
-    (void)local.Stacks().Flush(stripes, true);
+    (void)local.Stacks().Flush(stripes);
     local.Cache().Flush();
 
     ThreadLocal::FlushCurrentThreadMarkStacks();
@@ -758,7 +758,7 @@ bool ZMark::FollowWorkPartial()
     const Result result = FollowWork(local, smr, stripes, terminate, workerId, true,
                      [this, &local](const MarkStackEntry& entry) { MarkAndFollow(local, entry); },
                      nullptr, nullptr, this);
-    (void)local.Stacks().Flush(stripes, true);
+    (void)local.Stacks().Flush(stripes);
     local.Cache().Flush();
     return result != Result::Aborted;
 }

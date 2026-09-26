@@ -26,7 +26,7 @@ GC_TEST(MarkingStacks, PopulationCountsEntriesAndPublishedChunks)
     local.Push(stripes, 2, MarkStackEntry(uintptr_t(0x2000), true, true, true, false), true);
     GC_EXPECT_EQ(local.Population(), 2u);
     GC_EXPECT_EQ(stripes.Population(), 0u);
-    GC_EXPECT_TRUE(local.Flush(stripes, true));
+    GC_EXPECT_TRUE(local.Flush(stripes));
     GC_EXPECT_EQ(local.Population(), 0u);
     GC_EXPECT_EQ(stripes.Population(), 1u);
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), 2u);
@@ -58,7 +58,7 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
         MarkStripeSet& stripes = mark.Stripes();
         MarkThreadLocalStacks local(4);
         local.Push(stripes, 1, MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
-        GC_EXPECT_TRUE(local.Flush(stripes, true));
+        GC_EXPECT_TRUE(local.Flush(stripes));
         GC_EXPECT_EQ(stripes.Population(), 1u);
         if (!reject) {
             MapleRuntime::GcUnit::WorkerFixture workerFixture;

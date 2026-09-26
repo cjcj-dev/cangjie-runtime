@@ -82,7 +82,7 @@ GC_TEST(MarkPort203Storage, BothPublicationListsDrainMultipleStripesAndSegments)
                 producer.Push(stripes, s, Entry(s * count + i), publish);
             }
         }
-        GC_EXPECT_TRUE(producer.Flush(stripes, publish));
+        GC_EXPECT_TRUE(producer.Flush(stripes));
         GC_EXPECT_TRUE(producer.IsEmpty());
         for (size_t s = 0; s < 4; ++s) {
             std::vector<bool> seen(count, false);
