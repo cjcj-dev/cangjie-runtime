@@ -242,10 +242,8 @@ void ZVerify::threads_start_processing()
     if (epoch == 0) {
         return;
     }
-    RootVisitor noop = [](ObjectRef&) {};
     threads.Apply([&](Mutator& mutator) {
-        size_t frames = 0;
-        (void)StackWatermarkSet::finish_processing(mutator, noop, noop, epoch, nullptr, frames);
+        StackWatermarkSet::start_processing(mutator);
     });
 }
 

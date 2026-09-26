@@ -2295,6 +2295,7 @@ int CJ_MRT_GetAllCJThreadStackTrace(void *cjStackTraceBufPtr, unsigned int num)
             get.Append(MapleRuntime::CString::FormatString("cjthread #%d state: %s name: %s\n",
                                                            threadId, threadState.Str(), threadName.Str()));
             MapleRuntime::PrintStackInfo printStackInfo(&(mutator.GetUnwindContext()));
+            printStackInfo.SetProcessingOwner(&mutator);
             get.Append(printStackInfo.GetStackTraceString());
             snprintf_s(cjStackTraceBuffer + recordCnt * CJTHREAD_STACK_STRING_SIZE,
                        CJTHREAD_STACK_STRING_SIZE, CJTHREAD_STACK_STRING_SIZE - 1, "%s", get.Str());

@@ -35,7 +35,9 @@ struct ThreadLocalData {
     uint8_t* schedule;
     uint8_t* preemptFlag;
     uint8_t* protectAddr;
-    uint64_t safepointState;
+    // Shared ordinary/return poll ABI (HotSpot safepointMechanism.cpp:47-48).
+    // Bit zero requests a safepoint; an aligned stack address is a watermark.
+    uint64_t pollingWord;
     uint64_t tid;
     void* foreignCJThread;
 #ifdef INTERPRETER_ENABLED
@@ -56,6 +58,17 @@ struct ThreadLocalData {
     ThreadGCData* nativeGCData;
 
 public:
+    static constexpr uintptr_t PollBit = 1;
+    static constexpr uintptr_t DisarmedPollWord = ~PollBit;
+    uintptr_t GetPollWord() const
+    {
+        return static_cast<uintptr_t>(__atomic_load_n(&pollingWord, __ATOMIC_ACQUIRE));
+    }
+    void SetPollWord(uintptr_t value)
+    {
+        __atomic_store_n(&pollingWord, static_cast<uint64_t>(value), __ATOMIC_RELEASE);
+    }
+    bool IsPollArmed() const { return (GetPollWord() & PollBit) != 0; }
     void SetMutator(Mutator* newMutator);
 };
 

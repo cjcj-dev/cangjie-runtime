@@ -64,7 +64,7 @@ void InitPtrAuthRAMod(FrameInfo& callerFrameInfo, FrameInfo& calleeFrameInfo)
 }
 #endif
 
-void StackInfo::CheckTopUnwindContextAndInit(UnwindContext& uwContext)
+void StackFrameStream::CheckTopUnwindContextAndInit(UnwindContext& uwContext)
 {
     if (topContext == nullptr) {
         UnwindContext& localContext = Mutator::GetMutator()->GetUnwindContext();
@@ -96,15 +96,24 @@ void StackInfo::CheckTopUnwindContextAndInit(UnwindContext& uwContext)
 #endif
 }
 
-void StackInfo::AnalyseAndSetFrameType(UnwindContext& uwContext)
+void StackFrameStream::AnalyseAndSetFrameType(UnwindContext& uwContext)
 {
     FrameInfo& frameInfo = uwContext.frameInfo;
     MachineFrame& mFrame = frameInfo.mFrame;
     if (mFrame.IsN2CStubFrame()) {
-        MRT_Check(lastFrameType == FrameType::MANAGED, "");
+        // The callee is managed code, a return barrier left in its place, or a
+        // native task the stub entered. Unlinked instruction pointers are not
+        // managed frames, so they are NATIVE rather than MANAGED.
+        MRT_Check(lastFrameType == FrameType::MANAGED || lastFrameType == FrameType::NATIVE ||
+                      lastFrameType == FrameType::UNKNOWN || lastFrameType == FrameType::RUNTIME ||
+                      lastFrameType == FrameType::RETURN_SAFEPOINT,
+                  "");
         N2CSlotData* n2cSlotData = N2CFrame::GetSlotData(mFrame.GetFA());
         isReliableN2CStub |= (n2cSlotData->status == UnwindContextStatus::RELIABLE);
         frameInfo.SetFrameType(FrameType::N2C_STUB);
+    } else if (mFrame.IsReturnSafepointHandlerStubFrame()) {
+        isReliableN2CStub = false;
+        frameInfo.SetFrameType(FrameType::RETURN_SAFEPOINT);
     } else if (mFrame.IsSafepointHandlerStubFrame()) {
         isReliableN2CStub = false;
         frameInfo.SetFrameType(FrameType::SAFEPOINT);
@@ -149,17 +158,22 @@ void StackInfo::AnalyseAndSetFrameType(UnwindContext& uwContext)
         // be directly identified by the runtime library address.
         if (isReliableN2CStub) {
             frameInfo.SetFrameType(FrameType::RUNTIME);
-        } else {
+        } else if (ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(mFrame.GetIP()))) {
             frameInfo.SetFrameType(FrameType::MANAGED);
             isReliableN2CStub = false;
             frameInfo.ResolveProcInfo();
+        } else {
+            // C++ / runtime-transition frames are not managed. GetFuncStartPC
+            // loads fa-1 and faults when that slot is not a function entry.
+            frameInfo.SetFrameType(FrameType::NATIVE);
+            isReliableN2CStub = false;
         }
         return;
     }
 
     // When the stack is not empty, it is necessary to determine whether a current
     // context is the context of n2c.
-    if (stack.size() != 0 && IsN2CContext(uwContext)) {
+    if (lastFrameType != FrameType::UNKNOWN && IsN2CContext(uwContext)) {
         // If the context has not been set to n2cstub before, you need to set it to
         // runtime frame.
         if (frameInfo.GetFrameType() == FrameType::UNKNOWN) {
@@ -171,7 +185,7 @@ void StackInfo::AnalyseAndSetFrameType(UnwindContext& uwContext)
 
 // The current judgment of anchor context is made by comparing the previous stack
 // frame type and the current stack frame type.
-bool StackInfo::IsN2CContext(const UnwindContext& uwContext) const
+bool StackFrameStream::IsN2CContext(const UnwindContext& uwContext) const
 {
     if ((lastFrameType == FrameType::MANAGED && uwContext.frameInfo.GetFrameType() == FrameType::RUNTIME) ||
         uwContext.frameInfo.GetFrameType() == FrameType::N2C_STUB) {
@@ -181,10 +195,54 @@ bool StackInfo::IsN2CContext(const UnwindContext& uwContext) const
     }
 }
 
-uint32_t* StackInfo::GetAnchorFAFromMutatorContext() const
+uint32_t* StackFrameStream::GetAnchorFAFromMutatorContext() const
 {
     UnwindContext& localContext = Mutator::GetMutator()->GetUnwindContext();
     return localContext.anchorFA;
+}
+
+void StackFrameStream::Start()
+{
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    CheckTopUnwindContextAndInit(current);
+    done = current.frameInfo.mFrame.IsAnchorFrame(anchorFA);
+    if (!done) { AnalyseAndSetFrameType(current); }
+}
+
+void StackFrameStream::Next()
+{
+    if (done) { return; }
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    lastFrameType = current.frameInfo.GetFrameType();
+    UnwindContext caller;
+#ifndef _WIN64
+    const bool advanced = current.UnwindToCallerContext(caller);
+#else
+    const bool advanced = current.UnwindToCallerContext(caller, uwCtxStatus);
+#endif
+    done = !advanced || caller.frameInfo.mFrame.IsAnchorFrame(anchorFA);
+    caller.frameInfo.mFrame.SetSP(current.frameInfo.CallerSP());
+    current = caller;
+    if (!done) { AnalyseAndSetFrameType(current); }
+}
+
+void StackFrameStream::Rebase(intptr_t offset)
+{
+    if (anchorFA != nullptr) {
+        anchorFA = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(anchorFA) + offset);
+    }
+    if (done) { return; }
+    MachineFrame& frame = current.frameInfo.mFrame;
+    frame.SetFA(reinterpret_cast<FrameAddress*>(reinterpret_cast<uintptr_t>(frame.GetFA()) + offset));
+    if (frame.GetSP() != 0) { frame.SetSP(frame.GetSP() + offset); }
+}
+
+void StackInfo::ProcessOnIteration(const FrameInfo& frame)
+{
+    if (processingOwner != nullptr && frame.GetFrameType() == FrameType::MANAGED) {
+        StackWatermarkSet::start_processing(*processingOwner);
+        StackWatermarkSet::on_iteration(*processingOwner, frame);
+    }
 }
 
 void StackInfo::ExtractLiteFrameInfoFromStack(std::vector<uint64_t>& liteFrameInfos, size_t steps) const

@@ -17,6 +17,9 @@
 #endif
 
 extern uintptr_t unwindPCForSafepointHandlerStub;
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+extern uintptr_t unwindPCForReturnSafepointHandlerStub;
+#endif
 extern uintptr_t unwindPCForN2CStub;
 extern uintptr_t unwindPCForC2NStub;
 extern uintptr_t unwindPCForC2RStubStart;
@@ -128,6 +131,15 @@ bool MachineFrame::IsSafepointHandlerStubFrame() const
         reinterpret_cast<uintptr_t>(&unwindPCForSafepointHandlerStub);
 #else
     return reinterpret_cast<uintptr_t>(ip) == reinterpret_cast<uintptr_t>(&unwindPCForSafepointHandlerStub);
+#endif
+}
+
+bool MachineFrame::IsReturnSafepointHandlerStubFrame() const
+{
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+    return reinterpret_cast<uintptr_t>(ip) == reinterpret_cast<uintptr_t>(&unwindPCForReturnSafepointHandlerStub);
+#else
+    return false;
 #endif
 }
 

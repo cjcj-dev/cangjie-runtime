@@ -11,6 +11,7 @@
 #include "os/Loader.h"
 #include "StackMap/StackMap.h"
 #include "StackMetadataHelper.h"
+#include "Exception/EhFrameInfo.h"
 #include "Loader/ElfUnloadQuiescence.h"
 
 #include <cstdarg>
@@ -29,10 +30,53 @@ void SigAppend(char* buf, size_t cap, const char* fmt, ...)
     CHECK_IN_SIG(n != -1);
 }
 } // namespace
+// The sender SP comes from the frame that is still present, never from a
+// guessed frame size at an already dismantled return site.
+uintptr_t FrameInfo::CallerSP() const
+{
+    const uintptr_t fp = reinterpret_cast<uintptr_t>(mFrame.GetFA());
+#if defined(__x86_64__) && !defined(_WIN64)
+    return fp + sizeof(FrameAddress);
+#elif defined(__aarch64__) && !defined(__APPLE__)
+    switch (GetFrameType()) {
+        case FrameType::RETURN_SAFEPOINT:
+        case FrameType::SAFEPOINT:
+        case FrameType::STACKGROW: return fp + 0x310;
+        case FrameType::C2R_STUB: return fp + 8 * 14;
+        case FrameType::C2N_STUB: return fp + 8 * 32;
+        case FrameType::MANAGED: {
+            ElfUnloadQuiescence::ReadScope reader;
+            FuncDescRef desc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(GetStartProc()));
+            if (desc == nullptr) { return 0; }
+            Uptr* table = desc->GetStackMap();
+            uint32_t position = 0;
+            (void)EHFrameInfo::ReadVarInt(&table, position);
+            (void)EHFrameInfo::ReadVarInt(&table, position);
+            uint32_t bitmap = EHFrameInfo::ReadVarInt(&table, position);
+            size_t saved = 0;
+            while (bitmap != 0) {
+                const uint32_t offset = EHFrameInfo::ReadVarInt(&table, position);
+                if (offset != 0 && offset != 1) { ++saved; }
+                bitmap &= bitmap - 1;
+            }
+            return fp + sizeof(FrameAddress) + ((saved + 1) & ~size_t(1)) * sizeof(uintptr_t);
+        }
+        default: return 0;
+    }
+#else
+    // No return poll ABI has been supplied for these compiler targets.
+    return 0;
+#endif
+}
+
 void FrameInfo::ResolveProcInfo()
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     startProc = GetFuncStartPC();
+    if (startProc == nullptr) {
+        lsdaStart = nullptr;
+        return;
+    }
 #ifdef __APPLE__
     FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(mFrame.GetFA());
 #else

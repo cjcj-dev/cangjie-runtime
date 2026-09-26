@@ -24,7 +24,12 @@
 #include "Handshake.h"
 #include "Mutator.inline.h"
 #include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zRootsIterator.hpp"
+#include "UnwindStack/StackFrameCursor.h"
 #include "schedule.h"
+#include <memory>
+#include <vector>
 #include "Loader/PackageInit.h"
 #include "CpuProfiler/CpuProfiler.h"
 
@@ -73,20 +78,9 @@ bool IsGcThread()
 
 extern "C" void HandleSafepoint(ThreadLocalData* tlData)
 {
-    Handshake::Current().process_by_self();
-    Mutator* mutator = tlData->mutator;
-    if (mutator != nullptr) {
-        mutator->DoEnterSaferegion();
-        mutator->DoLeaveSaferegion();
-    }
-    UpdatePollValues(tlData);
-    DLOG(SIGNAL, "HandleSafepoint, thread restarted.");
-}
-
-#if defined (__arm__)
-extern "C" void HandleSafepointForArm(ThreadLocalData* tlData)
-{
-    if (tlData->safepointState == 0) {
+    // safepointMechanism.cpp:81-94: ordinary polls test bit0. A disarmed ~1
+    // or a watermark SP is not an armed safepoint; return polls use their stub.
+    if (tlData == nullptr || !tlData->IsPollArmed()) {
         return;
     }
     Handshake::Current().process_by_self();
@@ -94,6 +88,58 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData)
     if (mutator != nullptr) {
         mutator->DoEnterSaferegion();
         mutator->DoLeaveSaferegion();
+        StackWatermarkSet::on_safepoint(*mutator);
+    }
+    UpdatePollValues(tlData);
+    DLOG(SIGNAL, "HandleSafepoint, thread restarted.");
+}
+
+// safepoint.cpp:818-839: name the return oops, keep them live across the
+// request, then write the updated values back into the saved registers.
+extern "C" void HandleReturnSafepoint(ThreadLocalData* tlData)
+{
+    Mutator* mutator = tlData == nullptr ? nullptr : tlData->mutator;
+    struct Binding {
+        ObjectRef* slot;
+        Handle handle;
+    };
+    std::vector<Binding> bindings;
+    std::unique_ptr<HandleMark> roots;
+    if (mutator != nullptr) {
+        roots.reset(new HandleMark(*mutator));
+        std::vector<StackFrameCursor::ReturnRegisterRoot> named;
+        StackFrameCursor::CollectReturnRegisterRoots(mutator->GetUnwindContext().frameInfo, named);
+        for (const StackFrameCursor::ReturnRegisterRoot& root : named) {
+            bindings.push_back(Binding { root.slot, Handle(mutator, root.object) });
+        }
+    }
+    Handshake::Current().process_by_self();
+    if (mutator != nullptr) {
+        mutator->DoEnterSaferegion();
+        mutator->DoLeaveSaferegion();
+        StackWatermarkSet::on_safepoint(*mutator);
+        StackWatermarkSet::after_unwind(*mutator);
+    }
+    for (Binding& binding : bindings) {
+        StorePlain(*binding.slot, from_object(binding.handle()));
+    }
+    if (tlData != nullptr) {
+        UpdatePollValues(tlData);
+    }
+}
+
+#if defined (__arm__)
+extern "C" void HandleSafepointForArm(ThreadLocalData* tlData)
+{
+    if (!tlData->IsPollArmed()) {
+        return;
+    }
+    Handshake::Current().process_by_self();
+    Mutator* mutator = tlData->mutator;
+    if (mutator != nullptr) {
+        mutator->DoEnterSaferegion();
+        mutator->DoLeaveSaferegion();
+        StackWatermarkSet::on_safepoint(*mutator);
     }
     UpdatePollValues(tlData);
     DLOG(SIGNAL, "HandleSafepoint, thread restarted.");

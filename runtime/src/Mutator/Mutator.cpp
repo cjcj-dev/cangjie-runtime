@@ -578,6 +578,23 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             }
             return 0;
         }
+        // continuationFreezeThaw.cpp:748 unwind_frames() before :787 copy_to_chunk.
+        // The lock stays held through the copy, the historical-colour shift and
+        // the poll publication (stackWatermark.cpp:184-196).
+        struct StackGrowRootFlush {
+            explicit StackGrowRootFlush(StackWatermark& owner) : owner(owner) { owner.BeginGrowFlush(); }
+            ~StackGrowRootFlush() { End(); }
+            void Shift(intptr_t offset) { owner.ShiftForGrow(offset); }
+            void End()
+            {
+                if (!ended) {
+                    owner.EndGrowFlush();
+                    ended = true;
+                }
+            }
+            StackWatermark& owner;
+            bool ended = false;
+        } flush(stackWatermark);
         intptr_t stackOffset;
         // When frameBase is 0, it is actively invoked in the FFI. In this case, the stack is expanded to the maximum.
         // When frameBase != 0, the stack check is invoked. In this case, the stack is expanded by two times by default.
@@ -656,6 +673,13 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>> derivedSlots;
         RecordStackPtrs(rootSlots, derivedSlots);
 
+        // Publish the shifted watermark before dropping its lock. VisitStackRoots
+        // takes MutatorLock and then the watermark lock, so this lock cannot be
+        // held across MutatorLock.
+        flush.Shift(stackOffset);
+        UpdatePollValues(ThreadLocal::GetThreadLocalData());
+        flush.End();
+
         // Serialize against VisitStackRoots / concurrent GC stack fill (stackwm #7 Q4):
         // absolute-FA caches must not be built against a half-moved stack.
         MutatorLock();
@@ -675,9 +699,6 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         }
 
         uwContext.anchorFA = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
-
-        // stackwm #7: publish movable-stack generation. cursorIndex is logical — not rebased.
-        stackWatermark.OnStackGrow(stackOffset);
         MutatorUnlock();
 
         return stackOffset;
@@ -792,33 +813,24 @@ static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool
 
 bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
-    // ZGC zStackWatermark.cpp:163-214: the closure reads the color saved in
-    // start_processing_impl, not the previous epoch's headColor.
-    RootVisitor visitor = [this, young, stackScanEpoch](ObjectRef& root) {
-        const uintptr_t rootColor = stackScanEpoch == 0 ? GetGCData().storeGoodMask
-            : GetStackWatermark().uncolored_root_color();
-        VisitHeapRootSlots(root, [young, rootColor](ObjectRef& slot) {
-            (void)PushHeapRoot(slot, young, rootColor);
-        });
-    };
-    RootVisitor invisibleRootVisitor = [this, young, stackScanEpoch](ObjectRef& root) {
-        const uintptr_t rootColor = stackScanEpoch == 0 ? GetGCData().storeGoodMask
-            : GetStackWatermark().uncolored_root_color();
-        (void)PushHeapRoot(root, young, rootColor, false);
-    };
-    DerivedPtrVisitor derivedVisitor = MakeDerivedRootVisitor(visitor);
-    if (stackScanEpoch == 0) {
-        VisitHeapReferences(visitor, visitor, derivedVisitor, visitor, invisibleRootVisitor, young);
+    (void)bySelf;
+    if (stackScanEpoch != 0) {
+        StackWatermarkSet::finish_processing(*this, reinterpret_cast<void*>(ZUncoloredRoot::mark));
         return true;
     }
-    size_t frames = 0;
-    (void)bySelf;
-    bool scanned = StackWatermarkSet::finish_processing(*this, visitor, invisibleRootVisitor, stackScanEpoch,
-                                                        &derivedVisitor, frames);
-    if (scannedFrames != nullptr) {
-        *scannedFrames = frames;
-    }
-    return scanned;
+    const uintptr_t color = GetGCData().storeGoodMask;
+    RootVisitor visitor = [this, young, color](ObjectRef& root) {
+        VisitHeapRootSlots(root, [young, color](ObjectRef& slot) {
+            (void)PushHeapRoot(slot, young, color);
+        });
+    };
+    RootVisitor invisible = [this, young, color](ObjectRef& root) {
+        (void)PushHeapRoot(root, young, color, false);
+    };
+    DerivedPtrVisitor derived = MakeDerivedRootVisitor(visitor);
+    VisitHeapReferences(visitor, visitor, derived, visitor, invisible, young);
+    (void)scannedFrames;
+    return true;
 }
 
 DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor)
