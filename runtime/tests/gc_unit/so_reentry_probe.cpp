@@ -23,6 +23,23 @@
 #include <unistd.h>
 
 #include "Common/Runtime.h"
+#include "ExceptionManager.h"
+#include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
+
+// The concurrency model the product's own guard path reads
+// (Mutator::StackGuardExpand asks GetStackGuardCheckFlag, Mutator.cpp:406). The
+// abstract base has no other implementation of it, so the fixture supplies the
+// one the default configuration runs with: guard pages checked, and the
+// configured reserved size the model reports for the runtime-thread branch.
+class FixtureConcurrencyModel final : public MapleRuntime::ConcurrencyModel
+{
+public:
+    FixtureConcurrencyModel() { stackGuardCheck = true; }
+    void VisitGCRoots(RootVisitor*) override {}
+    size_t GetReservedStackSize() const override { return reservedStackSize; }
+    bool GetStackGuardCheckFlag() const override { return stackGuardCheck; }
+};
 
 // The product's own scheduler entry, called the way CJThreadModel::Init calls it
 // (CJThreadModel.cpp:197-216): attribute init, the reserved-stack set that must happen
@@ -35,7 +52,17 @@
 // product source is recompiled into this executable and no product export is added.
 class PublishedRuntime final : public MapleRuntime::Runtime {
 public:
-    PublishedRuntime() { runtime = this; }
+    PublishedRuntime()
+    {
+        runtime = this;
+        // The managers the recovery path reaches for: the exception manager that owns
+        // the raiser ThrowImplicitException dispatches through (ExceptionManager.cpp:363)
+        // and the concurrency model StackGuardExpand asks about the guard page. Both are
+        // runtime singletons the product fills in at startup; the fixture supplies the
+        // two this path reads and nothing else.
+        exceptionManager = new MapleRuntime::ExceptionManager();
+        concurrencyModel = new FixtureConcurrencyModel();
+    }
     ~PublishedRuntime() override { runtime = nullptr; }
     RuntimeParam GetRuntimeParam() const override { return {}; }
     void SetGCThreshold(uint64_t) override {}
@@ -232,18 +259,129 @@ int ExpandRecover()
     return ok ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// The real recovery entry: ExceptionManager::StackOverflow, entered the way the
+// cangjie-runtime#1167 core entered it.
+//
+// The core's repeating prefix is ExceptionManager::StackOverflow ->
+// ThrowImplicitException (ExceptionManager.cpp:358-370) -> ExecuteCangjieStub ->
+// the raiser, and the raiser's own stack check brings the cycle back to
+// StackOverflow before any clearer has run. This case builds that cycle for
+// real: it registers a raiser through the product's own
+// ExceptionManager::RegisterExceptionRaiser (ExceptionManager.h:86) and calls
+// the product's ExceptionManager::StackOverflow (ExceptionManager.cpp:113)
+// directly, so every turn runs the product's expand, the product's throw and
+// the product's raiser dispatch. The raiser performs the one step the real
+// consumer performs between turns — the marker clear of
+// ExceptionWrapper::Reset/ClearInfo (ExceptionCApi.cpp:45,
+// Mutator.cpp:194-197) — and re-enters the same product entry, so the recursion
+// is the product's, not a loop that calls the guard API and returns.
+//
+// The turn count is bounded by the raiser itself: the cycle ends by decision,
+// with a diagnosable end state, which is the invariant the issue states. A turn
+// that could not end would end in a signal instead, and the run script reports
+// that as a failure of this case.
+// ---------------------------------------------------------------------------
+
+// Turns of the real chain. The core recorded ~1100 before the wild dispatch;
+// 64 separates "bounded" from "one step per turn" without depending on how deep
+// a real overflow happened to go, and keeps the recursion inside the cjthread
+// stack so the case measures the guard, not the c thread stack.
+constexpr int kCycleTurns = 64;
+
+MapleRuntime::Mutator *g_cycleMutator = nullptr;
+int g_cycleDepth = 0;
+int g_cycleTurnsDone = 0;
+void *g_cycleGuardFirstTurn = nullptr;
+uintptr_t g_cycleGuardLowest = UINTPTR_MAX;
+
+void CycleRaiser(int type, void *threadData)
+{
+    (void)type;
+    (void)threadData;
+    g_cycleDepth++;
+    if (g_cycleDepth > g_cycleTurnsDone) {
+        g_cycleTurnsDone = g_cycleDepth;
+    }
+    // The product's own threshold after the turn's expand, read back the way the
+    // managed runtime reads it. This is the value the target assertion consumes.
+    uintptr_t guard = reinterpret_cast<uintptr_t>(CJ_CJThreadStackGuardGet());
+    if (guard < g_cycleGuardLowest) {
+        g_cycleGuardLowest = guard;
+    }
+    if (g_cycleDepth == 1) {
+        g_cycleGuardFirstTurn = CJ_CJThreadStackGuardGet();
+    }
+    if (g_cycleDepth >= kCycleTurns) {
+        // Bounded end: the cycle stops here, on purpose, with a readable state.
+        return;
+    }
+    // What the consumer does before the next turn (ExceptionCApi.cpp:45): the
+    // throwing marker is cleared. It does not run the guard recover — that is
+    // the pair this issue is about, and the failing re-entry prefix in the core
+    // never reached it.
+    g_cycleMutator->GetExceptionWrapper().ClearInfo();
+    // Re-enter the product's own overflow handler: the next turn is product code
+    // from here to the raiser again.
+    MapleRuntime::ExceptionManager::StackOverflow(0, reinterpret_cast<void *>(&CycleRaiser));
+    g_cycleDepth--;
+}
+
+int ExpandCycle()
+{
+    void *before = CJ_CJThreadStackGuardGet();
+    void *stackEnd = CJ_CJThreadStackAddrGet();
+    uintptr_t reserved = CJ_CJThreadStackReversedGet();
+    if (!Preconditions(before, stackEnd, reserved)) {
+        Report("CYCLE", 0);
+        return 2;
+    }
+    // The product's mutator, on this cjthread, so ExceptionManager::StackOverflow
+    // has a real receiver with a real vtable and a real ExceptionWrapper — the
+    // dispatch the core died in.
+    g_cycleMutator = new MapleRuntime::Mutator();
+    g_cycleMutator->InitTid();
+    MapleRuntime::MutatorManager::Instance().BindMutator(*g_cycleMutator);
+    MapleRuntime::Runtime::Current().GetExceptionManager().RegisterExceptionRaiser(
+        reinterpret_cast<void *>(&CycleRaiser));
+    std::fprintf(stderr, "SO_REENTRY_CYCLE_ARM mutator=%p raiser=registered turns=%d\n",
+        static_cast<void *>(g_cycleMutator), kCycleTurns);
+    g_cycleGuardLowest = reinterpret_cast<uintptr_t>(before);
+    CycleRaiser(0, nullptr);
+    void *after = CJ_CJThreadStackGuardGet();
+    intptr_t walked = static_cast<intptr_t>(g_cycleGuardLowest) - static_cast<intptr_t>(after);
+    std::fprintf(stderr,
+        "SO_REENTRY_CYCLE_TURNS turns=%d deepest=%d guard_first_turn=%p guard_after=%p walked=%zd\n",
+        kCycleTurns, g_cycleTurnsDone, g_cycleGuardFirstTurn, after, static_cast<ssize_t>(walked));
+    // Target 1 (real recursion, product frames): every planned turn really ran
+    // through the product's overflow handler. Proved by the depth the product's
+    // own raiser reached, not by a call count in this file.
+    bool deep = g_cycleTurnsDone == kCycleTurns;
+    // Target 2 (bounded): the guard the product installed on the first turn is
+    // the guard it still has, and it still names an address inside the stack.
+    bool stable = g_cycleGuardFirstTurn != nullptr && after == g_cycleGuardFirstTurn;
+    bool inside = reinterpret_cast<uintptr_t>(after) >= reinterpret_cast<uintptr_t>(stackEnd);
+    int ok = deep && stable && inside ? 1 : 0;
+    std::fprintf(stderr,
+        "SO_REENTRY_CYCLE_OK turns=%d deepest=%d stable=%d above_stack_end=%d walked=%zd ok=%d\n",
+        kCycleTurns, g_cycleTurnsDone, stable ? 1 : 0, inside ? 1 : 0, static_cast<ssize_t>(walked), ok);
+    Report("CYCLE", ok);
+    return ok ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     if (argc != 2) {
-        std::fprintf(stderr, "usage: %s once|bounded|recover\n", argv[0]);
+        std::fprintf(stderr, "usage: %s once|bounded|recover|reentry|cycle\n", argv[0]);
         Finish(2);
     }
     int caseId = std::strcmp(argv[1], "once") == 0 ? 1
         : std::strcmp(argv[1], "bounded") == 0 ? 2
         : std::strcmp(argv[1], "recover") == 0 ? 3
-        : std::strcmp(argv[1], "reentry") == 0 ? 4 : 0;
+        : std::strcmp(argv[1], "reentry") == 0 ? 4
+        : std::strcmp(argv[1], "cycle") == 0 ? 5 : 0;
     if (caseId == 0) {
         std::fprintf(stderr, "SO_REENTRY_UNKNOWN_CASE name=%s\n", argv[1]);
         Finish(2);
@@ -265,6 +403,8 @@ int main(int argc, char **argv)
             Finish(ExpandRecover());
         case 4:
             Finish(ExpandReentry());
+        case 5:
+            Finish(ExpandCycle());
         default:
             Finish(2);
     }

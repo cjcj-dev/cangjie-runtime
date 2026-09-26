@@ -19,12 +19,22 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 CXX="${CXX:-clang++}"
 
 mkdir -p "$SIGNAL_TEST_OUTPUT"
-"$CXX" -std=c++17 -O2 -pthread -fno-rtti \
-    -I"$repo/runtime/src" -I"$repo/runtime/src/Heap" -I"$repo/runtime/include" \
-    -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
-    "$repo/runtime/tests/gc_unit/so_reentry_probe.cpp" \
-    -L"$GCV2_RUNTIME_LIB_DIR" -Wl,-rpath,"$GCV2_RUNTIME_LIB_DIR" \
-    -lcangjie-runtime -lboundscheck -ldl -o "$SIGNAL_TEST_OUTPUT/so-reentry-bounded"
+# The executable is a function of the probe source and the headers only: no rpath and no
+# baked-in library path, so the same bytes can be run against any product SO. A caller
+# that already built it (the cut/restored/base arms of this issue's evidence) hands the
+# path in and every arm then runs that one file, byte for byte.
+if [[ -n "${SO_REENTRY_TEST_ELF:-}" ]]; then
+  cp -p "$SO_REENTRY_TEST_ELF" "$SIGNAL_TEST_OUTPUT/so-reentry-bounded"
+else
+  "$CXX" -std=c++17 -O2 -pthread -fno-rtti \
+      -I"$repo/runtime/src" -I"$repo/runtime/src/Heap" -I"$repo/runtime/include" \
+      -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
+      "$repo/runtime/tests/gc_unit/so_reentry_probe.cpp" \
+      -L"$GCV2_RUNTIME_LIB_DIR" \
+      -lcangjie-runtime -lboundscheck -ldl -o "$SIGNAL_TEST_OUTPUT/so-reentry-bounded"
+fi
+# The library search path is the arm's, set per run from the environment, so the same
+# executable can be linked at run time against a base, candidate or cut product SO.
 export LD_LIBRARY_PATH="$GCV2_RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # Hashes captured where they are produced, before any run.
 sha256sum "$SIGNAL_TEST_OUTPUT/so-reentry-bounded" \
@@ -38,9 +48,10 @@ declare -A TARGET=(
   [bounded]=SO_REENTRY_EXPAND_BOUNDED_OK
   [recover]=SO_REENTRY_EXPAND_RECOVER_OK
   [reentry]=SO_REENTRY_EXPAND_REENTRY_OK
+  [cycle]=SO_REENTRY_CYCLE_OK
 )
 overall=0
-for case_name in once bounded recover reentry; do
+for case_name in once bounded recover reentry cycle; do
   log="$SIGNAL_TEST_OUTPUT/so_reentry_$case_name.log"
   set +e
   "$SIGNAL_TEST_OUTPUT/so-reentry-bounded" "$case_name" >"$log" 2>&1
@@ -64,4 +75,4 @@ done
 if [[ $overall -ne 0 ]]; then
   exit 1
 fi
-echo "SO_REENTRY_BOUNDED_OK cases=4 target_assertions=4"
+echo "SO_REENTRY_BOUNDED_OK cases=5 target_assertions=5"
