@@ -338,6 +338,7 @@ MAIN_SOURCES=(
   "$SRC/test_zLiveMap.cpp"
   "$SRC/test_region_age.cpp"
   "$SRC/test_unwind_regressions.cpp"
+  "$SRC/test_return_frame_slot_root.cpp"
   "$SRC/test_stackmap_base_capture.cpp"
   "$SRC/test_gctibzero.cpp"
   "$SRC/test_field_iterator.cpp"
