@@ -971,7 +971,6 @@ namespace MapleRuntime {
 extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
 extern "C" void CJ_MCC_StoreBarrierOnHeapField(volatile zpointer*);
 extern "C" void CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(volatile zpointer*);
-extern "C" const uintptr_t g_cjStoreBarrierBufferOffset;
 extern "C" const uintptr_t g_cjStoreBarrierBufferCurrentOffset;
 extern "C" const uintptr_t g_cjStoreBarrierBufferBufferOffset;
 extern "C" const uintptr_t g_cjStoreBarrierEntrySize;
@@ -1004,7 +1003,7 @@ void* FillByteBuffer(void* context)
         ThreadGCDataABI::LoadBadMask == offsetof(ThreadGCData, loadBadMask) &&
         ThreadGCDataABI::StoreBadMask == offsetof(ThreadGCData, storeBadMask) &&
         ThreadGCDataABI::StoreGoodMask == offsetof(ThreadGCData, storeGoodMask) &&
-        g_cjStoreBarrierBufferOffset == offsetof(ThreadGCData, storeBarrierBuffer) &&
+        ThreadGCDataABI::StoreBarrierBuffer == offsetof(ThreadGCData, storeBarrierBuffer) &&
         g_cjStoreBarrierBufferCurrentOffset == offsetof(StoreBarrierBuffer, current) &&
         g_cjStoreBarrierBufferBufferOffset == offsetof(StoreBarrierBuffer, buffer) &&
         g_cjStoreBarrierEntrySize == sizeof(StoreBarrierEntry) &&

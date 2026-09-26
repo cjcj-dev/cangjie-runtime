@@ -99,10 +99,10 @@ extern "C" MRT_EXPORT void CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(volatile zp
     ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing_no_keep_alive(slot);
 }
 
-// Buffer-internal offsets remain runtime ABI. Thread/mask offsets are compile-time
-// constants, checked in ThreadLocal.h and zThreadLocalData.hpp against
-// ThreadGCDataABI (ZGC zThreadLocalData.hpp:115-132).
-extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferOffset = ThreadGCData::store_barrier_buffer_offset();
+// Buffer-internal offsets remain runtime ABI. Thread, mask, and the
+// thread-to-buffer offset are compile-time constants, checked in
+// ThreadLocal.h and zThreadLocalData.hpp against ThreadGCDataABI
+// (ZGC zThreadLocalData.hpp:115-133; zBarrierSetAssembler_x86.cpp:478).
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferCurrentOffset = StoreBarrierBuffer::current_offset();
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferBufferOffset = StoreBarrierBuffer::buffer_offset();
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierEntrySize = sizeof(StoreBarrierEntry);

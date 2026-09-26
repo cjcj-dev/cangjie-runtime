@@ -17,6 +17,6 @@ CANGJIE {
           CreateCJThread;SuspendCJThread;ResumeCJThread;GetCJThreadState;GetCJThreadResult;DestoryCJThread;
           AddHandlerToSignalStack;RemoveHandlerFromSignalStack;sigaction;signal;sigprocmask;
           _Z30CJ_MRT_GetCJThreadNumberUnsafev;_Z25CJ_MRT_GetAllCJThreadInfoPvj;RegisterStackInfoCallbacks;
-          g_cjStoreBarrierBufferOffset;g_cjStoreBarrierBufferCurrentOffset;g_cjStoreBarrierBufferBufferOffset;g_cjStoreBarrierEntrySize;g_cjStoreBarrierEntryPOffset;g_cjStoreBarrierEntryPrevOffset;
+          g_cjStoreBarrierBufferCurrentOffset;g_cjStoreBarrierBufferBufferOffset;g_cjStoreBarrierEntrySize;g_cjStoreBarrierEntryPOffset;g_cjStoreBarrierEntryPrevOffset;
   local: *; # Hide everything else.
 };
