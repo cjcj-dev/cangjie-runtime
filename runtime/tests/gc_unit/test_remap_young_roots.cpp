@@ -12,6 +12,7 @@
 #include "gc_unittest.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "CangjieRuntime.h"
@@ -24,6 +25,26 @@ extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
 
 namespace {
 using namespace MapleRuntime;
+
+class HandshakeRuntime final : public Runtime {
+public:
+    HandshakeRuntime()
+    {
+        runtime = this;
+        mutatorManager = &manager;
+        manager.Init();
+        manager.RegisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
+    }
+    ~HandshakeRuntime() override
+    {
+        manager.UnregisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
+        runtime = nullptr;
+    }
+    RuntimeParam GetRuntimeParam() const override { return {}; }
+    void SetGCThreshold(uint64_t) override {}
+private:
+    MutatorManager manager;
+};
 
 static void ManagedFrameIp() {}
 
@@ -220,6 +241,7 @@ GC_TEST(StackWatermark, HistoricalColorCoverage)
 // above every stack address, while ordinary polling only observes bit zero.
 GC_TEST(StackWatermark, SharedPollWordArmAndDisarm)
 {
+    HandshakeRuntime host;
     ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
     const uintptr_t saved = tls->GetPollWord();
     struct Restore {
@@ -300,6 +322,7 @@ GC_TEST(StackWatermark, RemapRetainsLogicalStackIdentityAcrossGrow)
 GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
 {
     EnsureImages();
+    HandshakeRuntime host;
     uint32_t* epoch = ZPointerStoreGoodMaskLowOrderBitsAddr;
     const uint32_t savedEpoch = *epoch;
     ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
