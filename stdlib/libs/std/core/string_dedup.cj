@@ -8,20 +8,10 @@
 
 package std.core
 
-// Only String supplies this ABI: promotion cannot distinguish immutable String
-// backing from mutable byte arrays. The pin protects the input during registration.
-// L01s: register through the existing pinned-input C ABI. A managed return
-// of the canonical RawArray requires a compiler intrinsic (tracked separately).
-foreign func CJ_MRT_RequestStringDedup(data: CPointer<UInt8>, length: UIntNative): Unit
+@Intrinsic
+func canonicalizeStringBacking(candidate: RawArray<UInt8>): RawArray<UInt8>
 
 func canonicalizeString(candidate: String): String {
-    unsafe {
-        let data = acquireRawData<UInt8>(candidate.myData)
-        try {
-            CJ_MRT_RequestStringDedup(data, UIntNative(candidate.length))
-        } finally {
-            releaseRawData<UInt8>(candidate.myData, data)
-        }
-    }
-    return candidate
+    let backing = canonicalizeStringBacking(candidate.myData)
+    return String(backing, 0u32, candidate.length)
 }

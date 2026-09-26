@@ -4,26 +4,22 @@
 #ifndef MRT_STRING_DEDUP_H
 #define MRT_STRING_DEDUP_H
 
-#include <condition_variable>
 #include <functional>
 #include <mutex>
-#include <thread>
 #include <unordered_map>
-#include <vector>
 #include "Common/BaseObject.h"
+#include "Common/TypeDef.h"
 
 namespace MapleRuntime {
-// L01s: weak runtime slots hold byte arrays, never language String values.
-// Neither requests nor table entries are enumerated as strong roots.
+// Weak table of byte arrays. String is a value type, so this call returns the
+// canonical array instead of rewriting a heap String (stringDedupTable.cpp:634).
 class StringDedup {
     friend class StringDedupTest;
 public:
     static StringDedup& Instance();
     void Start();
     void Stop();
-    // Only the explicit String ABI supplies immutable content, pinned for this call.
-    // RawArray type alone is insufficient: ordinary byte arrays are mutable.
-    void RequestString(const uint8_t* data, size_t length);
+    ArrayRef Canonical(const TypeInfo* arrayInfo, ArrayRef candidate);
     void Clean(const std::function<bool(BaseObject*)>& isAlive);
 
 private:
@@ -31,20 +27,13 @@ private:
         zpointer value;
     };
     using Table = std::unordered_multimap<size_t, WeakSlot>;
+    static bool Accepts(const TypeInfo* arrayInfo, ArrayRef candidate);
     static BaseObject* Resolve(WeakSlot& slot);
     size_t Hash(BaseObject* object) const;
-    void Run();
-    void Process(WeakSlot slot);
     StringDedup();
     ~StringDedup() { Stop(); }
-    // Resolution can publish another promotion request on the same GC thread.
     std::recursive_mutex mutex;
-    std::condition_variable_any condition;
-    std::thread processor;
     bool stopped = true;
-    size_t suspended = 0;
-    std::vector<WeakSlot> requests;
-    std::vector<WeakSlot> processing;
     Table table;
     uint64_t hashSeed;
 };

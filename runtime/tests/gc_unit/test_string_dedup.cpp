@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 // Private table observations are available only in the matching product configuration.
 #if defined(MRT_TESTABLE_INTERNALS)
+#include <cstdio>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/shared/stringdedup/stringDedup.hpp"
@@ -12,7 +13,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
-extern "C" void CJ_MRT_RequestStringDedup(const uint8_t* data, size_t length);
+extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate);
 
 class StringDedupTest {
 public:
@@ -25,17 +26,7 @@ public:
         dedup.hashSeed = saved;
         return hash;
     }
-    static size_t Pending() { return StringDedup::Instance().requests.size(); }
     static size_t Entries() { return StringDedup::Instance().table.size(); }
-    static void ProcessRequests()
-    {
-        auto& dedup = StringDedup::Instance();
-        while (!dedup.requests.empty()) {
-            auto slot = dedup.requests.back();
-            dedup.requests.pop_back();
-            dedup.Process(slot);
-        }
-    }
 };
 }
 
@@ -70,26 +61,30 @@ GC_TEST(StringDedup, SameLengthKeepsDistinctBacking)
     arrays.first->SetPrimitiveElement<I8>(1, 31);
     arrays.second->SetPrimitiveElement<I8>(0, 1);
     arrays.second->SetPrimitiveElement<I8>(1, 0);
-    CJ_MRT_RequestStringDedup(arrays.first->ConvertToCArray(), arrays.first->GetLength());
-    CJ_MRT_RequestStringDedup(arrays.second->ConvertToCArray(), arrays.second->GetLength());
-    GC_EXPECT_EQ(StringDedupTest::Pending(), 2U);
-    StringDedupTest::ProcessRequests();
+    auto* left = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.first);
+    auto* right = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.second);
+    GC_EXPECT_TRUE(left == arrays.first);
+    GC_EXPECT_TRUE(right == arrays.second);
     GC_EXPECT_EQ(StringDedupTest::Entries(), 2U);
 }
 
-// TestStringDeduplication: equal immutable String values share a weak table entry.
-// The managed canonical return is tracked separately; this checks registration.
+// TestStringDeduplication: equal values share one weak table entry, and the
+// second call returns that entry (stringDedupTable.cpp:634).
 GC_TEST(StringDedup, ExplicitEqualStringBackingFindsEntry)
 {
     ByteArrays arrays;
     for (auto* array : {arrays.first, arrays.second}) {
         array->SetPrimitiveElement<I8>(0, 7);
         array->SetPrimitiveElement<I8>(1, 9);
-        CJ_MRT_RequestStringDedup(array->ConvertToCArray(), array->GetLength());
     }
-    GC_EXPECT_EQ(StringDedupTest::Pending(), 2U);
-    StringDedupTest::ProcessRequests();
+    auto* first = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.first);
+    auto* second = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.second);
     GC_EXPECT_EQ(StringDedupTest::Entries(), 1U);
+    GC_EXPECT_TRUE(first == arrays.first);
+    const int hit = second == arrays.first ? 1 : 0;
+    std::printf("STRING_DEDUP_CANONICAL_HIT second_is_first=%d\n", hit);
+    std::fflush(stdout);
+    GC_EXPECT_TRUE(second == arrays.first);
 }
 
 // TestStringDeduplicationFullGC: weak storage drops dead table and queued values.
@@ -100,15 +95,21 @@ GC_TEST(StringDedup, CleanDeadTableAndRequest)
     auto& dedup = StringDedup::Instance();
     arrays.first->SetPrimitiveElement<I8>(0, 7);
     arrays.first->SetPrimitiveElement<I8>(1, 9);
-    CJ_MRT_RequestStringDedup(arrays.first->ConvertToCArray(), arrays.first->GetLength());
-    StringDedupTest::ProcessRequests();
+    auto* installed = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.first);
+    GC_EXPECT_TRUE(installed == arrays.first);
     GC_EXPECT_EQ(StringDedupTest::Entries(), 1U);
-    CJ_MRT_RequestStringDedup(arrays.second->ConvertToCArray(), arrays.second->GetLength());
+    arrays.second->SetPrimitiveElement<I8>(0, 1);
+    arrays.second->SetPrimitiveElement<I8>(1, 2);
+    auto* other = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.second);
+    GC_EXPECT_TRUE(other == arrays.second);
+    GC_EXPECT_EQ(StringDedupTest::Entries(), 2U);
     dedup.Clean([&](BaseObject* object) { return object == arrays.first; });
-    StringDedupTest::ProcessRequests();
     GC_EXPECT_EQ(StringDedupTest::Entries(), 1U);
     dedup.Clean([](BaseObject*) { return false; });
     GC_EXPECT_EQ(StringDedupTest::Entries(), 0U);
+    auto* again = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.first);
+    GC_EXPECT_TRUE(again == arrays.first);
+    GC_EXPECT_EQ(StringDedupTest::Entries(), 1U);
 }
 
 // TestStringDeduplicationYoungGC adaptation: only explicit String ABI requests
@@ -118,9 +119,27 @@ GC_TEST(StringDedup, RejectOrdinaryObject)
     GcHeapFixture heap;
     auto& dedup = StringDedup::Instance();
     dedup.Stop();
-    CJ_MRT_RequestStringDedup(reinterpret_cast<uint8_t*>(heap.obj0) + MArray::GetContentOffset(), 2);
-    GC_EXPECT_EQ(StringDedupTest::Pending(), 0U);
+    auto* rejected = MCC_StringDedupCanonicalImpl(heap.typeInfo, reinterpret_cast<ArrayRef>(heap.obj0));
+    GC_EXPECT_TRUE(rejected == reinterpret_cast<ArrayRef>(heap.obj0));
+    GC_EXPECT_EQ(StringDedupTest::Entries(), 0U);
     dedup.Stop();
+}
+
+GC_TEST(StringDedup, EmptyLengthNotInstalled)
+{
+    ByteArrays arrays;
+    arrays.first->SetLength(0);
+    auto* returned = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.first);
+    GC_EXPECT_TRUE(returned == arrays.first);
+    GC_EXPECT_EQ(StringDedupTest::Entries(), 0U);
+}
+
+GC_TEST(StringDedup, NullCandidateReturned)
+{
+    ByteArrays arrays;
+    auto* returned = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, nullptr);
+    GC_EXPECT_TRUE(returned == nullptr);
+    GC_EXPECT_EQ(StringDedupTest::Entries(), 0U);
 }
 
 // AltHashingTest.halfsiphash_test_ByteArray: upstream aggregate reference vector.

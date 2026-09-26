@@ -90,6 +90,8 @@ extern "C" MRT_EXPORT void CJ_MCC_EndCatch();
 __asm__(".global _CJ_MCC_EndCatch\n\t.set _CJ_MCC_EndCatch, _MCC_EndCatch");
 extern "C" MRT_EXPORT ArrayRef CJ_MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const ArrayRef exceptionMessage);
 __asm__(".global _CJ_MCC_FillInStackTraceImpl\n\t.set _CJ_MCC_FillInStackTraceImpl, _MCC_FillInStackTraceImpl");
+extern "C" MRT_EXPORT ArrayRef CJ_MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate);
+__asm__(".global _CJ_MCC_StringDedupCanonicalImpl\n\t.set _CJ_MCC_StringDedupCanonicalImpl, _MCC_StringDedupCanonicalImpl");
 extern "C" MRT_EXPORT void CJ_MCC_ReleaseRawData(ArrayRef array, void* rawPtr);
 __asm__(".global _CJ_MCC_ReleaseRawData\n\t.set _CJ_MCC_ReleaseRawData, _MCC_ReleaseRawData");
 extern "C" MRT_EXPORT TypeInfo* CJ_MCC_GetObjClass(const ObjectPtr obj);

@@ -242,13 +242,9 @@ public struct String <: Collection<Byte> & Comparable<String> & Hashable & ToStr
     }
 
     /**
-     * Registers the effective UTF-8 backing as a weak deduplication candidate.
-     * Returns the candidate while managed canonical-backing return is unavailable.
-     *
-     * This operation is explicit and functional: it does not change this
-     * String value. Callers must retain the returned value. A sliced String is
-     * first detached from its larger backing so canonicalization cannot make a
-     * short-lived slice retain unrelated bytes.
+     * Returns a String whose backing is the canonical byte array for this
+     * content. Empty strings stay empty. A sliced String is first detached
+     * from its larger backing. This value is not modified.
      */
     public func deduplicated(): String {
         if (length == 0) {

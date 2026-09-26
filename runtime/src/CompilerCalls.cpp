@@ -8,6 +8,7 @@
 #include "Heap/z/zAccess.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include "CompilerCalls.h"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zBarrierSet.hpp"
 #include "Mutator/ThreadLocal.h"
 
@@ -770,6 +771,11 @@ extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const Ar
         array->SetPrimitiveElement(i, static_cast<int64_t>(liteFrameInfos[i]));
     }
     return array;
+}
+
+extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate)
+{
+    return StringDedup::Instance().Canonical(arrayInfo, candidate);
 }
 
 extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint64_t pc, const uint64_t funcDesc,

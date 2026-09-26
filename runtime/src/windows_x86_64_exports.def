@@ -2716,3 +2716,6 @@ EXPORTS
     CJ_MCC_LoadBarrierOnOopFieldPreloaded @3515
     CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded @3516
     g_cjMarkBadMaskOffset @3517 DATA
+    CJ_MCC_StringDedupCanonical @3518
+    CJ_MCC_StringDedupCanonicalImpl @3519
+    MCC_StringDedupCanonicalImpl @3520
