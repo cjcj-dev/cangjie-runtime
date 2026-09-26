@@ -20,6 +20,7 @@ set(GC_UNIT_SOURCES
     test_zIndexDistributor.cpp
     test_zValue.cpp
     test_zUtils.cpp
+    test_align.cpp
     test_used_generation.cpp
     test_zstat.cpp
     test_zstat_heap.cpp

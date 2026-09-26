@@ -327,6 +327,7 @@ MAIN_SOURCES=(
   "$SRC/test_zIndexDistributor.cpp"
   "$SRC/test_zValue.cpp"
   "$SRC/test_zUtils.cpp"
+  "$SRC/test_align.cpp"
   "$SRC/test_used_generation.cpp"
   "$SRC/test_zstat.cpp"
   "$SRC/test_zstat_heap.cpp"

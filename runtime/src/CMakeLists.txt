@@ -9,7 +9,7 @@ include_directories(${BOUNDSCHECK_INCLUDE})
 # ZGC OS_HEADER(gc/z/zPhysicalMemoryBacking): CMake picks os/<os> include dir.
 if (WINDOWS_FLAG MATCHES 1)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/Heap/z/os/windows)
-elseif (MACOS_FLAG MATCHES 1)
+elseif (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/Heap/z/os/bsd)
 else()
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/Heap/z/os/linux)
