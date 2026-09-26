@@ -25,7 +25,7 @@ set(SRC_LIST
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 if (WINDOWS_FLAG MATCHES 1)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/windows)
-elseif (MACOS_FLAG MATCHES 1)
+elseif (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/bsd)
 else()
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/linux)
@@ -67,7 +67,7 @@ if (WINDOWS_FLAG MATCHES 1)
         "z/zNUMA_windows.cpp"
     )
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/windows)
-elseif (MACOS_FLAG MATCHES 1)
+elseif (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
     list(APPEND SRC_LIST
         "z/zVirtualMemoryManager_posix.cpp"
         "z/zPhysicalMemoryBacking_bsd.cpp"
