@@ -38,7 +38,6 @@ flags=(
   -I runtime/src
   -I runtime/include
   -I runtime/src/Heap
-  -I runtime/src/Heap/z/os/bsd
   -I runtime/src/Mutator
   -I "$bc/include"
   -I "$cj/runtime/schedule/include"
