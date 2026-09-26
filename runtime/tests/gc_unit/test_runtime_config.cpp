@@ -121,7 +121,7 @@ void CheckMaximumBytes(const char* input, size_t expected)
     GC_EXPECT_EQ(actual, expectedCapacity);
     GC_EXPECT_EQ(capacity, expectedCapacity);
 }
-void CheckMaximumRejected(const char* input)
+void CheckMaximumRejected(const char* input, const char* diagnostic = "Invalid cjHeapSize")
 {
     int output[2];
     GC_EXPECT_EQ(pipe(output), 0);
@@ -149,7 +149,7 @@ void CheckMaximumRejected(const char* input)
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
-    const bool diagnosed = transcript.find("Invalid cjHeapSize") != std::string::npos;
+    const bool diagnosed = transcript.find(diagnostic) != std::string::npos;
     std::fprintf(stderr, "MAX_REJECT_ASSERT input=%s status=%d rejected=%d diagnosed=%d\n%s",
                  input, status, rejected, diagnosed, transcript.c_str());
     GC_EXPECT_TRUE(rejected && diagnosed);
@@ -165,9 +165,9 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TwoCharacterUnit) { CheckMaximumBytes("64M
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, InteriorWhitespace) { CheckMaximumBytes("6 4MB", 64UL * 1024 * 1024); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, LeadingWhitespace) { CheckMaximumBytes(" 64MB", 64UL * 1024 * 1024); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TrailingWhitespace) { CheckMaximumBytes("64MB ", 64UL * 1024 * 1024); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, NumberOverflow) { CheckMaximumRejected("18446744073709551616"); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, NumberOverflow) { CheckMaximumRejected("18446744073709551616KB"); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, UnitOverflow) { CheckMaximumRejected("18014398509481984KB"); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Negative) { CheckMaximumRejected("-64M"); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Negative) { CheckMaximumRejected("-64MB"); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Zero) { CheckMaximumRejected("0"); }
 
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiKilobytes)
@@ -206,7 +206,7 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiEnvironmentBytes)
 }
 
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, TooSmall) { CheckMaximumRejected("1MB"); }
-GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, AlignmentOverflow) { CheckMaximumRejected("18446744073709551615"); }
+GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, AlignmentOverflow) { CheckMaximumRejected("18014398509481983KB", "maximum heap alignment overflows bytes"); }
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, Minimum) { CheckMaximumBytes("2MB", 2UL * 1024 * 1024); }
 
 GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiMinimum)
