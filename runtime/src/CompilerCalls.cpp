@@ -99,14 +99,9 @@ extern "C" MRT_EXPORT void CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(volatile zp
     ZBarrierSetRuntime::store_barrier_on_oop_field_without_healing_no_keep_alive(slot);
 }
 
-// Transitional exports for existing compiler artifacts. The 64-bit layout is
-// pinned by ThreadGCDataABI and static assertions in the owning headers.
-// Remove these exports with the paired LLVM constant-offset lowering.
-extern "C" MRT_EXPORT const uintptr_t g_cjThreadGCDataOffset = offsetof(ThreadLocalData, gcData);
-extern "C" MRT_EXPORT const uintptr_t g_cjLoadBadMaskOffset = ThreadGCData::load_bad_mask_offset();
-extern "C" MRT_EXPORT const uintptr_t g_cjMarkBadMaskOffset = ThreadGCData::mark_bad_mask_offset();
-extern "C" MRT_EXPORT const uintptr_t g_cjStoreBadMaskOffset = ThreadGCData::store_bad_mask_offset();
-extern "C" MRT_EXPORT const uintptr_t g_cjStoreGoodMaskOffset = ThreadGCData::store_good_mask_offset();
+// Buffer-internal offsets remain runtime ABI. Thread/mask offsets are compile-time
+// constants, checked in ThreadLocal.h and zThreadLocalData.hpp against
+// ThreadGCDataABI (ZGC zThreadLocalData.hpp:115-132).
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferOffset = ThreadGCData::store_barrier_buffer_offset();
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferCurrentOffset = StoreBarrierBuffer::current_offset();
 extern "C" MRT_EXPORT const uintptr_t g_cjStoreBarrierBufferBufferOffset = StoreBarrierBuffer::buffer_offset();

@@ -7,6 +7,7 @@
 
 
 #include "gc_heap_fixture.hpp"
+#include <dlfcn.h>
 #include "Interpreter/Options.h"
 #include "Cangjie.h"
 #include "Heap/z/zDriver.hpp"
@@ -33,7 +34,6 @@ using namespace MapleRuntime::GcUnit;
 
 extern "C" ObjectPtr CJ_MCC_LoadBarrierOnOopFieldPreloaded(ObjectPtr, volatile zpointer*);
 extern "C" ObjectPtr CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded(ObjectPtr, volatile zpointer*);
-extern "C" const uintptr_t g_cjMarkBadMaskOffset;
 extern "C" MapleRuntime::ObjectPtr CJ_MCC_AtomicSwapReference(
     MapleRuntime::ObjectPtr ref, MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<true>* field,
     MapleRuntime::MemoryOrder order);
@@ -223,9 +223,9 @@ GC_TEST(LoadPreloaded, WeakHealsObservedSlot)
     GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj0);
 }
 
-GC_TEST(LoadPreloaded, ExportedMarkBadOffsetMatchesThreadData)
+GC_TEST(LoadPreloaded, ConstantMarkBadOffsetMatchesThreadData)
 {
-    GC_EXPECT_EQ(g_cjMarkBadMaskOffset, ThreadGCData::mark_bad_mask_offset());
+    GC_EXPECT_EQ(ThreadGCDataABI::MarkBadMask, ThreadGCData::mark_bad_mask_offset());
 }
 
 #ifdef INTERPRETER_ENABLED
@@ -290,3 +290,49 @@ GC_TEST(LoadPreloaded, InterpreterStackFieldUsesPlainAccessor)
     GC_EXPECT_EQ(raw(slot.LoadPlain()), reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
 #endif
+
+// ZGC zThreadLocalData.hpp:115-132: offsets are compiler constants, not data exports.
+GC_TEST(ThreadOffsetABI1140, g_cjThreadGCDataOffsetIsNotExported)
+{
+    // Positive control: the lookup must reach the loaded product runtime.
+    GC_EXPECT_TRUE(dlsym(RTLD_DEFAULT, "CJ_MCC_LoadBarrierOnOopFieldPreloaded") != nullptr);
+    void* exported = dlsym(RTLD_DEFAULT, "g_cjThreadGCDataOffset");
+    std::printf("OFFSET_ABI_TARGET symbol=g_cjThreadGCDataOffset exported=%d\n", exported != nullptr);
+    GC_EXPECT_TRUE(exported == nullptr);
+}
+
+GC_TEST(ThreadOffsetABI1140, g_cjLoadBadMaskOffsetIsNotExported)
+{
+    // Positive control: the lookup must reach the loaded product runtime.
+    GC_EXPECT_TRUE(dlsym(RTLD_DEFAULT, "CJ_MCC_LoadBarrierOnOopFieldPreloaded") != nullptr);
+    void* exported = dlsym(RTLD_DEFAULT, "g_cjLoadBadMaskOffset");
+    std::printf("OFFSET_ABI_TARGET symbol=g_cjLoadBadMaskOffset exported=%d\n", exported != nullptr);
+    GC_EXPECT_TRUE(exported == nullptr);
+}
+
+GC_TEST(ThreadOffsetABI1140, g_cjMarkBadMaskOffsetIsNotExported)
+{
+    // Positive control: the lookup must reach the loaded product runtime.
+    GC_EXPECT_TRUE(dlsym(RTLD_DEFAULT, "CJ_MCC_LoadBarrierOnOopFieldPreloaded") != nullptr);
+    void* exported = dlsym(RTLD_DEFAULT, "g_cjMarkBadMaskOffset");
+    std::printf("OFFSET_ABI_TARGET symbol=g_cjMarkBadMaskOffset exported=%d\n", exported != nullptr);
+    GC_EXPECT_TRUE(exported == nullptr);
+}
+
+GC_TEST(ThreadOffsetABI1140, g_cjStoreBadMaskOffsetIsNotExported)
+{
+    // Positive control: the lookup must reach the loaded product runtime.
+    GC_EXPECT_TRUE(dlsym(RTLD_DEFAULT, "CJ_MCC_LoadBarrierOnOopFieldPreloaded") != nullptr);
+    void* exported = dlsym(RTLD_DEFAULT, "g_cjStoreBadMaskOffset");
+    std::printf("OFFSET_ABI_TARGET symbol=g_cjStoreBadMaskOffset exported=%d\n", exported != nullptr);
+    GC_EXPECT_TRUE(exported == nullptr);
+}
+
+GC_TEST(ThreadOffsetABI1140, g_cjStoreGoodMaskOffsetIsNotExported)
+{
+    // Positive control: the lookup must reach the loaded product runtime.
+    GC_EXPECT_TRUE(dlsym(RTLD_DEFAULT, "CJ_MCC_LoadBarrierOnOopFieldPreloaded") != nullptr);
+    void* exported = dlsym(RTLD_DEFAULT, "g_cjStoreGoodMaskOffset");
+    std::printf("OFFSET_ABI_TARGET symbol=g_cjStoreGoodMaskOffset exported=%d\n", exported != nullptr);
+    GC_EXPECT_TRUE(exported == nullptr);
+}

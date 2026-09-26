@@ -2703,10 +2703,6 @@ EXPORTS
 
     CJ_MCC_StoreBarrierOnHeapField @3503
     CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive @3504
-    g_cjThreadGCDataOffset @3505 DATA
-    g_cjLoadBadMaskOffset @3506 DATA
-    g_cjStoreBadMaskOffset @3507 DATA
-    g_cjStoreGoodMaskOffset @3508 DATA
     g_cjStoreBarrierBufferOffset @3509 DATA
     g_cjStoreBarrierBufferCurrentOffset @3510 DATA
     g_cjStoreBarrierBufferBufferOffset @3511 DATA
@@ -2715,7 +2711,6 @@ EXPORTS
     g_cjStoreBarrierEntryPrevOffset @3514 DATA
     CJ_MCC_LoadBarrierOnOopFieldPreloaded @3515
     CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded @3516
-    g_cjMarkBadMaskOffset @3517 DATA
     CJ_MCC_StringDedupCanonical @3518
     CJ_MCC_StringDedupCanonicalImpl @3519
     MCC_StringDedupCanonicalImpl @3520
