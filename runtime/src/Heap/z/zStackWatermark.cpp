@@ -262,7 +262,15 @@ void StackWatermark::after_unwind()
     if (!frames.IsDone()) { ensure_safe(frames.Current()); }
 }
 
-void StackWatermark::on_iteration(const FrameInfo& frame) { ensure_safe(frame); }
+// stackWatermark.inline.hpp:70-71,127-131: on_iteration assumes processing has
+// already been started by on_safepoint; a watermark that never started exposes
+// nothing and has no iterator to walk. Same guard shape as before_unwind /
+// after_unwind above.
+void StackWatermark::on_iteration(const FrameInfo& frame)
+{
+    if (!processing_started() || IsDone() || !HasExposableFrame(owner)) { return; }
+    ensure_safe(frame);
+}
 
 StackWatermarkProcessOopClosure::RootFunction StackWatermarkProcessOopClosure::select_function(void* context)
 {

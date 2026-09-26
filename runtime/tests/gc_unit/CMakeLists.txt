@@ -106,6 +106,7 @@ set(GC_UNIT_SOURCES
     test_write_generic.cpp
     test_arraycopy.cpp
     test_cycle_ref_saferegion.cpp
+    test_watermark_iteration.cpp
     test_thread_smr_reclaim.cpp
 )
 
