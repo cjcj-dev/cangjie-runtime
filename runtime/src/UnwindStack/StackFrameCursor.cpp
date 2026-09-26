@@ -137,11 +137,13 @@ void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const Deri
     HeapReferenceMap roots = builder.Build<HeapReferenceMap>();
     // The returned frame is gone. Only the dedicated register map is legal;
     // neither spill slots nor its prologue's saved-register map may be used.
+    // safepoint.cpp:800-806: a return point protects the returned value from the
+    // saved_oop_result register slot only. There is no stackBase for a frame whose
+    // spill slots are already gone, so neither slot roots nor derived roots of the
+    // returned map may be visited here.
+    (void)derivedPtrVisitor;
     if (roots.IsValid()) {
         RegSlotsMap returnedRegisters = regSlotsMap;
-        DerivedPtrVisitor derived = derivedPtrVisitor != nullptr ? *derivedPtrVisitor :
-            Mutator::MakeDerivedRootVisitor(visitor);
-        roots.VisitDerivedPtr(derived, nullptr, returnedRegisters);
         roots.VisitRegRoots(visitor, nullptr, returnedRegisters);
     }
 #else
