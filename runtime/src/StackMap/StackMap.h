@@ -45,13 +45,13 @@ protected:
 
 class RootMap : public StackMap {
 public:
-    RootMap(Uptr base, PrologueRegisterClosure&& prologue) : StackMap(base), calleeSavedPrologue(std::move(prologue)) {}
-    RootMap(bool valid, Uptr base, const StackMapEntry& entry, PrologueRegisterClosure&& prologue)
-        : StackMap(valid, base), calleeSavedPrologue(std::move(prologue)), slotRoot(entry.BuildSlotRoot()),
+    explicit RootMap(Uptr base) : StackMap(base) {}
+    RootMap(bool valid, Uptr base, const StackMapEntry& entry)
+        : StackMap(valid, base), slotRoot(entry.BuildSlotRoot()),
           regRoot(entry.BuildRegRoot()) {}
     ~RootMap() override = default;
     RootMap(RootMap&& other)
-        : StackMap(std::move(other)), calleeSavedPrologue(std::move(other.calleeSavedPrologue)),
+        : StackMap(std::move(other)),
           slotRoot(std::move(other.slotRoot)), regRoot(other.regRoot) {}
     RootMap& operator=(RootMap&& other)
     {
@@ -59,7 +59,6 @@ public:
             return *this;
         }
         StackMap::operator=(std::move(other));
-        this->calleeSavedPrologue = std::move(other.calleeSavedPrologue);
         this->slotRoot = std::move(other.slotRoot);
         this->regRoot = other.regRoot;
         return *this;
@@ -78,22 +77,16 @@ public:
         slotRoot.VisitGCRoots(visitor, debugFunc, stackBase);
     }
 
-    void RecordCalleeSaved(RegSlotsMap& regSlotsMap) const
-    {
-        calleeSavedPrologue.RecordCalleeSaved(regSlotsMap, stackBase);
-    }
-
 protected:
-    PrologueRegisterClosure calleeSavedPrologue;
     SlotRoot slotRoot;
     RegRoot regRoot;
 };
 
 class HeapReferenceMap : public RootMap {
 public:
-    HeapReferenceMap(Uptr base, PrologueRegisterClosure&& prologue) : RootMap(base, std::move(prologue)) {}
-    HeapReferenceMap(bool valid, Uptr base, const StackMapEntry& entry, PrologueRegisterClosure&& prologue)
-        : RootMap(valid, base, entry, std::move(prologue)), derivedPtr(entry.BuildDerivedPtrRoot()),
+    explicit HeapReferenceMap(Uptr base) : RootMap(base) {}
+    HeapReferenceMap(bool valid, Uptr base, const StackMapEntry& entry)
+        : RootMap(valid, base, entry), derivedPtr(entry.BuildDerivedPtrRoot()),
           oopSlotRoot(entry.BuildOopSlotRoot()), oopRegRoot(entry.BuildOopRegRoot()) {}
     HeapReferenceMap(HeapReferenceMap&& other)
         : RootMap(std::move(other)), derivedPtr(other.derivedPtr),
@@ -147,6 +140,12 @@ public:
                 break;
             }
         }
+    }
+
+    bool HasRegisterRoots() const
+    {
+        return regRoot.CountRootSlots() != 0 || oopRegRoot.CountRootSlots() != 0 ||
+            derivedPtr.CountRootSlots().derivedRegs != 0;
     }
 
     StackMapRootCounts CountRootSlots() const
@@ -216,7 +215,18 @@ public:
     {
         // Reuse GC interface
         return gcRegRoot.VisitGCRoots(traceAndFixPtrVisitor, debugFunc, regSlotsMap, &rootsList) &&
-            stackPtrRegRoot.VisitGCRoots(fixPtrVisitor, debugFunc, regSlotsMap, nullptr);
+            VisitStackPointerRegs(fixPtrVisitor, debugFunc, regSlotsMap);
+    }
+
+    bool VisitStackPointerRegs(const StackPtrVisitor& visitor, const RegDebugVisitor& debugFunc,
+                               RegSlotsMap& registers)
+    {
+        return stackPtrRegRoot.VisitGCRoots(visitor, debugFunc, registers, nullptr);
+    }
+
+    bool HasGCRegisterRoots() const
+    {
+        return gcRegRoot.CountRootSlots() != 0 || derivedPtr.CountRootSlots().derivedRegs != 0;
     }
 
     void VisitSlot(const StackPtrVisitor& traceAndFixPtrVisitor, const StackPtrVisitor& fixPtrVisitor,
@@ -306,6 +316,21 @@ protected:
     uintptr_t stackBase;
     uint64_t *funcDesc;
 };
+
+// Compiled GC frames do not publish callee-saved locations (HotSpot
+// frame_x86.inline.hpp:455-464). Prologues belong only to movable-stack pointers.
+template<>
+inline HeapReferenceMap StackMapBuilder::Build<HeapReferenceMap>(bool countDerivedRows) const
+{
+    ElfUnloadQuiescence::ReadScope metadataReader;
+#ifdef __APPLE__
+    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
+#else
+    auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr);
+#endif
+    auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
+    return entry.IsValid() ? HeapReferenceMap(true, stackBase, entry) : HeapReferenceMap(stackBase);
+}
 
 // specialization for MethodMap which avoids using malloc().
 template<>

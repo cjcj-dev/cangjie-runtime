@@ -47,6 +47,7 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
                                                              reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         default:
+            regSlotsMap = RegSlotsMap();
             break;
     }
 #else
@@ -72,6 +73,7 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
             RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         default:
+            regSlotsMap = RegSlotsMap();
             break;
     }
     (void)mutator;
@@ -149,6 +151,7 @@ void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const Deri
 #else
     (void)visitor; (void)derivedPtrVisitor; (void)regSlotsMap; (void)frame;
 #endif
+    regSlotsMap = RegSlotsMap();
 }
 
 bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
@@ -187,17 +190,25 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
 #else
     if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
 #endif
+        regSlotsMap = RegSlotsMap();
         return;
     }
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(true);
     SlotDebugVisitor slotDebugFunc = nullptr;
     RegDebugVisitor regDebugFunc = nullptr;
     DerivedPtrVisitor derived =
         derivedPtrVisitor != nullptr ? *derivedPtrVisitor : Mutator::MakeDerivedRootVisitor(visitor);
     if (heapMap.IsValid()) {
+        // HotSpot frame_x86.inline.hpp:455-464: compiled calls cannot carry
+        // callee-saved GC roots. Poll/stackcheck blobs supply a full register map
+        // only for their immediate caller; returns use ProcessReturnFrame.
+        if (!regSlotsMap.allRegistersSaved && heapMap.HasRegisterRoots()) {
+            LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, start ip: %p frame pc: %p",
+                reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP));
+        }
         heapMap.VisitDerivedPtr(derived, nullptr, regSlotsMap);
         heapMap.VisitSlotRoots(visitor, slotDebugFunc);
         if (!heapMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
@@ -205,7 +216,7 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
                 reinterpret_cast<void*>(frameIP));
         }
     }
-    heapMap.RecordCalleeSaved(regSlotsMap);
+    regSlotsMap = RegSlotsMap();
 }
 }
 

@@ -61,6 +61,8 @@ struct StackMapRootCounts {
     size_t Total() const { return Base() + Derived(); }
 };
 struct RegSlotsMap {
+    // Only the managed caller immediately above a full-save stub may name GC registers.
+    bool allRegistersSaved = false;
     SlotAddress addrMap[REGISTERS_COUNT]{ nullptr };
     bool isRecorded[REGISTERS_COUNT]{ false };
     bool HasReg(RegisterNum reg) const { return isRecorded[reg]; }

@@ -41,6 +41,7 @@ public:
 
     static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
     {
+        regSlotsMap.allRegistersSaved = false;
         constexpr Uptr slotLength = 4;
         constexpr Uptr calleeSavedAreaOffset = 4 * 4;
         Uptr slotAddr = fp + calleeSavedAreaOffset;
@@ -53,6 +54,7 @@ public:
 
     static void RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
     {
+        regSlotsMap.allRegistersSaved = false;
         constexpr Uptr slotLength = 4;
         // arm32 C2NStub stores extra metadata ahead of the callee-saved area.
         constexpr Uptr calleeSavedAreaOffset = 4 * 6;
@@ -66,6 +68,7 @@ public:
 
     static void RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
     {
+        regSlotsMap.allRegistersSaved = false;
         constexpr Uptr slotLength = 4;
         // arm32 ExclusiveScope reserves an N2CSlotData area ahead of the callee-saved registers.
         constexpr Uptr calleeSavedAreaOffset = 4 * 5;
@@ -79,6 +82,7 @@ public:
 
     static void RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
     {
+        regSlotsMap.allRegistersSaved = true;
         constexpr Uptr slotLength = 4;
         constexpr Uptr registersAreaOffset = 4 * 4;
         Uptr slotAddr = fp + registersAreaOffset;

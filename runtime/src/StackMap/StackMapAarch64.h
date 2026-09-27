@@ -41,6 +41,7 @@ public:
 
     static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
     {
+        regSlotsMap.allRegistersSaved = false;
         constexpr Uptr slotLength = 8;
         constexpr Uptr calleeSavedAreaOffset = 8 * 4;
         Uptr slotAddr = fp + calleeSavedAreaOffset;
@@ -53,6 +54,7 @@ public:
 
     static void RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
     {
+        regSlotsMap.allRegistersSaved = true;
         constexpr Uptr slotLength = 8;
         constexpr Uptr registersAreaOffset = 8 * 2;
         Uptr slotAddr = fp + registersAreaOffset;

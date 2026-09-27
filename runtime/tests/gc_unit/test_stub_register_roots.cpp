@@ -18,6 +18,12 @@
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "gc_unittest.hpp"
+#include "UnwindStack/GcStackInfo.h"
+#if defined(__linux__)
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #if defined(__linux__) && defined(__x86_64__)
 using namespace MapleRuntime;
@@ -266,4 +272,88 @@ GC_OTHER_VM_TEST(StubRegisterRoots, RealReturnStub)
     GC_EXPECT_EQ(mismatches, size_t(0));
     GC_EXPECT_EQ(rewrite.seen, UINT32_MAX);
 }
+
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+namespace {
+void RunThreeFrameRoots(FrameType stub, bool invalidCaller)
+{
+    ConfigScope config;
+    static Descriptor maps[2];
+    InitDescriptor(maps[0], uint64_t(1) << R12);
+    InitDescriptor(maps[1], invalidCaller ? uint64_t(1) << R13 : 0);
+    alignas(16) uintptr_t storage[3][64] {};
+    auto* fp = &storage[0][56];
+    for (unsigned i = 0; i < 15; ++i) { fp[-1 - int(i)] = 0x10000 + savedGprs[i] * 16; }
+    const uintptr_t expected = 0x10000 + R12 * 16;
+    Mutator mutator;
+    GCStackInfo stack;
+    MachineFrame machine;
+    machine.SetFA(reinterpret_cast<FrameAddress*>(fp));
+    stack.GetStack().emplace_back(machine, stub);
+    for (unsigned i = 0; i < 2; ++i) {
+        FrameInfo frame(maps[i].pc);
+        frame.SetFrameType(FrameType::MANAGED);
+        frame.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&storage[i + 1][56]));
+        frame.mFrame.SetIP(maps[i].pc + 4);
+        stack.GetStack().push_back(frame);
+    }
+    size_t visits = 0;
+    uintptr_t observed = 0;
+    stack.VisitStackRoots([&](RootSlot& slot) {
+        observed = raw(slot.LoadPlain());
+        ++visits;
+        StorePlain(slot, to_zaddress(0x50000));
+    }, mutator);
+    uintptr_t* r12slot = nullptr;
+    for (unsigned i = 0; i < 15; ++i) { if (savedGprs[i] == R12) { r12slot = fp - 1 - i; } }
+    const bool healed = visits == 1 && observed == expected && *r12slot == 0x50000;
+    std::fprintf(stderr, "CALL_ROOT_RESULT stub=%d invalid=%d visits=%zu observed=%zx healed=%d\n",
+                 int(stub), invalidCaller, visits, observed, healed);
+    GC_EXPECT_TRUE(healed);
+}
+void CheckThreeFrameRoots(FrameType stub, bool invalidCaller)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        RunThreeFrameRoots(stub, invalidCaller);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char buffer[512];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) { transcript.append(buffer, count); }
+    close(output[0]);
+    std::fwrite(transcript.data(), 1, transcript.size(), stderr);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find("GC register root at ordinary statepoint") != std::string::npos;
+    const bool accepted = WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+        transcript.find("healed=1") != std::string::npos;
+    std::fprintf(stderr, "CALL_ROOT_TARGET stub=%d invalid=%d status=%d rejected=%d accepted=%d\n",
+                 int(stub), invalidCaller, status, rejected, accepted);
+    GC_EXPECT_TRUE(invalidCaller ? rejected : accepted);
+}
+}
+GC_OTHER_VM_TEST(CallRegisterRoots, RejectsThirdFrame)
+{
+    CheckThreeFrameRoots(FrameType::SAFEPOINT, true);
+}
+GC_OTHER_VM_TEST(CallRegisterRoots, PollCallerSurvives)
+{
+    CheckThreeFrameRoots(FrameType::SAFEPOINT, false);
+}
+GC_OTHER_VM_TEST(CallRegisterRoots, StackcheckCallerSurvives)
+{
+    CheckThreeFrameRoots(FrameType::STACKGROW, false);
+}
+#endif
 #endif
