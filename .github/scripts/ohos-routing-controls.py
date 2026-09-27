@@ -11,7 +11,9 @@ byte-identical copy of the SDK, so the cuts must NOT change any binary: arms are
 grouped into identity classes by (recipe, effective SDK path) and every artifact
 inside a class must be byte-identical, otherwise the arm is invalid.
 
-Classes per recipe group:
+Classes per recipe group (identity is compared byte-for-byte, with the
+CJRT-COMMIT source digest zeroed in .so files — a cut mutates runtime source,
+so the digest must change while every other byte must not):
   real SDK : candidate, restored, strip-cut, rename-cut (plus all cuts on the
              non-target architecture, where the mutation is inert)
   alternate SDK : sdkpath-control, producer-cut, consumer-cut
@@ -29,6 +31,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -52,14 +55,35 @@ observer = repo / 'runtime/tests/test_ohos_public_sdk.py'
 (out / 'observer.sha256').write_text(hashlib.sha256(observer.read_bytes()).hexdigest() + '\n')
 
 reroute_cuts = ('producer-cut', 'consumer-cut', 'buildpy-cut')
+control_arms = ('sdkpath-control', 'buildpy-control')
 
 
 def sdk_for(arm):
-    if arm in ('sdkpath-control', 'buildpy-control'):
+    """Effective SDK feeding the products (identity class axis)."""
+    if arm in control_arms:
         return alternative
     if arch == 'x86_64' and arm in reroute_cuts:
         return alternative
     return sdk
+
+
+def entry_sdk_for(arm):
+    """SDK handed to the entry. Cut arms get the REAL SDK: the reroute must
+    come from the mutation alone, otherwise the cut proves nothing."""
+    return alternative if arm in control_arms else sdk
+
+
+def normalized_identity(path):
+    """Byte identity modulo the runtime provenance stamp.
+
+    libcangjie-runtime.so embeds CJRT-COMMIT:src-<sha256>, a digest of the
+    runtime source content (runtime/build/cmake/GenerateRuntimeProvenance.cmake).
+    A cut mutates runtime source, so the stamp MUST differ between a cut arm
+    and its unmutated control; everything else MUST NOT. Normalizing the stamp
+    keeps the comparison live instead of dropping the .so from identity.
+    """
+    data = path.read_bytes()
+    return re.sub(b'CJRT-COMMIT:src-[0-9a-f]{64}', b'CJRT-COMMIT:src-' + b'0' * 64, data)
 
 
 def mutate(source, arm):
@@ -164,17 +188,17 @@ def run(arm, source):
     env['OHOS_ROUTE_CONTROL_SDK'] = str(alternative)
     env['CMAKE_EXPORT_COMPILE_COMMANDS'] = 'ON'
     build = source / 'configured'
-    effective_sdk = sdk_for(arm)
+    entry_sdk = entry_sdk_for(arm)
     command = ['cmake', '-S', str(source / 'runtime'), '-B', str(build),
                '-DCMAKE_BUILD_TYPE=Release', '-DOHOS_FLAG=' + ('2' if arch == 'x86_64' else '1'),
-               '-DOHOS_PUBLIC_SDK=' + str(effective_sdk), '-DCMAKE_INSTALL_PREFIX=' + str(source / 'install'),
+               '-DOHOS_PUBLIC_SDK=' + str(entry_sdk), '-DCMAKE_INSTALL_PREFIX=' + str(source / 'install'),
                '-DCOPYGC_FLAG=1', '-DDOPRA_FLAG=1', '-DRUNTIME_TRACE_FLAG=0',
                '-DCJ_SDK_VERSION=0.0.1', '-DDISABLE_VERSION_CHECK=1']
     if arch == 'aarch64':
         command += ['-DRUNTIME_FORWARD_PTRAUTH_CFI=1', '-DRUNTIME_BACKWARD_PTRAUTH_CFI=1']
     if arm.startswith('buildpy-'):
         command = [sys.executable, str(source / 'runtime/build.py'), 'build', '-t', 'release',
-                   '--target', 'ohos-' + arch, '--ohos-public-sdk', str(effective_sdk), '-v', '0.0.1']
+                   '--target', 'ohos-' + arch, '--ohos-public-sdk', str(entry_sdk), '-v', '0.0.1']
         build = source / 'runtime/CMakebuild'
     with (out / (arm + '.log')).open('w') as log:
         log.write(json.dumps(command) + '\n'); log.flush()
@@ -189,6 +213,8 @@ def run(arm, source):
     expected = expected_for(arm)
     failures = None
     artifacts = {}
+    identity_hashes = {}
+    stamps = {}
     observation = out / (arm + '.json')
     if observation.exists():
         parsed = json.loads(observation.read_text())
@@ -198,10 +224,16 @@ def run(arm, source):
         keep = out / 'artifacts' / arm
         keep.mkdir(parents=True, exist_ok=True)
         for entry in parsed['artifacts']:
-            shutil.copy2(entry['path'], keep / Path(entry['path']).name)
+            target = keep / Path(entry['path']).name
+            shutil.copy2(entry['path'], target)
+            identity_hashes[target.name] = hashlib.sha256(normalized_identity(target)).hexdigest()
+            match = re.search(b'CJRT-COMMIT:[^\\\\]+', target.read_bytes())
+            if match:
+                stamps[target.name] = match.group(0).decode()
     record = {'arm': arm, 'arch': arch, 'configure_rc': configured.returncode,
               'observer_rc': observed, 'failures': failures, 'expected_failures': expected,
-              'sdk_path': str(effective_sdk), 'artifacts': artifacts,
+              'sdk_path': str(sdk_for(arm)), 'artifacts': artifacts,
+              'identity_hashes': identity_hashes, 'stamps': stamps,
               'wall': round(time.monotonic() - started, 2)}
     record['routes_valid'] = (configured.returncode == 0 and failures == expected
                               and observed == (1 if expected else 0))
@@ -229,17 +261,32 @@ def run_group(arms, source):
             classes.setdefault(name, []).append(record)
     identity = []
     for name, members in sorted(classes.items()):
-        reference = members[0]['artifacts']
+        reference = members[0]['identity_hashes']
         table = {'class': name, 'reference_arm': members[0]['arm'],
-                 'arms': {m['arm']: m['artifacts'] for m in members}}
-        diverged = [m['arm'] for m in members if m['artifacts'] != reference]
+                 'arms': {m['arm']: m['artifacts'] for m in members},
+                 'identity_basis': 'normalized (CJRT-COMMIT source digest zeroed for .so)',
+                 'stamps': {m['arm']: m['stamps'] for m in members}}
+        diverged = [m['arm'] for m in members if m['identity_hashes'] != reference]
+        # Positive control: in a class pairing an unmutated control with cut arms,
+        # the .so provenance stamp MUST differ (the mutation changes the runtime
+        # source digest); an identical stamp means the stamp is dead or the
+        # mutation did not land in the product source.
+        controls = [m for m in members if m['arm'] in control_arms]
+        cuts = [m for m in members if m['arm'] in reroute_cuts]
+        stamp_dead = []
+        for control in controls:
+            for cut in cuts:
+                shared = set(control['stamps']) & set(cut['stamps'])
+                if shared and all(control['stamps'][s] == cut['stamps'][s] for s in shared):
+                    stamp_dead.append(cut['arm'])
         table['identical'] = not diverged
         table['diverged_arms'] = diverged
+        table['stamp_dead_arms'] = stamp_dead
         identity.append(table)
         for m in members:
             m['identity_class'] = name
-            m['identity_valid'] = not diverged
-            m['valid'] = m['routes_valid'] and not diverged
+            m['identity_valid'] = not diverged and m['arm'] not in stamp_dead
+            m['valid'] = m['routes_valid'] and m['identity_valid']
             (out / (m['arm'] + '-result.json')).write_text(json.dumps(m, indent=2) + '\n')
     for record in records:
         record.setdefault('valid', record['routes_valid'])
