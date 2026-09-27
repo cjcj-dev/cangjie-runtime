@@ -1371,6 +1371,61 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NestedRawAcquireAndEarlyReturns)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
+namespace {
+struct StaleHeaderRawResult {
+    int64_t afterAcquire = -1;
+    int64_t afterRelease = -1;
+    bool releaseReturned = false;
+};
+
+void* StaleHeaderRawTask(void* context)
+{
+    auto& result = *static_cast<StaleHeaderRawResult*>(context);
+    alignas(TypeInfo) static unsigned char types[2][sizeof(TypeInfo)]{};
+    auto* byteType = reinterpret_cast<TypeInfo*>(types[0]);
+    auto* arrayType = reinterpret_cast<TypeInfo*>(types[1]);
+    byteType->SetType(TypeKind::TYPE_KIND_UINT8);
+    byteType->SetInstanceSize(1);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetComponentTypeInfo(byteType);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(types), sizeof(types));
+    HandleMark mark(*Mutator::GetMutator());
+    Handle array(Mutator::GetMutator(), MCC_NewArray8(arrayType, 8));
+    auto* a = static_cast<MArray*>(array());
+    void* raw = MCC_AcquireRawData(a, nullptr);
+    result.afterAcquire = ZJNICritical::count_snapshot();
+    TypeInfo* saved = a->GetTypeInfo();
+    // ZGC jni.cpp:2881-2887 / zCollectedHeap.cpp:279-281: unpin re-resolves the
+    // reference and never dereferences the object header. A stale header
+    // (moved/reclaimed from-version) must not be read by release.
+    a->SetClassInfo(reinterpret_cast<TypeInfo*>(static_cast<uintptr_t>(0xdeadbeef8ULL)));
+    MCC_ReleaseRawData(a, raw);
+    result.releaseReturned = true;
+    a->SetClassInfo(saved);
+    result.afterRelease = ZJNICritical::count_snapshot();
+    return nullptr;
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, ReleaseRawDataIgnoresStaleHeader)
+{
+    RuntimeParam param{};
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    StaleHeaderRawResult result;
+    CJThreadHandle task = RunCJTask(StaleHeaderRawTask, &result);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "STALE_HEADER_RELEASE_TARGET acquired=%lld released=%lld returned=%d\n",
+        static_cast<long long>(result.afterAcquire), static_cast<long long>(result.afterRelease),
+        result.releaseReturned ? 1 : 0);
+    GC_EXPECT_TRUE(result.releaseReturned);
+    GC_EXPECT_EQ(result.afterAcquire, 1);
+    GC_EXPECT_EQ(result.afterRelease, 0);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
 GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NestedRawAcquireDuringBlock)
 {
     RuntimeParam param{};
