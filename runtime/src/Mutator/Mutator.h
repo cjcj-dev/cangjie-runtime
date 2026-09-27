@@ -89,6 +89,11 @@ public:
 
     ThreadGCData& GetGCData() { return gcData; }
     const ThreadGCData& GetGCData() const { return gcData; }
+    // threads.cpp:1108 set_terminated(_thread_gc_barrier_detached): set once
+    // the final GC publication and list removal have both completed inside the
+    // safepoint-exclusive critical section.
+    bool IsGCDetached() const { return gcDetached.load(std::memory_order_acquire); }
+    void SetGCDetached() { gcDetached.store(true, std::memory_order_release); }
     void ResetMutator();
 
     // HotSpot javaThread.hpp:878-885: critical regions nest per logical thread.
@@ -547,6 +552,7 @@ private:
     // this flag is used for gc unwind stack, when runtime-thread stack doesn't include managed frame,
     // we don't need to scan it.
     std::atomic<bool> inManagedContext = { true };
+    std::atomic<bool> gcDetached = { false };
     void* stackBoundAddr = { nullptr };
     std::mutex mutatorLock;
 

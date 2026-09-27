@@ -184,12 +184,10 @@ void MutatorManager::TransitMutatorToExit()
     // Complete this identity's phase processing before detaching its roots.
     // threads.cpp:1099-1114 keeps the watermark alive through the last transition.
     StackWatermarkSet::on_safepoint(*mutator);
-    // threads.cpp:1090-1114: final GC publication and list removal share
-    // the Threads_lock critical section held by the entire safepoint.
-    AcquireMutatorManagementWLockForExit(*mutator);
-    ZBarrierSet::on_thread_detach(mutator->GetGCData());
-    ThreadsSMRSupport::remove_thread(mutator);
-    MutatorManagementWUnlock();
+    // threads.cpp:1089-1104 (Threads::remove): the final GC publication and
+    // the list removal share the Threads_lock critical section held by the
+    // entire safepoint, and the exiting thread is not yet safepoint-safe.
+    RemoveMutator(*mutator);
     (void)mutator->EnterSaferegion(false);
     mutator->ResetMutator();
     UnbindMutator(*mutator);
@@ -203,26 +201,35 @@ void MutatorManager::TransitMutatorToExit()
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
     ConsumeCpuProfileRequest(mutator);
-    // threads.cpp:1089-1114: list removal always happens inside the
-    // safepoint-exclusive critical section. A thread that ran its exit
-    // transition was already removed by TransitMutatorToExit; an unstarted
-    // carrier freed through the CJThread destructor hook never did, so its
-    // removal is completed here under the same pause-exclusive lock.
+    // javaThread.cpp:878-898: a failed-attach cleanup enters the same
+    // Threads::remove. An unstarted carrier freed through the CJThread
+    // destructor hook never ran its exit transition, so its detach and
+    // removal are completed here; for a thread that already exited this is
+    // a no-op.
+    RemoveMutator(*mutator);
+    // threadSMR.cpp:912: waiting for readers must happen outside the lock.
+    ThreadsSMRSupport::smr_delete(mutator);
+}
+
+// threads.cpp:1089-1114: the final GC publication, the removal from the
+// thread list, and the GC-detached transition form one removal transaction
+// inside the safepoint-exclusive critical section (safepoint.cpp:346/465
+// holds Threads_lock for the whole pause).
+void MutatorManager::RemoveMutator(Mutator& mutator)
+{
     Mutator* current = Mutator::GetMutator();
     if (current != nullptr) {
+        // mutex.cpp:87-127: safepoint-cooperative blocking acquisition.
         AcquireMutatorManagementWLockForExit(*current);
     } else {
         MutatorManagementWLock();
     }
-    {
-        ThreadsListHandle handle;
-        if (handle.includes(mutator)) {
-            ThreadsSMRSupport::remove_thread(mutator);
-        }
+    if (!mutator.IsGCDetached()) {
+        ZBarrierSet::on_thread_detach(mutator.GetGCData());
+        ThreadsSMRSupport::remove_thread(&mutator);
+        mutator.SetGCDetached();
     }
     MutatorManagementWUnlock();
-    // threadSMR.cpp:912: waiting for readers must happen outside the lock.
-    ThreadsSMRSupport::smr_delete(mutator);
 }
 
 Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)

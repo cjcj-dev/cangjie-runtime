@@ -807,6 +807,41 @@ struct CancelledThreadCase {
 };
 void* EmptySnapshotTask(void*) { return nullptr; }
 void* NeverScheduledSnapshotTask(void*, unsigned int) { return nullptr; }
+// threads.cpp:1089-1114: the destructor of an unstarted carrier enters the
+// same pause-exclusive removal transaction as a regular exit.
+struct ExcludedFreeCase {
+    std::atomic<bool> ready{false};
+    std::atomic<bool> proceed{false};
+    std::atomic<bool> freeStarted{false};
+    std::atomic<bool> freeDone{false};
+    std::atomic<CJThread*> carrier{nullptr};
+    std::atomic<Mutator*> identity{nullptr};
+};
+void* ExcludedFreeTask(void* value)
+{
+    auto& state = *static_cast<ExcludedFreeCase*>(value);
+    CJThreadAttr attr;
+    CJThreadAttrInit(&attr);
+    CJThread* carrier = CJThreadBuild(reinterpret_cast<ScheduleHandle>(ThreadLocal::GetSchedule()), &attr,
+                                      NeverScheduledSnapshotTask, nullptr, 0, CJTHREAD_CREATE_SOURCE_DEFAULT,
+                                      ZPointerStoreGoodMask);
+    state.carrier.store(carrier, std::memory_order_release);
+    if (carrier != nullptr) {
+        ThreadsListHandle list;
+        for (size_t i = 0; i < list.length(); ++i) {
+            if (list.thread_at(i)->GetCjthreadPtr() == carrier) {
+                state.identity.store(list.thread_at(i), std::memory_order_release);
+                break;
+            }
+        }
+    }
+    state.ready.store(true, std::memory_order_release);
+    while (!state.proceed.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    state.freeStarted.store(true, std::memory_order_release);
+    CJ_CJThreadFree(carrier, true);
+    state.freeDone.store(true, std::memory_order_release);
+    return nullptr;
+}
 void* CancelBuiltSnapshotTask(void* value)
 {
     auto& state = *static_cast<CancelledThreadCase*>(value);
@@ -855,6 +890,49 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, UnstartedCarrierReleasesIdentity)
     std::fprintf(stderr, "THREAD_SNAPSHOT_CANCEL_TARGET executed=1 created=%d registered=%d removed=%d\n",
                  state.created, state.registered, state.removed);
     GC_EXPECT_TRUE(state.created && state.registered && state.removed);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// threads.cpp:1089-1114: while a pause holds the safepoint-exclusive lock,
+// the unstarted-carrier destructor cannot complete its removal; once the
+// pause releases it, the identity leaves the thread list.
+GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, UnstartedCarrierFreeExcludesPauseLock)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ExcludedFreeCase state;
+    auto task = RunCJTask(ExcludedFreeTask, &state);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!state.ready.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    auto& manager = MutatorManager::Instance();
+    manager.MutatorManagementWLock();
+    state.proceed.store(true, std::memory_order_release);
+    while (!state.freeStarted.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    // Give the worker ample time to reach the removal transaction.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    const bool doneWhileLocked = state.freeDone.load(std::memory_order_acquire);
+    manager.MutatorManagementWUnlock();
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &result), E_OK);
+    ReleaseHandle(task);
+    bool removed = false;
+    {
+        ThreadsListHandle list;
+        removed = state.identity.load() != nullptr && !list.includes(state.identity.load());
+    }
+    std::fprintf(stderr,
+                 "THREAD_SNAPSHOT_FREE_EXCLUSION executed=1 ready=%d started=%d done_while_locked=%d removed=%d\n",
+                 state.ready.load(), state.freeStarted.load(), doneWhileLocked, removed);
+    GC_EXPECT_TRUE(state.ready.load());
+    GC_EXPECT_TRUE(state.freeStarted.load());
+    GC_EXPECT_FALSE(doneWhileLocked);
+    GC_EXPECT_TRUE(removed);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif
