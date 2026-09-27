@@ -10,7 +10,7 @@
 
 #include <cassert>
 #include <thread>
-#if defined(__linux__) || defined(hongmeng)
+#ifndef _WIN64
 #include <unistd.h>
 #endif
 
