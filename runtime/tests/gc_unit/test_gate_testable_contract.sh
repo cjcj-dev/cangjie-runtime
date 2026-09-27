@@ -255,7 +255,7 @@ printf '#!/usr/bin/env bash\necho SEGMENTED_ARRAY_MANAGED >>"${GC_UNIT_GATE_TRAC
 chmod +x "$fixture/runtime/tests/gc_unit/run_segmented_array_managed.sh"
 touch "$fixture/lib/libcangjie-runtime.so"
 
-PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/defer.trace" GC_UNIT_OUT="$fixture/defer-out" \
+PATH="$fixture/bin:$PATH" MRT_GC_UNIT_OHOS_HOST=1 GC_UNIT_GATE_TRACE="$fixture/defer.trace" GC_UNIT_OUT="$fixture/defer-out" \
   GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_GATE_LANGUAGE_TESTS=defer \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/defer.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/defer.log" 2>&1
@@ -273,7 +273,7 @@ set -e
 [[ "$only_missing_rc" -eq 2 ]]
 /usr/bin/grep -qx 'REASON=LANGUAGE_SDK_MISSING' "$fixture/only-missing.status"
 
-PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/only.trace" GC_UNIT_OUT="$fixture/only-out" \
+PATH="$fixture/bin:$PATH" MRT_GC_UNIT_OHOS_HOST=ON GC_UNIT_GATE_TRACE="$fixture/only.trace" GC_UNIT_OUT="$fixture/only-out" \
   GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_GATE_LANGUAGE_TESTS=only \
   CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/only.status" \
