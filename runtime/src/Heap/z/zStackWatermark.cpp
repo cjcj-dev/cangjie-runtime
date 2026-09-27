@@ -169,7 +169,13 @@ private:
         owner.process(frame, cursor.RegMap(), context);
         if (frame.GetFrameType() != FrameType::MANAGED) { return; }
         ElfUnloadQuiescence::ReadScope metadataReader;
-        StackPtrMap pointers = StackMapBuilder(reinterpret_cast<uintptr_t>(frame.GetStartProc()),
+        const uintptr_t startPC = reinterpret_cast<uintptr_t>(frame.GetStartProc());
+#ifdef __APPLE__
+        if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) { return; }
+#else
+        if (MFuncDesc::GetFuncDesc(startPC) == nullptr) { return; }
+#endif
+        StackPtrMap pointers = StackMapBuilder(startPC,
             reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
             reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<StackPtrMap>();
         if (!pointers.IsValid()) { return; }
