@@ -19,7 +19,9 @@ source = Path(__file__).resolve().parents[2]
 arm = sys.argv[1] if len(sys.argv) > 1 else "candidate"
 out = Path(os.environ["RUNNER_TEMP"]) / "safepoint-windows" / arm
 out.mkdir(parents=True, exist_ok=True)
-tree = out / "runtime"
+# Matrix jobs use isolated machines and the same absolute product paths.
+# This also keeps paths embedded by nested builds identical across arms.
+tree = Path(os.environ["RUNNER_TEMP"]) / "safepoint-product" / "runtime"
 shutil.copytree(source, tree)
 stub = tree / "src/arch/x86_64_windows/HandleSafepointStub.S"
 before = stub.read_text()
@@ -69,7 +71,7 @@ rc = run(["cmake", "-S", tree, "-B", build, "-G", "Ninja",
           "-DCMAKE_C_FLAGS=-ffile-prefix-map=" + tree.as_posix() + "=/usr/src/cangjie-runtime",
           "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=" + tree.as_posix() + "=/usr/src/cangjie-runtime",
           "-DCMAKE_ASM_FLAGS=-ffile-prefix-map=" + tree.as_posix() + "=/usr/src/cangjie-runtime",
-          "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--no-insert-timestamp", "-DCMAKE_INSTALL_PREFIX=" + str(out / "install")],
+          "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--no-insert-timestamp", "-DCMAKE_INSTALL_PREFIX=" + str(tree.parent / "install")],
          "configure")
 if not rc:
     rc = run(["cmake", "--build", build, "--parallel", str(os.cpu_count())], "build")
