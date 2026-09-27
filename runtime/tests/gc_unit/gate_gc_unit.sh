@@ -354,6 +354,7 @@ fi
 # of SIGPIPE, and under `set -o pipefail` the whole pipeline reports 141 — which
 # silently kept this arm at CAN_RUN=0 on the full-size product SO.
 SO_REENTRY_SYMBOLS="$GC_UNIT_OUT/.so_reentry_symbols"
+mkdir -p "$GC_UNIT_OUT"
 if nm --defined-only "$SO" >"$SO_REENTRY_SYMBOLS" 2>/dev/null &&
    /usr/bin/grep -Eq '[[:space:]]CJ_CJThreadStackGuardExpand(@@?[^[:space:]]+)?$' "$SO_REENTRY_SYMBOLS" &&
    /usr/bin/grep -Eq '[[:space:]]CJ_CJThreadStackGuardRecover(@@?[^[:space:]]+)?$' "$SO_REENTRY_SYMBOLS" &&
