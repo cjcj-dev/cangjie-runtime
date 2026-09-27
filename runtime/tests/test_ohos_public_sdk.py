@@ -61,8 +61,14 @@ def main():
 
     install_script = (args.build / 'cmake_install.cmake').read_text()
     strip = str(sdk / 'llvm/bin/llvm-strip')
-    check('runtime.strip_route', strip in install_script and '/prebuilts/clang/ohos/' not in install_script,
-          [line.strip() for line in install_script.splitlines() if 'llvm-strip' in line])
+    # Two independent strip routes land in the install script: the STRIP_PROGRAM
+    # install(CODE) lines and CMake's CMAKE_STRIP-generated execute_process lines.
+    # A substring check is masked when only one route is cut, so require every
+    # strip command to reference the SDK strip.
+    strip_lines = [line.strip() for line in install_script.splitlines()
+                   if 'execute_process' in line and 'strip' in line]
+    check('runtime.strip_route', bool(strip_lines) and all(strip in line for line in strip_lines)
+          and '/prebuilts/clang/ohos/' not in install_script, strip_lines)
     renamed = list(args.build.rglob('libstdc++.so'))
     check('no_runtime_library_rename', not renamed, [str(p) for p in renamed])
     patterns = ('libcangjie-thread.a',) if args.configured_only else ('libcangjie-runtime.so', 'libcangjie-thread.a')
