@@ -56,13 +56,45 @@ def main():
     def save():
         (evidence / 'result.json').write_text(json.dumps(record, indent=2) + '\n')
 
+    def snapshot(name):
+        """Retain the producer's coordinates and bytes at entry boundaries."""
+        destination = evidence / name
+        destination.mkdir(exist_ok=True)
+        cache = build / 'CMakeCache.txt'
+        if cache.is_file():
+            shutil.copy2(cache, destination / cache.name)
+        root = source / 'output/temp'
+        inventory = []
+        for path in sorted(root.rglob('*')):
+            item = {'path': str(path), 'directory': path.is_dir()}
+            if path.is_file():
+                item['size'] = path.stat().st_size
+                if path.name in ('runtime-build-config.txt', 'runtime-build-inputs.txt',
+                                 'runtime-product-hashes.json'):
+                    target = destination / path.relative_to(root)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, target)
+                    item['sha256'] = sha(path)
+            inventory.append(item)
+        (destination / 'inventory.json').write_text(json.dumps(inventory, indent=2) + '\n')
+
     def run(name, command, cwd=source):
         start = time.monotonic()
         with (evidence / (name + '.log')).open('w') as log:
             log.write(repr([str(x) for x in command]) + '\n')
             log.flush()
-            rc = subprocess.run([str(x) for x in command], cwd=cwd, env=env,
-                                stdout=log, stderr=subprocess.STDOUT).returncode
+            with subprocess.Popen([str(x) for x in command], cwd=cwd, env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  text=True, errors='replace') as process:
+                publications = 0
+                for line in process.stdout:
+                    log.write(line)
+                    if line.startswith('RUNTIME_OUTPUT_PUBLISHED config='):
+                        publications += 1
+                        snapshot(f'{name}-published-{publications}')
+                rc = process.wait()
+        if name == 'production-entry':
+            snapshot('production-entry-completed')
         record['steps'][name] = {'rc': rc, 'wall': time.monotonic() - start}
         save()
         print(f'LINK_PUBLICATION_STEP {name} rc={rc} wall={time.monotonic() - start:.2f}', flush=True)
