@@ -45,7 +45,7 @@ if "%~1" == "-s" (
         if errorlevel 1 goto :cjthread_fail
     )
 
-    @REM Reconfiguration can follow runtime publication (make preinstall).
+    @REM Reconfiguration can follow runtime publication during make preinstall.
     @REM Preserve published output, as build_cjthread.sh does; clean only BUILD_PATH.
     if not exist "%PROJECT_PATH%\output" (
         md "%PROJECT_PATH%\output"
