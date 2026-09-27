@@ -135,18 +135,22 @@ def main():
     # Change a genuine linker flag, force the real linker/post-build entry, and
     # inspect the product's recorded input rather than calling a model helper.
     option = '-Wl,--nxcompat' if os.name == 'nt' else '-Wl,--as-needed'
-    changed = re.sub(r'(?m)^(.*clang\+\+[^\n]*)$', lambda m: m[1] + ' ' + option, content)
-    assert changed != content
+    cache = (build / 'CMakeCache.txt').read_text()
+    old_flags = re.search(r'^CMAKE_SHARED_LINKER_FLAGS:STRING=(.*)$', cache, re.M)[1]
     try:
-        selected.write_text(changed)
-        runtime.unlink()
+        # Configure the real flag: editing a generated recipe directly is not
+        # durable across CMake's automatic regeneration after cache updates.
+        assert run('changed-link-configure', ['cmake', '-S', source, '-B', build,
+                   '-DCMAKE_SHARED_LINKER_FLAGS=' + old_flags + ' ' + option]) == 0
         assert run('changed-link-build', ['cmake', '--build', build, '--target', 'cangjie-runtime', '--parallel', os.cpu_count()]) == 0
         changed_id, changed_inputs = publication('changed')
         print(f'LINK_IDENTITY_ASSERT before={original_id} after={changed_id}', flush=True)
         assert original_id != changed_id, 'actual linker input change did not change identity'
         assert any(option in value for value in changed_inputs['links'].values()), 'changed link command was not recorded'
     finally:
-        selected.write_text(content)
+        assert run('restored-link-configure', ['cmake', '-S', source, '-B', build,
+                   '-DCMAKE_SHARED_LINKER_FLAGS=' + old_flags]) == 0
+    assert run('restored-link-build', ['cmake', '--build', build, '--target', 'cangjie-runtime', '--parallel', os.cpu_count()]) == 0
     # Missing genuine inputs must fail even with the linked DLL/SO still present.
     response_files = []
     for key in original_inputs['links']:
