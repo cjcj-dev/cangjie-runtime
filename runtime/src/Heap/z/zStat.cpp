@@ -14,6 +14,7 @@
 #include "Base/GcLog.h"
 #include "Base/LogFile.h"
 #include "CangjieRuntime.h"
+#include "os/LoadAverage.h"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -1089,16 +1090,14 @@ void ZStatMMU::Print()
 // zStat.cpp:1410-1420
 void ZStatLoad::Print()
 {
-#if defined(__linux__) || defined(hongmeng)
     double loadavg[3] = {};
-    if (getloadavg(loadavg, 3) != -1) {
+    if (Os::GetLoadAverage(loadavg, 3) != -1) {
         const double cpus = static_cast<double>(ZCPU::count());
         LOG(RTLOG_INFO, "Load: %.2f (%.0f%%) / %.2f (%.0f%%) / %.2f (%.0f%%)",
             loadavg[0], loadavg[0] / cpus * 100.0,
             loadavg[1], loadavg[1] / cpus * 100.0,
             loadavg[2], loadavg[2] / cpus * 100.0);
     }
-#endif
 }
 
 // zStat.cpp:1423-1456
