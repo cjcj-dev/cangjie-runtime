@@ -22,7 +22,6 @@ sdk_name = 'iphonesimulator' if 'simulator' in args.tuple else 'iphoneos'
 sdk = subprocess.check_output(['xcrun', '--sdk', sdk_name, '--show-sdk-path'], text=True).strip()
 toolchain = f'ios_{args.tuple}_toolchain.cmake'
 old = subprocess.check_output(['git', 'show', f'{args.baseline}:stdlib/cmake/{toolchain}'], cwd=repo)
-original = (repo / 'stdlib/cmake' / toolchain).read_bytes()
 print(f'PROBE tuple={args.tuple} sdk={sdk}', flush=True)
 
 
@@ -46,7 +45,7 @@ def run(arm):
     if arm in variables:
         # Copy the real SDK to a path with spaces to distinguish caller selection
         # from automatic xcrun fallback, without replacing compiler executables.
-        supplied = root / 'Caller SDK.sdk'
+        supplied = root / 'Caller SDK' / Path(sdk).name
         shutil.copytree(sdk, supplied, symlinks=False)
         expected = str(supplied)
         command.append(f'-D{variables[arm]}={expected}')
@@ -61,9 +60,12 @@ def run(arm):
     commands = json.loads(commands_file.read_text()) if commands_file.exists() else []
     native = [c['command'] for c in commands if ' -c ' in c['command']]
     observed = bool(native) and all(expected in c for c in native)
+    pcre_cache = root / 'build/third_party/pcre2-build/CMakeCache.txt'
+    nested_sdk = pcre_cache.exists() and expected in pcre_cache.read_text()
+    observed = observed and nested_sdk
     red = arm in ('baseline', 'cut')
     log_text = (root / 'configure.log').read_text()
-    precise_red = result.returncode != 0 and '17.5.sdk' in log_text and ('isysroot' in log_text or 'sysroot' in log_text)
+    precise_red = result.returncode != 0 and '17.5.sdk' in log_text and 'Ignoring CMAKE_OSX_SYSROOT value' in log_text and "library 'System' not found" in log_text
     passed = precise_red if red else result.returncode == 0 and observed
     record = dict(arm=arm, tuple=args.tuple, rc=result.returncode, sdk=expected,
                   product_sha256=digest, configure_command=command,
