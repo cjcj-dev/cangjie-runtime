@@ -115,6 +115,10 @@ void RunArm(Arm arm)
     std::atomic<bool> worldStopped{false};
     std::atomic<bool> pauseDone{false};
     std::thread pause([&] {
+        // Product pauses run on the ZDriver ConcurrentGCThread
+        // (concurrentGCThread.cpp:78); SetThreadType attaches native GC TLS
+        // data through ThreadLocal::InitializeCleaner (ThreadLocal.h:111).
+        ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
         ScopedStopTheWorld stw("PROBE1137 young mark-end", false);
         worldStopped.store(true, std::memory_order_release);
         std::fprintf(stderr, "PROBE1137_OUTER_FLUSH_BEGIN world_stopped=%d\n",
