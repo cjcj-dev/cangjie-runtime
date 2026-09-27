@@ -52,10 +52,10 @@ def run(command, name, env=ENV):
 
 
 def replace(path, old, new):
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     assert text.count(old) == 1, (path, old)
     changed = text.replace(old, new)
-    path.write_text(changed)
+    path.write_text(changed, encoding="utf-8")
     relative = "runtime/" + path.relative_to(TREE).as_posix()
     (LOG / "cut.diff").write_text("".join(difflib.unified_diff(
         text.splitlines(True), changed.splitlines(True),
@@ -72,7 +72,7 @@ if ARM == "baseline":
     # same candidate tree, isolating the two build entry fixes.
     for path in [bat, config]:
         relative = "runtime/" + path.relative_to(TREE).as_posix()
-        path.write_bytes(subprocess.check_output([GIT, "-C", REPO, "show", BASE + ":" + relative]))
+        path.write_text(subprocess.check_output([GIT, "-C", REPO, "show", BASE + ":" + relative]).decode("utf-8"), encoding="utf-8")
     # Isolate the path failure from the separately tested acquisition failure.
     assert run([GIT, "clone", "--depth", "1", "--branch", "OpenHarmony-v6.0-Release",
                 url, dependency], "dependency-seed") == 0
