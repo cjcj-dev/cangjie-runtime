@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arm: [candidate, cut-producer, cut-consumer, restored]
+        arm: [candidate, cut-producer, cut-consumer, restored, cut-retention, cut-lookup]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,7 +46,12 @@ jobs:
       - name: Exercise cjcj 589 production entry and publication controls
         shell: pwsh
         run: |
-          & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/test_runtime_link_publication.py --source runtime-source/runtime --production-entry compiler-entry --evidence evidence --arm ${{ matrix.arm }}
+          $arm = '${{ matrix.arm }}'
+          if ($arm -in @('cut-retention', 'cut-lookup')) {
+            & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/test_runtime_publication_metadata.py --source runtime-source/runtime --production-entry compiler-entry --evidence evidence --cut $arm.Substring(4)
+          } else {
+            & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/test_runtime_link_publication.py --source runtime-source/runtime --production-entry compiler-entry --evidence evidence --arm $arm
+          }
           exit $LASTEXITCODE
       - uses: actions/upload-artifact@v4
         if: always()

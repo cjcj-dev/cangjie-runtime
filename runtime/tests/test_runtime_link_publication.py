@@ -37,6 +37,7 @@ def main():
     build = args.build.resolve() if args.build else source / 'CMakebuild'
     producer = source / 'build/cmake/RuntimeOutputLayout.cmake'
     consumer = source / 'build/publish_runtime_output.py'
+    sources = (producer, consumer, source / 'build/build_cjthread_windows.bat')
     env = dict(os.environ, GC_UNIT_GATE_SKIP='1')
     if os.name == 'nt':
         # Keep a successfully linked DLL when a later POST_BUILD check fails.
@@ -51,18 +52,50 @@ def main():
         env['PATH'] = 'C:/msys64/mingw64/bin;C:/msys64/usr/bin;' + env['PATH']
     record = {'arm': args.arm, 'jobs': os.cpu_count(), 'steps': {},
               'test_sha256': sha(Path(__file__)),
-              'source_sha256': {str(p.relative_to(source)): sha(p) for p in (producer, consumer)}}
+              'source_sha256': {str(p.relative_to(source)): sha(p) for p in sources}}
 
     def save():
         (evidence / 'result.json').write_text(json.dumps(record, indent=2) + '\n')
+
+    def snapshot(name):
+        """Retain the producer's coordinates and bytes at entry boundaries."""
+        destination = evidence / name
+        destination.mkdir(exist_ok=True)
+        cache = build / 'CMakeCache.txt'
+        if cache.is_file():
+            shutil.copy2(cache, destination / cache.name)
+        root = source / 'output/temp'
+        inventory = []
+        for path in sorted(root.rglob('*')):
+            item = {'path': str(path), 'directory': path.is_dir()}
+            if path.is_file():
+                item['size'] = path.stat().st_size
+                if path.name in ('runtime-build-config.txt', 'runtime-build-inputs.txt',
+                                 'runtime-product-hashes.json'):
+                    target = destination / path.relative_to(root)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(path, target)
+                    item['sha256'] = sha(path)
+            inventory.append(item)
+        (destination / 'inventory.json').write_text(json.dumps(inventory, indent=2) + '\n')
 
     def run(name, command, cwd=source):
         start = time.monotonic()
         with (evidence / (name + '.log')).open('w') as log:
             log.write(repr([str(x) for x in command]) + '\n')
             log.flush()
-            rc = subprocess.run([str(x) for x in command], cwd=cwd, env=env,
-                                stdout=log, stderr=subprocess.STDOUT).returncode
+            with subprocess.Popen([str(x) for x in command], cwd=cwd, env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  text=True, errors='replace') as process:
+                publications = 0
+                for line in process.stdout:
+                    log.write(line)
+                    if line.startswith('RUNTIME_OUTPUT_PUBLISHED config='):
+                        publications += 1
+                        snapshot(f'{name}-published-{publications}')
+                rc = process.wait()
+        if name == 'production-entry':
+            snapshot('production-entry-completed')
         record['steps'][name] = {'rc': rc, 'wall': time.monotonic() - start}
         save()
         print(f'LINK_PUBLICATION_STEP {name} rc={rc} wall={time.monotonic() - start:.2f}', flush=True)
@@ -90,7 +123,7 @@ def main():
             before.splitlines(True), after.splitlines(True),
             fromfile='a/runtime/build/publish_runtime_output.py',
             tofile='b/runtime/build/publish_runtime_output.py')))
-    record['tested_source_sha256'] = {str(p.relative_to(source)): sha(p) for p in (producer, consumer)}
+    record['tested_source_sha256'] = {str(p.relative_to(source)): sha(p) for p in sources}
     save()
     if args.production_entry:
         assert os.name == 'nt', 'production entry acceptance requires native Windows'
@@ -130,12 +163,29 @@ def main():
         return
     assert record['publication_assertion_rc'] == 0, 'production post-link publication failed'
 
-    def publication(name):
+    def publication(name, log_name):
         cache = (build / 'CMakeCache.txt').read_text()
         identity = re.search(r'^CANGJIE_RUNTIME_CONFIG_ID:INTERNAL=(.*)$', cache, re.M)[1]
         root = source / 'output/temp' / identity
+        log = (evidence / (log_name + '.log')).read_text(errors='replace')
+        published = re.findall(r'^RUNTIME_OUTPUT_PUBLISHED config=(\S+) lib_dir=(.*?) '
+                               r'runtime_sha256=', log, re.M)
+        assert published, 'publication receipt is absent'
+        published_id, published_lib = published[-1]
+        published_root = Path(published_lib).parents[1]
+        lookup_ok = identity == published_id and root == published_root
+        metadata = ('runtime-build-config.txt', 'runtime-build-inputs.txt', 'runtime-product-hashes.json')
+        missing = [filename for filename in metadata if not (published_root / filename).is_file()]
+        record[name + '-lookup'] = {'cache_id': identity, 'root': str(root),
+                                   'published_id': published_id, 'published_root': str(published_root),
+                                   'lookup_assertion_rc': int(not lookup_ok), 'missing_metadata': missing}
+        save()
+        print(f'PUBLICATION_LOOKUP_ASSERT name={name} rc={int(not lookup_ok)} root={root}', flush=True)
+        assert lookup_ok, 'PUBLICATION_LOOKUP_MISMATCH: test/cache coordinate differs from publisher receipt'
+        print(f'PUBLICATION_METADATA_ASSERT name={name} missing={missing}', flush=True)
+        assert not missing, f'PUBLICATION_METADATA_MISSING: producer publication {published_root}: {missing}'
         inputs = json.loads((root / 'runtime-build-inputs.txt').read_text())
-        for filename in ('runtime-build-config.txt', 'runtime-build-inputs.txt', 'runtime-product-hashes.json'):
+        for filename in metadata:
             shutil.copy2(root / filename, evidence / (name + '-' + filename))
         products = {p.name: sha(p) for p in root.rglob('*') if p.name in inputs['products']}
         assert products == inputs['products'], 'published product bytes differ from recorded identity'
@@ -148,7 +198,7 @@ def main():
         save()
         return identity, inputs
 
-    original_id, original_inputs = publication('candidate')
+    original_id, original_inputs = publication('candidate', 'production-entry')
     listed = [Path(line) for line in (build / 'runtime-link-inputs.txt').read_text().splitlines() if line]
     expected_name = 'build.make' if os.name == 'nt' else 'link.txt'
     assert listed and all(p.name == expected_name and p.is_file() for p in listed)
@@ -172,7 +222,7 @@ def main():
                    '-DCMAKE_SHARED_LINKER_FLAGS=' + old_flags + ' ' + option]) == 0
         changed_build_rc = run('changed-link-build', [cmake, '--build', build, '--target', 'cangjie-runtime', '--parallel', os.cpu_count()])
         assert 'RUNTIME_OUTPUT_PUBLISHED config=' in (evidence / 'changed-link-build.log').read_text(errors='replace'), 'changed product did not publish'
-        changed_id, changed_inputs = publication('changed')
+        changed_id, changed_inputs = publication('changed', 'changed-link-build')
         print(f'LINK_IDENTITY_ASSERT before={original_id} after={changed_id}', flush=True)
         assert original_id != changed_id, 'actual linker input change did not change identity'
         assert any(option in value for value in changed_inputs['links'].values()), 'changed link command was not recorded'
@@ -197,7 +247,7 @@ def main():
         finally:
             missing.write_bytes(saved)
     assert run('restored-publish', publisher_command) == 0
-    restored_id, restored_inputs = publication('restored')
+    restored_id, restored_inputs = publication('restored', 'restored-publish')
     assert restored_id == original_id and restored_inputs['products'] == original_inputs['products'], 'restoring link inputs did not restore product identity'
     record['controls_passed'] = True
     save()
