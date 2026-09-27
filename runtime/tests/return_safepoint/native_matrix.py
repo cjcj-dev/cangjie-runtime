@@ -111,25 +111,37 @@ def build(kind):
 arms=['green','cut-wiring'] if CROSS else ['green','cut-save','cut-restore','cut-wiring']
 with concurrent.futures.ThreadPoolExecutor(max_workers=len(arms)) as pool:
     results=list(pool.map(build,arms))
-# Removing the CMake wiring must keep the library buildable yet make the identity
-# gate fail on precisely CJ_MCC_HandleReturnSafepoint, with the plain safepoint
-# symbol as the positive control that a healthy library was read.
+# Removing the CMake wiring breaks the product on its real failure path: the stub
+# also defines the unwind metadata symbol consumed by MachineFrame.cpp, so the
+# library either fails to link with undefined return-safepoint symbols, or links
+# and then fails the nm identity gate on precisely CJ_MCC_HandleReturnSafepoint.
+# The plain CJ_MCC_HandleSafepoint symbol is the positive control that a healthy
+# library was read. Either precise mode is platform-attributed; a generic build
+# error is not.
+def wiring_precise(r):
+    kind=r['kind']
+    if not r.get('build_rc'):
+        checks=json.loads((OUT/kind/'identity.json').read_text())['checks']
+        ok = r.get('identity_rc')==1 and checks=={'CJ_MCC_HandleSafepoint':True,'CJ_MCC_HandleReturnSafepoint':False}
+        return ok, f'identity_rc={r.get("identity_rc")} checks={checks}'
+    log=(OUT/kind/'build.log').read_text()
+    blamed=[s for s in ['HandleReturnSafepoint','unwindPCForReturnSafepoint'] if s in log]
+    ok = 'Undefined symbols' in log and len(blamed)==2
+    return ok, f'build_rc={r.get("build_rc")} undefined={blamed}'
 matrix_ok=True
 for r in results:
     kind=r['kind']
-    if r.get('build_rc'):
-        r['wiring_expect_ok'] = False
-        matrix_ok=False
-        continue
-    checks=json.loads((OUT/kind/'identity.json').read_text())['checks']
     if kind=='cut-wiring':
-        ok = r.get('identity_rc')==1 and checks=={'CJ_MCC_HandleSafepoint':True,'CJ_MCC_HandleReturnSafepoint':False}
+        ok, detail = wiring_precise(r)
         r['wiring_expect_ok']=ok
-        print(f'WIRING_ASSERT {ARCH} identity_rc={r.get("identity_rc")} checks={checks} {"PASS" if ok else "FAIL"}',flush=True)
+        r['wiring_detail']=detail
+        print(f'WIRING_ASSERT {ARCH} {detail} {"PASS" if ok else "FAIL"}',flush=True)
+    elif r.get('build_rc'):
+        r['wiring_expect_ok']=False
     else:
-        ok = r.get('identity_rc')==0 and all(checks.values())
-        r['wiring_expect_ok']=ok
-    matrix_ok &= ok
+        checks=json.loads((OUT/kind/'identity.json').read_text())['checks']
+        r['wiring_expect_ok']=r.get('identity_rc')==0 and all(checks.values())
+    matrix_ok &= r['wiring_expect_ok']
 (OUT/'build-results.json').write_text(json.dumps(results,indent=2))
 if not matrix_ok: sys.exit(2)
 if CROSS: sys.exit(0)
