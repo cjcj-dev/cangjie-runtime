@@ -8,6 +8,7 @@
 #include <algorithm>
 #include "Base/ImmortalWrapper.h"
 #include <climits>
+#include <cstring>
 #include <condition_variable>
 #include <new>
 #include <thread>
@@ -174,6 +175,18 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     }
     return nullptr;
 }
+
+#ifdef __APPLE__
+Uptr ElfUnloadQuiescence::FindFunctionDescriptor(Uptr startPC)
+{
+    AssertReaderActive();
+    const auto image = RegisteredImageForAddress(startPC);
+    if (image == nullptr) { return 0; }
+    const auto found = std::lower_bound(image->functions.begin(), image->functions.end(), startPC,
+        [](const ImageAddressMap::Function& function, Uptr pc) { return function.startPC < pc; });
+    return found != image->functions.end() && found->startPC == startPC ? found->descriptor : 0;
+}
+#endif
 
 Uptr ElfUnloadQuiescence::RegisteredIdentity(Uptr metadata)
 {
@@ -489,9 +502,27 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
                     image->ranges.push_back({ static_cast<Uptr>(segment->vmaddr + slide),
                         static_cast<size_t>(segment->vmsize), (segment->initprot & VM_PROT_EXECUTE) != 0 });
                 }
+                const auto* sections = reinterpret_cast<const section_64*>(segment + 1);
+                for (uint32_t j = 0; j != segment->nsects; ++j) {
+                    const auto& section = sections[j];
+                    if (std::strncmp(section.segname, "__CJ_METADATA", sizeof(section.segname)) != 0 ||
+                        std::strncmp(section.sectname, "__cjfuncmap", sizeof(section.sectname)) != 0) {
+                        continue;
+                    }
+                    using Function = ImageAddressMap::Function;
+                    static_assert(sizeof(Function) == 16, "MachO function map ABI");
+                    const auto* records = reinterpret_cast<const Function*>(section.addr + slide);
+                    image->functions.assign(records, records + section.size / sizeof(Function));
+                }
             }
             command = reinterpret_cast<const load_command*>(reinterpret_cast<const char*>(command) + command->cmdsize);
         }
+        // CodeCache::find_blob (codeCache.cpp:750-759): publish a PC index,
+        // never recover return-site metadata from an already removed frame.
+        std::sort(image->functions.begin(), image->functions.end(),
+                  [](const ImageAddressMap::Function& a, const ImageAddressMap::Function& b) {
+                      return a.startPC < b.startPC;
+                  });
         break;
     }
 #else
