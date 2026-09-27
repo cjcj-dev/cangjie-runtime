@@ -20,6 +20,9 @@ APPLE = platform.system() == 'Darwin'
 CPU = 'aarch64' if platform.machine() in ('arm64', 'aarch64') else 'x86_64'
 TARGET = CPU + ('-macos' if APPLE else '-windows')
 JOBS = str(os.cpu_count() or 1)
+# The checkout uses Git for Windows with CRLF conversion; MSYS Git has its
+# own global configuration. Compare with the same checkout policy on both reads.
+GIT = ['git'] if APPLE else ['git', '-c', 'core.autocrlf=true']
 OUT.mkdir(parents=True, exist_ok=True)
 
 
@@ -60,8 +63,10 @@ for row in manifest['objects']:
 if set(objects) != {'candidate', 'cut-producer'}:
     raise RuntimeError('target objects missing')
 (OUT/'producer-identity.json').write_text(json.dumps(manifest, indent=2))
-if run(['git', '-C', SOURCE.parent, 'rev-parse', 'HEAD'], OUT/'runtime-head.log') != 0:
+if run(GIT + ['-C', SOURCE.parent, 'rev-parse', 'HEAD'], OUT/'runtime-head.log') != 0:
     raise RuntimeError('runtime source identity command did not execute')
+if run(GIT + ['-C', SOURCE.parent, 'diff', '--exit-code'], OUT/'runtime-source-before.log') != 0:
+    raise RuntimeError('runtime checkout differs from its declared source before the experiment')
 run(['uptime'], OUT/'uptime-before.log')
 source_consumer = SOURCE/'src/Mutator/MutatorManager.cpp'
 source_before = sha(source_consumer)
@@ -168,7 +173,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
                            ('restored', green, executables['candidate'])]))
 (OUT/'run-results.json').write_text(json.dumps(results, indent=2))
 unchanged = source_before == sha(source_consumer)
-source_rc = run(['git', '-C', SOURCE.parent, 'diff', '--exit-code'], OUT/'runtime-source-unchanged.log')
+source_rc = run(GIT + ['-C', SOURCE.parent, 'diff', '--exit-code'], OUT/'runtime-source-unchanged.log')
 (OUT/'runtime-source-identity.json').write_text(json.dumps({'before': source_before, 'after': sha(source_consumer), 'diff_rc': source_rc}))
 run(['uptime'], OUT/'uptime-after.log')
 run(['sccache', '--show-stats'], OUT/'sccache.log')
