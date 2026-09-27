@@ -33,6 +33,7 @@ set(GC_UNIT_SOURCES
     test_unwind_regressions.cpp
     test_return_frame_slot_root.cpp
     test_stackmap_base_capture.cpp
+    test_stub_register_roots.cpp
     test_gctibzero.cpp
     test_field_iterator.cpp
     test_pinroot.cpp
