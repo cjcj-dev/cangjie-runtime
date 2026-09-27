@@ -1,3 +1,4 @@
+#include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -50,14 +51,17 @@ GC_TEST(MarkPort203Storage, FirstAndRegularCapacityPreserveValidPrefix)
 GC_TEST(MarkPort203Storage, FullFirstPublishesThenUsesRegularSegment)
 {
     MarkStripeSet stripes(1);
+    MarkTerminate stripeTerminate;
+    stripeTerminate.Reset(1);
+    stripes.SetTerminate(&stripeTerminate);
     MarkThreadLocalStacks local(1);
     MapleRuntime::GcUnit::WorkerFixture workerFixture;
     MarkingSMR smr;
     for (size_t i = 0; i < 129; ++i) {
-        local.Push(stripes, 0, Entry(i), false);
+        local.Push(stripes, stripes.At(0), Entry(i), false);
     }
-    StackOwner next(local.StealLocal(0), MarkStripeStack::Destroy);
-    StackOwner first(stripes.At(0).StealStack(smr, 0), MarkStripeStack::Destroy);
+    StackOwner next(local.StealLocal(stripes, stripes.At(0)), MarkStripeStack::Destroy);
+    StackOwner first(stripes.At(0)->StealStack(smr, 0), MarkStripeStack::Destroy);
     GC_EXPECT_TRUE(next != nullptr && first != nullptr);
     GC_EXPECT_EQ(next->Capacity(), 512u);
     GC_EXPECT_EQ(first->Capacity(), 128u);
@@ -72,6 +76,9 @@ GC_TEST(MarkPort203Storage, BothPublicationListsDrainMultipleStripesAndSegments)
 {
     for (bool publish : {true, false}) {
         MarkStripeSet stripes(4);
+        MarkTerminate stripeTerminate;
+        stripeTerminate.Reset(1);
+        stripes.SetTerminate(&stripeTerminate);
         MapleRuntime::GcUnit::WorkerFixture workerFixture;
     MarkingSMR smr;
         MarkThreadLocalStacks producer(4);
@@ -79,7 +86,7 @@ GC_TEST(MarkPort203Storage, BothPublicationListsDrainMultipleStripesAndSegments)
         constexpr size_t count = 128 + 512 + 7;
         for (size_t s = 0; s < 4; ++s) {
             for (size_t i = 0; i < count; ++i) {
-                producer.Push(stripes, s, Entry(s * count + i), publish);
+                producer.Push(stripes, stripes.At(s), Entry(s * count + i), publish);
             }
         }
         GC_EXPECT_TRUE(producer.Flush(stripes));
@@ -88,7 +95,7 @@ GC_TEST(MarkPort203Storage, BothPublicationListsDrainMultipleStripesAndSegments)
             std::vector<bool> seen(count, false);
             size_t popped = 0;
             MarkStackEntry entry;
-            while (consumer.Pop(smr, 0, stripes, s, entry)) {
+            while (consumer.Pop(smr, 0, stripes, stripes.At(s), entry)) {
                 const size_t i = entry.partial_array_offset() - 1 - s * count;
                 GC_EXPECT_TRUE(i < count);
                 GC_EXPECT_FALSE(seen[i]);
@@ -106,17 +113,20 @@ GC_TEST(MarkPort203Storage, BothPublicationListsDrainMultipleStripesAndSegments)
 GC_TEST(MarkPort203Storage, TransferredSegmentOutlivesItsSource)
 {
     MarkStripeSet stripes(1);
+    MarkTerminate stripeTerminate;
+    stripeTerminate.Reset(1);
+    stripes.SetTerminate(&stripeTerminate);
     MapleRuntime::GcUnit::WorkerFixture workerFixture;
     MarkingSMR smr;
     MarkThreadLocalStacks destination(1);
     {
         MarkThreadLocalStacks source(1);
-        source.Push(stripes, 0, Entry(9), true);
-        destination.Install(0, source.StealLocal(0));
+        source.Push(stripes, stripes.At(0), Entry(9), true);
+        destination.Install(stripes, stripes.At(0), source.StealLocal(stripes, stripes.At(0)));
         GC_EXPECT_TRUE(source.IsEmpty());
     }
     MarkStackEntry entry;
-    GC_EXPECT_TRUE(destination.Pop(smr, 0, stripes, 0, entry));
+    GC_EXPECT_TRUE(destination.Pop(smr, 0, stripes, stripes.At(0), entry));
     ExpectEntry(entry, 9);
-    GC_EXPECT_FALSE(destination.Pop(smr, 0, stripes, 0, entry));
+    GC_EXPECT_FALSE(destination.Pop(smr, 0, stripes, stripes.At(0), entry));
 }

@@ -1,3 +1,4 @@
+#include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -52,7 +53,7 @@ struct PartialArrayTestAccess {
     {
         auto& domain = *Heap::GetHeap().old().MarkPtr();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
-            if (auto* stack = domain.Stacks().StealLocal(stripe)) {
+            if (auto* stack = domain.Stacks().StealLocal(domain.Stripes(), domain.Stripes().At(stripe))) {
                 while (!stack->IsEmpty()) result.push_back(stack->Pop());
                 MarkStripeStack::Destroy(stack);
             }
