@@ -24,6 +24,7 @@
 #include "Handshake.h"
 #include "Mutator.inline.h"
 #include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include "UnwindStack/StackFrameCursor.h"
@@ -183,6 +184,11 @@ void MutatorManager::TransitMutatorToExit()
     // Complete this identity's phase processing before detaching its roots.
     // threads.cpp:1099-1114 keeps the watermark alive through the last transition.
     StackWatermarkSet::on_safepoint(*mutator);
+    // PROBE-1137 prototype (evidence only): threads.cpp:1089-1104 runs
+    // on_thread_detach while the exiting thread is not safepoint-safe
+    // (_thread_in_vm under Threads_lock), so no pause can overlap the final
+    // mark flush. Detach here, before the pause may count this thread stopped.
+    ZBarrierSet::on_thread_detach(mutator->GetGCData());
     (void)mutator->EnterSaferegion(false);
     mutator->MutatorLock();
     mutator->ResetMutator();

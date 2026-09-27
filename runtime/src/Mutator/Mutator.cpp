@@ -201,7 +201,8 @@ void Mutator::ResetMutator()
     // thread-removal critical section. Inventory flushing takes this same
     // lock; detach must finish before another reader can flush our stacks.
     // Registry-reader waiting belongs to on_thread_destroy, after unlocking.
-    ZBarrierSet::on_thread_detach(gcData);
+    // PROBE-1137 prototype: detach moved to TransitMutatorToExit, before
+    // EnterSaferegion.
     MutatorUnlock();
 }
 
