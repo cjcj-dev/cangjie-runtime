@@ -26,8 +26,10 @@ mkdir -p "$SIGNAL_TEST_OUTPUT"
 if [[ -n "${SO_REENTRY_TEST_ELF:-}" ]]; then
   cp -p "$SO_REENTRY_TEST_ELF" "$SIGNAL_TEST_OUTPUT/so-reentry-bounded"
 else
+  runtime_output_root="${GCV2_RUNTIME_OUTPUT_ROOT:-$(python3 "$repo/runtime/build/resolve_runtime_headers.py" "$repo/runtime" "$GCV2_RUNTIME_LIB_DIR")}"
   "$CXX" -std=c++17 -O2 -pthread -fno-rtti \
       -I"$repo/runtime/src" -I"$repo/runtime/src/Heap" -I"$repo/runtime/include" \
+      -I"$repo/runtime/src/CJThread/src/runtime/schedule/include" -I"$runtime_output_root/include" \
       -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
       "$repo/runtime/tests/gc_unit/so_reentry_probe.cpp" \
       -L"$GCV2_RUNTIME_LIB_DIR" \

@@ -91,7 +91,7 @@ int CJ_ScheduleGetTlsHookRegister(uintptr_t *(*func)(void));
 int CJ_ScheduleAttrInit(struct ScheduleAttr *usrAttr);
 int CJ_ScheduleAttrStackProtectSet(struct ScheduleAttr *usrAttr, bool open);
 int CJ_ScheduleAttrStackGrowSet(struct ScheduleAttr *usrAttr, bool open);
-void *CJ_ScheduleNew(int scheduleType, const struct ScheduleAttr *userAttr);
+void *CJ_ScheduleNew(ScheduleType scheduleType, const struct ScheduleAttr *userAttr);
 }
 
 extern "C" {
@@ -140,7 +140,7 @@ void *SetupScheduler()
     }
     CJ_ScheduleAttrStackProtectSet(reinterpret_cast<struct ScheduleAttr *>(attr), true);
     CJ_ScheduleAttrStackGrowSet(reinterpret_cast<struct ScheduleAttr *>(attr), true);
-    return CJ_ScheduleNew(0 /* SCHEDULE_DEFAULT */, reinterpret_cast<const struct ScheduleAttr *>(attr));
+    return CJ_ScheduleNew(SCHEDULE_DEFAULT, reinterpret_cast<const struct ScheduleAttr *>(attr));
 }
 
 // Preconditions are reported, never fatal: a missing precondition must not mask the
