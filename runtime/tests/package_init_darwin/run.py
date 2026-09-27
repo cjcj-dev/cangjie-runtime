@@ -75,9 +75,12 @@ includes = [ROOT / 'runtime/src', ROOT / 'runtime/src/Heap', ROOT / 'runtime/inc
             ROOT / 'runtime/third_party/third_party_bounds_checking_function/include']
 # Installed/generated public CJThread headers are under output/**/include.
 includes += list((ROOT / 'runtime/output').glob('**/include'))
+# Use the configured platform header paths and product layout definitions.
+includes += [Path(arg[2:]) for arg in compile_cmd if arg.startswith('-I')]
+product_defines = [arg for arg in compile_cmd if arg.startswith('-D')]
 caller = OUT / 'caller'
 command = ['clang++', '-std=c++17', '-O0', '-g', '-fno-rtti', '-pthread']
-command += ['-I' + str(p) for p in includes]
+command += product_defines + ['-I' + str(p) for p in includes]
 command += [str(Path(__file__).with_name('caller.cpp')), str(Path(__file__).with_name('caller.S')),
             '-L' + str(product.parent), '-L' + str(bounds.parent),
             '-Wl,-rpath,' + str(product.parent), '-lcangjie-runtime', '-lboundscheck', '-o', str(caller)]
