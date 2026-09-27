@@ -44,6 +44,7 @@ def run(command, name):
 # Each negative arm restores a real POSIX dependency in one product TU.
 # This is a native compilation contract, not a GC behavioral test.
 cut_targets = {
+    "cut-compiler": ("build/cmake/CMakeLists.txt", "memset_s.c.obj", "x86_64-w64-mingw32-gcc"),
     "cut-region": ("src/Heap/Allocator/RegionSpace.h", "BaseObject.cpp.obj", "sys/mman.h"),
     "cut-filler": ("src/Heap/shared/collectedHeap.cpp", "collectedHeap.cpp.obj", "sys/mman.h"),
     "cut-limit": ("src/Heap/z/zAddressSpaceLimit.cpp", "zAddressSpaceLimit.cpp.obj", "sys/resource.h"),
@@ -52,7 +53,9 @@ if arm in cut_targets:
     relative, target_suffix, header = cut_targets[arm]
     path = tree / relative
     before = path.read_text()
-    if arm == 'cut-region':
+    if arm == 'cut-compiler':
+        after = before.replace('if(NOT CMAKE_HOST_WIN32 OR CMAKE_CROSSCOMPILING)', 'if(TRUE)')
+    elif arm == 'cut-region':
         after = before.replace('#include <memory>\n', '#include <memory>\n#include <sys/mman.h>\n')
     elif arm == 'cut-filler':
         after = before.replace('#ifdef _WIN64\n#include <memoryapi.h>\n#else\n#include <sys/mman.h>\n#endif', '#include <sys/mman.h>')
@@ -84,7 +87,8 @@ if not rc and arm in cut_targets:
     record["target"] = matches[0]
     rc = run(["cmake", "--build", build, "--target", matches[0]], "build")
     text = (out / "build.log").read_text(errors="replace")
-    exact = rc != 0 and header in text and "file not found" in text and target_suffix[:-4] in text
+    diagnostic = "CreateProcess failed" if arm == "cut-compiler" else "file not found"
+    exact = rc != 0 and header in text and diagnostic in text and target_suffix[:-4] in text
     record.update(assertion_rc=int(rc != 0), expected_compile_failure=exact)
     (out / "result.json").write_text(json.dumps(record, indent=2))
     print("NATIVE_COMPILE_ASSERT", arm, "FAIL" if rc else "PASS", "expected=", exact, flush=True)
