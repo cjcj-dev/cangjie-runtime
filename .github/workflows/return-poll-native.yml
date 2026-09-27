@@ -1,0 +1,91 @@
+name: Native return-poll roots
+on:
+  workflow_dispatch:
+    inputs:
+      runtime_ref:
+        description: Paired runtime commit; its resolved SHA is retained in the evidence.
+        type: string
+        required: true
+        default: sym/1207-implement-r5855120562
+      targets:
+        description: Native runner/target matrix (JSON); select only the arm needing new evidence.
+        type: string
+        required: false
+        default: '[{"runner":"macos-15","target":"aarch64-macos"},{"runner":"macos-15-intel","target":"x86_64-macos"},{"runner":"windows-latest","target":"x86_64-windows"}]'
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.targets) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      RETURN_PAIR_OUT: ${{ github.workspace }}/return-pair
+      SCCACHE_GHA_ENABLED: 'false'
+      SCCACHE_DIR: ${{ github.workspace }}/sccache-return-pair
+      SCCACHE_CACHE_SIZE: 2G
+    steps:
+      - name: Preserve compiler input bytes on Windows
+        shell: bash
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Preserve Windows batch-file checkout convention
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf true
+      - uses: actions/checkout@v4
+        with:
+          repository: cjcj-dev/cangjie-runtime
+          ref: ${{ inputs.runtime_ref }}
+          path: runtime-source
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: ${{ github.workspace }}/sccache-return-pair
+          key: return-pair-${{ matrix.target }}-${{ inputs.runtime_ref }}-${{ github.run_id }}
+          restore-keys: return-pair-${{ matrix.target }}-${{ inputs.runtime_ref }}-
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+            file git procps-ng
+      - name: Apple native pair
+        if: runner.os == 'macOS'
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/return_poll_native/native.py runtime-source
+      - name: Windows native pair
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ulimit -c 0
+          export PATH="$(dirname "$(cygpath -u "$SCCACHE_PATH")"):$PATH"
+          python3 runtime/tests/return_poll_native/native.py runtime-source
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ${{ github.workspace }}/sccache-return-pair
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: return-pair-${{ matrix.target }}
+          path: |
+            ${{ github.workspace }}/return-pair/*.json
+            ${{ github.workspace }}/return-pair/*.log
+            ${{ github.workspace }}/return-pair/*.o
+            ${{ github.workspace }}/return-pair/*-pair*
+            ${{ github.workspace }}/return-pair/*/*.json
+            ${{ github.workspace }}/return-pair/*/*.log
+            ${{ github.workspace }}/return-pair/*/*.diff
+            ${{ github.workspace }}/return-pair/*/product/*
+          if-no-files-found: error
