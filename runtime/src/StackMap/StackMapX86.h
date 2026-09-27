@@ -44,6 +44,7 @@ public:
 
     static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
     {
+        regSlotsMap.allRegistersSaved = false;
         constexpr Uptr slotLength = 8;
         Uptr slotAddr = fp - slotLength;
 #ifdef _WIN64
@@ -60,6 +61,7 @@ public:
 #ifdef _WIN64
     static void RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
     {
+        regSlotsMap.allRegistersSaved = true;
         constexpr Uptr universalSlotLength = 8;
         constexpr Uptr xmmSlotLength = 16;
         constexpr U32 stubPushNum = 14;
@@ -79,6 +81,7 @@ public:
 #else
     static void RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
     {
+        regSlotsMap.allRegistersSaved = true;
 #define RECORD_GPR(reg, id, off) regSlotsMap.Insert(id, &RootSlotAt(fp + (off)));
         MRT_X86_STUB_GPRS(RECORD_GPR)
 #undef RECORD_GPR

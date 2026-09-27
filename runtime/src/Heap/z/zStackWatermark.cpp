@@ -156,6 +156,12 @@ public:
         if (callerSP != 0) { callerSP += offset; }
         if (calleeSP != 0) { calleeSP += offset; }
         cursor.Rebase(offset);
+        for (size_t i = 0; i < REGISTERS_COUNT; ++i) {
+            if (stackPointerRegisters.HasReg(i) && stackPointerRegisters.addrMap[i] != nullptr) {
+                stackPointerRegisters.addrMap[i] = reinterpret_cast<SlotAddress>(
+                    reinterpret_cast<uintptr_t>(stackPointerRegisters.addrMap[i]) + offset);
+            }
+        }
     }
 private:
     // HotSpot stackWatermark.cpp:96-110,205-220 protects exposed frames and
@@ -163,11 +169,14 @@ private:
     // caller frame: close over those live stack pointers before exposing it.
     void process_frame(const FrameInfo& frame, void* context, uintptr_t& stackTarget)
     {
-        // Root processing consumes register locations and records the caller's
-        // spills. Stack pointers at this PC need the incoming register map.
-        RegSlotsMap registers = cursor.RegMap();
+        // Movable Cangjie stack pointers retain prologue locations. GC heap
+        // roots have a separate map and never inherit a compiled callee's saves.
+        RegSlotsMap registers = stackPointerRegisters;
         owner.process(frame, cursor.RegMap(), context);
-        if (frame.GetFrameType() != FrameType::MANAGED) { return; }
+        if (frame.GetFrameType() != FrameType::MANAGED) {
+            stackPointerRegisters = cursor.RegMap();
+            return;
+        }
         ElfUnloadQuiescence::ReadScope metadataReader;
         const uintptr_t startPC = reinterpret_cast<uintptr_t>(frame.GetStartProc());
 #ifdef __APPLE__
@@ -178,12 +187,13 @@ private:
         StackPtrMap pointers = StackMapBuilder(startPC,
             reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
             reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<StackPtrMap>();
+        pointers.RecordCalleeSaved(stackPointerRegisters);
         if (!pointers.IsValid()) { return; }
         StackPtrVisitor visit = [&](ObjectRef& slot) {
             const uintptr_t target = raw(slot.LoadPlain());
             if (owner.owner.IsStackAddr(target) && target > stackTarget) { stackTarget = target; }
         };
-        if (!pointers.VisitReg(visit, visit, nullptr, registers)) {
+        if (!pointers.VisitStackPointerRegs(visit, nullptr, registers)) {
             LOG(RTLOG_FATAL, "wrong stack pointer register info at %p", frame.mFrame.GetIP());
         }
         pointers.VisitSlot(visit, visit, nullptr);
@@ -210,6 +220,7 @@ private:
     }
     StackWatermark& owner;
     StackFrameCursor cursor;
+    RegSlotsMap stackPointerRegisters;
     uintptr_t callerSP = 0;
     uintptr_t calleeSP = 0;
 };

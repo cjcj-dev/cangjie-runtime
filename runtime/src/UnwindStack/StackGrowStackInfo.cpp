@@ -61,8 +61,12 @@ void StackGrowStackInfo::RecordStackPtrsImpl(const StackPtrVisitor& traceAndFixP
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
-    StackPtrMap stackPtrMap = StackMapBuilder(startIP, frameIP, frameAddress).Build<StackPtrMap>();
+    StackPtrMap stackPtrMap = StackMapBuilder(startIP, frameIP, frameAddress).Build<StackPtrMap>(true);
     if (stackPtrMap.IsValid()) {
+        if (!regSlotsMap.allRegistersSaved && stackPtrMap.HasGCRegisterRoots()) {
+            LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, frame pc: %p",
+                reinterpret_cast<void*>(frameIP));
+        }
         if (!stackPtrMap.VisitReg(traceAndFixPtrVisitor, fixPtrVisitor, nullptr, regSlotsMap)) {
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
@@ -71,6 +75,7 @@ void StackGrowStackInfo::RecordStackPtrsImpl(const StackPtrVisitor& traceAndFixP
         stackPtrMap.VisitDerivedPtr(derivedPtrVisitor, regSlotsMap);
     }
     stackPtrMap.RecordCalleeSaved(regSlotsMap);
+    regSlotsMap.allRegistersSaved = false;
 }
 
 void StackGrowStackInfo::RecordStackPtrs(const StackPtrVisitor& traceAndFixPtrVisitor,
@@ -105,6 +110,7 @@ void StackGrowStackInfo::RecordStackPtrs(const StackPtrVisitor& traceAndFixPtrVi
                 RegRoot::RecordRegs(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
+                regSlotsMap.allRegistersSaved = false;
                 break;
             }
         }

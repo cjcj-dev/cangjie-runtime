@@ -58,7 +58,7 @@ void RunCapture(bool registerBase, bool oop, bool derivedRegister, U32 derivedCo
     RegSlotsMap locations;
     if (!missing) { locations.Insert(Register::RBX, &RootSlotAt(reinterpret_cast<Uptr>(&baseReg))); }
     locations.Insert(Register::R12, &RootSlotAt(reinterpret_cast<Uptr>(&derivedReg)));
-    HeapReferenceMap map(true, reinterpret_cast<Uptr>(&frame[2]), entry, PrologueRegisterClosure());
+    HeapReferenceMap map(true, reinterpret_cast<Uptr>(&frame[2]), entry);
     U32 derivedVisits = 0;
     bool originalBase = true;
     DerivedPtrVisitor derived = [&](BasePtrType base, DerivedSlot& slot) {
