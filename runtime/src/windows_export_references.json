@@ -1,0 +1,1073 @@
+{
+  "inputs": [
+    {
+      "kind": "emitter",
+      "label": "compiler-codegen",
+      "revision": "367d9ca8845ba8ef5fd9c17ea983c9692e303f62",
+      "sha256": "e4f0aa11b8da5ed5a23cf05b8525ac533468ca925338b993ce1adb8a7129d0f6",
+      "files": 118
+    },
+    {
+      "kind": "emitter",
+      "label": "compiler-reflection",
+      "revision": "367d9ca8845ba8ef5fd9c17ea983c9692e303f62",
+      "sha256": "f6922c72c4479b67737de7804103d5a661691226949a3e2d2036be247199517f",
+      "files": 126
+    },
+    {
+      "kind": "emitter",
+      "label": "llvm-lib",
+      "revision": "08b58a2747eca07e8dfecd7e017e87684c872377",
+      "sha256": "7c55bb095c308a5b066cb190b4db1f3b6394c3a591d855aa532820221243d73e",
+      "files": 3826
+    },
+    {
+      "kind": "emitter",
+      "label": "llvm-include",
+      "revision": "08b58a2747eca07e8dfecd7e017e87684c872377",
+      "sha256": "581cb8b408f7c89741258dfc4ea7e873da8a5781e9aaa303e0ff8b4803d1de0b",
+      "files": 1799
+    },
+    {
+      "kind": "emitter",
+      "label": "cjcj-codegen",
+      "revision": "9d390634fd915de7680a5aab5cd06e6e9135457b",
+      "sha256": "d1b022ac6217a7f6f54cca8cf125294248d0185b617dd83297c76904faf97bfa",
+      "files": 75
+    },
+    {
+      "kind": "source",
+      "label": "stdlib",
+      "revision": "d2840f7621dfe6d31e260e9bedd1dc33c8b08a5f",
+      "sha256": "a4ef7fbee0094d6610f060c26d89db90cf7fd44430252810fd17b6d6caec9103",
+      "files": 546
+    }
+  ],
+  "symbols": {
+    "CJ_MCC_AcquireRawData": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:92",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:104"
+    ],
+    "CJ_MCC_ApplyCJGenericInstanceMethod": [
+      "compiler-codegen/Utils/CGCommonDef.h:150",
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:47",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:105",
+      "cjcj-codegen/IRBuilder.cj:221",
+      "cjcj-codegen/IRBuilder.cj:361"
+    ],
+    "CJ_MCC_ApplyCJGenericStaticMethod": [
+      "compiler-codegen/Utils/CGCommonDef.h:150",
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:48",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:106",
+      "cjcj-codegen/IRBuilder.cj:222",
+      "cjcj-codegen/IRBuilder.cj:362"
+    ],
+    "CJ_MCC_ApplyCJInstanceMethod": [
+      "compiler-codegen/Utils/CGCommonDef.h:149",
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:45",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:107",
+      "cjcj-codegen/IRBuilder.cj:219",
+      "cjcj-codegen/IRBuilder.cj:359"
+    ],
+    "CJ_MCC_ApplyCJStaticMethod": [
+      "compiler-codegen/Utils/CGCommonDef.h:149",
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:46",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:108",
+      "cjcj-codegen/IRBuilder.cj:220",
+      "cjcj-codegen/IRBuilder.cj:360"
+    ],
+    "CJ_MCC_ArrayCopyGeneric": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:204",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:109"
+    ],
+    "CJ_MCC_ArrayCopyRef": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:195",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:110"
+    ],
+    "CJ_MCC_ArrayCopyStruct": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:196",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:111"
+    ],
+    "CJ_MCC_AssignGeneric": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:201",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:112"
+    ],
+    "CJ_MCC_AtomicCompareAndSwapReference": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:200",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:113"
+    ],
+    "CJ_MCC_AtomicReadReference": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:198",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:114",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:397"
+    ],
+    "CJ_MCC_AtomicSwapReference": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:199",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:115",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:398"
+    ],
+    "CJ_MCC_AtomicWriteReference": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:197",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:116"
+    ],
+    "CJ_MCC_C2NStub": [
+      "llvm-lib/CodeGen/AsmPrinter/AsmPrinter.cpp:4120",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:60",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:119"
+    ],
+    "CJ_MCC_CheckMethodActualArgs": [
+      "compiler-codegen/Utils/CGCommonDef.h:150",
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:19",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:120",
+      "cjcj-codegen/IRBuilder.cj:194",
+      "cjcj-codegen/IRBuilder.cj:363"
+    ],
+    "CJ_MCC_CheckThreadLocalDataOffset": [
+      "compiler-codegen/CJNative/EmitPackageIR.cpp:217",
+      "cjcj-codegen/EmitPackageIR.cj:653"
+    ],
+    "CJ_MCC_CopyStructField": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:194",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:121"
+    ],
+    "CJ_MCC_CreateExportHandle": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:131",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:122"
+    ],
+    "CJ_MCC_CrossAccessBarrier": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:128",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:123"
+    ],
+    "CJ_MCC_DecodeStackTrace": [
+      "compiler-codegen/CJNative/CJNativeIntrinsicsCall.cpp:138",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:124",
+      "cjcj-codegen/IRBuilder.cj:3058"
+    ],
+    "CJ_MCC_DumpCJHeapData": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:108",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:125"
+    ],
+    "CJ_MCC_ExclusiveScope": [
+      "compiler-codegen/Base/IntrinsicsDispatcher.cpp:790",
+      "cjcj-codegen/IntrinsicsDispatcher.cj:489"
+    ],
+    "CJ_MCC_FillInStackTrace": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:96",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:126"
+    ],
+    "CJ_MCC_FutureInit": [
+      "compiler-codegen/Utils/CGCommonDef.h:155",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:127",
+      "cjcj-codegen/IRBuilder.cj:161"
+    ],
+    "CJ_MCC_FutureIsComplete": [
+      "compiler-codegen/Utils/CGCommonDef.h:156",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:128",
+      "cjcj-codegen/IRBuilder.cj:162"
+    ],
+    "CJ_MCC_FutureNotifyAll": [
+      "compiler-codegen/Utils/CGCommonDef.h:158",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:129",
+      "cjcj-codegen/IRBuilder.cj:164"
+    ],
+    "CJ_MCC_FutureWait": [
+      "compiler-codegen/Utils/CGCommonDef.h:157",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:130",
+      "cjcj-codegen/IRBuilder.cj:163"
+    ],
+    "CJ_MCC_GetActualParameterInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:51",
+      "cjcj-codegen/IRBuilder.cj:225"
+    ],
+    "CJ_MCC_GetAllThreadSnapshot": [
+      "compiler-codegen/CJNative/CJNativeIntrinsicsCall.cpp:192",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:132",
+      "cjcj-codegen/IRBuilder.cj:3086"
+    ],
+    "CJ_MCC_GetAllocatedHeapSize": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:106",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:131"
+    ],
+    "CJ_MCC_GetAssociatedValues": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:93",
+      "cjcj-codegen/IRBuilder.cj:263"
+    ],
+    "CJ_MCC_GetBlockingCJThreadNumber": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:111",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:133"
+    ],
+    "CJ_MCC_GetCJThreadNumber": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:109",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:134"
+    ],
+    "CJ_MCC_GetCurrentCJThreadObject": [
+      "compiler-codegen/Utils/CGCommonDef.h:160",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:135",
+      "cjcj-codegen/IRBuilder.cj:166"
+    ],
+    "CJ_MCC_GetCurrentThreadSnapshot": [
+      "compiler-codegen/CJNative/CJNativeIntrinsicsCall.cpp:170",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:136",
+      "cjcj-codegen/IRBuilder.cj:3075"
+    ],
+    "CJ_MCC_GetEnumConstructorInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:99",
+      "cjcj-codegen/IRBuilder.cj:267"
+    ],
+    "CJ_MCC_GetEnumConstructorInfoFromAny": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:101",
+      "cjcj-codegen/IRBuilder.cj:269"
+    ],
+    "CJ_MCC_GetEnumConstructorName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:100",
+      "cjcj-codegen/IRBuilder.cj:268"
+    ],
+    "CJ_MCC_GetExceptionWrapper": [
+      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:761",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:101",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:137",
+      "cjcj-codegen/IRBuilder.cj:5459"
+    ],
+    "CJ_MCC_GetExportedRef": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:129",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:138",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:406"
+    ],
+    "CJ_MCC_GetFieldTypes": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:91",
+      "cjcj-codegen/IRBuilder.cj:261"
+    ],
+    "CJ_MCC_GetFunctionSignatureTypes": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:96",
+      "cjcj-codegen/IRBuilder.cj:265"
+    ],
+    "CJ_MCC_GetGCCount": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:114",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:139"
+    ],
+    "CJ_MCC_GetGCFreedSize": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:116",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:140"
+    ],
+    "CJ_MCC_GetGCTimeUs": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:115",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:141"
+    ],
+    "CJ_MCC_GetGenericParameterInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:52",
+      "cjcj-codegen/IRBuilder.cj:226"
+    ],
+    "CJ_MCC_GetInstanceFieldAnnotations": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:63",
+      "cjcj-codegen/IRBuilder.cj:236"
+    ],
+    "CJ_MCC_GetInstanceFieldInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:55",
+      "cjcj-codegen/IRBuilder.cj:228"
+    ],
+    "CJ_MCC_GetInstanceFieldModifier": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:64",
+      "cjcj-codegen/IRBuilder.cj:237"
+    ],
+    "CJ_MCC_GetInstanceFieldName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:61",
+      "cjcj-codegen/IRBuilder.cj:234"
+    ],
+    "CJ_MCC_GetInstanceFieldType": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:62",
+      "cjcj-codegen/IRBuilder.cj:235"
+    ],
+    "CJ_MCC_GetInstanceFieldValue": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:66",
+      "cjcj-codegen/IRBuilder.cj:239"
+    ],
+    "CJ_MCC_GetInstanceMethodInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:38",
+      "cjcj-codegen/IRBuilder.cj:212"
+    ],
+    "CJ_MCC_GetInterface": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:29",
+      "cjcj-codegen/IRBuilder.cj:204"
+    ],
+    "CJ_MCC_GetJSLambdaAddr": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:133",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:142"
+    ],
+    "CJ_MCC_GetMTable": [
+      "llvm-lib/Transforms/Scalar/CJDevirtualOpt.cpp:61",
+      "llvm-lib/Transforms/Scalar/CJDevirtualOpt.cpp:108",
+      "llvm-lib/Transforms/Scalar/CJDevirtualOpt.cpp:358",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:90",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:143"
+    ],
+    "CJ_MCC_GetMaxHeapSize": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:107",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:144"
+    ],
+    "CJ_MCC_GetMethodAnnotations": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:44",
+      "cjcj-codegen/IRBuilder.cj:218"
+    ],
+    "CJ_MCC_GetMethodModifier": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:43",
+      "cjcj-codegen/IRBuilder.cj:217"
+    ],
+    "CJ_MCC_GetMethodName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:41",
+      "cjcj-codegen/IRBuilder.cj:215"
+    ],
+    "CJ_MCC_GetMethodOuterTI": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:91",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:145"
+    ],
+    "CJ_MCC_GetMethodReturnType": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:42",
+      "cjcj-codegen/IRBuilder.cj:216"
+    ],
+    "CJ_MCC_GetNativeThreadNumber": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:113",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:146"
+    ],
+    "CJ_MCC_GetNumOfActualParameters": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:49",
+      "cjcj-codegen/IRBuilder.cj:223"
+    ],
+    "CJ_MCC_GetNumOfEnumConstructorInfos": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:98",
+      "cjcj-codegen/IRBuilder.cj:266"
+    ],
+    "CJ_MCC_GetNumOfFieldTypes": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:90",
+      "cjcj-codegen/IRBuilder.cj:260"
+    ],
+    "CJ_MCC_GetNumOfFunctionSignatureTypes": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:95",
+      "cjcj-codegen/IRBuilder.cj:264"
+    ],
+    "CJ_MCC_GetNumOfGenericParameters": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:50",
+      "cjcj-codegen/IRBuilder.cj:224"
+    ],
+    "CJ_MCC_GetNumOfInstanceFieldInfos": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:54",
+      "cjcj-codegen/IRBuilder.cj:227"
+    ],
+    "CJ_MCC_GetNumOfInstanceMethodInfos": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:37",
+      "cjcj-codegen/IRBuilder.cj:211"
+    ],
+    "CJ_MCC_GetNumOfInterface": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:28",
+      "cjcj-codegen/IRBuilder.cj:203"
+    ],
+    "CJ_MCC_GetNumOfStaticFieldInfos": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:56",
+      "cjcj-codegen/IRBuilder.cj:229"
+    ],
+    "CJ_MCC_GetNumOfStaticMethodInfos": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:39",
+      "cjcj-codegen/IRBuilder.cj:213"
+    ],
+    "CJ_MCC_GetObjClass": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:33",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:73",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:147",
+      "cjcj-codegen/IRBuilder.cj:208"
+    ],
+    "CJ_MCC_GetOrCreateTypeInfo": [
+      "llvm-lib/Transforms/Scalar/CJGenericIntrinsicOpt.cpp:346",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:123",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:148"
+    ],
+    "CJ_MCC_GetOrCreateTypeInfoForReflect": [
+      "compiler-codegen/Utils/CGCommonDef.h:151",
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:17",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:149",
+      "cjcj-codegen/IRBuilder.cj:192",
+      "cjcj-codegen/IRBuilder.cj:364"
+    ],
+    "CJ_MCC_GetPackageByQualifiedName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:86",
+      "cjcj-codegen/IRBuilder.cj:257"
+    ],
+    "CJ_MCC_GetPackageGlobalFieldInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:84",
+      "cjcj-codegen/IRBuilder.cj:255"
+    ],
+    "CJ_MCC_GetPackageGlobalMethodInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:82",
+      "cjcj-codegen/IRBuilder.cj:253"
+    ],
+    "CJ_MCC_GetPackageName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:78",
+      "cjcj-codegen/IRBuilder.cj:249"
+    ],
+    "CJ_MCC_GetPackageNumOfGlobalFieldInfos": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:83",
+      "cjcj-codegen/IRBuilder.cj:254"
+    ],
+    "CJ_MCC_GetPackageNumOfGlobalMethodInfos": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:81",
+      "cjcj-codegen/IRBuilder.cj:252"
+    ],
+    "CJ_MCC_GetPackageNumOfTypeInfos": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:79",
+      "cjcj-codegen/IRBuilder.cj:250"
+    ],
+    "CJ_MCC_GetPackageTypeInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:80",
+      "cjcj-codegen/IRBuilder.cj:251"
+    ],
+    "CJ_MCC_GetPackageVersion": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:87",
+      "cjcj-codegen/IRBuilder.cj:258"
+    ],
+    "CJ_MCC_GetParameterAnnotations": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:75",
+      "cjcj-codegen/IRBuilder.cj:247"
+    ],
+    "CJ_MCC_GetParameterIndex": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:72",
+      "cjcj-codegen/IRBuilder.cj:244"
+    ],
+    "CJ_MCC_GetParameterName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:73",
+      "cjcj-codegen/IRBuilder.cj:245"
+    ],
+    "CJ_MCC_GetParameterType": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:74",
+      "cjcj-codegen/IRBuilder.cj:246"
+    ],
+    "CJ_MCC_GetQualifiedName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:27",
+      "cjcj-codegen/IRBuilder.cj:202"
+    ],
+    "CJ_MCC_GetQualifiedNameLength": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:26",
+      "cjcj-codegen/IRBuilder.cj:201"
+    ],
+    "CJ_MCC_GetRealHeapSize": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:104",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:150"
+    ],
+    "CJ_MCC_GetRelatedPackageInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:77",
+      "cjcj-codegen/IRBuilder.cj:248"
+    ],
+    "CJ_MCC_GetStaticFieldAnnotations": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:60",
+      "cjcj-codegen/IRBuilder.cj:233"
+    ],
+    "CJ_MCC_GetStaticFieldInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:57",
+      "cjcj-codegen/IRBuilder.cj:230"
+    ],
+    "CJ_MCC_GetStaticFieldModifier": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:65",
+      "cjcj-codegen/IRBuilder.cj:238"
+    ],
+    "CJ_MCC_GetStaticFieldName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:58",
+      "cjcj-codegen/IRBuilder.cj:231"
+    ],
+    "CJ_MCC_GetStaticFieldType": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:59",
+      "cjcj-codegen/IRBuilder.cj:232"
+    ],
+    "CJ_MCC_GetStaticFieldValue": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:68",
+      "cjcj-codegen/IRBuilder.cj:241"
+    ],
+    "CJ_MCC_GetStaticMethodInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:40",
+      "cjcj-codegen/IRBuilder.cj:214"
+    ],
+    "CJ_MCC_GetSubPackages": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:88",
+      "cjcj-codegen/IRBuilder.cj:259"
+    ],
+    "CJ_MCC_GetSuperTypeInfo": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:34",
+      "cjcj-codegen/IRBuilder.cj:209"
+    ],
+    "CJ_MCC_GetTypeArgs": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:35",
+      "cjcj-codegen/IRBuilder.cj:210"
+    ],
+    "CJ_MCC_GetTypeByMangledName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:23",
+      "cjcj-codegen/IRBuilder.cj:198"
+    ],
+    "CJ_MCC_GetTypeForAny": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:22",
+      "cjcj-codegen/IRBuilder.cj:197"
+    ],
+    "CJ_MCC_GetTypeInfoAnnotations": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:32",
+      "cjcj-codegen/IRBuilder.cj:207"
+    ],
+    "CJ_MCC_GetTypeInfoModifier": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:31",
+      "cjcj-codegen/IRBuilder.cj:206"
+    ],
+    "CJ_MCC_GetTypeName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:24",
+      "cjcj-codegen/IRBuilder.cj:199"
+    ],
+    "CJ_MCC_GetTypeTemplate": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:18",
+      "cjcj-codegen/IRBuilder.cj:193"
+    ],
+    "CJ_MCC_HandleReturnSafepoint": [
+      "llvm-lib/Target/AArch64/AArch64AsmPrinter.cpp:2384",
+      "llvm-lib/Target/X86/X86MCInstLower.cpp:1521"
+    ],
+    "CJ_MCC_HandleSafepoint": [
+      "llvm-lib/Target/AArch64/AArch64AsmPrinter.cpp:2465",
+      "llvm-lib/Target/AArch64/AArch64AsmPrinter.cpp:2496",
+      "llvm-lib/Target/X86/X86MCInstLower.cpp:1559",
+      "llvm-lib/Target/X86/X86MCInstLower.cpp:1597",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:151",
+      "llvm-lib/Transforms/Scalar/PlaceSafepoints.cpp:177",
+      "llvm-lib/Transforms/Scalar/PlaceSafepoints.cpp:196",
+      "llvm-include/llvm/IR/Function.h:902"
+    ],
+    "CJ_MCC_InvokeGC": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:72",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:152",
+      "llvm-lib/Transforms/Scalar/PlaceSafepoints.cpp:179"
+    ],
+    "CJ_MCC_IsBox": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:15",
+      "cjcj-codegen/IRBuilder.cj:191"
+    ],
+    "CJ_MCC_IsClass": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:8",
+      "cjcj-codegen/IRBuilder.cj:184"
+    ],
+    "CJ_MCC_IsEnum": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:14",
+      "cjcj-codegen/IRBuilder.cj:190"
+    ],
+    "CJ_MCC_IsFunction": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:13",
+      "cjcj-codegen/IRBuilder.cj:189"
+    ],
+    "CJ_MCC_IsGeneric": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:11",
+      "cjcj-codegen/IRBuilder.cj:187"
+    ],
+    "CJ_MCC_IsInterface": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:7",
+      "cjcj-codegen/IRBuilder.cj:183"
+    ],
+    "CJ_MCC_IsPrimitive": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:9",
+      "cjcj-codegen/IRBuilder.cj:185"
+    ],
+    "CJ_MCC_IsReflectUnsupportedType": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:21",
+      "cjcj-codegen/IRBuilder.cj:196"
+    ],
+    "CJ_MCC_IsStruct": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:10",
+      "cjcj-codegen/IRBuilder.cj:186"
+    ],
+    "CJ_MCC_IsSubType": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:30",
+      "llvm-lib/Transforms/Scalar/CJDevirtualOpt.cpp:104",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:124",
+      "llvm-lib/Transforms/Scalar/CJSimpleOpt.cpp:941",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:153",
+      "cjcj-codegen/IRBuilder.cj:205"
+    ],
+    "CJ_MCC_IsThreadObjectInited": [
+      "compiler-codegen/Utils/CGCommonDef.h:159",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:154",
+      "cjcj-codegen/IRBuilder.cj:165"
+    ],
+    "CJ_MCC_IsTuple": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:12",
+      "cjcj-codegen/IRBuilder.cj:188"
+    ],
+    "CJ_MCC_IsTupleTypeOf": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:125",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:155"
+    ],
+    "CJ_MCC_IsWrapperClassForAutoEnv": [
+      "compiler-codegen/CJNative/CJNativeIntrinsicsCall.cpp:1498",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:157",
+      "cjcj-codegen/IRBuilder.cj:3653"
+    ],
+    "CJ_MCC_LoadBarrierOnOopFieldPreloaded": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:873"
+    ],
+    "CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:872"
+    ],
+    "CJ_MCC_LoadPackage": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:85",
+      "cjcj-codegen/IRBuilder.cj:256"
+    ],
+    "CJ_MCC_MethodEntryPointIsNull": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:20",
+      "cjcj-codegen/IRBuilder.cj:195"
+    ],
+    "CJ_MCC_MonitorNotify": [
+      "compiler-codegen/Utils/CGCommonDef.h:171",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:158",
+      "cjcj-codegen/IRBuilder.cj:176"
+    ],
+    "CJ_MCC_MonitorNotifyAll": [
+      "compiler-codegen/Utils/CGCommonDef.h:172",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:159",
+      "cjcj-codegen/IRBuilder.cj:177"
+    ],
+    "CJ_MCC_MonitorWait": [
+      "compiler-codegen/Utils/CGCommonDef.h:170",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:160",
+      "cjcj-codegen/IRBuilder.cj:175"
+    ],
+    "CJ_MCC_MultiConditionMonitorNotify": [
+      "compiler-codegen/Utils/CGCommonDef.h:174",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:161",
+      "cjcj-codegen/IRBuilder.cj:179"
+    ],
+    "CJ_MCC_MultiConditionMonitorNotifyAll": [
+      "compiler-codegen/Utils/CGCommonDef.h:175",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:162",
+      "cjcj-codegen/IRBuilder.cj:180"
+    ],
+    "CJ_MCC_MultiConditionMonitorWait": [
+      "compiler-codegen/Utils/CGCommonDef.h:173",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:163",
+      "cjcj-codegen/IRBuilder.cj:178"
+    ],
+    "CJ_MCC_MutexCheckStatus": [
+      "compiler-codegen/Utils/CGCommonDef.h:166",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:164",
+      "cjcj-codegen/IRBuilder.cj:171"
+    ],
+    "CJ_MCC_MutexInit": [
+      "compiler-codegen/Utils/CGCommonDef.h:163",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:165",
+      "cjcj-codegen/IRBuilder.cj:168"
+    ],
+    "CJ_MCC_MutexLock": [
+      "compiler-codegen/Utils/CGCommonDef.h:164",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:166",
+      "llvm-include/llvm/ADT/StringRef.h:905",
+      "cjcj-codegen/IRBuilder.cj:169"
+    ],
+    "CJ_MCC_MutexLockSlowPath": [
+      "llvm-lib/Transforms/Scalar/CJSimpleOpt.cpp:434"
+    ],
+    "CJ_MCC_MutexTryLock": [
+      "compiler-codegen/Utils/CGCommonDef.h:165",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:167",
+      "cjcj-codegen/IRBuilder.cj:170"
+    ],
+    "CJ_MCC_MutexUnlock": [
+      "compiler-codegen/Utils/CGCommonDef.h:167",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:168",
+      "cjcj-codegen/IRBuilder.cj:172"
+    ],
+    "CJ_MCC_N2CStub": [
+      "llvm-lib/CodeGen/AsmPrinter/AsmPrinter.cpp:4122",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:61",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:169"
+    ],
+    "CJ_MCC_NewAndInitEnumTupleObject": [
+      "compiler-codegen/Utils/CGCommonDef.h:151",
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:92",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:170",
+      "cjcj-codegen/IRBuilder.cj:262",
+      "cjcj-codegen/IRBuilder.cj:365"
+    ],
+    "CJ_MCC_NewArray": [
+      "llvm-lib/Analysis/InlineCost.cpp:693",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:476",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:560",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:592",
+      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:159",
+      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:1104",
+      "llvm-lib/Transforms/Scalar/CJBarrierOpt.cpp:53",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:808",
+      "llvm-lib/Transforms/Scalar/CJSimpleOpt.cpp:840",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:171",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:398"
+    ],
+    "CJ_MCC_NewArray16": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:477",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:561",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:588",
+      "llvm-lib/Transforms/Scalar/CJBarrierOpt.cpp:53",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:816",
+      "llvm-lib/Transforms/Scalar/CJSimpleOpt.cpp:840",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:172",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:399"
+    ],
+    "CJ_MCC_NewArray32": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:477",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:562",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:589",
+      "llvm-lib/Transforms/Scalar/CJBarrierOpt.cpp:54",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:818",
+      "llvm-lib/Transforms/Scalar/CJSimpleOpt.cpp:841",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:173",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:400"
+    ],
+    "CJ_MCC_NewArray64": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:478",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:562",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:590",
+      "llvm-lib/Transforms/Scalar/CJBarrierOpt.cpp:54",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:820",
+      "llvm-lib/Transforms/Scalar/CJSimpleOpt.cpp:841",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:174",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:400"
+    ],
+    "CJ_MCC_NewArray8": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:476",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:561",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:587",
+      "llvm-lib/Transforms/Scalar/CJBarrierOpt.cpp:53",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:814",
+      "llvm-lib/Transforms/Scalar/CJSimpleOpt.cpp:840",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:175",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:399"
+    ],
+    "CJ_MCC_NewArrayGeneric": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:80",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:176",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:401"
+    ],
+    "CJ_MCC_NewCJThread": [
+      "compiler-codegen/CJNative/CJNativeIntrinsicsCall.cpp:613",
+      "cjcj-codegen/IRBuilder.cj:75"
+    ],
+    "CJ_MCC_NewCJThreadNoReturn": [
+      "compiler-codegen/CJNative/CJNativeIntrinsicsCall.cpp:613",
+      "cjcj-codegen/IRBuilder.cj:76"
+    ],
+    "CJ_MCC_NewFinalizer": [
+      "llvm-lib/Analysis/MemoryDependenceAnalysis.cpp:481",
+      "llvm-lib/CodeGen/AsmPrinter/AsmPrinter.cpp:4173",
+      "llvm-lib/IR/SafepointIRVerifier.cpp:1162",
+      "llvm-lib/Target/AArch64/AArch64InstrInfo.cpp:110",
+      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:160",
+      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:168",
+      "llvm-lib/Transforms/Scalar/CJBarrierOpt.cpp:58",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:406",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:410",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:177",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:401",
+      "llvm-include/llvm/ADT/StringRef.h:908"
+    ],
+    "CJ_MCC_NewObjArray": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:478",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:560",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:591",
+      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:161",
+      "llvm-lib/Transforms/Scalar/CJBarrierOpt.cpp:54",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:806",
+      "llvm-lib/Transforms/Scalar/CJSimpleOpt.cpp:841",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:179",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:402"
+    ],
+    "CJ_MCC_NewObject": [
+      "llvm-lib/CodeGen/AsmPrinter/AsmPrinter.cpp:4172",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:1295",
+      "llvm-lib/Target/AArch64/AArch64InstrInfo.cpp:105",
+      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:158",
+      "llvm-lib/Transforms/Scalar/CJBarrierOpt.cpp:58",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:74",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:79",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:180",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:403",
+      "llvm-include/llvm/ADT/StringRef.h:908"
+    ],
+    "CJ_MCC_NewPinnedObject": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:475",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:575",
+      "llvm-lib/Transforms/Scalar/CJBarrierOpt.cpp:59",
+      "llvm-lib/Transforms/Scalar/CJFillMetadata.cpp:549",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:380",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:387",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:182",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:404"
+    ],
+    "CJ_MCC_NewWeakRefObject": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:418",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:420",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:183",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:405"
+    ],
+    "CJ_MCC_OnFinalizerCreated": [
+      "llvm-lib/Analysis/MemoryDependenceAnalysis.cpp:482",
+      "llvm-lib/Target/AArch64/AArch64AsmPrinter.cpp:2125",
+      "llvm-lib/Target/X86/X86MCInstLower.cpp:3412",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:62",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:184"
+    ],
+    "CJ_MCC_PostThrowException": [
+      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:764",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:94",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:185",
+      "cjcj-codegen/IRBuilder.cj:5474"
+    ],
+    "CJ_MCC_ReadGeneric": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:203",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:186"
+    ],
+    "CJ_MCC_ReadGenericPayload": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:206"
+    ],
+    "CJ_MCC_ReadRefField": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:189",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:187",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:395"
+    ],
+    "CJ_MCC_ReadStaticRef": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:192",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:188",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:396"
+    ],
+    "CJ_MCC_ReadStaticStruct": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:193",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:189"
+    ],
+    "CJ_MCC_ReadStructField": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:191",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:190"
+    ],
+    "CJ_MCC_ReadWeakRef": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:190",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:191",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:395"
+    ],
+    "CJ_MCC_RegisterImplicitExceptionRaisers": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:122",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:192"
+    ],
+    "CJ_MCC_ReleaseRawData": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:93",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:193"
+    ],
+    "CJ_MCC_RemoveExportedRef": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:130",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:194"
+    ],
+    "CJ_MCC_SetCurrentCJThreadObject": [
+      "compiler-codegen/Utils/CGCommonDef.h:161",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:195",
+      "cjcj-codegen/IRBuilder.cj:167"
+    ],
+    "CJ_MCC_SetGCThreshold": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:103",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:196"
+    ],
+    "CJ_MCC_SetInstanceFieldValue": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:67",
+      "cjcj-codegen/IRBuilder.cj:240"
+    ],
+    "CJ_MCC_SetStaticFieldValue": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:69",
+      "cjcj-codegen/IRBuilder.cj:242"
+    ],
+    "CJ_MCC_StackGrowStub": [
+      "llvm-lib/Target/AArch64/AArch64AsmPrinter.cpp:1319",
+      "llvm-lib/Target/ARM/ARMAsmPrinter.cpp:1545",
+      "llvm-lib/Target/X86/X86MCInstLower.cpp:1435"
+    ],
+    "CJ_MCC_StartCpuProfiling": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:118",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:198"
+    ],
+    "CJ_MCC_StopCpuProfiling": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:120",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:199"
+    ],
+    "CJ_MCC_StoreBarrierOnHeapField": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:997",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:211"
+    ],
+    "CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:996",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:212"
+    ],
+    "CJ_MCC_StringDedupCanonical": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:98",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:200"
+    ],
+    "CJ_MCC_ThrowException": [
+      "llvm-lib/CodeGen/AsmPrinter/AsmPrinter.cpp:4168",
+      "llvm-lib/Transforms/IPO/CJPartialEscapeAnalysis.cpp:768",
+      "llvm-lib/Transforms/IPO/MergeFunctions.cpp:459",
+      "llvm-lib/Transforms/Scalar/CJRewriteStatepoint.cpp:3061",
+      "llvm-lib/Transforms/Scalar/CJRewriteStatepoint.cpp:3068",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:95",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:202",
+      "llvm-include/llvm/IR/Function.h:928",
+      "cjcj-codegen/IRBuilder.cj:43"
+    ],
+    "CJ_MCC_ThrowStackOverflowError": [
+      "llvm-lib/Target/AArch64/AArch64AsmPrinter.cpp:1308",
+      "llvm-lib/Target/X86/X86MCInstLower.cpp:1353"
+    ],
+    "CJ_MCC_UpdateVMT": [
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:89",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:203"
+    ],
+    "CJ_MCC_WaitQueueForMonitorInit": [
+      "compiler-codegen/Utils/CGCommonDef.h:169",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:204",
+      "cjcj-codegen/IRBuilder.cj:174"
+    ],
+    "CJ_MCC_WaitQueueInit": [
+      "compiler-codegen/Utils/CGCommonDef.h:168",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:205",
+      "cjcj-codegen/IRBuilder.cj:173"
+    ],
+    "CJ_MCC_WriteGeneric": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:202",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:206"
+    ],
+    "CJ_MCC_WriteGenericPayload": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:205",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:207"
+    ],
+    "CJ_MCC_WriteRefField": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:185",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:208"
+    ],
+    "CJ_MCC_WriteRefField_Strong": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:323",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:209"
+    ],
+    "CJ_MCC_WriteRefField_Weak": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:324",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:210"
+    ],
+    "CJ_MCC_WriteStaticRef": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:187",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:213"
+    ],
+    "CJ_MCC_WriteStaticStruct": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:188",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:214"
+    ],
+    "CJ_MCC_WriteStructField": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:186",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:215"
+    ],
+    "CJ_MCC_getTypeByQualifiedName": [
+      "compiler-reflection/Utils/LLVMReflectionIntrinsics.def:25",
+      "cjcj-codegen/IRBuilder.cj:200"
+    ],
+    "CJ_MRT_CjRuntimeInit": [
+      "compiler-codegen/CJNative/EmitPackageIR.cpp:271",
+      "cjcj-codegen/EmitPackageIR.cj:605"
+    ],
+    "CJ_MRT_CjRuntimeInitWithConfigV1": [
+      "cjcj-codegen/EmitPackageIR.cj:560"
+    ],
+    "CJ_MRT_CjRuntimeStart": [
+      "compiler-codegen/CJNative/EmitPackageIR.cpp:289",
+      "cjcj-codegen/EmitPackageIR.cj:626"
+    ],
+    "CJ_MRT_GetCJThreadId": [
+      "stdlib/std/core/thread.cj:31",
+      "stdlib/std/core/thread.cj:219"
+    ],
+    "CJ_MRT_GetCJThreadState": [
+      "stdlib/std/core/thread.cj:37",
+      "stdlib/std/core/thread.cj:370"
+    ],
+    "CJ_MRT_GetCommandLineArgs": [
+      "stdlib/std/core/main_args.cj:14",
+      "stdlib/std/core/native.cj:79",
+      "stdlib/std/process/current_process.cj:25",
+      "stdlib/std/process/native.cj:257"
+    ],
+    "CJ_MRT_GetCurrentCJThread": [
+      "stdlib/std/core/thread.cj:34",
+      "stdlib/std/core/thread.cj:290"
+    ],
+    "CJ_MRT_PreInitializePackage": [
+      "llvm-lib/CodeGen/AsmPrinter/AsmPrinter.cpp:4164",
+      "llvm-lib/Target/AArch64/AArch64AsmPrinter.cpp:2302",
+      "llvm-lib/Target/AArch64/AArch64ISelLowering.cpp:6890",
+      "llvm-lib/Target/X86/X86MCInstLower.cpp:3765",
+      "llvm-lib/Target/X86/X86MCInstLower.cpp:3776",
+      "llvm-lib/Transforms/Scalar/CJRuntimeLowering.cpp:100",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:217"
+    ],
+    "CJ_MRT_SetCJThreadName": [
+      "stdlib/std/core/thread.cj:28",
+      "stdlib/std/core/thread.cj:325"
+    ],
+    "CJ_MRT_SetCommandLineArgs": [
+      "compiler-codegen/CJNative/EmitPackageIR.cpp:279",
+      "cjcj-codegen/EmitPackageIR.cj:616"
+    ],
+    "CJ_MRT_Sleep": [
+      "compiler-codegen/Utils/CGCommonDef.h:176",
+      "llvm-lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:218",
+      "cjcj-codegen/IRBuilder.cj:181"
+    ],
+    "CJ_ScheduleDumpTrace": [
+      "stdlib/std/runtime/runtime_trace.cj:43",
+      "stdlib/std/runtime/runtime_trace.cj:62"
+    ],
+    "CJ_ScheduleStartTrace": [
+      "stdlib/std/runtime/runtime_trace.cj:39",
+      "stdlib/std/runtime/runtime_trace.cj:79"
+    ],
+    "CJ_ScheduleStopTrace": [
+      "stdlib/std/runtime/runtime_trace.cj:41",
+      "stdlib/std/runtime/runtime_trace.cj:95"
+    ],
+    "FiniCJRuntime": [
+      "stdlib/std/env/env.cj:369",
+      "stdlib/std/env/native.cj:89",
+      "stdlib/std/process/current_process.cj:258",
+      "stdlib/std/process/native.cj:64"
+    ],
+    "g_cjHeapRangeCount": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:130"
+    ],
+    "g_cjHeapRangeEnd": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:132"
+    ],
+    "g_cjHeapRangeStart": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:131"
+    ],
+    "g_cjLoadShift": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:907",
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:1031"
+    ],
+    "g_cjStoreBarrierBufferBufferOffset": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:1062"
+    ],
+    "g_cjStoreBarrierBufferCurrentOffset": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:1053"
+    ],
+    "g_cjStoreBarrierEntryPOffset": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:1065"
+    ],
+    "g_cjStoreBarrierEntryPrevOffset": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:1068"
+    ],
+    "g_cjStoreBarrierEntrySize": [
+      "llvm-lib/CodeGen/CJBarrierLowering.cpp:1059"
+    ],
+    "sprintf_s": [
+      "stdlib/std/fs/native/file_system_unix.c:384",
+      "stdlib/std/process/native/process_impl_linux.c:111",
+      "stdlib/std/process/native/process_impl_linux.c:182",
+      "stdlib/std/process/native/process_impl_linux.c:203",
+      "stdlib/std/process/native/process_impl_linux.c:417"
+    ]
+  }
+}
