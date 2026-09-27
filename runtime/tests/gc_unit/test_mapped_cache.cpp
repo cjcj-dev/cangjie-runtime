@@ -276,10 +276,6 @@ uint64_t Read(uintptr_t address)
 }
 }
 
-// ZPartition::prepare_harvested_and_claim_virtual (zPageAllocator.cpp:1001-1046):
-// with no capacity left to grow, a request larger than any cached run harvests
-// the cache, unmaps, shuffles the virtual memory to the lowest free address
-// and maps the stashed backing there in backing-index order.
 GC_COMPONENT_OTHER_VM_TEST(PrimeCache, HeapConstructionPublishesMappedCapacity)
 {
     ProductHeapFixture fixture(64);
@@ -336,6 +332,10 @@ GC_COMPONENT_OTHER_VM_TEST(PrimeCache, RepeatedPagesReuseCommittedCapacity)
     }
 }
 
+// ZPartition::prepare_harvested_and_claim_virtual (zPageAllocator.cpp:1001-1046):
+// with no capacity left to grow, a request larger than any cached run harvests
+// the cache, unmaps, shuffles the virtual memory to the lowest free address
+// and maps the stashed backing there in backing-index order.
 GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
 {
     const size_t unit = ZGranuleSize;
