@@ -31,8 +31,15 @@ function(cj_runtime_export_directory directory)
         endif()
         if(NOT _type STREQUAL "OBJECT_LIBRARY")
             get_target_property(_binary "${_target}" BINARY_DIR)
+            # CMake's Windows-hosted Makefile generators write link recipes
+            # directly into build.make (UseLinkScript=false), including when
+            # the target platform differs from the host platform.
+            set(_link_input link.txt)
+            if(CMAKE_GENERATOR MATCHES "Makefiles" AND CMAKE_HOST_WIN32)
+                set(_link_input build.make)
+            endif()
             set_property(GLOBAL APPEND PROPERTY CJ_RUNTIME_LINK_COMMAND_FILES
-                "${_binary}/CMakeFiles/${_target}.dir/link.txt")
+                "${_binary}/CMakeFiles/${_target}.dir/${_link_input}")
         endif()
         # These are generation-time compiler/linker inputs, not snapshots of
         # CMake variables or an allowlist of arbitrary target properties.
