@@ -236,18 +236,6 @@ run_ohos_host_arm() {
   echo "GC_UNIT_OHOS_HOST_OK filters=${#tests[@]} receipt=$receipt elf=$elf"
 }
 
-case "${MRT_GC_UNIT_OHOS_HOST:-0}" in
-  0) ;;
-  1)
-    run_ohos_host_arm
-    exit $?
-    ;;
-  *)
-    echo "error: MRT_GC_UNIT_OHOS_HOST must be 0 or 1" >&2
-    exit 2
-    ;;
-esac
-
 TEST_DEFINES=()
 
 # Like HotSpot CompileGtest.gmk, inherit the linked product's compile-time
@@ -255,7 +243,11 @@ TEST_DEFINES=()
 # a deleted test hook is not a configuration interface.
 PRODUCT_CONFIGURATION=$(python3 "$SRC/product_test_configuration.py" \
   "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT")
-read -r SO_TESTABLE SO_GC_UNIT_TESTS <<<"$PRODUCT_CONFIGURATION"
+read -r SO_TESTABLE SO_GC_UNIT_TESTS SO_OHOS_HOST <<<"$PRODUCT_CONFIGURATION"
+if [[ "$SO_OHOS_HOST" == 1 ]]; then
+    run_ohos_host_arm
+    exit $?
+fi
 if [[ -n "${MRT_TESTABLE_INTERNALS:-}" && "$MRT_TESTABLE_INTERNALS" != "$SO_TESTABLE" ]]; then
   echo "GC_UNIT_PRODUCT_CONFIGURATION_MISMATCH requested=$MRT_TESTABLE_INTERNALS product=$SO_TESTABLE" >&2
   exit 2

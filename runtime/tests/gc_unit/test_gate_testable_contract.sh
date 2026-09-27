@@ -25,6 +25,26 @@ mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/runti
   "$fixture/sdk/bin"
 cp "$ROOT/runtime/tests/gc_unit/gate_gc_unit.sh" "$fixture/runtime/tests/gc_unit/"
 cp "$ROOT/runtime/build/resolve_runtime_output.sh" "$fixture/runtime/build/"
+cp "$ROOT/runtime/build/resolve_runtime_headers.py" "$fixture/runtime/build/"
+cp "$ROOT/runtime/tests/gc_unit/product_test_configuration.py" "$fixture/runtime/tests/gc_unit/"
+
+# Synthetic products still carry the real parser's hash-bound compile recipe.
+write_product_recipe() {
+  python3 - "$1" "$2" "$3" <<'PYRECIPE'
+import hashlib, json, sys
+from pathlib import Path
+output, library = map(Path, sys.argv[1:3])
+output.mkdir(parents=True, exist_ok=True)
+arguments = ['clang++']
+if sys.argv[3] == '1':
+    arguments += ['-DMRT_GC_UNIT_OHOS_HOST=1']
+recipe = dict(products={name: hashlib.sha256((library / name).read_bytes()).hexdigest()
+                        for name in ('libcangjie-runtime.so', 'libboundscheck.so')},
+              commands=[dict(file='/runtime/src/Heap/z/zGeneration.cpp', arguments=arguments)])
+(output / 'runtime-build-inputs.txt').write_text(json.dumps(recipe))
+PYRECIPE
+}
+
 printf '#!/usr/bin/env bash\n# test_x.cpp\necho CPP_SUITE >>"${GC_UNIT_GATE_TRACE:?}"\nmkdir -p "$(dirname "${GC_UNIT_TALLY_FILE:?}")"\necho "[========] 1 tests: 1 passed, 0 failed" >"$GC_UNIT_TALLY_FILE"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_standalone.sh"
 printf '#!/usr/bin/env bash\necho FINALIZER_TRIGGER >>"${GC_UNIT_GATE_TRACE:?}"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_finalizer_trigger.sh"
 printf '#!/usr/bin/env bash\necho PHASE_ENTRY_TRIGGER >>"${GC_UNIT_GATE_TRACE:?}"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_phase_entry_trigger.sh"
@@ -63,12 +83,13 @@ printf '#!/usr/bin/env bash\nheader_root=${GC_UNIT_OHOS_HEADER_ROOT_TOKEN:-${GCV
 chmod +x "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 ohos_output_root="$fixture/selected-output"
 mkdir -p "$ohos_output_root/include"
-PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+write_product_recipe "$ohos_output_root" "$fixture/lib" 1
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=ON \
   GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
   GC_UNIT_OUT="$fixture/ohos-good-out" GC_UNIT_GATE_STATUS="$fixture/ohos-good.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-good.log" 2>&1
 set +e
-PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=ON \
   GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
   GC_UNIT_OHOS_HEADER_ROOT_TOKEN="$fixture/stale-output/include" \
   GC_UNIT_OUT="$fixture/ohos-mismatch-out" GC_UNIT_GATE_STATUS="$fixture/ohos-mismatch.status" \
@@ -83,7 +104,7 @@ printf 'OHOS header identity: rc=0 mismatch_rc=%s root=%s/include\n' \
   "$ohos_mismatch_rc" "$ohos_output_root"
 # Reusing an explicitly supplied ELF does not compile headers. The runner's
 # receipt remains mandatory, but a fresh-compilation record is not required.
-PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=ON \
   GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
   GC_UNIT_OHOS_HOST_TEST_ELF="$fixture/reused-elf" \
   GC_UNIT_OHOS_HEADER_ROOT_TOKEN=not-a-fresh-compile \
@@ -103,7 +124,7 @@ for missing in CJ_GetUIThreadStackTop CJ_PushUIThreadStackTop; do
     reuse_elf=""
     [[ "$reuse" == fresh ]] || reuse_elf="$fixture/reused-elf"
     set +e
-    PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+    PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=ON \
       GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
       GC_UNIT_OHOS_HOST_TEST_ELF="$reuse_elf" \
       GC_UNIT_OUT="$out" GC_UNIT_GATE_STATUS="$out/status" \
@@ -121,7 +142,7 @@ mv "$fixture/ohos-nm" "$fixture/bin/nm"
 # A successful legacy three-filter receipt must not certify the handler chain.
 sed -i 's/FILTER_HANDLER=PASS/FILTER_HANDLER=NOT_RUN/' "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 set +e
-PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=ON \
   GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
   GC_UNIT_OUT="$fixture/ohos-handler-missing-out" GC_UNIT_GATE_STATUS="$fixture/ohos-handler-missing.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-handler-missing.log" 2>&1
@@ -133,6 +154,7 @@ set -e
 printf 'OHOS handler receipt: good_rc=0 missing_rc=%s target=receipt-incomplete\n' "$ohos_handler_rc"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fixture/bin/nm"
 mv "$fixture/default-runner.sh" "$fixture/runtime/tests/gc_unit/run_standalone.sh"
+write_product_recipe "$GCV2_RUNTIME_OUTPUT_ROOT" "$fixture/lib" 0
 
 # Configuration selection is a gate input, not a directory scan.  Prove the
 # requested manifest is accepted and an explicit path from another
@@ -150,6 +172,8 @@ printf '%s\n' \
   "RUNTIME_SHA256=$(sha256sum "$config_lib/libcangjie-runtime.so" | awk '{print $1}')" \
   "BOUNDSCHECK_SHA256=$(sha256sum "$config_lib/libboundscheck.so" | awk '{print $1}')" \
   "LIB_DIR=$config_lib" >"$fixture/runtime/output/temp/$config_id/runtime-build-config.txt"
+
+write_product_recipe "$fixture/runtime/output/temp/$config_id" "$config_lib" 0
 
 PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/config.trace" \
   GC_UNIT_OUT="$fixture/config-out" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
@@ -231,7 +255,7 @@ printf '#!/usr/bin/env bash\necho SEGMENTED_ARRAY_MANAGED >>"${GC_UNIT_GATE_TRAC
 chmod +x "$fixture/runtime/tests/gc_unit/run_segmented_array_managed.sh"
 touch "$fixture/lib/libcangjie-runtime.so"
 
-PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/defer.trace" GC_UNIT_OUT="$fixture/defer-out" \
+PATH="$fixture/bin:$PATH" MRT_GC_UNIT_OHOS_HOST=1 GC_UNIT_GATE_TRACE="$fixture/defer.trace" GC_UNIT_OUT="$fixture/defer-out" \
   GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_GATE_LANGUAGE_TESTS=defer \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/defer.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/defer.log" 2>&1
@@ -249,7 +273,7 @@ set -e
 [[ "$only_missing_rc" -eq 2 ]]
 /usr/bin/grep -qx 'REASON=LANGUAGE_SDK_MISSING' "$fixture/only-missing.status"
 
-PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/only.trace" GC_UNIT_OUT="$fixture/only-out" \
+PATH="$fixture/bin:$PATH" MRT_GC_UNIT_OHOS_HOST=ON GC_UNIT_GATE_TRACE="$fixture/only.trace" GC_UNIT_OUT="$fixture/only-out" \
   GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_GATE_LANGUAGE_TESTS=only \
   CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/only.status" \

@@ -39,7 +39,6 @@ OHOS_HOST_SOURCE=NOT_RUN
 OHOS_HOST_FILTERS=0
 STATUS_REASON=UNEXPECTED_EXIT
 TESTABLE_INTERNALS="${MRT_TESTABLE_INTERNALS:-0}"
-OHOS_HOST="${MRT_GC_UNIT_OHOS_HOST:-0}"
 RUNTIME_CONFIG_ID="${GCV2_RUNTIME_CONFIG:-explicit-lib-dir}"
 RUNTIME_CONFIG_SIGNATURE=unrecorded
 RUNTIME_SHA256=unrecorded
@@ -157,15 +156,6 @@ case "$TESTABLE_INTERNALS" in
     ;;
 esac
 
-case "$OHOS_HOST" in
-  0|1) ;;
-  *)
-    STATUS_REASON=INVALID_OHOS_HOST
-    echo "GC_UNIT_GATE_FAIL: MRT_GC_UNIT_OHOS_HOST must be 0 or 1 (got '$OHOS_HOST')" >&2
-    exit 2
-    ;;
-esac
-
 if [[ ! -d "$SRC" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing $SRC" >&2
   exit 2
@@ -233,6 +223,11 @@ if [[ -z "${GCV2_RUNTIME_OUTPUT_ROOT:-}" ]]; then
     "$ROOT/runtime" "$GCV2_RUNTIME_LIB_DIR")
   export GCV2_RUNTIME_OUTPUT_ROOT
 fi
+# Use the same hash-bound product recipe as run_standalone. Environment
+# spellings (ON/1/unset) cannot change the selected product's platform.
+PRODUCT_CONFIGURATION=$(python3 "$SRC/product_test_configuration.py" \
+  "$ROOT/runtime" "$GCV2_RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT")
+read -r SO_TESTABLE SO_GC_UNIT_TESTS OHOS_HOST <<<"$PRODUCT_CONFIGURATION"
 RUNTIME_SHA256=$(sha256sum "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" | awk '{print $1}')
 if [[ -f "$GCV2_RUNTIME_LIB_DIR/libboundscheck.so" ]]; then
   BOUNDSCHECK_SHA256=$(sha256sum "$GCV2_RUNTIME_LIB_DIR/libboundscheck.so" | awk '{print $1}')
