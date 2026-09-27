@@ -349,7 +349,7 @@ struct FrameRootMapImage {
 };
 FrameRootMapImage frameRootMapImage;
 
-void InitializeFrameRootMap(bool sret = false)
+void InitializeFrameRootMap(bool sret = false, bool registerPointer = false)
 {
     auto& image = frameRootMapImage;
     std::memset(&image, 0, sizeof(image));
@@ -368,6 +368,19 @@ void InitializeFrameRootMap(bool sret = false)
         if (value <= 11) { put(value, 4); }
         else { put(12, 4); put(value, 8); }
     };
+    if (sret && registerPointer) {
+        // R13 saved at fp-24; the entry PC has no incoming register pointer.
+        // At PC 16 the saved R13 belongs to the preceding frame, so consuming
+        // the caller register map instead of its incoming snapshot is visible.
+        var(0); var(0); var(4); var(3);
+        var(2); var(0); var(1); var(0); var(0); var(1); var(0); var(0);
+        put(0, 32); put(1, 1); put(0, 1);
+        put(16, 32); put(1, 1); put(1, 1);
+        var(1); var(16); put(1u << 13, 16);
+        var(1); var(8); var(1); put(0xf0, 8); put(1, 1);
+        var(0); var(0); var(0);
+        return;
+    }
     if (sret) {
         // One PC, a heap root at fp-16 and a stack pointer at fp-24.
         // Both maps use the product decoder; only metadata/stack are inputs.
@@ -401,7 +414,8 @@ void InitializeFrameRootMap(bool sret = false)
 
 // zUncoloredRoot.inline.hpp:62-68 and zGeneration.inline.hpp:131-139: relocate-start
 // exit processing writes the to-address of a cset frame slot before concurrent relocate.
-static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPointer = true)
+static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPointer = true,
+                                                bool registerPointer = false)
 {
     B09RuntimeFixture runtime;
     CreateStandaloneHeap(8);
@@ -453,7 +467,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
 #if defined(__x86_64__) && defined(__linux__)
     const auto savedGrow = CangjieRuntime::stackGrowConfig;
     if (sret) { CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON; }
-    InitializeFrameRootMap(sret);
+    InitializeFrameRootMap(sret, registerPointer);
     const uintptr_t startIP = reinterpret_cast<uintptr_t>(frameRootMapImage.pc);
     uintptr_t younger[8] = {};
     uintptr_t caller[8] = {};
@@ -490,7 +504,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     if (sret) {
         parked->SetStackTopAddr(reinterpret_cast<uintptr_t>(frames));
         parked->SetStackSize(sizeof(frames));
-        context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP + 16));
+        context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP + (registerPointer ? 0 : 16)));
         context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frames[0][4]));
         context.frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(&frames[0][0]));
     }
@@ -513,8 +527,8 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         const bool covered = after == relocated && relocated != 0 && frames[8][2] == transitive && transitive != 0;
         const bool untouched = after == before && relocated == 0;
         const bool bounded = !parked->GetStackWatermark().IsDone();
-        std::fprintf(stderr, "SRET_COVER_ASSERT_EXECUTED pointer=%d covered=%d untouched=%d bounded=%d\n",
-                     hasPointer, covered, untouched, bounded);
+        std::fprintf(stderr, "SRET_COVER_ASSERT_EXECUTED pointer=%d register=%d covered=%d untouched=%d bounded=%d\n",
+                     hasPointer, registerPointer, covered, untouched, bounded);
         GC_EXPECT_TRUE(hasPointer ? covered : untouched);
         GC_EXPECT_TRUE(bounded);
         // A callee writes its return value through sret after phase entry;
@@ -542,6 +556,11 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
 GC_COMPONENT_OTHER_VM_TEST(SretWatermark, CoversTransitiveCallerBeforeWrite)
 {
     CheckRelocateStartExitRemapsFrameRoot(true, true);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(SretWatermark, UsesIncomingRegisterPointerMap)
+{
+    CheckRelocateStartExitRemapsFrameRoot(true, true, true);
 }
 
 GC_COMPONENT_OTHER_VM_TEST(SretWatermark, NoPointerKeepsLazyFrontier)
