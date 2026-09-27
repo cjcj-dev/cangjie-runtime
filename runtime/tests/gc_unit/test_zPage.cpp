@@ -1288,3 +1288,134 @@ GC_RUNTIME_OTHER_VM_TEST(ZPageSequence, CollectionPublishesBothGenerationSequenc
     GC_EXPECT_EQ(result.youngAfter, result.youngBefore + 2);
     GC_EXPECT_EQ(result.oldAfter, result.oldBefore + 1);
 }
+
+namespace {
+struct NestedRawResult {
+    bool block = false;
+    std::atomic<bool> entered{false};
+    std::atomic<bool> proceed{false};
+    std::atomic<bool> nested{false};
+    std::atomic<bool> finish{false};
+    int64_t first = 0, second = 0, innerReleased = 0, final = 0;
+    int64_t nullReleased = 0, emptyReleased = 0, stackReleased = 0;
+};
+
+void* NestedRawTask(void* context)
+{
+    auto& result = *static_cast<NestedRawResult*>(context);
+    alignas(TypeInfo) static unsigned char types[2][sizeof(TypeInfo)]{};
+    auto* byteType = reinterpret_cast<TypeInfo*>(types[0]);
+    auto* arrayType = reinterpret_cast<TypeInfo*>(types[1]);
+    byteType->SetType(TypeKind::TYPE_KIND_UINT8);
+    byteType->SetInstanceSize(1);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetComponentTypeInfo(byteType);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(types), sizeof(types));
+    HandleMark mark(*Mutator::GetMutator());
+    Handle array(Mutator::GetMutator(), MCC_NewArray8(arrayType, 8));
+    Handle empty(Mutator::GetMutator(), MCC_NewArray8(arrayType, 0));
+    auto* a = static_cast<MArray*>(array());
+    void* outer = MCC_AcquireRawData(a, nullptr);
+    result.first = ZJNICritical::count_snapshot();
+    result.entered.store(true, std::memory_order_release);
+    if (result.block) {
+        while (!result.proceed.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    }
+    void* inner = MCC_AcquireRawData(a, nullptr);
+    result.second = ZJNICritical::count_snapshot();
+    MCC_ReleaseRawData(a, inner);
+    result.innerReleased = ZJNICritical::count_snapshot();
+    void* nullRaw = MCC_AcquireRawData(nullptr, nullptr);
+    MCC_ReleaseRawData(nullptr, nullRaw);
+    result.nullReleased = ZJNICritical::count_snapshot();
+    auto* e = static_cast<MArray*>(empty());
+    void* emptyRaw = MCC_AcquireRawData(e, nullptr);
+    MCC_ReleaseRawData(e, emptyRaw);
+    result.emptyReleased = ZJNICritical::count_snapshot();
+    alignas(MArray) unsigned char storage[sizeof(MArray) + 8]{};
+    auto* stackArray = reinterpret_cast<MArray*>(storage);
+    void* stackRaw = MCC_AcquireRawData(stackArray, nullptr);
+    MCC_ReleaseRawData(stackArray, stackRaw);
+    result.stackReleased = ZJNICritical::count_snapshot();
+    result.nested.store(true, std::memory_order_release);
+    if (result.block) {
+        while (!result.finish.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    }
+    MCC_ReleaseRawData(a, outer);
+    result.final = ZJNICritical::count_snapshot();
+    return nullptr;
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NestedRawAcquireAndEarlyReturns)
+{
+    RuntimeParam param{};
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    NestedRawResult result;
+    CJThreadHandle task = RunCJTask(NestedRawTask, &result);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr, "NESTED_RAW_TARGET first=%lld nested=%lld inner_release=%lld null=%lld empty=%lld stack=%lld final=%lld\n",
+        (long long)result.first, (long long)result.second, (long long)result.innerReleased,
+        (long long)result.nullReleased, (long long)result.emptyReleased,
+        (long long)result.stackReleased, (long long)result.final);
+    GC_EXPECT_EQ(result.second, 1);
+    GC_EXPECT_EQ(result.innerReleased, 1);
+    GC_EXPECT_EQ(result.nullReleased, 1);
+    GC_EXPECT_EQ(result.emptyReleased, 1);
+    GC_EXPECT_EQ(result.stackReleased, 1);
+    GC_EXPECT_EQ(result.final, 0);
+    GC_EXPECT_EQ(result.first, 1);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NestedRawAcquireDuringBlock)
+{
+    RuntimeParam param{};
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    NestedRawResult result;
+    result.block = true;
+    CJThreadHandle task = RunCJTask(NestedRawTask, &result);
+    while (!result.entered.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    std::atomic<bool> blocked{false};
+    std::thread blocker([&] {
+        ZJNICritical::block();
+        blocked.store(true, std::memory_order_release);
+        ZJNICritical::unblock();
+    });
+    while (ZJNICritical::count_snapshot() != -2) { std::this_thread::yield(); }
+    result.proceed.store(true, std::memory_order_release);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!result.nested.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool completed = result.nested.load(std::memory_order_acquire);
+    std::fprintf(stderr, "NESTED_BLOCK_TARGET completed=%d global=%lld blocked=%d\n",
+        completed, (long long)ZJNICritical::count_snapshot(), blocked.load());
+    // A failed invariant leaves the product task waiting for its own release.
+    // Terminate this OTHER_VM after printing the actual target assertion.
+    if (!completed) {
+        try { GC_EXPECT_TRUE(completed); }
+        catch (const AssertFailure& error) {
+            std::fprintf(stderr, "%s\n", error.what());
+            std::_Exit(1);
+        }
+    }
+    const int64_t held = ZJNICritical::count_snapshot();
+    const bool premature = blocked.load(std::memory_order_acquire);
+    result.finish.store(true, std::memory_order_release);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    blocker.join();
+    GC_EXPECT_EQ(held, -2);
+    GC_EXPECT_FALSE(premature);
+    GC_EXPECT_EQ(result.second, -2);
+    GC_EXPECT_EQ(result.innerReleased, -2);
+    GC_EXPECT_EQ(result.nullReleased, -2);
+    GC_EXPECT_EQ(result.emptyReleased, -2);
+    GC_EXPECT_EQ(result.stackReleased, -2);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
