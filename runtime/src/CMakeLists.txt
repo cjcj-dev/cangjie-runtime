@@ -91,6 +91,7 @@ elseif ((CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" AND IOS_FLAG MATCHES 1) OR IOS_
         "arch/x86_64_ios/ExclusiveScope.S"
         "Os/Linux/Loader.cpp"
         "Os/Linux/Path.cpp"
+        "os/Linux/LoadAverage.cpp"
     )
 elseif ((CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64") AND (WINDOWS_FLAG MATCHES 0) AND (IOS_FLAG MATCHES 0) AND (IOS_SIMULATOR_FLAG MATCHES 0))
     set(SRC_LIST
@@ -165,6 +166,7 @@ elseif ((IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1) AND (CMAKE_SYSTEM_P
         "arch/aarch64_ios/ExclusiveScope.S"
         "Os/Linux/Loader.cpp"
         "Os/Linux/Path.cpp"
+        "os/Linux/LoadAverage.cpp"
     )
 elseif ((CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64") AND (WINDOWS_FLAG MATCHES 0))
     set(SRC_LIST
