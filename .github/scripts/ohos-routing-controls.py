@@ -126,7 +126,11 @@ def run(arm):
                                       stdout=log, stderr=subprocess.STDOUT).returncode
     expected = []
     if arm == 'baseline' and arch == 'aarch64':
-        expected = ['cjthread.sdk_route', 'runtime.strip_route', 'no_runtime_library_rename']
+        # Base already routes aarch64 cjthread through OHOS_PUBLIC_SDK
+        # (runtime/CMakeLists.txt OHOS_FLAG==1 exports it; ohos_aarch64_cangjie.cmake
+        # consumes it), so only the strip route and the library rename remain as
+        # baseline failures.
+        expected = ['runtime.strip_route', 'no_runtime_library_rename']
     if arch == 'x86_64' and arm in ('producer-cut', 'consumer-cut'):
         expected = ['cjthread.sdk_route']
     elif arch == 'x86_64' and arm == 'buildpy-cut':
