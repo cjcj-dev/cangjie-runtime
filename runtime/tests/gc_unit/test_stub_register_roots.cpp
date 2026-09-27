@@ -19,6 +19,7 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "gc_unittest.hpp"
 #include "UnwindStack/GcStackInfo.h"
+#include "UnwindStack/StackGrowStackInfo.h"
 #if defined(__linux__)
 #include <csignal>
 #include <sys/wait.h>
@@ -275,7 +276,7 @@ GC_OTHER_VM_TEST(StubRegisterRoots, RealReturnStub)
 
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 namespace {
-void RunThreeFrameRoots(FrameType stub, bool invalidCaller)
+void RunThreeFrameRoots(FrameType stub, bool invalidCaller, unsigned route)
 {
     ConfigScope config;
     static Descriptor maps[2];
@@ -300,11 +301,28 @@ void RunThreeFrameRoots(FrameType stub, bool invalidCaller)
     }
     size_t visits = 0;
     uintptr_t observed = 0;
-    stack.VisitStackRoots([&](RootSlot& slot) {
+    RootVisitor visitor = [&](RootSlot& slot) {
         observed = raw(slot.LoadPlain());
         ++visits;
         StorePlain(slot, to_zaddress(0x50000));
-    }, mutator);
+    };
+    DerivedPtrVisitor derived = [](BasePtrType, DerivedSlot&) {};
+    switch (route) {
+        case 0: stack.VisitStackRoots(visitor, mutator); break;
+        case 1: stack.VisitHeapReferencesOnStack(visitor, derived, mutator); break;
+        case 2: {
+            RecordStackInfo recorded(&context);
+            for (const auto& frame : stack.GetStack()) { recorded.stacks.push_back(new FrameInfo(frame)); }
+            recorded.VisitStackRoots(visitor, mutator);
+            break;
+        }
+        case 3: {
+            StackGrowStackInfo moving(&context);
+            moving.GetStack() = stack.GetStack();
+            moving.RecordStackPtrs(visitor, [](ObjectRef&) {}, derived, mutator);
+            break;
+        }
+    }
     uintptr_t* r12slot = nullptr;
     for (unsigned i = 0; i < 15; ++i) { if (savedGprs[i] == R12) { r12slot = fp - 1 - i; } }
     const bool healed = visits == 1 && observed == expected && *r12slot == 0x50000;
@@ -312,7 +330,7 @@ void RunThreeFrameRoots(FrameType stub, bool invalidCaller)
                  int(stub), invalidCaller, visits, observed, healed);
     GC_EXPECT_TRUE(healed);
 }
-void CheckThreeFrameRoots(FrameType stub, bool invalidCaller)
+void CheckThreeFrameRoots(FrameType stub, bool invalidCaller, unsigned route = 0)
 {
     int output[2];
     GC_EXPECT_EQ(pipe(output), 0);
@@ -323,7 +341,7 @@ void CheckThreeFrameRoots(FrameType stub, bool invalidCaller)
         if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
         close(output[1]);
         signal(SIGABRT, SIG_DFL);
-        RunThreeFrameRoots(stub, invalidCaller);
+        RunThreeFrameRoots(stub, invalidCaller, route);
         _exit(0);
     }
     close(output[1]);
@@ -339,8 +357,8 @@ void CheckThreeFrameRoots(FrameType stub, bool invalidCaller)
         transcript.find("GC register root at ordinary statepoint") != std::string::npos;
     const bool accepted = WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
         transcript.find("healed=1") != std::string::npos;
-    std::fprintf(stderr, "CALL_ROOT_TARGET stub=%d invalid=%d status=%d rejected=%d accepted=%d\n",
-                 int(stub), invalidCaller, status, rejected, accepted);
+    std::fprintf(stderr, "CALL_ROOT_TARGET route=%u stub=%d invalid=%d status=%d rejected=%d accepted=%d\n",
+                 route, int(stub), invalidCaller, status, rejected, accepted);
     GC_EXPECT_TRUE(invalidCaller ? rejected : accepted);
 }
 }
@@ -355,6 +373,30 @@ GC_OTHER_VM_TEST(CallRegisterRoots, PollCallerSurvives)
 GC_OTHER_VM_TEST(CallRegisterRoots, StackcheckCallerSurvives)
 {
     CheckThreeFrameRoots(FrameType::STACKGROW, false);
+}
+GC_OTHER_VM_TEST(CallRegisterRoots, HeapReferencesRejectsThirdFrame)
+{
+    CheckThreeFrameRoots(FrameType::SAFEPOINT, true, 1);
+}
+GC_OTHER_VM_TEST(CallRegisterRoots, HeapReferencesPreservesPollCaller)
+{
+    CheckThreeFrameRoots(FrameType::SAFEPOINT, false, 1);
+}
+GC_OTHER_VM_TEST(CallRegisterRoots, RecordedStackRejectsThirdFrame)
+{
+    CheckThreeFrameRoots(FrameType::SAFEPOINT, true, 2);
+}
+GC_OTHER_VM_TEST(CallRegisterRoots, RecordedStackPreservesPollCaller)
+{
+    CheckThreeFrameRoots(FrameType::SAFEPOINT, false, 2);
+}
+GC_OTHER_VM_TEST(CallRegisterRoots, StackMoveRejectsThirdFrame)
+{
+    CheckThreeFrameRoots(FrameType::STACKGROW, true, 3);
+}
+GC_OTHER_VM_TEST(CallRegisterRoots, StackMovePreservesStackcheckCaller)
+{
+    CheckThreeFrameRoots(FrameType::STACKGROW, false, 3);
 }
 #endif
 #endif
