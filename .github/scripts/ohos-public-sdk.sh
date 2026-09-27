@@ -20,6 +20,10 @@ ccache -M 50G
 cp "$RUNNER_TEMP/ohos-sdk/archive.sha256" "$out/sdk.sha256"
 cp "$PUBLIC_NATIVE/oh-uni-package.json" "$out/sdk.json"
 git rev-parse HEAD > "$out/source.sha"
+if [[ $entry == controls ]]; then
+    python3 .github/scripts/ohos-routing-controls.py "$arch"
+    exit 0
+fi
 flag=2
 extra=()
 if [[ $arch == aarch64 ]]; then

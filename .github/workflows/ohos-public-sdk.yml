@@ -13,7 +13,12 @@ on:
       - 'runtime/src/CJThread/CMakeLists.txt'
       - 'runtime/tests/test_ohos_public_sdk.py'
       - '.github/scripts/ohos-public-sdk.sh'
+      - '.github/scripts/ohos-routing-controls.py'
       - '.github/workflows/ohos-public-sdk.yml'
+
+concurrency:
+  group: ohos-public-sdk-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -26,7 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         arch: [x86_64, aarch64]
-        entry: [cmake, build.py]
+        entry: [cmake, build.py, controls]
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
