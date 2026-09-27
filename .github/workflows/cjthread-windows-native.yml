@@ -1,0 +1,43 @@
+name: CJThread Windows native configure
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["sym/1181-*"]
+    paths:
+      - runtime/build/build_cjthread_windows.bat
+      - runtime/config.cmake
+      - runtime/tests/cjthread_windows_native.py
+      - .github/workflows/cjthread-windows-native.yml
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [baseline, green, cut-path, cut-output, restored, incomplete, clone-failure]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+      - name: Exercise the native parent configure
+        shell: msys2 {0}
+        run: python3 runtime/tests/cjthread_windows_native.py ${{ matrix.arm }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cjthread-native-${{ matrix.arm }}
+          path: ${{ runner.temp }}/cjthread-native/evidence
