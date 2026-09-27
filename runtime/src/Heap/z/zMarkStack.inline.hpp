@@ -13,10 +13,24 @@ bool MarkStripeStack::IsFull() const { return top == entries.length(); }
 size_t MarkStripeStack::Size() const { return top; }
 size_t MarkStripeStack::Capacity() const { return entries.length(); }
 bool MarkStripe::IsEmpty() const { return published.IsEmpty() && overflowed.IsEmpty(); }
-size_t MarkStripeSet::Next(size_t stripeId) const { return (stripeId + 1) & capacityMask; }
-size_t MarkStripeSet::Next(size_t stripeId, size_t offset) const { return (stripeId + offset) & capacityMask; }
-MarkStripe& MarkStripeSet::At(size_t stripeId) { return *stripes[stripeId]; }
-const MarkStripe& MarkStripeSet::At(size_t stripeId) const { return *stripes[stripeId]; }
+size_t MarkStripeSet::StripeId(const MarkStripe* stripe) const
+{
+    const size_t index = (reinterpret_cast<uintptr_t>(stripe) -
+                          reinterpret_cast<uintptr_t>(stripes.data())) / sizeof(MarkStripe);
+    CHECK_DETAIL(index < stripes.size(), "invalid mark stripe index=%zu", index);
+    return index;
+}
+MarkStripe* MarkStripeSet::Next(MarkStripe* stripe) { return At((StripeId(stripe) + 1) & capacityMask); }
+MarkStripe* MarkStripeSet::At(size_t stripeId)
+{
+    CHECK_DETAIL(stripeId < stripes.size(), "invalid mark stripe index=%zu", stripeId);
+    return &stripes[stripeId];
+}
+const MarkStripe* MarkStripeSet::At(size_t stripeId) const
+{
+    CHECK_DETAIL(stripeId < stripes.size(), "invalid mark stripe index=%zu", stripeId);
+    return &stripes[stripeId];
+}
 
 
 
@@ -48,9 +62,7 @@ void MarkStripe::PublishStack(MarkStripeStack* stack, bool publish, MarkTerminat
     } else {
         overflowed.Push(stack);
     }
-    if (terminate != nullptr) {
-        terminate->Wake();
-    }
+    terminate->Wake();
 }
 
 
@@ -71,9 +83,9 @@ void MarkStripe::PublishStack(MarkStripeStack* stack, bool publish, MarkTerminat
 
 
 
-size_t MarkStripeSet::StripeForAddress(uintptr_t address) const
+MarkStripe* MarkStripeSet::StripeForAddress(uintptr_t address)
 {
-    return (address >> MARK_STRIPE_SHIFT) & NStripesMask();
+    return At((address >> MARK_STRIPE_SHIFT) & NStripesMask());
 }
 
 
@@ -86,9 +98,10 @@ size_t MarkStripeSet::StripeForAddress(uintptr_t address) const
 
 
 
-void MarkThreadLocalStacks::Push(MarkStripeSet& stripes, size_t stripeId, const MarkStackEntry& entry,
+void MarkThreadLocalStacks::Push(MarkStripeSet& stripes, MarkStripe* stripe, const MarkStackEntry& entry,
                                  bool publish)
 {
+    const size_t stripeId = stripes.StripeId(stripe);
     CHECK_DETAIL(stripeId < stacks.size(), "invalid local mark stripe=%zu count=%zu", stripeId, stacks.size());
     MarkStripeStack*& slot = stacks[stripeId];
     MarkStripeStack* const previous = slot;
@@ -97,7 +110,7 @@ void MarkThreadLocalStacks::Push(MarkStripeSet& stripes, size_t stripeId, const 
             previous->Push(entry);
             return;
         }
-        stripes.At(stripeId).PublishStack(previous, publish, stripes.Terminate());
+        stripe->PublishStack(previous, publish, stripes.Terminate());
         slot = nullptr;
     }
 
@@ -106,13 +119,14 @@ void MarkThreadLocalStacks::Push(MarkStripeSet& stripes, size_t stripeId, const 
     slot->Push(entry);
 }
 
-bool MarkThreadLocalStacks::Pop(MarkingSMR& smr, size_t workerId, MarkStripeSet& stripes, size_t stripeId,
+bool MarkThreadLocalStacks::Pop(MarkingSMR& smr, size_t workerId, MarkStripeSet& stripes, MarkStripe* stripe,
                                 MarkStackEntry& entry)
 {
+    const size_t stripeId = stripes.StripeId(stripe);
     CHECK_DETAIL(stripeId < stacks.size(), "invalid pop mark stripe=%zu count=%zu", stripeId, stacks.size());
     MarkStripeStack*& slot = stacks[stripeId];
     if (slot == nullptr) {
-        slot = stripes.At(stripeId).StealStack(smr, workerId);
+        slot = stripe->StealStack(smr, workerId);
         if (slot == nullptr) {
             return false;
         }
@@ -125,16 +139,18 @@ bool MarkThreadLocalStacks::Pop(MarkingSMR& smr, size_t workerId, MarkStripeSet&
     return true;
 }
 
-MarkStripeStack* MarkThreadLocalStacks::StealLocal(size_t stripeId)
+MarkStripeStack* MarkThreadLocalStacks::StealLocal(MarkStripeSet& stripes, MarkStripe* stripe)
 {
+    const size_t stripeId = stripes.StripeId(stripe);
     CHECK_DETAIL(stripeId < stacks.size(), "invalid steal-local stripe=%zu count=%zu", stripeId, stacks.size());
     MarkStripeStack* const result = stacks[stripeId];
     stacks[stripeId] = nullptr;
     return result;
 }
 
-void MarkThreadLocalStacks::Install(size_t stripeId, MarkStripeStack* stack)
+void MarkThreadLocalStacks::Install(MarkStripeSet& stripes, MarkStripe* stripe, MarkStripeStack* stack)
 {
+    const size_t stripeId = stripes.StripeId(stripe);
     CHECK_DETAIL(stripeId < stacks.size(), "invalid install stripe=%zu count=%zu", stripeId, stacks.size());
     CHECK_DETAIL(stacks[stripeId] == nullptr, "install target stripe=%zu is not empty", stripeId);
     stacks[stripeId] = stack;

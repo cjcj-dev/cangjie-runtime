@@ -117,14 +117,10 @@ MarkStripeStack* MarkStripe::StealStack(MarkingSMR& smr, size_t workerId)
 }
 
 MarkStripeSet::MarkStripeSet(size_t stripeCount)
-    : capacityMask(stripeCount - 1), nstripesMask(stripeCount - 1)
+    : capacityMask(stripeCount - 1), nstripesMask(stripeCount - 1), stripes(stripeCount)
 {
     CHECK_DETAIL(IsPowerOfTwo(stripeCount), "mark stripe count must be a power of two: %zu", stripeCount);
-    stripes.reserve(stripeCount);
-    for (size_t i = 0; i < stripeCount; ++i) {
-        stripes.emplace_back(new (std::nothrow) MarkStripe());
-        CHECK_DETAIL(stripes.back() != nullptr, "failed to allocate mark stripe index=%zu", i);
-    }
+
 }
 
 void MarkStripeSet::SetNStripes(size_t value)
@@ -158,7 +154,7 @@ bool MarkStripeSet::IsCrowded() const
     size_t population = 0;
     const size_t crowdedThreshold = NStripes() << 4;
     for (const auto& stripe : stripes) {
-        population += stripe->Population();
+        population += stripe.Population();
         if (population > crowdedThreshold) {
             return true;
         }
@@ -169,7 +165,7 @@ bool MarkStripeSet::IsCrowded() const
 bool MarkStripeSet::IsEmpty() const
 {
     for (const auto& stripe : stripes) {
-        if (!stripe->IsEmpty()) {
+        if (!stripe.IsEmpty()) {
             return false;
         }
     }
@@ -180,7 +176,7 @@ size_t MarkStripeSet::Population() const
 {
     size_t population = 0;
     for (const auto& stripe : stripes) {
-        population += stripe->Population();
+        population += stripe.Population();
     }
     return population;
 }
@@ -188,14 +184,14 @@ size_t MarkStripeSet::Population() const
 size_t MarkStripeSet::FirstNonEmptyStripe() const
 {
     for (size_t i = 0; i < stripes.size(); ++i) {
-        if (!stripes[i]->IsEmpty()) {
+        if (!stripes[i].IsEmpty()) {
             return i;
         }
     }
     return std::numeric_limits<size_t>::max();
 }
 
-size_t MarkStripeSet::StripeForWorker(size_t nworkers, size_t workerId) const
+MarkStripe* MarkStripeSet::StripeForWorker(size_t nworkers, size_t workerId)
 {
     CHECK_DETAIL(nworkers != 0 && workerId < nworkers, "invalid mark worker id=%zu count=%zu", workerId,
                  nworkers);
@@ -203,12 +199,12 @@ size_t MarkStripeSet::StripeForWorker(size_t nworkers, size_t workerId) const
     const size_t active = mask + 1;
     const size_t spilloverLimit = (nworkers / active) * active;
     if (workerId < spilloverLimit) {
-        return workerId & mask;
+        return At(workerId & mask);
     }
     const size_t spilloverWorkers = nworkers - spilloverLimit;
     const size_t spilloverId = workerId - spilloverLimit;
-    return static_cast<size_t>(static_cast<double>(spilloverId) *
-                               (static_cast<double>(active) / static_cast<double>(spilloverWorkers)));
+    return At(static_cast<size_t>(static_cast<double>(spilloverId) *
+                               (static_cast<double>(active) / static_cast<double>(spilloverWorkers))));
 }
 
 MarkThreadLocalStacks::MarkThreadLocalStacks(size_t stripeCount) : stacks(stripeCount, nullptr) {}
@@ -252,7 +248,7 @@ bool MarkThreadLocalStacks::Flush(MarkStripeSet& stripes)
         if (stack == nullptr) {
             continue;
         }
-        stripes.At(i).PublishStack(stack, true, stripes.Terminate());
+        stripes.At(i)->PublishStack(stack, true, stripes.Terminate());
         stack = nullptr;
         flushed = true;
     }

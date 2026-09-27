@@ -593,11 +593,11 @@ namespace MapleRuntime {
 static bool StealLocalRound(MarkContext& context, MarkStripeSet& stripes)
 {
     MarkThreadLocalStacks& stacks = context.Stacks();
-    const size_t home = context.StripeId();
-    for (size_t victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
-        MarkStripeStack* stack = stacks.StealLocal(victim);
+    MarkStripe* const home = context.Stripe();
+    for (MarkStripe* victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
+        MarkStripeStack* stack = stacks.StealLocal(stripes, victim);
         if (stack != nullptr) {
-            stacks.Install(home, stack);
+            stacks.Install(stripes, home, stack);
             return true;
         }
     }
@@ -608,14 +608,14 @@ static bool StealGlobalRound(MarkContext& context, MarkingSMR& smr, MarkStripeSe
                              std::atomic<size_t>* stealSuccess, std::atomic<size_t>* stealFailure)
 {
     MarkThreadLocalStacks& stacks = context.Stacks();
-    const size_t home = context.StripeId();
-    for (size_t victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
-        MarkStripeStack* stack = stripes.At(victim).StealStack(smr, workerId);
+    MarkStripe* const home = context.Stripe();
+    for (MarkStripe* victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
+        MarkStripeStack* stack = victim->StealStack(smr, workerId);
         if (stack != nullptr) {
             if (stealSuccess != nullptr) {
                 stealSuccess->fetch_add(1, std::memory_order_relaxed);
             }
-            stacks.Install(home, stack);
+            stacks.Install(stripes, home, stack);
             return true;
         }
         if (stealFailure != nullptr) {
@@ -638,9 +638,9 @@ static bool RebalanceWork(MarkContext& context, MarkStripeSet& stripes, MarkTerm
             context.SetNStripes(restored);
         }
     }
-    const size_t stripe = stripes.StripeForWorker(nworkers, workerId);
-    if (context.StripeId() != stripe) {
-        context.SetStripeId(stripe);
+    MarkStripe* const stripe = stripes.StripeForWorker(nworkers, workerId);
+    if (context.Stripe() != stripe) {
+        context.SetStripe(stripe);
         (void)context.Stacks().Flush(stripes);
     } else if (!terminate.Saturated()) {
         (void)context.Stacks().Flush(stripes);
@@ -653,9 +653,9 @@ static bool Drain(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
 {
     MarkStackEntry entry;
     size_t processed = 0;
-    context.SetStripeId(stripes.StripeForWorker(nworkers, workerId));
+    context.SetStripe(stripes.StripeForWorker(nworkers, workerId));
     context.SetNStripes(stripes.NStripes());
-    while (context.Stacks().Pop(smr, workerId, stripes, context.StripeId(), entry)) {
+    while (context.Stacks().Pop(smr, workerId, stripes, context.Stripe(), entry)) {
         process(entry);
         if ((processed++ & 31) == 0 && RebalanceWork(context, stripes, terminate, workerId, nworkers, domain)) {
             return false;
@@ -797,8 +797,8 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
             } else {
                 address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(work.object_address()))));
             }
-            const size_t stripeIndex = stripes.StripeForAddress(address);
-            const bool published = stripeIndex != ctx.StripeId();
+            MarkStripe* const stripeIndex = stripes.StripeForAddress(address);
+            const bool published = stripeIndex != ctx.Stripe();
             ctx.Stacks().Push(stripes, stripeIndex, work, published);
             if (published) {
                 terminate.Wake();
@@ -834,8 +834,8 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         } else {
             address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(work.object_address()))));
         }
-        const size_t stripeIndex = stripes.StripeForAddress(address);
-        const bool published = stripeIndex != ctx.StripeId();
+        MarkStripe* const stripeIndex = stripes.StripeForAddress(address);
+        const bool published = stripeIndex != ctx.Stripe();
         ctx.Stacks().Push(stripes, stripeIndex, work, published);
         if (published) {
             terminate.Wake();

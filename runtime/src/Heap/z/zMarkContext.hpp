@@ -10,21 +10,22 @@
 #include "Heap/z/zMarkCache.hpp"
 
 namespace MapleRuntime {
+class MarkStripe;
 class MarkStripeSet;
 class MarkThreadLocalStacks;
 class MarkContext {
 public:
     MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes, MarkThreadLocalStacks& stacks);
 
-    size_t StripeId() const;
+    MarkStripe* Stripe() const;
     size_t NStripes() const;
     void SetNStripes(size_t value);
-    void SetStripeId(size_t value);
+    void SetStripe(MarkStripe* value);
     MarkThreadLocalStacks& Stacks();
     MarkLiveCache& Cache();
 
 private:
-    size_t stripeId;
+    MarkStripe* stripe;
     size_t nstripes;
     MarkThreadLocalStacks* stacks;
     MarkLiveCache cache;
