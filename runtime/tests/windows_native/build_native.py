@@ -98,9 +98,15 @@ if not rc and arm in cut_targets:
     raise SystemExit(0 if exact else 1)
 if not rc:
     rc = run(["cmake", "--build", build, "--parallel", str(os.cpu_count()), "--", "-k", "0"], "build")
-if not rc:
-    libs = list(tree.rglob("*cangjie-runtime.dll"))
+build_rc = rc
+raw_exports = build / "windows_x86_64_exports.raw.def"
+if raw_exports.is_file():
+    shutil.copy2(raw_exports, out / raw_exports.name)
+    record["raw_exports_sha256"] = hashlib.sha256(raw_exports.read_bytes()).hexdigest()
+libs = list(tree.rglob("*cangjie-runtime.dll"))
+if not build_rc:
     assert libs, "product DLL missing"
+if libs:
     product = out / "product"
     product.mkdir()
     for path in libs[0].parent.iterdir():
@@ -112,4 +118,4 @@ if not rc:
     if not rc:
         rc = run(["llvm-nm", "--defined-only", libs[0]], "defined")
     (out / "result.json").write_text(json.dumps(record, indent=2))
-raise SystemExit(rc)
+raise SystemExit(build_rc or rc)
