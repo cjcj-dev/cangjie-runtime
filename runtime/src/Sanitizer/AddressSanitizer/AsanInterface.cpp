@@ -179,32 +179,6 @@ void HandleNoReturn(uint64_t from, uint64_t to)
     REAL(__asan_unpoison_memory_region)(reinterpret_cast<void*>(from), size);
 }
 
-void* ArrayAcquireMemoryRegion(ArrayRef, void* addr, size_t size)
-{
-    auto alias = GetMemoryAlias(addr);
-    g_counter->Lock(reinterpret_cast<uintptr_t>(alias));
-    int64_t count = g_counter->CounterAddOrInsert(reinterpret_cast<uintptr_t>(alias), false).first;
-    if (count == 1) {
-        REAL(__asan_unpoison_memory_region)(alias, size);
-    }
-    g_counter->Unlock(reinterpret_cast<uintptr_t>(alias));
-    DLOG(SANITIZER, "acquire array(%p), alias[%p], refcount[%ld]", addr, alias, count);
-    return alias;
-}
-
-void* ArrayReleaseMemoryRegion(ArrayRef, void* alias, size_t size)
-{
-    void* addr = GetMemoryFromAlias(alias);
-    g_counter->Lock(reinterpret_cast<uintptr_t>(alias));
-    int64_t count = g_counter->CounterSubOrDelete(reinterpret_cast<uintptr_t>(alias)).first;
-    if (count == 0) {
-        REAL(__asan_poison_memory_region)(alias, size);
-    }
-    g_counter->Unlock(reinterpret_cast<uintptr_t>(alias));
-    DLOG(SANITIZER, "release array(%p), alias[%p], refcount[%ld]", addr, alias, count);
-    return addr;
-}
-
 void AsanStartSwitchThreadContext(void* oldThread, void* newThread)
 {
     void* fakeStack = nullptr;

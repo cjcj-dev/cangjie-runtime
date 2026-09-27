@@ -1081,11 +1081,9 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
         }
     }
 #endif
-#if defined(GENERAL_ASAN_SUPPORT_INTERFACE) || defined(CANGJIE_GWPASAN_SUPPORT)
-    return Sanitizer::ArrayAcquireMemoryRegion(pArray, pArray->ConvertToCArray(), pArray->GetContentSize());
-#else
+    // ZGC jni.cpp:2869-2881: GetPrimitiveArrayCritical returns the content
+    // pointer directly; there is no sanitizer region hook in ZGC.
     return pArray->ConvertToCArray();
-#endif
 }
 
 // Release the raw pointer
@@ -1108,10 +1106,6 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     if (rawPtr == unreadablePage) {
         return;
     }
-#if defined(GENERAL_ASAN_SUPPORT_INTERFACE) || defined(CANGJIE_GWPASAN_SUPPORT)
-    // sanitizer will convert alias/colorized pointer to real pointer for runtime
-    rawPtr = Sanitizer::ArrayReleaseMemoryRegion(plain, rawPtr, plain->GetContentSize());
-#endif
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     std::vector<uint64_t> frame;
     StackManager::RecordLiteFrameInfos(frame, 4); // record 4 frames

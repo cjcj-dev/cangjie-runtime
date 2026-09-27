@@ -44,11 +44,6 @@ namespace Sanitizer {
 void OnHeapAllocated(void* addr, size_t size);
 void OnHeapDeallocated(void* addr, size_t size);
 
-#if defined(GENERAL_ASAN_SUPPORT_INTERFACE) || defined(CANGJIE_GWPASAN_SUPPORT)
-void* ArrayAcquireMemoryRegion(ArrayRef array, void* addr, size_t size);
-void* ArrayReleaseMemoryRegion(ArrayRef array, void* alias, size_t size);
-#endif
-
 #ifdef GENERAL_ASAN_SUPPORT_INTERFACE
 void AsanRead(volatile const void* addr, uintptr_t size);
 void AsanWrite(volatile const void* addr, uintptr_t size);
