@@ -42,7 +42,11 @@ def main():
         # Keep a successfully linked DLL when a later POST_BUILD check fails.
         # This changes Make's cleanup only; all product commands still run.
         precious = evidence / 'preserve-products.make'
-        precious.write_text('.PRECIOUS: %\n')
+        # CMake emits explicit rules: a .PRECIOUS pattern alone does not
+        # protect them from .DELETE_ON_ERROR. These are the two native x86_64
+        # target paths emitted with/without CMAKE_SYSTEM_PROCESSOR populated.
+        precious.write_text('.PRECIOUS: % runtime-staging/bin/_Release/libcangjie-runtime.dll '
+                            'runtime-staging/bin/x86_64_Release/libcangjie-runtime.dll\n')
         env['MAKEFILES'] = precious.as_posix()
         env['PATH'] = 'C:/msys64/mingw64/bin;C:/msys64/usr/bin;' + env['PATH']
     record = {'arm': args.arm, 'jobs': os.cpu_count(), 'steps': {},
