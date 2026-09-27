@@ -84,7 +84,7 @@ jobs:
           dylib="$(find runtime -type f -name libcangjie-runtime.dylib -print -quit)"
           test -n "$dylib"
           file "$dylib" | tee "$out/product-file.txt"
-          lipo "$dylib" -verify_arch "$ARCH"
+          lipo -verify_arch "$ARCH" "$dylib"
           nm -u "$dylib" > "$out/imports.txt"
           grep -E '(^|[[:space:]])_vm_remap$' "$out/imports.txt"
           mkdir -p "$out/product"
