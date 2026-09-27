@@ -1,0 +1,74 @@
+name: Ordinary safepoint Win64 ABI
+on:
+  workflow_dispatch:
+  push:
+    branches: ['sym/1179-*']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [candidate, cut-home, cut-restore, restored]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+      - name: Build native product
+        shell: msys2 {0}
+        run: python3 runtime/tests/safepoint_windows/build_native.py '${{ matrix.arm }}'
+      - name: Link the shared sentinel
+        if: matrix.arm == 'candidate'
+        shell: msys2 {0}
+        run: python3 runtime/tests/safepoint_windows/verify.py --link
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: safepoint-windows-${{ matrix.arm }}
+          path: |
+            ${{ runner.temp }}/safepoint-windows/**/*.log
+            ${{ runner.temp }}/safepoint-windows/**/*.json
+            ${{ runner.temp }}/safepoint-windows/**/*.diff
+            ${{ runner.temp }}/safepoint-windows/*/*.def
+            ${{ runner.temp }}/safepoint-windows/sentinel.exe
+            ${{ runner.temp }}/safepoint-windows/*/product/*
+  verify:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-gdb
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: safepoint-windows-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/safepoint-windows
+      - name: Exercise the same sentinel against all products
+        shell: msys2 {0}
+        run: python3 runtime/tests/safepoint_windows/verify.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: safepoint-windows-behavior
+          path: |
+            ${{ runner.temp }}/safepoint-windows/behavior.json
+            ${{ runner.temp }}/safepoint-windows/identity.json
+            ${{ runner.temp }}/safepoint-windows/*/sentinel.log
+            ${{ runner.temp }}/safepoint-windows/*/home.log
+            ${{ runner.temp }}/safepoint-windows/*/home.json
