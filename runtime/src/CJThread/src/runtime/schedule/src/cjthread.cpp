@@ -1943,7 +1943,7 @@ void CJThreadStackGuardRecover(void)
     //   2. it then guarantees cur_sp > stack_reserved_zone_base() (:229): managed code
     //      never executes inside the reserved zone, so a clearer that is itself running
     //      there has not unwound out of it yet and must not re-guard under itself. Here
-    //      the expanded guard is that reserved-zone base, and the clearer runs on this
+    //      the birth guard is that reserved-zone base, and the clearer runs on this
     //      cjthread's own stack, so its own stack pointer is the cur_sp;
     //   3. only after the re-guard took effect is the state committed back to enabled,
     //      the way enable_stack_reserved_zone (:150-155) commits after a successful
@@ -1956,22 +1956,22 @@ void CJThreadStackGuardRecover(void)
     char *currentSp = nullptr;
     currentSp = reinterpret_cast<char *>(&currentSp);
     // The reserved zone is the headroom between stackTopAddr and the birth guard, and a
-    // cjthread stack grows up from stackTopAddr, so a frame that belongs to this stack
+    // cjthread stack grows down toward stackTopAddr, so a frame that belongs to this stack
     // is inside [stackTopAddr, stackTopAddr + stackSize). A frame outside that mapping is
     // not executing in the reserved zone at all and comparing it with the guard would
     // compare two unrelated addresses, so the guarantee below is stated for the frames it
     // is about.
+    uintptr_t reguarded = reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard) + CJThreadStackReservedFreeze();
     if (currentSp >= cjthread->stack.stackTopAddr &&
         currentSp < cjthread->stack.stackTopAddr + cjthread->stack.stackSize) {
-        if (currentSp >= cjthread->stack.stackGuard) {
+        if (reinterpret_cast<uintptr_t>(currentSp) <= reguarded) {
             LOG(RTLOG_FATAL,
                 "not enough space to reguard - the clearer is running inside the reserved zone "
                 "(sp %p, reserved zone base %p)",
-                currentSp, cjthread->stack.stackGuard);
+                currentSp, reinterpret_cast<void *>(reguarded));
             return;
         }
     }
-    uintptr_t reguarded = reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard) + CJThreadStackReservedFreeze();
     // HotSpot stackOverflow.cpp:185-189: leave the disabled state intact if
     // the OS cannot restore protection; a later recovery may retry.
     if (cjthread->stack.protectAddr != nullptr) {
