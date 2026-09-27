@@ -30,5 +30,6 @@ jobs:
             ${{ runner.temp }}/safepoint-windows/**/*.log
             ${{ runner.temp }}/safepoint-windows/**/*.json
             ${{ runner.temp }}/safepoint-windows/**/*.diff
+            ${{ runner.temp }}/safepoint-windows/*/*.def
             ${{ runner.temp }}/safepoint-windows/sentinel.exe
             ${{ runner.temp }}/safepoint-windows/*/product/*

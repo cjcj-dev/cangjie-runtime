@@ -21,7 +21,7 @@
 # to the accounting that exists to make exactly that visible.
 #
 # <file>                                  <status>   <what it needs / why it is here>
-safepoint_windows                        manual     native Windows product build; .github/workflows/safepoint-windows.yml; build is not behavioral acceptance
+safepoint_windows                        manual     native Windows product SIMD sentinel and home/restore cuts; .github/workflows/safepoint-windows.yml; only behavior.json records behavioral evidence
 
 test_runtime_copied_headers.py            manual     real copied-SO header identity regression; requires a published runtime pair and isolated work directory
 

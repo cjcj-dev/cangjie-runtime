@@ -73,17 +73,22 @@ rc = run(["cmake", "-S", tree, "-B", build, "-G", "Ninja",
          "configure")
 if not rc:
     rc = run(["cmake", "--build", build, "--parallel", str(os.cpu_count())], "build")
-if not rc:
-    libs = list(tree.rglob("*cangjie-runtime.dll"))
-    assert libs, "product DLL missing"
+# Preserve the linked product even when a later build guard rejects it.
+# This does not change the build return code or qualify it for acceptance.
+libs = sorted((build / "runtime-staging").rglob("*cangjie-runtime.dll"))
+if libs:
     product = out / "product"
     product.mkdir()
-    for path in libs[0].parent.iterdir():
-        if path.is_file() and path.suffix in (".dll", ".a"):
+    for pattern in ("*.dll", "*.dll.a"):
+        for path in (build / "runtime-staging").rglob(pattern):
             shutil.copy2(path, product / path.name)
     record["products"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in product.iterdir()}
-    rc = run(["llvm-nm", "--defined-only", product / libs[0].name], "defined")
+    run(["llvm-nm", "--defined-only", product / libs[0].name], "defined")
     run(["llvm-objdump", "-d", "--disassemble-symbols=CJ_MCC_HandleSafepoint,MRT_UpdateUwContext,HandleSafepoint,MRT_GetThreadLocalData,MRT_DeleteC2NContext", product / libs[0].name], "disassembly")
-    (out / "result.json").write_text(json.dumps(record, indent=2))
+for path in (build / "windows_x86_64_exports.raw.def", tree / "src/windows_x86_64_exports.def"):
+    if path.is_file():
+        shutil.copy2(path, out / path.name)
+run(["clang++", "--version"], "compiler")
+(out / "result.json").write_text(json.dumps(record, indent=2))
 raise SystemExit(rc)
