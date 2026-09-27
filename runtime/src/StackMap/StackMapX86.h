@@ -14,10 +14,12 @@
 #include "StackMap/StackMapTypeDef.h"
 
 namespace MapleRuntime {
+static_assert(XMM15 < sizeof(RegBits) * 8, "all x86 register bits must be representable");
+
 class RegRoot {
 public:
     RegRoot() = default;
-    explicit RegRoot(U32 bits) : regBits(static_cast<RegBits>(bits)) {}
+    explicit RegRoot(RegBits bits) : regBits(bits) {}
     ~RegRoot() = default;
 
     RegRoot(const RegRoot& other) : regBits(other.regBits) {}

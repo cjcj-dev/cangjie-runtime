@@ -285,7 +285,18 @@ public:
     explicit RegTable(BitsManager&& bits) : TableAPI(bits) { Init(); }
     ~RegTable() = default;
 
-    U32 GetActiveRegBits(U32 row) const { return data.GetNext(row * rowBitsLen).GetBits(headerInfo[BITS_LEN]); }
+    RegBits GetActiveRegBits(U32 row) const
+    {
+        const BitsManager bits = data.GetNext(row * rowBitsLen);
+        const U32 width = headerInfo[BITS_LEN];
+        // GetBits is a 32-bit field reader; register bitmaps on x86 include
+        // bit 32 (XMM15). Keep table indices and the other fields unchanged.
+        if (width > 32) {
+            const U64 high = bits.GetNext(32).GetBits(width - 32);
+            return static_cast<RegBits>(bits.GetBits(32) | (high << 32));
+        }
+        return bits.GetBits(width);
+    }
 
 private:
     void Init()

@@ -31,7 +31,12 @@ using SlotDebugVisitor = std::function<void(SlotBias, zaddress_unsafe)>;
 using RegisterNum = uint32_t;
 using RegDebugVisitor = std::function<void(RegisterNum, zaddress_unsafe)>;
 constexpr uintptr_t METHOD_DESC_OFFSET = 4;
+#if defined(__aarch64__) || defined(__arm__)
 using RegBits = uint32_t;
+#else
+// X86Bit2Reg includes RIP at bit 16 and XMM15 at bit 32.
+using RegBits = uint64_t;
+#endif
 using PrologueBits = uint16_t;
 using PrologueBias = int16_t;
 using namespace Register;
