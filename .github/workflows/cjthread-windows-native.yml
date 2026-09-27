@@ -7,6 +7,7 @@ on:
     paths:
       - runtime/build/build_cjthread_windows.bat
       - runtime/config.cmake
+      - runtime/src/**
       - runtime/tests/cjthread_windows_native.py
       - .github/workflows/cjthread-windows-native.yml
 
