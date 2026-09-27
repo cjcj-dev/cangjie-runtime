@@ -9,10 +9,6 @@ jobs:
   windows:
     runs-on: windows-2025
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        arm: [candidate, restored]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,10 +39,10 @@ jobs:
           $cacheHome = $env:USERPROFILE.Replace('\', '/')
           $cacheConfigHome = $env:LOCALAPPDATA.Replace('\', '/')
           "export USERPROFILE='$cacheHome' LOCALAPPDATA='$cacheConfigHome'" | Set-Content -NoNewline -Encoding utf8 C:/msys64/etc/profile.d/runtime-publication.sh
-      - name: Exercise cjcj 589 production entry and publication controls
+      - name: Exercise the pinned cjcj 589 production entry
         shell: pwsh
         run: |
-          & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/test_runtime_link_publication.py --source runtime-source/runtime --production-entry compiler-entry --evidence evidence --arm ${{ matrix.arm }}
+          & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/windows_exports/test_native_entry.py --source runtime-source --production-entry compiler-entry --evidence evidence
           exit $LASTEXITCODE
       - name: Check actual DLL contract through the shipped CLI
         shell: pwsh
@@ -56,6 +52,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: target-exports-${{ matrix.arm }}
+          name: target-exports
           path: evidence/
           retention-days: 7
