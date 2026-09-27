@@ -29,6 +29,7 @@ else
   runtime_output_root="${GCV2_RUNTIME_OUTPUT_ROOT:-$(python3 "$repo/runtime/build/resolve_runtime_headers.py" "$repo/runtime" "$GCV2_RUNTIME_LIB_DIR")}"
   "$CXX" -std=c++17 -O2 -pthread -fno-rtti \
       -I"$repo/runtime/src" -I"$repo/runtime/src/Heap" -I"$repo/runtime/include" \
+      -I"$repo/runtime/src/Loader/BinaryFile" -I"$repo/runtime/src/Heap/z/os/linux" \
       -I"$repo/runtime/src/CJThread/src/runtime/schedule/include" -I"$runtime_output_root/include" \
       -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
       "$repo/runtime/tests/gc_unit/so_reentry_probe.cpp" \
