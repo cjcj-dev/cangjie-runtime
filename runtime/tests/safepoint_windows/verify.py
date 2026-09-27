@@ -46,11 +46,28 @@ def execute(arm):
         rc = subprocess.run([local], cwd=local.parent, env=env, stdout=log,
                             stderr=subprocess.STDOUT, timeout=60).returncode
     targets = [x for x in (home / "sentinel.log").read_text().splitlines() if x.startswith("SIMD_TARGET ")]
-    valid = (len(targets) == 2 and rc == (1 if arm.startswith("cut") else 0))
-    if arm == "cut-restore":
-        valid &= "pass=1" in targets[0] and "pass=0" in targets[1] if len(targets) == 2 else False
     dll = next(local.parent.glob("*cangjie-runtime.dll"))
+    expected_simd = [True, arm != "cut-restore"]
+    valid = (len(targets) == 2 and rc == int(arm == "cut-restore") and
+             all(t.endswith("pass=" + str(int(p))) for t, p in zip(targets, expected_simd)))
+    # Release callees need not use their caller's home area. Observe its live
+    # boundaries without altering the inferior, independently of SIMD values.
+    env["SAFEPOINT_PRODUCT"] = str(dll)
+    env["SAFEPOINT_HOME_RESULT"] = str(home / "home.json")
+    with (home / "home.log").open("w") as log:
+        home_rc = subprocess.run(["gdb", "--batch", "-nx", "-q", "-ex", "set pagination off",
+                                  "-ex", "set confirm off", "-ex", "start",
+                                  "-x", str(here / "observe_home.py"), str(local)],
+                                 cwd=local.parent, env=env, stdout=log,
+                                 stderr=subprocess.STDOUT, timeout=60).returncode
+    observation = json.loads((home / "home.json").read_text()) if (home / "home.json").exists() else {}
+    entries = observation.get("entries", [])
+    home_valid = (home_rc == int(arm == "cut-home") and observation.get("complete") and
+                  observation.get("dll_sha256") == sha(dll) and
+                  observation.get("inferior_rc") == rc and len(entries) == 4 and
+                  all(e["frame_valid"] and e["passed"] == (arm != "cut-home") for e in entries))
     return {"arm": arm, "rc": rc, "targets": targets, "valid": valid,
+            "home_rc": home_rc, "home_valid": bool(home_valid), "home": observation,
             "wall": time.monotonic()-start, "exe_sha256": sha(local),
             "dll_sha256": sha(dll), "dll": str(dll)}
 
@@ -70,5 +87,5 @@ identity = {
                                 for a in arms),
 }
 (out / "identity.json").write_text(json.dumps(identity, indent=2))
-sys.exit(0 if all(r["valid"] and r["exe_sha256"] == exe_sha for r in results)
+sys.exit(0 if all(r["valid"] and r["home_valid"] and r["exe_sha256"] == exe_sha for r in results)
          and all(identity[k] for k in ("restored_equal", "cuts_differ", "other_products_equal")) else 1)
