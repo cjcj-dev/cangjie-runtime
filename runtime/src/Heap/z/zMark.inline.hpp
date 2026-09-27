@@ -37,7 +37,7 @@ inline void ZMark::MarkObject(zaddress address)
         terminate.SetResurrected(true);
     }
     MarkThreadLocalStacks& stacks = Stacks();
-    const size_t stripe = stripes.StripeForAddress(raw(address));
+    MarkStripe* const stripe = stripes.StripeForAddress(raw(address));
     const MarkStackEntry entry(untype(ZAddress::offset(address)), !markBeforePush, incLive, follow, finalizable);
     CHECK(page->IsYoungRegion() == (generation == MarkingStacks::MarkingGeneration::YOUNG));
     const bool publish = !gcThread;

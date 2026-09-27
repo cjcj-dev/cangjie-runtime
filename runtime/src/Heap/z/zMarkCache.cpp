@@ -10,6 +10,11 @@
 namespace MapleRuntime {
 MarkLiveCache::MarkLiveCache(size_t stripeCount) : shift(MARK_STRIPE_SHIFT + Log2Exact(stripeCount)) {}
 
+void MarkLiveCache::SetNStripes(size_t stripeCount)
+{
+    shift = MARK_STRIPE_SHIFT + Log2Exact(stripeCount);
+}
+
 MarkLiveCache::~MarkLiveCache()
 {
     Flush();

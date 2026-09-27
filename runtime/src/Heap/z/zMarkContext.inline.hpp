@@ -7,15 +7,15 @@
 #include "Heap/z/zMarkStack.hpp"
 namespace MapleRuntime {
 MarkContext::MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes, MarkThreadLocalStacks& stacks)
-    : stripeId(stripes.StripeForWorker(workerCount, workerId)), nstripes(stripes.NStripes()), stacks(&stacks),
-      cache(stripes.Count())
+    : stripe(stripes.StripeForWorker(workerCount, workerId)), nstripes(stripes.NStripes()), stacks(&stacks),
+      cache(stripes.NStripes())
 {}
 
 
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-size_t MarkContext::StripeId() const { return stripeId; }
+MarkStripe* MarkContext::Stripe() const { return stripe; }
 }
 
 namespace MapleRuntime {
@@ -23,14 +23,17 @@ size_t MarkContext::NStripes() const { return nstripes; }
 }
 
 namespace MapleRuntime {
-void MarkContext::SetNStripes(size_t value) { nstripes = value; }
+void MarkContext::SetNStripes(size_t value)
+{
+    cache.SetNStripes(value);
+    nstripes = value;
+}
 }
 
 namespace MapleRuntime {
-void MarkContext::SetStripeId(size_t value)
+void MarkContext::SetStripe(MarkStripe* value)
     {
-        cache.Flush();
-        stripeId = value;
+        stripe = value;
     }
 }
 

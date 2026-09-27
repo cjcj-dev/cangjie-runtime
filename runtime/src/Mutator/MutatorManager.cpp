@@ -24,6 +24,7 @@
 #include "Handshake.h"
 #include "Mutator.inline.h"
 #include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zRootsIterator.hpp"
 #include "UnwindStack/StackFrameCursor.h"
@@ -183,8 +184,11 @@ void MutatorManager::TransitMutatorToExit()
     // Complete this identity's phase processing before detaching its roots.
     // threads.cpp:1099-1114 keeps the watermark alive through the last transition.
     StackWatermarkSet::on_safepoint(*mutator);
+    // threads.cpp:1089-1104 (Threads::remove): the final GC publication and
+    // the list removal share the Threads_lock critical section held by the
+    // entire safepoint, and the exiting thread is not yet safepoint-safe.
+    RemoveMutator(*mutator);
     (void)mutator->EnterSaferegion(false);
-    mutator->MutatorLock();
     mutator->ResetMutator();
     UnbindMutator(*mutator);
     if (mutator->GetCjthreadPtr() != nullptr) {
@@ -197,10 +201,35 @@ void MutatorManager::TransitMutatorToExit()
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
     ConsumeCpuProfileRequest(mutator);
-    // Threads::remove publishes new membership before smr_delete waits on
-    // old handles. Never wait while holding the management/STW lock.
-    ThreadsSMRSupport::remove_thread(mutator);
+    // javaThread.cpp:878-898: a failed-attach cleanup enters the same
+    // Threads::remove. An unstarted carrier freed through the CJThread
+    // destructor hook never ran its exit transition, so its detach and
+    // removal are completed here; for a thread that already exited this is
+    // a no-op.
+    RemoveMutator(*mutator);
+    // threadSMR.cpp:912: waiting for readers must happen outside the lock.
     ThreadsSMRSupport::smr_delete(mutator);
+}
+
+// threads.cpp:1089-1114: the final GC publication, the removal from the
+// thread list, and the GC-detached transition form one removal transaction
+// inside the safepoint-exclusive critical section (safepoint.cpp:346/465
+// holds Threads_lock for the whole pause).
+void MutatorManager::RemoveMutator(Mutator& mutator)
+{
+    Mutator* current = Mutator::GetMutator();
+    if (current != nullptr) {
+        // mutex.cpp:87-127: safepoint-cooperative blocking acquisition.
+        AcquireMutatorManagementWLockForExit(*current);
+    } else {
+        MutatorManagementWLock();
+    }
+    if (!mutator.IsGCDetached()) {
+        ZBarrierSet::on_thread_detach(mutator.GetGCData());
+        ThreadsSMRSupport::remove_thread(&mutator);
+        mutator.SetGCDetached();
+    }
+    MutatorManagementWUnlock();
 }
 
 Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
@@ -272,6 +301,56 @@ bool MutatorManager::ConcurrentStackScanEnabled()
     return true;
 }
 
+
+namespace {
+// mutex.cpp:38-54: records whether the acquired lock was released while
+// returning from the blocked state.
+class InFlightMutatorManagementLockRelease {
+public:
+    explicit InFlightMutatorManagementLockRelease(MutatorManager& manager) : manager(manager) {}
+    void operator()()
+    {
+        manager.MutatorManagementWUnlock();
+        released = true;
+    }
+    bool NotReleased() const { return !released; }
+private:
+    MutatorManager& manager;
+    bool released = false;
+};
+
+// interfaceSupport.inline.hpp:203-223: the transition owns preprocessing;
+// the lock acquisition must not cache the request decision before it.
+template<class Preprocess>
+class MutatorBlockInVMPreprocess {
+public:
+    MutatorBlockInVMPreprocess(Mutator& mutator, Preprocess& preprocess)
+        : mutator(mutator), preprocess(preprocess)
+    {
+        (void)mutator.EnterSaferegion(false);
+    }
+    ~MutatorBlockInVMPreprocess() { mutator.DoLeaveSaferegion(preprocess); }
+private:
+    Mutator& mutator;
+    Preprocess& preprocess;
+};
+} // namespace
+
+void MutatorManager::AcquireMutatorManagementWLockForExit(Mutator& mutator)
+{
+    // mutex.cpp:99-110: state transition, request check, in-flight release,
+    // processing, and retry occur in that order.
+    while (!TryAcquireMutatorManagementWLock()) {
+        InFlightMutatorManagementLockRelease release(*this);
+        {
+            MutatorBlockInVMPreprocess<InFlightMutatorManagementLockRelease> blocked(mutator, release);
+            MutatorManagementWLock();
+        }
+        if (release.NotReleased()) {
+            return;
+        }
+    }
+}
 
 void MutatorManager::AcquireMutatorManagementWLock()
 {

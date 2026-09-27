@@ -89,6 +89,11 @@ public:
 
     ThreadGCData& GetGCData() { return gcData; }
     const ThreadGCData& GetGCData() const { return gcData; }
+    // threads.cpp:1108 set_terminated(_thread_gc_barrier_detached): set once
+    // the final GC publication and list removal have both completed inside the
+    // safepoint-exclusive critical section.
+    bool IsGCDetached() const { return gcDetached.load(std::memory_order_acquire); }
+    void SetGCDetached() { gcDetached.store(true, std::memory_order_release); }
     void ResetMutator();
 
     // HotSpot javaThread.hpp:878-885: critical regions nest per logical thread.
@@ -171,7 +176,10 @@ public:
     // Force current mutator enter saferegion, internal use only.
     __attribute__((always_inline)) inline void DoEnterSaferegion();
     // Force current mutator leave saferegion, internal use only.
-    __attribute__((always_inline)) inline void DoLeaveSaferegion()
+    // interfaceSupport.inline.hpp:213-220: publish the active state with a
+    // fence, then release any in-flight lock before processing requests.
+    template<class Preprocess>
+    __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess)
     {
         for (;;) {
             MarkFlushBeginLeaveSaferegion();
@@ -182,12 +190,19 @@ public:
             break;
         }
         if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
+            preprocess();
             HandleSuspensionRequest();
         }
         // javaThread.cpp:1112 then stackWatermark.inline.hpp:86. Start processing
         // first; before_unwind only exposes a frame when one is still open.
         StackWatermarkSet::on_safepoint(*this);
         StackWatermarkSet::before_unwind(*this);
+    }
+
+    __attribute__((always_inline)) inline void DoLeaveSaferegion()
+    {
+        auto preprocess = [] {};
+        DoLeaveSaferegion(preprocess);
     }
 
     // If current mutator is not in saferegion, enter and return true
@@ -547,6 +562,7 @@ private:
     // this flag is used for gc unwind stack, when runtime-thread stack doesn't include managed frame,
     // we don't need to scan it.
     std::atomic<bool> inManagedContext = { true };
+    std::atomic<bool> gcDetached = { false };
     void* stackBoundAddr = { nullptr };
     std::mutex mutatorLock;
 

@@ -445,7 +445,7 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     size_t entries = 0;
                     for (size_t stripe = 0; stripe < domain.Stripes().Count(); ++stripe) {
                         WorkerFixture worker;
-                        while (domain.Stacks().Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
+                        while (domain.Stacks().Pop(domain.Smr(), 0, domain.Stripes(), domain.Stripes().At(stripe), entry)) {
                             ++entries;
                             GC_EXPECT_TRUE(to_object(ZOffset::address(to_zoffset(entry.object_address()))) == fx.obj0);
                             GC_EXPECT_EQ(entry.object_address(), untype(ZAddress::offset(from_object(fx.obj0))));
