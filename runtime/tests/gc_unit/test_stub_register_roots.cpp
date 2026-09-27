@@ -286,7 +286,8 @@ void RunThreeFrameRoots(FrameType stub, bool invalidCaller)
     for (unsigned i = 0; i < 15; ++i) { fp[-1 - int(i)] = 0x10000 + savedGprs[i] * 16; }
     const uintptr_t expected = 0x10000 + R12 * 16;
     Mutator mutator;
-    GCStackInfo stack;
+    UnwindContext context{};
+    GCStackInfo stack(&context);
     MachineFrame machine;
     machine.SetFA(reinterpret_cast<FrameAddress*>(fp));
     stack.GetStack().emplace_back(machine, stub);
