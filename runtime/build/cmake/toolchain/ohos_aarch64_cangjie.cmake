@@ -39,11 +39,11 @@ endif()
 # build tools. OHOS_PUBLIC_SDK selects the installed public Native SDK.
 # Unset, the full OHOS_ROOT prebuilts layout is unchanged.
 if(DEFINED ENV{OHOS_PUBLIC_SDK} AND NOT "$ENV{OHOS_PUBLIC_SDK}" STREQUAL "")
-    set(CMAKE_C_COMPILER "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/clang")
-    set(CMAKE_ASM_COMPILER "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/clang")
-    set(CMAKE_CXX_COMPILER "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/clang++")
-    set(CMAKE_AR "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/llvm-ar")
-    set(CMAKE_RANLIB "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/llvm-ranlib")
+    set(CMAKE_C_COMPILER "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/clang${EXECUTABLE_EXTENSION}")
+    set(CMAKE_ASM_COMPILER "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/clang${EXECUTABLE_EXTENSION}")
+    set(CMAKE_CXX_COMPILER "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/clang++${EXECUTABLE_EXTENSION}")
+    set(CMAKE_AR "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/llvm-ar${EXECUTABLE_EXTENSION}")
+    set(CMAKE_RANLIB "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/llvm-ranlib${EXECUTABLE_EXTENSION}")
     set(OHOS_CJTHREAD_SYSROOT "$ENV{OHOS_PUBLIC_SDK}/sysroot")
 else()
     set(CMAKE_C_COMPILER "$ENV{OHOS_ROOT}/prebuilts/clang/ohos/${cmake_host_system_name}-${cmake_host_system_processor}/llvm/bin/clang${EXECUTABLE_EXTENSION}")
@@ -83,7 +83,7 @@ set(CMAKE_CXX_FLAGS
 )
 
 set(OHOS_INCLUDE "")
-if(DEFINED ENV{OHOS_ROOT} AND EXISTS "$ENV{OHOS_ROOT}/third_party/openssl/include")
+if("$ENV{OHOS_PUBLIC_SDK}" STREQUAL "" AND DEFINED ENV{OHOS_ROOT} AND EXISTS "$ENV{OHOS_ROOT}/third_party/openssl/include")
     set(OHOS_INCLUDE "-I$ENV{OHOS_ROOT}/third_party/openssl/include")
 endif()
 

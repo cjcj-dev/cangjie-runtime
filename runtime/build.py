@@ -198,7 +198,7 @@ def do_build(args):
         build_target(cmake_command, args)
 
     elif target_args in ["ohos-aarch64", "ohos-arm", "ohos-x86_64"]:
-        if args.target_toolchain == None:
+        if args.target_toolchain is None and args.ohos_public_sdk is None:
             print("Please configure ohos toolchain, for example '/root/workspace/ohos_dep_files/'")
             sys.exit(1)
         if target_args == "ohos-aarch64":
@@ -221,7 +221,8 @@ def do_build(args):
             "-DCOPYGC_FLAG=1",
             "-DDOPRA_FLAG=1",
             "-DOHOS_FLAG={}".format(ohos_flag),
-            "-DOHOS_ROOT={}".format(args.target_toolchain),
+            "-DOHOS_ROOT={}".format(args.target_toolchain or ""),
+            "-DOHOS_PUBLIC_SDK={}".format(os.path.abspath(args.ohos_public_sdk) if args.ohos_public_sdk else ""),
             "-DANDROID_FLAG=0",
             "-DIOS_FLAG=0",
             "-DIOS_SIMULATOR_FLAG=0",
@@ -430,6 +431,10 @@ if __name__ == "__main__":
     b.add_argument(
         "--target-toolchain",
         help="The toolchain required for cross-compilation depends on the specific build target; please specify the appropriate toolchain according to each build-target."
+    )
+    b.add_argument(
+        "--ohos-public-sdk",
+        help="Public OpenHarmony Native SDK root containing llvm/ and sysroot/ (CMake OHOS_PUBLIC_SDK)."
     )
     b.add_argument(
         "--target-sysroot",
