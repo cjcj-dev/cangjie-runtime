@@ -1,5 +1,24 @@
 #!/usr/bin/env python3
-"""Cut actual OHOS configure edges and observe their generated compilation routes."""
+"""Cut actual OHOS configure edges and observe their generated compilation routes.
+
+Artifact identity protocol (B1 rework):
+Every arm of one recipe group builds in the SAME source/build path, sequentially,
+so a byte difference can never come from the arm's own directory. Diagnosis on
+the same tree showed libcangjie-thread.a embeds the source/build path and the
+SDK path through DWARF (same path rebuild is byte-identical; a different source,
+build or SDK path is not). Route cuts only re-point the toolchain to a
+byte-identical copy of the SDK, so the cuts must NOT change any binary: arms are
+grouped into identity classes by (recipe, effective SDK path) and every artifact
+inside a class must be byte-identical, otherwise the arm is invalid.
+
+Classes per recipe group:
+  real SDK : candidate, restored, strip-cut, rename-cut (plus all cuts on the
+             non-target architecture, where the mutation is inert)
+  alternate SDK : sdkpath-control, producer-cut, consumer-cut
+             (the control arm routes the unmutated tree to the alternate SDK;
+             the cut arms must reproduce its bytes exactly)
+build.py recipe: buildpy-restored (real), buildpy-control / buildpy-cut (alternate).
+"""
 import concurrent.futures
 import difflib
 import hashlib
@@ -19,13 +38,24 @@ out = repo / 'ohos-evidence' / 'controls'
 root.mkdir(parents=True, exist_ok=True)
 out.mkdir(parents=True, exist_ok=True)
 alternative = root / 'alternate-native'
-shutil.copytree(sdk, alternative, symlinks=False)
+if not alternative.exists():
+    shutil.copytree(sdk, alternative, symlinks=False)
 base = '10965c352184f366d9e46fc75341905724bf40d5'
 with (out / 'baseline-fetch.log').open('w') as log:
     subprocess.run(['git', 'fetch', '--no-tags', '--depth=1', 'origin', base],
                    cwd=repo, stdout=log, stderr=subprocess.STDOUT, check=True)
 observer = repo / 'runtime/tests/test_ohos_public_sdk.py'
 (out / 'observer.sha256').write_text(hashlib.sha256(observer.read_bytes()).hexdigest() + '\n')
+
+reroute_cuts = ('producer-cut', 'consumer-cut', 'buildpy-cut')
+
+
+def sdk_for(arm):
+    if arm in ('sdkpath-control', 'buildpy-control'):
+        return alternative
+    if arch == 'x86_64' and arm in reroute_cuts:
+        return alternative
+    return sdk
 
 
 def mutate(source, arm):
@@ -65,10 +95,27 @@ def mutate(source, arm):
         before.splitlines(True), after.splitlines(True), 'a/' + relative, 'b/' + relative)))
 
 
-def run(arm):
-    started = time.monotonic()
-    source = root / arm
-    # Only tracked source is copied; no generated product or sibling arm is reused.
+def expected_for(arm):
+    if arm == 'baseline' and arch == 'aarch64':
+        # Base already routes aarch64 cjthread through OHOS_PUBLIC_SDK
+        # (runtime/CMakeLists.txt OHOS_FLAG==1 exports it; ohos_aarch64_cangjie.cmake
+        # consumes it), so only the strip route and the library rename remain as
+        # baseline failures.
+        return ['runtime.strip_route', 'no_runtime_library_rename']
+    if arch == 'x86_64' and arm in ('producer-cut', 'consumer-cut'):
+        return ['cjthread.sdk_route']
+    if arch == 'x86_64' and arm == 'buildpy-cut':
+        return ['runtime.sdk_route', 'cjthread.sdk_route', 'runtime.strip_route']
+    if arch == 'x86_64' and arm == 'strip-cut':
+        return ['runtime.strip_route']
+    if arch == 'x86_64' and arm == 'rename-cut':
+        return ['no_runtime_library_rename']
+    return []
+
+
+def materialize(arm, source):
+    if source.exists():
+        shutil.rmtree(source)
     source.mkdir()
     if arm == 'baseline':
         archive = subprocess.Popen(['git', 'archive', base], cwd=repo, stdout=subprocess.PIPE)
@@ -88,8 +135,13 @@ def run(arm):
         mutate(source, 'buildpy-cut' if arm == 'buildpy-restored' else 'producer-cut')
         path.write_bytes(original)
         assert path.read_bytes() == (repo / path.relative_to(source)).read_bytes()
-    else:
+    elif arm not in ('sdkpath-control', 'buildpy-control'):
         mutate(source, arm)
+
+
+def run(arm, source):
+    started = time.monotonic()
+    materialize(arm, source)
     identities = {}
     for relative in ('runtime/CMakeLists.txt', 'runtime/config.cmake', 'runtime/build.py',
                      'runtime/build/cmake/toolchain/ohos_x86_64_cangjie.cmake',
@@ -103,16 +155,17 @@ def run(arm):
     env['OHOS_ROUTE_CONTROL_SDK'] = str(alternative)
     env['CMAKE_EXPORT_COMPILE_COMMANDS'] = 'ON'
     build = source / 'configured'
+    effective_sdk = sdk_for(arm)
     command = ['cmake', '-S', str(source / 'runtime'), '-B', str(build),
                '-DCMAKE_BUILD_TYPE=Release', '-DOHOS_FLAG=' + ('2' if arch == 'x86_64' else '1'),
-               '-DOHOS_PUBLIC_SDK=' + str(sdk), '-DCMAKE_INSTALL_PREFIX=' + str(source / 'install'),
+               '-DOHOS_PUBLIC_SDK=' + str(effective_sdk), '-DCMAKE_INSTALL_PREFIX=' + str(source / 'install'),
                '-DCOPYGC_FLAG=1', '-DDOPRA_FLAG=1', '-DRUNTIME_TRACE_FLAG=0',
                '-DCJ_SDK_VERSION=0.0.1', '-DDISABLE_VERSION_CHECK=1']
     if arch == 'aarch64':
         command += ['-DRUNTIME_FORWARD_PTRAUTH_CFI=1', '-DRUNTIME_BACKWARD_PTRAUTH_CFI=1']
     if arm.startswith('buildpy-'):
         command = [sys.executable, str(source / 'runtime/build.py'), 'build', '-t', 'release',
-                   '--target', 'ohos-' + arch, '--ohos-public-sdk', str(sdk), '-v', '0.0.1']
+                   '--target', 'ohos-' + arch, '--ohos-public-sdk', str(effective_sdk), '-v', '0.0.1']
         build = source / 'runtime/CMakebuild'
     with (out / (arm + '.log')).open('w') as log:
         log.write(json.dumps(command) + '\n'); log.flush()
@@ -120,45 +173,91 @@ def run(arm):
         observed = None
         if configured.returncode == 0:
             observed = subprocess.run([sys.executable, str(observer), '--build', str(build),
-                                       '--sdk', str(sdk), '--arch', arch,
+                                       '--sdk', str(effective_sdk), '--arch', arch,
                                        '--output', str(out / (arm + '.json'))]
                                       + ([] if arm.startswith('buildpy-') else ['--configured-only']),
                                       stdout=log, stderr=subprocess.STDOUT).returncode
-    expected = []
-    if arm == 'baseline' and arch == 'aarch64':
-        # Base already routes aarch64 cjthread through OHOS_PUBLIC_SDK
-        # (runtime/CMakeLists.txt OHOS_FLAG==1 exports it; ohos_aarch64_cangjie.cmake
-        # consumes it), so only the strip route and the library rename remain as
-        # baseline failures.
-        expected = ['runtime.strip_route', 'no_runtime_library_rename']
-    if arch == 'x86_64' and arm in ('producer-cut', 'consumer-cut'):
-        expected = ['cjthread.sdk_route']
-    elif arch == 'x86_64' and arm == 'buildpy-cut':
-        expected = ['runtime.sdk_route', 'cjthread.sdk_route', 'runtime.strip_route']
-    elif arch == 'x86_64' and arm == 'strip-cut':
-        expected = ['runtime.strip_route']
-    elif arch == 'x86_64' and arm == 'rename-cut':
-        expected = ['no_runtime_library_rename']
+    expected = expected_for(arm)
     failures = None
+    artifacts = {}
     observation = out / (arm + '.json')
     if observation.exists():
-        failures = [c['name'] for c in json.loads(observation.read_text())['checks'] if not c['pass']]
+        parsed = json.loads(observation.read_text())
+        failures = [c['name'] for c in parsed['checks'] if not c['pass']]
+        for entry in parsed['artifacts']:
+            artifacts[Path(entry['path']).name] = entry['sha256']
+        keep = out / 'artifacts' / arm
+        keep.mkdir(parents=True, exist_ok=True)
+        for entry in parsed['artifacts']:
+            shutil.copy2(entry['path'], keep / Path(entry['path']).name)
     record = {'arm': arm, 'arch': arch, 'configure_rc': configured.returncode,
               'observer_rc': observed, 'failures': failures, 'expected_failures': expected,
+              'sdk_path': str(effective_sdk), 'artifacts': artifacts,
               'wall': round(time.monotonic() - started, 2)}
-    record['valid'] = (configured.returncode == 0 and failures == expected
-                       and observed == (1 if expected else 0))
+    record['routes_valid'] = (configured.returncode == 0 and failures == expected
+                              and observed == (1 if expected else 0))
     if arm == 'baseline' and arch == 'x86_64':
-        record['valid'] = configured.returncode != 0
+        record['routes_valid'] = configured.returncode != 0
         record['note'] = 'Original configure failure reproduced; not counted as assertion-level red evidence.'
     (out / (arm + '-result.json')).write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps(record), flush=True)
     return record
 
 
+def identity_class(record):
+    if record['arm'] == 'baseline':
+        return None
+    recipe = 'buildpy' if record['arm'].startswith('buildpy-') else 'cmake'
+    return recipe + '|' + record['sdk_path']
+
+
+def run_group(arms, source):
+    records = [run(arm, source) for arm in arms]
+    classes = {}
+    for record in records:
+        name = identity_class(record)
+        if name:
+            classes.setdefault(name, []).append(record)
+    identity = []
+    for name, members in sorted(classes.items()):
+        reference = members[0]['artifacts']
+        table = {'class': name, 'reference_arm': members[0]['arm'],
+                 'arms': {m['arm']: m['artifacts'] for m in members}}
+        diverged = [m['arm'] for m in members if m['artifacts'] != reference]
+        table['identical'] = not diverged
+        table['diverged_arms'] = diverged
+        identity.append(table)
+        for m in members:
+            m['identity_class'] = name
+            m['identity_valid'] = not diverged
+            m['valid'] = m['routes_valid'] and not diverged
+            (out / (m['arm'] + '-result.json')).write_text(json.dumps(m, indent=2) + '\n')
+    for record in records:
+        record.setdefault('valid', record['routes_valid'])
+        (out / (record['arm'] + '-result.json')).write_text(json.dumps(record, indent=2) + '\n')
+    return records, identity
+
+
 subprocess.run(['uptime'], check=True)
-with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-    results = list(pool.map(run, ['baseline', 'candidate', 'producer-cut', 'consumer-cut', 'rename-cut', 'strip-cut', 'restored', 'buildpy-cut', 'buildpy-restored']))
+groups = [(['baseline', 'candidate', 'sdkpath-control', 'producer-cut', 'consumer-cut',
+            'rename-cut', 'strip-cut', 'restored'], root / 'tree-cmake'),
+          (['buildpy-restored', 'buildpy-control', 'buildpy-cut'], root / 'tree-buildpy')]
+with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    grouped = list(pool.map(lambda g: run_group(*g), groups))
 subprocess.run(['uptime'], check=True)
-(out / 'summary.json').write_text(json.dumps(results, indent=2) + '\n')
+results = [r for records, _ in grouped for r in records]
+identity = [t for _, tables in grouped for t in tables]
+# Cross-class sample: where the first byte diverges between SDK-path classes of the
+# cmake recipe (documentation of the path-bearing artifact class, not a gate).
+kept = out / 'artifacts'
+sample = {}
+real_a = kept / 'candidate' / 'libcangjie-thread.a'
+alt_a = kept / 'sdkpath-control' / 'libcangjie-thread.a'
+if real_a.exists() and alt_a.exists():
+    probe = subprocess.run(['cmp', str(real_a), str(alt_a)], capture_output=True, text=True)
+    sample = {'candidate_vs_sdkpath_control_cmp': probe.stdout.strip(),
+              'note': 'Identical toolchain content at different SDK paths; '
+                      'divergence is the path-bearing bytes (DWARF) documented in the report.'}
+summary = {'arch': arch, 'results': results, 'identity': identity, 'cross_class_sample': sample}
+(out / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
 raise SystemExit(0 if all(r['valid'] for r in results) else 1)
