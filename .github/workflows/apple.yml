@@ -18,6 +18,7 @@ on:
         options:
           - all
           - bsd-backing-fail
+          - ios-stdlib-configure
         default: all
 
 permissions:
@@ -406,3 +407,45 @@ jobs:
             done
           done
           exit "$fail"
+
+  ios-stdlib-configure:
+    if: ${{ github.event_name == 'push' || inputs.job == 'ios-stdlib-configure' || inputs.job == 'all' }}
+    runs-on: macos-15
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        tuple: [arm64, simulator_arm64, simulator_x86_64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Prepare configure dependencies
+        run: |
+          ulimit -c 0
+          xcodebuild -version
+          uptime
+          brew install ninja llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          git clone --depth 1 --branch OpenHarmony-v6.0-Release https://github.com/openharmony/third_party_bounds_checking_function.git stdlib/third_party/boundscheck-v1.1.16
+          git clone --depth 1 https://github.com/openharmony/third_party_pcre2.git stdlib/third_party/pcre2
+      - name: Configure baseline, candidate, cut, restored and caller SDK arms
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: 3
+        run: |
+          ulimit -c 0
+          python3 stdlib/tests/ios_sdk_configure.py --tuple '${{ matrix.tuple }}' \
+            --baseline a891df782f6132909c81afb9ecb4c05a73278d03 \
+            --output "$RUNNER_TEMP/ios-sdk-evidence"
+      - name: Record final load
+        if: always()
+        run: uptime
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-sdk-${{ matrix.tuple }}
+          path: |
+            ${{ runner.temp }}/ios-sdk-evidence/**/configure.log
+            ${{ runner.temp }}/ios-sdk-evidence/**/result*.json
+            ${{ runner.temp }}/ios-sdk-evidence/**/compile_commands.json
