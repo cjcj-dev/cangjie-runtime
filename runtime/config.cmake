@@ -428,15 +428,23 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wframe-larger-than=10240")
 
 # Set cjthread path.
 # Provide secure functions.
-set(BOUNDSCHECK ${CMAKE_SOURCE_DIR}/third_party/third_party_bounds_checking_function)
-if(NOT EXISTS ${BOUNDSCHECK})
+set(BOUNDSCHECK "${CMAKE_SOURCE_DIR}/third_party/third_party_bounds_checking_function")
+if(NOT EXISTS "${BOUNDSCHECK}")
+    find_package(Git REQUIRED)
     set(REPOSITORY_PATH https://gitcode.com/openharmony/third_party_bounds_checking_function)
     message(STATUS "Set boundscheck REPOSITORY_PATH: ${REPOSITORY_PATH}")
     execute_process(
-        COMMAND git clone --branch OpenHarmony-v6.0-Release ${REPOSITORY_PATH} ${BOUNDSCHECK}
+        COMMAND "${GIT_EXECUTABLE}" clone --branch OpenHarmony-v6.0-Release ${REPOSITORY_PATH} "${BOUNDSCHECK}"
+        RESULT_VARIABLE _boundscheck_result
     )
+    if(NOT _boundscheck_result STREQUAL "0")
+        message(FATAL_ERROR "Boundscheck clone failed: ${_boundscheck_result} (${REPOSITORY_PATH})")
+    endif()
 endif()
-file(COPY build/cmake/CMakeLists.txt DESTINATION ${BOUNDSCHECK}/)
+if(NOT EXISTS "${BOUNDSCHECK}/include/securec.h")
+    message(FATAL_ERROR "Boundscheck dependency is incomplete: ${BOUNDSCHECK}/include/securec.h is missing")
+endif()
+file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/build/cmake/CMakeLists.txt" DESTINATION "${BOUNDSCHECK}/")
 set(BOUNDSCHECK_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/third_party/third_party_bounds_checking_function CACHE FILEPATH "" FORCE)
 set(BOUNDSCHECK_INCLUDE ${BOUNDSCHECK_ROOT}/include)
 set(OHOS_PUBLIC_LINK_DIRS "")

@@ -8,6 +8,36 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+// zUtils.inline.hpp:37-49: a process-lifetime allocation is aligned, zeroed,
+// and writable even when size is not a multiple of alignment. Keep the
+// invariants independent so one failure cannot mask another assertion.
+GC_TEST(ZUtils, aligned_unfreeable_alignment)
+{
+    for (size_t alignment : {size_t(1), size_t(2), size_t(8), size_t(64), size_t(4096)}) {
+        const uintptr_t address = ZUtils::alloc_aligned_unfreeable(alignment, 37);
+        GC_EXPECT_EQ(address % alignment, uintptr_t(0));
+    }
+}
+
+GC_TEST(ZUtils, aligned_unfreeable_zeroed)
+{
+    const auto* bytes = reinterpret_cast<const unsigned char*>(ZUtils::alloc_aligned_unfreeable(64, 257));
+    for (size_t i = 0; i < 257; ++i) {
+        GC_EXPECT_EQ(bytes[i], 0);
+    }
+}
+
+GC_TEST(ZUtils, aligned_unfreeable_writable)
+{
+    auto* bytes = reinterpret_cast<unsigned char*>(ZUtils::alloc_aligned_unfreeable(64, 257));
+    for (size_t i = 0; i < 257; ++i) {
+        bytes[i] = static_cast<unsigned char>(i);
+    }
+    for (size_t i = 0; i < 257; ++i) {
+        GC_EXPECT_EQ(bytes[i], static_cast<unsigned char>(i));
+    }
+}
+
 // Exercise the public header, including offset calculation and both Copy branches.
 // Atomic access itself is checked by test_zUtils_atomic_ir.py with the product recipe.
 GC_TEST(ZUtils, atomic_copy_preserves_bounds_and_offset)
