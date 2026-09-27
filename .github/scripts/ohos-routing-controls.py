@@ -18,6 +18,10 @@ Classes per recipe group:
              (the control arm routes the unmutated tree to the alternate SDK;
              the cut arms must reproduce its bytes exactly)
 build.py recipe: buildpy-restored (real), buildpy-control / buildpy-cut (alternate).
+
+The route observer always asserts against the REAL SDK path (the product
+invariant), so any arm routed at the alternate SDK turns red on exactly the
+rerouted assertions; control arms expect the full reroute set.
 """
 import concurrent.futures
 import difflib
@@ -110,6 +114,11 @@ def expected_for(arm):
         return ['runtime.strip_route']
     if arch == 'x86_64' and arm == 'rename-cut':
         return ['no_runtime_library_rename']
+    if arm in ('sdkpath-control', 'buildpy-control'):
+        # Unmutated tree routed wholesale at the alternate SDK: every route
+        # assertion fires. This arm is the identity reference for the cut arms,
+        # not a route-green arm.
+        return ['runtime.sdk_route', 'cjthread.sdk_route', 'runtime.strip_route']
     return []
 
 
@@ -173,7 +182,7 @@ def run(arm, source):
         observed = None
         if configured.returncode == 0:
             observed = subprocess.run([sys.executable, str(observer), '--build', str(build),
-                                       '--sdk', str(effective_sdk), '--arch', arch,
+                                       '--sdk', str(sdk), '--arch', arch,
                                        '--output', str(out / (arm + '.json'))]
                                       + ([] if arm.startswith('buildpy-') else ['--configured-only']),
                                       stdout=log, stderr=subprocess.STDOUT).returncode
