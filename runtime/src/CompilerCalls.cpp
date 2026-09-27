@@ -22,12 +22,6 @@
 // module interfaces
 #include "ObjectManager.inline.h"
 #include "ObjectModel/MethodInfo.h"
-#if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
-#include "Sanitizer/SanitizerInterface.h"
-#endif
-#if defined(CANGJIE_SANITIZER_SUPPORT)
-#include "timer.h"
-#endif
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
 #include "SignalManager.h"
 #endif
@@ -122,122 +116,6 @@ static bool IsGlobalStruct(const ObjectPtr basePtr, MAddress field)
     return (reinterpret_cast<uintptr_t>(basePtr) & globalFlag) != 0;
 #endif
 }
-#if defined(CANGJIE_SANITIZER_SUPPORT)
-// These interfaces are used to detect whether the acquireArrayRawData is released in time.
-class PinnedArrayRecorder {
-public:
-    PinnedArrayRecorder() = default;
-    size_t RegisterBtInfo(void* rawPtr, Mutator* mutator, const std::vector<uint64_t>& stackInfo)
-    {
-        std::lock_guard<std::mutex> lg(safeMutex);
-        auto it = stackInfos.find(rawPtr);
-        if (it == stackInfos.end()) {
-            std::unordered_map<Mutator*, std::vector<std::vector<uint64_t>>> mutatorStackMap {
-                { mutator, std::vector<std::vector<uint64_t>>({ stackInfo }) }
-            };
-            stackInfos.emplace(rawPtr, mutatorStackMap);
-            return 0;
-        } else {
-            auto& mutatorStackMap = it->second;
-            auto mutatorIt = mutatorStackMap.find(mutator);
-            if (mutatorIt == mutatorStackMap.end()) {
-                mutatorStackMap.insert({ mutator, std::vector<std::vector<uint64_t>>({ stackInfo }) });
-                return 0;
-            } else {
-                auto& vec = mutatorIt->second;
-                size_t pos = vec.size();
-                vec.push_back(stackInfo);
-                return pos;
-            }
-        }
-    }
-
-    void RemoveBtInfo(void* rawPtr, Mutator* mutator, const std::vector<uint64_t>& stackInfo)
-    {
-        std::lock_guard<std::mutex> lg(safeMutex);
-        auto it = stackInfos.find(rawPtr);
-        if (it == stackInfos.end()) {
-            std::vector<StackTraceElement> stackTraces;
-            StackManager::GetStackTraceByLiteFrameInfos(stackInfo, stackTraces);
-            LOG(RTLOG_ERROR, "Call too many releaseArrayRawData");
-            for (const auto& ste : stackTraces) {
-                LOG(RTLOG_ERROR, "\t at %s%s%s(%s:%ld)", ste.className.Str(),
-                    ste.className.Length() > 0 ? "." : "", ste.methodName.Str(), ste.fileName.Str(),
-                    ste.lineNumber);
-            }
-            return;
-        }
-        auto& mutatorStackMap = it->second;
-        auto mutatorIt = mutatorStackMap.find(mutator);
-        if (mutatorIt == mutatorStackMap.end()) {
-            std::vector<StackTraceElement> stackTraces;
-            StackManager::GetStackTraceByLiteFrameInfos(stackInfo, stackTraces);
-            LOG(RTLOG_ERROR, "Call too many releaseArrayRawData");
-            for (const auto& ste : stackTraces) {
-                LOG(RTLOG_ERROR, "\t at %s%s%s(%s:%ld)", ste.className.Str(),
-                    ste.className.Length() > 0 ? "." : "", ste.methodName.Str(), ste.fileName.Str(),
-                    ste.lineNumber);
-            }
-            return;
-        }
-        auto& vec = mutatorIt->second;
-        vec.pop_back();
-        if (vec.empty()) {
-            mutatorStackMap.erase(mutatorIt);
-        }
-    }
-
-    bool CheckStackInfo(void* rawPtr, Mutator* mutator, size_t pos, std::vector<StackTraceElement>& stackTraces)
-    {
-        std::lock_guard<std::mutex> lg(safeMutex);
-        auto rawPtrIt = stackInfos.find(rawPtr);
-        if (rawPtrIt == stackInfos.end()) {
-            return true;
-        }
-        auto& mutatorStackMap = rawPtrIt->second;
-        auto mutatorIt = mutatorStackMap.find(mutator);
-        if (mutatorIt == mutatorStackMap.end()) {
-            return true;
-        }
-        auto& vec = mutatorIt->second;
-        if (pos >= vec.size()) {
-            return true;
-        }
-        std::vector<uint64_t>& frames = vec[pos];
-        StackManager::GetStackTraceByLiteFrameInfos(frames, stackTraces);
-        return false;
-    }
-private:
-    std::mutex safeMutex;
-    std::unordered_map<void*, std::unordered_map<Mutator*, std::vector<std::vector<uint64_t>>>> stackInfos;
-};
-
-PinnedArrayRecorder pinnedArrayRecorder;
-
-struct DataClosure {
-    void* rawPtr = nullptr;
-    Mutator* mutator = nullptr;
-    size_t pos = 0;
-};
-
-void RawPtrCheckerTimerEntry(void* arg)
-{
-    DataClosure* dataClosure = reinterpret_cast<DataClosure*>(arg);
-    void* rawPtr = dataClosure->rawPtr;
-    Mutator* mutator = dataClosure->mutator;
-    size_t pos = dataClosure->pos;
-    NativeAllocator::NativeFree(dataClosure, sizeof(DataClosure));
-    std::vector<StackTraceElement> stackTraces;
-    if (!pinnedArrayRecorder.CheckStackInfo(rawPtr, mutator, pos, stackTraces)) {
-        LOG(RTLOG_ERROR, "acquireArrayRawData lasted too long");
-        for (const auto& ste : stackTraces) {
-            LOG(RTLOG_ERROR, "\t at %s%s%s(%s:%ld) misses releaseArrayRawData", ste.className.Str(),
-                ste.className.Length() > 0 ?
-                "." : "", ste.methodName.Str(), ste.fileName.Str(), ste.lineNumber);
-        }
-    }
-}
-#endif
 // runtime interfaces provided to compiler for code generation.
 // The compiler should only call MCC_* to access runtime functions.
 // MCC_* calls follows C standard calling convention.
@@ -1064,38 +942,19 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
     (void)CJThreadPreemptOffCntAdd();
     PinArray(static_cast<ArrayRef>(arrayHandle()));
     ArrayRef pArray = static_cast<ArrayRef>(arrayHandle());
-#if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
-    auto* rawPtr = pArray->ConvertToCArray();
-    std::vector<uint64_t> frame;
-    StackManager::RecordLiteFrameInfos(frame, 4); // record 4 frames
-    size_t pos = pinnedArrayRecorder.RegisterBtInfo(rawPtr, Mutator::GetMutator(), frame);
-    DataClosure* dataClosure = new (NativeAllocator::NativeAlloc(sizeof(DataClosure))) DataClosure();
-    if (dataClosure != nullptr) {
-        dataClosure->rawPtr = rawPtr;
-        dataClosure->mutator = Mutator::GetMutator();
-        dataClosure->pos = pos;
-        auto timer = TimerNew(30ULL * SECOND_TO_NANO_SECOND, 0, &RawPtrCheckerTimerEntry,
-                              reinterpret_cast<void*>(dataClosure));
-        if (timer != nullptr) {
-            TimerRelease(timer);
-        }
-    }
-#endif
-#if defined(GENERAL_ASAN_SUPPORT_INTERFACE) || defined(CANGJIE_GWPASAN_SUPPORT)
-    return Sanitizer::ArrayAcquireMemoryRegion(pArray, pArray->ConvertToCArray(), pArray->GetContentSize());
-#else
     return pArray->ConvertToCArray();
-#endif
 }
 
 // Release the raw pointer
 extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
 {
+    // ZGC jni.cpp:2881-2887 / zCollectedHeap.cpp:279-281: unpin re-resolves the
+    // reference and never dereferences the object header; the exit path must not
+    // depend on the caller-supplied reference still designating a valid object.
     ArrayRef plain = array;
     if (!Heap::IsHeapAddress(plain)) {
         return;
     }
-    MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_ReleaseRawData");
 #ifdef _WIN64
     static void* unreadablePage = reinterpret_cast<void*>(0x1234);
 #else
@@ -1108,15 +967,6 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     if (rawPtr == unreadablePage) {
         return;
     }
-#if defined(GENERAL_ASAN_SUPPORT_INTERFACE) || defined(CANGJIE_GWPASAN_SUPPORT)
-    // sanitizer will convert alias/colorized pointer to real pointer for runtime
-    rawPtr = Sanitizer::ArrayReleaseMemoryRegion(plain, rawPtr, plain->GetContentSize());
-#endif
-#if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
-    std::vector<uint64_t> frame;
-    StackManager::RecordLiteFrameInfos(frame, 4); // record 4 frames
-    pinnedArrayRecorder.RemoveBtInfo(rawPtr, Mutator::GetMutator(), frame);
-#endif
     ZJNICritical::exit();
     (void)CJThreadPreemptOffCntSub();
     (void)rawPtr;
