@@ -72,6 +72,9 @@ record["product_build_cmake_sha256"] = hashlib.sha256((tree / "build/cmake/CMake
 record["source_sha256"] = {str(p.relative_to(tree)): hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in (tree / "src").rglob("*") if p.is_file()}
 
+run(["clang", "--version"], "clang-version")
+for filename in ("windows_x86_64_exports.def", "windows_export_references.json"):
+    shutil.copy2(tree / "src" / filename, out / filename)
 build = tree / "CMakebuild"
 rc = run(["cmake", "-S", tree, "-B", build, "-G", "Ninja",
           "-DWINDOWS_FLAG=1", "-DCOPYGC_FLAG=1", "-DDOPRA_FLAG=1",
