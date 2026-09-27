@@ -18,6 +18,7 @@ on:
         options:
           - all
           - bsd-backing-fail
+          - ios-stdlib-configure
         default: all
 
 permissions:
@@ -406,3 +407,66 @@ jobs:
             done
           done
           exit "$fail"
+
+  ios-stdlib-configure:
+    if: ${{ (github.event_name == 'push' || inputs.job == 'ios-stdlib-configure' || inputs.job == 'all') && inputs.p04_bsd_tu_only != true }}
+    runs-on: macos-15
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        tuple: [arm64, simulator_arm64, simulator_x86_64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      # Pinned compiler AST inputs from cjcj ci/ast_support/darwin_aarch64.env.
+      # These supply configure prerequisites; this job does not compile Cangjie std.
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: cjcj-dev/cjcj
+          run-id: 36019663568
+          artifact-ids: 10816590496
+          merge-multiple: true
+          path: ${{ runner.temp }}/stdlib-configure-inputs
+      - name: Verify configure input identity
+        run: |
+          cd "$RUNNER_TEMP/stdlib-configure-inputs"
+          cat PROVENANCE
+          shasum -a 256 -c SHA256SUMS
+          echo 'a0257ed258ea93c1138295c1f1c017358379c10489fbfbb2cc3e1377bb9f675b  libcangjie-ast-support.a' | shasum -a 256 -c -
+          chmod +x third_party/flatbuffers/bin/flatc
+          echo "CANGJIE_HOME=$RUNNER_TEMP/stdlib-configure-inputs" >> "$GITHUB_ENV"
+      - name: Prepare configure dependencies
+        run: |
+          ulimit -c 0
+          xcodebuild -version
+          uptime
+          brew install ninja llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          git clone --depth 1 --branch OpenHarmony-v6.0-Release https://github.com/openharmony/third_party_bounds_checking_function.git stdlib/third_party/boundscheck-v1.1.16
+          git clone --depth 1 https://github.com/openharmony/third_party_pcre2.git stdlib/third_party/pcre2
+      - name: Configure baseline, candidate, cut, restored and caller SDK arms
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: 3
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
+        run: |
+          ulimit -c 0
+          python3 stdlib/tests/ios_sdk_configure.py --tuple '${{ matrix.tuple }}' \
+            --baseline a891df782f6132909c81afb9ecb4c05a73278d03 \
+            --output "$RUNNER_TEMP/ios-sdk-evidence"
+      - name: Record final load
+        if: always()
+        run: uptime
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-sdk-${{ matrix.tuple }}
+          path: |
+            ${{ runner.temp }}/ios-sdk-evidence/**/configure.log
+            ${{ runner.temp }}/ios-sdk-evidence/**/result*.json
+            ${{ runner.temp }}/ios-sdk-evidence/**/compile_commands.json
+            ${{ runner.temp }}/ios-sdk-evidence/**/CMakeCache.txt
