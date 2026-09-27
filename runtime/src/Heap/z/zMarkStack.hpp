@@ -152,6 +152,10 @@ public:
     MarkStripeStack* StealLocal(size_t stripeId);
     void Install(size_t stripeId, MarkStripeStack* stack);
     bool Flush(MarkStripeSet& stripes);
+#if defined(MRT_TESTABLE_INTERNALS)
+    // PROBE-1137 (test only): runs between Create() and the first entry push.
+    static void SetPushCreatedBreakpoint(void (*callback)());
+#endif
 
 private:
     std::vector<MarkStripeStack*> stacks;

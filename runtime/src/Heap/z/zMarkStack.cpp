@@ -23,7 +23,17 @@ namespace MapleRuntime {
 namespace {
 constexpr size_t FIRST_STACK_CAPACITY = 128;
 constexpr size_t REGULAR_STACK_CAPACITY = 512;
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<void (*)()> pushCreatedBreakpoint{nullptr};
+#endif
 } // namespace
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void MarkThreadLocalStacks::SetPushCreatedBreakpoint(void (*callback)())
+{
+    pushCreatedBreakpoint.store(callback, std::memory_order_release);
+}
+#endif
 
 
 MarkStripeStack* MarkStripeStack::Create(bool firstStack)

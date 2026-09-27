@@ -103,6 +103,9 @@ void MarkThreadLocalStacks::Push(MarkStripeSet& stripes, size_t stripeId, const 
 
     slot = MarkStripeStack::Create(previous == nullptr);
     CHECK_DETAIL(slot != nullptr, "failed to allocate local mark stripe stack");
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (auto breakpoint = pushCreatedBreakpoint.load(std::memory_order_acquire)) { breakpoint(); }
+#endif
     slot->Push(entry);
 }
 
