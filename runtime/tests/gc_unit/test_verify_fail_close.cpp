@@ -1,3 +1,4 @@
+#include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -375,7 +376,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerify, RuntimeRejectsStaleMarkStackAtStart)
         auto* stack = MarkStripeStack::Create(true);
         if (stack == nullptr) { _exit(122); }
         stack->Push(MarkStackEntry(uintptr_t(0x1000), true, true, true, false));
-        stripes.At(0).PublishStack(stack, true);
+        stripes.At(0)->PublishStack(stack, true, stripes.Terminate());
         if (stripes.Population() != 1) { _exit(123); }
         std::fprintf(stderr, "VERIFY_RUNTIME_MARK_START published_stacks=1\n");
         // A broken start returns here before any worker consumes the deliberately

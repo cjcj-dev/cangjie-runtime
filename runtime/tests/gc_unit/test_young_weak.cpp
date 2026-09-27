@@ -1,3 +1,4 @@
+#include "Heap/z/zMarkTerminate.hpp"
 #include "marking_smr_test.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -618,7 +619,7 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
             GC_EXPECT_TRUE(stacks.Flush(current.Stripes()));
             MapleRuntime::GcUnit::WorkerFixture workerFixture;
     MarkingSMR smr;
-            MarkStripeStack* published = current.Stripes().At(0).StealStack(smr, 0);
+            MarkStripeStack* published = current.Stripes().At(0)->StealStack(smr, 0);
             GC_EXPECT_TRUE(published != nullptr);
             MarkStripeStack::Destroy(published);
             MarkingSMRTest::reclaim(smr);

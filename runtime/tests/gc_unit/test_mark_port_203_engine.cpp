@@ -1,3 +1,4 @@
+#include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -75,7 +76,7 @@ GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
         MarkThreadLocalStacks seed(4);
         constexpr size_t count = 40;
         for (size_t i = 0; i < count; ++i) {
-            seed.Push(stripes, i % 4, Entry(i), true);
+            seed.Push(stripes, stripes.At(i % 4), Entry(i), true);
         }
         (void)seed.Flush(stripes);
         std::vector<std::vector<size_t>> seen(workers);
@@ -115,13 +116,13 @@ GC_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
     MarkingSMR smr;
     MarkThreadLocalStacks stacks(2);
     MarkContext context(1, 0, stripes, stacks);
-    context.SetStripeId(0);
+    context.SetStripe(stripes.At(0));
     MarkStripeStack* localVictim = MarkStripeStack::Create(true);
     localVictim->Push(Entry(11));
-    context.Stacks().Install(1, localVictim);
+    context.Stacks().Install(stripes, stripes.At(1), localVictim);
     MarkStripeStack* global = MarkStripeStack::Create(true);
     global->Push(Entry(22));
-    stripes.At(1).PublishStack(global, true, stripes.Terminate());
+    stripes.At(1)->PublishStack(global, true, stripes.Terminate());
     std::vector<size_t> seen;
     DrainFollow(context, smr, stripes, terminate, 0, seen, false);
     GC_EXPECT_EQ(seen.size(), 2u);
@@ -132,18 +133,21 @@ GC_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
 GC_TEST(MarkPort203Engine, OverflowPreferredOverPublished)
 {
     MarkStripeSet stripes(1);
+    MarkTerminate stripeTerminate;
+    stripeTerminate.Reset(1);
+    stripes.SetTerminate(&stripeTerminate);
     MapleRuntime::GcUnit::WorkerFixture workerFixture;
     MarkingSMR smr;
     MarkStripeStack* overflow = MarkStripeStack::Create(true);
     overflow->Push(Entry(1));
     MarkStripeStack* published = MarkStripeStack::Create(true);
     published->Push(Entry(2));
-    stripes.At(0).PublishStack(overflow, false);
-    stripes.At(0).PublishStack(published, true);
-    MarkStripeStack* first = stripes.At(0).StealStack(smr, 0);
+    stripes.At(0)->PublishStack(overflow, false, stripes.Terminate());
+    stripes.At(0)->PublishStack(published, true, stripes.Terminate());
+    MarkStripeStack* first = stripes.At(0)->StealStack(smr, 0);
     GC_EXPECT_EQ(first->Pop().partial_array_offset(), 2u);
     MarkStripeStack::Destroy(first);
-    MarkStripeStack* second = stripes.At(0).StealStack(smr, 0);
+    MarkStripeStack* second = stripes.At(0)->StealStack(smr, 0);
     GC_EXPECT_EQ(second->Pop().partial_array_offset(), 3u);
     MarkStripeStack::Destroy(second);
 }
@@ -151,23 +155,26 @@ GC_TEST(MarkPort203Engine, OverflowPreferredOverPublished)
 GC_TEST(MarkPort203Engine, ShrinkingNStripesStillSeesHighSlotWork)
 {
     MarkStripeSet stripes(4);
+    MarkTerminate stripeTerminate;
+    stripeTerminate.Reset(1);
+    stripes.SetTerminate(&stripeTerminate);
     MarkStripeStack* high = MarkStripeStack::Create(true);
     high->Push(Entry(9));
-    stripes.At(3).PublishStack(high, true);
+    stripes.At(3)->PublishStack(high, true, stripes.Terminate());
     stripes.SetNStripes(2);
     GC_EXPECT_TRUE(!stripes.IsEmpty());
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), 3u);
-    size_t home = 0;
+    MarkStripe* home = stripes.At(0);
     size_t seenHigh = 0;
-    for (size_t victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
-        if (victim == 3) {
+    for (MarkStripe* victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
+        if (victim == stripes.At(3)) {
             ++seenHigh;
         }
     }
     GC_EXPECT_EQ(seenHigh, 1u);
     MapleRuntime::GcUnit::WorkerFixture workerFixture;
     MarkingSMR smr;
-    MarkStripeStack* taken = stripes.At(3).StealStack(smr, 0);
+    MarkStripeStack* taken = stripes.At(3)->StealStack(smr, 0);
     GC_EXPECT_TRUE(taken != nullptr);
     MarkStripeStack::Destroy(taken);
     GC_EXPECT_TRUE(stripes.IsEmpty());
@@ -207,22 +214,22 @@ GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
     MarkContext context(2, 0, stripes, stacks);
     MarkStripeStack* overflow = MarkStripeStack::Create(true);
     overflow->Push(Entry(1));
-    stripes.At(0).PublishStack(overflow, false, stripes.Terminate());
+    stripes.At(0)->PublishStack(overflow, false, stripes.Terminate());
     MarkStripeStack* published = MarkStripeStack::Create(true);
     published->Push(Entry(2));
-    stripes.At(0).PublishStack(published, true, stripes.Terminate());
+    stripes.At(0)->PublishStack(published, true, stripes.Terminate());
     MarkStripeStack* local = MarkStripeStack::Create(true);
     local->Push(Entry(80));
     local->Push(Entry(81));
-    stacks.Install(0, local);
+    stacks.Install(stripes, stripes.At(0), local);
     terminate.Leave();
     ZMark domain(2, MarkingStacks::MarkingGeneration::YOUNG);
     ZAbort::abort();
     ResetAbort resetAbort;
     const auto result = ZMark::FollowWork(context, smr, stripes, terminate, 0, false,
         [](const MarkStackEntry&) {}, nullptr, nullptr, &domain);
-    const size_t first = StealOffset(stripes.At(0), smr, 0);
-    const size_t second = StealOffset(stripes.At(0), smr, 0);
+    const size_t first = StealOffset(*stripes.At(0), smr, 0);
+    const size_t second = StealOffset(*stripes.At(0), smr, 0);
     std::fprintf(stderr, "REBALANCE_FLUSH_TARGET executed=1 branch=unsaturated result=%d first=%zu second=%zu\n",
                  static_cast<int>(result), first, second);
     GC_EXPECT_EQ(first, 2u);
@@ -244,24 +251,24 @@ GC_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
     for (size_t i = 0; i < 17; ++i) {
         MarkStripeStack* crowded = MarkStripeStack::Create(true);
         crowded->Push(Entry(100 + i));
-        stripes.At(0).PublishStack(crowded, true, stripes.Terminate());
+        stripes.At(0)->PublishStack(crowded, true, stripes.Terminate());
     }
     MarkStripeStack* overflow = MarkStripeStack::Create(true);
     overflow->Push(Entry(1));
-    stripes.At(0).PublishStack(overflow, false, stripes.Terminate());
+    stripes.At(0)->PublishStack(overflow, false, stripes.Terminate());
     MarkThreadLocalStacks stacks(4);
     MarkContext context(2, 1, stripes, stacks);
     MarkStripeStack* local = MarkStripeStack::Create(true);
     local->Push(Entry(80));
     local->Push(Entry(81));
-    stacks.Install(0, local);
+    stacks.Install(stripes, stripes.At(0), local);
     ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
     ZAbort::abort();
     ResetAbort resetAbort;
     const auto result = ZMark::FollowWork(context, smr, stripes, terminate, 1, false,
         [](const MarkStackEntry&) {}, nullptr, nullptr, &domain);
-    const size_t first = StealOffset(stripes.At(0), smr, 1);
-    const size_t second = StealOffset(stripes.At(0), smr, 1);
+    const size_t first = StealOffset(*stripes.At(0), smr, 1);
+    const size_t second = StealOffset(*stripes.At(0), smr, 1);
     std::fprintf(stderr, "REBALANCE_FLUSH_TARGET executed=1 branch=stripe result=%d first=%zu second=%zu\n",
                  static_cast<int>(result), first, second);
     GC_EXPECT_EQ(first, 2u);
@@ -293,7 +300,7 @@ GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     MarkStripeStack* stack = MarkStripeStack::Create(true);
     stack->Push(Entry(4));
-    stripes.At(0).PublishStack(stack, true, stripes.Terminate());
+    stripes.At(0)->PublishStack(stack, true, stripes.Terminate());
     std::vector<size_t> producerSeen;
     DrainFollow(producer, smr, stripes, terminate, 1, producerSeen, false);
     waitThread.join();
@@ -328,14 +335,17 @@ GC_TEST(MarkPort203Engine, LeaveUnblocksTryTerminateWaiter)
 GC_TEST(MarkPort203Engine, TrySetNStripesIsAtomicSnapshot)
 {
     MarkStripeSet stripes(4);
+    MarkTerminate stripeTerminate;
+    stripeTerminate.Reset(1);
+    stripes.SetTerminate(&stripeTerminate);
     GC_EXPECT_EQ(stripes.NStripes(), 4u);
     GC_EXPECT_TRUE(stripes.TrySetNStripes(4, 2));
     GC_EXPECT_EQ(stripes.NStripes(), 2u);
     GC_EXPECT_TRUE(!stripes.TrySetNStripes(4, 1));
     GC_EXPECT_EQ(stripes.NStripes(), 2u);
-    GC_EXPECT_EQ(stripes.StripeForWorker(2, 0), 0u);
-    GC_EXPECT_EQ(stripes.Next(0), 1u);
-    GC_EXPECT_EQ(stripes.Next(3), 0u);
+    GC_EXPECT_EQ(stripes.StripeForWorker(2, 0), stripes.At(0));
+    GC_EXPECT_EQ(stripes.Next(stripes.At(0)), stripes.At(1));
+    GC_EXPECT_EQ(stripes.Next(stripes.At(3)), stripes.At(0));
 }
 
 GC_TEST(MarkPort203Engine, DomainPrepareResizeKeepsCapacity)
@@ -356,11 +366,14 @@ GC_TEST(MarkPort203Engine, DomainPrepareResizeKeepsCapacity)
 GC_TEST(MarkPort203Engine, CrowdedRestoresNStripes)
 {
     MarkStripeSet stripes(4);
+    MarkTerminate stripeTerminate;
+    stripeTerminate.Reset(1);
+    stripes.SetTerminate(&stripeTerminate);
     stripes.SetNStripes(1);
     for (size_t i = 0; i < 32; ++i) {
         MarkStripeStack* stack = MarkStripeStack::Create(true);
         stack->Push(Entry(i));
-        stripes.At(0).PublishStack(stack, true);
+        stripes.At(0)->PublishStack(stack, true, stripes.Terminate());
     }
     GC_EXPECT_TRUE(stripes.IsCrowded());
     GC_EXPECT_TRUE(stripes.TrySetNStripes(1, 2));
@@ -587,7 +600,7 @@ void ExpectFlushPublishes(MarkingStacks::MarkingGeneration generation)
     }
     (void)domain.Flush(data);
     std::vector<size_t> observed;
-    while (auto* stack = domain.Stripes().At(0).StealStack(domain.Smr(), 0)) {
+    while (auto* stack = domain.Stripes().At(0)->StealStack(domain.Smr(), 0)) {
         while (!stack->IsEmpty()) {
             observed.push_back(stack->Pop().partial_array_offset());
         }
@@ -626,8 +639,8 @@ GC_TEST(MarkPublish1144, EmptyStackRejectedForBothRoutes)
         GC_EXPECT_TRUE(child >= 0);
         if (child == 0) {
             signal(SIGABRT, SIG_DFL);
-            MarkStripe stripe;
-            stripe.PublishStack(MarkStripeStack::Create(true), publish);
+            MarkStripe stripe;            MarkTerminate stripeTerminate;            stripeTerminate.Reset(1);
+            stripe.PublishStack(MarkStripeStack::Create(true), publish, &stripeTerminate);
             _exit(0);
         }
         int status = 0;

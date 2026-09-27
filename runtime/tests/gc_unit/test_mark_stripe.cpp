@@ -1,3 +1,4 @@
+#include "Heap/z/zMarkTerminate.hpp"
 #include "marking_smr_test.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -142,6 +143,9 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
     constexpr size_t stripeCount = 8;
     constexpr size_t entries = 16384;
     MarkStripeSet stripes(stripeCount);
+    MarkTerminate stripeTerminate;
+    stripeTerminate.Reset(1);
+    stripes.SetTerminate(&stripeTerminate);
     MapleRuntime::GcUnit::WorkerFixture workerFixture;
     MarkingSMR smr;
     MarkThreadLocalStacks seed(stripeCount);
@@ -149,7 +153,7 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
         const uintptr_t value = ENTRY_BASE + i * ENTRY_STEP;
         // Put all initial work on one shared stripe so non-owner workers must
         // take the global steal path; flush converts private tails to nodes.
-        seed.Push(stripes, 0, MarkStackEntry(uintptr_t(value), true, true, true, false), true);
+        seed.Push(stripes, stripes.At(0), MarkStackEntry(uintptr_t(value), true, true, true, false), true);
     }
     GC_EXPECT_TRUE(seed.Flush(stripes));
 
@@ -174,9 +178,9 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
             // A start barrier alone is insufficient: the owner could still
             // consume everything before another worker gets scheduled.
             if (workerId != 0) {
-                MarkStripeStack* stack = stripes.At(0).StealStack(smr, workerId);
+                MarkStripeStack* stack = stripes.At(0)->StealStack(smr, workerId);
                 if (stack != nullptr) {
-                    context.Stacks().Install(context.StripeId(), stack);
+                    context.Stacks().Install(stripes, context.Stripe(), stack);
                     stealSuccess.fetch_add(1, std::memory_order_relaxed);
                 }
             }
@@ -188,7 +192,7 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
             while (remaining.load(std::memory_order_acquire) != 0 &&
                    !invalidEntry.load(std::memory_order_relaxed) &&
                    std::chrono::steady_clock::now() < deadline) {
-                if (context.Stacks().Pop(smr, workerId, stripes, context.StripeId(), entry)) {
+                if (context.Stacks().Pop(smr, workerId, stripes, context.Stripe(), entry)) {
                     const uintptr_t value = entry.object_address();
                     const size_t index = (value - ENTRY_BASE) / ENTRY_STEP;
                     // Report failures after joining; an assertion exception in
@@ -203,14 +207,14 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
                 }
 
                 bool stole = false;
-                for (size_t victim = stripes.Next(context.StripeId()); victim != context.StripeId();
+                for (MarkStripe* victim = stripes.Next(context.Stripe()); victim != context.Stripe();
                      victim = stripes.Next(victim)) {
-                    MarkStripeStack* stack = context.Stacks().StealLocal(victim);
+                    MarkStripeStack* stack = context.Stacks().StealLocal(stripes, victim);
                     if (stack == nullptr) {
-                        stack = stripes.At(victim).StealStack(smr, workerId);
+                        stack = victim->StealStack(smr, workerId);
                     }
                     if (stack != nullptr) {
-                        context.Stacks().Install(context.StripeId(), stack);
+                        context.Stacks().Install(stripes, context.Stripe(), stack);
                         stealSuccess.fetch_add(1, std::memory_order_relaxed);
                         stole = true;
                         break;
@@ -240,13 +244,13 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
 // the concurrent drain. ZGC zMark.cpp:511-528 also permits either steal result.
 GC_TEST(MarkStripe, GlobalStealReportsEmptyAfterDrain)
 {
-    MarkStripe stripe;
+    MarkStripe stripe;    MarkTerminate stripeTerminate;    stripeTerminate.Reset(1);
     MapleRuntime::GcUnit::WorkerFixture workerFixture;
     MarkingSMR smr;
     MarkStripeStack* const empty = stripe.StealStack(smr, 0);
     GC_EXPECT_TRUE(empty == nullptr);
     // Positive control: the same consumer must return the published payload.
-    stripe.PublishStack(StackWithOne(ENTRY_BASE), true);
+    stripe.PublishStack(StackWithOne(ENTRY_BASE), true, &stripeTerminate);
     MarkStripeStack* const stack = stripe.StealStack(smr, 0);
     GC_EXPECT_TRUE(stack != nullptr);
     const uintptr_t value = stack->Pop().object_address();
@@ -263,8 +267,11 @@ GC_TEST(MarkingSMR, WorkerPopRetiresInCurrentSlot)
     MarkingSMR smr;
     constexpr uint32_t count = 4;
     MarkStripeSet stripes(count);
+    MarkTerminate stripeTerminate;
+    stripeTerminate.Reset(1);
+    stripes.SetTerminate(&stripeTerminate);
     for (uint32_t id = 0; id < count; ++id) {
-        stripes.At(id).PublishStack(StackWithOne(ENTRY_BASE + id * ENTRY_STEP), true);
+        stripes.At(id)->PublishStack(StackWithOne(ENTRY_BASE + id * ENTRY_STEP), true, stripes.Terminate());
     }
     struct PopTask : ZTask {
         MarkingSMR& smr;
@@ -277,7 +284,7 @@ GC_TEST(MarkingSMR, WorkerPopRetiresInCurrentSlot)
         void work() override
         {
             const uint32_t id = WorkerThread::worker_id();
-            MarkStripeStack* stack = stripes.At(id).StealStack(smr, id);
+            MarkStripeStack* stack = stripes.At(id)->StealStack(smr, id);
             if (stack != nullptr) {
                 popped[id] = reinterpret_cast<uintptr_t>(stack);
                 MarkStripeStack::Destroy(stack);
