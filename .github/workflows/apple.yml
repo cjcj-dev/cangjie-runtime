@@ -17,6 +17,7 @@ on:
         type: choice
         options:
           - all
+          - package-init
           - bsd-backing-fail
           - ios-stdlib-configure
         default: all
@@ -470,3 +471,34 @@ jobs:
             ${{ runner.temp }}/ios-sdk-evidence/**/result*.json
             ${{ runner.temp }}/ios-sdk-evidence/**/compile_commands.json
             ${{ runner.temp }}/ios-sdk-evidence/**/CMakeCache.txt
+
+  package-init:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'package-init' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native product build
+        run: |
+          ulimit -c 0
+          export CANGJIE_BUILD_JOBS=$(sysctl -n hw.ncpu)
+          export GC_UNIT_GATE_SKIP=1
+          uptime
+          cd runtime
+          python3 build.py build --target native --build-type release
+      - name: Install symbol reader
+        run: brew list llvm >/dev/null 2>&1 || brew install llvm
+      - name: PackageInit native calls and product fault arms
+        run: |
+          ulimit -c 0
+          export PATH="$(brew --prefix llvm)/bin:$PATH"
+          python3 runtime/tests/package_init_darwin/run.py "$RUNNER_TEMP/package-init"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: package-init-${{ matrix.runner }}
+          path: ${{ runner.temp }}/package-init
