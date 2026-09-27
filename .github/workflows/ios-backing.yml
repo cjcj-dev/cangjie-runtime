@@ -10,9 +10,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        tuple: [device, simulator]
+        arm: [candidate, api-regression, restored]
         include:
-          - {runner: macos-15, target: ios-aarch64, sdk: iphoneos, arch: arm64}
-          - {runner: macos-15-intel, target: ios-simulator-x86_64, sdk: iphonesimulator, arch: x86_64}
+          - {tuple: device, runner: macos-15, target: ios-aarch64, sdk: iphoneos, arch: arm64}
+          - {tuple: simulator, runner: macos-15-intel, target: ios-simulator-x86_64, sdk: iphonesimulator, arch: x86_64}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -23,12 +25,15 @@ jobs:
       SCCACHE_GHA_ENABLED: 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Build full runtime against SDK 18.5
         env:
           TARGET: ${{ matrix.target }}
           SDK: ${{ matrix.sdk }}
           ARCH: ${{ matrix.arch }}
+          ARM: ${{ matrix.arm }}
         run: |
           ulimit -c 0
           out="$RUNNER_TEMP/ios-backing"
@@ -43,6 +48,14 @@ jobs:
           export CANGJIE_BUILD_JOBS="$(sysctl -n hw.ncpu)"
           printf 'jobs=%s target=%s sdk=%s\n' "$CANGJIE_BUILD_JOBS" "$TARGET" "$sdk_root" > "$out/recipe.txt"
           git rev-parse HEAD > "$out/head.txt"
+          # Restore the original product API at the same bearing point. This
+          # arm tests the compile contract only, not runtime mapping behavior.
+          if [ "$ARM" = api-regression ]; then
+            git show 10965c352184f366d9e46fc75341905724bf40d5:runtime/src/Heap/z/zPhysicalMemoryBacking_bsd.cpp > runtime/src/Heap/z/zPhysicalMemoryBacking_bsd.cpp
+            git diff > "$out/cut.diff"
+          fi
+          maps="-ffile-prefix-map=$GITHUB_WORKSPACE=/usr/src/cangjie-runtime -fdebug-prefix-map=$GITHUB_WORKSPACE=/usr/src/cangjie-runtime -fmacro-prefix-map=$GITHUB_WORKSPACE=/usr/src/cangjie-runtime"
+          export CFLAGS="$maps" CXXFLAGS="$maps" ASMFLAGS="$maps"
           start=$SECONDS
           rc=0
           (cd runtime && python3 build.py build --target "$TARGET" --build-type release \
@@ -52,6 +65,13 @@ jobs:
           printf 'wall=%s\n' "$((SECONDS-start))" > "$out/wall.txt"
           uptime > "$out/uptime-after.txt"
           find runtime -type f -name '*.dylib' -exec shasum -a 256 {} + > "$out/dylibs.sha256"
+          if [ "$ARM" = api-regression ]; then
+            test "$rc" != 0
+            grep -n 'mach_vm.h unsupported' "$out/build.log"
+            grep -n "undeclared identifier 'mach_vm_remap'" "$out/build.log"
+            printf 'SDK_API_REGRESSION_ASSERT executed rc=%s\n' "$rc" | tee "$out/assertion.txt"
+            exit 0
+          fi
           if [ "$rc" != 0 ]; then
             grep -n -m 25 -E 'error:|Undefined symbols|undefined symbol|Error [0-9]' "$out/build.log" || true
             exit "$rc"
@@ -61,13 +81,13 @@ jobs:
           file "$dylib" | tee "$out/product-file.txt"
           lipo -verify_arch "$ARCH" "$dylib"
           nm -u "$dylib" > "$out/imports.txt"
-          grep -E ' U _vm_remap$' "$out/imports.txt"
+          grep -E '(^|[[:space:]])_vm_remap$' "$out/imports.txt"
           mkdir -p "$out/product"
           cp "$dylib" "$out/product/"
           find runtime -type f -name libboundscheck.dylib -exec cp {} "$out/product/" \;
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ios-backing-${{ matrix.target }}
+          name: ios-backing-${{ matrix.target }}-${{ matrix.arm }}
           path: ${{ runner.temp }}/ios-backing
           retention-days: 7
