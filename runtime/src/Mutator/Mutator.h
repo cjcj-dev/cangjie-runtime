@@ -176,7 +176,10 @@ public:
     // Force current mutator enter saferegion, internal use only.
     __attribute__((always_inline)) inline void DoEnterSaferegion();
     // Force current mutator leave saferegion, internal use only.
-    __attribute__((always_inline)) inline void DoLeaveSaferegion()
+    // interfaceSupport.inline.hpp:213-220: publish the active state with a
+    // fence, then release any in-flight lock before processing requests.
+    template<class Preprocess>
+    __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess)
     {
         for (;;) {
             MarkFlushBeginLeaveSaferegion();
@@ -187,12 +190,19 @@ public:
             break;
         }
         if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
+            preprocess();
             HandleSuspensionRequest();
         }
         // javaThread.cpp:1112 then stackWatermark.inline.hpp:86. Start processing
         // first; before_unwind only exposes a frame when one is still open.
         StackWatermarkSet::on_safepoint(*this);
         StackWatermarkSet::before_unwind(*this);
+    }
+
+    __attribute__((always_inline)) inline void DoLeaveSaferegion()
+    {
+        auto preprocess = [] {};
+        DoLeaveSaferegion(preprocess);
     }
 
     // If current mutator is not in saferegion, enter and return true

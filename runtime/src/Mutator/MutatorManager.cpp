@@ -302,21 +302,51 @@ bool MutatorManager::ConcurrentStackScanEnabled()
 }
 
 
+namespace {
+// mutex.cpp:38-54: records whether the acquired lock was released while
+// returning from the blocked state.
+class InFlightMutatorManagementLockRelease {
+public:
+    explicit InFlightMutatorManagementLockRelease(MutatorManager& manager) : manager(manager) {}
+    void operator()()
+    {
+        manager.MutatorManagementWUnlock();
+        released = true;
+    }
+    bool NotReleased() const { return !released; }
+private:
+    MutatorManager& manager;
+    bool released = false;
+};
+
+// interfaceSupport.inline.hpp:203-223: the transition owns preprocessing;
+// the lock acquisition must not cache the request decision before it.
+template<class Preprocess>
+class MutatorBlockInVMPreprocess {
+public:
+    MutatorBlockInVMPreprocess(Mutator& mutator, Preprocess& preprocess)
+        : mutator(mutator), preprocess(preprocess)
+    {
+        (void)mutator.EnterSaferegion(false);
+    }
+    ~MutatorBlockInVMPreprocess() { mutator.DoLeaveSaferegion(preprocess); }
+private:
+    Mutator& mutator;
+    Preprocess& preprocess;
+};
+} // namespace
+
 void MutatorManager::AcquireMutatorManagementWLockForExit(Mutator& mutator)
 {
-    // mutex.cpp:87-127: try_lock, then a safepoint-safe blocking acquisition.
-    // Release an in-flight lock before processing a pending safepoint, just
-    // as InFlightMutexRelease does for ThreadBlockInVMPreprocess.
+    // mutex.cpp:99-110: state transition, request check, in-flight release,
+    // processing, and retry occur in that order.
     while (!TryAcquireMutatorManagementWLock()) {
-        (void)mutator.EnterSaferegion(false);
-        MutatorManagementWLock();
-        const bool release = SyncTriggered() || mutator.HasAnySuspensionRequest() ||
-                             MarkFlushPendingForCurrentThread();
-        if (release) {
-            MutatorManagementWUnlock();
+        InFlightMutatorManagementLockRelease release(*this);
+        {
+            MutatorBlockInVMPreprocess<InFlightMutatorManagementLockRelease> blocked(mutator, release);
+            MutatorManagementWLock();
         }
-        (void)mutator.LeaveSaferegion();
-        if (!release) {
+        if (release.NotReleased()) {
             return;
         }
     }
