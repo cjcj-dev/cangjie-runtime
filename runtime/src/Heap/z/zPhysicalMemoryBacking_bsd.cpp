@@ -10,7 +10,7 @@
 
 #include <sys/mman.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
+#include <mach/vm_map.h>
 
 #include "Base/Log.h"
 #include "Heap/z/zAddress.inline.hpp"
@@ -30,10 +30,14 @@ static int vm_flags_superpage() {
 }
 
 static ZErrno mremap_mach(uintptr_t from_addr, uintptr_t to_addr, size_t size) {
-  mach_vm_address_t remap_addr = to_addr;
+  // iOS SDKs expose vm_remap rather than mach_vm_remap. On our LP64
+  // Apple targets vm_address_t preserves the complete virtual address.
+  static_assert(sizeof(vm_address_t) == sizeof(uintptr_t), "VM address must preserve pointers");
+  static_assert(sizeof(vm_size_t) == sizeof(size_t), "VM size must preserve mapping lengths");
+  vm_address_t remap_addr = to_addr;
   vm_prot_t remap_cur_prot;
   vm_prot_t remap_max_prot;
-  const kern_return_t res = mach_vm_remap(mach_task_self(),
+  const kern_return_t res = vm_remap(mach_task_self(),
                                           &remap_addr,
                                           size,
                                           0,

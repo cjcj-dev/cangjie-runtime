@@ -1,0 +1,73 @@
+name: Return safepoint ABI
+on:
+  workflow_dispatch:
+  push:
+    branches: ['sym/1178-*']
+permissions:
+  contents: read
+jobs:
+  apple:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15, target: native, name: aarch64-macos}
+          - {runner: macos-15-intel, target: native, name: x86_64-macos}
+          - {runner: macos-15, target: ios-aarch64, name: aarch64-ios}
+          - {runner: macos-15-intel, target: ios-simulator-x86_64, name: x86_64-ios}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and exercise product return stub
+        env:
+          RETURN_STUB_OUT: ${{ runner.temp }}/return-stub
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/return_safepoint/native_matrix.py '${{ matrix.target }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: return-stub-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/return-stub/*.json
+            ${{ runner.temp }}/return-stub/*.log
+            ${{ runner.temp }}/return-stub/*.sha256
+            ${{ runner.temp }}/return-stub/*/*.json
+            ${{ runner.temp }}/return-stub/*/*.log
+            ${{ runner.temp }}/return-stub/*/*.rc
+            ${{ runner.temp }}/return-stub/*/*.diff
+            ${{ runner.temp }}/return-stub/*/product/*
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+            file
+      - name: Build and exercise product return stub
+        shell: msys2 {0}
+        env:
+          RETURN_STUB_OUT: ${{ runner.temp }}/return-stub
+        run: python3 runtime/tests/return_safepoint/native_matrix.py windows-x86_64
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: return-stub-x86_64-windows
+          path: |
+            ${{ runner.temp }}/return-stub/*.json
+            ${{ runner.temp }}/return-stub/*.log
+            ${{ runner.temp }}/return-stub/*.sha256
+            ${{ runner.temp }}/return-stub/*/*.json
+            ${{ runner.temp }}/return-stub/*/*.log
+            ${{ runner.temp }}/return-stub/*/*.rc
+            ${{ runner.temp }}/return-stub/*/*.diff
+            ${{ runner.temp }}/return-stub/*/runtime/CMakebuild/*.def
+            ${{ runner.temp }}/return-stub/*/product/*
