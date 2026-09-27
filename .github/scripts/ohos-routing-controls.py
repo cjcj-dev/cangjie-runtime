@@ -95,8 +95,20 @@ def mutate(source, arm):
     elif arm == 'consumer-cut':
         path = source / 'runtime/build/cmake/toolchain/ohos_x86_64_cangjie.cmake'
         before = path.read_text()
-        old = 'set(CMAKE_CXX_COMPILER "$ENV{OHOS_PUBLIC_SDK}/llvm/bin/clang++${EXECUTABLE_EXTENSION}")'
-        new = 'set(CMAKE_CXX_COMPILER "$ENV{OHOS_ROUTE_CONTROL_SDK}/llvm/bin/clang++${EXECUTABLE_EXTENSION}")'
+        # Reroute the toolchain file's ENTIRE public-SDK consumption (public
+        # branch lines 41-47): compilers, ar/ranlib and sysroot. Rerouting only
+        # one line leaves a mixed real/alternate toolchain whose archive cannot
+        # be identity-compared against the alternate-SDK control.
+        old = '$ENV{OHOS_PUBLIC_SDK}'
+        occurrences = before.count(old)
+        if occurrences < 1:
+            raise RuntimeError('Cut anchor changed: ' + arm)
+        after = before.replace(old, '$ENV{OHOS_ROUTE_CONTROL_SDK}')
+        path.write_text(after)
+        relative = path.relative_to(source).as_posix()
+        (out / (arm + '.diff')).write_text(''.join(difflib.unified_diff(
+            before.splitlines(True), after.splitlines(True), 'a/' + relative, 'b/' + relative)))
+        return
     elif arm == 'buildpy-cut':
         path = source / 'runtime/build.py'
         before = path.read_text()
