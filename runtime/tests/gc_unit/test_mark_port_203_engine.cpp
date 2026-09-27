@@ -52,6 +52,18 @@ struct ResetAbort {
     ~ResetAbort() { ZAbort::reset(); }
 };
 
+bool WaitForCount(std::atomic<size_t>* counter, size_t target, std::chrono::milliseconds budget)
+{
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    while (counter->load(std::memory_order_acquire) < target) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
 size_t StealOffset(MarkStripe& stripe, MarkingSMR& smr, size_t workerId)
 {
     MarkStripeStack* stack = stripe.StealStack(smr, workerId);
@@ -289,10 +301,19 @@ GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
     MarkContext waiter(2, 0, stripes, waiterStacks);
     MarkContext producer(2, 1, stripes, producerStacks);
     std::atomic<bool> waiterEntered{ false };
+    std::atomic<size_t> waiterPicked{ 0 };
     std::vector<size_t> seen;
     std::thread waitThread([&]() {
+        MapleRuntime::GcUnit::WorkerFixture workerThread(0);
+        SuspendibleThreadSetJoiner stsJoiner;
         waiterEntered.store(true, std::memory_order_release);
-        DrainFollow(waiter, smr, stripes, terminate, 0, seen, false);
+        // ZGC zMarkStack.inline.hpp:74: the publish-side wake is the only way a
+        // worker parked in MarkTerminate::TryTerminate learns about new work.
+        (void)ZMark::FollowWork(waiter, smr, stripes, terminate, 0, false,
+            [&](const MarkStackEntry& entry) {
+                seen.push_back(entry.partial_array_offset());
+                waiterPicked.fetch_add(1, std::memory_order_release);
+            });
     });
     while (!waiterEntered.load(std::memory_order_acquire)) {
         std::this_thread::yield();
@@ -300,10 +321,20 @@ GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     MarkStripeStack* stack = MarkStripeStack::Create(true);
     stack->Push(Entry(4));
+    std::fprintf(stderr, "WAKE_TARGET before_publish picked=%zu saturated=%d\n",
+                 waiterPicked.load(std::memory_order_acquire),
+                 static_cast<int>(terminate.Saturated()));
     stripes.At(0)->PublishStack(stack, true, stripes.Terminate());
+    // Bounded, so that a missing publish-side wake is a red assertion and not a
+    // hang. The producer drain below always terminates the parked worker.
+    const bool wokeOnPublish = WaitForCount(&waiterPicked, 1, std::chrono::milliseconds(2000));
+    std::fprintf(stderr, "WAKE_TARGET after_publish woke=%d picked=%zu saturated=%d\n",
+                 static_cast<int>(wokeOnPublish), waiterPicked.load(std::memory_order_acquire),
+                 static_cast<int>(terminate.Saturated()));
     std::vector<size_t> producerSeen;
     DrainFollow(producer, smr, stripes, terminate, 1, producerSeen, false);
     waitThread.join();
+    GC_EXPECT_TRUE(wokeOnPublish);
     GC_EXPECT_TRUE(stripes.IsEmpty());
     GC_EXPECT_EQ(seen.size() + producerSeen.size(), 1u);
 }
