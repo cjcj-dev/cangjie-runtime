@@ -23,6 +23,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <algorithm>
+#include <vector>
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "gc_heap_fixture.hpp"
@@ -241,7 +243,16 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, PauseDoesNotFlushAttachedMutator)
     GC_EXPECT_EQ(before, 1U);
     GC_EXPECT_EQ(after, before);
     GC_EXPECT_FALSE(markedDuringPause);
-    Heap::GetHeap().young().Mark().MarkFollow();
-    GC_EXPECT_TRUE(heap.region0()->is_object_marked(from_object(heap.obj0), false));
+    // The owner's store must survive the pause and become visible to the
+    // marking machinery through its own exit flush: after detach, the entry
+    // is drainable from the published young stripe stacks.
+    std::vector<BaseObject*> drained;
+    DrainPublishedMarkObjects(drained);
+    const BaseObject* target = from_object(heap.obj0);
+    const bool published =
+        std::find(drained.begin(), drained.end(), const_cast<BaseObject*>(target)) != drained.end();
+    std::fprintf(stderr, "EXIT_DETACH_PUBLISHED_ASSERT drained=%zu contains_obj0=%d\n",
+                 drained.size(), published);
+    GC_EXPECT_TRUE(published);
 }
 #endif

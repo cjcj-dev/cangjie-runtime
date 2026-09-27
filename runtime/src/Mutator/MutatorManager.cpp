@@ -203,8 +203,25 @@ void MutatorManager::TransitMutatorToExit()
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
     ConsumeCpuProfileRequest(mutator);
-    // threads.cpp:1114 / threadSMR.cpp:912: removal was completed by
-    // TransitMutatorToExit; waiting for readers must happen outside the lock.
+    // threads.cpp:1089-1114: list removal always happens inside the
+    // safepoint-exclusive critical section. A thread that ran its exit
+    // transition was already removed by TransitMutatorToExit; an unstarted
+    // carrier freed through the CJThread destructor hook never did, so its
+    // removal is completed here under the same pause-exclusive lock.
+    Mutator* current = Mutator::GetMutator();
+    if (current != nullptr) {
+        AcquireMutatorManagementWLockForExit(*current);
+    } else {
+        MutatorManagementWLock();
+    }
+    {
+        ThreadsListHandle handle;
+        if (handle.includes(mutator)) {
+            ThreadsSMRSupport::remove_thread(mutator);
+        }
+    }
+    MutatorManagementWUnlock();
+    // threadSMR.cpp:912: waiting for readers must happen outside the lock.
     ThreadsSMRSupport::smr_delete(mutator);
 }
 
