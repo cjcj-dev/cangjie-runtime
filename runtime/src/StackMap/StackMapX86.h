@@ -10,13 +10,16 @@
 #include <vector>
 
 #include "Common/RegisterX86-64.h"
+#include "Common/X86StubLayout.h"
 #include "StackMap/StackMapTypeDef.h"
 
 namespace MapleRuntime {
+static_assert(XMM15 < sizeof(RegBits) * 8, "all x86 register bits must be representable");
+
 class RegRoot {
 public:
     RegRoot() = default;
-    explicit RegRoot(U32 bits) : regBits(static_cast<RegBits>(bits)) {}
+    explicit RegRoot(RegBits bits) : regBits(bits) {}
     ~RegRoot() = default;
 
     RegRoot(const RegRoot& other) : regBits(other.regBits) {}
@@ -76,22 +79,12 @@ public:
 #else
     static void RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
     {
-        constexpr Uptr universalSlotLength = 8;
-        constexpr Uptr xmmSlotLength = 16;
-        constexpr Uptr stackDepth = 264; // defined in signalHandlerStub_x86_64.S
-        constexpr U32 stubPushNum = 15;
-        constexpr RegisterId stubPushOrder[stubPushNum] = { RAX, RBX, RCX, RDX, RDI, RSI, RSP, R8,
-                                                            R9,  R10, R11, R12, R13, R14, R15 };
-        Uptr slotAddr = fp - universalSlotLength;
-        for (U32 i = 0; i < stubPushNum; ++i, slotAddr -= universalSlotLength) {
-            regSlotsMap.Insert(stubPushOrder[i], &RootSlotAt(slotAddr));
-        }
-
-        Uptr sp = slotAddr - stackDepth;
-        slotAddr = sp;
-        for (U8 i = XMM0; i <= XMM15; ++i, slotAddr += xmmSlotLength) {
-            regSlotsMap.Insert(i, &RootSlotAt(slotAddr));
-        }
+#define RECORD_GPR(reg, id, off) regSlotsMap.Insert(id, &RootSlotAt(fp + (off)));
+        MRT_X86_STUB_GPRS(RECORD_GPR)
+#undef RECORD_GPR
+#define RECORD_XMM(reg, id, off) regSlotsMap.Insert(id, &RootSlotAt(fp + MRT_X86_STUB_XMM_BASE + (off)));
+        MRT_X86_STUB_XMMS(RECORD_XMM)
+#undef RECORD_XMM
     }
 #endif
 
@@ -111,6 +104,8 @@ public:
                 return false;
             }
         }
+        // RIP occupies bit 16 in the emitter's X86Bit2Reg table.
+        bits >>= (XMM0 - R15 - 1);
         // Visit xmm register roots.
         for (RegisterNum i = XMM0; i <= XMM15; ++i, bits >>= 1) {
             if (bits == 0) {
@@ -135,6 +130,7 @@ public:
                 ++count;
             }
         }
+        bits >>= (XMM0 - R15 - 1);
         for (RegisterNum i = XMM0; i <= XMM15; ++i, bits >>= 1) {
             if ((bits & LOWEST_BIT) != 0) {
                 count += 2;

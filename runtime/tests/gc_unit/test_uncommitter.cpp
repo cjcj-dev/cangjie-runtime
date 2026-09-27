@@ -227,14 +227,10 @@ static void InitializeUncommitCache(FreeRegionManager& frm, ProbeHeap& heap)
     const size_t bytes = heap.units * ZGranuleSize;
     (void)bytes; // ProbeHeap initialized the capacity owner and its free cache together.
     // Prime partition 0 with all of its capacity: claim, commit, map, cache.
-    const size_t primed = frm.partitions.front()->currentMaxCapacity;
-    const ZVirtualMemory vmem = frm.claim_virtual(primed, 0);
-    GC_EXPECT_FALSE(vmem.is_null());
-    GC_EXPECT_EQ(frm.increase_capacity(0, primed), primed);
-    frm.claim_physical(vmem, 0);
-    GC_EXPECT_EQ(frm.commit_physical(vmem, 0), primed);
-    frm.map_virtual(vmem, 0);
-    frm.partitions.front()->cache.insert(vmem);
+    // ZPartition::prime now runs during heap construction. Only fill the
+    // remaining capacity, using the same product prime implementation.
+    auto& partition = *frm.partitions.front();
+    GC_EXPECT_TRUE(partition.prime(frm, partition.currentMaxCapacity - partition.capacity));
 }
 
 static size_t ProbeProductUncommit(bool cancelFirst)

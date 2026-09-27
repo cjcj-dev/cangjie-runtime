@@ -80,7 +80,7 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 
 void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::vector<ReturnRegisterRoot>& roots)
 {
-#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+#if defined(__x86_64__) || defined(__aarch64__)
     RegSlotsMap regSlotsMap;
     RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
 #if defined(__x86_64__)
@@ -99,7 +99,11 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
         return;
     }
     ElfUnloadQuiescence::ReadScope metadataReader;
-    StackMapBuilder builder(startPC, sitePC, 0);
+    // safepoint.cpp:818-839 / codeCache.cpp:750-759: the returned frame
+    // is gone; resolve its map by PC before protecting the saved return oop.
+    const auto descriptor = MFuncDesc::GetFuncDesc(startPC);
+    if (descriptor == nullptr) { return; }
+    StackMapBuilder builder(startPC, sitePC, 0, reinterpret_cast<uint64_t*>(descriptor));
     HeapReferenceMap map = builder.Build<HeapReferenceMap>();
     if (!map.IsValid()) {
         return;
@@ -121,7 +125,7 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
 void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
                                          RegSlotsMap& regSlotsMap, const FrameInfo& frame)
 {
-#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+#if defined(__x86_64__) || defined(__aarch64__)
     ElfUnloadQuiescence::ReadScope metadataReader;
     RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
 #if defined(__x86_64__)
@@ -133,7 +137,11 @@ void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const Deri
 #endif
     const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[startRegister]);
     const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[siteRegister]);
-    StackMapBuilder builder(startPC, sitePC, 0);
+    // safepoint.cpp:818-839 / codeCache.cpp:750-759: the returned frame
+    // is gone; resolve its map by PC before protecting the saved return oop.
+    const auto descriptor = MFuncDesc::GetFuncDesc(startPC);
+    if (descriptor == nullptr) { return; }
+    StackMapBuilder builder(startPC, sitePC, 0, reinterpret_cast<uint64_t*>(descriptor));
     HeapReferenceMap roots = builder.Build<HeapReferenceMap>();
     // The returned frame is gone. Only the dedicated register map is legal;
     // neither spill slots nor its prologue's saved-register map may be used.

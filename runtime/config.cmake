@@ -44,8 +44,7 @@ if (NOT OHOS_FLAG)
 endif ()
 set(OHOS_FLAG_LIST "1" "2" "3")
 message(STATUS "OHOS_FLAG : ${OHOS_FLAG}")
-# Empty keeps the OHOS_ROOT prebuilts/clang + musl-sysroot layout. Set only by
-# the qemu user-mode arm; native and MRT_GC_UNIT_OHOS_HOST do not pass it.
+# Empty selects the documented OHOS_ROOT prebuilts/clang + musl-sysroot layout.
 set(OHOS_PUBLIC_SDK "" CACHE PATH
     "Public OpenHarmony Native SDK root containing llvm/ and sysroot/")
 
@@ -429,15 +428,23 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wframe-larger-than=10240")
 
 # Set cjthread path.
 # Provide secure functions.
-set(BOUNDSCHECK ${CMAKE_SOURCE_DIR}/third_party/third_party_bounds_checking_function)
-if(NOT EXISTS ${BOUNDSCHECK})
+set(BOUNDSCHECK "${CMAKE_SOURCE_DIR}/third_party/third_party_bounds_checking_function")
+if(NOT EXISTS "${BOUNDSCHECK}")
+    find_package(Git REQUIRED)
     set(REPOSITORY_PATH https://gitcode.com/openharmony/third_party_bounds_checking_function)
     message(STATUS "Set boundscheck REPOSITORY_PATH: ${REPOSITORY_PATH}")
     execute_process(
-        COMMAND git clone --branch OpenHarmony-v6.0-Release ${REPOSITORY_PATH} ${BOUNDSCHECK}
+        COMMAND "${GIT_EXECUTABLE}" clone --branch OpenHarmony-v6.0-Release ${REPOSITORY_PATH} "${BOUNDSCHECK}"
+        RESULT_VARIABLE _boundscheck_result
     )
+    if(NOT _boundscheck_result STREQUAL "0")
+        message(FATAL_ERROR "Boundscheck clone failed: ${_boundscheck_result} (${REPOSITORY_PATH})")
+    endif()
 endif()
-file(COPY build/cmake/CMakeLists.txt DESTINATION ${BOUNDSCHECK}/)
+if(NOT EXISTS "${BOUNDSCHECK}/include/securec.h")
+    message(FATAL_ERROR "Boundscheck dependency is incomplete: ${BOUNDSCHECK}/include/securec.h is missing")
+endif()
+file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/build/cmake/CMakeLists.txt" DESTINATION "${BOUNDSCHECK}/")
 set(BOUNDSCHECK_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/third_party/third_party_bounds_checking_function CACHE FILEPATH "" FORCE)
 set(BOUNDSCHECK_INCLUDE ${BOUNDSCHECK_ROOT}/include)
 set(OHOS_PUBLIC_LINK_DIRS "")
@@ -451,14 +458,7 @@ endif()
 if (OHOS_PUBLIC_SDK AND OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
     set(_ohos_ndk_lib "${OHOS_PUBLIC_SDK}/sysroot/usr/lib/${_ohos_triple}")
     set(_ohos_llvm_lib "${OHOS_PUBLIC_SDK}/llvm/lib/${_ohos_triple}")
-    set(OHOS_LIB "${CMAKE_BINARY_DIR}/ohos_public_link")
-    file(MAKE_DIRECTORY "${OHOS_LIB}")
-    # Remove the link left by older configurations before copying: never write
-    # through it into the shared SDK. Reused libraries are independent files.
-    if(IS_SYMLINK "${OHOS_LIB}/libstdc++.so")
-        file(REMOVE "${OHOS_LIB}/libstdc++.so")
-    endif()
-    configure_file("${_ohos_llvm_lib}/libc++.so" "${OHOS_LIB}/libstdc++.so" COPYONLY)
+    set(OHOS_LIB "${_ohos_ndk_lib}")
     file(GLOB _ohos_clang_rt "${OHOS_PUBLIC_SDK}/llvm/lib/clang/*/lib/${_ohos_triple}")
     set(OHOS_PUBLIC_LINK_DIRS "${_ohos_ndk_lib}" "${_ohos_llvm_lib}" ${_ohos_clang_rt})
 elseif (OHOS_FLAG MATCHES 1 OR WINDOWS_FLAG MATCHES 1)

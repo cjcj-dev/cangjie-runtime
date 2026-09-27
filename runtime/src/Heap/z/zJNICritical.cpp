@@ -6,6 +6,7 @@
 
 #include "Heap/z/zJNICritical.hpp"
 #include "Common/ScopedObjectAccess.h"
+#include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
 
@@ -81,7 +82,12 @@ void ZJNICritical::enter_inner()
 void ZJNICritical::enter()
 {
     initialize();
-    enter_inner();
+    Mutator* thread = Mutator::GetMutator();
+    // ZGC zJNICritical.cpp:132-140: only the outermost region enters globally.
+    if (!thread->InCritical()) {
+        enter_inner();
+    }
+    thread->EnterCritical();
 }
 
 void ZJNICritical::exit_inner()
@@ -110,7 +116,12 @@ void ZJNICritical::exit_inner()
 void ZJNICritical::exit()
 {
     initialize();
-    exit_inner();
+    Mutator* thread = Mutator::GetMutator();
+    // ZGC zJNICritical.cpp:177-184: release globally after the last nested exit.
+    thread->ExitCritical();
+    if (!thread->InCritical()) {
+        exit_inner();
+    }
 }
 
 } // namespace MapleRuntime

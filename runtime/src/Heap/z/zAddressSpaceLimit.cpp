@@ -12,7 +12,9 @@
 
 #include <cstdint>
 #include <limits>
+#ifndef _WIN64
 #include <sys/resource.h>
+#endif
 
 #include "Base/Globals.h"
 #include "Base/LogFile.h"
@@ -23,11 +25,16 @@ namespace MapleRuntime {
 static const size_t MaxVirtMemFraction = 2;
 
 static size_t reserve_memory_limit() {
+#ifdef _WIN64
+  // HotSpot os_windows.cpp:3475-3478: virtual address space cannot be limited.
+  return std::numeric_limits<size_t>::max();
+#else
   struct rlimit rlim;
   if (getrlimit(RLIMIT_AS, &rlim) != 0 || rlim.rlim_cur == RLIM_INFINITY) {
     return std::numeric_limits<size_t>::max();
   }
   return static_cast<size_t>(rlim.rlim_cur);
+#endif
 }
 
 size_t ZAddressSpaceLimit::heap() {
