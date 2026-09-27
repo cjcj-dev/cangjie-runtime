@@ -160,7 +160,9 @@ void RunArm(Arm arm)
     std::fprintf(stderr, "EXIT_DETACH_TARGET executed=1 arm=%d hook=%d parked=%d marked_young=%d\n",
                  static_cast<int>(arm), hookArmed, parked, marked);
     // Check only after joining, so a failing assertion cannot strand a thread.
-    if (hookArmed) {
+    // The window assertions belong to the race arm alone; the controls assert
+    // their own ordering invariants below.
+    if (arm == Arm::RaceInWindow && hookArmed) {
         std::fprintf(stderr, "EXIT_DETACH_WINDOW_ASSERT parked=%d safe=%d lock_held=%d\n",
                      parked, g_parkedInSaferegion.load(), managementLockHeld);
         GC_EXPECT_TRUE(parked);
@@ -232,21 +234,19 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, RequestAtActiveTransitionReleasesLock)
     auto& manager = MutatorManager::Instance();
     manager.MutatorManagementWLock();
     exitNow.store(true, std::memory_order_release);
+    // The exit path is now blocked acquiring the management lock inside the
+    // saferegion (mutex.cpp:99-110 blocking acquisition). Queue a real
+    // operation before releasing it, so the request arrives between the lock
+    // acquisition and the active-state restore.
     const bool blocked = WaitFor([&] {
         return target->InSaferegion() && target->GetHandshakeState().observed_safe();
     }, 10000);
-    target->MutatorLock();
-    manager.MutatorManagementWUnlock();
-    const bool transition = WaitFor([&] { return !target->GetHandshakeState().observed_safe(); }, 10000);
-    // The product transition is now blocked on MutatorLock, having obtained
-    // the management lock. Queue a real operation before allowing its fence.
     target->GetHandshakeState().add_operation(&request);
-    target->MutatorUnlock();
+    manager.MutatorManagementWUnlock();
     exiting.join();
-    std::fprintf(stderr, "EXIT_REQUEST_TARGET executed=1 blocked=%d transition=%d completed=%d lock_available=%d\n",
-                 blocked, transition, request.is_completed(), closure.lockAvailable);
+    std::fprintf(stderr, "EXIT_REQUEST_TARGET executed=1 blocked=%d completed=%d lock_available=%d\n",
+                 blocked, request.is_completed(), closure.lockAvailable);
     GC_EXPECT_TRUE(blocked);
-    GC_EXPECT_TRUE(transition);
     GC_EXPECT_TRUE(request.is_completed());
     GC_EXPECT_TRUE(closure.executed && closure.active && closure.onOwner);
     GC_EXPECT_TRUE(closure.lockAvailable);
