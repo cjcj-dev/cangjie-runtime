@@ -350,9 +350,14 @@ fi
 
 # The bounded stack-overflow recovery assertion reaches the product through the
 # cjthread guard ABI. Probe the product SO for it rather than assuming a shape.
-if nm -D "$SO" 2>/dev/null | /usr/bin/grep -qE 'CJ_CJThreadStackGuardExpand' &&
-   nm -D "$SO" 2>/dev/null | /usr/bin/grep -qE 'CJ_CJThreadStackGuardRecover' &&
-   nm -D "$SO" 2>/dev/null | /usr/bin/grep -qE 'CJ_CJThreadStackGuardGet'; then
+# The symbol list goes to a file first: `nm | grep -q` leaves grep early, nm dies
+# of SIGPIPE, and under `set -o pipefail` the whole pipeline reports 141 — which
+# silently kept this arm at CAN_RUN=0 on the full-size product SO.
+SO_REENTRY_SYMBOLS="$GC_UNIT_OUT/.so_reentry_symbols"
+if nm --defined-only "$SO" >"$SO_REENTRY_SYMBOLS" 2>/dev/null &&
+   /usr/bin/grep -Eq '[[:space:]]CJ_CJThreadStackGuardExpand(@@?[^[:space:]]+)?$' "$SO_REENTRY_SYMBOLS" &&
+   /usr/bin/grep -Eq '[[:space:]]CJ_CJThreadStackGuardRecover(@@?[^[:space:]]+)?$' "$SO_REENTRY_SYMBOLS" &&
+   /usr/bin/grep -Eq '[[:space:]]CJ_CJThreadStackGuardGet(@@?[^[:space:]]+)?$' "$SO_REENTRY_SYMBOLS"; then
   SO_REENTRY_CAN_RUN=1
 fi
 
