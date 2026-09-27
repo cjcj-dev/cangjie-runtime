@@ -384,6 +384,114 @@ int ExpandCycle()
     return ok ? 0 : 1;
 }
 
+#if defined(__linux__) && defined(__x86_64__)
+// ---------------------------------------------------------------------------
+// The recovery on the cjthread's own allocated stack.
+//
+// CJThreadStackGuardRecover reads the address of a local in its own frame and,
+// when that frame is inside this cjthread's allocated stack mapping, must not
+// re-guard while the clearer still executes inside the reserved zone
+// (stackOverflow.cpp:229-231: cur_sp > stack_reserved_zone_base() or the
+// reguard is refused). The cases above run their frames on the OS thread
+// stack, outside the cjthread mapping, so that branch never observed them.
+// This case puts the frame genuinely inside the cjthread stack mapping —
+// mid-stack, clear of the reserved headroom at the low end — and runs the
+// product's exported expand/recover pair there. The mapping bounds come from
+// /proc/self/maps, not from a size this file assumes, so the proof that the
+// frame was inside the mapping does not depend on the scheduler's default.
+// ---------------------------------------------------------------------------
+
+bool StackMappingBounds(const void *addr, uintptr_t &lo, uintptr_t &hi)
+{
+    FILE *maps = std::fopen("/proc/self/maps", "r");
+    if (maps == nullptr) {
+        return false;
+    }
+    uintptr_t target = reinterpret_cast<uintptr_t>(addr);
+    char line[512];
+    bool found = false;
+    while (std::fgets(line, sizeof(line), maps) != nullptr) {
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+        if (std::sscanf(line, "%lx-%lx", &start, &end) == 2 && target >= start && target < end) {
+            lo = start;
+            hi = end;
+            found = true;
+            break;
+        }
+    }
+    std::fclose(maps);
+    return found;
+}
+
+char *g_ownSp = nullptr;
+void *g_ownExpanded = nullptr;
+void *g_ownAfter = nullptr;
+
+__attribute__((noinline)) void OwnStackPairBody()
+{
+    char marker = 0;
+    g_ownSp = &marker;
+    CJ_CJThreadStackGuardExpand();
+    g_ownExpanded = CJ_CJThreadStackGuardGet();
+    CJ_CJThreadStackGuardRecover();
+    g_ownAfter = CJ_CJThreadStackGuardGet();
+}
+
+// Move the stack pointer into the cjthread stack mapping, run the pair there,
+// restore. The frame OwnStackPairBody() then occupies is genuinely inside the
+// mapping, which is what the reguard branch reads.
+__attribute__((noinline)) void RunOnOwnStack(uintptr_t target)
+{
+    void *saved = __builtin_frame_address(0);
+    uintptr_t sp = (target & ~static_cast<uintptr_t>(15)) - 128;
+    asm volatile(
+        "mov %0, %%rsp\n\t"
+        "call *%1\n\t"
+        "mov %2, %%rsp\n\t"
+        :
+        : "r"(sp), "r"(reinterpret_cast<uintptr_t>(&OwnStackPairBody)), "r"(saved)
+        : "memory");
+}
+
+int ExpandRecoverOwnStack()
+{
+    void *before = CJ_CJThreadStackGuardGet();
+    void *stackEnd = CJ_CJThreadStackAddrGet();
+    uintptr_t reserved = CJ_CJThreadStackReversedGet();
+    if (!Preconditions(before, stackEnd, reserved)) {
+        Report("OWNSTACK_RECOVER", 0);
+        return 2;
+    }
+    uintptr_t mapLo = 0;
+    uintptr_t mapHi = 0;
+    if (!StackMappingBounds(stackEnd, mapLo, mapHi)) {
+        std::fprintf(stderr, "SO_REENTRY_OWNSTACK_PRECONDITION maps_lookup=failed\n");
+        Report("OWNSTACK_RECOVER", 0);
+        return 2;
+    }
+    RunOnOwnStack(mapLo + (mapHi - mapLo) / 2);
+    bool onOwn = reinterpret_cast<uintptr_t>(g_ownSp) >= mapLo &&
+        reinterpret_cast<uintptr_t>(g_ownSp) < mapHi;
+    intptr_t moved = reinterpret_cast<intptr_t>(before) - reinterpret_cast<intptr_t>(g_ownExpanded);
+    std::fprintf(stderr,
+        "SO_REENTRY_OWNSTACK_FRAME sp=%p map=[%lx,%lx) on_own_stack=%d\n",
+        static_cast<void *>(g_ownSp), mapLo, mapHi, onOwn ? 1 : 0);
+    // Target: with the clearer frame genuinely on this cjthread's own stack and
+    // above the reserved zone, the pair expands by exactly one reserved step and
+    // the recover restores the birth guard — the reguard is only refused when
+    // the frame is still inside the reserved zone (stackOverflow.cpp:229-231).
+    int ok = onOwn && moved == static_cast<intptr_t>(reserved) && g_ownAfter == before ? 1 : 0;
+    std::fprintf(stderr,
+        "SO_REENTRY_OWNSTACK_RECOVER_OK on_own_stack=%d moved=%zd expected=%zu "
+        "guard_before=%p guard_after=%p restored=%d ok=%d\n",
+        onOwn ? 1 : 0, static_cast<ssize_t>(moved), static_cast<size_t>(reserved),
+        before, g_ownAfter, g_ownAfter == before ? 1 : 0, ok);
+    Report("OWNSTACK_RECOVER", ok);
+    return ok ? 0 : 1;
+}
+#endif
+
 #if defined(__linux__)
 // Kernel fault injection, restricted to this process and this stack's protection
 // page. No product replacement, callback, or additional product export is involved.
@@ -440,7 +548,8 @@ int ProtectionFailure(bool recover)
 int main(int argc, char **argv)
 {
     if (argc != 2) {
-        std::fprintf(stderr, "usage: %s once|bounded|recover|reentry|cycle\n", argv[0]);
+        std::fprintf(stderr, "usage: %s once|bounded|recover|reentry|cycle|unprotect-failure|protect-failure|ownstack\n",
+            argv[0]);
         Finish(2);
     }
     int caseId = std::strcmp(argv[1], "once") == 0 ? 1
@@ -449,7 +558,8 @@ int main(int argc, char **argv)
         : std::strcmp(argv[1], "reentry") == 0 ? 4
         : std::strcmp(argv[1], "cycle") == 0 ? 5
         : std::strcmp(argv[1], "unprotect-failure") == 0 ? 6
-        : std::strcmp(argv[1], "protect-failure") == 0 ? 7 : 0;
+        : std::strcmp(argv[1], "protect-failure") == 0 ? 7
+        : std::strcmp(argv[1], "ownstack") == 0 ? 8 : 0;
     if (caseId == 0) {
         std::fprintf(stderr, "SO_REENTRY_UNKNOWN_CASE name=%s\n", argv[1]);
         Finish(2);
@@ -478,6 +588,10 @@ int main(int argc, char **argv)
             Finish(ProtectionFailure(false));
         case 7:
             Finish(ProtectionFailure(true));
+#endif
+#if defined(__linux__) && defined(__x86_64__)
+        case 8:
+            Finish(ExpandRecoverOwnStack());
 #endif
         default:
             Finish(2);
