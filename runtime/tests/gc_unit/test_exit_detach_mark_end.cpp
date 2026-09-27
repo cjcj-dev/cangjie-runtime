@@ -43,6 +43,18 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+namespace {
+template<class Pred> bool WaitFor(Pred pred, int ms)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (!pred()) {
+        if (std::chrono::steady_clock::now() >= deadline) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+} // namespace
+
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace {
 std::atomic<Mutator*> g_armedOwner{nullptr};
@@ -68,15 +80,6 @@ void ParkExitingPush()
     std::fprintf(stderr, "EXIT_DETACH_RESUMED\n");
 }
 
-template<class Pred> bool WaitFor(Pred pred, int ms)
-{
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
-    while (!pred()) {
-        if (std::chrono::steady_clock::now() >= deadline) { return false; }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return true;
-}
 
 enum class Arm { RaceInWindow, HookDisarmed, FlushAfterDetach };
 
@@ -190,10 +193,12 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, PauseCannotOverlapExitDetachWindow)
     RunArm(Arm::RaceInWindow);
 }
 
-// A request arriving after lock acquisition must be decided after the
-// active-state fence, with the in-flight lock released before the closure.
-// Hold the existing per-mutator lock to park the real transition between
-// leave_safe() and SetInSaferegion(false); no product test hook is needed.
+#endif // MRT_TESTABLE_INTERNALS
+
+// A request queued during contended exit-lock acquisition must complete on
+// the active owner, with the in-flight management lock released for its closure.
+// Start active so the observed safe state identifies the blocking acquisition
+// (HotSpot mutex.cpp:99-110), rather than the initial native state.
 GC_OTHER_VM_TEST(ExitDetachMarkEnd, RequestAtActiveTransitionReleasesLock)
 {
     B09RuntimeFixture runtime;
@@ -222,6 +227,9 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, RequestAtActiveTransitionReleasesLock)
     std::thread exiting([&] {
         auto& manager = MutatorManager::Instance();
         Mutator* current = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        // Creation starts safe; publish only after becoming active so the
+        // next safe state belongs to AcquireMutatorManagementWLockForExit.
+        (void)current->LeaveSaferegion();
         StackWatermarkSet::on_safepoint(*current);
         owner.store(current, std::memory_order_release);
         while (!exitNow.load(std::memory_order_acquire)) { std::this_thread::yield(); }
@@ -236,8 +244,8 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, RequestAtActiveTransitionReleasesLock)
     exitNow.store(true, std::memory_order_release);
     // The exit path is now blocked acquiring the management lock inside the
     // saferegion (mutex.cpp:99-110 blocking acquisition). Queue a real
-    // operation before releasing it, so the request arrives between the lock
-    // acquisition and the active-state restore.
+    // operation before releasing it, so the request is pending when the owner
+    // acquires the lock and restores its active state.
     const bool blocked = WaitFor([&] {
         return target->InSaferegion() && target->GetHandshakeState().observed_safe();
     }, 10000);
@@ -252,6 +260,7 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, RequestAtActiveTransitionReleasesLock)
     GC_EXPECT_TRUE(closure.lockAvailable);
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
 // Regression for #1224: queue only after the old pre-transition decision
 // point has passed. The same ELF must reject that old product ordering.
 GC_OTHER_VM_TEST(ExitDetachMarkEnd, LateRequestAtActiveTransitionReleasesLock)
