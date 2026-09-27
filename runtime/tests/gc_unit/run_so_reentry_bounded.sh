@@ -49,9 +49,11 @@ declare -A TARGET=(
   [recover]=SO_REENTRY_EXPAND_RECOVER_OK
   [reentry]=SO_REENTRY_EXPAND_REENTRY_OK
   [cycle]=SO_REENTRY_CYCLE_OK
+  [unprotect-failure]=SO_REENTRY_UNPROTECT_FAILURE_OK
+  [protect-failure]=SO_REENTRY_PROTECT_FAILURE_OK
 )
 overall=0
-for case_name in once bounded recover reentry cycle; do
+for case_name in once bounded recover reentry cycle unprotect-failure protect-failure; do
   log="$SIGNAL_TEST_OUTPUT/so_reentry_$case_name.log"
   set +e
   "$SIGNAL_TEST_OUTPUT/so-reentry-bounded" "$case_name" >"$log" 2>&1
@@ -75,4 +77,4 @@ done
 if [[ $overall -ne 0 ]]; then
   exit 1
 fi
-echo "SO_REENTRY_BOUNDED_OK cases=5 target_assertions=5"
+echo "SO_REENTRY_BOUNDED_OK cases=7 target_assertions=7"

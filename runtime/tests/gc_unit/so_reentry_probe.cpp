@@ -21,6 +21,15 @@
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
+#if defined(__linux__)
+#include <cerrno>
+#include <cstddef>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <sys/prctl.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+#endif
 
 #include "Common/Runtime.h"
 #include "Common/BaseObject.h"
@@ -375,6 +384,57 @@ int ExpandCycle()
     return ok ? 0 : 1;
 }
 
+#if defined(__linux__)
+// Kernel fault injection, restricted to this process and this stack's protection
+// page. No product replacement, callback, or additional product export is involved.
+bool RejectPageProtection(void *page)
+{
+    uintptr_t address = reinterpret_cast<uintptr_t>(page);
+    sock_filter filter[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, nr)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_mprotect, 0, 5),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, args[0])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, static_cast<uint32_t>(address), 0, 3),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, args[0]) + 4),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, static_cast<uint32_t>(address >> 32), 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    sock_fprog program{static_cast<unsigned short>(sizeof(filter) / sizeof(filter[0])), filter};
+    return prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0 &&
+        prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program) == 0;
+}
+
+int ProtectionFailure(bool recover)
+{
+    auto *mutator = new MapleRuntime::Mutator();
+    mutator->InitTid();
+    MapleRuntime::MutatorManager::Instance().BindMutator(*mutator);
+    if (recover) {
+        mutator->StackGuardExpand();
+    }
+    void *before = CJ_CJThreadStackGuardGet();
+    void *page = static_cast<char *>(CJ_CJThreadStackAddrGet()) - sysconf(_SC_PAGESIZE);
+    bool installed = RejectPageProtection(page);
+    errno = 0;
+    int control = mprotect(page, sysconf(_SC_PAGESIZE), recover ? PROT_NONE : PROT_READ | PROT_WRITE);
+    int controlErrno = errno;
+    for (int i = 0; i < 2; ++i) {
+        if (recover) {
+            mutator->StackGuardRecover();
+        } else {
+            mutator->StackGuardExpand();
+        }
+    }
+    void *after = CJ_CJThreadStackGuardGet();
+    bool ok = installed && control == -1 && controlErrno == EPERM && before == after;
+    std::fprintf(stderr,
+        "SO_REENTRY_%s_FAILURE_OK installed=%d control_rc=%d errno=%d before=%p after=%p unchanged=%d ok=%d\n",
+        recover ? "PROTECT" : "UNPROTECT", installed, control, controlErrno, before, after, before == after, ok);
+    return ok ? 0 : 1;
+}
+#endif
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -387,7 +447,9 @@ int main(int argc, char **argv)
         : std::strcmp(argv[1], "bounded") == 0 ? 2
         : std::strcmp(argv[1], "recover") == 0 ? 3
         : std::strcmp(argv[1], "reentry") == 0 ? 4
-        : std::strcmp(argv[1], "cycle") == 0 ? 5 : 0;
+        : std::strcmp(argv[1], "cycle") == 0 ? 5
+        : std::strcmp(argv[1], "unprotect-failure") == 0 ? 6
+        : std::strcmp(argv[1], "protect-failure") == 0 ? 7 : 0;
     if (caseId == 0) {
         std::fprintf(stderr, "SO_REENTRY_UNKNOWN_CASE name=%s\n", argv[1]);
         Finish(2);
@@ -411,6 +473,12 @@ int main(int argc, char **argv)
             Finish(ExpandReentry());
         case 5:
             Finish(ExpandCycle());
+#if defined(__linux__)
+        case 6:
+            Finish(ProtectionFailure(false));
+        case 7:
+            Finish(ProtectionFailure(true));
+#endif
         default:
             Finish(2);
     }

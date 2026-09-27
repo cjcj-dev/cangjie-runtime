@@ -397,26 +397,6 @@ void Mutator::StackGuardExpand() const
     // Expand stack boundary when StackOverflowError occurs
     if (!IsRuntimeThread()) {
         CJThreadStackGuardExpand();
-        // No own stack (foreign/exclusive): the expand above was a no-op and there is
-        // no guard page to unprotect — nullptr minus a page is not an address.
-        if (CJThreadStackAddrGet() == nullptr) {
-            return;
-        }
-        if (Runtime::Current().GetConcurrencyModel().GetStackGuardCheckFlag()) {
-            void* topAddr = reinterpret_cast<uint8_t*>(CJThreadStackAddrGet()) - MapleRuntime::MRT_PAGE_SIZE;
-#ifdef _WIN64
-            DWORD oldProt = 0;
-            int ret = VirtualProtect(topAddr, MapleRuntime::MRT_PAGE_SIZE, PAGE_READWRITE, &oldProt);
-            if (ret == 0) {
-                LOG(RTLOG_ERROR, "Enable stack protect page failed");
-            }
-#else
-            int ret = mprotect(topAddr, MapleRuntime::MRT_PAGE_SIZE, PROT_READ | PROT_WRITE);
-            if (ret != 0) {
-                LOG(RTLOG_ERROR, "Enable stack protect page failed");
-            }
-#endif
-        }
     } else {
         ThreadLocal::SetProtectAddr(static_cast<uint8_t*>(stackBoundAddr));
     }
@@ -427,24 +407,6 @@ void Mutator::StackGuardRecover() const
     // Recover stack boundary when StackOverflowError has been caught
     if (!IsRuntimeThread()) {
         CJThreadStackGuardRecover();
-        if (CJThreadStackAddrGet() == nullptr) {
-            return;
-        }
-        if (Runtime::Current().GetConcurrencyModel().GetStackGuardCheckFlag()) {
-            void* topAddr = reinterpret_cast<uint8_t*>(CJThreadStackAddrGet()) - MapleRuntime::MRT_PAGE_SIZE;
-#ifdef _WIN64
-            DWORD oldProt = 0;
-            int ret = VirtualProtect(topAddr, MapleRuntime::MRT_PAGE_SIZE, PAGE_NOACCESS, &oldProt);
-            if (ret == 0) {
-                LOG(RTLOG_ERROR, "Disable stack protect page failed");
-            }
-#else
-            int ret = mprotect(topAddr, MapleRuntime::MRT_PAGE_SIZE, PROT_NONE);
-            if (ret != 0) {
-                LOG(RTLOG_ERROR, "Disable stack protect page failed");
-            }
-#endif
-        }
     } else {
         // A runtime-thread mutator whose protect boundary was never armed (the
         // finalizer mutator's setup path skips InitProtectStackAddr) has nothing to

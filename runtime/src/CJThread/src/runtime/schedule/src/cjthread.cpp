@@ -1898,31 +1898,8 @@ void CJThreadStackGuardExpand(void)
     if (cjthread->stack.stackTopAddr == nullptr) {
         return;
     }
-    // The frozen value, not the settable global: recover and the reuse check must
-    // undo/verify exactly what this expand did.
-    //
-    // This is the disable side of the guard state machine. HotSpot
-    // StackOverflow::disable_stack_yellow_reserved_zone (stackOverflow.cpp:191-207)
-    // asserts it is not already disabled, returns for a thread that does not use guard
-    // pages, guarantees base < stack_base() (:182 is the same guarantee on the enable
-    // side), calls os::unguard_memory, and only then commits
-    // _stack_guard_state = stack_guard_yellow_reserved_disabled — on failure it warns and
-    // the state stays enabled (stackOverflow.hpp:41-45 names that state 'disabled
-    // (temporarily) after stack overflow'). The three steps are kept in that order and
-    // that granularity here:
-    //
-    //   1. already in the target state -> no-op, not a second step (:197-198);
-    //   2. the expanded threshold must stay above the end of the allocated stack,
-    //      the guarantee at :182; one turn's worth of headroom is the whole
-    //      reservation, so a guard that is not above the stack end has none left;
-    //   3. commit the state only after the unguard took effect — ProtectAddrSet is
-    //      this side's os::unguard_memory, and ProtectAddrGet reads the threshold
-    //      back the way HotSpot's branch reads the mprotect result (:203-206).
-    //
-    // Without step 1 and step 2 the guard walks one reserved step per turn of the
-    // re-entrant stack-overflow recovery cycle, from stackTopAddr + reserved at birth to
-    // stackTopAddr on the first turn and then below the allocated stack, where it guards
-    // nothing and ProtectAddrSet installs a threshold outside the mapping.
+    // HotSpot stackOverflow.cpp:192-207: unguard the allocated protection page
+    // before committing the disabled state. Re-entry must not move the boundary again.
     if (cjthread->stack.stackGuardExpanded) {
         return;
     }
@@ -1932,14 +1909,19 @@ void CJThreadStackGuardExpand(void)
         return;
     }
     uintptr_t expanded = reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard) - CJThreadStackReservedFreeze();
-    ProtectAddrSet(expanded);
-    if (ProtectAddrGet() != expanded) {
-        // The unguard did not take effect: restore the threshold, leave the state at its
-        // birth value so the next turn can try again, and say so the way HotSpot warns.
-        ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
-        LOG(RTLOG_ERROR, "Attempt to unguard cjthread stack reserved zone failed, threshold %p", expanded);
-        return;
+    if (cjthread->stack.protectAddr != nullptr) {
+#ifdef MRT_WINDOWS
+        DWORD oldProt = 0;
+        bool success = VirtualProtect(cjthread->stack.protectAddr, SchedulePageSize(), PAGE_READWRITE, &oldProt) != 0;
+#else
+        bool success = mprotect(cjthread->stack.protectAddr, SchedulePageSize(), PROT_READ | PROT_WRITE) == 0;
+#endif
+        if (!success) {
+            LOG(RTLOG_ERROR, "Attempt to unguard cjthread stack reserved zone failed");
+            return;
+        }
     }
+    ProtectAddrSet(expanded);
     cjthread->stack.stackGuard = reinterpret_cast<char *>(expanded);
     cjthread->stack.stackGuardExpanded = true;
 }
@@ -1990,12 +1972,21 @@ void CJThreadStackGuardRecover(void)
         }
     }
     uintptr_t reguarded = reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard) + CJThreadStackReservedFreeze();
-    ProtectAddrSet(reguarded);
-    if (ProtectAddrGet() != reguarded) {
-        ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
-        LOG(RTLOG_ERROR, "Attempt to guard cjthread stack reserved zone failed, threshold %p", reguarded);
-        return;
+    // HotSpot stackOverflow.cpp:185-189: leave the disabled state intact if
+    // the OS cannot restore protection; a later recovery may retry.
+    if (cjthread->stack.protectAddr != nullptr) {
+#ifdef MRT_WINDOWS
+        DWORD oldProt = 0;
+        bool success = VirtualProtect(cjthread->stack.protectAddr, SchedulePageSize(), PAGE_NOACCESS, &oldProt) != 0;
+#else
+        bool success = mprotect(cjthread->stack.protectAddr, SchedulePageSize(), PROT_NONE) == 0;
+#endif
+        if (!success) {
+            LOG(RTLOG_ERROR, "Attempt to guard cjthread stack reserved zone failed");
+            return;
+        }
     }
+    ProtectAddrSet(reguarded);
     cjthread->stack.stackGuard = reinterpret_cast<char *>(reguarded);
     cjthread->stack.stackGuardExpanded = false;
 }
