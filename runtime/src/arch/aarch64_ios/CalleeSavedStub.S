@@ -170,10 +170,30 @@
 
     .global _unwindPCForC2RStubStart
 _unwindPCForC2RStubStart:
+    .text
+    .align 2
+    .global _CJ_MCC_PackageInitBegin
+_CJ_MCC_PackageInitBegin:
     CalleeSavedRegistersStub MCC_PackageInitBegin
+
+    .text
+    .align 2
+    .global _CJ_MCC_PackageInitComplete
+_CJ_MCC_PackageInitComplete:
     CalleeSavedRegistersStub MCC_PackageInitComplete
+
+    .text
+    .align 2
+    .global _CJ_MCC_PackageInitFail
+_CJ_MCC_PackageInitFail:
     CalleeSavedRegistersStub MCC_PackageInitFail
+
+    .text
+    .align 2
+    .global _CJ_MCC_PackageInitAbort
+_CJ_MCC_PackageInitAbort:
     CalleeSavedRegistersStub MCC_PackageInitAbort
+
 
     .text
     .align 2

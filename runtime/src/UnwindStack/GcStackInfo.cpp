@@ -69,7 +69,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                 RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
-
+                regSlotsMap = RegSlotsMap();
                 break;
             }
         }
@@ -107,6 +107,7 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
                                                                  reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             default: {
+                regSlotsMap = RegSlotsMap();
                 break;
             }
         }
@@ -187,7 +188,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                 RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
-
+                regSlotsMap = RegSlotsMap();
                 break;
             }
         }
@@ -241,6 +242,7 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
                 RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             default: {
+                regSlotsMap = RegSlotsMap();
                 break;
             }
         }

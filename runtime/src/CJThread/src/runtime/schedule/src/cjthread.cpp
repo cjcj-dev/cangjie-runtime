@@ -249,6 +249,7 @@ MRT_STATIC_INLINE void CJThreadStackAttrInit(struct CJThread *cjthread, size_t t
         // nullptr: the arithmetic is undefined, and its garbage results used to escape
         // through the getters looking like real addresses.
         cjthread->stack.stackGuard = nullptr;
+        cjthread->stack.stackGuardExpanded = false;
         cjthread->stack.stackBaseAddr = nullptr;
         cjthread->stack.cjthreadStackBaseAddr = nullptr;
         cjthread->stack.stackGrowCnt = stackAttr->stackGrow ? 0 : 1;
@@ -259,6 +260,7 @@ MRT_STATIC_INLINE void CJThreadStackAttrInit(struct CJThread *cjthread, size_t t
     // reserved size for the whole process lifetime, so expand/recover/the reuse check
     // move the guard by the same amount this line used.
     cjthread->stack.stackGuard = stackAddr + CJThreadStackReservedFreeze();
+    cjthread->stack.stackGuardExpanded = false;
     cjthread->stack.stackBaseAddr = stackAddr + stackAttr->stackSizeAlign;
     // 16-byte-aligned. Note that the 64 KB lower stack address is not 0x0 - 0x100000000,
     // but 0x0 - 0xffffff, and the 16 bytes are aligned to 0x0 - 0xfffffff0. The stack
@@ -531,6 +533,11 @@ struct CJThread *CJThreadAlloc(struct Schedule *schedule, struct ArgAttr *argAtt
                 newCJThread->stack.stackGuard, birthGuard,
                 static_cast<size_t>(CJThreadStackReservedFreeze()));
         }
+        // A guard back at its birth value means the expansion was recovered, so the
+        // transition state must be back at its birth value too. Restoring it here rather
+        // than trusting the pair discipline keeps a stack whose expansion was unpaired
+        // from refusing the first legitimate expand of its next task.
+        newCJThread->stack.stackGuardExpanded = false;
     }
     if (newCJThread == nullptr) {
         newCJThread = CJThreadMemAlloc(schedule, stackAttr);
@@ -1891,10 +1898,32 @@ void CJThreadStackGuardExpand(void)
     if (cjthread->stack.stackTopAddr == nullptr) {
         return;
     }
-    // The frozen value, not the settable global: recover and the reuse check must
-    // undo/verify exactly what this expand did.
-    cjthread->stack.stackGuard -= CJThreadStackReservedFreeze();
-    ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
+    // HotSpot stackOverflow.cpp:192-207: unguard the allocated protection page
+    // before committing the disabled state. Re-entry must not move the boundary again.
+    if (cjthread->stack.stackGuardExpanded) {
+        return;
+    }
+    if (cjthread->stack.stackGuard < cjthread->stack.stackTopAddr + CJThreadStackReservedFreeze()) {
+        LOG(RTLOG_FATAL, "Error calculating stack reserved zone: guard %p is not above the stack end %p",
+            cjthread->stack.stackGuard, cjthread->stack.stackTopAddr);
+        return;
+    }
+    uintptr_t expanded = reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard) - CJThreadStackReservedFreeze();
+    if (cjthread->stack.protectAddr != nullptr) {
+#ifdef MRT_WINDOWS
+        DWORD oldProt = 0;
+        bool success = VirtualProtect(cjthread->stack.protectAddr, SchedulePageSize(), PAGE_READWRITE, &oldProt) != 0;
+#else
+        bool success = mprotect(cjthread->stack.protectAddr, SchedulePageSize(), PROT_READ | PROT_WRITE) == 0;
+#endif
+        if (!success) {
+            LOG(RTLOG_ERROR, "Attempt to unguard cjthread stack reserved zone failed");
+            return;
+        }
+    }
+    ProtectAddrSet(expanded);
+    cjthread->stack.stackGuard = reinterpret_cast<char *>(expanded);
+    cjthread->stack.stackGuardExpanded = true;
 }
 
 /* This function is used for the exception try catch mechanism of cangjie. After the stack
@@ -1905,8 +1934,61 @@ void CJThreadStackGuardRecover(void)
     if (cjthread->stack.stackTopAddr == nullptr) {
         return;
     }
-    cjthread->stack.stackGuard += CJThreadStackReservedFreeze();
-    ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
+    // The recover is the enable side of the same state machine, and follows HotSpot
+    // StackOverflow::reguard_stack (stackOverflow.cpp:220-246) step for step:
+    //
+    //   1. reguard_stack returns true immediately when the state is not one of the two
+    //      disabled states (:220-223, "Stack already guarded or guard pages not
+    //      needed") — a transition that already holds is not applied again;
+    //   2. it then guarantees cur_sp > stack_reserved_zone_base() (:229): managed code
+    //      never executes inside the reserved zone, so a clearer that is itself running
+    //      there has not unwound out of it yet and must not re-guard under itself. Here
+    //      the birth guard is that reserved-zone base, and the clearer runs on this
+    //      cjthread's own stack, so its own stack pointer is the cur_sp;
+    //   3. only after the re-guard took effect is the state committed back to enabled,
+    //      the way enable_stack_reserved_zone (:150-155) commits after a successful
+    //      os::guard_memory and warns without committing when it fails.
+    if (!cjthread->stack.stackGuardExpanded) {
+        return;
+    }
+    // The address of a local is this frame's stack pointer, without a
+    // compiler-specific frame-address builtin.
+    char *currentSp = nullptr;
+    currentSp = reinterpret_cast<char *>(&currentSp);
+    // The reserved zone is the headroom between stackTopAddr and the birth guard, and a
+    // cjthread stack grows down toward stackTopAddr, so a frame that belongs to this stack
+    // is inside [stackTopAddr, stackTopAddr + stackSize). A frame outside that mapping is
+    // not executing in the reserved zone at all and comparing it with the guard would
+    // compare two unrelated addresses, so the guarantee below is stated for the frames it
+    // is about.
+    uintptr_t reguarded = reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard) + CJThreadStackReservedFreeze();
+    if (currentSp >= cjthread->stack.stackTopAddr &&
+        currentSp < cjthread->stack.stackTopAddr + cjthread->stack.stackSize) {
+        if (reinterpret_cast<uintptr_t>(currentSp) <= reguarded) {
+            LOG(RTLOG_FATAL,
+                "not enough space to reguard - the clearer is running inside the reserved zone "
+                "(sp %p, reserved zone base %p)",
+                currentSp, reinterpret_cast<void *>(reguarded));
+            return;
+        }
+    }
+    // HotSpot stackOverflow.cpp:185-189: leave the disabled state intact if
+    // the OS cannot restore protection; a later recovery may retry.
+    if (cjthread->stack.protectAddr != nullptr) {
+#ifdef MRT_WINDOWS
+        DWORD oldProt = 0;
+        bool success = VirtualProtect(cjthread->stack.protectAddr, SchedulePageSize(), PAGE_NOACCESS, &oldProt) != 0;
+#else
+        bool success = mprotect(cjthread->stack.protectAddr, SchedulePageSize(), PROT_NONE) == 0;
+#endif
+        if (!success) {
+            LOG(RTLOG_ERROR, "Attempt to guard cjthread stack reserved zone failed");
+            return;
+        }
+    }
+    ProtectAddrSet(reguarded);
+    cjthread->stack.stackGuard = reinterpret_cast<char *>(reguarded);
+    cjthread->stack.stackGuardExpanded = false;
 }
 
 int CJBindOSThread(void)
