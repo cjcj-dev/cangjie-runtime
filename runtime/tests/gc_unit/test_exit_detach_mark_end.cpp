@@ -252,6 +252,81 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, RequestAtActiveTransitionReleasesLock)
     GC_EXPECT_TRUE(closure.lockAvailable);
 }
 
+// Regression for #1224: queue only after the old pre-transition decision
+// point has passed. The same ELF must reject that old product ordering.
+GC_OTHER_VM_TEST(ExitDetachMarkEnd, LateRequestAtActiveTransitionReleasesLock)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    class ObserveLock final : public HandshakeClosure {
+    public:
+        ObserveLock() : HandshakeClosure("exit in-flight lock") {}
+        bool executed = false;
+        bool lockAvailable = false;
+        bool active = false;
+        bool onOwner = false;
+        void do_thread(Mutator* target) override
+        {
+            executed = true;
+            active = !target->InSaferegion();
+            onOwner = Mutator::GetMutator() == target;
+            auto& manager = MutatorManager::Instance();
+            lockAvailable = manager.TryAcquireMutatorManagementWLock();
+            if (lockAvailable) { manager.MutatorManagementWUnlock(); }
+            std::fprintf(stderr, "EXIT_LATE_REQUEST_RESULT executed=1 active=%d owner=%d lock_available=%d\n",
+                         active, onOwner, lockAvailable);
+        }
+    } closure;
+    std::atomic<Mutator*> owner{nullptr};
+    std::atomic<bool> exitNow{false};
+    std::thread exiting([&] {
+        auto& manager = MutatorManager::Instance();
+        Mutator* current = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        // Publish an active owner: observed_safe=true below must come from
+        // exit's contended management-lock acquisition, not initial creation.
+        (void)current->LeaveSaferegion();
+        StackWatermarkSet::on_safepoint(*current);
+        owner.store(current, std::memory_order_release);
+        while (!exitNow.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    const bool created = WaitFor([&] { return owner.load() != nullptr; }, 10000);
+    if (!created) { std::abort(); }
+    Mutator* target = owner.load();
+    HandshakeOperation request(&closure, target);
+    auto& manager = MutatorManager::Instance();
+    manager.MutatorManagementWLock();
+    exitNow.store(true, std::memory_order_release);
+    const bool blocked = WaitFor([&] {
+        return target->InSaferegion() && target->GetHandshakeState().observed_safe();
+    }, 10000);
+    if (!blocked) { std::abort(); }
+    // Hold the existing state-transition mutex before allowing acquisition.
+    // leave_safe() publishes false before DoLeaveSaferegion takes this mutex.
+    // In the old shape the request decision precedes leave_safe(); in the
+    // ZGC shape (interfaceSupport.inline.hpp:213-220) it follows state restore.
+    target->MutatorLock();
+    manager.MutatorManagementWUnlock();
+    const bool restoring = WaitFor([&] {
+        return !target->GetHandshakeState().observed_safe();
+    }, 10000);
+    if (!restoring) { std::abort(); }
+    const bool stillSafe = target->InSaferegion();
+    const bool acquired = manager.TryAcquireMutatorManagementWLock();
+    if (acquired) { manager.MutatorManagementWUnlock(); }
+    target->GetHandshakeState().add_operation(&request);
+    std::fprintf(stderr, "EXIT_LATE_REQUEST_WINDOW restoring=%d safe=%d lock_held=%d pending=%d\n",
+                 restoring, stillSafe, !acquired, target->GetHandshakeState().operation_pending(&request));
+    target->MutatorUnlock();
+    exiting.join();
+    std::fprintf(stderr, "EXIT_LATE_REQUEST_TARGET executed=1 blocked=%d completed=%d lock_available=%d\n",
+                 blocked, request.is_completed(), closure.lockAvailable);
+    GC_EXPECT_TRUE(blocked && restoring && stillSafe && !acquired);
+    GC_EXPECT_TRUE(request.is_completed());
+    GC_EXPECT_TRUE(closure.executed && closure.active && closure.onOwner);
+    GC_EXPECT_TRUE(closure.lockAvailable);
+}
+
 // Control 1: no breakpoint; the exit completes before the pause.
 GC_OTHER_VM_TEST(ExitDetachMarkEnd, ControlHookDisarmed)
 {
