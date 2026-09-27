@@ -433,6 +433,8 @@ jobs:
       - name: Configure baseline, candidate, cut, restored and caller SDK arms
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: 3
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
         run: |
           ulimit -c 0
           python3 stdlib/tests/ios_sdk_configure.py --tuple '${{ matrix.tuple }}' \

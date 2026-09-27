@@ -34,14 +34,20 @@ def run(arm):
     if arm in ('baseline', 'cut'):
         # Restore the actual pre-fix toolchain, including its SDK consumer.
         product.write_bytes(old)
-    digest = hashlib.sha256(product.read_bytes()).hexdigest()
+    pcre_product = source / 'third_party/cmake/Pcre2.cmake'
+    if arm == 'pcre-cut':
+        pcre_product.write_text(pcre_product.read_text().replace(
+            '        -DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}\n', ''))
+    products = [product, source / 'cmake/ios_sdk.cmake', pcre_product]
+    hashes = {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in products}
+    digest = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
     command = ['cmake', '-S', str(source), '-B', str(root / 'build'), '-G', 'Ninja',
                f'-DCMAKE_TOOLCHAIN_FILE={product}', '-DCMAKE_BUILD_TYPE=Release',
                '-DCANGJIE_SKIP_FIND_OPENSSL=ON', '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
                '-DCMAKE_C_COMPILER=clang', '-DCMAKE_CXX_COMPILER=clang++',
                '-DCMAKE_C_COMPILER_LAUNCHER=sccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache']
     variables = {'caller': 'CMAKE_OSX_SYSROOT', 'target': 'CANGJIE_TARGET_SYSROOT',
-                 'legacy': 'CMAKE_IOS_SDK_ROOT'}
+                 'legacy': 'CMAKE_IOS_SDK_ROOT', 'pcre-cut': 'CMAKE_OSX_SYSROOT'}
     if arm in variables:
         # Copy the real SDK to a path with spaces to distinguish caller selection
         # from automatic xcrun fallback, without replacing compiler executables.
@@ -62,13 +68,19 @@ def run(arm):
     observed = bool(native) and all(expected in c for c in native)
     pcre_cache = root / 'build/third_party/pcre2-build/CMakeCache.txt'
     nested_sdk = pcre_cache.exists() and expected in pcre_cache.read_text()
+    outer_sdk = observed
     observed = observed and nested_sdk
     red = arm in ('baseline', 'cut')
     log_text = (root / 'configure.log').read_text()
     precise_red = result.returncode != 0 and '17.5.sdk' in log_text and 'Ignoring CMAKE_OSX_SYSROOT value' in log_text and "library 'System' not found" in log_text
     passed = precise_red if red else result.returncode == 0 and observed
+    if arm == 'pcre-cut':
+        precise_red = result.returncode == 0 and outer_sdk and not nested_sdk
+        passed = precise_red
     record = dict(arm=arm, tuple=args.tuple, rc=result.returncode, sdk=expected,
-                  product_sha256=digest, configure_command=command,
+                  product_sha256=digest, source_hashes=hashes, configure_command=command,
+                  harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                  outer_sdk=outer_sdk, nested_sdk=nested_sdk,
                   native_commands=len(native), sdk_assertion=observed,
                   precise_red=precise_red, passed=passed, wall=time.monotonic()-start)
     (root / 'result.json').write_text(json.dumps(record, indent=2) + '\n')
@@ -77,7 +89,7 @@ def run(arm):
 
 
 # Independent source/build directories; all arms use the same dependency sources.
-arms = ['baseline', 'candidate', 'cut', 'restored', 'caller', 'target', 'legacy']
+arms = ['baseline', 'candidate', 'cut', 'restored', 'caller', 'target', 'legacy', 'pcre-cut']
 with concurrent.futures.ThreadPoolExecutor(max_workers=len(arms)) as pool:
     results = list(pool.map(run, arms))
 by_arm = {r['arm']: r for r in results}
