@@ -18,6 +18,7 @@ extern "C" int CJ_ScheduleManagerInit();
 #include <algorithm>
 #include <cstring>
 #include <chrono>
+#include <cmath>
 #include <thread>
 #if defined(__linux__)
 #include <sys/wait.h>
@@ -87,6 +88,52 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationRate855, PreInitRelocationPageExcluded)
 {
     CheckPageAllocationRate(true, false);
 }
+
+#if defined(__linux__) && !defined(__ANDROID__)
+// zStat.cpp:727,1410-1417: a real collection consumes OS load samples.
+GC_RUNTIME_OTHER_VM_TEST(ZStat, LoadAverageLoggedByCollection)
+{
+    FILE* transcript = std::tmpfile();
+    GC_EXPECT_TRUE(transcript != nullptr);
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        alarm(35);
+        if (dup2(fileno(transcript), STDOUT_FILENO) < 0 ||
+            dup2(fileno(transcript), STDERR_FILENO) < 0) _exit(126);
+        RuntimeParam params{};
+        params.heapParam.heapSize = 64 * 1024;
+        params.coParam.processorNum = 1;
+        params.logParam.logLevel = RTLOG_INFO;
+        if (InitCJRuntime(&params) != E_OK) _exit(125);
+        Heap::GetHeap().RequestGC(GC_REASON_USER);
+        std::fflush(nullptr);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::rewind(transcript);
+    char line[2048];
+    bool observed = false;
+    while (std::fgets(line, sizeof(line), transcript) != nullptr) {
+        const char* record = std::strstr(line, "Load: ");
+        if (record == nullptr) continue;
+        double samples[6]{};
+        const int fields = std::sscanf(record, "Load: %lf (%lf%%) / %lf (%lf%%) / %lf (%lf%%)",
+            &samples[0], &samples[1], &samples[2], &samples[3], &samples[4], &samples[5]);
+        bool valid = fields == 6;
+        for (double sample : samples) valid &= std::isfinite(sample) && sample >= 0;
+        observed |= valid;
+        std::fprintf(stderr, "ZSTAT_LOAD_RECORD %s", record);
+    }
+    std::fclose(transcript);
+    const bool returned = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    std::fprintf(stderr, "ZSTAT_LOAD_TARGET executed=1 observed=%d returned=%d status=%d\n",
+        observed, returned, status);
+    GC_EXPECT_TRUE(observed && returned);
+}
+#endif
 
 #if defined(__linux__)
 // Read the existing product history printer, without exposing TU-private
