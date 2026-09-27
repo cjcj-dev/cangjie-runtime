@@ -29,6 +29,8 @@ def main():
     parser.add_argument('--production-entry', type=Path, help='cjcj#589 checkout')
     parser.add_argument('--arm', choices=['candidate', 'cut-producer', 'cut-consumer', 'restored'], default='candidate')
     args = parser.parse_args()
+    if args.production_entry:
+        args.production_entry = args.production_entry.resolve()
     source = args.source.resolve()
     evidence = args.evidence.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
