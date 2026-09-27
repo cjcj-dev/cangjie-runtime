@@ -223,6 +223,10 @@ static void RunRequestAtActiveTransition(bool lateRequest)
         auto& manager = MutatorManager::Instance();
         Mutator* current = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         StackWatermarkSet::on_safepoint(*current);
+        // Native runtime mutators start safe. Publish only after becoming
+        // active, so the controller cannot mistake that initial state for
+        // the later blocking management-lock acquisition in the exit path.
+        (void)current->LeaveSaferegion();
         owner.store(current, std::memory_order_release);
         while (!exitNow.load(std::memory_order_acquire)) { std::this_thread::yield(); }
         manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
