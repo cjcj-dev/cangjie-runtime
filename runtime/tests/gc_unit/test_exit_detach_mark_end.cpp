@@ -235,6 +235,9 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, PauseDoesNotFlushAttachedMutator)
             markedDuringPause = heap.region0()->is_object_marked(from_object(heap.obj0), false);
         }
     }
+    // The pause advanced the young phase past marking; restore it so the
+    // owner's exit flush publishes its buffered entry instead of dropping it.
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Mark);
     release.store(true, std::memory_order_release);
     owner.join();
     std::fprintf(stderr, "EXIT_DETACH_SCOPE_ASSERT reached=%d before=%zu after=%zu marked_in_pause=%d\n",
