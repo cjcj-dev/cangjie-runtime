@@ -184,17 +184,12 @@ void MutatorManager::TransitMutatorToExit()
     // Complete this identity's phase processing before detaching its roots.
     // threads.cpp:1099-1114 keeps the watermark alive through the last transition.
     StackWatermarkSet::on_safepoint(*mutator);
-    // ZGC threads.cpp:1089-1104 (Threads::remove) runs on_thread_detach while
-    // the exiting thread is not yet safepoint-safe, so no safepoint can
-    // overlap the final mark flush (safepoint.cpp:346/465 holds Threads_lock
-    // for the whole pause and the exiting thread is no longer waited on).
-    // Our STW waits until every mutator is InSaferegion, so running the
-    // detach flush before EnterSaferegion gives the same exclusion by
-    // ordering: until the flush finishes, no pause can complete. The
-    // management write lock itself cannot be held across the flush: STW holds
-    // it while waiting for this very thread to stop, so acquiring it before
-    // EnterSaferegion would deadlock.
+    // threads.cpp:1090-1114: final GC publication and list removal share
+    // the Threads_lock critical section held by the entire safepoint.
+    AcquireMutatorManagementWLockForExit(*mutator);
     ZBarrierSet::on_thread_detach(mutator->GetGCData());
+    ThreadsSMRSupport::remove_thread(mutator);
+    MutatorManagementWUnlock();
     (void)mutator->EnterSaferegion(false);
     mutator->ResetMutator();
     UnbindMutator(*mutator);
@@ -208,12 +203,8 @@ void MutatorManager::TransitMutatorToExit()
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
     ConsumeCpuProfileRequest(mutator);
-    // threads.cpp:1108-1114: list removal shares the safepoint-exclusive
-    // critical section; a pause holds the management lock in write mode.
-    // smr_delete waits on outstanding readers and must stay outside the lock.
-    MutatorManagementWLock();
-    ThreadsSMRSupport::remove_thread(mutator);
-    MutatorManagementWUnlock();
+    // threads.cpp:1114 / threadSMR.cpp:912: removal was completed by
+    // TransitMutatorToExit; waiting for readers must happen outside the lock.
     ThreadsSMRSupport::smr_delete(mutator);
 }
 
@@ -286,6 +277,26 @@ bool MutatorManager::ConcurrentStackScanEnabled()
     return true;
 }
 
+
+void MutatorManager::AcquireMutatorManagementWLockForExit(Mutator& mutator)
+{
+    // mutex.cpp:87-127: try_lock, then a safepoint-safe blocking acquisition.
+    // Release an in-flight lock before processing a pending safepoint, just
+    // as InFlightMutexRelease does for ThreadBlockInVMPreprocess.
+    while (!TryAcquireMutatorManagementWLock()) {
+        (void)mutator.EnterSaferegion(false);
+        MutatorManagementWLock();
+        const bool release = SyncTriggered() || mutator.HasAnySuspensionRequest() ||
+                             MarkFlushPendingForCurrentThread();
+        if (release) {
+            MutatorManagementWUnlock();
+        }
+        (void)mutator.LeaveSaferegion();
+        if (!release) {
+            return;
+        }
+    }
+}
 
 void MutatorManager::AcquireMutatorManagementWLock()
 {

@@ -128,6 +128,7 @@ public:
     void WithdrawMgmtWriterPending() { mgmtWritersWaiting.fetch_sub(1, std::memory_order_acq_rel); }
 
     void AcquireMutatorManagementWLock();
+    void AcquireMutatorManagementWLockForExit(Mutator& mutator);
 
     bool AcquireMutatorManagementWLockForCpuProfile();
 

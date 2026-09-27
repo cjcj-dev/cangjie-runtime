@@ -111,6 +111,13 @@ void RunArm(Arm arm)
         std::fprintf(stderr, "EXIT_DETACH_STATE parked=%d in_saferegion=%d pending_before=%zu local_young_before=%zu\n",
                      parked, g_parkedInSaferegion.load(), pendingBefore, localYoungBefore);
     }
+    bool managementLockHeld = false;
+    if (parked) {
+        auto& manager = MutatorManager::Instance();
+        const bool acquired = manager.TryAcquireMutatorManagementWLock();
+        managementLockHeld = !acquired;
+        if (acquired) { manager.MutatorManagementWUnlock(); }
+    }
     if (arm == Arm::FlushAfterDetach) {
         // Swap order: let detach finish completely before the pause flush.
         g_release.store(true, std::memory_order_release);
@@ -150,6 +157,20 @@ void RunArm(Arm arm)
     const bool marked = heap.region0()->is_object_marked(from_object(heap.obj0), false);
     std::fprintf(stderr, "EXIT_DETACH_TARGET executed=1 arm=%d hook=%d parked=%d marked_young=%d\n",
                  static_cast<int>(arm), hookArmed, parked, marked);
+    // Check only after joining, so a failing assertion cannot strand a thread.
+    if (hookArmed) {
+        std::fprintf(stderr, "EXIT_DETACH_WINDOW_ASSERT parked=%d safe=%d lock_held=%d\n",
+                     parked, g_parkedInSaferegion.load(), managementLockHeld);
+        GC_EXPECT_TRUE(parked);
+        GC_EXPECT_EQ(g_parkedInSaferegion.load(), 0);
+        GC_EXPECT_TRUE(managementLockHeld);
+    }
+    if (arm == Arm::RaceInWindow) {
+        std::fprintf(stderr, "EXIT_DETACH_EXCLUSION_ASSERT stopped_while_parked=%d\n", stoppedWhileParked);
+        GC_EXPECT_FALSE(stoppedWhileParked);
+    }
+    GC_EXPECT_TRUE(worldStopped.load());
+    GC_EXPECT_TRUE(pauseDone.load());
     GC_EXPECT_TRUE(marked);
 }
 } // namespace
@@ -175,5 +196,52 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, ControlHookDisarmed)
 GC_OTHER_VM_TEST(ExitDetachMarkEnd, ControlFlushAfterDetach)
 {
     RunArm(Arm::FlushAfterDetach);
+}
+// zMark.cpp:961-962: a mark-end pause flushes non-Java threads only.
+// A still-attached saferegion owner retains its pending store until its own
+// handshake/exit, even when mark_end is called by the real pause path.
+GC_OTHER_VM_TEST(ExitDetachMarkEnd, PauseDoesNotFlushAttachedMutator)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    heap.region0()->reset(PageAge::eden);
+    heap.region1()->reset(PageAge::old);
+    MarkPublicationFixture marking;
+    std::atomic<bool> ready{false};
+    std::atomic<bool> release{false};
+    StoreBarrierBuffer* buffer = nullptr;
+    std::thread owner([&] {
+        auto& manager = MutatorManager::Instance();
+        Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        buffer = mutator->GetGCData().storeBarrierBuffer;
+        buffer->add(heap.heapStart + 16, StoreGoodPointer(heap.obj0));
+        ready.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    const bool reached = WaitFor([&] { return ready.load(std::memory_order_acquire); }, 10000);
+    size_t before = 0;
+    size_t after = 0;
+    bool markedDuringPause = false;
+    if (reached) {
+        before = buffer->Pending();
+        ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+        {
+            ScopedStopTheWorld stw("EXIT_DETACH attached owner scope", false);
+            (void)Heap::GetHeap().young().mark_end();
+            after = buffer->Pending();
+            markedDuringPause = heap.region0()->is_object_marked(from_object(heap.obj0), false);
+        }
+    }
+    release.store(true, std::memory_order_release);
+    owner.join();
+    std::fprintf(stderr, "EXIT_DETACH_SCOPE_ASSERT reached=%d before=%zu after=%zu marked_in_pause=%d\n",
+                 reached, before, after, markedDuringPause);
+    GC_EXPECT_TRUE(reached);
+    GC_EXPECT_EQ(before, 1U);
+    GC_EXPECT_EQ(after, before);
+    GC_EXPECT_FALSE(markedDuringPause);
+    Heap::GetHeap().young().Mark().MarkFollow();
+    GC_EXPECT_TRUE(heap.region0()->is_object_marked(from_object(heap.obj0), false));
 }
 #endif
