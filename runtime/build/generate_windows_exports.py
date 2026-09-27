@@ -70,10 +70,56 @@ def consumer_text(text: str) -> str:
     return COMMENT_RE.sub(lambda m: m.group(1) or "\n" * m.group().count("\n"), text)
 
 
-def collect_references(raw_path: Path, consumers: list[str], output: Path) -> None:
+def capture_native_sources(build: Path, root: Path, output: Path) -> None:
+    """Make a portable source set from a successful native CMake configure."""
+    root = root.resolve()
+    commands = json.loads((build / "compile_commands.json").read_text())
+    cache = (build / "CMakeCache.txt").read_text()
+    target = re.search(r"^EXPORT_SOURCE_SYSTEM:INTERNAL=(.+)$", cache, re.M)
+    if target is None:
+        raise ValueError("native build must use export_source_config")
+    sources = set()
+    for command in commands:
+        path = (Path(command["directory"]) / command["file"]).resolve()
+        if path.is_relative_to(root):
+            sources.add(path.relative_to(root).as_posix())
+    configurations = sorted(root.glob("**/native/CMakeLists.txt"))
+    missing = [p.parent.relative_to(root).as_posix() for p in configurations
+               if not any((root / name).parent == p.parent for name in sources)]
+    if not sources or missing:
+        raise ValueError(f"native configuration has no translation units for: {missing}")
+    document = {"system": target[1], "sources": sorted(sources),
+                "configurations": {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                                   for p in configurations}}
+    output.write_text(json.dumps(document, indent=2) + "\n")
+    print(f"NATIVE_SOURCE_CAPTURE system={target[1]} directories={len(configurations)} sources={len(sources)}")
+
+
+def source_files(root: Path, kind: str, selection: Path | None) -> list[Path]:
+    files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix in SOURCE_SUFFIXES)
+    if kind == "emitter":
+        return files
+    if selection is None:
+        raise ValueError("source consumer requires --native-sources label=manifest")
+    document = json.loads(selection.read_text())
+    if document["system"] != "Windows":
+        raise ValueError("Windows export collection requires a Windows native source configuration")
+    configurations = {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                      for p in root.glob("**/native/CMakeLists.txt")}
+    if configurations != document["configurations"]:
+        raise ValueError("native source configuration differs from consumer source tree; recapture it")
+    selected = set(document["sources"])
+    if not selected or any(not (root / name).is_file() or not (root / name).resolve().is_relative_to(root.resolve())
+                           for name in selected):
+        raise ValueError("native source configuration contains missing or invalid source paths")
+    return [p for p in files if p.suffix == ".cj" or p.relative_to(root).as_posix() in selected]
+
+
+def collect_references(raw_path: Path, consumers: list[str], output: Path, native_sources: list[str]) -> None:
     available = {export.name for export in parse_exports(raw_path)}
     references: dict[str, list[str]] = {}
     inputs = []
+    selections = dict(item.split("=", 1) for item in native_sources)
     for consumer in consumers:
         # kind:label@revision=/absolute/source/subtree; the label is portable.
         identity, directory = consumer.split("=", 1)
@@ -82,7 +128,8 @@ def collect_references(raw_path: Path, consumers: list[str], output: Path) -> No
         if kind not in {"emitter", "source"} or not label or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
             raise ValueError("consumer must be emitter:label@40-digit-revision=directory or source:label@40-digit-revision=directory")
         root = Path(directory)
-        files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix in SOURCE_SUFFIXES)
+        selection = Path(selections[label]) if label in selections else None
+        files = source_files(root, kind, selection)
         if not files:
             raise ValueError(f"no consumer sources in {root}")
         digest = hashlib.sha256()
@@ -119,7 +166,10 @@ def collect_references(raw_path: Path, consumers: list[str], output: Path) -> No
                              if m.group(1) in constants)
                 for name in sorted(names & available):
                     references.setdefault(name, []).append(f"{label}/{relative}:{line_number}")
-        inputs.append({"kind": kind, "label": label, "revision": revision, "sha256": digest.hexdigest(), "files": len(files)})
+        identity = {"kind": kind, "label": label, "revision": revision, "sha256": digest.hexdigest(), "files": len(files)}
+        if selection is not None:
+            identity["native_sources_sha256"] = hashlib.sha256(selection.read_bytes()).hexdigest()
+        inputs.append(identity)
     if not references:
         raise ValueError("consumer sources reference no exports")
     output.write_text(json.dumps({"inputs": inputs, "symbols": dict(sorted(references.items()))}, indent=2) + "\n")
@@ -215,13 +265,21 @@ def main() -> int:
     collect_parser.add_argument("raw", type=Path)
     collect_parser.add_argument("output", type=Path)
     collect_parser.add_argument("--consumer", action="append", required=True)
+    collect_parser.add_argument("--native-sources", action="append", default=[], metavar="LABEL=MANIFEST")
+    capture_parser = subparsers.add_parser("capture-native", help="capture all configured std native translation units")
+    capture_parser.add_argument("build", type=Path)
+    capture_parser.add_argument("root", type=Path, help="stdlib/libs source root")
+    capture_parser.add_argument("output", type=Path)
     for subparser in (write_parser, check_parser):
         subparser.add_argument("--references", type=Path, default=DEFAULT_REFERENCES)
 
     arguments = parser.parse_args()
     try:
+        if arguments.command == "capture-native":
+            capture_native_sources(arguments.build, arguments.root, arguments.output)
+            return 0
         if arguments.command == "collect":
-            collect_references(arguments.raw, arguments.consumer, arguments.output)
+            collect_references(arguments.raw, arguments.consumer, arguments.output, arguments.native_sources)
             return 0
         if arguments.command == "write":
             write_exports(arguments.raw, arguments.output, arguments.source_ref, arguments.references)

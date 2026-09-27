@@ -47,3 +47,36 @@ exercise the actual CLI, both libc++ ABI tags, and removal of each captured
 symbol. The Windows consumer export contract workflow also runs the complete
 CLANG64 product build, saving toolchain identity, raw/registered definitions,
 reference provenance, DLL hashes and results.
+
+Native std references must come from the Windows build's translation units.
+Scanning every `.c` file also admits Linux/Unix implementations that Windows
+never compiles. `.cj` sources and compiler emitter collection are unchanged;
+native headers are not independently treated as translation units.
+
+Configure the pinned std tree for Windows. When the complete std configure is
+blocked by unrelated dependency builds, `export_source_config` configures **all**
+`libs/**/native/CMakeLists.txt` with the real CMake target selection. It does not
+build or link std, generate a replacement source list, or select by filename.
+It needs the compiler SDK headers/schema/flatc for the native AST configuration.
+For example, on a Linux host with MinGW cross compilers:
+
+```sh
+cmake -S runtime/build/export_source_config -B native-windows \
+  -DSTDLIB_SOURCE=/absolute/pinned/stdlib \
+  -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
+  -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+  -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++
+python3 runtime/build/generate_windows_exports.py capture-native \
+  native-windows /absolute/pinned/stdlib/libs \
+  runtime/src/windows_stdlib_sources.json
+```
+
+Pass `--native-sources stdlib=runtime/src/windows_stdlib_sources.json` to the
+`collect` command above. The manifest records the configured platform, every
+native source directory's CMake hash, and the portable translation-unit paths
+from `compile_commands.json`. Capture rejects a configuration missing an entire
+native directory; collect rejects missing manifests, non-Windows selection,
+changed native CMake inputs, and nonexistent/out-of-tree selected sources.
+Source-content and manifest hashes are retained in the consumer reference file.
+Neither collection nor checking infers the expected set from a failing DLL.
+Regenerate both JSON and `.def` through the CLI; do not edit symbol entries.

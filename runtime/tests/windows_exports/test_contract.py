@@ -88,6 +88,38 @@ class Contract(unittest.TestCase):
         self.assertEqual(references['symbols'], {'CJ_MCC_Object': ['compiler/emit.cpp:3']})
         self.assertEqual(references['inputs'][0]['files'], 1)
 
+    def test_collection_uses_configured_native_translation_units(self):
+        source = self.root / 'stdlib'
+        native = source / 'std/example/native'
+        native.mkdir(parents=True)
+        config = native / 'CMakeLists.txt'
+        config.write_text('add_library(native OBJECT selected.c)\n')
+        (source / 'managed.cj').write_text('foreign func CJ_MCC_Object(): Unit\n')
+        (native / 'selected.c').write_text('void selected() { state(); }\n')
+        # Deliberately no platform suffix: configuration, not spelling, selects.
+        (native / 'excluded.c').write_text('void excluded() { _ZNSt3__1swapB9nqn220107Ev(); }\n')
+        selection = self.root / 'native.json'
+        selection.write_text(json.dumps({
+            'system': 'Windows', 'sources': ['std/example/native/selected.c'],
+            'configurations': {'std/example/native/CMakeLists.txt': hashlib.sha256(config.read_bytes()).hexdigest()}}))
+        result = self.cli('collect', self.raw, self.refs,
+                          '--consumer', f'source:stdlib@{"a" * 40}={source}',
+                          '--native-sources', f'stdlib={selection}')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        actual = json.loads(self.refs.read_text())['symbols']
+        self.assertEqual(actual, {'CJ_MCC_Object': ['stdlib/managed.cj:1'],
+                                  'state': ['stdlib/std/example/native/selected.c:1']})
+        print('ASSERT configured_translation_units_only PASS', flush=True)
+
+    def test_source_collection_requires_configured_selection(self):
+        source = self.root / 'stdlib'
+        source.mkdir()
+        (source / 'native.c').write_text('state();\n')
+        result = self.cli('collect', self.raw, self.refs,
+                          '--consumer', f'source:stdlib@{"a" * 40}={source}')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('requires --native-sources', result.stderr)
+
     def test_malformed_raw_is_rejected(self):
         self.raw.write_text('EXPORTS\n CJ_MCC_Object @1\n state @1 DATA\n')
         result = self.check()
