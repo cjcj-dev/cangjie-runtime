@@ -25,6 +25,8 @@ def main():
     source, publication, output = (p.resolve() for p in
                                    (args.source, args.publication, args.output))
     output.mkdir(parents=True, exist_ok=True)
+    for name in ('ohos_host.receipt', 'gate.status'):
+        (output / name).unlink(missing_ok=True)
     env = dict(os.environ)
     for key in ('MRT_GC_UNIT_OHOS_HOST', 'MRT_TESTABLE_INTERNALS',
                 'GCV2_RUNTIME_CONFIG', 'GC_UNIT_GATE_SKIP', 'GC_UNIT_GATE_CONTRACT_SELFTEST',
