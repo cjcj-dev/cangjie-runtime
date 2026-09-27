@@ -502,3 +502,49 @@ jobs:
         with:
           name: package-init-${{ matrix.runner }}
           path: ${{ runner.temp }}/package-init
+
+  package-init-ios:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'package-init' }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: ios-aarch64
+            sdk: iphoneos
+          - target: ios-simulator-x86_64
+            sdk: iphonesimulator
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cross-build product for iOS
+        env:
+          TARGET: ${{ matrix.target }}
+          SDK: ${{ matrix.sdk }}
+        run: |
+          ulimit -c 0
+          export CANGJIE_BUILD_JOBS=$(sysctl -n hw.ncpu)
+          export GC_UNIT_GATE_SKIP=1
+          mkdir -p "$RUNNER_TEMP/package-init-ios"
+          cd runtime
+          toolchain=$(dirname "$(dirname "$(xcrun --sdk "$SDK" --find clang)")")
+          python3 build.py build --target "$TARGET" --build-type release \
+            --target-toolchain "$toolchain" --target-sysroot "$(xcrun --sdk "$SDK" --show-sdk-path)"
+      - name: Install symbol reader
+        run: brew list llvm >/dev/null 2>&1 || brew install llvm
+      - name: Check defined entry symbols
+        run: |
+          product=$(find runtime/CMakebuild -name libcangjie-runtime.dylib -type f -print -quit)
+          nm="$(brew --prefix llvm)/bin/llvm-nm"
+          "$nm" --defined-only "$product" > "$RUNNER_TEMP/package-init-ios/defined.txt"
+          shasum -a 256 "$product" > "$RUNNER_TEMP/package-init-ios/sha256.txt"
+          for entry in Begin Complete Fail Abort; do
+            grep -E " [Tt] _CJ_MCC_PackageInit${entry}$" "$RUNNER_TEMP/package-init-ios/defined.txt"
+            grep -E " [Tt] _MCC_PackageInit${entry}$" "$RUNNER_TEMP/package-init-ios/defined.txt"
+          done
+          grep -E ' [Tt] _CJ_MCC_NewObject$' "$RUNNER_TEMP/package-init-ios/defined.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: package-init-${{ matrix.target }}
+          path: ${{ runner.temp }}/package-init-ios
