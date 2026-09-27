@@ -34,6 +34,12 @@ public:
         Uptr identity { 0 };
         U64 generation { 0 };
         std::vector<Range> ranges;
+#ifdef __APPLE__
+        // LLVM __CJ_METADATA,__cjfuncmap: relocated address pairs, sorted on load.
+        struct Function { Uptr startPC; Uptr descriptor; };
+        std::vector<Function> functions;
+        Uptr FindFunctionDescriptor(Uptr startPC) const;
+#endif
         bool Contains(Uptr address, bool codeOnly = false) const;
     };
     enum class ReaderKind : U8 {
@@ -164,6 +170,9 @@ public:
     static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress);
     static void UnlinkImage(Uptr imageAddress);
     static bool IsLinkedAddress(Uptr address);
+#ifdef __APPLE__
+    static Uptr FindFunctionDescriptor(Uptr startPC);
+#endif
     static bool IsAddressInImage(Uptr address, Uptr imageAddress);
     static bool IsPurgeAuthorized(Uptr imageAddress);
     static bool HasCallerPurgeProtection();
