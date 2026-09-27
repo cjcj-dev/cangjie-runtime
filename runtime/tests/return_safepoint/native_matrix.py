@@ -58,7 +58,7 @@ def build(kind):
         old,new = ('stp  x0, x1,','stp  x2, x1,') if CPU=='aarch64' else (('movq    %rax, -8(%rbp)','movq    %rcx, -8(%rbp)') if not APPLE else ('pushq  %rax','pushq  %rcx'))
         text = text.replace(old,new,1)
     elif kind == 'cut-restore':
-        if CPU=='aarch64': text=text.replace('ldp  x0, x1,','ldp  x2, x1,',1)
+        if CPU=='aarch64': text=text.replace('ldp  x0, x1,','ldp  x9, x1,',1)
         elif APPLE:
             index=text.rfind('popq  %rax'); text=text[:index]+text[index:].replace('popq  %rax','popq  %rcx',1)
         else: text=text.replace('movq    -8(%rbp), %rax','movq    -8(%rbp), %rcx',1)
