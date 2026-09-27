@@ -362,39 +362,41 @@ void CheckThreeFrameRoots(FrameType stub, bool invalidCaller, unsigned route = 0
     GC_EXPECT_TRUE(invalidCaller ? rejected : accepted);
 }
 }
-GC_OTHER_VM_TEST(CallRegisterRoots, RejectsThirdFrame)
+// These metadata-only scenes own their context and need no heap. Forking after
+// a standalone heap starts workers would inherit threads that cannot be joined.
+GC_COMPONENT_OTHER_VM_TEST(CallRegisterRoots, RejectsThirdFrame)
 {
     CheckThreeFrameRoots(FrameType::SAFEPOINT, true);
 }
-GC_OTHER_VM_TEST(CallRegisterRoots, PollCallerSurvives)
+GC_COMPONENT_OTHER_VM_TEST(CallRegisterRoots, PollCallerSurvives)
 {
     CheckThreeFrameRoots(FrameType::SAFEPOINT, false);
 }
-GC_OTHER_VM_TEST(CallRegisterRoots, StackcheckCallerSurvives)
+GC_COMPONENT_OTHER_VM_TEST(CallRegisterRoots, StackcheckCallerSurvives)
 {
     CheckThreeFrameRoots(FrameType::STACKGROW, false);
 }
-GC_OTHER_VM_TEST(CallRegisterRoots, HeapReferencesRejectsThirdFrame)
+GC_COMPONENT_OTHER_VM_TEST(CallRegisterRoots, HeapReferencesRejectsThirdFrame)
 {
     CheckThreeFrameRoots(FrameType::SAFEPOINT, true, 1);
 }
-GC_OTHER_VM_TEST(CallRegisterRoots, HeapReferencesPreservesPollCaller)
+GC_COMPONENT_OTHER_VM_TEST(CallRegisterRoots, HeapReferencesPreservesPollCaller)
 {
     CheckThreeFrameRoots(FrameType::SAFEPOINT, false, 1);
 }
-GC_OTHER_VM_TEST(CallRegisterRoots, RecordedStackRejectsThirdFrame)
+GC_COMPONENT_OTHER_VM_TEST(CallRegisterRoots, RecordedStackRejectsThirdFrame)
 {
     CheckThreeFrameRoots(FrameType::SAFEPOINT, true, 2);
 }
-GC_OTHER_VM_TEST(CallRegisterRoots, RecordedStackPreservesPollCaller)
+GC_COMPONENT_OTHER_VM_TEST(CallRegisterRoots, RecordedStackPreservesPollCaller)
 {
     CheckThreeFrameRoots(FrameType::SAFEPOINT, false, 2);
 }
-GC_OTHER_VM_TEST(CallRegisterRoots, StackMoveRejectsThirdFrame)
+GC_COMPONENT_OTHER_VM_TEST(CallRegisterRoots, StackMoveRejectsThirdFrame)
 {
     CheckThreeFrameRoots(FrameType::STACKGROW, true, 3);
 }
-GC_OTHER_VM_TEST(CallRegisterRoots, StackMovePreservesStackcheckCaller)
+GC_COMPONENT_OTHER_VM_TEST(CallRegisterRoots, StackMovePreservesStackcheckCaller)
 {
     CheckThreeFrameRoots(FrameType::STACKGROW, false, 3);
 }
