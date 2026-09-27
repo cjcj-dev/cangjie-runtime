@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arm: [baseline, green, cut-path, cut-output, restored, incomplete, clone-failure]
+        arm: [baseline, green, cut-path, cut-output, restored, incomplete, clone-failure, cut-dependency-overlay, cut-clone-result]
     steps:
       - uses: actions/checkout@v4
         with:

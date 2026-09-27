@@ -81,9 +81,17 @@ elif ARM == "cut-path":
 elif ARM == "cut-output":
     replace(parent, 'set(OTHER_DEFINITIONS " -DRUNTIME_OUTPUT_ROOT=${CMAKE_OUTPUT_DIRECTORY}")',
             'set(OTHER_DEFINITIONS " -DRUNTIME_OUTPUT_ROOT=${CMAKE_OUTPUT_DIRECTORY}/cut-output")')
-elif ARM == "incomplete":
+elif ARM in ["incomplete", "cut-dependency-overlay"]:
     dependency.mkdir(parents=True)
-elif ARM == "clone-failure":
+    if ARM == "cut-dependency-overlay":
+        guard = 'if(NOT EXISTS "${BOUNDSCHECK}/include/securec.h")\n' + \
+                '    message(FATAL_ERROR "Boundscheck dependency is incomplete: ${BOUNDSCHECK}/include/securec.h is missing")\nendif()\n'
+        overlay = 'file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/build/cmake/CMakeLists.txt" DESTINATION "${BOUNDSCHECK}/")\n'
+        replace(config, guard + overlay, overlay + guard)
+elif ARM in ["clone-failure", "cut-clone-result"]:
+    if ARM == "cut-clone-result":
+        replace(config, 'if(NOT _boundscheck_result STREQUAL "0")',
+                'if(_boundscheck_result STREQUAL "0")')
     # A real git clone of an empty repository lacks the requested release tag.
     # Redirect only this child's URL via Git's documented per-process config.
     empty = WORK / "empty.git"
@@ -94,7 +102,7 @@ elif ARM == "clone-failure":
 elif ARM not in ["green", "restored"]:
     raise ValueError(ARM)
 
-record["source_sha256"] = {str(p.relative_to(TREE)): digest(p) for p in [bat, config, parent]}
+record["source_sha256"] = {str(p.relative_to(TREE)): digest(p) for p in [bat, config, parent, TREE/"src/Heap/Allocator/LocalDeque.h", TREE/"src/Heap/z/zUtils.inline.hpp"]}
 build = TREE / "CMakebuild"
 command = ["cmake", "-S", TREE, "-B", build, "-G", "Ninja",
            "-DWINDOWS_FLAG=1", "-DCOPYGC_FLAG=1", "-DDOPRA_FLAG=1",
@@ -105,12 +113,13 @@ command = ["cmake", "-S", TREE, "-B", build, "-G", "Ninja",
 rc = run(command, "configure")
 text = (LOG / "configure.log").read_text(errors="replace")
 checks = {}
-if ARM in ["incomplete", "clone-failure"]:
-    marker = "Boundscheck dependency is incomplete:" if ARM == "incomplete" else "Boundscheck clone failed:"
+if ARM in ["incomplete", "clone-failure", "cut-dependency-overlay", "cut-clone-result"]:
+    marker = "Boundscheck dependency is incomplete:" if ARM in ["incomplete", "cut-dependency-overlay"] else "Boundscheck clone failed:"
     checks["dependency_diagnostic"] = rc != 0 and marker in text
     checks["no_child_on_invalid_dependency"] = "build cjthread for windows on windows" not in text
     checks["no_dependency_overlay_on_failure"] = not (dependency / "CMakeLists.txt").exists()
-    expected_failures = []
+    expected_failures = {"cut-dependency-overlay": ["no_dependency_overlay_on_failure"],
+                         "cut-clone-result": ["dependency_diagnostic"]}.get(ARM, [])
 else:
     checks["native_configure"] = rc == 0
     caches = [p for p in TREE.rglob("CMakeCache.txt")
