@@ -125,9 +125,11 @@ def wiring_precise(r):
         ok = r.get('identity_rc')==1 and checks=={'CJ_MCC_HandleSafepoint':True,'CJ_MCC_HandleReturnSafepoint':False}
         return ok, f'identity_rc={r.get("identity_rc")} checks={checks}'
     log=(OUT/kind/'build.log').read_text()
-    blamed=[s for s in ['HandleReturnSafepoint','unwindPCForReturnSafepoint'] if s in log]
-    ok = 'Undefined symbols' in log and len(blamed)==2
-    return ok, f'build_rc={r.get("build_rc")} undefined={blamed}'
+    import re
+    undefined=re.findall(r'"(_?[A-Za-z]\w*)", referenced from',log)
+    ret=[s for s in undefined if 'ReturnSafepoint' in s]
+    ok = 'Undefined symbols' in log and len(undefined)>0 and undefined==ret
+    return ok, f'build_rc={r.get("build_rc")} undefined={undefined}'
 matrix_ok=True
 for r in results:
     kind=r['kind']
