@@ -421,6 +421,24 @@ jobs:
         with:
           fetch-depth: 0
       - uses: mozilla-actions/sccache-action@v0.0.9
+      # Pinned compiler AST inputs from cjcj ci/ast_support/darwin_aarch64.env.
+      # These supply configure prerequisites; this job does not compile Cangjie std.
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: cjcj-dev/cjcj
+          run-id: 36019663568
+          artifact-ids: 10816590496
+          merge-multiple: true
+          path: ${{ runner.temp }}/stdlib-configure-inputs
+      - name: Verify configure input identity
+        run: |
+          cd "$RUNNER_TEMP/stdlib-configure-inputs"
+          cat PROVENANCE
+          shasum -a 256 -c SHA256SUMS
+          echo 'a0257ed258ea93c1138295c1f1c017358379c10489fbfbb2cc3e1377bb9f675b  libcangjie-ast-support.a' | shasum -a 256 -c -
+          chmod +x third_party/flatbuffers/bin/flatc
+          echo "CANGJIE_HOME=$RUNNER_TEMP/stdlib-configure-inputs" >> "$GITHUB_ENV"
       - name: Prepare configure dependencies
         run: |
           ulimit -c 0
@@ -451,3 +469,4 @@ jobs:
             ${{ runner.temp }}/ios-sdk-evidence/**/configure.log
             ${{ runner.temp }}/ios-sdk-evidence/**/result*.json
             ${{ runner.temp }}/ios-sdk-evidence/**/compile_commands.json
+            ${{ runner.temp }}/ios-sdk-evidence/**/CMakeCache.txt

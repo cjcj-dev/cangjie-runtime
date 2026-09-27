@@ -81,7 +81,7 @@ def run(arm):
                   product_sha256=digest, source_hashes=hashes, configure_command=command,
                   harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                   outer_sdk=outer_sdk, nested_sdk=nested_sdk,
-                  native_commands=len(native), sdk_assertion=observed,
+                  native_commands=len(native), sdk_assertion=observed, assertion_rc=0 if observed else 1,
                   precise_red=precise_red, passed=passed, wall=time.monotonic()-start)
     (root / 'result.json').write_text(json.dumps(record, indent=2) + '\n')
     print(json.dumps(record), flush=True)
