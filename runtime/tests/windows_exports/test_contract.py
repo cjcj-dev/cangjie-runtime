@@ -107,12 +107,11 @@ class Contract(unittest.TestCase):
         # Every captured consumer symbol is independently necessary. Extra
         # implementation exports remain in each input, so failures are exact.
         for name in symbols:
-            with self.subTest(symbol=name):
-                self.raw.write_text('\n'.join(line for line in raw_text.splitlines()
-                                              if not line.strip().startswith(name + ' @')) + '\n')
-                result = self.cli('check', self.raw, expected, '--references', references)
-                self.assertEqual((result.returncode, result.stderr.splitlines()),
-                                 (1, ['FATAL: missing export: ' + name]))
+            self.raw.write_text('\n'.join(line for line in raw_text.splitlines()
+                                          if not line.strip().startswith(name + ' @')) + '\n')
+            result = self.cli('check', self.raw, expected, '--references', references)
+            self.assertEqual((result.returncode, result.stderr.splitlines()),
+                             (1, ['FATAL: missing export: ' + name]))
         print(f'ASSERT real_input_each_deletion PASS n={len(symbols)} raw_sha256={hashlib.sha256(raw_text.encode()).hexdigest()}', flush=True)
 
 
