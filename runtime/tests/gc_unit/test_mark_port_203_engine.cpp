@@ -192,6 +192,38 @@ GC_TEST(MarkPort203Engine, ShrinkingNStripesStillSeesHighSlotWork)
     GC_EXPECT_TRUE(stripes.IsEmpty());
 }
 
+// ZGC zMarkStack.inline.hpp:77-86: the local slot is derived from the stripe
+// pointer, so a push for stripe k lands in slot k. An independent cached index
+// (the shape this package removed) puts every push in one slot instead.
+GC_TEST(MarkPort203Engine, LocalSlotIndexFollowsStripePointer)
+{
+    MarkStripeSet stripes(4);
+    MarkTerminate terminate;
+    terminate.Reset(1);
+    stripes.SetTerminate(&terminate);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
+    MarkThreadLocalStacks stacks(4);
+    for (size_t k = 0; k < 4; ++k) {
+        stacks.Push(stripes, stripes.At(k), Entry(10 * k + 1), true);
+    }
+    std::fprintf(stderr, "SLOT_IDENTITY pushed=4 stripe0_slot=%zu stripe3_slot=%zu\n",
+                 stripes.StripeId(stripes.At(0)), stripes.StripeId(stripes.At(3)));
+    GC_EXPECT_EQ(stripes.StripeId(stripes.At(3)), 3u);
+    (void)stacks.Flush(stripes);
+    for (size_t k = 0; k < 4; ++k) {
+        MarkStripeStack* published = stripes.At(k)->StealStack(smr, 0);
+        // Each stripe must own exactly the entries pushed for it.
+        GC_EXPECT_TRUE(published != nullptr);
+        if (published == nullptr) {
+            continue;
+        }
+        GC_EXPECT_EQ(published->Pop().partial_array_offset(), Entry(10 * k + 1).partial_array_offset());
+        MarkStripeStack::Destroy(published);
+    }
+    GC_EXPECT_TRUE(stripes.IsEmpty());
+}
+
 GC_TEST(MarkPort203Engine, PartialReturnsBeforeTerminate)
 {
     MarkStripeSet stripes(1);
