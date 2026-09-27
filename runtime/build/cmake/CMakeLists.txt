@@ -6,7 +6,9 @@
 if (WINDOWS_FLAG MATCHES 1)
     # Native Windows inherits the configured compiler (including CLANG64).
     # Preserve upstream's MinGW selection for Linux-to-Windows cross builds.
-    if(NOT CMAKE_HOST_WIN32 OR CMAKE_CROSSCOMPILING)
+    # The parent explicitly sets CMAKE_SYSTEM_NAME even on native Windows,
+    # so CMAKE_CROSSCOMPILING alone cannot distinguish the two routes.
+    if(NOT CMAKE_HOST_WIN32)
         set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
         set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
     endif()

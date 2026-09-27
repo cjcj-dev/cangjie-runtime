@@ -54,7 +54,7 @@ if arm in cut_targets:
     path = tree / relative
     before = path.read_text()
     if arm == 'cut-compiler':
-        after = before.replace('if(NOT CMAKE_HOST_WIN32 OR CMAKE_CROSSCOMPILING)', 'if(TRUE)')
+        after = before.replace('if(NOT CMAKE_HOST_WIN32)', 'if(TRUE)')
     elif arm == 'cut-region':
         after = before.replace('#include <memory>\n', '#include <memory>\n#include <sys/mman.h>\n')
     elif arm == 'cut-filler':
@@ -79,6 +79,9 @@ rc = run(["cmake", "-S", tree, "-B", build, "-G", "Ninja",
           "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++",
           "-DCMAKE_AR_PATH=llvm-ar", "-DCMAKE_INSTALL_PREFIX=" + str(out / "install")],
          "configure")
+if not rc:
+    for system in (build / "CMakeFiles").glob("*/CMakeSystem.cmake"):
+        shutil.copy2(system, out / "CMakeSystem.cmake")
 if not rc and arm in cut_targets:
     targets = subprocess.check_output(["ninja", "-C", build, "-t", "targets", "all"], text=True)
     matches = [line.split(": ", 1)[0] for line in targets.splitlines()

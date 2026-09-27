@@ -30,7 +30,7 @@ def arm(name):
     shutil.copytree(dependency, dep)
     text = product
     if name == "cut":
-        text = text.replace("if(NOT CMAKE_HOST_WIN32 OR CMAKE_CROSSCOMPILING)", "if(FALSE)")
+        text = text.replace("if(NOT CMAKE_HOST_WIN32)", "if(FALSE)")
         assert text != product
         (root / "cut.diff").write_text("".join(difflib.unified_diff(
             product.splitlines(True), text.splitlines(True),
