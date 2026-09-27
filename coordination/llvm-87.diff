@@ -1,0 +1,338 @@
+diff --git a/llvm/lib/CodeGen/FixupStatepointCallerSaved.cpp b/llvm/lib/CodeGen/FixupStatepointCallerSaved.cpp
+index 19315c5c0353..afc278cc7943 100644
+--- a/llvm/lib/CodeGen/FixupStatepointCallerSaved.cpp
++++ b/llvm/lib/CodeGen/FixupStatepointCallerSaved.cpp
+@@ -57,12 +57,6 @@ static cl::opt<unsigned> MaxStatepointsWithRegs(
+     "fixup-max-csr-statepoints", cl::Hidden,
+     cl::desc("Max number of statepoints allowed to pass GC Ptrs in registers"));
+ 
+-cl::opt<bool>
+-    EnableCalledSaveForStackMap("enable-callee-saved-stackmap", cl::init(true),
+-                                cl::ReallyHidden,
+-                                cl::desc("enable called saved for stackmap."
+-                                         " ALWAYS disable if optlevel=-O0"));
+-
+ namespace {
+ 
+ class FixupStatepointCallerSaved : public MachineFunctionPass {
+@@ -603,9 +597,6 @@ class StatepointProcessor {
+ } // namespace
+ 
+ bool FixupStatepointCallerSaved::runOnMachineFunction(MachineFunction &MF) {
+-  if (EnableCalledSaveForStackMap) {
+-    PassGCPtrInCSR = true;
+-  }
+   if (skipFunction(MF.getFunction()))
+     return false;
+ 
+diff --git a/llvm/lib/CodeGen/SelectionDAG/StatepointLowering.cpp b/llvm/lib/CodeGen/SelectionDAG/StatepointLowering.cpp
+index 7f061197a0d7..39077ff8d9d4 100644
+--- a/llvm/lib/CodeGen/SelectionDAG/StatepointLowering.cpp
++++ b/llvm/lib/CodeGen/SelectionDAG/StatepointLowering.cpp
+@@ -57,7 +57,6 @@
+ #include <utility>
+ 
+ using namespace llvm;
+-extern cl::opt<bool> EnableCalledSaveForStackMap;
+ 
+ namespace llvm {
+ extern cl::opt<bool> CJPipeline;
+@@ -921,11 +920,6 @@ SDValue SelectionDAGBuilder::LowerAsSTATEPOINT(
+   StatepointLowering.startNewStatepoint(*this);
+   assert(SI.Bases.size() == SI.Ptrs.size());
+ 
+-  if (EnableCalledSaveForStackMap) {
+-    MaxRegistersForGCPointers = 64;
+-    UseRegistersForGCPointersInLandingPad = true;
+-  }
+-
+   LLVM_DEBUG(dbgs() << "Lowering statepoint " << *SI.StatepointInstr << "\n");
+ #ifndef NDEBUG
+   for (const auto *Reloc : SI.GCRelocates)
+diff --git a/llvm/test/CodeGen/X86/CangjieGC/Inputs/check-call-root-stack.py b/llvm/test/CodeGen/X86/CangjieGC/Inputs/check-call-root-stack.py
+new file mode 100644
+index 000000000000..5a9a4878cb71
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/CangjieGC/Inputs/check-call-root-stack.py
+@@ -0,0 +1,144 @@
++# Decode the product's ELF relocations and compressed Cangjie stackmap.
++# Layout: StackMaps.cpp, DataEncoder::emitPrologueAndStackMapItemHeader,
++# emitStackMapItem, writeRegRefAndSlotRef. No compiler log is used as a map.
++import hashlib
++import json
++import re
++import struct
++import sys
++from pathlib import Path
++
++raw = Path(sys.argv[1]).read_bytes()
++assert raw[:6] == b"\x7fELF\x02\x01", "expected ELF64 little endian"
++header = struct.unpack_from("<HHIQQQIHHHHHH", raw, 16)
++assert header[0] == 1, "expected relocatable object"
++sections = [struct.unpack_from("<IIQQQQIIQQ", raw, header[5] + i * header[10])
++            for i in range(header[11])]
++
++
++def data(index):
++    section = sections[index]
++    return raw[section[4]:section[4] + section[5]]
++
++
++def string(buf, offset):
++    return buf[offset:buf.index(b"\0", offset)].decode()
++
++
++symbols = {}
++for index, section in enumerate(sections):
++    if section[1] != 2:
++        continue
++    table = []
++    for offset in range(0, section[5], section[9]):
++        name, info, other, sec, value, size = struct.unpack_from(
++            "<IBBHQQ", data(index), offset)
++        table.append((string(data(section[6]), name), sec, value, size))
++    symbols[index] = table
++
++relocations = {}
++for index, section in enumerate(sections):
++    if section[1] != 4:
++        continue
++    for offset in range(0, section[5], section[9]):
++        pos, info, addend = struct.unpack_from("<QQq", data(index), offset)
++        relocations[section[7], pos] = (symbols[section[6]][info >> 32], addend)
++
++
++def target(section, pos):
++    symbol, addend = relocations[section, pos]
++    return symbol[1], symbol[2] + addend
++
++
++name = sys.argv[2] if len(sys.argv) > 2 else "call_root_stack"
++symbol = next(s for table in symbols.values() for s in table if s[0] == name)
++_, section, start, size = symbol
++metadata, offset = target(section, start - 4)
++stackmap, offset = target(metadata, offset)
++buf = data(stackmap)[offset:]
++cursor = 0
++
++
++def take(width):
++    global cursor
++    assert cursor + width <= len(buf) * 8, "truncated stackmap"
++    begin, end = cursor // 8, (cursor + width + 7) // 8
++    value = (int.from_bytes(buf[begin:end], "little") >> (cursor % 8)) & ((1 << width) - 1)
++    cursor += width
++    return value
++
++
++def var():
++    prefix = take(4)
++    return prefix if prefix <= 11 else take((prefix - 11) * 8)
++
++
++stack, fmt, saved = var(), var(), var()
++for bit in range(32):
++    if saved & (1 << bit):
++        var()
++count = var()
++assert count > 0, "no product stackmap rows"
++# Tests use the default stack-grow format (six row columns).
++widths = [var() for _ in range(6)]
++take(var())
++rows = [[take(32)] + [take(width) for width in widths] for _ in range(count)]
++reg_count, reg_width = var(), var()
++registers = [take(reg_width) for _ in range(reg_count)]
++assert fmt == 0, "small fixture must use the bitmap slot format"
++slot_count, offset_width, slot_width = var(), var(), var()
++slots = [(take(offset_width), take(slot_width)) for _ in range(slot_count)]
++line_count, line_width = var(), var()
++for _ in range(line_count):
++    take(line_width)
++derived_count = var()
++derived = [(take(widths[0]), take(widths[1])) for _ in range(derived_count)]
++
++
++def reg_mask(index):
++    return registers[index - 1] if index else 0
++
++
++def slot_mask(index):
++    return slots[index - 1][1] if index else 0
++
++call_returns = []
++if name == "indirect_root_stack":
++    instructions = []
++    for line in Path(sys.argv[3]).read_text().splitlines():
++        match = re.match(r"\s*([0-9a-f]+):\s+(.*)", line)
++        if match:
++            instructions.append((int(match[1], 16), match[2]))
++    for index, (pc, instruction) in enumerate(instructions):
++        if re.match(r"(?:callq?\s+\*|blr\s)", instruction):
++            call_returns.append(instructions[index + 1][0] - start)
++else:
++    for (sec, pos), (callee, addend) in relocations.items():
++        if sec == section and start <= pos < start + size and callee[0] == "checkpoint":
++            call_returns.append(pos + 4 - start)
++calls = []
++for pc in call_returns:
++    matches = [row for row in rows if row[0] == pc]
++    assert len(matches) == 1, "call return must have exactly one product map"
++    row = matches[0]
++    mask = reg_mask(row[1])
++    stack_mask = slot_mask(row[2])
++    base_count = bin(mask).count("1") + bin(stack_mask).count("1")
++    derived_masks = []
++    if row[4]:
++        begin = row[4] - 1
++        pairs = derived[begin:begin + base_count]
++        assert len(pairs) == base_count, "missing derived-root records"
++        derived_masks = [reg_mask(pair[0]) for pair in pairs]
++    calls.append({"return_offset": pc, "register_mask": mask,
++                  "stack_mask": stack_mask, "derived_register_masks": derived_masks})
++assert calls, "fixture did not emit a tested call"
++print(json.dumps({"sha256": hashlib.sha256(raw).hexdigest(), "function": name,
++                  "stack_size": stack, "calls": calls}, sort_keys=True))
++# Emit the target assertion verdict before failing so an earlier assertion
++# cannot be mistaken for this invariant's negative control.
++expect_root = name != "no_root_stack"
++okay = all(call["register_mask"] == 0 and bool(call["stack_mask"]) == expect_root
++           and not any(call["derived_register_masks"]) for call in calls)
++print("CALL_ROOTS_IN_FRAME_STACK=" + str(okay), flush=True)
++sys.exit(0 if okay else 1)
+diff --git a/llvm/test/CodeGen/X86/CangjieGC/call-root-stack-lowering.test b/llvm/test/CodeGen/X86/CangjieGC/call-root-stack-lowering.test
+new file mode 100644
+index 000000000000..16e8a2d6f9ec
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/CangjieGC/call-root-stack-lowering.test
+@@ -0,0 +1,10 @@
++# RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -O2 -stop-after=finalize-isel %S/call-root-stack.ll -o - | FileCheck %s
++# The default lowering must describe live-through roots as frame locations.
++# A late register-allocation spill must not hide reintroduction of the removed
++# lowering override. See StatepointLowering.cpp:651-661 and x86.ad:43-49.
++# CHECK-LABEL: name:{{ *}}call_root_stack
++# CHECK: STATEPOINT{{.*}}%stack.
++# CHECK-LABEL: name:{{ *}}invoke_root_stack
++# CHECK: STATEPOINT{{.*}}%stack.
++# CHECK-LABEL: name:{{ *}}derived_root_stack
++# CHECK: STATEPOINT{{.*}}%stack.
+diff --git a/llvm/test/CodeGen/X86/CangjieGC/call-root-stack.ll b/llvm/test/CodeGen/X86/CangjieGC/call-root-stack.ll
+new file mode 100644
+index 000000000000..77a8898b596e
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/CangjieGC/call-root-stack.ll
+@@ -0,0 +1,77 @@
++; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -O2 -filetype=obj %s -o %t.o
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.o
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.o invoke_root_stack
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.o derived_root_stack
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.o no_root_stack
++; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -O2 --max-registers-for-gc-values=64 -filetype=obj %s -o %t.regalloc.o
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.regalloc.o
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.regalloc.o invoke_root_stack
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.regalloc.o derived_root_stack
++; RUN: llvm-objdump -d --no-show-raw-insn --disassemble-symbols=indirect_root_stack %t.o > %t.dis
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.o indirect_root_stack %t.dis
++; RUN: llc --cangjie-pipeline -mtriple=aarch64-unknown-linux-gnu -O2 -filetype=obj %s -o %t.a64.o
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.a64.o
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.a64.o invoke_root_stack
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.a64.o derived_root_stack
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.a64.o no_root_stack
++; RUN: llvm-objdump -d --no-show-raw-insn --disassemble-symbols=indirect_root_stack %t.a64.o > %t.a64.dis
++; RUN: %python %S/Inputs/check-call-root-stack.py %t.a64.o indirect_root_stack %t.a64.dis
++;
++; HotSpot cpu/x86/x86.ad:43-49: save live references at the call site.
++; frame_x86.inline.hpp:455-464: compiled-frame roots do not depend on a
++; callee's register-save slots. Check actual ELF call-return stackmap rows.
++
++target datalayout = "e-m:e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
++
++define void @call_root_stack(i8 addrspace(1)* %root, i8 addrspace(1)** %out) gc "cangjie" {
++entry:
++  %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @checkpoint, i32 0, i32 0) [ "gc-live"(i8 addrspace(1)* %root) ]
++  %relocated = call i8 addrspace(1)* @llvm.cj.gc.relocate.p1i8(token %token, i32 0, i32 0)
++  store i8 addrspace(1)* %relocated, i8 addrspace(1)** %out
++  ret void
++}
++
++declare token @llvm.cj.gc.statepoint(...)
++declare void @checkpoint()
++
++define void @invoke_root_stack(i8 addrspace(1)* %root, i8 addrspace(1)** %out) gc "cangjie" personality i32 (...)* @__gxx_personality_v0 {
++entry:
++  %token = invoke token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @checkpoint, i32 0, i32 0) [ "gc-live"(i8 addrspace(1)* %root) ] to label %normal unwind label %exception
++normal:
++  %normal.root = call i8 addrspace(1)* @llvm.cj.gc.relocate.p1i8(token %token, i32 0, i32 0)
++  store i8 addrspace(1)* %normal.root, i8 addrspace(1)** %out
++  ret void
++exception:
++  %exception.value = landingpad token cleanup
++  %exception.root = call i8 addrspace(1)* @llvm.cj.gc.relocate.p1i8(token %exception.value, i32 0, i32 0)
++  store i8 addrspace(1)* %exception.root, i8 addrspace(1)** %out
++  ret void
++}
++
++define void @derived_root_stack(i8 addrspace(1)* %root, i8 addrspace(1)** %out, i64 %index) gc "cangjie" {
++entry:
++  %derived = getelementptr i8, i8 addrspace(1)* %root, i64 %index
++  %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @checkpoint, i32 0, i32 0) [ "gc-live"(i8 addrspace(1)* %root, i8 addrspace(1)* %derived) ]
++  %relocated = call i8 addrspace(1)* @llvm.cj.gc.relocate.p1i8(token %token, i32 0, i32 1)
++  store i8 addrspace(1)* %relocated, i8 addrspace(1)** %out
++  ret void
++}
++
++declare i32 @__gxx_personality_v0(...)
++
++; A normal call with no live GC values needs no root slot.
++define void @no_root_stack() gc "cangjie" {
++entry:
++  %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @checkpoint, i32 0, i32 0)
++  ret void
++}
++
++declare i8 addrspace(1)* @llvm.cj.gc.relocate.p1i8(token, i32 immarg, i32 immarg)
++
++define void @indirect_root_stack(i8 addrspace(1)* %root, i8 addrspace(1)** %out, void ()* %callee) gc "cangjie" {
++entry:
++  %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* %callee, i32 0, i32 0) [ "gc-live"(i8 addrspace(1)* %root) ]
++  %relocated = call i8 addrspace(1)* @llvm.cj.gc.relocate.p1i8(token %token, i32 0, i32 0)
++  store i8 addrspace(1)* %relocated, i8 addrspace(1)** %out
++  ret void
++}
+diff --git a/llvm/test/CodeGen/X86/statepoint-vreg-twoaddr2.ll b/llvm/test/CodeGen/X86/statepoint-vreg-twoaddr2.ll
+index 5ffcd8c70d26..941b6575977a 100644
+--- a/llvm/test/CodeGen/X86/statepoint-vreg-twoaddr2.ll
++++ b/llvm/test/CodeGen/X86/statepoint-vreg-twoaddr2.ll
+@@ -1,4 +1,4 @@
+-; RUN: llc -O2 --enable-callee-saved-stackmap --max-registers-for-gc-values=16 --mtriple x86_64-pc-linux-gnu --print-after='twoaddressinstruction' < %s --filetype=obj 2>&1 | FileCheck %s
++; RUN: llc -O2 --max-registers-for-gc-values=16 --mtriple x86_64-pc-linux-gnu --print-after='twoaddressinstruction' < %s --filetype=obj 2>&1 | FileCheck %s
+ 
+ ; This test checks that TwoAddressInstruction pass will create COPY instruction for registers
+ ; with inconsistent types.
+diff --git a/llvm/tools/llc/llc.cpp b/llvm/tools/llc/llc.cpp
+index c95ef6b227fa..b9665ab8be7c 100644
+--- a/llvm/tools/llc/llc.cpp
++++ b/llvm/tools/llc/llc.cpp
+@@ -195,7 +195,6 @@ extern cl::opt<bool> DisableGCSupport;
+ extern cl::opt<bool> EnableBarrierOnly;
+ extern cl::opt<bool> EnableSafepointOnly;
+ }
+-extern cl::opt<bool> EnableCalledSaveForStackMap;
+ extern cl::opt<cl::boolOrDefault> EnableGlobalISelOption;
+ namespace {
+ 
+@@ -467,7 +466,6 @@ static bool addPass(PassManagerBase &PM, const char *argv0,
+ 
+ // enable CJ Options when -cangjie-pipeline='true'
+ static void initCangjieOptions() {
+-  EnableCalledSaveForStackMap = CJPipeline && EnableCalledSaveForStackMap;
+   if (CJPipeline) {
+     EnableGlobalISelOption = cl::BOU_FALSE;
+   }
+@@ -499,7 +497,6 @@ static int compileModule(char **argv, LLVMContext &Context) {
+   case ' ': break;
+   case '0': {
+     OLvl = CodeGenOpt::None;
+-    EnableCalledSaveForStackMap = false;
+     break;
+   }
+   case '1': OLvl = CodeGenOpt::Less; break;
