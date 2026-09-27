@@ -14,6 +14,7 @@
 #include <new>
 
 #include "Base/Copy.h"
+#include "Base/Globals.h"
 #include "Base/Log.h"
 #include "Heap/z/zAddress.inline.hpp"
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -24,14 +25,14 @@ namespace MapleRuntime {
 // zUtils.inline.hpp:37-50
 inline uintptr_t ZUtils::alloc_aligned_unfreeable(size_t alignment, size_t size)
 {
-    void* aligned_addr = nullptr;
-    if (alignment < sizeof(void*)) {
-        alignment = sizeof(void*);
+    const size_t padded_size = size + (alignment - 1);
+    void* const addr = std::malloc(padded_size);
+    if (addr == nullptr) {
+        LOG(RTLOG_FATAL, "ZGC alloc_aligned_unfreeable malloc failed (%zu bytes)", padded_size);
     }
-    if (posix_memalign(&aligned_addr, alignment, size) != 0 || aligned_addr == nullptr) {
-        LOG(RTLOG_FATAL, "ZGC alloc_aligned_unfreeable posix_memalign failed (%zu bytes)", size);
-    }
+    void* const aligned_addr = AlignUp(addr, alignment);
     memset(aligned_addr, 0, size);
+    // As in ZGC, the aligned interior pointer is intentionally not freeable.
     return reinterpret_cast<uintptr_t>(aligned_addr);
 }
 
