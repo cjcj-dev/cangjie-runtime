@@ -1423,7 +1423,7 @@ void CheckRawDataShape(RawDataShapeResult& result)
         result.copied, static_cast<long long>(result.acquired), static_cast<long long>(result.released));
     // Separate address and pin-lifetime witnesses; no existence assertion can
     // hide the returned-address assertion (ZGC jni.cpp:2881).
-    GC_EXPECT_EQ(result.actual, result.expected);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(result.actual), reinterpret_cast<uintptr_t>(result.expected));
     GC_EXPECT_EQ(result.copied, false);
     GC_EXPECT_EQ(result.acquired, 1);
     GC_EXPECT_EQ(result.released, 0); // ZGC jni.cpp:2893 ignores carray.
