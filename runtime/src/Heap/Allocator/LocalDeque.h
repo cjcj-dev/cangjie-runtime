@@ -12,7 +12,11 @@
 #include <cstdint>
 
 #include <new>
+#ifdef _WIN64
+#include <memoryapi.h>
+#else
 #include <sys/mman.h>
+#endif
 
 #include "Base/Log.h"
 #include "Base/Panic.h"
@@ -33,8 +37,15 @@ class DequeMapping {
 public:
     static DequeMapping* MapMemory(size_t size, const char* tag)
     {
+#ifdef _WIN64
+        // Match the native mapping contract used by PagePool/TypeInfoManager:
+        // reserve and commit writable storage, then release the whole mapping.
+        void* base = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        CHECK_DETAIL(base != nullptr, "%s: VirtualAlloc of %zu bytes failed", tag, size);
+#else
         void* base = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         CHECK_DETAIL(base != MAP_FAILED, "%s: mmap of %zu bytes failed", tag, size);
+#endif
 #if defined(__linux__) || defined(hongmeng)
         MRT_PRCTL(base, size, tag);
 #endif
@@ -44,7 +55,11 @@ public:
     static void DestroyMemMap(DequeMapping*& mapping) noexcept
     {
         if (mapping != nullptr) {
+#ifdef _WIN64
+            ALLOCUTIL_MEM_UNMAP(mapping->base, mapping->size);
+#else
             (void)munmap(mapping->base, mapping->size);
+#endif
             delete mapping;
             mapping = nullptr;
         }

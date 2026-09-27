@@ -7,66 +7,74 @@
 @REM Windows build script
 @echo off
 
-set platform=windows_x86_64
-set CURRENT_PATH="%CD%"
-set PROJECT_PATH="%~dp0\..\"
-set CJTHREAD_PATH="%~dp0\..\src\CJThread"
-set TESTCODE_PATH="%~dp0\..\test_tools\tests\cjthread_test"
-set BUILD_PATH=%PROJECT_PATH%\build\cjthread_build
-if defined CJTHREAD_BUILD_PATH set BUILD_PATH=%CJTHREAD_BUILD_PATH%
+setlocal
+set "platform=windows_x86_64"
+set "CURRENT_PATH=%CD%"
+for %%I in ("%~dp0..") do set "PROJECT_PATH=%%~fI"
+set "CJTHREAD_PATH=%PROJECT_PATH%\src\CJThread"
+set "TESTCODE_PATH=%PROJECT_PATH%\test_tools\tests\cjthread_test"
+set "BUILD_PATH=%PROJECT_PATH%\build\cjthread_build"
+if defined CJTHREAD_BUILD_PATH set "BUILD_PATH=%CJTHREAD_BUILD_PATH:/=\%"
 
 @REM 检查路径是否包含空格
-if %PROJECT_PATH% neq %PROJECT_PATH: =% (
+if "%PROJECT_PATH%" neq "%PROJECT_PATH: =%" (
     echo The path cannot contain spaces.
     exit /b 1
 )
 
-if "%1" == "-s" (
-    cd %TESTCODE_PATH%\cjthread_sdv\src
+if "%~1" == "-s" (
+    cd /d "%TESTCODE_PATH%\cjthread_sdv\src"
+    if errorlevel 1 goto :cjthread_fail
     call build_test_windows.bat %*
-) else if "%1" == "-h" (
-    cd %TESTCODE_PATH%\cjthread_sdv\src
+) else if "%~1" == "-h" (
+    cd /d "%TESTCODE_PATH%\cjthread_sdv\src"
+    if errorlevel 1 goto :cjthread_fail
     call build_test_windows.bat %*
-) else if "%1" == "set_env" (
-    call %PROJECT_PATH%\scripts\environment_variables_setting.bat
+) else if "%~1" == "set_env" (
+    call "%PROJECT_PATH%\scripts\environment_variables_setting.bat"
     echo set environment success
-) else if "%1" == "clean" (
-    call %PROJECT_PATH%\build\scripts\clean_history.bat
-) else if "%1" == "-p" (
-    if exist %BUILD_PATH% (
-        rd  /S /Q %BUILD_PATH%
+) else if "%~1" == "clean" (
+    call "%PROJECT_PATH%\build\scripts\clean_history.bat"
+) else if "%~1" == "-p" (
+    if exist "%BUILD_PATH%" (
+        rd /S /Q "%BUILD_PATH%"
+        if errorlevel 1 goto :cjthread_fail
     ) 
-    if not exist %BUILD_PATH% (
-        md %BUILD_PATH%
+    if not exist "%BUILD_PATH%" (
+        md "%BUILD_PATH%"
+        if errorlevel 1 goto :cjthread_fail
     )
 
-    if exist %PROJECT_PATH%\output (
-        rd  /S /Q %PROJECT_PATH%\output\
+    if exist "%PROJECT_PATH%\output" (
+        rd /S /Q "%PROJECT_PATH%\output"
+        if errorlevel 1 goto :cjthread_fail
     ) 
-    if not exist %PROJECT_PATH%\output (
-        md %PROJECT_PATH%\output
+    if not exist "%PROJECT_PATH%\output" (
+        md "%PROJECT_PATH%\output"
+        if errorlevel 1 goto :cjthread_fail
     )
 
-    cd /d %BUILD_PATH%\
+    cd /d "%BUILD_PATH%"
+    if errorlevel 1 goto :cjthread_fail
 
-    if "%2" == "windows_x86_64" (
-        cmake -DTARGET="%2" -DCMAKE_BUILD_TYPE="%3" -DLIBTYPE="%4" -DBUILDING_STAGE="%5" %6 -DCMAKE_C_COMPILER_TARGET=x86_64-windows-gnu -DCMAKE_CXX_COMPILER_TARGET=x86_64-windows-gnu %CJTHREAD_PATH% -G "MinGW Makefiles"
+    if "%~2" == "windows_x86_64" (
+        cmake -DTARGET="%~2" -DCMAKE_BUILD_TYPE="%~3" -DLIBTYPE="%~4" -DBUILDING_STAGE="%~5" %~6 -DCMAKE_C_COMPILER_TARGET=x86_64-windows-gnu -DCMAKE_CXX_COMPILER_TARGET=x86_64-windows-gnu "%CJTHREAD_PATH%" -G "MinGW Makefiles"
         if errorlevel 1 goto :cjthread_fail
     ) else (
-        cmake -DTARGET="%2" -DCMAKE_BUILD_TYPE="%3" -DLIBTYPE="%4" -DBUILDING_STAGE="%5" %6 %CJTHREAD_PATH% -G "MinGW Makefiles"
+        cmake -DTARGET="%~2" -DCMAKE_BUILD_TYPE="%~3" -DLIBTYPE="%~4" -DBUILDING_STAGE="%~5" %~6 "%CJTHREAD_PATH%" -G "MinGW Makefiles"
         if errorlevel 1 goto :cjthread_fail
     )
 
-    mingw32-make
+    mingw32-make -j%NUMBER_OF_PROCESSORS%
     if errorlevel 1 goto :cjthread_fail
 )
 
-cd /d %CURRENT_PATH%
+cd /d "%CURRENT_PATH%"
 exit /b 0
 
 :cjthread_fail
 set "CJTHREAD_FAIL_RC=%ERRORLEVEL%"
-cd /d %CURRENT_PATH%
+cd /d "%CURRENT_PATH%"
 exit /b %CJTHREAD_FAIL_RC%
 
 @echo on
