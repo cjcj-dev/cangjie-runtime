@@ -162,12 +162,29 @@ def main():
         return
     assert record['publication_assertion_rc'] == 0, 'production post-link publication failed'
 
-    def publication(name):
+    def publication(name, log_name):
         cache = (build / 'CMakeCache.txt').read_text()
         identity = re.search(r'^CANGJIE_RUNTIME_CONFIG_ID:INTERNAL=(.*)$', cache, re.M)[1]
         root = source / 'output/temp' / identity
+        log = (evidence / (log_name + '.log')).read_text(errors='replace')
+        published = re.findall(r'^RUNTIME_OUTPUT_PUBLISHED config=(\S+) lib_dir=(.*?) '
+                               r'runtime_sha256=', log, re.M)
+        assert published, 'publication receipt is absent'
+        published_id, published_lib = published[-1]
+        published_root = Path(published_lib).parents[1]
+        lookup_ok = identity == published_id and root == published_root
+        metadata = ('runtime-build-config.txt', 'runtime-build-inputs.txt', 'runtime-product-hashes.json')
+        missing = [filename for filename in metadata if not (published_root / filename).is_file()]
+        record[name + '-lookup'] = {'cache_id': identity, 'root': str(root),
+                                   'published_id': published_id, 'published_root': str(published_root),
+                                   'lookup_assertion_rc': int(not lookup_ok), 'missing_metadata': missing}
+        save()
+        print(f'PUBLICATION_LOOKUP_ASSERT name={name} rc={int(not lookup_ok)} root={root}', flush=True)
+        assert lookup_ok, 'PUBLICATION_LOOKUP_MISMATCH: test/cache coordinate differs from publisher receipt'
+        print(f'PUBLICATION_METADATA_ASSERT name={name} missing={missing}', flush=True)
+        assert not missing, f'PUBLICATION_METADATA_MISSING: producer publication {published_root}: {missing}'
         inputs = json.loads((root / 'runtime-build-inputs.txt').read_text())
-        for filename in ('runtime-build-config.txt', 'runtime-build-inputs.txt', 'runtime-product-hashes.json'):
+        for filename in metadata:
             shutil.copy2(root / filename, evidence / (name + '-' + filename))
         products = {p.name: sha(p) for p in root.rglob('*') if p.name in inputs['products']}
         assert products == inputs['products'], 'published product bytes differ from recorded identity'
@@ -180,7 +197,7 @@ def main():
         save()
         return identity, inputs
 
-    original_id, original_inputs = publication('candidate')
+    original_id, original_inputs = publication('candidate', 'production-entry')
     listed = [Path(line) for line in (build / 'runtime-link-inputs.txt').read_text().splitlines() if line]
     expected_name = 'build.make' if os.name == 'nt' else 'link.txt'
     assert listed and all(p.name == expected_name and p.is_file() for p in listed)
@@ -204,7 +221,7 @@ def main():
                    '-DCMAKE_SHARED_LINKER_FLAGS=' + old_flags + ' ' + option]) == 0
         changed_build_rc = run('changed-link-build', [cmake, '--build', build, '--target', 'cangjie-runtime', '--parallel', os.cpu_count()])
         assert 'RUNTIME_OUTPUT_PUBLISHED config=' in (evidence / 'changed-link-build.log').read_text(errors='replace'), 'changed product did not publish'
-        changed_id, changed_inputs = publication('changed')
+        changed_id, changed_inputs = publication('changed', 'changed-link-build')
         print(f'LINK_IDENTITY_ASSERT before={original_id} after={changed_id}', flush=True)
         assert original_id != changed_id, 'actual linker input change did not change identity'
         assert any(option in value for value in changed_inputs['links'].values()), 'changed link command was not recorded'
@@ -229,7 +246,7 @@ def main():
         finally:
             missing.write_bytes(saved)
     assert run('restored-publish', publisher_command) == 0
-    restored_id, restored_inputs = publication('restored')
+    restored_id, restored_inputs = publication('restored', 'restored-publish')
     assert restored_id == original_id and restored_inputs['products'] == original_inputs['products'], 'restoring link inputs did not restore product identity'
     record['controls_passed'] = True
     save()
