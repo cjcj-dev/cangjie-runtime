@@ -908,28 +908,14 @@ static void PinArray(const ArrayRef /* array */)
     ZJNICritical::enter();
 }
 
-// Return the raw pointer of input array object, isCopy records whether memory copy occurs.
-// If GC is running, try to copy the payload of array and return the copy data pointer, isCopy set true
-// If copy failed, just return the content pointer of real array, isCopy set false,
-// but can't return until GC finish current work.
+// ZGC jni.cpp:2868-2886: every heap array, including an empty array,
+// enters the critical region and returns its content address without copying.
 extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 {
-    // Coloured refs fail the heap-range check and skip pin; strip first (ffibound / acqstrip).
+    // Cangjie stack arrays and null do not participate in heap pinning.
     ArrayRef plain = array;
     if (!Heap::IsHeapAddress(plain)) {
         return plain == nullptr ? nullptr : plain->ConvertToCArray();
-    }
-#ifdef _WIN64
-    static void* unreadablePage = reinterpret_cast<void*>(0x1234);
-#else
-    static void* unreadablePage = MutatorManager::Instance().GetSafepointPageManager()->GetUnreadablePage();
-#endif
-    MRT_ASSERT(unreadablePage != nullptr, "runtime is not initialized\n");
-    if (UNLIKELY(plain == nullptr)) {
-        return nullptr;
-    }
-    if (UNLIKELY(plain->GetContentSize() == 0)) {
-        return unreadablePage;
     }
     MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_AcquireRawData");
     if (isCopy != nullptr) {
@@ -948,23 +934,11 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 // Release the raw pointer
 extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
 {
-    // ZGC jni.cpp:2881-2887 / zCollectedHeap.cpp:279-281: unpin re-resolves the
+    // ZGC jni.cpp:2890-2896 / zCollectedHeap.cpp:279-281: unpin re-resolves the
     // reference and never dereferences the object header; the exit path must not
     // depend on the caller-supplied reference still designating a valid object.
     ArrayRef plain = array;
     if (!Heap::IsHeapAddress(plain)) {
-        return;
-    }
-#ifdef _WIN64
-    static void* unreadablePage = reinterpret_cast<void*>(0x1234);
-#else
-    static void* unreadablePage = MutatorManager::Instance().GetSafepointPageManager()->GetUnreadablePage();
-#endif
-    MRT_ASSERT(unreadablePage != nullptr, "runtime is not initialized\n");
-    if (UNLIKELY(plain == nullptr || rawPtr == nullptr)) {
-        return;
-    }
-    if (rawPtr == unreadablePage) {
         return;
     }
     ZJNICritical::exit();
