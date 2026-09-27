@@ -248,9 +248,7 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, PauseDoesNotFlushAttachedMutator)
     // is drainable from the published young stripe stacks.
     std::vector<BaseObject*> drained;
     DrainPublishedMarkObjects(drained);
-    const BaseObject* target = from_object(heap.obj0);
-    const bool published =
-        std::find(drained.begin(), drained.end(), const_cast<BaseObject*>(target)) != drained.end();
+    const bool published = std::find(drained.begin(), drained.end(), heap.obj0) != drained.end();
     std::fprintf(stderr, "EXIT_DETACH_PUBLISHED_ASSERT drained=%zu contains_obj0=%d\n",
                  drained.size(), published);
     GC_EXPECT_TRUE(published);
