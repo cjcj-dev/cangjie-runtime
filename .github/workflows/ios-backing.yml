@@ -1,0 +1,73 @@
+name: iOS backing SDK contract
+on:
+  workflow_dispatch:
+  push:
+    branches: ['sym/1182-*']
+permissions:
+  contents: read
+jobs:
+  full-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15, target: ios-aarch64, sdk: iphoneos, arch: arm64}
+          - {runner: macos-15-intel, target: ios-simulator-x86_64, sdk: iphonesimulator, arch: x86_64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      CMAKE_ASM_COMPILER_LAUNCHER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Build full runtime against SDK 18.5
+        env:
+          TARGET: ${{ matrix.target }}
+          SDK: ${{ matrix.sdk }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          ulimit -c 0
+          out="$RUNNER_TEMP/ios-backing"
+          mkdir -p "$out"
+          uptime > "$out/uptime-before.txt"
+          xcodebuild -version | tee "$out/xcode.txt"
+          sdk_version="$(xcrun --sdk "$SDK" --show-sdk-version)"
+          printf '%s\n' "$sdk_version" | tee "$out/sdk-version.txt"
+          test "$sdk_version" = 18.5
+          sdk_root="$(xcrun --sdk "$SDK" --show-sdk-path)"
+          clang_path="$(xcrun --sdk "$SDK" --find clang)"
+          export CANGJIE_BUILD_JOBS="$(sysctl -n hw.ncpu)"
+          printf 'jobs=%s target=%s sdk=%s\n' "$CANGJIE_BUILD_JOBS" "$TARGET" "$sdk_root" > "$out/recipe.txt"
+          git rev-parse HEAD > "$out/head.txt"
+          start=$SECONDS
+          rc=0
+          (cd runtime && python3 build.py build --target "$TARGET" --build-type release \
+            --target-toolchain "$(dirname "$(dirname "$clang_path")")" \
+            --target-sysroot "$sdk_root" --prefix "$out/preinstall") > "$out/build.log" 2>&1 || rc=$?
+          printf '%s\n' "$rc" > "$out/build.rc"
+          printf 'wall=%s\n' "$((SECONDS-start))" > "$out/wall.txt"
+          uptime > "$out/uptime-after.txt"
+          find runtime -type f -name '*.dylib' -exec shasum -a 256 {} + > "$out/dylibs.sha256"
+          if [ "$rc" != 0 ]; then
+            grep -n -m 25 -E 'error:|Undefined symbols|undefined symbol|Error [0-9]' "$out/build.log" || true
+            exit "$rc"
+          fi
+          dylib="$(find runtime -type f -name libcangjie-runtime.dylib -print -quit)"
+          test -n "$dylib"
+          file "$dylib" | tee "$out/product-file.txt"
+          lipo -verify_arch "$ARCH" "$dylib"
+          nm -u "$dylib" > "$out/imports.txt"
+          grep -E ' U _vm_remap$' "$out/imports.txt"
+          mkdir -p "$out/product"
+          cp "$dylib" "$out/product/"
+          find runtime -type f -name libboundscheck.dylib -exec cp {} "$out/product/" \;
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-backing-${{ matrix.target }}
+          path: ${{ runner.temp }}/ios-backing
+          retention-days: 7
