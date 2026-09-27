@@ -415,10 +415,10 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false)
 // zUncoloredRoot.inline.hpp:62-68 and zGeneration.inline.hpp:131-139: relocate-start
 // exit processing writes the to-address of a cset frame slot before concurrent relocate.
 static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPointer = true,
-                                                bool registerPointer = false)
+                                                bool registerPointer = false, bool inplaceSret = false)
 {
     B09RuntimeFixture runtime;
-    CreateStandaloneHeap(8);
+    CreateStandaloneHeap(inplaceSret ? 2 : 8);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
@@ -449,6 +449,9 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     for (size_t i = 0; i < 2; ++i) {
         pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
+        if (inplaceSret) {
+            reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24))->SetClassInfo(type);
+        }
         for (size_t j = 0; j < 2; ++j) {
             objects[i][j] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
             objects[i][j]->SetClassInfo(type);
@@ -487,6 +490,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
             frames[0][1] = reinterpret_cast<uintptr_t>(&frames[6][2]);
             frames[6][1] = reinterpret_cast<uintptr_t>(&frames[8][2]);
         }
+        if (inplaceSret) { frames[0][2] = reinterpret_cast<uintptr_t>(objects[0][1]); }
         frames[6][2] = reinterpret_cast<uintptr_t>(objects[0][0]);
         frames[8][2] = reinterpret_cast<uintptr_t>(objects[0][1]);
     }
@@ -516,6 +520,10 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     // The phase has already installed the new thread masks. Frame roots still
     // belong to the watermark's saved color (ZGC zStackWatermark.cpp:95-99).
     parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
+    if (inplaceSret) {
+        ZRelocate::StartRelocationTasks(generation.id());
+        generation.relocate().relocate(&generation.relocation_set());
+    }
     parked->DoLeaveSaferegion();
     const uintptr_t after = sret ? frames[6][2] : younger[2];
     const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
@@ -529,11 +537,23 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         const bool bounded = !parked->GetStackWatermark().IsDone();
         std::fprintf(stderr, "SRET_COVER_ASSERT_EXECUTED pointer=%d register=%d covered=%d untouched=%d bounded=%d\n",
                      hasPointer, registerPointer, covered, untouched, bounded);
+        if (inplaceSret) {
+            // The real phase exit heals the callee root. Its current address
+            // overlaps an old forwarding key after in-place compaction.
+            // Write that return value through sret before draining callers.
+            const uintptr_t returned = frames[0][2];
+            *reinterpret_cast<uintptr_t*>(frames[0][1]) = returned;
+            parked->GetStackWatermark().finish_processing(nullptr);
+            std::fprintf(stderr, "SRET_INPLACE_VALUE_ASSERT_EXECUTED returned=%#zx value=%#zx old_key=%#zx covered=%d\n",
+                         returned, frames[6][2], reinterpret_cast<uintptr_t>(objects[0][0]), covered);
+            GC_EXPECT_EQ(frames[6][2], returned);
+            GC_EXPECT_EQ(returned, transitive);
+        }
         GC_EXPECT_TRUE(hasPointer ? covered : untouched);
         GC_EXPECT_TRUE(bounded);
         // A callee writes its return value through sret after phase entry;
         // draining the remaining callers must preserve that current address.
-        if (hasPointer) {
+        if (hasPointer && !inplaceSret) {
             *reinterpret_cast<uintptr_t*>(frames[0][1]) = transitive;
             parked->GetStackWatermark().finish_processing(nullptr);
             std::fprintf(stderr, "SRET_VALUE_ASSERT_EXECUTED value=%#zx expected=%#zx\n", frames[6][2], transitive);
@@ -566,6 +586,11 @@ GC_COMPONENT_OTHER_VM_TEST(SretWatermark, UsesIncomingRegisterPointerMap)
 GC_COMPONENT_OTHER_VM_TEST(SretWatermark, NoPointerKeepsLazyFrontier)
 {
     CheckRelocateStartExitRemapsFrameRoot(true, false);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(SretWatermark, PreservesCurrentSretAfterEpochFlip)
+{
+    CheckRelocateStartExitRemapsFrameRoot(true, true, false, true);
 }
 
 GC_COMPONENT_OTHER_VM_TEST(RelocateStartFrameRoot, WritesToAddressBeforeConcurrentRelocate)
