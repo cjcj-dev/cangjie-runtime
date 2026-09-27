@@ -343,9 +343,9 @@ GC_TEST(MarkPort203Engine, TrySetNStripesIsAtomicSnapshot)
     GC_EXPECT_EQ(stripes.NStripes(), 2u);
     GC_EXPECT_TRUE(!stripes.TrySetNStripes(4, 1));
     GC_EXPECT_EQ(stripes.NStripes(), 2u);
-    GC_EXPECT_EQ(stripes.StripeForWorker(2, 0), stripes.At(0));
-    GC_EXPECT_EQ(stripes.Next(stripes.At(0)), stripes.At(1));
-    GC_EXPECT_EQ(stripes.Next(stripes.At(3)), stripes.At(0));
+    GC_EXPECT_TRUE(stripes.StripeForWorker(2, 0) == stripes.At(0));
+    GC_EXPECT_TRUE(stripes.Next(stripes.At(0)) == stripes.At(1));
+    GC_EXPECT_TRUE(stripes.Next(stripes.At(3)) == stripes.At(0));
 }
 
 GC_TEST(MarkPort203Engine, DomainPrepareResizeKeepsCapacity)
@@ -414,7 +414,7 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     MarkContext context(1, 0, domain.Stripes(), stacks);
     constexpr size_t count = 64;
     for (size_t i = 0; i < count; ++i) {
-        stacks.Push(domain.Stripes(), 0, Entry(i), true);
+        stacks.Push(domain.Stripes(), domain.Stripes().At(0), Entry(i), true);
     }
     size_t followed = 0;
     const auto result = ZMark::FollowWork(context, domain.Smr(), domain.Stripes(), domain.Terminate(),
@@ -596,7 +596,7 @@ void ExpectFlushPublishes(MarkingStacks::MarkingGeneration generation)
     // A full first segment overflows on the 129th push; the last entry
     // remains owned by the thread until the real ZMark flush entry runs.
     for (size_t i = 0; i < 129; ++i) {
-        local.Push(domain.Stripes(), 0, Entry(i), false);
+        local.Push(domain.Stripes(), domain.Stripes().At(0), Entry(i), false);
     }
     (void)domain.Flush(data);
     std::vector<size_t> observed;

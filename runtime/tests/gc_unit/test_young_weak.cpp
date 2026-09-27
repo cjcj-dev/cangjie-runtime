@@ -600,7 +600,7 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
         ZMark& current = *domain;
         ZMark& other = domain == &old ? young : old;
         auto& stacks = ThreadLocal::GetMarkStacks(current);
-        stacks.Push(current.Stripes(), 0,
+        stacks.Push(current.Stripes(), current.Stripes().At(0),
                     MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
         GC_EXPECT_TRUE(current.Stripes().IsEmpty());
         GC_EXPECT_FALSE(stacks.IsEmpty());
