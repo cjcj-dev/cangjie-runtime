@@ -140,7 +140,7 @@ def arm(name):
         precise = missing == {export_cut} and rc != 0 and ('_CJ_MCC_PackageInit' + export_cut) in diagnostic
         return dict(arm=name, hashes=hashes, missing=sorted(missing), link_rc=rc, precise=precise,
                     scope='symbol/link negative control only; not runtime behaviour evidence')
-    env = dict(os.environ, DYLD_LIBRARY_PATH=str(directory))
+    env = dict(os.environ, DYLD_LIBRARY_PATH=str(directory), DYLD_PRINT_LIBRARIES="1")
     results = {}
     for test in NAMES:
         log = directory / (test + '.log')
@@ -148,14 +148,17 @@ def arm(name):
         output = log.read_text()
         passed = (rc == 70 and 'phase=1 result=4' in output) if test == 'Abort' else (
             rc == 0 and f'PACKAGE_INIT_TARGET {test} executed=1 pass=1' in output)
+        loaded_product = str(target) in output
+        passed = passed and loaded_product
+        target_failed = rc == 1 and f'PACKAGE_INIT_TARGET {test} executed=1 pass=0' in output and loaded_product
         # Abort's target assertion is the externally observed product termination.
         if test == 'Abort':
             with log.open('a') as stream:
                 stream.write(f'PACKAGE_INIT_TARGET Abort executed=1 pass={int(passed)} rc={rc}\n')
-        results[test] = dict(rc=rc, passed=passed)
+        results[test] = dict(rc=rc, passed=passed, target_failed=target_failed, loaded_product=loaded_product)
     expected = {name} if name in cuts else set()
     failed = {test for test, result in results.items() if not result['passed']}
-    return dict(arm=name, hashes=hashes, results=results, precise=(failed == expected))
+    return dict(arm=name, hashes=hashes, results=results, precise=(failed == expected and all(results[test]['target_failed'] for test in expected)))
 
 
 # Immutable build inputs; only the selected assembly object and output differ.

@@ -73,6 +73,7 @@ int main(int argc, char** argv)
     void* token = nullptr;
     if (std::strcmp(argv[1], "Begin") == 0) {
         const uint32_t result = InvokeBegin(package, unit, 0, &token);
+        std::fprintf(stderr, "PRODUCT_RESULT Begin result=%u token_nonnull=%d\n", result, token != nullptr);
         Check("Begin", result == 0 && token != nullptr);
         MCC_PackageInitComplete(token);
     } else {
@@ -87,6 +88,7 @@ int main(int argc, char** argv)
         } else { return 2; }
         void* next = reinterpret_cast<void*>(1);
         const uint32_t result = MCC_PackageInitBegin(package, unit, 0, &next);
+        std::fprintf(stderr, "PRODUCT_RESULT %s result=%u token_empty=%d\n", argv[1], result, next == nullptr);
         Check(argv[1], result == expected && next == nullptr);
     }
     // Isolated process: avoid making runtime teardown part of this ABI assertion.
