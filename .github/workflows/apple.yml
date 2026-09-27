@@ -409,7 +409,7 @@ jobs:
           exit "$fail"
 
   ios-stdlib-configure:
-    if: ${{ github.event_name == 'push' || inputs.job == 'ios-stdlib-configure' || inputs.job == 'all' }}
+    if: ${{ (github.event_name == 'push' || inputs.job == 'ios-stdlib-configure' || inputs.job == 'all') && inputs.p04_bsd_tu_only != true }}
     runs-on: macos-15
     timeout-minutes: 35
     strategy:
