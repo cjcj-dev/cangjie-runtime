@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -40,33 +41,47 @@ def main():
             triples.update(entry_triples)
             if not compiler or not entry_roots or not entry_triples:
                 missing.append(entry['file'])
+        detected = {}
+        for language in ('C', 'CXX'):
+            files = list((build / 'CMakeFiles').glob('*/CMake' + language + 'Compiler.cmake'))
+            for config in files:
+                match = re.search(r'set\(CMAKE_' + language + r'_COMPILER "([^"]+)"\)', config.read_text())
+                if match:
+                    detected[language] = match.group(1)
         # All commands contribute; a missing parameter cannot disappear in a set union.
         check(label + '.sdk_route', bool(commands) and not missing
               and all(Path(c).parent == sdk / 'llvm/bin' for c in compilers)
-              and roots == {str(sdk / 'sysroot')},
-              {'compilers': sorted(compilers), 'sysroots': sorted(roots), 'missing': missing})
+              and roots == {str(sdk / 'sysroot')}
+              and set(detected) == {'C', 'CXX'}
+              and all(Path(c).parent == sdk / 'llvm/bin' for c in detected.values()),
+              {'compilers': sorted(compilers), 'sysroots': sorted(roots),
+               'detected': detected, 'missing': missing})
         check(label + '.target', bool(commands) and not missing
               and triples == {args.arch + '-linux-ohos'}, sorted(triples))
 
+    install_script = (args.build / 'cmake_install.cmake').read_text()
+    strip = str(sdk / 'llvm/bin/llvm-strip')
+    check('runtime.strip_route', strip in install_script and '/prebuilts/clang/ohos/' not in install_script,
+          [line.strip() for line in install_script.splitlines() if 'llvm-strip' in line])
     renamed = list(args.build.rglob('libstdc++.so'))
     check('no_runtime_library_rename', not renamed, [str(p) for p in renamed])
-    if not args.configured_only:
-        for pattern in ('libcangjie-runtime.so', 'libcangjie-thread.a'):
-            products = list(args.build.rglob(pattern))
-            check('product.' + pattern, bool(products), [str(p) for p in products])
-            for product in products:
-                result = subprocess.run(['file', str(product)], capture_output=True, text=True)
-                check('file.' + pattern, result.returncode == 0, result.stdout.strip())
-                identity = {'sha256': hashlib.sha256(product.read_bytes()).hexdigest(),
-                            'path': str(product), 'file': result.stdout.strip()}
-                artifacts.append(identity)
-                print(json.dumps(identity), flush=True)
-                if product.suffix == '.so':
-                    with product.open('rb') as stream:
-                        header = stream.read(20)
-                    machine = int.from_bytes(header[18:20], 'little')
-                    check('elf.machine', header[:4] == b'\x7fELF'
-                          and machine == {'x86_64': 62, 'aarch64': 183}[args.arch], machine)
+    patterns = ('libcangjie-thread.a',) if args.configured_only else ('libcangjie-runtime.so', 'libcangjie-thread.a')
+    for pattern in patterns:
+        products = list(args.build.rglob(pattern))
+        check('product.' + pattern, bool(products), [str(p) for p in products])
+        for product in products:
+            result = subprocess.run(['file', str(product)], capture_output=True, text=True)
+            check('file.' + pattern, result.returncode == 0, result.stdout.strip())
+            identity = {'sha256': hashlib.sha256(product.read_bytes()).hexdigest(),
+                        'path': str(product), 'file': result.stdout.strip()}
+            artifacts.append(identity)
+            print(json.dumps(identity), flush=True)
+            if product.suffix == '.so':
+                with product.open('rb') as stream:
+                    header = stream.read(20)
+                machine = int.from_bytes(header[18:20], 'little')
+                check('elf.machine', header[:4] == b'\x7fELF'
+                      and machine == {'x86_64': 62, 'aarch64': 183}[args.arch], machine)
     args.output.write_text(json.dumps({'checks': checks, 'artifacts': artifacts}, indent=2) + '\n')
     return 0 if all(c['pass'] for c in checks) else 1
 

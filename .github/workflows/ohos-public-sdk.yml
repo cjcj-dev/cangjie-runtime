@@ -3,7 +3,7 @@ name: OHOS public SDK
 on:
   workflow_dispatch:
   push:
-    branches: ['sym/1196-*']
+    branches: ['main']
   pull_request:
     paths:
       - 'runtime/build.py'
@@ -34,6 +34,8 @@ jobs:
         entry: [cmake, build.py, controls]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y ccache libtinfo5 ninja-build
       - uses: actions/cache@v4
