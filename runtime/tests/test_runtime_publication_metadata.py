@@ -30,8 +30,7 @@ def main():
     if args.cut == 'retention':
         target = source / 'build/build_cjthread_windows.bat'
         old = '    cd /d "%BUILD_PATH%"'
-        new = ('    if exist "%PROJECT_PATH%\\output" rd /S /Q "%PROJECT_PATH%\\output"\n'
-               + old)
+        new = '    rd /S /Q "%PROJECT_PATH%\\output" & cd /d "%BUILD_PATH%"'
         diagnostic = 'PUBLICATION_METADATA_MISSING'
     else:
         target = test
