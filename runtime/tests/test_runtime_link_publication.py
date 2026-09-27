@@ -37,6 +37,7 @@ def main():
     build = args.build.resolve() if args.build else source / 'CMakebuild'
     producer = source / 'build/cmake/RuntimeOutputLayout.cmake'
     consumer = source / 'build/publish_runtime_output.py'
+    sources = (producer, consumer, source / 'build/build_cjthread_windows.bat')
     env = dict(os.environ, GC_UNIT_GATE_SKIP='1')
     if os.name == 'nt':
         # Keep a successfully linked DLL when a later POST_BUILD check fails.
@@ -51,7 +52,7 @@ def main():
         env['PATH'] = 'C:/msys64/mingw64/bin;C:/msys64/usr/bin;' + env['PATH']
     record = {'arm': args.arm, 'jobs': os.cpu_count(), 'steps': {},
               'test_sha256': sha(Path(__file__)),
-              'source_sha256': {str(p.relative_to(source)): sha(p) for p in (producer, consumer)}}
+              'source_sha256': {str(p.relative_to(source)): sha(p) for p in sources}}
 
     def save():
         (evidence / 'result.json').write_text(json.dumps(record, indent=2) + '\n')
@@ -122,7 +123,7 @@ def main():
             before.splitlines(True), after.splitlines(True),
             fromfile='a/runtime/build/publish_runtime_output.py',
             tofile='b/runtime/build/publish_runtime_output.py')))
-    record['tested_source_sha256'] = {str(p.relative_to(source)): sha(p) for p in (producer, consumer)}
+    record['tested_source_sha256'] = {str(p.relative_to(source)): sha(p) for p in sources}
     save()
     if args.production_entry:
         assert os.name == 'nt', 'production entry acceptance requires native Windows'
