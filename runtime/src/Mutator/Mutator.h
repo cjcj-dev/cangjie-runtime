@@ -91,6 +91,15 @@ public:
     const ThreadGCData& GetGCData() const { return gcData; }
     void ResetMutator();
 
+    // HotSpot javaThread.hpp:878-885: critical regions nest per logical thread.
+    bool InCritical() const { return jniActiveCritical > 0; }
+    void EnterCritical() { ++jniActiveCritical; }
+    void ExitCritical()
+    {
+        --jniActiveCritical;
+        MRT_ASSERT(jniActiveCritical >= 0, "JNI critical nesting problem");
+    }
+
     static Mutator* GetMutator() noexcept;
     HandshakeState& GetHandshakeState() { return handshakeState; }
     void StackGuardExpand() const;
@@ -531,6 +540,7 @@ private:
     std::atomic<uint32_t> suspensionFlag = { 0 };
     ObjectRef rawObject{};
     ThreadGCData gcData;
+    int32_t jniActiveCritical = 0;
     std::deque<ObjectRef> nativeFrameRoots;
 
 
