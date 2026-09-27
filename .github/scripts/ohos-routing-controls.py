@@ -227,7 +227,7 @@ def run(arm, source):
             target = keep / Path(entry['path']).name
             shutil.copy2(entry['path'], target)
             identity_hashes[target.name] = hashlib.sha256(normalized_identity(target)).hexdigest()
-            match = re.search(b'CJRT-COMMIT:[^\\\\]+', target.read_bytes())
+            match = re.search(rb'CJRT-COMMIT:[\w.-]+', target.read_bytes())
             if match:
                 stamps[target.name] = match.group(0).decode()
     record = {'arm': arm, 'arch': arch, 'configure_rc': configured.returncode,
