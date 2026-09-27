@@ -16,6 +16,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "gc_heap_fixture.hpp"
@@ -50,8 +52,8 @@ void ParkExitingPush()
     // Fire once: the first stack created by this owner after arming.
     g_armedOwner.store(nullptr, std::memory_order_release);
     g_parkedInSaferegion.store(armed->InSaferegion() ? 1 : 0, std::memory_order_release);
-    std::fprintf(stderr, "PROBE1137_PARKED between=Create/Push in_saferegion=%d\n",
-                 g_parkedInSaferegion.load());
+    std::fprintf(stderr, "PROBE1137_PARKED between=Create/Push in_saferegion=%d tid=%ld\n",
+                 g_parkedInSaferegion.load(), static_cast<long>(syscall(SYS_gettid)));
     g_parked.store(true, std::memory_order_release);
     while (!g_release.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -121,8 +123,8 @@ void RunArm(Arm arm)
         ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
         ScopedStopTheWorld stw("PROBE1137 young mark-end", false);
         worldStopped.store(true, std::memory_order_release);
-        std::fprintf(stderr, "PROBE1137_OUTER_FLUSH_BEGIN world_stopped=%d\n",
-                     MutatorManager::Instance().WorldStopped());
+        std::fprintf(stderr, "PROBE1137_OUTER_FLUSH_BEGIN world_stopped=%d tid=%ld\n",
+                     MutatorManager::Instance().WorldStopped(), static_cast<long>(syscall(SYS_gettid)));
         const bool ended = Heap::GetHeap().young().mark_end();
         std::fprintf(stderr, "PROBE1137_OUTER_FLUSH_END mark_end=%d\n", ended);
         pauseDone.store(true, std::memory_order_release);
