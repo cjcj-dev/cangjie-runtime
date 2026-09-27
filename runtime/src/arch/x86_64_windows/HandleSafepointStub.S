@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #define SafepointStubFrameSize           (8 * 46)
+#define SafepointStubArgumentSaveSize    32
 
 // This signal handler stub relies on MRT_PrepareToHandleSignal to put continuation pc in x17.
 // Continuation pc describes the control flow after signal handling completes.
@@ -59,6 +60,9 @@ CJ_MCC_HandleSafepoint:
     movapd  %xmm14, -352(%rbp)
     movapd  %xmm15, -368(%rbp)
 
+    // Keep the Win64 argument home area below the saved register slots.
+    subq   $SafepointStubArgumentSaveSize, %rsp
+
     movq   $3, %r8
     movq   %rbp, %rdx
     leaq   0x10(%rip), %rcx
@@ -75,6 +79,7 @@ unwindPCForSafepointHandlerStub:
     movq   %rax, %rcx
     callq  MRT_DeleteC2NContext
 
+    addq    $SafepointStubArgumentSaveSize, %rsp
     addq    $SafepointStubFrameSize, %rsp
 
     movq    -8(%rbp), %rax
