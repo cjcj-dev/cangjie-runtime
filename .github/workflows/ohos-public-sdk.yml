@@ -1,0 +1,67 @@
+name: OHOS public SDK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['sym/1196-*']
+  pull_request:
+    paths:
+      - 'runtime/build.py'
+      - 'runtime/config.cmake'
+      - 'runtime/CMakeLists.txt'
+      - 'runtime/build/cmake/toolchain/ohos_*'
+      - 'runtime/src/CJThread/CMakeLists.txt'
+      - 'runtime/tests/test_ohos_public_sdk.py'
+      - '.github/scripts/ohos-public-sdk.sh'
+      - '.github/workflows/ohos-public-sdk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        entry: [cmake, build.py]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y ccache libtinfo5 ninja-build
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ohos-sdk
+          key: ohos-public-native-linux-5.0.0-v1
+      - name: Download official OpenHarmony SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="$RUNNER_TEMP/ohos-sdk"
+          if ! test -f "$sdk/archive.sha256"; then
+            mkdir -p "$sdk"
+            cd "$sdk"
+            url=https://repo.huaweicloud.com/openharmony/os/5.0.0-Release/ohos-sdk-windows_linux-public.tar.gz
+            curl --fail --location --retry 3 "$url" -o sdk.tar.gz
+            curl --fail --location --retry 3 "$url.sha256" -o expected.sha256
+            expected=$(awk '{print $1}' expected.sha256)
+            printf '%s  sdk.tar.gz\n' "$expected" | sha256sum -c -
+            sha256sum sdk.tar.gz > archive.sha256
+            tar -xzf sdk.tar.gz --wildcards --no-anchored 'native-linux-*.zip'
+            native_zip=$(find . -name 'native-linux-*.zip' -print -quit)
+            unzip -q "$native_zip" -d unpacked
+            rm sdk.tar.gz "$native_zip"
+          fi
+          native=$(find "$sdk/unpacked" -type d -name native -print -quit)
+          test -x "$native/llvm/bin/clang"
+          echo "PUBLIC_NATIVE=$native" >> "$GITHUB_ENV"
+          cat "$sdk/archive.sha256" "$native/oh-uni-package.json"
+      - name: Build through real entry and verify products
+        run: bash .github/scripts/ohos-public-sdk.sh '${{ matrix.arch }}' '${{ matrix.entry }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ohos-${{ matrix.arch }}-${{ matrix.entry }}
+          path: ohos-evidence
