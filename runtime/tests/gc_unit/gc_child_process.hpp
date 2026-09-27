@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <cerrno>
 #include <string>
+#include <fstream>
+#include <sstream>
 #include <thread>
 #include <dirent.h>
 #include <sys/prctl.h>
@@ -45,6 +47,56 @@ private:
     bool valid = true;
 };
 
+// Timestamps are observations in the supervisor, not additional deadlines.
+struct ChildVmTiming {
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point spawned = Clock::now();
+    Clock::time_point firstByte {};
+    Clock::time_point sentinel {};
+    Clock::time_point waitFinished {};
+
+    std::string Summary(bool waited) const
+    {
+        const auto elapsed = [](Clock::time_point start, Clock::time_point end) {
+            return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+        };
+        const bool started = firstByte != Clock::time_point{};
+        const bool completed = sentinel != Clock::time_point{};
+        return "; exec_ms=" + elapsed(spawned, started ? firstByte : waitFinished) +
+            "; body_ms=" + (started ? elapsed(firstByte, completed ? sentinel : waitFinished) : "not-started") +
+            "; exit_ms=" + (completed ? elapsed(sentinel, waitFinished) : "not-started") +
+            "; pending_phase=" + (!started ? "exec" : !completed ? "body" : !waited ? "exit" : "none");
+    }
+};
+
+// /proc remains useful when the debugger cannot be started or times out.
+inline void DumpChildProcState(pid_t child)
+{
+    const std::string prefix = "/proc/" + std::to_string(child);
+    std::string wchan;
+    std::ifstream waitChannel(prefix + "/wchan");
+    if (!std::getline(waitChannel, wchan)) { wchan = "unavailable"; }
+    std::string stat;
+    std::ifstream processStat(prefix + "/stat");
+    std::string utime = "unavailable";
+    std::string stime = "unavailable";
+    if (std::getline(processStat, stat)) {
+        // comm (field 2) may contain spaces and parentheses.
+        const size_t commEnd = stat.rfind(')');
+        if (commEnd != std::string::npos) {
+            std::istringstream fields(stat.substr(commEnd + 1));
+            std::string value;
+            for (int field = 3; field <= 15 && fields >> value; ++field) {
+                if (field == 14) { utime = value; }
+                if (field == 15) { stime = value; }
+            }
+        }
+    }
+    std::fprintf(stderr, "[ PROC ] pid=%d wchan=%s stat.utime=%s stat.stime=%s (clock ticks)\n",
+                 child, wchan.c_str(), utime.c_str(), stime.c_str());
+    std::fflush(stderr);
+}
+
 // This deadline reports a harness failure; it never substitutes for a scenario
 // assertion. Capture all child threads before terminating an unresponsive VM.
 inline void DumpChildStacks(pid_t child)
@@ -60,6 +112,7 @@ inline void DumpChildStacks(pid_t child)
     }
     if (debugger < 0) {
         std::fprintf(stderr, "[ ERROR ] cannot fork stack collector: %d\n", errno);
+        DumpChildProcState(child);
         return;
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -68,13 +121,15 @@ inline void DumpChildStacks(pid_t child)
         const pid_t result = waitpid(debugger, &status, WNOHANG);
         if (result == debugger) {
             std::fprintf(stderr, "[ STACKS ] collector status=%d\n", status);
+            if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) { DumpChildProcState(child); }
             return;
         }
-        if (result < 0 && errno != EINTR) { return; }
+        if (result < 0 && errno != EINTR) { DumpChildProcState(child); return; }
         if (std::chrono::steady_clock::now() >= deadline) {
             kill(debugger, SIGKILL);
             while (waitpid(debugger, &status, 0) < 0 && errno == EINTR) {}
             std::fprintf(stderr, "[ ERROR ] stack collector exceeded 10 seconds\n");
+            DumpChildProcState(child);
             return;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -123,11 +178,12 @@ inline std::string ChildExitSummary(bool waited, int status)
 }
 
 inline bool WaitChildExit(pid_t child, int& status,
-                          std::chrono::steady_clock::time_point deadline, bool ownsGroup = false)
+                          std::chrono::steady_clock::time_point deadline, ChildVmTiming& timing, bool ownsGroup = false)
 {
     for (;;) {
         const pid_t result = waitpid(child, &status, WNOHANG);
         if (result == child) {
+            timing.waitFinished = ChildVmTiming::Clock::now();
             if (ownsGroup && kill(-child, 0) == 0) {
                 // Cleanup is independent of the direct child's result. Like
                 // HotSpot TEST_OTHER_VM (unittest.hpp:98), the caller judges
@@ -136,8 +192,12 @@ inline bool WaitChildExit(pid_t child, int& status,
             }
             return true;
         }
-        if (result < 0 && errno != EINTR) { return false; }
+        if (result < 0 && errno != EINTR) {
+            timing.waitFinished = ChildVmTiming::Clock::now();
+            return false;
+        }
         if (std::chrono::steady_clock::now() >= deadline) {
+            timing.waitFinished = ChildVmTiming::Clock::now();
             if (ownsGroup) {
                 TerminateChildVmGroup(child);
                 return false;

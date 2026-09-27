@@ -276,6 +276,62 @@ uint64_t Read(uintptr_t address)
 }
 }
 
+GC_COMPONENT_OTHER_VM_TEST(PrimeCache, HeapConstructionPublishesMappedCapacity)
+{
+    ProductHeapFixture fixture(64);
+    RegionManager& manager = fixture.manager;
+    const size_t cached = manager.GetCachedBytes();
+    const size_t committed = manager.GetCommittedCapacity();
+    std::printf("PrimeCache startup cached=%zu committed=%zu\n", cached, committed);
+    std::fflush(stdout);
+    // Target invariant: heap construction publishes the committed, mapped
+    // extent before any allocation. A missing insertion fails here.
+    GC_EXPECT_EQ(cached, 4 * ZGranuleSize);
+    GC_EXPECT_EQ(committed, cached);
+    ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden,
+                                 MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    GC_EXPECT_TRUE(page != nullptr);
+    Stamp(page, 0x1193);
+    GC_EXPECT_EQ(Read(page->GetRegionStart()), 0x1193U);
+    GC_EXPECT_EQ(manager.GetCommittedCapacity(), committed);
+    GC_EXPECT_EQ(manager.GetCachedBytes(), cached - ZPageSizeSmall);
+    Heap::free_page(page);
+    GC_EXPECT_EQ(manager.GetCachedBytes(), cached);
+    std::printf("PrimeCache startup allocation complete\n");
+    std::fflush(stdout);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(PrimeCache, RepeatedPagesReuseCommittedCapacity)
+{
+    ProductHeapFixture fixture(256);
+    RegionManager& manager = fixture.manager;
+    constexpr size_t pages = 32;
+    constexpr size_t rounds = 4;
+    size_t firstCapacity = 0;
+    for (size_t round = 0; round < rounds; ++round) {
+        std::printf("PrimeCache begin round=%zu\n", round);
+        std::fflush(stdout);
+        std::vector<ZPage*> allocated;
+        for (size_t i = 0; i < pages; ++i) {
+            ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden,
+                                         MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+            GC_EXPECT_TRUE(page != nullptr);
+            Stamp(page, round * pages + i);
+            allocated.push_back(page);
+        }
+        const size_t capacity = manager.GetCommittedCapacity();
+        if (round == 0) { firstCapacity = capacity; }
+        std::printf("PrimeCache round=%zu committed=%zu first=%zu\n", round, capacity, firstCapacity);
+        std::fflush(stdout);
+        GC_EXPECT_EQ(capacity, firstCapacity);
+        for (size_t i = 0; i < pages; ++i) {
+            GC_EXPECT_EQ(Read(allocated[i]->GetRegionStart()), round * pages + i);
+            Heap::free_page(allocated[i]);
+        }
+        GC_EXPECT_EQ(manager.GetCachedBytes(), firstCapacity);
+    }
+}
+
 // ZPartition::prepare_harvested_and_claim_virtual (zPageAllocator.cpp:1001-1046):
 // with no capacity left to grow, a request larger than any cached run harvests
 // the cache, unmaps, shuffles the virtual memory to the lowest free address

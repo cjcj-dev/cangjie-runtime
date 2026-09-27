@@ -4,7 +4,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#ifdef _WIN64
+#include <memoryapi.h>
+#else
 #include <sys/mman.h>
+#endif
 
 #include "Base/Panic.h"
 #include "Common/BaseObject.h"
@@ -46,8 +50,14 @@ static void EnsureTypes()
         return;
     }
     constexpr size_t kBytes = 4096;
+    // Native committed storage, as in TypeInfoManager::NewMMap.
+#ifdef _WIN64
+    void* page = VirtualAlloc(nullptr, kBytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    CHECK_DETAIL(page != nullptr, "filler type metadata allocation failed");
+#else
     void* page = mmap(nullptr, kBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     CHECK_DETAIL(page != MAP_FAILED, "filler type metadata allocation failed");
+#endif
     auto* base = static_cast<char*>(page);
     g_byteTi = PlantTi(base, TypeKind::TYPE_KIND_UINT8, 1, "FillerByte");
     g_unitTi = PlantTi(base + 256, TypeKind::TYPE_KIND_CLASS, 0, "FillerUnit");

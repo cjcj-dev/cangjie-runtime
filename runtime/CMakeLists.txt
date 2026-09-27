@@ -11,6 +11,18 @@ if (OHOS_FLAG MATCHES 1 OR OHOS_FLAG MATCHES 2 OR OHOS_FLAG MATCHES 3)
     set(CMAKE_C_COMPILER_WORKS 1)
     set(CMAKE_CXX_COMPILER_WORKS 1)
     if (OHOS_PUBLIC_SDK)
+        # Language/ABI detection must use the same SDK target and sysroot as
+        # the later product compilation configured by config.cmake.
+        if (OHOS_FLAG MATCHES 1)
+            set(CMAKE_SYSTEM_PROCESSOR aarch64)
+        elseif (OHOS_FLAG MATCHES 2)
+            set(CMAKE_SYSTEM_PROCESSOR x86_64)
+        else()
+            set(CMAKE_SYSTEM_PROCESSOR arm)
+        endif()
+        set(CMAKE_SYSROOT "${OHOS_PUBLIC_SDK}/sysroot")
+        set(CMAKE_C_COMPILER_TARGET "${CMAKE_SYSTEM_PROCESSOR}-linux-ohos")
+        set(CMAKE_CXX_COMPILER_TARGET "${CMAKE_SYSTEM_PROCESSOR}-linux-ohos")
         set(CMAKE_C_COMPILER "${OHOS_PUBLIC_SDK}/llvm/bin/clang" CACHE FILEPATH "" FORCE)
         set(CMAKE_CXX_COMPILER "${OHOS_PUBLIC_SDK}/llvm/bin/clang++" CACHE FILEPATH "" FORCE)
         set(CMAKE_ASM_COMPILER "${OHOS_PUBLIC_SDK}/llvm/bin/clang" CACHE FILEPATH "" FORCE)
@@ -189,6 +201,10 @@ if (BUILD_CJTHREAD) # BUILD_CJTHREAD
 unset(_cjthread_result)
 set(_cjthread_previous_build_path "$ENV{CJTHREAD_BUILD_PATH}")
 set(ENV{CJTHREAD_BUILD_PATH} "${CMAKE_BINARY_DIR}/cjthread-build")
+set(_cjthread_previous_public_sdk "$ENV{OHOS_PUBLIC_SDK}")
+if (OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
+    set(ENV{OHOS_PUBLIC_SDK} "${OHOS_PUBLIC_SDK}")
+endif()
 # build cjthread
 if (WINDOWS_FLAG MATCHES 1)
     if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
@@ -210,9 +226,6 @@ elseif (OHOS_FLAG MATCHES 1) # for ohos-aarch64
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     else ()
         message("build cjthread for ohos")
-        if (OHOS_PUBLIC_SDK)
-            set(ENV{OHOS_PUBLIC_SDK} "${OHOS_PUBLIC_SDK}")
-        endif()
         execute_process(COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p ohos_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     endif ()
@@ -300,6 +313,7 @@ else ()
 endif () # WINDOWS_FLAG
 
 set(ENV{CJTHREAD_BUILD_PATH} "${_cjthread_previous_build_path}")
+set(ENV{OHOS_PUBLIC_SDK} "${_cjthread_previous_public_sdk}")
 # Only an executed child has a result (BUILD_CJTHREAD=OFF never enters here).
 # Restore the caller's environment before reporting a child failure.
 if (DEFINED _cjthread_result)
@@ -579,7 +593,7 @@ if (DOPRA_FLAG MATCHES 1 AND OHOS_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 0) # l
     endif ()
 elseif (DOPRA_FLAG MATCHES 1 AND OHOS_FLAG IN_LIST OHOS_FLAG_LIST AND WINDOWS_FLAG MATCHES 0) # OHOS
     target_link_libraries(cangjie-runtime "-Wl,--start-group -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/${EXPORT_MAP}"
-        "-lstdc++" ${LINK_LIBS} "-Wl,--end-group -lunwind -lclang_rt.builtins -lhilog_ndk.z -lhitrace_ndk.z")
+        "-lc++" ${LINK_LIBS} "-Wl,--end-group -lunwind -lclang_rt.builtins -lhilog_ndk.z -lhitrace_ndk.z")
 elseif (DOPRA_FLAG MATCHES 1 AND OHOS_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 1) # Windows
     set(WINDOWS_EXPORT_DEFINITION "${CMAKE_CURRENT_SOURCE_DIR}/src/windows_x86_64_exports.def")
     set(WINDOWS_EXPORT_DEFINITION_RAW "${CMAKE_CURRENT_BINARY_DIR}/windows_x86_64_exports.raw.def")
@@ -697,13 +711,13 @@ if (CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
     set(STRIP_PROGRAM strip)
     if(OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
         # System installed `strip` may not support aarch64 targets. We use llvm-strip in OHOS toolchain.
-        if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
+        if (OHOS_PUBLIC_SDK)
+            set(STRIP_PROGRAM "${OHOS_PUBLIC_SDK}/llvm/bin/llvm-strip")
+        elseif (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
             set(STRIP_PROGRAM $ENV{OHOS_ROOT}/prebuilts/clang/ohos/windows-x86_64/llvm/bin/llvm-strip)
-        endif()
-        if (CMAKE_HOST_SYSTEM_NAME MATCHES "Linux")
+        elseif (CMAKE_HOST_SYSTEM_NAME MATCHES "Linux")
             set(STRIP_PROGRAM $ENV{OHOS_ROOT}/prebuilts/clang/ohos/linux-x86_64/llvm/bin/llvm-strip)
-        endif()
-        if (CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
+        elseif (CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
             set(STRIP_PROGRAM $ENV{OHOS_ROOT}/prebuilts/clang/ohos/${CMAKE_HOST_SYSTEM_NAME}-${CMAKE_HOST_SYSTEM_PROCESSOR}/llvm/bin/llvm-strip)
         endif()
     endif()

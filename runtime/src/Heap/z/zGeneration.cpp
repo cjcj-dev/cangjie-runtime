@@ -437,7 +437,6 @@ void ZGenerationYoung::mark_follow()
 void ZGenerationYoung::concurrent_mark()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentMarkYoung);
-    youngFullScan = false;
     // ZGC zGeneration.cpp:665-669: roots, then combined scan and follow.
     produceYoungRoots();
     mark_follow();
@@ -544,9 +543,9 @@ void ZGenerationYoung::concurrent_relocate()
     ++minorTotalRuns;
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - youngStartNs) / NS_PER_US;
     VLOG(REPORT,
-         "[GCV2Minor] run=%zu fallbackFullScan=%u liveBytes=%zu "
+         "[GCV2Minor] run=%zu liveBytes=%zu "
          "reclaimedBytes=%zu pause=%zu us",
-         minorTotalRuns, static_cast<unsigned>(youngFullScan),
+         minorTotalRuns,
          statHeap.LiveAtMarkEnd(), reclaimedBytes,
          pauseUs);
     statHeap.AtRelocateEnd(space.GetRegionManager().Stats(this), should_record_stats());

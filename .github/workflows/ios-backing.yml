@@ -1,0 +1,206 @@
+name: iOS backing SDK contract
+on:
+  workflow_dispatch:
+  push:
+    branches: ['sym/1182-*']
+permissions:
+  contents: read
+jobs:
+  full-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        tuple: [device, simulator]
+        arm: [candidate, api-regression, restored]
+        include:
+          - {tuple: device, runner: macos-15, target: ios-aarch64, sdk: iphoneos, arch: arm64, sdk_version: '18.5'}
+          - {tuple: simulator, runner: macos-15-intel, target: ios-simulator-x86_64, sdk: iphonesimulator, arch: x86_64, sdk_version: '18.5'}
+          - {tuple: native-arm64, arm: candidate, runner: macos-15, target: native, sdk: macosx, arch: arm64, sdk_version: '15.5'}
+          - {tuple: native-x86_64, arm: candidate, runner: macos-15-intel, target: native, sdk: macosx, arch: x86_64, sdk_version: '15.5'}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      CMAKE_ASM_COMPILER_LAUNCHER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Build full runtime against SDK 18.5
+        env:
+          TARGET: ${{ matrix.target }}
+          SDK: ${{ matrix.sdk }}
+          SDK_VERSION: ${{ matrix.sdk_version }}
+          ARCH: ${{ matrix.arch }}
+          ARM: ${{ matrix.arm }}
+        run: |
+          ulimit -c 0
+          out="$RUNNER_TEMP/ios-backing"
+          mkdir -p "$out"
+          uptime > "$out/uptime-before.txt"
+          xcodebuild -version | tee "$out/xcode.txt"
+          sdk_version="$(xcrun --sdk "$SDK" --show-sdk-version)"
+          printf '%s\n' "$sdk_version" | tee "$out/sdk-version.txt"
+          test "$sdk_version" = "$SDK_VERSION"
+          sdk_root="$(xcrun --sdk "$SDK" --show-sdk-path)"
+          clang_path="$(xcrun --sdk "$SDK" --find clang)"
+          export CANGJIE_BUILD_JOBS="$(sysctl -n hw.ncpu)"
+          printf 'jobs=%s target=%s sdk=%s\n' "$CANGJIE_BUILD_JOBS" "$TARGET" "$sdk_root" > "$out/recipe.txt"
+          git rev-parse HEAD > "$out/head.txt"
+          # Restore the original product API at the same bearing point. This
+          # arm tests the compile contract only, not runtime mapping behavior.
+          if [ "$ARM" = api-regression ]; then
+            git show 10965c352184f366d9e46fc75341905724bf40d5:runtime/src/Heap/z/zPhysicalMemoryBacking_bsd.cpp > runtime/src/Heap/z/zPhysicalMemoryBacking_bsd.cpp
+            git diff > "$out/cut.diff"
+          fi
+          maps="-ffile-prefix-map=$GITHUB_WORKSPACE=/usr/src/cangjie-runtime -fdebug-prefix-map=$GITHUB_WORKSPACE=/usr/src/cangjie-runtime -fmacro-prefix-map=$GITHUB_WORKSPACE=/usr/src/cangjie-runtime"
+          export CFLAGS="$maps" CXXFLAGS="$maps" ASMFLAGS="$maps"
+          start=$SECONDS
+          rc=0
+          args=(--target "$TARGET" --build-type release --prefix "$out/preinstall")
+          if [ "$TARGET" != native ]; then
+            args+=(--target-toolchain "$(dirname "$(dirname "$clang_path")")" --target-sysroot "$sdk_root")
+          fi
+          (cd runtime && python3 build.py build "${args[@]}") > "$out/build.log" 2>&1 || rc=$?
+          printf '%s\n' "$rc" > "$out/build.rc"
+          printf 'wall=%s\n' "$((SECONDS-start))" > "$out/wall.txt"
+          uptime > "$out/uptime-after.txt"
+          find runtime -type f -name '*.dylib' -exec shasum -a 256 {} + > "$out/dylibs.sha256"
+          if [ "$ARM" = api-regression ]; then
+            # Contract (issue #1182 original diagnostic): the restored product
+            # must fail this build with the SDK header rejection
+            # "mach_vm.h unsupported.". A nonzero rc without that exact
+            # diagnostic is a non-target failure and fails this job.
+            if [ "$rc" = 0 ]; then
+              printf 'SDK_API_REGRESSION_ASSERT FAIL: restored build unexpectedly succeeded\n' | tee "$out/assertion.txt"
+              exit 1
+            fi
+            if ! grep -n 'mach_vm.h unsupported' "$out/build.log" | tee "$out/target-diagnostic.txt"; then
+              printf 'SDK_API_REGRESSION_ASSERT FAIL: rc=%s without target diagnostic (non-target failure)\n' "$rc" | tee "$out/assertion.txt"
+              grep -n -m 25 -E 'error:|Error [0-9]' "$out/build.log" || true
+              exit 1
+            fi
+            grep -n "undeclared identifier 'mach_vm_remap'" "$out/build.log" > "$out/secondary-diagnostic.txt" || true
+            printf 'SDK_API_REGRESSION_ASSERT PASS: rc=%s target diagnostic present\n' "$rc" | tee "$out/assertion.txt"
+            exit 0
+          fi
+          if [ "$rc" != 0 ]; then
+            grep -n -m 25 -E 'error:|Undefined symbols|undefined symbol|Error [0-9]' "$out/build.log" || true
+            exit "$rc"
+          fi
+          dylib="$(find runtime -type f -name libcangjie-runtime.dylib -print -quit)"
+          test -n "$dylib"
+          file "$dylib" | tee "$out/product-file.txt"
+          lipo "$dylib" -verify_arch "$ARCH"
+          nm -u "$dylib" > "$out/imports.txt"
+          grep -E '(^|[[:space:]])_vm_remap$' "$out/imports.txt"
+          mkdir -p "$out/product"
+          cp "$dylib" "$out/product/"
+          find runtime -type f -name libboundscheck.dylib -exec cp {} "$out/product/" \;
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-backing-${{ matrix.tuple }}-${{ matrix.arm }}
+          path: ${{ runner.temp }}/ios-backing
+          retention-days: 7
+
+  sim-remap-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {tuple: simulator-arm64, runner: macos-15, arch: arm64}
+          - {tuple: simulator-x86_64, runner: macos-15-intel, arch: x86_64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe simulator and run vm_remap path test from product source
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          ulimit -c 0
+          out="$RUNNER_TEMP/sim-remap"
+          mkdir -p "$out"
+          uptime > "$out/uptime-before.txt"
+          xcodebuild -version | tee "$out/xcode.txt"
+          sdk_version="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          printf '%s\n' "$sdk_version" | tee "$out/sdk-version.txt"
+          test "$sdk_version" = '18.5'
+          git rev-parse HEAD > "$out/head.txt"
+          probe="$out/sim-probe.txt"
+          : > "$probe"
+          rec() {
+            printf '$ %s\n' "$*" >> "$probe"
+            "$@" >> "$probe" 2>&1
+            rc=$?
+            printf 'rc=%s\n\n' "$rc" >> "$probe"
+            return $rc
+          }
+          udid=""
+          infeasible=""
+          rec xcrun simctl list runtimes
+          udid="$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          for runtime, devs in sorted(data.get("devices", {}).items(), reverse=True):
+              if "iOS" not in runtime:
+                  continue
+              for dev in devs:
+                  if dev.get("isAvailable") and "iPhone" in dev.get("name", ""):
+                      print(dev["udid"])
+                      sys.exit(0)
+          ')"
+          if [ -z "$udid" ]; then
+            infeasible="no available iPhone simulator device (see sim-probe.txt)"
+          else
+            if ! rec xcrun simctl boot "$udid"; then
+              # boot returns an error when the device is already booted
+              state="$(xcrun simctl list devices -j | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          for devs in data.get("devices", {}).values():
+              for dev in devs:
+                  if dev.get("udid") == "'"$udid"'":
+                      print(dev.get("state", ""))
+          ')"
+              if [ "$state" != "Booted" ]; then
+                infeasible="simctl boot $udid failed (see sim-probe.txt)"
+              fi
+            fi
+          fi
+          if [ -z "$infeasible" ] && ! rec xcrun simctl spawn "$udid" /bin/echo spawn-sanity-ok; then
+            infeasible="simctl spawn sanity check failed (see sim-probe.txt)"
+          fi
+          cat "$probe"
+          if [ -n "$infeasible" ]; then
+            printf 'SIM_RUNTIME=infeasible reason=%s\n' "$infeasible" | tee "$out/sim-runtime.txt"
+            exit 0
+          fi
+          printf 'SIM_RUNTIME=feasible udid=%s arch=%s\n' "$udid" "$ARCH" | tee "$out/sim-runtime.txt"
+          # Build the vm_remap path unit test from the product source
+          # (zPhysicalMemoryBacking_bsd.cpp) for the iOS simulator SDK and
+          # execute it inside the booted simulator. map_ok drives the product
+          # map -> mremap_mach -> vm_remap path and consumes its result.
+          rc=0
+          BSD_BACKING_SDK=iphonesimulator \
+          BSD_BACKING_ARCH="$ARCH" \
+          BSD_BACKING_SIM_UDID="$udid" \
+          BSD_BACKING_CASES="ctor_ok map_ok" \
+            bash runtime/tests/bsd/run_backing_fail.sh > "$out/sim-test.log" 2>&1 || rc=$?
+          cat "$out/sim-test.log"
+          printf 'SIM_RUNTIME_TEST rc=%s cases=[ctor_ok map_ok]\n' "$rc" | tee -a "$out/sim-runtime.txt"
+          uptime > "$out/uptime-after.txt"
+          exit "$rc"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sim-remap-${{ matrix.tuple }}
+          path: ${{ runner.temp }}/sim-remap
+          retention-days: 7
