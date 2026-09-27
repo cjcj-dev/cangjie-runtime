@@ -3,6 +3,7 @@
 
 Build success is recorded separately from behavioral acceptance.
 """
+import difflib
 import hashlib
 import json
 import os
@@ -10,8 +11,10 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
 import time
 
+arm = sys.argv[1] if len(sys.argv) > 1 else "candidate"
 assert platform.system() == "Windows", "requires native Windows"
 source = Path(__file__).resolve().parents[2]
 out = Path(os.environ["RUNNER_TEMP"]) / "runtime-windows"
@@ -22,7 +25,7 @@ env = dict(os.environ, GC_UNIT_GATE_SKIP="1",
            CANGJIE_BUILD_JOBS=str(os.cpu_count()),
            CMAKE_BUILD_PARALLEL_LEVEL=str(os.cpu_count()))
 record = {"platform": platform.platform(), "jobs": os.cpu_count(),
-          "head": os.environ.get("GITHUB_SHA"), "behavior": "NOT_RUN"}
+          "head": os.environ.get("GITHUB_SHA"), "arm": arm, "behavior": "NOT_RUN"}
 
 
 def run(command, name):
@@ -38,6 +41,33 @@ def run(command, name):
     return rc
 
 
+# Each negative arm restores a real POSIX dependency in one product TU.
+# This is a native compilation contract, not a GC behavioral test.
+cut_targets = {
+    "cut-region": ("src/Heap/Allocator/RegionSpace.h", "BaseObject.cpp.obj", "sys/mman.h"),
+    "cut-filler": ("src/Heap/shared/collectedHeap.cpp", "collectedHeap.cpp.obj", "sys/mman.h"),
+    "cut-limit": ("src/Heap/z/zAddressSpaceLimit.cpp", "zAddressSpaceLimit.cpp.obj", "sys/resource.h"),
+}
+if arm in cut_targets:
+    relative, target_suffix, header = cut_targets[arm]
+    path = tree / relative
+    before = path.read_text()
+    if arm == 'cut-region':
+        after = before.replace('#include <memory>\n', '#include <memory>\n#include <sys/mman.h>\n')
+    elif arm == 'cut-filler':
+        after = before.replace('#ifdef _WIN64\n#include <memoryapi.h>\n#else\n#include <sys/mman.h>\n#endif', '#include <sys/mman.h>')
+    else:
+        after = before.replace('#ifndef _WIN64\n#include <sys/resource.h>\n#endif', '#include <sys/resource.h>')
+    assert after != before
+    path.write_text(after)
+    (out / "cut.diff").write_text("".join(difflib.unified_diff(
+        before.splitlines(True), after.splitlines(True),
+        fromfile="a/runtime/" + relative, tofile="b/runtime/" + relative)))
+elif arm not in ("candidate", "restored"):
+    raise ValueError(arm)
+record["source_sha256"] = {str(p.relative_to(tree)): hashlib.sha256(p.read_bytes()).hexdigest()
+                          for p in (tree / "src").rglob("*") if p.is_file()}
+
 build = tree / "CMakebuild"
 rc = run(["cmake", "-S", tree, "-B", build, "-G", "Ninja",
           "-DWINDOWS_FLAG=1", "-DCOPYGC_FLAG=1", "-DDOPRA_FLAG=1",
@@ -46,6 +76,19 @@ rc = run(["cmake", "-S", tree, "-B", build, "-G", "Ninja",
           "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++",
           "-DCMAKE_AR_PATH=llvm-ar", "-DCMAKE_INSTALL_PREFIX=" + str(out / "install")],
          "configure")
+if not rc and arm in cut_targets:
+    targets = subprocess.check_output(["ninja", "-C", build, "-t", "targets", "all"], text=True)
+    matches = [line.split(": ", 1)[0] for line in targets.splitlines()
+               if line.split(": ", 1)[0].endswith("/" + target_suffix)]
+    assert len(matches) == 1, matches
+    record["target"] = matches[0]
+    rc = run(["cmake", "--build", build, "--target", matches[0]], "build")
+    text = (out / "build.log").read_text(errors="replace")
+    exact = rc != 0 and header in text and "file not found" in text and target_suffix[:-4] in text
+    record.update(assertion_rc=int(rc != 0), expected_compile_failure=exact)
+    (out / "result.json").write_text(json.dumps(record, indent=2))
+    print("NATIVE_COMPILE_ASSERT", arm, "FAIL" if rc else "PASS", "expected=", exact, flush=True)
+    raise SystemExit(0 if exact else 1)
 if not rc:
     rc = run(["cmake", "--build", build, "--parallel", str(os.cpu_count()), "--", "-k", "0"], "build")
 if not rc:

@@ -9,6 +9,10 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [candidate, cut-region, cut-filler, cut-limit, restored]
     steps:
       - uses: actions/checkout@v4
       - uses: msys2/setup-msys2@v2
@@ -21,11 +25,11 @@ jobs:
             mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make file
       - name: Build native product
         shell: msys2 {0}
-        run: python3 runtime/tests/windows_native/build_native.py
+        run: python3 runtime/tests/windows_native/build_native.py ${{ matrix.arm }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: runtime-windows
+          name: runtime-windows-${{ matrix.arm }}
           path: |
             ${{ runner.temp }}/runtime-windows/*.log
             ${{ runner.temp }}/runtime-windows/*.json
