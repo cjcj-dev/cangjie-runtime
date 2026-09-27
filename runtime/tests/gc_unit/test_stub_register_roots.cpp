@@ -169,6 +169,8 @@ public:
 };
 // This is only the native-to-managed ABI bridge. The saves, root discovery,
 // handles and restores under test all belong to CJ_MCC_HandleReturnSafepoint.
+// Use the eagerly resolved GOT address: a first PLT lazy-binding call may
+// overwrite the managed ABI metadata in r10/r11 before reaching the stub.
 extern "C" void InvokeStubXmm(ThreadLocalData*, uintptr_t, uintptr_t*, uintptr_t*);
 asm(R"(
 .text
@@ -203,7 +205,8 @@ InvokeStubXmm:
  movdqu 208(%r12),%xmm13
  movdqu 224(%r12),%xmm14
  movdqu 240(%r12),%xmm15
- callq CJ_MCC_HandleReturnSafepoint@PLT
+ movq CJ_MCC_HandleReturnSafepoint@GOTPCREL(%rip),%rax
+ callq *%rax
  movdqu %xmm0,0(%r13)
  movdqu %xmm1,16(%r13)
  movdqu %xmm2,32(%r13)
