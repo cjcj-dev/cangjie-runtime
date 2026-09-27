@@ -13,8 +13,10 @@ jobs:
         tuple: [device, simulator]
         arm: [candidate, api-regression, restored]
         include:
-          - {tuple: device, runner: macos-15, target: ios-aarch64, sdk: iphoneos, arch: arm64}
-          - {tuple: simulator, runner: macos-15-intel, target: ios-simulator-x86_64, sdk: iphonesimulator, arch: x86_64}
+          - {tuple: device, runner: macos-15, target: ios-aarch64, sdk: iphoneos, arch: arm64, sdk_version: '18.5'}
+          - {tuple: simulator, runner: macos-15-intel, target: ios-simulator-x86_64, sdk: iphonesimulator, arch: x86_64, sdk_version: '18.5'}
+          - {tuple: native-arm64, arm: candidate, runner: macos-15, target: native, sdk: macosx, arch: arm64, sdk_version: '15.5'}
+          - {tuple: native-x86_64, arm: candidate, runner: macos-15-intel, target: native, sdk: macosx, arch: x86_64, sdk_version: '15.5'}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -32,6 +34,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           SDK: ${{ matrix.sdk }}
+          SDK_VERSION: ${{ matrix.sdk_version }}
           ARCH: ${{ matrix.arch }}
           ARM: ${{ matrix.arm }}
         run: |
@@ -42,7 +45,7 @@ jobs:
           xcodebuild -version | tee "$out/xcode.txt"
           sdk_version="$(xcrun --sdk "$SDK" --show-sdk-version)"
           printf '%s\n' "$sdk_version" | tee "$out/sdk-version.txt"
-          test "$sdk_version" = 18.5
+          test "$sdk_version" = "$SDK_VERSION"
           sdk_root="$(xcrun --sdk "$SDK" --show-sdk-path)"
           clang_path="$(xcrun --sdk "$SDK" --find clang)"
           export CANGJIE_BUILD_JOBS="$(sysctl -n hw.ncpu)"
@@ -58,9 +61,11 @@ jobs:
           export CFLAGS="$maps" CXXFLAGS="$maps" ASMFLAGS="$maps"
           start=$SECONDS
           rc=0
-          (cd runtime && python3 build.py build --target "$TARGET" --build-type release \
-            --target-toolchain "$(dirname "$(dirname "$clang_path")")" \
-            --target-sysroot "$sdk_root" --prefix "$out/preinstall") > "$out/build.log" 2>&1 || rc=$?
+          args=(--target "$TARGET" --build-type release --prefix "$out/preinstall")
+          if [ "$TARGET" != native ]; then
+            args+=(--target-toolchain "$(dirname "$(dirname "$clang_path")")" --target-sysroot "$sdk_root")
+          fi
+          (cd runtime && python3 build.py build "${args[@]}") > "$out/build.log" 2>&1 || rc=$?
           printf '%s\n' "$rc" > "$out/build.rc"
           printf 'wall=%s\n' "$((SECONDS-start))" > "$out/wall.txt"
           uptime > "$out/uptime-after.txt"
@@ -88,6 +93,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ios-backing-${{ matrix.target }}-${{ matrix.arm }}
+          name: ios-backing-${{ matrix.tuple }}-${{ matrix.arm }}
           path: ${{ runner.temp }}/ios-backing
           retention-days: 7
