@@ -324,9 +324,9 @@ inline HeapReferenceMap StackMapBuilder::Build<HeapReferenceMap>(bool countDeriv
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
-    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
+    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);
 #else
-    auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr);
+    auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr, funcDesc);
 #endif
     auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
     return entry.IsValid() ? HeapReferenceMap(true, stackBase, entry) : HeapReferenceMap(stackBase);
