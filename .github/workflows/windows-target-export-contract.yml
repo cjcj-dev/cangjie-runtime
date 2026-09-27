@@ -1,0 +1,61 @@
+name: Windows target export contract
+on:
+  workflow_dispatch:
+  push:
+    branches: ['sym/1236-*']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [candidate, restored]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: runtime-source
+      - uses: actions/checkout@v4
+        with:
+          repository: cjcj-dev/cjcj
+          ref: 34ade075158dce9bb380297cd0c8e1d785a035d8
+          path: compiler-entry
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          release: false
+          update: true
+          path-type: inherit
+          install: >-
+            git make python gzip unzip file binutils
+            mingw-w64-x86_64-clang mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-compiler-rt mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-libc++ mingw-w64-x86_64-libunwind
+            mingw-w64-x86_64-ninja mingw-w64-x86_64-python mingw-w64-x86_64-lld
+      - name: Preserve native cache directories
+        shell: pwsh
+        run: |
+          $cacheHome = $env:USERPROFILE.Replace('\', '/')
+          $cacheConfigHome = $env:LOCALAPPDATA.Replace('\', '/')
+          "export USERPROFILE='$cacheHome' LOCALAPPDATA='$cacheConfigHome'" | Set-Content -NoNewline -Encoding utf8 C:/msys64/etc/profile.d/runtime-publication.sh
+      - name: Exercise cjcj 589 production entry and publication controls
+        shell: pwsh
+        run: |
+          & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/test_runtime_link_publication.py --source runtime-source/runtime --production-entry compiler-entry --evidence evidence --arm ${{ matrix.arm }}
+          exit $LASTEXITCODE
+      - name: Check actual DLL contract through the shipped CLI
+        shell: pwsh
+        run: |
+          & C:/msys64/mingw64/bin/python.exe runtime-source/runtime/tests/windows_exports/test_contract.py --raw evidence/windows_x86_64_exports.raw.def *> evidence/export-contract.log
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: target-exports-${{ matrix.arm }}
+          path: evidence/
+          retention-days: 7
