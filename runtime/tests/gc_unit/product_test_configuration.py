@@ -27,7 +27,8 @@ def configuration(runtime, library, output):
     arguments = entry.get('arguments') or shlex.split(entry['command'])
     def enabled(name):
         return int(any(arg in ('-D' + name, '-D' + name + '=1') for arg in arguments))
-    return enabled('MRT_TESTABLE_INTERNALS'), enabled('MRT_GC_UNIT_TESTS')
+    return (enabled('MRT_TESTABLE_INTERNALS'), enabled('MRT_GC_UNIT_TESTS'),
+            enabled('MRT_GC_UNIT_OHOS_HOST'))
 
 
 if __name__ == '__main__':
