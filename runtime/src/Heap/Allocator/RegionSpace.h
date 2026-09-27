@@ -11,7 +11,6 @@
 #include <cassert>
 #include <list>
 #include <memory>
-#include <sys/mman.h>
 #include <map>
 #include <set>
 #include <thread>

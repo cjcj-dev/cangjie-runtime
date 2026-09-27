@@ -4,8 +4,14 @@
 #
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 if (WINDOWS_FLAG MATCHES 1)
-    set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
-    set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+    # Native Windows inherits the configured compiler (including CLANG64).
+    # Preserve upstream's MinGW selection for Linux-to-Windows cross builds.
+    # The parent explicitly sets CMAKE_SYSTEM_NAME even on native Windows,
+    # so CMAKE_CROSSCOMPILING alone cannot distinguish the two routes.
+    if(NOT CMAKE_HOST_WIN32)
+        set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
+        set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+    endif()
     set(WARNING_FLAGS "-w")
     set(SECURE_CFLAG_FOR_SHARED_LIBRARY "-static ${SECURE_CFLAG_FOR_SHARED_LIBRARY}")
     set(CMAKE_C_FLAGS "${SECURE_CFLAG_FOR_SHARED_LIBRARY} ${WARNING_FLAGS}")

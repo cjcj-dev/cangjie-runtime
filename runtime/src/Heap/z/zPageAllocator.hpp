@@ -124,6 +124,7 @@ public:
         : regionManager(manager), numaId(id), uncommitter(*this) {}
     size_t available() const { return currentMaxCapacity - used - claimed; }
     bool claim_capacity_fast_medium(PageMemory& memory);
+    bool prime(FreeRegionManager& allocator, size_t size);
 };
 
 // This class is and should be accessed only for region allocation. we do not rely on it to check region status.
@@ -134,9 +135,11 @@ public:
     explicit FreeRegionManager(RegionManager& manager) : regionManager(manager) {}
 
     friend class Uncommitter;
+    friend class ZPartition;
     virtual ~FreeRegionManager() = default;
     void StartUncommitters();
     void StopUncommitters();
+    bool PrimeCache(size_t size);
     // ZPageAllocator(min/initial/max capacity) owns _virtual/_physical and one
     // ZPartition per NUMA id (zPageAllocator.cpp:1201-1260); the partitions
     // here consume the two managers the same way.

@@ -109,3 +109,6 @@ run_elf_unload_public_active.sh           manual     compile and run public acti
 bsd                                       manual     macOS xcrun clang++ plus boundscheck; apple.yml bsd-backing-fail runs runtime/tests/bsd/run_backing_fail.sh, Linux configure cannot
 
 return_safepoint                       manual     GHA return-safepoint.yml: native product register-preservation and save/restore cuts; iOS cross identity
+windows_native                          manual     Windows native CLANG64 full product build and DLL identity; run by .github/workflows/runtime-windows.yml on windows-latest
+
+return_poll_native                        manual     GHA return-poll-native.yml; real LLVM return-reference objects, native product libraries, producer/consumer cuts and restored root rewrite on macOS arm64/x86_64 and Windows

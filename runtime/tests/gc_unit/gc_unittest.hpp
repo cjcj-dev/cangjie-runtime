@@ -159,7 +159,8 @@ inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortD
     if (!supervisor.IsValid()) {
         throw AssertFailure("other-vm subreaper setup failed for " + fullName);
     }
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    ChildVmTiming timing;
+    const auto deadline = timing.spawned + std::chrono::seconds(60);
     int childStderr[2];
     if (pipe(childStderr) != 0) {
         throw AssertFailure("other-vm pipe failed for " + fullName + ": " + std::strerror(errno));
@@ -199,6 +200,7 @@ inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortD
         // exec; the parent also establishes it before starting supervision.
         (void)setpgid(child, child);
     }
+    const std::string sentinel = "GC_UNIT_OTHER_VM_OKIDOKI " + fullName + "\n";
     std::string transcript;
     char buffer[1024];
     bool readOk = true;
@@ -213,7 +215,13 @@ inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortD
         if (ready < 0) { readOk = false; break; }
         const ssize_t count = read(childStderr[0], buffer, sizeof(buffer));
         if (count > 0) {
+            const auto observed = ChildVmTiming::Clock::now();
+            if (timing.firstByte == ChildVmTiming::Clock::time_point{}) { timing.firstByte = observed; }
             transcript.append(buffer, static_cast<size_t>(count));
+            if (timing.sentinel == ChildVmTiming::Clock::time_point{} &&
+                transcript.find(sentinel) != std::string::npos) {
+                timing.sentinel = observed;
+            }
             (void)std::fwrite(buffer, 1, static_cast<size_t>(count), stderr);
             continue;
         }
@@ -228,8 +236,7 @@ inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortD
     close(childStderr[0]);
 
     int status = 0;
-    const bool waited = WaitChildExit(child, status, deadline, supervisor.OwnsGroup());
-    const std::string sentinel = "GC_UNIT_OTHER_VM_OKIDOKI " + fullName + "\n";
+    const bool waited = WaitChildExit(child, status, deadline, timing, supervisor.OwnsGroup());
     const bool exitedCleanly = waited && WIFEXITED(status) && WEXITSTATUS(status) == 0;
     const bool sawSentinel = transcript.find(sentinel) != std::string::npos;
     const auto failureDiagnostic = [&] {
@@ -238,6 +245,7 @@ inline void RunInOtherVm(const std::string& fullName, const char* expectedAbortD
         return ": " + ChildExitSummary(waited, status) +
             "; sentinel=" + (sawSentinel ? "seen" : "missing") +
             "; stderr_read=" + (readOk ? "complete" : "incomplete") +
+            timing.Summary(waited) +
             "\nChild stderr tail (<=4096 bytes):\n" + transcript.substr(tailStart);
     };
     if (expectedAbortDiagnostic != nullptr) {

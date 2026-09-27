@@ -78,6 +78,36 @@ void FreeRegionManager::Initialize(ZVirtualMemoryManager& virtualMemoryManager,
     }
 }
 
+// ZPartition::prime, zPageAllocator.cpp:952-994. Construction owns the cache
+// exclusively; partial commit is an initialization failure, without cleanup.
+bool ZPartition::prime(FreeRegionManager& allocator, size_t size)
+{
+    if (size == 0) { return true; }
+    ZArray<ZVirtualMemory> vmems;
+    const size_t claimed = allocator.claim_virtual(size, numaId, &vmems);
+    CHECK(claimed == size);
+    allocator.increase_capacity(numaId, claimed);
+    for (const ZVirtualMemory vmem : vmems) {
+        allocator.claim_physical(vmem, numaId);
+        const size_t committed = allocator.commit_physical(vmem, numaId);
+        if (committed != vmem.size()) { return false; }
+        allocator.map_virtual(vmem, numaId);
+        // Heap construction has no pre-touch flag or worker pool.
+        allocator.InsertCommitted(*this, FreeRegionManager::IndexOf(vmem), vmem.size());
+    }
+    return true;
+}
+
+// ZPageAllocator::prime_cache, zPageAllocator.cpp:1257-1271.
+bool FreeRegionManager::PrimeCache(size_t size)
+{
+    for (const auto& partition : partitions) {
+        const size_t toPrime = NumaTopology::calculate_share(partition->numaId, size, ZGranuleSize);
+        if (!partition->prime(*this, toPrime)) { return false; }
+    }
+    return true;
+}
+
 // Partitions are initialized before the reference processor starts workers.
 void FreeRegionManager::StartUncommitters()
 {
@@ -932,7 +962,11 @@ namespace MapleRuntime {
 RegionManager::MetadataMapping::~MetadataMapping()
 {
     if (base != nullptr) {
+#ifdef _WIN64
+        (void)VirtualFree(base, 0, MEM_RELEASE);
+#else
         (void)munmap(base, size);
+#endif
     }
 }
 
@@ -977,14 +1011,25 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
     // touch their descriptor.
     const std::vector<ZPage::ReservedSegment> segments = RegionManager::ReservedSegments(*virtualMemory);
     metadata.size = RegionManager::GetMetadataSize();
+#ifdef _WIN64
+    void* const metadataBase = VirtualAlloc(nullptr, metadata.size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    CHECK_DETAIL(metadataBase != nullptr, "failed to map %zu bytes of region metadata", metadata.size);
+#else
     void* const metadataBase =
         mmap(nullptr, metadata.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     CHECK_DETAIL(metadataBase != MAP_FAILED, "failed to map %zu bytes of region metadata", metadata.size);
+#endif
     metadata.base = metadataBase;
     MAddress metadataAddress = reinterpret_cast<MAddress>(metadata.base);
     CHECK(IsRepresentableLow48Range(metadataAddress, metadata.size));
     Initialize(alignedHeapSize, metadataAddress, *virtualMemory, *physicalMemory, vmHeapParam,
                              garbageThreshold);
+    // ZHeap::ZHeap, zHeap.cpp:77-82: prime after allocator initialization.
+    // HeapParam has no InitialHeapSize; use four granules (8 MB), bounded
+    // by the configured maximum heap for small heaps.
+    constexpr size_t initialHeapSize = 4 * ZGranuleSize;
+    CHECK_DETAIL(freeRegionManager.PrimeCache(std::min(initialHeapSize, maxCapacity)),
+                 "failed to allocate initial heap");
 #if defined(MRT_DUMP_ADDRESS)
     VLOG(REPORT, "region metadata@%zx, heap @[0x%zx+%zu, 0x%zx)", metadataAddress, reservedStart, reservedEnd - reservedStart,
          reservedEnd);
