@@ -144,6 +144,12 @@ void* AcquireWhileJNICriticalBlocked(void* context)
 }
 void* AllocateGranulePages(void* context)
 {
+    // ZGC zObjectAllocator.cpp:136-148: construct the cold-medium branch
+    // explicitly now that heap construction primes the mapped cache.
+    const size_t cached = Heap::GetHeap().page_allocator().GetCachedBytes();
+    ZPage* initialCache = cached == 0 ? nullptr : Heap::alloc_page(
+        cached, ZPageType::large, false, PageAge::eden, NonBlockingAllocationFlags());
+    GC_EXPECT_TRUE(cached == 0 || initialCache != nullptr);
     auto& result = *static_cast<GranuleAllocationResult*>(context);
     alignas(TypeInfo) static unsigned char types[3][sizeof(TypeInfo)];
     result.requested[0] = 32;
@@ -175,6 +181,7 @@ void* AllocateGranulePages(void* context)
     const ObjRef smallAgain = MCC_NewObject(reinterpret_cast<TypeInfo*>(types[0]), result.requested[0]);
     result.sameSmallPage = first != nullptr && Heap::page(reinterpret_cast<uintptr_t>(smallAgain)) == first;
     result.tableSize = Heap::page_table().map().size();
+    if (initialCache != nullptr) { Heap::free_page(initialCache); }
     return nullptr;
 }
 }
