@@ -1095,7 +1095,7 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     if (!Heap::IsHeapAddress(plain)) {
         return;
     }
-    MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_ReleaseRawData");
+    // ZGC zCollectedHeap.cpp:279-281: unpin does not inspect the object.
 #ifdef _WIN64
     static void* unreadablePage = reinterpret_cast<void*>(0x1234);
 #else

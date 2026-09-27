@@ -551,6 +551,7 @@ struct JNICriticalMovingEnterResult {
     uintptr_t returned{0};
     bool payload{false};
     bool copied{true};
+    int64_t released{-1};
 };
 
 void* HoldArrayForMovingEnter(void* context)
@@ -634,7 +635,10 @@ void* AcquireMovingArray(void* context)
     result.payload = raw == current->ConvertToCArray() &&
         static_cast<unsigned char*>(raw)[0] == 0x5a &&
         static_cast<unsigned char*>(raw)[4095] == 0x5a;
-    MCC_ReleaseRawData(current, raw);
+    // The caller still holds its pre-enter reference after Acquire blocked
+    // across relocation. Release must not inspect that retired object header.
+    MCC_ReleaseRawData(array, raw);
+    result.released = ZJNICritical::count_snapshot();
     mutator->SetManagedContext(true);
     return nullptr;
 }
@@ -679,6 +683,9 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedAcquireReloadsRelocatedArray)
         static_cast<MArray*>(Heap::GetHeap().GetExportObject(result.roots[0]))->ConvertToCArray());
     std::fprintf(stderr, "JNI_MOVING_ENTER_TARGET before=%#lx current=%#lx returned=%#lx payload=%d copied=%d\n",
                  result.before, result.current, result.returned, result.payload, result.copied);
+    std::fprintf(stderr, "JNI_MOVING_RELEASE_TARGET retired=%#lx current=%#lx released=%lld\n",
+                 result.before, result.current, static_cast<long long>(result.released));
+    GC_EXPECT_EQ(result.released, 0);
     GC_EXPECT_EQ(result.returned, result.current);
     GC_EXPECT_TRUE(result.payload);
     GC_EXPECT_TRUE(result.current != result.before);
