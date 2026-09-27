@@ -194,7 +194,7 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, PauseCannotOverlapExitDetachWindow)
 // active-state fence, with the in-flight lock released before the closure.
 // Hold the existing per-mutator lock to park the real transition between
 // leave_safe() and SetInSaferegion(false); no product test hook is needed.
-GC_OTHER_VM_TEST(ExitDetachMarkEnd, RequestAtActiveTransitionReleasesLock)
+static void RunRequestAtActiveTransition(bool lateRequest)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture heap;
@@ -234,22 +234,55 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, RequestAtActiveTransitionReleasesLock)
     auto& manager = MutatorManager::Instance();
     manager.MutatorManagementWLock();
     exitNow.store(true, std::memory_order_release);
-    // The exit path is now blocked acquiring the management lock inside the
-    // saferegion (mutex.cpp:99-110 blocking acquisition). Queue a real
-    // operation before releasing it, so the request arrives between the lock
-    // acquisition and the active-state restore.
+    // First force the blocking management-lock acquisition, so both arms
+    // traverse the product's blocked -> active transition.
     const bool blocked = WaitFor([&] {
         return target->InSaferegion() && target->GetHandshakeState().observed_safe();
     }, 10000);
-    target->GetHandshakeState().add_operation(&request);
-    manager.MutatorManagementWUnlock();
+    if (!blocked) { std::abort(); }
+    bool transitionParked = false;
+    bool requestAbsent = false;
+    if (lateRequest) {
+        // DoLeaveSaferegion calls leave_safe() before taking this lock and
+        // publishing the active state (Mutator.h). Once observed_safe clears,
+        // the management lock has been acquired and the old pre-transition
+        // request decision has already happened. Keep restoration blocked
+        // until the request is queued. No timing delay or product hook.
+        target->MutatorLock();
+        manager.MutatorManagementWUnlock();
+        transitionParked = WaitFor([&] {
+            return !target->GetHandshakeState().observed_safe();
+        }, 10000);
+        transitionParked = transitionParked && target->InSaferegion();
+        requestAbsent = !target->GetHandshakeState().has_operation();
+        if (!transitionParked || !requestAbsent) { std::abort(); }
+        target->GetHandshakeState().add_operation(&request);
+        std::fprintf(stderr, "EXIT_REQUEST_WINDOW late=1 parked=1 request_absent=1 queued=%d\n",
+                     target->GetHandshakeState().operation_pending(&request));
+        target->MutatorUnlock();
+    } else {
+        target->GetHandshakeState().add_operation(&request);
+        manager.MutatorManagementWUnlock();
+    }
     exiting.join();
-    std::fprintf(stderr, "EXIT_REQUEST_TARGET executed=1 blocked=%d completed=%d lock_available=%d\n",
-                 blocked, request.is_completed(), closure.lockAvailable);
+    std::fprintf(stderr, "EXIT_REQUEST_TARGET executed=1 late=%d blocked=%d completed=%d lock_available=%d\n",
+                 lateRequest, blocked, request.is_completed(), closure.lockAvailable);
     GC_EXPECT_TRUE(blocked);
     GC_EXPECT_TRUE(request.is_completed());
     GC_EXPECT_TRUE(closure.executed && closure.active && closure.onOwner);
     GC_EXPECT_TRUE(closure.lockAvailable);
+}
+
+GC_OTHER_VM_TEST(ExitDetachMarkEnd, RequestAtActiveTransitionReleasesLock)
+{
+    RunRequestAtActiveTransition(false);
+}
+
+// ZGC interfaceSupport.inline.hpp:213-220: decide only after restoring the
+// active state. A cached pre-transition decision misses this late request.
+GC_OTHER_VM_TEST(ExitDetachMarkEnd, LateRequestAtActiveTransitionReleasesLock)
+{
+    RunRequestAtActiveTransition(true);
 }
 
 // Control 1: no breakpoint; the exit completes before the pause.
