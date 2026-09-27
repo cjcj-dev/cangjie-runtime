@@ -18,6 +18,7 @@ public:
     MarkLiveCache(const MarkLiveCache&) = delete;
     MarkLiveCache& operator=(const MarkLiveCache&) = delete;
 
+    void SetNStripes(size_t stripeCount);
     void IncLive(ZPage* region, size_t bytes);
     void Flush();
 

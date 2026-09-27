@@ -53,9 +53,13 @@ inline FuncDescRef MFuncDesc::GetFuncDesc(Uptr startPC)
     if (!ElfUnloadQuiescence::IsLinkedAddress(startPC)) {
         return nullptr;
     }
+#ifdef __APPLE__
+    return reinterpret_cast<FuncDescRef>(ElfUnloadQuiescence::FindFunctionDescriptor(startPC));
+#else
     DataRefOffset32<MFuncDesc>* offset =
         reinterpret_cast<DataRefOffset32<MFuncDesc>*>(startPC - START_PC_OFFSET);
     return offset->GetDataRef();
+#endif
 }
 } // namespace MapleRuntime
 #endif // MRT_MFUNC_DESC_INLINE_H

@@ -288,9 +288,9 @@ public:
             }
         };
 #ifdef __APPLE__
-        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, visitor);
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, visitor, funcDesc);
 #else
-        auto head = CompressedStackMapHead::GetStackMapHead(startPC, visitor);
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, visitor, funcDesc);
 #endif
         auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
         if (!entry.IsValid()) {
@@ -303,9 +303,9 @@ public:
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
-        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);
 #else
-        auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr);
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr, funcDesc);
 #endif
         return head.GetInvalidReason(startPC, framePC);
     }

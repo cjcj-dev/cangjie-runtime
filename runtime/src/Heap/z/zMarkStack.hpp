@@ -94,7 +94,7 @@ class MarkStripe {
 public:
     bool IsEmpty() const;
     size_t Population() const;
-    void PublishStack(MarkStripeStack* stack, bool publish, MarkTerminate* terminate = nullptr);
+    void PublishStack(MarkStripeStack* stack, bool publish, MarkTerminate* terminate);
     MarkStripeStack* StealStack(MarkingSMR& smr, size_t workerId);
 
 private:
@@ -122,19 +122,24 @@ public:
     bool IsEmpty() const;
     size_t Population() const;
     size_t FirstNonEmptyStripe() const;
-    size_t StripeForAddress(uintptr_t address) const;
-    size_t StripeForWorker(size_t workerCount, size_t workerId) const;
-    size_t Next(size_t stripeId) const;
-    size_t Next(size_t stripeId, size_t offset) const;
-    MarkStripe& At(size_t stripeId);
-    const MarkStripe& At(size_t stripeId) const;
+    MarkStripe* StripeForAddress(uintptr_t address);
+    MarkStripe* StripeForWorker(size_t workerCount, size_t workerId);
+    size_t StripeId(const MarkStripe* stripe) const;
+    MarkStripe* Next(MarkStripe* stripe);
+    MarkStripe* At(size_t stripeId);
+    const MarkStripe* At(size_t stripeId) const;
 
 private:
     size_t capacityMask;
     std::atomic<size_t> nstripesMask;
     MarkTerminate* terminate = nullptr;
-    std::vector<std::unique_ptr<MarkStripe>> stripes;
+    std::vector<MarkStripe> stripes;
 };
+
+#if defined(MRT_TESTABLE_INTERNALS)
+// Test-only breakpoint storage for SetPushCreatedBreakpoint.
+extern std::atomic<void (*)()> pushCreatedBreakpoint;
+#endif
 
 class MarkThreadLocalStacks {
 public:
@@ -146,12 +151,16 @@ public:
 
     bool IsEmpty() const;
     size_t Population() const;
-    void Push(MarkStripeSet& stripes, size_t stripeId, const MarkStackEntry& entry, bool publish);
-    bool Pop(MarkingSMR& smr, size_t workerId, MarkStripeSet& stripes, size_t stripeId,
+    void Push(MarkStripeSet& stripes, MarkStripe* stripe, const MarkStackEntry& entry, bool publish);
+    bool Pop(MarkingSMR& smr, size_t workerId, MarkStripeSet& stripes, MarkStripe* stripe,
              MarkStackEntry& entry);
-    MarkStripeStack* StealLocal(size_t stripeId);
-    void Install(size_t stripeId, MarkStripeStack* stack);
+    MarkStripeStack* StealLocal(MarkStripeSet& stripes, MarkStripe* stripe);
+    void Install(MarkStripeSet& stripes, MarkStripe* stripe, MarkStripeStack* stack);
     bool Flush(MarkStripeSet& stripes);
+#if defined(MRT_TESTABLE_INTERNALS)
+    // Test-only: runs between slot Create() and the first entry push.
+    static void SetPushCreatedBreakpoint(void (*callback)());
+#endif
 
 private:
     std::vector<MarkStripeStack*> stacks;
