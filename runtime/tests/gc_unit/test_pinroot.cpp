@@ -376,8 +376,8 @@ void InitializeFrameRootMap(bool sret = false)
         put(16, 32); put(1, 2); put(2, 2);
         var(0); var(0); // no register table
         var(2); var(8); var(1);
-        put(0xfe, 8); put(1, 1); // fp-16
-        put(0xfd, 8); put(1, 1); // fp-24
+        put(0xf0, 8); put(1, 1); // byte offset fp-16
+        put(0xe8, 8); put(1, 1); // byte offset fp-24
         var(0); var(0); var(0); // line and derived tables
         return;
     }
