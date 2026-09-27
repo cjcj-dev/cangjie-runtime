@@ -962,7 +962,11 @@ namespace MapleRuntime {
 RegionManager::MetadataMapping::~MetadataMapping()
 {
     if (base != nullptr) {
+#ifdef _WIN64
+        (void)VirtualFree(base, 0, MEM_RELEASE);
+#else
         (void)munmap(base, size);
+#endif
     }
 }
 
@@ -1007,9 +1011,14 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
     // touch their descriptor.
     const std::vector<ZPage::ReservedSegment> segments = RegionManager::ReservedSegments(*virtualMemory);
     metadata.size = RegionManager::GetMetadataSize();
+#ifdef _WIN64
+    void* const metadataBase = VirtualAlloc(nullptr, metadata.size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    CHECK_DETAIL(metadataBase != nullptr, "failed to map %zu bytes of region metadata", metadata.size);
+#else
     void* const metadataBase =
         mmap(nullptr, metadata.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     CHECK_DETAIL(metadataBase != MAP_FAILED, "failed to map %zu bytes of region metadata", metadata.size);
+#endif
     metadata.base = metadataBase;
     MAddress metadataAddress = reinterpret_cast<MAddress>(metadata.base);
     CHECK(IsRepresentableLow48Range(metadataAddress, metadata.size));

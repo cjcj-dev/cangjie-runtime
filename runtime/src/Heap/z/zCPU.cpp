@@ -7,7 +7,11 @@
 // gc/z/zCPU.cpp:24-66
 #include "Heap/z/zCPU.inline.hpp"
 
+#ifdef _WIN64
+#include <windows.h>
+#else
 #include <sched.h>
+#endif
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
@@ -42,8 +46,16 @@ void ZCPU::initialize()
         _affinity[i]._thread = ZCPU_UNKNOWN_AFFINITY;
     }
 
-    VLOG(REPORT, "CPUs: %u total, %u available", count(),
-         static_cast<unsigned>(sysconf(_SC_NPROCESSORS_ONLN) > 0 ? sysconf(_SC_NPROCESSORS_ONLN) : 1));
+#ifdef _WIN64
+    // Native processor query, also used by CJThread::GetSystemProcessorsNums.
+    SYSTEM_INFO systemInfo;
+    GetSystemInfo(&systemInfo);
+    const unsigned available = systemInfo.dwNumberOfProcessors;
+#else
+    const long online = sysconf(_SC_NPROCESSORS_ONLN);
+    const unsigned available = static_cast<unsigned>(online > 0 ? online : 1);
+#endif
+    VLOG(REPORT, "CPUs: %u total, %u available", count(), available);
 }
 
 // zCPU.cpp:54-66
