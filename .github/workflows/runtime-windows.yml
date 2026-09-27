@@ -33,6 +33,7 @@ jobs:
           path: |
             ${{ runner.temp }}/runtime-windows/*.log
             ${{ runner.temp }}/runtime-windows/*.json
+            ${{ runner.temp }}/runtime-windows/*.diff
             ${{ runner.temp }}/runtime-windows/*.def
             ${{ runner.temp }}/runtime-windows/*.cmake
             ${{ runner.temp }}/runtime-windows/product/*

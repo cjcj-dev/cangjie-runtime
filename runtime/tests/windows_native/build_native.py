@@ -68,6 +68,7 @@ if arm in cut_targets:
         fromfile="a/runtime/" + relative, tofile="b/runtime/" + relative)))
 elif arm not in ("candidate", "restored"):
     raise ValueError(arm)
+record["product_build_cmake_sha256"] = hashlib.sha256((tree / "build/cmake/CMakeLists.txt").read_bytes()).hexdigest()
 record["source_sha256"] = {str(p.relative_to(tree)): hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in (tree / "src").rglob("*") if p.is_file()}
 
