@@ -111,3 +111,4 @@ return_safepoint                       manual     GHA return-safepoint.yml: nati
 windows_native                          manual     Windows native CLANG64 full product build and DLL identity; run by .github/workflows/runtime-windows.yml on windows-latest
 
 return_poll_native                        manual     GHA return-poll-native.yml; real LLVM return-reference objects, native product libraries, producer/consumer cuts and restored root rewrite on macOS arm64/x86_64 and Windows
+windows_exports                         manual     Python CLI contract tests plus actual CLANG64 raw.def; invoked by .github/workflows/windows-export-contract.yml
