@@ -394,18 +394,17 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false)
         var(0); var(0); var(0); // line and derived tables
         return;
     }
-    // R13 is callee-saved index 2 (RegisterX86-64.h:78). Spill offset 2 → fp-16.
-    // PC 0 has no reg root so the younger frame can RecordCalleeSaved first.
-    // PC 16 names R13; VisitSingleSlotsRoot then heals that spill.
-    var(0); var(0); var(4); var(2);
-    var(2); var(4); var(1); var(1); var(1);
+    // Ordinary calls own their GC roots in frame slots, not a callee's saves.
+    // HotSpot frame_x86.inline.hpp:455-464. Keep the relocation/copy assertions
+    // below unchanged while migrating their input away from the removed ABI.
+    var(0); var(0); var(0);
+    var(2); var(1); var(1); var(1); var(1);
     if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) { var(0); var(0); }
     var(0);
-    put(0, 32); put(0, 4); put(0, 1); put(0, 1); put(0, 1);
-    put(16, 32); put(1, 4); put(0, 1); put(0, 1); put(0, 1);
-    var(1); var(16);
-    put(1u << 13, 16);
-    var(0); var(8); var(0);
+    put(0, 32); put(0, 1); put(1, 1); put(0, 1); put(0, 1);
+    put(16, 32); put(0, 1); put(0, 1); put(0, 1); put(0, 1);
+    var(0); var(0);
+    var(1); var(8); var(1); put(0xf0, 8); put(1, 1);
     var(0); var(0);
     var(0);
 }
@@ -528,7 +527,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     const uintptr_t after = sret ? frames[6][2] : younger[2];
     const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
     std::fprintf(stderr,
-        "FRAME_ROOT_REMAP_ASSERT_EXECUTED startIP=%#zx before=%#zx after=%#zx relocated=%#zx reg=r13\n",
+        "FRAME_ROOT_REMAP_ASSERT_EXECUTED startIP=%#zx before=%#zx after=%#zx relocated=%#zx root=frame-slot\n",
         startIP, before, after, relocated);
     if (sret) {
         const uintptr_t transitive = owner->find(reinterpret_cast<MAddress>(objects[0][1]));
