@@ -3,6 +3,8 @@
 
 Build success is recorded separately from behavioral acceptance.
 """
+import difflib
+import sys
 import hashlib
 import json
 import os
@@ -14,15 +16,34 @@ import time
 
 assert platform.system() == "Windows", "requires native Windows"
 source = Path(__file__).resolve().parents[2]
-out = Path(os.environ["RUNNER_TEMP"]) / "safepoint-windows"
+arm = sys.argv[1] if len(sys.argv) > 1 else "candidate"
+out = Path(os.environ["RUNNER_TEMP"]) / "safepoint-windows" / arm
 out.mkdir(parents=True, exist_ok=True)
 tree = out / "runtime"
 shutil.copytree(source, tree)
+stub = tree / "src/arch/x86_64_windows/HandleSafepointStub.S"
+before = stub.read_text()
+if arm == "cut-home":
+    after = before.replace("#define SafepointStubArgumentSaveSize    32",
+                           "#define SafepointStubArgumentSaveSize    0")
+elif arm == "cut-restore":
+    after = before.replace("movapd  -368(%rbp), %xmm15", "movapd  -352(%rbp), %xmm15")
+elif arm in ("candidate", "restored"):
+    after = before
+else:
+    raise ValueError(arm)
+if arm.startswith("cut"):
+    assert after != before, "knife no longer matches"
+    stub.write_text(after)
+    (out / "cut.diff").write_text("".join(difflib.unified_diff(
+        before.splitlines(True), after.splitlines(True),
+        fromfile="a/runtime/src/arch/x86_64_windows/HandleSafepointStub.S",
+        tofile="b/runtime/src/arch/x86_64_windows/HandleSafepointStub.S")))
 env = dict(os.environ, GC_UNIT_GATE_SKIP="1",
            CANGJIE_BUILD_JOBS=str(os.cpu_count()),
            CMAKE_BUILD_PARALLEL_LEVEL=str(os.cpu_count()))
 record = {"platform": platform.platform(), "jobs": os.cpu_count(),
-          "head": os.environ.get("GITHUB_SHA"), "behavior": "NOT_RUN"}
+          "head": os.environ.get("GITHUB_SHA"), "arm": arm, "behavior": "NOT_RUN"}
 
 
 def run(command, name):
@@ -44,7 +65,11 @@ rc = run(["cmake", "-S", tree, "-B", build, "-G", "Ninja",
           "-DCMAKE_BUILD_TYPE=Release", "-DRUNTIME_TRACE_FLAG=1",
           "-DCJ_SDK_VERSION=0.0.1", "-DDISABLE_VERSION_CHECK=1",
           "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++",
-          "-DCMAKE_AR_PATH=llvm-ar", "-DCMAKE_INSTALL_PREFIX=" + str(out / "install")],
+          "-DCMAKE_AR_PATH=llvm-ar",
+          "-DCMAKE_C_FLAGS=-ffile-prefix-map=" + tree.as_posix() + "=/usr/src/cangjie-runtime",
+          "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=" + tree.as_posix() + "=/usr/src/cangjie-runtime",
+          "-DCMAKE_ASM_FLAGS=-ffile-prefix-map=" + tree.as_posix() + "=/usr/src/cangjie-runtime",
+          "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--no-insert-timestamp", "-DCMAKE_INSTALL_PREFIX=" + str(out / "install")],
          "configure")
 if not rc:
     rc = run(["cmake", "--build", build, "--parallel", str(os.cpu_count())], "build")
@@ -58,6 +83,7 @@ if not rc:
             shutil.copy2(path, product / path.name)
     record["products"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                           for p in product.iterdir()}
-    rc = run(["llvm-nm", "--defined-only", libs[0]], "defined")
+    rc = run(["llvm-nm", "--defined-only", product / libs[0].name], "defined")
+    run(["llvm-objdump", "-d", "--disassemble-symbols=CJ_MCC_HandleSafepoint,MRT_UpdateUwContext,HandleSafepoint,MRT_GetThreadLocalData,MRT_DeleteC2NContext", product / libs[0].name], "disassembly")
     (out / "result.json").write_text(json.dumps(record, indent=2))
 raise SystemExit(rc)

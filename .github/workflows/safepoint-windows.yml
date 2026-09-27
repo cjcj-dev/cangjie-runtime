@@ -19,14 +19,16 @@ jobs:
             mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
             mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
             mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
-      - name: Build native product
+      - name: Build and exercise native product
         shell: msys2 {0}
-        run: python3 runtime/tests/safepoint_windows/build_native.py
+        run: python3 runtime/tests/safepoint_windows/verify.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: safepoint-windows
           path: |
-            ${{ runner.temp }}/safepoint-windows/*.log
-            ${{ runner.temp }}/safepoint-windows/*.json
-            ${{ runner.temp }}/safepoint-windows/product/*
+            ${{ runner.temp }}/safepoint-windows/**/*.log
+            ${{ runner.temp }}/safepoint-windows/**/*.json
+            ${{ runner.temp }}/safepoint-windows/**/*.diff
+            ${{ runner.temp }}/safepoint-windows/sentinel.exe
+            ${{ runner.temp }}/safepoint-windows/*/product/*
