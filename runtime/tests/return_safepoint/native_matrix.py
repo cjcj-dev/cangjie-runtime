@@ -54,6 +54,15 @@ def build(kind):
     stub = tree/'src/arch'/ARCH/'HandleReturnSafepointStub.S'
     original = stub.read_text()
     text = original
+    if kind == 'cut-wiring':
+        cmake = tree/'src/CMakeLists.txt'
+        before = cmake.read_text()
+        line = '"arch/'+ARCH+'/HandleReturnSafepointStub.S"\n'
+        after = before.replace(line,'',1)
+        if after == before: raise RuntimeError('knife did not match')
+        import difflib
+        (arm/'cut.diff').write_text(''.join(difflib.unified_diff(before.splitlines(True),after.splitlines(True),fromfile='a/runtime/src/CMakeLists.txt',tofile='b/runtime/src/CMakeLists.txt')))
+        cmake.write_text(after)
     if kind == 'cut-save':
         old,new = ('stp  x0, x1,','stp  x2, x1,') if CPU=='aarch64' else (('movq    %rax, -8(%rbp)','movq    %rcx, -8(%rbp)') if not APPLE else ('pushq  %rax','pushq  %rcx'))
         text = text.replace(old,new,1)
@@ -62,7 +71,7 @@ def build(kind):
         elif APPLE:
             index=text.rfind('popq  %rax'); text=text[:index]+text[index:].replace('popq  %rax','popq  %rcx',1)
         else: text=text.replace('movq    -8(%rbp), %rax','movq    -8(%rbp), %rcx',1)
-    if kind.startswith('cut'):
+    if kind.startswith('cut') and kind != 'cut-wiring':
         if text == original: raise RuntimeError('knife did not match')
         import difflib
         (arm/'cut.diff').write_text(''.join(difflib.unified_diff(original.splitlines(True),text.splitlines(True),fromfile='a/runtime/src/arch/'+ARCH+'/HandleReturnSafepointStub.S',tofile='b/runtime/src/arch/'+ARCH+'/HandleReturnSafepointStub.S')))
@@ -99,11 +108,30 @@ def build(kind):
     (arm/'product.json').write_text(json.dumps(result,indent=2))
     return result
 
-arms=['green'] if CROSS else ['green','cut-save','cut-restore']
+arms=['green','cut-wiring'] if CROSS else ['green','cut-save','cut-restore','cut-wiring']
 with concurrent.futures.ThreadPoolExecutor(max_workers=len(arms)) as pool:
     results=list(pool.map(build,arms))
+# Removing the CMake wiring must keep the library buildable yet make the identity
+# gate fail on precisely CJ_MCC_HandleReturnSafepoint, with the plain safepoint
+# symbol as the positive control that a healthy library was read.
+matrix_ok=True
+for r in results:
+    kind=r['kind']
+    if r.get('build_rc'):
+        r['wiring_expect_ok'] = False
+        matrix_ok=False
+        continue
+    checks=json.loads((OUT/kind/'identity.json').read_text())['checks']
+    if kind=='cut-wiring':
+        ok = r.get('identity_rc')==1 and checks=={'CJ_MCC_HandleSafepoint':True,'CJ_MCC_HandleReturnSafepoint':False}
+        r['wiring_expect_ok']=ok
+        print(f'WIRING_ASSERT {ARCH} identity_rc={r.get("identity_rc")} checks={checks} {"PASS" if ok else "FAIL"}',flush=True)
+    else:
+        ok = r.get('identity_rc')==0 and all(checks.values())
+        r['wiring_expect_ok']=ok
+    matrix_ok &= ok
 (OUT/'build-results.json').write_text(json.dumps(results,indent=2))
-if any(r.get('build_rc') or r.get('identity_rc') for r in results): sys.exit(2)
+if not matrix_ok: sys.exit(2)
 if CROSS: sys.exit(0)
 green=results[0]; tree=Path(green['tree']); pair=Path(green['library']).parent
 exe=OUT/('registers.exe' if not APPLE else 'registers')
@@ -117,7 +145,7 @@ if rc: sys.exit(rc)
 (OUT/'test.sha256').write_text(digest(exe)+'\n')
 run_results=[]
 # The restored arm reuses the retained, byte-identical green product, not a later rebuild.
-for r in results+[dict(green,kind='restored')]:
+for r in [r for r in results if r['kind']!='cut-wiring']+[dict(green,kind='restored')]:
     arm=OUT/r['kind']; arm.mkdir(exist_ok=True)
     product=Path(r['library']).parent
     localexe=product/exe.name; shutil.copy2(exe,localexe)
