@@ -38,6 +38,7 @@ public:
         // LLVM __CJ_METADATA,__cjfuncmap: relocated address pairs, sorted on load.
         struct Function { Uptr startPC; Uptr descriptor; };
         std::vector<Function> functions;
+        Uptr FindFunctionDescriptor(Uptr startPC) const;
 #endif
         bool Contains(Uptr address, bool codeOnly = false) const;
     };

@@ -177,14 +177,19 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
 }
 
 #ifdef __APPLE__
+Uptr ElfUnloadQuiescence::ImageAddressMap::FindFunctionDescriptor(Uptr startPC) const
+{
+    const auto found = std::lower_bound(functions.begin(), functions.end(), startPC,
+        [](const Function& function, Uptr pc) { return function.startPC < pc; });
+    return found != functions.end() && found->startPC == startPC ? found->descriptor : 0;
+}
+
 Uptr ElfUnloadQuiescence::FindFunctionDescriptor(Uptr startPC)
 {
+    // CodeCache::find_blob selects the owning heap, then delegates its lookup.
     AssertReaderActive();
     const auto image = RegisteredImageForAddress(startPC);
-    if (image == nullptr) { return 0; }
-    const auto found = std::lower_bound(image->functions.begin(), image->functions.end(), startPC,
-        [](const ImageAddressMap::Function& function, Uptr pc) { return function.startPC < pc; });
-    return found != image->functions.end() && found->startPC == startPC ? found->descriptor : 0;
+    return image != nullptr ? image->FindFunctionDescriptor(startPC) : 0;
 }
 #endif
 
