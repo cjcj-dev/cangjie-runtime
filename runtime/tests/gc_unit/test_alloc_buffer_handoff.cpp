@@ -95,16 +95,16 @@ GC_TEST(AllocBufferHandoff, StackRootPublishedDuringMergeIsDelivered)
     ZMark domain(64, MarkingStacks::MarkingGeneration::YOUNG);
     domain.PrepareWork(1);
     auto& producer = domain.Stacks();
-    producer.Push(domain.Stripes(), 0, MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, true, false), true);
+    producer.Push(domain.Stripes(), domain.Stripes().At(0), MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, true, false), true);
     GC_EXPECT_TRUE(domain.Stripes().IsEmpty());
     GC_EXPECT_TRUE(domain.FlushStacks());
-    producer.Push(domain.Stripes(), 0, MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj1))), true, true, true, false), true);
+    producer.Push(domain.Stripes(), domain.Stripes().At(0), MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj1))), true, true, true, false), true);
     GC_EXPECT_TRUE(domain.FlushStacks());
     std::vector<MarkStackEntry> delivered;
     WorkerFixture worker;
     MarkThreadLocalStacks consumer(64);
     MarkStackEntry entry;
-    while (consumer.Pop(domain.Smr(), 0, domain.Stripes(), 0, entry)) {
+    while (consumer.Pop(domain.Smr(), 0, domain.Stripes(), domain.Stripes().At(0), entry)) {
         delivered.push_back(entry);
     }
     GC_EXPECT_EQ(CountEntry(delivered, fx.obj0), 1u);
@@ -127,7 +127,7 @@ GC_OTHER_VM_TEST(AllocBufferHandoff, StackRootPublishDuringRetireKeepsHeapIntact
         ThreadLocal::GetThreadLocalData()->buffer = id == 0 ? &first : &second;
         owners[id] = &ThreadLocal::GetGCData();
         auto& stacks = domain.Stacks();
-        stacks.Push(domain.Stripes(), id,
+        stacks.Push(domain.Stripes(), domain.Stripes().At(id),
                     MarkStackEntry(untype(ZAddress::offset(from_object(id == 0 ? fx.obj0 : fx.obj1))), true, true, true, false), true);
         ready.fetch_add(1);
         while (ready.load() != 2) { std::this_thread::yield(); }
@@ -146,7 +146,7 @@ GC_OTHER_VM_TEST(AllocBufferHandoff, StackRootPublishDuringRetireKeepsHeapIntact
     MarkThreadLocalStacks consumer(64);
     MarkStackEntry entry;
     for (size_t stripe = 0; stripe < 2; ++stripe) {
-        while (consumer.Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
+        while (consumer.Pop(domain.Smr(), 0, domain.Stripes(), domain.Stripes().At(stripe), entry)) {
             delivered.push_back(entry);
         }
     }

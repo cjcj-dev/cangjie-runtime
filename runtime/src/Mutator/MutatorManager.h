@@ -128,6 +128,10 @@ public:
     void WithdrawMgmtWriterPending() { mgmtWritersWaiting.fetch_sub(1, std::memory_order_acq_rel); }
 
     void AcquireMutatorManagementWLock();
+    void AcquireMutatorManagementWLockForExit(Mutator& mutator);
+    // threads.cpp:1089-1114: single removal transaction (detach publication,
+    // list removal, GC-detached transition) in the pause-exclusive section.
+    void RemoveMutator(Mutator& mutator);
 
     bool AcquireMutatorManagementWLockForCpuProfile();
 

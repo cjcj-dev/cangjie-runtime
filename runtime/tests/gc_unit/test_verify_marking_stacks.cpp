@@ -1,3 +1,4 @@
+#include "Heap/z/zMarkTerminate.hpp"
 #include "marking_smr_test.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -21,9 +22,12 @@ using namespace MapleRuntime::GcUnit;
 GC_TEST(MarkingStacks, PopulationCountsEntriesAndPublishedChunks)
 {
     MarkStripeSet stripes(4);
+    MarkTerminate stripeTerminate;
+    stripeTerminate.Reset(1);
+    stripes.SetTerminate(&stripeTerminate);
     MarkThreadLocalStacks local(4);
-    local.Push(stripes, 2, MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
-    local.Push(stripes, 2, MarkStackEntry(uintptr_t(0x2000), true, true, true, false), true);
+    local.Push(stripes, stripes.At(2), MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
+    local.Push(stripes, stripes.At(2), MarkStackEntry(uintptr_t(0x2000), true, true, true, false), true);
     GC_EXPECT_EQ(local.Population(), 2u);
     GC_EXPECT_EQ(stripes.Population(), 0u);
     GC_EXPECT_TRUE(local.Flush(stripes));
@@ -32,7 +36,7 @@ GC_TEST(MarkingStacks, PopulationCountsEntriesAndPublishedChunks)
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), 2u);
     MapleRuntime::GcUnit::WorkerFixture workerFixture;
     MarkingSMR smr;
-    MarkStripeStack* published = stripes.At(2).StealStack(smr, 0);
+    MarkStripeStack* published = stripes.At(2)->StealStack(smr, 0);
     GC_EXPECT_TRUE(published != nullptr);
     MarkStripeStack::Destroy(published);
     MarkingSMRTest::reclaim(smr);
@@ -57,13 +61,13 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
         mark.BindWorkers(generation.Workers());
         MarkStripeSet& stripes = mark.Stripes();
         MarkThreadLocalStacks local(4);
-        local.Push(stripes, 1, MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
+        local.Push(stripes, stripes.At(1), MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
         GC_EXPECT_TRUE(local.Flush(stripes));
         GC_EXPECT_EQ(stripes.Population(), 1u);
         if (!reject) {
             MapleRuntime::GcUnit::WorkerFixture workerFixture;
             MarkingSMR smr;
-            MarkStripeStack* stack = stripes.At(1).StealStack(smr, 0);
+            MarkStripeStack* stack = stripes.At(1)->StealStack(smr, 0);
             GC_EXPECT_TRUE(stack != nullptr);
             MarkStripeStack::Destroy(stack);
             MarkingSMRTest::reclaim(smr);

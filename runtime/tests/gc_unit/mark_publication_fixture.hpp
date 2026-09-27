@@ -48,7 +48,7 @@ struct MarkPublicationFixture {
         ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
         MarkStackEntry entry;
         for (size_t stripe = 0; stripe < domain.Stripes().Count(); ++stripe) {
-            while (domain.Stacks().Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
+            while (domain.Stacks().Pop(domain.Smr(), 0, domain.Stripes(), domain.Stripes().At(stripe), entry)) {
                 visitor(to_object(ZOffset::address(to_zoffset(entry.object_address()))), entry.follow());
             }
         }

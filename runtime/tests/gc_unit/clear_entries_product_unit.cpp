@@ -1,3 +1,4 @@
+#include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -287,7 +288,7 @@ struct LoadHealDeliveryTestAccess {
         auto& stacks = domain.Stacks();
         const size_t work = stacks.Population();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
-            if (auto* stack = stacks.StealLocal(stripe)) MarkStripeStack::Destroy(stack);
+            if (auto* stack = stacks.StealLocal(domain.Stripes(), domain.Stripes().At(stripe))) MarkStripeStack::Destroy(stack);
         }
         RelocationReceiptTest::BindCollector(nullptr);
         return RemsetConsumeResult { work, consumed.size() };
