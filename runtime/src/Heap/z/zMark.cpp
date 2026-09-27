@@ -948,8 +948,8 @@ bool ZMark::HandshakeFlush(ZMark* domain)
         // counted stopped (threads.cpp:1089-1104 form, see
         // MutatorManager::TransitMutatorToExit). Flushing foreign mutator
         // data here would race that detach flush.
-        if (gcWorkers != nullptr) {
-            gcWorkers->threads_do([&](WorkerThread* worker) {
+        if (domain != nullptr && domain->gcWorkers != nullptr) {
+            domain->gcWorkers->threads_do([&](WorkerThread* worker) {
                 ThreadGCData* data = worker->gc_data();
                 if (data != nullptr && FlushTargetGCData(*data, domain)) {
                     flushed = true;
