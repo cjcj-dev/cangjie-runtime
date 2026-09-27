@@ -95,6 +95,10 @@ def build(arm):
         if rc == 0:
             rc = run(['cmake', '--build', tree/'CMakebuild', '--parallel', JOBS], home/'build.log', tree, env)
     row = {'arm': arm, 'build_rc': rc, 'jobs': JOBS, 'tree': str(tree)}
+    raw_exports = tree/'CMakebuild/windows_x86_64_exports.raw.def'
+    if raw_exports.is_file():
+        shutil.copy2(raw_exports, home/raw_exports.name)
+        row['raw_exports_sha256'] = sha(raw_exports)
     if rc == 0:
         leaf = 'libcangjie-runtime.dylib' if APPLE else '*cangjie-runtime.dll'
         libs = sorted((tree/'output').rglob(leaf)) if APPLE else sorted(tree.rglob(leaf))

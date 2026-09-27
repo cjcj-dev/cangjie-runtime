@@ -1,7 +1,5 @@
 name: Native return-poll roots
 on:
-  push:
-    branches: ['sym/1207-*']
   workflow_dispatch:
     inputs:
       runtime_ref:
@@ -49,7 +47,9 @@ jobs:
         with:
           path: ${{ github.workspace }}/sccache-return-pair
           key: return-pair-${{ matrix.target }}-${{ inputs.runtime_ref || github.sha }}-${{ github.run_id }}
-          restore-keys: return-pair-${{ matrix.target }}-${{ inputs.runtime_ref || github.sha }}-
+          restore-keys: |
+            return-pair-${{ matrix.target }}-${{ inputs.runtime_ref || github.sha }}-
+            return-pair-${{ matrix.target }}-
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
         with:
@@ -89,5 +89,6 @@ jobs:
             ${{ github.workspace }}/return-pair/*/*.json
             ${{ github.workspace }}/return-pair/*/*.log
             ${{ github.workspace }}/return-pair/*/*.diff
+            ${{ github.workspace }}/return-pair/*/*.def
             ${{ github.workspace }}/return-pair/*/product/*
           if-no-files-found: error
