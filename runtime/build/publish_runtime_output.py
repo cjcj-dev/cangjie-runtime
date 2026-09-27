@@ -42,8 +42,8 @@ def parse_args():
 def generated_inputs(args):
     def normalize(text):
         # These paths describe the private workspace, not a product option.
-        text = text.replace(str(args.staging), '<STAGING>')
-        text = text.replace(str(args.build), '<BUILD>')
+        for path, replacement in [(args.staging, '<STAGING>'), (args.build, '<BUILD>')]:
+            text = text.replace(str(path), replacement).replace(path.as_posix(), replacement)
         return re.sub(r'::@\([^)]*\)', '::@directory', text)
 
     def text_input(path):
@@ -67,7 +67,23 @@ def generated_inputs(args):
         links = {'ninja-commands': normalize(result.stdout)}
     else:
         paths = [Path(line) for line in (args.build / 'runtime-link-inputs.txt').read_text().splitlines() if line]
-        links = {normalize(str(path)): text_input(path) for path in paths}
+        paths = [(path, path.parents[2]) for path in paths]
+        links = {}
+        while paths:
+            path, working_directory = paths.pop()
+            key = normalize(str(path))
+            if key in links:
+                continue
+            content = path.read_text()
+            links[key] = normalize(content)
+            # CMake emits objects*.rsp/linkLibs.rsp when the native command
+            # needs response files. Hash their contents too, not just their
+            # names in build.make/link.txt. Resolve relative to the target cwd
+            # used by CMake's generated recipes; missing inputs must fail.
+            for quoted, plain in re.findall(r'@(?:"([^"\r\n]+\.rsp)"|([^\s"\r\n]+\.rsp))', content):
+                response = Path(quoted or plain)
+                paths.append((response if response.is_absolute() else working_directory / response,
+                              working_directory))
     if not links:
         raise RuntimeError('generated link command inputs are missing')
     compiler_files = sorted(args.compiler_state.glob('CMake*Compiler.cmake'))
