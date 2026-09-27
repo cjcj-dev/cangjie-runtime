@@ -10,7 +10,9 @@
 
 #include <cassert>
 #include <thread>
+#if defined(__linux__) || defined(hongmeng)
 #include <unistd.h>
+#endif
 
 namespace MapleRuntime {
 // zCPU.inline.hpp:32-34 (os::processor_count == sysconf(_SC_NPROCESSORS_CONF), os_linux.cpp)

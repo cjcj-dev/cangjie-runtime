@@ -47,7 +47,7 @@ rc = run(["cmake", "-S", tree, "-B", build, "-G", "Ninja",
           "-DCMAKE_AR_PATH=llvm-ar", "-DCMAKE_INSTALL_PREFIX=" + str(out / "install")],
          "configure")
 if not rc:
-    rc = run(["cmake", "--build", build, "--parallel", str(os.cpu_count())], "build")
+    rc = run(["cmake", "--build", build, "--parallel", str(os.cpu_count()), "--", "-k", "0"], "build")
 if not rc:
     libs = list(tree.rglob("*cangjie-runtime.dll"))
     assert libs, "product DLL missing"
