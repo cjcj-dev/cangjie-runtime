@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -101,7 +102,9 @@ class Contract(unittest.TestCase):
         raw_text = ARGS.raw.read_text()
         symbols = json.loads(references.read_text())['symbols']
         for marker in ('220107', '220108'):
-            self.raw.write_text(raw_text.replace('B9nqn220107', 'B9nqn' + marker))
+            fixture = re.sub(r'B9nqn[0-9]+', 'B9nqn' + marker, raw_text)
+            self.raw.write_text(fixture)
+            print(f'FIXTURE abi={marker} sha256={hashlib.sha256(fixture.encode()).hexdigest()}', flush=True)
             result = self.cli('check', self.raw, expected, '--references', references)
             self.assertEqual(result.returncode, 0, result.stderr)
         # Every captured consumer symbol is independently necessary. Extra
