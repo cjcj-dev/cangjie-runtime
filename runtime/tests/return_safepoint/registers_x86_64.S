@@ -87,7 +87,11 @@ SYM(CheckReturnStub):
     movdqu %xmm15, 560(%r10)
     xorq %r10, %r10
     xorq %r11, %r11
+#ifdef _WIN64
     call SYM(CJ_MCC_HandleReturnSafepoint)
+#else
+    call *SYM(CJ_MCC_HandleReturnSafepoint)@GOTPCREL(%rip)
+#endif
     movq 304(%rsp), %r10
     movq %rax, 160(%r10)
     movq %rdx, 168(%r10)

@@ -136,7 +136,14 @@ SYM(CheckReturnStub):
     str q31, [x9, #816]
     mov x16, #0
     mov x17, #0
-    bl SYM(CJ_MCC_HandleReturnSafepoint)
+#ifdef __APPLE__
+    adrp x9, SYM(CJ_MCC_HandleReturnSafepoint)@GOTPAGE
+    ldr x9, [x9, SYM(CJ_MCC_HandleReturnSafepoint)@GOTPAGEOFF]
+#else
+    adrp x9, :got:SYM(CJ_MCC_HandleReturnSafepoint)
+    ldr x9, [x9, :got_lo12:SYM(CJ_MCC_HandleReturnSafepoint)]
+#endif
+    blr x9
     ldr x9, [sp]
     str x0, [x9, #160]
     str x1, [x9, #168]
