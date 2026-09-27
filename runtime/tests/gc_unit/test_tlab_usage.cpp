@@ -810,6 +810,7 @@ void* NeverScheduledSnapshotTask(void*, unsigned int) { return nullptr; }
 // threads.cpp:1089-1114: the destructor of an unstarted carrier enters the
 // same pause-exclusive removal transaction as a regular exit.
 struct ExcludedFreeCase {
+    bool waitInSaferegion = false;
     std::atomic<bool> ready{false};
     std::atomic<bool> proceed{false};
     std::atomic<bool> freeStarted{false};
@@ -835,11 +836,13 @@ void* ExcludedFreeTask(void* value)
             }
         }
     }
+    if (state.waitInSaferegion) { (void)Mutator::GetMutator()->EnterSaferegion(false); }
     state.ready.store(true, std::memory_order_release);
     while (!state.proceed.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     state.freeStarted.store(true, std::memory_order_release);
     CJ_CJThreadFree(carrier, true);
     state.freeDone.store(true, std::memory_order_release);
+    if (state.waitInSaferegion) { (void)Mutator::GetMutator()->LeaveSaferegion(); }
     return nullptr;
 }
 void* CancelBuiltSnapshotTask(void* value)
@@ -935,6 +938,66 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, UnstartedCarrierFreeExcludesPauseLock)
     GC_EXPECT_TRUE(removed);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+// javaThread.cpp:898 + threads.cpp:1090-1114: failed-attach removal and
+// the actual mark-end safepoint share the same exclusion protocol.
+GC_RUNTIME_OTHER_VM_TEST(ThreadSnapshot, UnstartedCarrierFreeExcludesMarkEnd)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    auto& young = Heap::GetHeap().young();
+    young.Workers()->set_active_workers(1);
+    young.pause_mark_start();
+    ExcludedFreeCase state;
+    state.waitInSaferegion = true;
+    auto task = RunCJTask(ExcludedFreeTask, &state);
+    auto waitFor = [](auto pred) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!pred() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return pred();
+    };
+    const bool ready = waitFor([&] { return state.ready.load(std::memory_order_acquire); });
+    bool stopped = false;
+    bool markEndCalled = false;
+    bool doneDuringPause = false;
+    bool started = false;
+    bool registeredDuringPause = false;
+    std::thread pause([&] {
+        ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+        ScopedStopTheWorld stw("unstarted carrier young mark-end", false);
+        stopped = MutatorManager::Instance().WorldStopped();
+        const bool ended = young.mark_end();
+        markEndCalled = true;
+        state.proceed.store(true, std::memory_order_release);
+        started = waitFor([&] { return state.freeStarted.load(std::memory_order_acquire); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        doneDuringPause = state.freeDone.load(std::memory_order_acquire);
+        ThreadsListHandle list;
+        registeredDuringPause = list.includes(state.identity.load());
+        std::fprintf(stderr, "UNSTARTED_MARK_END_PAUSE stopped=%d mark_end=%d started=%d done=%d registered=%d\n",
+                     stopped, ended, started, doneDuringPause, registeredDuringPause);
+    });
+    pause.join();
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &result), E_OK);
+    ReleaseHandle(task);
+    bool removed = false;
+    {
+        ThreadsListHandle list;
+        removed = state.identity.load() != nullptr && !list.includes(state.identity.load());
+    }
+    std::fprintf(stderr, "UNSTARTED_MARK_END_TARGET executed=1 ready=%d stopped=%d called=%d started=%d done_during_pause=%d retained=%d removed=%d\n",
+                 ready, stopped, markEndCalled, started, doneDuringPause, registeredDuringPause, removed);
+    GC_EXPECT_TRUE(ready && stopped && markEndCalled && started);
+    GC_EXPECT_FALSE(doneDuringPause);
+    GC_EXPECT_TRUE(registeredDuringPause);
+    GC_EXPECT_TRUE(state.freeDone.load() && removed);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
 #endif
 
 #if defined(__linux__)

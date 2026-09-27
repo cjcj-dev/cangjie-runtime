@@ -188,6 +188,70 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, PauseCannotOverlapExitDetachWindow)
     RunArm(Arm::RaceInWindow);
 }
 
+// A request arriving after lock acquisition must be decided after the
+// active-state fence, with the in-flight lock released before the closure.
+// Hold the existing per-mutator lock to park the real transition between
+// leave_safe() and SetInSaferegion(false); no product test hook is needed.
+GC_OTHER_VM_TEST(ExitDetachMarkEnd, RequestAtActiveTransitionReleasesLock)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    class ObserveLock final : public HandshakeClosure {
+    public:
+        ObserveLock() : HandshakeClosure("exit in-flight lock") {}
+        bool executed = false;
+        bool lockAvailable = false;
+        bool active = false;
+        bool onOwner = false;
+        void do_thread(Mutator* target) override
+        {
+            executed = true;
+            active = !target->InSaferegion();
+            onOwner = Mutator::GetMutator() == target;
+            auto& manager = MutatorManager::Instance();
+            lockAvailable = manager.TryAcquireMutatorManagementWLock();
+            if (lockAvailable) { manager.MutatorManagementWUnlock(); }
+            std::fprintf(stderr, "EXIT_REQUEST_RESULT executed=1 active=%d owner=%d lock_available=%d\n",
+                         active, onOwner, lockAvailable);
+        }
+    } closure;
+    std::atomic<Mutator*> owner{nullptr};
+    std::atomic<bool> exitNow{false};
+    std::thread exiting([&] {
+        auto& manager = MutatorManager::Instance();
+        Mutator* current = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        StackWatermarkSet::on_safepoint(*current);
+        owner.store(current, std::memory_order_release);
+        while (!exitNow.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    const bool created = WaitFor([&] { return owner.load() != nullptr; }, 10000);
+    if (!created) { std::abort(); }
+    Mutator* target = owner.load();
+    HandshakeOperation request(&closure, target);
+    auto& manager = MutatorManager::Instance();
+    manager.MutatorManagementWLock();
+    exitNow.store(true, std::memory_order_release);
+    const bool blocked = WaitFor([&] {
+        return target->InSaferegion() && target->GetHandshakeState().observed_safe();
+    }, 10000);
+    target->MutatorLock();
+    manager.MutatorManagementWUnlock();
+    const bool transition = WaitFor([&] { return !target->GetHandshakeState().observed_safe(); }, 10000);
+    // The product transition is now blocked on MutatorLock, having obtained
+    // the management lock. Queue a real operation before allowing its fence.
+    target->GetHandshakeState().add_operation(&request);
+    target->MutatorUnlock();
+    exiting.join();
+    std::fprintf(stderr, "EXIT_REQUEST_TARGET executed=1 blocked=%d transition=%d completed=%d lock_available=%d\n",
+                 blocked, transition, request.is_completed(), closure.lockAvailable);
+    GC_EXPECT_TRUE(blocked);
+    GC_EXPECT_TRUE(transition);
+    GC_EXPECT_TRUE(request.is_completed());
+    GC_EXPECT_TRUE(closure.executed && closure.active && closure.onOwner);
+    GC_EXPECT_TRUE(closure.lockAvailable);
+}
+
 // Control 1: no breakpoint; the exit completes before the pause.
 GC_OTHER_VM_TEST(ExitDetachMarkEnd, ControlHookDisarmed)
 {
