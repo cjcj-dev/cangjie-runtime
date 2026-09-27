@@ -92,6 +92,7 @@ set(GC_UNIT_SOURCES
     test_mark_port_203_entries.cpp
     test_mark_discovery.cpp
     test_mark_port_203_engine.cpp
+    test_exit_detach_mark_end.cpp
     test_partial_array.cpp
     test_segmented_array_init.cpp
     test_package_init.cpp

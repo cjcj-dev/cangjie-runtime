@@ -20,11 +20,22 @@
 #include "Heap/z/zPage.hpp"
 
 namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<void (*)()> pushCreatedBreakpoint{nullptr};
+#endif
 namespace {
 constexpr size_t FIRST_STACK_CAPACITY = 128;
 constexpr size_t REGULAR_STACK_CAPACITY = 512;
 } // namespace
 
+#if defined(MRT_TESTABLE_INTERNALS)
+// Test-only breakpoint between Create() and the first entry push, same
+// pattern as ThreadSMR.cpp reclaimScanBreakpoint.
+void MarkThreadLocalStacks::SetPushCreatedBreakpoint(void (*callback)())
+{
+    pushCreatedBreakpoint.store(callback, std::memory_order_release);
+}
+#endif
 
 MarkStripeStack* MarkStripeStack::Create(bool firstStack)
 {

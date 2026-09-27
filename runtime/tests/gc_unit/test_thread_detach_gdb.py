@@ -1,15 +1,23 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # Licensed under Apache-2.0 with Runtime Library Exception.
-"""Schedule the product's final stack publication against inventory flushing.
+"""Observe the product's final stack publication relative to the saferegion.
 
 Uses the existing managed-exit fixture and the real product SO. No product
-state, return value, entry point or test assertion is replaced. The trylock
-is a nonblocking observation of the same mutex used by GC inventory readers.
+state, return value, entry point or test assertion is replaced.
+
+ZGC form (threads.cpp:1089-1104): the detach flush runs before the exiting
+thread is counted as safepoint-safe, so no pause can overlap the publication.
+The load-bearing observation is the owner's saferegion word read from the
+live TransitMutatorToExit frame while the exiting thread is stopped inside
+the real publication: it must be SAFE_REGION_FALSE. Afterwards the shared
+list must reference the exiting stack exactly once.
 """
 import gdb
 import json
 import os
 from pathlib import Path
+
+SAFE_REGION_FALSE = 0x03020100
 
 
 def cmd(command):
@@ -32,59 +40,43 @@ class ExitPublication(gdb.Breakpoint):
         return gdb.selected_thread().num == EXIT_THREAD
 
 
+def owner_saferegion_word():
+    frame = gdb.newest_frame()
+    while frame is not None:
+        if frame.name() == 'MapleRuntime::MutatorManager::TransitMutatorToExit':
+            frame.select()
+            owner = frame.read_var('mutator')
+            return int(owner['inSaferegion']['_M_i'])
+        frame = frame.older()
+    raise RuntimeError('TransitMutatorToExit frame not found')
+
+
 try:
     for option in ('pagination off', 'confirm off', 'breakpoint pending on', 'print thread-events off'):
         cmd('set ' + option)
     fixture = 'ThreadLifecycle.ManagedDetachMarksBothGenerations'
     cmd('set environment GC_UNIT_FILTER ' + fixture)
     cmd('set environment GC_UNIT_OTHER_VM_CHILD ' + fixture)
-    entry = gdb.Breakpoint('MapleRuntime::Mutator::ResetMutator', temporary=True)
+    entry = gdb.Breakpoint('MapleRuntime::MutatorManager::TransitMutatorToExit', temporary=True)
     cmd('run')
     if entry.is_valid():
-        raise RuntimeError('Real ResetMutator entry was not reached')
+        raise RuntimeError('Real TransitMutatorToExit entry was not reached')
     EXIT_THREAD = gdb.selected_thread().num
-    cmd('set $owner = this')
     boundary = ExitPublication('MapleRuntime::MarkStripeStackList::Push')
     cmd('continue')
     if not gdb.selected_inferior().threads():
         raise RuntimeError('Product exit publication was not reached')
-    exiting = gdb.selected_thread()
-    cmd('set scheduler-locking on')
     product = gdb.solib_name(gdb.newest_frame().pc())
     expected = Path(os.environ['GCV2_RUNTIME_LIB_DIR']) / 'libcangjie-runtime.so'
     if Path(product).resolve() != expected.resolve():
         raise RuntimeError('Product identity mismatch: ' + str(product))
     cmd('set $published = this')
     cmd('set $chunk = stack')
-    emit('PRODUCT_EXIT_PUBLICATION', library=product, chunk=int(val('$chunk')), stack=cmd('bt'))
-    cmd('set $mutex = (pthread_mutex_t*)&$owner->mutatorLock')
-    boundary.enabled = False
-    observer = next(t for t in gdb.selected_inferior().threads() if t.num == 1)
-    observer.switch()
-    lock_rc = int(val('(int)pthread_mutex_trylock($mutex)'))
-    emit('INVENTORY_LOCK_OBSERVATION', trylock_rc=lock_rc)
-    if lock_rc == 0:
-        cmd('call (int)pthread_mutex_unlock($mutex)')
-        # Run the actual inventory consumer on a second thread while the
-        # exiting thread still holds the stack argument for its publication.
-        cmd('call ((bool (*)()) &_ZN12MapleRuntime5ZMark19FlushAllGenerationsEv)()')
-        emit('CONCURRENT_INVENTORY_FLUSH', completed=True)
-    elif lock_rc != 16:  # Linux EBUSY
-        raise RuntimeError('Unexpected mutex result: ' + str(lock_rc))
-    exiting.switch()
-    gdb.newest_frame().select()
+    raw = owner_saferegion_word()
+    in_saferegion = 0 if raw == SAFE_REGION_FALSE else 1
+    emit('EXIT_PUBLICATION_STATE', library=product, chunk=int(val('$chunk')),
+         in_saferegion=in_saferegion, stack=cmd('bt'))
     cmd('finish')
-    if lock_rc == 16:
-        # The inventory consumer can run once final publication relinquishes
-        # the mutex, before unbinding/removal destroys the owner's identity.
-        unlocked = gdb.Breakpoint('MapleRuntime::MutatorManager::UnbindMutator', temporary=True)
-        cmd('continue')
-        if unlocked.is_valid():
-            raise RuntimeError('Owner did not reach the post-reset boundary')
-        observer.switch()
-        cmd('call ((bool (*)()) &_ZN12MapleRuntime5ZMark19FlushAllGenerationsEv)()')
-        emit('SERIALIZED_INVENTORY_FLUSH', completed=True)
-        exiting.switch()
     count = int(val('$published->length._M_i'))
     # Count actual references to this same stack, not call/hit counts.
     node = val('$published->head._M_b._M_p')
@@ -96,12 +88,11 @@ try:
         seen.add(int(node))
         duplicates += int(node.dereference()['stack']) == int(val('$chunk'))
         node = node.dereference()['next']
-    passed = lock_rc == 16 and duplicates == 1 and count == 1
-    emit('ASSERT_EXIT_SINGLE_PUBLICATION', passed=passed, lock_rc=lock_rc,
+    passed = in_saferegion == 0 and duplicates == 1 and count == 1
+    emit('ASSERT_EXIT_SINGLE_PUBLICATION', passed=passed, in_saferegion=in_saferegion,
          stack_references=duplicates, published_nodes=count)
     if not passed:
         cmd('quit 1')
-    cmd('set scheduler-locking off')
     cmd('continue')
     code = int(val('$_exitcode'))
     emit('FIXTURE_EXIT', rc=code)

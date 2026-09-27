@@ -941,17 +941,21 @@ bool ZMark::HandshakeFlush(ZMark* domain)
     auto& manager = MutatorManager::Instance();
     bool flushed = false;
     if (manager.WorldStopped()) {
-        {
-            std::lock_guard<std::mutex> lock(manager.markFlushThreadMutex);
-            for (auto* tls : manager.markFlushThreads) {
-                if (FlushThreadLocal(tls, domain)) {
+        // ZGC zMark.cpp:954-970 (try_end): a stopped world flushes only
+        // non-Java (here: GC) threads. Mutator stacks are drained by the
+        // concurrent handshake flush below (zMark.cpp:535-606 form) and, on
+        // thread exit, by the detach flush that runs before the thread is
+        // counted stopped (threads.cpp:1089-1104 form, see
+        // MutatorManager::TransitMutatorToExit). Flushing foreign mutator
+        // data here would race that detach flush.
+        if (gcWorkers != nullptr) {
+            gcWorkers->threads_do([&](WorkerThread* worker) {
+                ThreadGCData* data = worker->gc_data();
+                if (data != nullptr && FlushTargetGCData(*data, domain)) {
                     flushed = true;
                 }
-            }
+            });
         }
-        ThreadGCData::VisitOwners([&](ThreadGCData& data, Mutator*, ThreadLocalData*) {
-            flushed = FlushTargetGCData(data, domain) || flushed;
-        });
         flushed = FlushThreadLocal(ThreadLocal::GetThreadLocalData(), domain) || flushed;
         return flushed;
     }
@@ -962,11 +966,13 @@ bool ZMark::HandshakeFlush(ZMark* domain)
             : HandshakeClosure("ZMarkFlushStacks"), domain_(d), flushed_(false) {}
         void do_thread(Mutator* thread) override
         {
-            thread->MutatorLock();
+            // ZGC zMark.cpp:535-557: no per-owner lock. The closure runs on
+            // the owner itself, or on the handshaker while the owner is
+            // observed safe; a saferegion-resident owner never touches its
+            // marking state (the exit flush runs before EnterSaferegion).
             if (FlushTargetGCData(thread->GetGCData(), domain_)) {
                 flushed_ = true;
             }
-            thread->MutatorUnlock();
         }
         bool flushed() const { return flushed_.load(std::memory_order_relaxed); }
     private:
