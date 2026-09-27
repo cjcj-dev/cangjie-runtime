@@ -96,11 +96,17 @@ def arm(name):
     shutil.copy2(bounds, directory / bounds.name)
     cmd = link_cmd.copy()
     cmd[cmd.index('-o') + 1] = str(target)
-    if name in cuts:
+    export_cut = name.removeprefix('export-') if name.startswith('export-') else None
+    if name in cuts or export_cut:
         original = source.read_text()
-        needle = '    CalleeSavedRegistersStub MCC_PackageInit' + name
+        if export_cut:
+            needle = f'    .global _CJ_MCC_PackageInit{export_cut}\n_CJ_MCC_PackageInit{export_cut}:\n'
+            replacement_text = ''
+        else:
+            needle = '    CalleeSavedRegistersStub MCC_PackageInit' + name
+            replacement_text = '    CalleeSavedRegistersStub ' + cuts[name]
         assert original.count(needle) == 1
-        changed = original.replace(needle, '    CalleeSavedRegistersStub ' + cuts[name])
+        changed = original.replace(needle, replacement_text)
         replacement = directory / source.name
         replacement.write_text(changed)
         import difflib
@@ -122,6 +128,18 @@ def arm(name):
     assert run(cmd, directory / 'link.log', link_cwd) == 0
     hashes = dict(caller=caller_sha, runtime=sha(target), boundscheck=sha(directory / bounds.name))
     (directory / 'sha256.json').write_text(json.dumps(hashes, indent=2))
+    if export_cut:
+        assert run([llvm_nm, '--defined-only', str(target)], directory / 'defined.txt') == 0
+        defined = {line.split()[-1] for line in (directory / 'defined.txt').read_text().splitlines() if line.split()}
+        missing = {entry for entry in NAMES if '_CJ_MCC_PackageInit' + entry not in defined}
+        link_caller = command.copy()
+        link_caller[link_caller.index('-L' + str(product.parent))] = '-L' + str(directory)
+        link_caller[link_caller.index('-o') + 1] = str(directory / 'caller')
+        rc = run(link_caller, directory / 'caller-link.log')
+        diagnostic = (directory / 'caller-link.log').read_text()
+        precise = missing == {export_cut} and rc != 0 and ('_CJ_MCC_PackageInit' + export_cut) in diagnostic
+        return dict(arm=name, hashes=hashes, missing=sorted(missing), link_rc=rc, precise=precise,
+                    scope='symbol/link negative control only; not runtime behaviour evidence')
     env = dict(os.environ, DYLD_LIBRARY_PATH=str(directory))
     results = {}
     for test in NAMES:
@@ -142,7 +160,7 @@ def arm(name):
 
 # Immutable build inputs; only the selected assembly object and output differ.
 with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-    results = list(pool.map(arm, ['green', 'restored', *NAMES]))
+    results = list(pool.map(arm, ['green', 'restored', *NAMES, *('export-' + name for name in NAMES)]))
 (OUT / 'results.json').write_text(json.dumps(results, indent=2))
 run(['uptime'], OUT / 'uptime-after.txt')
 assert all(r['precise'] for r in results), 'target-only runtime assertion failures required'
