@@ -28,6 +28,20 @@ namespace MapleRuntime {
 extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
 }
 namespace {
+// ZGC zObjectAllocator.cpp:136-148 tries the mapped cache before the cold
+// path. Reserve the constructor's cache while constructing a cold geometry.
+struct InitialCacheReservation {
+    ZPage* page;
+    InitialCacheReservation()
+    {
+        const size_t cached = Heap::GetHeap().page_allocator().GetCachedBytes();
+        page = cached == 0 ? nullptr : Heap::alloc_page(cached, ZPageType::large, false, PageAge::eden,
+                                                       NonBlockingAllocationFlags());
+        GC_EXPECT_TRUE(cached == 0 || page != nullptr);
+    }
+    ~InitialCacheReservation() { if (page != nullptr) { Heap::free_page(page); } }
+};
+
 void* AllocateSizedObjects(void*)
 {
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
@@ -157,6 +171,7 @@ void* AllocateTLABSlices(void*)
 }
 void* AllocateManagedFastMedium(void*)
 {
+    InitialCacheReservation initialCache;
     auto& manager = Heap::GetHeap().page_allocator();
     if (!ZPageSizeMediumEnabled) { return reinterpret_cast<void*>(1); }
     ZPage* cached = Heap::alloc_page(ZPageSizeMediumMin, ZPageType::medium, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
@@ -182,6 +197,7 @@ void* AllocateManagedFastMedium(void*)
 }
 void* AllocateMediumNonBlocking(void*)
 {
+    InitialCacheReservation initialCache;
     auto& heap = Heap::GetHeap();
     const size_t bytes = ZObjectSizeLimitSmall + 8;
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
@@ -204,7 +220,9 @@ void* AllocateMediumNonBlocking(void*)
 void* AllocateMediumBlockingFailure(void*)
 {
     auto& heap = Heap::GetHeap();
-    const size_t occupiedBytes = heap.GetMaxCapacity() - ZGranuleSize;
+    // A single cached granule can satisfy fast-medium after prime. Occupy
+    // all remaining capacity so both cache and cold branches must fail.
+    const size_t occupiedBytes = heap.GetMaxCapacity() - heap.page_allocator().GetAllocatedSize();
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
     std::memset(storage, 0, sizeof(storage));
     auto* type = reinterpret_cast<TypeInfo*>(storage);
@@ -273,6 +291,7 @@ void* AllocateNonBlockingCapacity(void*)
 }
 void* AllocateFastMedium(void*)
 {
+    InitialCacheReservation initialCache;
     auto& manager = Heap::GetHeap().page_allocator();
     if (!ZPageSizeMediumEnabled) { return reinterpret_cast<void*>(1); }
     const size_t size = ZPageSizeMediumMin;
