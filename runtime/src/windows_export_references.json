@@ -39,8 +39,9 @@
       "kind": "source",
       "label": "stdlib",
       "revision": "d2840f7621dfe6d31e260e9bedd1dc33c8b08a5f",
-      "sha256": "a4ef7fbee0094d6610f060c26d89db90cf7fd44430252810fd17b6d6caec9103",
-      "files": 546
+      "sha256": "9e729dedc2c811e77a436276ab897259866426dc93f0279f860c7ddd223f259d",
+      "files": 530,
+      "native_sources_sha256": "9f309cb3ba92dd159af11a81eb604dc2a097b128bb2763d07c2901db0cacf8c8"
     }
   ],
   "symbols": {
@@ -1061,13 +1062,6 @@
     ],
     "g_cjStoreBarrierEntrySize": [
       "llvm-lib/CodeGen/CJBarrierLowering.cpp:1059"
-    ],
-    "sprintf_s": [
-      "stdlib/std/fs/native/file_system_unix.c:384",
-      "stdlib/std/process/native/process_impl_linux.c:111",
-      "stdlib/std/process/native/process_impl_linux.c:182",
-      "stdlib/std/process/native/process_impl_linux.c:203",
-      "stdlib/std/process/native/process_impl_linux.c:417"
     ]
   }
 }
