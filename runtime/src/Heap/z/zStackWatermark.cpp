@@ -10,7 +10,7 @@
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 // ===== OPUS500 PROBE (test-only instrumentation, not for merge) =====
 #include <fcntl.h>
 #include <unistd.h>
@@ -233,7 +233,7 @@ void StackWatermark::OnStackGrow(intptr_t offset)
 
 void StackWatermark::BeginGrowFlush()
 {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     O5ModeScope o5m(3);
 #endif
     lock.lock();
@@ -295,7 +295,7 @@ void StackWatermark::yield_processing()
 void StackWatermark::start_processing()
 {
     if (processing_started()) { return; }
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     O5ModeScope o5m(0);
 #endif
     lock.lock();
@@ -305,7 +305,7 @@ void StackWatermark::start_processing()
 
 void StackWatermark::finish_processing(void* context)
 {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     O5ModeScope o5m(2);
 #endif
     lock.lock();
@@ -319,7 +319,7 @@ void StackWatermark::finish_processing(void* context)
 
 void StackWatermark::process_one()
 {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     O5ModeScope o5m(1);
 #endif
     lock.lock();
@@ -362,7 +362,7 @@ bool HasExposableFrame(Mutator& owner)
 
 void StackWatermark::before_unwind()
 {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     O5ModeScope o5m(5);
 #endif
     // stackWatermark.inline.hpp:86-106. Processing was started by on_safepoint
@@ -382,7 +382,7 @@ void StackWatermark::before_unwind()
 
 void StackWatermark::after_unwind()
 {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     O5ModeScope o5m(4);
 #endif
     // stackWatermark.inline.hpp:109-124.
@@ -401,7 +401,7 @@ void StackWatermark::after_unwind()
 // after_unwind above.
 void StackWatermark::on_iteration(const FrameInfo& frame)
 {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     O5ModeScope o5m(6);
 #endif
     if (!processing_started() || IsDone() || !HasExposableFrame(owner)) { return; }
@@ -475,7 +475,7 @@ void ZStackWatermark::process_head(void* context)
 
 void ZStackWatermark::start_processing_impl(void* context)
 {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     if (O5On()) {
         // OPUS500: snapshot in-frame root slot values of the whole stack at epoch start.
         Opus500Snap snap;
@@ -519,7 +519,7 @@ void ZStackWatermark::start_processing_impl(void* context)
 void ZStackWatermark::process(const FrameInfo& frame, RegSlotsMap& registers, void* context)
 {
     StackWatermarkProcessOopClosure closure(context, prev_frame_color(frame));
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     const bool o5 = O5On();
     Opus500Snap* o5snap = nullptr;
     if (o5) {
@@ -535,7 +535,7 @@ void ZStackWatermark::process(const FrameInfo& frame, RegSlotsMap& registers, vo
     const uintptr_t o5stub = o5mut ? reinterpret_cast<uintptr_t>(owner.GetUnwindContext().frameInfo.mFrame.GetFA()) : 0;
 #endif
     RootVisitor roots = [&](RootSlot& root) {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
         uintptr_t before = 0;
         bool o5wasMut = false;
         const uintptr_t a = reinterpret_cast<uintptr_t>(&root);
@@ -609,7 +609,7 @@ void ZStackWatermark::process(const FrameInfo& frame, RegSlotsMap& registers, vo
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
             closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
         });
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
         if (o5) {
             const uintptr_t after = raw(root.LoadPlain());
             if (o5wasMut && after != before) {

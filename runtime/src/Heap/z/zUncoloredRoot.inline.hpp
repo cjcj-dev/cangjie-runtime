@@ -7,7 +7,7 @@
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 extern "C" void Opus500ProbeUncNull(void* p, uintptr_t addr, uintptr_t color);
 #endif
 namespace MapleRuntime {
@@ -22,7 +22,7 @@ inline void ZUncoloredRoot::barrier(ObjectFunctionT function, zaddress_unsafe* p
         return;
     }
     const zaddress loadGood = make_load_good(addr, color);
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     if (is_null(loadGood)) {
         Opus500ProbeUncNull(static_cast<void*>(p), static_cast<uintptr_t>(untype(addr)), color);
     }
