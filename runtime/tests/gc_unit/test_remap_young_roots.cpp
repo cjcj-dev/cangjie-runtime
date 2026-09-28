@@ -372,7 +372,7 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     callerMachine.SetFA(&caller.fa);
     callerMachine.SetSP(FrameInfo(context.frameInfo.mFrame, FrameType::RETURN_SAFEPOINT).CallerSP());
     const FrameInfo callerFrame(callerMachine, FrameType::MANAGED);
-    GC_EXPECT_FALSE(owner.GetStackWatermark().is_frame_safe(callerFrame));
+    GC_EXPECT_FALSE(owner.GetStackWatermark().processing_started());
     RewriteReturnRoot cold(original, replaced);
     HandshakeOperation coldOp(&cold, &owner);
     Handshake::Current().add_operation(&coldOp);
@@ -380,7 +380,7 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     const BaseObject* coldValue = to_object(safe(RootSlotAt(StubSlot(stub, kReturnSlot)).LoadPlain()));
     GC_EXPECT_TRUE(cold.rewritten);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(coldValue), reinterpret_cast<uintptr_t>(replaced));
-    GC_EXPECT_TRUE(owner.GetStackWatermark().is_frame_safe(callerFrame));
+    owner.GetStackWatermark().assert_is_frame_safe(callerFrame);
     std::fprintf(stderr, "RETURN_ROOT_RESULT phase=cold value=%p safe=1\n", coldValue);
     StorePlain(RootSlotAt(StubSlot(stub, kReturnSlot)), from_object(original));
     RewriteReturnRoot warm(original, replaced);
@@ -390,7 +390,7 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     const BaseObject* warmValue = to_object(safe(RootSlotAt(StubSlot(stub, kReturnSlot)).LoadPlain()));
     GC_EXPECT_TRUE(warm.rewritten);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(warmValue), reinterpret_cast<uintptr_t>(replaced));
-    GC_EXPECT_TRUE(owner.GetStackWatermark().is_frame_safe(callerFrame));
+    owner.GetStackWatermark().assert_is_frame_safe(callerFrame);
     std::fprintf(stderr, "RETURN_ROOT_RESULT phase=started value=%p safe=1\n", warmValue);
 }
 #endif
