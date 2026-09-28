@@ -20,8 +20,6 @@ using sighandler_t = sig_t;
 
 namespace MapleRuntime {
 
-constexpr uint64_t SIGNAL_STACK_ALLOW_NORETURN = 0x1UL;
-
 class SignalStack {
 public:
     SignalStack() noexcept : isMark(false) {}

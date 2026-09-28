@@ -17,6 +17,7 @@
 
 extern "C" void CJ_MCC_AddSignalHandler(int, SignalAction*);
 static std::atomic<int> delivered{0};
+static std::atomic<int> deliveryCount{0};
 static std::atomic<long> deliveryThread{0};
 static volatile sig_atomic_t nativeResult = 0;
 static void NativeHandler(int sig)
@@ -42,6 +43,7 @@ static bool RecordSignal(int sig, siginfo_t*, void*)
 {
     deliveryThread.store(syscall(SYS_gettid), std::memory_order_relaxed);
     delivered.store(sig, std::memory_order_release);
+    deliveryCount.fetch_add(1, std::memory_order_release);
     return true;
 }
 
@@ -97,18 +99,24 @@ int main(int argc, char** argv)
         void* result = nullptr;
         if (task == nullptr || GetTaskRet(task, &result) != E_OK) { return 4; }
         ReleaseHandle(task);
-    } else {
+    } else if (std::strcmp(argv[1], "unhandled") == 0) {
         std::raise(sig);
+        return 1;
+    } else {
+        int expected = std::strcmp(argv[1], "burst") == 0 ? 8 : 1;
+        for (int i = 0; i < expected; ++i) { std::raise(sig); }
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (delivered.load(std::memory_order_acquire) == 0 && std::chrono::steady_clock::now() < deadline) {
+        while (deliveryCount.load(std::memory_order_acquire) != expected && std::chrono::steady_clock::now() < deadline) {
             std::this_thread::yield();
         }
         const int observed = delivered.load(std::memory_order_acquire);
         std::fprintf(stderr, "SIGNAL_NORMAL_TARGET executed=1 signal=%d observed=%d\n", sig, observed);
+        int count = deliveryCount.load(std::memory_order_acquire);
+        std::fprintf(stderr, "SIGNAL_PENDING_TARGET executed=1 expected=%d observed=%d\n", expected, count);
         bool separate = deliveryThread.load() != syscall(SYS_gettid);
         int fini = FiniCJRuntime();
         std::fprintf(stderr, "SIGNAL_DISPATCH_TARGET separate=%d fini=%d\n", separate, fini);
-        std::_Exit(observed == sig && separate && fini == E_OK ? 0 : 1);
+        std::_Exit(observed == sig && count == expected && separate && fini == E_OK ? 0 : 1);
     }
     std::_Exit(0);
 }

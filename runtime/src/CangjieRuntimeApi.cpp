@@ -429,7 +429,6 @@ struct FutureImpl {
     FutureFlag flag{ FLAG_WAITING };
     std::mutex g_mtx;
     std::condition_variable cv;
-    bool autoRelease{ false };
 
     explicit FutureImpl(void* arg, const CJTaskFunc fn = nullptr)
         : fn(fn), pendingTask(reinterpret_cast<MapleRuntime::Uptr>(fn)), arg(arg)
@@ -462,8 +461,6 @@ static void* UserFuncExecutor(void* arg, [[maybe_unused]] unsigned int len)
         std::lock_guard<std::mutex> lck(fi->g_mtx);
         fi->res = ptr;
         if (fi->flag == FLAG_RELEASED) {
-            needDelete = true;
-        } else if (fi->autoRelease) {
             needDelete = true;
         } else {
             fi->flag = FLAG_DONE;
@@ -512,8 +509,7 @@ ScheduleHandle GetScheduler()
 }
 
 CJThreadHandle RunCJTaskImpl(const CJTaskFunc func, void* args, int num = 0, CJThreadSpecificDataInner* data = nullptr,
-                             ScheduleHandle schedule = nullptr,
-                             CJThreadCreateSource createSource = CJTHREAD_CREATE_SOURCE_DEFAULT)
+                             ScheduleHandle schedule = nullptr)
 {
     MapleRuntime::ScopedEntryTrace trace("CJRT_INVOKE_CJTASK_ASYNC");
     if (!CheckRuntimeValid(func)) {
@@ -527,9 +523,6 @@ CJThreadHandle RunCJTaskImpl(const CJTaskFunc func, void* args, int num = 0, CJT
     if (UNLIKELY(fi == nullptr)) {
         LOG(RTLOG_ERROR, "new future failed.\n");
         return nullptr;
-    }
-    if (createSource == CJTHREAD_CREATE_SOURCE_SIGNAL) {
-        fi->autoRelease = true;  // Mark for auto-release after signal task execution
     }
     {
         std::lock_guard<std::mutex> lck(g_mtx);
@@ -554,7 +547,7 @@ CJThreadHandle RunCJTaskImpl(const CJTaskFunc func, void* args, int num = 0, CJT
     MapleRuntime::LWTData lwtData {};
     lwtData.fn = fi;
     CJThreadHandle handle = CJThreadNewToSchedule(scheduler, (const struct CJThreadAttr*)(&attr), UserFuncExecutor,
-                                                  &lwtData, sizeof(lwtData), createSource, ZPointerStoreGoodMask);
+                                                  &lwtData, sizeof(lwtData), CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
     if (handle == nullptr) {
         LOG(RTLOG_ERROR, "failed to create cjthread.\n");
         std::lock_guard<std::mutex> lck(g_mtx);
@@ -568,11 +561,6 @@ CJThreadHandle RunCJTaskImpl(const CJTaskFunc func, void* args, int num = 0, CJT
 
 // asan read is in RunCJTaskImpl, so no need to intercept here
 CJThreadHandle RunCJTask(const CJTaskFunc func, void* args) { return RunCJTaskImpl(func, args); }
-CJThreadHandle RunCJTaskSignal(const CJTaskFunc func, void* args)
-{
-    return RunCJTaskImpl(func, args, 0, nullptr, nullptr, CJTHREAD_CREATE_SOURCE_SIGNAL);
-}
-
 CJThreadHandle RunCJTaskToSchedule(const CJTaskFunc func, void* args, ScheduleHandle schedule)
 {
     if (schedule == nullptr) {

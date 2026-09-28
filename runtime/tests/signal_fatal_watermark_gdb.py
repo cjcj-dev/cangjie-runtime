@@ -1,10 +1,9 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # Licensed under Apache-2.0 with Runtime Library Exception.
-# Deliver SIGABRT to a thread verifiably holding the StackWatermark mutex,
-# using gdb's `signal` command (kernel-level delivery on resume), so no
-# inferior function call is in flight and termination is observed cleanly.
-# Verdicts derive from the inferior's own state (gdb's termination report,
-# pid liveness), never from gdb-internal messages alone.
+# Invoke the real Logger::FormatLog FATAL producer while the selected thread
+# verifiably owns its StackWatermark mutex. The inferior call's error is never
+# a verdict: require gdb's SIGABRT termination event and pid death, or capture
+# the post-FATAL futex wait with mutex owner == waiting thread.
 import gdb
 import os
 

@@ -2,12 +2,12 @@
 # Acceptance for cangjie-runtime#1253. All arms share one test ELF (built by
 # run_signal_fatal_watermark.sh); the product SO is selected per arm through
 # LD_LIBRARY_PATH.
-#   arm watermark: SIGABRT delivered to a thread holding the StackWatermark
+#   arm watermark: real Logger FATAL invoked on a thread holding the StackWatermark
 #       mutex must print the fatal diagnostics and terminate the inferior,
 #       never self-lock. Termination is proven by gdb's own
 #       "Program terminated with signal" report plus pid death. An inferior
 #       surviving FATAL_POST_WAIT is a hang: the injecting gdb is SIGKILLed
-#       (the tracee resumes, still hung) and a fresh gdb attach captures the
+#       and the live inferior captures the
 #       blocked thread's stack and the mutex owner (same-thread reentry).
 #   arm normal: a non-fatal signal (SIGUSR1) must still reach the registered
 #       user handler (non-regression of the managed dispatch path).
@@ -39,18 +39,32 @@ LD_LIBRARY_PATH="$ARM_LIB_DIR" ldd "$bin" | /usr/bin/grep -E 'cangjie|boundschec
 cat "$arm_dir/identity.sha256" "$arm_dir/ldd.txt"
 
 rc_all=0
-for mode in native native-info ignored; do
-    LD_LIBRARY_PATH="$ARM_LIB_DIR" timeout --signal=KILL 30 "$bin" "$mode" 6 > "$arm_dir/$mode.log" 2>&1
-    native_rc=$?
-    echo "${mode}_RC=$native_rc" | tee "$arm_dir/$mode.rc"
-    [ "$native_rc" = 0 ] || rc_all=1
+for sig in 4 5 6 7 8 11; do
+    for mode in native native-info ignored unhandled; do
+        LD_LIBRARY_PATH="$ARM_LIB_DIR" timeout --signal=KILL 30 "$bin" "$mode" "$sig" > "$arm_dir/$mode-$sig.log" 2>&1
+        observed_rc=$?
+        expected_rc=0
+        [ "$mode" = unhandled ] && expected_rc=$((128 + sig))
+        echo "${mode}_${sig}_RC=$observed_rc EXPECTED=$expected_rc" >> "$arm_dir/matrix.rc"
+        [ "$observed_rc" = "$expected_rc" ] || rc_all=1
+        case "$mode" in
+            native*) /usr/bin/grep -q "SIGNAL_NATIVE_TARGET executed=1 result=$sig reset=1 managed=0" "$arm_dir/$mode-$sig.log" || rc_all=1 ;;
+            ignored) /usr/bin/grep -q 'SIGNAL_IGNORE_TARGET executed=1 managed=0' "$arm_dir/$mode-$sig.log" || rc_all=1 ;;
+            unhandled) /usr/bin/grep -q "CJNative Handle signal: $sig" "$arm_dir/$mode-$sig.log" || rc_all=1 ;;
+        esac
+    done
 done
+LD_LIBRARY_PATH="$ARM_LIB_DIR" timeout --signal=KILL 30 "$bin" burst 10 > "$arm_dir/burst.log" 2>&1
+burst_rc=$?
+echo "BURST_RC=$burst_rc" > "$arm_dir/burst.rc"
+[ "$burst_rc" = 0 ] || rc_all=1
+/usr/bin/grep -q 'SIGNAL_PENDING_TARGET executed=1 expected=8 observed=8' "$arm_dir/burst.log" || rc_all=1
 
 echo "== arm[$ARM_NAME]: normal signal (SIGUSR1) non-regression =="
 LD_LIBRARY_PATH="$ARM_LIB_DIR" timeout --signal=KILL 60 "$bin" normal 10 > "$arm_dir/normal.log" 2>&1
 rc=$?
 echo "NORMAL_RC=$rc" | tee "$arm_dir/normal.rc"
-cat "$arm_dir/normal.log"
+/usr/bin/grep "SIGNAL_.*TARGET" "$arm_dir/normal.log"
 if [ $rc -ne 0 ] || ! /usr/bin/grep -q 'SIGNAL_NORMAL_TARGET executed=1 signal=10 observed=10' "$arm_dir/normal.log"; then
     echo "NORMAL_ARM_FAIL rc=$rc"
     rc_all=1
