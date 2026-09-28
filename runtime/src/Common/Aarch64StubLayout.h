@@ -51,18 +51,28 @@
     V(x28, X28, 28, 0x68)
 
 #ifdef __ASSEMBLER__
-// A paired store's second slot is implicit in the instruction. Validate both
-// slots against the packed layout before the assembly is accepted.
+#ifdef __APPLE__
+#define MRT_AARCH64_ASM_SEPARATOR %%
+#else
+#define MRT_AARCH64_ASM_SEPARATOR ;
+#endif
 #define MRT_AARCH64_ALL_SLOT(reg, id, index, off) \
-    .equ .Lmrt_a64_all_ ## reg, off; \
-    .if off != 16 + 8 * index; .error "aarch64 all-register slot mismatch"; .endif;
+    .equ .Lmrt_a64_all_ ## reg, off MRT_AARCH64_ASM_SEPARATOR
 #define MRT_AARCH64_CALLEE_SLOT(reg, id, index, off) \
-    .equ .Lmrt_a64_callee_ ## reg, off; \
-    .if off != MRT_AARCH64_STUB_CALLEE_BASE + 8 * (index - 19); \
-    .error "aarch64 callee-register slot mismatch"; .endif;
+    .equ .Lmrt_a64_callee_ ## reg, off MRT_AARCH64_ASM_SEPARATOR
 MRT_AARCH64_STUB_GPRS(MRT_AARCH64_ALL_SLOT)
 MRT_AARCH64_STUB_CALLEE_GPRS(MRT_AARCH64_CALLEE_SLOT)
 #undef MRT_AARCH64_ALL_SLOT
 #undef MRT_AARCH64_CALLEE_SLOT
+// A paired store's second slot is implicit in the instruction. Validate the
+// table used by this saving stub; unrelated save areas remain independent.
+#define MRT_AARCH64_CHECK_ALL_SLOT(reg, id, index, off) \
+    .if off != 16 + 8 * index MRT_AARCH64_ASM_SEPARATOR \
+    .error "aarch64 all-register slot mismatch" MRT_AARCH64_ASM_SEPARATOR \
+    .endif MRT_AARCH64_ASM_SEPARATOR
+#define MRT_AARCH64_CHECK_CALLEE_SLOT(reg, id, index, off) \
+    .if off != MRT_AARCH64_STUB_CALLEE_BASE + 8 * (index - 19) MRT_AARCH64_ASM_SEPARATOR \
+    .error "aarch64 callee-register slot mismatch" MRT_AARCH64_ASM_SEPARATOR \
+    .endif MRT_AARCH64_ASM_SEPARATOR
 #endif
 #endif

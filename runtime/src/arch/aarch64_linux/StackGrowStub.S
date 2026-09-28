@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Common/Aarch64StubLayout.h"
+MRT_AARCH64_STUB_GPRS(MRT_AARCH64_CHECK_ALL_SLOT)
 
 #define cfi_adjust_cfa_offset(off)	.cfi_adjust_cfa_offset off
 #define cfi_rel_offset(reg, off)	.cfi_rel_offset reg, off

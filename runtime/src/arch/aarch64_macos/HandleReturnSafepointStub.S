@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Common/Aarch64StubLayout.h"
+MRT_AARCH64_STUB_GPRS(MRT_AARCH64_CHECK_ALL_SLOT)
 
 #define HandleReturnSafepointStubFrameSize           MRT_AARCH64_STUB_FRAME_BYTES
 
