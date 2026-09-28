@@ -19,6 +19,8 @@
 #include <unistd.h>
 
 extern "C" void CJ_MCC_AddSignalHandler(int, SignalAction*);
+extern "C" void* CJ_CJThreadStackAddrGet(void);
+extern "C" bool CJ_CJThreadIsStackGuardAddress(const void*);
 static std::atomic<int> delivered{0};
 static std::atomic<int> deliveryCount{0};
 static std::atomic<long> deliveryThread{0};
@@ -80,9 +82,9 @@ static void* SignalGuardWork(void*)
 {
     // Touch the actual guard page allocated for this runtime task. No fake
     // siginfo, watermark, mutator state or direct handler invocation.
-    auto* guard = static_cast<volatile char*>(CJThreadStackAddrGet()) - 1;
+    auto* guard = static_cast<volatile char*>(CJ_CJThreadStackAddrGet()) - 1;
     std::fprintf(stderr, "SIGNAL_GUARD_INPUT address=%p in_guard=%d\n",
-                 const_cast<char*>(guard), CJThreadIsStackGuardAddress(const_cast<char*>(guard)));
+                 const_cast<char*>(guard), CJ_CJThreadIsStackGuardAddress(const_cast<char*>(guard)));
     *guard = 1;
     return nullptr;
 }
