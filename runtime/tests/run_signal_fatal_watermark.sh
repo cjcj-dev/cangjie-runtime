@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Build the signal-fatal-watermark test ELF exactly once. The ELF carries no
+# rpath: all three acceptance arms copy this single ELF and select the product
+# SO per arm through LD_LIBRARY_PATH (see check_signal_fatal_watermark.sh).
 set -euo pipefail
 ulimit -c 0
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -11,6 +14,8 @@ clang++ -std=c++17 -O0 -g -pthread -fno-rtti \
     -I"$output_root/include" \
     -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
     "$repo/runtime/tests/signal_fatal_watermark.cpp" \
-    -L"$GCV2_RUNTIME_LIB_DIR" -Wl,-rpath,"$GCV2_RUNTIME_LIB_DIR" \
-    -lcangjie-runtime -lboundscheck -ldl -o "$SIGNAL_TEST_OUTPUT/signal-fatal-watermark"
-sha256sum "$SIGNAL_TEST_OUTPUT/signal-fatal-watermark" "$GCV2_RUNTIME_LIB_DIR/"*.so > "$SIGNAL_TEST_OUTPUT/identity.sha256"
+    -L"$GCV2_RUNTIME_LIB_DIR" -lcangjie-runtime -lboundscheck -ldl \
+    -o "$SIGNAL_TEST_OUTPUT/signal-fatal-watermark"
+sha256sum "$SIGNAL_TEST_OUTPUT/signal-fatal-watermark" > "$SIGNAL_TEST_OUTPUT/elf.sha256"
+git -C "$repo" rev-parse HEAD > "$SIGNAL_TEST_OUTPUT/elf.head"
+cat "$SIGNAL_TEST_OUTPUT/elf.sha256" "$SIGNAL_TEST_OUTPUT/elf.head"
