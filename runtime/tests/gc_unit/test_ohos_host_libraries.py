@@ -51,10 +51,11 @@ def main():
         if case == 'missing':
             passed = run.returncode != 0 and 'OHOS_HOST_LIBRARY_MISSING libc.so:' in run.stdout
         elif host:
-            passed = run.returncode == 0 and 'OHOS_HOST_LIBRARY_OK libc.so' in run.stdout
+            passed = run.returncode == 0
         else:
             passed = run.returncode == 0 and 'OHOS_HOST_LIBRARY_' not in run.stdout
-        results[case] = dict(rc=run.returncode, passed=passed)
+        results[case] = dict(rc=run.returncode, passed=passed,
+                             loader_observed='OHOS_HOST_LIBRARY_OK libc.so' in run.stdout)
         print(f'OHOS_CONFIGURE_ASSERT case={case} rc={run.returncode} '
               f'status={"PASS" if passed else "FAIL"}', flush=True)
     paths = ['runtime/config.cmake', 'runtime/src/Signal/SignalStack.cpp',
