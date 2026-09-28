@@ -120,7 +120,6 @@ namespace {
 struct PointerChain {
     static Descriptor descStorage;
     Descriptor& desc = descStorage;
-    std::memset(&descStorage, 0, sizeof(descStorage));
     alignas(16) uintptr_t frames[14][64] {};
     StackGrowConfig savedGrow = CangjieRuntime::stackGrowConfig;
     uint32_t savedEpoch = *ZPointerStoreGoodMaskLowOrderBitsAddr;
@@ -131,6 +130,7 @@ struct PointerChain {
 
     explicit PointerChain(bool returning)
     {
+        std::memset(&descStorage, 0, sizeof(descStorage));
         ThreadLocal::GetThreadLocalData()->SetMutator(&owner);
         CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON;
         desc.descriptorOffset = reinterpret_cast<char*>(&desc.stackMapOffset) -
@@ -219,6 +219,7 @@ struct PointerChain {
         GC_EXPECT_EQ(observedValue, target);
     }
 };
+Descriptor PointerChain::descStorage;
 }
 
 GC_TEST(ReturnSafepointRegMap, SenderKeepsStubSlot)
