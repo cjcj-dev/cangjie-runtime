@@ -19,6 +19,13 @@
 
 #include <cstdint>
 #include <cstring>
+#if defined(__linux__)
+#include <csignal>
+#include <string>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+#include "Mutator/MutatorManager.h"
 
 extern "C" void HandleReturnSafepoint(MapleRuntime::ThreadLocalData* tlData);
 extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
@@ -258,7 +265,7 @@ GC_TEST(StackWatermark, SharedPollWordArmAndDisarm)
     HandshakeState& state = Handshake::Current();
     state.add_operation(&operation);
     const uintptr_t armed = tls->GetPollWord();
-    state.process_by_self();
+    HandleSafepoint(tls);
     const uintptr_t disarmed = tls->GetPollWord();
     GC_EXPECT_EQ(armed, ThreadLocalData::PollBit);
     GC_EXPECT_EQ(disarmed, ThreadLocalData::DisarmedPollWord);
@@ -317,6 +324,59 @@ GC_TEST(StackWatermark, RemapRetainsLogicalStackIdentityAcrossGrow)
         watermark.last_processed_raw(), watermark.prev_frame_color(frame));
 }
 
+#if defined(__linux__)
+namespace {
+void CheckUnstartedExposure(bool returning)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        HandshakeRuntime runtime;
+        Mutator owner;
+        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+        tls->SetMutator(&owner);
+        alignas(16) uintptr_t stub[64] {};
+        owner.GetUnwindContext().frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&stub[16]));
+        owner.GetUnwindContext().frameInfo.mFrame.SetIP(&unwindPCForReturnSafepointHandlerStub);
+        *ZPointerStoreGoodMaskLowOrderBitsAddr = StackWatermark::epoch_id() ^ 1;
+        tls->SetPollWord(ThreadLocalData::DisarmedPollWord);
+        if (returning) { HandleReturnSafepoint(tls); }
+        else { MRT_LeaveSaferegion(); }
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char bytes[512];
+    ssize_t count;
+    while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, count); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find("Processing should already have started") != std::string::npos;
+    std::fprintf(stderr, "K3_UNSTARTED_EXPOSURE_ASSERT returning=%d status=%d rejected=%d\n%s",
+                 returning, status, rejected, transcript.c_str());
+    GC_EXPECT_TRUE(rejected);
+}
+}
+
+GC_TEST(SafepointHandshakeOrder, ReturnRejectsUnstartedEpoch)
+{
+    CheckUnstartedExposure(true);
+}
+
+GC_TEST(SafepointHandshakeOrder, NativeRejectsUnstartedEpoch)
+{
+    CheckUnstartedExposure(false);
+}
+#endif
+
 // safepoint.cpp:818-839: a return oop stays the value published by request
 // processing, including when this epoch's frame walk has already started.
 GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
@@ -373,6 +433,10 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     callerMachine.SetSP(FrameInfo(context.frameInfo.mFrame, FrameType::RETURN_SAFEPOINT).CallerSP());
     const FrameInfo callerFrame(callerMachine, FrameType::MANAGED);
     GC_EXPECT_FALSE(owner.GetStackWatermark().is_frame_safe(callerFrame));
+    // safepoint.cpp:831: return polls expose a frame only after epoch start.
+    // A real ordinary poll supplies that precondition; no helper starts it.
+    ArmThreadPoll(tls);
+    HandleSafepoint(tls);
     RewriteReturnRoot cold(original, replaced);
     HandshakeOperation coldOp(&cold, &owner);
     Handshake::Current().add_operation(&coldOp);

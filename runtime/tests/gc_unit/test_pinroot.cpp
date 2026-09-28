@@ -16,6 +16,9 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
+#include "UnwindStack/UnwindCApi.h"
+extern "C" void HandleReturnSafepoint(MapleRuntime::ThreadLocalData*);
+extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
 #include <cstdio>
 #include <chrono>
 #include <cstring>
@@ -349,7 +352,7 @@ struct FrameRootMapImage {
 };
 FrameRootMapImage frameRootMapImage;
 
-void InitializeFrameRootMap(bool sret = false, bool registerPointer = false)
+void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, bool everyCallRoot = false)
 {
     auto& image = frameRootMapImage;
     std::memset(&image, 0, sizeof(image));
@@ -402,7 +405,7 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false)
     if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) { var(0); var(0); }
     var(0);
     put(0, 32); put(0, 1); put(1, 1); put(0, 1); put(0, 1);
-    put(16, 32); put(0, 1); put(0, 1); put(0, 1); put(0, 1);
+    put(16, 32); put(0, 1); put(everyCallRoot ? 1 : 0, 1); put(0, 1); put(0, 1);
     var(0); var(0);
     var(1); var(8); var(1); put(0xf0, 8); put(1, 1);
     var(0); var(0);
@@ -414,7 +417,7 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false)
 // zUncoloredRoot.inline.hpp:62-68 and zGeneration.inline.hpp:131-139: relocate-start
 // exit processing writes the to-address of a cset frame slot before concurrent relocate.
 static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPointer = true,
-                                                bool registerPointer = false, bool inplaceSret = false)
+                                                bool registerPointer = false, bool inplaceSret = false, int requestEntry = 0)
 {
     B09RuntimeFixture runtime;
     CreateStandaloneHeap(inplaceSret ? 2 : 8);
@@ -469,7 +472,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
 #if defined(__x86_64__) && defined(__linux__)
     const auto savedGrow = CangjieRuntime::stackGrowConfig;
     if (sret) { CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON; }
-    InitializeFrameRootMap(sret, registerPointer);
+    InitializeFrameRootMap(sret, registerPointer, (requestEntry >= 5 && requestEntry <= 7));
     const uintptr_t startIP = reinterpret_cast<uintptr_t>(frameRootMapImage.pc);
     uintptr_t younger[8] = {};
     uintptr_t caller[8] = {};
@@ -479,19 +482,23 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     younger[5] = startIP + 16;
     caller[3] = startIP + 9;
     uintptr_t frames[12][8] = {};
-    if (sret) {
+    if (sret || (requestEntry >= 5 && requestEntry <= 7)) {
         for (size_t i = 0; i < 12; ++i) {
             frames[i][3] = startIP + 9;
             frames[i][4] = i + 1 < 12 ? reinterpret_cast<uintptr_t>(&frames[i + 1][4]) : 0;
             frames[i][5] = startIP + 16;
         }
-        if (hasPointer) {
+        if (hasPointer && sret) {
             frames[0][1] = reinterpret_cast<uintptr_t>(&frames[6][2]);
             frames[6][1] = reinterpret_cast<uintptr_t>(&frames[8][2]);
         }
         if (inplaceSret) { frames[0][2] = reinterpret_cast<uintptr_t>(objects[0][1]); }
-        frames[6][2] = reinterpret_cast<uintptr_t>(objects[0][0]);
-        frames[8][2] = reinterpret_cast<uintptr_t>(objects[0][1]);
+        if (sret) {
+            frames[6][2] = reinterpret_cast<uintptr_t>(objects[0][0]);
+            frames[8][2] = reinterpret_cast<uintptr_t>(objects[0][1]);
+        } else {
+            frames[3][2] = reinterpret_cast<uintptr_t>(objects[0][0]);
+        }
     }
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(parked != nullptr);
@@ -504,7 +511,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP));
     context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&younger[4]));
     context.anchorFA = nullptr;
-    if (sret) {
+    if (sret || (requestEntry >= 5 && requestEntry <= 7)) {
         parked->SetStackTopAddr(reinterpret_cast<uintptr_t>(frames));
         parked->SetStackSize(sizeof(frames));
         context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP + (registerPointer ? 0 : 16)));
@@ -523,7 +530,118 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         ZRelocate::StartRelocationTasks(generation.id());
         generation.relocate().relocate(&generation.relocation_set());
     }
-    parked->DoLeaveSaferegion();
+    if ((requestEntry >= 5 && requestEntry <= 7)) {
+        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+        ArmThreadPoll(tls);
+        HandleSafepoint(tls);
+        const uintptr_t unexposed = frames[3][2];
+        // Move the anchor to the return/native boundary; the watermark's
+        // iterator remains at the frontier established by the ordinary poll.
+        context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frames[2][4]));
+        context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP + 16));
+        context.frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(&frames[2][0]));
+        class ReadExposedRoot final : public HandshakeClosure {
+        public:
+            explicit ReadExposedRoot(uintptr_t* p) : HandshakeClosure("K3-unwind-order"), p(p) {}
+            void do_thread(Mutator*) override { observed = *p; }
+            uintptr_t* p;
+            uintptr_t observed = 0;
+        } closure(&frames[3][2]);
+        HandshakeOperation operation(&closure, parked);
+        parked->GetHandshakeState().add_operation(&operation);
+        alignas(16) uintptr_t returnStub[32] {};
+        if (requestEntry == 5) {
+            returnStub[16] = reinterpret_cast<uintptr_t>(&frames[2][4]);
+            returnStub[17] = startIP + 16;
+            context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&returnStub[16]));
+            context.frameInfo.mFrame.SetIP(&unwindPCForReturnSafepointHandlerStub);
+            HandleReturnSafepoint(tls);
+        } else if (requestEntry == 6) {
+            MRT_C2N_Leave(true, 0);
+        } else {
+            HandleSafepoint(tls);
+        }
+        const uintptr_t forwarding = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+        const uintptr_t original = reinterpret_cast<uintptr_t>(objects[0][0]);
+        const bool result = unexposed == original && (requestEntry == 7
+            ? closure.observed == original && frames[3][2] == original && forwarding == 0
+            : frames[3][2] == forwarding && forwarding != 0 && forwarding != original &&
+              closure.observed == (requestEntry == 5 ? forwarding : original));
+        std::fprintf(stderr, "K3_UNWIND_ORDER_ASSERT entry=%d original=%#zx unexposed=%#zx closure=%#zx final=%#zx forwarding=%#zx result=%d\n",
+                     requestEntry, original, unexposed, closure.observed, frames[3][2], forwarding, result);
+        GC_EXPECT_TRUE(result);
+        return;
+    }
+    if (requestEntry == 4) {
+        // Exercise the real VM_ZMarkStartYoung operation, whose policy is
+        // inherited from VM_ZOperation. It must not process this old root.
+        heap.young().pause_mark_start();
+        const uintptr_t forwarding = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+        std::fprintf(stderr, "K3_ZOP_SKIP_ASSERT old=%#zx observed=%#zx forwarding=%#zx\n",
+                     before, younger[2], forwarding);
+        GC_EXPECT_TRUE(younger[2] == before && forwarding == 0);
+        return;
+    }
+    if (requestEntry == 3) {
+        ScopedStopTheWorld operation("K3-non-Z-operation");
+        const uintptr_t forwarding = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+        std::fprintf(stderr, "K3_NON_ZOP_ASSERT old=%#zx observed=%#zx forwarding=%#zx\n",
+                     before, younger[2], forwarding);
+        GC_EXPECT_TRUE(younger[2] != before && younger[2] == forwarding);
+    } else if (requestEntry != 0) {
+        class ReadStackRoot final : public HandshakeClosure {
+        public:
+            ReadStackRoot(uintptr_t* slot, Mutator* owner)
+                : HandshakeClosure("K3-read-stack-root"), slot(slot), owner(owner) {}
+            void do_thread(Mutator*) override
+            {
+                observed = *slot;
+                started = owner->GetStackWatermark().processing_started();
+            }
+            uintptr_t* slot;
+            Mutator* owner;
+            uintptr_t observed = 0;
+            bool started = false;
+        } closure(&younger[2], parked);
+        if (requestEntry == 8) {
+            std::atomic<Mutator*> target {nullptr};
+            std::thread executor([&] {
+                auto& manager = MutatorManager::Instance();
+                Mutator* self = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+                self->DoLeaveSaferegion();
+                target.store(self, std::memory_order_release);
+                while (!self->GetHandshakeState().has_operation()) { std::this_thread::yield(); }
+                HandleSafepoint(ThreadLocal::GetThreadLocalData());
+                (void)self->EnterSaferegion(false);
+                manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+            });
+            Mutator* other;
+            while ((other = target.load(std::memory_order_acquire)) == nullptr) { std::this_thread::yield(); }
+            Handshake::execute(&closure, other);
+            executor.join();
+        } else if (requestEntry == 1) {
+            // The caller is a different executor. No test calls watermark
+            // processing: execute -> try_process -> prepare must heal the slot.
+            std::thread executor([&] { Handshake::execute(&closure, parked); });
+            executor.join();
+        } else {
+            HandshakeOperation operation(&closure, parked);
+            parked->GetHandshakeState().add_operation(&operation);
+            HandleSafepoint(ThreadLocal::GetThreadLocalData());
+        }
+        const uintptr_t forwarding = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
+        std::fprintf(stderr,
+            "K3_CLOSURE_ROOT_ASSERT entry=%d old=%#zx observed=%#zx forwarding=%#zx started=%d\n",
+            requestEntry, before, closure.observed, forwarding, closure.started);
+        // No preceding assertion masks this target invariant. The value is
+        // read by the closure while the product handshake owns the target.
+        GC_EXPECT_TRUE(closure.observed != before && closure.observed == forwarding && closure.started);
+    } else {
+        // The fixture flips the epoch directly, so publish the poll that the
+        // real phase's DemandSuspensionForSync normally arms.
+        ArmThreadPoll(ThreadLocal::GetThreadLocalData());
+        parked->DoLeaveSaferegion();
+    }
     const uintptr_t after = sret ? frames[6][2] : younger[2];
     const MAddress relocated = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
     std::fprintf(stderr,
@@ -570,6 +688,48 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     (void)owner;
     GC_EXPECT_TRUE(false);
 #endif
+}
+
+GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, ReturnExposesFrameBeforeHandshake)
+{
+    CheckRelocateStartExitRemapsFrameRoot(false, true, false, false, 5);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, NativeExposesCallerAfterHandshake)
+{
+    CheckRelocateStartExitRemapsFrameRoot(false, true, false, false, 6);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, OrdinaryPollDoesNotExposeCaller)
+{
+    CheckRelocateStartExitRemapsFrameRoot(false, true, false, false, 7);
+}
+
+// HotSpot stackWatermarkSet.cpp:163-171 and zGeneration.cpp:432-434.
+GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, NonZOperationProcessesStackRoots)
+{
+    CheckRelocateStartExitRemapsFrameRoot(false, true, false, false, 3);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, ZOperationSkipsStackRoots)
+{
+    CheckRelocateStartExitRemapsFrameRoot(false, true, false, false, 4);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, TargetClosureReadsHealedRequesterRoot)
+{
+    CheckRelocateStartExitRemapsFrameRoot(false, true, false, false, 8);
+}
+
+// HotSpot handshake.cpp:316-330 and safepointMechanism.cpp:150-160.
+GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, ExternalClosureReadsHealedStackRoot)
+{
+    CheckRelocateStartExitRemapsFrameRoot(false, true, false, false, 1);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, PollClosureReadsHealedStackRoot)
+{
+    CheckRelocateStartExitRemapsFrameRoot(false, true, false, false, 2);
 }
 
 GC_COMPONENT_OTHER_VM_TEST(SretWatermark, CoversTransitiveCallerBeforeWrite)

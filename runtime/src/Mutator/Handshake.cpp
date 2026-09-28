@@ -110,11 +110,8 @@ bool HandshakeState::process_by_self()
         op->do_handshake(handshakee_);
         remove_op(op);
     }
-    Mutator* mutator = handshakee_;
-    if (mutator != nullptr && mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
-        (void)mutator->TransitionToCpuProfile(true);
-        return true;
-    }
+    // All current operations are synchronous; only an asynchronous operation
+    // that blocks would require the safepoint loop to recheck (handshake.cpp:640).
     return false;
 }
 

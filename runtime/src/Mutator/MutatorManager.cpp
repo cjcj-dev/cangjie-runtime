@@ -94,6 +94,11 @@ static void ProcessSafepoint(ThreadLocalData* tlData)
         HandshakeState& handshake = Handshake::Current();
         recheck = handshake.has_operation() && handshake.process_by_self();
     } while (recheck);
+    // HotSpot safepointMechanism.cpp:163: sample requests follow stack and
+    // handshake processing, so their frame walk observes the current epoch.
+    if (mutator != nullptr && mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
+        (void)mutator->TransitionToCpuProfile(true);
+    }
     UpdatePollValues(tlData);
 }
 

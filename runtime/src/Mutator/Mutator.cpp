@@ -219,13 +219,8 @@ void Mutator::HandleSuspensionRequest()
     for (;;) {
         SetInSaferegion(SAFE_REGION_TRUE);
         MarkFlushOnEnterSaferegion();
-        if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
-            TransitionToCpuProfile(true);
-        } else if (HasSuspensionRequest(SUSPENSION_FOR_SYNC)) {
+        if (HasSuspensionRequest(SUSPENSION_FOR_SYNC)) {
             SuspendForSync();
-            if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
-                TransitionToCpuProfile(true);
-            }
         } else if (HasPreemptRequest()) {
             SuspendForPreempt();
         } else if (HasSuspensionRequest(SUSPENSION_FOR_EXIT)) {
@@ -244,7 +239,8 @@ void Mutator::HandleSuspensionRequest()
             SetSuspensionFlag(SUSPENSION_FOR_SYNC);
         }
         // Leave saferegion if current mutator has no suspend request, otherwise try again
-        if (LIKELY(!HasAnySuspensionRequest() && !HasObserver())) {
+        if (LIKELY(!HasSuspensionRequest(SUSPENSION_FOR_SYNC) &&
+                   !HasSuspensionRequest(SUSPENSION_FOR_EXIT) && !HasPreemptRequest() && !HasObserver())) {
             return;
         }
     }
