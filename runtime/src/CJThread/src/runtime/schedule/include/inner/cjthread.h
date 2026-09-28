@@ -10,6 +10,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <atomic>
 #include <mutex>
 #ifdef __OHOS__
@@ -20,6 +21,7 @@
 #include "list.h"
 #include "thread.h"
 #include "cjthread_context.h"
+#include "gas/offset_macro.h"
 #include "Mutator/Mutator.h"
 #include "base.h"
 
@@ -80,6 +82,12 @@ struct CJThreadStack {
                                         * equal to stackBaseAddr does not belong to the stack. */
     size_t stackSize;                  /* Specifies the stack size for creating a cjthread,
                                         * excluding the stack protection size. */
+    char *cjthreadStackBaseAddr;       /* Actual stack bottom of cjthread stack. It is equal
+                                        * to stackAddr+stackAlign and is 16 bytes down. */
+    unsigned int stackGrowCnt;         /* whether to enable cjthread stack scaling.
+                                        * The value 0 indicates that stack scaling is enabled,
+                                        * and other values indicate that disabled. */
+    // Keep this state in the tail padding: compiled mutex fast paths depend on CJThread.id.
     /* Whether the reserved zone is currently unguarded, i.e. whether stackGuard sits one
      * reserved step below its birth value. HotSpot records this as a guard state:
      * StackOverflow::_stack_guard_state (stackOverflow.hpp:41-45) enumerates
@@ -94,11 +102,6 @@ struct CJThreadStack {
      * an unconditional arithmetic step, so the re-entrant stack-overflow recovery cycle
      * cannot walk the guard below the end of the stack. */
     bool stackGuardExpanded;
-    char *cjthreadStackBaseAddr;       /* Actual stack bottom of cjthread stack. It is equal
-                                        * to stackAddr+stackAlign and is 16 bytes down. */
-    unsigned int stackGrowCnt;         /* whether to enable cjthread stack scaling.
-                                        * The value 0 indicates that stack scaling is enabled,
-                                        * and other values indicate that disabled. */
 };
 
 struct StackInfo {
@@ -171,6 +174,20 @@ struct CJThread {
     std::vector<unsigned long long> threadStackTopList;
 #endif
 };
+
+// These fields are consumed by generated code and the context-switch assembly.
+// LLVM: X86MCInstLower.cpp:3719-3722; AArch64AsmPrinter.cpp:2249.
+#if defined(__x86_64__) || defined(__aarch64__)
+static_assert(offsetof(CJThread, thread) == CJTHREAD_THREAD_OFFSET, "CJThread.thread assembly ABI");
+static_assert(offsetof(CJThread, context) == CJTHREAD_CONTEXT_OFFSET, "CJThread.context assembly ABI");
+#if defined(__aarch64__)
+static_assert(offsetof(CJThread, id) == 0x1c8, "CJThread.id compiler ABI");
+#elif defined(MRT_WINDOWS)
+static_assert(offsetof(CJThread, id) == 0x218, "CJThread.id compiler ABI");
+#else
+static_assert(offsetof(CJThread, id) == 0x150, "CJThread.id compiler ABI");
+#endif
+#endif
 
 /**
  * @brief lua cjthread is only used in lua2cj
