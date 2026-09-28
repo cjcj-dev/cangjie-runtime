@@ -39,17 +39,20 @@ LD_LIBRARY_PATH="$ARM_LIB_DIR" ldd "$bin" | /usr/bin/grep -E 'cangjie|boundschec
 cat "$arm_dir/identity.sha256" "$arm_dir/ldd.txt"
 
 rc_all=0
-for sig in 4 5 6 7 8 11; do
+for sig in 4 5 6 7 8 11 10 13 25; do
     for mode in native native-info ignored unhandled; do
+        if [ "$mode" = unhandled ] && [[ "$sig" = 10 || "$sig" = 13 || "$sig" = 25 ]]; then continue; fi
         LD_LIBRARY_PATH="$ARM_LIB_DIR" timeout --signal=KILL 30 "$bin" "$mode" "$sig" > "$arm_dir/$mode-$sig.log" 2>&1
         observed_rc=$?
         expected_rc=0
         [ "$mode" = unhandled ] && expected_rc=$((128 + sig))
         echo "${mode}_${sig}_RC=$observed_rc EXPECTED=$expected_rc" >> "$arm_dir/matrix.rc"
         [ "$observed_rc" = "$expected_rc" ] || rc_all=1
+        native_result=$sig; native_reset=1; managed_result=0
+        if [ "$sig" = 10 ]; then native_result=0; native_reset=0; managed_result=$sig; fi
         case "$mode" in
-            native*) /usr/bin/grep -q "SIGNAL_NATIVE_TARGET executed=1 result=$sig reset=1 managed=0" "$arm_dir/$mode-$sig.log" || rc_all=1 ;;
-            ignored) /usr/bin/grep -q 'SIGNAL_IGNORE_TARGET executed=1 managed=0' "$arm_dir/$mode-$sig.log" || rc_all=1 ;;
+            native*) /usr/bin/grep -q "SIGNAL_NATIVE_TARGET executed=1 result=$native_result reset=$native_reset managed=$managed_result" "$arm_dir/$mode-$sig.log" || rc_all=1 ;;
+            ignored) /usr/bin/grep -q "SIGNAL_IGNORE_TARGET executed=1 managed=$managed_result" "$arm_dir/$mode-$sig.log" || rc_all=1 ;;
             unhandled) /usr/bin/grep -q "CJNative Handle signal: $sig" "$arm_dir/$mode-$sig.log" || rc_all=1 ;;
         esac
     done

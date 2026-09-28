@@ -172,8 +172,15 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context);
 void SignalStack::Handler(int signal, siginfo_t* siginfo, void* context)
 {
     const int savedErrno = errno;
-    // signals_posix.cpp:637-654: native chain, then unhandled fatal report.
-    if (!CallChainedHandler(signal, siginfo, context)) {
+    // HotSpot signals_posix.cpp:609-613: only these categories chain first.
+    bool handled = false;
+    if (signal == SIGPIPE || signal == SIGXFSZ) {
+        CallChainedHandler(signal, siginfo, context);
+        handled = true;
+    }
+    // signals_posix.cpp:637-641 / os.cpp:371-380: platform/notification
+    // handling precedes the fallback native chain for all other signals.
+    if (!handled) {
         switch (signal) {
             case SIGSEGV:
             case SIGBUS:
@@ -181,16 +188,20 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* context)
             case SIGILL:
             case SIGABRT:
             case SIGTRAP:
-                LogHandleSignalAsSafe(signal);
-                PrintSignalHandlerStack(signal, siginfo, context);
-                RaiseDefaultAsSafe(signal);
                 break;
             default:
-                // signals_posix.cpp:666-677 UserHandler: no managed entry,
-                // allocation, or VM lock on the interrupted thread.
                 NotifySignal(signal);
+                handled = true;
                 break;
         }
+    }
+    if (!handled) {
+        handled = CallChainedHandler(signal, siginfo, context);
+    }
+    if (!handled) {
+        LogHandleSignalAsSafe(signal);
+        PrintSignalHandlerStack(signal, siginfo, context);
+        RaiseDefaultAsSafe(signal);
     }
     errno = savedErrno;
 }

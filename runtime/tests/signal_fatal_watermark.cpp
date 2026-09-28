@@ -67,6 +67,20 @@ int main(int argc, char** argv)
     sigemptyset(&action.scMask);
     CJ_MCC_AddSignalHandler(sig, &action);
     std::fprintf(stderr, "SIGNAL_INPUT registered=%d mode=%s\n", sig, argv[1]);
+    const bool notificationFirst = sig == SIGUSR1;
+    auto waitForNotification = [&]() {
+        if (!notificationFirst) { return; }
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (delivered.load(std::memory_order_acquire) != sig && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+    };
+    // SIGPIPE is blocked by runtime initialization; exercise its explicit
+    // HotSpot category with the same real OS entrance as the other cases.
+    sigset_t unblock;
+    sigemptyset(&unblock);
+    sigaddset(&unblock, sig);
+    pthread_sigmask(SIG_UNBLOCK, &unblock, nullptr);
     if (std::strncmp(argv[1], "native", 6) == 0) {
         struct sigaction native{};
         sigemptyset(&native.sa_mask);
@@ -82,7 +96,10 @@ int main(int argc, char** argv)
         std::raise(sig);
         struct sigaction after{};
         sigaction(sig, nullptr, &after);
-        bool ok = nativeResult == sig && after.sa_handler == SIG_DFL && delivered.load() == 0;
+        waitForNotification();
+        bool ok = notificationFirst
+            ? nativeResult == 0 && after.sa_handler != SIG_DFL && delivered.load() == sig
+            : nativeResult == sig && after.sa_handler == SIG_DFL && delivered.load() == 0;
         std::fprintf(stderr, "SIGNAL_NATIVE_TARGET executed=1 result=%d reset=%d managed=%d\n",
                      nativeResult, after.sa_handler == SIG_DFL, delivered.load());
         std::_Exit(ok ? 0 : 1);
@@ -92,8 +109,9 @@ int main(int argc, char** argv)
         sigemptyset(&ignore.sa_mask);
         sigaction(sig, &ignore, nullptr);
         std::raise(sig);
+        waitForNotification();
         std::fprintf(stderr, "SIGNAL_IGNORE_TARGET executed=1 managed=%d\n", delivered.load());
-        std::_Exit(delivered.load() == 0 ? 0 : 1);
+        std::_Exit(delivered.load() == (notificationFirst ? sig : 0) ? 0 : 1);
     } else if (std::strcmp(argv[1], "watermark") == 0) {
         auto task = RunCJTask(SignalWatermarkWork, nullptr);
         void* result = nullptr;
