@@ -191,7 +191,6 @@ struct PrologueRegisterClosure {
         return *this;
     }
 
-    enum class Type : U32 { CALLEE_REGISTER, OFFSET };
     ~PrologueRegisterClosure() = default;
     void RecordCalleeSaved(RegSlotsMap& regSlotsMap, uintptr_t base) const
     {

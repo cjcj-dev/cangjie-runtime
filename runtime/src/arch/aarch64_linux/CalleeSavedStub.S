@@ -4,6 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Common/Aarch64StubLayout.h"
+
 #define cfi_adjust_cfa_offset(off)      .cfi_adjust_cfa_offset off
 #define cfi_rel_offset(reg, off)        .cfi_rel_offset reg, off
 #define cfi_restore(reg)                .cfi_restore reg
@@ -15,7 +17,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #define StubFrameContextSize      (8 * 14)
-#define StubCalleeSaveAreaSize (8 * 4)
+#define StubCalleeSaveAreaSize MRT_AARCH64_STUB_CALLEE_BASE
 
 // the frame layout of stack(growing downwards) after MCC_C2NStub frame is built looks like:
 
@@ -64,48 +66,48 @@ CalleeSavedStubFrameSize:
     cfi_def_cfa_register (sp)
 
     // save all used callee-saved registers.
-    stp  x19, x20, [sp, #StubCalleeSaveAreaSize]
-    cfi_rel_offset (x19, StubCalleeSaveAreaSize)
-    cfi_rel_offset (x20, StubCalleeSaveAreaSize+8)
+    stp  x19, x20, [sp, #.Lmrt_a64_callee_x19]
+    cfi_rel_offset (x19, .Lmrt_a64_callee_x19)
+    cfi_rel_offset (x20, .Lmrt_a64_callee_x20)
 
-    stp  x21, x22, [sp, #StubCalleeSaveAreaSize+0x10]
-    cfi_rel_offset (x21, StubCalleeSaveAreaSize+0x10)
-    cfi_rel_offset (x22, StubCalleeSaveAreaSize+0x18)
+    stp  x21, x22, [sp, #.Lmrt_a64_callee_x21]
+    cfi_rel_offset (x21, .Lmrt_a64_callee_x21)
+    cfi_rel_offset (x22, .Lmrt_a64_callee_x22)
 
-    stp  x23, x24, [sp, #StubCalleeSaveAreaSize+0x20]
-    cfi_rel_offset (x23, StubCalleeSaveAreaSize+0x20)
-    cfi_rel_offset (x24, StubCalleeSaveAreaSize+0x28)
+    stp  x23, x24, [sp, #.Lmrt_a64_callee_x23]
+    cfi_rel_offset (x23, .Lmrt_a64_callee_x23)
+    cfi_rel_offset (x24, .Lmrt_a64_callee_x24)
 
-    stp  x25, x26, [sp, #StubCalleeSaveAreaSize+0x30]
-    cfi_rel_offset (x25, StubCalleeSaveAreaSize+0x30)
-    cfi_rel_offset (x26, StubCalleeSaveAreaSize+0x38)
+    stp  x25, x26, [sp, #.Lmrt_a64_callee_x25]
+    cfi_rel_offset (x25, .Lmrt_a64_callee_x25)
+    cfi_rel_offset (x26, .Lmrt_a64_callee_x26)
 
-    stp  x27, x28, [sp, #StubCalleeSaveAreaSize+0x40]
-    cfi_rel_offset (x27, StubCalleeSaveAreaSize+0x40)
-    cfi_rel_offset (x28, StubCalleeSaveAreaSize+0x48)
+    stp  x27, x28, [sp, #.Lmrt_a64_callee_x27]
+    cfi_rel_offset (x27, .Lmrt_a64_callee_x27)
+    cfi_rel_offset (x28, .Lmrt_a64_callee_x28)
 
     bl   \funcName
-    str  x0,  [sp, #StubCalleeSaveAreaSize+0x48]
+    str  x0,  [sp, #.Lmrt_a64_callee_x28]
 
     bl   MRT_GetThreadLocalData
     mov  x28, x0
 
     // restore all used callee-saved registers.
-    ldp  x19, x20, [sp, #StubCalleeSaveAreaSize]
+    ldp  x19, x20, [sp, #.Lmrt_a64_callee_x19]
     cfi_restore (x19)
     cfi_restore (x20)
-    ldp  x21, x22, [sp, #StubCalleeSaveAreaSize+0x10]
+    ldp  x21, x22, [sp, #.Lmrt_a64_callee_x21]
     cfi_restore (x21)
     cfi_restore (x22)
-    ldp  x23, x24, [sp, #StubCalleeSaveAreaSize+0x20]
+    ldp  x23, x24, [sp, #.Lmrt_a64_callee_x23]
     cfi_restore (x23)
     cfi_restore (x24)
-    ldp  x25, x26, [sp, #StubCalleeSaveAreaSize+0x30]
+    ldp  x25, x26, [sp, #.Lmrt_a64_callee_x25]
     cfi_restore (x25)
     cfi_restore (x26)
-    ldr  x27, [sp, #StubCalleeSaveAreaSize+0x40]
+    ldr  x27, [sp, #.Lmrt_a64_callee_x27]
     cfi_restore (x27)
-    ldr  x0,  [sp, #StubCalleeSaveAreaSize+0x48]
+    ldr  x0,  [sp, #.Lmrt_a64_callee_x28]
     cfi_restore (x0)
 
     ldp  x29, x30, [sp], #StubFrameContextSize
@@ -138,48 +140,48 @@ CalleeSavedStubFrameSize:
     cfi_def_cfa_register (sp)
 
     // save all used callee-saved registers.
-    stp  x19, x20, [sp, #StubCalleeSaveAreaSize]
-    cfi_rel_offset (x19, StubCalleeSaveAreaSize)
-    cfi_rel_offset (x20, StubCalleeSaveAreaSize+8)
+    stp  x19, x20, [sp, #.Lmrt_a64_callee_x19]
+    cfi_rel_offset (x19, .Lmrt_a64_callee_x19)
+    cfi_rel_offset (x20, .Lmrt_a64_callee_x20)
 
-    stp  x21, x22, [sp, #StubCalleeSaveAreaSize+0x10]
-    cfi_rel_offset (x21, StubCalleeSaveAreaSize+0x10)
-    cfi_rel_offset (x22, StubCalleeSaveAreaSize+0x18)
+    stp  x21, x22, [sp, #.Lmrt_a64_callee_x21]
+    cfi_rel_offset (x21, .Lmrt_a64_callee_x21)
+    cfi_rel_offset (x22, .Lmrt_a64_callee_x22)
 
-    stp  x23, x24, [sp, #StubCalleeSaveAreaSize+0x20]
-    cfi_rel_offset (x23, StubCalleeSaveAreaSize+0x20)
-    cfi_rel_offset (x24, StubCalleeSaveAreaSize+0x28)
+    stp  x23, x24, [sp, #.Lmrt_a64_callee_x23]
+    cfi_rel_offset (x23, .Lmrt_a64_callee_x23)
+    cfi_rel_offset (x24, .Lmrt_a64_callee_x24)
 
-    stp  x25, x26, [sp, #StubCalleeSaveAreaSize+0x30]
-    cfi_rel_offset (x25, StubCalleeSaveAreaSize+0x30)
-    cfi_rel_offset (x26, StubCalleeSaveAreaSize+0x38)
+    stp  x25, x26, [sp, #.Lmrt_a64_callee_x25]
+    cfi_rel_offset (x25, .Lmrt_a64_callee_x25)
+    cfi_rel_offset (x26, .Lmrt_a64_callee_x26)
 
-    stp  x27, x28, [sp, #StubCalleeSaveAreaSize+0x40]
-    cfi_rel_offset (x27, StubCalleeSaveAreaSize+0x40)
-    cfi_rel_offset (x28, StubCalleeSaveAreaSize+0x48)
+    stp  x27, x28, [sp, #.Lmrt_a64_callee_x27]
+    cfi_rel_offset (x27, .Lmrt_a64_callee_x27)
+    cfi_rel_offset (x28, .Lmrt_a64_callee_x28)
 
     bl   \funcName
-    str  x0,  [sp, #StubCalleeSaveAreaSize+0x48]
+    str  x0,  [sp, #.Lmrt_a64_callee_x28]
 
     bl   MRT_GetThreadLocalData
     mov  x28, x0
 
     // restore all used callee-saved registers.
-    ldp  x19, x20, [sp, #StubCalleeSaveAreaSize]
+    ldp  x19, x20, [sp, #.Lmrt_a64_callee_x19]
     cfi_restore (x19)
     cfi_restore (x20)
-    ldp  x21, x22, [sp, #StubCalleeSaveAreaSize+0x10]
+    ldp  x21, x22, [sp, #.Lmrt_a64_callee_x21]
     cfi_restore (x21)
     cfi_restore (x22)
-    ldp  x23, x24, [sp, #StubCalleeSaveAreaSize+0x20]
+    ldp  x23, x24, [sp, #.Lmrt_a64_callee_x23]
     cfi_restore (x23)
     cfi_restore (x24)
-    ldp  x25, x26, [sp, #StubCalleeSaveAreaSize+0x30]
+    ldp  x25, x26, [sp, #.Lmrt_a64_callee_x25]
     cfi_restore (x25)
     cfi_restore (x26)
-    ldr  x27, [sp, #StubCalleeSaveAreaSize+0x40]
+    ldr  x27, [sp, #.Lmrt_a64_callee_x27]
     cfi_restore (x27)
-    ldr  x0,  [sp, #StubCalleeSaveAreaSize+0x48]
+    ldr  x0,  [sp, #.Lmrt_a64_callee_x28]
     cfi_restore (x0)
 
     ldp  x29, x30, [sp], #StubFrameContextSize

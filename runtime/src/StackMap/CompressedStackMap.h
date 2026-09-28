@@ -126,6 +126,7 @@ private:
 class CompressedStackMapHead {
 public:
     explicit CompressedStackMapHead(const Uptr* table) : prologue(table) {}
+    CompressedStackMapHead(CompressedStackMapHead&&) = default;
     ~CompressedStackMapHead() = default;
     PrologueRegisterClosure TakePrologueRegisters() { return prologue.TakeRegisters(); }
     static CompressedStackMapHead GetStackMapHead(Uptr addr, uint64_t* funcDesc = nullptr)

@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 #include "StackMap/StackMapTypeDef.h"
+#include "Common/Aarch64StubLayout.h"
 
 namespace MapleRuntime {
 class RegRoot {
@@ -42,25 +43,18 @@ public:
     static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
     {
         regSlotsMap.allRegistersSaved = false;
-        constexpr Uptr slotLength = 8;
-        constexpr Uptr calleeSavedAreaOffset = 8 * 4;
-        Uptr slotAddr = fp + calleeSavedAreaOffset;
-        static constexpr RegisterId calleeSavedRegiser[] = { X19, X20, X21, X22, X23, X24, X25, X26, X27, X28 };
-        for (auto reg : calleeSavedRegiser) {
-            regSlotsMap.Insert(reg, &RootSlotAt(slotAddr));
-            slotAddr += slotLength;
-        }
+#define RECORD_CALLEE(reg, id, index, off) regSlotsMap.Insert(id, &RootSlotAt(fp + off));
+        MRT_AARCH64_STUB_CALLEE_GPRS(RECORD_CALLEE)
+#undef RECORD_CALLEE
     }
 
     static void RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
     {
         regSlotsMap.allRegistersSaved = true;
-        constexpr Uptr slotLength = 8;
-        constexpr Uptr registersAreaOffset = 8 * 2;
-        Uptr slotAddr = fp + registersAreaOffset;
-        for (RegisterNum i = X0; i <= X28; ++i, slotAddr += slotLength) {
-            regSlotsMap.Insert(i, &RootSlotAt(slotAddr));
-        }
+#define RECORD_ALL(reg, id, index, off) \
+        if (id <= X28) { regSlotsMap.Insert(id, &RootSlotAt(fp + off)); }
+        MRT_AARCH64_STUB_GPRS(RECORD_ALL)
+#undef RECORD_ALL
     }
 
     bool VisitGCRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, const RegSlotsMap& regSlotsMap,

@@ -4,7 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#define HandleReturnSafepointStubFrameSize           (0x310)
+#include "Common/Aarch64StubLayout.h"
+
+#define HandleReturnSafepointStubFrameSize           MRT_AARCH64_STUB_FRAME_BYTES
 
 #define cfi_adjust_cfa_offset(off)	.cfi_adjust_cfa_offset off
 #define cfi_rel_offset(reg, off)	.cfi_rel_offset reg, off
@@ -30,65 +32,65 @@ CJ_MCC_HandleReturnSafepoint:
    cfi_def_cfa_register (x29)
 
    // save all callee registers
-   stp  x0, x1, [sp, #0x10]
-   cfi_rel_offset (x0, 0x10)
-   cfi_rel_offset (x1, 0x18)
+   stp  x0, x1, [sp, #.Lmrt_a64_all_x0]
+   cfi_rel_offset (x0, .Lmrt_a64_all_x0)
+   cfi_rel_offset (x1, .Lmrt_a64_all_x1)
 
-   stp  x2, x3, [sp, #0x20]
-   cfi_rel_offset (x2, 0x20)
-   cfi_rel_offset (x3, 0x28)
+   stp  x2, x3, [sp, #.Lmrt_a64_all_x2]
+   cfi_rel_offset (x2, .Lmrt_a64_all_x2)
+   cfi_rel_offset (x3, .Lmrt_a64_all_x3)
 
-   stp  x4, x5, [sp, #0x30]
-   cfi_rel_offset (x4, 0x30)
-   cfi_rel_offset (x5, 0x38)
+   stp  x4, x5, [sp, #.Lmrt_a64_all_x4]
+   cfi_rel_offset (x4, .Lmrt_a64_all_x4)
+   cfi_rel_offset (x5, .Lmrt_a64_all_x5)
 
-   stp  x6, x7, [sp, #0x40]
-   cfi_rel_offset (x6, 0x40)
-   cfi_rel_offset (x7, 0x48)
+   stp  x6, x7, [sp, #.Lmrt_a64_all_x6]
+   cfi_rel_offset (x6, .Lmrt_a64_all_x6)
+   cfi_rel_offset (x7, .Lmrt_a64_all_x7)
 
-   stp  x8, x9, [sp, #0x50]
-   cfi_rel_offset (x8, 0x50)
-   cfi_rel_offset (x9, 0x58)
+   stp  x8, x9, [sp, #.Lmrt_a64_all_x8]
+   cfi_rel_offset (x8, .Lmrt_a64_all_x8)
+   cfi_rel_offset (x9, .Lmrt_a64_all_x9)
 
-   stp  x10, x11, [sp, #0x60]
-   cfi_rel_offset (x10, 0x60)
-   cfi_rel_offset (x11, 0x68)
+   stp  x10, x11, [sp, #.Lmrt_a64_all_x10]
+   cfi_rel_offset (x10, .Lmrt_a64_all_x10)
+   cfi_rel_offset (x11, .Lmrt_a64_all_x11)
 
-   stp  x12, x13, [sp, #0x70]
-   cfi_rel_offset (x12, 0x70)
-   cfi_rel_offset (x13, 0x78)
+   stp  x12, x13, [sp, #.Lmrt_a64_all_x12]
+   cfi_rel_offset (x12, .Lmrt_a64_all_x12)
+   cfi_rel_offset (x13, .Lmrt_a64_all_x13)
 
-   stp  x14, x15, [sp, #0x80]
-   cfi_rel_offset (x14, 0x80)
-   cfi_rel_offset (x15, 0x88)
+   stp  x14, x15, [sp, #.Lmrt_a64_all_x14]
+   cfi_rel_offset (x14, .Lmrt_a64_all_x14)
+   cfi_rel_offset (x15, .Lmrt_a64_all_x15)
 
-   stp  x16, x17, [sp, #0x90]
-   cfi_rel_offset (x16, 0x90)
-   cfi_rel_offset (x17, 0x98)
+   stp  x16, x17, [sp, #.Lmrt_a64_all_x16]
+   cfi_rel_offset (x16, .Lmrt_a64_all_x16)
+   cfi_rel_offset (x17, .Lmrt_a64_all_x17)
 
-   stp  x18, x19, [sp, #0xa0]
-   cfi_rel_offset (x18, 0xa0)
-   cfi_rel_offset (x19, 0xa8)
+   stp  x18, x19, [sp, #.Lmrt_a64_all_x18]
+   cfi_rel_offset (x18, .Lmrt_a64_all_x18)
+   cfi_rel_offset (x19, .Lmrt_a64_all_x19)
 
-   stp  x20, x21, [sp, 0xb0]
-   cfi_rel_offset (x20, 0xb0)
-   cfi_rel_offset (x21, 0xb8)
+   stp  x20, x21, [sp, .Lmrt_a64_all_x20]
+   cfi_rel_offset (x20, .Lmrt_a64_all_x20)
+   cfi_rel_offset (x21, .Lmrt_a64_all_x21)
 
-   stp  x22, x23, [sp, 0xc0]
-   cfi_rel_offset (x22, 0xc0)
-   cfi_rel_offset (x23, 0xc8)
+   stp  x22, x23, [sp, .Lmrt_a64_all_x22]
+   cfi_rel_offset (x22, .Lmrt_a64_all_x22)
+   cfi_rel_offset (x23, .Lmrt_a64_all_x23)
 
-   stp  x24, x25, [sp, 0xd0]
-   cfi_rel_offset (x24, 0xd0)
-   cfi_rel_offset (x25, 0xd8)
+   stp  x24, x25, [sp, .Lmrt_a64_all_x24]
+   cfi_rel_offset (x24, .Lmrt_a64_all_x24)
+   cfi_rel_offset (x25, .Lmrt_a64_all_x25)
 
-   stp  x26, x27, [sp, 0xe0]
-   cfi_rel_offset (x26, 0xe0)
-   cfi_rel_offset (x27, 0xe8)
+   stp  x26, x27, [sp, .Lmrt_a64_all_x26]
+   cfi_rel_offset (x26, .Lmrt_a64_all_x26)
+   cfi_rel_offset (x27, .Lmrt_a64_all_x27)
 
-   stp  x28, x29, [sp, 0xf0]
-   cfi_rel_offset (x28, 0xf0)
-   cfi_rel_offset (x29, 0xf8)
+   stp  x28, x29, [sp, .Lmrt_a64_all_x28]
+   cfi_rel_offset (x28, .Lmrt_a64_all_x28)
+   cfi_rel_offset (x29, .Lmrt_a64_all_x29)
 
    mrs  x30, nzcv
    str  x30, [sp, 0x100]
@@ -144,58 +146,58 @@ unwindPCForReturnSafepointHandlerStub:
    ldp  q28, q29, [sp, #0x2d0]
    ldp  q30, q31, [sp, #0x2f0]
 
-   ldp  x0, x1, [sp, #0x10]
+   ldp  x0, x1, [sp, #.Lmrt_a64_all_x0]
    cfi_restore (x0)
    cfi_restore (x1)
 
-   ldp  x2, x3, [sp, #0x20]
+   ldp  x2, x3, [sp, #.Lmrt_a64_all_x2]
    cfi_restore (x2)
    cfi_restore (x3)
 
-   ldp  x4, x5, [sp, #0x30]
+   ldp  x4, x5, [sp, #.Lmrt_a64_all_x4]
    cfi_restore (x4)
    cfi_restore (x5)
 
-   ldp  x6, x7, [sp, #0x40]
+   ldp  x6, x7, [sp, #.Lmrt_a64_all_x6]
    cfi_restore (x6)
    cfi_restore (x7)
 
-   ldp  x8, x9, [sp, #0x50]
+   ldp  x8, x9, [sp, #.Lmrt_a64_all_x8]
    cfi_restore (x8)
    cfi_restore (x9)
 
-   ldp  x10, x11, [sp, #0x60]
+   ldp  x10, x11, [sp, #.Lmrt_a64_all_x10]
    cfi_restore (x10)
    cfi_restore (x11)
 
-   ldp  x12, x13, [sp, #0x70]
+   ldp  x12, x13, [sp, #.Lmrt_a64_all_x12]
    cfi_restore (x12)
    cfi_restore (x13)
 
-   ldp  x14, x15, [sp, #0x80]
+   ldp  x14, x15, [sp, #.Lmrt_a64_all_x14]
    cfi_restore (x14)
    cfi_restore (x15)
 
-   ldp  x16, x17, [sp, #0x90]
+   ldp  x16, x17, [sp, #.Lmrt_a64_all_x16]
    cfi_restore (x16)
    cfi_restore (x30)
 
-   ldp  x18, x19, [sp, #0xa0]
+   ldp  x18, x19, [sp, #.Lmrt_a64_all_x18]
    cfi_restore (x18)
    cfi_restore (x19)
-   ldp  x20, x21, [sp, #0xb0]
+   ldp  x20, x21, [sp, #.Lmrt_a64_all_x20]
    cfi_restore (x20)
    cfi_restore (x21)
-   ldp  x22, x23, [sp, #0xc0]
+   ldp  x22, x23, [sp, #.Lmrt_a64_all_x22]
    cfi_restore (x22)
    cfi_restore (x23)
-   ldp  x24, x25, [sp, #0xd0]
+   ldp  x24, x25, [sp, #.Lmrt_a64_all_x24]
    cfi_restore (x24)
    cfi_restore (x25)
-   ldp  x26, x27, [sp, #0xe0]
+   ldp  x26, x27, [sp, #.Lmrt_a64_all_x26]
    cfi_restore (x26)
    cfi_restore (x27)
-   ldp  x28, x29, [sp, #0xf0]
+   ldp  x28, x29, [sp, #.Lmrt_a64_all_x28]
    cfi_restore (x28)
    cfi_restore (x29)
    ldr  x30, [sp, #0x100]

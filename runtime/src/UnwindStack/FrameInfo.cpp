@@ -6,6 +6,7 @@
 
 
 #include "Base/Types.h"
+#include "Common/Aarch64StubLayout.h"
 #include "Common/StackType.h"
 #include "Common/TypeDef.h"
 #include "os/Loader.h"
@@ -41,7 +42,7 @@ uintptr_t FrameInfo::CallerSP() const
     switch (GetFrameType()) {
         case FrameType::RETURN_SAFEPOINT:
         case FrameType::SAFEPOINT:
-        case FrameType::STACKGROW: return fp + 0x310;
+        case FrameType::STACKGROW: return fp + MRT_AARCH64_STUB_FRAME_BYTES;
         case FrameType::C2R_STUB: return fp + 8 * 14;
         case FrameType::C2N_STUB: return fp + 8 * 32;
         case FrameType::MANAGED: {
