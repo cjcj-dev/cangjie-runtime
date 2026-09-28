@@ -125,13 +125,10 @@ private:
 };
 class CompressedStackMapHead {
 public:
-    CompressedStackMapHead(U8* ptr, U32 bitPos, const PrologueVisitor& visitor, U32 format)
-        : prologue(ptr, bitPos, visitor), slotFormat(format) {}
-    CompressedStackMapHead(const BitsManager& prologueManager, const PrologueVisitor& visitor, U32 format)
-        : prologue(prologueManager, visitor), slotFormat(format) {}
+    explicit CompressedStackMapHead(const Uptr* table) : prologue(table) {}
     ~CompressedStackMapHead() = default;
-    static CompressedStackMapHead GetStackMapHead(Uptr addr, const PrologueVisitor& visitor,
-                                                  uint64_t* funcDesc = nullptr)
+    PrologueRegisterClosure TakePrologueRegisters() { return prologue.TakeRegisters(); }
+    static CompressedStackMapHead GetStackMapHead(Uptr addr, uint64_t* funcDesc = nullptr)
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
         U8 *stackmapStart = nullptr;
@@ -145,10 +142,7 @@ public:
 #endif
             stackmapStart = reinterpret_cast<U8*>(desc->GetStackMap());
         }
-        StacksizeVarInt stacksizeVarInt(stackmapStart, 0);
-        StacksizeVarInt compressedFormatVarInt(stacksizeVarInt.GetNextTable());
-        U32 format = compressedFormatVarInt.GetStacksize();
-        return CompressedStackMapHead(compressedFormatVarInt.GetNextTable(), visitor, format);
+        return CompressedStackMapHead(reinterpret_cast<Uptr*>(stackmapStart));
     }
     static void DestroyStackMapHead(CompressedStackMapHead*& stackMapHead) noexcept
     {
@@ -160,13 +154,13 @@ public:
 
     CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC, bool countDerivedRows = false) const
     {
-        StackMapTable stackMapTable(prologue.GetNextTable(), slotFormat);
+        StackMapTable stackMapTable(prologue.GetNextTable(), prologue.GetSlotFormat());
         if (stackMapTable.GetLookupResult(startPC, framePC) != StackMapLookupResult::FOUND) {
             return CompressedStackMapEntry(false);
         }
         auto idxSet = stackMapTable.GetIdxSet(startPC, framePC);
         RegTable regTable(stackMapTable.GetNextTable());
-        SlotTable slotTable(regTable.GetNextTable(), slotFormat);
+        SlotTable slotTable(regTable.GetNextTable(), prologue.GetSlotFormat());
         LineNumTable lineTable(slotTable.GetNextTable());
         DerivedPtrTable derivedTable(lineTable.GetNextTable(), stackMapTable.GetRegBitsLen(),
                                      stackMapTable.GetSlotBitsLen());
@@ -178,7 +172,7 @@ public:
 
     StackMapInvalidReason GetInvalidReason(Uptr startPC, Uptr framePC) const
     {
-        StackMapTable stackMapTable(prologue.GetNextTable(), slotFormat);
+        StackMapTable stackMapTable(prologue.GetNextTable(), prologue.GetSlotFormat());
         switch (stackMapTable.GetLookupResult(startPC, framePC)) {
             case StackMapLookupResult::ZERO_ENTRIES:
                 return StackMapInvalidReason::ZERO_ENTRIES;
@@ -191,8 +185,7 @@ public:
     }
 
 private:
-    PrologueVarInt prologue;
-    U32 slotFormat;
+    FramePrologue prologue;
 };
 using StackMapEntry = CompressedStackMapEntry;
 using StackMapHead = CompressedStackMapHead;

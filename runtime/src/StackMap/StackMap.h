@@ -276,22 +276,12 @@ public:
     MapType Build(bool countDerivedRows = false) const
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
-        PrologueRegisterClosure closure;
-        PrologueVisitor visitor = [&closure](PrologueRegisterClosure::Type type, uint32_t value) {
-            switch (type) {
-                case PrologueRegisterClosure::Type::CALLEE_REGISTER:
-                    closure.calleeSaved.push_back(value);
-                    break;
-                case PrologueRegisterClosure::Type::OFFSET:
-                    closure.offset.push_back(value);
-                    break;
-            }
-        };
 #ifdef __APPLE__
-        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, visitor, funcDesc);
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc);
 #else
-        auto head = CompressedStackMapHead::GetStackMapHead(startPC, visitor, funcDesc);
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
 #endif
+        auto closure = head.TakePrologueRegisters();
         auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
         if (!entry.IsValid()) {
             return MapType(stackBase, std::move(closure));
@@ -303,9 +293,9 @@ public:
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
-        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc);
 #else
-        auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr, funcDesc);
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
 #endif
         return head.GetInvalidReason(startPC, framePC);
     }
@@ -324,9 +314,9 @@ inline HeapReferenceMap StackMapBuilder::Build<HeapReferenceMap>(bool countDeriv
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
-    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);
+    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc);
 #else
-    auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr, funcDesc);
+    auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
 #endif
     auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
     return entry.IsValid() ? HeapReferenceMap(true, stackBase, entry) : HeapReferenceMap(stackBase);
@@ -339,9 +329,9 @@ inline MethodMap StackMapBuilder::Build<MethodMap>(bool countDerivedRows) const
     ElfUnloadQuiescence::ReadScope metadataReader;
     (void)countDerivedRows;
 #ifdef __APPLE__
-    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);
+    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc);
 #else
-    auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr, funcDesc);
+    auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
 #endif
     auto entry = head.GetStackMapEntry(startPC, framePC);
     if (!entry.IsValid()) {

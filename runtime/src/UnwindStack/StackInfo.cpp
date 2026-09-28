@@ -40,18 +40,9 @@ void InitPtrAuthRAMod(FrameInfo& callerFrameInfo, FrameInfo& calleeFrameInfo)
         FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(
             reinterpret_cast<Uptr>(FrameInfo::GetFuncStartPCFromFrameAddress(
                 reinterpret_cast<FrameAddress*>(calleeFrameInfo.mFrame.GetFA()))));
-        Uptr* stackMapEntry = funcDesc->GetStackMap();
-        uint32_t validPos = 0;
+        const FramePrologue prologue(funcDesc->GetStackMap());
         auto fa = calleeFrameInfo.mFrame.GetFA();
-        uint32_t stackSize = EHFrameInfo::ReadVarInt(&stackMapEntry, validPos);
-        (void)stackSize;
-        (void)EHFrameInfo::ReadVarInt(&stackMapEntry, validPos);
-        uint32_t calleeSavedBitmap = EHFrameInfo::ReadVarInt(&stackMapEntry, validPos);
-        uint32_t count = 0;
-        while (calleeSavedBitmap != 0) {
-            count++;
-            calleeSavedBitmap = (calleeSavedBitmap - 1) & calleeSavedBitmap;
-        }
+        const size_t count = prologue.GetSavedRegisterCount();
         callerFrameInfo.mFrame.SetPtrAuthRAMod(stackFrameAlign(reinterpret_cast<uint64_t*>(fa) + count));
     } else if (calleeFrameInfo.mFrame.IsC2RStubFrame() || calleeFrameInfo.mFrame.IsC2NExceptionStubFrame()) {
         auto fa = calleeFrameInfo.mFrame.GetFA();

@@ -606,9 +606,7 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 #else
             FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(caller.frameInfo.GetFuncStartPC()));
 #endif
-            Uptr* stackMapEntry = funcDesc->GetStackMap();
-            uint32_t validPos = 0;
-            uint32_t frameSize = EHFrameInfo::ReadVarInt(&stackMapEntry, validPos);
+            const uint32_t frameSize = FramePrologue(funcDesc->GetStackMap()).GetFrameSize();
 #if defined(__x86_64__)
             // 8 is the slot length of returnaddr.
             uint64_t callerSp = *reinterpret_cast<intptr_t*>(frameBase) - frameSize + 8;

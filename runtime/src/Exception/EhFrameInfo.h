@@ -109,19 +109,11 @@ public:
 #else
         FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(startProc));
 #endif
-        Uptr* stackMapEntry = funcDesc->GetStackMap();
-        uint32_t validPos = 0;
-
-        // Skip the stackmap header.
-        (void)ReadVarInt(&stackMapEntry, validPos);
-        (void)ReadVarInt(&stackMapEntry, validPos);
-
-        uint32_t calleeSavedBitmap = ReadVarInt(&stackMapEntry, validPos);
-        for (uint32_t idx = 0; idx < CALLEE_SAVE_NUMBERS; idx++) {
-            if ((calleeSavedBitmap & (static_cast<uint32_t>(1) << idx)) == 0) {
-                continue;
-            }
-            uint32_t offset = ReadVarInt(&stackMapEntry, validPos);
+        const FramePrologue prologue(funcDesc->GetStackMap());
+        const auto& saved = prologue.GetRegisters();
+        for (size_t i = 0; i < saved.calleeSaved.size(); ++i) {
+            const uint32_t idx = saved.calleeSaved[i];
+            const uint32_t offset = saved.offset[i];
 #if defined(_WIN64)
             if (idx < calleeSaveXMMIdxStart) {
                 uint64_t* slotAddr = reinterpret_cast<uint64_t*>(calleeFrameAddress + SLOT_SIZE_FACTOR * offset);
@@ -185,43 +177,6 @@ public:
         // update tsan's function trace
         Sanitizer::TsanFuncRestoreContext(reinterpret_cast<const void*>(mFrame.GetIP()));
 #endif
-    }
-
-    /* Var Int format:
-        If the value of reading 4bit is less than 12, the value will be returned directly.
-        If the value of reading 4bit is equal to 12, then the next 8bit needs to be read out and returned.
-        If the value of reading 4bit is equal to 13, then the next 16bit needs to be read out and returned.
-        If the value of reading 4bit is equal to 14, then the next 24bit needs to be read out and returned.
-        If the value of reading 4bit is equal to 15, then the next 32bit needs to be read out and returned.
-        When validPos is equal to 0, read from the lower four bits, otherwise read from the upper four bits.
-    */
-    static uint32_t ReadVarInt(Uptr** point, uint32_t& validPos)
-    {
-        uint32_t res = 0;
-        uint32_t bitsMask = 0xf;
-        constexpr uint32_t tagLen = 4;
-        res = (*reinterpret_cast<uint8_t*>(*point)) >> (tagLen * validPos) & bitsMask;
-        *point = (validPos == 1) ? reinterpret_cast<Uptr*>((reinterpret_cast<uint8_t*>(*point)) + 1) : *point;
-        validPos = (validPos == 1) ? 0 : 1;
-        if (res <= VarInt::TagType::MAX_VALID_VALUE) {
-            return res;
-        }
-
-        uint32_t bitsLen = 0;
-        if (res == VarInt::TagType::VAR_VALUE8) {
-            bitsLen = VarInt::BitsLen::FIRST_STEP_VAR_BITS;
-        } else if (res == VarInt::TagType::VAR_VALUE16) {
-            bitsLen = VarInt::BitsLen::SECOND_STEP_VAR_BITS;
-        } else if (res == VarInt::TagType::VAR_VALUE24) {
-            bitsLen = VarInt::BitsLen::THIRD_STEP_VAR_BITS;
-        } else {
-            bitsLen = VarInt::BitsLen::FORTH_STEP_VAR_BITS;
-        }
-        bitsMask = static_cast<uint32_t>((1UL << bitsLen) - 1);
-        res = (*reinterpret_cast<ArchUInt*>(*point) >> (tagLen * validPos)) & bitsMask;
-        uint32_t byteLen = bitsLen >> 3; // 8 bits per byte
-        *point = reinterpret_cast<Uptr*>(reinterpret_cast<uint8_t*>(*point) + byteLen);
-        return res;
     }
 
     const uint32_t* GetIP() const override
