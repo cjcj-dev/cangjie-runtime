@@ -251,11 +251,13 @@ void StackWatermark::process_one()
 
 // runtime/stackWatermark.cpp:178-197: the predicate is private to a locked
 // assertion; the iterator must not be reset while its frontier is inspected.
+#if (defined(MRT_DEBUG) && (MRT_DEBUG == 1)) || defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 void StackWatermark::assert_is_frame_safe(const FrameInfo& frame)
 {
     std::lock_guard<std::mutex> guard(lock);
     CHECK(is_frame_safe(frame));
 }
+#endif
 
 bool StackWatermark::is_frame_safe(const FrameInfo& frame) const
 {

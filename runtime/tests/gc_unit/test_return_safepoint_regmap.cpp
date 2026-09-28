@@ -267,6 +267,7 @@ GC_TEST(FramePrologue, DecodesSizeAndSavedSlots)
     GC_EXPECT_EQ(VarInt(prologue.GetNextTable()).GetValue().first, U32(7));
 }
 
+#if (defined(MRT_DEBUG) && (MRT_DEBUG == 1)) || defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 namespace {
 struct SafetyAssertionRendezvous {
     std::mutex mutex;
@@ -333,6 +334,8 @@ GC_TEST(StackWatermark, SafetyAssertionWaitsForProcessing)
     GC_EXPECT_FALSE(early);
     GC_EXPECT_TRUE(rendezvous.returned);
 }
+
+#endif
 
 GC_TEST(ReturnSafepointRegMap, OrdinaryCallRejectsRegisterRoot)
 {
