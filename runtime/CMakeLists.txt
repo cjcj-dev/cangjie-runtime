@@ -633,8 +633,16 @@ endif()
 
 install(TARGETS cangjie-runtime DESTINATION runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
 
+# Compiler copies of the generated ABI header must match these compiled assertions.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_custom_target(runtime-layout-check ALL
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/generate-runtime-layout.py
+    VERBATIM)
+add_dependencies(cangjie-runtime runtime-layout-check)
+
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/RuntimeConfig.h
         ${CMAKE_CURRENT_SOURCE_DIR}/src/Cangjie.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/CangjieRuntimeLayout.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/Interpreter/RuntimeAPI.h
         ${CMAKE_CURRENT_SOURCE_DIR}/include/Interpreter/RTInterface.h
         DESTINATION include)

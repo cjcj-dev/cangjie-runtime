@@ -22,7 +22,12 @@
 #include "MClass.inline.h"
 
 namespace MapleRuntime {
-constexpr MOffset MArray::GetContentOffset() { return sizeof(MArray); }
+constexpr MOffset MArray::GetContentOffset()
+{
+    static_assert(offsetof(MArray, length) == 8, "compiler layout ArrayLengthOffset");
+    static_assert(sizeof(MArray) == 16, "compiler layout ArrayHeaderSize");
+    return sizeof(MArray);
+}
 
 inline MIndex MArray::GetLength() const { return length; }
 

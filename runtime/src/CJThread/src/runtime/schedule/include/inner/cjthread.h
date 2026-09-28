@@ -181,11 +181,11 @@ struct CJThread {
 static_assert(offsetof(CJThread, thread) == CJTHREAD_THREAD_OFFSET, "CJThread.thread assembly ABI");
 static_assert(offsetof(CJThread, context) == CJTHREAD_CONTEXT_OFFSET, "CJThread.context assembly ABI");
 #if defined(__aarch64__)
-static_assert(offsetof(CJThread, id) == 0x1c8, "CJThread.id compiler ABI");
+static_assert(offsetof(CJThread, id) == 0x1c8, "compiler layout ThreadIdAArch64Offset");
 #elif defined(MRT_WINDOWS)
-static_assert(offsetof(CJThread, id) == 0x218, "CJThread.id compiler ABI");
+static_assert(offsetof(CJThread, id) == 0x218, "compiler layout ThreadIdWindowsX86Offset");
 #else
-static_assert(offsetof(CJThread, id) == 0x150, "CJThread.id compiler ABI");
+static_assert(offsetof(CJThread, id) == 0x150, "compiler layout ThreadIdX86Offset");
 #endif
 #endif
 

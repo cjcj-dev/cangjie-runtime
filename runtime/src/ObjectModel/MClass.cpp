@@ -1379,7 +1379,35 @@ struct ExtensionDataLayoutCheck {
     }
 };
 
+#endif
+
 struct TypeInfoLayoutCheck {
+    // AOT metadata producers use the order below. The runtime compiler checks the
+    // physical layout; generate-runtime-layout.py derives both indices and offsets.
+    // This is the 64-bit compiler ABI; ARM32 has a distinct pointer layout.
+#if UINTPTR_MAX == UINT64_MAX
+    static_assert(offsetof(TypeInfo, typeInfoName) == 0, "compiler TypeInfo field typeInfoName");
+    static_assert(offsetof(TypeInfo, type) == 8, "compiler TypeInfo field type");
+    static_assert(offsetof(TypeInfo, flag) == 9, "compiler TypeInfo field flag");
+    static_assert(offsetof(TypeInfo, fieldNum) == 10, "compiler TypeInfo field fieldNum");
+    static_assert(offsetof(TypeInfo, instanceSize) == 12, "compiler TypeInfo field instanceSize");
+    static_assert(offsetof(TypeInfo, gctib) == 16, "compiler TypeInfo field gctib");
+    static_assert(offsetof(TypeInfo, uuid) == 24, "compiler TypeInfo field uuid");
+    static_assert(offsetof(TypeInfo, align) == 28, "compiler TypeInfo field align");
+    static_assert(offsetof(TypeInfo, typeArgsNum) == 29, "compiler TypeInfo field typeArgsNum");
+    static_assert(offsetof(TypeInfo, validInheritNum) == 30, "compiler TypeInfo field validInheritNum");
+    static_assert(offsetof(TypeInfo, fieldOffsets) == 32, "compiler TypeInfo field fieldOffsets");
+    static_assert(offsetof(TypeInfo, sourceGeneric) == 40, "compiler TypeInfo field sourceGeneric");
+    static_assert(offsetof(TypeInfo, typeArgs) == 48, "compiler TypeInfo field typeArgs");
+    static_assert(offsetof(TypeInfo, fields) == 56, "compiler TypeInfo field fields");
+    static_assert(offsetof(TypeInfo, superTypeInfo) == 64, "compiler TypeInfo field superTypeInfo");
+    static_assert(offsetof(TypeInfo, vExtensionDataStart) == 72, "compiler TypeInfo field vExtensionDataStart");
+    static_assert(offsetof(TypeInfo, mTableDesc) == 80, "compiler TypeInfo field mTableDesc");
+    static_assert(offsetof(TypeInfo, reflectInfo) == 88, "compiler TypeInfo field reflectInfo");
+    static_assert(sizeof(TypeInfo) == 96, "compiler layout TypeInfoSize");
+#endif
+
+#ifdef INTERPRETER_ENABLED
     // Static layout checks: DYN_TypeInfo is a binary mirror of TypeInfo.
     static void CheckInterpreterMirror()
     {
@@ -1439,7 +1467,7 @@ struct TypeInfoLayoutCheck {
         static_assert(__builtin_offsetof(DYN_TypeInfo, reflectOrDebugInfo) == __builtin_offsetof(TypeInfo, reflectInfo),
             "reflectInfo offset mismatch");
     }
-};
 #endif
+};
 
 } // namespace MapleRuntime
