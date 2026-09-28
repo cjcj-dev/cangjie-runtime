@@ -32,5 +32,5 @@ GC_COMPONENT_TEST(ZRememberedSetShape, PageRememberPublishesCurrentBit)
     const bool remembered = page.is_remembered(field);
     std::fprintf(stderr, "PAGE_REMEMBER_CURRENT_ASSERT remembered=%d\n", remembered);
     GC_EXPECT_TRUE(remembered);
-    GC_EXPECT_FALSE(page.is_remembered_previous(field));
+    GC_EXPECT_FALSE(page.was_remembered(field));
 }
