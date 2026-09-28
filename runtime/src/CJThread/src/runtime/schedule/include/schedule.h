@@ -405,7 +405,6 @@ struct CJThreadSpecificDataInner {
  */
 enum CJThreadCreateSource {
     CJTHREAD_CREATE_SOURCE_DEFAULT = 0,     /* create cjthread from general use scenarios */
-    CJTHREAD_CREATE_SOURCE_SIGNAL = 1,      /* create cjthread from signal */
     CJTHREAD_CREATE_SOURCE_FINALIZER = 2,      /* create cjthread from finalizer */
 };
 

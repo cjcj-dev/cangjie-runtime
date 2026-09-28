@@ -28,9 +28,6 @@
 #include "Inspector/CjHeapData.h"
 #include "Heap/z/zDriver.hpp"
 #include "securec.h"
-#ifdef COV_SIGNALHANDLE
-extern "C" void __gcov_dump(void);
-#endif
 namespace MapleRuntime {
 
 namespace {
@@ -41,16 +38,6 @@ void WriteSigDiag(const char* buf, size_t len)
         return;
     }
     (void)write(STDERR_FILENO, buf, len);
-}
-
-// FLOG-compatible ERROR line without logMutex: "<tid> E <msg>\n"
-void LogErrorAsSafe(const char* msg)
-{
-    char buf[512];
-    int n = sprintf_s(buf, sizeof(buf), "%d E %s\n", static_cast<int>(GetTid()), msg);
-    if (n > 0) {
-        WriteSigDiag(buf, static_cast<size_t>(n));
-    }
 }
 
 // Fold free-text phase names into one key=value token (same rule as GcLog::Phase).
@@ -264,7 +251,8 @@ static void CheckStackOverflow(const siginfo_t& info)
     // HotSpot checks the current thread's red zone, not global VM initialization.
     // A signal can arrive while Runtime exists but its concurrency model does not.
     if (CJThreadIsStackGuardAddress(info.si_addr)) {
-        LogErrorAsSafe("unhandled SIGSEGV from unmanaged stack overflow!");
+        constexpr char message[] = "unhandled SIGSEGV from unmanaged stack overflow!\n";
+        (void)write(STDERR_FILENO, message, sizeof(message) - 1);
     }
 }
 
@@ -316,32 +304,24 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
 
 bool SignalManager::HandleUnexpectedSignal(int sig, siginfo_t* info, void* context)
 {
+    // signals_posix.cpp:637-641 platform step: AS-safe checks only.
+    // Crash text (PrintSignalHandlerStack/EmitCrashRec) is the fatal report
+    // at SignalStack::Handler, signals_posix.cpp:650-655.
+    (void)sig;
+    (void)info;
+    (void)context;
     CheckSuspendState();
-    // pc/fa/si_addr already emitted at HandlerImpl entry (before user handlers).
-#ifdef COV_SIGNALHANDLE
-    __gcov_dump();
-#endif
-
     return false;
 }
 
 void SignalManager::InstallUnexpectedSignalHandlers()
 {
-    sigset_t mask;
-    CHECK_SIGNAL_CALL(sigemptyset, (&mask), "sigemptyset failed");
-    SignalAction sa;
-    sa.saSignalAction= HandleUnexpectedSignal;
-    sa.scMask = mask;
-    sa.scFlags = SA_SIGINFO | SA_ONSTACK;
-
-    AddHandlerToSignalStack(SIGABRT, &sa);
-#ifdef __APPLE__
-    AddHandlerToSignalStack(SIGSEGV, &sa);
-#else
-    AddHandlerToSignalStack(SIGBUS, &sa);
-#endif
-    AddHandlerToSignalStack(SIGILL, &sa);
-    AddHandlerToSignalStack(SIGFPE, &sa);
+    SignalStack::InitializeSignalStack();
+    // Fixed platform dispatch, like pd_hotspot_signal_handler. These are OS
+    // registrations only; managed handlerStack is never read by fatal signals.
+    for (int sig : {SIGABRT, SIGBUS, SIGILL, SIGFPE, SIGTRAP}) {
+        SignalStack::GetStacks()[sig].MarkSig(sig);
+    }
 }
 
 void SignalManager::InstallSIGUSR1Handlers() const
@@ -439,13 +419,28 @@ bool SignalManager::HandleUnexpectedSIGUSR1(int sig, siginfo_t* info, void* cont
 // Handle unexpected SIGSEGV
 bool SignalManager::HandleUnexpectedSigsegv(int sig, siginfo_t* info, void* context)
 {
+    (void)sig;
+    (void)context;
     CheckSuspendState();
     // Do more functional things here.
     if (info != nullptr) {
         CheckStackOverflow(*info);
     }
-    // pc/fa/si_addr already emitted at HandlerImpl entry (before user handlers).
     return false;
+}
+
+// HotSpot signals_posix.cpp:637-641: one fixed platform step before chaining.
+// No managed callbacks, mutable handler container, allocation or VM lock.
+bool SignalManager::HandlePlatformSignal(int sig, siginfo_t* info, void* context)
+{
+#ifdef __APPLE__
+    if (sig == SIGBUS) {
+#else
+    if (sig == SIGSEGV) {
+#endif
+        return HandleUnexpectedSigsegv(sig, info, context);
+    }
+    return HandleUnexpectedSignal(sig, info, context);
 }
 
 void SignalManager::InstallSegvHandler()
@@ -471,16 +466,7 @@ void SignalManager::InstallSegvHandler()
         CHECK_SIGNAL_CALL(sigaltstack, (&ss, nullptr), "sigaltstack failed in InstallSegvHandler");
     }
 
-    CHECK_SIGNAL_CALL(sigemptyset, (&mask), "sigemptyset failed");
-    SignalAction unexcept;
-    unexcept.saSignalAction= HandleUnexpectedSigsegv;
-    unexcept.scMask = mask;
-    unexcept.scFlags = SA_RESTART | SA_SIGINFO | SA_ONSTACK;
-#ifdef __APPLE__
-    AddHandlerToSignalStack(SIGBUS, &unexcept);
-#else
-    AddHandlerToSignalStack(SIGSEGV, &unexcept);
-#endif
+    SignalStack::GetStacks()[SIGSEGV].MarkSig(SIGSEGV);
 }
 
 void SignalManager::AddHandlerToSignalStack(int signal, SignalAction* sa)

@@ -20,11 +20,9 @@ using sighandler_t = sig_t;
 
 namespace MapleRuntime {
 
-constexpr uint64_t SIGNAL_STACK_ALLOW_NORETURN = 0x1UL;
-
 class SignalStack {
 public:
-    SignalStack() noexcept : isMark(false), isUserSigHandler(false) {}
+    SignalStack() noexcept : isMark(false) {}
 
     bool IsMarked() { return isMark; }
 
@@ -36,13 +34,6 @@ public:
         }
     }
 
-    bool IsUserSigHandler() { return isUserSigHandler; }
-
-    void SetUserSigHandler(bool flag)
-    {
-        isUserSigHandler = flag;
-    }
-
     void Register(int signal);
 
     struct sigaction GetAction();
@@ -52,14 +43,15 @@ public:
     void RemoveHandler(bool (*fn)(int, siginfo_t*, void*));
 
     static void Handler(int signal, siginfo_t* siginfo, void* ucontextRaw);
-    static void HandlerImpl(void* args);
+    static void HandlerImpl(int signal);
+    static void* DispatchSignals(void*);
+    static void StartDispatcher();
+    static void StopDispatcher();
     static void InitializeSignalStack();
     static SignalStack* GetStacks() { return stacks; }
     struct sigaction sigAction;
 private:
     bool isMark;
-
-    bool isUserSigHandler;
 
     std::vector<SignalAction> handlerStack;
 #ifdef __APPLE__
