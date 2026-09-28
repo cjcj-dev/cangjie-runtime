@@ -54,8 +54,11 @@ def main():
             passed = run.returncode == 0
         else:
             passed = run.returncode == 0 and 'OHOS_HOST_LIBRARY_' not in run.stdout
+        probe = build / 'CMakeFiles/ohos-host-libraries/probe'
         results[case] = dict(rc=run.returncode, passed=passed,
-                             loader_observed='OHOS_HOST_LIBRARY_OK libc.so' in run.stdout)
+                             loader_observed='OHOS_HOST_LIBRARY_OK libc.so\n' in run.stdout,
+                             probe_sha256=hashlib.sha256(probe.read_bytes()).hexdigest()
+                             if probe.is_file() else None)
         print(f'OHOS_CONFIGURE_ASSERT case={case} rc={run.returncode} '
               f'status={"PASS" if passed else "FAIL"}', flush=True)
     paths = ['runtime/config.cmake', 'runtime/src/Signal/SignalStack.cpp',
