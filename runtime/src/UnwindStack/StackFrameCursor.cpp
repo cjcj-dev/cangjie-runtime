@@ -159,7 +159,9 @@ void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const Deri
 #else
     (void)visitor; (void)derivedPtrVisitor; (void)regSlotsMap; (void)frame;
 #endif
-    regSlotsMap = RegSlotsMap();
+    // The stub save stays on the walk map for the sender. HotSpot
+    // frame_x86.inline.hpp:455-460 updates the same RegisterMap; it does not
+    // clear it. stackWatermark.cpp:140 reads that map with update_registers.
 }
 
 bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
@@ -169,7 +171,7 @@ bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
         return false;
     }
 
-    ProcessFrame(*CurrentFrame(), regSlotsMap, visitor, mutator, derivedPtrVisitor, young);
+    ProcessFrame(*CurrentFrame(), RegMap(), visitor, mutator, derivedPtrVisitor, young);
     Advance();
     return true;
 }
@@ -198,7 +200,6 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
 #else
     if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
 #endif
-        regSlotsMap = RegSlotsMap();
         return;
     }
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
@@ -224,7 +225,6 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
                 reinterpret_cast<void*>(frameIP));
         }
     }
-    regSlotsMap = RegSlotsMap();
 }
 }
 

@@ -13,6 +13,7 @@
 #include "Common/BaseObject.h"
 #include "Common/StackType.h"
 #include "Interpreter/Options.h"
+#include "StackMap/StackMapTypeDef.h"
 
 namespace MapleRuntime {
 
@@ -39,6 +40,10 @@ public:
     void Rebase(intptr_t offset);
     bool IsDone() const { return done; }
     const FrameInfo& Current() const { return current.frameInfo; }
+    // One walk, one map. Next() publishes the callee's save locations for its sender.
+    // HotSpot stackFrameStream.cpp:28-32 / frame_x86.inline.hpp:455-460.
+    RegSlotsMap& RegisterMap() const { return regSlotsMap; }
+    void PublishCalleeRegisters(const FrameInfo& frame) const;
 
 protected:
     uint32_t n2cCount;
@@ -54,6 +59,7 @@ private:
     bool isReliableN2CStub;
     UnwindContext current;
     bool done = true;
+    mutable RegSlotsMap regSlotsMap;
 };
 
 class StackInfo : public StackFrameStream {

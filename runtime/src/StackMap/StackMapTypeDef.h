@@ -72,8 +72,6 @@ struct RegSlotsMap {
         addrMap[reg] = slot;
     }
 
-    inline void Erase(RegisterNum reg) { isRecorded[reg] = false; }
-
     bool VisitSingleSlotsRoot(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegisterNum reg,
                               std::list<BasePtrType>* rootsList = nullptr)
     {
@@ -88,7 +86,6 @@ struct RegSlotsMap {
             debugFunc(reg, addrMap[reg]->LoadPlain());
         }
         visitor(*addrMap[reg]);
-        Erase(reg);
         return true;
     }
 
@@ -105,7 +102,6 @@ struct RegSlotsMap {
         }
         visitor(*slot);
         visitor(*(slot + 1));
-        Erase(reg);
         return true;
     }
 };

@@ -209,9 +209,62 @@ void StackFrameStream::Start()
     if (!done) { AnalyseAndSetFrameType(current); }
 }
 
+void StackFrameStream::PublishCalleeRegisters(const FrameInfo& frame) const
+{
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    switch (frame.GetFrameType()) {
+        case FrameType::MANAGED: {
+            const uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
+#ifdef __APPLE__
+            if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
+#else
+            if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
+#endif
+                regSlotsMap = RegSlotsMap();
+                return;
+            }
+            StackPtrMap pointers = StackMapBuilder(startIP,
+                reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<StackPtrMap>();
+            pointers.RecordCalleeSaved(regSlotsMap);
+            regSlotsMap.allRegistersSaved = false;
+            break;
+        }
+        case FrameType::SAFEPOINT:
+        case FrameType::RETURN_SAFEPOINT:
+        case FrameType::STACKGROW:
+            RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+#ifdef __arm__
+        case FrameType::C2R_STUB:
+            RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+        case FrameType::C2N_STUB:
+            RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+        case FrameType::EXSLUSIVE:
+            RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+#else
+        case FrameType::C2R_STUB:
+        case FrameType::C2N_STUB:
+        case FrameType::EXSLUSIVE:
+#ifdef INTERPRETER_ENABLED
+        case FrameType::INTERPRETER_C2I:
+#endif
+            RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+#endif
+        default:
+            regSlotsMap = RegSlotsMap();
+            break;
+    }
+}
+
 void StackFrameStream::Next()
 {
     if (done) { return; }
+    PublishCalleeRegisters(current.frameInfo);
     ElfUnloadQuiescence::ReadScope metadataReader;
     lastFrameType = current.frameInfo.GetFrameType();
     UnwindContext caller;
@@ -235,6 +288,12 @@ void StackFrameStream::Rebase(intptr_t offset)
     MachineFrame& frame = current.frameInfo.mFrame;
     frame.SetFA(reinterpret_cast<FrameAddress*>(reinterpret_cast<uintptr_t>(frame.GetFA()) + offset));
     if (frame.GetSP() != 0) { frame.SetSP(frame.GetSP() + offset); }
+    for (size_t i = 0; i < REGISTERS_COUNT; ++i) {
+        if (regSlotsMap.isRecorded[i] && regSlotsMap.addrMap[i] != nullptr) {
+            regSlotsMap.addrMap[i] = reinterpret_cast<SlotAddress>(
+                reinterpret_cast<uintptr_t>(regSlotsMap.addrMap[i]) + offset);
+        }
+    }
 }
 
 void StackInfo::ProcessOnIteration(const FrameInfo& frame)

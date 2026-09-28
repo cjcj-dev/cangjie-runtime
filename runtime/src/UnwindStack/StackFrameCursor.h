@@ -36,17 +36,8 @@ public:
             ++index;
         }
     }
-    RegSlotsMap& RegMap() { return regSlotsMap; }
-    void Rebase(intptr_t offset)
-    {
-        stream.Rebase(offset);
-        for (size_t i = 0; i < REGISTERS_COUNT; ++i) {
-            if (regSlotsMap.isRecorded[i] && regSlotsMap.addrMap[i] != nullptr) {
-                regSlotsMap.addrMap[i] = reinterpret_cast<SlotAddress>(
-                    reinterpret_cast<uintptr_t>(regSlotsMap.addrMap[i]) + offset);
-            }
-        }
-    }
+    RegSlotsMap& RegMap() { return stream.RegisterMap(); }
+    void Rebase(intptr_t offset) { stream.Rebase(offset); }
 
     // Process exactly one frame (barrier-frame or stub bookkeeping), advance cursor.
     // Returns false when already done.
@@ -85,7 +76,6 @@ public:
 
 private:
     StackFrameStream stream;
-    RegSlotsMap regSlotsMap;
     size_t index = 0;
 };
 
