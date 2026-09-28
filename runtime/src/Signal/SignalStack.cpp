@@ -204,7 +204,8 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context);
 void SignalStack::Handler(int signal, siginfo_t* siginfo, void* ucontextRaw)
 {
     LogHandleSignalAsSafe(signal);
-    // Crash-family diagnostics must complete before HandlerImpl can be dispatched asynchronously.
+    // HotSpot signals_posix.cpp:642-654: fatal handling stays on the signal
+    // thread, before any managed dispatch or safepoint transition.
     switch (signal) {
         case SIGSEGV:
         case SIGBUS:
@@ -213,7 +214,8 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* ucontextRaw)
         case SIGABRT:
         case SIGTRAP:
             PrintSignalHandlerStack(signal, siginfo, ucontextRaw);
-            break;
+            RaiseDefaultAsSafe(signal);
+            return;
         default:
             break;
     }
@@ -223,44 +225,11 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* ucontextRaw)
         RaiseDefaultAsSafe(signal);
         return;
     }
-    switch (signal) {
-        case SIGSEGV:
-        case SIGBUS:
-        case SIGFPE:
-            HandlerImpl(args);
-            break;
-        case SIGABRT:
-        case SIGILL:
-            // By default, handle SIGABRT and SIGILL signals synchronously;
-            // when the user registers a handler, handle SIGABRT and SIGILL signals asynchronously.
-            if (!SignalStack::stacks[signal].IsUserSigHandler()) {
-                HandlerImpl(args);
-            } else {
-                args->isAsync = true;
-                if (RunCJTaskSignal(reinterpret_cast<CJTaskFunc>(
-                                    MapleRuntime::SignalStack::HandlerImpl),
-                                    args) == NULL) {
-                    WriteAsSafeCStr("Signal Handler fail. as RunCJTask return null\n");
-                    ReleaseSignalArgs(args);
-                }
-            }
-            break;
-        default:
-            args->isAsync = true;
-            if (RunCJTaskSignal(reinterpret_cast<CJTaskFunc>(MapleRuntime::SignalStack::HandlerImpl), args) == NULL) {
-                WriteAsSafeCStr("Signal Handler fail. as RunCJTask return null\n");
-                ReleaseSignalArgs(args);
-            }
+    args->isAsync = true;
+    if (RunCJTaskSignal(reinterpret_cast<CJTaskFunc>(MapleRuntime::SignalStack::HandlerImpl), args) == NULL) {
+        WriteAsSafeCStr("Signal Handler fail. as RunCJTask return null\n");
+        ReleaseSignalArgs(args);
     }
-}
-
-// Hard faults must never resume the faulting PC and must never enter managed
-// user handlers (stdlib synchronized(mtx) + eprintln can hang; saSignalAction
-// return-true resumes the faulting instruction → SEGV masked as timeout).
-// Diagnostics (pc/fa/si_addr) already emitted; terminate with SIG_DFL+raise.
-static bool IsHardFaultSignal(int signal)
-{
-    return signal == SIGSEGV || signal == SIGBUS || signal == SIGILL || signal == SIGFPE;
 }
 
 void SignalStack::HandlerImpl(void* args)
@@ -270,15 +239,6 @@ void SignalStack::HandlerImpl(void* args)
     int signal = signalArgs->signal;
     siginfo_t* siginfo = &signalArgs->siginfo;
     void* ucontextRaw = &signalArgs->ucontext;
-    if (IsHardFaultSignal(signal)) {
-        // Nested hard-fault while already handling: do not re-enter user code.
-        if (GetHandlingSignal()) {
-            WriteAsSafeCStr("nested hard-fault signal; terminating\n");
-        }
-        ReleaseSignalArgs(signalArgs);
-        RaiseDefaultAsSafe(signal);
-        return;
-    }
     // Check if we are already handling a signal
     if (!GetHandlingSignal()) {
         std::vector<SignalAction>& handlerStack = SignalStack::stacks[signal].handlerStack;
