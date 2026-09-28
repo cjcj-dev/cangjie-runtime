@@ -23,7 +23,8 @@ private:
 
 class HandshakeOperation {
 public:
-    HandshakeOperation(HandshakeClosure* cl, Mutator* target) : cl_(cl), target_(target) {}
+    HandshakeOperation(HandshakeClosure* cl, Mutator* target);
+    void prepare(Mutator* target, Mutator* executingThread);
     HandshakeClosure* closure() const { return cl_; }
     Mutator* target() const { return target_; }
     void do_handshake(Mutator* thread);
@@ -33,6 +34,7 @@ public:
 private:
     HandshakeClosure* cl_;
     Mutator* target_;
+    Mutator* requester_;
     std::atomic<size_t> pending_{1};
 };
 
@@ -48,7 +50,7 @@ public:
     HandshakeOperation* get_op_for_self();
     HandshakeOperation* get_op();
     void remove_op(HandshakeOperation* op);
-    void process_by_self();
+    bool process_by_self();
     bool try_process();
     bool claim_handshake();
     bool possibly_can_process();
@@ -78,6 +80,7 @@ void ConsumeCpuProfileRequest(Mutator* mutator);
 bool ClaimCpuProfileRequest(Mutator* mutator);
 void CompleteCpuProfileRequest(Mutator* mutator);
 bool CpuProfileRequestQueued(const Mutator* mutator);
+void ProcessSafepointIfRequested(ThreadLocalData* tls);
 void UpdatePollValues(ThreadLocalData* tls);
 bool HasPendingSafepoint(ThreadLocalData* tls);
 bool GlobalPoll();

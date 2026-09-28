@@ -191,12 +191,9 @@ public:
         }
         if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
             preprocess();
-            HandleSuspensionRequest();
+            ArmThreadPoll(ThreadLocal::GetThreadLocalData());
         }
-        // javaThread.cpp:1112 then stackWatermark.inline.hpp:86. Start processing
-        // first; before_unwind only exposes a frame when one is still open.
-        StackWatermarkSet::on_safepoint(*this);
-        StackWatermarkSet::before_unwind(*this);
+        ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
     }
 
     __attribute__((always_inline)) inline void DoLeaveSaferegion()

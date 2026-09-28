@@ -101,6 +101,9 @@ extern "C" ThreadLocalData* MRT_C2N_Leave(bool safeState, unsigned long long sta
     if (safeState) {
         // Step 1: LeaveSaferegion - includes suspension request check
         mutator->LeaveSaferegion();
+        // HotSpot javaThread.cpp:1112-1118: only native -> managed exposes
+        // the caller frame after request processing.
+        StackWatermarkSet::before_unwind(*mutator);
     }
 
     // Step 2: DeleteC2NContext - restore unwind context status to RELIABLE

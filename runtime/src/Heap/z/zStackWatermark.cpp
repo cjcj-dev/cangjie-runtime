@@ -353,6 +353,7 @@ bool StackWatermark::is_frame_safe(const FrameInfo& frame) const
 
 void StackWatermark::ensure_safe(const FrameInfo& frame)
 {
+    CHECK_DETAIL(processing_started(), "Processing should already have started");
     if (IsDone(epoch_id())) { return; }
     // real_fp in HotSpot is the sender's SP, not the machine frame pointer.
     const uintptr_t senderSP = frame.CallerSP();
@@ -381,7 +382,8 @@ void StackWatermark::before_unwind()
     // stackWatermark.inline.hpp:86-106. Processing was started by on_safepoint
     // (javaThread.cpp:1112). A finished watermark has nothing to expose, and a
     // runtime leave has no Java frame: do not classify it.
-    if (!processing_started() || IsDone() || !HasExposableFrame(owner)) {
+    CHECK_DETAIL(processing_started(), "Processing should already have started");
+    if (IsDone() || !HasExposableFrame(owner)) {
         return;
     }
     StackFrameStream frames(&owner.GetUnwindContext());
@@ -399,7 +401,8 @@ void StackWatermark::after_unwind()
     O5ModeScope o5m(4);
 #endif
     // stackWatermark.inline.hpp:109-124.
-    if (!processing_started() || IsDone() || !HasExposableFrame(owner)) {
+    CHECK_DETAIL(processing_started(), "Processing should already have started");
+    if (IsDone() || !HasExposableFrame(owner)) {
         return;
     }
     StackFrameStream frames(&owner.GetUnwindContext());
@@ -409,15 +412,14 @@ void StackWatermark::after_unwind()
 }
 
 // stackWatermark.inline.hpp:70-71,127-131: on_iteration assumes processing has
-// already been started by on_safepoint; a watermark that never started exposes
-// nothing and has no iterator to walk. Same guard shape as before_unwind /
-// after_unwind above.
+// already been started before a frame is exposed.
 void StackWatermark::on_iteration(const FrameInfo& frame)
 {
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     O5ModeScope o5m(6);
 #endif
-    if (!processing_started() || IsDone() || !HasExposableFrame(owner)) { return; }
+    CHECK_DETAIL(processing_started(), "Processing should already have started");
+    if (IsDone() || !HasExposableFrame(owner)) { return; }
     ensure_safe(frame);
 }
 

@@ -211,7 +211,6 @@ void Mutator::SetManagedContext(bool isManagedContext)
 void Mutator::HandleSuspensionRequest()
 {
     for (;;) {
-        Handshake::Current().process_by_self();
         SetInSaferegion(SAFE_REGION_TRUE);
         MarkFlushOnEnterSaferegion();
         if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
