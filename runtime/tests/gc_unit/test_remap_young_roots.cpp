@@ -205,6 +205,32 @@ public:
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+// handshake.cpp:317-320,337-340: a pinned identity can retire before a
+// queued operation is claimed; completion still releases its requester.
+GC_TEST(SafepointHandshakeOrder, DetachedTargetCompletesWithoutExposingRoots)
+{
+    HandshakeRuntime host;
+    Mutator owner;
+    class Observe final : public HandshakeClosure {
+    public:
+        Observe() : HandshakeClosure("K3-detached") {}
+        void do_thread(Mutator*) override { invoked = true; }
+        bool invoked = false;
+    } closure;
+    HandshakeOperation operation(&closure, &owner);
+    owner.GetHandshakeState().add_operation(&operation);
+    const uint32_t saved = *ZPointerStoreGoodMaskLowOrderBitsAddr;
+    *ZPointerStoreGoodMaskLowOrderBitsAddr = saved ^ 1;
+    owner.SetGCDetached();
+    const uint32_t before = owner.GetStackWatermark().PackedState();
+    const bool claimed = owner.GetHandshakeState().try_process();
+    const bool unchanged = before == owner.GetStackWatermark().PackedState();
+    *ZPointerStoreGoodMaskLowOrderBitsAddr = saved;
+    std::fprintf(stderr, "K3_DETACHED_ASSERT claimed=%d completed=%d invoked=%d unchanged=%d\n",
+                 claimed, operation.is_completed(), closure.invoked, unchanged);
+    GC_EXPECT_TRUE(claimed && operation.is_completed() && !closure.invoked && unchanged);
+}
+
 // No-frame threads still pass through the product head-processing entry.
 GC_TEST(StackWatermark, PackedEpochDoneIsIdempotent)
 {
@@ -442,7 +468,8 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     Handshake::Current().add_operation(&coldOp);
     HandleReturnSafepoint(tls);
     const BaseObject* coldValue = to_object(safe(RootSlotAt(StubSlot(stub, kReturnSlot)).LoadPlain()));
-    GC_EXPECT_TRUE(cold.rewritten);
+    std::fprintf(stderr, "K3_RETURN_WRITEBACK_ASSERT phase=first rewritten=%d value=%p expected=%p\n",
+                 cold.rewritten, coldValue, replaced);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(coldValue), reinterpret_cast<uintptr_t>(replaced));
     GC_EXPECT_TRUE(owner.GetStackWatermark().is_frame_safe(callerFrame));
     std::fprintf(stderr, "RETURN_ROOT_RESULT phase=cold value=%p safe=1\n", coldValue);
@@ -452,7 +479,8 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     Handshake::Current().add_operation(&warmOp);
     HandleReturnSafepoint(tls);
     const BaseObject* warmValue = to_object(safe(RootSlotAt(StubSlot(stub, kReturnSlot)).LoadPlain()));
-    GC_EXPECT_TRUE(warm.rewritten);
+    std::fprintf(stderr, "K3_RETURN_WRITEBACK_ASSERT phase=repeat rewritten=%d value=%p expected=%p\n",
+                 warm.rewritten, warmValue, replaced);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(warmValue), reinterpret_cast<uintptr_t>(replaced));
     GC_EXPECT_TRUE(owner.GetStackWatermark().is_frame_safe(callerFrame));
     std::fprintf(stderr, "RETURN_ROOT_RESULT phase=started value=%p safe=1\n", warmValue);

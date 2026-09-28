@@ -31,6 +31,7 @@ HandshakeOperation::HandshakeOperation(HandshakeClosure* cl, Mutator* target)
 // and handles owned by the requester, before either thread resumes.
 void HandshakeOperation::prepare(Mutator* target, Mutator* executingThread)
 {
+    if (target != nullptr && target->IsGCDetached()) { return; }
     if (target != nullptr && target != executingThread) {
         StackWatermarkSet::start_processing(*target);
     }
@@ -41,7 +42,7 @@ void HandshakeOperation::prepare(Mutator* target, Mutator* executingThread)
 
 void HandshakeOperation::do_handshake(Mutator* thread)
 {
-    cl_->do_thread(thread);
+    if (thread == nullptr || !thread->IsGCDetached()) { cl_->do_thread(thread); }
     pending_.fetch_sub(1, std::memory_order_release);
 }
 
