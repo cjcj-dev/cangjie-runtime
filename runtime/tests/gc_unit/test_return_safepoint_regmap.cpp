@@ -13,9 +13,15 @@
 #include "CangjieRuntime.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/ThreadLocal.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/GcStackInfo.h"
 #include "UnwindStack/StackFrameCursor.h"
+#include "UnwindStack/StackGrowStackInfo.h"
+#include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zAddress.inline.hpp"
+
+extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
 #include "gc_unittest.hpp"
 
 #if defined(__linux__)
@@ -108,33 +114,128 @@ struct GrowOff {
 
 } // namespace
 
+namespace {
+// Metadata and frame bytes are inputs; all classification, unwinding, location
+// propagation and pointer consumption happen in the linked product SO.
+struct PointerChain {
+    Descriptor desc {};
+    alignas(16) uintptr_t frames[14][64] {};
+    StackGrowConfig savedGrow = CangjieRuntime::stackGrowConfig;
+    uint32_t savedEpoch = *ZPointerStoreGoodMaskLowOrderBitsAddr;
+    Mutator owner;
+    Mutator* savedMutator = ThreadLocal::GetThreadLocalData()->mutator;
+    uintptr_t* expectedSlot;
+    uintptr_t target;
+
+    explicit PointerChain(bool returning)
+    {
+        ThreadLocal::GetThreadLocalData()->SetMutator(&owner);
+        CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON;
+        desc.descriptorOffset = reinterpret_cast<char*>(&desc.stackMapOffset) -
+            reinterpret_cast<char*>(&desc.descriptorOffset);
+        desc.stackMapOffset = reinterpret_cast<char*>(desc.bits) - reinterpret_cast<char*>(&desc.stackMapOffset);
+        Bits bits {desc.bits};
+        // R13's prologue slot is fp-24. PC0 has no incoming stack pointer;
+        // PC16 names R13. GC roots are only the zero-valued fp-16 slots.
+        bits.Var(0); bits.Var(0); bits.Var(4); bits.Var(3);
+        bits.Var(2); bits.Var(0); bits.Var(1); bits.Var(0); bits.Var(0); bits.Var(1); bits.Var(0); bits.Var(0);
+        bits.Put(0, 32); bits.Put(1, 1); bits.Put(0, 1);
+        bits.Put(16, 32); bits.Put(1, 1); bits.Put(1, 1);
+        bits.Var(1); bits.Var(16); bits.Put(1u << R13, 16);
+        bits.Var(1); bits.Var(8); bits.Var(1); bits.Put(0xf0, 8); bits.Put(1, 1);
+        bits.Var(0); bits.Var(0); bits.Var(0);
+        ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(desc.pc));
+        for (unsigned i = 1; i < 14; ++i) {
+            frames[i][55] = reinterpret_cast<uintptr_t>(desc.pc) + 9;
+            frames[i][56] = i + 1 < 14 ? reinterpret_cast<uintptr_t>(&frames[i + 1][56]) : 0;
+            frames[i][57] = reinterpret_cast<uintptr_t>(desc.pc + 4);
+        }
+        target = reinterpret_cast<uintptr_t>(&frames[8][54]);
+        auto& context = owner.GetUnwindContext();
+        if (returning) {
+            auto* stub = &frames[0][56];
+            stub[0] = reinterpret_cast<uintptr_t>(&frames[1][56]);
+            stub[1] = reinterpret_cast<uintptr_t>(desc.pc + 4);
+            *StubSlot(stub, R10) = reinterpret_cast<uintptr_t>(desc.pc);
+            *StubSlot(stub, R11) = reinterpret_cast<uintptr_t>(desc.pc);
+            expectedSlot = StubSlot(stub, R13);
+            // A consumer that overwrites the incoming map with this prologue
+            // first will resolve a different slot and miss the distant frame.
+            frames[1][53] = reinterpret_cast<uintptr_t>(&frames[3][54]);
+            context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(stub));
+            context.frameInfo.mFrame.SetIP(&unwindPCForReturnSafepointHandlerStub);
+        } else {
+            expectedSlot = &frames[1][53];
+            context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frames[1][56]));
+            context.frameInfo.mFrame.SetIP(desc.pc);
+        }
+        *expectedSlot = target;
+        context.frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(frames));
+        context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+        owner.SetManagedContext(true);
+        owner.SetStackTopAddr(reinterpret_cast<uintptr_t>(frames));
+        owner.SetStackSize(sizeof(frames));
+        *ZPointerStoreGoodMaskLowOrderBitsAddr = savedEpoch == 7 ? 8 : 7;
+    }
+    ~PointerChain()
+    {
+        ThreadLocal::GetThreadLocalData()->SetMutator(savedMutator);
+        CangjieRuntime::stackGrowConfig = savedGrow;
+        *ZPointerStoreGoodMaskLowOrderBitsAddr = savedEpoch;
+    }
+
+    void CheckWatermark()
+    {
+        // Real phase entrance -> start_processing -> Next -> process_frame ->
+        // VisitStackPointerRegs. Observe the frontier computed from its value.
+        StackWatermarkSet::on_safepoint(owner);
+        const uintptr_t frontier = owner.GetStackWatermark().last_processed_raw();
+        const bool bounded = !owner.GetStackWatermark().IsDone();
+        std::fprintf(stderr, "WATERMARK_POINTER_TARGET frontier=%p target=%p bounded=%d\n",
+            reinterpret_cast<void*>(frontier), reinterpret_cast<void*>(target), bounded);
+        GC_EXPECT_TRUE(frontier > target);
+        GC_EXPECT_TRUE(bounded);
+    }
+    void CheckGrow()
+    {
+        StackGrowStackInfo grow(&owner.GetUnwindContext());
+        grow.FillInStackTrace();
+        uintptr_t observedSlot = 0;
+        uintptr_t observedValue = 0;
+        StackPtrVisitor pointer = [&](ObjectRef& slot) {
+            // Ignore frame links: the pointer value uniquely identifies R13.
+            if (raw(slot.LoadPlain()) == target) {
+                observedSlot = reinterpret_cast<uintptr_t>(&slot);
+                observedValue = raw(slot.LoadPlain());
+            }
+        };
+        grow.RecordStackPtrs([](ObjectRef&) {}, pointer, [](BasePtrType, DerivedSlot&) {}, owner);
+        std::fprintf(stderr, "GROW_POINTER_TARGET slot=%p expected=%p value=%p target=%p\n",
+            reinterpret_cast<void*>(observedSlot), expectedSlot,
+            reinterpret_cast<void*>(observedValue), reinterpret_cast<void*>(target));
+        GC_EXPECT_EQ(observedSlot, reinterpret_cast<uintptr_t>(expectedSlot));
+        GC_EXPECT_EQ(observedValue, target);
+    }
+};
+}
+
 GC_TEST(ReturnSafepointRegMap, SenderKeepsStubSlot)
 {
-    GrowOff grow;
-    static Descriptor desc;
-    InitDescriptor(desc, 0);
-    alignas(16) uintptr_t storage[128] {};
-    uintptr_t* fp = &storage[56];
-    const uintptr_t sentinel = 0x10000 + R12 * 16;
-    *StubSlot(fp, R12) = sentinel;
-    UnwindContext context{};
-    GCStackInfo stack(&context);
-    PlantReturnFrame(stack, fp, desc.pc);
-    RootVisitor ignore = [](RootSlot&) {};
-    Mutator mutator;
-    StackFrameCursor cursor(stack.GetStack());
-    cursor.ProcessAll(ignore, mutator);
-    const RegSlotsMap& map = cursor.RegMap();
-    const uintptr_t slot = reinterpret_cast<uintptr_t>(map.addrMap[R12]);
-    const uintptr_t expected = reinterpret_cast<uintptr_t>(StubSlot(fp, R12));
-    std::fprintf(stderr, "SENDER_SLOT_TARGET slot=%p expected=%p value=%p flag=%d\n",
-        reinterpret_cast<void*>(slot), reinterpret_cast<void*>(expected),
-        slot == 0 ? nullptr : reinterpret_cast<void*>(*reinterpret_cast<uintptr_t*>(slot)),
-        map.allRegistersSaved ? 1 : 0);
-    std::fprintf(stderr, "TARGET_ASSERT_EXECUTED SenderKeepsStubSlot\n");
-    GC_EXPECT_EQ(slot, expected);
-    GC_EXPECT_EQ(*reinterpret_cast<uintptr_t*>(slot), sentinel);
-    GC_EXPECT_FALSE(map.allRegistersSaved);
+    PointerChain chain(true);
+    chain.CheckWatermark();
+    chain.CheckGrow();
+}
+
+GC_TEST(ReturnSafepointRegMap, PrologueReachesWatermark)
+{
+    PointerChain chain(false);
+    chain.CheckWatermark();
+}
+
+GC_TEST(ReturnSafepointRegMap, PrologueReachesStackGrow)
+{
+    PointerChain chain(false);
+    chain.CheckGrow();
 }
 
 GC_TEST(ReturnSafepointRegMap, OrdinaryCallRejectsRegisterRoot)

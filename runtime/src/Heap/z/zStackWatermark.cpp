@@ -509,8 +509,7 @@ void ZStackWatermark::start_processing_impl(void* context)
                         snap.vals[a] = raw(s.LoadPlain()) | 0x1; // register-root location marker (low bit)
                     }
                 };
-                StackFrameCursor::ProcessFrame(f, cur.RegMap(), rec, owner, &noDerived, false);
-                cur.Advance();
+                cur.ProcessOne(rec, owner, &noDerived, false);
             }
         }
         O5Count(C_SNAPS);
