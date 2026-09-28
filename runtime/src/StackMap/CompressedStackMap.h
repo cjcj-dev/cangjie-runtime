@@ -15,7 +15,6 @@
 #include "StackMap/DerivedPtr.h"
 #include "StackMap/SlotRoot.h"
 #include "StackMap/StackMapTable.h"
-#include "StackMap/StackSizeVarInt.h"
 #ifdef __aarch64__
 #include "StackMap/StackMapAarch64.h"
 #elif defined (__arm__)
