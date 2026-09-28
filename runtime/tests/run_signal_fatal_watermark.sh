@@ -17,5 +17,5 @@ clang++ -std=c++17 -O0 -g -pthread -fno-rtti \
     -L"$GCV2_RUNTIME_LIB_DIR" -lcangjie-runtime -lboundscheck -ldl \
     -o "$SIGNAL_TEST_OUTPUT/signal-fatal-watermark"
 sha256sum "$SIGNAL_TEST_OUTPUT/signal-fatal-watermark" > "$SIGNAL_TEST_OUTPUT/elf.sha256"
-git -C "$repo" rev-parse HEAD > "$SIGNAL_TEST_OUTPUT/elf.head"
+git -C "$repo" rev-parse HEAD > "$SIGNAL_TEST_OUTPUT/elf.head" 2>/dev/null || echo no-git > "$SIGNAL_TEST_OUTPUT/elf.head"
 cat "$SIGNAL_TEST_OUTPUT/elf.sha256" "$SIGNAL_TEST_OUTPUT/elf.head"

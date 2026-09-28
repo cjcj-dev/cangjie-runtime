@@ -1,11 +1,12 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # Licensed under Apache-2.0 with Runtime Library Exception.
-# Inject FATAL only at a real GC watermark entry after its mutex is acquired.
-# Verdicts derive from the inferior's own state (pid liveness, post-injection
-# stack, mutex owner), never from gdb-internal messages alone.
+# Deliver SIGABRT to a thread verifiably holding the StackWatermark mutex,
+# using gdb's `signal` command (kernel-level delivery on resume), so no
+# inferior function call is in flight and termination is observed cleanly.
+# Verdicts derive from the inferior's own state (gdb's termination report,
+# pid liveness), never from gdb-internal messages alone.
 import gdb
 import os
-import signal
 
 for cmd in ['set pagination off', 'set confirm off', 'set breakpoint pending on',
             'set print thread-events off', 'handle SIGUSR1 nostop noprint pass',
@@ -18,9 +19,17 @@ for cmd in ['set pagination off', 'set confirm off', 'set breakpoint pending on'
 def inferior_alive(pid):
     if pid <= 0:
         return False
-    if gdb.selected_inferior().pid == 0:
+    try:
+        if gdb.selected_inferior().pid == 0:
+            return False
+    except gdb.error:
         return False
-    return os.path.exists('/proc/%d' % pid)
+    try:
+        with open('/proc/%d/stat' % pid) as stat:
+            state = stat.read().rsplit(')', 1)[1].split()[0]
+        return state != 'Z'
+    except OSError:
+        return False
 
 
 class OwnerEntry(gdb.Breakpoint):
@@ -57,8 +66,11 @@ try:
     owner = OwnerEntry('MapleRuntime::ZStackWatermark::start_processing_impl(void*)')
     gdb.execute('continue')
     owner.delete()
-    gdb.execute('set scheduler-locking on')
+    # The selected thread entered start_processing_impl from LeaveSaferegion;
+    # StackWatermark::start_processing (zStackWatermark.cpp:319) already holds
+    # the mutex. Verify ownership against this OS thread before injection.
     wm = gdb.parse_and_eval('this')
+    print('WATERMARK_THIS=%#x' % int(wm), flush=True)
     injected_tid = gdb.selected_thread().ptid[1]
     lock_owner = int(wm['lock']['_M_mutex']['__data']['__owner'])
     print('WATERMARK_LOCK_TARGET owner=%d tid=%d held=%d'
@@ -67,39 +79,18 @@ try:
         print('GDB_ERROR lock not owned by injected thread', flush=True)
         gdb.execute('quit 5')
 
-    sig = int(os.environ.get('FATAL_SIGNAL', '6'))
-    print('FATAL_INJECTING signal=%d' % sig, flush=True)
-    try:
-        if sig == 6:
-            gdb.execute('call MapleRuntime::Logger::GetLogger().FormatLog(RTLOG_FATAL, false, "FATAL_WATERMARK_1253")')
-        else:
-            gdb.execute('call (int)raise(%d)' % sig)
-    except gdb.error as err:
-        # Raised both when the inferior died mid-call (correct fatal path:
-        # diagnostics then default raise) and when the checker SIGINT-stopped
-        # a surviving inferior for stack capture. Distinguished by liveness.
-        print('GDB_CALL_ENDED: %s' % str(err).strip().splitlines()[0], flush=True)
-
+    sig = os.environ.get('FATAL_SIGNAL', '6')
+    print('FATAL_INJECTING signal=%s' % sig, flush=True)
+    # `signal` resumes the inferior delivering the signal to this thread
+    # before it executes another instruction, while it still holds the lock.
+    # Returns only if the process survives or stops; a hang never returns and
+    # is captured by the checker (SIGKILL of gdb + fresh attach).
+    gdb.execute('signal %s' % sig)
     if not inferior_alive(pid):
         print('INFERIOR_TERMINATED pid=%d' % pid, flush=True)
         gdb.execute('quit 0')
-
-    # The inferior survived the fatal signal: capture the post-injection stack
-    # and this same thread's mutex owner. owner == waiter proves same-thread
-    # reentry, not a scheduler-locking artifact.
-    print('WATERMARK_POSTINJECT_STACK', flush=True)
-    trace = gdb.execute('bt 30', to_string=True)
-    for line in trace.splitlines():
-        print('POSTINJECT| ' + line, flush=True)
-    owner_now = int(wm['lock']['_M_mutex']['__data']['__owner'])
-    waiter_now = gdb.selected_thread().ptid[1]
-    print('WATERMARK_SELFLOCK owner=%d waiter=%d same=%d'
-          % (owner_now, waiter_now, owner_now == waiter_now), flush=True)
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
-    gdb.execute('quit 3' if owner_now == waiter_now else 'quit 4')
+    print('GDB_ERROR inferior survived fatal signal without termination', flush=True)
+    gdb.execute('quit 4')
 except gdb.error as err:
     print('GDB_ERROR %s' % str(err).strip().splitlines()[0], flush=True)
     gdb.execute('quit 4')

@@ -2,16 +2,18 @@
 # Acceptance for cangjie-runtime#1253. All arms share one test ELF (built by
 # run_signal_fatal_watermark.sh); the product SO is selected per arm through
 # LD_LIBRARY_PATH.
-#   arm watermark: SIGABRT(FATAL) while this thread owns the StackWatermark
-#       mutex must print the FATAL text and terminate the inferior, never
-#       self-lock. A surviving inferior is SIGINT-stopped before any timeout
-#       cleanup so its post-injection stack and the mutex owner are captured.
+#   arm watermark: SIGABRT delivered to a thread holding the StackWatermark
+#       mutex must print the fatal diagnostics and terminate the inferior,
+#       never self-lock. Termination is proven by gdb's own
+#       "Program terminated with signal" report plus pid death. An inferior
+#       surviving FATAL_POST_WAIT is a hang: the injecting gdb is SIGKILLed
+#       (the tracee resumes, still hung) and a fresh gdb attach captures the
+#       blocked thread's stack and the mutex owner (same-thread reentry).
 #   arm normal: a non-fatal signal (SIGUSR1) must still reach the registered
 #       user handler (non-regression of the managed dispatch path).
 # Env: SIGNAL_TEST_OUTPUT (dir with the built ELF), ARM_LIB_DIR (product SO
 #      dir of this arm), ARM_NAME, FATAL_TIMEOUT (s, def 90),
-#      FATAL_POST_WAIT (s between lock-verified injection and the SIGINT
-#      capture of a surviving inferior, def 15).
+#      FATAL_POST_WAIT (s after injection before declaring a hang, def 15).
 set -uo pipefail
 ulimit -c 0
 : "${SIGNAL_TEST_OUTPUT:?}" "${ARM_LIB_DIR:?}" "${ARM_NAME:?}"
@@ -23,6 +25,11 @@ bin="$arm_dir/signal-fatal-watermark"
 cp "$srcbin" "$bin"
 timeout_s=${FATAL_TIMEOUT:-90}
 post_wait=${FATAL_POST_WAIT:-15}
+
+pid_state() { # prints R/S/t/Z... or empty when gone
+    [ -n "$1" ] && [ -r "/proc/$1/stat" ] || return 1
+    sed -n 's/.*) \([A-Za-z]\) .*/\1/p' "/proc/$1/stat"
+}
 
 # Identity actually used by this arm: the copied single ELF, the selected SOs,
 # and the loader resolution with this arm's LD_LIBRARY_PATH.
@@ -47,45 +54,87 @@ fi
 
 echo "== arm[$ARM_NAME]: FATAL while owning StackWatermark lock (gdb injection) =="
 log="$arm_dir/watermark.log"
+caplog="$arm_dir/capture.log"
 LD_LIBRARY_PATH="$ARM_LIB_DIR" gdb -q -batch \
     -x "$repo/runtime/tests/signal_fatal_watermark_gdb.py" \
     --args "$bin" watermark 6 > "$log" 2>&1 &
 gdb_pid=$!
 deadline=$((SECONDS + timeout_s))
-interrupted=0
-while kill -0 "$gdb_pid" 2>/dev/null; do
-    if [ $interrupted -eq 0 ] && /usr/bin/grep -q 'WATERMARK_LOCK_TARGET .*held=1' "$log"; then
-        sleep "$post_wait"
-        interrupted=1
+verdict=''
+ipid=''
+gdb_rc=''
+while :; do
+    if [ -z "$verdict" ] && /usr/bin/grep -q 'FATAL_INJECTING' "$log"; then
         ipid=$(/usr/bin/grep -oP 'INFERIOR_PID=\K[0-9]+' "$log" | tail -1)
-        if [ -n "$ipid" ] && kill -0 "$ipid" 2>/dev/null; then
-            echo "inferior $ipid survived ${post_wait}s after FATAL injection; SIGINT stop for stack capture"
-            kill -INT "$ipid"
-        fi
+        # post_wait grace: a correct fatal path terminates within this window.
+        settle_deadline=$((SECONDS + post_wait))
+        while [ $SECONDS -lt $settle_deadline ]; do
+            state=$(pid_state "$ipid" || true)
+            [ -z "$state" ] || [ "$state" = "Z" ] && { verdict=terminated; break; }
+            kill -0 "$gdb_pid" 2>/dev/null || { verdict=terminated; break; }
+            sleep 1
+        done
+        [ -z "$verdict" ] && verdict=survived
+    fi
+    if [ "$verdict" = "survived" ]; then
+        echo "inferior $ipid survived ${post_wait}s after FATAL injection; capturing hang proof"
+        # SIGKILL the injecting gdb: the tracee resumes on its own and stays
+        # hung; a fresh attach then sees the unperturbed blocked state.
+        kill -KILL "$gdb_pid" 2>/dev/null
+        wait "$gdb_pid" 2>/dev/null
+        gdb_rc=$?
+        sleep 1
+        addr=$(/usr/bin/grep -oP 'WATERMARK_THIS=\K0x[0-9a-f]+' "$log" | tail -1)
+        LD_LIBRARY_PATH="$ARM_LIB_DIR" WATERMARK_THIS="$addr" gdb -q -batch \
+            -x "$repo/runtime/tests/signal_fatal_watermark_capture.py" \
+            -p "$ipid" > "$caplog" 2>&1
+        echo "CAPTURE_RC=$?" | tee "$arm_dir/capture.rc"
+        kill -KILL "$ipid" 2>/dev/null
+        verdict=hang
+    fi
+    if [ "$verdict" = "terminated" ]; then
+        wait "$gdb_pid" 2>/dev/null
+        gdb_rc=$?
+    fi
+    [ -n "$verdict" ] && break
+    if ! kill -0 "$gdb_pid" 2>/dev/null; then
+        # gdb exited before any injection marker: injection setup failed or
+        # the process died early; decide from the log below.
+        ipid=$(/usr/bin/grep -oP 'INFERIOR_PID=\K[0-9]+' "$log" | tail -1)
+        verdict=early-exit
+        break
     fi
     if [ $SECONDS -ge $deadline ]; then
         echo "WATERMARK_ARM_TIMEOUT killing gdb/inferior"
         ipid=$(/usr/bin/grep -oP 'INFERIOR_PID=\K[0-9]+' "$log" | tail -1)
-        [ -n "$ipid" ] && kill -KILL "$ipid" 2>/dev/null
         kill -KILL "$gdb_pid" 2>/dev/null
+        [ -n "$ipid" ] && kill -KILL "$ipid" 2>/dev/null
+        verdict=timeout
         break
     fi
     sleep 1
 done
-wait "$gdb_pid"
-gdb_rc=$?
+if [ -z "$gdb_rc" ]; then
+    wait "$gdb_pid" 2>/dev/null
+    gdb_rc=$?
+fi
 echo "GDB_RC=$gdb_rc" | tee "$arm_dir/watermark.rc"
-ipid=$(/usr/bin/grep -oP 'INFERIOR_PID=\K[0-9]+' "$log" | tail -1 || true)
 inferior_gone=0
-if [ -n "$ipid" ] && ! kill -0 "$ipid" 2>/dev/null; then inferior_gone=1; fi
-echo "INFERIOR_GONE=$inferior_gone"
+if [ -n "$ipid" ] && [ -z "$(pid_state "$ipid" || true)" ]; then inferior_gone=1; fi
+echo "INFERIOR_GONE=$inferior_gone VERDICT=$verdict"
 
-if /usr/bin/grep -q 'GDB_ERROR' "$log"; then
+if /usr/bin/grep -q 'GDB_ERROR' "$log" || /usr/bin/grep -q 'GDB_ERROR' "$caplog" 2>/dev/null; then
     echo "WATERMARK_ARM_GDB_ERROR (debugger failure, not a product verdict)"
     rc_all=1
-elif /usr/bin/grep -q 'INFERIOR_TERMINATED' "$log" && [ $gdb_rc -eq 0 ]; then
-    if ! /usr/bin/grep -q 'FATAL_WATERMARK_1253' "$log"; then
-        echo "WATERMARK_ARM_NOFATAL"
+elif [ "$verdict" = "terminated" ]; then
+    if ! /usr/bin/grep -q 'INFERIOR_TERMINATED' "$log"; then
+        echo "WATERMARK_ARM_NO_TERM_MARKER"
+        rc_all=1
+    elif ! /usr/bin/grep -q 'Program terminated with signal SIGABRT' "$log"; then
+        echo "WATERMARK_ARM_NO_SIGNAL_TERM (gdb did not observe SIGABRT termination)"
+        rc_all=1
+    elif ! /usr/bin/grep -q 'CJNative Handle signal: 6' "$log" || ! /usr/bin/grep -q 'signal SIGABRT (6)' "$log"; then
+        echo "WATERMARK_ARM_NOFATAL (fatal diagnostics missing)"
         rc_all=1
     elif ! /usr/bin/grep -q 'WATERMARK_LOCK_TARGET .*held=1' "$log"; then
         echo "WATERMARK_ARM_NOLOCK (lock ownership not verified)"
@@ -94,14 +143,18 @@ elif /usr/bin/grep -q 'INFERIOR_TERMINATED' "$log" && [ $gdb_rc -eq 0 ]; then
         echo "WATERMARK_ARM_STILL_ALIVE"
         rc_all=1
     else
-        echo "WATERMARK_ARM_PASS gdb_rc=$gdb_rc (FATAL text emitted; inferior process terminated)"
+        echo "WATERMARK_ARM_PASS gdb_rc=$gdb_rc (fatal diagnostics emitted; inferior terminated by SIGABRT)"
     fi
-elif /usr/bin/grep -q 'WATERMARK_SELFLOCK .*same=1' "$log" && [ $gdb_rc -eq 3 ]; then
-    echo "WATERMARK_ARM_HANG gdb_rc=$gdb_rc (same-thread reentry self-lock reproduced)"
-    /usr/bin/grep '^POSTINJECT|' "$log" | head -30
+elif [ "$verdict" = "hang" ]; then
+    if /usr/bin/grep -q 'WATERMARK_SELFLOCK .*same=1' "$caplog"; then
+        echo "WATERMARK_ARM_HANG (same-thread reentry self-lock reproduced)"
+        /usr/bin/grep '^POSTINJECT|' "$caplog" | head -30
+    else
+        echo "WATERMARK_ARM_HANG_UNPROVEN (survived but self-lock not captured)"
+    fi
     rc_all=1
 else
-    echo "WATERMARK_ARM_UNKNOWN gdb_rc=$gdb_rc"
+    echo "WATERMARK_ARM_UNKNOWN verdict=$verdict gdb_rc=$gdb_rc"
     rc_all=1
 fi
 exit $rc_all
