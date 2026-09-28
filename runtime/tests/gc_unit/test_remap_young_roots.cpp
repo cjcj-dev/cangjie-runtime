@@ -392,12 +392,12 @@ void CheckUnstartedExposure(bool returning)
 }
 }
 
-GC_TEST(SafepointHandshakeOrder, ReturnRejectsUnstartedEpoch)
+GC_COMPONENT_TEST(SafepointHandshakeOrder, ReturnRejectsUnstartedEpoch)
 {
     CheckUnstartedExposure(true);
 }
 
-GC_TEST(SafepointHandshakeOrder, NativeRejectsUnstartedEpoch)
+GC_COMPONENT_TEST(SafepointHandshakeOrder, NativeRejectsUnstartedEpoch)
 {
     CheckUnstartedExposure(false);
 }

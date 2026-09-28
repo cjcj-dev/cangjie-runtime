@@ -9,14 +9,11 @@
 // StackInfo::ProcessOnIteration (runtime/src/UnwindStack/StackInfo.cpp), which
 // used to call StackWatermarkSet::start_processing unconditionally.
 #include <cstdio>
-#include <thread>
 #include <csignal>
 #include <string>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "b09_runtime_fixture.hpp"
-#include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zStackWatermark.hpp"
@@ -41,68 +38,65 @@ public:
 };
 } // namespace
 
-GC_OTHER_VM_TEST(WatermarkIteration, DiagnosticWalkRejectsUnstartedEpoch)
+GC_COMPONENT_TEST(WatermarkIteration, DiagnosticWalkRejectsUnstartedEpoch)
 {
-    B09RuntimeFixture runtime;
-    GcHeapFixture heap;
+    // This death test owns its environment. Fork before creating any worker
+    // threads; inheriting a live runtime's mutexes cannot test an epoch guard.
+    Mutator ownerStorage;
+    ownerStorage.SetManagedContext(false);
+    Mutator* owner = &ownerStorage;
+    auto& watermark = owner->GetStackWatermark();
     bool precondition = false;
     bool targetHeld = false;
     bool controlStarted = false;
-    std::thread thread([&] {
-        auto& manager = MutatorManager::Instance();
-        auto* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-        auto& watermark = owner->GetStackWatermark();
-        // A real phase flip republishes the store-good colour before
-        // safepoint_synchronize_begin (stackWatermarkSet.cpp:163-170) starts
-        // processing, which leaves the owner registered on the previous epoch.
-        const uintptr_t published = ::g_cjStoreGoodMask;
-        ::g_cjStoreGoodMask = published | ZPointerRememberedMask;
-        const bool stale = !watermark.processing_started();
-        const uint32_t stateBefore = watermark.PackedState();
+    // A real phase flip republishes the store-good colour before
+    // safepoint_synchronize_begin (stackWatermarkSet.cpp:163-170) starts
+    // processing, which leaves the owner registered on the previous epoch.
+    const uintptr_t published = ::g_cjStoreGoodMask;
+    ::g_cjStoreGoodMask = published | ZPointerRememberedMask;
+    const bool stale = !watermark.processing_started();
+    const uint32_t stateBefore = watermark.PackedState();
 
-        FrameInfo frame { MachineFrame(nullptr, nullptr), FrameType::MANAGED };
-        IterationDriver driver;
-        int output[2];
-        GC_EXPECT_EQ(pipe(output), 0);
-        const pid_t child = fork();
-        GC_EXPECT_TRUE(child >= 0);
-        if (child == 0) {
-            close(output[0]);
-            if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
-            close(output[1]);
-            signal(SIGABRT, SIG_DFL);
-            driver.WalkOneFrame(*owner, frame);
-            _exit(0);
-        }
-        close(output[1]);
-        std::string transcript;
-        char bytes[512];
-        ssize_t count;
-        while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, count); }
+    FrameInfo frame { MachineFrame(nullptr, nullptr), FrameType::MANAGED };
+    IterationDriver driver;
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
         close(output[0]);
-        int status = 0;
-        GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-        const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
-            transcript.find("Processing should already have started") != std::string::npos;
-        std::fprintf(stderr, "WM_ITERATION_TARGET executed=1 stale=%d rejected=%d status=%d\n%s",
-                     stale, rejected, status, transcript.c_str());
-        precondition = stale;
-        targetHeld = rejected;
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        driver.WalkOneFrame(*owner, frame);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char bytes[512];
+    ssize_t count;
+    while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, count); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find("Processing should already have started") != std::string::npos;
+    std::fprintf(stderr, "WM_ITERATION_TARGET executed=1 stale=%d rejected=%d status=%d\n%s",
+                 stale, rejected, status, transcript.c_str());
+    precondition = stale;
+    targetHeld = rejected;
 
-        // Positive control: the legal safepoint entry does start processing on
-        // the same owner, and the epoch it publishes is the current one, so the
-        // state read by the target assertion is not a constant.
-        StackWatermarkSet::on_safepoint(*owner);
-        const bool started = watermark.processing_started();
-        const bool advanced = watermark.GetEpoch() != StackWatermark::UnpackEpoch(stateBefore);
-        std::fprintf(stderr, "WM_ITERATION_CONTROL executed=1 started=%d epoch_advanced=%d epoch_now=%u\n", started,
-            advanced, watermark.GetEpoch());
-        controlStarted = started && advanced;
+    // Positive control: the legal safepoint entry does start processing on
+    // the same owner, and the epoch it publishes is the current one, so the
+    // state read by the target assertion is not a constant.
+    StackWatermarkSet::on_safepoint(*owner);
+    const bool started = watermark.processing_started();
+    const bool advanced = watermark.GetEpoch() != StackWatermark::UnpackEpoch(stateBefore);
+    std::fprintf(stderr, "WM_ITERATION_CONTROL executed=1 started=%d epoch_advanced=%d epoch_now=%u\n", started,
+        advanced, watermark.GetEpoch());
+    controlStarted = started && advanced;
 
-        ::g_cjStoreGoodMask = published;
-        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    });
-    thread.join();
+    ::g_cjStoreGoodMask = published;
     GC_EXPECT_TRUE(precondition);
     GC_EXPECT_TRUE(targetHeld);
     GC_EXPECT_TRUE(controlStarted);
