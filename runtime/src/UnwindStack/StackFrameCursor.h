@@ -23,6 +23,9 @@ class StackFrameCursor {
 public:
     explicit StackFrameCursor(const UnwindContext& topFrame);
 
+    explicit StackFrameCursor(const std::vector<FrameInfo>& frames) : stream(frames) { stream.Start(); }
+    explicit StackFrameCursor(const std::vector<FrameInfo*>& frames) : stream(frames) { stream.Start(); }
+
     size_t Cursor() const { return index; }
     bool Done() const { return stream.IsDone(); }
     const FrameInfo* CurrentFrame() const
@@ -36,17 +39,8 @@ public:
             ++index;
         }
     }
-    RegSlotsMap& RegMap() { return regSlotsMap; }
-    void Rebase(intptr_t offset)
-    {
-        stream.Rebase(offset);
-        for (size_t i = 0; i < REGISTERS_COUNT; ++i) {
-            if (regSlotsMap.isRecorded[i] && regSlotsMap.addrMap[i] != nullptr) {
-                regSlotsMap.addrMap[i] = reinterpret_cast<SlotAddress>(
-                    reinterpret_cast<uintptr_t>(regSlotsMap.addrMap[i]) + offset);
-            }
-        }
-    }
+    const RegSlotsMap& RegMap() const { return stream.RegisterMap(); }
+    void Rebase(intptr_t offset) { stream.Rebase(offset); }
 
     // Process exactly one frame (barrier-frame or stub bookkeeping), advance cursor.
     // Returns false when already done.
@@ -76,16 +70,15 @@ public:
     // safepoint.cpp:818-824: return oops are named before the request is processed.
     static void CollectReturnRegisterRoots(const FrameInfo& frame, std::vector<ReturnRegisterRoot>& roots);
     static void ProcessReturnFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
-                                   RegSlotsMap& regSlotsMap, const FrameInfo& frame);
+                                   const RegSlotsMap& regSlotsMap, const FrameInfo& frame);
     static void ProcessManagedFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
-                                    RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
-    static void ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
+                                    const RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
+    static void ProcessFrame(const FrameInfo& frame, const RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
                              Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor = nullptr,
                              bool young = false);
 
 private:
     StackFrameStream stream;
-    RegSlotsMap regSlotsMap;
     size_t index = 0;
 };
 

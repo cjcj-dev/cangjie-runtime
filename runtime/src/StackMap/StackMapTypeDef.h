@@ -72,10 +72,8 @@ struct RegSlotsMap {
         addrMap[reg] = slot;
     }
 
-    inline void Erase(RegisterNum reg) { isRecorded[reg] = false; }
-
     bool VisitSingleSlotsRoot(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegisterNum reg,
-                              std::list<BasePtrType>* rootsList = nullptr)
+                              std::list<BasePtrType>* rootsList = nullptr) const
     {
         if (!HasReg(reg)) {
             LOG(RTLOG_ERROR, "register %s is not recorded", GetRegisterName(reg));
@@ -88,11 +86,10 @@ struct RegSlotsMap {
             debugFunc(reg, addrMap[reg]->LoadPlain());
         }
         visitor(*addrMap[reg]);
-        Erase(reg);
         return true;
     }
 
-    bool VisitDoubleSlotsRoot(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegisterNum reg)
+    bool VisitDoubleSlotsRoot(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegisterNum reg) const
     {
         if (!HasReg(reg)) {
             LOG(RTLOG_ERROR, "register %s is not recorded", GetRegisterName(reg));
@@ -105,7 +102,6 @@ struct RegSlotsMap {
         }
         visitor(*slot);
         visitor(*(slot + 1));
-        Erase(reg);
         return true;
     }
 };

@@ -18,11 +18,8 @@ namespace MapleRuntime {
 #ifdef __arm__
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
-    RegSlotsMap regSlotsMap;
-    for (const auto& frame : stack) {
-
-        StackFrameCursor::ProcessFrame(frame, regSlotsMap, func, mutator);
-    }
+    StackFrameCursor cursor(stack);
+    cursor.ProcessAll(func, mutator);
 }
 
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
@@ -36,91 +33,27 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                              const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator,
                                              bool young) const
 {
-    RegSlotsMap regSlotsMap;
-    for (const auto& frame : stack) {
-
-        switch (frame.GetFrameType()) {
-            case FrameType::MANAGED: {
-                (void)young;
-                StackFrameCursor::ProcessManagedFrame(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame, mutator);
-                break;
-            }
-            case FrameType::C2R_STUB:
-
-                RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::C2N_STUB:
-
-                RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::EXSLUSIVE:
-
-                RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap,
-                                                                 reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::STACKGROW:
-                LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitHeapReferencesOnStack");
-                break;
-            case FrameType::RETURN_SAFEPOINT:
-                StackFrameCursor::ProcessReturnFrame(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame);
-                break;
-            case FrameType::SAFEPOINT:
-
-                RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            default: {
-                regSlotsMap = RegSlotsMap();
-                break;
-            }
-        }
-    }
+    (void)slotRootVisitor;
+    (void)young;
+    StackFrameCursor cursor(stack);
+    cursor.ProcessAll(regRootVisitor, mutator, &derivedPtrVisitor, young);
 }
 
 void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 {
-    RegSlotsMap regSlotsMap;
-    for (auto frame : stacks) {
-        FrameInfo &ref = *frame;
-        switch (frame->GetFrameType()) {
-            case FrameType::MANAGED: {
-                currentFramePtr = frame;
-                StackFrameCursor::ProcessManagedFrame(func, nullptr, regSlotsMap, ref, mutator);
-                break;
-            }
-            case FrameType::STACKGROW:
-                LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitStackRoots");
-                break;
-            case FrameType::RETURN_SAFEPOINT:
-                StackFrameCursor::ProcessReturnFrame(func, nullptr, regSlotsMap, ref);
-                break;
-            case FrameType::SAFEPOINT:
-                RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
-                break;
-            case FrameType::C2R_STUB:
-                RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
-                break;
-            case FrameType::C2N_STUB:
-                RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
-                break;
-            case FrameType::EXSLUSIVE:
-                RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap,
-                                                                 reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
-                break;
-            default: {
-                regSlotsMap = RegSlotsMap();
-                break;
-            }
+    StackFrameCursor cursor(stacks);
+    while (!cursor.Done()) {
+        if (cursor.CurrentFrame()->GetFrameType() == FrameType::MANAGED) {
+            currentFramePtr = stacks[cursor.Cursor()];
         }
+        cursor.ProcessOne(func, mutator);
     }
 }
 #else
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
-    RegSlotsMap regSlotsMap;
-    for (const auto& frame : stack) {
-
-        StackFrameCursor::ProcessFrame(frame, regSlotsMap, func, mutator);
-    }
+    StackFrameCursor cursor(stack);
+    cursor.ProcessAll(func, mutator);
 
 #ifdef INTERPRETER_ENABLED
     auto markingStackVisitor = [this, &func](DYN_VisitingState state) {
@@ -161,38 +94,9 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                              const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator,
                                              bool young) const
 {
-    RegSlotsMap regSlotsMap;
-    for (const auto& frame : stack) {
-
-        switch (frame.GetFrameType()) {
-            case FrameType::MANAGED: {
-                (void)young;
-                StackFrameCursor::ProcessManagedFrame(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame, mutator);
-                break;
-            }
-            case FrameType::C2R_STUB:
-            case FrameType::C2N_STUB:
-            case FrameType::EXSLUSIVE:
-#ifdef INTERPRETER_ENABLED
-            case FrameType::INTERPRETER_C2I:
-#endif
-
-                RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::RETURN_SAFEPOINT:
-                StackFrameCursor::ProcessReturnFrame(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame);
-                break;
-            case FrameType::SAFEPOINT:
-            case FrameType::STACKGROW:
-
-                RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            default: {
-                regSlotsMap = RegSlotsMap();
-                break;
-            }
-        }
-    }
+    (void)young;
+    StackFrameCursor cursor(stack);
+    cursor.ProcessAll(regRootVisitor, mutator, &derivedPtrVisitor, young);
 
 #ifdef INTERPRETER_ENABLED
     auto adjustingStackVisitor = [this, &slotRootVisitor, &derivedPtrVisitor](DYN_VisitingState state) {
@@ -220,32 +124,12 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
 void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 {
-    RegSlotsMap regSlotsMap;
-    for (auto frame : stacks) {
-        FrameInfo &ref = *frame;
-        switch (frame->GetFrameType()) {
-            case FrameType::MANAGED: {
-                currentFramePtr = frame;
-                StackFrameCursor::ProcessManagedFrame(func, nullptr, regSlotsMap, ref, mutator);
-                break;
-            }
-            case FrameType::RETURN_SAFEPOINT:
-                StackFrameCursor::ProcessReturnFrame(func, nullptr, regSlotsMap, ref);
-                break;
-            case FrameType::SAFEPOINT:
-            case FrameType::STACKGROW:
-                RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
-                break;
-            case FrameType::C2R_STUB:
-            case FrameType::C2N_STUB:
-            case FrameType::EXSLUSIVE:
-                RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
-                break;
-            default: {
-                regSlotsMap = RegSlotsMap();
-                break;
-            }
+    StackFrameCursor cursor(stacks);
+    while (!cursor.Done()) {
+        if (cursor.CurrentFrame()->GetFrameType() == FrameType::MANAGED) {
+            currentFramePtr = stacks[cursor.Cursor()];
         }
+        cursor.ProcessOne(func, mutator);
     }
 }
 #endif

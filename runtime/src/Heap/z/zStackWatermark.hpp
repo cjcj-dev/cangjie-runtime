@@ -64,7 +64,7 @@ public:
 
 protected:
     virtual void start_processing_impl(void* context);
-    virtual void process(const FrameInfo& frame, RegSlotsMap& registers, void* context) = 0;
+    virtual void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) = 0;
     void update_watermark();
     void yield_processing();
     std::mutex lock;
@@ -102,7 +102,7 @@ private:
     void save_old_watermark();
     void process_head(void* context);
     void start_processing_impl(void* context) override;
-    void process(const FrameInfo& frame, RegSlotsMap& registers, void* context) override;
+    void process(const FrameInfo& frame, const RegSlotsMap& registers, void* context) override;
 };
 
 class StackWatermarkSet {

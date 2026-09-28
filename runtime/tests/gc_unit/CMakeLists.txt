@@ -32,6 +32,7 @@ set(GC_UNIT_SOURCES
     test_region_age.cpp
     test_unwind_regressions.cpp
     test_return_frame_slot_root.cpp
+    test_return_safepoint_regmap.cpp
     test_stackmap_base_capture.cpp
     test_stub_register_roots.cpp
     test_gctibzero.cpp

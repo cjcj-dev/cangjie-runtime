@@ -63,7 +63,7 @@ public:
         }
     }
 
-    bool VisitGCRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
+    bool VisitGCRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, const RegSlotsMap& regSlotsMap,
                       std::list<BasePtrType>* rootsList = nullptr) const
     {
         RegBits bits = regBits;

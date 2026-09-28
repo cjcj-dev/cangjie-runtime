@@ -24,7 +24,7 @@ public:
         : derivePtrTable(derivePtr), regTable(reg), slotTable(slot), derivedPtrIdx(startIdx), derivedPtrRows(rows) {}
     ~DerivedPtr() = default;
     bool VisitDerivedPtr(const DerivedPtrVisitor& visitor, const DerivedPtrDebugVisitor debugVisitor,
-                         RegSlotsMap& regSlotsMap, BasePtrType basePtr, Uptr fp)
+                         const RegSlotsMap& regSlotsMap, BasePtrType basePtr, Uptr fp)
     {
         if (LIKELY(derivedPtrIdx == 0)) {
             return false;
@@ -44,7 +44,7 @@ public:
         return true;
     }
     bool VisitDerivedPtrForStackGrow(const DerivedPtrVisitor& visitor, const DerivedPtrDebugVisitor debugVisitor,
-                                     RegSlotsMap& regSlotsMap, BasePtrType basePtr, Uptr fp)
+                                     const RegSlotsMap& regSlotsMap, BasePtrType basePtr, Uptr fp)
     {
         if (LIKELY(derivedPtrIdx == 0)) {
             return false;
@@ -86,7 +86,7 @@ public:
 
 private:
     inline void VisitRegDerivedPtr(const DerivedPtrVisitor& visitor, const DerivedPtrDebugVisitor debugVisitor,
-                                   RegSlotsMap& regSlotsMap, BasePtrType basePtr, U32 regIdx) const
+                                   const RegSlotsMap& regSlotsMap, BasePtrType basePtr, U32 regIdx) const
     {
         RegRoot regRoot(regTable.GetActiveRegBits(regIdx));
         RootVisitor rootVisitor = [&visitor, basePtr](RootSlot& derivedRoot) {

@@ -55,7 +55,7 @@ void StackGrowStackInfo::FillInStackTrace()
 void StackGrowStackInfo::RecordStackPtrsImpl(const StackPtrVisitor& traceAndFixPtrVisitor,
                                              const StackPtrVisitor& fixPtrVisitor,
                                              const DerivedPtrVisitor& derivedPtrVisitor,
-                                             RegSlotsMap& regSlotsMap,
+                                             const RegSlotsMap& regSlotsMap,
                                              const FrameInfo& frame, Mutator& mutator)
 {
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
@@ -63,10 +63,6 @@ void StackGrowStackInfo::RecordStackPtrsImpl(const StackPtrVisitor& traceAndFixP
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackPtrMap stackPtrMap = StackMapBuilder(startIP, frameIP, frameAddress).Build<StackPtrMap>(true);
     if (stackPtrMap.IsValid()) {
-        if (!regSlotsMap.allRegistersSaved && stackPtrMap.HasGCRegisterRoots()) {
-            LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, frame pc: %p",
-                reinterpret_cast<void*>(frameIP));
-        }
         if (!stackPtrMap.VisitReg(traceAndFixPtrVisitor, fixPtrVisitor, nullptr, regSlotsMap)) {
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
@@ -74,8 +70,6 @@ void StackGrowStackInfo::RecordStackPtrsImpl(const StackPtrVisitor& traceAndFixP
         stackPtrMap.VisitSlot(traceAndFixPtrVisitor, fixPtrVisitor, nullptr);
         stackPtrMap.VisitDerivedPtr(derivedPtrVisitor, regSlotsMap);
     }
-    stackPtrMap.RecordCalleeSaved(regSlotsMap);
-    regSlotsMap.allRegistersSaved = false;
 }
 
 void StackGrowStackInfo::RecordStackPtrs(const StackPtrVisitor& traceAndFixPtrVisitor,
@@ -83,37 +77,19 @@ void StackGrowStackInfo::RecordStackPtrs(const StackPtrVisitor& traceAndFixPtrVi
                                          const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
-    RegSlotsMap regSlotsMap;
-    for (const auto& frame : stack) {
+    StackFrameStream stream(stack);
+    stream.Start();
+    while (!stream.IsDone()) {
+        const FrameInfo frame = stream.Current();
+        // Advance only after consuming this frame's incoming register locations.
+        // The frame vector is a C++ container for the existing stack snapshot.
         ObjectRef* rbp = reinterpret_cast<ObjectRef*>(frame.GetMachineFrame().GetFA());
         fixPtrVisitor(*rbp);
-
-        switch (frame.GetFrameType()) {
-            case FrameType::MANAGED: {
-                RecordStackPtrsImpl(traceAndFixPtrVisitor, fixPtrVisitor, derivedPtrVisitor,
-                                    regSlotsMap, frame, mutator);
-                break;
-            }
-            // Stub frames spill the callee-saved registers of their managed caller. Without recording
-            // those spill slots, a managed frame above the stub resolves its register roots to the
-            // innermost recorded slots, i.e. to register values that belong to the runtime code below.
-            case FrameType::C2R_STUB:
-            case FrameType::C2N_STUB:
-            case FrameType::EXSLUSIVE:
-#ifdef INTERPRETER_ENABLED
-            case FrameType::INTERPRETER_C2I:
-#endif
-                RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::SAFEPOINT:
-            case FrameType::STACKGROW:
-                RegRoot::RecordRegs(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            default: {
-                regSlotsMap.allRegistersSaved = false;
-                break;
-            }
+        if (frame.GetFrameType() == FrameType::MANAGED) {
+            RecordStackPtrsImpl(traceAndFixPtrVisitor, fixPtrVisitor, derivedPtrVisitor,
+                                stream.RegisterMap(), frame, mutator);
         }
+        stream.Next();
     }
 
 #ifdef INTERPRETER_ENABLED

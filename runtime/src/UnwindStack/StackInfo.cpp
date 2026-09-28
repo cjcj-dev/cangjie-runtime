@@ -204,14 +204,113 @@ uint32_t* StackFrameStream::GetAnchorFAFromMutatorContext() const
 void StackFrameStream::Start()
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
+    if (recordedFrames != nullptr || recordedFramePointers != nullptr) {
+        done = recordedFrames != nullptr ? recordedFrames->empty() : recordedFramePointers->empty();
+        if (!done) {
+            current.frameInfo = recordedFrames != nullptr ? (*recordedFrames)[0] : *(*recordedFramePointers)[0];
+            CheckRegisterRoots();
+        }
+        return;
+    }
     CheckTopUnwindContextAndInit(current);
     done = current.frameInfo.mFrame.IsAnchorFrame(anchorFA);
-    if (!done) { AnalyseAndSetFrameType(current); }
+    if (!done) { AnalyseAndSetFrameType(current); CheckRegisterRoots(); }
+}
+
+void StackFrameStream::UpdateRegisterMap(const FrameInfo& frame)
+{
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    switch (frame.GetFrameType()) {
+        case FrameType::MANAGED: {
+            const uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
+#ifdef __APPLE__
+            if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
+#else
+            if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
+#endif
+                regSlotsMap = RegSlotsMap();
+                return;
+            }
+            const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
+            StackPtrMap pointers = StackMapBuilder(startIP, frameIP,
+                reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<StackPtrMap>();
+            pointers.RecordCalleeSaved(regSlotsMap);
+            regSlotsMap.allRegistersSaved = false;
+            break;
+        }
+        case FrameType::SAFEPOINT:
+        case FrameType::STACKGROW:
+            RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+        case FrameType::RETURN_SAFEPOINT:
+            // Same save-area locations as a safepoint blob (frame_x86.inline.hpp:459),
+            // but the returned frame is gone: the caller is an ordinary call.
+            RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            regSlotsMap.allRegistersSaved = false;
+            break;
+#ifdef __arm__
+        case FrameType::C2R_STUB:
+            RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+        case FrameType::C2N_STUB:
+            RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+        case FrameType::EXSLUSIVE:
+            RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+#else
+        case FrameType::C2R_STUB:
+        case FrameType::C2N_STUB:
+        case FrameType::EXSLUSIVE:
+#ifdef INTERPRETER_ENABLED
+        case FrameType::INTERPRETER_C2I:
+#endif
+            RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+#endif
+        default:
+            // N2C and entry frames drop the map. frame_x86.inline.hpp:418.
+            regSlotsMap = RegSlotsMap();
+            break;
+    }
+}
+
+// The sender is validated before any consumer can observe it. Full-save stubs
+// license only their immediate managed sender; a return poll does not.
+// HotSpot frame_x86.inline.hpp:455-464.
+void StackFrameStream::CheckRegisterRoots() const
+{
+    const FrameInfo& frame = current.frameInfo;
+    if (frame.GetFrameType() != FrameType::MANAGED || regSlotsMap.allRegistersSaved) { return; }
+    const uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
+    const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
+#ifdef __APPLE__
+    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) { return; }
+#else
+    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) { return; }
+#endif
+    HeapReferenceMap roots = StackMapBuilder(startIP, frameIP,
+        reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<HeapReferenceMap>(true);
+    if (roots.IsValid() && roots.HasRegisterRoots()) {
+        LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, start ip: %p frame pc: %p",
+            reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP));
+    }
 }
 
 void StackFrameStream::Next()
 {
     if (done) { return; }
+    UpdateRegisterMap(current.frameInfo);
+    if (recordedFrames != nullptr || recordedFramePointers != nullptr) {
+        ++recordedIndex;
+        done = recordedIndex == (recordedFrames != nullptr ? recordedFrames->size() : recordedFramePointers->size());
+        if (!done) {
+            current.frameInfo = recordedFrames != nullptr ? (*recordedFrames)[recordedIndex] :
+                *(*recordedFramePointers)[recordedIndex];
+            CheckRegisterRoots();
+        }
+        return;
+    }
     ElfUnloadQuiescence::ReadScope metadataReader;
     lastFrameType = current.frameInfo.GetFrameType();
     UnwindContext caller;
@@ -223,7 +322,7 @@ void StackFrameStream::Next()
     done = !advanced || caller.frameInfo.mFrame.IsAnchorFrame(anchorFA);
     caller.frameInfo.mFrame.SetSP(current.frameInfo.CallerSP());
     current = caller;
-    if (!done) { AnalyseAndSetFrameType(current); }
+    if (!done) { AnalyseAndSetFrameType(current); CheckRegisterRoots(); }
 }
 
 void StackFrameStream::Rebase(intptr_t offset)
@@ -235,6 +334,12 @@ void StackFrameStream::Rebase(intptr_t offset)
     MachineFrame& frame = current.frameInfo.mFrame;
     frame.SetFA(reinterpret_cast<FrameAddress*>(reinterpret_cast<uintptr_t>(frame.GetFA()) + offset));
     if (frame.GetSP() != 0) { frame.SetSP(frame.GetSP() + offset); }
+    for (size_t i = 0; i < REGISTERS_COUNT; ++i) {
+        if (regSlotsMap.isRecorded[i] && regSlotsMap.addrMap[i] != nullptr) {
+            regSlotsMap.addrMap[i] = reinterpret_cast<SlotAddress>(
+                reinterpret_cast<uintptr_t>(regSlotsMap.addrMap[i]) + offset);
+        }
+    }
 }
 
 void StackInfo::ProcessOnIteration(const FrameInfo& frame)

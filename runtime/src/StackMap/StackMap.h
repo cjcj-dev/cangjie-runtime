@@ -65,7 +65,7 @@ public:
     }
 
     // HeapReferenceMap processes derived values before either ordinary-root pass.
-    virtual bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
+    virtual bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, const RegSlotsMap& regSlotsMap,
                               bool young = false)
     {
         (void)young;
@@ -103,7 +103,7 @@ public:
         return *this;
     }
     ~HeapReferenceMap() override = default;
-    bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
+    bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, const RegSlotsMap& regSlotsMap,
                        bool young = false) override
     {
         (void)young;
@@ -121,7 +121,7 @@ public:
 
     // oopMap.cpp:413: process every derived value before updating any base.
     void VisitDerivedPtr(const DerivedPtrVisitor& derivedVisitor, const DerivedPtrDebugVisitor debugVisitor,
-                         RegSlotsMap& regSlotsMap)
+                         const RegSlotsMap& regSlotsMap)
     {
         std::list<BasePtrType> rootsList;
         RootVisitor capture = [](ObjectRef&) {};
@@ -211,7 +211,7 @@ public:
     }
 
     bool VisitReg(const StackPtrVisitor& traceAndFixPtrVisitor, const StackPtrVisitor& fixPtrVisitor,
-                  const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap)
+                  const RegDebugVisitor& debugFunc, const RegSlotsMap& regSlotsMap)
     {
         // Reuse GC interface
         return gcRegRoot.VisitGCRoots(traceAndFixPtrVisitor, debugFunc, regSlotsMap, &rootsList) &&
@@ -219,7 +219,7 @@ public:
     }
 
     bool VisitStackPointerRegs(const StackPtrVisitor& visitor, const RegDebugVisitor& debugFunc,
-                               RegSlotsMap& registers)
+                               const RegSlotsMap& registers)
     {
         return stackPtrRegRoot.VisitGCRoots(visitor, debugFunc, registers, nullptr);
     }
@@ -237,7 +237,7 @@ public:
         stackPtrSlotRoot.VisitGCRoots(fixPtrVisitor, debugFunc, stackBase, nullptr);
     }
 
-    void VisitDerivedPtr(const DerivedPtrVisitor& derivedVisitor, RegSlotsMap& regSlotsMap)
+    void VisitDerivedPtr(const DerivedPtrVisitor& derivedVisitor, const RegSlotsMap& regSlotsMap)
     {
         for (auto it = rootsList.begin(); it != rootsList.end(); ++it) {
             if (!derivedPtr.VisitDerivedPtrForStackGrow(derivedVisitor, nullptr, regSlotsMap, *it, stackBase)) {
