@@ -968,8 +968,7 @@ struct CJThread* CJThreadBuild(ScheduleHandle schedule, const struct CJThreadAtt
     CJThreadNewSetAttr(attr, scheduleCJThread, &stackAttr);
     // Method of obtaining the cjthread control block
     CJThreadBuf buf =
-        (CJThreadGet() == nullptr || currentSchedule != targetSchedule ||
-         createSource == CJTHREAD_CREATE_SOURCE_SIGNAL) ? GLOBAL_BUF : LOCAL_BUF;
+        (CJThreadGet() == nullptr || currentSchedule != targetSchedule) ? GLOBAL_BUF : LOCAL_BUF;
 
     // scheduleCJThread increases by 1. The count is calculated when the cjthread upper limit
     // exists. The count is mandatory for a non-default scheduler. The count is used to
@@ -1157,8 +1156,7 @@ CJThreadHandle CJThreadNew(ScheduleHandle schedule, const struct CJThreadAttr *a
     }
     // Set cjthread id in CJThreadNew
     CJThreadSetId(newCJThread, cjthreadId);
-    CJThreadBuf buf = (CJThreadGet() == nullptr || currentSchedule != targetSchedule ||
-                       createSource == CJTHREAD_CREATE_SOURCE_SIGNAL) ? GLOBAL_BUF : LOCAL_BUF;
+    CJThreadBuf buf = (CJThreadGet() == nullptr || currentSchedule != targetSchedule) ? GLOBAL_BUF : LOCAL_BUF;
 #ifdef __OHOS__
     TRACE_FINISH_ASYNC(TRACE_CJTHREAD_NEW, cjthreadId);
 #elif defined(__ANDROID__)

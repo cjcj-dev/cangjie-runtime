@@ -414,7 +414,6 @@ MRT_EXPORT enum RTErrorCode SetRuntimeFiniFlag(void);
  * @retval Return the cjthread handle if success. Otherwise, return NULL.
  */
 MRT_EXPORT CJThreadHandle RunCJTask(const CJTaskFunc func, void* args);
-MRT_EXPORT CJThreadHandle RunCJTaskSignal(const CJTaskFunc func, void* args);
 /*
  * @brief Submit a task to specify Cangjie cjthread scheduler.
  * @par This API will create a Cangjie cjthread and return the cjthread handle.

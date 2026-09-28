@@ -4,6 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 #include "RuntimeConfig.h"
+#ifndef _WIN64
+#include <unistd.h>
+#endif
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Common/Runtime.h"
@@ -369,26 +372,6 @@ void ExceptionManager::ThrowImplicitException(ImplicitExceptionType type)
         reinterpret_cast<void*>(threadData), 0);
 }
 
-#ifndef _WIN64
-static bool HandleAbortSignal(int sig, siginfo_t* info, void* context)
-{
-    LOG(RTLOG_ERROR, "Two pending exceptions are thrown when a C function calls Cangjie function. Program will abort.");
-    return true;
-}
-
-static void InstallExceptionAbortHandler()
-{
-    sigset_t mask;
-    CHECK_SIGNAL_CALL(sigemptyset, (&mask), "sigemptyset failed");
-    SignalAction sa;
-    sa.saSignalAction = HandleAbortSignal;
-    sa.scMask = mask;
-    sa.scFlags = SA_SIGINFO | SA_ONSTACK;
-
-    AddHandlerToSignalStack(SIGABRT, &sa);
-}
-#endif
-
 void ExceptionManager::ThrowException(const ExceptionRef& exception)
 {
     ScopedEntryTrace trace("CJRT_THROW_EXCEPTION");
@@ -408,9 +391,11 @@ void ExceptionManager::ThrowException(const ExceptionRef& exception)
 
     if (mExceptionWrapper.GetExceptionRef() != nullptr) {
 #ifndef _WIN64
-        // Because the throwing of exceptions has already modified the rbp and pc of some frames,
-        // it is impossible to correctly complete the stack unwind. Here, an empty handler is added to exit directly.
-        InstallExceptionAbortHandler();
+        // Report at the failure site before abort, as VMError::report_and_die
+        // does; no dynamically registered managed handler in signal context.
+        constexpr char message[] = "Two pending exceptions are thrown when a C function calls Cangjie function. "
+                                   "Program will abort.\n";
+        (void)write(STDERR_FILENO, message, sizeof(message) - 1);
 #endif
         LOG(RTLOG_FATAL, "ThrowException fail, abort.");
     }

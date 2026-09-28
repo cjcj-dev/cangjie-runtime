@@ -536,9 +536,6 @@ extern "C" void CJ_MCC_SignalRaise(int sig)
 }
 extern "C" void CJ_MCC_AddSignalHandler(int signal, struct SignalAction* sa)
 {
-    if (signal == SIGABRT || signal == SIGILL) {
-        SignalStack::GetStacks()[signal].SetUserSigHandler(true);
-    }
     // By default, block the SIGPIPE signal, and take no action on the SIGPIPE signal;
     // when the user registers a handler, unblock the SIGPIPE signal,
     // allowing the user to take action on the SIGPIPE signal.
