@@ -224,7 +224,7 @@ unwindPCForExclusiveStub:
 
     ldr     x0, [x29, #0xc0]            // enterSafe
     cbz     x0, .L_exc_skip_leave
-    bl      MRT_LeaveSaferegion
+    bl      MRT_LeaveNative
     bl      MRT_GetThreadLocalData
     mov     x19, x0
     b       .L_exc_do_delete

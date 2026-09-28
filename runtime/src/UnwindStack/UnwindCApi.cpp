@@ -100,7 +100,7 @@ extern "C" ThreadLocalData* MRT_C2N_Leave(bool safeState, unsigned long long sta
 
     if (safeState) {
         // Step 1: LeaveSaferegion - includes suspension request check
-        MRT_LeaveSaferegion();
+        MRT_LeaveNative();
     }
 
     // Step 2: DeleteC2NContext - restore unwind context status to RELIABLE

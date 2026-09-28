@@ -373,7 +373,7 @@ void CheckUnstartedExposure(bool returning)
         *ZPointerStoreGoodMaskLowOrderBitsAddr = StackWatermark::epoch_id() ^ 1;
         tls->SetPollWord(ThreadLocalData::DisarmedPollWord);
         if (returning) { HandleReturnSafepoint(tls); }
-        else { MRT_LeaveSaferegion(); }
+        else { MRT_LeaveNative(); }
         _exit(0);
     }
     close(output[1]);

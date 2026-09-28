@@ -58,10 +58,19 @@ extern "C" bool MRT_LeaveSaferegion()
     if (mutator == nullptr) {
         return false;
     }
+    return mutator->LeaveSaferegion();
+}
+
+extern "C" bool MRT_LeaveNative()
+{
+    Mutator* mutator = Mutator::GetMutator();
+    if (mutator == nullptr) {
+        return false;
+    }
     const bool transitioned = mutator->LeaveSaferegion();
     if (transitioned) {
-        // HotSpot javaThread.cpp:1103-1118. This C ABI is the native ->
-        // managed transition used by N2C/I2N/ExclusiveScope stubs.
+        // HotSpot javaThread.cpp:1103-1118: process requests before exposing
+        // the caller on return from native code. N2C entry does not unwind.
         StackWatermarkSet::before_unwind(*mutator);
     }
     return transitioned;

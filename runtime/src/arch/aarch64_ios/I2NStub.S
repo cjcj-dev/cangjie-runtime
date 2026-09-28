@@ -107,7 +107,7 @@ L_unwind_pc:
     ldr  x9, [sp, #SafeStateOffset]
     cmp  x9, #0
     beq  L_no_leave_saferegion
-    bl   _MRT_LeaveSaferegion
+    bl   _MRT_LeaveNative
 L_no_leave_saferegion:
 
     // DeleteC2NContext(threadLocalData)

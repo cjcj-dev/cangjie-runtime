@@ -30,6 +30,7 @@ namespace {
 // calls, so no re-implementation of the mechanism lives in the test.
 class IterationDriver : public PrintStackInfo {
 public:
+    using PrintStackInfo::PrintStackInfo;
     void WalkOneFrame(Mutator& owner, const FrameInfo& frame)
     {
         SetProcessingOwner(&owner);
@@ -58,7 +59,7 @@ GC_COMPONENT_TEST(WatermarkIteration, DiagnosticWalkRejectsUnstartedEpoch)
     const uint32_t stateBefore = watermark.PackedState();
 
     FrameInfo frame { MachineFrame(nullptr, nullptr), FrameType::MANAGED };
-    IterationDriver driver;
+    IterationDriver driver(&owner->GetUnwindContext());
     int output[2];
     GC_EXPECT_EQ(pipe(output), 0);
     const pid_t child = fork();
@@ -92,8 +93,8 @@ GC_COMPONENT_TEST(WatermarkIteration, DiagnosticWalkRejectsUnstartedEpoch)
     StackWatermarkSet::on_safepoint(*owner);
     const bool started = watermark.processing_started();
     const bool advanced = watermark.GetEpoch() != StackWatermark::UnpackEpoch(stateBefore);
-    std::fprintf(stderr, "WM_ITERATION_CONTROL executed=1 started=%d epoch_advanced=%d epoch_now=%u\n", started,
-        advanced, watermark.GetEpoch());
+    std::fprintf(stderr, "WM_ITERATION_CONTROL executed=1 started=%d epoch_advanced=%d epoch_now=%llu\n", started,
+        advanced, static_cast<unsigned long long>(watermark.GetEpoch()));
     controlStarted = started && advanced;
 
     ::g_cjStoreGoodMask = published;

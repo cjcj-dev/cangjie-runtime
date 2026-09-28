@@ -107,7 +107,7 @@ L_current_pc:
     // LeaveSaferegion() only if EnterSaferegion changed state
     cmpq    $0, SafeStateOffset(%rbp)
     je      L_no_leave_saferegion
-    callq   _MRT_LeaveSaferegion
+    callq   _MRT_LeaveNative
     callq   _MRT_GetThreadLocalData
     movq    %rax, -48(%rbp)
 L_no_leave_saferegion:

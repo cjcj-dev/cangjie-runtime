@@ -190,7 +190,7 @@ unwindPCForExclusiveStub:
     movq    -96(%rbp), %rax
     cmpq    $0, %rax
     je      .L_exc_skip_leave
-    callq   MRT_LeaveSaferegion@PLT
+    callq   MRT_LeaveNative@PLT
     callq   MRT_GetThreadLocalData@PLT
     movq    %rax, %r13
 .L_exc_skip_leave:

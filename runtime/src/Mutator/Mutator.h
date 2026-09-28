@@ -34,6 +34,7 @@
 namespace MapleRuntime {
 extern "C" MRT_EXPORT bool MRT_EnterSaferegion(bool updateUnwindContext);
 extern "C" MRT_EXPORT bool MRT_LeaveSaferegion();
+extern "C" MRT_EXPORT bool MRT_LeaveNative();
 extern "C" MRT_EXPORT bool MRT_CheckRuntimeFinished();
 
 class BaseObject;

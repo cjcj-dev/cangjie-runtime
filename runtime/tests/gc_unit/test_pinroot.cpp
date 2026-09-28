@@ -472,7 +472,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
 #if defined(__x86_64__) && defined(__linux__)
     const auto savedGrow = CangjieRuntime::stackGrowConfig;
     if (sret) { CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON; }
-    InitializeFrameRootMap(sret, registerPointer, (requestEntry >= 5 && requestEntry <= 7));
+    InitializeFrameRootMap(sret, registerPointer, ((requestEntry >= 5 && requestEntry <= 7) || requestEntry == 9));
     const uintptr_t startIP = reinterpret_cast<uintptr_t>(frameRootMapImage.pc);
     uintptr_t younger[8] = {};
     uintptr_t caller[8] = {};
@@ -482,7 +482,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     younger[5] = startIP + 16;
     caller[3] = startIP + 9;
     uintptr_t frames[12][8] = {};
-    if (sret || (requestEntry >= 5 && requestEntry <= 7)) {
+    if (sret || ((requestEntry >= 5 && requestEntry <= 7) || requestEntry == 9)) {
         for (size_t i = 0; i < 12; ++i) {
             frames[i][3] = startIP + 9;
             frames[i][4] = i + 1 < 12 ? reinterpret_cast<uintptr_t>(&frames[i + 1][4]) : 0;
@@ -511,7 +511,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP));
     context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&younger[4]));
     context.anchorFA = nullptr;
-    if (sret || (requestEntry >= 5 && requestEntry <= 7)) {
+    if (sret || ((requestEntry >= 5 && requestEntry <= 7) || requestEntry == 9)) {
         parked->SetStackTopAddr(reinterpret_cast<uintptr_t>(frames));
         parked->SetStackSize(sizeof(frames));
         context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP + (registerPointer ? 0 : 16)));
@@ -530,7 +530,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         ZRelocate::StartRelocationTasks(generation.id());
         generation.relocate().relocate(&generation.relocation_set());
     }
-    if ((requestEntry >= 5 && requestEntry <= 7)) {
+    if (((requestEntry >= 5 && requestEntry <= 7) || requestEntry == 9)) {
         ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
         ArmThreadPoll(tls);
         HandleSafepoint(tls);
@@ -558,12 +558,14 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
             HandleReturnSafepoint(tls);
         } else if (requestEntry == 6) {
             MRT_C2N_Leave(true, 0);
+        } else if (requestEntry == 9) {
+            MRT_LeaveSaferegion();
         } else {
             HandleSafepoint(tls);
         }
         const uintptr_t forwarding = owner->find(reinterpret_cast<MAddress>(objects[0][0]));
         const uintptr_t original = reinterpret_cast<uintptr_t>(objects[0][0]);
-        const bool result = unexposed == original && (requestEntry == 7
+        const bool result = unexposed == original && ((requestEntry == 7 || requestEntry == 9)
             ? closure.observed == original && frames[3][2] == original && forwarding == 0
             : frames[3][2] == forwarding && forwarding != 0 && forwarding != original &&
               closure.observed == (requestEntry == 5 ? forwarding : original));
@@ -703,6 +705,11 @@ GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, NativeExposesCallerAfterHand
 GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, OrdinaryPollDoesNotExposeCaller)
 {
     CheckRelocateStartExitRemapsFrameRoot(false, true, false, false, 7);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(SafepointHandshakeOrder, N2CEntryDoesNotExposeCaller)
+{
+    CheckRelocateStartExitRemapsFrameRoot(false, true, false, false, 9);
 }
 
 // HotSpot stackWatermarkSet.cpp:163-171 and zGeneration.cpp:432-434.

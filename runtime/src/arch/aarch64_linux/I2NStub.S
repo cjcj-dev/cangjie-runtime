@@ -103,7 +103,7 @@ CJ_MCC_I2NStub:
     stp  d2, d3, [sp, #0x50]
 
     // LeaveSaferegion().
-    bl   MRT_LeaveSaferegion
+    bl   MRT_LeaveNative
 
     // DeleteC2NContext(threadLocalData). x28 carries current thread-local data.
     mov  x0, x28
