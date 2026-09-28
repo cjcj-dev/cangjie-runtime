@@ -22,7 +22,7 @@ GC_TEST(ZRememberedSetShape, FlipMovesCurrentToPrevious)
 #include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zVirtualMemory.inline.hpp"
 
-GC_COMPONENT_TEST(ZRememberedSetShape, PageRememberPublishesCurrentBit)
+GC_TEST(ZRememberedSetShape, PageRememberPublishesCurrentBit)
 {
     ZPage page(ZPageType::small, PageAge::old,
                ZVirtualMemory(to_zoffset(ZPageSizeSmall), ZPageSizeSmall));

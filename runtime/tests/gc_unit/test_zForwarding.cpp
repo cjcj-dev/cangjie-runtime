@@ -386,7 +386,7 @@ GC_TEST(ZForwardingEntries, MaximumRepresentableIndexRoundTrip)
 
 // ZGC zForwarding.inline.hpp:132,227: table iteration must invert index()
 // using the source page's alignment, including nonzero medium-page indices.
-GC_COMPONENT_TEST(ZForwardingEntries, MediumPageFromAddressRoundTrip)
+GC_TEST(ZForwardingEntries, MediumPageFromAddressRoundTrip)
 {
     ZPage page(ZPageType::medium, PageAge::old,
                ZVirtualMemory(to_zoffset(ZPageSizeMediumMax), ZPageSizeMediumMax));
