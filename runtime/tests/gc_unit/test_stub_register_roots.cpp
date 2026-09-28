@@ -99,7 +99,9 @@ void CheckSlots(bool xmm)
         machine.SetFA(reinterpret_cast<FrameAddress*>(fp));
         machine.SetSP(reinterpret_cast<uintptr_t>(storage));
         FrameInfo frame(machine, FrameType::RETURN_SAFEPOINT);
-        RegSlotsMap locations;
+        const std::vector<FrameInfo> frames {frame};
+        StackFrameCursor cursor(frames);
+        Mutator owner;
         std::vector<uintptr_t> addresses;
         std::vector<uintptr_t> values;
         RootVisitor visitor = [&](RootSlot& slot) {
@@ -107,7 +109,7 @@ void CheckSlots(bool xmm)
             values.push_back(raw(slot.LoadPlain()));
             StorePlain(slot, to_zaddress(0x40000));
         };
-        StackFrameCursor::ProcessReturnFrame(visitor, nullptr, locations, frame);
+        cursor.ProcessAll(visitor, owner);
         bool ok = addresses.size() == (xmm ? 2u : 1u);
         ok = ok && addresses[0] == reinterpret_cast<uintptr_t>(expected) && values[0] == old && expected[0] == 0x40000;
         if (xmm) {

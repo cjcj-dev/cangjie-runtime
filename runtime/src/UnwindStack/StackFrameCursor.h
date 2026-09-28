@@ -23,6 +23,9 @@ class StackFrameCursor {
 public:
     explicit StackFrameCursor(const UnwindContext& topFrame);
 
+    explicit StackFrameCursor(const std::vector<FrameInfo>& frames) : stream(frames) { stream.Start(); }
+    explicit StackFrameCursor(const std::vector<FrameInfo*>& frames) : stream(frames) { stream.Start(); }
+
     size_t Cursor() const { return index; }
     bool Done() const { return stream.IsDone(); }
     const FrameInfo* CurrentFrame() const

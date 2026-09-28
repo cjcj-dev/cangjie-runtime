@@ -122,8 +122,9 @@ GC_TEST(ReturnSafepointRegMap, SenderKeepsStubSlot)
     PlantReturnFrame(stack, fp, desc.pc);
     RootVisitor ignore = [](RootSlot&) {};
     Mutator mutator;
-    stack.VisitStackRoots(ignore, mutator);
-    const RegSlotsMap& map = stack.RegisterMap();
+    StackFrameCursor cursor(stack.GetStack());
+    cursor.ProcessAll(ignore, mutator);
+    const RegSlotsMap& map = cursor.RegMap();
     const uintptr_t slot = reinterpret_cast<uintptr_t>(map.addrMap[R12]);
     const uintptr_t expected = reinterpret_cast<uintptr_t>(StubSlot(fp, R12));
     std::fprintf(stderr, "SENDER_SLOT_TARGET slot=%p expected=%p value=%p flag=%d\n",

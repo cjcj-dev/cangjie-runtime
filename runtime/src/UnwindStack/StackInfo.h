@@ -32,6 +32,12 @@ public:
     {
         anchorFA = context == nullptr ? GetAnchorFAFromMutatorContext() : context->anchorFA;
     }
+    explicit StackFrameStream(const std::vector<FrameInfo>& frames)
+        : n2cCount(0), lastFrameType(FrameType::UNKNOWN), topContext(nullptr),
+          isReliableN2CStub(false), recordedFrames(&frames) {}
+    explicit StackFrameStream(const std::vector<FrameInfo*>& frames)
+        : n2cCount(0), lastFrameType(FrameType::UNKNOWN), topContext(nullptr),
+          isReliableN2CStub(false), recordedFramePointers(&frames) {}
     void CheckTopUnwindContextAndInit(UnwindContext& context);
     bool IsN2CContext(const UnwindContext& context) const;
     void AnalyseAndSetFrameType(UnwindContext& context);
@@ -42,10 +48,8 @@ public:
     const FrameInfo& Current() const { return current.frameInfo; }
     // One walk, one map. Next() publishes the callee's save locations for its sender.
     // HotSpot stackFrameStream.cpp:28-32 / frame_x86.inline.hpp:455-460.
-    // Readers see a const map (oopMap.inline.hpp:73,112). Only Next()/Publish writes it.
+    // Readers see a const map (oopMap.inline.hpp:73,112). Only the sender computation in Next() writes it.
     const RegSlotsMap& RegisterMap() const { return regSlotsMap; }
-    void ResetRegisterMap() const { regSlotsMap = RegSlotsMap(); }
-    void PublishCalleeRegisters(const FrameInfo& frame) const;
 
 protected:
     uint32_t n2cCount;
@@ -56,12 +60,17 @@ protected:
 #endif
 
 private:
+    void UpdateRegisterMap(const FrameInfo& frame);
+    void CheckRegisterRoots() const;
     uint32_t* GetAnchorFAFromMutatorContext() const;
     const UnwindContext* topContext;
     bool isReliableN2CStub;
     UnwindContext current;
     bool done = true;
-    mutable RegSlotsMap regSlotsMap;
+    RegSlotsMap regSlotsMap;
+    const std::vector<FrameInfo>* recordedFrames = nullptr;
+    const std::vector<FrameInfo*>* recordedFramePointers = nullptr;
+    size_t recordedIndex = 0;
 };
 
 class StackInfo : public StackFrameStream {

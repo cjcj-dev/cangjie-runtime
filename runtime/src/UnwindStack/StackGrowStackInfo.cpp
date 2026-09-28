@@ -63,16 +63,12 @@ void StackGrowStackInfo::RecordStackPtrsImpl(const StackPtrVisitor& traceAndFixP
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackPtrMap stackPtrMap = StackMapBuilder(startIP, frameIP, frameAddress).Build<StackPtrMap>(true);
     if (stackPtrMap.IsValid()) {
-        if (!regSlotsMap.allRegistersSaved && stackPtrMap.HasGCRegisterRoots()) {
-            LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, frame pc: %p",
-                reinterpret_cast<void*>(frameIP));
-        }
-        if (!stackPtrMap.VisitReg(traceAndFixPtrVisitor, fixPtrVisitor, nullptr, const_cast<RegSlotsMap&>(regSlotsMap))) {
+        if (!stackPtrMap.VisitReg(traceAndFixPtrVisitor, fixPtrVisitor, nullptr, regSlotsMap)) {
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
         stackPtrMap.VisitSlot(traceAndFixPtrVisitor, fixPtrVisitor, nullptr);
-        stackPtrMap.VisitDerivedPtr(derivedPtrVisitor, const_cast<RegSlotsMap&>(regSlotsMap));
+        stackPtrMap.VisitDerivedPtr(derivedPtrVisitor, regSlotsMap);
     }
 }
 
@@ -81,15 +77,19 @@ void StackGrowStackInfo::RecordStackPtrs(const StackPtrVisitor& traceAndFixPtrVi
                                          const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
-    ResetRegisterMap();
-    for (const auto& frame : stack) {
+    StackFrameStream stream(stack);
+    stream.Start();
+    while (!stream.IsDone()) {
+        const FrameInfo frame = stream.Current();
+        // Advance only after consuming this frame's incoming register locations.
+        // The frame vector is a C++ container for the existing stack snapshot.
         ObjectRef* rbp = reinterpret_cast<ObjectRef*>(frame.GetMachineFrame().GetFA());
         fixPtrVisitor(*rbp);
         if (frame.GetFrameType() == FrameType::MANAGED) {
             RecordStackPtrsImpl(traceAndFixPtrVisitor, fixPtrVisitor, derivedPtrVisitor,
-                                RegisterMap(), frame, mutator);
+                                stream.RegisterMap(), frame, mutator);
         }
-        PublishCalleeRegisters(frame);
+        stream.Next();
     }
 
 #ifdef INTERPRETER_ENABLED

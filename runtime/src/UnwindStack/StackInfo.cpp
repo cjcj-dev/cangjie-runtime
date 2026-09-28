@@ -204,12 +204,20 @@ uint32_t* StackFrameStream::GetAnchorFAFromMutatorContext() const
 void StackFrameStream::Start()
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
+    if (recordedFrames != nullptr || recordedFramePointers != nullptr) {
+        done = recordedFrames != nullptr ? recordedFrames->empty() : recordedFramePointers->empty();
+        if (!done) {
+            current.frameInfo = recordedFrames != nullptr ? (*recordedFrames)[0] : *(*recordedFramePointers)[0];
+            CheckRegisterRoots();
+        }
+        return;
+    }
     CheckTopUnwindContextAndInit(current);
     done = current.frameInfo.mFrame.IsAnchorFrame(anchorFA);
-    if (!done) { AnalyseAndSetFrameType(current); }
+    if (!done) { AnalyseAndSetFrameType(current); CheckRegisterRoots(); }
 }
 
-void StackFrameStream::PublishCalleeRegisters(const FrameInfo& frame) const
+void StackFrameStream::UpdateRegisterMap(const FrameInfo& frame)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     switch (frame.GetFrameType()) {
@@ -224,15 +232,6 @@ void StackFrameStream::PublishCalleeRegisters(const FrameInfo& frame) const
                 return;
             }
             const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
-            // frame_x86.inline.hpp:455-464: a compiled sender does not license
-            // callee-saved GC roots. A full-save poll/stackcheck stub is the only
-            // younger frame that may; a return stub keeps locations but not that license.
-            HeapReferenceMap heapMap = StackMapBuilder(startIP, frameIP,
-                reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<HeapReferenceMap>(true);
-            if (heapMap.IsValid() && !regSlotsMap.allRegistersSaved && heapMap.HasRegisterRoots()) {
-                LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, start ip: %p frame pc: %p",
-                    reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP));
-            }
             StackPtrMap pointers = StackMapBuilder(startIP, frameIP,
                 reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<StackPtrMap>();
             pointers.RecordCalleeSaved(regSlotsMap);
@@ -276,10 +275,37 @@ void StackFrameStream::PublishCalleeRegisters(const FrameInfo& frame) const
     }
 }
 
+// The sender is validated before any consumer can observe it. Full-save stubs
+// license only their immediate managed sender; a return poll does not.
+// HotSpot frame_x86.inline.hpp:455-464.
+void StackFrameStream::CheckRegisterRoots() const
+{
+    const FrameInfo& frame = current.frameInfo;
+    if (frame.GetFrameType() != FrameType::MANAGED || regSlotsMap.allRegistersSaved) { return; }
+    const uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
+    const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
+    HeapReferenceMap roots = StackMapBuilder(startIP, frameIP,
+        reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<HeapReferenceMap>(true);
+    if (roots.IsValid() && roots.HasRegisterRoots()) {
+        LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, start ip: %p frame pc: %p",
+            reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP));
+    }
+}
+
 void StackFrameStream::Next()
 {
     if (done) { return; }
-    PublishCalleeRegisters(current.frameInfo);
+    UpdateRegisterMap(current.frameInfo);
+    if (recordedFrames != nullptr || recordedFramePointers != nullptr) {
+        ++recordedIndex;
+        done = recordedIndex == (recordedFrames != nullptr ? recordedFrames->size() : recordedFramePointers->size());
+        if (!done) {
+            current.frameInfo = recordedFrames != nullptr ? (*recordedFrames)[recordedIndex] :
+                *(*recordedFramePointers)[recordedIndex];
+            CheckRegisterRoots();
+        }
+        return;
+    }
     ElfUnloadQuiescence::ReadScope metadataReader;
     lastFrameType = current.frameInfo.GetFrameType();
     UnwindContext caller;
@@ -291,7 +317,7 @@ void StackFrameStream::Next()
     done = !advanced || caller.frameInfo.mFrame.IsAnchorFrame(anchorFA);
     caller.frameInfo.mFrame.SetSP(current.frameInfo.CallerSP());
     current = caller;
-    if (!done) { AnalyseAndSetFrameType(current); }
+    if (!done) { AnalyseAndSetFrameType(current); CheckRegisterRoots(); }
 }
 
 void StackFrameStream::Rebase(intptr_t offset)

@@ -18,11 +18,8 @@ namespace MapleRuntime {
 #ifdef __arm__
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
-    ResetRegisterMap();
-    for (const auto& frame : stack) {
-        StackFrameCursor::ProcessFrame(frame, RegisterMap(), func, mutator);
-        PublishCalleeRegisters(frame);
-    }
+    StackFrameCursor cursor(stack);
+    cursor.ProcessAll(func, mutator);
 }
 
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
@@ -38,31 +35,25 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 {
     (void)slotRootVisitor;
     (void)young;
-    ResetRegisterMap();
-    for (const auto& frame : stack) {
-        StackFrameCursor::ProcessFrame(frame, RegisterMap(), regRootVisitor, mutator, &derivedPtrVisitor, young);
-        PublishCalleeRegisters(frame);
-    }
+    StackFrameCursor cursor(stack);
+    cursor.ProcessAll(regRootVisitor, mutator, &derivedPtrVisitor, young);
 }
 
 void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 {
-    ResetRegisterMap();
-    for (auto frame : stacks) {
-        FrameInfo &ref = *frame;
-        if (frame->GetFrameType() == FrameType::MANAGED) { currentFramePtr = frame; }
-        StackFrameCursor::ProcessFrame(ref, RegisterMap(), func, mutator);
-        PublishCalleeRegisters(ref);
+    StackFrameCursor cursor(stacks);
+    while (!cursor.Done()) {
+        if (cursor.CurrentFrame()->GetFrameType() == FrameType::MANAGED) {
+            currentFramePtr = stacks[cursor.Cursor()];
+        }
+        cursor.ProcessOne(func, mutator);
     }
 }
 #else
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
-    ResetRegisterMap();
-    for (const auto& frame : stack) {
-        StackFrameCursor::ProcessFrame(frame, RegisterMap(), func, mutator);
-        PublishCalleeRegisters(frame);
-    }
+    StackFrameCursor cursor(stack);
+    cursor.ProcessAll(func, mutator);
 
 #ifdef INTERPRETER_ENABLED
     auto markingStackVisitor = [this, &func](DYN_VisitingState state) {
@@ -104,11 +95,8 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                              bool young) const
 {
     (void)young;
-    ResetRegisterMap();
-    for (const auto& frame : stack) {
-        StackFrameCursor::ProcessFrame(frame, RegisterMap(), regRootVisitor, mutator, &derivedPtrVisitor, young);
-        PublishCalleeRegisters(frame);
-    }
+    StackFrameCursor cursor(stack);
+    cursor.ProcessAll(regRootVisitor, mutator, &derivedPtrVisitor, young);
 
 #ifdef INTERPRETER_ENABLED
     auto adjustingStackVisitor = [this, &slotRootVisitor, &derivedPtrVisitor](DYN_VisitingState state) {
@@ -136,12 +124,12 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
 void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 {
-    ResetRegisterMap();
-    for (auto frame : stacks) {
-        FrameInfo &ref = *frame;
-        if (frame->GetFrameType() == FrameType::MANAGED) { currentFramePtr = frame; }
-        StackFrameCursor::ProcessFrame(ref, RegisterMap(), func, mutator);
-        PublishCalleeRegisters(ref);
+    StackFrameCursor cursor(stacks);
+    while (!cursor.Done()) {
+        if (cursor.CurrentFrame()->GetFrameType() == FrameType::MANAGED) {
+            currentFramePtr = stacks[cursor.Cursor()];
+        }
+        cursor.ProcessOne(func, mutator);
     }
 }
 #endif

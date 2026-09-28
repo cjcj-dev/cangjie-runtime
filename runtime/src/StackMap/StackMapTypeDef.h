@@ -73,7 +73,7 @@ struct RegSlotsMap {
     }
 
     bool VisitSingleSlotsRoot(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegisterNum reg,
-                              std::list<BasePtrType>* rootsList = nullptr)
+                              std::list<BasePtrType>* rootsList = nullptr) const
     {
         if (!HasReg(reg)) {
             LOG(RTLOG_ERROR, "register %s is not recorded", GetRegisterName(reg));
@@ -89,7 +89,7 @@ struct RegSlotsMap {
         return true;
     }
 
-    bool VisitDoubleSlotsRoot(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegisterNum reg)
+    bool VisitDoubleSlotsRoot(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegisterNum reg) const
     {
         if (!HasReg(reg)) {
             LOG(RTLOG_ERROR, "register %s is not recorded", GetRegisterName(reg));

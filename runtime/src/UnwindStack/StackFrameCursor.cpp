@@ -104,7 +104,7 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
             roots.push_back(ReturnRegisterRoot { &slot, object });
         }
     };
-    (void)map.VisitRegRoots(capture, nullptr, const_cast<RegSlotsMap&>(saved));
+    (void)map.VisitRegRoots(capture, nullptr, saved);
 #else
     (void)frame;
     (void)roots;
@@ -114,14 +114,9 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
 void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
                                          const RegSlotsMap& regSlotsMap, const FrameInfo& frame)
 {
-    (void)regSlotsMap;
 #if defined(__x86_64__) || defined(__aarch64__)
     ElfUnloadQuiescence::ReadScope metadataReader;
-    // This frame's own save area. The walk map is updated only by Next().
-    // oopMap.cpp:493-522 / frame_x86.inline.hpp:459.
-    RegSlotsMap saved;
-    RegRoot::RecordStubAllRegister(saved, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-    saved.allRegistersSaved = false;
+    // Next() has published this stub's saves into the stream's sole map.
 #if defined(__x86_64__)
     constexpr RegisterNum startRegister = R10;
     constexpr RegisterNum siteRegister = R11;
@@ -129,8 +124,8 @@ void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const Deri
     constexpr RegisterNum startRegister = X17;
     constexpr RegisterNum siteRegister = X16;
 #endif
-    const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(saved.addrMap[startRegister]);
-    const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(saved.addrMap[siteRegister]);
+    const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[startRegister]);
+    const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[siteRegister]);
     // safepoint.cpp:818-839 / codeCache.cpp:750-759: the returned frame
     // is gone; resolve its map by PC before protecting the saved return oop.
     const auto descriptor = MFuncDesc::GetFuncDesc(startPC);
@@ -145,7 +140,7 @@ void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const Deri
     // returned map may be visited here.
     (void)derivedPtrVisitor;
     if (roots.IsValid()) {
-        roots.VisitRegRoots(visitor, nullptr, const_cast<RegSlotsMap&>(saved));
+        roots.VisitRegRoots(visitor, nullptr, regSlotsMap);
     }
 #else
     (void)visitor; (void)derivedPtrVisitor; (void)regSlotsMap; (void)frame;
@@ -162,8 +157,11 @@ bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
         return false;
     }
 
-    ProcessFrame(*CurrentFrame(), RegMap(), visitor, mutator, derivedPtrVisitor, young);
-    Advance();
+    const FrameInfo frame = *CurrentFrame();
+    const bool returning = frame.GetFrameType() == FrameType::RETURN_SAFEPOINT;
+    if (returning) { Advance(); }
+    ProcessFrame(frame, RegMap(), visitor, mutator, derivedPtrVisitor, young);
+    if (!returning) { Advance(); }
     return true;
 }
 
@@ -202,16 +200,9 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
     DerivedPtrVisitor derived =
         derivedPtrVisitor != nullptr ? *derivedPtrVisitor : Mutator::MakeDerivedRootVisitor(visitor);
     if (heapMap.IsValid()) {
-        // HotSpot frame_x86.inline.hpp:455-464: compiled calls cannot carry
-        // callee-saved GC roots. Poll/stackcheck blobs supply a full register map
-        // only for their immediate caller; returns use ProcessReturnFrame.
-        if (!regSlotsMap.allRegistersSaved && heapMap.HasRegisterRoots()) {
-            LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, start ip: %p frame pc: %p",
-                reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP));
-        }
-        heapMap.VisitDerivedPtr(derived, nullptr, const_cast<RegSlotsMap&>(regSlotsMap));
+        heapMap.VisitDerivedPtr(derived, nullptr, regSlotsMap);
         heapMap.VisitSlotRoots(visitor, slotDebugFunc);
-        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, const_cast<RegSlotsMap&>(regSlotsMap))) {
+        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }

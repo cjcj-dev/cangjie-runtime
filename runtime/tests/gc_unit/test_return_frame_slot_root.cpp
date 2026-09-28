@@ -231,7 +231,9 @@ GC_TEST(ReturnFrameSlotRoot, ReturnPointMapIsNotVisitedThroughStackBase)
     machine.SetFA(stub);
     machine.SetSP(reinterpret_cast<uintptr_t>(&gStubArea[0]));
     const FrameInfo frame(machine, FrameType::RETURN_SAFEPOINT);
-    RegSlotsMap regSlotsMap;
+    const std::vector<FrameInfo> frames {frame};
+    StackFrameCursor cursor(frames);
+    Mutator owner;
     size_t rootVisits = 0;
     size_t derivedVisits = 0;
     const RootVisitor roots = [&](RootSlot& slot) {
@@ -248,7 +250,7 @@ GC_TEST(ReturnFrameSlotRoot, ReturnPointMapIsNotVisitedThroughStackBase)
     {
         FaultScope scope;
         if (sigsetjmp(gFaultJump, 1) == 0) {
-            StackFrameCursor::ProcessReturnFrame(roots, &derived, regSlotsMap, frame);
+            cursor.ProcessAll(roots, owner, &derived);
         }
     }
     // The product result, read back from the stub frame after the call.
