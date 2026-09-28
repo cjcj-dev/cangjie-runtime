@@ -304,8 +304,13 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
 
 bool SignalManager::HandleUnexpectedSignal(int sig, siginfo_t* info, void* context)
 {
+    // signals_posix.cpp:637-641 platform step: AS-safe checks only.
+    // Crash text (PrintSignalHandlerStack/EmitCrashRec) is the fatal report
+    // at SignalStack::Handler, signals_posix.cpp:650-655.
+    (void)sig;
+    (void)info;
+    (void)context;
     CheckSuspendState();
-    PrintSignalHandlerStack(sig, info, context);
     return false;
 }
 
@@ -414,12 +419,13 @@ bool SignalManager::HandleUnexpectedSIGUSR1(int sig, siginfo_t* info, void* cont
 // Handle unexpected SIGSEGV
 bool SignalManager::HandleUnexpectedSigsegv(int sig, siginfo_t* info, void* context)
 {
+    (void)sig;
+    (void)context;
     CheckSuspendState();
     // Do more functional things here.
     if (info != nullptr) {
         CheckStackOverflow(*info);
     }
-    PrintSignalHandlerStack(sig, info, context);
     return false;
 }
 

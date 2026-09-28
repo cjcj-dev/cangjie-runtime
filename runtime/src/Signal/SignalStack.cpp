@@ -201,6 +201,10 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* context)
         handled = CallChainedHandler(signal, siginfo, context);
     }
     if (!handled) {
+        // signals_posix.cpp:650-655 VMError::report_and_die. Symbolization
+        // (dladdr/sprintf in PrintSignalHandlerStack) belongs here, not in
+        // the platform step at signals_posix.cpp:637-641.
+        PrintSignalHandlerStack(signal, siginfo, context);
         LogHandleSignalAsSafe(signal);
         RaiseDefaultAsSafe(signal);
     }
