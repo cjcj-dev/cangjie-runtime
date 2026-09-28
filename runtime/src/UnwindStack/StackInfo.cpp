@@ -284,6 +284,11 @@ void StackFrameStream::CheckRegisterRoots() const
     if (frame.GetFrameType() != FrameType::MANAGED || regSlotsMap.allRegistersSaved) { return; }
     const uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
+#ifdef __APPLE__
+    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) { return; }
+#else
+    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) { return; }
+#endif
     HeapReferenceMap roots = StackMapBuilder(startIP, frameIP,
         reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<HeapReferenceMap>(true);
     if (roots.IsValid() && roots.HasRegisterRoots()) {

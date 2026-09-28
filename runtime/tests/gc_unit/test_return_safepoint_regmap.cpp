@@ -118,7 +118,9 @@ namespace {
 // Metadata and frame bytes are inputs; all classification, unwinding, location
 // propagation and pointer consumption happen in the linked product SO.
 struct PointerChain {
-    Descriptor desc {};
+    static Descriptor descStorage;
+    Descriptor& desc = descStorage;
+    std::memset(&descStorage, 0, sizeof(descStorage));
     alignas(16) uintptr_t frames[14][64] {};
     StackGrowConfig savedGrow = CangjieRuntime::stackGrowConfig;
     uint32_t savedEpoch = *ZPointerStoreGoodMaskLowOrderBitsAddr;
