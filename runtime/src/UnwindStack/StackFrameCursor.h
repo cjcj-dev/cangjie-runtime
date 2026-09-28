@@ -69,8 +69,6 @@ public:
     };
     // safepoint.cpp:818-824: return oops are named before the request is processed.
     static void CollectReturnRegisterRoots(const FrameInfo& frame, std::vector<ReturnRegisterRoot>& roots);
-    static void ProcessReturnFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
-                                   const RegSlotsMap& regSlotsMap, const FrameInfo& frame);
     static void ProcessManagedFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
                                     const RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
     static void ProcessFrame(const FrameInfo& frame, const RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
