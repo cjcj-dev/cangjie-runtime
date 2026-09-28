@@ -5,6 +5,9 @@
 #include "Heap/z/zHeap.hpp"
 #include "SignalManager.h"
 #include "Base/Log.h"
+#include "ObjectModel/MObject.h"
+#include "ExceptionManager.h"
+#include "CJThread/src/runtime/schedule/include/schedule.h"
 #include <cerrno>
 #include <sys/syscall.h>
 #include <atomic>
@@ -50,6 +53,37 @@ static bool RecordSignal(int sig, siginfo_t*, void*)
 extern "C" __attribute__((noinline)) void* SignalWatermarkWork(void*)
 {
     MapleRuntime::Heap::GetHeap().RequestGC(MapleRuntime::GC_REASON_USER);
+    return nullptr;
+}
+
+namespace MapleRuntime {
+extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
+extern "C" void MCC_ThrowException(ExceptionRef);
+}
+static MapleRuntime::ExceptionRef pendingException;
+extern "C" __attribute__((noinline)) void SignalThrowAgain()
+{
+    MapleRuntime::MCC_ThrowException(pendingException);
+}
+static void* SignalExceptionWork(void*)
+{
+    using namespace MapleRuntime;
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(64);
+    pendingException = MCC_NewObject(type, 64 + TYPEINFO_PTR_SIZE);
+    SignalThrowAgain();
+    return nullptr;
+}
+static void* SignalGuardWork(void*)
+{
+    // Touch the actual guard page allocated for this runtime task. No fake
+    // siginfo, watermark, mutator state or direct handler invocation.
+    auto* guard = static_cast<volatile char*>(CJThreadStackAddrGet()) - 1;
+    std::fprintf(stderr, "SIGNAL_GUARD_INPUT address=%p in_guard=%d\n",
+                 const_cast<char*>(guard), CJThreadIsStackGuardAddress(const_cast<char*>(guard)));
+    *guard = 1;
     return nullptr;
 }
 
@@ -112,6 +146,11 @@ int main(int argc, char** argv)
         waitForNotification();
         std::fprintf(stderr, "SIGNAL_IGNORE_TARGET executed=1 managed=%d\n", delivered.load());
         std::_Exit(delivered.load() == (notificationFirst ? sig : 0) ? 0 : 1);
+    } else if (std::strcmp(argv[1], "guard") == 0 || std::strcmp(argv[1], "exception") == 0) {
+        auto task = RunCJTask(std::strcmp(argv[1], "guard") == 0 ? SignalGuardWork : SignalExceptionWork, nullptr);
+        void* result = nullptr;
+        if (task == nullptr || GetTaskRet(task, &result) != E_OK) { return 4; }
+        return 1;
     } else if (std::strcmp(argv[1], "watermark") == 0) {
         auto task = RunCJTask(SignalWatermarkWork, nullptr);
         void* result = nullptr;

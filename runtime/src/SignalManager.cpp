@@ -28,9 +28,6 @@
 #include "Inspector/CjHeapData.h"
 #include "Heap/z/zDriver.hpp"
 #include "securec.h"
-#ifdef COV_SIGNALHANDLE
-extern "C" void __gcov_dump(void);
-#endif
 namespace MapleRuntime {
 
 namespace {
