@@ -6,6 +6,8 @@
 #include "Heap/z/zThreadLocalData.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.h"
+#include "Mutator/ThreadSMR.h"
+#include "Mutator/VMOperation.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -681,6 +683,16 @@ void ZStackWatermark::OnStackGrow(intptr_t offset)
 {
     std::lock_guard<std::mutex> guard(lock);
     ShiftForGrow(offset);
+}
+
+// HotSpot runtime/stackWatermarkSet.cpp:163-171.
+void StackWatermarkSet::safepoint_synchronize_begin()
+{
+    if (VMThread::vm_operation()->skip_thread_oop_barriers()) { return; }
+    ThreadsListHandle threads;
+    for (size_t i = 0; i < threads.length(); ++i) {
+        start_processing(*threads.thread_at(i));
+    }
 }
 
 void StackWatermarkSet::on_safepoint(Mutator& mutator) { mutator.GetStackWatermark().on_safepoint(); }

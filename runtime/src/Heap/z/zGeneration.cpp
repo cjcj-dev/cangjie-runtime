@@ -194,12 +194,13 @@ bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 
 
 
-class VM_ZOperation {
+class VM_ZOperation : public VMOperation {
 public:
     virtual ~VM_ZOperation() = default;
     virtual bool do_operation() = 0;
     virtual const char* name() const = 0;
     virtual bool block_jni_critical() const { return false; }
+    bool skip_thread_oop_barriers() const override { return true; }
     bool pause()
     {
         if (block_jni_critical()) {
@@ -207,7 +208,7 @@ public:
         }
         bool success = false;
         {
-            ScopedStopTheWorld stw(name(), false);
+            ScopedStopTheWorld stw(name(), false, 0, this);
             // zGeneration.cpp:432-452: skip_thread_oop_barriers, then verify.
             // Frame slots are healed on safepoint exit (Mutator.h:175), not here.
             ZVerify::BeforeZOperation();

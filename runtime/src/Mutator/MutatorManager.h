@@ -24,6 +24,7 @@
 #include "Base/RwLock.h"
 #include "Common/PageAllocator.h"
 #include "Mutator.h"
+#include "VMOperation.h"
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
 #include "SafepointPageManager.h"
 #endif
@@ -156,7 +157,7 @@ public:
     bool TlsHasMarkFlushPending(ThreadLocalData* tls);
 
     // Some functions about stw
-    void StopTheWorld();
+    void StopTheWorld(VMOperation* operation);
     void StartTheWorld() noexcept;
     void StartLightSync();
     void StopLightSync() noexcept;
@@ -348,10 +349,10 @@ public:
 class ScopedStopTheWorld {
 public:
     __attribute__((always_inline)) explicit ScopedStopTheWorld(const char* gcReason, bool = false,
-        int = 0) : reason(gcReason)
+        int = 0, VMOperation* operation = nullptr) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
-        MutatorManager::Instance().StopTheWorld();
+        MutatorManager::Instance().StopTheWorld(operation == nullptr ? &defaultOperation : operation);
         stoppedTime = TimeUtil::NanoSeconds();
     }
 
@@ -371,6 +372,7 @@ public:
 
 
 private:
+    VMOperation defaultOperation;
     const char* reason = nullptr;
     uint64_t startTime = 0;
     uint64_t stoppedTime = 0;

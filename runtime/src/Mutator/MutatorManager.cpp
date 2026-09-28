@@ -430,12 +430,6 @@ void MutatorManager::DemandSuspensionForSync()
         mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
     });
     ArmAllThreadPolls();
-    class SyncHandshakeClosure : public HandshakeClosure {
-    public:
-        SyncHandshakeClosure() : HandshakeClosure("STW") {}
-        void do_thread(Mutator*) override {}
-    } cl;
-    Handshake::execute(&cl);
 }
 
 void MutatorManager::RegisterMarkFlushThread(ThreadLocalData* tls)
@@ -467,7 +461,9 @@ bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
     return pending;
 }
 
-void MutatorManager::StopTheWorld()
+VMOperation* VMThread::currentOperation = nullptr;
+
+void MutatorManager::StopTheWorld(VMOperation* operation)
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     bool saferegionEntered = false;
@@ -479,6 +475,7 @@ void MutatorManager::StopTheWorld()
     }
 #endif
     syncMutex.lock();
+    VMThread::currentOperation = operation;
     // ZGC safepoint.cpp:341: suspend GC workers before locking the thread
     // list, since concurrent root workers can still be visiting that list.
     if (ZCollectedHeap::heap() != nullptr) {
@@ -527,6 +524,7 @@ void MutatorManager::StartTheWorld() noexcept
     if (ZCollectedHeap::heap() != nullptr) {
         ZCollectedHeap::heap()->safepoint_synchronize_end();
     }
+    VMThread::currentOperation = nullptr;
     // Release syncMutex to allow other thread call STW.
     syncMutex.unlock();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)

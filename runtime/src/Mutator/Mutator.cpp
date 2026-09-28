@@ -58,7 +58,13 @@ extern "C" bool MRT_LeaveSaferegion()
     if (mutator == nullptr) {
         return false;
     }
-    return mutator->LeaveSaferegion();
+    const bool transitioned = mutator->LeaveSaferegion();
+    if (transitioned) {
+        // HotSpot javaThread.cpp:1103-1118. This C ABI is the native ->
+        // managed transition used by N2C/I2N/ExclusiveScope stubs.
+        StackWatermarkSet::before_unwind(*mutator);
+    }
+    return transitioned;
 }
 
 extern "C" void MRT_SetGrowFlag(bool flag)
