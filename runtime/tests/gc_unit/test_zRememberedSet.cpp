@@ -18,3 +18,19 @@ GC_TEST(ZRememberedSetShape, FlipMovesCurrentToPrevious)
     GC_EXPECT_TRUE(remset.is_cleared_current());
     GC_EXPECT_TRUE(remset.at_previous(sizeof(RefField<>)));
 }
+
+#include "Heap/z/zPage.inline.hpp"
+#include "Heap/z/zVirtualMemory.inline.hpp"
+
+GC_COMPONENT_TEST(ZRememberedSetShape, PageRememberPublishesCurrentBit)
+{
+    ZPage page(ZPageType::small, PageAge::old,
+               ZVirtualMemory(to_zoffset(ZPageSizeSmall), ZPageSizeSmall));
+    auto* field = reinterpret_cast<volatile zpointer*>(page.GetRegionStart() + sizeof(zpointer));
+    GC_EXPECT_FALSE(page.is_remembered(field));
+    page.remember(field);
+    const bool remembered = page.is_remembered(field);
+    std::fprintf(stderr, "PAGE_REMEMBER_CURRENT_ASSERT remembered=%d\n", remembered);
+    GC_EXPECT_TRUE(remembered);
+    GC_EXPECT_FALSE(page.is_remembered_previous(field));
+}
