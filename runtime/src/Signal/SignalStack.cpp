@@ -6,6 +6,7 @@
 
 
 #include "SignalStack.h"
+#include "SignalManager.h"
 #include "Cangjie.h"
 
 #include <dlfcn.h>
@@ -188,6 +189,7 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* context)
             case SIGILL:
             case SIGABRT:
             case SIGTRAP:
+                handled = SignalManager::HandlePlatformSignal(signal, siginfo, context);
                 break;
             default:
                 NotifySignal(signal);
@@ -200,7 +202,6 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* context)
     }
     if (!handled) {
         LogHandleSignalAsSafe(signal);
-        PrintSignalHandlerStack(signal, siginfo, context);
         RaiseDefaultAsSafe(signal);
     }
     errno = savedErrno;

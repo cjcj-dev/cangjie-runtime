@@ -37,6 +37,8 @@ public:
     // Fini the signal manager
     void Fini();
 
+    static bool HandlePlatformSignal(int sig, siginfo_t* info, void* context);
+
     static void AddHandlerToSignalStack(int signal, SignalAction* sa);
     static void RemoveHandlerFromSignalStack(int signal, bool (*fn)(int, siginfo_t*, void*));
 
