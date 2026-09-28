@@ -71,7 +71,8 @@ void RunCapture(bool registerBase, bool oop, bool derivedRegister, U32 derivedCo
     };
     map.VisitDerivedPtr(derived, nullptr, locations);
     const bool baseAvailable = locations.HasReg(Register::RBX);
-    const bool derivedConsumed = !locations.HasReg(Register::R12);
+    // oopMap.cpp:493-522 leaves the location in the map after the oop is visited.
+    const bool derivedKept = !derivedRegister || locations.HasReg(Register::R12);
     U32 baseVisits = 0;
     RootVisitor ordinary = [&](RootSlot& slot) {
         ++baseVisits;
@@ -89,16 +90,16 @@ void RunCapture(bool registerBase, bool oop, bool derivedRegister, U32 derivedCo
     GC_EXPECT_TRUE(originalBase);
     GC_EXPECT_EQ(derivedVisits, derivedCount);
     if (derivedRegister && derivedCount) {
-        GC_EXPECT_TRUE(derivedConsumed);
+        GC_EXPECT_TRUE(derivedKept);
         GC_EXPECT_EQ(derivedReg, uintptr_t(0x20008));
     } else if (derivedCount) {
         GC_EXPECT_EQ(frame[1], uintptr_t(0x20008));
         if (derivedCount == 2) { GC_EXPECT_EQ(frame[0], uintptr_t(0x20018)); }
     }
     if (registerBase && !missing) {
-        GC_EXPECT_FALSE(locations.HasReg(Register::RBX));
+        GC_EXPECT_TRUE(locations.HasReg(Register::RBX));
         GC_EXPECT_EQ(baseReg, uintptr_t(0x20000));
-        // The next frame supplies a new saved location after real consumption.
+        // The sender's prologue slot replaces the location; the map is not cleared.
         PrologueRegisterClosure next;
         next.calleeSaved.push_back(0); next.offset.push_back(1);
         next.RecordCalleeSaved(locations, reinterpret_cast<Uptr>(&frame[2]));

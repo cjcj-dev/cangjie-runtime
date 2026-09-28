@@ -11,6 +11,8 @@
 #include <cstring>
 
 #include "Loader/ElfUnloadQuiescence.h"
+#include "Mutator/Mutator.h"
+#include "Mutator/ThreadLocal.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "UnwindStack/StackGrowStackInfo.h"
@@ -126,10 +128,14 @@ GC_TEST(ReturnSafepointRegMap, StreamAndStackGrowShareStubSlot)
     const uintptr_t sentinel = 0x2000;
     SlotAddress expected = nullptr;
     const FrameInfo frame = MakeReturnFrame(sentinel, &expected);
+    Mutator owner;
+    Mutator* saved = ThreadLocal::GetMutator();
+    ThreadLocal::SetMutator(&owner);
     StackFrameStream stream;
     stream.PublishCalleeRegisters(frame);
     StackGrowStackInfo grow;
     grow.PublishCalleeRegisters(frame);
+    ThreadLocal::SetMutator(saved);
     const SlotAddress streamSlot = stream.RegisterMap().addrMap[R13];
     const SlotAddress growSlot = grow.RegisterMap().addrMap[R13];
     std::fprintf(stderr, "RETURN_SPILL_SHARED stream=%p grow=%p expected=%p\n",
