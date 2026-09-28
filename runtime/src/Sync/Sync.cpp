@@ -24,6 +24,12 @@
 #endif
 
 namespace MapleRuntime {
+// Compiler mutex fast paths consume these fields (HotSpot offsets are VM-owned:
+// macroAssembler_x86.cpp:2594). Generate compiler constants from these assertions.
+static_assert(offsetof(CJMutex, ownerThreadId) == 8, "compiler layout MutexOwnerOffset");
+static_assert(offsetof(CJMutex, ownCount) == 16, "compiler layout MutexCountOffset");
+static_assert(offsetof(CJMutex, state) == 24, "compiler layout MutexStateOffset");
+
 template<typename T>
 static T CastToT(const void* ptr)
 {
@@ -237,6 +243,7 @@ int MCC_MutexInit(void* ptr)
 const int64_t SPINNING = 0x1;
 const int64_t STARVING = 0x2;
 const int64_t LOCKED  = 0x4;
+static_assert(LOCKED == 4, "compiler layout MutexLocked");
 const int64_t WAITER_UNIT_SHIFT = 3;
 const int64_t WAITER_UNIT = 1 << WAITER_UNIT_SHIFT;
 const uint64_t STARVING_THRESHOLD = 1000; // 1000us

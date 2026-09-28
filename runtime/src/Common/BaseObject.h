@@ -108,6 +108,7 @@ protected:
     // caller should ensure that address is valid (not doing null check here)
     static inline BaseObject* SetClassInfo(MAddress address, TypeInfo* klass)
     {
+        static_assert(offsetof(BaseObject, stateWord) == 0, "compiler layout ObjectStateWordOffset");
         auto ref = from_alloc_addr(address);
         // Whole word, not just the address halves: this memory may have been a from-version, and
         // SetTypeInfo would leave its stateCode behind (StateWord::InitTypeInfoAndState).
@@ -127,6 +128,8 @@ private:
     // The only contract between Managed Heap and other modules
     StateWord stateWord;
 };
+
+static_assert(sizeof(BaseObject) == 8, "compiler layout ObjectHeaderSize");
 
 using ObjectPtr = BaseObject*;
 using ObjectVisitor = std::function<void(ObjectPtr)>;
