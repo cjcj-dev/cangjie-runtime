@@ -1,18 +1,10 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 //
-// HotSpot safepoint.cpp:800-806 protects the value a returning frame hands back
-// through one saved register slot (cpu/x86/frame_x86.inline.hpp:371-376); no
-// stack base is involved. StackFrameCursor::ProcessReturnFrame builds the
-// return-point map with base 0 (StackFrameCursor.cpp:136), so nothing in that
-// map may be visited through the base: HeapReferenceMap::VisitDerivedPtr
-// (StackMap.h:130-149) unconditionally scans slot roots at stackBase + bias and
-// SlotRoot::VisitGCRoots (SlotRoot.h:52-75) loads through that address.
-//
-// The return-point metadata is fabricated in-process (the pattern already used
-// by test_remap_young_roots.cpp) so the row really carries one register root
-// and one slot root. The product decoder builds the map; only the metadata
-// bytes and the stub frame are supplied by the test.
+// HotSpot safepoint.cpp:794-837: return oops are protected by Handles, not
+// by the return-poll frame's oopmap. Even metadata naming register and stack
+// roots must not cause a frame visitor to access either kind of root.
+// Fabricated metadata provides a positive control for the product decoder.
 
 #include <csignal>
 #include <cstdint>
@@ -191,7 +183,7 @@ struct FaultScope {
 
 // The returned frame has no stack base, so a return-point map that names a slot
 // root must not send the product to that slot: no fault, no derived visit, and
-// the returned register root still protected.
+// the returned register is unchanged by frame traversal.
 GC_TEST(ReturnFrameSlotRoot, ReturnPointMapIsNotVisitedThroughStackBase)
 {
     const StackGrowConfig savedGrow = CangjieRuntime::stackGrowConfig;
@@ -262,9 +254,8 @@ GC_TEST(ReturnFrameSlotRoot, ReturnPointMapIsNotVisitedThroughStackBase)
         static_cast<const void*>(returned));
     GC_EXPECT_FALSE(gFaulted != 0);
     GC_EXPECT_EQ(derivedVisits, size_t {0});
-    GC_EXPECT_EQ(rootVisits, size_t {1});
-    // The register root the product protected and rewrote is read back from the
-    // stub frame: the returned value is the one this visitor published.
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(kept), reinterpret_cast<uintptr_t>(expected));
+    GC_EXPECT_EQ(rootVisits, size_t {0});
+    // Only HandleReturnSafepoint may write the returned reference back.
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(kept), reinterpret_cast<uintptr_t>(returned));
 }
 #endif
