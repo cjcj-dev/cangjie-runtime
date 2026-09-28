@@ -296,6 +296,10 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
     ScheduleSetToCurrentThread(scheduler);
+    lck.unlock();
+#ifndef _WIN64
+    MapleRuntime::SignalStack::StartDispatcher();
+#endif
 #if defined(__IOS__)
     auto* loader = MapleRuntime::LoaderManager::GetInstance()->GetLoader();
     MapleRuntime::BaseFile* initFile = nullptr;
@@ -400,6 +404,9 @@ RTErrorCode FiniCJRuntime()
             MapleRuntime::MutatorManager::Instance().TransitMutatorToExit();
         }
         ScheduleHandle scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
+#ifndef _WIN64
+        MapleRuntime::SignalStack::StopDispatcher();
+#endif
         ScheduleStopOutside(scheduler);
         MapleRuntime::CangjieRuntime::FiniAndDelete();
         return E_OK;

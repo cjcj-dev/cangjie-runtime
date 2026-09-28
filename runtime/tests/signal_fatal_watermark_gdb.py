@@ -79,13 +79,13 @@ try:
         print('GDB_ERROR lock not owned by injected thread', flush=True)
         gdb.execute('quit 5')
 
-    sig = os.environ.get('FATAL_SIGNAL', '6')
-    print('FATAL_INJECTING signal=%s' % sig, flush=True)
-    # `signal` resumes the inferior delivering the signal to this thread
-    # before it executes another instruction, while it still holds the lock.
-    # Returns only if the process survives or stops; a hang never returns and
-    # is captured by the checker (SIGKILL of gdb + fresh attach).
-    gdb.execute('signal %s' % sig)
+    print('FATAL_INJECTING producer=Logger::FormatLog body=SIGNAL_WATERMARK_REAL_FATAL_1253', flush=True)
+    # Keep the interrupted product frames intact. Inferior-call errors are
+    # not termination evidence: only the termination event and pid death are.
+    try:
+        gdb.execute('call (void) SignalFatal()')
+    except gdb.error as call_error:
+        print('INFERIOR_CALL_RETURN ' + str(call_error).splitlines()[0], flush=True)
     if not inferior_alive(pid):
         print('INFERIOR_TERMINATED pid=%d' % pid, flush=True)
         gdb.execute('quit 0')

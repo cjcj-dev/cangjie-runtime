@@ -45,7 +45,10 @@ public:
     void RemoveHandler(bool (*fn)(int, siginfo_t*, void*));
 
     static void Handler(int signal, siginfo_t* siginfo, void* ucontextRaw);
-    static void HandlerImpl(void* args);
+    static void HandlerImpl(int signal);
+    static void* DispatchSignals(void*);
+    static void StartDispatcher();
+    static void StopDispatcher();
     static void InitializeSignalStack();
     static SignalStack* GetStacks() { return stacks; }
     struct sigaction sigAction;

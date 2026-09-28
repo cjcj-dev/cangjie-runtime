@@ -39,6 +39,12 @@ LD_LIBRARY_PATH="$ARM_LIB_DIR" ldd "$bin" | /usr/bin/grep -E 'cangjie|boundschec
 cat "$arm_dir/identity.sha256" "$arm_dir/ldd.txt"
 
 rc_all=0
+for mode in native native-info ignored; do
+    LD_LIBRARY_PATH="$ARM_LIB_DIR" timeout --signal=KILL 30 "$bin" "$mode" 6 > "$arm_dir/$mode.log" 2>&1
+    native_rc=$?
+    echo "${mode}_RC=$native_rc" | tee "$arm_dir/$mode.rc"
+    [ "$native_rc" = 0 ] || rc_all=1
+done
 
 echo "== arm[$ARM_NAME]: normal signal (SIGUSR1) non-regression =="
 LD_LIBRARY_PATH="$ARM_LIB_DIR" timeout --signal=KILL 60 "$bin" normal 10 > "$arm_dir/normal.log" 2>&1
@@ -128,7 +134,7 @@ elif [ "$verdict" = "terminated" ]; then
     elif ! /usr/bin/grep -q 'Program terminated with signal SIGABRT' "$log"; then
         echo "WATERMARK_ARM_NO_SIGNAL_TERM (gdb did not observe SIGABRT termination)"
         rc_all=1
-    elif ! /usr/bin/grep -q 'CJNative Handle signal: 6' "$log" || ! /usr/bin/grep -q 'signal SIGABRT (6)' "$log"; then
+    elif ! /usr/bin/grep -q ' F SIGNAL_WATERMARK_REAL_FATAL_1253' "$log" || ! /usr/bin/grep -q 'assert=SIGNAL_WATERMARK_REAL_FATAL_1253' "$log" || ! /usr/bin/grep -q 'CJNative Handle signal: 6' "$log" || ! /usr/bin/grep -q 'signal SIGABRT (6)' "$log"; then
         echo "WATERMARK_ARM_NOFATAL (fatal diagnostics missing)"
         rc_all=1
     elif ! /usr/bin/grep -q 'WATERMARK_LOCK_TARGET .*held=1' "$log"; then

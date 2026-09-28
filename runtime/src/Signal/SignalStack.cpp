@@ -25,6 +25,13 @@
 #include "Cangjie.h"
 #include "Base/SysCall.h"
 #include "securec.h"
+#include "Common/ScopedObjectAccess.h"
+#include "CJThread/src/syscall/include/inner/syscall_impl.h"
+#ifdef __APPLE__
+#include <mach/mach.h>
+#else
+#include <semaphore.h>
+#endif
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);
 #endif
@@ -33,7 +40,48 @@ SignalStack SignalStack::stacks[_NSIG];
 
 static decltype(&sigaction) g_linkedSignalAction;
 static decltype(&sigprocmask) g_linkedSignalProcmask;
-static pthread_key_t g_sigchainKey;
+// HotSpot signals_posix.cpp:350-377: one counter per signal and a semaphore.
+static std::atomic<int> g_pendingSignals[_NSIG + 1]{};
+static_assert(ATOMIC_INT_LOCK_FREE == 2, "signal counters must be lock-free");
+#ifdef __APPLE__
+static semaphore_t g_signalSemaphore;
+#else
+static sem_t g_signalSemaphore;
+#endif
+static CJThreadHandle g_signalDispatcher = nullptr;
+static std::mutex g_handlerMutex;
+
+static void NotifySignal(int signal)
+{
+    g_pendingSignals[signal].fetch_add(1, std::memory_order_relaxed);
+#ifdef __APPLE__
+    semaphore_signal(g_signalSemaphore);
+#else
+    sem_post(&g_signalSemaphore);
+#endif
+}
+
+static int WaitForSignal()
+{
+    for (;;) {
+        for (int signal = 0; signal <= _NSIG; ++signal) {
+            int pending = g_pendingSignals[signal].load(std::memory_order_relaxed);
+            if (pending > 0 && g_pendingSignals[signal].compare_exchange_strong(
+                pending, pending - 1, std::memory_order_relaxed)) {
+                return signal;
+            }
+        }
+        // semaphore.inline.hpp:33-41: only the dispatcher may transition.
+        ScopedEnterSaferegion blocked(false);
+        SyscallEnter();
+#ifdef __APPLE__
+        while (semaphore_wait(g_signalSemaphore) == KERN_ABORTED) {}
+#else
+        while (sem_wait(&g_signalSemaphore) != 0 && errno == EINTR) {}
+#endif
+        SyscallExit();
+    }
+}
 
 
 // AS-safe helpers for the signal handler path (POSIX async-signal-safe only).
@@ -70,16 +118,6 @@ void LogHandleSignalAsSafe(int signal)
     }
 }
 
-void LogSignalSlotExhaustedAsSafe(int signal)
-{
-    char buf[96];
-    int n = sprintf_s(buf, sizeof(buf), "%d E Signal Handler fail: SignalArgs slots exhausted sig=%d\n",
-                      static_cast<int>(GetTid()), signal);
-    if (n > 0) {
-        WriteAsSafe(buf, static_cast<size_t>(n));
-    }
-}
-
 void RaiseDefaultAsSafe(int signal)
 {
     struct sigaction dfl = {};
@@ -91,56 +129,15 @@ void RaiseDefaultAsSafe(int signal)
 }
 } // namespace
 
-void SigOrSet(sigset_t* dest, const sigset_t* left, const sigset_t* right)
-{
-    if (dest == nullptr || left == nullptr || right == nullptr) {
-        return;
-    }
-
-    // Byte-wise: `_NSIG / 8 / sizeof(long)` is 0 on Apple (NSIG=32, 8-byte
-    // long) and only covers the first word of a 128-byte Linux sigset_t.
-    auto* destination = reinterpret_cast<unsigned char*>(dest);
-    const auto* leftSet = reinterpret_cast<const unsigned char*>(left);
-    const auto* rightSet = reinterpret_cast<const unsigned char*>(right);
-    for (size_t i = 0; i < sizeof(sigset_t); ++i) {
-        destination[i] = static_cast<unsigned char>(leftSet[i] | rightSet[i]);
-    }
-}
-
-static void CreatePthreadKey()
-{
-    static std::once_flag once;
-    std::call_once(once, []() {
-        int rc = pthread_key_create(&g_sigchainKey, nullptr);
-        if (rc != 0) {
-            FLOG(RTLOG_ERROR, "failed to create signalStack pthread key: rc:%d error:%d", rc, errno);
-        }
-    });
-}
-
-static pthread_key_t GetHandlingSignalKey()
-{
-    return g_sigchainKey;
-}
-
-static bool GetHandlingSignal()
-{
-    void* res = pthread_getspecific(GetHandlingSignalKey());
-    return res == nullptr ? false : true;
-}
-
-static void SetHandlingSignal(bool value)
-{
-    pthread_setspecific(GetHandlingSignalKey(), reinterpret_cast<void *>(value));
-}
-
 void SignalStack::AddHandler(SignalAction* sa)
 {
+    std::lock_guard<std::mutex> lock(g_handlerMutex);
     handlerStack.push_back(*sa);
 }
 
 void SignalStack::RemoveHandler(bool (*fn)(int, siginfo_t*, void*))
 {
+    std::lock_guard<std::mutex> lock(g_handlerMutex);
     for (std::vector<SignalAction>::iterator it = handlerStack.begin(); it != handlerStack.end(); it++) {
         if ((*it).saSignalAction == fn) {
             handlerStack.erase(it);
@@ -149,173 +146,99 @@ void SignalStack::RemoveHandler(bool (*fn)(int, siginfo_t*, void*))
     }
 }
 
-struct SignalArgs {
-    int signal;
-    siginfo_t siginfo;
-    ucontext_t ucontext;
-    bool isAsync;
-};
-
-// 2-deep static slots: nested signals take the second; exhausted → DFL+raise (no heap).
-static constexpr size_t kSigArgsSlotCount = 2;
-static SignalArgs g_sigArgsSlots[kSigArgsSlotCount];
-static volatile sig_atomic_t g_sigArgsInUse[kSigArgsSlotCount] = {0, 0};
-
-static SignalArgs* AcquireSignalArgs(int signal, siginfo_t* siginfo, void* ucontextRaw, bool isAsync)
+// HotSpot signals_posix.cpp:404-447. Native chained handlers run on the
+// interrupted thread, with their own mask, before the unhandled-fatal branch.
+static bool CallChainedHandler(int signal, siginfo_t* info, void* context)
 {
-    for (size_t i = 0; i < kSigArgsSlotCount; ++i) {
-        sig_atomic_t expected = 0;
-        if (__atomic_compare_exchange_n(&g_sigArgsInUse[i], &expected, 1, false,
-                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-            g_sigArgsSlots[i].signal = signal;
-            if (siginfo != nullptr) {
-                g_sigArgsSlots[i].siginfo = *siginfo;
-            } else {
-                g_sigArgsSlots[i].siginfo = {};
-            }
-            if (ucontextRaw != nullptr) {
-                g_sigArgsSlots[i].ucontext = *static_cast<ucontext_t*>(ucontextRaw);
-            } else {
-                g_sigArgsSlots[i].ucontext = {};
-            }
-            g_sigArgsSlots[i].isAsync = isAsync;
-            return &g_sigArgsSlots[i];
-        }
-    }
-    return nullptr;
+    auto& action = SignalStack::GetStacks()[signal].sigAction;
+    if (action.sa_handler == SIG_DFL) { return false; }
+    if (action.sa_handler == SIG_IGN) { return true; }
+    const auto handler = action.sa_handler;
+    const auto sigactionHandler = action.sa_sigaction;
+    const int flags = action.sa_flags;
+    sigset_t mask = action.sa_mask;
+    if (!(flags & SA_NODEFER)) { sigaddset(&mask, signal); }
+    if (flags & SA_RESETHAND) { action.sa_handler = SIG_DFL; }
+    sigset_t previous;
+    g_linkedSignalProcmask(SIG_SETMASK, &mask, &previous);
+    if (flags & SA_SIGINFO) { sigactionHandler(signal, info, context); }
+    else { handler(signal); }
+    g_linkedSignalProcmask(SIG_SETMASK, &previous, nullptr);
+    return true;
 }
 
-static void ReleaseSignalArgs(SignalArgs* args)
-{
-    if (args == nullptr) {
-        return;
-    }
-    for (size_t i = 0; i < kSigArgsSlotCount; ++i) {
-        if (args == &g_sigArgsSlots[i]) {
-            __atomic_store_n(&g_sigArgsInUse[i], 0, __ATOMIC_RELEASE);
-            return;
-        }
-    }
-}
-
-// Defined in SignalManager.cpp; emit pc/fa/si_addr before any user saSignalAction.
 void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context);
 
-void SignalStack::Handler(int signal, siginfo_t* siginfo, void* ucontextRaw)
+void SignalStack::Handler(int signal, siginfo_t* siginfo, void* context)
 {
-    LogHandleSignalAsSafe(signal);
-    // HotSpot signals_posix.cpp:642-654: fatal handling stays on the signal
-    // thread, before any managed dispatch or safepoint transition.
-    switch (signal) {
-        case SIGSEGV:
-        case SIGBUS:
-        case SIGILL:
-        case SIGFPE:
-        case SIGABRT:
-        case SIGTRAP:
-            PrintSignalHandlerStack(signal, siginfo, ucontextRaw);
-            RaiseDefaultAsSafe(signal);
-            return;
-        default:
-            break;
+    const int savedErrno = errno;
+    // signals_posix.cpp:637-654: native chain, then unhandled fatal report.
+    if (!CallChainedHandler(signal, siginfo, context)) {
+        switch (signal) {
+            case SIGSEGV:
+            case SIGBUS:
+            case SIGFPE:
+            case SIGILL:
+            case SIGABRT:
+            case SIGTRAP:
+                LogHandleSignalAsSafe(signal);
+                PrintSignalHandlerStack(signal, siginfo, context);
+                RaiseDefaultAsSafe(signal);
+                break;
+            default:
+                // signals_posix.cpp:666-677 UserHandler: no managed entry,
+                // allocation, or VM lock on the interrupted thread.
+                NotifySignal(signal);
+                break;
+        }
     }
-    SignalArgs* args = AcquireSignalArgs(signal, siginfo, ucontextRaw, false);
-    if (args == nullptr) {
-        LogSignalSlotExhaustedAsSafe(signal);
-        RaiseDefaultAsSafe(signal);
-        return;
+    errno = savedErrno;
+}
+
+void SignalStack::HandlerImpl(int signal)
+{
+    // The managed dispatcher owns execution. User signal delivery carries a
+    // signal number, not an interrupted stack (os.cpp:signal_thread_entry).
+    std::vector<SignalAction> handlers;
+    {
+        std::lock_guard<std::mutex> lock(g_handlerMutex);
+        handlers = stacks[signal].handlerStack;
     }
-    args->isAsync = true;
-    if (RunCJTaskSignal(reinterpret_cast<CJTaskFunc>(MapleRuntime::SignalStack::HandlerImpl), args) == NULL) {
-        WriteAsSafeCStr("Signal Handler fail. as RunCJTask return null\n");
-        ReleaseSignalArgs(args);
+    for (auto it = handlers.rbegin(); it != handlers.rend(); ++it) {
+        if (it->saSignalAction == nullptr) { break; }
+        sigset_t previous;
+        g_linkedSignalProcmask(SIG_SETMASK, &it->scMask, &previous);
+        bool handled = it->saSignalAction(signal, nullptr, nullptr);
+        g_linkedSignalProcmask(SIG_SETMASK, &previous, nullptr);
+        if (handled) { return; }
+    }
+    RaiseDefaultAsSafe(signal);
+}
+
+void* SignalStack::DispatchSignals(void*)
+{
+    // os.cpp:371-380: a dedicated managed task, including an exit signal.
+    for (;;) {
+        int signal = WaitForSignal();
+        if (signal == _NSIG) { return nullptr; }
+        HandlerImpl(signal);
     }
 }
 
-void SignalStack::HandlerImpl(void* args)
+void SignalStack::StartDispatcher()
 {
-    // Extract signal arguments
-    SignalArgs* signalArgs = reinterpret_cast<SignalArgs*>(args);
-    int signal = signalArgs->signal;
-    siginfo_t* siginfo = &signalArgs->siginfo;
-    void* ucontextRaw = &signalArgs->ucontext;
-    // Check if we are already handling a signal
-    if (!GetHandlingSignal()) {
-        std::vector<SignalAction>& handlerStack = SignalStack::stacks[signal].handlerStack;
-        for (auto it = handlerStack.rbegin(); it != handlerStack.rend(); ++it) {
-            const SignalAction& handler = *it;
-            if (handler.saSignalAction == nullptr) {
-                break;
-            }
-            // Save the previous signal mask
-            sigset_t previous_mask;
-            g_linkedSignalProcmask(SIG_SETMASK, &handler.scMask, &previous_mask);
-            bool previous_value = GetHandlingSignal();
-            // If the signal is handled asynchronously, signal reentry is allowed
-            // and reentered signals are handled by the registered Cangjie handler since it has no return value.
-            // Otherwise, it is handled by the OS default handler.
-            if (!signalArgs->isAsync) {
-                // marke thread is handling a signal
-                SetHandlingSignal(true);
-            }
-            // Execute the signal handler
-            bool handled = handler.saSignalAction(signal, siginfo, ucontextRaw);
-            g_linkedSignalProcmask(SIG_SETMASK, &previous_mask, nullptr);
-            SetHandlingSignal(previous_value);
-            if (handled) {
-                ReleaseSignalArgs(signalArgs);
-                return;
-            }
-        }
-    }
-    int handlerFlags = SignalStack::stacks[signal].sigAction.sa_flags;
-    ucontext_t* ucontext = static_cast<ucontext_t*>(ucontextRaw);
-    // Combine the signal masks
-    sigset_t mask;
-    SigOrSet(&mask, &ucontext->uc_sigmask, &SignalStack::stacks[signal].sigAction.sa_mask);
-    // Add the current signal to the mask if SA_NODEFER is not set
-    if (!(handlerFlags & SA_NODEFER)) {
-        sigaddset(&mask, signal);
-    }
+    g_signalDispatcher = RunCJTask(DispatchSignals, nullptr);
+    CHECK(g_signalDispatcher != nullptr);
+}
 
-    // Handle the signal based on the signal action
-    if (handlerFlags & SA_SIGINFO) {
-        g_linkedSignalProcmask(SIG_SETMASK, &mask, nullptr);
-#ifdef __APPLE__
-        if (SignalStack::stacks[signal].sigAction.sa_sigaction == nullptr) {
-            WriteAsSafeCStr("Handle unexpected signal action.\n");
-            int retNum = signal + 128; // Signal base return number
-            exit(retNum);
-        }
-#endif
-        // Call the signal action with siginfo and ucontext
-        if (SignalStack::stacks[signal].sigAction.sa_sigaction == nullptr) {
-            ReleaseSignalArgs(signalArgs);
-            RaiseDefaultAsSafe(signal);
-            return;
-        }
-        SignalStack::stacks[signal].sigAction.sa_sigaction(signal, siginfo, ucontextRaw);
-    } else {
-        // Get the signal handler
-        auto handler = SignalStack::stacks[signal].sigAction.sa_handler;
-        if (handler == SIG_IGN) {
-            ReleaseSignalArgs(signalArgs);
-            return;
-        } else if (handler == SIG_DFL) {
-            // Restore default signal handler and re-raise the signal.
-            // Zero heap / zero mutex on this path before raise (AS-safe termination).
-            ReleaseSignalArgs(signalArgs);
-            RaiseDefaultAsSafe(signal);
-            return;
-        } else {
-            g_linkedSignalProcmask(SIG_SETMASK, &mask, nullptr);
-#ifdef COV_SIGNALHANDLE
-            __gcov_dump();
-#endif
-            handler(signal);
-        }
-    }
-    ReleaseSignalArgs(signalArgs);
+void SignalStack::StopDispatcher()
+{
+    if (g_signalDispatcher == nullptr) { return; }
+    NotifySignal(_NSIG);
+    void* result = nullptr;
+    GetTaskRet(g_signalDispatcher, &result);
+    ReleaseHandle(g_signalDispatcher);
+    g_signalDispatcher = nullptr;
 }
 
 template <typename T>
@@ -347,6 +270,11 @@ __attribute__((constructor)) void SignalStack::InitializeSignalStack()
 {
     static std::once_flag once;
     std::call_once(once, []() {
+#ifdef __APPLE__
+        CHECK(semaphore_create(mach_task_self(), &g_signalSemaphore, SYNC_POLICY_FIFO, 0) == KERN_SUCCESS);
+#else
+        CHECK(sem_init(&g_signalSemaphore, 0, 0) == 0);
+#endif
         FindSymbolInLibc(&g_linkedSignalAction, "sigaction");
         FindSymbolInLibc(&g_linkedSignalProcmask, "sigprocmask");
     });
@@ -356,7 +284,6 @@ void SignalStack::Register(int signal)
 {
     struct sigaction handlerAction = {};
     sigfillset(&handlerAction.sa_mask);
-    CreatePthreadKey();
 
     handlerAction.sa_sigaction = SignalStack::Handler;
     handlerAction.sa_flags = SA_RESTART | SA_SIGINFO | SA_ONSTACK;
@@ -448,10 +375,6 @@ void AdjustSignalMask(sigset_t* set)
 int SigProcMask(int how, const sigset_t* newSet, sigset_t* oldSet,
                 int (*linked)(int, const sigset_t*, sigset_t*))
 {
-    if (GetHandlingSignal()) {
-        return linked(how, newSet, oldSet);
-    }
-
     if (newSet == nullptr) {
         return linked(how, newSet, oldSet);
     }

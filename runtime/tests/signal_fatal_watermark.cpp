@@ -4,6 +4,9 @@
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
 #include "SignalManager.h"
+#include "Base/Log.h"
+#include <cerrno>
+#include <sys/syscall.h>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -14,8 +17,30 @@
 
 extern "C" void CJ_MCC_AddSignalHandler(int, SignalAction*);
 static std::atomic<int> delivered{0};
+static std::atomic<long> deliveryThread{0};
+static volatile sig_atomic_t nativeResult = 0;
+static void NativeHandler(int sig)
+{
+    sigset_t mask;
+    sigprocmask(SIG_SETMASK, nullptr, &mask);
+    nativeResult = sigismember(&mask, SIGUSR2) && sigismember(&mask, sig) ? sig : -1;
+}
+static void NativeInfoHandler(int sig, siginfo_t* info, void* context)
+{
+    NativeHandler(sig);
+    if (info == nullptr || context == nullptr) { nativeResult = -2; }
+}
+
+// The debugger calls a real Logger FATAL producer while the selected product
+// frame owns its watermark mutex. No synthetic remembered message or signal.
+extern "C" __attribute__((noinline)) void SignalFatal()
+{
+    LOG(RTLOG_FATAL, "SIGNAL_WATERMARK_REAL_FATAL_1253");
+}
+
 static bool RecordSignal(int sig, siginfo_t*, void*)
 {
+    deliveryThread.store(syscall(SYS_gettid), std::memory_order_relaxed);
     delivered.store(sig, std::memory_order_release);
     return true;
 }
@@ -40,7 +65,34 @@ int main(int argc, char** argv)
     sigemptyset(&action.scMask);
     CJ_MCC_AddSignalHandler(sig, &action);
     std::fprintf(stderr, "SIGNAL_INPUT registered=%d mode=%s\n", sig, argv[1]);
-    if (std::strcmp(argv[1], "watermark") == 0) {
+    if (std::strncmp(argv[1], "native", 6) == 0) {
+        struct sigaction native{};
+        sigemptyset(&native.sa_mask);
+        sigaddset(&native.sa_mask, SIGUSR2);
+        native.sa_flags = SA_RESETHAND;
+        if (std::strcmp(argv[1], "native-info") == 0) {
+            native.sa_flags |= SA_SIGINFO;
+            native.sa_sigaction = NativeInfoHandler;
+        } else {
+            native.sa_handler = NativeHandler;
+        }
+        if (sigaction(sig, &native, nullptr) != 0) { return 5; }
+        std::raise(sig);
+        struct sigaction after{};
+        sigaction(sig, nullptr, &after);
+        bool ok = nativeResult == sig && after.sa_handler == SIG_DFL && delivered.load() == 0;
+        std::fprintf(stderr, "SIGNAL_NATIVE_TARGET executed=1 result=%d reset=%d managed=%d\n",
+                     nativeResult, after.sa_handler == SIG_DFL, delivered.load());
+        std::_Exit(ok ? 0 : 1);
+    } else if (std::strcmp(argv[1], "ignored") == 0) {
+        struct sigaction ignore{};
+        ignore.sa_handler = SIG_IGN;
+        sigemptyset(&ignore.sa_mask);
+        sigaction(sig, &ignore, nullptr);
+        std::raise(sig);
+        std::fprintf(stderr, "SIGNAL_IGNORE_TARGET executed=1 managed=%d\n", delivered.load());
+        std::_Exit(delivered.load() == 0 ? 0 : 1);
+    } else if (std::strcmp(argv[1], "watermark") == 0) {
         auto task = RunCJTask(SignalWatermarkWork, nullptr);
         void* result = nullptr;
         if (task == nullptr || GetTaskRet(task, &result) != E_OK) { return 4; }
@@ -53,7 +105,10 @@ int main(int argc, char** argv)
         }
         const int observed = delivered.load(std::memory_order_acquire);
         std::fprintf(stderr, "SIGNAL_NORMAL_TARGET executed=1 signal=%d observed=%d\n", sig, observed);
-        std::_Exit(observed == sig ? 0 : 1);
+        bool separate = deliveryThread.load() != syscall(SYS_gettid);
+        int fini = FiniCJRuntime();
+        std::fprintf(stderr, "SIGNAL_DISPATCH_TARGET separate=%d fini=%d\n", separate, fini);
+        std::_Exit(observed == sig && separate && fini == E_OK ? 0 : 1);
     }
     std::_Exit(0);
 }
