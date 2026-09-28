@@ -118,4 +118,3 @@ signal_fatal_watermark.cpp                manual     check_signal_fatal_watermar
 run_signal_fatal_watermark.sh             manual     GCV2_RUNTIME_LIB_DIR and SIGNAL_TEST_OUTPUT; compiles signal_fatal_watermark.cpp against the built product pair
 check_signal_fatal_watermark.sh           manual     SIGNAL_TEST_OUTPUT with built binary; gdb python signal_fatal_watermark_gdb.py injects SIGABRT at real watermark lock owner entry
 signal_fatal_watermark_gdb.py             manual     gdb batch script used by check_signal_fatal_watermark.sh; breakpoints at SignalWatermarkWork and ZStackWatermark::start_processing_impl, delivers SIGABRT via gdb `signal`
-signal_fatal_watermark_capture.py         manual     gdb attach script used by check_signal_fatal_watermark.sh hang arm; captures the blocked thread stack and mutex owner after the injecting gdb is SIGKILLed

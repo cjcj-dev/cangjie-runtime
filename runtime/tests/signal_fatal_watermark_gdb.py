@@ -89,8 +89,28 @@ try:
     if not inferior_alive(pid):
         print('INFERIOR_TERMINATED pid=%d' % pid, flush=True)
         gdb.execute('quit 0')
-    print('GDB_ERROR inferior survived fatal signal without termination', flush=True)
-    gdb.execute('quit 4')
+    # Survived: the checker SIGINT-interrupted gdb's `signal` wait and the
+    # inferior is stopped. Capture the post-injection stack of the blocked
+    # thread and prove same-thread reentry: the mutex owner equals the
+    # waiting thread's own tid, so the wait is no artifact of any debugger
+    # thread scheduling.
+    print('WATERMARK_POSTINJECT_STACK', flush=True)
+    trace = gdb.execute('bt 30', to_string=True)
+    for line in trace.splitlines():
+        print('POSTINJECT| ' + line, flush=True)
+    waiter_now = gdb.selected_thread().ptid[1]
+    owner_now = -1
+    frame = gdb.newest_frame()
+    while frame is not None:
+        if 'start_processing_impl' in (frame.name() or ''):
+            frame.select()
+            owner_now = int(gdb.parse_and_eval('this')['lock']['_M_mutex']['__data']['__owner'])
+            break
+        frame = frame.older()
+    print('WATERMARK_SELFLOCK owner=%d waiter=%d same=%d'
+          % (owner_now, waiter_now, owner_now == waiter_now), flush=True)
+    gdb.execute('kill')
+    gdb.execute('quit 3' if owner_now == waiter_now else 'quit 4')
 except gdb.error as err:
     print('GDB_ERROR %s' % str(err).strip().splitlines()[0], flush=True)
     gdb.execute('quit 4')

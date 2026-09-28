@@ -54,7 +54,7 @@ fi
 
 echo "== arm[$ARM_NAME]: FATAL while owning StackWatermark lock (gdb injection) =="
 log="$arm_dir/watermark.log"
-caplog="$arm_dir/capture.log"
+
 LD_LIBRARY_PATH="$ARM_LIB_DIR" gdb -q -batch \
     -x "$repo/runtime/tests/signal_fatal_watermark_gdb.py" \
     --args "$bin" watermark 6 > "$log" 2>&1 &
@@ -77,19 +77,14 @@ while :; do
         [ -z "$verdict" ] && verdict=survived
     fi
     if [ "$verdict" = "survived" ]; then
-        echo "inferior $ipid survived ${post_wait}s after FATAL injection; capturing hang proof"
-        # SIGKILL the injecting gdb: the tracee resumes on its own and stays
-        # hung; a fresh attach then sees the unperturbed blocked state.
-        kill -KILL "$gdb_pid" 2>/dev/null
+        echo "inferior $ipid survived ${post_wait}s after FATAL injection; interrupting gdb for stack capture"
+        # SIGINT to gdb interrupts its `signal` wait exactly like an
+        # interactive Ctrl-C: the inferior stops and the gdb script captures
+        # the blocked stack and the mutex owner (WATERMARK_SELFLOCK).
+        kill -INT "$gdb_pid" 2>/dev/null
         wait "$gdb_pid" 2>/dev/null
         gdb_rc=$?
-        sleep 1
-        addr=$(/usr/bin/grep -oP 'WATERMARK_THIS=\K0x[0-9a-f]+' "$log" | tail -1)
-        LD_LIBRARY_PATH="$ARM_LIB_DIR" WATERMARK_THIS="$addr" gdb -q -batch \
-            -x "$repo/runtime/tests/signal_fatal_watermark_capture.py" \
-            -p "$ipid" > "$caplog" 2>&1
-        echo "CAPTURE_RC=$?" | tee "$arm_dir/capture.rc"
-        kill -KILL "$ipid" 2>/dev/null
+        [ -n "$ipid" ] && kill -KILL "$ipid" 2>/dev/null
         verdict=hang
     fi
     if [ "$verdict" = "terminated" ]; then
@@ -123,7 +118,7 @@ inferior_gone=0
 if [ -n "$ipid" ] && [ -z "$(pid_state "$ipid" || true)" ]; then inferior_gone=1; fi
 echo "INFERIOR_GONE=$inferior_gone VERDICT=$verdict"
 
-if /usr/bin/grep -q 'GDB_ERROR' "$log" || /usr/bin/grep -q 'GDB_ERROR' "$caplog" 2>/dev/null; then
+if /usr/bin/grep -q 'GDB_ERROR' "$log"; then
     echo "WATERMARK_ARM_GDB_ERROR (debugger failure, not a product verdict)"
     rc_all=1
 elif [ "$verdict" = "terminated" ]; then
@@ -146,9 +141,9 @@ elif [ "$verdict" = "terminated" ]; then
         echo "WATERMARK_ARM_PASS gdb_rc=$gdb_rc (fatal diagnostics emitted; inferior terminated by SIGABRT)"
     fi
 elif [ "$verdict" = "hang" ]; then
-    if /usr/bin/grep -q 'WATERMARK_SELFLOCK .*same=1' "$caplog"; then
-        echo "WATERMARK_ARM_HANG (same-thread reentry self-lock reproduced)"
-        /usr/bin/grep '^POSTINJECT|' "$caplog" | head -30
+    if /usr/bin/grep -q 'WATERMARK_SELFLOCK .*same=1' "$log" && [ "$gdb_rc" -eq 3 ]; then
+        echo "WATERMARK_ARM_HANG gdb_rc=$gdb_rc (same-thread reentry self-lock reproduced)"
+        /usr/bin/grep '^POSTINJECT|' "$log" | head -30
     else
         echo "WATERMARK_ARM_HANG_UNPROVEN (survived but self-lock not captured)"
     fi
