@@ -497,6 +497,8 @@ if (MRT_GC_UNIT_OHOS_HOST)
             "MRT_GC_UNIT_OHOS_HOST requires a native x86_64 Linux build; "
             "it is not the OpenHarmony SDK cross-build arm")
     endif()
+    include(${CMAKE_CURRENT_LIST_DIR}/build/cmake/CheckOHOSHostLibraries.cmake)
+    cj_check_ohos_host_libraries()
     set(MRT_GC_UNIT_TESTS ON CACHE BOOL "Build GC unit tests (cj_gc_unit)" FORCE)
 endif()
 if (MRT_GC_UNIT_TESTS)
