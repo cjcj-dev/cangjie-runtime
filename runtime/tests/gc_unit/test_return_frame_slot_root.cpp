@@ -26,6 +26,7 @@
 #include "Loader/ElfUnloadQuiescence.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
+#include "Mutator/Mutator.h"
 #include "gc_unittest.hpp"
 
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
