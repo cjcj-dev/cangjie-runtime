@@ -162,7 +162,7 @@ public:
         for (size_t i = 0; i < _entries.length(); ++i) {
             const ForwardingEntry entry = ForwardingEntry::FromRaw(words[i].load(std::memory_order_acquire));
             if (entry.populated()) {
-                fn(_start + (static_cast<MAddress>(entry.from_index()) << kAlignShift));
+                fn(_start + (static_cast<MAddress>(entry.from_index()) << object_alignment_shift()));
             }
         }
 
