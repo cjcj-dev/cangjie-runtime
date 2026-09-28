@@ -114,3 +114,7 @@ windows_native                          manual     Windows native CLANG64 full p
 return_poll_native                        manual     GHA return-poll-native.yml; real LLVM return-reference objects, native product libraries, producer/consumer cuts and restored root rewrite on macOS arm64/x86_64 and Windows
 windows_exports                         manual     Python CLI contract tests plus actual CLANG64 raw.def; invoked by .github/workflows/windows-export-contract.yml
 package_init_darwin                     manual     Apple workflow package-init job; native product dylib callers and per-entry assembly routing cuts
+signal_fatal_watermark.cpp                manual     check_signal_fatal_watermark.sh: FATAL under StackWatermark lock exits with FATAL text (candidate) vs hangs (old path); SIGUSR1 user-handler non-regression
+run_signal_fatal_watermark.sh             manual     GCV2_RUNTIME_LIB_DIR and SIGNAL_TEST_OUTPUT; compiles signal_fatal_watermark.cpp against the built product pair
+check_signal_fatal_watermark.sh           manual     SIGNAL_TEST_OUTPUT with built binary; gdb python signal_fatal_watermark_gdb.py injects SIGABRT at real watermark lock owner entry
+signal_fatal_watermark_gdb.py             manual     gdb batch script used by check_signal_fatal_watermark.sh; breakpoints at SignalWatermarkWork and ZStackWatermark::start_processing_impl
