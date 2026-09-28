@@ -34,7 +34,7 @@ for sig in 4 5 6 7 8 11; do
     /usr/bin/grep -Eq "signal SIG[A-Z]+ \($sig\) pc=" "$out/diagnostic-$sig.log" || ok=0
     record "diagnostic-$sig" "$ok" "$rc"
 done
-timeout --signal=KILL 10 "$bin" guard 11 > "$out/guard.log" 2>&1
+MRT_STACK_CHECK=1 timeout --signal=KILL 10 "$bin" guard 11 > "$out/guard.log" 2>&1
 rc=$?; ok=1; [ "$rc" = 139 ] || ok=0
 /usr/bin/grep -q 'SIGNAL_GUARD_INPUT.*in_guard=1' "$out/guard.log" || ok=0
 /usr/bin/grep -q 'unhandled SIGSEGV from unmanaged stack overflow!' "$out/guard.log" || ok=0
