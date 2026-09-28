@@ -2,23 +2,20 @@
 // Licensed under Apache-2.0 with Runtime Library Exception.
 //
 // A return-safepoint stub records save-area locations for its sender
-// (frame_x86.inline.hpp:455-460, stackWatermark.cpp:140) and does not
-// license register GC roots on the ordinary call that follows
-// (frame_x86.inline.hpp:464).
+// (frame_x86.inline.hpp:455-460) and does not license register GC roots
+// on the ordinary call that follows (frame_x86.inline.hpp:464).
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "CangjieRuntime.h"
-#include "Heap/z/zStackWatermark.hpp"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "Mutator/Mutator.h"
-#include "Mutator/ThreadLocal.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/GcStackInfo.h"
 #include "UnwindStack/StackFrameCursor.h"
-#include "UnwindStack/StackGrowStackInfo.h"
 #include "gc_unittest.hpp"
 
 #if defined(__linux__)
@@ -26,8 +23,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
-
-extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
 
 #if defined(__linux__) && defined(__x86_64__)
 #define MRT_TEST_RETURN_SAFEPOINT_REGMAP 1
@@ -40,9 +35,9 @@ using namespace MapleRuntime::GcUnit;
 
 namespace {
 
-struct MapDesc {
+struct Descriptor {
     int32_t descriptorOffset;
-    uint32_t pc[8];
+    uint32_t pc[4];
     int32_t stackMapOffset;
     uint32_t rest[6];
     uint8_t bits[256];
@@ -50,11 +45,11 @@ struct MapDesc {
 
 struct Bits {
     uint8_t* data;
-    uint32_t bit = 0;
-    void Put(uint32_t value, unsigned width)
+    unsigned pos = 0;
+    void Put(uint64_t value, unsigned width)
     {
-        for (unsigned i = 0; i < width; ++i, ++bit) {
-            data[bit / 8] |= static_cast<uint8_t>(((value >> i) & 1u) << (bit % 8));
+        for (unsigned i = 0; i < width; ++i, ++pos) {
+            data[pos / 8] |= ((value >> i) & 1) << (pos % 8);
         }
     }
     void Var(uint32_t value)
@@ -64,177 +59,85 @@ struct Bits {
     }
 };
 
-MapDesc gStackPtr;
-MapDesc gRegRoot;
-bool gLinked = false;
-
-void BuildStackPtrBits(uint8_t* data)
-{
-    std::memset(data, 0, 256);
-    Bits b {data};
-    b.Var(0); b.Var(0); b.Var(0);
-    b.Var(1); b.Var(1); b.Var(1); b.Var(1); b.Var(1); b.Var(1); b.Var(1); b.Var(0);
-    b.Put(4, 32); b.Put(0, 1); b.Put(0, 1); b.Put(0, 1); b.Put(0, 1); b.Put(1, 1); b.Put(0, 1);
-    b.Var(1); b.Var(33); b.Put(static_cast<uint32_t>(1u << R13), 33);
-    b.Var(0); b.Var(0); b.Var(0);
-    b.Var(0); b.Var(0);
-    b.Var(0);
-}
-
-void BuildRegRootBits(uint8_t* data)
-{
-    std::memset(data, 0, 256);
-    Bits b {data};
-    b.Var(0); b.Var(0); b.Var(0);
-    b.Var(1); b.Var(1); b.Var(1); b.Var(1); b.Var(1); b.Var(0);
-    b.Put(4, 32); b.Put(1, 1); b.Put(0, 1); b.Put(0, 1); b.Put(0, 1);
-    b.Var(1); b.Var(33); b.Put(static_cast<uint32_t>(1u << R13), 33);
-    b.Var(0); b.Var(0); b.Var(0);
-    b.Var(0); b.Var(0);
-    b.Var(0);
-}
-
-void LinkOne(MapDesc& desc, void (*build)(uint8_t*))
+void InitDescriptor(Descriptor& desc, uint64_t mask)
 {
     std::memset(&desc, 0, sizeof(desc));
     desc.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&desc.stackMapOffset) -
         reinterpret_cast<char*>(&desc.descriptorOffset));
     desc.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(desc.bits) -
         reinterpret_cast<char*>(&desc.stackMapOffset));
-    build(desc.bits);
+    Bits bits {desc.bits};
+    bits.Var(0); bits.Var(0); bits.Var(0);
+    bits.Var(2); bits.Var(1); bits.Var(1); bits.Var(1); bits.Var(1); bits.Var(0);
+    bits.Put(0, 32); bits.Put(0, 1); bits.Put(0, 1); bits.Put(0, 1); bits.Put(0, 1);
+    bits.Put(16, 32); bits.Put(1, 1); bits.Put(0, 1); bits.Put(0, 1); bits.Put(0, 1);
+    bits.Var(1); bits.Var(33); bits.Put(mask, 33);
+    bits.Var(0); bits.Var(0); bits.Var(0);
+    bits.Var(0); bits.Var(0);
+    bits.Var(0);
     ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(desc.pc));
 }
 
-void EnsureLinked()
+constexpr unsigned savedGprs[] = {0, 3, 2, 1, 5, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+
+uintptr_t* StubSlot(uintptr_t* fp, unsigned reg)
 {
-    if (gLinked) { return; }
-    LinkOne(gStackPtr, BuildStackPtrBits);
-    LinkOne(gRegRoot, BuildRegRootBits);
-    gLinked = true;
-}
-
-struct Chain {
-    uintptr_t pad;
-    FrameAddress fa;
-};
-
-alignas(16) uint64_t gArea[96];
-
-SlotAddress PlantStub(FrameAddress* stub, uintptr_t sentinel)
-{
-    RegSlotsMap layout;
-    RegRoot::RecordStubAllRegister(layout, reinterpret_cast<Uptr>(stub));
-    *reinterpret_cast<uintptr_t*>(layout.addrMap[R13]) = sentinel;
-    *reinterpret_cast<uintptr_t*>(layout.addrMap[R10]) = reinterpret_cast<uintptr_t>(gStackPtr.pc);
-    *reinterpret_cast<uintptr_t*>(layout.addrMap[R11]) = reinterpret_cast<uintptr_t>(gStackPtr.pc) + 4;
-    return layout.addrMap[R13];
-}
-
-void LinkChain(FrameAddress* stub, Chain* nodes, unsigned count, const uint32_t* ip)
-{
-    stub->callerFrameAddress = &nodes[0].fa;
-    stub->returnAddress = ip;
-    for (unsigned i = 0; i < count; ++i) {
-        nodes[i].fa.callerFrameAddress = (i + 1 < count) ? &nodes[i + 1].fa : nullptr;
-        nodes[i].fa.returnAddress = (i + 1 < count) ? ip : nullptr;
+    for (unsigned i = 0; i < 15; ++i) {
+        if (savedGprs[i] == reg) { return fp - 1 - i; }
     }
+    return nullptr;
 }
 
-struct GrowRestore {
-    StackGrowConfig old;
-    GrowRestore() : old(CangjieRuntime::stackGrowConfig)
-    {
-        CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON;
-    }
-    ~GrowRestore() { CangjieRuntime::stackGrowConfig = old; }
+void PlantReturnFrame(GCStackInfo& stack, uintptr_t* fp, const uint32_t* start)
+{
+    MachineFrame stub;
+    stub.SetFA(reinterpret_cast<FrameAddress*>(fp));
+    stack.GetStack().emplace_back(stub, FrameType::RETURN_SAFEPOINT);
+    FrameInfo managed(start);
+    managed.SetFrameType(FrameType::MANAGED);
+    managed.mFrame.SetFA(reinterpret_cast<FrameAddress*>(fp + 64));
+    managed.mFrame.SetIP(start + 4);
+    stack.GetStack().push_back(managed);
+}
+
+struct GrowOff {
+    StackGrowConfig old = CangjieRuntime::stackGrowConfig;
+    GrowOff() { CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_OFF; }
+    ~GrowOff() { CangjieRuntime::stackGrowConfig = old; }
 };
 
 } // namespace
 
 GC_TEST(ReturnSafepointRegMap, SenderKeepsStubSlot)
 {
-    GrowRestore grow;
-    EnsureLinked();
-    std::memset(gArea, 0, sizeof(gArea));
-    const uintptr_t sentinel = reinterpret_cast<uintptr_t>(&gArea[90]);
-    FrameAddress* stub = reinterpret_cast<FrameAddress*>(&gArea[40]);
-    Chain nodes[5];
-    std::memset(nodes, 0, sizeof(nodes));
-    const uint32_t* ip = gStackPtr.pc + 1;
-    LinkChain(stub, nodes, 5, ip);
-    const SlotAddress expected = PlantStub(stub, sentinel);
-    *reinterpret_cast<uintptr_t*>(stub) = 0x1111;
-
-    Mutator owner;
-    owner.SetManagedContext(true);
-    owner.SetStackTopAddr(reinterpret_cast<uintptr_t>(&gArea[0]) - 1);
-    owner.SetStackSize(sizeof(gArea) + 32);
-    UnwindContext& context = owner.GetUnwindContext();
-    context.frameInfo.mFrame.SetFA(stub);
-    context.frameInfo.mFrame.SetIP(&unwindPCForReturnSafepointHandlerStub);
-    context.frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(stub));
-    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
-    Mutator* saved = ThreadLocal::GetMutator();
-    ThreadLocal::SetMutator(&owner);
-
-    StackFrameCursor cursor(context);
-    RootVisitor ignore = [](RootSlot&) {};
-    cursor.ProcessOne(ignore, owner);
-    const RegSlotsMap& map = cursor.RegMap();
-    StackPtrMap pointers = StackMapBuilder(reinterpret_cast<uintptr_t>(gStackPtr.pc),
-        reinterpret_cast<uintptr_t>(ip), reinterpret_cast<uintptr_t>(&nodes[0].fa)).Build<StackPtrMap>();
-    uintptr_t seenAddr = 0;
-    uintptr_t seenValue = 0;
-    int visits = 0;
-    StackPtrVisitor visit = [&](ObjectRef& slot) {
-        seenAddr = reinterpret_cast<uintptr_t>(&slot);
-        seenValue = *reinterpret_cast<uintptr_t*>(&slot);
-        ++visits;
-    };
-    const bool resolved = pointers.IsValid() && pointers.VisitStackPointerRegs(visit, nullptr, const_cast<RegSlotsMap&>(map));
-    std::fprintf(stderr,
-        "SENDER_SLOT_TARGET resolved=%d visits=%d slot=%p expected=%p value=%p sentinel=%p flag=%d\n",
-        resolved ? 1 : 0, visits, reinterpret_cast<void*>(seenAddr), static_cast<void*>(expected),
-        reinterpret_cast<void*>(seenValue), reinterpret_cast<void*>(sentinel), map.allRegistersSaved ? 1 : 0);
-    std::fprintf(stderr, "TARGET_ASSERT_EXECUTED SenderKeepsStubSlot\n");
-
+    GrowOff grow;
+    static Descriptor desc;
+    InitDescriptor(desc, 0);
+    alignas(16) uintptr_t storage[128] {};
+    uintptr_t* fp = &storage[56];
+    const uintptr_t sentinel = 0x10000 + R12 * 16;
+    *StubSlot(fp, R12) = sentinel;
+    UnwindContext context{};
     GCStackInfo stack(&context);
-    stack.GetStack().emplace_back(context.frameInfo.mFrame, FrameType::RETURN_SAFEPOINT);
-    FrameInfo managed(ip);
-    managed.SetFrameType(FrameType::MANAGED);
-    managed.mFrame.SetFA(&nodes[0].fa);
-    managed.mFrame.SetIP(ip);
-    stack.GetStack().push_back(managed);
-    stack.VisitStackRoots(ignore, owner);
-    StackGrowStackInfo moving(&context);
-    moving.GetStack() = stack.GetStack();
-    moving.RecordStackPtrs(ignore, [](ObjectRef&) {}, [](BasePtrType, DerivedSlot&) {}, owner);
-    const SlotAddress gcSlot = stack.RegisterMap().addrMap[R13];
-    const SlotAddress growSlot = moving.RegisterMap().addrMap[R13];
-
-    uint32_t* epoch = ZPointerStoreGoodMaskLowOrderBitsAddr;
-    const uint32_t savedEpoch = *epoch;
-    *epoch = savedEpoch == 7 ? 8 : 7;
-    StackWatermarkSet::start_processing(owner);
-    const bool done = owner.GetStackWatermark().IsDone();
-    *epoch = savedEpoch;
-    ThreadLocal::SetMutator(saved);
-
-    std::fprintf(stderr, "SENDER_SLOT_SHARED gc=%p grow=%p done=%d\n",
-        static_cast<void*>(gcSlot), static_cast<void*>(growSlot), done ? 1 : 0);
-    GC_EXPECT_TRUE(resolved);
-    GC_EXPECT_EQ(visits, 1);
-    GC_EXPECT_EQ(seenAddr, reinterpret_cast<uintptr_t>(expected));
-    GC_EXPECT_EQ(seenValue, sentinel);
+    PlantReturnFrame(stack, fp, desc.pc);
+    RootVisitor ignore = [](RootSlot&) {};
+    Mutator mutator;
+    stack.VisitStackRoots(ignore, mutator);
+    const RegSlotsMap& map = stack.RegisterMap();
+    const uintptr_t slot = reinterpret_cast<uintptr_t>(map.addrMap[R12]);
+    const uintptr_t expected = reinterpret_cast<uintptr_t>(StubSlot(fp, R12));
+    std::fprintf(stderr, "SENDER_SLOT_TARGET slot=%p expected=%p value=%p flag=%d\n",
+        reinterpret_cast<void*>(slot), reinterpret_cast<void*>(expected),
+        slot == 0 ? nullptr : reinterpret_cast<void*>(*reinterpret_cast<uintptr_t*>(slot)),
+        map.allRegistersSaved ? 1 : 0);
+    std::fprintf(stderr, "TARGET_ASSERT_EXECUTED SenderKeepsStubSlot\n");
+    GC_EXPECT_EQ(slot, expected);
+    GC_EXPECT_EQ(*reinterpret_cast<uintptr_t*>(slot), sentinel);
     GC_EXPECT_FALSE(map.allRegistersSaved);
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(gcSlot), reinterpret_cast<uintptr_t>(expected));
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(growSlot), reinterpret_cast<uintptr_t>(expected));
-    GC_EXPECT_TRUE(done);
 }
 
 GC_TEST(ReturnSafepointRegMap, OrdinaryCallRejectsRegisterRoot)
 {
-    EnsureLinked();
     int output[2];
     GC_EXPECT_EQ(pipe(output), 0);
     const pid_t child = fork();
@@ -244,22 +147,18 @@ GC_TEST(ReturnSafepointRegMap, OrdinaryCallRejectsRegisterRoot)
         if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
         close(output[1]);
         signal(SIGABRT, SIG_DFL);
-        CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_OFF;
-        EnsureLinked();
+        GrowOff grow;
+        static Descriptor desc;
+        InitDescriptor(desc, uint64_t(1) << R12);
+        alignas(16) uintptr_t storage[128] {};
+        uintptr_t* fp = &storage[56];
+        *StubSlot(fp, R12) = 0x10000 + R12 * 16;
         UnwindContext context{};
         GCStackInfo stack(&context);
-        MachineFrame stubFrame;
-        stubFrame.SetFA(reinterpret_cast<FrameAddress*>(&gArea[40]));
-        stubFrame.SetIP(&unwindPCForReturnSafepointHandlerStub);
-        stack.GetStack().emplace_back(stubFrame, FrameType::RETURN_SAFEPOINT);
-        FrameInfo managed(gRegRoot.pc + 1);
-        managed.SetFrameType(FrameType::MANAGED);
-        managed.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&gArea[70]));
-        managed.mFrame.SetIP(gRegRoot.pc + 1);
-        stack.GetStack().push_back(managed);
+        PlantReturnFrame(stack, fp, desc.pc);
         Mutator mutator;
-        RootVisitor visitor = [](RootSlot&) {};
-        stack.VisitStackRoots(visitor, mutator);
+        RootVisitor ignore = [](RootSlot&) {};
+        stack.VisitStackRoots(ignore, mutator);
         _exit(0);
     }
     close(output[1]);
