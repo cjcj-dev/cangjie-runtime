@@ -1372,6 +1372,104 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NestedRawAcquireAndEarlyReturns)
 }
 
 namespace {
+struct RawDataShapeResult {
+    MIndex length = 0;
+    bool zeroWidth = false;
+    bool replaceRaw = false;
+    void* releaseValue = nullptr;
+    void* actual = nullptr;
+    void* expected = nullptr;
+    bool copied = true;
+    int64_t acquired = -1;
+    int64_t released = -1;
+};
+
+void* RawDataShapeTask(void* context)
+{
+    auto& result = *static_cast<RawDataShapeResult*>(context);
+    alignas(TypeInfo) static unsigned char types[2][sizeof(TypeInfo)]{};
+    auto* elementType = reinterpret_cast<TypeInfo*>(types[0]);
+    auto* arrayType = reinterpret_cast<TypeInfo*>(types[1]);
+    elementType->SetType(result.zeroWidth ? TypeKind::TYPE_KIND_UNIT : TypeKind::TYPE_KIND_UINT8);
+    elementType->SetInstanceSize(result.zeroWidth ? 0 : 1);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetComponentTypeInfo(elementType);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(types), sizeof(types));
+    HandleMark mark(*Mutator::GetMutator());
+    Handle array(Mutator::GetMutator(), MCC_NewArray8(arrayType, result.length));
+    result.actual = MCC_AcquireRawData(static_cast<MArray*>(array()), &result.copied);
+    // Observe the product result after the real entry has returned. No payload
+    // read is valid for zero length/width; the invariant is the base address.
+    result.expected = static_cast<MArray*>(array())->ConvertToCArray();
+    result.acquired = ZJNICritical::count_snapshot();
+    MCC_ReleaseRawData(static_cast<MArray*>(array()),
+        result.replaceRaw ? result.releaseValue : result.actual);
+    result.released = ZJNICritical::count_snapshot();
+    return nullptr;
+}
+
+void CheckRawDataShape(RawDataShapeResult& result)
+{
+    RuntimeParam param{};
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    CJThreadHandle task = RunCJTask(RawDataShapeTask, &result);
+    void* value = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &value), E_OK);
+    ReleaseHandle(task);
+    std::fprintf(stderr,
+        "RAWDATA_SHAPE_TARGET length=%zu zero_width=%d raw=%p expected=%p copied=%d acquired=%lld released=%lld\n",
+        static_cast<size_t>(result.length), result.zeroWidth, result.actual, result.expected,
+        result.copied, static_cast<long long>(result.acquired), static_cast<long long>(result.released));
+    // Separate address and pin-lifetime witnesses; no existence assertion can
+    // hide the returned-address assertion (ZGC jni.cpp:2881).
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(result.actual), reinterpret_cast<uintptr_t>(result.expected));
+    GC_EXPECT_EQ(result.copied, false);
+    GC_EXPECT_EQ(result.acquired, 1);
+    GC_EXPECT_EQ(result.released, 0); // ZGC jni.cpp:2893 ignores carray.
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, EmptyRawArrayReturnsContentAddress)
+{
+    RawDataShapeResult result;
+    CheckRawDataShape(result);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, ZeroWidthRawArrayReturnsContentAddress)
+{
+    RawDataShapeResult result;
+    result.zeroWidth = true;
+    result.length = 1;
+    CheckRawDataShape(result);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, EmptyZeroWidthRawArrayReturnsContentAddress)
+{
+    RawDataShapeResult result;
+    result.zeroWidth = true;
+    CheckRawDataShape(result);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, ReleaseRawDataIgnoresNullData)
+{
+    RawDataShapeResult result;
+    result.length = 8;
+    result.replaceRaw = true;
+    CheckRawDataShape(result);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, ReleaseRawDataIgnoresSentinelData)
+{
+    RawDataShapeResult result;
+    result.length = 8;
+    result.replaceRaw = true;
+    result.releaseValue = reinterpret_cast<void*>(static_cast<uintptr_t>(0x1234));
+    CheckRawDataShape(result);
+}
+
+namespace {
 struct StaleHeaderRawResult {
     int64_t afterAcquire = -1;
     int64_t afterRelease = -1;

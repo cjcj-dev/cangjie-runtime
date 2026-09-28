@@ -25,10 +25,8 @@ public:
             mmap(nullptr, MapleRuntime::MRT_PAGE_SIZE, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
         unreadablePage = reinterpret_cast<uint8_t*>(
             mmap(nullptr, MapleRuntime::MRT_PAGE_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
-        unreadablePageForRawData = reinterpret_cast<uint8_t*>(
-            mmap(nullptr, MapleRuntime::MRT_PAGE_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
         CHECK_DETAIL(
-            (readablePage != MAP_FAILED && unreadablePage != MAP_FAILED && unreadablePageForRawData != MAP_FAILED),
+            (readablePage != MAP_FAILED && unreadablePage != MAP_FAILED),
             "allocate safepoint page failed!");
     }
 
@@ -38,21 +36,15 @@ public:
                 "munmap failed in SafepointPageManager readablePage destruction, errno: %d", errno);
         CHECK_E(UNLIKELY(munmap(unreadablePage, MapleRuntime::MRT_PAGE_SIZE) != EOK),
                 "munmap failed in SafepointPageManager unreadablePage destruction, errno: %d", errno);
-        CHECK_E(UNLIKELY(munmap(unreadablePageForRawData, MapleRuntime::MRT_PAGE_SIZE) != EOK),
-                "munmap failed in SafepointPageManager unreadablePageForRawData destruction, errno: %d", errno);
     }
 
     uint8_t* GetSafepointReadablePage() const { return readablePage; }
 
     uint8_t* GetSafepointUnreadablePage() const { return unreadablePage; }
 
-    // refactor this code: move to where it is used.
-    uint8_t* GetUnreadablePage() const { return unreadablePageForRawData; }
-
 private:
     uint8_t* readablePage = nullptr;
     uint8_t* unreadablePage = nullptr;
-    uint8_t* unreadablePageForRawData = nullptr;
 };
 } // namespace MapleRuntime
 #endif // MRT_SAFEPOINT_PAGE_MANAGER_H
