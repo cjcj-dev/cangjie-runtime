@@ -184,7 +184,7 @@ private:
             const uintptr_t target = raw(slot.LoadPlain());
             if (owner.owner.IsStackAddr(target) && target > stackTarget) { stackTarget = target; }
         };
-        if (!pointers.VisitStackPointerRegs(visit, nullptr, cursor.RegMap())) {
+        if (!pointers.VisitStackPointerRegs(visit, nullptr, const_cast<RegSlotsMap&>(cursor.RegMap()))) {
             LOG(RTLOG_FATAL, "wrong stack pointer register info at %p", frame.mFrame.GetIP());
         }
         pointers.VisitSlot(visit, visit, nullptr);
@@ -523,7 +523,7 @@ void ZStackWatermark::start_processing_impl(void* context)
     StackWatermark::start_processing_impl(context);
 }
 
-void ZStackWatermark::process(const FrameInfo& frame, RegSlotsMap& registers, void* context)
+void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registers, void* context)
 {
     StackWatermarkProcessOopClosure closure(context, prev_frame_color(frame));
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)

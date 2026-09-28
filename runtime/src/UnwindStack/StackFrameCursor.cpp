@@ -17,7 +17,7 @@ StackFrameCursor::StackFrameCursor(const UnwindContext& topFrame) : stream(&topF
     stream.Start();
 }
 
-void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
+void StackFrameCursor::ProcessFrame(const FrameInfo& frame, const RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
                                     Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor, bool young)
 {
 #ifdef __arm__
@@ -34,20 +34,12 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
             ProcessReturnFrame(visitor, derivedPtrVisitor, regSlotsMap, frame);
             break;
         case FrameType::SAFEPOINT:
-            RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-            break;
         case FrameType::C2R_STUB:
-            RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-            break;
         case FrameType::C2N_STUB:
-            RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-            break;
         case FrameType::EXSLUSIVE:
-            RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap,
-                                                             reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-            break;
         default:
-            regSlotsMap = RegSlotsMap();
+            // Locations are published by StackFrameStream::Next, not by the consumer.
+            // oopMap.cpp:504-510 rejects a second update of the same frame.
             break;
     }
 #else
@@ -62,18 +54,13 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
             break;
         case FrameType::SAFEPOINT:
         case FrameType::STACKGROW:
-            RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-            break;
         case FrameType::C2R_STUB:
         case FrameType::C2N_STUB:
         case FrameType::EXSLUSIVE:
 #ifdef INTERPRETER_ENABLED
         case FrameType::INTERPRETER_C2I:
 #endif
-            RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-            break;
         default:
-            regSlotsMap = RegSlotsMap();
             break;
     }
     (void)mutator;
@@ -83,8 +70,9 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::vector<ReturnRegisterRoot>& roots)
 {
 #if defined(__x86_64__) || defined(__aarch64__)
-    RegSlotsMap regSlotsMap;
-    RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+    RegSlotsMap saved;
+    RegRoot::RecordStubAllRegister(saved, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+    saved.allRegistersSaved = false;
 #if defined(__x86_64__)
     constexpr RegisterNum startRegister = R10;
     constexpr RegisterNum siteRegister = R11;
@@ -92,11 +80,11 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
     constexpr RegisterNum startRegister = X17;
     constexpr RegisterNum siteRegister = X16;
 #endif
-    if (regSlotsMap.addrMap[startRegister] == nullptr || regSlotsMap.addrMap[siteRegister] == nullptr) {
+    if (saved.addrMap[startRegister] == nullptr || saved.addrMap[siteRegister] == nullptr) {
         return;
     }
-    const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[startRegister]);
-    const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[siteRegister]);
+    const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(saved.addrMap[startRegister]);
+    const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(saved.addrMap[siteRegister]);
     if (startPC == 0 || sitePC == 0) {
         return;
     }
@@ -116,8 +104,7 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
             roots.push_back(ReturnRegisterRoot { &slot, object });
         }
     };
-    RegSlotsMap returned = regSlotsMap;
-    (void)map.VisitRegRoots(capture, nullptr, returned);
+    (void)map.VisitRegRoots(capture, nullptr, const_cast<RegSlotsMap&>(saved));
 #else
     (void)frame;
     (void)roots;
@@ -125,11 +112,16 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
 }
 
 void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
-                                         RegSlotsMap& regSlotsMap, const FrameInfo& frame)
+                                         const RegSlotsMap& regSlotsMap, const FrameInfo& frame)
 {
+    (void)regSlotsMap;
 #if defined(__x86_64__) || defined(__aarch64__)
     ElfUnloadQuiescence::ReadScope metadataReader;
-    RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+    // This frame's own save area. The walk map is updated only by Next().
+    // oopMap.cpp:493-522 / frame_x86.inline.hpp:459.
+    RegSlotsMap saved;
+    RegRoot::RecordStubAllRegister(saved, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+    saved.allRegistersSaved = false;
 #if defined(__x86_64__)
     constexpr RegisterNum startRegister = R10;
     constexpr RegisterNum siteRegister = R11;
@@ -137,8 +129,8 @@ void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const Deri
     constexpr RegisterNum startRegister = X17;
     constexpr RegisterNum siteRegister = X16;
 #endif
-    const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[startRegister]);
-    const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[siteRegister]);
+    const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(saved.addrMap[startRegister]);
+    const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(saved.addrMap[siteRegister]);
     // safepoint.cpp:818-839 / codeCache.cpp:750-759: the returned frame
     // is gone; resolve its map by PC before protecting the saved return oop.
     const auto descriptor = MFuncDesc::GetFuncDesc(startPC);
@@ -153,8 +145,7 @@ void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const Deri
     // returned map may be visited here.
     (void)derivedPtrVisitor;
     if (roots.IsValid()) {
-        RegSlotsMap returnedRegisters = regSlotsMap;
-        roots.VisitRegRoots(visitor, nullptr, returnedRegisters);
+        roots.VisitRegRoots(visitor, nullptr, const_cast<RegSlotsMap&>(saved));
     }
 #else
     (void)visitor; (void)derivedPtrVisitor; (void)regSlotsMap; (void)frame;
@@ -191,7 +182,7 @@ namespace MapleRuntime {
 // managed frame map. Cangjie uses StackMapBuilder and a RegSlotsMap instead.
 void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
                                          const DerivedPtrVisitor* derivedPtrVisitor,
-                                         RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator)
+                                         const RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
@@ -218,9 +209,9 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
             LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, start ip: %p frame pc: %p",
                 reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP));
         }
-        heapMap.VisitDerivedPtr(derived, nullptr, regSlotsMap);
+        heapMap.VisitDerivedPtr(derived, nullptr, const_cast<RegSlotsMap&>(regSlotsMap));
         heapMap.VisitSlotRoots(visitor, slotDebugFunc);
-        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
+        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, const_cast<RegSlotsMap&>(regSlotsMap))) {
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }

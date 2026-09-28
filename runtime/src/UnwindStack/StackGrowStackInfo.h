@@ -36,7 +36,7 @@ public:
     void RecordStackPtrsImpl(const StackPtrVisitor& traceAndFixPtrVisitor,
                              const StackPtrVisitor& fixPtrVisitor,
                              const DerivedPtrVisitor& derivedPtrVisitor,
-                             RegSlotsMap& regSlotsMap,
+                             const RegSlotsMap& regSlotsMap,
                              const FrameInfo& frame, Mutator& mutator);
 };
 } // namespace MapleRuntime

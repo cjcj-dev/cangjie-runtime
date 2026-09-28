@@ -223,17 +223,31 @@ void StackFrameStream::PublishCalleeRegisters(const FrameInfo& frame) const
                 regSlotsMap = RegSlotsMap();
                 return;
             }
-            StackPtrMap pointers = StackMapBuilder(startIP,
-                reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+            const uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
+            // frame_x86.inline.hpp:455-464: a compiled sender does not license
+            // callee-saved GC roots. A full-save poll/stackcheck stub is the only
+            // younger frame that may; a return stub keeps locations but not that license.
+            HeapReferenceMap heapMap = StackMapBuilder(startIP, frameIP,
+                reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<HeapReferenceMap>(true);
+            if (heapMap.IsValid() && !regSlotsMap.allRegistersSaved && heapMap.HasRegisterRoots()) {
+                LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, start ip: %p frame pc: %p",
+                    reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP));
+            }
+            StackPtrMap pointers = StackMapBuilder(startIP, frameIP,
                 reinterpret_cast<uintptr_t>(frame.mFrame.GetFA())).Build<StackPtrMap>();
             pointers.RecordCalleeSaved(regSlotsMap);
             regSlotsMap.allRegistersSaved = false;
             break;
         }
         case FrameType::SAFEPOINT:
-        case FrameType::RETURN_SAFEPOINT:
         case FrameType::STACKGROW:
             RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            break;
+        case FrameType::RETURN_SAFEPOINT:
+            // Same save-area locations as a safepoint blob (frame_x86.inline.hpp:459),
+            // but the returned frame is gone: the caller is an ordinary call.
+            RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            regSlotsMap.allRegistersSaved = false;
             break;
 #ifdef __arm__
         case FrameType::C2R_STUB:
@@ -256,6 +270,7 @@ void StackFrameStream::PublishCalleeRegisters(const FrameInfo& frame) const
             break;
 #endif
         default:
+            // N2C and entry frames drop the map. frame_x86.inline.hpp:418.
             regSlotsMap = RegSlotsMap();
             break;
     }

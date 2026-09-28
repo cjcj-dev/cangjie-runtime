@@ -55,7 +55,7 @@ void StackGrowStackInfo::FillInStackTrace()
 void StackGrowStackInfo::RecordStackPtrsImpl(const StackPtrVisitor& traceAndFixPtrVisitor,
                                              const StackPtrVisitor& fixPtrVisitor,
                                              const DerivedPtrVisitor& derivedPtrVisitor,
-                                             RegSlotsMap& regSlotsMap,
+                                             const RegSlotsMap& regSlotsMap,
                                              const FrameInfo& frame, Mutator& mutator)
 {
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
@@ -67,12 +67,12 @@ void StackGrowStackInfo::RecordStackPtrsImpl(const StackPtrVisitor& traceAndFixP
             LOG(RTLOG_FATAL, "GC register root at ordinary statepoint, frame pc: %p",
                 reinterpret_cast<void*>(frameIP));
         }
-        if (!stackPtrMap.VisitReg(traceAndFixPtrVisitor, fixPtrVisitor, nullptr, regSlotsMap)) {
+        if (!stackPtrMap.VisitReg(traceAndFixPtrVisitor, fixPtrVisitor, nullptr, const_cast<RegSlotsMap&>(regSlotsMap))) {
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
         stackPtrMap.VisitSlot(traceAndFixPtrVisitor, fixPtrVisitor, nullptr);
-        stackPtrMap.VisitDerivedPtr(derivedPtrVisitor, regSlotsMap);
+        stackPtrMap.VisitDerivedPtr(derivedPtrVisitor, const_cast<RegSlotsMap&>(regSlotsMap));
     }
 }
 
@@ -81,7 +81,7 @@ void StackGrowStackInfo::RecordStackPtrs(const StackPtrVisitor& traceAndFixPtrVi
                                          const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
-    RegisterMap() = RegSlotsMap();
+    ResetRegisterMap();
     for (const auto& frame : stack) {
         ObjectRef* rbp = reinterpret_cast<ObjectRef*>(frame.GetMachineFrame().GetFA());
         fixPtrVisitor(*rbp);

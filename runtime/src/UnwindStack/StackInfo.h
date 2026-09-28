@@ -42,7 +42,9 @@ public:
     const FrameInfo& Current() const { return current.frameInfo; }
     // One walk, one map. Next() publishes the callee's save locations for its sender.
     // HotSpot stackFrameStream.cpp:28-32 / frame_x86.inline.hpp:455-460.
-    RegSlotsMap& RegisterMap() const { return regSlotsMap; }
+    // Readers see a const map (oopMap.inline.hpp:73,112). Only Next()/Publish writes it.
+    const RegSlotsMap& RegisterMap() const { return regSlotsMap; }
+    void ResetRegisterMap() const { regSlotsMap = RegSlotsMap(); }
     void PublishCalleeRegisters(const FrameInfo& frame) const;
 
 protected:

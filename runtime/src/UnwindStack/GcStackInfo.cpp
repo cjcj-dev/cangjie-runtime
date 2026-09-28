@@ -18,7 +18,7 @@ namespace MapleRuntime {
 #ifdef __arm__
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
-    RegisterMap() = RegSlotsMap();
+    ResetRegisterMap();
     for (const auto& frame : stack) {
         StackFrameCursor::ProcessFrame(frame, RegisterMap(), func, mutator);
         PublishCalleeRegisters(frame);
@@ -38,7 +38,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 {
     (void)slotRootVisitor;
     (void)young;
-    RegisterMap() = RegSlotsMap();
+    ResetRegisterMap();
     for (const auto& frame : stack) {
         StackFrameCursor::ProcessFrame(frame, RegisterMap(), regRootVisitor, mutator, &derivedPtrVisitor, young);
         PublishCalleeRegisters(frame);
@@ -47,7 +47,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
 void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 {
-    RegisterMap() = RegSlotsMap();
+    ResetRegisterMap();
     for (auto frame : stacks) {
         FrameInfo &ref = *frame;
         if (frame->GetFrameType() == FrameType::MANAGED) { currentFramePtr = frame; }
@@ -58,7 +58,7 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 #else
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
-    RegisterMap() = RegSlotsMap();
+    ResetRegisterMap();
     for (const auto& frame : stack) {
         StackFrameCursor::ProcessFrame(frame, RegisterMap(), func, mutator);
         PublishCalleeRegisters(frame);
@@ -104,7 +104,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                              bool young) const
 {
     (void)young;
-    RegisterMap() = RegSlotsMap();
+    ResetRegisterMap();
     for (const auto& frame : stack) {
         StackFrameCursor::ProcessFrame(frame, RegisterMap(), regRootVisitor, mutator, &derivedPtrVisitor, young);
         PublishCalleeRegisters(frame);
@@ -136,7 +136,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
 void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 {
-    RegisterMap() = RegSlotsMap();
+    ResetRegisterMap();
     for (auto frame : stacks) {
         FrameInfo &ref = *frame;
         if (frame->GetFrameType() == FrameType::MANAGED) { currentFramePtr = frame; }

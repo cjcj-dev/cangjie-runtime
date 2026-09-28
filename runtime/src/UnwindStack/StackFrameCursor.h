@@ -36,7 +36,7 @@ public:
             ++index;
         }
     }
-    RegSlotsMap& RegMap() { return stream.RegisterMap(); }
+    const RegSlotsMap& RegMap() const { return stream.RegisterMap(); }
     void Rebase(intptr_t offset) { stream.Rebase(offset); }
 
     // Process exactly one frame (barrier-frame or stub bookkeeping), advance cursor.
@@ -67,10 +67,10 @@ public:
     // safepoint.cpp:818-824: return oops are named before the request is processed.
     static void CollectReturnRegisterRoots(const FrameInfo& frame, std::vector<ReturnRegisterRoot>& roots);
     static void ProcessReturnFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
-                                   RegSlotsMap& regSlotsMap, const FrameInfo& frame);
+                                   const RegSlotsMap& regSlotsMap, const FrameInfo& frame);
     static void ProcessManagedFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
-                                    RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
-    static void ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
+                                    const RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
+    static void ProcessFrame(const FrameInfo& frame, const RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
                              Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor = nullptr,
                              bool young = false);
 
