@@ -30,9 +30,9 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, const RegSlotsMap& r
         case FrameType::STACKGROW:
             LOG(RTLOG_FATAL, "STACKGROW frame is not supported in Process");
             break;
+        // safepoint.cpp:794-837: return oops belong to HandleReturnSafepoint.
+        // The stream updates saved-register locations; this stub has no roots.
         case FrameType::RETURN_SAFEPOINT:
-            ProcessReturnFrame(visitor, derivedPtrVisitor, regSlotsMap, frame);
-            break;
         case FrameType::SAFEPOINT:
         case FrameType::C2R_STUB:
         case FrameType::C2N_STUB:
@@ -49,9 +49,9 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, const RegSlotsMap& r
             StackFrameCursor::ProcessManagedFrame(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
             break;
         }
+        // safepoint.cpp:794-837: return oops belong to HandleReturnSafepoint.
+        // The stream updates saved-register locations; this stub has no roots.
         case FrameType::RETURN_SAFEPOINT:
-            ProcessReturnFrame(visitor, derivedPtrVisitor, regSlotsMap, frame);
-            break;
         case FrameType::SAFEPOINT:
         case FrameType::STACKGROW:
         case FrameType::C2R_STUB:
@@ -109,45 +109,6 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
     (void)frame;
     (void)roots;
 #endif
-}
-
-void StackFrameCursor::ProcessReturnFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
-                                         const RegSlotsMap& regSlotsMap, const FrameInfo& frame)
-{
-#if defined(__x86_64__) || defined(__aarch64__)
-    ElfUnloadQuiescence::ReadScope metadataReader;
-    // Next() has published this stub's saves into the stream's sole map.
-#if defined(__x86_64__)
-    constexpr RegisterNum startRegister = R10;
-    constexpr RegisterNum siteRegister = R11;
-#else
-    constexpr RegisterNum startRegister = X17;
-    constexpr RegisterNum siteRegister = X16;
-#endif
-    const uintptr_t startPC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[startRegister]);
-    const uintptr_t sitePC = *reinterpret_cast<uintptr_t*>(regSlotsMap.addrMap[siteRegister]);
-    // safepoint.cpp:818-839 / codeCache.cpp:750-759: the returned frame
-    // is gone; resolve its map by PC before protecting the saved return oop.
-    const auto descriptor = MFuncDesc::GetFuncDesc(startPC);
-    if (descriptor == nullptr) { return; }
-    StackMapBuilder builder(startPC, sitePC, 0, reinterpret_cast<uint64_t*>(descriptor));
-    HeapReferenceMap roots = builder.Build<HeapReferenceMap>();
-    // The returned frame is gone. Only the dedicated register map is legal;
-    // neither spill slots nor its prologue's saved-register map may be used.
-    // safepoint.cpp:800-806: a return point protects the returned value from the
-    // saved_oop_result register slot only. There is no stackBase for a frame whose
-    // spill slots are already gone, so neither slot roots nor derived roots of the
-    // returned map may be visited here.
-    (void)derivedPtrVisitor;
-    if (roots.IsValid()) {
-        roots.VisitRegRoots(visitor, nullptr, regSlotsMap);
-    }
-#else
-    (void)visitor; (void)derivedPtrVisitor; (void)regSlotsMap; (void)frame;
-#endif
-    // The stub save stays on the walk map for the sender. HotSpot
-    // frame_x86.inline.hpp:455-460 updates the same RegisterMap; it does not
-    // clear it. stackWatermark.cpp:140 reads that map with update_registers.
 }
 
 bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,

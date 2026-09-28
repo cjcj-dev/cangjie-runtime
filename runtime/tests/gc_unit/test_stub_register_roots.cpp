@@ -99,23 +99,18 @@ void CheckSlots(bool xmm)
         machine.SetFA(reinterpret_cast<FrameAddress*>(fp));
         machine.SetSP(reinterpret_cast<uintptr_t>(storage));
         FrameInfo frame(machine, FrameType::RETURN_SAFEPOINT);
-        const std::vector<FrameInfo> frames {frame};
-        StackFrameCursor cursor(frames);
-        Mutator owner;
-        std::vector<uintptr_t> addresses;
-        std::vector<uintptr_t> values;
-        RootVisitor visitor = [&](RootSlot& slot) {
-            addresses.push_back(reinterpret_cast<uintptr_t>(&slot));
-            values.push_back(raw(slot.LoadPlain()));
-            StorePlain(slot, to_zaddress(0x40000));
-        };
-        cursor.ProcessAll(visitor, owner);
-        bool ok = addresses.size() == (xmm ? 2u : 1u);
-        ok = ok && addresses[0] == reinterpret_cast<uintptr_t>(expected) && values[0] == old && expected[0] == 0x40000;
+        // safepoint.cpp:794-837: only the Handle producer consumes return roots.
+        // Keep the register-layout oracle on that consumer, not the frame walk.
+        std::vector<StackFrameCursor::ReturnRegisterRoot> roots;
+        StackFrameCursor::CollectReturnRegisterRoots(frame, roots);
+        bool ok = roots.size() == (xmm ? 2u : 1u);
+        ok = ok && reinterpret_cast<uintptr_t>(roots[0].slot) == reinterpret_cast<uintptr_t>(expected) &&
+            reinterpret_cast<uintptr_t>(roots[0].object) == old;
         if (xmm) {
-            ok = ok && addresses[1] == reinterpret_cast<uintptr_t>(expected + 1) && values[1] == oldHigh && expected[1] == 0x40000;
+            ok = ok && reinterpret_cast<uintptr_t>(roots[1].slot) == reinterpret_cast<uintptr_t>(expected + 1) &&
+                reinterpret_cast<uintptr_t>(roots[1].object) == oldHigh;
         }
-        std::fprintf(stderr, "STUB_SLOT_TARGET reg=%u visits=%zu expected=%p match=%d\n", reg, addresses.size(), expected, ok);
+        std::fprintf(stderr, "STUB_SLOT_TARGET reg=%u visits=%zu expected=%p match=%d\n", reg, roots.size(), expected, ok);
         mismatches += !ok;
     }
     GC_EXPECT_EQ(mismatches, size_t(0));
