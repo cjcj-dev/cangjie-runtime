@@ -579,30 +579,39 @@ void* RunMarkAllocationCase(void* rawExisting)
 void* RunNativeTaskRootCase(void*)
 {
     Mutator::GetMutator()->SetManagedContext(false);
-    struct Observation {
-        RootSlot* taskRoot = nullptr;
-        uintptr_t native = 0;
-        size_t tasks = 0;
-    } observed;
+    // os.cpp:371-380 adds a real signal dispatcher task. Root classification
+    // is an invariant of every live task, not an absolute task-count test.
+    struct TaskRoots {
+        RootSlot* object;
+        uintptr_t native;
+        size_t visits;
+    };
+    std::vector<TaskRoots> observed;
     CJ_ScheduleAllCJThreadVisit([](void* argument, void* context) {
-        auto& result = *static_cast<Observation*>(context);
+        auto& result = *static_cast<std::vector<TaskRoots>*>(context);
         auto& data = *static_cast<LWTData*>(argument);
         if (data.fn != nullptr) {
-            result.taskRoot = &RootSlotAt(&data.obj);
-            result.native = reinterpret_cast<uintptr_t>(data.fn);
-            ++result.tasks;
+            result.push_back({&RootSlotAt(&data.obj), reinterpret_cast<uintptr_t>(data.fn), 0});
         }
     }, &observed);
-    size_t visits = 0;
     size_t nativeRoots = 0;
     RootVisitor visitor = [&](RootSlot& root) {
-        visits += &root == observed.taskRoot;
-        nativeRoots += observed.native != 0 && raw(root.LoadPlain()) == observed.native;
+        for (auto& task : observed) {
+            task.visits += &root == task.object;
+            nativeRoots += raw(root.LoadPlain()) == task.native;
+        }
     };
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
-    const bool rootsValid = observed.tasks == 1 && visits == 1 && nativeRoots == 0;
+    bool rootsValid = !observed.empty() && nativeRoots == 0;
+    size_t visits = 0;
+    for (const auto& task : observed) {
+        rootsValid = rootsValid && task.visits == 1;
+        visits += task.visits;
+        std::fprintf(stderr, "NATIVE_TASK_SLOT_TARGET slot=%p obj_visits=%zu expected=1\n",
+                     static_cast<void*>(task.object), task.visits);
+    }
     std::fprintf(stderr, "NATIVE_TASK_ROOT_TARGET tasks=%zu obj_visits=%zu native_roots=%zu pass=%d\n",
-                 observed.tasks, visits, nativeRoots, rootsValid);
+                 observed.size(), visits, nativeRoots, rootsValid);
     if (!rootsValid) {
         Mutator::GetMutator()->SetManagedContext(true);
         return reinterpret_cast<void*>(41);
