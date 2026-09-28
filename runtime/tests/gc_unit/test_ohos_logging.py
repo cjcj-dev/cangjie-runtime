@@ -21,7 +21,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    env.pop('MRT_LOG_FILE', None)
+    env.pop('MRT_LOG_PATH', None)
     env['LD_LIBRARY_PATH'] = str(args.runtime_lib_dir.resolve())
     artifacts = [args.elf, args.runtime_lib_dir / 'libcangjie-runtime.so',
                  args.runtime_lib_dir / 'libboundscheck.so']
