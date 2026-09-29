@@ -334,6 +334,7 @@ GC_TEST(MarkConsumer1328, PartialDoesNotWakeWithoutFullStack)
 {
     GcHeapFixture fx;
     WorkerFixture worker;
+    SuspendibleThreadSetJoiner joiner;
     ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
     domain.PrepareWork(4);
     auto& stripes = domain.Stripes();
