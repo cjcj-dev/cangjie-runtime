@@ -1,0 +1,50 @@
+$ git grep -F -c VisitAllGCDataOwners cjcjdev/main -- runtime/src
+rc=1
+$ git grep -F -c VisitAllGCDataOwners HEAD -- runtime/src
+rc=1
+$ git grep -F -c ThreadGCData::InstallMasks cjcjdev/main -- runtime/src
+rc=0
+cjcjdev/main:runtime/src/Heap/z/zThreadLocalData.cpp:1
+$ git grep -F -c ThreadGCData::InstallMasks HEAD -- runtime/src
+rc=0
+HEAD:runtime/src/Heap/z/zThreadLocalData.cpp:1
+$ git grep -F -c ThreadLocalData::Initialize cjcjdev/main -- runtime/src
+rc=1
+$ git grep -F -c ThreadLocalData::Initialize HEAD -- runtime/src
+rc=1
+$ git grep -F -c ThreadLocalData::Finalize cjcjdev/main -- runtime/src
+rc=1
+$ git grep -F -c ThreadLocalData::Finalize HEAD -- runtime/src
+rc=1
+$ git grep -F -c ZBarrierSet::on_thread_attach cjcjdev/main -- runtime/src
+rc=0
+cjcjdev/main:runtime/src/Heap/z/zBarrierSet.cpp:1
+cjcjdev/main:runtime/src/Mutator/Mutator.cpp:1
+cjcjdev/main:runtime/src/Mutator/ThreadLocal.cpp:1
+$ git grep -F -c ZBarrierSet::on_thread_attach HEAD -- runtime/src
+rc=0
+HEAD:runtime/src/Heap/z/zBarrierSet.cpp:1
+HEAD:runtime/src/Mutator/Mutator.cpp:1
+HEAD:runtime/src/Mutator/ThreadLocal.cpp:1
+$ git grep -F -c ThreadsListHandle cjcjdev/main -- runtime/src
+rc=0
+cjcjdev/main:runtime/src/Heap/z/zRootsIterator.hpp:1
+cjcjdev/main:runtime/src/Heap/z/zStackWatermark.cpp:1
+cjcjdev/main:runtime/src/Heap/z/zThreadLocalData.cpp:1
+cjcjdev/main:runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:2
+cjcjdev/main:runtime/src/Mutator/Handshake.cpp:3
+cjcjdev/main:runtime/src/Mutator/Mutator.cpp:1
+cjcjdev/main:runtime/src/Mutator/MutatorManager.cpp:2
+cjcjdev/main:runtime/src/Mutator/ThreadSMR.h:1
+$ git grep -F -c ThreadsListHandle HEAD -- runtime/src
+rc=0
+HEAD:runtime/src/Heap/z/zRootsIterator.hpp:1
+HEAD:runtime/src/Heap/z/zStackWatermark.cpp:1
+HEAD:runtime/src/Heap/z/zThreadLocalData.cpp:1
+HEAD:runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:2
+HEAD:runtime/src/Mutator/Handshake.cpp:3
+HEAD:runtime/src/Mutator/Mutator.cpp:1
+HEAD:runtime/src/Mutator/MutatorManager.cpp:2
+HEAD:runtime/src/Mutator/ThreadSMR.h:1
+$ git diff --exit-code cjcjdev/main HEAD -- runtime/src/Heap/z/zBarrierSet.cpp runtime/src/Heap/z/zThreadLocalData.cpp runtime/src/Heap/z/zMark.cpp runtime/src/Mutator/Mutator.cpp runtime/src/Mutator/ThreadLocal.cpp
+rc=0
