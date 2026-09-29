@@ -121,7 +121,19 @@ void ExpectPartition(ZMark& domain, Slot* addr, size_t length,
     size_t pending = 0;
     bool inRange = true;
     bool aligned = true;
-    for (auto* stack : domain.Stacks().stacks) {
+    std::vector<MarkStripeStack*> chunks = domain.Stacks().stacks;
+    // The fixture has one executing worker, paused between drain calls. Full
+    // local chunks may have moved to either product-owned shared list; observe
+    // both without popping, relocating or synthesizing their entries.
+    for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
+        auto* owner = domain.Stripes().At(stripe);
+        for (auto* list : { &owner->published, &owner->overflowed }) {
+            for (auto* node = list->head.load(); node != nullptr; node = node->Next()) {
+                chunks.push_back(node->Stack());
+            }
+        }
+    }
+    for (auto* stack : chunks) {
         if (stack == nullptr) continue;
         for (size_t i = 0; i < stack->Size(); ++i) {
             const auto entry = stack->entries(stack)[i];
@@ -154,6 +166,7 @@ void ExpectPartition(ZMark& domain, Slot* addr, size_t length,
 std::set<size_t> OnSet(GcHeapFixture& fx, Slot* addr, size_t length)
 {
     WorkerFixture worker;
+    SuspendibleThreadSetJoiner joiner;
     auto& domain = Heap::GetHeap().old().Mark();
     domain.PrepareWork(1);
     auto* fields = reinterpret_cast<RefField<>*>(addr);
