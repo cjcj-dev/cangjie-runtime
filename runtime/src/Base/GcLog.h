@@ -24,11 +24,13 @@ namespace MapleRuntime {
 // record is one line, `key=value` separated by spaces, with a stable field order and a schema
 // version so a reader can refuse a record it does not understand.
 //
-//   [GCLOG] v=5 rec=cycle seq= gc_tag= kind= reason= start_ns= dur_ns= live_before= live_after=
-//           collected= heap_used= rss_kb=     (v=5: threshold= dropped with the heapThreshold heuristic)
-//   [GCLOG] v=5 rec=generation seq= gc_tag= name= start_ns= dur_ns= live_before= live_after=
-//   [GCLOG] v=4 rec=phase seq= gc_tag= name= kind= start_ns= ns=
-//   [GCLOG] v=4 rec=stw   seq= gc_tag= reason= start_ns= wait_ns= held_ns=
+//   [GCLOG] v=6 rec=cycle seq= gc_tag=- name= cause= event=start|abort
+//   [GCLOG] v=6 rec=cycle seq= gc_tag=- name= cause= event=end start_ns= dur_ns= used_at_start= used_at_end=
+//   [GCLOG] v=6 rec=generation seq= gc_tag= name= event=start|abort
+//   [GCLOG] v=6 rec=generation seq= gc_tag= name= event=end start_ns= dur_ns=
+//           used_at_collection_start= used_at_collection_end=
+//   [GCLOG] v=5 rec=phase seq= gc_tag= name= kind= start_ns= ns=
+//   [GCLOG] v=5 rec=stw seq= gc_tag= reason= start_ns= wait_ns= held_ns=
 //   [GCLOG] v=3 rec=crash ...  (crash signature; always-on via write(2), see Crash())
 //
 // gc_tag is y for a minor, Y/O for the young/old parts of a major, and - without a registered ID.
@@ -39,7 +41,7 @@ namespace MapleRuntime {
 // MRT_GC_LOG so a crash before GcLog init still emits.
 class GcLog {
 public:
-    static constexpr uint32_t SCHEMA_VERSION = 5;
+    static constexpr uint32_t SCHEMA_VERSION = 6;
     // Crash records remain independently emitted and parsed at v3.
     static constexpr uint32_t CRASH_SCHEMA_VERSION = 3;
     // 128: longest phase name in the tree is well under this; longer ones are truncated.
@@ -56,44 +58,46 @@ public:
 
     static uint64_t CurrentSeq() { return GCIdMark::Current(); }
 
-    static void Cycle(uint64_t seq, const char* kind, const char* reason, uint64_t startNs, uint64_t durNs,
-                      size_t liveBefore, size_t liveAfter, size_t collected, size_t heapUsed)
+    // ZGC zStat.cpp:654-691: collection records have no generation prefix.
+    static void Collection(uint64_t seq, const char* name, const char* cause, const char* event,
+                           uint64_t startNs = 0, uint64_t durNs = 0,
+                           size_t usedAtStart = 0, size_t usedAtEnd = 0)
     {
-        if (seq == 0) {
-            std::abort();
-        }
-        if (!Enabled()) {
+        if (!Enabled()) { return; }
+        char safeName[MAX_PHASE_NAME + 1];
+        char safeCause[MAX_PHASE_NAME + 1];
+        FoldToToken(name, safeName);
+        FoldToToken(cause, safeCause);
+        if (strcmp(event, "end") != 0) {
+            EmitLine("[GCLOG] v=%u rec=cycle seq=%llu gc_tag=- name=%s cause=%s event=%s",
+                     SCHEMA_VERSION, static_cast<unsigned long long>(seq), safeName, safeCause, event);
             return;
         }
-        // Always-on stderr (same shape as rec=crash): MRT_GC_LOG alone must emit rec=cycle.
-        // Do not route through WriteLog(REPORT) — Release gates REPORT on MRT_REPORT=<path>
-        // (DEFAULT_MRT_REPORT=0), which silently dropped cycle/phase and caused false
-        // "rec=cycle=0 ⇒ no GC" readings (walkcost/hostslow).
-        char safeKind[MAX_PHASE_NAME + 1];
-        char safeReason[MAX_PHASE_NAME + 1];
-        FoldToToken(kind, safeKind);
-        FoldToToken(reason, safeReason);
-        EmitLine("[GCLOG] v=%u rec=cycle seq=%llu gc_tag=%c kind=%s reason=%s start_ns=%llu dur_ns=%llu "
-                 "live_before=%zu live_after=%zu collected=%zu heap_used=%zu rss_kb=%zu",
-                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safeKind, safeReason,
-                 static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs), liveBefore,
-                 liveAfter, collected, heapUsed, ResidentKB());
+        EmitLine("[GCLOG] v=%u rec=cycle seq=%llu gc_tag=- name=%s cause=%s event=end "
+                 "start_ns=%llu dur_ns=%llu used_at_start=%zu used_at_end=%zu",
+                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), safeName, safeCause,
+                 static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs),
+                 usedAtStart, usedAtEnd);
     }
 
-    // ZGC zStat.cpp:737-741: generation completion is inside the registered
-    // y/Y/O scope. Collection completion is outside it and remains untagged.
-    static void Generation(uint64_t seq, const char* name, uint64_t startNs, uint64_t durNs,
-                           size_t liveBefore, size_t liveAfter)
+    // ZGC zStat.cpp:703-741: generation events remain inside the y/Y/O scope.
+    static void Generation(uint64_t seq, const char* name, const char* event,
+                           uint64_t startNs = 0, uint64_t durNs = 0,
+                           size_t usedAtStart = 0, size_t usedAtEnd = 0)
     {
-        if (!Enabled()) {
-            return;
-        }
+        if (!Enabled()) { return; }
         char safeName[MAX_PHASE_NAME + 1];
         FoldToToken(name, safeName);
-        EmitLine("[GCLOG] v=%u rec=generation seq=%llu gc_tag=%c name=%s start_ns=%llu dur_ns=%llu "
-                 "live_before=%zu live_after=%zu", SCHEMA_VERSION, static_cast<unsigned long long>(seq),
-                 ZGCIdPrinter::Tag(seq), safeName, static_cast<unsigned long long>(startNs),
-                 static_cast<unsigned long long>(durNs), liveBefore, liveAfter);
+        if (strcmp(event, "end") != 0) {
+            EmitLine("[GCLOG] v=%u rec=generation seq=%llu gc_tag=%c name=%s event=%s",
+                     SCHEMA_VERSION, static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safeName, event);
+            return;
+        }
+        EmitLine("[GCLOG] v=%u rec=generation seq=%llu gc_tag=%c name=%s event=end start_ns=%llu dur_ns=%llu "
+                 "used_at_collection_start=%zu used_at_collection_end=%zu", SCHEMA_VERSION,
+                 static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safeName,
+                 static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs),
+                 usedAtStart, usedAtEnd);
     }
 
     static void Phase(uint64_t seq, const char* name, const char* kind, uint64_t startNs, uint64_t ns)
@@ -104,7 +108,7 @@ public:
         char safe[MAX_PHASE_NAME + 1];
         FoldToToken(name, safe);
         // Same always-on channel as Cycle (see Cycle comment).
-        EmitLine("[GCLOG] v=%u rec=phase seq=%llu gc_tag=%c name=%s kind=%s start_ns=%llu ns=%llu", SCHEMA_VERSION,
+        EmitLine("[GCLOG] v=%u rec=phase seq=%llu gc_tag=%c name=%s kind=%s start_ns=%llu ns=%llu", 5u,
                  static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safe, kind,
                  static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(ns));
     }
@@ -129,7 +133,7 @@ public:
         }
         char safe[MAX_PHASE_NAME + 1];
         FoldToToken(reason, safe);
-        EmitLine("[GCLOG] v=%u rec=stw seq=%llu gc_tag=%c reason=%s start_ns=%llu wait_ns=%llu held_ns=%llu", SCHEMA_VERSION,
+        EmitLine("[GCLOG] v=%u rec=stw seq=%llu gc_tag=%c reason=%s start_ns=%llu wait_ns=%llu held_ns=%llu", 5u,
                  static_cast<unsigned long long>(CurrentSeq()), ZGCIdPrinter::Tag(CurrentSeq()), safe,
                  static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(waitNs),
                  static_cast<unsigned long long>(heldNs));

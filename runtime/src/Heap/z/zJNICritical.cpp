@@ -1,3 +1,4 @@
+#include "Heap/z/zStat.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -9,6 +10,7 @@
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
+static const ZStatCriticalPhase ZCriticalPhaseJNICriticalStall("JNI Critical Stall");
 
 std::atomic<int64_t> ZJNICritical::count{ 0 };
 std::mutex ZJNICritical::lock;
@@ -28,6 +30,7 @@ void ZJNICritical::block()
     for (;;) {
         const int64_t n = count.load(std::memory_order_acquire);
         if (n < 0) {
+            ZStatTimer timer(ZCriticalPhaseJNICriticalStall);
             std::unique_lock<std::mutex> guard(lock);
             while (count.load(std::memory_order_acquire) < 0) {
                 attention.wait(guard);
@@ -61,6 +64,7 @@ void ZJNICritical::enter_inner()
     for (;;) {
         const int64_t n = count.load(std::memory_order_acquire);
         if (n < 0) {
+            ZStatTimer timer(ZCriticalPhaseJNICriticalStall);
             // ZGC zJNICritical.cpp:108-116: publish a blockable thread state
             // before taking the condition lock, so a concurrent handshake can
             // complete while this mutator waits for JNI critical to unblock.
