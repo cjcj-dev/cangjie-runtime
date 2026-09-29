@@ -56,7 +56,7 @@ def parse_logs(d: Path, arm: str):
 
 def cycle_pauses(text: str):
     by_seq = defaultdict(int)
-    records = parse_gclog(text)
+    records = parse_gclog(text).validate_complete()
     for record in records.stw:
         by_seq[record.seq] += record.held_ns
     if by_seq:
@@ -68,13 +68,13 @@ def cycle_pauses(text: str):
 
 
 def cycle_durs(text: str):
-    records = parse_gclog(text)
-    out = {record.seq: record.dur_ns for record in records.cycles}
-    kinds = {record.seq: record.kind for record in records.cycles}
-    if out:
-        return out, kinds
+    records = parse_gclog(text).validate_complete()
+    out = {record.seq: record.dur_ns for record in records.cycles if record.event == "end"}
+    kinds = {record.seq: record.kind for record in records.cycles if record.event == "end"}
     if records.any():
-        return {}, {}
+        # The validated ledger can contain only aborted/truncated collections;
+        # main reports those populations separately from completed durations.
+        return out, kinds
     reasons = BEGIN.findall(text)
     return {i: 0 for i, _ in enumerate(reasons, 1)}, {
         i: ("minor" if "YOUNG" in r.upper() or "MINOR" in r.upper() else "major")
@@ -88,11 +88,8 @@ def pillars(text: str):
     conc = 0
     total = 0
     wait = 0
-    records = parse_gclog(text)
+    records = parse_gclog(text).validate_complete()
     if records.cycles:
-        # P15: rec=phase_leaf is gone (no ZGC counterpart). Pillar totals now
-        # come from owned rec=phase records; the work-level phase population
-        # is the same one the retired Timer observed.
         for record in records.phases:
             if record.seq == 0:
                 continue
@@ -106,10 +103,9 @@ def pillars(text: str):
         us = record.ns / 1000.0
         names[name] += us
         total += us
-        if name == "finalizerProcessor_waitting_time":
+        if record.kind == "critical":
             wait += us
-            continue
-        if CONC_PHASE.search(name):
+        if record.kind == "conc":
             conc += us
     return dict(acc), dict(names), total, conc, wait
 
@@ -139,6 +135,7 @@ def main(root: Path):
         w = wall_of(run_dir)
         pauses = cycle_pauses(text)
         durs, kinds = cycle_durs(text)
+        lifecycle = parse_gclog(text).validate_complete()
         n = len(durs)
         minor = sum(1 for k in kinds.values() if "young" in k.lower() or "minor" in k.lower())
         major = sum(1 for k in kinds.values() if "old" in k.lower() or "full" in k.lower() or "major" in k.lower())
@@ -147,6 +144,8 @@ def main(root: Path):
         gc_dur = sum(durs.values())
         cells[(wl, heap, arm)].append({
             "dir": str(run_dir),
+            "aborted_cycles": lifecycle.aborted,
+            "truncated_cycles": lifecycle.truncated,
             "class": cls,
             "wall": w,
             "pauses_ns": list(pauses.values()),
@@ -199,6 +198,8 @@ def main(root: Path):
         summary["/".join(key)] = {
             "n_ok": len(ok),
             "n_try": len(rows),
+            "aborted_cycles": sum(r["aborted_cycles"] for r in rows),
+            "truncated_cycles": sum(r["truncated_cycles"] for r in rows),
             "wall_med": pctile(walls, 0.5),
             "wall_p90": pctile(walls, 0.9),
             "wall_p99": pctile(walls, 0.99),
