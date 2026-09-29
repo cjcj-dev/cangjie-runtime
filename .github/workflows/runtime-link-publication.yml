@@ -83,6 +83,7 @@ jobs:
             evidence/*.log
             evidence/*.json
             evidence/*.sha256
+            evidence/*.diff
             evidence/standalone/*.log
             evidence/standalone/*.sha256
           retention-days: 7

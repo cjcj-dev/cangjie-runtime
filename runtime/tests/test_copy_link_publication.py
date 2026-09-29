@@ -6,6 +6,7 @@ restore the original undefined-reference signature, not fail provenance checks.
 """
 import argparse
 import hashlib
+import difflib
 import json
 import os
 from pathlib import Path
@@ -64,6 +65,38 @@ def main():
     commands = json.loads((build / 'compile_commands.json').read_text())
     assert len([x for x in commands if x['file'].endswith('/Copy_aarch64.S')]) == 1
     run('object-symbols', ['readelf', '-Ws', obj])
+    archive = build / 'src/Base/libBase.a'
+    member = subprocess.check_output(['ar', 'p', str(archive), 'Copy_aarch64.S.o'])
+    assert hashlib.sha256(member).hexdigest() == hashlib.sha256(obj.read_bytes()).hexdigest()
+    (evidence / 'copy-compile-command.json').write_text(json.dumps(
+        [x for x in commands if x['file'].endswith('/Copy_aarch64.S')], indent=2))
+    helper = source / 'tests/gc_unit/product_test_configuration.py'
+    validate = ['python3', helper, source, library, copied, '--copy-object', '--compiler', 'clang++']
+    assert run('identity-normal-relocated', validate) == 0
+    original_bytes = obj.read_bytes()
+    obj.unlink()
+    assert run('identity-missing', validate) == 2
+    obj.write_bytes(original_bytes + b'changed')
+    assert run('identity-hash', validate) == 2
+    obj.write_bytes(original_bytes)
+    assert run('identity-compiler-target', validate[:-1] + ['clang++ --target=x86_64-linux-gnu']) == 2
+    recipe = copied / 'runtime-build-inputs.txt'
+    inventory = copied / 'runtime-product-hashes.json'
+    recipe_bytes, inventory_bytes = recipe.read_bytes(), inventory.read_bytes()
+    wrong_elf = bytearray(original_bytes)
+    wrong_elf[18:20] = bytes([62, 0])
+    obj.write_bytes(wrong_elf)
+    digest = hashlib.sha256(wrong_elf).hexdigest()
+    inputs['internal_test_objects']['copy_disjoint_words']['sha256'] = digest
+    recipe.write_text(json.dumps(inputs))
+    hashes = json.loads(inventory.read_text())
+    hashes[str(obj.relative_to(copied))] = digest
+    inventory.write_text(json.dumps(hashes))
+    assert run('identity-object-architecture', validate) == 2
+    obj.write_bytes(original_bytes)
+    recipe.write_bytes(recipe_bytes)
+    inventory.write_bytes(inventory_bytes)
+    assert run('identity-restored', validate) == 0
     products = [obj, library / 'libcangjie-runtime.so', library / 'libboundscheck.so']
     (evidence / 'products.sha256').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + str(p) + '\n' for p in products))
     env.update(GCV2_RUNTIME_LIB_DIR=str(library), GCV2_RUNTIME_OUTPUT_ROOT=str(copied),
@@ -73,6 +106,7 @@ def main():
         original = cmake.read_text()
         if args.arm == 'cut':
             cmake.write_text(original.replace('target_sources(cj_gc_unit PRIVATE $<TARGET_OBJECTS:RuntimeCopy>)', '# internal object deliberately disconnected'))
+            (evidence / 'cut.diff').write_text(''.join(difflib.unified_diff(original.splitlines(True), cmake.read_text().splitlines(True), fromfile='a/runtime/tests/gc_unit/CMakeLists.txt', tofile='b/runtime/tests/gc_unit/CMakeLists.txt')))
         try:
             rc = run('cmake-link', ['cmake', '--build', build, '--target', 'cj_gc_unit', '-j', os.cpu_count()], env)
         finally:
@@ -84,6 +118,7 @@ def main():
         original = runner.read_text()
         if args.arm == 'cut':
             runner.write_text(original.replace('"${MAIN_OBJECTS[@]}" "${COPY_OBJECTS[@]}"', '"${MAIN_OBJECTS[@]}"'))
+            (evidence / 'cut.diff').write_text(''.join(difflib.unified_diff(original.splitlines(True), runner.read_text().splitlines(True), fromfile='a/runtime/tests/gc_unit/run_standalone.sh', tofile='b/runtime/tests/gc_unit/run_standalone.sh')))
         try:
             rc = run('standalone', ['bash', runner], env)
         finally:
@@ -104,6 +139,35 @@ def main():
         for test in ['atomic_copy_preserves_bounds_and_offset', 'atomic_copy_adjacent_ranges']:
             assert run(test, [elf, '--gtest_filter=ZUtils.' + test], env) == 0
         print('COPY_LINK_AND_CONTENT_CONFIRMED', flush=True)
+        if args.profile == 'gcunit':
+            # External CMake must consume the relocated publication with the
+            # original producer build temporarily inaccessible.
+            top = source / 'CMakeLists.txt'
+            original_top = top.read_text()
+            hidden_build = evidence / 'producer-build-held'
+            build.rename(hidden_build)
+            external = evidence / 'external-build'
+            try:
+                top.write_text('\n'.join([
+                    'cmake_minimum_required(VERSION 3.19)',
+                    'project(ExternalGcUnit LANGUAGES C CXX)',
+                    f'set(GCV2_RUNTIME_LIB_DIR "{library}")',
+                    f'set(GCV2_RUNTIME_OUTPUT_ROOT "{copied}")',
+                    'include_directories("${CMAKE_SOURCE_DIR}/third_party/third_party_bounds_checking_function/include")',
+                    'include_directories("${CMAKE_SOURCE_DIR}/src/CJThread/src/runtime/schedule/include")',
+                    f'include_directories("{copied}/include")',
+                    'add_subdirectory(tests/gc_unit)', '']))
+                assert run('external-configure', ['cmake', '-S', source, '-B', external,
+                            '-DCMAKE_CXX_COMPILER=clang++'], env) == 0
+                assert run('external-link', ['cmake', '--build', external, '--target',
+                            'cj_gc_unit', '-j', os.cpu_count()], env) == 0
+                external_elf = external / 'tests/gc_unit/cj_gc_unit'
+                (evidence / 'external-elf.sha256').write_text(hashlib.sha256(external_elf.read_bytes()).hexdigest())
+                for test in ['atomic_copy_preserves_bounds_and_offset', 'atomic_copy_adjacent_ranges']:
+                    assert run('external-' + test, [external_elf, '--gtest_filter=ZUtils.' + test], env) == 0
+            finally:
+                top.write_text(original_top)
+                hidden_build.rename(build)
     run('uptime-after', ['uptime'])
 
 
