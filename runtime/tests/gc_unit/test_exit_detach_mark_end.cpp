@@ -102,7 +102,7 @@ void RunArm(Arm arm)
         // One buffered store whose previous value is an unmarked young object.
         // The slot is in the young page, so remember() is a no-op.
         auto* buffer = owner->GetGCData().storeBarrierBuffer;
-        buffer->add(heap.heapStart + 16, StoreGoodPointer(heap.obj0));
+        buffer->add(reinterpret_cast<volatile zpointer*>(heap.heapStart + 16), StoreGoodPointer(heap.obj0));
         pendingBefore = buffer->Pending();
         localYoungBefore = owner->GetGCData().markStacks[0].Population();
         if (hookArmed) { g_armedOwner.store(owner, std::memory_order_release); }
@@ -364,7 +364,7 @@ GC_OTHER_VM_TEST(ExitDetachMarkEnd, PauseDoesNotFlushAttachedMutator)
         auto& manager = MutatorManager::Instance();
         Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         buffer = mutator->GetGCData().storeBarrierBuffer;
-        buffer->add(heap.heapStart + 16, StoreGoodPointer(heap.obj0));
+        buffer->add(reinterpret_cast<volatile zpointer*>(heap.heapStart + 16), StoreGoodPointer(heap.obj0));
         ready.store(true, std::memory_order_release);
         while (!release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
         manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);

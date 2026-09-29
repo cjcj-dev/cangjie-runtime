@@ -79,9 +79,11 @@ void StoreBarrierBuffer::install_base_pointers()
 
 static volatile zpointer* RemapBufferedField(volatile zpointer* p, zaddress_unsafe pBase, uintptr_t color)
 {
+    ASSERT(!is_null(pBase));
     const uintptr_t offset = reinterpret_cast<uintptr_t>(p) - untype(pBase);
     ZUncoloredRoot::process_no_keepalive(&pBase, color);
     const zaddress remapped = safe(pBase);
+    ASSERT(offset < to_object(remapped)->GetSize());
     return reinterpret_cast<volatile zpointer*>(untype(remapped) + offset);
 }
 

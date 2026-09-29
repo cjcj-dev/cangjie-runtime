@@ -39,7 +39,7 @@ GC_TEST(OldToYoung1102, YoungMarkPhaseFlushRemembersOldToYoungSlot)
 
     StoreBarrierBuffer buffer;
     buffer.Initialize(::g_cjStoreGoodMask);
-    buffer.add(slot, field.GetFieldValue());
+    buffer.add(reinterpret_cast<volatile zpointer*>(slot), field.GetFieldValue());
     buffer.lastProcessedColor = ::g_cjStoreGoodMask ^ ZPointerMarkedYoungMask;
 
     auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);

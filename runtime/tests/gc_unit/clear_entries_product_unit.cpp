@@ -136,11 +136,6 @@ public:
         return ZGeneration::generation(forwarding->generation_id())->relocate().relocate_object(forwarding_for_page(forwarding), from);
     }
 
-    static bool TryUpdateRefField(Heap& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
-    {
-        return ZBarrier::TryUpdateRefField(obj, field, newRef);
-    }
-
     static BaseObject* ProductRelocateOrRemap(
         Heap& collector, BaseObject* from, ZGenerationId generation)
     {

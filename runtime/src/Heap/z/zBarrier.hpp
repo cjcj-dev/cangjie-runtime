@@ -32,12 +32,9 @@ class ZBarrier : public AllStatic {
 public:
     enum class RefSlotKind : U8 { STRONG, WEAK_REFERENT };
     static BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field);
-    static bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef);
     template<bool forward>
     static bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
                                       BaseObject*& toObj);
-    static bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
-                                         bool allowNull = false);
 
     static HandVerdict JudgeHandOutTarget(BaseObject* target);
     [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits);

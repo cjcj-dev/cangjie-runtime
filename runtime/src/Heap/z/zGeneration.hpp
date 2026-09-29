@@ -118,8 +118,6 @@ public:
     {
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
     }
-    void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
-    bool active_remset_is_current() const;
     ZForwardingTable& forwarding_table() { return _forwarding_table; }
     const ZForwardingTable& forwarding_table() const { return _forwarding_table; }
     ZRelocationSet& relocation_set() { return _relocation_set; }
@@ -154,8 +152,6 @@ protected:
     // seqnum 0 as "never marked" (zLiveMap.cpp:40, zLiveMap.inline.hpp:37-43),
     // so no generation may ever report sequence 0.
     uint32_t _seqnum = 1;
-    // ZGenerationOld::_young_seqnum_at_reloc_start (zGeneration.hpp:278).
-    std::atomic<uint64_t> youngSequenceAtRelocateStart{ 0 };
     std::atomic<ZYoungType> youngType { ZYoungType::none };
     ZGeneration::Phase _phase { ZGeneration::Phase::Relocate };
     std::atomic<size_t> _freed { 0 };
@@ -198,7 +194,7 @@ public:
     void register_in_place_relocate_promoted(ZPage* page);
     void register_flip_promoted(const ZArray<ZPage*>& pages);
     void SelectTenuringThreshold(const TenuringInputs& inputs);
-    void EvacuateYoungRegions();
+    void Relocate();
     bool should_record_stats() override;
     void collect(ZYoungType type, void* timer = nullptr);
     void mark_start();
@@ -219,8 +215,6 @@ private:
     void flip_relocate_start();
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint32_t _tenuring_threshold = 0;
-    uint64_t minorTotalRuns = 0;
-    uint64_t youngStartNs = 0;
     WorkStack youngWorkStack;
     ZRemembered _remembered;
 };
@@ -252,9 +246,14 @@ public:
     void concurrent_select_relocation_set();
     void remap_young_roots();
     void concurrent_remap_young_roots();
+    void flip_relocate_start();
+    void relocate_start();
+    void Relocate();
+    bool active_remset_is_current() const;
     void pause_relocate_start();
     void concurrent_relocate();
 private:
+    uint32_t _young_seqnum_at_reloc_start = 0;
     uint32_t _total_collections_at_start = 0;
     WorkStack oldMarkWorkStack;
     ValueRootList oldExportOwners;

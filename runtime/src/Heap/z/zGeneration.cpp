@@ -178,19 +178,12 @@ double ZGeneration::FragmentationLimit() const
 
 
 
-// ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
-// young sequence once for the whole old relocation, not once per forwarding.
-void ZGeneration::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
+bool ZGenerationOld::active_remset_is_current() const
 {
-    CHECK(_id == ZGenerationId::old);
-    youngSequenceAtRelocateStart.store(youngSequence, std::memory_order_release);
-}
-
-bool ZGeneration::active_remset_is_current() const
-{
-    CHECK(_id == ZGenerationId::old);
-    // zGeneration.inline.hpp:174-182: each young mark start flips the faces.
-    return ((ZGeneration::young()->Sequence() - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
+    ASSERT(_young_seqnum_at_reloc_start != 0);
+    const uint32_t seqnum = ZGeneration::young()->Sequence();
+    const uint32_t seqnumDiff = seqnum - _young_seqnum_at_reloc_start;
+    return (seqnumDiff & 1U) == 0;
 }
 
 
@@ -292,14 +285,7 @@ public:
     bool do_operation() override
     {
         ZStatTimerOld timer(ZPhasePauseRelocateStartOld);
-        ZGlobalsPointers::flip_old_relocate_start();
-        ZVerify::OnColorFlip();
-        ZGeneration::old()->set_phase(ZGeneration::Phase::Relocate);
-        ZGeneration::old()->RecordYoungSequenceAtRelocateStart(ZGeneration::young()->Sequence());
-        ZGeneration::old()->StatHeap()->AtRelocateStart(
-            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(
-                ZGeneration::old()));
-        ZRelocate::StartRelocationTasks(ZGenerationId::old);
+        ZGeneration::old()->relocate_start();
         return true;
     }
     bool block_jni_critical() const override { return true; }
@@ -398,7 +384,6 @@ bool ZGenerationYoung::pause_mark_end()
 
 void ZGenerationYoung::mark_start()
 {
-    uint64_t start = TimeUtil::NanoSeconds();
     CHECK(_id == ZGenerationId::young);
     ZGlobalsPointers::flip_young_mark_start();
     ZVerify::OnColorFlip();
@@ -423,7 +408,6 @@ void ZGenerationYoung::mark_start()
     statHeap.AtMarkStart(
         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
 
-    youngStartNs = start;
 }
 
 void ZGenerationYoung::produceYoungRoots()
@@ -534,28 +518,7 @@ void ZGenerationYoung::relocate_start()
 void ZGenerationYoung::concurrent_relocate()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentRelocateYoung);
-    // ZGC zGeneration.cpp:575-580: after relocate-start every selected page
-    // must finish relocation, including when shutdown requests an abort.
-    RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    size_t allocatedBefore = space.AllocatedBytes();
-    EvacuateYoungRegions();
-    size_t allocatedAfter = space.AllocatedBytes();
-    const size_t reclaimedBytes =
-        allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
-    ZGeneration::young()->increase_freed(reclaimedBytes);
-
-    {
-        Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Young);
-    }
-    ++minorTotalRuns;
-    uint64_t pauseUs = (TimeUtil::NanoSeconds() - youngStartNs) / NS_PER_US;
-    VLOG(REPORT,
-         "[GCV2Minor] run=%zu liveBytes=%zu "
-         "reclaimedBytes=%zu pause=%zu us",
-         minorTotalRuns,
-         statHeap.LiveAtMarkEnd(), reclaimedBytes,
-         pauseUs);
-    statHeap.AtRelocateEnd(space.GetRegionManager().Stats(this), should_record_stats());
+    Relocate();
 }
 
 } // namespace MapleRuntime
@@ -1050,6 +1013,23 @@ void ZGenerationOld::concurrent_remap_young_roots()
     remap_young_roots();
 }
 
+void ZGenerationOld::flip_relocate_start()
+{
+    ZGlobalsPointers::flip_old_relocate_start();
+    ZVerify::OnColorFlip();
+}
+
+void ZGenerationOld::relocate_start()
+{
+    ASSERT(MutatorManager::Instance().WorldStopped());
+    flip_relocate_start();
+    set_phase(Phase::Relocate);
+    StatHeap()->AtRelocateStart(
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+    _young_seqnum_at_reloc_start = ZGeneration::young()->Sequence();
+    ZRelocate::StartRelocationTasks(ZGenerationId::old);
+}
+
 void ZGenerationOld::pause_relocate_start()
 {
     VM_ZRelocateStartOld op;
@@ -1059,6 +1039,11 @@ void ZGenerationOld::pause_relocate_start()
 void ZGenerationOld::concurrent_relocate()
 {
     ZStatTimerOld timer(ZPhaseConcurrentRelocateOld);
+    Relocate();
+}
+
+void ZGenerationOld::Relocate()
+{
     relocate().relocate(&relocation_set());
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
     statHeap.AtRelocateEnd(
@@ -1265,9 +1250,13 @@ BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object)
 }
 
 namespace MapleRuntime {
-void ZGenerationYoung::EvacuateYoungRegions()
+void ZGenerationYoung::Relocate()
 {
     relocate().relocate(&relocation_set());
+    Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Young);
+    statHeap.AtRelocateEnd(
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this),
+        should_record_stats());
 }
 }
 

@@ -199,7 +199,7 @@ static void CheckInPlaceRemset()
                                      : static_cast<ZGeneration&>(heap.old());
     generation.InitializeWorkers(workers);
     generation.Workers()->set_active_workers(workers);
-    generation.RecordYoungSequenceAtRelocateStart(heap.young().Sequence());
+    heap.old().relocate_start();
     GenerationSequenceFixture::Advance(generation);
     if (promote) { ZGenerationTest::SetTenuringThreshold(heap.young(), 1); }
 

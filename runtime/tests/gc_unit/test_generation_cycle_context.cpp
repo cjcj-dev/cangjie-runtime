@@ -145,7 +145,7 @@ void* Exercise(void*)
                    "prelude_starts_old_mark");
             StoreBarrierBuffer buffer;
             RootSlot slot;
-            buffer.add(reinterpret_cast<MAddress>(&slot), zpointer::null);
+            buffer.add(reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(&slot)), zpointer::null);
             Expect(buffer.Pending() == 1u, "prelude_store_buffer_old_obligation");
             buffer.Flush();
         } else {
@@ -175,7 +175,7 @@ void* Exercise(void*)
         // its own state; the test does not provide a phase or generation.
         StoreBarrierBuffer buffer;
         RootSlot slot;
-        buffer.add(reinterpret_cast<MAddress>(&slot), zpointer::null);
+        buffer.add(reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(&slot)), zpointer::null);
         const auto storedPending = buffer.Pending();
         const bool young = Heap::GetHeap().young().Workers()->is_active();
         ZWorkers& current = *Heap::GetHeap().GetZGeneration(
