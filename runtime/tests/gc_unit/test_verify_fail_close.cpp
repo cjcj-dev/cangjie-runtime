@@ -28,6 +28,7 @@
 
 #include "Heap/z/zAccess.hpp"
 #include "Heap/z/zDriver.hpp"
+#include "Heap/z/zHeapIterator.hpp"
 #include "Concurrency/ConcurrencyModel.h"
 
 using namespace MapleRuntime;
@@ -682,6 +683,7 @@ void CheckCarrierWalk(bool heapWalk)
     }
     GC_EXPECT_TRUE(thread != nullptr);
     auto& heap = Heap::GetHeap();
+    const uintptr_t savedGuard = ZPointerStoreGoodMask;
     {
         DriverLocker lock;
         YoungTypeSetter typeSetter(heap.young(), ZYoungType::minor);
@@ -691,6 +693,7 @@ void CheckCarrierWalk(bool heapWalk)
     ZPage* page = Heap::page(reinterpret_cast<MAddress>(object));
     const bool markedBefore = page->is_object_marked_live(from_object(object));
     GC_EXPECT_TRUE(armedBefore);
+    GC_EXPECT_FALSE(CJThreadRootsAreArmed(thread, savedGuard));
     GC_EXPECT_FALSE(markedBefore);
     bool found = false;
     if (heapWalk) {
@@ -707,8 +710,12 @@ void CheckCarrierWalk(bool heapWalk)
         std::fprintf(stderr, "HEAP_CARRIER_TARGET found=%d armed=%d marked=%d\n", found, armedAfter, markedAfter);
         GC_EXPECT_TRUE(found);
         GC_EXPECT_FALSE(armedAfter);
-        GC_EXPECT_TRUE(markedAfter);
+        // ZGC zUncoloredRoot.inline.hpp:75-78 enqueues keep-alive marking;
+        // it does not promise that a mark worker has already set the bitmap.
     } else {
+        const bool sameGuard = !CJThreadRootsAreArmed(thread, savedGuard);
+        std::fprintf(stderr, "VERIFY_CARRIER_GUARD_TARGET saved=%#zx unchanged=%d\n", savedGuard, sameGuard);
+        GC_EXPECT_TRUE(sameGuard);
         GC_EXPECT_EQ(armedBefore, armedAfter);
         GC_EXPECT_EQ(markedBefore, markedAfter);
     }
@@ -769,5 +776,32 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, WeakVerificationChecksReferent)
 {
     CheckVerifyFieldCase(VerifyFieldCase::ReferentCheckedAfterWeak,
-                        "ZVerifyReferent.WeakVerificationChecksReferent", "Bad object");
+                        "ZVerifyReferent.WeakVerificationChecksReferent", "Non-live old oop");
+}
+
+GC_OTHER_VM_TEST(ZVerifyReferent, RelocationChecksSourceReferent)
+{
+    if (!ZVerifyRemembered) {
+        GC_EXPECT_EQ(setenv("ZVerifyRemembered", "1", 1), 0);
+        RunInOtherVm("ZVerifyReferent.RelocationChecksSourceReferent");
+        return;
+    }
+    GcVerifyFixture fixture;
+    fixture.PrepareOldSource();
+    fixture.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
+    HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
+    RememberedSet& remset = HeapTestRemset();
+    remset.Initialize(fixture.heapStart, 2 * ZGranuleSize);
+    std::fprintf(stderr, "VERIFY_SOURCE_REFERENT_INPUT slot=%#zx value=%#zx\n", slot,
+                 raw(HeapSlotAt<>(slot).GetFieldValue()));
+    ExpectSceneAbort("Missing remembered field", [&] {
+        auto& old = Heap::GetHeap().old();
+        if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
+        old.Workers()->set_active_workers(1);
+        old.Workers()->set_active();
+        ZRelocate::StartRelocationTasks(old.id());
+        old.relocate().relocate(&old.relocation_set());
+        old.Workers()->set_inactive();
+    });
 }

@@ -20,7 +20,8 @@ ZGenerationYoung* p16_young = nullptr;
 
 int main(int argc, char** argv)
 {
-    if (argc != 2) { return 78; }
+    if (argc != 2 && argc != 3) { return 78; }
+    const bool referent = argc == 3 && std::strcmp(argv[2], "referent") == 0;
     const bool scan = std::strcmp(argv[1], "scan") == 0;
     const bool young = scan || std::strcmp(argv[1], "young") == 0;
     ConcGCThreads = 64;
@@ -41,6 +42,7 @@ int main(int argc, char** argv)
     heap.old().InitializeWorkers(1);
     heap.young().InitializeWorkers(1);
     fixture.PrepareOldSource();
+    if (referent) { fixture.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS); }
     p16_forwarding = forwarding_for_page(fixture.region0());
     p16_young = &heap.young();
     p16_remset_mask = ZPointerRememberedMask;
