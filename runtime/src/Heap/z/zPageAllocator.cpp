@@ -1026,14 +1026,6 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
     CHECK(IsRepresentableLow48Range(metadataAddress, metadata.size));
     Initialize(alignedHeapSize, metadataAddress, *virtualMemory, *physicalMemory, vmHeapParam,
                              garbageThreshold);
-    // ZHeap::ZHeap, zHeap.cpp:77-82: prime after allocator initialization.
-    // HeapParam has no InitialHeapSize; use four granules (8 MB), bounded
-    // by the configured maximum heap for small heaps.
-    constexpr size_t initialHeapSize = 4 * ZGranuleSize;
-    if (!freeRegionManager.PrimeCache(std::min(initialHeapSize, maxCapacity))) {
-        ZInitialize::error("Failed to allocate initial heap");
-        return;
-    }
 #if defined(MRT_DUMP_ADDRESS)
     VLOG(REPORT, "region metadata@%zx, heap @[0x%zx+%zu, 0x%zx)", metadataAddress, reservedStart, reservedEnd - reservedStart,
          reservedEnd);
