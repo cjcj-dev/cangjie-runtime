@@ -267,9 +267,9 @@ GC_TEST(AbsentStackMap, SafepointWalkCrossesAbsentMapFrame)
         close(output[0]);
         if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
         close(output[1]);
-        // A younger frame the present map's root points at.
-        uintptr_t target = reinterpret_cast<uintptr_t>(&frames[kAbsentFrames + 1][54]);
-        (void)target;
+        // A root value that is not a stack address, so Mutator::VisitHeapRootSlots
+        // (Mutator.cpp:708-712) hands the slot itself to the product closure.
+        const uintptr_t target = 0x20;
         for (unsigned i = 1; i < kFrames; ++i) {
             const Desc& desc = i <= kAbsentFrames ? absent : present;
             frames[i][kFpSlot - 1] = reinterpret_cast<uintptr_t>(desc.pc) + 9;
@@ -302,10 +302,13 @@ GC_TEST(AbsentStackMap, SafepointWalkCrossesAbsentMapFrame)
         presentHigh = reinterpret_cast<uintptr_t>(&frames[kFrames][0]);
         presentRoots = 0;
         StackWatermarkSet::finish_processing(owner, reinterpret_cast<void*>(&ObserveRoot));
+        const bool exhausted = owner.GetStackWatermark().IsDone();
         *ZPointerStoreGoodMaskLowOrderBitsAddr = savedEpoch;
-        std::fprintf(stderr, "ABSENT_SAFEPOINT_TARGET target=%p frontier=%p crossed=%d bounded=%d present_roots=%u\n",
+        std::fprintf(stderr, "ABSENT_SAFEPOINT_TARGET target=%p frontier=%p crossed=%d bounded=%d present_roots=%u"
+            " exhausted=%d\n",
             reinterpret_cast<void*>(target), reinterpret_cast<void*>(frontier),
-            static_cast<int>(frontier != 0), static_cast<int>(bounded), presentRoots);
+            static_cast<int>(frontier != 0), static_cast<int>(bounded), presentRoots,
+            static_cast<int>(exhausted));
         _exit(0);
     }
     close(output[1]);
@@ -317,7 +320,7 @@ GC_TEST(AbsentStackMap, SafepointWalkCrossesAbsentMapFrame)
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     const bool crossed = transcript.find("crossed=1 bounded=1") != std::string::npos;
-    const bool reached = transcript.find("present_roots=0") == std::string::npos;
+    const bool reached = transcript.find("present_roots=0 exhausted=1") == std::string::npos;
     const bool finished = WIFEXITED(status) && WEXITSTATUS(status) == 0;
     std::fprintf(stderr, "ABSENT_SAFEPOINT_RESULT executed=1 crossed=%d reached=%d finished=%d signaled=%d sig=%d "
         "status=%d\n%s",
