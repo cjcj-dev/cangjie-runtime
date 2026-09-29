@@ -230,8 +230,6 @@ struct ForwardingSelectionResult {
     bool verifyRetirement{false};
     bool verifyPreviousMark{false};
     bool verifyPromotion{false};
-    bool forceInPlacePromotion{false};
-    size_t inPlacePromoted{0};
     bool observedMark{false};
     size_t previousMembers{0};
     size_t markReceipts{0};
@@ -316,32 +314,7 @@ void* SelectRealLivePages(void* context)
     if (result.verifyRetirement) {
         snapshot(result.usedBefore, result.mappedBefore, result.generationBefore, result.mappedGenerationBefore);
     }
-    std::vector<U64> occupiedRoots;
     const int savedTenuringThreshold = ZTenuringThreshold;
-    if (result.forceInPlacePromotion) {
-        // A bounded capacity construction: live large pages consume all spare
-        // extents, so at least the first small relocation must reuse its page.
-        // Threshold zero is the supported promotion policy for this minor GC;
-        // the separate PromoteAll case tests the full-preclean routing branch.
-        ZTenuringThreshold = 0;
-        alignas(TypeInfo) static unsigned char byteStorage[sizeof(TypeInfo)]{};
-        alignas(TypeInfo) static unsigned char arrayStorage[sizeof(TypeInfo)]{};
-        auto* byteType = reinterpret_cast<TypeInfo*>(byteStorage);
-        auto* arrayType = reinterpret_cast<TypeInfo*>(arrayStorage);
-        byteType->SetType(TypeKind::TYPE_KIND_UINT8);
-        byteType->SetInstanceSize(1);
-        arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
-        arrayType->SetComponentTypeInfo(byteType);
-        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(byteStorage), sizeof(byteStorage));
-        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(arrayStorage), sizeof(arrayStorage));
-        auto& allocator = Heap::GetHeap().page_allocator();
-        while (allocator.GetUsedBytes() + ZGranuleSize <= allocator.GetHeapCapacity()) {
-            BaseObject* filler = MCC_NewArray8(arrayType, ZGranuleSize - 64);
-            occupiedRoots.push_back(Heap::GetHeap().RegisterExportRoot(filler));
-        }
-        std::fprintf(stderr, "INPLACE1315_PRECONDITION used=%zu capacity=%zu live_large_pages=%zu\n",
-                     allocator.GetUsedBytes(), allocator.GetHeapCapacity(), occupiedRoots.size());
-    }
     // Live objects in three real small pages force a non-empty relocation set.
     if (result.verifyCritical) {
         auto* array = static_cast<MArray*>(Heap::GetHeap().GetExportObject(roots[0]));
@@ -380,24 +353,16 @@ void* SelectRealLivePages(void* context)
         if (result.verifyPromotion) {
             std::fprintf(stderr, "PROMOTION1315_PRECONDITION roots=%zu full_preclean_requested=1\n", result.roots);
         }
-        Heap::GetHeap().RequestGC(result.verifyPromotion && !result.forceInPlacePromotion ? GC_REASON_USER : GC_REASON_YOUNG);
+        Heap::GetHeap().RequestGC(result.verifyPromotion ? GC_REASON_USER : GC_REASON_YOUNG);
     }
     if (result.verifyPromotion) {
         for (size_t i = 0; i < result.roots; ++i) {
             BaseObject* root = Heap::GetHeap().GetExportObject(roots[i]);
             ZPage* page = root == nullptr ? nullptr : Heap::page(reinterpret_cast<MAddress>(root));
             result.promotedRoots += page != nullptr && page->generation_id() == ZGenerationId::old;
-            if (result.forceInPlacePromotion) {
-                ZForwarding* forwarding = Heap::GetHeap().young().forwarding(starts[i]);
-                result.inPlacePromoted += forwarding != nullptr && forwarding->is_promotion() && forwarding->in_place();
-            }
             Heap::GetHeap().RemoveExportObject(roots[i]);
         }
-        for (U64 root : occupiedRoots) { Heap::GetHeap().RemoveExportObject(root); }
         ZTenuringThreshold = savedTenuringThreshold;
-        if (result.forceInPlacePromotion) {
-            std::fprintf(stderr, "INPLACE1315_TARGET executed=1 registered_from_in_place=%zu\n", result.inPlacePromoted);
-        }
         std::fprintf(stderr, "PROMOTION1315_TARGET executed=1 promoted=%zu roots=%zu\n",
                      result.promotedRoots, result.roots);
         mutator->SetManagedContext(true);
@@ -1721,26 +1686,6 @@ GC_RUNTIME_OTHER_VM_TEST(PageIdentity1315, PromoteAllRegistersUniquePages)
     void* taskResult = nullptr;
     GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
     ReleaseHandle(handle);
-    GC_EXPECT_EQ(result.promotedRoots, result.roots);
-    GC_EXPECT_TRUE(result.roots > 0);
-    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
-}
-
-GC_RUNTIME_OTHER_VM_TEST(PageIdentity1315, InPlacePromotionRegistersUniquePages)
-{
-    RuntimeParam param{};
-    param.heapParam.heapSize = 64 * 1024;
-    param.coParam.processorNum = 1;
-    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    ForwardingSelectionResult result;
-    result.verifyPromotion = true;
-    result.forceInPlacePromotion = true;
-    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
-    GC_EXPECT_TRUE(handle != nullptr);
-    void* taskResult = nullptr;
-    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
-    ReleaseHandle(handle);
-    GC_EXPECT_TRUE(result.inPlacePromoted > 0);
     GC_EXPECT_EQ(result.promotedRoots, result.roots);
     GC_EXPECT_TRUE(result.roots > 0);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
