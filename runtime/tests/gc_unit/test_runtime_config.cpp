@@ -7,6 +7,7 @@
 #include "Base/Log.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zInitialize.hpp"
 #include <sys/wait.h>
 #include <csignal>
 #include <cstring>
@@ -335,4 +336,54 @@ GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, BackingFailureReachesInitializationOwner
     std::fprintf(stderr, "INIT1310_TARGET owner_rejected=%d original_error=%d status=%d\n%s",
                  ownerRejected, originalError, status, diagnostic.c_str());
     GC_EXPECT_TRUE(ownerRejected && originalError && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+namespace {
+void CheckInitializationFinished(bool lateError)
+{
+    using namespace MapleRuntime;
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        dup2(output[1], STDERR_FILENO);
+        dup2(output[1], STDOUT_FILENO);
+        close(output[1]);
+        unsetenv("cjAllocateHeapAt");
+        setenv("cjHeapSize", "64MB", 1);
+        if (CJ_ScheduleManagerInit() != 0) { _exit(91); }
+        CJ_MRT_CjRuntimeInit();
+        std::fprintf(stderr, "INIT1310_PRODUCT_INITIALIZED\n");
+        if (lateError) { ZInitialize::error("late initialization error"); }
+        else { ZInitialize::finish(); }
+        _exit(92);
+    }
+    close(output[1]);
+    std::string diagnostic;
+    char chunk[1024];
+    for (ssize_t count; (count = read(output[0], chunk, sizeof(chunk))) > 0;) {
+        diagnostic.append(chunk, static_cast<size_t>(count));
+    }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool initialized = diagnostic.find("INIT1310_PRODUCT_INITIALIZED") != std::string::npos;
+    const char* expected = lateError ? "Only register errors during initialization" : "Only finish initialization once";
+    const bool rejected = diagnostic.find(expected) != std::string::npos;
+    std::fprintf(stderr, "INIT1310_FINISH_TARGET initialized=%d rejected=%d late_error=%d status=%d\n%s",
+                 initialized, rejected, lateError, status, diagnostic.c_str());
+    GC_EXPECT_TRUE(initialized && rejected && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, OwnerFinishesInitializationOnce)
+{
+    CheckInitializationFinished(false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, FinishedOwnerRejectsLateError)
+{
+    CheckInitializationFinished(true);
 }

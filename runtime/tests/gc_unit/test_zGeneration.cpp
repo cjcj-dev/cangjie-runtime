@@ -6,6 +6,7 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zJNICritical.hpp"
+#include "b09_runtime_fixture.hpp"
 #include "gc_unittest.hpp"
 
 #include <atomic>
@@ -186,4 +187,23 @@ GC_TEST(RememberedLifecycle720, UnboundConstructionAbortsRegisterFoundOld)
     std::fprintf(stderr, "REMEMBERED720 unbound_signaled=%d sig=%d\n",
                  WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0);
     GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+// ZGC zGeneration.cpp:1261-1294: mark_end publishes completion after end()
+// succeeds; the collection owner consumes abort at its phase boundary.
+GC_OTHER_VM_TEST(Lifecycle1310, OldMarkEndPublishesCompletionBeforeAbortpoint)
+{
+    B09RuntimeFixture runtime;
+    auto& old = Heap::GetHeap().old();
+    old.InitializeWorkers(1);
+    old.Mark().Start();
+    old.Mark().PrepareWork(1);
+    old.set_phase(ZGeneration::Phase::Mark);
+    ZAbort::abort();
+    const bool ended = old.mark_end();
+    const bool complete = old.is_phase_mark_complete();
+    std::fprintf(stderr, "MARKEND1310_TARGET ended=%d complete=%d abort=%d\n",
+                 ended, complete, ZAbort::should_abort());
+    GC_EXPECT_TRUE(ended && complete && ZAbort::should_abort());
+    old.StopWorkers();
 }
