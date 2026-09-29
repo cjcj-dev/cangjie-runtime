@@ -29,7 +29,8 @@ bool HeapIteratorBitMap::try_set_bit(size_t index)
 
 HeapIterator::HeapIterator(bool visitWeaks, bool forVerify, unsigned nworkers)
     : workerQueues(nworkers == 0 ? 1 : nworkers), workerArrayQueues(nworkers == 0 ? 1 : nworkers),
-      visitWeaks(visitWeaks), forVerify(forVerify), terminator(workerQueues.size(), &workerQueues),
+      visitWeaks(visitWeaks), forVerify(forVerify), rootsColored(workerQueues.size()),
+      rootsUncolored(), rootsWeakColored(workerQueues.size()), terminator(workerQueues.size(), &workerQueues),
       objectBitmaps(ZAddressOffsetMax)
 {
     for (unsigned i = 0; i < workerQueues.size(); ++i) {
@@ -40,8 +41,9 @@ HeapIterator::HeapIterator(bool visitWeaks, bool forVerify, unsigned nworkers)
 
 HeapIterator::~HeapIterator()
 {
-    for (size_t i = 0; i < objectBitmaps.size(); ++i) {
-        delete objectBitmaps.at(i);
+    ZGranuleMapIterator<HeapIteratorBitMap*, false> bitmaps(&objectBitmaps);
+    for (HeapIteratorBitMap* bitmap; bitmaps.next(&bitmap);) {
+        delete bitmap;
     }
     for (unsigned i = 0; i < workerQueues.size(); ++i) {
         delete workerQueues.queue(i);
@@ -204,9 +206,12 @@ void HeapIterator::UncoloredRootOopClosure::do_root(ObjectRef& root)
 void HeapIterator::push_strong_roots(const HeapIteratorContext& context)
 {
     ColoredRootOopClosure<false> colored(*this, context);
-    RootsIteratorStrongColored().Apply([&](NativeSlot& root) { colored.do_root(root); });
+    rootsColored.Apply([&](NativeSlot& root) { colored.do_root(root); });
     UncoloredRootOopClosure uncolored(*this, context);
-    ZMark::VisitStrongPlainRoots([&](ObjectRef& root) { uncolored.do_root(root); }, [&](Mutator& mutator) {
+    rootsUncolored.Apply([&] {
+        ZMark::VisitStrongPlainRoots([&](ObjectRef& root) { uncolored.do_root(root); }, {});
+    });
+    rootsUncolored.ApplyThreads([&](Mutator& mutator) {
         mutator.VisitMutatorRoots([&](ObjectRef& root) { mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
             uncolored.do_root(slot);
         }); }, [](ObjectRef&) {});
@@ -219,7 +224,14 @@ void HeapIterator::push_weak_roots(const HeapIteratorContext& context)
         return;
     }
     ColoredRootOopClosure<true> colored(*this, context);
-    RootsIteratorWeakColored().Apply([&](NativeSlot& root) { colored.do_root(root); });
+    rootsWeakColored.Apply([&](NativeSlot& root) { colored.do_root(root); });
+}
+
+template<bool VisitWeaks>
+void HeapIterator::push_roots(const HeapIteratorContext& context)
+{
+    push_strong_roots(context);
+    if constexpr (VisitWeaks) push_weak_roots(context);
 }
 
 template <bool VisitWeaks>
@@ -271,12 +283,7 @@ void HeapIterator::drain_and_steal(const HeapIteratorContext& context)
 template <bool VisitWeaks>
 void HeapIterator::object_iterate_inner(const HeapIteratorContext& context)
 {
-    if (context.worker_id() == 0) {
-        push_strong_roots(context);
-        if constexpr (VisitWeaks) {
-            push_weak_roots(context);
-        }
-    }
+    push_roots<VisitWeaks>(context);
     drain_and_steal<VisitWeaks>(context);
 }
 

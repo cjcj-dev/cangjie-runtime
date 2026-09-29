@@ -12,6 +12,7 @@
 #include "Common/BaseObject.h"
 #include "Heap/z/zIterator.hpp"
 #include "Heap/z/zTaskTerminator.hpp"
+#include "Heap/z/zRootsIterator.hpp"
 #include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {
@@ -45,6 +46,8 @@ public:
     void object_iterate(const ObjectVisitor& objectVisitor, uint32_t worker_id);
     void object_and_field_iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor,
                                   uint32_t worker_id);
+    template<bool VisitWeaks>
+    void push_roots(const HeapIteratorContext& context);
     void push_strong_roots(const HeapIteratorContext& context);
     void push_weak_roots(const HeapIteratorContext& context);
     template <bool VisitWeaks>
@@ -113,6 +116,9 @@ private:
     void follow_array_chunk(const HeapIteratorContext& context, const ObjArrayTask& array);
     const bool visitWeaks;
     const bool forVerify;
+    RootsIteratorStrongColored rootsColored;
+    RootsIteratorStrongUncolored rootsUncolored;
+    RootsIteratorWeakColored rootsWeakColored;
     TaskTerminator terminator;
     std::mutex bitmapLock;
     HeapIteratorBitMap* object_bitmap(BaseObject* object);
