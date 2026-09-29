@@ -450,6 +450,6 @@ void ZBarrier::load_barrier_on_oop_array(volatile zpointer* p, size_t length)
 RefField<> ZBarrier::GetAndTryTagRefField(BaseObject* target)
 {
     // ZGC zAddress.inline.hpp:505-508: store_good consumes an uncolored address.
-    return RefField<>(ZAddress::store_good(from_object(target)));
+    return RefField<>(ZAddress::store_good_or_null(from_object(target)));
 }
 } // namespace MapleRuntime
