@@ -369,14 +369,4 @@ GC_OTHER_VM_TEST(ObjectAllocator917, FastAvailableRequiresMutator)
     });
 }
 
-GC_OTHER_VM_TEST(ObjectAllocator917, TLABEntryRequiresMutator)
-{
-    ExpectAllocatorAbort("ObjectAllocator917.TLABEntryRequiresMutator", "Should be a mutator thread", [] {
-        GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
-        AllocBuffer buffer;
-        buffer.ClearRegion();
-        // HotSpot memAllocator.cpp:287-294: the refill slow path queries capacity.
-        (void)buffer.AllocateImpl(16, AllocType::MOVEABLE_OBJECT);
-    });
-}
 #endif

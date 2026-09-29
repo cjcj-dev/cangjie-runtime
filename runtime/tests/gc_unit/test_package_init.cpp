@@ -1093,6 +1093,69 @@ GC_TEST(PackageInit, PublicUnloadWithoutRuntimeInitErasesHandler)
     Target("uninit-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
     Target("uninit-handle-erased", CJFileLoaderTest::Handle(*loader, uPath.c_str()) == nullptr);
 }
+// ZGC zRootsIterator.cpp:107,117 enumerates CLD roots from the loader data
+// graph. The library image is loaded through the product entry
+// (CjFileLoader.cpp:44 -> CJFile::RegisterFile -> CJFile::LoadLinuxCJFileMeta)
+// and its own GC_ROOT_TABLE must reach the root enumeration; the object stored
+// there is the product result the assertion reads.
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryStaticRootIsEnumerated)
+{
+    Init();
+    const std::string path = FixtureBesideExecutable("libcj_package_init_fixture.so");
+    void* library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("static-root-library-open", library != nullptr);
+    auto getMetadata = reinterpret_cast<void* (*)()>(dlsym(library, "PackageInitImageMetadata"));
+    auto rootSlot = reinterpret_cast<MAddress* (*)()>(dlsym(library, "PackageInitImageRootSlot"));
+    auto setRoot = reinterpret_cast<void (*)(MAddress)>(dlsym(library, "PackageInitImageSetRoot"));
+    Target("static-root-library-symbols", getMetadata != nullptr && rootSlot != nullptr && setRoot != nullptr);
+    auto* file = new CJFile(CString("package-init-library"), reinterpret_cast<Uptr>(getMetadata()));
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    loader->AddLoadedFiles(file);
+    struct StaticRootContext {
+        void (*setRoot)(MAddress) { nullptr };
+        MAddress object { 0 };
+        std::atomic<bool> done { false };
+    } context;
+    context.setRoot = setRoot;
+    // Registration happens before the object exists: only the image table can
+    // make this root visible to the enumeration.
+    loader->RegisterLoadFile(file->GetFileMetaAddr());
+    Start([](void* argument) {
+        auto& c = *static_cast<StaticRootContext*>(argument);
+        alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)] {};
+        auto* type = reinterpret_cast<TypeInfo*>(storage);
+        type->SetType(TypeKind::TYPE_KIND_CLASS);
+        type->SetInstanceSize(64);
+        c.object = reinterpret_cast<MAddress>(MCC_NewObject(type, 64 + TYPEINFO_PTR_SIZE));
+        c.setRoot(c.object);
+        c.done.store(true, std::memory_order_release);
+    }, &context);
+    Target("static-root-object-published", Await(context.done) && context.object != 0);
+    size_t visited = 0;
+    MAddress observed = 0;
+    bool matched = false;
+    LoaderManager::GetInstance()->VisitStaticRoots([&](NativeSlot& slot) {
+        ++visited;
+        if (reinterpret_cast<MAddress>(&slot) == reinterpret_cast<MAddress>(rootSlot())) {
+            matched = true;
+            observed = slot.GetAddress();
+        }
+    });
+    std::fprintf(stderr, "STATIC_ROOT_IMAGE_TARGET executed=1 visited=%zu matched=%d observed=%#zx object=%#zx\n",
+                 visited, matched, observed, context.object);
+    Target("static-root-enumerated", matched);
+    Target("static-root-value", observed == context.object);
+    // CjFile.cpp:19 unload: the same table must leave the enumeration.
+    file->UnregisterFile();
+    matched = false;
+    LoaderManager::GetInstance()->VisitStaticRoots([&](NativeSlot& slot) {
+        if (reinterpret_cast<MAddress>(&slot) == reinterpret_cast<MAddress>(rootSlot())) { matched = true; }
+    });
+    Target("static-root-unregistered", !matched);
+    loader->RemoveLoadedFiles(file);
+    Target("static-root-library-closed", dlclose(library) == 0);
+    Target("static-root-runtime-finish", FiniCJRuntime() == E_OK);
+}
 #endif
 GC_TEST(PackageInit, UnattachedNativeUnavailable)
 {

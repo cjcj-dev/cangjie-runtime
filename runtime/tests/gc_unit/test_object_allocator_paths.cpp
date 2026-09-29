@@ -571,3 +571,61 @@ GC_RUNTIME_OTHER_VM_TEST(HeapFacade1334, MajorCollectionCountOwner)
 {
     RunAllocatorCase(CollectMajorAndReadCount);
 }
+
+namespace {
+// gc/shared/memAllocator.cpp:255-325: the TLAB slow path lives in MemAllocator.
+// Both branches are reached with ordinary objects through Heap::Allocate, the
+// product entry HeapManager.cpp:20 builds the MemAllocator from. No hook, no
+// counter and no direct call into the TLAB refill schedule.
+void* AllocateUntilSlowBranch(void*)
+{
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    const size_t size = 256;
+    type->SetInstanceSize(size - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    Heap& heap = Heap::GetHeap();
+    // The first object creates the TLAB; it must land in the TLAB region.
+    const uintptr_t first = heap.Allocate(size, AllocType::MOVEABLE_OBJECT);
+    const ZPage* firstRegion = AllocBuffer::GetAllocBuffer()->GetRegion();
+    const bool created = first != 0 && firstRegion != nullptr && Heap::page(first) == firstRegion;
+    size_t retained = 0;
+    size_t refilled = 0;
+    size_t outside = 0;
+    size_t limitRaisedBy = 0;
+    size_t previousLimit = AllocBuffer::GetAllocBuffer()->RefillWasteLimit();
+    const ZPage* previousRegion = firstRegion;
+    for (size_t i = 0; i < 200000 && (retained == 0 || refilled == 0); ++i) {
+        const uintptr_t addr = heap.Allocate(size, AllocType::MOVEABLE_OBJECT);
+        if (addr == 0) { break; }
+        const ZPage* region = AllocBuffer::GetAllocBuffer()->GetRegion();
+        const size_t limit = AllocBuffer::GetAllocBuffer()->RefillWasteLimit();
+        if (limit > previousLimit) {
+            // memAllocator.cpp:276-278 retains the TLAB and returns 0, so the
+            // allocation lands outside while the waste limit grew by one step.
+            limitRaisedBy = limit - previousLimit;
+            retained = (Heap::page(addr) != region) ? 1 : 0;
+        } else if (limit < previousLimit && region != nullptr && region != previousRegion &&
+                   Heap::page(addr) == region) {
+            // memAllocator.cpp:287-306 retired the TLAB and published a new
+            // one; the object that triggered the refill lives in it.
+            refilled = 1;
+            previousRegion = region;
+        } else if (region == previousRegion && Heap::page(addr) != region) {
+            ++outside;
+        }
+        previousLimit = limit;
+    }
+    const bool step = limitRaisedBy == AllocBuffer::RefillWasteLimitIncrement();
+    const bool shape = created && retained == 1 && refilled == 1;
+    std::fprintf(stderr, "HEAP1334_TLAB_SLOW_TARGET executed=1 created=%d retained=%d refilled=%d outside=%zu "
+                         "limit_raised_by=%zu step=%d shape=%d\n",
+                 created, retained, refilled, outside, limitRaisedBy, step, shape);
+    return reinterpret_cast<void*>(uintptr_t(!shape ? 1 : !step ? 2 : 0));
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(HeapFacade1334, TlabSlowPathOwnsRefillSchedule)
+{
+    RunAllocatorCase(AllocateUntilSlowBranch);
+}
