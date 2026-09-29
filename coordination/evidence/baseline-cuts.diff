@@ -1,0 +1,22 @@
+--- a/runtime/src/Heap/z/zRootsIterator.cpp
++++ b/runtime/src/Heap/z/zRootsIterator.cpp
+@@ -138,7 +138,7 @@
+ {
+     NativeSlotVisitor copy = visitor;
+     strong.apply(&copy);
+-    statics.apply(&copy);
++    // Controlled cut: do not publish static roots to the iterator.
+ }
+ 
+ void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
+--- a/runtime/src/Base/BitMap.h
++++ b/runtime/src/Base/BitMap.h
+@@ -184,7 +184,7 @@
+         do {
+             const bm_word_t new_val = old_val | mask;
+             if (new_val == old_val) {
+-                return false; // Someone else beat us to it.
++                return true; // Controlled cut: report an already-set bit as newly marked.
+             }
+             bm_word_t expected = old_val;
+             if (__atomic_compare_exchange_n(addr, &expected, new_val, false, static_cast<int>(memory_order),

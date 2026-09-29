@@ -1,0 +1,4 @@
+[  RUN   ] AccessBarrier976.UnknownWeakStoreResolvesAtFieldOffset
+ACCESS976_UNKNOWN_ASSERT pending=0 remembered=1 raw=1510
+[  PASS  ] AccessBarrier976.UnknownWeakStoreResolvesAtFieldOffset
+[========] 1 tests: 1 passed, 0 failed

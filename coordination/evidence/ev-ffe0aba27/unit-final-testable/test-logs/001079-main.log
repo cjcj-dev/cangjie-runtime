@@ -1,0 +1,4 @@
+[  RUN   ] SoftMemoryTable.OfficialInvalid
+MEMORY_TABLE input=[20XB] reference_line=394 rc=0 accepted=0 bytes=4711 expected=0
+[  PASS  ] SoftMemoryTable.OfficialInvalid
+[========] 1 tests: 1 passed, 0 failed

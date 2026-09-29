@@ -1,0 +1,3 @@
+[  RUN   ] ZArray.insert_before_at_end_appends
+[  PASS  ] ZArray.insert_before_at_end_appends
+[========] 1 tests: 1 passed, 0 failed

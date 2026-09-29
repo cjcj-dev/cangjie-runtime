@@ -1,0 +1,4 @@
+[  RUN   ] Remember1273.MissingPageDoesNotReturnSilently
+REMEMBER1273_MISSING_TARGET entered=1 wait_status=139 signal=11 rejected=1
+[  PASS  ] Remember1273.MissingPageDoesNotReturnSilently
+[========] 1 tests: 1 passed, 0 failed

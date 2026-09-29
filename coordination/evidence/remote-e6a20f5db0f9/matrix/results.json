@@ -1,0 +1,238 @@
+{
+  "arrays": {
+    "ArrayChunks": {
+      "rc": 1,
+      "assertions": [
+        "P82_ARRAY_ASSERT exact=0",
+        "P82_ARRAY_ASSERT exact=0"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log"
+    },
+    "OverflowRoots": {
+      "rc": 0,
+      "assertions": [
+        "P82_OVERFLOW_ASSERT seen=132000 expected=132000"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/OverflowRoots.log"
+    },
+    "ReachableSet": {
+      "rc": 0,
+      "assertions": [
+        "P82_REACHABLE_SET_ASSERT exact=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log"
+    },
+    "TerminationAgreement": {
+      "rc": 0,
+      "assertions": [
+        "P82_TERMINATION_ASSERT early_return=0 visits=1025"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/TerminationAgreement.log"
+    },
+    "VisitsOnce": {
+      "rc": 0,
+      "assertions": [
+        "P82_VISITS_ONCE_ASSERT once=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log"
+    }
+  },
+  "bitmap": {
+    "ArrayChunks": {
+      "rc": 0,
+      "assertions": [
+        "P82_ARRAY_ASSERT exact=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ArrayChunks.log"
+    },
+    "OverflowRoots": {
+      "rc": 0,
+      "assertions": [
+        "P82_OVERFLOW_ASSERT seen=132000 expected=132000"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/OverflowRoots.log"
+    },
+    "ReachableSet": {
+      "rc": 0,
+      "assertions": [
+        "P82_REACHABLE_SET_ASSERT exact=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log"
+    },
+    "TerminationAgreement": {
+      "rc": 0,
+      "assertions": [
+        "P82_TERMINATION_ASSERT early_return=0 visits=1028"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/TerminationAgreement.log"
+    },
+    "VisitsOnce": {
+      "rc": 1,
+      "assertions": [
+        "P82_VISITS_ONCE_ASSERT once=0",
+        "P82_VISITS_ONCE_ASSERT once=0"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log"
+    }
+  },
+  "candidate": {
+    "ArrayChunks": {
+      "rc": 0,
+      "assertions": [
+        "P82_ARRAY_ASSERT exact=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/candidate/ArrayChunks.log"
+    },
+    "OverflowRoots": {
+      "rc": 0,
+      "assertions": [
+        "P82_OVERFLOW_ASSERT seen=132000 expected=132000"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/candidate/OverflowRoots.log"
+    },
+    "ReachableSet": {
+      "rc": 0,
+      "assertions": [
+        "P82_REACHABLE_SET_ASSERT exact=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/candidate/ReachableSet.log"
+    },
+    "TerminationAgreement": {
+      "rc": 0,
+      "assertions": [
+        "P82_TERMINATION_ASSERT early_return=0 visits=1025"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/candidate/TerminationAgreement.log"
+    },
+    "VisitsOnce": {
+      "rc": 0,
+      "assertions": [
+        "P82_VISITS_ONCE_ASSERT once=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/candidate/VisitsOnce.log"
+    }
+  },
+  "entry": {
+    "OverflowRoots": {
+      "rc": 1,
+      "assertions": [
+        "P82_OVERFLOW_ASSERT seen=0 expected=132000",
+        "P82_OVERFLOW_ASSERT seen=0 expected=132000"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/entry/OverflowRoots.log"
+    }
+  },
+  "objects": {
+    "ArrayChunks": {
+      "rc": 0,
+      "assertions": [
+        "P82_ARRAY_ASSERT exact=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ArrayChunks.log"
+    },
+    "OverflowRoots": {
+      "rc": 0,
+      "assertions": [
+        "P82_OVERFLOW_ASSERT seen=132000 expected=132000"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/OverflowRoots.log"
+    },
+    "ReachableSet": {
+      "rc": 1,
+      "assertions": [
+        "P82_REACHABLE_SET_ASSERT exact=0",
+        "P82_REACHABLE_SET_ASSERT exact=0"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log"
+    },
+    "TerminationAgreement": {
+      "rc": 0,
+      "assertions": [
+        "P82_TERMINATION_ASSERT early_return=0 visits=257"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/TerminationAgreement.log"
+    },
+    "VisitsOnce": {
+      "rc": 0,
+      "assertions": [
+        "P82_VISITS_ONCE_ASSERT once=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log"
+    }
+  },
+  "restored": {
+    "ArrayChunks": {
+      "rc": 0,
+      "assertions": [
+        "P82_ARRAY_ASSERT exact=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/restored/ArrayChunks.log"
+    },
+    "OverflowRoots": {
+      "rc": 0,
+      "assertions": [
+        "P82_OVERFLOW_ASSERT seen=132000 expected=132000"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/restored/OverflowRoots.log"
+    },
+    "ReachableSet": {
+      "rc": 0,
+      "assertions": [
+        "P82_REACHABLE_SET_ASSERT exact=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/restored/ReachableSet.log"
+    },
+    "TerminationAgreement": {
+      "rc": 0,
+      "assertions": [
+        "P82_TERMINATION_ASSERT early_return=0 visits=1025"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/restored/TerminationAgreement.log"
+    },
+    "VisitsOnce": {
+      "rc": 0,
+      "assertions": [
+        "P82_VISITS_ONCE_ASSERT once=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/restored/VisitsOnce.log"
+    }
+  },
+  "termination": {
+    "ArrayChunks": {
+      "rc": 0,
+      "assertions": [
+        "P82_ARRAY_ASSERT exact=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ArrayChunks.log"
+    },
+    "OverflowRoots": {
+      "rc": 0,
+      "assertions": [
+        "P82_OVERFLOW_ASSERT seen=132000 expected=132000"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/OverflowRoots.log"
+    },
+    "ReachableSet": {
+      "rc": 0,
+      "assertions": [
+        "P82_REACHABLE_SET_ASSERT exact=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log"
+    },
+    "TerminationAgreement": {
+      "rc": 1,
+      "assertions": [
+        "P82_TERMINATION_ASSERT early_return=1 visits=1025",
+        "P82_TERMINATION_ASSERT early_return=1 visits=1025"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/TerminationAgreement.log"
+    },
+    "VisitsOnce": {
+      "rc": 0,
+      "assertions": [
+        "P82_VISITS_ONCE_ASSERT once=1"
+      ],
+      "log": "/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log"
+    }
+  }
+}

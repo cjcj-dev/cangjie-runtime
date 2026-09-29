@@ -1,0 +1,4 @@
+[  RUN   ] ZWorkers.RunAllUsesMaxWorkersAndRestoresActive
+OBSERVED IDs for single/full/restored batches
+[  PASS  ] ZWorkers.RunAllUsesMaxWorkersAndRestoresActive
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,3 @@
+[  RUN   ] StoreBuf.NonNullPrevPublishesMarkBeforeRememberingSlot
+[  PASS  ] StoreBuf.NonNullPrevPublishesMarkBeforeRememberingSlot
+[========] 1 tests: 1 passed, 0 failed

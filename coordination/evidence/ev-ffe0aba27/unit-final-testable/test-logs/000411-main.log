@@ -1,0 +1,6 @@
+[  RUN   ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+[  RUN   ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+B19_YOUNG_MARK_BEFORE_HEAL executed=1 marked=1 before=0 after=1 word=0x80001000081a30
+GC_UNIT_OTHER_VM_OKIDOKI NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+[  PASS  ] NativeRootCurrent.YoungGoodMarksBeforeHealingAndSkipsRepeat
+[========] 1 tests: 1 passed, 0 failed

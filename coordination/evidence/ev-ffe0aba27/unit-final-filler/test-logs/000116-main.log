@@ -1,0 +1,3 @@
+[  RUN   ] ZLiveMapPage.find_base_resolves_interior_field
+[  PASS  ] ZLiveMapPage.find_base_resolves_interior_field
+[========] 1 tests: 1 passed, 0 failed

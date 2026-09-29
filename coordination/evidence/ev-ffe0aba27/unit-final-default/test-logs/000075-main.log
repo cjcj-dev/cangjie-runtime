@@ -1,0 +1,13 @@
+[  RUN   ] ZStat.GenerationSubphaseShape
+[  RUN   ] ZStat.GenerationSubphaseShape
+GENERATION_SUBPHASE_RECORD Old Subphase: Concurrent Mark Follow 12550/12550 12550/12550 12550/12550 12550/12550 ns
+GENERATION_SUBPHASE_RECORD Old Subphase: Concurrent Mark Roots 25751/25751 25751/25751 25751/25751 25751/25751 ns
+GENERATION_SUBPHASE_RECORD Young Phase: Concurrent Mark 61115/82671 61115/82671 61115/82671 61115/82671 ns
+GENERATION_SUBPHASE_RECORD Young Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+GENERATION_SUBPHASE_RECORD Young Phase: Concurrent Mark Free 625/970 625/970 625/970 625/970 ns
+GENERATION_SUBPHASE_RECORD Young Subphase: Concurrent Mark Follow 20930/23860 20930/23860 20930/23860 20930/23860 ns
+GENERATION_SUBPHASE_RECORD Young Subphase: Concurrent Mark Roots 39715/58171 39715/58171 39715/58171 39715/58171 ns
+GENERATION_SUBPHASE_TARGET executed=1 status=0 mark=1 roots=1 follow=1 old_roots=1 old_follow=1 legacy=0 returned=1
+GC_UNIT_OTHER_VM_OKIDOKI ZStat.GenerationSubphaseShape
+[  PASS  ] ZStat.GenerationSubphaseShape
+[========] 1 tests: 1 passed, 0 failed

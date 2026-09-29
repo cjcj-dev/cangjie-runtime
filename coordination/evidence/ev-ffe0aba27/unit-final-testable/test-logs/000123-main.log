@@ -1,0 +1,5 @@
+[  RUN   ] ZLiveMapPage.concurrent_strong_upgrade_counts_live_once
+P02_SAME_OBJECT large=0 upgrade=1 claims=1 objects=1 bytes=16 live=1 strong=1
+P02_SAME_OBJECT large=1 upgrade=1 claims=1 objects=1 bytes=16 live=1 strong=1
+[  PASS  ] ZLiveMapPage.concurrent_strong_upgrade_counts_live_once
+[========] 1 tests: 1 passed, 0 failed

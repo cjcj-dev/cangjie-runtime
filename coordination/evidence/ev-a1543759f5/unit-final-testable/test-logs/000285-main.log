@@ -1,0 +1,5 @@
+[  RUN   ] YoungConc.ExportRootRegistrationDoesNotMarkIncomingValue
+[  RUN   ] YoungConc.ExportRootRegistrationDoesNotMarkIncomingValue
+GC_UNIT_OTHER_VM_OKIDOKI YoungConc.ExportRootRegistrationDoesNotMarkIncomingValue
+[  PASS  ] YoungConc.ExportRootRegistrationDoesNotMarkIncomingValue
+[========] 1 tests: 1 passed, 0 failed

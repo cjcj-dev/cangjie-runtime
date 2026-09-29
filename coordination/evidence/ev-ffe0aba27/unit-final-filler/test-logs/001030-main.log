@@ -1,0 +1,9 @@
+[  RUN   ] MaxHeapSize.UnitOverflow
+[  RUN   ] MaxHeapSize.UnitOverflow
+MAX_REJECT_ASSERT input=18014398509481984KB status=134 rejected=1 diagnosed=1
+2026-09-30 00:28:28.984453 256774 E Invalid cjHeapSize
+2026-09-30 00:28:28.984638 256774 F Check failed: GCArguments::parse_vm_init_args(param.heapParam)
+2026-09-30 00:28:28.984687 256774 F Invalid heap size arguments
+GC_UNIT_OTHER_VM_OKIDOKI MaxHeapSize.UnitOverflow
+[  PASS  ] MaxHeapSize.UnitOverflow
+[========] 1 tests: 1 passed, 0 failed

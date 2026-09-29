@@ -1,0 +1,7 @@
+[  RUN   ] PageGeneration579.ResetAndReuseCurrentGeneration
+PAGE579 reset young=1 current=0 id=0
+PAGE579 reset young=0 current=1 id=1
+PAGE579 reset young=1 current=0 id=0
+PAGE579 reset young=0 current=1 id=1
+[  PASS  ] PageGeneration579.ResetAndReuseCurrentGeneration
+[========] 1 tests: 1 passed, 0 failed

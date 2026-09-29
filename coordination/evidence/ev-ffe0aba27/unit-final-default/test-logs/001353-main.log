@@ -1,0 +1,7 @@
+[  RUN   ] PayloadClamp.ReadOverLimitAborts
+[  RUN   ] PayloadClamp.ReadOverLimitAborts
+2026-09-30 00:27:57.705401 3634660 F Check failed: false
+2026-09-30 00:27:57.706007 3634660 F generic payload size 9 exceeds object payload 8 type=(null)
+GC_UNIT_OTHER_VM_OKIDOKI PayloadClamp.ReadOverLimitAborts
+[  PASS  ] PayloadClamp.ReadOverLimitAborts
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] ZWorkers.RestartableTaskWithoutRequestRunsOnce
+OBSERVED restartable task without request completes one batch
+[  PASS  ] ZWorkers.RestartableTaskWithoutRequestRunsOnce
+[========] 1 tests: 1 passed, 0 failed

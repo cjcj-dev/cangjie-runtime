@@ -1,0 +1,7 @@
+[  RUN   ] RelocateWorkers.OldProductEntryReducesWorkersDuringRelocation
+[  RUN   ] RelocateWorkers.OldProductEntryReducesWorkersDuringRelocation
+RELOCATE_RESIZE_PENDING generation=old initial_batch=1 remaining_unclaimed=1 remaining_claimed=1 remaining_pending=1 active_while_pending=1 final_active=1
+ASSERT_RELOCATE_RESIZE_BEFORE_COMPLETION executed=1 active=1 expected=1
+GC_UNIT_OTHER_VM_OKIDOKI RelocateWorkers.OldProductEntryReducesWorkersDuringRelocation
+[  PASS  ] RelocateWorkers.OldProductEntryReducesWorkersDuringRelocation
+[========] 1 tests: 1 passed, 0 failed

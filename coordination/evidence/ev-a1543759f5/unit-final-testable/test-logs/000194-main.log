@@ -1,0 +1,6 @@
+[  RUN   ] RelocationTargets.StoppedWorldCopiesOnlyRequestedObject
+[  RUN   ] RelocationTargets.StoppedWorldCopiesOnlyRequestedObject
+MUTATOR_RELOCATE_RESULT stopped=1 world_stopped=1 source=0x40000000000 result=0x40000400000 in_place=0 other=0 done=0 refs=1
+GC_UNIT_OTHER_VM_OKIDOKI RelocationTargets.StoppedWorldCopiesOnlyRequestedObject
+[  PASS  ] RelocationTargets.StoppedWorldCopiesOnlyRequestedObject
+[========] 1 tests: 1 passed, 0 failed

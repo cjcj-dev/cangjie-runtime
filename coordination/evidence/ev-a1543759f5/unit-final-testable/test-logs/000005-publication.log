@@ -1,0 +1,6 @@
+[  RUN   ] RemapYoungRoots1039.MajorUpdatesCurrentRemsetMultipleWorkers
+[  RUN   ] RemapYoungRoots1039.MajorUpdatesCurrentRemsetMultipleWorkers
+MAJOR_CURRENT_REMSET_TARGET workers=2 before=80002400021910 pending=80002400021910 observed=40000000000 expected=40000000000 updated=1
+GC_UNIT_OTHER_VM_OKIDOKI RemapYoungRoots1039.MajorUpdatesCurrentRemsetMultipleWorkers
+[  PASS  ] RemapYoungRoots1039.MajorUpdatesCurrentRemsetMultipleWorkers
+[========] 1 tests: 1 passed, 0 failed

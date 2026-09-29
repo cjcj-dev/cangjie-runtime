@@ -1,0 +1,9 @@
+[  RUN   ] ObjectAllocator917.RetireOldRequiresSafepoint
+[  RUN   ] ObjectAllocator917.RetireOldRequiresSafepoint
+[  RUN   ] ObjectAllocator917.RetireOldRequiresSafepoint
+2026-09-30 00:28:28.372768 235968 F Check failed: MutatorManager::Instance().WorldStopped()
+2026-09-30 00:28:28.372940 235968 F Should be at safepoint
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+GC_UNIT_OTHER_VM_OKIDOKI ObjectAllocator917.RetireOldRequiresSafepoint
+[  PASS  ] ObjectAllocator917.RetireOldRequiresSafepoint
+[========] 1 tests: 1 passed, 0 failed

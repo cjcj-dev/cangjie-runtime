@@ -1,0 +1,4 @@
+[  RUN   ] ReturnSafepointRegMap.PrologueReachesStackGrow
+GROW_POINTER_TARGET slot=0x7ffcc768a518 expected=0x7ffcc768a518 value=0x7ffcc768b320 target=0x7ffcc768b320
+[  PASS  ] ReturnSafepointRegMap.PrologueReachesStackGrow
+[========] 1 tests: 1 passed, 0 failed

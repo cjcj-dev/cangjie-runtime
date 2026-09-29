@@ -1,0 +1,7 @@
+[  RUN   ] SoftMemoryRuntime.Case158
+[  RUN   ] SoftMemoryRuntime.Case158
+2026-09-30 00:27:55.695362 3583351 E Invalid cjSoftMaxHeapSize
+MEMORY_RUNTIME input=[17179869184G] rc=-1 valid=0 expected=0
+GC_UNIT_OTHER_VM_OKIDOKI SoftMemoryRuntime.Case158
+[  PASS  ] SoftMemoryRuntime.Case158
+[========] 1 tests: 1 passed, 0 failed

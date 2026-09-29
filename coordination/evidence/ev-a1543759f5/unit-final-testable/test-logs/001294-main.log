@@ -1,0 +1,3 @@
+[  RUN   ] ReferenceProcessor.DeadWeakReferentIsCleanedByCas
+[  PASS  ] ReferenceProcessor.DeadWeakReferentIsCleanedByCas
+[========] 1 tests: 1 passed, 0 failed

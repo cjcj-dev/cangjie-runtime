@@ -1,0 +1,279 @@
+GC_UNIT_OHOS_HOST_HEADER_ROOT=/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_unit_main.cpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Mutator/ThreadLocal.h:17:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zStoreBarrierBuffer.hpp:13:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Common/TypeDef.h:15:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zAddress.hpp:342:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zAddress.inline.hpp:713:44: warning: unused parameter 'a' [-Wunused-parameter]
+inline void assert_is_oop_or_null(zaddress a)
+                                           ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_unit_main.cpp:18:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zHeap.hpp:20:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zBarrier.hpp:13:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:21:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zForwardingTable.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGranuleMap.hpp:19:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:53:9: warning: 'LOG_DEBUG' macro redefined [-Wmacro-redefined]
+#define LOG_DEBUG(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:13:9: note: previous definition is here
+#define LOG_DEBUG 3
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_unit_main.cpp:18:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zHeap.hpp:20:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zBarrier.hpp:13:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:21:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zForwardingTable.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGranuleMap.hpp:19:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:64:9: warning: 'LOG_INFO' macro redefined [-Wmacro-redefined]
+#define LOG_INFO(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:14:9: note: previous definition is here
+#define LOG_INFO 4
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_unit_main.cpp:18:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zHeap.hpp:20:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zBarrier.hpp:13:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:21:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zForwardingTable.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGranuleMap.hpp:19:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:75:9: warning: 'LOG_WARN' macro redefined [-Wmacro-redefined]
+#define LOG_WARN(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:15:9: note: previous definition is here
+#define LOG_WARN 5
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_unit_main.cpp:18:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zHeap.hpp:20:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zBarrier.hpp:13:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:21:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zForwardingTable.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGranuleMap.hpp:19:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:86:9: warning: 'LOG_ERROR' macro redefined [-Wmacro-redefined]
+#define LOG_ERROR(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:16:9: note: previous definition is here
+#define LOG_ERROR 6
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_unit_main.cpp:18:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zHeap.hpp:20:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zBarrier.hpp:13:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:21:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zForwardingTable.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGranuleMap.hpp:19:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:97:9: warning: 'LOG_FATAL' macro redefined [-Wmacro-redefined]
+#define LOG_FATAL(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:17:9: note: previous definition is here
+#define LOG_FATAL 7
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_unit_main.cpp:18:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zHeap.hpp:26:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zPageAllocator.hpp:601:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zPageAllocator.inline.hpp:17:16: warning: unused variable 'alignedHeapSize' [-Wunused-variable]
+        size_t alignedHeapSize = GetAlignedHeapSize(heapSize);
+               ^
+7 warnings generated.
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.cpp:3:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zCrossVM.hpp:12:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Common/TypeDef.h:15:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zAddress.hpp:342:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zAddress.inline.hpp:713:44: warning: unused parameter 'a' [-Wunused-parameter]
+inline void assert_is_oop_or_null(zaddress a)
+                                           ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.cpp:3:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:21:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zForwardingTable.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGranuleMap.hpp:19:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:53:9: warning: 'LOG_DEBUG' macro redefined [-Wmacro-redefined]
+#define LOG_DEBUG(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:13:9: note: previous definition is here
+#define LOG_DEBUG 3
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.cpp:3:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:21:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zForwardingTable.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGranuleMap.hpp:19:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:64:9: warning: 'LOG_INFO' macro redefined [-Wmacro-redefined]
+#define LOG_INFO(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:14:9: note: previous definition is here
+#define LOG_INFO 4
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.cpp:3:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:21:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zForwardingTable.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGranuleMap.hpp:19:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:75:9: warning: 'LOG_WARN' macro redefined [-Wmacro-redefined]
+#define LOG_WARN(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:15:9: note: previous definition is here
+#define LOG_WARN 5
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.cpp:3:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:21:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zForwardingTable.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGranuleMap.hpp:19:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:86:9: warning: 'LOG_ERROR' macro redefined [-Wmacro-redefined]
+#define LOG_ERROR(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:16:9: note: previous definition is here
+#define LOG_ERROR 6
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.cpp:3:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/gc_cycle_sequence_fixture.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.hpp:21:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zForwardingTable.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGranuleMap.hpp:19:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:97:9: warning: 'LOG_FATAL' macro redefined [-Wmacro-redefined]
+#define LOG_FATAL(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:17:9: note: previous definition is here
+#define LOG_FATAL 7
+        ^
+6 warnings generated.
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:5:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zCrossVM.hpp:12:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Common/TypeDef.h:15:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zAddress.hpp:342:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zAddress.inline.hpp:713:44: warning: unused parameter 'a' [-Wunused-parameter]
+inline void assert_is_oop_or_null(zaddress a)
+                                           ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:6:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.inline.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:53:9: warning: 'LOG_DEBUG' macro redefined [-Wmacro-redefined]
+#define LOG_DEBUG(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:13:9: note: previous definition is here
+#define LOG_DEBUG 3
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:6:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.inline.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:64:9: warning: 'LOG_INFO' macro redefined [-Wmacro-redefined]
+#define LOG_INFO(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:14:9: note: previous definition is here
+#define LOG_INFO 4
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:6:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.inline.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:75:9: warning: 'LOG_WARN' macro redefined [-Wmacro-redefined]
+#define LOG_WARN(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:15:9: note: previous definition is here
+#define LOG_WARN 5
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:6:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.inline.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:86:9: warning: 'LOG_ERROR' macro redefined [-Wmacro-redefined]
+#define LOG_ERROR(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:16:9: note: previous definition is here
+#define LOG_ERROR 6
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:6:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.inline.hpp:4:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Base/Panic.h:14:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CangjieRuntime.h:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/CJThread/src/runtime/schedule/include/schedule.h:14:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/include/log.h:97:9: warning: 'LOG_FATAL' macro redefined [-Wmacro-redefined]
+#define LOG_FATAL(errorCode, fmt, args...) \
+        ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/include/hilog/log.h:17:9: note: previous definition is here
+#define LOG_FATAL 7
+        ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:6:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.inline.hpp:6:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zMark.inline.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zMark.hpp:37:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/Allocator/RegionSpace.h:22:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Mutator/Mutator.h:30:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zStackWatermark.hpp:13:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zUncoloredRoot.hpp:32:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zUncoloredRoot.inline.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zBarrier.inline.hpp:16:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zCollectedHeap.hpp:12:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zHeap.hpp:26:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zPageAllocator.hpp:601:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zPageAllocator.inline.hpp:17:16: warning: unused variable 'alignedHeapSize' [-Wunused-variable]
+        size_t alignedHeapSize = GetAlignedHeapSize(heapSize);
+               ^
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:6:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zGeneration.inline.hpp:6:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zMark.inline.hpp:8:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zMark.hpp:37:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/Allocator/RegionSpace.h:22:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Mutator/Mutator.h:31:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zBarrierSet.hpp:71:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zBarrierSet.inline.hpp:401:17: warning: unused parameter 'srcObj' [-Wunused-parameter]
+    BaseObject* srcObj, MAddress src, size_t srcSize, BaseObject* dstObj, MAddress dst, size_t dstSize)
+                ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/src/Heap/z/zBarrierSet.inline.hpp:401:67: warning: unused parameter 'dstObj' [-Wunused-parameter]
+    BaseObject* srcObj, MAddress src, size_t srcSize, BaseObject* dstObj, MAddress dst, size_t dstSize)
+                                                                  ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:40:28: warning: unused parameter 'collector' [-Wunused-parameter]
+    static void Seed(Heap& collector, BaseObject* object)
+                           ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:47:29: warning: unused parameter 'collector' [-Wunused-parameter]
+    static void Clear(Heap& collector)
+                            ^
+/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/runtime/tests/gc_unit/ohos_host/ohos_cycle_unit.cpp:52:44: warning: unused parameter 'collector' [-Wunused-parameter]
+    static void PostResolveCycleTask(Heap& collector) { Heap::GetHeap().cross_vm().PostResolveCycleTask(); }
+                                           ^
+12 warnings generated.
+GC_UNIT_OHOS_HOST_FILTER test=OHOSCycle.HandlerChainThroughMajorEntry state=PASS rc=0 log=/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/unit/ohos_host_handler.log
+GC_UNIT_OHOS_HOST_FILTER test=OHOSCycle.HandlerReceivesCurrentRootsAfterRelocate state=PASS rc=0 log=/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/unit/ohos_host_relocate.log
+GC_UNIT_OHOS_HOST_FILTER test=OHOSCycle.HandlerRefreshesRootsAfterCallbackRelocate state=PASS rc=0 log=/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/unit/ohos_host_callback.log
+GC_UNIT_OHOS_HOST_FILTER test=OHOSCycle.MajorEntryPostsResolveTask state=PASS rc=0 log=/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/unit/ohos_host_major.log
+GC_UNIT_OHOS_HOST_FILTER test=OHOSCycle.PostResolvePostsProductTask state=PASS rc=0 log=/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/unit/ohos_host_post.log
+GC_UNIT_OHOS_HOST_FILTER test=OHOSCycle.EmptyWorkDoesNotPost state=PASS rc=0 log=/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/unit/ohos_host_empty.log
+GC_UNIT_OHOS_HOST_OK filters=6 receipt=/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/unit/ohos_host.receipt elf=/root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/unit/cj_gc_ohos_host_unit

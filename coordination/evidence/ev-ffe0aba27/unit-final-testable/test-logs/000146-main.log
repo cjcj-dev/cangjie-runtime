@@ -1,0 +1,4 @@
+[  RUN   ] StackMapBaseCapture.SharedRegisterBase
+BASE_CAPTURE_TARGET reg=1 oop=0 derived_reg=0 count=2 missing=0 available=1 accepted=1 base_visits=1 derived_visits=2
+[  PASS  ] StackMapBaseCapture.SharedRegisterBase
+[========] 1 tests: 1 passed, 0 failed

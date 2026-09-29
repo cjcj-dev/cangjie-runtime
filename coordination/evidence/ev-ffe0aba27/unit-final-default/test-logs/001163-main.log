@@ -1,0 +1,4 @@
+[  RUN   ] AccessBarrier976.ClearOnePublishesColorNull
+ACCESS976_CLEAR_ASSERT actual=1530 color_null=1530 store_good_null=1510
+[  PASS  ] AccessBarrier976.ClearOnePublishesColorNull
+[========] 1 tests: 1 passed, 0 failed

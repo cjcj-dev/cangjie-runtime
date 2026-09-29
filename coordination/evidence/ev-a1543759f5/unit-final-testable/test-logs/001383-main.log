@@ -1,0 +1,7 @@
+[  RUN   ] ExitDetachMarkEnd.PauseDoesNotFlushAttachedMutator
+[  RUN   ] ExitDetachMarkEnd.PauseDoesNotFlushAttachedMutator
+EXIT_DETACH_SCOPE_ASSERT reached=1 before=1 after=1 marked_in_pause=0
+EXIT_DETACH_PUBLISHED_ASSERT drained=1 contains_obj0=1
+GC_UNIT_OTHER_VM_OKIDOKI ExitDetachMarkEnd.PauseDoesNotFlushAttachedMutator
+[  PASS  ] ExitDetachMarkEnd.PauseDoesNotFlushAttachedMutator
+[========] 1 tests: 1 passed, 0 failed

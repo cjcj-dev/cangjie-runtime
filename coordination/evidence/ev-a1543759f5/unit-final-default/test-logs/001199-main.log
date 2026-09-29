@@ -1,0 +1,6 @@
+[  RUN   ] MarkStackClear.MultipleBuffers
+MARK_STACK_CLEAR_ENTER entries=129 buffers=3
+MARK_STACK_CLEAR_RESULT empty=1
+MARK_STACK_CLEAR_STATUS entries=129 status=0
+[  PASS  ] MarkStackClear.MultipleBuffers
+[========] 1 tests: 1 passed, 0 failed

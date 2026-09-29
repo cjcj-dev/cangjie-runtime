@@ -1,0 +1,6 @@
+[  RUN   ] MaxHeapSize.SingleUnit
+[  RUN   ] MaxHeapSize.SingleUnit
+MAX_BYTES_ASSERT input=64MB actual=67108864 expected=67108864 capacity=67108864 expected_capacity=67108864
+GC_UNIT_OTHER_VM_OKIDOKI MaxHeapSize.SingleUnit
+[  PASS  ] MaxHeapSize.SingleUnit
+[========] 1 tests: 1 passed, 0 failed
