@@ -1300,8 +1300,8 @@ static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = fa
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* source = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::survivor1, flags);
-    ZPage* childPage = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, referent == 1 ? PageAge::old : PageAge::eden, flags);
+    ZPage* source = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
+    ZPage* childPage = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, referent == 1 ? PageAge::old : PageAge::eden, flags);
     GC_EXPECT_TRUE(source != nullptr && childPage != nullptr);
     auto* object = reinterpret_cast<BaseObject*>(source->alloc_object(16));
     auto* child = reinterpret_cast<BaseObject*>(childPage->alloc_object(16));
@@ -1320,7 +1320,7 @@ static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = fa
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(source, object));
     ZPageTest::MakeRelocatable(*source);
     if (!flip) {
-        ZPage* peer = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::survivor1, flags);
+        ZPage* peer = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
         GC_EXPECT_TRUE(peer != nullptr);
         auto* peerObject = reinterpret_cast<BaseObject*>(peer->alloc_object(16));
         peerObject->SetClassInfo(type);
