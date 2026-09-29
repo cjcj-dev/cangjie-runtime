@@ -169,8 +169,8 @@ bool RunYoungRuntimeProductEntry()
     }
     MutatorManager mutatorManager;
     YoungForwardTestRuntime runtime(mutatorManager);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RegionManager& manager = space.GetRegionManager();
+    RegionManager& space = Heap::GetHeap().page_allocator();
+    RegionManager& manager = space;
 
     ZRelocateQueue& queue = generation_relocate_queue(Generation::Young);
 

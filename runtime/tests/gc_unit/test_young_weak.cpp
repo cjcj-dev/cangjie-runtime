@@ -355,7 +355,7 @@ void RunYoungWeakVariant(size_t helpers)
     }
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RelocationReceiptTest::BindWorkerBudget();
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& space = Heap::GetHeap().page_allocator();
     fx.region1()->SetRegionRole(ZPageRole::RecentFull);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
@@ -415,7 +415,7 @@ void RunYoungWeakRemsetFlow()
     const bool recordedBeforeMinor = rememberedSet.Contains(weakSlot);
 
     RelocationReceiptTest::BindWorkerBudget();
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& space = Heap::GetHeap().page_allocator();
     fx.region1()->SetRegionRole(ZPageRole::RecentFull);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
@@ -462,7 +462,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     }
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::BindWorkerBudget(static_cast<int32_t>(helpers + 1));
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& space = Heap::GetHeap().page_allocator();
     fx.region0()->SetRegionRole(ZPageRole::RecentFull);
     if (runtimeEntry) {
     }
@@ -660,7 +660,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     RelocationReceiptTest::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::BindWorkerBudget();
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& space = Heap::GetHeap().page_allocator();
     fx.region0()->SetRegionRole(ZPageRole::RecentFull);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 

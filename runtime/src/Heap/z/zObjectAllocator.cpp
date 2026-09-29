@@ -294,51 +294,6 @@ void ZObjectAllocator::retire_pages(PageAgeRange ages)
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
-MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
-{
-    // HotSpot memAllocator.cpp:327-347: both TLAB attempts precede the
-    // outside-TLAB allocation. A failed refill is not yet an allocation failure.
-    if (allocSize <= ZObjectSizeLimitSmall && ThreadLocal::GetMutator() != nullptr) {
-        AllocBuffer* allocBuffer = ThreadLocal::GetMutator()->tlab();
-        MAddress addr = allocBuffer->Allocate(allocSize, allocType);
-        if (addr != 0) { return addr; }
-        addr = allocBuffer->AllocateImpl(allocSize, allocType);
-        if (addr != 0) { return addr; }
-    }
-    return AllocateOutsideTLAB(allocSize, allocType);
-}
-
-// HotSpot memAllocator.cpp:235-247: one outside-TLAB allocation operation.
-MAddress RegionSpace::AllocateOutsideTLAB(size_t allocSize, AllocType allocType)
-{
-    (void)allocType;
-    return Heap::GetHeap().object_allocator().alloc(allocSize);
-}
-
-MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
-{
-    uintptr_t internalAddr = 0;
-    size_t allocSize = ToAllocSize(size);
-    internalAddr = TryAllocateOnce(allocSize, allocType);
-    if (UNLIKELY(internalAddr == 0)) {
-        // GC workers are strictly non-blocking: inability to obtain a region
-        // means this move cannot be completed in the current collection.
-        if (IsGcThread()) {
-            return 0;
-        }
-        // Page allocation owns the request through stall and consumption.
-        // Reaching this point means that request failed, not a retry promise.
-        GetRegionManager().DumpRegionStats("region statistics when gc ends");
-        VLOG(REPORT, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
-        LOG(RTLOG_ERROR, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
-        ExceptionManager::OutOfMemory();
-        return 0;
-    }
-#if defined(CANGJIE_TSAN_SUPPORT)
-    Sanitizer::TsanAllocObject(reinterpret_cast<void *>(internalAddr), allocSize);
-#endif
-    return internalAddr + HEADER_SIZE;
-}
 
 }
 

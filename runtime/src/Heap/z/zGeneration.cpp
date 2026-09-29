@@ -297,7 +297,7 @@ public:
         ZGeneration::old()->set_phase(ZGeneration::Phase::Relocate);
         ZGeneration::old()->RecordYoungSequenceAtRelocateStart(ZGeneration::young()->Sequence());
         ZGeneration::old()->StatHeap()->AtRelocateStart(
-            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(
+            Heap::GetHeap().page_allocator().Stats(
                 ZGeneration::old()));
         ZRelocate::StartRelocationTasks(ZGenerationId::old);
         return true;
@@ -323,7 +323,7 @@ void ZGeneration::at_collection_start(void* timer)
     CycleStats().AtStart(TimeUtil::NanoSeconds());
     // zGeneration.cpp:380-385: the heap account opens at collection start.
     statHeap.AtCollectionStart(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+        Heap::GetHeap().page_allocator().Stats(this));
     Workers()->set_active();
 }
 
@@ -403,8 +403,8 @@ void ZGenerationYoung::mark_start()
     ZGlobalsPointers::flip_young_mark_start();
     ZVerify::OnColorFlip();
 
-    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    auto& manager = space.GetRegionManager();
+    auto& space = Heap::GetHeap().page_allocator();
+    auto& manager = space;
     {
         Heap::GetHeap().reset_tlab_used();
         Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
@@ -421,7 +421,7 @@ void ZGenerationYoung::mark_start()
     // zGeneration.cpp:880-885: mark-start sample (also resets the
     // collection's used high/low trackers, zPageAllocator.cpp:1332-1346).
     statHeap.AtMarkStart(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
+        Heap::GetHeap().page_allocator().UpdateAndStats(this));
 
     youngStartNs = start;
 }
@@ -457,7 +457,7 @@ bool ZGenerationYoung::mark_end()
         Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
         // zGeneration.cpp:906-911: mark-end sample.
         statHeap.AtMarkEnd(
-            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+            Heap::GetHeap().page_allocator().Stats(this));
         return true;
     }
 
@@ -496,8 +496,8 @@ void ZGenerationYoung::concurrent_reset_relocation_set()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentResetRelocationSetYoung);
     reset_relocation_set();
-    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().ResetFlipPromotedPages();
+    auto& space = Heap::GetHeap().page_allocator();
+    space.ResetFlipPromotedPages();
 }
 
 void ZGenerationYoung::concurrent_select_relocation_set()
@@ -527,7 +527,7 @@ void ZGenerationYoung::relocate_start()
     flip_relocate_start();
     set_phase(Phase::Relocate);
     StatHeap()->AtRelocateStart(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+        Heap::GetHeap().page_allocator().Stats(this));
     ZRelocate::StartRelocationTasks(ZGenerationId::young);
 }
 
@@ -536,10 +536,10 @@ void ZGenerationYoung::concurrent_relocate()
     ZStatTimerYoung timer(ZPhaseConcurrentRelocateYoung);
     // ZGC zGeneration.cpp:575-580: after relocate-start every selected page
     // must finish relocation, including when shutdown requests an abort.
-    RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    size_t allocatedBefore = space.AllocatedBytes();
+    RegionManager& space = Heap::GetHeap().page_allocator();
+    size_t allocatedBefore = space.GetAllocatedSize();
     EvacuateYoungRegions();
-    size_t allocatedAfter = space.AllocatedBytes();
+    size_t allocatedAfter = space.GetAllocatedSize();
     const size_t reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     ZGeneration::young()->increase_freed(reclaimedBytes);
@@ -555,7 +555,7 @@ void ZGenerationYoung::concurrent_relocate()
          minorTotalRuns,
          statHeap.LiveAtMarkEnd(), reclaimedBytes,
          pauseUs);
-    statHeap.AtRelocateEnd(space.GetRegionManager().Stats(this), should_record_stats());
+    statHeap.AtRelocateEnd(space.Stats(this), should_record_stats());
 }
 
 } // namespace MapleRuntime
@@ -851,7 +851,7 @@ void ZGenerationOld::mark_start()
     Mark().Start();
     // zGeneration.cpp:1238-1242: old mark-start sample.
     statHeap.AtMarkStart(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
+        Heap::GetHeap().page_allocator().UpdateAndStats(this));
 }
 
 bool ZGenerationOld::mark_end()
@@ -876,7 +876,7 @@ bool ZGenerationOld::mark_end()
     set_phase(ZGeneration::Phase::MarkComplete);
     // zGeneration.cpp:1275-1278: old mark-end sample.
     statHeap.AtMarkEnd(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+        Heap::GetHeap().page_allocator().Stats(this));
     ZVerify::AfterMark();
     ZResurrection::block();
 
@@ -1062,7 +1062,7 @@ void ZGenerationOld::concurrent_relocate()
     relocate().relocate(&relocation_set());
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
     statHeap.AtRelocateEnd(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this),
+        Heap::GetHeap().page_allocator().Stats(this),
         should_record_stats());
 }
 
@@ -1267,7 +1267,7 @@ BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object)
 namespace MapleRuntime {
 void ZGenerationYoung::EvacuateYoungRegions()
 {
-    RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    RegionManager& manager = Heap::GetHeap().page_allocator();
     ZWorkers& workers = *Workers();
     {
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start flip=1");

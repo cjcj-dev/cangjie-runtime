@@ -74,7 +74,7 @@ static int RunConsumers()
     if (g_cjHeapRangeCount != requestedReservations) return 1;
     ArrayTypes types;
     ZArray<ZVirtualMemory> borrowed;
-    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    auto& space = Heap::GetHeap().page_allocator();
     if (targetReservation != 0) {
         // Temporarily own the other free virtual ranges. MCC_NewObjArray still
         // executes the product claim/commit/map path and creates the real holder.

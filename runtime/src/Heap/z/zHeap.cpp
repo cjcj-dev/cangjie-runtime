@@ -105,7 +105,6 @@ Heap::Heap(const HeapParam& param, double garbageThreshold)
 {
     _heap = this;
     RunType::InitRunTypeMap();
-    _allocation_adapter.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
     ZStat::NotifyHeapConstructed();
@@ -123,7 +122,18 @@ Heap::~Heap()
 
 
 
-MAddress Heap::Allocate(size_t size, AllocType allocType) { return _allocation_adapter->Allocate(size, allocType); }
+// ZGC zHeap.inline.hpp:82-90: the facade directly enters the object allocator.
+MAddress Heap::Allocate(size_t size, AllocType allocType)
+{
+    (void)allocType;
+    const MAddress addr = _object_allocator.alloc(RoundUp<size_t>(size, 8));
+    if (UNLIKELY(addr == 0)) {
+        if (IsGcThread()) { return 0; }
+        _page_allocator.DumpRegionStats("region statistics when gc ends");
+        ExceptionManager::OutOfMemory();
+    }
+    return addr;
+}
 
 void Heap::Init()
 {
@@ -244,7 +254,6 @@ void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
 
 OopStorage& Heap::GetExportRootStorage() { return exportRootsTable->RootStorage(); }
 
-RegionSpace& Heap::GetAllocator() { return *_allocation_adapter; }
 
 size_t Heap::GetMaxCapacity() const { return _page_allocator.GetHeapCapacity(); }
 size_t Heap::soft_max_capacity() const { return _page_allocator.soft_max_capacity(); }
@@ -625,8 +634,8 @@ void Heap::DumpRoots(LogType logType)
         // DumpRoots is called while the root owner retains the target for inspection.
         auto obj = to_object(safe(value));
         DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
-              Heap::GetHeap().GetAllocator().IsHeapAddress(reinterpret_cast<MAddress>(obj)),
-              Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(obj)));
+              Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj)),
+              Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj)));
     };
 
     DLOG(logType, "stack roots");
@@ -646,8 +655,8 @@ void Heap::DumpRoots(LogType logType)
             return;
         }
         DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
-              Heap::GetHeap().GetAllocator().IsHeapAddress(reinterpret_cast<MAddress>(obj)),
-              Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(obj)));
+              Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj)),
+              Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj)));
     };
 
     DLOG(logType, "static fields");

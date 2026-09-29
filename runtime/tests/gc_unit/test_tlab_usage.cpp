@@ -132,7 +132,7 @@ GC_OTHER_VM_TEST(TLABUsage, NativeFrameDerivedScan)
 // and promote_used, not ZPage::reset()'s youngRegionBytes side counter.
 GC_OTHER_VM_TEST(TLABUsage, YoungOccupancyUsesActualExtent)
 {
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    auto& manager = Heap::GetHeap().page_allocator();
     const size_t beforeYoung = manager.used_generation(ZGenerationId::young);
     const size_t beforeOld = manager.used_generation(ZGenerationId::old);
     const size_t small = ZGranuleSize;
@@ -160,7 +160,7 @@ void* AllocateThroughCycle(void*)
     type->SetInstanceSize(256);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     const MSize objectSize = 256 + TYPEINFO_PTR_SIZE;
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    auto& manager = Heap::GetHeap().page_allocator();
     AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
     const size_t maximum = ZObjectSizeLimitSmall;
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);

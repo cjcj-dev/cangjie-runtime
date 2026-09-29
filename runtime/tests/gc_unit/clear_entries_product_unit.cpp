@@ -467,7 +467,7 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
 class DeliverySharedPageScope {
 public:
     explicit DeliverySharedPageScope(ZPage* page)
-        : manager(static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager())
+        : manager(Heap::GetHeap().page_allocator())
     {
         // zObjectAllocator.hpp:41 ZPerCPU<ZPage*>: every CPU slot names the page.
         auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::old);
@@ -973,7 +973,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         state.from->SetStateCode(ObjectState::NORMAL);
         state.region->MarkForwardingDone();
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-        auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+        auto& manager = Heap::GetHeap().page_allocator();
         RelocationReceiptTest::ParkFrom(manager, state.region);
         auto& old = Heap::GetHeap().old();
         if (old.Workers() == nullptr) old.InitializeWorkers(1);
@@ -1192,7 +1192,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         BaseObject* from = fx.PlaceObject(region->GetRegionStart() + dead->GetSize());
         region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
         ZLiveMap* live = &region->livemap();
-        auto& regionManager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+        auto& regionManager = Heap::GetHeap().page_allocator();
         RelocationReceiptTest::ParkFrom(regionManager, region);
         // ZGC selects a set only when packing can release a page. Two sparse
         // pages are input to the real selector; a single page is exempted.

@@ -631,11 +631,11 @@ static ZWorkerResizeStats sample_worker_resize_stats(const ZStatCycleStats& cycl
 static ZDirectorStats sample_stats()
 {
     const uint64_t now = TimeUtil::NanoSeconds();
-    auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    auto& regions = Heap::GetHeap().page_allocator();
     ZDirectorStats stats;
     stats.mutator_alloc_rate = ZStatMutatorAllocRate::stats();
     stats.heap.soft_max_heap_size = Heap::GetHeap().soft_max_capacity();
-    stats.heap.used = Heap::GetHeap().GetAllocator().AllocatedBytes();
+    stats.heap.used = Heap::GetHeap().page_allocator().GetAllocatedSize();
     stats.heap.total_collections = Heap::GetHeap().total_collections();
     stats.young_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young).CycleStats().Stats(now);
     stats.old_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old).CycleStats().Stats(now);

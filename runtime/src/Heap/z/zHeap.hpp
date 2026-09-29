@@ -51,7 +51,6 @@ class OopStorage;
 class ObjectClosure;
 class OopFieldClosure;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
-class RegionSpace;
 class AllocBuffer;
 class FinalizerProcessor;
 struct ThreadLocalData;
@@ -88,7 +87,6 @@ public:
     void DumpBeforeGC();
     void DumpAfterGC();
 #endif
-    RegionSpace& GetAllocator();
     RegionManager& page_allocator();
     const RegionManager& page_allocator() const;
     uintptr_t alloc_tlab(size_t size);
@@ -278,14 +276,12 @@ private:
     // zHeap.hpp:48-56: the heap directly owns the page allocator; its
     // mapped caches and backing resources outlive both generation members.
     RegionManager _page_allocator;
-    // Object/TLAB adapter remains pending P16; it owns no page allocator.
-    std::unique_ptr<RegionSpace> _allocation_adapter;
     ZPageTable _page_table;
     ZObjectAllocator _object_allocator;
-    ZTLABUsage _tlab_usage;
     ZServiceability _serviceability;
     ZGenerationOld _old;
     ZGenerationYoung _young;
+    ZTLABUsage _tlab_usage;
     // Cangjie foreign-cycle ownership has no Java/JNI counterpart.
     ZCrossVM _cross_vm;
     ExportRootTable* exportRootsTable { nullptr };

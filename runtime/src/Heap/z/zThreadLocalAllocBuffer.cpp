@@ -79,7 +79,7 @@ void AllocBuffer::Init()
     static_assert(offsetof(TLAB, end) == 8, "compiler TLAB end ABI");
     tlab = TLAB{};
     ThreadLocal::InitializeCleaner();
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    auto& manager = Heap::GetHeap().page_allocator();
     manager.InitializeTLAB(*this);
 }
 
