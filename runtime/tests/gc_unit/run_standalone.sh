@@ -322,6 +322,7 @@ MAIN_SOURCES=(
   "$SRC/test_align.cpp"
   "$SRC/test_used_generation.cpp"
   "$SRC/test_zstat.cpp"
+  "$SRC/test_gc_totals.cpp"
   "$SRC/test_zstat_heap.cpp"
   "$SRC/test_zserviceability.cpp"
   "$SRC/test_trustp1_phase1.cpp"
