@@ -214,7 +214,7 @@ struct DedupCycle {
 };
 void WaitCommand(DedupCycle& cycle, unsigned command)
 {
-    ScopedEnterSaferegion safe;
+    ScopedEnterSaferegion safe(false);
     cycle.stage.store(command, std::memory_order_release);
     while (cycle.command.load(std::memory_order_acquire) < command) std::this_thread::yield();
 }
