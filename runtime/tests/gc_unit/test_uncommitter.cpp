@@ -44,7 +44,7 @@ struct UncommitterTestAccess {
     {
         Uncommitter& worker = UncommitterTestAccess::Current();
         auto& regions = worker.partition.regionManager;
-        std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+        ZLocker<ZLock> guard(&regions.pageAllocatorMutex);
         worker.canceled = false;
         worker.stopped.store(false);
     }
@@ -54,13 +54,13 @@ struct UncommitterTestAccess {
     static void Cancel()
     {
         auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-        std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+        ZLocker<ZLock> guard(&regions.pageAllocatorMutex);
         Current().Cancel();
     }
     static bool Canceled()
     {
         auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-        std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+        ZLocker<ZLock> guard(&regions.pageAllocatorMutex);
         return UncommitterTestAccess::Current().canceled;
     }
     static void PrepareChunk(Uncommitter& worker)

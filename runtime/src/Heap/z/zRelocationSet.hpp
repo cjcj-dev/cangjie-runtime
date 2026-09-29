@@ -1,8 +1,8 @@
 #ifndef MRT_Z_RELOCATION_SET_HPP
 #define MRT_Z_RELOCATION_SET_HPP
 
+#include "Heap/z/zLock.inline.hpp"
 #include <cstddef>
-#include <mutex>
 
 #include "Heap/z/zArray.hpp"
 #include "Heap/z/zForwardingAllocator.hpp"
@@ -26,7 +26,7 @@ private:
     ZForwardingAllocator _allocator;
     ZForwarding** _forwardings;
     size_t _nforwardings;
-    std::mutex _promotion_lock;
+    ZLock _promotion_lock;
     ZArray<ZPage*> _flip_promoted_pages;
     ZArray<ZPage*> _relocate_promoted_pages;
     ZArray<ZPage*> _in_place_relocate_promoted_pages;

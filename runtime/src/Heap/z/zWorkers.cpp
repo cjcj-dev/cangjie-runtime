@@ -60,20 +60,20 @@ void ZWorkers::set_active_workers(uint32_t nworkers)
         nworkers = max;
     }
     VLOG(REPORT, "Using %u Workers for %s Generation", nworkers, _generation_name);
-    std::lock_guard<std::mutex> locker(_resize_lock);
+    ZLocker<ZLock> locker(&_resize_lock);
     _workers.set_active_workers(nworkers);
 }
 
 void ZWorkers::set_active()
 {
-    std::lock_guard<std::mutex> locker(_resize_lock);
+    ZLocker<ZLock> locker(&_resize_lock);
     _is_active = true;
     _requested_nworkers.store(0, std::memory_order_relaxed);
 }
 
 void ZWorkers::set_inactive()
 {
-    std::lock_guard<std::mutex> locker(_resize_lock);
+    ZLocker<ZLock> locker(&_resize_lock);
     _is_active = false;
 }
 
@@ -83,14 +83,14 @@ void ZWorkers::run(ZTask* task)
     VLOG(GCPHASE, "Executing %s using %s with %u workers", task->name(), _workers.name(), active_workers());
 
     {
-        std::lock_guard<std::mutex> locker(_resize_lock);
+        ZLocker<ZLock> locker(&_resize_lock);
         _stats->at_start(active_workers());
     }
 
     _workers.run_task(task->worker_task());
 
     {
-        std::lock_guard<std::mutex> locker(_resize_lock);
+        ZLocker<ZLock> locker(&_resize_lock);
         _stats->at_end();
     }
 }
@@ -102,7 +102,7 @@ void ZWorkers::run(ZRestartableTask* task)
         // Run task
         run(static_cast<ZTask*>(task));
 
-        std::lock_guard<std::mutex> locker(_resize_lock);
+        ZLocker<ZLock> locker(&_resize_lock);
         const uint32_t requested = _requested_nworkers.load(std::memory_order_relaxed);
         if (requested == 0) {
             // Task completed
@@ -136,7 +136,7 @@ void ZWorkers::threads_do(const std::function<void(WorkerThread*)>& tc) const
     _workers.threads_do(tc);
 }
 
-std::mutex* ZWorkers::resizing_lock()
+ZLock* ZWorkers::resizing_lock()
 {
     return &_resize_lock;
 }
@@ -146,7 +146,7 @@ void ZWorkers::request_resize_workers(uint32_t nworkers)
 {
     DCHECK(nworkers != 0);
 
-    std::lock_guard<std::mutex> locker(_resize_lock);
+    ZLocker<ZLock> locker(&_resize_lock);
 
     if (_requested_nworkers.load(std::memory_order_relaxed) == nworkers) {
         // Already requested

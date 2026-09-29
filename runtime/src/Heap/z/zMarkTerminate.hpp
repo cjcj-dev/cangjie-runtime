@@ -6,10 +6,9 @@
 
 #ifndef MRT_ZMARKTERMINATE_HPP
 #define MRT_ZMARKTERMINATE_HPP
+#include "Heap/z/zLock.inline.hpp"
 #include <cstddef>
 #include <atomic>
-#include <mutex>
-#include <condition_variable>
 
 namespace MapleRuntime {
 class MarkStripeSet;
@@ -31,8 +30,7 @@ private:
     size_t workerCount = 0;
     size_t working = 0;
     size_t awakening = 0;
-    mutable std::mutex mutex;
-    std::condition_variable condition;
+    mutable ZConditionLock mutex;
 };
 } // namespace MapleRuntime
 #endif

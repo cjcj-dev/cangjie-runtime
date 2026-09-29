@@ -154,7 +154,7 @@ uint64_t ZStatWorkers::now_for_test()
 
 void ZStatWorkers::at_start(uint32_t active_workers)
 {
-    std::lock_guard<std::mutex> locker(_stat_lock);
+    ZLocker<ZLock> locker(&_stat_lock);
 #if defined(MRT_TESTABLE_INTERNALS)
     _start_of_last = now_for_test();
 #else
@@ -165,7 +165,7 @@ void ZStatWorkers::at_start(uint32_t active_workers)
 
 void ZStatWorkers::at_end()
 {
-    std::lock_guard<std::mutex> locker(_stat_lock);
+    ZLocker<ZLock> locker(&_stat_lock);
 #if defined(MRT_TESTABLE_INTERNALS)
     const uint64_t now = now_for_test();
 #else
@@ -221,7 +221,7 @@ uint32_t ZStatWorkers::active_workers()
 
 double ZStatWorkers::get_and_reset_duration()
 {
-    std::lock_guard<std::mutex> locker(_stat_lock);
+    ZLocker<ZLock> locker(&_stat_lock);
     const double duration = static_cast<double>(_accumulated_duration) / SECOND_TO_NANO_SECOND;
     _accumulated_duration = 0;
     return duration;
@@ -229,7 +229,7 @@ double ZStatWorkers::get_and_reset_duration()
 
 double ZStatWorkers::get_and_reset_time()
 {
-    std::lock_guard<std::mutex> locker(_stat_lock);
+    ZLocker<ZLock> locker(&_stat_lock);
     const double time = static_cast<double>(_accumulated_time) / SECOND_TO_NANO_SECOND;
     _accumulated_time = 0;
     return time;
@@ -237,13 +237,13 @@ double ZStatWorkers::get_and_reset_time()
 
 ZStatWorkersStats ZStatWorkers::stats()
 {
-    std::lock_guard<std::mutex> locker(_stat_lock);
+    ZLocker<ZLock> locker(&_stat_lock);
     return { accumulated_time(), accumulated_duration() };
 }
 
 void ZStatCycle::Initialize(uint64_t now)
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZLock> guard(&lock);
     start = end = now;
     warmupCycles = 0;
     lastActiveWorkers = 1;
@@ -258,14 +258,14 @@ void ZStatCycle::Initialize(uint64_t now)
 // zStat.cpp:1237-1240
 void ZStatCycle::AtStart(uint64_t now)
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZLock> guard(&lock);
     start = now;
 }
 
 // zStat.cpp:1242-1268
 void ZStatCycle::AtEnd(uint64_t now, ZStatWorkers* statWorkers, bool warmup, bool recordStats)
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZLock> guard(&lock);
     // zStat.cpp:1242-1268
     const uint64_t previousEnd = hasEnded ? endOfLast : 0;
     end = now;
@@ -292,7 +292,7 @@ void ZStatCycle::AtEnd(uint64_t now, ZStatWorkers* statWorkers, bool warmup, boo
 
 ZStatCycleStats ZStatCycle::Stats(uint64_t now) const
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZLock> guard(&lock);
     ZStatCycleStats out;
     out.warmupCycles = warmupCycles;
     out.timeSinceLast = static_cast<double>(now - std::min(now, end)) / SECOND_TO_NANO_SECOND;
@@ -781,14 +781,14 @@ size_t ZStatHeap::Reclaimed(size_t freed, size_t relocated, size_t promoted) con
 
 void ZStatHeap::AtInitialize(size_t minCapacity, size_t maxCapacity)
 {
-    std::lock_guard<std::mutex> locker(_statLock);
+    ZLocker<ZLock> locker(&_statLock);
     _atInitialize.minCapacity = minCapacity;
     _atInitialize.maxCapacity = maxCapacity;
 }
 
 void ZStatHeap::AtCollectionStart(const ZPageAllocatorStats& stats)
 {
-    std::lock_guard<std::mutex> locker(_statLock);
+    ZLocker<ZLock> locker(&_statLock);
     _atCollectionStart.softMaxCapacity = stats.soft_max_capacity();
     _atCollectionStart.capacity = stats.capacity();
     _atCollectionStart.free = Free(stats.used());
@@ -798,7 +798,7 @@ void ZStatHeap::AtCollectionStart(const ZPageAllocatorStats& stats)
 
 void ZStatHeap::AtMarkStart(const ZPageAllocatorStats& stats)
 {
-    std::lock_guard<std::mutex> locker(_statLock);
+    ZLocker<ZLock> locker(&_statLock);
     _atMarkStart.softMaxCapacity = stats.soft_max_capacity();
     _atMarkStart.capacity = stats.capacity();
     _atMarkStart.free = Free(stats.used());
@@ -809,7 +809,7 @@ void ZStatHeap::AtMarkStart(const ZPageAllocatorStats& stats)
 
 void ZStatHeap::AtMarkEnd(const ZPageAllocatorStats& stats)
 {
-    std::lock_guard<std::mutex> locker(_statLock);
+    ZLocker<ZLock> locker(&_statLock);
     _atMarkEnd.capacity = stats.capacity();
     _atMarkEnd.free = Free(stats.used());
     _atMarkEnd.used = stats.used();
@@ -820,7 +820,7 @@ void ZStatHeap::AtMarkEnd(const ZPageAllocatorStats& stats)
 
 void ZStatHeap::AtSelectRelocationSet(const ZRelocationSetSelectorStats& stats)
 {
-    std::lock_guard<std::mutex> locker(_statLock);
+    ZLocker<ZLock> locker(&_statLock);
     size_t live = 0;
     for (PageAge age : kPageAgeRangeAll) {
         live += stats.small(age).live() + stats.medium(age).live() + stats.large(age).live();
@@ -831,7 +831,7 @@ void ZStatHeap::AtSelectRelocationSet(const ZRelocationSetSelectorStats& stats)
 
 void ZStatHeap::AtRelocateStart(const ZPageAllocatorStats& stats)
 {
-    std::lock_guard<std::mutex> locker(_statLock);
+    ZLocker<ZLock> locker(&_statLock);
     _atRelocateStart.capacity = stats.capacity();
     _atRelocateStart.free = Free(stats.used());
     _atRelocateStart.used = stats.used();
@@ -847,7 +847,7 @@ void ZStatHeap::AtRelocateStart(const ZPageAllocatorStats& stats)
 
 void ZStatHeap::AtRelocateEnd(const ZPageAllocatorStats& stats, bool recordStats)
 {
-    std::lock_guard<std::mutex> locker(_statLock);
+    ZLocker<ZLock> locker(&_statLock);
     _atRelocateEnd.capacity = stats.capacity();
     _atRelocateEnd.capacityHigh = CapacityHigh();
     _atRelocateEnd.capacityLow = CapacityLow();
@@ -888,13 +888,13 @@ size_t ZStatHeap::StallsAtRelocateEnd() const { return _atRelocateEnd.allocation
 
 double ZStatHeap::ReclaimedAvg()
 {
-    std::lock_guard<std::mutex> locker(_statLock);
+    ZLocker<ZLock> locker(&_statLock);
     return _reclaimedBytes.Average() + std::numeric_limits<double>::denorm_min();
 }
 
 ZStatHeapStats ZStatHeap::Stats()
 {
-    std::lock_guard<std::mutex> locker(_statLock);
+    ZLocker<ZLock> locker(&_statLock);
     return { UsedAtRelocateEnd(), LiveAtMarkEnd(),
              _reclaimedBytes.Average() + std::numeric_limits<double>::denorm_min() };
 }

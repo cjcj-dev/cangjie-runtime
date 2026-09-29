@@ -618,7 +618,7 @@ static bool start_gc(const ZDirectorStats& stats)
 static ZWorkerResizeStats sample_worker_resize_stats(const ZStatCycleStats& cycle_stats,
     ZStatWorkersStats worker_stats, ZWorkers* workers)
 {
-    std::lock_guard<std::mutex> locker(*workers->resizing_lock());
+    ZLocker<ZLock> locker(workers->resizing_lock());
     if (!workers->is_active()) {
         return {};
     }

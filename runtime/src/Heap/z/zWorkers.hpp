@@ -7,6 +7,7 @@
 #ifndef MRT_GC_Z_ZWORKERS_HPP
 #define MRT_GC_Z_ZWORKERS_HPP
 
+#include "Heap/z/zLock.inline.hpp"
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -22,12 +23,12 @@ class ZStatWorkers;
 class ZTask;
 
 // zWorkers.hpp:38-67. The generation's view of its WorkerThreads: six fields,
-// no task state, no timing, no stop protocol. ZLock is std::mutex here (I14).
+// no task state, no timing, no stop protocol.
 class ZWorkers {
 private:
     WorkerThreads _workers;
     const char* const _generation_name;
-    std::mutex _resize_lock;
+    ZLock _resize_lock;
     std::atomic<uint32_t> _requested_nworkers;
     bool _is_active;
     ZStatWorkers* const _stats;
@@ -52,7 +53,7 @@ public:
     void threads_do(const std::function<void(WorkerThread*)>& tc) const;
 
     // Worker resizing
-    std::mutex* resizing_lock();
+    ZLock* resizing_lock();
     ZStatWorkers* stat_workers() { return _stats; }
     void request_resize_workers(uint32_t nworkers);
 

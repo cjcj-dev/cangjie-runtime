@@ -7,8 +7,8 @@
 #ifndef MRT_STORE_BARRIER_BUFFER_H
 #define MRT_STORE_BARRIER_BUFFER_H
 
+#include "Heap/z/zLock.inline.hpp"
 #include <cstddef>
-#include <mutex>
 
 #include "Common/TypeDef.h"
 #include "Heap/z/zAddress.hpp"
@@ -56,7 +56,7 @@ private:
 public:
     uintptr_t lastProcessedColor;
     uintptr_t lastInstalledColor;
-    std::mutex basePointerLock;
+    ZLock basePointerLock;
     zaddress_unsafe basePointers[kStoreBarrierBufferLength] {};
     // ZGC zStoreBarrierBuffer.hpp:61: byte index growing downwards.
     size_t current;
