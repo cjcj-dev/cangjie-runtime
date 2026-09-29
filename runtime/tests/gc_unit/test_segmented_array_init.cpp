@@ -146,13 +146,20 @@ public:
         // Existing root-observer ownership keeps HandleSuspensionRequest from
         // returning while the external thread reads the initialization window.
         // No product callback or allocation wrapper is installed.
+        target->VisitMutatorRoots([&](ObjectRef& root) {
+            ordinarySlots.push_back(reinterpret_cast<uintptr_t>(&root));
+        });
         target->IncObserver();
         requester = std::thread([&] {
             for (size_t i = 0; i < requests; ++i) {
                 Heap::GetHeap().RequestGC(young ? GC_REASON_YOUNG : GC_REASON_FORCE);
                 target->MutatorLock();
-                MArray* array = static_cast<MArray*>(target->LoadInvisibleRoot());
+                zaddress_unsafe* slot = target->GetGCData().invisible_root();
+                MArray* array = slot == nullptr ? nullptr : static_cast<MArray*>(to_object(safe(*slot)));
                 if (array != nullptr) {
+                    windowAddress.store(reinterpret_cast<uintptr_t>(array), std::memory_order_release);
+                    windowSlot.store(reinterpret_cast<uintptr_t>(slot), std::memory_order_release);
+
                     const uint64_t sequence = Heap::GetHeap().GetZGeneration(
                         young ? ZGenerationId::young : ZGenerationId::old).seqnum();
                     windowSequence.store(sequence, std::memory_order_release);
@@ -165,6 +172,11 @@ public:
                     }
                 }
                 target->MutatorUnlock();
+                std::vector<uintptr_t> observed;
+                target->VisitMutatorRoots([&](ObjectRef& root) {
+                    observed.push_back(reinterpret_cast<uintptr_t>(&root));
+                });
+                ordinaryPreserved.store(observed == ordinarySlots, std::memory_order_release);
             }
             target->DecObserver();
         });
@@ -190,6 +202,10 @@ public:
     bool armed = false;
     std::atomic<uint64_t> windowSequence{0};
     std::atomic<bool> headerInvalid{false};
+    std::atomic<uintptr_t> windowAddress{0};
+    std::atomic<uintptr_t> windowSlot{0};
+    std::atomic<bool> ordinaryPreserved{true};
+    std::vector<uintptr_t> ordinarySlots;
     std::thread requester;
 };
 
@@ -219,6 +235,7 @@ void* RunArrayCase(void* argument)
         primitive ? GetByteArrayTypeInfos().array : GetReferenceArrayTypeInfos().array;
     ArrayGCWindow window(mutator, young || full, young, twice ? 2 : 1);
     window.before = before;
+    const bool emptyBefore = mutator->GetGCData().invisible_root() == nullptr;
     window.start();
     MArray* array = plainStruct ? MCC_NewArray64(arrayType, length) :
         primitive ? MCC_NewArray8(arrayType, length) : MCC_NewObjArray(arrayType, length);
@@ -246,12 +263,19 @@ void* RunArrayCase(void* argument)
     const bool uninterrupted = young || full ||
         (youngBefore == heap.GetZGeneration(ZGenerationId::young).seqnum() &&
          oldBefore == heap.GetZGeneration(ZGenerationId::old).seqnum() && colorBefore == ::g_cjStoreGoodMask);
-    const bool published = !array->IsInvisibleObject() && mutator->LoadInvisibleRoot() == nullptr;
+    const bool published = !array->IsInvisibleObject() && mutator->GetGCData().invisible_root() == nullptr;
     const uint64_t after = heap.GetZGeneration(generation).seqnum();
     const uint64_t inWindow = window.windowSequence.load(std::memory_order_acquire);
     const bool gc = !(young || full) || (window.armed && inWindow >= before + (twice ? 2 : 1));
     const bool header = !window.headerInvalid.load(std::memory_order_acquire);
     const bool lengthValid = array->GetLength() == length;
+    const bool ordinary = window.ordinaryPreserved.load(std::memory_order_acquire);
+    const bool windowResult = !(young || full) ||
+        (window.windowSlot.load(std::memory_order_acquire) != 0 &&
+         window.windowAddress.load(std::memory_order_acquire) == reinterpret_cast<uintptr_t>(array));
+    std::fprintf(stderr, "INVISIBLE_WINDOW_TARGET mode=%zu before_empty=%d after_empty=%d window_result=%d ordinary_preserved=%d slot=%zx result=%zx\n",
+                 mode, emptyBefore, mutator->GetGCData().invisible_root() == nullptr, windowResult, ordinary,
+                 window.windowSlot.load(), reinterpret_cast<uintptr_t>(array));
     std::fprintf(stderr, "SEGMENTED_RESULT_TARGET mode=%zu size=%zu length=%d published=%d mismatches=%zu before=%llu after=%llu window=%llu gc=%d header=%d expected=0x%zx uninterrupted=%d\n",
                  mode, array->GetContentSize(), lengthValid, published, mismatches,
                  (unsigned long long)before, (unsigned long long)after, (unsigned long long)inWindow,
@@ -263,7 +287,7 @@ void* RunArrayCase(void* argument)
     }
     window.finish();
     mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>((mismatches == 0 && published && lengthValid && gc && header && uninterrupted) ? 0 : 2);
+    return reinterpret_cast<void*>((mismatches == 0 && published && lengthValid && gc && header && uninterrupted && emptyBefore && windowResult && ordinary) ? 0 : 2);
 }
 
 void* RunLargePageIdentityCase(void*)
