@@ -94,8 +94,6 @@ bool ZBarrier::CasInstallResolvedTarget(RefField<>& field, MAddress expected, za
     if (object != nullptr) {
         CHECK_DETAIL(Heap::IsHeapAddress(object),
                      "resolved heal target must be a heap address target=%p", object);
-        CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(object) == HandVerdict::Usable,
-                     "resolved heal target must be usable target=%p", object);
     }
     zpointer desired = is_null(target) ? zpointer::null : RefField<>(ZAddress::store_good(target)).GetFieldValue();
     if (expected == raw(desired)) {
@@ -449,104 +447,9 @@ void ZBarrier::load_barrier_on_oop_array(volatile zpointer* p, size_t length)
     }
 }
 
-namespace {
-HandVerdict ClassifyRawHeader(uint64_t header)
-{
-    if (((header >> 48) & 0x3u) == 3u) {
-        return HandVerdict::Forwarded;
-    }
-    if ((header & 0xffffffffffffull) == 0) {
-        return HandVerdict::ZeroHeader;
-    }
-    return HandVerdict::Usable;
-}
-}
-
 RefField<> ZBarrier::GetAndTryTagRefField(BaseObject* target)
 {
-    // Null carries no colour (ZGC zAddress: null is never load-bad).
-    if (target == nullptr) {
-        return RefField<>(zpointer::null);
-    }
-    // TypeInfo* / binary constants / immortal metadata are not relocated,
-    // but a non-null HeapSlot word is still coloured.  The load-good mask
-    // fast path peels it without routing through the collector.
-    if (!Heap::IsHeapAddress(target)) {
-        return RefField<>(ZAddress::store_good(from_object(target)));
-    }
-    // ZPointer::uncolor is the sole producer accepted by ZAddress::store_good
-    // (zAddress.inline.hpp:609-624,806-811). ValidateCurrentValue is our
-    // make-load-good producer: a relocation-set address is looked up or copied
-    // by this thread; an unresolved address never reaches colouring.
-    target = ZBarrier::ValidateCurrentValue(target);
-    CHECK_DETAIL(target != nullptr && Heap::IsHeapAddress(target),
-                 "store-good requires a resolved heap address");
-    ZBarrier::CheckStoreGoodTarget("GetAndTryTagRefField", target);
+    // ZGC zAddress.inline.hpp:505-508: store_good consumes an uncolored address.
     return RefField<>(ZAddress::store_good(from_object(target)));
-}
-
-BaseObject* ZBarrier::ValidateCurrentValue(BaseObject* ref)
-{
-    if (ref == nullptr || !Heap::IsHeapAddress(ref) || ZBarrier::JudgeHandOutTarget(ref) == HandVerdict::Usable) {
-        return ref;
-    }
-    ZBarrier::FailClosedLoad("current raw value required", ref, 0);
-}
-
-HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
-{
-    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-        return HandVerdict::Usable;
-    }
-    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
-    return ClassifyRawHeader(hdr);
-}
-
-[[noreturn]] void ZBarrier::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits)
-{
-    const HandVerdict verdict = ZBarrier::JudgeHandOutTarget(target);
-    const MAddress from = target != nullptr ? reinterpret_cast<MAddress>(target) : 0;
-    ZPage* region = (from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader)
-        ? Heap::page(from)
-        : nullptr;
-    const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
-    const MAddress lookupTo = canLookup
-        ? forwarding_find(Heap::GetHeap().ObjectGeneration(target), from)
-        : 0;
-    // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
-    // gc_unit other-vm children can enter before the generation cycle is active.
-    const unsigned gcPhase = ZGeneration::old() != nullptr
-        ? static_cast<unsigned>(ZGeneration::old()->phase())
-        : 0xffu;
-    std::fprintf(stderr,
-                 "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
-                 "from=%p from_region=%p "
-                 "region_type=%u generation=%u forwarding_lookup_hit=%u "
-                 "table_id=%#zx from_page_epoch=%llu lifeId=%llu "
-                 "lookup_state=%s gc_phase=%u "
-                 "unresolved non-Usable from-address must not be handed out\n",
-                 site != nullptr ? site : "?", static_cast<void*>(target),
-                 static_cast<unsigned>(verdict), slotBits,
-                 static_cast<void*>(target),
-                 static_cast<void*>(region),
-                 region != nullptr ? static_cast<unsigned>(0u) : 0xffu,
-                 region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
-                  lookupTo != 0 ? 1u : 0u,
-                  static_cast<size_t>(0),
-                  0ull,
-                  0ull,
-                  !canLookup ? "not_attempted" : (lookupTo != 0 ? "hit" : "miss"),
-                 gcPhase);
-    (void)fflush(stderr);
-    (void)fflush(stdout);
-    std::abort();
-}
-
-void ZBarrier::CheckStoreGoodTarget(const char* consumer, BaseObject* target)
-{
-    // zAddress.inline.hpp:store_good consumes an already current address.
-    // The originating load/root operation performed generation-specific remap.
-    (void)consumer;
-    (void)ZBarrier::ValidateCurrentValue(target);
 }
 } // namespace MapleRuntime

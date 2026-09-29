@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "Common/BaseObject.inline.h"
+#include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zVerify.hpp"
 #include <cstdlib>
 #include <cstring>
@@ -42,21 +43,6 @@ void z_verify_safepoints_are_blocked()
 #endif
 
 namespace {
-// VM adapter: the first WeakRef payload slot is outside Cangjie's ordinary
-// strong-field bitmap. HotSpot's reference Klass dispatch owns that layout.
-// This is raw iteration, as at zVerify.cpp:632 and 737, not a safe split.
-template <typename Function>
-void IterateVerifyFields(BaseObject* object, Function function)
-{
-    const MAddress referent = reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE;
-    if (object->IsWeakRef()) { function(HeapSlotAt<>(referent)); }
-    object->ForEachRefField([&](RefField<>& field) {
-        if (!object->IsWeakRef() || reinterpret_cast<MAddress>(&field) != referent) {
-            function(field);
-        }
-    });
-}
-
 #if defined(MRT_DEBUG) && MRT_DEBUG == 1
 constexpr bool trueInDebug = true;
 #else
@@ -145,6 +131,20 @@ public:
 };
 }
 
+namespace {
+class ZVerifyNMethodClosure {
+    const RootVisitor& closure;
+public:
+    explicit ZVerifyNMethodClosure(const RootVisitor& closure) : closure(closure) {}
+    void do_nmethod(CJThreadRoot& root)
+    {
+        // ZGC zVerify.cpp:354-360: verification only observes disarmed carriers.
+        if (root.is_armed()) { return; }
+        root.oops_do(closure);
+    }
+};
+} // namespace
+
 void ZVerify::RootsStrong(bool afterOldMark)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
@@ -152,11 +152,14 @@ void ZVerify::RootsStrong(bool afterOldMark)
     RootsIteratorStrongColored().Apply([&](NativeSlot& root) { colored.do_oop(root); });
     ZVerifyUncoloredRootClosure uncolored;
     RootVisitor plain = [&](ObjectRef& root) { uncolored.do_oop(root); };
-    ZMark::VisitStrongPlainRoots(plain, [&](Mutator& mutator) {
+    RootsIteratorStrongUncolored roots;
+    roots.ApplyThreads([&](Mutator& mutator) {
         mutator.VisitProcessedRoots([&](ObjectRef& root) {
             mutator.VisitHeapRootSlots(root, plain);
         });
     });
+    ZVerifyNMethodClosure carrier(plain);
+    roots.Apply([&] { VisitCJThreadRoots([&](CJThreadRoot& root) { carrier.do_nmethod(root); }); });
 }
 void ZVerify::RootsWeak()
 {
@@ -257,6 +260,10 @@ public:
         if (verifyWeaks) { z_verify_possibly_weak_oop(field); }
         else { z_verify_old_oop(field); }
     }
+    ReferenceIterationMode reference_iteration_mode() override
+    {
+        return verifyWeaks ? DO_FIELDS : DO_FIELDS_EXCEPT_REFERENT;
+    }
 };
 
 class ZVerifyObjectClosure : public ObjectClosure, public OopFieldClosure {
@@ -282,15 +289,7 @@ public:
     void verify_live_object(BaseObject* object)
     {
         ZVerifyOldOopClosure oopClosure(verifyWeaks);
-        const MAddress referent = reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE;
-        if (object->IsWeakRef() && verifyWeaks) { oopClosure.do_oop(&HeapSlotAt<>(referent)); }
-        auto fields = [&](RefField<>& field) {
-            if (!object->IsWeakRef() || reinterpret_cast<MAddress>(&field) != referent) {
-                oopClosure.do_oop(&field);
-            }
-        };
-        ZBasicOopIterateClosure<decltype(fields)> closure(fields);
-        ZIterator::oop_iterate_safe(object, &closure);
+        ZIterator::oop_iterate_safe(object, &oopClosure);
     }
 
     void do_object(BaseObject* object) override
@@ -346,6 +345,7 @@ class ZVerifyRemsetBeforeOopClosure : public BasicOopIterateClosure {
     ZForwarding* const forwarding;
     MAddress from = 0;
 public:
+    ReferenceIterationMode reference_iteration_mode() override { return DO_FIELDS; }
     explicit ZVerifyRemsetBeforeOopClosure(ZForwarding* value) : forwarding(value) {}
     void set_from_addr(MAddress value) { from = value; }
     void do_oop(RefField<>* pointer) override
@@ -369,6 +369,7 @@ class ZVerifyRemsetAfterOopClosure : public BasicOopIterateClosure {
     MAddress from = 0;
     MAddress to = 0;
 public:
+    ReferenceIterationMode reference_iteration_mode() override { return DO_FIELDS; }
     explicit ZVerifyRemsetAfterOopClosure(ZForwarding* value) : forwarding(value) {}
     void set_from_addr(MAddress value) { from = value; }
     void set_to_addr(MAddress value) { to = value; }
@@ -406,7 +407,7 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
     ZVerifyRemsetBeforeOopClosure closure(forwarding);
     page->object_iterate([&](BaseObject* object) {
         closure.set_from_addr(reinterpret_cast<MAddress>(object));
-        IterateVerifyFields(object, [&](RefField<>& field) { closure.do_oop(&field); });
+        OopIteratorClosureDispatch::oop_oop_iterate(&closure, object, object->GetTypeInfo());
     });
 }
 void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
@@ -418,7 +419,7 @@ void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
         BaseObject* object = generation->remap_object(reinterpret_cast<BaseObject*>(from));
         closure.set_from_addr(from);
         closure.set_to_addr(reinterpret_cast<MAddress>(object));
-        IterateVerifyFields(object, [&](RefField<>& field) { closure.do_oop(&field); });
+        OopIteratorClosureDispatch::oop_oop_iterate(&closure, object, object->GetTypeInfo());
     });
 }
 void ZVerify::AfterRelocation(ZForwarding* forwarding)

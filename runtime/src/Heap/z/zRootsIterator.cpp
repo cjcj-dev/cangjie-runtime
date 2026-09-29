@@ -170,16 +170,6 @@ void JavaThreadsIterator::Apply(const std::function<void(Mutator&)>& visitor)
     }
 }
 
-void ZMark::VisitStrongPlainRoots(
-    const RootVisitor& visitor, const std::function<void(Mutator&)>& threadVisitor)
-{
-    if (threadVisitor) {
-        MutatorManager::Instance().VisitAllMutators(threadVisitor);
-    }
-    (void)visitor;
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots();
-}
-
 void ZMark::VisitStaticRoots(const NativeSlotVisitor& visitor)
 {
     Heap::GetHeap().VisitStaticRoots(visitor);

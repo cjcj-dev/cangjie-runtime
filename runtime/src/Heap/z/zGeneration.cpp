@@ -305,13 +305,15 @@ public:
     bool block_jni_critical() const override { return true; }
 };
 
-class VM_ZVerifyOld : public VM_ZOperation {
+class VM_ZVerifyOld : public VMOperation {
 public:
-    const char* name() const override { return "Verify Old"; }
-    bool do_operation() override
+    bool skip_thread_oop_barriers() const override { return true; }
+    void doit() { ZVerify::AfterWeakProcessing(); }
+    void pause()
     {
-        ZVerify::AfterWeakProcessing();
-        return true;
+        // ZGC zGeneration.cpp:1136-1153: a plain VM operation.
+        ScopedStopTheWorld stw("Verify Old", false, 0, this);
+        doit();
     }
 };
 

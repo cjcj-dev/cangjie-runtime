@@ -43,7 +43,6 @@ class BaseObject;
 // (zGeneration.inline.hpp:131-140 has no "lookup miss ⇒ return from" exit); detected shapes are:
 //   Forwarded   header stateCode=3, a to-version exists and must be found
 //   ZeroHeader  object header not yet initialized -- nothing to resolve
-enum class HandVerdict : uint8_t { Usable, Forwarded, ZeroHeader };
 
 // Provenance is captured by the runtime entry that owns the slot.  Resolution
 // carries it down to the fail-closed exit instead of trying to reconstruct a

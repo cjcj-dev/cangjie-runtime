@@ -349,13 +349,9 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(const ValueRoot& root) const
         // when this generation's forwarding table has no entry for it.
         BaseObject* current = ZBarrier::remap_generation(colorPtr)
             ->relocate_or_remap_object(value);
-        if (current == nullptr || !Heap::IsHeapAddress(current) ||
-            ZBarrier::JudgeHandOutTarget(current) != HandVerdict::Usable) {
-            ZBarrier::FailClosedLoad("value root relocate_or_remap requires usable to", value, 0);
-        }
         return current;
     }
-    return ZBarrier::ValidateCurrentValue(value);
+    return value;
 }
 
 void ZCrossVM::CurrentizeValueRootSet(ValueRootSet& roots) const

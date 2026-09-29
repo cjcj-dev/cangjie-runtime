@@ -134,7 +134,6 @@ void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
 {
     CHECK(Heap::GetHeap().old().IsPhaseMark());
     BaseObject* object = to_object(ZBarrier::load_barrier_on_oop_field(reinterpret_cast<volatile zpointer*>(&(slot))));
-    object = ZBarrier::ValidateCurrentValue(object);
     if (object == nullptr) return;
     auto* page = Heap::page(reinterpret_cast<MAddress>(object));
     if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
@@ -210,9 +209,7 @@ void ZMark::EnumAllCommonRoots(ZWorkers& workers, ValueRootList& exportOwners)
     CHECK_DETAIL(Heap::GetHeap().old().MarkPtr() != nullptr, "old mark domain must start before roots");
     MarkOldRootsTask task(Heap::GetHeap().old().Mark(),
                          [](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
-        VisitStrongPlainRoots([&](ObjectRef& root) {
-            ZUncoloredRoot::mark_object(safe(root.LoadPlain()));
-        }, {});
+        Runtime::Current().GetConcurrencyModel().VisitGCRoots();
         Heap::GetHeap().cross_vm().VisitSurrectedExportRoots([](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZBarrier::Mark<false, false, true, false>(from_object(object));
@@ -269,12 +266,9 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
         std::lock_guard<std::mutex> lock(resultLock);
         visitor(object);
     };
-    RootVisitor rawRootVisitor = [&resultVisitor](ObjectRef& root) {
-        resultVisitor(to_object(safe(root.LoadPlain())));
-    };
     (void)invisibleVisitor; // Watermark owns the invisible slot with its saved color.
     MarkYoungRootsTask task([&] {
-        VisitStrongPlainRoots(rawRootVisitor, {});
+        Runtime::Current().GetConcurrencyModel().VisitGCRoots();
         Heap::GetHeap().cross_vm().VisitMinorValueRoots([&](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZBarrier::Mark<false, false, true, false>(from_object(object));

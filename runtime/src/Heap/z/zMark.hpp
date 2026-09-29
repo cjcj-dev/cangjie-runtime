@@ -63,8 +63,6 @@ class Mutator;
 class ZMark {
     friend class ZMarkTask;
 public:
-    static void VisitStrongPlainRoots(const RootVisitor& visitor,
-                              const std::function<void(Mutator&)>& threadVisitor);
     static void EnumAllCommonRoots(ZWorkers& workers, ValueRootList& exportOwners);
     static void DiscoverFinalizableRoot(NativeSlot& slot);
     static void MergeMutatorRoots(WorkStack& workStack);

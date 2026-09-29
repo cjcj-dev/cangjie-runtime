@@ -104,11 +104,6 @@ public:
         return ZBarrier::GetAndTryTagRefField(value);
     }
 
-    static void CheckStoreGoodTarget(Heap& collector, BaseObject* value)
-    {
-        ZBarrier::CheckStoreGoodTarget("ForwardingLookupWitness", value);
-    }
-
     static BaseObject* ForwardUpdateRawRef(Heap& collector, ObjectRef& root)
     {
         const zaddress_unsafe observed = root.LoadPlain();

@@ -74,31 +74,45 @@ namespace {
 // disarms by publishing the store-good guard.
 void MutatorEntryCaller(void* argPtr, void* handle)
 {
-    LWTData* data = reinterpret_cast<LWTData*>(argPtr);
-    // zBarrierSetNMethod.cpp:53-57: recheck the guard under the group lock.
-    const uintptr_t color = *g_uncoloredVisitColor;
-    ObjectRef& ref = reinterpret_cast<ObjectRef&>(data->obj);
-    ObjectRef& map = reinterpret_cast<ObjectRef&>(data->threadObject);
-    ObjectRef& execute = RootSlotAt(&data->execute);
-    if (color != ZPointerStoreGoodMask) {
-        // zBarrierSetNMethod.cpp:78-84: ZUncoloredRootProcessWeakOopClosure.
-        auto processWeak = [&](ObjectRef& slot) {
-            // zUncoloredRoot.inline.hpp:75-78: process_weak keeps the oop alive.
-            ZUncoloredRoot::process_weak(reinterpret_cast<zaddress_unsafe*>(&slot), color);
-        };
-        processWeak(ref);
-        processWeak(map);
-        processWeak(execute);
-        // zBarrierSetNMethod.cpp:88-97: disarm by publishing store good.
-        __atomic_store_n(g_uncoloredVisitColor, ZPointerStoreGoodMask, __ATOMIC_RELEASE);
-    }
+    CJThreadRoot root(*static_cast<LWTData*>(argPtr), *g_uncoloredVisitColor);
+    root.entry_barrier();
     if (handle != nullptr) {
-        (*reinterpret_cast<RootVisitor*>(handle))(ref);
-        (*reinterpret_cast<RootVisitor*>(handle))(map);
-        (*reinterpret_cast<RootVisitor*>(handle))(execute);
+        root.oops_do(*static_cast<RootVisitor*>(handle));
     }
 }
 } // namespace
+
+bool CJThreadRoot::is_armed() const
+{
+    return color != ZPointerStoreGoodMask;
+}
+
+void CJThreadRoot::oops_do(const RootVisitor& visitor)
+{
+    visitor(RootSlotAt(&data.obj));
+    visitor(RootSlotAt(&data.threadObject));
+    visitor(RootSlotAt(&data.execute));
+}
+
+void CJThreadRoot::entry_barrier()
+{
+    // ZGC zBarrierSetNMethod.cpp:53-97: recheck under the carrier lock.
+    if (is_armed()) {
+        oops_do([&](RootSlot& slot) {
+            ZUncoloredRoot::process_weak(reinterpret_cast<zaddress_unsafe*>(&slot), color);
+        });
+        __atomic_store_n(&color, ZPointerStoreGoodMask, __ATOMIC_RELEASE);
+    }
+}
+
+void VisitCJThreadRoots(const std::function<void(CJThreadRoot&)>& visitor)
+{
+    auto copy = visitor;
+    ScheduleAllCJThreadVisit([](void* data, void* handle) {
+        CJThreadRoot root(*static_cast<LWTData*>(data), *g_uncoloredVisitColor);
+        (*static_cast<std::function<void(CJThreadRoot&)>*>(handle))(root);
+    }, &copy);
+}
 
 void CJThreadRootEntryBarrier()
 {
