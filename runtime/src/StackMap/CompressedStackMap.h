@@ -140,12 +140,12 @@ public:
 #else
             FuncDescRef desc = MFuncDesc::GetFuncDesc(addr);
 #endif
-            CHECK_DETAIL(desc != nullptr, "managed frame missing funcdesc startPC=%#lx ip=%#lx",
-                         static_cast<unsigned long>(addr), static_cast<unsigned long>(framePC));
+            CHECK_DETAIL(desc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
+                         reinterpret_cast<const void*>(addr), reinterpret_cast<const void*>(framePC));
             stackmapStart = reinterpret_cast<U8*>(desc->GetStackMap());
         }
-        CHECK_DETAIL(stackmapStart != nullptr, "managed frame missing stackmap startPC=%#lx ip=%#lx",
-                     static_cast<unsigned long>(addr), static_cast<unsigned long>(framePC));
+        CHECK_DETAIL(stackmapStart != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
+                     reinterpret_cast<const void*>(addr), reinterpret_cast<const void*>(framePC));
         return CompressedStackMapHead(reinterpret_cast<Uptr*>(stackmapStart));
     }
     static void DestroyStackMapHead(CompressedStackMapHead*& stackMapHead) noexcept

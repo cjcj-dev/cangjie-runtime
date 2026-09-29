@@ -92,13 +92,13 @@ void StackFrameCursor::CollectReturnRegisterRoots(const FrameInfo& frame, std::v
     // safepoint.cpp:818-839 / codeCache.cpp:750-759: the returned frame
     // is gone; resolve its map by PC before protecting the saved return oop.
     const auto descriptor = MFuncDesc::GetFuncDesc(startPC);
-    CHECK_DETAIL(descriptor != nullptr, "return frame missing funcdesc startPC=%#lx ip=%#lx",
-                 static_cast<unsigned long>(startPC), static_cast<unsigned long>(sitePC));
+    CHECK_DETAIL(descriptor != nullptr, "return frame missing funcdesc startPC=%p ip=%p",
+                 reinterpret_cast<const void*>(startPC), reinterpret_cast<const void*>(sitePC));
     StackMapBuilder builder(startPC, sitePC, 0, reinterpret_cast<uint64_t*>(descriptor));
     HeapReferenceMap map = builder.Build<HeapReferenceMap>();
     CHECK_DETAIL(map.IsValid() || builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ROOT_INDICES,
-                 "return frame missing stackmap entry startPC=%#lx ip=%#lx",
-                 static_cast<unsigned long>(startPC), static_cast<unsigned long>(sitePC));
+                 "return frame missing stackmap entry startPC=%p ip=%p",
+                 reinterpret_cast<const void*>(startPC), reinterpret_cast<const void*>(sitePC));
     if (!map.IsValid()) { return; }
     RootVisitor capture = [&roots](RootSlot& slot) {
         BaseObject* object = to_object(safe(slot.LoadPlain()));

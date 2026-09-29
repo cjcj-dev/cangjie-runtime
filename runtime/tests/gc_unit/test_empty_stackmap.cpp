@@ -6,6 +6,7 @@
 #include <csignal>
 #include <string>
 #include "CangjieRuntime.h"
+#include "Exception/Exception.h"
 #include "Exception/EhFrameInfo.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"

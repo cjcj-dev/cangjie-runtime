@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "CangjieRuntime.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -28,23 +30,40 @@ int main(int argc, char** argv)
         if (std::memcmp(reinterpret_cast<void*>(p), poll, sizeof(poll)) == 0) { site = p; break; }
     }
     if (site == 0) { std::fprintf(stderr, "INPUT_RETURN_POLL_MISSING\n"); return 2; }
-    CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_OFF;
-    alignas(16) uintptr_t storage[64] {};
-    auto* fp = &storage[56];
-    fp[-1] = 0x10000; // rax return oop; no object dereference by this collector
-    fp[-10] = pc;
-    fp[-11] = site;
-    MachineFrame machine;
-    machine.SetFA(reinterpret_cast<FrameAddress*>(fp));
-    machine.SetSP(reinterpret_cast<uintptr_t>(storage));
-    const FrameInfo frame(machine, FrameType::RETURN_SAFEPOINT);
-    std::vector<StackFrameCursor::ReturnRegisterRoot> roots;
-    StackFrameCursor::CollectReturnRegisterRoots(frame, roots);
-    const bool target = roots.size() == 1 &&
-        reinterpret_cast<uintptr_t>(roots[0].slot) == reinterpret_cast<uintptr_t>(fp - 1) &&
-        reinterpret_cast<uintptr_t>(roots[0].object) == 0x10000;
-    std::fprintf(stderr, "RETURN_ROOT_TARGET leaf=%d roots=%zu slot_rax=%d startPC=%p ip=%p assertion-executed\n",
-                 leaf, roots.size(), target, reinterpret_cast<void*>(pc), reinterpret_cast<void*>(site));
+    int resultPipe[2];
+    if (pipe(resultPipe) != 0) { return 2; }
+    const pid_t child = fork();
+    if (child < 0) { return 2; }
+    if (child == 0) {
+        close(resultPipe[0]);
+        CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON;
+        alignas(16) uintptr_t storage[64] {};
+        auto* fp = &storage[56];
+        fp[-1] = 0x10000; // rax return oop; no object dereference by this collector
+        fp[-10] = pc;
+        fp[-11] = site;
+        MachineFrame machine;
+        machine.SetFA(reinterpret_cast<FrameAddress*>(fp));
+        machine.SetSP(reinterpret_cast<uintptr_t>(storage));
+        const FrameInfo frame(machine, FrameType::RETURN_SAFEPOINT);
+        std::vector<StackFrameCursor::ReturnRegisterRoot> roots;
+        StackFrameCursor::CollectReturnRegisterRoots(frame, roots);
+        const bool target = roots.size() == 1 &&
+            reinterpret_cast<uintptr_t>(roots[0].slot) == reinterpret_cast<uintptr_t>(fp - 1) &&
+            reinterpret_cast<uintptr_t>(roots[0].object) == 0x10000;
+        const unsigned result = target ? 1 : 0;
+        const auto bytes = write(resultPipe[1], &result, sizeof(result));
+        _exit(bytes == sizeof(result) ? 0 : 2);
+    }
+    close(resultPipe[1]);
+    unsigned result = 0;
+    const auto bytes = read(resultPipe[0], &result, sizeof(result));
+    close(resultPipe[0]);
+    int status = 0;
+    const auto waited = waitpid(child, &status, 0);
+    const bool target = bytes == sizeof(result) && waited == child && status == 0 && result == 1;
+    std::fprintf(stderr, "RETURN_ROOT_TARGET leaf=%d one_root_at_rax=%d bytes=%zd status=%d assertion-executed\n",
+                 leaf, target, bytes, status);
     return target ? 0 : 1;
 #else
     return 125;
