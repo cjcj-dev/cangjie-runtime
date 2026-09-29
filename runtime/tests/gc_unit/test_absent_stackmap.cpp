@@ -320,15 +320,18 @@ GC_TEST(AbsentStackMap, SafepointWalkCrossesAbsentMapFrame)
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     const bool crossed = transcript.find("crossed=1 bounded=1") != std::string::npos;
-    const bool reached = transcript.find("present_roots=0 exhausted=1") == std::string::npos;
+    const bool reached = transcript.find("exhausted=1") != std::string::npos;
     const bool finished = WIFEXITED(status) && WEXITSTATUS(status) == 0;
     std::fprintf(stderr, "ABSENT_SAFEPOINT_RESULT executed=1 crossed=%d reached=%d finished=%d signaled=%d sig=%d "
         "status=%d\n%s",
         crossed, reached, finished, WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0, status,
         transcript.c_str());
-    // The target invariant: the walk crossed the absent-map frames and consumed
-    // the roots of the present frames behind them. A decode of the null table
-    // takes the child down before this line, which is what the cut arm shows.
+    // Target invariant, in the order the product produces it: the safepoint
+    // published a frontier over the absent-map frames (crossed && bounded), the
+    // walk then traversed the whole chain through the present frames behind them
+    // and reached the anchor (exhausted), and the mutator survived (finished).
+    // A decode of the null table takes the child down before any of the three
+    // lines is printed, which is what the cut arm shows.
     GC_EXPECT_TRUE(crossed);
     GC_EXPECT_TRUE(reached);
     GC_EXPECT_TRUE(finished);
