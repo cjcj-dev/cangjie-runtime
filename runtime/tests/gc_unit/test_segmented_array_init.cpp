@@ -635,6 +635,73 @@ void* RunNativeTaskRootCase(void*)
     return reinterpret_cast<void*>(objects == 1 ? 0 : 42);
 }
 
+// #1261 T0.3/T0.4: two actual young collections with a holder older
+// than its child. Product allocation, barriers, selection and scanning own
+// all remembered bits; compare the raw field before a mutator load can heal it.
+// ZGC zRelocate.cpp:742-799,1227-1255; zRemembered.cpp:127-160.
+void* RunRemembered1261Cycle(void* argument)
+{
+    const uintptr_t mode = reinterpret_cast<uintptr_t>(argument);
+    auto& heap = Heap::GetHeap();
+    ZTenuringThreshold = 1;
+    const MIndex length = mode == 0 ? kLargeRefLength : mode == 1 ? 16 : 64 * 1024;
+    auto* holder = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, length);
+    const U64 holderRoot = heap.RegisterExportRoot(holder);
+    Mutator::GetMutator()->SetManagedContext(false);
+    heap.RequestGC(mode == 2 ? GC_REASON_USER : GC_REASON_YOUNG);
+    holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
+    const auto holderBefore = reinterpret_cast<MAddress>(holder);
+    const unsigned ageBefore = static_cast<unsigned>(Heap::page(holderBefore)->age());
+    auto* child = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
+    const U64 childRoot = heap.RegisterExportRoot(child);
+    auto* fields = reinterpret_cast<RefField<>*>(holder->ConvertToCArray());
+    HeapAccess<>::oop_store(&fields[0], child);
+    Mutator::GetMutator()->FlushStoreBarrierBuffer();
+    const zpointer before = fields[0].GetFieldValue();
+    const bool storeGoodBefore = ZPointer::is_store_good(before);
+    const bool rememberedBefore = Heap::page(holderBefore)->is_remembered(
+        reinterpret_cast<volatile zpointer*>(fields));
+    std::vector<U64> peers;
+    if (mode == 1) {
+        for (size_t page = 0; page < 3; ++page) {
+            for (size_t i = 0; i < 40; ++i) {
+                (void)MCC_NewArray8(GetByteArrayTypeInfos().array, 64 * 1024);
+            }
+            peers.push_back(heap.RegisterExportRoot(
+                MCC_NewObjArray(GetReferenceArrayTypeInfos().array, 16)));
+        }
+    }
+    heap.RequestGC(GC_REASON_YOUNG);
+    holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
+    fields = reinterpret_cast<RefField<>*>(holder->ConvertToCArray());
+    const zpointer after = fields[0].GetFieldValue();
+    const MAddress expected = reinterpret_cast<MAddress>(heap.GetExportObject(childRoot));
+    auto* page = Heap::page(reinterpret_cast<MAddress>(holder));
+    const bool old = !page->IsYoungRegion();
+    const bool childYoung = Heap::page(expected)->IsYoungRegion();
+    const bool remembered = page->is_remembered(reinterpret_cast<volatile zpointer*>(fields)) ||
+        page->was_remembered(reinterpret_cast<volatile zpointer*>(fields));
+    const bool addressMatches = untype(ZPointer::uncolor_unsafe(after)) == expected;
+    const bool loadGood = ZPointer::is_load_good(after);
+    // Copy promotion may defer young remapping (ZGC zRelocate.cpp:762-793).
+    // The product read barrier must resolve that remembered field correctly.
+    const MAddress resolved = reinterpret_cast<MAddress>(HeapAccess<>::oop_load(&fields[0]));
+    const bool resolvedMatches = resolved == expected;
+    const bool healed = ZPointer::is_load_good(fields[0].GetFieldValue());
+    const bool medium = page->is_medium();
+    std::fprintf(stderr, "REMSET1261_CYCLE_TARGET mode=%zu age_before=%u moved=%d old=%d child_young=%d "
+        "before=%zx after=%zx remembered_before=%d remembered=%d load_good=%d address_matches=%d resolved_matches=%d healed=%d medium=%d executed=1\n",
+        mode, ageBefore, reinterpret_cast<MAddress>(holder) != holderBefore, old, childYoung,
+        raw(before), raw(after), rememberedBefore, remembered, loadGood, addressMatches, resolvedMatches, healed, medium);
+    const bool result = old && childYoung && remembered && resolvedMatches && healed &&
+        storeGoodBefore && (mode != 2 || (rememberedBefore && medium));
+    for (U64 root : peers) { heap.RemoveExportObject(root); }
+    heap.RemoveExportObject(childRoot);
+    heap.RemoveExportObject(holderRoot);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>(result ? 0 : 61);
+}
+
 int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
                    bool runtimeThread = false)
 {
@@ -808,4 +875,17 @@ GC_RUNTIME_OTHER_VM_TEST(RelocatePromotion, NullFieldsStayColoredThroughCollecti
 GC_RUNTIME_OTHER_VM_TEST(FlipPromotion, FirstYoungStoreIntoPromotedNullIsRemembered)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunFlipPromotionCase, 3, 1, true), 0);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(Remembered1261Cycle, FlipPromotion)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunRemembered1261Cycle, 0, 1, true), 0);
+}
+GC_RUNTIME_OTHER_VM_TEST(Remembered1261Cycle, CopyPromotion)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunRemembered1261Cycle, 1, 1, true), 0);
+}
+GC_RUNTIME_OTHER_VM_TEST(Remembered1261Cycle, OldMediumScan)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunRemembered1261Cycle, 2, 1, true), 0);
 }

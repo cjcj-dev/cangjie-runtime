@@ -614,3 +614,56 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldRejectsNonLiveOldTarget)
     CheckVerifyFieldCase(VerifyFieldCase::WeakNonLiveOld,
         "ZVerify.WeakFieldRejectsNonLiveOldTarget", "Non-live old oop");
 }
+
+#include "Heap/z/zRemembered.hpp"
+#include "Heap/z/zWorkers.hpp"
+
+namespace {
+// #1261 T0.4. The fixture selects old liveness inputs; the actual young
+// mark-start and remembered scanning phase produce and consume both bitmaps.
+// ZGC zRemembered.cpp:127-160: allocating pages and concurrent old marking
+// must scan all recorded slots, independently of old-object live bits.
+void CheckRemembered1261Scan(unsigned mode)
+{
+    GcVerifyFixture fixture;
+    WorkerFixture worker;
+    auto& heap = Heap::GetHeap();
+    heap.young().InitializeWorkers(1);
+    heap.old().InitializeWorkers(1);
+    fixture.region0()->reset(PageAge::old);
+    fixture.region1()->reset(PageAge::eden);
+    heap.old().set_phase(ZGenerationPhase::MarkComplete);
+    if (mode != 0) { GcHeapFixture::AdvanceGeneration(Generation::Old); }
+    if (mode == 1) { heap.old().set_phase(ZGenerationPhase::Mark); }
+    if (mode == 2) { (void)RegionSpace::MarkObject<Generation::Old>(fixture.obj0); }
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(to_zpointer(raw(StoreGoodPointer(nullptr)) ^ ZPointerMarkedOldMask));
+    HeapAccess<>::oop_store(&field, fixture.obj1);
+    auto* p = reinterpret_cast<volatile zpointer*>(&field);
+    const bool produced = fixture.region0()->is_remembered(p);
+    heap.remembered().register_found_old(fixture.region0());
+    {
+        ScopedStopTheWorld stopped("Remembered1261Scan");
+        heap.young().mark_start();
+    }
+    const bool previous = fixture.region0()->was_remembered(p);
+    const bool allocating = fixture.region0()->is_allocating();
+    const bool oldMark = heap.old().is_phase_mark();
+    heap.remembered().scan_and_follow(&heap.young().Mark());
+    const bool retained = fixture.region0()->is_remembered(p);
+    const bool cleared = !fixture.region0()->was_remembered(p);
+    const bool healed = ZPointer::is_marked_young(field.GetFieldValue());
+    const bool addressMatches = to_object(field.GetTargetObject()) == fixture.obj1;
+    const bool childLive = fixture.region1()->is_object_live(to_zaddress(reinterpret_cast<MAddress>(fixture.obj1)));
+    std::fprintf(stderr, "REMSET1261_SCAN_TARGET mode=%u allocating=%d old_mark=%d produced=%d previous=%d "
+        "retained=%d cleared=%d healed=%d address_matches=%d child_live=%d executed=1\n",
+        mode, allocating, oldMark, produced, previous, retained, cleared, healed, addressMatches, childLive);
+    GC_EXPECT_TRUE(retained && cleared && healed && addressMatches && childLive);
+    GC_EXPECT_TRUE(produced && previous);
+    GC_EXPECT_EQ(allocating, mode == 0);
+    GC_EXPECT_EQ(oldMark, mode == 1);
+}
+}
+GC_OTHER_VM_TEST(Remembered1261Scan, AllocatingOldPage) { CheckRemembered1261Scan(0); }
+GC_OTHER_VM_TEST(Remembered1261Scan, ConcurrentOldMark) { CheckRemembered1261Scan(1); }
+GC_OTHER_VM_TEST(Remembered1261Scan, MarkedOldPage) { CheckRemembered1261Scan(2); }
