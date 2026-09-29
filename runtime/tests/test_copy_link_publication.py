@@ -65,7 +65,7 @@ def main():
     commands = json.loads((build / 'compile_commands.json').read_text())
     assert len([x for x in commands if x['file'].endswith('/Copy_aarch64.S')]) == 1
     run('object-symbols', ['readelf', '-Ws', obj])
-    archive = build / 'src/Base/libBase.a'
+    archive = next((build / 'runtime-staging/ar').glob('*/libBase.a'))
     member = subprocess.check_output(['ar', 'p', str(archive), 'Copy_aarch64.S.o'])
     assert hashlib.sha256(member).hexdigest() == hashlib.sha256(obj.read_bytes()).hexdigest()
     (evidence / 'copy-compile-command.json').write_text(json.dumps(
@@ -111,7 +111,7 @@ def main():
             rc = run('cmake-link', ['cmake', '--build', build, '--target', 'cj_gc_unit', '-j', os.cpu_count()], env)
         finally:
             cmake.write_text(original)
-        elf = build / 'tests/gc_unit/cj_gc_unit'
+        elf = build / 'runtime-staging/bin/aarch64_Release/cj_gc_unit'
         link_log = evidence / 'cmake-link.log'
     else:
         runner = source / 'tests/gc_unit/run_standalone.sh'
