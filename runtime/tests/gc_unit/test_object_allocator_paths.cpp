@@ -582,7 +582,9 @@ void* AllocateUntilSlowBranch(void*)
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
-    const size_t size = 256;
+    // A small object whose size does not divide the TLAB, so the tail left in
+    // the TLAB is larger than the refill waste limit: the retain branch.
+    const size_t size = 3000;
     type->SetInstanceSize(size - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     // The product entry is MCC_NewObject -> HeapManager.cpp:20 -> the TLAB
