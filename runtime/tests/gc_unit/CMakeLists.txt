@@ -149,10 +149,14 @@ elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
     if(NOT DEFINED GCV2_RUNTIME_OUTPUT_ROOT)
         set(GCV2_RUNTIME_OUTPUT_ROOT "${GCV2_RUNTIME_LIB_DIR}/../..")
     endif()
+    set(_copy_compiler "${CMAKE_CXX_COMPILER} ${CMAKE_CXX_COMPILER_ARG1}")
+    if(CMAKE_CXX_COMPILER_TARGET)
+        string(APPEND _copy_compiler " --target=${CMAKE_CXX_COMPILER_TARGET}")
+    endif()
     execute_process(
         COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/product_test_configuration.py"
             "${CMAKE_SOURCE_DIR}" "${GCV2_RUNTIME_LIB_DIR}" "${GCV2_RUNTIME_OUTPUT_ROOT}"
-            --copy-object --compiler "${CMAKE_CXX_COMPILER}"
+            --copy-object --compiler "${_copy_compiler}"
         RESULT_VARIABLE _copy_rc OUTPUT_VARIABLE _copy_object
         ERROR_VARIABLE _copy_error OUTPUT_STRIP_TRAILING_WHITESPACE)
     if(NOT _copy_rc EQUAL 0)

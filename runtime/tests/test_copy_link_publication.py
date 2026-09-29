@@ -64,6 +64,18 @@ def main():
     obj = copied / inputs['internal_test_objects']['copy_disjoint_words']['path']
     commands = json.loads((build / 'compile_commands.json').read_text())
     assert len([x for x in commands if x['file'].endswith('/Copy_aarch64.S')]) == 1
+    # Exercise the actual publisher with a changed object input. The SO pair
+    # remains identical; the publication identity must change with object bytes.
+    publish = ['python3', source / 'build/publish_runtime_output.py',
+               '@' + str(build / 'runtime-publish-args.txt')]
+    changed = evidence / 'changed-Copy.o'
+    changed.write_bytes(obj.read_bytes() + b'\0')
+    assert run('publish-changed-object', publish + ['--copy-object', changed], env) == 0
+    changed_cache = (build / 'CMakeCache.txt').read_text()
+    assert 'OUTPUT_TEMP_PATH:INTERNAL=' + str(root) + '\n' not in changed_cache
+    assert run('publish-restored-object', publish, env) == 0
+    assert 'OUTPUT_TEMP_PATH:INTERNAL=' + str(root) + '\n' in (build / 'CMakeCache.txt').read_text()
+    changed.unlink()
     run('object-symbols', ['readelf', '-Ws', obj])
     archive = next((build / 'runtime-staging/ar').glob('*/libBase.a'))
     member = subprocess.check_output(['ar', 'p', str(archive), 'Copy_aarch64.S.o'])
@@ -73,6 +85,15 @@ def main():
     helper = source / 'tests/gc_unit/product_test_configuration.py'
     validate = ['python3', helper, source, library, copied, '--copy-object', '--compiler', 'clang++']
     assert run('identity-normal-relocated', validate) == 0
+    assert run('identity-resolve-relocated', ['python3', helper, source, library, copied, '--resolve-root']) == 0
+    detached = evidence / 'detached-pair'
+    detached.mkdir()
+    for name in ('libcangjie-runtime.so', 'libboundscheck.so'):
+        shutil.copy2(library / name, detached / name)
+    assert run('identity-detached-ambiguous', ['python3', helper, source, detached, detached, '--resolve-root']) == 2
+    assert run('identity-detached-explicit', ['python3', helper, source, detached, copied,
+                                            '--copy-object', '--compiler', 'clang++']) == 0
+    shutil.rmtree(detached)
     original_bytes = obj.read_bytes()
     obj.unlink()
     assert run('identity-missing', validate) == 2
@@ -113,6 +134,9 @@ def main():
             cmake.write_text(original)
         elf = build / 'runtime-staging/bin/aarch64_Release/cj_gc_unit'
         link_log = evidence / 'cmake-link.log'
+        shutil.copy2(build / 'tests/gc_unit/CMakeFiles/cj_gc_unit.dir/link.txt', evidence / 'cmake-link-command.log')
+        if elf.exists():
+            run('cmake-elf-symbols', ['nm', '--defined-only', elf])
     else:
         runner = source / 'tests/gc_unit/run_standalone.sh'
         original = runner.read_text()

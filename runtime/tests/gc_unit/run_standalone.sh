@@ -18,8 +18,8 @@ if [[ -z "$RUNTIME_LIB_DIR" || ! -f "$RUNTIME_LIB_DIR/libcangjie-runtime.so" ]];
 fi
 
 if [[ -z "${GCV2_RUNTIME_OUTPUT_ROOT:-}" ]]; then
-  GCV2_RUNTIME_OUTPUT_ROOT=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" \
-    "$ROOT/runtime" "$RUNTIME_LIB_DIR")
+  GCV2_RUNTIME_OUTPUT_ROOT=$(python3 "$SRC/product_test_configuration.py" \
+    "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$RUNTIME_LIB_DIR/../.." --resolve-root)
 fi
 
 run_ohos_host_arm() {

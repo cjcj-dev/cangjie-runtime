@@ -70,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install native build tools
-        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build ccache libssl-dev libffi-dev
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build ccache gdb libssl-dev libffi-dev
       - name: Exercise product Copy publication and real unit link
         run: |
           ulimit -c 0
@@ -84,6 +84,6 @@ jobs:
             evidence/*.json
             evidence/*.sha256
             evidence/*.diff
-            evidence/standalone/*.log
-            evidence/standalone/*.sha256
+            evidence/standalone/**/*.log
+            evidence/standalone/**/*.sha256
           retention-days: 7
