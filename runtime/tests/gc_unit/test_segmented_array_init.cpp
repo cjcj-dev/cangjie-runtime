@@ -4,6 +4,8 @@
 
 
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -32,7 +34,7 @@ extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void*
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
-#include "Heap/z/zIterator.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/Allocator/RegionSpace.h"
@@ -50,6 +52,7 @@ extern "C" void CJ_ScheduleAllCJThreadVisit(void (*visitor)(void*, void*), void*
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);
 extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems);
+extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems);
 }
 
 #include "Heap/z/zAccess.hpp"
@@ -117,34 +120,109 @@ ByteArrayTypeInfos& GetByteArrayTypeInfos()
 }
 
 
+struct PlainStructArrayTypeInfos : ByteArrayTypeInfos {
+    PlainStructArrayTypeInfos()
+    {
+        component->SetType(TypeKind::TYPE_KIND_STRUCT);
+        component->SetInstanceSize(sizeof(uint64_t));
+    }
+};
+PlainStructArrayTypeInfos& GetPlainStructArrayTypeInfos()
+{
+    static PlainStructArrayTypeInfos infos;
+    return infos;
+}
+
+// External controller: a real collection is already waiting for the mutator
+// when allocation starts. The first product yield lets mark-start proceed.
+// Neither initialization nor a synthetic payload is compiled into this test.
+class ArrayGCWindow {
+public:
+    ArrayGCWindow(Mutator* target, bool enabled, bool young, size_t requests)
+        : target(target), enabled(enabled), young(young), requests(requests) {}
+    void start()
+    {
+        if (!enabled) { return; }
+        // Existing root-observer ownership keeps HandleSuspensionRequest from
+        // returning while the external thread reads the initialization window.
+        // No product callback or allocation wrapper is installed.
+        target->IncObserver();
+        requester = std::thread([&] {
+            for (size_t i = 0; i < requests; ++i) {
+                Heap::GetHeap().RequestGC(young ? GC_REASON_YOUNG : GC_REASON_FORCE);
+                target->MutatorLock();
+                MArray* array = static_cast<MArray*>(target->LoadInvisibleRoot());
+                if (array != nullptr) {
+                    const uint64_t sequence = Heap::GetHeap().GetZGeneration(
+                        young ? ZGenerationId::young : ZGenerationId::old).seqnum();
+                    windowSequence.store(sequence, std::memory_order_release);
+                    size_t fields = 0;
+                    auto visit = [&](RefField<>&) { ++fields; };
+                    ZBasicOopIterateClosure<decltype(visit)> closure(visit);
+                    ZIterator::oop_iterate_safe(array, &closure);
+                    if (!array->IsInvisibleObject() || fields != 0) {
+                        headerInvalid.store(true, std::memory_order_release);
+                    }
+                }
+                target->MutatorUnlock();
+            }
+            target->DecObserver();
+        });
+        const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (!MutatorManager::Instance().SyncTriggered() && std::chrono::steady_clock::now() < limit) {
+            std::this_thread::yield();
+        }
+        armed = MutatorManager::Instance().SyncTriggered();
+    }
+    void finish()
+    {
+        if (!enabled) { return; }
+        // The returned array is checked before entering a saferegion. Do not
+        // keep a native unregistered array pointer across the remaining GC.
+        ScopedEnterSaferegion saferegion(true);
+        requester.join();
+    }
+    Mutator* target;
+    bool enabled;
+    bool young;
+    size_t requests;
+    uint64_t before = 0;
+    bool armed = false;
+    std::atomic<uint64_t> windowSequence{0};
+    std::atomic<bool> headerInvalid{false};
+    std::thread requester;
+};
+
 constexpr MIndex kLargeRefLength = 1024 * 1024;
 
 void* RunArrayCase(void* argument)
 {
     const uintptr_t mode = reinterpret_cast<uintptr_t>(argument);
-    const bool primitive = (mode & 1) != 0;
+    const bool plainStruct = (mode & 64) != 0;
+    const bool primitive = (mode & 1) != 0 || plainStruct;
     const bool small = (mode & 2) != 0;
     const bool young = (mode & 4) != 0;
     const bool full = (mode & 8) != 0;
     const bool twice = (mode & 16) != 0;
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    if (young || full) {
-        setenv("MRT_GC_UNIT_MANAGED_SEGMENTED", young ? "young" : twice ? "full2" : "full", 1);
-    } else {
-        unsetenv("MRT_GC_UNIT_MANAGED_SEGMENTED");
-    }
-    const MIndex length = small ? 16 : kLargeRefLength + ((mode & 32) != 0 ? 1 : 0);
+    const MIndex length = plainStruct ? (1024 * 1024 / sizeof(uint64_t)) :
+        small ? 16 : kLargeRefLength + ((mode & 32) != 0 ? 1 : 0);
     auto& heap = Heap::GetHeap();
     const ZGenerationId generation = young ? ZGenerationId::young : ZGenerationId::old;
     const uint64_t before = heap.GetZGeneration(generation).seqnum();
     const uint64_t youngBefore = heap.GetZGeneration(ZGenerationId::young).seqnum();
     const uint64_t oldBefore = heap.GetZGeneration(ZGenerationId::old).seqnum();
     const uintptr_t colorBefore = ::g_cjStoreGoodMask;
-    MArray* array = primitive ? MCC_NewArray8(GetByteArrayTypeInfos().array, length) :
-                               MCC_NewObjArray(GetReferenceArrayTypeInfos().array, length);
-    unsetenv("MRT_GC_UNIT_MANAGED_SEGMENTED");
-    if (array == nullptr) { return reinterpret_cast<void*>(1); }
+    // Initialize fixture metadata before a GC is queued.
+    TypeInfo* arrayType = plainStruct ? GetPlainStructArrayTypeInfos().array :
+        primitive ? GetByteArrayTypeInfos().array : GetReferenceArrayTypeInfos().array;
+    ArrayGCWindow window(mutator, young || full, young, twice ? 2 : 1);
+    window.before = before;
+    window.start();
+    MArray* array = plainStruct ? MCC_NewArray64(arrayType, length) :
+        primitive ? MCC_NewArray8(arrayType, length) : MCC_NewObjArray(arrayType, length);
+    if (array == nullptr) { window.finish(); return reinterpret_cast<void*>(1); }
     size_t mismatches = 0;
     const uintptr_t expected = primitive || small ? 0 :
         (::g_cjStoreGoodMask | ((young || full) ? ZPointerRememberedMask : 0));
@@ -170,13 +248,22 @@ void* RunArrayCase(void* argument)
          oldBefore == heap.GetZGeneration(ZGenerationId::old).seqnum() && colorBefore == ::g_cjStoreGoodMask);
     const bool published = !array->IsInvisibleObject() && mutator->LoadInvisibleRoot() == nullptr;
     const uint64_t after = heap.GetZGeneration(generation).seqnum();
-    const bool gc = !(young || full) || after > before;
+    const uint64_t inWindow = window.windowSequence.load(std::memory_order_acquire);
+    const bool gc = !(young || full) || (window.armed && inWindow >= before + (twice ? 2 : 1));
+    const bool header = !window.headerInvalid.load(std::memory_order_acquire);
     const bool lengthValid = array->GetLength() == length;
-    std::fprintf(stderr, "SEGMENTED_RESULT_TARGET mode=%zu size=%zu length=%d published=%d mismatches=%zu before=%llu after=%llu gc=%d expected=0x%zx uninterrupted=%d\n",
+    std::fprintf(stderr, "SEGMENTED_RESULT_TARGET mode=%zu size=%zu length=%d published=%d mismatches=%zu before=%llu after=%llu window=%llu gc=%d header=%d expected=0x%zx uninterrupted=%d\n",
                  mode, array->GetContentSize(), lengthValid, published, mismatches,
-                 (unsigned long long)before, (unsigned long long)after, gc, expected, uninterrupted);
+                 (unsigned long long)before, (unsigned long long)after, (unsigned long long)inWindow,
+                 gc, header, expected, uninterrupted);
+    if (!primitive && (young || full) && gc && mismatches == 0) {
+        // All slots have 11 after the observed GC; the first-pass prefix was
+        // therefore rewritten by the product's second pass.
+        std::fprintf(stderr, "SEGMENTED_PASSES=2\n");
+    }
+    window.finish();
     mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>((mismatches == 0 && published && lengthValid && gc && uninterrupted) ? 0 : 2);
+    return reinterpret_cast<void*>((mismatches == 0 && published && lengthValid && gc && header && uninterrupted) ? 0 : 2);
 }
 
 void* RunLargePageIdentityCase(void*)
@@ -713,6 +800,10 @@ GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, OddPrimitiveTailUsesSegmentedCleari
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 33), 0);
 }
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, PlainStructArrayYieldsToYoungGc)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 64 | 4), 0);
+}
 GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 8), 0);
