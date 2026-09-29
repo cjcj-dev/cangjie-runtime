@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the real metadata executable; record every target assertion, fail closed."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -59,8 +60,10 @@ def run(exe, destination):
     valid_control = (not control.get("launch_error") and "ABORT_CONTROL" in control["output"] and
                      control["rc"] in ((3, -1073740791, 1073740791, 3221226505) if windows else (-6,)))
     results = {}
-    for case in cases(windows):
-        result = invoke(exe, case)
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+        pending = {case: pool.submit(invoke, exe, case) for case in cases(windows)}
+    for case, future in pending.items():
+        result = future.result()
         loaded = re.search(r"^RUNTIME_MODULE (.+)$", result["output"], re.MULTILINE)
         expected_module = exe.parent / ("libcangjie-runtime.dll" if windows else "libcangjie-runtime.so")
         result["module_matches"] = bool(loaded and Path(loaded[1].strip()).resolve() == expected_module.resolve())
