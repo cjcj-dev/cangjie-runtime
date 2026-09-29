@@ -974,18 +974,22 @@ GC_OTHER_VM_TEST(P82HeapIterator, OverflowRoots)
     WeakClosureTestRuntime runtime(manager);
     GcHeapFixture fx;
     RelocationReceiptTest::BindCollector(&Heap::GetHeap());
-    constexpr size_t count = 17000;
+    // HotSpot globalDefinitions.hpp:1069: LP64 queue has 2^17 slots.
+    constexpr size_t count = 132000;
     std::vector<NativeSlot> slots(count);
     std::vector<NativeSlot*> roots;
     std::unordered_set<BaseObject*> expected;
     for (size_t i = 0; i < count; ++i) {
-        auto* object = fx.PlaceObject(fx.region0()->GetRegionStart() + 4096 + i * 64);
+        auto* region = i < count / 2 ? fx.region0() : fx.region1();
+        auto* object = fx.PlaceObject(region->GetRegionStart() + 4096 + (i % (count / 2)) * 16);
         WeakGraph::Field(object).StoreColoured(zpointer::null);
         expected.insert(object);
         slots[i].StoreColoured(StoreGoodPointer(object));
         roots.push_back(&slots[i]);
     }
-    fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + 4096 + count * 64);
+    for (auto* region : {fx.region0(), fx.region1()}) {
+        region->SetRegionAllocPtr(region->GetRegionStart() + 4096 + count / 2 * 16);
+    }
     Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), roots.size());
     std::unordered_set<BaseObject*> seen;
     auto visitor = [&](BaseObject* object) { seen.insert(object); };

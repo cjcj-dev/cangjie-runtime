@@ -28,7 +28,7 @@ bool HeapIteratorBitMap::try_set_bit(size_t index)
 }
 
 HeapIterator::HeapIterator(bool visitWeaks, bool forVerify, unsigned nworkers)
-    : workerQueues(nworkers == 0 ? 1 : nworkers), workerArrayQueues(nworkers == 0 ? 1 : nworkers),
+    : workerQueues(nworkers), workerArrayQueues(nworkers),
       visitWeaks(visitWeaks), forVerify(forVerify), rootsColored(workerQueues.size()),
       rootsUncolored(), rootsWeakColored(workerQueues.size()), terminator(workerQueues.size(), &workerQueues),
       objectBitmaps(ZAddressOffsetMax)
@@ -51,16 +51,27 @@ HeapIterator::~HeapIterator()
     }
 }
 
+static size_t object_index_max()
+{
+    return ZGranuleSize / 8;
+}
+
+static size_t object_index(BaseObject* object)
+{
+    const zoffset offset = ZAddress::offset(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(object)));
+    return (untype(offset) & (ZGranuleSize - 1)) / 8;
+}
+
 // ZGC zHeapIterator.cpp:312-327: acquire lookup, locked recheck, release install.
 HeapIteratorBitMap* HeapIterator::object_bitmap(BaseObject* object)
 {
     const zoffset offset = ZAddress::offset(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(object)));
     HeapIteratorBitMap* bitmap = objectBitmaps.get_acquire(offset);
     if (bitmap == nullptr) {
-        std::lock_guard<std::mutex> lock(bitmapLock);
+        ZLocker<ZLock> lock(&bitmapLock);
         bitmap = objectBitmaps.get(offset);
         if (bitmap == nullptr) {
-            bitmap = new HeapIteratorBitMap(ZGranuleSize / 8);
+            bitmap = new HeapIteratorBitMap(object_index_max());
             objectBitmaps.release_put(offset, bitmap);
         }
     }
@@ -70,8 +81,7 @@ HeapIteratorBitMap* HeapIterator::object_bitmap(BaseObject* object)
 bool HeapIterator::mark_object(BaseObject* object)
 {
     if (object == nullptr) return false;
-    const zoffset offset = ZAddress::offset(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(object)));
-    return object_bitmap(object)->try_set_bit((untype(offset) & (ZGranuleSize - 1)) / 8);
+    return object_bitmap(object)->try_set_bit(object_index(object));
 }
 
 void HeapIteratorContext::visit_object(BaseObject* object) const

@@ -120,7 +120,7 @@ private:
     RootsIteratorStrongUncolored rootsUncolored;
     RootsIteratorWeakColored rootsWeakColored;
     TaskTerminator terminator;
-    std::mutex bitmapLock;
+    ZLock bitmapLock;
     HeapIteratorBitMap* object_bitmap(BaseObject* object);
     ZGranuleMap<HeapIteratorBitMap*> objectBitmaps;
 };

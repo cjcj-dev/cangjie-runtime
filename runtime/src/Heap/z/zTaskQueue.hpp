@@ -11,8 +11,9 @@
 namespace MapleRuntime {
 // HotSpot gc/shared/taskqueue.hpp:333-429 and taskqueue.inline.hpp:110-287.
 // One owner pushes/pops the bottom; thieves claim the top with a tagged CAS.
-template<class E, unsigned N = 1 << 14>
-class GenericTaskQueue {
+template<unsigned N>
+class TaskQueueSuper {
+protected:
     static_assert((N & (N - 1)) == 0, "power of two queue");
     static constexpr uint32_t MASK = N - 1;
     struct Age {
@@ -28,6 +29,25 @@ class GenericTaskQueue {
     }
     alignas(64) std::atomic<uint32_t> bottom { 0 };
     alignas(64) std::atomic<uint64_t> age { 0 };
+public:
+    enum class PopResult { Empty, Contended, Success };
+    unsigned size() const
+    {
+        return clean_size(bottom.load(std::memory_order_relaxed), unpack(age.load(std::memory_order_relaxed)).top);
+    }
+    bool is_empty() const { return size() == 0; }
+};
+
+template<class E, unsigned N = (sizeof(void*) == 8 ? 1 << 17 : 1 << 14)>
+class GenericTaskQueue : public TaskQueueSuper<N> {
+    using Super = TaskQueueSuper<N>;
+    using Age = typename Super::Age;
+    using Super::MASK;
+    using Super::pack;
+    using Super::unpack;
+    using Super::clean_size;
+    using Super::bottom;
+    using Super::age;
     std::unique_ptr<E[]> elems { new E[N] };
     unsigned lastStolen = unsigned(-1);
     int seed = 17;
@@ -44,12 +64,7 @@ class GenericTaskQueue {
     }
 public:
     using element_type = E;
-    enum class PopResult { Empty, Contended, Success };
-    unsigned size() const
-    {
-        return clean_size(bottom.load(std::memory_order_relaxed), unpack(age.load(std::memory_order_relaxed)).top);
-    }
-    bool is_empty() const { return size() == 0; }
+    using PopResult = typename Super::PopResult;
     bool push(E task)
     {
         const uint32_t b = bottom.load(std::memory_order_relaxed);
