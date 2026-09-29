@@ -4,7 +4,7 @@
 set -u
 ulimit -c 0
 r=/root/sym_cangjie_runtime_1305_implement_r5892797534
-head=a1543759f5df04db74f441fefb47cf0e8bfef49a
+head=ffe0aba27261a647a57fcfce38f5bcab95b20853
 export CCACHE_DIR=/root/.ccache CCACHE_NOHASHDIR=1 GC_UNIT_GATE_SKIP=1
 export PATH=/usr/lib/ccache:$PATH
 ccache -M 50G >/dev/null

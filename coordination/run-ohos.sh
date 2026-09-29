@@ -16,7 +16,7 @@ maps="-ffile-prefix-map=$root=/usr/src/cangjie-runtime -fdebug-prefix-map=$root=
 export CFLAGS="$maps" CXXFLAGS="$maps" ASMFLAGS="$maps"
 uptime > "$root/uptime-before.txt"
 start=$SECONDS
-cmake -S "$root/runtime" -B "$root/build" -DCJ_RUNTIME_COMMIT=a1543759f5df04db74f441fefb47cf0e8bfef49a -DCMAKE_BUILD_TYPE=Release -DCOPYGC_FLAG=1 -DDOPRA_FLAG=1 -DRUNTIME_TRACE_FLAG=1 -DCJ_SDK_VERSION=0.0.1 -DDISABLE_VERSION_CHECK=1 -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_AR_PATH=ar -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_ASM_COMPILER_LAUNCHER=ccache -DMRT_TESTABLE_INTERNALS=ON -DMRT_GC_UNIT_OHOS_HOST=ON -DCMAKE_INSTALL_PREFIX="$root/install" > "$root/configure.log" 2>&1
+cmake -S "$root/runtime" -B "$root/build" -DCJ_RUNTIME_COMMIT=ffe0aba27261a647a57fcfce38f5bcab95b20853 -DCMAKE_BUILD_TYPE=Release -DCOPYGC_FLAG=1 -DDOPRA_FLAG=1 -DRUNTIME_TRACE_FLAG=1 -DCJ_SDK_VERSION=0.0.1 -DDISABLE_VERSION_CHECK=1 -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_AR_PATH=ar -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_ASM_COMPILER_LAUNCHER=ccache -DMRT_TESTABLE_INTERNALS=ON -DMRT_GC_UNIT_OHOS_HOST=ON -DCMAKE_INSTALL_PREFIX="$root/install" > "$root/configure.log" 2>&1
 rc=$?; echo "$rc" > "$root/configure.rc"
 if [[ $rc == 0 ]]; then cmake --build "$root/build" -j"$(nproc)" > "$root/build.log" 2>&1; rc=$?; fi
 echo "$rc" > "$root/build.rc"
