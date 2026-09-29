@@ -764,3 +764,44 @@ GC_OTHER_VM_TEST(Lifecycle1310, AbortLeavesLateRootUnmarked)
 {
     CheckLateNativeRoot(true);
 }
+
+namespace {
+void CheckRememberedCallerWork(bool abort)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& young = Heap::GetHeap().young();
+    fixture.region0()->reset(PageAge::eden);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    young.InitializeWorkers(2);
+    young.Workers()->set_active();
+    young.Workers()->set_active_workers(1);
+    young.Mark().Start();
+    young.set_phase(ZGenerationPhase::Mark);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE)
+        .StoreColoured(zpointer::null);
+    const auto before = fixture.region0()->live_bytes();
+    // This product producer leaves the native caller's work private until
+    // scan_and_follow's termination flush. The worker scan cannot consume it.
+    Heap::GetHeap().MarkYoungObjectIfActive(fixture.obj0);
+    if (abort) { ZAbort::abort(); }
+    young.mark_follow();
+    const auto after = fixture.region0()->live_bytes();
+    const bool marked = fixture.region0()->is_object_strongly_live(from_object(fixture.obj0));
+    const auto expected = abort ? 0 : fixture.obj0->GetSize();
+    std::fprintf(stderr, "REMSET1310_TARGET abort=%d marked=%d bytes=%llu expected=%zu\n",
+                 abort, marked, static_cast<unsigned long long>(after - before), expected);
+    GC_EXPECT_TRUE(marked == !abort && after - before == expected);
+    young.StopWorkers();
+}
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, RememberedFollowsCallerWork)
+{
+    CheckRememberedCallerWork(false);
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, RememberedAbortLeavesCallerWork)
+{
+    CheckRememberedCallerWork(true);
+}
