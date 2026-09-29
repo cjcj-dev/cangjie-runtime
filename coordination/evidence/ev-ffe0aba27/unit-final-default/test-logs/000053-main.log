@@ -1,0 +1,3 @@
+[  RUN   ] ZValue.per_worker_slot_count_follows_conc_gc_threads
+[  PASS  ] ZValue.per_worker_slot_count_follows_conc_gc_threads
+[========] 1 tests: 1 passed, 0 failed

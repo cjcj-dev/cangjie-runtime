@@ -1,0 +1,7 @@
+[  RUN   ] MarkPort203Entries.StripedInvisibleRootIsLiveWithoutFollowingFields
+[  RUN   ] MarkPort203Entries.StripedInvisibleRootIsLiveWithoutFollowingFields
+M2_ARRAY_RESULT variant=striped array=1 children=0 objects=1 bytes=12440 expected_bytes=12440
+M2_LIVE_ASSERT objects_ok=1 bytes_ok=1 root_order=0
+GC_UNIT_OTHER_VM_OKIDOKI MarkPort203Entries.StripedInvisibleRootIsLiveWithoutFollowingFields
+[  PASS  ] MarkPort203Entries.StripedInvisibleRootIsLiveWithoutFollowingFields
+[========] 1 tests: 1 passed, 0 failed

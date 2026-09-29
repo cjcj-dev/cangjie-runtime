@@ -1,0 +1,6 @@
+[  RUN   ] AllocationRate855.MutatorPageContributes
+[  RUN   ] AllocationRate855.MutatorPageContributes
+ALLOC_RATE_TARGET initialized=1 relocation=0 bytes=33554432 avg_before=0 avg_after=3.72182e+08 allocation=33554432 sampling_granule=2097152
+GC_UNIT_OTHER_VM_OKIDOKI AllocationRate855.MutatorPageContributes
+[  PASS  ] AllocationRate855.MutatorPageContributes
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,3 @@
+[  RUN   ] DefectRegress.CompilerWriteTaggedGlobalStructUsesRootPath
+[  PASS  ] DefectRegress.CompilerWriteTaggedGlobalStructUsesRootPath
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,7 @@
+[  RUN   ] RawNullInstall.YoungControl
+[  RUN   ] RawNullInstall.YoungControl
+RAW_NULL_INSTALL_TARGET medium=0 promote=0 workers=1 page=0 allows=1 installed=1
+RAW_NULL_INSTALL_TARGET medium=0 promote=0 workers=1 page=1 allows=1 installed=1
+GC_UNIT_OTHER_VM_OKIDOKI RawNullInstall.YoungControl
+[  PASS  ] RawNullInstall.YoungControl
+[========] 1 tests: 1 passed, 0 failed

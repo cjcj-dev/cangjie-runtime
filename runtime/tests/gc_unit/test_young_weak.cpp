@@ -6,6 +6,9 @@
 
 #include "gc_worker_fixture.hpp"
 #include <algorithm>
+#include <future>
+#include <thread>
+#include <map>
 #include <csignal>
 #include <cstdlib>
 #include <sys/wait.h>
@@ -738,6 +741,267 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
+}
+
+// P8-2: use only existing visitor callbacks to hold an in-flight object.
+// The queue, bitmap, follow, and termination results come from the linked SO.
+namespace {
+struct P82Graph {
+    static constexpr unsigned branches = 4;
+    static constexpr unsigned length = 256;
+    std::vector<BaseObject*> objects;
+    std::vector<NativeSlot> roots;
+    std::vector<NativeSlot*> rootSlots;
+    explicit P82Graph(GcHeapFixture& fx, bool duplicateRoots)
+        : roots(branches * (duplicateRoots ? 2 : 1), NativeSlot(zpointer::null))
+    {
+        for (unsigned i = 0; i < branches * length; ++i) {
+            objects.push_back(fx.PlaceObject(fx.region0()->GetRegionStart() + 4096 + i * 64));
+        }
+        fx.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(objects.back()) + 64);
+        auto* shared = fx.PlaceObject(fx.region1()->GetRegionStart() + 4096);
+        fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(shared) + 64);
+        for (unsigned i = 0; i < objects.size(); ++i) {
+            WeakGraph::Field(objects[i]).StoreColoured(StoreGoodPointer(
+                (i + 1) % length == 0 ? shared : objects[i + 1]));
+        }
+        WeakGraph::Field(shared).StoreColoured(zpointer::null);
+        objects.push_back(shared);
+        for (unsigned i = 0; i < roots.size(); ++i) {
+            roots[i].StoreColoured(StoreGoodPointer(objects[(i % branches) * length]));
+            rootSlots.push_back(&roots[i]);
+        }
+        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(rootSlots.data()), rootSlots.size());
+    }
+    ~P82Graph()
+    {
+        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(rootSlots.data()), rootSlots.size());
+    }
+};
+
+struct P82Result {
+    bool exactSet;
+    bool once;
+};
+
+P82Result P82Traverse(P82Graph& graph, unsigned workers, bool weak, bool verify)
+{
+    HeapIterator iter(weak, verify, workers);
+    std::mutex lock;
+    std::map<BaseObject*, unsigned> seen;
+    std::promise<void> ownerAtObject;
+    auto ownerReady = ownerAtObject.get_future();
+    std::promise<void> releaseOwner;
+    auto release = releaseOwner.get_future().share();
+    std::promise<void> thiefAtObject;
+    auto thiefReady = thiefAtObject.get_future();
+    std::atomic<bool> thiefReported { false };
+    bool ownerReported = false;
+    auto visit = [&](BaseObject* object, unsigned id) {
+        {
+            std::lock_guard<std::mutex> guard(lock);
+            ++seen[object];
+        }
+        if (workers > 1 && id == 0 && !ownerReported) {
+            ownerReported = true;
+            ownerAtObject.set_value();
+            release.wait();
+        } else if (id != 0 && !thiefReported.exchange(true)) {
+            thiefAtObject.set_value();
+        }
+    };
+    std::vector<std::thread> threads;
+    threads.emplace_back([&] { iter.object_iterate([&](BaseObject* o) { visit(o, 0); }, 0); });
+    if (workers > 1) {
+        (void)ownerReady.wait_for(std::chrono::milliseconds(250));
+        for (unsigned i = 1; i < workers; ++i) {
+            threads.emplace_back([&, i] { iter.object_iterate([&](BaseObject* o) { visit(o, i); }, i); });
+        }
+        // In verify mode the first visit is before queue publication. In follow
+        // mode the remaining roots are already available to the thieves.
+        const auto state = thiefReady.wait_for(std::chrono::milliseconds(250));
+        std::fprintf(stderr, "P82_STEAL_OBSERVATION workers=%u verify=%d visitor=%d\n",
+                     workers, verify, state == std::future_status::ready);
+        releaseOwner.set_value();
+    }
+    for (auto& thread : threads) thread.join();
+    bool exact = seen.size() == graph.objects.size();
+    bool once = true;
+    for (auto* object : graph.objects) {
+        const auto it = seen.find(object);
+        exact = exact && it != seen.end();
+        if (it != seen.end()) once = once && it->second == 1;
+    }
+    std::fprintf(stderr, "P82_RESULT workers=%u weak=%d verify=%d seen=%zu expected=%zu exact=%d once=%d\n",
+                 workers, weak, verify, seen.size(), graph.objects.size(), exact, once);
+    return {exact, once};
+}
+}
+
+GC_OTHER_VM_TEST(P82HeapIterator, TerminationAgreement)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager manager;
+    WeakClosureTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    RelocationReceiptTest::BindCollector(&Heap::GetHeap());
+    P82Graph graph(fx, false);
+    HeapIterator iter(false, false, 2);
+    std::promise<void> held;
+    auto heldReady = held.get_future();
+    std::promise<void> release;
+    auto releaseReady = release.get_future().share();
+    bool first = true;
+    std::atomic<unsigned> visits { 0 };
+    std::thread owner([&] {
+        iter.object_iterate([&](BaseObject*) {
+            ++visits;
+            if (first) { first = false; held.set_value(); releaseReady.wait(); }
+        }, 0);
+    });
+    heldReady.wait();
+    auto thief = std::async(std::launch::async, [&] {
+        iter.object_iterate([&](BaseObject*) { ++visits; }, 1);
+    });
+    const bool returnedWhileOwnerHeld = thief.wait_for(std::chrono::milliseconds(250)) == std::future_status::ready;
+    release.set_value();
+    owner.join();
+    thief.get();
+    std::fprintf(stderr, "P82_TERMINATION_ASSERT early_return=%d visits=%u\n",
+                 returnedWhileOwnerHeld, visits.load());
+    GC_EXPECT_TRUE(!returnedWhileOwnerHeld);
+}
+
+GC_OTHER_VM_TEST(P82HeapIterator, ReachableSet)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager manager;
+    WeakClosureTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    RelocationReceiptTest::BindCollector(&Heap::GetHeap());
+    P82Graph graph(fx, true);
+    bool exact = true;
+    for (unsigned workers : {1U, 2U, 4U}) {
+        for (bool weak : {false, true}) {
+            for (bool verify : {false, true}) exact &= P82Traverse(graph, workers, weak, verify).exactSet;
+        }
+    }
+    std::fprintf(stderr, "P82_REACHABLE_SET_ASSERT exact=%d\n", exact);
+    GC_EXPECT_TRUE(exact);
+}
+
+GC_OTHER_VM_TEST(P82HeapIterator, VisitsOnce)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager manager;
+    WeakClosureTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    RelocationReceiptTest::BindCollector(&Heap::GetHeap());
+    P82Graph graph(fx, true);
+    bool once = true;
+    for (unsigned workers : {1U, 2U, 4U}) {
+        for (bool weak : {false, true}) {
+            for (bool verify : {false, true}) once &= P82Traverse(graph, workers, weak, verify).once;
+        }
+    }
+    std::fprintf(stderr, "P82_VISITS_ONCE_ASSERT once=%d\n", once);
+    GC_EXPECT_TRUE(once);
+}
+
+GC_OTHER_VM_TEST(P82HeapIterator, ArrayChunks)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager manager;
+    WeakClosureTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    RelocationReceiptTest::BindCollector(&Heap::GetHeap());
+    alignas(TypeInfo) unsigned char arrayTypeStorage[sizeof(TypeInfo)]{};
+    auto* arrayType = reinterpret_cast<TypeInfo*>(arrayTypeStorage);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetFlagHasRefField();
+    arrayType->SetComponentTypeInfo(fx.typeInfo);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(arrayTypeStorage), sizeof(arrayTypeStorage));
+    auto* array = reinterpret_cast<MArray*>(fx.region1()->GetRegionStart() + 128);
+    array->SetClassInfo(arrayType);
+    constexpr MIndex length = 4097;
+    array->SetLength(length);
+    fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(array) + array->GetSize());
+    auto* slots = reinterpret_cast<HeapSlot<>*>(array->ConvertToCArray());
+    for (MIndex i = 0; i < length; ++i) slots[i].StoreColoured(zpointer::null);
+    NativeSlot root(StoreGoodPointer(array));
+    NativeSlot* roots[] = { &root };
+    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    bool exact = true;
+    for (bool weak : {false, true}) {
+        HeapIterator iter(weak, false, 2);
+        std::vector<unsigned> edges(length, 0);
+        std::mutex lock;
+        std::promise<void> atFirst;
+        auto first = atFirst.get_future();
+        std::promise<void> atContinuation;
+        auto continuation = atContinuation.get_future();
+        std::promise<void> release;
+        auto released = release.get_future().share();
+        auto field = [&](BaseObject* base, const void* slot, uintptr_t) {
+            if (base != array) return;
+            const auto index = static_cast<const HeapSlot<>*>(slot) - slots;
+            {
+                std::lock_guard<std::mutex> guard(lock);
+                if (index >= 0 && index < length) ++edges[index];
+                else exact = false;
+            }
+            if (index == 0) { atFirst.set_value(); released.wait(); }
+            if (index == 2048) atContinuation.set_value();
+        };
+        std::thread owner([&] { iter.object_and_field_iterate([](BaseObject*) {}, field, 0); });
+        (void)first.wait_for(std::chrono::milliseconds(250));
+        std::thread thief([&] { iter.object_and_field_iterate([](BaseObject*) {}, field, 1); });
+        const auto stolen = continuation.wait_for(std::chrono::milliseconds(250));
+        release.set_value();
+        owner.join();
+        thief.join();
+        const auto count = std::count(edges.begin(), edges.end(), 1U);
+        exact &= count == length;
+        std::fprintf(stderr, "P82_ARRAY_RESULT weak=%d stolen_continuation=%d exact_edges=%zu expected=%u\n",
+                     weak, stolen == std::future_status::ready, size_t(count), unsigned(length));
+    }
+    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    std::fprintf(stderr, "P82_ARRAY_ASSERT exact=%d\n", exact);
+    GC_EXPECT_TRUE(exact);
+}
+
+GC_OTHER_VM_TEST(P82HeapIterator, OverflowRoots)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager manager;
+    WeakClosureTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    RelocationReceiptTest::BindCollector(&Heap::GetHeap());
+    // HotSpot globalDefinitions.hpp:1069: LP64 queue has 2^17 slots.
+    constexpr size_t count = 132000;
+    std::vector<NativeSlot> slots(count, NativeSlot(zpointer::null));
+    std::vector<NativeSlot*> roots;
+    std::unordered_set<BaseObject*> expected;
+    for (size_t i = 0; i < count; ++i) {
+        auto* region = i < count / 2 ? fx.region0() : fx.region1();
+        auto* object = fx.PlaceObject(region->GetRegionStart() + 4096 + (i % (count / 2)) * 16);
+        WeakGraph::Field(object).StoreColoured(zpointer::null);
+        expected.insert(object);
+        slots[i].StoreColoured(StoreGoodPointer(object));
+        roots.push_back(&slots[i]);
+    }
+    for (auto* region : {fx.region0(), fx.region1()}) {
+        region->SetRegionAllocPtr(region->GetRegionStart() + 4096 + count / 2 * 16);
+    }
+    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), roots.size());
+    std::unordered_set<BaseObject*> seen;
+    auto visitor = [&](BaseObject* object) { seen.insert(object); };
+    ZObjectClosure<decltype(visitor)> closure(visitor);
+    Heap::GetHeap().object_iterate(&closure, false);
+    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), roots.size());
+    std::fprintf(stderr, "P82_OVERFLOW_ASSERT seen=%zu expected=%zu\n", seen.size(), expected.size());
+    GC_EXPECT_TRUE(seen == expected);
 }
 
 // ZGC zHeapIterator.cpp:430-459: objects carry VisitReferents, array chunks

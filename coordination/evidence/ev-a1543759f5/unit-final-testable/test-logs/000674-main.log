@@ -1,0 +1,9 @@
+[  RUN   ] SoftMaxConstraint.ManagedAboveMaximum
+[  RUN   ] SoftMaxConstraint.ManagedAboveMaximum
+2026-09-29 23:56:10.385180 3130307 E SoftMaxHeapSize must be less than or equal to the maximum heap size
+2026-09-29 23:56:10.385400 3130307 F Check failed: GCArguments::initialize_heap_flags_and_sizes(param.heapParam)
+2026-09-29 23:56:10.385462 3130307 F Invalid heap size flags
+SOFT_MANAGED_CONSTRAINT_ASSERT soft=128MB status=134 rejected=1
+GC_UNIT_OTHER_VM_OKIDOKI SoftMaxConstraint.ManagedAboveMaximum
+[  PASS  ] SoftMaxConstraint.ManagedAboveMaximum
+[========] 1 tests: 1 passed, 0 failed

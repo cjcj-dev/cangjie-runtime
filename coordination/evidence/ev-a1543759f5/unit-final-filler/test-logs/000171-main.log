@@ -1,0 +1,5 @@
+[  RUN   ] FieldIterator.ReferenceArrayFullAndRange
+FIELD_ITERATOR_RESULT path=reference-array-full actual=3 expected=3 exact=1
+FIELD_ITERATOR_RESULT path=reference-array-range actual=2 expected=2 exact=1
+[  PASS  ] FieldIterator.ReferenceArrayFullAndRange
+[========] 1 tests: 1 passed, 0 failed

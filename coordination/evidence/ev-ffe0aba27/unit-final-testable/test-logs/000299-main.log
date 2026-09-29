@@ -1,0 +1,5 @@
+[  RUN   ] AllocBufferHandoff.StackRootPublishDuringRetireKeepsHeapIntact
+[  RUN   ] AllocBufferHandoff.StackRootPublishDuringRetireKeepsHeapIntact
+GC_UNIT_OTHER_VM_OKIDOKI AllocBufferHandoff.StackRootPublishDuringRetireKeepsHeapIntact
+[  PASS  ] AllocBufferHandoff.StackRootPublishDuringRetireKeepsHeapIntact
+[========] 1 tests: 1 passed, 0 failed

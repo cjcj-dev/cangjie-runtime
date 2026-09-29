@@ -1,0 +1,71 @@
+[  RUN   ] ZVerify.RuntimeRejectsUnallocatedRootBeforeMark
+[  RUN   ] ZVerify.RuntimeRejectsUnallocatedRootBeforeMark
+[  RUN   ] ZVerify.RuntimeRejectsUnallocatedRootBeforeMark
+[  RUN   ] ZVerify.RuntimeRejectsUnallocatedRootBeforeMark
+VERIFY_PRODUCT_MAPS_BEGIN
+5c1f00033000-5c1f00055000 r--p 00000000 103:05 9437801                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+5c1f00055000-5c1f002b8000 r-xp 00022000 103:05 9437801                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+5c1f002b8000-5c1f003a2000 r--p 00285000 103:05 9437801                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+5c1f003a2000-5c1f003a6000 r--p 0036e000 103:05 9437801                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+5c1f003a6000-5c1f003a8000 rw-p 00372000 103:05 9437801                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+5c1f003a8000-5c1f003b1000 rw-p 00000000 00:00 0 
+5c1f1f116000-5c1f1f179000 rw-p 00000000 00:00 0                          [heap]
+761d2f400000-761d2f428000 r--p 00000000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+761d2f428000-761d2f5bd000 r-xp 00028000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+761d2f5bd000-761d2f615000 r--p 001bd000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+761d2f615000-761d2f616000 ---p 00215000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+761d2f616000-761d2f61a000 r--p 00215000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+761d2f61a000-761d2f61c000 rw-p 00219000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+761d2f61c000-761d2f629000 rw-p 00000000 00:00 0 
+761d2f800000-761d2f89a000 r--p 00000000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+761d2f89a000-761d2f9ab000 r-xp 0009a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+761d2f9ab000-761d2fa1a000 r--p 001ab000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+761d2fa1a000-761d2fa1b000 ---p 0021a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+761d2fa1b000-761d2fa26000 r--p 0021a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+761d2fa26000-761d2fa29000 rw-p 00225000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+761d2fa29000-761d2fa2c000 rw-p 00000000 00:00 0 
+761d2fada000-761d2fae0000 rw-p 00000000 00:00 0 
+761d2fae0000-761d2fae3000 r--p 00000000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+761d2fae3000-761d2fafa000 r-xp 00003000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+761d2fafa000-761d2fafe000 r--p 0001a000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+761d2fafe000-761d2faff000 r--p 0001d000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+761d2faff000-761d2fb00000 rw-p 0001e000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+761d2fb00000-761d2fb0e000 r--p 00000000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+761d2fb0e000-761d2fb8a000 r-xp 0000e000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+761d2fb8a000-761d2fbe5000 r--p 0008a000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+761d2fbe5000-761d2fbe6000 r--p 000e4000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+761d2fbe6000-761d2fbe7000 rw-p 000e5000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+761d2fbf7000-761d2fbf9000 r--p 00000000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+761d2fbf9000-761d2fc05000 r-xp 00002000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+761d2fc05000-761d2fc08000 r--p 0000e000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+761d2fc08000-761d2fc09000 r--p 00010000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+761d2fc09000-761d2fc0a000 rw-p 00011000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+761d2fc0a000-761d2fc7f000 r--p 00000000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+761d2fc7f000-761d2fd77000 r-xp 00075000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+761d2fd77000-761d2fdc3000 r--p 0016d000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+761d2fdc3000-761d2fdc4000 ---p 001b9000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+761d2fdc4000-761d2fdc7000 r--p 001b9000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+761d2fdc7000-761d2fdc9000 rw-p 001bc000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+761d2fdc9000-761d2fde1000 rw-p 00000000 00:00 0 
+761d2fde1000-761d2fde3000 r--p 00000000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+761d2fde3000-761d2fe0d000 r-xp 00002000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+761d2fe0d000-761d2fe18000 r--p 0002c000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+761d2fe19000-761d2fe1b000 r--p 00037000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+761d2fe1b000-761d2fe1d000 rw-p 00039000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7fffceef5000-7fffcef17000 rw-p 00000000 00:00 0                          [stack]
+7fffcefc1000-7fffcefc5000 r--p 00000000 00:00 0                          [vvar]
+7fffcefc5000-7fffcefc7000 r-xp 00000000 00:00 0                          [vdso]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
+VERIFY_PRODUCT_MAPS_END
+VERIFY_RUNTIME_REQUEST root=0x5c1f1f14d8c0 address=0x4001ffffff8
+2026-09-30 00:27:59.304935 3684909 F Check failed: IsOop(address)
+2026-09-30 00:27:59.305062 3684909 F Bad object 0x8003ffffff1510 found at 0x5c1f1f14d8c0
+3684909 E signal SIGABRT (6) pc=0x761d2f4969bc fa=0x383a2d si_addr=0x3835ba
+[GCLOG] v=3 rec=crash seq=1 signo=6 signame=SIGABRT si_code=-6 si_codename=SI_TKILL si_addr=0x3835ba pc=0x761d2f4969bc pc_mod=libc.so.6 pc_off=0x969bc sym=pthread_kill rbp=0x383a2d gc_phase=Relocate gc_kind=fix in_par_fix=1 regs=rax=0x0,rbx=0x761d2c93c640,rcx=0x761d2f4969bc,rdx=0x6,rsi=0x383a2d,rdi=0x3835ba,rbp=0x383a2d,rsp=0x761d2c9394f0,r8=0x761d2c9395c0,r9=0x761d2c9396c0,r10=0x8,r11=0x246,r12=0x6,r13=0x16,r14=0x761d2fdc88e0,r15=0x761d2fdc88f8,rip=0x761d2f4969bc insn=4189c541f7dd3d00f0ffffb800000000 assert=Bad_object_0x8003ffffff1510_found_at_0x5c1f1f14d8c0
+3684909 E CJNative Handle signal: 6.
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+VERIFY_TARGET_ASSERT_EXECUTED diagnostic=Bad object matched=1
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.RuntimeRejectsUnallocatedRootBeforeMark
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.RuntimeRejectsUnallocatedRootBeforeMark
+[  PASS  ] ZVerify.RuntimeRejectsUnallocatedRootBeforeMark
+[========] 1 tests: 1 passed, 0 failed

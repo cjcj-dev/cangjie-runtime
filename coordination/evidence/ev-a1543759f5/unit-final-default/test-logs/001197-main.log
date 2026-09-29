@@ -1,0 +1,6 @@
+[  RUN   ] MarkStackClear.Empty
+MARK_STACK_CLEAR_ENTER entries=0 buffers=0
+MARK_STACK_CLEAR_RESULT empty=1
+MARK_STACK_CLEAR_STATUS entries=0 status=0
+[  PASS  ] MarkStackClear.Empty
+[========] 1 tests: 1 passed, 0 failed

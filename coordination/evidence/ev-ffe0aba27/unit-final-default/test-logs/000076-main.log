@@ -1,0 +1,4 @@
+[  RUN   ] ZStat.RegistryInitializationWritesConstLinks
+ZSTAT_INIT_TARGET executed=1 status=0 initialized=1
+[  PASS  ] ZStat.RegistryInitializationWritesConstLinks
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,7 @@
+[  RUN   ] SafepointHandshakeOrder.NonZOperationProcessesStackRoots
+[  RUN   ] SafepointHandshakeOrder.NonZOperationProcessesStackRoots
+K3_NON_ZOP_ASSERT old=0x40000000000 observed=0x40000400000 forwarding=0x40000400000
+FRAME_ROOT_REMAP_ASSERT_EXECUTED startIP=0x591927a91a3c before=0x40000000000 after=0x40000400000 relocated=0x40000400000 root=frame-slot
+GC_UNIT_OTHER_VM_OKIDOKI SafepointHandshakeOrder.NonZOperationProcessesStackRoots
+[  PASS  ] SafepointHandshakeOrder.NonZOperationProcessesStackRoots
+[========] 1 tests: 1 passed, 0 failed

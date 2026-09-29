@@ -1,0 +1,6 @@
+[  RUN   ] ConcurrencyRootColor.RemapDuringYoungMarkPublishesFollowWork
+[  RUN   ] ConcurrencyRootColor.RemapDuringYoungMarkPublishesFollowWork
+CONCURRENCY_REMAP_MARK young=1 found=1 object=0x40000800040
+GC_UNIT_OTHER_VM_OKIDOKI ConcurrencyRootColor.RemapDuringYoungMarkPublishesFollowWork
+[  PASS  ] ConcurrencyRootColor.RemapDuringYoungMarkPublishesFollowWork
+[========] 1 tests: 1 passed, 0 failed

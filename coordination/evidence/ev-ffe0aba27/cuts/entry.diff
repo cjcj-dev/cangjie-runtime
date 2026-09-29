@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRootsIterator.cpp
++++ b/runtime/src/Heap/z/zRootsIterator.cpp
+@@ -138,7 +138,7 @@
+ {
+     NativeSlotVisitor copy = visitor;
+     strong.apply(&copy);
+-    statics.apply(&copy);
++    // Controlled cut: do not publish static roots to the iterator.
+ }
+ 
+ void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)

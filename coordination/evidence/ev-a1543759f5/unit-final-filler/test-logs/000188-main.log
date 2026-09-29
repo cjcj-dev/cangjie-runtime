@@ -1,0 +1,7 @@
+[  RUN   ] SafepointHandshakeOrder.TargetClosureReadsHealedRequesterRoot
+[  RUN   ] SafepointHandshakeOrder.TargetClosureReadsHealedRequesterRoot
+K3_CLOSURE_ROOT_ASSERT entry=8 old=0x40000000000 observed=0x40000400000 forwarding=0x40000400000 started=1
+FRAME_ROOT_REMAP_ASSERT_EXECUTED startIP=0x5c6d15df9a3c before=0x40000000000 after=0x40000400000 relocated=0x40000400000 root=frame-slot
+GC_UNIT_OTHER_VM_OKIDOKI SafepointHandshakeOrder.TargetClosureReadsHealedRequesterRoot
+[  PASS  ] SafepointHandshakeOrder.TargetClosureReadsHealedRequesterRoot
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,5 @@
+[  RUN   ] Uncommitter.TestNoUncommitAtCapacityFloor
+[  RUN   ] Uncommitter.TestNoUncommitAtCapacityFloor
+GC_UNIT_OTHER_VM_OKIDOKI Uncommitter.TestNoUncommitAtCapacityFloor
+[  PASS  ] Uncommitter.TestNoUncommitAtCapacityFloor
+[========] 1 tests: 1 passed, 0 failed

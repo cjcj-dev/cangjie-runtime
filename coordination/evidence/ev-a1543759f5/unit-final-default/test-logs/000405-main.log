@@ -1,0 +1,4 @@
+[  RUN   ] AccessBarrier976.AtomicExchangeHealsWithoutBufferingControl
+ACCESS976_XCHG_ASSERT before=0 after=0 result=0x40000800040
+[  PASS  ] AccessBarrier976.AtomicExchangeHealsWithoutBufferingControl
+[========] 1 tests: 1 passed, 0 failed

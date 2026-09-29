@@ -6,6 +6,7 @@
 #define MRT_ALLOCATION_STALL_QUEUE_H
 
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -365,10 +366,7 @@ public:
 
     // Stable cycle history: read under the statistics lock, at a safepoint,
     // or with managed access preventing the next young pause.
-    size_t GetTLABUsed() const { return lastTLABUsed; }
-    size_t GetTLABCapacity() const { return static_cast<size_t>(tlabCapacity); }
     void InitializeTLAB(AllocBuffer& buffer);
-    void ResetTLABUsage();
     void PublishTLABStatistics(const TLABStatistics& statistics);
     void RetireTLAB(AllocBuffer& buffer, TLABStatistics& statistics);
 
@@ -548,9 +546,6 @@ private:
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only
     size_t heapCapacity = 0;
-    std::atomic<size_t> tlabUsed{ 0 };
-    size_t lastTLABUsed = 0;
-    double tlabCapacity = 0;
     TLABAllocationAverage tlabAllocatingThreads;
     TLABAllocationAverage tlabRequestedFraction;
 

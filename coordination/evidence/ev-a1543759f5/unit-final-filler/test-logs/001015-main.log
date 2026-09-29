@@ -1,0 +1,6 @@
+[  RUN   ] RuntimeConfigV1.EnvironmentOverridesEmbeddedHeapDumpPath
+[  RUN   ] RuntimeConfigV1.EnvironmentOverridesEmbeddedHeapDumpPath
+RUNTIME_CONFIG_HEAP_DUMP_PATH actual=/var.3235076 expected=/var.3235076
+GC_UNIT_OTHER_VM_OKIDOKI RuntimeConfigV1.EnvironmentOverridesEmbeddedHeapDumpPath
+[  PASS  ] RuntimeConfigV1.EnvironmentOverridesEmbeddedHeapDumpPath
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,27 @@
+[  RUN   ] P1Mark.AllocatingAndRelocatablePolicyMatrix
+P1_ALLOCATING_ASSERT young=0 gc=0 follow=0 finalizable=0 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=0 gc=0 follow=0 finalizable=0 entries=1
+P1_ALLOCATING_ASSERT young=0 gc=0 follow=0 finalizable=1 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=0 gc=0 follow=0 finalizable=1 entries=1
+P1_ALLOCATING_ASSERT young=0 gc=0 follow=1 finalizable=0 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=0 gc=0 follow=1 finalizable=0 entries=1
+P1_ALLOCATING_ASSERT young=0 gc=0 follow=1 finalizable=1 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=0 gc=0 follow=1 finalizable=1 entries=1
+P1_ALLOCATING_ASSERT young=0 gc=1 follow=0 finalizable=0 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=0 gc=1 follow=0 finalizable=0 entries=1
+P1_ALLOCATING_ASSERT young=0 gc=1 follow=0 finalizable=1 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=0 gc=1 follow=0 finalizable=1 entries=1
+P1_ALLOCATING_ASSERT young=0 gc=1 follow=1 finalizable=0 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=0 gc=1 follow=1 finalizable=0 entries=1
+P1_ALLOCATING_ASSERT young=0 gc=1 follow=1 finalizable=1 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=0 gc=1 follow=1 finalizable=1 entries=1
+P1_ALLOCATING_ASSERT young=1 gc=0 follow=0 finalizable=0 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=1 gc=0 follow=0 finalizable=0 entries=1
+P1_ALLOCATING_ASSERT young=1 gc=0 follow=1 finalizable=0 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=1 gc=0 follow=1 finalizable=0 entries=1
+P1_ALLOCATING_ASSERT young=1 gc=1 follow=0 finalizable=0 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=1 gc=1 follow=0 finalizable=0 entries=1
+P1_ALLOCATING_ASSERT young=1 gc=1 follow=1 finalizable=0 pending=0 live=0
+P1_RELOCATABLE_ASSERT young=1 gc=1 follow=1 finalizable=0 entries=1
+[  PASS  ] P1Mark.AllocatingAndRelocatablePolicyMatrix
+[========] 1 tests: 1 passed, 0 failed

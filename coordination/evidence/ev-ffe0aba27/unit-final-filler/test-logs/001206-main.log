@@ -1,0 +1,4 @@
+[  RUN   ] MarkStripe.ConcurrentGlobalStealIsLiveAndLossless
+MARK_STRIPE_DRAIN remaining=0 invalid=0 steals=29 ready=8
+[  PASS  ] MarkStripe.ConcurrentGlobalStealIsLiveAndLossless
+[========] 1 tests: 1 passed, 0 failed

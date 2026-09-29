@@ -1,0 +1,4 @@
+[  RUN   ] YoungClosure784.MultipleWorkersAccountPublishedRoot
+YOUNG_CLOSURE784_RESULT workers=2 before=0 after=16 expected=16 marked=1
+[  PASS  ] YoungClosure784.MultipleWorkersAccountPublishedRoot
+[========] 1 tests: 1 passed, 0 failed

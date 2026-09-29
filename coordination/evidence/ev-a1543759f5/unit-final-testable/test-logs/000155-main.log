@@ -1,0 +1,6 @@
+[  RUN   ] ManagedMetadata.EhAbsentDescriptor
+2026-09-29 23:56:09.079149 3115282 F Check failed: funcDesc != nullptr
+2026-09-29 23:56:09.079638 3115282 F managed frame missing funcdesc startPC=0x5fb45d8a197c ip=0x5fb45d8a1980
+METADATA_TARGET entry=2 desc=0 map=0 status=134 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.EhAbsentDescriptor
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] UnwindRegress.SignalFramePrintDoesNotAbort
+3112724 E   #0  0x62f5644447a0 in sprintf_s from /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+[  PASS  ] UnwindRegress.SignalFramePrintDoesNotAbort
+[========] 1 tests: 1 passed, 0 failed

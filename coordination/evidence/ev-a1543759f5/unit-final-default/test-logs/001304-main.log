@@ -1,0 +1,4 @@
+[  RUN   ] P10Roots.ParallelApplyCompletesOnce
+P10_PARALLEL_APPLY_ASSERT_EXECUTED visits=1
+[  PASS  ] P10Roots.ParallelApplyCompletesOnce
+[========] 1 tests: 1 passed, 0 failed

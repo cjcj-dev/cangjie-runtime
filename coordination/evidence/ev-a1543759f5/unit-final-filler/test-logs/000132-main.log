@@ -1,0 +1,5 @@
+[  RUN   ] ReturnFrameSlotRoot.ReturnPointMapIsNotVisitedThroughStackBase
+RETURN_SLOT_INJECT map_valid=1 slot_roots=1 reg_roots=1 derived_rows=0
+RETURN_SLOT_TARGET faulted=0 fault_addr=(nil) si_code=0 derived_visits=0 root_visits=0 returned=0x582c54aeb290 expected=0x582c54aeb290
+[  PASS  ] ReturnFrameSlotRoot.ReturnPointMapIsNotVisitedThroughStackBase
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] SyncNativeWait.WeakHandleResolveFollowsRelocatedObject
+SYNC_WEAK_RELOCATE_RESOLVE_ASSERT_EXECUTED
+[  PASS  ] SyncNativeWait.WeakHandleResolveFollowsRelocatedObject
+[========] 1 tests: 1 passed, 0 failed

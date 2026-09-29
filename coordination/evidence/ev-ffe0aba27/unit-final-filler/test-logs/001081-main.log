@@ -1,0 +1,6 @@
+[  RUN   ] RuntimeWorkers.HeapStopJoinsRuntimePool
+[  RUN   ] RuntimeWorkers.HeapStopJoinsRuntimePool
+RUNTIME_WORKERS_STOP_RESULT before_created=20 before_active=20 created=0 active=0
+GC_UNIT_OTHER_VM_OKIDOKI RuntimeWorkers.HeapStopJoinsRuntimePool
+[  PASS  ] RuntimeWorkers.HeapStopJoinsRuntimePool
+[========] 1 tests: 1 passed, 0 failed

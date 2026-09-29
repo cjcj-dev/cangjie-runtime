@@ -1,0 +1,15 @@
+[  RUN   ] MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration
+[  RUN   ] MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration
+[  RUN   ] MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration
+[  RUN   ] MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration
+2026-09-29 23:56:09.927321 3124772 F Check failed: data->markStacks[index].IsEmpty()
+2026-09-29 23:56:09.927525 3124772 F Thread marking stack is not empty: owner=0x711940830cc8 generation=1
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+[  RUN   ] MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration
+2026-09-29 23:56:10.173370 3127394 F Check failed: data->markStacks[index].IsEmpty()
+2026-09-29 23:56:10.173558 3127394 F Thread marking stack is not empty: owner=0x79d5248bdcc8 generation=0
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+GC_UNIT_OTHER_VM_OKIDOKI MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration
+GC_UNIT_OTHER_VM_OKIDOKI MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration
+[  PASS  ] MarkingStacksProduct.MarkEndChecksPrivateStacksByGeneration
+[========] 1 tests: 1 passed, 0 failed

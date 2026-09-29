@@ -1,0 +1,173 @@
+[  RUN   ] ZVerify.BeforeOperationRejectsUnmanagedRoot
+[  RUN   ] ZVerify.BeforeOperationRejectsUnmanagedRoot
+[  RUN   ] ZVerify.BeforeOperationRejectsUnmanagedRoot
+[  RUN   ] ZVerify.BeforeOperationRejectsUnmanagedRoot
+VERIFY_PRODUCT_MAPS_BEGIN
+40000000000-40001400000 rw-s 00000000 00:01 4097934                      /memfd:cangjie_heap (deleted)
+40001400000-40800000000 ---p 00000000 00:00 0 
+64d3cce41000-64d3cce5f000 r--p 00000000 103:05 9437795                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+64d3cce5f000-64d3cd059000 r-xp 0001e000 103:05 9437795                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+64d3cd059000-64d3cd11b000 r--p 00218000 103:05 9437795                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+64d3cd11c000-64d3cd11f000 r--p 002da000 103:05 9437795                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+64d3cd11f000-64d3cd121000 rw-p 002dd000 103:05 9437795                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+64d3cd121000-64d3cd12a000 rw-p 00000000 00:00 0 
+64d40265a000-64d402729000 rw-p 00000000 00:00 0                          [heap]
+726f90000000-726f90021000 rw-p 00000000 00:00 0 
+726f90021000-726f94000000 ---p 00000000 00:00 0 
+726f98000000-726f98021000 rw-p 00000000 00:00 0 
+726f98021000-726f9c000000 ---p 00000000 00:00 0 
+726f9c000000-726f9c021000 rw-p 00000000 00:00 0 
+726f9c021000-726fa0000000 ---p 00000000 00:00 0 
+726fa0000000-726fa0021000 rw-p 00000000 00:00 0 
+726fa0021000-726fa4000000 ---p 00000000 00:00 0 
+726fa4000000-726fa4021000 rw-p 00000000 00:00 0 
+726fa4021000-726fa8000000 ---p 00000000 00:00 0 
+726fa8000000-726fa8021000 rw-p 00000000 00:00 0 
+726fa8021000-726fac000000 ---p 00000000 00:00 0 
+726fac000000-726fac021000 rw-p 00000000 00:00 0 
+726fac021000-726fb0000000 ---p 00000000 00:00 0 
+726fb0000000-726fb0021000 rw-p 00000000 00:00 0 
+726fb0021000-726fb4000000 ---p 00000000 00:00 0 
+726fb4000000-726fb4021000 rw-p 00000000 00:00 0 
+726fb4021000-726fb8000000 ---p 00000000 00:00 0 
+726fb8000000-726fb8021000 rw-p 00000000 00:00 0 
+726fb8021000-726fbc000000 ---p 00000000 00:00 0 
+726fbc000000-726fbc021000 rw-p 00000000 00:00 0 
+726fbc021000-726fc0000000 ---p 00000000 00:00 0 
+726fc0000000-726fc0021000 rw-p 00000000 00:00 0 
+726fc0021000-726fc4000000 ---p 00000000 00:00 0 
+726fc4000000-726fc4021000 rw-p 00000000 00:00 0 
+726fc4021000-726fc8000000 ---p 00000000 00:00 0 
+726fc8000000-726fc8021000 rw-p 00000000 00:00 0 
+726fc8021000-726fcc000000 ---p 00000000 00:00 0 
+726fcc000000-726fcc021000 rw-p 00000000 00:00 0 
+726fcc021000-726fd0000000 ---p 00000000 00:00 0 
+726fd0000000-726fd0021000 rw-p 00000000 00:00 0 
+726fd0021000-726fd4000000 ---p 00000000 00:00 0 
+726fd4000000-726fd4021000 rw-p 00000000 00:00 0 
+726fd4021000-726fd8000000 ---p 00000000 00:00 0 
+726fd8000000-726fd8021000 rw-p 00000000 00:00 0 
+726fd8021000-726fdc000000 ---p 00000000 00:00 0 
+726fdc000000-726fdc021000 rw-p 00000000 00:00 0 
+726fdc021000-726fe0000000 ---p 00000000 00:00 0 
+726fe0000000-726fe0021000 rw-p 00000000 00:00 0 
+726fe0021000-726fe4000000 ---p 00000000 00:00 0 
+726fe4000000-726fe4021000 rw-p 00000000 00:00 0 
+726fe4021000-726fe8000000 ---p 00000000 00:00 0 
+726fe8000000-726fe8021000 rw-p 00000000 00:00 0 
+726fe8021000-726fec000000 ---p 00000000 00:00 0 
+726fec000000-726fec021000 rw-p 00000000 00:00 0 
+726fec021000-726ff0000000 ---p 00000000 00:00 0 
+726ff206f000-726ff20ef000 rw-p 00000000 00:00 0                          [anon:PagePool]
+726ff20ef000-726ff20f0000 ---p 00000000 00:00 0 
+726ff20f0000-726ff21f0000 rw-p 00000000 00:00 0 
+726ff21f0000-726ff21f1000 ---p 00000000 00:00 0 
+726ff21f1000-726ff22f1000 rw-p 00000000 00:00 0 
+726ff22f1000-726ff22f2000 ---p 00000000 00:00 0 
+726ff22f2000-726ff23f2000 rw-p 00000000 00:00 0 
+726ff23f2000-726ff23f3000 ---p 00000000 00:00 0 
+726ff23f3000-726ff24f3000 rw-p 00000000 00:00 0 
+726ff24f3000-726ff24f4000 ---p 00000000 00:00 0 
+726ff24f4000-726ff25f4000 rw-p 00000000 00:00 0 
+726ff25f4000-726ff25f5000 ---p 00000000 00:00 0 
+726ff25f5000-726ff26f5000 rw-p 00000000 00:00 0 
+726ff26f5000-726ff26f6000 ---p 00000000 00:00 0 
+726ff26f6000-726ff27f6000 rw-p 00000000 00:00 0 
+726ff27f6000-726ff27f7000 ---p 00000000 00:00 0 
+726ff27f7000-726ff28f7000 rw-p 00000000 00:00 0 
+726ff28f7000-726ff28f8000 ---p 00000000 00:00 0 
+726ff28f8000-726ff29f8000 rw-p 00000000 00:00 0 
+726ff29f8000-726ff29f9000 ---p 00000000 00:00 0 
+726ff29f9000-726ff2af9000 rw-p 00000000 00:00 0 
+726ff2af9000-726ff2afa000 ---p 00000000 00:00 0 
+726ff2afa000-726ff2bfa000 rw-p 00000000 00:00 0 
+726ff2bfa000-726ff2bfb000 ---p 00000000 00:00 0 
+726ff2bfb000-726ff2cfb000 rw-p 00000000 00:00 0 
+726ff2cfb000-726ff2cfc000 ---p 00000000 00:00 0 
+726ff2cfc000-726ff2dfc000 rw-p 00000000 00:00 0 
+726ff2dfc000-726ff2dfd000 ---p 00000000 00:00 0 
+726ff2dfd000-726ff2efd000 rw-p 00000000 00:00 0 
+726ff2efd000-726ff2efe000 ---p 00000000 00:00 0 
+726ff2efe000-726ff2ffe000 rw-p 00000000 00:00 0 
+726ff2ffe000-726ff2fff000 ---p 00000000 00:00 0 
+726ff2fff000-726ff37ff000 rw-p 00000000 00:00 0 
+726ff37ff000-726ff3800000 ---p 00000000 00:00 0 
+726ff3800000-726ff4000000 rw-p 00000000 00:00 0 
+726ff4000000-726ff4021000 rw-p 00000000 00:00 0 
+726ff4021000-726ff8000000 ---p 00000000 00:00 0 
+726ff8076000-726ff80f9000 rw-p 00000000 00:00 0 
+726ff80f9000-726ff80fa000 ---p 00000000 00:00 0 
+726ff80fa000-726ff81fa000 rw-p 00000000 00:00 0 
+726ff81fa000-726ff81fb000 ---p 00000000 00:00 0 
+726ff81fb000-726ff82fb000 rw-p 00000000 00:00 0 
+726ff82fb000-726ff82fc000 ---p 00000000 00:00 0 
+726ff82fc000-726ff83fc000 rw-p 00000000 00:00 0 
+726ff83fc000-726ff83fd000 ---p 00000000 00:00 0 
+726ff83fd000-726ff84fd000 rw-p 00000000 00:00 0 
+726ff84fd000-726ff84fe000 ---p 00000000 00:00 0 
+726ff84fe000-726ff85fe000 rw-p 00000000 00:00 0 
+726ff85fe000-726ff85ff000 ---p 00000000 00:00 0 
+726ff85ff000-726ff8dff000 rw-p 00000000 00:00 0 
+726ff8dff000-726ff8e00000 ---p 00000000 00:00 0 
+726ff8e00000-726ff9600000 rw-p 00000000 00:00 0 
+726ff9600000-726ff9800000 rw-p 00000000 00:00 0 
+726ff9820000-726ff98ba000 rw-p 00000000 00:00 0 
+726ff98fc000-726ff9a00000 rw-p 00000000 00:00 0 
+726ff9a00000-726ff9a28000 r--p 00000000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+726ff9a28000-726ff9bbd000 r-xp 00028000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+726ff9bbd000-726ff9c15000 r--p 001bd000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+726ff9c15000-726ff9c16000 ---p 00215000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+726ff9c16000-726ff9c1a000 r--p 00215000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+726ff9c1a000-726ff9c1c000 rw-p 00219000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+726ff9c1c000-726ff9c29000 rw-p 00000000 00:00 0 
+726ff9c3c000-726ff9cf9000 rw-p 00000000 00:00 0 
+726ff9cf9000-726ff9cfc000 r--p 00000000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+726ff9cfc000-726ff9d13000 r-xp 00003000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+726ff9d13000-726ff9d17000 r--p 0001a000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+726ff9d17000-726ff9d18000 r--p 0001d000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+726ff9d18000-726ff9d19000 rw-p 0001e000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+726ff9d19000-726ff9d27000 r--p 00000000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+726ff9d27000-726ff9da3000 r-xp 0000e000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+726ff9da3000-726ff9dfe000 r--p 0008a000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+726ff9dfe000-726ff9dff000 r--p 000e4000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+726ff9dff000-726ff9e00000 rw-p 000e5000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+726ff9e00000-726ff9e9a000 r--p 00000000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+726ff9e9a000-726ff9fab000 r-xp 0009a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+726ff9fab000-726ffa01a000 r--p 001ab000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+726ffa01a000-726ffa01b000 ---p 0021a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+726ffa01b000-726ffa026000 r--p 0021a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+726ffa026000-726ffa029000 rw-p 00225000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+726ffa029000-726ffa02c000 rw-p 00000000 00:00 0 
+726ffa02c000-726ffa030000 rw-p 00000000 00:00 0 
+726ffa03f000-726ffa040000 ---p 00000000 00:00 0 
+726ffa040000-726ffa042000 r--p 00000000 103:05 10527202                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+726ffa042000-726ffa04e000 r-xp 00002000 103:05 10527202                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+726ffa04e000-726ffa051000 r--p 0000e000 103:05 10527202                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+726ffa051000-726ffa052000 r--p 00010000 103:05 10527202                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+726ffa052000-726ffa053000 rw-p 00011000 103:05 10527202                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+726ffa053000-726ffa0c5000 r--p 00000000 103:05 10525747                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+726ffa0c5000-726ffa1b1000 r-xp 00072000 103:05 10525747                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+726ffa1b1000-726ffa1f4000 r--p 0015e000 103:05 10525747                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+726ffa1f4000-726ffa1f5000 ---p 001a1000 103:05 10525747                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+726ffa1f5000-726ffa1f8000 r--p 001a1000 103:05 10525747                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+726ffa1f8000-726ffa1fa000 rw-p 001a4000 103:05 10525747                  /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+726ffa1fa000-726ffa212000 rw-p 00000000 00:00 0 
+726ffa212000-726ffa214000 r--p 00000000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+726ffa214000-726ffa23e000 r-xp 00002000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+726ffa23e000-726ffa249000 r--p 0002c000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+726ffa249000-726ffa24a000 r--p 00000000 00:00 0 
+726ffa24a000-726ffa24c000 r--p 00037000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+726ffa24c000-726ffa24e000 rw-p 00039000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7ffc13c27000-7ffc13c48000 rw-p 00000000 00:00 0                          [stack]
+7ffc13dae000-7ffc13db2000 r--p 00000000 00:00 0                          [vvar]
+7ffc13db2000-7ffc13db4000 r-xp 00000000 00:00 0                          [vdso]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
+VERIFY_PRODUCT_MAPS_END
+2026-09-29 23:56:41.056994 3244811 F Check failed: IsOop(address)
+2026-09-29 23:56:41.057138 3244811 F Bad object 0x80001c00001510 found at 0x64d40270aa80
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+VERIFY_TARGET_ASSERT_EXECUTED diagnostic=Bad object matched=1
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.BeforeOperationRejectsUnmanagedRoot
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.BeforeOperationRejectsUnmanagedRoot
+[  PASS  ] ZVerify.BeforeOperationRejectsUnmanagedRoot
+[========] 1 tests: 1 passed, 0 failed

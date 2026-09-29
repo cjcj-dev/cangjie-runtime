@@ -1,0 +1,7 @@
+[  RUN   ] PageGeneration579.PromotionAndCarrierRouting
+PAGE579 promotion table=0x56deedc41830 from=0x56deedc01580 to=0x56deedc41830
+PAGE579 expect-table-ok
+PAGE579 expect-ids-ok
+PAGE579 body-done
+[  PASS  ] PageGeneration579.PromotionAndCarrierRouting
+[========] 1 tests: 1 passed, 0 failed

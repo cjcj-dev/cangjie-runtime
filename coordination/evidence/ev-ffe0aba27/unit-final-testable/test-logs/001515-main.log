@@ -1,0 +1,7 @@
+[  RUN   ] ThreadSMRReclaim.NestedHandoffRetainsRetiredList
+[  RUN   ] ThreadSMRReclaim.NestedHandoffRetainsRetiredList
+THREAD_SMR_SCAN_BOUNDARY handoff_complete=1
+THREAD_SMR_RECLAIM_TARGET executed=1 handoffs=1 protected=1
+GC_UNIT_OTHER_VM_OKIDOKI ThreadSMRReclaim.NestedHandoffRetainsRetiredList
+[  PASS  ] ThreadSMRReclaim.NestedHandoffRetainsRetiredList
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,7 @@
+[  RUN   ] SoftMaxConstraint.EnvironmentByteOverflow
+[  RUN   ] SoftMaxConstraint.EnvironmentByteOverflow
+2026-09-30 00:27:55.110714 3564309 E Invalid cjSoftMaxHeapSize
+SOFT_CONSTRAINT_ASSERT soft_kb=0 env=18014398509481984KB actual=-1 expected=-1
+GC_UNIT_OTHER_VM_OKIDOKI SoftMaxConstraint.EnvironmentByteOverflow
+[  PASS  ] SoftMaxConstraint.EnvironmentByteOverflow
+[========] 1 tests: 1 passed, 0 failed

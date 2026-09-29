@@ -1,0 +1,5 @@
+[  RUN   ] ArrayCopyOverlap.RefBackward
+ARRAYCOPY_PRECONDITION heap=1 length=5 distinct=1
+ARRAYCOPY_TARGET_EXECUTED struct=0 backwards=1 refs=1 primitives=1
+[  PASS  ] ArrayCopyOverlap.RefBackward
+[========] 1 tests: 1 passed, 0 failed

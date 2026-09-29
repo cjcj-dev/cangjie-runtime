@@ -1,0 +1,4 @@
+[  RUN   ] UpstreamDemangle.CStringAssignmentControl
+UPSTREAM_CSTRING_TARGET actual=a longer independently owned string
+[  PASS  ] UpstreamDemangle.CStringAssignmentControl
+[========] 1 tests: 1 passed, 0 failed

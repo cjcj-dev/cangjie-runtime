@@ -1,0 +1,5 @@
+[  RUN   ] StoreBarrierBuffer.DetachPublishesBothGenerationsWithoutAllocator
+[  RUN   ] StoreBarrierBuffer.DetachPublishesBothGenerationsWithoutAllocator
+GC_UNIT_OTHER_VM_OKIDOKI StoreBarrierBuffer.DetachPublishesBothGenerationsWithoutAllocator
+[  PASS  ] StoreBarrierBuffer.DetachPublishesBothGenerationsWithoutAllocator
+[========] 1 tests: 1 passed, 0 failed

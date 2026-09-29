@@ -1,0 +1,4 @@
+[  RUN   ] SyncNativeWait.RetireSkipsBusyWaitSet
+SYNC_RETIRE_BUSY_ASSERT_EXECUTED
+[  PASS  ] SyncNativeWait.RetireSkipsBusyWaitSet
+[========] 1 tests: 1 passed, 0 failed

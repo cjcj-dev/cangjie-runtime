@@ -1,0 +1,3 @@
+[  RUN   ] StringDedup.EmptyLengthNotInstalled
+[  PASS  ] StringDedup.EmptyLengthNotInstalled
+[========] 1 tests: 1 passed, 0 failed

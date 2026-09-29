@@ -1,0 +1,7 @@
+[  RUN   ] MaxHeapSize.ApiTooSmall
+[  RUN   ] MaxHeapSize.ApiTooSmall
+2026-09-30 00:28:28.990891 256908 E Invalid cjHeapSize: too small maximum heap
+MAX_API_SMALL_ASSERT rc=-1 expected=-1
+GC_UNIT_OTHER_VM_OKIDOKI MaxHeapSize.ApiTooSmall
+[  PASS  ] MaxHeapSize.ApiTooSmall
+[========] 1 tests: 1 passed, 0 failed

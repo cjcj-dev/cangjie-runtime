@@ -1,0 +1,4 @@
+[  RUN   ] MarkPort203Entries.LargeFinalizableUpgradeDoesNotAccountTwice
+M2_LIVE_RESULT finalizable=1 repeat=0 bytes=16 expected=16 strong=1
+[  PASS  ] MarkPort203Entries.LargeFinalizableUpgradeDoesNotAccountTwice
+[========] 1 tests: 1 passed, 0 failed

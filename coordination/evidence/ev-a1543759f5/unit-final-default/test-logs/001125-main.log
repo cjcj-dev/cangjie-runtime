@@ -1,0 +1,3 @@
+[  RUN   ] LoadFc.StaticReadHealthyTargetReturnsNormally
+[  PASS  ] LoadFc.StaticReadHealthyTargetReturnsNormally
+[========] 1 tests: 1 passed, 0 failed

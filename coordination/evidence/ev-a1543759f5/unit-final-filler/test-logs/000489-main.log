@@ -1,0 +1,13 @@
+[  RUN   ] PrimeCache.RepeatedPagesReuseCommittedCapacity
+[  RUN   ] PrimeCache.RepeatedPagesReuseCommittedCapacity
+PrimeCache begin round=0
+PrimeCache round=0 committed=67108864 first=67108864
+PrimeCache begin round=1
+PrimeCache round=1 committed=67108864 first=67108864
+PrimeCache begin round=2
+PrimeCache round=2 committed=67108864 first=67108864
+PrimeCache begin round=3
+PrimeCache round=3 committed=67108864 first=67108864
+GC_UNIT_OTHER_VM_OKIDOKI PrimeCache.RepeatedPagesReuseCommittedCapacity
+[  PASS  ] PrimeCache.RepeatedPagesReuseCommittedCapacity
+[========] 1 tests: 1 passed, 0 failed

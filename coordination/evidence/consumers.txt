@@ -1,0 +1,54 @@
+$ git rev-parse HEAD
+rc=0
+a1543759f5df04db74f441fefb47cf0e8bfef49a
+$ git grep -n object_iterate -- runtime/src
+rc=0
+runtime/src/Heap/z/zHeap.cpp:564:void Heap::object_iterate(ObjectClosure* object_cl, bool visit_weaks)
+runtime/src/Heap/z/zHeap.cpp:567:    iter.object_iterate([&](BaseObject* object) { object_cl->do_object(object); }, 0);
+runtime/src/Heap/z/zHeap.hpp:191:    void object_iterate(ObjectClosure* object_cl, bool visit_weaks);
+runtime/src/Heap/z/zHeapIterator.cpp:287:void HeapIterator::object_iterate_inner(const HeapIteratorContext& context)
+runtime/src/Heap/z/zHeapIterator.cpp:293:void HeapIterator::object_iterate(const ObjectVisitor& objectVisitor, uint32_t worker_id)
+runtime/src/Heap/z/zHeapIterator.cpp:306:        object_iterate_inner<true>(context);
+runtime/src/Heap/z/zHeapIterator.cpp:308:        object_iterate_inner<false>(context);
+runtime/src/Heap/z/zHeapIterator.hpp:40:    void object_iterate(const ObjectVisitor& objectVisitor, uint32_t worker_id);
+runtime/src/Heap/z/zHeapIterator.hpp:105:    void object_iterate_inner(const HeapIteratorContext& context);
+runtime/src/Heap/z/zPage.hpp:287:    void object_iterate(Function function);
+runtime/src/Heap/z/zPage.inline.hpp:236:inline void ZPage::object_iterate(Function function)
+runtime/src/Heap/z/zRelocate.cpp:238:                page->object_iterate([&](BaseObject* object) {
+runtime/src/Heap/z/zRelocate.cpp:455:    // ZGC zRelocate.cpp:1001: same single livemap entry as ZPage::object_iterate
+runtime/src/Heap/z/zRelocate.cpp:460:        page->object_iterate([&](BaseObject* object) { relocate_object(object); });
+runtime/src/Heap/z/zRelocate.cpp:914:                    page->object_iterate([](BaseObject* obj) {
+runtime/src/Heap/z/zVerify.cpp:407:    page->object_iterate([&](BaseObject* object) {
+$ git grep -n object_and_field_iterate_for_verify -- runtime/src
+rc=0
+runtime/src/Heap/z/zHeap.cpp:570:void Heap::object_and_field_iterate_for_verify(ObjectClosure* object_cl, OopFieldClosure* field_cl, bool visit_weaks)
+runtime/src/Heap/z/zHeap.hpp:192:    void object_and_field_iterate_for_verify(ObjectClosure* object_cl, OopFieldClosure* field_cl, bool visit_weaks);
+runtime/src/Heap/z/zVerify.cpp:323:    Heap::GetHeap().object_and_field_iterate_for_verify(&closure, &closure, verifyWeaks);
+$ git grep -n mark_visit_and_push -- runtime/src
+rc=0
+runtime/src/Heap/z/zHeapIterator.cpp:93:void HeapIterator::mark_visit_and_push(const HeapIteratorContext& context, BaseObject* object)
+runtime/src/Heap/z/zHeapIterator.cpp:138:    iter->mark_visit_and_push(context, load_oop(field));
+runtime/src/Heap/z/zHeapIterator.cpp:201:    iter.mark_visit_and_push(context, load_oop(&root));
+runtime/src/Heap/z/zHeapIterator.cpp:209:    iter.mark_visit_and_push(context, to_object(safe(root.LoadPlain())));
+runtime/src/Heap/z/zHeapIterator.hpp:56:    void mark_visit_and_push(const HeapIteratorContext& context, BaseObject* object);
+$ git grep -n follow_array_chunk -- runtime/src
+rc=0
+runtime/src/Heap/z/zHeapIterator.cpp:153:void HeapIterator::follow_array_chunk(const HeapIteratorContext& context, const ObjArrayTask& array)
+runtime/src/Heap/z/zHeapIterator.cpp:250:            follow_array_chunk(context, array);
+runtime/src/Heap/z/zHeapIterator.cpp:261:        follow_array_chunk(context, array);
+runtime/src/Heap/z/zHeapIterator.hpp:107:    void follow_array_chunk(const HeapIteratorContext& context, const ObjArrayTask& array);
+$ git grep -n offer_termination -- runtime/src
+rc=0
+runtime/src/Heap/z/zHeapIterator.cpp:283:    } while (!context.is_drained() || !terminator.offer_termination());
+runtime/src/Heap/z/zTaskTerminator.hpp:85:    bool offer_termination() { return offer_termination(nullptr); }
+runtime/src/Heap/z/zTaskTerminator.hpp:86:    bool offer_termination(TerminatorTerminator* terminator)
+$ git grep -n reset_for_reuse -- runtime/src
+rc=0
+runtime/src/Heap/z/zTaskTerminator.hpp:72:    void reset_for_reuse()
+runtime/src/Heap/z/zTaskTerminator.hpp:80:    void reset_for_reuse(unsigned threads)
+runtime/src/Heap/z/zTaskTerminator.hpp:82:        reset_for_reuse();
+$ git grep -n TerminatorTerminator -- runtime/src
+rc=0
+runtime/src/Heap/z/zTaskQueue.hpp:207:class TerminatorTerminator {
+runtime/src/Heap/z/zTaskTerminator.hpp:55:    bool exit_termination(size_t tasks, TerminatorTerminator* terminator) const
+runtime/src/Heap/z/zTaskTerminator.hpp:86:    bool offer_termination(TerminatorTerminator* terminator)

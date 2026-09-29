@@ -1,0 +1,18 @@
+[  RUN   ] StubRegisterRoots.GprSlots
+STUB_SLOT_TARGET reg=0 visits=1 expected=0x7ffc39184908 match=1
+STUB_SLOT_TARGET reg=1 visits=1 expected=0x7ffc391848f0 match=1
+STUB_SLOT_TARGET reg=2 visits=1 expected=0x7ffc391848f8 match=1
+STUB_SLOT_TARGET reg=3 visits=1 expected=0x7ffc39184900 match=1
+STUB_SLOT_TARGET reg=4 visits=1 expected=0x7ffc391848e0 match=1
+STUB_SLOT_TARGET reg=5 visits=1 expected=0x7ffc391848e8 match=1
+STUB_SLOT_TARGET reg=7 visits=1 expected=0x7ffc391848d8 match=1
+STUB_SLOT_TARGET reg=8 visits=1 expected=0x7ffc391848d0 match=1
+STUB_SLOT_TARGET reg=9 visits=1 expected=0x7ffc391848c8 match=1
+STUB_SLOT_TARGET reg=10 visits=1 expected=0x7ffc391848c0 match=1
+STUB_SLOT_TARGET reg=11 visits=1 expected=0x7ffc391848b8 match=1
+STUB_SLOT_TARGET reg=12 visits=1 expected=0x7ffc391848b0 match=1
+STUB_SLOT_TARGET reg=13 visits=1 expected=0x7ffc391848a8 match=1
+STUB_SLOT_TARGET reg=14 visits=1 expected=0x7ffc391848a0 match=1
+STUB_SLOT_TARGET reg=15 visits=1 expected=0x7ffc39184898 match=1
+[  PASS  ] StubRegisterRoots.GprSlots
+[========] 1 tests: 1 passed, 0 failed

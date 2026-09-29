@@ -1,0 +1,4 @@
+[  RUN   ] P10Roots.HeapIteratorBitMapTrySetOnce
+P10_BITMAP_ASSERT_EXECUTED
+[  PASS  ] P10Roots.HeapIteratorBitMapTrySetOnce
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] StoreBuf.CompilerStoreBadOverwriteHandsObservedOldToMark
+DETAIL arm=compiler_store_bad_overwrite compiler_hit=0 observed_prev=0x80001000201910 installed=0x80001400081510 pending=1 old_receipts=1 new_receipts=0 field_target=0x40000a00040
+[  PASS  ] StoreBuf.CompilerStoreBadOverwriteHandsObservedOldToMark
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] SoftMemoryTable.OfficialMixed
+MEMORY_TABLE input=[20mB] reference_line=394 rc=3 accepted=1 bytes=20971520 expected=20971520
+[  PASS  ] SoftMemoryTable.OfficialMixed
+[========] 1 tests: 1 passed, 0 failed

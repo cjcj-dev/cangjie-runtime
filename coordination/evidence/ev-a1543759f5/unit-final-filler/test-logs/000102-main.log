@@ -1,0 +1,3 @@
+[  RUN   ] DefectRegress.CompilerWriteGlobalOwnerStaticSlotUsesRootPath
+[  PASS  ] DefectRegress.CompilerWriteGlobalOwnerStaticSlotUsesRootPath
+[========] 1 tests: 1 passed, 0 failed
