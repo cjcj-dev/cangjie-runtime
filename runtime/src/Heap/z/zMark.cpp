@@ -160,12 +160,23 @@ namespace {
 class MarkOldRootsTask final : public ZTask {
 public:
     MarkOldRootsTask(ZMark& domain,
-                     NativeSlotVisitor finalizable, std::function<void()> uncolored, unsigned workers)
+                     NativeSlotVisitor finalizable, std::function<void()> uncolored,
+                     ValueRootList& exportOwners, unsigned workers)
         : ZTask("ZMarkOldRootsTask"), rootsColored(workers),
           finalizerRoots(Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers),
-          finalizable(std::move(finalizable)), domain(domain), uncolored(std::move(uncolored)) {}
+          exportRoots(Heap::GetHeap().GetExportRootStorage(), workers),
+          finalizable(std::move(finalizable)), domain(domain), uncolored(std::move(uncolored)),
+          exportOwners(exportOwners) {}
     void work() override
     {
+        ValueRootList localExportOwners;
+        exportRoots.OopsDo([&](NativeSlot& slot) {
+            ZMark::EnumRefFieldRoot(slot, localExportOwners);
+        });
+        {
+            std::lock_guard<std::mutex> lock(exportOwnersMutex);
+            exportOwners.splice(exportOwners.end(), localExportOwners);
+        }
         finalizerRoots.OopsDo(finalizable);
         rootsColored.Apply([&](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
@@ -182,16 +193,19 @@ public:
 private:
     RootsIteratorStrongColored rootsColored;
     OopStorage::ParState<true> finalizerRoots;
+    OopStorage::ParState<true> exportRoots;
     NativeSlotVisitor finalizable;
     RootsIteratorStrongUncolored rootsUncolored;
     MarkOopClosure coloredClosure;
     MarkThreadClosure threadClosure;
     ZMark& domain;
     std::function<void()> uncolored;
+    ValueRootList& exportOwners;
+    std::mutex exportOwnersMutex;
 };
 } // namespace
 
-void ZMark::EnumAllCommonRoots(ZWorkers& workers)
+void ZMark::EnumAllCommonRoots(ZWorkers& workers, ValueRootList& exportOwners)
 {
     CHECK_DETAIL(Heap::GetHeap().old().MarkPtr() != nullptr, "old mark domain must start before roots");
     MarkOldRootsTask task(Heap::GetHeap().old().Mark(),
@@ -204,7 +218,7 @@ void ZMark::EnumAllCommonRoots(ZWorkers& workers)
                 ZBarrier::Mark<false, false, true, false>(from_object(object));
             }
         });
-    }, workers.active_workers());
+    }, exportOwners, workers.active_workers());
     workers.run(&task);
 }
 
