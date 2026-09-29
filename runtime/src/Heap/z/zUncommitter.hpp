@@ -52,11 +52,20 @@ public:
     void Cancel();
 
 private:
-    bool WaitUntil(uint64_t deadline);
+    bool Wait(uint64_t timeout);
+    bool ShouldContinue();
     bool Activate();
     size_t Uncommit();
     void RegisterUncommit(size_t size);
-    void RunCycle();
+    void ResetCycle();
+    void Deactivate();
+    uint64_t ToMillis(double seconds) const;
+    void UpdateNextCycleTimeout(double fromTime);
+    void UpdateNextCycleTimeoutOnCancel();
+    void UpdateNextCycleTimeoutOnFinish();
+    bool CycleIsFinished() const;
+    bool CycleIsActive() const;
+    bool CycleIsCanceled() const;
 
     ZPartition& partition;
     bool started = false;
@@ -65,10 +74,10 @@ private:
     std::atomic<bool> stopped{false};
     // Cycle state is protected by the partition page allocator lock.
     // Only the worker consumes progress between chunks.
-    bool canceled = false;
-    uint64_t cancelTime = 0;
-    uint64_t cycleStart = 0;
-    uint64_t nextUncommitNs = 0;
+    double cancelTime = 0.0;
+    double cycleStart = 0.0;
+    uint64_t nextUncommitTimeout = 0;
+    uint64_t nextCycleTimeout = 0;
     size_t toUncommit = 0;
     size_t uncommitted = 0; // cycle progress, not a second capacity account
 };

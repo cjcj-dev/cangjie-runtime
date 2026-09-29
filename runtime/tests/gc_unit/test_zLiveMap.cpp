@@ -407,7 +407,7 @@ GC_TEST(ZLiveMapPage, allocating_page_is_implicitly_live)
 }
 
 // ZPage.cpp:33-42 constructs the live map after setting the page type. Exercise
-// the same InitRegion entry used by MaterializePageMemory, including reuse.
+// the same InitRegion entry used by RegionManager::create_page, including reuse.
 GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
 {
     GcHeapFixture fx;

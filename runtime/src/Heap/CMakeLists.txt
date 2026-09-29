@@ -5,6 +5,7 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "shared/memAllocator.cpp"
     "shared/gcArguments.cpp"
     "shared/jvmFlagConstraintsGC.cpp"
     "z/zHeap.cpp"

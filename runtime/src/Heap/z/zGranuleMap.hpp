@@ -29,6 +29,7 @@ namespace MapleRuntime {
 template <typename T>
 class ZGranuleMap {
     template<typename, bool> friend class ZGranuleMapIterator;
+    friend class ZPageTable;
 public:
     explicit ZGranuleMap(size_t max_offset)
         : _size(max_offset >> ZGranuleSizeShift),

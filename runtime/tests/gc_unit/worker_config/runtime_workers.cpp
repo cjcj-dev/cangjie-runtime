@@ -22,8 +22,11 @@ int main(int argc, char** argv)
         param.heapParam.heapSize = 256 * 1024;
         param.coParam.processorNum = 1;
         param.gcParam.concGCThreads = std::strtoul(argv[2], nullptr, 10);
+        param.gcParam.concGCThreadsSet = std::strcmp(argv[2], "default") != 0;
         param.gcParam.youngGCThreads = std::strtoul(argv[3], nullptr, 10);
+        param.gcParam.youngGCThreadsSet = std::strcmp(argv[3], "default") != 0;
         param.gcParam.oldGCThreads = std::strtoul(argv[4], nullptr, 10);
+        param.gcParam.oldGCThreadsSet = std::strcmp(argv[4], "default") != 0;
         param.gcParam.staticGCThreads = std::strcmp(argv[1], "static") == 0;
         const int rc = InitCJRuntime(&param);
         std::printf("INIT_RC=%d\n", rc);
