@@ -802,7 +802,7 @@ GC_OTHER_VM_TEST(ZVerifyReferent, RelocationChecksSourceReferent)
     remset.Initialize(fixture.heapStart, 2 * ZGranuleSize);
     std::fprintf(stderr, "VERIFY_SOURCE_REFERENT_INPUT slot=%#zx value=%#zx\n", slot,
                  raw(HeapSlotAt<>(slot).GetFieldValue()));
-    ExpectSceneAbort("Missing remembered field", [&] {
+    ExpectSceneAbort(" in source ", [&] {
         auto& old = Heap::GetHeap().old();
         if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
         old.Workers()->set_active_workers(1);
