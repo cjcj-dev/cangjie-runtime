@@ -180,7 +180,7 @@ static void UpdateRemsetPromotedFilterAndRemapPerField(RefField<>& field)
         return;
     }
     const zaddress_unsafe address = ZPointer::uncolor_unsafe(ptr);
-    ZForwarding* const forwarding = generation_forwarding_table(Generation::Young).get(untype(address));
+    ZForwarding* const forwarding = Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(untype(address));
     if (forwarding == nullptr) {
         if (!AddRemsetIfYoung(p, safe(address))) {
             ZBarrier::remap_young_relocated(p, ptr);

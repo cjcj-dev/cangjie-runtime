@@ -60,7 +60,7 @@ void StoreBarrierBuffer::install_base_pointers_inner()
             (generation == &Heap::GetHeap().GetZGeneration(ZGenerationId::young))
                 ? Generation::Young
                 : Generation::Old;
-        ZForwarding* forwarding = (entry.p == 0) ? nullptr : generation_forwarding_table(gen).get(reinterpret_cast<MAddress>(entry.p));
+        ZForwarding* forwarding = (entry.p == 0) ? nullptr : Heap::GetHeap().GetZGeneration(gen).forwarding_table().get(reinterpret_cast<MAddress>(entry.p));
         if (forwarding != nullptr && forwarding->page() != nullptr) {
             basePointers[i] = to_zaddress_unsafe(forwarding->page()->find_base(reinterpret_cast<MAddress>(entry.p)));
         } else {

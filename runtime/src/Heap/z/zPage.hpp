@@ -380,11 +380,7 @@ public:
     // released or claimed — the late reader must not touch from-side state.
     class RetainScope {
     public:
-        explicit RetainScope(ZForwarding* forwarding)
-            : owner(forwarding), region(owner ? owner->page() : nullptr),
-              retained(owner && owner->retain_page(&generation_relocate_queue((owner->from_age() == PageAge::old ? Generation::Old : Generation::Young))))
-        {
-        }
+        explicit RetainScope(ZForwarding* forwarding);
         ~RetainScope() { Release(); }
         void Release()
         {

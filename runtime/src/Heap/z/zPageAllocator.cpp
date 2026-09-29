@@ -656,10 +656,7 @@ void RegionManager::VisitPageOwners(const std::function<void(ZPage*)>& visitor) 
     }
 }
 
-void RegionManager::ReclaimRegion(ZPage* region)
-{
-    Heap::free_page(region);
-}
+
 
 // ZGC zPageAllocator.cpp:426-440: capture generation epochs at request construction.
 ZPageAllocation::ZPageAllocation(size_t size, uint8_t role, bool physical, ZAllocationFlags flags)
@@ -825,12 +822,7 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     return true;
 }
 
-size_t RegionManager::ReleaseRegion(ZPage* region)
-{
-    const size_t size = region->size();
-    Heap::free_page(region);
-    return size;
-}
+
 
 void RegionManager::PromoteAllRegions()
 {

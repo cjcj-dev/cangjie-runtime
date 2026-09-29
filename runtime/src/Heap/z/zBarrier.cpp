@@ -510,9 +510,10 @@ HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
         ? Heap::page(from)
         : nullptr;
     const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
-    const MAddress lookupTo = canLookup
-        ? forwarding_find(Heap::GetHeap().ObjectGeneration(target), from)
-        : 0;
+    ZForwarding* const forwarding = canLookup
+        ? Heap::GetHeap().GetZGeneration(Heap::GetHeap().ObjectGeneration(target)).forwarding(from)
+        : nullptr;
+    const MAddress lookupTo = forwarding != nullptr ? forwarding->find(from) : 0;
     // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
     // gc_unit other-vm children can enter before the generation cycle is active.
     const unsigned gcPhase = ZGeneration::old() != nullptr

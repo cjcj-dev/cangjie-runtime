@@ -28,7 +28,7 @@ def configuration(runtime, library, output):
     def enabled(name):
         return int(any(arg in ('-D' + name, '-D' + name + '=1') for arg in arguments))
     return (enabled('MRT_TESTABLE_INTERNALS'), enabled('MRT_GC_UNIT_TESTS'),
-            enabled('MRT_GC_UNIT_OHOS_HOST'))
+            enabled('MRT_GC_UNIT_OHOS_HOST'), enabled('NDEBUG'))
 
 
 if __name__ == '__main__':

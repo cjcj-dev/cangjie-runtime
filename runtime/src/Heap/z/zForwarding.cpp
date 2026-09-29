@@ -60,18 +60,7 @@ ZForwarding::PageWorkScope::~PageWorkScope()
 ZForwarding* ZForwarding::CurrentPageWork() { return currentPageWork; }
 
 
-void ZForwarding::WaitPageDone(ZForwarding* forwarding)
-{
-    if (forwarding == nullptr) {
-        return;
-    }
-    // Legacy page cleanup runs inside the completion owner itself.
-    if (CurrentPageWork() == forwarding || forwarding->is_done()) return;
-    auto& queue = generation_relocate_queue((forwarding->from_age() == PageAge::old ? Generation::Old : Generation::Young));
-    const auto request = queue.Add(forwarding);
-    CHECK_DETAIL(request.accepted, "forwarding wait requires a page task");
-    queue.Wait(request.forwarding);
-}
+
 
 
 } // namespace MapleRuntime
@@ -261,3 +250,12 @@ void ZForwarding::verify() const
 }
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+ZPage::RetainScope::RetainScope(ZForwarding* forwarding)
+    : owner(forwarding), region(owner ? owner->page() : nullptr),
+      retained(owner && owner->retain_page(ZGeneration::generation(
+          owner->from_age() == PageAge::old ? ZGenerationId::old : ZGenerationId::young)->relocate().queue()))
+{
+}
+}

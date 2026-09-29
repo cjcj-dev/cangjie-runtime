@@ -438,8 +438,6 @@ public:
     size_t GetYoungAllocatedSize() const;
 
 
-    void ReclaimRegion(ZPage* region);
-    size_t ReleaseRegion(ZPage* region);
 
 
     // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).

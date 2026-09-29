@@ -81,7 +81,6 @@ public:
         bool complete;
     };
     static ZForwarding* CurrentPageWork();
-    static void WaitPageDone(ZForwarding* forwarding);
     static constexpr uint32_t kAlignShift = 3;
 
     struct Receipt {
@@ -228,8 +227,6 @@ private:
     ZPage* const _page;
     const PageAge _from_age;
     const PageAge _to_age;
-    // Monotonic per-region-span generation. Written before the table pointer is
-    // published, then immutable for the table's lifetime.
     std::atomic<bool> _claimed;
     std::atomic<bool> _in_place;
     MAddress _in_place_top_at_start;

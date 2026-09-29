@@ -27,9 +27,6 @@ private:
 };
 
 class ZRelocateQueue;
-ZForwardingTable& generation_forwarding_table(Generation generation);
-ZRelocateQueue& generation_relocate_queue(Generation generation);
-MAddress forwarding_find(Generation generation, MAddress from);
 
 } // namespace MapleRuntime
 
