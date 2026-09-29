@@ -257,8 +257,8 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_FALSE(region->is_marked());
     GC_EXPECT_FALSE(region->is_object_live(from_object(fx.obj0)));
 
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr)); // false = newly marked
+    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache); }()); // false = newly marked
     GC_EXPECT_TRUE(region->is_marked());
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
@@ -267,8 +267,8 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
     GC_EXPECT_FALSE(region->IsKnownEmpty());
 
-    GC_EXPECT_TRUE(ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr)); // already marked: no second claim
+    GC_EXPECT_TRUE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache); }()); // already marked: no second claim
     GC_EXPECT_EQ(region->live_objects(), 1u);
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 
@@ -283,8 +283,8 @@ GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
 {
     GcHeapFixture fx;
     ZPage* region = fx.region0();
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), nullptr));
+    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), &cache); }());
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_FALSE(region->is_object_strongly_live(from_object(fx.obj0)));
     GC_EXPECT_TRUE(region->is_object_marked(from_object(fx.obj0), true));
@@ -293,8 +293,8 @@ GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 
     // The strong mark completes the pair without another live claim.
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr));
+    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache); }());
     GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
     GC_EXPECT_FALSE(RegionSpace::IsResurrectedObject(fx.obj0));
     GC_EXPECT_EQ(region->live_objects(), 1u);
@@ -452,8 +452,8 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
     BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
     if (initiallyFinalizable) {
-        GC_EXPECT_FALSE(ZMark::MarkEntryObject(object,
-            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, true), nullptr));
+        GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(object,
+            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, true), &cache); }());
     }
     std::atomic<unsigned> ready{0};
     bool already[2] = {true, true};
@@ -462,8 +462,8 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
         while (ready.load(std::memory_order_acquire) != 2) {
             std::this_thread::yield();
         }
-        already[worker] = ZMark::MarkEntryObject(object,
-            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), nullptr);
+        already[worker] = [&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(object,
+            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), &cache); }();
     };
 
     std::thread first(mark, 0);
@@ -480,7 +480,8 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
                  large, initiallyFinalizable, claims, liveObjects, liveBytes, live, strong);
     GC_EXPECT_EQ(claims, 1u);
     GC_EXPECT_EQ(liveObjects, 1u);
-    GC_EXPECT_EQ(liveBytes, object->GetSize());
+    // ZGC zMark.cpp:417-425: large-page live bytes include page alignment.
+    GC_EXPECT_EQ(liveBytes, AlignUp(object->GetSize(), region->object_alignment()));
     GC_EXPECT_TRUE(live);
     GC_EXPECT_TRUE(strong);
 }
@@ -523,13 +524,13 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     region->SetRegionAllocPtr(start + 1024 + seed->GetSize());
     // Initialize both old segments through real marks at different starts, so
     // both target bits are known clear before the controlled next-cycle reset.
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(warmFirst,
-        MarkStackEntry(untype(ZAddress::offset(from_object(warmFirst))), true, true, false, false), nullptr));
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(warmOther,
-        MarkStackEntry(untype(ZAddress::offset(from_object(warmOther))), true, true, false, false), nullptr));
+    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(warmFirst,
+        MarkStackEntry(untype(ZAddress::offset(from_object(warmFirst))), true, true, false, false), &cache); }());
+    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(warmOther,
+        MarkStackEntry(untype(ZAddress::offset(from_object(warmOther))), true, true, false, false), &cache); }());
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(seed,
-        MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false), nullptr));
+    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(seed,
+        MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false), &cache); }());
 
     std::atomic<unsigned> ready{0};
     bool firstAlready = true;
@@ -537,8 +538,8 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     auto mark = [&](BaseObject* object, bool& already) {
         ready.fetch_add(1, std::memory_order_release);
         while (ready.load(std::memory_order_acquire) != 2) { std::this_thread::yield(); }
-        already = ZMark::MarkEntryObject(object,
-            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), nullptr);
+        already = [&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(object,
+            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), &cache); }();
     };
     std::thread first([&] { mark(firstObject, firstAlready); });
     std::thread other([&] { mark(otherObject, otherAlready); });
@@ -561,8 +562,8 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     GC_EXPECT_FALSE(otherAlready);
     GC_EXPECT_EQ(objects, 3u);
     GC_EXPECT_EQ(region->live_bytes(), 3 * firstObject->GetSize());
-    GC_EXPECT_TRUE(ZMark::MarkEntryObject(otherObject,
-        MarkStackEntry(untype(ZAddress::offset(from_object(otherObject))), true, true, false, false), nullptr));
+    GC_EXPECT_TRUE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(otherObject,
+        MarkStackEntry(untype(ZAddress::offset(from_object(otherObject))), true, true, false, false), &cache); }());
     GC_EXPECT_EQ(region->live_objects(), 3u);
     std::vector<BaseObject*> visited;
     region->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
@@ -597,16 +598,16 @@ GC_TEST(ZLiveMapPage, reset_publication_preserves_peer_mark)
     BaseObject* other = fx.PlaceObject(region->GetRegionStart() + 256);
     BaseObject* seed = fx.PlaceObject(region->GetRegionStart() + 512);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(seed) + seed->GetSize());
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(seed,
-        MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false), nullptr));
+    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(seed,
+        MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false), &cache); }());
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     std::atomic<unsigned> ready{0};
     bool already[2] = {true, true};
     auto mark = [&](unsigned worker, BaseObject* object) {
         ready.fetch_add(1, std::memory_order_release);
         while (ready.load(std::memory_order_acquire) != 2) { std::this_thread::yield(); }
-        already[worker] = ZMark::MarkEntryObject(object,
-            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), nullptr);
+        already[worker] = [&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(object,
+            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), &cache); }();
     };
     std::thread first([&] { mark(0, fx.obj0); });
     std::thread peer([&] { mark(1, other); });

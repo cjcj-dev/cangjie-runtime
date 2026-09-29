@@ -8,7 +8,7 @@
 #include "Base/Log.h"
 #include "Common/SuspendibleThreadSet.h"
 namespace MapleRuntime {
-void MarkTerminate::Reset(size_t workers)
+void MarkTerminate::Reset(uint32_t workers)
 {
     CHECK_DETAIL(workers != 0, "mark termination needs a worker");
     workerCount = workers;
@@ -56,8 +56,8 @@ bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
 
 void MarkTerminate::Wake()
 {
-    const size_t nworking = working.load(std::memory_order_relaxed);
-    const size_t nawakening = awakening.load(std::memory_order_relaxed);
+    const uint32_t nworking = working.load(std::memory_order_relaxed);
+    const uint32_t nawakening = awakening.load(std::memory_order_relaxed);
     if (nworking + nawakening == workerCount) {
         return;
     }
@@ -73,8 +73,8 @@ void MarkTerminate::Wake()
 
 bool MarkTerminate::Saturated() const
 {
-    const size_t nworking = working.load(std::memory_order_relaxed);
-    const size_t nawakening = awakening.load(std::memory_order_relaxed);
+    const uint32_t nworking = working.load(std::memory_order_relaxed);
+    const uint32_t nawakening = awakening.load(std::memory_order_relaxed);
     return nworking + nawakening == workerCount;
 }
 

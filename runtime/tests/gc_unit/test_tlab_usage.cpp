@@ -1192,11 +1192,11 @@ GC_RUNTIME_OTHER_VM_TEST(TLABTail, RetiredTailSurvivesMarkEntry)
     GC_EXPECT_TRUE(CollectedHeap::is_filler_object(tailObj));
     BaseObject* obj = reinterpret_cast<BaseObject*>(state.object.load(std::memory_order_acquire));
     // Positive control: the live object takes the same entry without faulting.
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(obj,
-        MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), nullptr));
+    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(obj,
+        MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), &cache); }());
     // Target: the retired tail filler through the same consumer.
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(tailObj,
-        MarkStackEntry(untype(ZAddress::offset(from_object(tailObj))), true, true, false, false), nullptr));
+    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(tailObj,
+        MarkStackEntry(untype(ZAddress::offset(from_object(tailObj))), true, true, false, false), &cache); }());
     std::fprintf(stderr, "TLAB_TAIL_TARGET executed=1 tail=%#zx bound=%#zx tail_size=%zu obj_size=%zu\n",
                  tail, bound, tailObj->GetSize(), obj->GetSize());
     state.release.store(true, std::memory_order_release);

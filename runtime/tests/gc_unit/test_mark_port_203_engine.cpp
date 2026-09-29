@@ -530,6 +530,10 @@ GC_TEST(RememberedWorkers719, MissingYoungPoolFailsAtDispatch)
         signal(SIGABRT, SIG_DFL);
         ZMark mark(4, MarkingStacks::MarkingGeneration::YOUNG);
         mark.ResizeWorkers(1);
+        WorkerBudgetFixture budget(1);
+        ZStatWorkers stats;
+        ZWorkers pool(ZGenerationId::young, &stats);
+        mark.BindWorkers(&pool);
         if (Heap::GetHeap().young().Workers() != nullptr) _exit(91);
         ZRemembered remembered(&Heap::page_table(), &Heap::GetHeap().old().forwarding_table(),
                                &Heap::GetHeap().page_allocator());

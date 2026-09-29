@@ -252,6 +252,7 @@ add_test(NAME cj_gc_cycle_saferegion_unit COMMAND cj_gc_cycle_saferegion_unit)
 # process because ForwardingTable::Initialize is deliberately one-shot and the
 # main suite already owns that process-global table.
 add_executable(cj_gc_clear_entries_unit
+    gc_worker_fixture.cpp
     gc_unit_main.cpp
     gc_cycle_sequence_fixture.cpp
     clear_entries_product_unit.cpp

@@ -7,6 +7,7 @@
 #ifndef MRT_ZMARKTERMINATE_HPP
 #define MRT_ZMARKTERMINATE_HPP
 #include <cstddef>
+#include <cstdint>
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
@@ -18,7 +19,7 @@ class MarkTerminate {
 public:
     void SetResurrected(bool value) { resurrected.store(value, std::memory_order_relaxed); }
     bool Resurrected() const { return resurrected.load(std::memory_order_relaxed); }
-    void Reset(size_t workers);
+    void Reset(uint32_t workers);
     void Leave();
     bool TryTerminate(MarkStripeSet& stripes, size_t usedNStripes);
     void Wake();
@@ -27,10 +28,10 @@ public:
 private:
     void MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStripes);
 
+    uint32_t workerCount = 0;
+    std::atomic<uint32_t> working{0};
+    std::atomic<uint32_t> awakening{0};
     std::atomic<bool> resurrected{false};
-    size_t workerCount = 0;
-    std::atomic<size_t> working{0};
-    std::atomic<size_t> awakening{0};
     mutable std::mutex mutex;
     std::condition_variable condition;
 };
