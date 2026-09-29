@@ -480,8 +480,7 @@ uintptr_t Heap::alloc_tlab(size_t size)
 // zHeap.cpp:229: shared-page TLAB accounting includes only small eden pages.
 static bool IsSmallEdenPage(const ZPage* page)
 {
-    return page->IsSmallRegion() && page->IsYoungRegion() &&
-           page->GetYoungAge() == static_cast<uint8_t>(untype(PageAge::eden));
+    return page->type() == ZPageType::small && page->age() == PageAge::eden;
 }
 
 size_t Heap::tlab_used() const { return _tlab_usage.tlab_used(); }

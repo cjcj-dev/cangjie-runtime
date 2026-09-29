@@ -279,6 +279,66 @@ void CheckUsageHistory(bool idle)
 }
 }
 
+namespace {
+int allocationCpu1306 = 0;
+
+void* ObserveContendedUsage(void*)
+{
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
+    std::memset(storage, 0, sizeof(storage));
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(256);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
+    std::atomic<unsigned> ready{0};
+    ZPage* pages[2]{};
+    auto allocate = [&](unsigned index) {
+        pthread_setname_np(pthread_self(), index == 0 ? "tlab1306-A" : "tlab1306-B");
+        // Both owners use the same product per-CPU shared slot.
+        cpu_set_t cpus;
+        CPU_ZERO(&cpus);
+        CPU_SET(allocationCpu1306, &cpus);
+        pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus);
+        auto& manager = MutatorManager::Instance();
+        Mutator* owner = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        owner->DoLeaveSaferegion();
+        ready.fetch_add(1);
+        while (ready.load() != 2) { std::this_thread::yield(); }
+        (void)MCC_NewObject(type, 256 + TYPEINFO_PTR_SIZE);
+        pages[index] = owner->tlab()->GetRegion(); // GDB scheduling stop, after product allocation.
+        owner->DoEnterSaferegion();
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    };
+    std::thread first(allocate, 0);
+    std::thread second(allocate, 1);
+    first.join();
+    second.join();
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
+    const size_t used = Heap::GetHeap().tlab_used();
+    const bool shared = pages[0] != nullptr && pages[0] == pages[1];
+    std::fprintf(stderr, "TLAB1306_UNDO_TARGET shared=%d used=%zu expected=%zu\n",
+                 shared, used, ZPageSizeSmall);
+    return reinterpret_cast<void*>(shared && used == ZPageSizeSmall ? 0 : 4);
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(TLABUsage1306, ContendedPageUndoKeepsNetUsage)
+{
+    allocationCpu1306 = sched_getcpu();
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    CJThreadHandle handle = RunCJTask(ObserveContendedUsage, nullptr);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
+    ReleaseHandle(handle);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(result), uintptr_t{0});
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
 GC_RUNTIME_OTHER_VM_TEST(TLABUsage1306, TwoIdleCyclesPreserveCapacity)
 {
     CheckUsageHistory(true);
