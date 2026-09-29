@@ -59,11 +59,8 @@ public:
 
     using ObjectQueue = OverflowTaskQueue<BaseObject*>;
     using ArrayQueue = OverflowTaskQueue<ObjArrayTask>;
-    GenericTaskQueueSet<ObjectQueue> workerQueues;
-    GenericTaskQueueSet<ArrayQueue> workerArrayQueues;
 
 private:
-    friend class HeapIteratorContext;
     template <bool Weak>
     class ColoredRootOopClosure {
         HeapIterator& iter;
@@ -108,15 +105,17 @@ private:
     void object_iterate_inner(const HeapIteratorContext& context);
     void follow_array(const HeapIteratorContext& context, MArray* object);
     void follow_array_chunk(const HeapIteratorContext& context, const ObjArrayTask& array);
+    HeapIteratorBitMap* object_bitmap(BaseObject* object);
     const bool visitWeaks;
     const bool forVerify;
+    ZGranuleMap<HeapIteratorBitMap*> objectBitmaps;
+    ZLock bitmapLock;
+    GenericTaskQueueSet<ObjectQueue> workerQueues;
+    GenericTaskQueueSet<ArrayQueue> workerArrayQueues;
     RootsIteratorStrongColored rootsColored;
     RootsIteratorStrongUncolored rootsUncolored;
     RootsIteratorWeakColored rootsWeakColored;
     TaskTerminator terminator;
-    ZLock bitmapLock;
-    HeapIteratorBitMap* object_bitmap(BaseObject* object);
-    ZGranuleMap<HeapIteratorBitMap*> objectBitmaps;
 };
 
 class HeapIteratorContext {
@@ -138,9 +137,9 @@ public:
 
     const HeapIterator::ObjectVisitor* objectVisitor;
     const HeapIterator::EdgeVisitor* fieldVisitor;
-    uint32_t workerId;
-    HeapIterator::ObjectQueue* queue;
-    HeapIterator::ArrayQueue* arrayQueue;
+    const uint32_t workerId;
+    HeapIterator::ObjectQueue* const queue;
+    HeapIterator::ArrayQueue* const arrayQueue;
 };
 
 } // namespace MapleRuntime

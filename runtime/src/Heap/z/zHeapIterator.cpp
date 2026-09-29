@@ -19,13 +19,14 @@ bool HeapIteratorBitMap::try_set_bit(size_t index)
 }
 
 HeapIterator::HeapIterator(bool visitWeaks, bool forVerify, unsigned nworkers)
-    : workerQueues(nworkers), workerArrayQueues(nworkers),
-      visitWeaks(visitWeaks), forVerify(forVerify), rootsColored(workerQueues.size()),
-      rootsUncolored(), rootsWeakColored(workerQueues.size()), terminator(workerQueues.size(), &workerQueues),
-      objectBitmaps(ZAddressOffsetMax)
+    : visitWeaks(visitWeaks), forVerify(forVerify), objectBitmaps(ZAddressOffsetMax), bitmapLock(),
+      workerQueues(nworkers), workerArrayQueues(nworkers), rootsColored(nworkers),
+      rootsUncolored(), rootsWeakColored(nworkers), terminator(nworkers, &workerQueues)
 {
     for (unsigned i = 0; i < workerQueues.size(); ++i) {
         workerQueues.register_queue(i, new ObjectQueue());
+    }
+    for (unsigned i = 0; i < workerArrayQueues.size(); ++i) {
         workerArrayQueues.register_queue(i, new ArrayQueue());
     }
 }
@@ -36,9 +37,11 @@ HeapIterator::~HeapIterator()
     for (HeapIteratorBitMap* bitmap; bitmaps.next(&bitmap);) {
         delete bitmap;
     }
+    for (unsigned i = 0; i < workerArrayQueues.size(); ++i) {
+        delete workerArrayQueues.queue(i);
+    }
     for (unsigned i = 0; i < workerQueues.size(); ++i) {
         delete workerQueues.queue(i);
-        delete workerArrayQueues.queue(i);
     }
 }
 
@@ -72,7 +75,9 @@ HeapIteratorBitMap* HeapIterator::object_bitmap(BaseObject* object)
 bool HeapIterator::mark_object(BaseObject* object)
 {
     if (object == nullptr) return false;
-    return object_bitmap(object)->try_set_bit(object_index(object));
+    HeapIteratorBitMap* const bitmap = object_bitmap(object);
+    const size_t index = object_index(object);
+    return bitmap->try_set_bit(index);
 }
 
 void HeapIteratorContext::visit_object(BaseObject* object) const
@@ -221,9 +226,6 @@ void HeapIterator::push_strong_roots(const HeapIteratorContext& context)
 
 void HeapIterator::push_weak_roots(const HeapIteratorContext& context)
 {
-    if (!visitWeaks) {
-        return;
-    }
     ColoredRootOopClosure<true> colored(*this, context);
     rootsWeakColored.Apply([&](NativeSlot& root) { colored.do_root(root); });
 }

@@ -40,6 +40,10 @@ public:
         return clean_size(bottom.load(std::memory_order_relaxed), unpack(age.load(std::memory_order_relaxed)).top);
     }
     bool is_empty() const { return size() == 0; }
+    void assert_empty() const
+    {
+        assert(bottom.load(std::memory_order_relaxed) == unpack(age.load(std::memory_order_relaxed)).top);
+    }
 };
 
 template<class E, unsigned N = (sizeof(void*) == 8 ? 1 << 17 : 1 << 14)>
@@ -78,10 +82,10 @@ public:
         bottom.store((b + 1) & MASK, std::memory_order_release);
         return true;
     }
-    bool pop_local(E& task)
+    bool pop_local(E& task, unsigned threshold = 0)
     {
         uint32_t b = bottom.load(std::memory_order_relaxed);
-        if (((b - unpack(age.load(std::memory_order_relaxed)).top) & MASK) == 0) return false;
+        if (((b - unpack(age.load(std::memory_order_relaxed)).top) & MASK) <= threshold) return false;
         b = (b - 1) & MASK;
         bottom.store(b, std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -138,6 +142,7 @@ public:
 
 class TaskQueueSetSuper {
 public:
+    virtual void assert_empty() const = 0;
     virtual unsigned tasks() const = 0;
     virtual ~TaskQueueSetSuper() = default;
 };
@@ -181,6 +186,10 @@ public:
     void register_queue(unsigned id, Q* q) { queues[id] = q; }
     Q* queue(unsigned id) const { return queues[id]; }
     unsigned size() const { return queues.size(); }
+    void assert_empty() const override
+    {
+        for (Q* q : queues) q->assert_empty();
+    }
     unsigned tasks() const override
     {
         unsigned count = 0;
@@ -194,6 +203,10 @@ public:
         }
         return false;
     }
+};
+class TerminatorTerminator {
+public:
+    virtual bool should_exit_termination() = 0;
 };
 } // namespace MapleRuntime
 #endif

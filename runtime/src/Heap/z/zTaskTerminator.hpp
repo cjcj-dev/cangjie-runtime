@@ -45,14 +45,18 @@ class TaskTerminator {
             }
         }
     };
-    const unsigned nthreads;
+    unsigned nthreads;
     TaskQueueSetSuper* const queueSet;
-    unsigned offeredTermination = 0;
-    std::mutex blocker;
+    alignas(64) unsigned offeredTermination = 0;
+    alignas(64) std::mutex blocker;
     std::condition_variable condition;
     std::thread::id spinMaster;
     size_t tasks_in_queue_set() const { return queueSet->tasks(); }
-    bool exit_termination(size_t tasks) const { return tasks > 0; }
+    void assert_queue_set_empty() const { queueSet->assert_empty(); }
+    bool exit_termination(size_t tasks, TerminatorTerminator* terminator) const
+    {
+        return tasks > 0 || (terminator != nullptr && terminator->should_exit_termination());
+    }
     void prepare_for_return(std::thread::id self, size_t tasks = SIZE_MAX)
     {
         if (spinMaster == self) spinMaster = {};
@@ -61,17 +65,40 @@ class TaskTerminator {
     }
 public:
     TaskTerminator(unsigned nthreads, TaskQueueSetSuper* queueSet) : nthreads(nthreads), queueSet(queueSet) {}
-    bool offer_termination()
+    ~TaskTerminator()
     {
+        assert(offeredTermination == 0 || offeredTermination == nthreads);
+        assert(spinMaster == std::thread::id{});
+    }
+    void reset_for_reuse()
+    {
+        if (offeredTermination != 0) {
+            assert(offeredTermination == nthreads);
+            assert(spinMaster == std::thread::id{});
+            offeredTermination = 0;
+        }
+    }
+    void reset_for_reuse(unsigned threads)
+    {
+        reset_for_reuse();
+        nthreads = threads;
+    }
+    bool offer_termination() { return offer_termination(nullptr); }
+    bool offer_termination(TerminatorTerminator* terminator)
+    {
+        assert(nthreads > 0);
         if (nthreads == 1) {
             offeredTermination = 1;
+            assert_queue_set_empty();
             return true;
         }
         const auto self = std::this_thread::get_id();
         std::unique_lock<std::mutex> lock(blocker);
+        assert(offeredTermination < nthreads);
         ++offeredTermination;
         if (offeredTermination == nthreads) {
             prepare_for_return(self);
+            assert_queue_set_empty();
             return true;
         }
         for (;;) {
@@ -82,10 +109,11 @@ public:
                     lock.unlock();
                     delay.do_step();
                     const size_t tasks = tasks_in_queue_set();
-                    const bool shouldExit = exit_termination(tasks);
+                    const bool shouldExit = exit_termination(tasks, terminator);
                     lock.lock();
                     if (offeredTermination == nthreads) {
                         prepare_for_return(self);
+                        assert_queue_set_empty();
                         return true;
                     } else if (shouldExit) {
                         prepare_for_return(self, tasks);
@@ -98,6 +126,7 @@ public:
             const bool timedOut = condition.wait_for(lock, std::chrono::milliseconds(1)) == std::cv_status::timeout;
             if (offeredTermination == nthreads) {
                 prepare_for_return(self);
+                assert_queue_set_empty();
                 return true;
             } else if (!timedOut) {
                 prepare_for_return(self, 0);
@@ -105,7 +134,7 @@ public:
                 return false;
             } else {
                 const size_t tasks = tasks_in_queue_set();
-                if (exit_termination(tasks)) {
+                if (exit_termination(tasks, terminator)) {
                     prepare_for_return(self, tasks);
                     --offeredTermination;
                     return false;
