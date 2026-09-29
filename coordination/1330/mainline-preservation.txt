@@ -1,0 +1,61 @@
+COMMAND: git grep -c -F bitmapLock d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zHeapIterator.cpp:2
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zHeapIterator.hpp:1
+
+COMMAND: git grep -c -F bitmapLock 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src
+RC=0
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zHeapIterator.cpp:2
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zHeapIterator.hpp:1
+
+COMMAND: git grep -c -F workerArrayQueues d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zHeapIterator.cpp:7
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zHeapIterator.hpp:1
+
+COMMAND: git grep -c -F workerArrayQueues 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src
+RC=0
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zHeapIterator.cpp:7
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zHeapIterator.hpp:1
+
+COMMAND: git grep -c -F TaskTerminator d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zHeapIterator.hpp:2
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zTaskTerminator.hpp:3
+
+COMMAND: git grep -c -F TaskTerminator 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src
+RC=0
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zHeapIterator.hpp:2
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zTaskTerminator.hpp:3
+
+COMMAND: git grep -c -F ZGranuleMap d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zForwardingTable.hpp:1
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zGranuleMap.hpp:10
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zGranuleMap.inline.hpp:11
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zHeapIterator.cpp:1
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zHeapIterator.hpp:1
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zPageTable.hpp:6
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zPageTable.inline.hpp:1
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zPhysicalMemoryManager.hpp:1
+
+COMMAND: git grep -c -F ZGranuleMap 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src
+RC=0
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zForwardingTable.hpp:1
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zGranuleMap.hpp:10
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zGranuleMap.inline.hpp:11
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zHeapIterator.cpp:1
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zHeapIterator.hpp:1
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zPageTable.hpp:6
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zPageTable.inline.hpp:1
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zPhysicalMemoryManager.hpp:1
+
+COMMAND: git grep -c -F mediumPageAllocLock d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zObjectAllocator.cpp:1
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zObjectAllocator.hpp:1
+
+COMMAND: git grep -c -F mediumPageAllocLock 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src
+RC=0
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zObjectAllocator.cpp:1
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zObjectAllocator.hpp:1

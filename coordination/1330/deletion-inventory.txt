@@ -1,0 +1,73 @@
+Deletion inventory: exact declarations scoped to owning file. Common member names are not globally unique.
+COMMAND: git grep -c -F std::condition_variable _ref_changed d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zForwarding.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zForwarding.hpp:1
+COMMAND: git grep -c -F std::condition_variable _ref_changed 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zForwarding.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F std::condition_variable attention d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zRelocate.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zRelocate.hpp:1
+COMMAND: git grep -c -F std::condition_variable attention 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zRelocate.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F std::condition_variable changed d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zRelocate.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zRelocate.hpp:1
+COMMAND: git grep -c -F std::condition_variable changed 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zRelocate.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F std::condition_variable condition d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zMarkTerminate.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zMarkTerminate.hpp:1
+COMMAND: git grep -c -F std::condition_variable condition 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zMarkTerminate.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F std::condition_variable condition d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zUncommitter.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zUncommitter.hpp:1
+COMMAND: git grep -c -F std::condition_variable condition 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zUncommitter.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F std::condition_variable condition d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zDirector.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zDirector.hpp:1
+COMMAND: git grep -c -F std::condition_variable condition 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zDirector.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F bool reevaluate d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zDirector.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zDirector.hpp:1
+COMMAND: git grep -c -F bool reevaluate 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zDirector.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F std::mutex _resize_lock d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zWorkers.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zWorkers.hpp:1
+COMMAND: git grep -c -F std::mutex _resize_lock 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zWorkers.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F std::mutex _promotion_lock d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zRelocationSet.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zRelocationSet.hpp:1
+COMMAND: git grep -c -F std::mutex _promotion_lock 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zRelocationSet.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F std::mutex pageAllocatorMutex d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zPageAllocator.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zPageAllocator.hpp:1
+COMMAND: git grep -c -F std::mutex pageAllocatorMutex 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zPageAllocator.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F std::mutex basePointerLock d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zStoreBarrierBuffer.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zStoreBarrierBuffer.hpp:1
+COMMAND: git grep -c -F std::mutex basePointerLock 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zStoreBarrierBuffer.hpp
+RC=1
+(no match)
+COMMAND: git grep -c -F std::mutex d1f697a053fec85a657286ce5d1c4aeb8fba09b7 -- runtime/src/Heap/z/zStat.hpp
+RC=0
+d1f697a053fec85a657286ce5d1c4aeb8fba09b7:runtime/src/Heap/z/zStat.hpp:3
+COMMAND: git grep -c -F std::mutex 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src/Heap/z/zStat.hpp
+RC=1
+(no match)

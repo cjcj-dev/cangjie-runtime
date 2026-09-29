@@ -1,0 +1,5 @@
+PASS [4-header] 首行以 PROGRESS= 开头且含 LANE=
+PASS [1-delivery-ref] cjcjdev/refs/heads/sym/1330-implement-r5895631037 == 4b8ba5a8779058ad1e5323b98698081c1a289140
+FAIL [2-diff] 无 /root/cj_build/reports/DIFF-4b8ba5a87790-vs-*.json（差分未跑？）
+INFO [3-so-hash] 报告里归类不出 候选/恢复/切刀 三类 sha256 ⇒ 跳过（启发式，不算失败）
+SUMMARY fail=1 warn=0 rc=1
