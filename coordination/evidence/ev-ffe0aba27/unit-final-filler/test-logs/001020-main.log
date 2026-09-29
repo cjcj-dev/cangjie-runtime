@@ -1,0 +1,6 @@
+[  RUN   ] MaxHeapSize.LeadingZeroDecimal
+[  RUN   ] MaxHeapSize.LeadingZeroDecimal
+MAX_BYTES_ASSERT input=040MB actual=33554432 expected=33554432 capacity=33554432 expected_capacity=33554432
+GC_UNIT_OTHER_VM_OKIDOKI MaxHeapSize.LeadingZeroDecimal
+[  PASS  ] MaxHeapSize.LeadingZeroDecimal
+[========] 1 tests: 1 passed, 0 failed

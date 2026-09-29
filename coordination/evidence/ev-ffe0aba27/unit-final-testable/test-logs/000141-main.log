@@ -1,0 +1,4 @@
+[  RUN   ] StackWatermark.SafetyAssertionWaitsForProcessing
+SAFETY_LOCK_RESULT processing=1 checking=1 returned_while_processing=0 completed=1
+[  PASS  ] StackWatermark.SafetyAssertionWaitsForProcessing
+[========] 1 tests: 1 passed, 0 failed

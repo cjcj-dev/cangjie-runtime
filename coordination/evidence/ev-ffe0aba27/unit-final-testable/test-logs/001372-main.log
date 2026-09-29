@@ -1,0 +1,6 @@
+[  RUN   ] RememberedWorkers719.MissingYoungPoolFailsAtDispatch
+REMEMBERED719 child_status=134 diagnostic=2026-09-30 00:27:58.976797 3677930 F Check failed: workers != nullptr
+2026-09-30 00:27:58.977153 3677930 F ZRemembered::scan_and_follow requires young workers
+
+[  PASS  ] RememberedWorkers719.MissingYoungPoolFailsAtDispatch
+[========] 1 tests: 1 passed, 0 failed

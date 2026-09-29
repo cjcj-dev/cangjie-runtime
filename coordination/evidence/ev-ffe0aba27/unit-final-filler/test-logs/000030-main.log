@@ -1,0 +1,3 @@
+[  RUN   ] ZArray.elements_are_constructed_and_destroyed_exactly_once
+[  PASS  ] ZArray.elements_are_constructed_and_destroyed_exactly_once
+[========] 1 tests: 1 passed, 0 failed

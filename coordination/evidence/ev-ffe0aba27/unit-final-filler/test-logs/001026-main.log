@@ -1,0 +1,6 @@
+[  RUN   ] MaxHeapSize.InteriorWhitespace
+[  RUN   ] MaxHeapSize.InteriorWhitespace
+MAX_BYTES_ASSERT input=6 4MB actual=67108864 expected=67108864 capacity=67108864 expected_capacity=67108864
+GC_UNIT_OTHER_VM_OKIDOKI MaxHeapSize.InteriorWhitespace
+[  PASS  ] MaxHeapSize.InteriorWhitespace
+[========] 1 tests: 1 passed, 0 failed

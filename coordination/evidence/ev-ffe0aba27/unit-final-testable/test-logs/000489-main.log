@@ -1,0 +1,6 @@
+[  RUN   ] LogicalMarkHandshake1145.SafeBroadcastRetainsOperationDuringClosure
+[  RUN   ] LogicalMarkHandshake1145.SafeBroadcastRetainsOperationDuringClosure
+SYNC_HANDSHAKE_QUEUE_TARGET executed=1 self=0 broadcast=1 retained=1 removed=1
+GC_UNIT_OTHER_VM_OKIDOKI LogicalMarkHandshake1145.SafeBroadcastRetainsOperationDuringClosure
+[  PASS  ] LogicalMarkHandshake1145.SafeBroadcastRetainsOperationDuringClosure
+[========] 1 tests: 1 passed, 0 failed

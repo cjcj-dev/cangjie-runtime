@@ -1,0 +1,6 @@
+[  RUN   ] ZLiveMapPage.initialization_uses_current_page_role
+P02_PAGE_GEOMETRY role=2 segment=2 expected=2
+P02_PAGE_GEOMETRY role=0 segment=8192 expected=8192
+P02_PAGE_GEOMETRY role=2 segment=2 expected=2
+[  PASS  ] ZLiveMapPage.initialization_uses_current_page_role
+[========] 1 tests: 1 passed, 0 failed

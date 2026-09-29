@@ -1,0 +1,27 @@
+FindToPublicState.
+  NotManagedIsObservable
+RemapYoungRoots1039.
+  MajorUpdatesCurrentRemsetSingleWorker
+  MajorUpdatesCurrentRemsetMultipleWorkers
+RawRemapYoungProduct.
+  MajorRemapsStackObjectField
+  MajorRemapsHeaderlessRecordField
+  MajorWatermarkConsumesYoungTable
+  MajorWatermarkConsumesPromotedYoungSource
+  MajorKeepsOldRawRootUntilNextRootScan
+  MajorWatermarkRemapsDerivedYoungSource
+  MajorWatermarkRemapsDerivedPromotedSource
+  MajorKeepsOldDerivedRootUntilNextRootScan
+  MajorFallbackRemapsDerivedPromotedSource
+  MajorFallbackKeepsOldRootUntilNextRootScan
+PageGeneration579.
+  PromotionAndCarrierRouting
+  FlipAgePagesHandsRegionListSlotToPromotedPage
+  ResetAndReuseCurrentGeneration
+RelocateField782.
+  LoadGoodAddressIsNotForwardedTwice
+  LoadBadAddressConsumesForwarding
+RelocateMiss782.
+  RetainedPageCopiesAndPublishes
+  ClaimedPageWaitsForWorkerPublication
+  AllocationFailureWaitsForWorkerPublication

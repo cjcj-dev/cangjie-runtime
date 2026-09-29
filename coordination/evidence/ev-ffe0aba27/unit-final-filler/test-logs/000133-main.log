@@ -1,0 +1,5 @@
+[  RUN   ] ReturnSafepointRegMap.SenderKeepsStubSlot
+WATERMARK_POINTER_TARGET frontier=0x7ffc9f3432c0 target=0x7ffc9f3430a0 bounded=1
+GROW_POINTER_TARGET slot=0x7ffc9f342048 expected=0x7ffc9f342048 value=0x7ffc9f3430a0 target=0x7ffc9f3430a0
+[  PASS  ] ReturnSafepointRegMap.SenderKeepsStubSlot
+[========] 1 tests: 1 passed, 0 failed

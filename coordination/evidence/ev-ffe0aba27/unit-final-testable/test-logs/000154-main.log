@@ -1,0 +1,4 @@
+[  RUN   ] ManagedMetadata.ProloguePresent
+METADATA_TARGET entry=1 desc=1 map=1 status=0 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.ProloguePresent
+[========] 1 tests: 1 passed, 0 failed

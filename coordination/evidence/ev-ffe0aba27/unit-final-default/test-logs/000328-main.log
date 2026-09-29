@@ -1,0 +1,7 @@
+[  RUN   ] SharedSmallPage.AgeRefillAndRetirement
+[  RUN   ] SharedSmallPage.AgeRefillAndRetirement
+P1_SHARED_BIRTH_ASSERT generation=young birth=3 owner=3
+P1_SHARED_BIRTH_ASSERT generation=old birth=3 owner=3
+GC_UNIT_OTHER_VM_OKIDOKI SharedSmallPage.AgeRefillAndRetirement
+[  PASS  ] SharedSmallPage.AgeRefillAndRetirement
+[========] 1 tests: 1 passed, 0 failed
