@@ -45,7 +45,7 @@ struct UncommitterTestAccess {
         Uncommitter& worker = UncommitterTestAccess::Current();
         auto& regions = worker.partition.regionManager;
         std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
-        worker.canceled = false;
+        worker.ResetCycle();
         worker.stopped.store(false);
     }
     static bool Activate(Uncommitter& worker) { return worker.Activate(); }
@@ -61,7 +61,7 @@ struct UncommitterTestAccess {
     {
         auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
-        return UncommitterTestAccess::Current().canceled;
+        return UncommitterTestAccess::Current().CycleIsCanceled();
     }
     static void PrepareChunk(Uncommitter& worker)
     {
@@ -329,7 +329,11 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CancelDelaysActivation)
     UncommitterTestAccess::Cancel();
     Uncommitter& worker = UncommitterTestAccess::Current();
     GC_EXPECT_FALSE(UncommitterTestAccess::Activate(worker));
-    GC_EXPECT_TRUE(UncommitterTestAccess::Canceled());
+    // ZGC zUncommitter.cpp:214-219 resets a pre-activation cancellation.
+    GC_EXPECT_FALSE(UncommitterTestAccess::Canceled());
+    GC_EXPECT_FALSE(worker.CycleIsActive());
+    GC_EXPECT_TRUE(worker.CycleIsFinished());
+    GC_EXPECT_TRUE(worker.nextCycleNs > 0);
 }
 
 GC_COMPONENT_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)
@@ -369,6 +373,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CacheValleyLimitsActivationBudget)
 
     // The partition capacity floor wins when it is stricter than cache history.
     partition.minCapacity = total - ZGranuleSize;
+    UncommitterTestAccess::ResetCancel();
     GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
     std::fprintf(stderr, "TARGET_PARTITION_FLOOR budget=%zu\n", UncommitterTestAccess::Budget(worker));
     GC_EXPECT_EQ(UncommitterTestAccess::Budget(worker), ZGranuleSize);
@@ -425,6 +430,8 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, AllocationDuringCycleLowersUncommitAllow
     auto& worker = partition.uncommitter;
     UncommitterTestAccess::ResetCancel();
     GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
+    worker.Cancel();
+    worker.Deactivate();
     GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
     const size_t before = partition.capacity;
     const size_t allocated = before - 2 * ZGranuleSize;
@@ -439,4 +446,65 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, AllocationDuringCycleLowersUncommitAllow
                  released, partition.capacity, 2 * ZGranuleSize);
     GC_EXPECT_EQ(released, 2 * ZGranuleSize);
     GC_EXPECT_EQ(partition.capacity, before - released);
+}
+
+// ZGC zUncommitter.cpp:286-290,205-243. The real worker owns both cycles;
+// prime -> increase_capacity -> Cancel produces the intervening cancellation.
+GC_RUNTIME_OTHER_VM_TEST(Uncommitter, CancelStartsNewCacheWatermarkHistory)
+{
+    GC_EXPECT_EQ(setenv("cjUncommitDelay", "500ms", 1), 0);
+    BindUncommitWorkerThread();
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    auto& regions = Heap::GetHeap().GetAllocator().GetRegionManager();
+    auto& frm = regions.freeRegionManager;
+    frm.StopUncommitters();
+    auto& partition = UncommitterTestAccess::Partition();
+    auto& worker = partition.uncommitter;
+    const size_t target = 64 * MB;
+    GC_EXPECT_TRUE(partition.capacity < partition.currentMaxCapacity);
+    if (partition.capacity < target) {
+        GC_EXPECT_TRUE(partition.prime(frm, target - partition.capacity));
+    }
+    UncommitterTestAccess::ResetCancel();
+    partition.cache.reset_min_size_watermark();
+    worker.Start();
+    uint64_t canceledAt = 0;
+    size_t expected = 0;
+    size_t actual = 0;
+    bool observed = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+        {
+            ScopedObjectAccess participation;
+            std::lock_guard<std::mutex> owner(regions.pageAllocatorMutex);
+            std::lock_guard<std::mutex> cacheOwner(frm.cacheMutex);
+            if (canceledAt == 0 && worker.CycleIsActive() && !worker.CycleIsFinished()) {
+                // A cache valley followed by return must be forgotten on cancel.
+                const size_t high = partition.cache.min_size_watermark();
+                const auto valley = partition.cache.remove_contiguous(AlignDown(high / 2, ZGranuleSize));
+                partition.cache.insert(valley);
+                // The first uncommit may already have reduced cache size.
+                const size_t cacheAtCancel = partition.cache._size;
+                expected = AlignUp(static_cast<size_t>(double(cacheAtCancel) * 0.9), ZGranuleSize);
+                // Product prime grows capacity and cancels, then inserts memory.
+                // It cannot lower the new cache watermark after cancellation.
+                if (!partition.prime(frm, ZGranuleSize)) {
+                    break;
+                }
+                canceledAt = worker.cancelTime;
+            } else if (canceledAt != 0 && worker.cycleStart > canceledAt) {
+                // Read the product activation budget, including completed chunks.
+                actual = worker.toUncommit + worker.uncommitted;
+                observed = true;
+                break;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    worker.Stop();
+    std::fprintf(stderr, "TARGET_CANCEL_HISTORY observed=%d cancel=%llu budget=%zu expected=%zu\n",
+                 observed, static_cast<unsigned long long>(canceledAt), actual, expected);
+    GC_EXPECT_TRUE(observed);
+    GC_EXPECT_EQ(actual, expected);
 }

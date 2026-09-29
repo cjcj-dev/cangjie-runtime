@@ -165,13 +165,14 @@ bool Uncommitter::Activate()
     RegionManager& regions = partition.regionManager;
     ScopedObjectAccess participation;
     std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
-    const uint64_t now = TimeUtil::NanoSeconds();
-    if (canceled) {
+    CHECK(CycleIsFinished());
+    CHECK(!CycleIsActive());
+    if (CycleIsCanceled()) {
+        UpdateNextCycleTimeoutOnCancel();
+        ResetCycle();
         return false;
     }
-    canceled = false;
-    cycleStart = now;
-    nextUncommitNs = 0;
+    cycleStart = TimeUtil::NanoSeconds();
     uncommitted = 0;
     // ZGC zUncommitter.cpp:222-242: claim this partition's cache history.
     std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
@@ -180,11 +181,13 @@ bool Uncommitter::Activate()
     const size_t limit = partition.capacity - partition.minCapacity;
     toUncommit = std::min(limit, budget);
     partition.cache.reset_min_size_watermark();
+    CHECK(toUncommit % ZGranuleSize == 0);
     return true;
 }
 
 size_t Uncommitter::Uncommit()
 {
+    CHECK(CycleIsActive());
     RegionManager& regions = partition.regionManager;
     ZArray<ZVirtualMemory> flushedVmems;
     size_t flushed = 0;
@@ -193,7 +196,7 @@ size_t Uncommitter::Uncommit()
         // Allocation/cancel and cache claim must not observe separate owners.
         ScopedObjectAccess participation;
         std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
-        if (stopped.load(std::memory_order_acquire) || canceled) {
+        if (CycleIsCanceled()) {
             return 0;
         }
         std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
@@ -242,7 +245,7 @@ void Uncommitter::RegisterUncommit(size_t size)
     toUncommit -= size;
     uncommitted += size;
     nextUncommitNs = 0;
-    if (toUncommit == 0 || canceled) {
+    if (CycleIsFinished() || CycleIsCanceled()) {
         return;
     }
     const uint64_t elapsed = TimeUtil::NanoSeconds() - cycleStart;
@@ -266,46 +269,89 @@ void Uncommitter::RegisterUncommit(size_t size)
     }
 }
 
-void Uncommitter::RunCycle()
+// ZGC zUncommitter.cpp:177-203.
+void Uncommitter::ResetCycle()
 {
-    while (!stopped.load(std::memory_order_acquire) && toUncommit != 0) {
-        if (Uncommit() == 0) {
-            break;
-        }
-        if (toUncommit != 0 && nextUncommitNs != 0 &&
-            !WaitUntil(TimeUtil::NanoSeconds() + nextUncommitNs)) {
-            break;
-        }
-    }
+    toUncommit = 0;
+    uncommitted = 0;
+    cycleStart = 0;
+    cancelTime = 0;
+    CHECK(CycleIsFinished());
+    CHECK(!CycleIsCanceled());
+    CHECK(!CycleIsActive());
 }
 
-// zUncommitter.cpp:109-169
+void Uncommitter::Deactivate()
+{
+    ScopedObjectAccess participation;
+    std::lock_guard<std::mutex> guard(partition.regionManager.pageAllocatorMutex);
+    CHECK(CycleIsActive());
+    CHECK(CycleIsFinished() || CycleIsCanceled());
+    if (CycleIsCanceled()) {
+        UpdateNextCycleTimeoutOnCancel();
+    } else {
+        UpdateNextCycleTimeoutOnFinish();
+    }
+    ResetCycle();
+}
+
+// ZGC zUncommitter.cpp:250-284.
+void Uncommitter::UpdateNextCycleTimeout(uint64_t fromTime)
+{
+    const uint64_t elapsed = TimeUtil::NanoSeconds() - fromTime;
+    nextCycleNs = elapsed < DelayNs() ? DelayNs() - elapsed : 0;
+}
+
+void Uncommitter::UpdateNextCycleTimeoutOnCancel()
+{
+    CHECK(CycleIsCanceled());
+    UpdateNextCycleTimeout(cancelTime);
+}
+
+void Uncommitter::UpdateNextCycleTimeoutOnFinish()
+{
+    CHECK(CycleIsActive());
+    CHECK(CycleIsFinished());
+    UpdateNextCycleTimeout(cycleStart);
+}
+
+bool Uncommitter::CycleIsFinished() const { return toUncommit == 0; }
+bool Uncommitter::CycleIsActive() const { return cycleStart != 0; }
+bool Uncommitter::CycleIsCanceled() const { return cancelTime != 0; }
+
+// ZGC zUncommitter.cpp:109-169.
 void Uncommitter::run_thread()
 {
     MutatorManager& mutators = MutatorManager::Instance();
     mutators.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    uint64_t deadline = TimeUtil::NanoSeconds() + DelayNs();
-    while (WaitUntil(deadline)) {
-        if (Activate()) {
-            RunCycle();
+    nextCycleNs = DelayNs();
+    while (WaitUntil(TimeUtil::NanoSeconds() + nextCycleNs)) {
+        if (!Activate()) {
+            continue;
         }
-        ScopedObjectAccess participation;
-        RegionManager& regions = partition.regionManager;
-        std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
-        deadline = (canceled ? cancelTime : cycleStart) + DelayNs();
-        toUncommit = 0;
-        uncommitted = 0;
-        cycleStart = 0;
-        canceled = false;
+        while (!stopped.load(std::memory_order_acquire)) {
+            const size_t released = Uncommit();
+            if (released == 0 || CycleIsFinished()) {
+                break;
+            }
+            if (nextUncommitNs != 0) {
+                WaitUntil(TimeUtil::NanoSeconds() + nextUncommitNs);
+            }
+        }
+        if (stopped.load(std::memory_order_acquire)) {
+            break;
+        }
+        Deactivate();
     }
     mutators.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 
 void Uncommitter::Cancel()
 {
-    // Caller holds this partition's pageAllocatorMutex (ZPartition::reset).
+    // Both product callers own the allocator/cache serialization.
+    // ZGC zUncommitter.cpp:286-290: begin cache history at cancellation.
+    partition.cache.reset_min_size_watermark();
     cancelTime = TimeUtil::NanoSeconds();
-    canceled = true;
 }
 
 } // namespace MapleRuntime
