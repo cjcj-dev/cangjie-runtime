@@ -49,6 +49,17 @@ class RuntimeLayoutTest(unittest.TestCase):
         self.assertIn('MutexStateOffset = 32;', self.header.read_text())
         self.assertEqual(self.run_generator().returncode, 0)
 
+    def test_return_poll_offset_requires_regeneration(self):
+        source = self.root / 'src/ObjectModel/MFuncdesc.inline.h'
+        source.write_text(source.read_text().replace(
+            'offsetof(MFuncDesc, returnPollFlag) == 28', 'offsetof(MFuncDesc, returnPollFlag) == 24'))
+        result = self.run_generator()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('differs from runtime assertions', result.stderr)
+        self.assertEqual(self.run_generator('--write').returncode, 0)
+        self.assertIn('FuncDescReturnPollOffsetELF = 24;', self.header.read_text())
+        self.assertIn('FuncDescReturnPollOffsetMachO = 32;', self.header.read_text())
+
     def test_consumer_copy_drift(self):
         copy = self.root / 'compiler-copy.h'
         copy.write_text(self.header.read_text().replace('MutexStateOffset = 24', 'MutexStateOffset = 32'))

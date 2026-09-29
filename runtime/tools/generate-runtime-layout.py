@@ -16,6 +16,7 @@ SOURCES = (
     'Common/BaseObject.h',
     'ObjectModel/MArray.inline.h',
     'ObjectModel/MClass.cpp',
+    'ObjectModel/MFuncdesc.inline.h',
 )
 ASSERTION = re.compile(
     r'static_assert\(\s*(?:offsetof\(\w+,\s*\w+\)|sizeof\(\w+\)|\w+)'
