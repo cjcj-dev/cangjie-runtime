@@ -165,8 +165,18 @@ else:
         record["bundle"] = {p.name: digest(p) for p in bundle.iterdir()}
         (bundle / "identity.json").write_text(json.dumps(record, indent=2))
         if windows:
+            checked(["llvm-readobj", "--coff-imports", exe], "pe-imports")
+            imports = (out / "pe-imports.log").read_text()
+            for symbol in ("GetCurFrameInfo", "GetCallerFrameInfo", "LinkImage"):
+                assert symbol in imports, "missing product import: " + symbol
             checked(["llvm-readobj", "--unwind", exe], "pe-unwind")
+            unwind = (out / "pe-unwind.log").read_text()
+            for symbol in ("MetadataNoDescriptor", "MetadataNoMap", "MetadataPresent"):
+                assert symbol in unwind, "missing PE unwind input: " + symbol
             checked(["llvm-objdump", "-s", "-d", exe], "pe-input")
+        else:
+            checked(["nm", "--undefined-only", exe], "test-imports")
+            assert "CallerSP" in (out / "test-imports.log").read_text(), "missing CallerSP product import"
         save()
         raise SystemExit(0)
     reference = json.loads((bundle / "identity.json").read_text())
@@ -177,8 +187,9 @@ else:
     shutil.copy2(libs[0], bundle / libs[0].name)
 
 reference = json.loads((bundle / "identity.json").read_text())
+assert reference["head"] == os.environ.get("GITHUB_SHA"), "test bundle belongs to another commit"
 for name, sha in reference["bundle"].items():
-    if "cangjie-runtime" not in name:
+    if name != ("libcangjie-runtime.dll" if windows else "libcangjie-runtime.so"):
         assert digest(bundle / name) == sha, name
 record["tested_bundle"] = {p.name: digest(p) for p in bundle.iterdir() if p.name != "identity.json"}
 exe = bundle / ("metadata.exe" if windows else "metadata")

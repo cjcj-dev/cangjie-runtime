@@ -6,12 +6,14 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import shutil
+import tempfile
 
 
-def invoke(exe, case, timeout=30):
+def invoke(exe, case, timeout=30, environment=None):
     try:
         child = subprocess.run([str(exe), case], capture_output=True, text=True,
-                               errors="replace", timeout=timeout)
+                               errors="replace", timeout=timeout, env=environment)
         return {"rc": child.returncode, "output": child.stdout + child.stderr}
     except (OSError, subprocess.TimeoutExpired) as error:
         return {"rc": None, "output": str(error), "launch_error": True}
@@ -49,6 +51,9 @@ def accepts(case, child, windows, abort_rc):
 
 def run(exe, destination):
     windows = os.name == "nt"
+    if windows:
+        import ctypes
+        ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
     control = invoke(exe, "--abort-control")
     # MSVCRT/UCRT abort convention is calibrated with this exact executable.
     valid_control = (not control.get("launch_error") and "ABORT_CONTROL" in control["output"] and
@@ -70,6 +75,14 @@ def run(exe, destination):
     non_target = invoke(exe, "--non-target-control")
     rejected = {"missing_executable": missing, "timeout": timeout,
                 "non_target_exception": non_target, "unknown_filter": unknown}
+    if windows:
+        with tempfile.TemporaryDirectory(prefix="missing-library-", dir=exe.parent.parent) as temporary:
+            orphan = Path(temporary) / exe.name
+            shutil.copy2(exe, orphan)
+            isolated = dict(os.environ)
+            isolated["PATH"] = os.pathsep.join(p for p in isolated["PATH"].split(os.pathsep)
+                                                if Path(p).resolve() != exe.parent.resolve())
+            rejected["missing_dll"] = invoke(orphan, cases(windows)[0], environment=isolated)
     preflight = {name: not accepts(cases(windows)[0], result, windows, control["rc"])
                  for name, result in rejected.items()}
     report = {"preflight_rejected": preflight, "preflight_inputs": rejected, "abort_control": control, "abort_control_valid": valid_control,
