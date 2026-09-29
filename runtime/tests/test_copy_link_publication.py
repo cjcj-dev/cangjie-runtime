@@ -9,6 +9,7 @@ import hashlib
 import difflib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -18,10 +19,11 @@ import time
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--profile', choices=['default', 'testable', 'gcunit'], required=True)
-    parser.add_argument('--arm', choices=['candidate', 'cut', 'restored'], required=True)
+    parser.add_argument('--arm', choices=['baseline', 'candidate', 'cut', 'restored'], required=True)
     parser.add_argument('--evidence', type=Path, required=True)
+    parser.add_argument('--source', type=Path, default=Path(__file__).resolve().parents[1])
     args = parser.parse_args()
-    source = Path(__file__).resolve().parents[1]
+    source = args.source.resolve()
     evidence = args.evidence.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     build = evidence / 'build'
@@ -60,6 +62,21 @@ def main():
     copied = evidence / 'publication'
     shutil.copytree(root, copied)
     library = next(copied.glob('lib/*/libcangjie-runtime.so')).parent
+    env.update(GCV2_RUNTIME_LIB_DIR=str(library), GCV2_RUNTIME_OUTPUT_ROOT=str(copied),
+               LD_LIBRARY_PATH=str(library), GC_UNIT_OUT=str(evidence / 'standalone'))
+    if args.arm == 'baseline':
+        assert args.profile != 'gcunit', 'baseline reproducer is the reported standalone entry'
+        (evidence / 'products.sha256').write_text(''.join(
+            hashlib.sha256((library / name).read_bytes()).hexdigest() + '  ' + name + '\n'
+            for name in ('libcangjie-runtime.so', 'libboundscheck.so')))
+        rc = run('standalone', ['bash', source / 'tests/gc_unit/run_standalone.sh'], env)
+        log = (evidence / 'standalone.log').read_text()
+        assert rc != 0 and 'MRT_CopyDisjointWords' in log and 'undefined reference' in log
+        assert 'main_rc=1 publication_rc=0' in log
+        assert not (evidence / 'standalone/cj_gc_unit').exists()
+        run('uptime-after', ['uptime'])
+        print('COPY_BASELINE_LINK_FAILURE_CONFIRMED assertions=NOT_RUN', flush=True)
+        return
     inputs = json.loads((copied / 'runtime-build-inputs.txt').read_text())
     obj = copied / inputs['internal_test_objects']['copy_disjoint_words']['path']
     commands = json.loads((build / 'compile_commands.json').read_text())
@@ -125,6 +142,27 @@ def main():
     if args.profile == 'gcunit':
         cmake = source / 'tests/gc_unit/CMakeLists.txt'
         original = cmake.read_text()
+        if args.arm == 'candidate':
+            # Reproduce the old CMake interface: it propagates Base even when
+            # the explicit Copy object is removed. Preserve the native recipe
+            # and full symbol table before testing the corrected boundary.
+            inherited = original.replace(
+                '"$<TARGET_FILE:cangjie-runtime>" "$<TARGET_FILE:boundscheck>" pthread dl',
+                'cangjie-runtime').replace(
+                'target_sources(cj_gc_unit PRIVATE $<TARGET_OBJECTS:RuntimeCopy>)',
+                '# explicit Copy object removed from old interface control')
+            cmake.write_text(inherited)
+            try:
+                assert run('cmake-old-interface', ['cmake', '--build', build, '--target',
+                           'cj_gc_unit', '-j', os.cpu_count()], env) == 0
+                old_link = (build / 'tests/gc_unit/CMakeFiles/cj_gc_unit.dir/link.txt').read_text()
+                (evidence / 'cmake-old-interface-command.log').write_text(old_link)
+                assert 'libBase.a' in old_link
+                old_elf = build / 'runtime-staging/bin/aarch64_Release/cj_gc_unit'
+                assert run('cmake-old-interface-symbols', ['nm', '--defined-only', old_elf]) == 0
+                assert 'MRT_CopyDisjointWords' in (evidence / 'cmake-old-interface-symbols.log').read_text()
+            finally:
+                cmake.write_text(original)
         if args.arm == 'cut':
             cmake.write_text(original.replace('target_sources(cj_gc_unit PRIVATE $<TARGET_OBJECTS:RuntimeCopy>)', '# internal object deliberately disconnected'))
             (evidence / 'cut.diff').write_text(''.join(difflib.unified_diff(original.splitlines(True), cmake.read_text().splitlines(True), fromfile='a/runtime/tests/gc_unit/CMakeLists.txt', tofile='b/runtime/tests/gc_unit/CMakeLists.txt')))
@@ -135,6 +173,7 @@ def main():
         elf = build / 'runtime-staging/bin/aarch64_Release/cj_gc_unit'
         link_log = evidence / 'cmake-link.log'
         shutil.copy2(build / 'tests/gc_unit/CMakeFiles/cj_gc_unit.dir/link.txt', evidence / 'cmake-link-command.log')
+        assert 'libBase.a' not in (evidence / 'cmake-link-command.log').read_text()
         if elf.exists():
             run('cmake-elf-symbols', ['nm', '--defined-only', elf])
     else:
@@ -159,39 +198,52 @@ def main():
     else:
         assert elf.is_file(), 'real entry did not link its main ELF'
         (evidence / 'test-elf.sha256').write_text(hashlib.sha256(elf.read_bytes()).hexdigest() + '\n')
-        run('elf-symbols', ['nm', '--defined-only', elf])
+        assert run('elf-symbols', ['nm', '--defined-only', elf]) == 0
+        assert re.search(r' t MRT_CopyDisjointWords$', (evidence / 'elf-symbols.log').read_text(), re.M)
+        assert re.search(r' T main$', (evidence / 'elf-symbols.log').read_text(), re.M)
         for test in ['atomic_copy_preserves_bounds_and_offset', 'atomic_copy_adjacent_ranges']:
             assert run(test, [elf, '--gtest_filter=ZUtils.' + test], env) == 0
         print('COPY_LINK_AND_CONTENT_CONFIRMED', flush=True)
-        if args.profile == 'gcunit':
-            # External CMake must consume the relocated publication with the
-            # original producer build temporarily inaccessible.
-            top = source / 'CMakeLists.txt'
-            original_top = top.read_text()
-            hidden_build = evidence / 'producer-build-held'
-            build.rename(hidden_build)
-            external = evidence / 'external-build'
-            try:
-                top.write_text('\n'.join([
-                    'cmake_minimum_required(VERSION 3.19)',
-                    'project(ExternalGcUnit LANGUAGES C CXX)',
-                    f'set(GCV2_RUNTIME_LIB_DIR "{library}")',
-                    f'set(GCV2_RUNTIME_OUTPUT_ROOT "{copied}")',
-                    'include_directories("${CMAKE_SOURCE_DIR}/third_party/third_party_bounds_checking_function/include")',
-                    'include_directories("${CMAKE_SOURCE_DIR}/src/CJThread/src/runtime/schedule/include")',
-                    f'include_directories("{copied}/include")',
-                    'add_subdirectory(tests/gc_unit)', '']))
-                assert run('external-configure', ['cmake', '-S', source, '-B', external,
-                            '-DCMAKE_CXX_COMPILER=clang++'], env) == 0
-                assert run('external-link', ['cmake', '--build', external, '--target',
-                            'cj_gc_unit', '-j', os.cpu_count()], env) == 0
-                external_elf = external / 'tests/gc_unit/cj_gc_unit'
-                (evidence / 'external-elf.sha256').write_text(hashlib.sha256(external_elf.read_bytes()).hexdigest())
-                for test in ['atomic_copy_preserves_bounds_and_offset', 'atomic_copy_adjacent_ranges']:
-                    assert run('external-' + test, [external_elf, '--gtest_filter=ZUtils.' + test], env) == 0
-            finally:
-                top.write_text(original_top)
-                hidden_build.rename(build)
+    if args.profile == 'gcunit':
+        # External CMake must consume the relocated publication with the
+        # original producer build temporarily inaccessible.
+        top = source / 'CMakeLists.txt'
+        original_top = top.read_text()
+        original_unit = cmake.read_text()
+        if args.arm == 'cut':
+            cmake.write_text(original_unit.replace('target_sources(cj_gc_unit PRIVATE "${_copy_object}")', '# published object deliberately disconnected'))
+        hidden_build = evidence / 'producer-build-held'
+        build.rename(hidden_build)
+        external = evidence / 'external-build'
+        try:
+            top.write_text('\n'.join([
+                'cmake_minimum_required(VERSION 3.19)',
+                'project(ExternalGcUnit LANGUAGES C CXX)',
+                f'set(GCV2_RUNTIME_LIB_DIR "{library}")',
+                f'set(GCV2_RUNTIME_OUTPUT_ROOT "{copied}")',
+                'include_directories("${CMAKE_SOURCE_DIR}/third_party/third_party_bounds_checking_function/include")',
+                'include_directories("${CMAKE_SOURCE_DIR}/src/CJThread/src/runtime/schedule/include")',
+                f'include_directories("{copied}/include")',
+                'add_subdirectory(tests/gc_unit)', '']))
+            assert run('external-configure', ['cmake', '-S', source, '-B', external,
+                        '-DCMAKE_CXX_COMPILER=clang++'], env) == 0
+            external_rc = run('external-link', ['cmake', '--build', external, '--target',
+                              'cj_gc_unit', '-j', os.cpu_count()], env)
+            if args.arm == 'cut':
+                log = (evidence / 'external-link.log').read_text()
+                assert external_rc != 0 and 'undefined reference' in log and 'MRT_CopyDisjointWords' in log
+                assert not (external / 'tests/gc_unit/cj_gc_unit').exists()
+                run('uptime-after', ['uptime'])
+                return
+            assert external_rc == 0
+            external_elf = external / 'tests/gc_unit/cj_gc_unit'
+            (evidence / 'external-elf.sha256').write_text(hashlib.sha256(external_elf.read_bytes()).hexdigest())
+            for test in ['atomic_copy_preserves_bounds_and_offset', 'atomic_copy_adjacent_ranges']:
+                assert run('external-' + test, [external_elf, '--gtest_filter=ZUtils.' + test], env) == 0
+        finally:
+            top.write_text(original_top)
+            cmake.write_text(original_unit)
+            hidden_build.rename(build)
     run('uptime-after', ['uptime'])
 
 

@@ -101,3 +101,11 @@ selected SO pair, compiler target and object ELF before linking. A relocated
 publication must retain the complete publication root. Missing or mismatched
 ARM objects are errors; consumers never recompile the assembly or search another
 build. x64 publications do not require this record.
+
+The in-tree `cj_gc_unit` link uses the runtime and boundscheck files with explicit
+target dependencies. It does not inherit the runtime target's implementation
+archives: otherwise Base can silently supply Copy after its explicit input is
+removed. ARM SO pairs copied outside their publication need an explicit
+`GCV2_RUNTIME_OUTPUT_ROOT`; the pair alone cannot distinguish publications with
+different internal object bytes. The publication's own library directory resolves
+to its enclosing root directly.

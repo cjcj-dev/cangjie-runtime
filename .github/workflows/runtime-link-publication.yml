@@ -87,3 +87,34 @@ jobs:
             evidence/standalone/**/*.log
             evidence/standalone/**/*.sha256
           retention-days: 7
+
+  arm-copy-baseline:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [default, testable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: 81618ec3150dcda33a61ba4a171ddf755f5eb1cf
+          path: baseline-source
+      - name: Install native build tools
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build ccache gdb libssl-dev libffi-dev
+      - name: Reproduce frozen standalone link failure
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/test_copy_link_publication.py --source baseline-source/runtime --profile '${{ matrix.profile }}' --arm baseline --evidence evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm-copy-${{ matrix.profile }}-baseline
+          path: |
+            evidence/*.log
+            evidence/*.json
+            evidence/*.sha256
+            evidence/standalone/**/*.log
+            evidence/standalone/**/*.sha256
+          retention-days: 7

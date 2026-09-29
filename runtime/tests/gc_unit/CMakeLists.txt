@@ -141,7 +141,11 @@ target_compile_definitions(cj_gc_unit PRIVATE
     MRT_GC_UNIT_TESTS=1)
 # Prefer in-tree runtime library when building as part of the product tree.
 if (TARGET cangjie-runtime)
-    target_link_libraries(cj_gc_unit PRIVATE cangjie-runtime)
+    # Link the product SO without inheriting its private implementation archives.
+    # HotSpot CompileGtest.gmk:109: internal Copy is an explicit product object.
+    add_dependencies(cj_gc_unit cangjie-runtime boundscheck)
+    target_link_libraries(cj_gc_unit PRIVATE
+        "$<TARGET_FILE:cangjie-runtime>" "$<TARGET_FILE:boundscheck>" pthread dl)
     if(TARGET RuntimeCopy)
         target_sources(cj_gc_unit PRIVATE $<TARGET_OBJECTS:RuntimeCopy>)
     endif()
