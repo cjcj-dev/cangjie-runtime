@@ -328,9 +328,13 @@ GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, BackingFailureReachesInitializationOwner
     close(output[0]);
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    const bool ownerRejected = diagnostic.find("Check failed: ZCollectedHeap::heap()->initialize()")
-        != std::string::npos;
-    const bool originalError = diagnostic.find("Failed to create heap backing file") != std::string::npos;
+    const size_t ownerPosition = diagnostic.find("Check failed: ZCollectedHeap::heap()->initialize()");
+    const bool ownerRejected = ownerPosition != std::string::npos;
+    // Match the owner's fatal diagnostic after its failed admission, not the
+    // backing producer's earlier log. Disconnecting first-error storage must
+    // fail this assertion even if that earlier log still contains the text.
+    const bool originalError = ownerRejected &&
+        diagnostic.find("Failed to create heap backing file", ownerPosition) != std::string::npos;
     // Print before the combined target assertion: a wrong earlier failure
     // must never conceal whether the owner consumed the construction result.
     std::fprintf(stderr, "INIT1310_TARGET owner_rejected=%d original_error=%d status=%d\n%s",
