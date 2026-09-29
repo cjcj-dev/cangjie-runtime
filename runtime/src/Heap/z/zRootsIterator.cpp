@@ -191,22 +191,14 @@ void ZMark::MergeMutatorRoots(WorkStack& workStack)
     (void)Heap::GetHeap().old().Mark().Flush();
 }
 
-void ZMark::EnumAllExportRoots(ValueRootList& exportOwners)
-{
-    Heap::GetHeap().VisitAllExportRoots([&exportOwners](NativeSlot& root) {
-
-        EnumRefFieldRoot(root, exportOwners);
-    });
-}
 void ZMark::DoEnumeration(WorkStack& workStack, ValueRootList& exportOwners)
 {
     // ZGC zMark.cpp:939-942: keep the entire old root task inside the
     // suspendible set. Its barriers must not color young roots across the
     // young mark-start flip before the new mark domain is ready.
     SuspendibleThreadSetJoiner joiner;
-    EnumAllCommonRoots((*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()));
+    EnumAllCommonRoots((*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()), exportOwners);
     MergeMutatorRoots(workStack);
-    EnumAllExportRoots(exportOwners);
 }
 
 
