@@ -17,9 +17,10 @@ using namespace MapleRuntime::GcUnit;
 extern "C" void MCC_WriteStructField(ObjectPtr, MAddress, size_t, MAddress, size_t, GCTib);
 extern "C" void CJ_MCC_ArrayCopyRef(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
 extern "C" void CJ_MCC_ArrayCopyStruct(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
+extern "C" void CJ_MCC_ArrayCopyGeneric(ObjectPtr, MAddress, size_t, ObjectPtr, MAddress, size_t);
 
 namespace {
-void CheckOverlap(bool structure, bool backwards, size_t length = 4, bool same = false)
+void CheckOverlap(bool structure, bool backwards, size_t length = 4, bool same = false, bool generic = false, bool emptyDestination = false)
 {
     GcHeapFixture heap;
     constexpr size_t count = 5;
@@ -58,13 +59,14 @@ void CheckOverlap(bool structure, bool backwards, size_t length = 4, bool same =
     // Diagnostic preconditions must not hide the result assertion below.
     std::fprintf(stderr, "ARRAYCOPY_PRECONDITION heap=%d length=%zu distinct=%d\n",
                  Heap::IsHeapAddress(array), static_cast<size_t>(array->GetLength()), original[0] != original[1]);
-    auto copy = structure ? CJ_MCC_ArrayCopyStruct : CJ_MCC_ArrayCopyRef;
-    copy(array, content + dstIndex * stride, (count - 1) * stride,
+    auto copy = generic ? CJ_MCC_ArrayCopyGeneric : structure ? CJ_MCC_ArrayCopyStruct : CJ_MCC_ArrayCopyRef;
+    copy(array, content + dstIndex * stride, emptyDestination ? 0 : (count - 1) * stride,
          array, content + srcIndex * stride, length * stride);
     bool referencesMatch = true;
     bool primitivesMatch = true;
     for (size_t i = 0; i < count; ++i) {
-        const size_t expected = i >= dstIndex && i < dstIndex + length ? srcIndex + i - dstIndex : i;
+        const size_t copied = emptyDestination ? 0 : length;
+        const size_t expected = i >= dstIndex && i < dstIndex + copied ? srcIndex + i - dstIndex : i;
         const MAddress destination = content + i * stride;
         BaseObject* actual = HeapAccess<>::oop_load(&(HeapSlotAt<>(destination + refOffset)));
         referencesMatch &= actual == original[expected];
@@ -89,6 +91,33 @@ GC_TEST(ArrayCopyOverlap, RefEmpty) { CheckOverlap(false, true, 0); }
 GC_TEST(ArrayCopyOverlap, StructEmpty) { CheckOverlap(true, true, 0); }
 GC_TEST(ArrayCopyOverlap, RefDisjoint) { CheckOverlap(false, true, 1); }
 GC_TEST(ArrayCopyOverlap, StructDisjoint) { CheckOverlap(true, true, 1); }
+
+GC_TEST(ArrayCopyOverlap, GenericRefEmpty) { CheckOverlap(false, true, 0, false, true); }
+GC_TEST(ArrayCopyOverlap, GenericStructEmpty) { CheckOverlap(true, true, 0, false, true); }
+GC_TEST(ArrayCopyOverlap, GenericRefBackward) { CheckOverlap(false, true, 4, false, true); }
+GC_TEST(ArrayCopyOverlap, GenericStructBackward) { CheckOverlap(true, true, 4, false, true); }
+GC_TEST(ArrayCopyOverlap, RefBothEmpty) { CheckOverlap(false, true, 0, false, false, true); }
+GC_TEST(ArrayCopyOverlap, StructBothEmpty) { CheckOverlap(true, true, 0, false, false, true); }
+
+GC_TEST(ArrayCopyOverlap, RefEmptyDestination) { CheckOverlap(false, true, 4, false, false, true); }
+GC_TEST(ArrayCopyOverlap, GenericRefEmptyDestination) { CheckOverlap(false, true, 4, false, true, true); }
+
+namespace {
+void CheckHeaderlessCopy(size_t length)
+{
+    GcHeapFixture heap;
+    std::array<unsigned char, 8> bytes = {1, 2, 3, 4, 5, 6, 7, 8};
+    auto expected = bytes;
+    std::memmove(expected.data() + 1, expected.data(), length);
+    CJ_MCC_ArrayCopyStruct(nullptr, reinterpret_cast<MAddress>(bytes.data() + 1), bytes.size() - 1,
+                          nullptr, reinterpret_cast<MAddress>(bytes.data()), length);
+    const bool matches = bytes == expected;
+    std::fprintf(stderr, "ARRAYCOPY_HEADERLESS_TARGET length=%zu matches=%d\n", length, matches);
+    GC_EXPECT_TRUE(matches);
+}
+}
+GC_TEST(ArrayCopyOverlap, HeaderlessBackward) { CheckHeaderlessCopy(7); }
+GC_TEST(ArrayCopyOverlap, HeaderlessEmpty) { CheckHeaderlessCopy(0); }
 
 namespace {
 class ArrayCopyMutatorScope {
@@ -211,8 +240,8 @@ void CheckBulkBits976(BulkAccess976 kind)
             Api::oop_arraycopy(source, destination, 1);
             break;
         case BulkAccess976::RefArray:
-            Api::oop_arraycopy(array, reinterpret_cast<MAddress>(source), sizeof(zpointer),
-                              array, reinterpret_cast<MAddress>(destination), sizeof(zpointer));
+            Api::oop_arraycopy(array, reinterpret_cast<MAddress>(source),
+                              array, reinterpret_cast<MAddress>(destination), 1);
             break;
         case BulkAccess976::Value:
             Api::value_copy(ValuePayload(reinterpret_cast<MAddress>(source), sizeof(zpointer),
@@ -220,8 +249,8 @@ void CheckBulkBits976(BulkAccess976 kind)
                             ValuePayload(reinterpret_cast<MAddress>(destination), sizeof(zpointer), ValuePayload::Kind::Heap));
             break;
         case BulkAccess976::ValueArray:
-            Api::value_arraycopy(array, reinterpret_cast<MAddress>(source), sizeof(zpointer),
-                                array, reinterpret_cast<MAddress>(destination), sizeof(zpointer));
+            Api::value_arraycopy(array, reinterpret_cast<MAddress>(source),
+                                reinterpret_cast<MAddress>(destination), 1);
             break;
     }
     const zpointer expected = rawAccess ? color_null() : ZAddress::store_good(zaddress::null);
