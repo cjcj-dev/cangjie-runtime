@@ -17,6 +17,7 @@
 #include "Common/Runtime.h"
 #include "Common/SuspendibleThreadSet.h"
 #include "Concurrency/Concurrency.h"
+#include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
