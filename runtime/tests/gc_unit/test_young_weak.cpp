@@ -756,6 +756,8 @@ GC_OTHER_VM_TEST(HeapIterator, ExportRootIsIncludedInStrongMode)
     WeakClosureTestRuntime runtime(manager);
     GcHeapFixture fx;
     WeakGraph graph(fx, fx.region0());
+    RelocationReceiptTest::BindCollector(&Heap::GetHeap());
+    Heap::GetHeap().old().set_phase(ZGenerationPhase::Relocate);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
     std::unordered_set<BaseObject*> strong;
     HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
