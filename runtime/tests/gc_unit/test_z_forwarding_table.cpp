@@ -233,9 +233,9 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
     const ZGenerationPhase youngPhase = Heap::GetHeap().GetZGeneration(ZGenerationId::young).GcPhase();
     const ZGenerationPhase oldPhase = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
     for (bool marking : { false, true }) {
-        Heap::GetHeap().PublishGenerationPhase(ZGenerationId::young,
+        ZGeneration::young()->set_phase(
             marking ? ZGenerationPhase::Mark : ZGenerationPhase::Relocate);
-        Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old,
+        ZGeneration::old()->set_phase(
             marking ? ZGenerationPhase::Relocate : ZGenerationPhase::Mark);
         auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
         fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
@@ -245,8 +245,8 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
         size_t count = 0;
         fwd->relocated_remembered_fields_apply_to_published([&](MAddress) { ++count; });
         fwd->Destroy();
-        Heap::GetHeap().PublishGenerationPhase(ZGenerationId::young, youngPhase);
-        Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, oldPhase);
+        ZGeneration::young()->set_phase( youngPhase);
+        ZGeneration::old()->set_phase( oldPhase);
         GC_EXPECT_EQ(count, marking ? 1u : 0u);
     }
 }

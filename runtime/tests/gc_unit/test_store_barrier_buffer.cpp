@@ -1,4 +1,3 @@
-#include "Heap/z/zGeneration.inline.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -35,6 +34,7 @@
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #undef private
+#include "Heap/z/zGeneration.inline.hpp"
 
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zMark.hpp"
@@ -1604,6 +1604,7 @@ GC_TEST(Remset1313, BufferFlippedControl) { CheckPhaseRemset1313(true); }
 
 static void CheckPhaseMark1313(bool active)
 {
+    B09RuntimeFixture runtime;
     GcHeapFixture fx;
     fx.region0()->reset(PageAge::old);
     fx.region1()->reset(PageAge::old);
@@ -1629,5 +1630,5 @@ static void CheckPhaseMark1313(bool active)
     GC_EXPECT_EQ(live, active);
     GC_EXPECT_EQ(pending, 1u);
 }
-GC_TEST(Remset1313, BufferOldMark) { CheckPhaseMark1313(true); }
-GC_TEST(Remset1313, BufferOutsideOldMarkControl) { CheckPhaseMark1313(false); }
+GC_OTHER_VM_TEST(Remset1313, BufferOldMark) { CheckPhaseMark1313(true); }
+GC_OTHER_VM_TEST(Remset1313, BufferOutsideOldMarkControl) { CheckPhaseMark1313(false); }

@@ -77,12 +77,12 @@ void StoreBarrierBuffer::install_base_pointers()
     lastInstalledColor = ::g_cjStoreGoodMask;
 }
 
-static MAddress RemapBufferedField(MAddress p, zaddress_unsafe pBase, uintptr_t color)
+static volatile zpointer* RemapBufferedField(volatile zpointer* p, zaddress_unsafe pBase, uintptr_t color)
 {
-    const uintptr_t offset = p - untype(pBase);
+    const uintptr_t offset = reinterpret_cast<uintptr_t>(p) - untype(pBase);
     ZUncoloredRoot::process_no_keepalive(&pBase, color);
     const zaddress remapped = safe(pBase);
-    return untype(remapped) + offset;
+    return reinterpret_cast<volatile zpointer*>(untype(remapped) + offset);
 }
 
 void StoreBarrierBuffer::on_new_phase_relocate(size_t i)
@@ -94,8 +94,7 @@ void StoreBarrierBuffer::on_new_phase_relocate(size_t i)
     if (is_null(pBase)) {
         return;
     }
-    buffer[i].p = reinterpret_cast<volatile zpointer*>(
-        RemapBufferedField(reinterpret_cast<MAddress>(buffer[i].p), pBase, lastProcessedColor));
+    buffer[i].p = RemapBufferedField(buffer[i].p, pBase, lastProcessedColor);
 }
 
 void StoreBarrierBuffer::on_new_phase_remember(size_t i)
@@ -117,7 +116,7 @@ void StoreBarrierBuffer::on_new_phase_remember(size_t i)
 
 bool StoreBarrierBuffer::is_old_mark() const
 {
-    return Heap::GetHeap().GetZGeneration(ZGenerationId::old).IsPhaseMark();
+    return ZGeneration::old()->is_phase_mark();
 }
 
 bool StoreBarrierBuffer::stored_during_old_mark() const
@@ -176,7 +175,8 @@ bool StoreBarrierBuffer::is_in(MAddress p)
         for (size_t i = buffer->Current(); i < kStoreBarrierBufferLength; ++i) {
             MAddress entryP = reinterpret_cast<MAddress>(buffer->buffer[i].p);
             if (needsRemap && !is_null(buffer->basePointers[i])) {
-                entryP = RemapBufferedField(entryP, buffer->basePointers[i], buffer->lastProcessedColor);
+                entryP = reinterpret_cast<MAddress>(RemapBufferedField(
+                    buffer->buffer[i].p, buffer->basePointers[i], buffer->lastProcessedColor));
             }
             if (entryP == p) { found = true; return; }
         }

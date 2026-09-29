@@ -435,8 +435,8 @@ void PinOwnerGeneration(ZPage* region, Generation gen)
 
 void PublishGenerationMarkComplete(Generation gen)
 {
-    Heap::GetHeap().PublishGenerationPhase(
-        gen == Generation::Old ? ZGenerationId::old : ZGenerationId::young, ZGenerationPhase::MarkComplete);
+    Heap::GetHeap().GetZGeneration(
+        gen == Generation::Old ? ZGenerationId::old : ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
 }
 
 ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
