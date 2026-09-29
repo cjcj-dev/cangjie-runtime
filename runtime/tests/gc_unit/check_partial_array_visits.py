@@ -142,4 +142,8 @@ except ImportError:
     if __name__ == "__main__":
         sys.exit(main())
 else:
-    observe()
+    try:
+        observe()
+    except Exception as error:
+        print("ARRAY_VISITS_ERROR %s" % error, flush=True)
+        gdb.execute("quit 2")
