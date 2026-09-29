@@ -124,7 +124,9 @@ private:
 };
 class CompressedStackMapHead {
 public:
-    explicit CompressedStackMapHead(const Uptr* table) : prologue(table) {}
+    CompressedStackMapHead() = default;
+    explicit CompressedStackMapHead(const Uptr* table) : prologue(table), isValid(true) {}
+    bool IsValid() const { return isValid; }
     CompressedStackMapHead(CompressedStackMapHead&&) = default;
     ~CompressedStackMapHead() = default;
     PrologueRegisterClosure TakePrologueRegisters() { return prologue.TakeRegisters(); }
@@ -140,7 +142,15 @@ public:
 #else
             FuncDescRef desc = MFuncDesc::GetFuncDesc(addr);
 #endif
+            if (desc == nullptr) {
+                return CompressedStackMapHead();
+            }
             stackmapStart = reinterpret_cast<U8*>(desc->GetStackMap());
+        }
+        // codeCache.cpp:750-758: absent code metadata is an empty result,
+        // before any frame metadata is decoded. No synthetic stackmap is read.
+        if (stackmapStart == nullptr) {
+            return CompressedStackMapHead();
         }
         return CompressedStackMapHead(reinterpret_cast<Uptr*>(stackmapStart));
     }
@@ -154,6 +164,9 @@ public:
 
     CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC, bool countDerivedRows = false) const
     {
+        if (!IsValid()) {
+            return CompressedStackMapEntry(false);
+        }
         StackMapTable stackMapTable(prologue.GetNextTable(), prologue.GetSlotFormat());
         if (stackMapTable.GetLookupResult(startPC, framePC) != StackMapLookupResult::FOUND) {
             return CompressedStackMapEntry(false);
@@ -172,6 +185,9 @@ public:
 
     StackMapInvalidReason GetInvalidReason(Uptr startPC, Uptr framePC) const
     {
+        if (!IsValid()) {
+            return StackMapInvalidReason::ZERO_ENTRIES;
+        }
         StackMapTable stackMapTable(prologue.GetNextTable(), prologue.GetSlotFormat());
         switch (stackMapTable.GetLookupResult(startPC, framePC)) {
             case StackMapLookupResult::ZERO_ENTRIES:
@@ -186,6 +202,7 @@ public:
 
 private:
     FramePrologue prologue;
+    bool isValid = false;
 };
 using StackMapEntry = CompressedStackMapEntry;
 using StackMapHead = CompressedStackMapHead;

@@ -220,6 +220,7 @@ struct PrologueRegisterClosure {
 // needs the compiler's saved-register prologue for movable-stack pointers.
 class FramePrologue {
 public:
+    FramePrologue() = default;
     explicit FramePrologue(const Uptr* table) : nextTable(reinterpret_cast<U8*>(const_cast<Uptr*>(table)), 0)
     {
         frameSize = Read();
@@ -251,8 +252,8 @@ private:
         return value.first;
     }
     BitsManager nextTable;
-    U32 frameSize;
-    U32 slotFormat;
+    U32 frameSize = 0;
+    U32 slotFormat = 0;
     PrologueRegisterClosure registers;
 };
 

@@ -281,6 +281,9 @@ public:
 #else
         auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
 #endif
+        if (!head.IsValid()) {
+            return MapType(stackBase, PrologueRegisterClosure());
+        }
         auto closure = head.TakePrologueRegisters();
         auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
         if (!entry.IsValid()) {
@@ -297,6 +300,9 @@ public:
 #else
         auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
 #endif
+        if (!head.IsValid()) {
+            return StackMapInvalidReason::ZERO_ENTRIES;
+        }
         return head.GetInvalidReason(startPC, framePC);
     }
 
@@ -318,6 +324,9 @@ inline HeapReferenceMap StackMapBuilder::Build<HeapReferenceMap>(bool countDeriv
 #else
     auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
 #endif
+    if (!head.IsValid()) {
+        return HeapReferenceMap(stackBase);
+    }
     auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
     return entry.IsValid() ? HeapReferenceMap(true, stackBase, entry) : HeapReferenceMap(stackBase);
 }
@@ -333,6 +342,9 @@ inline MethodMap StackMapBuilder::Build<MethodMap>(bool countDerivedRows) const
 #else
     auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
 #endif
+    if (!head.IsValid()) {
+        return MethodMap(stackBase);
+    }
     auto entry = head.GetStackMapEntry(startPC, framePC);
     if (!entry.IsValid()) {
         return MethodMap(stackBase);
