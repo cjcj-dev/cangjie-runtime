@@ -148,7 +148,7 @@ void* AllocateGranulePages(void* context)
     // explicitly now that heap construction primes the mapped cache.
     const size_t cached = Heap::GetHeap().page_allocator().GetCachedBytes();
     ZPage* initialCache = cached == 0 ? nullptr : Heap::alloc_page(
-        cached, ZPageType::large, false, PageAge::eden, NonBlockingAllocationFlags());
+        cached, ZPageType::large, PageAge::eden, NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(cached == 0 || initialCache != nullptr);
     auto& result = *static_cast<GranuleAllocationResult*>(context);
     alignas(TypeInfo) static unsigned char types[3][sizeof(TypeInfo)];

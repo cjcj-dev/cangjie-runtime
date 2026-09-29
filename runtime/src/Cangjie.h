@@ -270,10 +270,15 @@ struct GCParam {
      */
     uint64_t backupGCInterval;
 
-    /* Zero selects ergonomics; positive values explicitly set the worker budget. */
+    /* Source bits below distinguish ergonomics from explicit values, including zero. */
+    uint32_t parallelGCThreads;
     uint32_t concGCThreads;
     uint32_t youngGCThreads;
     uint32_t oldGCThreads;
+    bool parallelGCThreadsSet;
+    bool concGCThreadsSet;
+    bool youngGCThreadsSet;
+    bool oldGCThreadsSet;
     /* False keeps dynamic worker selection (the default). */
     bool staticGCThreads;
     /* Explicitness is separate because zero is a valid tenuring threshold. */

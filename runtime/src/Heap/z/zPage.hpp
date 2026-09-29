@@ -44,7 +44,6 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zVirtualMemory.hpp"
 #include "Heap/z/zGranuleMap.hpp"
-#include "Heap/z/zPageTable.hpp"
 
 #include "Base/TimeUtils.h"
 #include "securec.h"

@@ -343,18 +343,6 @@ ZPageTable& Heap::page_table() { return GetHeap()._page_table; }
 RegionManager& Heap::page_allocator() { return _page_allocator; }
 const RegionManager& Heap::page_allocator() const { return _page_allocator; }
 
-namespace {
-thread_local ZPage* g_prematerializedPage = nullptr;
-}
-
-ZPage* Heap::alloc_page(ZPage* page)
-{
-    g_prematerializedPage = page;
-    ZPage* published = alloc_page(0, ZPageType::small);
-    g_prematerializedPage = nullptr;
-    return published;
-}
-
 // ZGC zHeap.cpp:148-160; MinTLABSize is in bytes in this runtime.
 size_t Heap::unsafe_max_tlab_alloc() const
 {
@@ -394,18 +382,22 @@ void Heap::account_undo_alloc_page(ZPage* page)
     }
 }
 
-ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, PageAge age, ZAllocationFlags flags)
+ZPage* Heap::alloc_page(size_t num, ZPageType role, PageAge age, ZAllocationFlags flags)
 {
     RegionManager& manager = GetHeap().page_allocator();
-    ZPage* page = g_prematerializedPage;
-    if (page == nullptr && num > 0) {
-        page = manager.TakeRegion(num, role, expectPhysicalMem, age, flags);
-    }
+    ZPage* page = manager.TakeRegion(num, role, age, flags);
     if (page != nullptr) {
         page_table().insert(page);
         GetHeap().account_alloc_page(page);
     }
     return page;
+}
+
+// ZGC zHeap.cpp:265-272: undo accounting precedes the ordinary page-free path.
+void Heap::undo_alloc_page(ZPage* page)
+{
+    account_undo_alloc_page(page);
+    free_page(page);
 }
 
 void Heap::free_page(ZPage* page)

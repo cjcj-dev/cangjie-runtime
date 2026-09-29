@@ -8,6 +8,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
+#include "Heap/z/zAccess.hpp"
 #include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
@@ -65,13 +66,8 @@ OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(unsigned workers,
 
 void OopStorageSetIteratorWeak::report_num_dead()
 {
-    numDead = 0;
     for (auto& state : states) {
-        state.OopsDo([&](NativeSlot& slot) {
-            if (is_null(slot.GetTargetObject())) {
-                ++numDead;
-            }
-        });
+        state.storage()->report_num_dead(state.num_dead());
     }
 }
 
@@ -81,9 +77,37 @@ void OopStorageSetIteratorStrong::Apply(const NativeSlotVisitor& visitor)
     for (auto& state : states) { state.OopsDo(visitor); }
 }
 
+// oopStorageSetParState.inline.hpp:44-70. NativeSlotVisitor is this
+// runtime's closure carrier; dead counting remains a per-worker closure.
+class DeadCounterClosure {
+public:
+    explicit DeadCounterClosure(const NativeSlotVisitor* closure) : closure(closure) {}
+    void do_oop(NativeSlot* slot)
+    {
+        (*closure)(*slot);
+        if (NativeAccess<ON_PHANTOM_OOP_REF | AS_NO_KEEPALIVE>::oop_load(slot) == nullptr) {
+            ++numDead;
+        }
+    }
+    size_t num_dead() const { return numDead; }
+private:
+    const NativeSlotVisitor* closure;
+    size_t numDead = 0;
+};
+
 void OopStorageSetIteratorWeak::Apply(const NativeSlotVisitor& visitor)
 {
-    for (auto& state : states) { state.OopsDo(visitor); }
+    // oopStorageSetParState.inline.hpp:76-91: count in the clearing pass,
+    // then notify each owner once after every worker has finished.
+    for (auto& state : states) {
+        if (state.storage()->should_report_num_dead()) {
+            DeadCounterClosure countingClosure(&visitor);
+            state.OopsDo([&](NativeSlot& slot) { countingClosure.do_oop(&slot); });
+            state.increment_num_dead(countingClosure.num_dead());
+        } else {
+            state.OopsDo(visitor);
+        }
+    }
 }
 
 void StaticRootsAdapterIterator::Apply(const NativeSlotVisitor& visitor)

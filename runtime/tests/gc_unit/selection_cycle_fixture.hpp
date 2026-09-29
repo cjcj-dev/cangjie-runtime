@@ -17,8 +17,8 @@ struct SelectionCycleFixture {
         // RunAll creates the standalone heap before this fixture. Heap's
         // constructor initializes its allocator and injects it into young's
         // remembered set (ZGC zHeap.cpp:58-79, zGeneration.cpp:499-505).
-        ZPage* page0 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
-        ZPage* page1 = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, secondAge, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* page0 = Heap::alloc_page(ZGranuleSize, ZPageType::small, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* page1 = Heap::alloc_page(ZGranuleSize, ZPageType::small, secondAge, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         GC_EXPECT_TRUE(page0 != nullptr && page1 != nullptr);
         starts[0] = page0->GetRegionStart();
         starts[1] = page1->GetRegionStart();

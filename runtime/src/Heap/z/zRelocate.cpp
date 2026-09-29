@@ -42,7 +42,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Common/SuspendibleThreadSet.h"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -323,7 +323,7 @@ static ZPage* AllocateRelocationTarget(ZForwarding* forwarding)
     flags.set_non_blocking();
     flags.set_gc_relocation();
     ZPage* source = forwarding->page();
-    return Heap::alloc_page(forwarding->size(), source->type(), false, forwarding->to_age(), flags);
+    return Heap::alloc_page(forwarding->size(), source->type(), forwarding->to_age(), flags);
 }
 
 static void RetireRelocationTarget(ZGeneration* generation, ZPage* page)

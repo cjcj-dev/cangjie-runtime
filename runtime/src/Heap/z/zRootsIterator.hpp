@@ -77,7 +77,6 @@ public:
 private:
     std::array<OopStorage::ParState<true>, 3> states;
     ZGenerationIdOptional generation;
-    size_t numDead = 0;
 };
 class StaticRootsAdapterIterator {
 public:

@@ -76,7 +76,7 @@ public:
     OneUnitStallFixture()
         : manager((ZStat::Initialize(), CreateStandaloneHeap(1), Heap::GetHeap().page_allocator()))
     {
-        capacity = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        capacity = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     }
 
     void PublishCapacity()
@@ -94,8 +94,8 @@ GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWai
     fixture.PublishCapacity();
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* first = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, flags);
-    ZPage* second = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, flags);
+    ZPage* first = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::eden, flags);
+    ZPage* second = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::eden, flags);
     const size_t count = (first != nullptr) + (second != nullptr);
     std::fprintf(stderr, "ALLOCATION_CAPACITY_TARGET count=%zu first=%p second=%p\n", count, first, second);
     GC_EXPECT_EQ(count, size_t{1});
@@ -110,8 +110,11 @@ GC_RUNTIME_OTHER_VM_TEST(RequestWorkers, StallAfterYoungPrelude)
     params.heapParam.heapSize = 64 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 4;
+    params.gcParam.concGCThreadsSet = true;
     params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
     params.gcParam.oldGCThreads = 3;
+    params.gcParam.oldGCThreadsSet = true;
     params.gcParam.staticGCThreads = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto& heap = Heap::GetHeap();
@@ -389,7 +392,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     }
     ZAllocationFlags nonBlocking;
     nonBlocking.set_non_blocking();
-    ZPage* competing = Heap::alloc_page(requestedBytes, ZPageType::large, false, PageAge::eden, nonBlocking);
+    ZPage* competing = Heap::alloc_page(requestedBytes, ZPageType::large, PageAge::eden, nonBlocking);
     ConcurrentGCBreakpoints::ReleaseControl();
     deadline = std::chrono::steady_clock::now() + kHangLimit;
     while ((!done[0].load() || !done[1].load()) && std::chrono::steady_clock::now() < deadline) {

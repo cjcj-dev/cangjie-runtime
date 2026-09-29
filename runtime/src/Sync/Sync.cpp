@@ -43,6 +43,16 @@ static NativeMutexWait* g_mutexWaits = nullptr;
 
 OopStorage& SyncWeakOopStorage()
 {
+    // oopStorage.hpp:179: register the owner before GC creates its ParState.
+    static const bool registered = [] {
+        g_syncWeakStorage.register_num_dead_callback([](size_t numDead) {
+            if (numDead != 0) {
+                SyncRetireDead();
+            }
+        });
+        return true;
+    }();
+    (void)registered;
     return g_syncWeakStorage;
 }
 

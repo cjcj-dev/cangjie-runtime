@@ -36,7 +36,7 @@ struct InitialCacheReservation {
     InitialCacheReservation()
     {
         const size_t cached = Heap::GetHeap().page_allocator().GetCachedBytes();
-        page = cached == 0 ? nullptr : Heap::alloc_page(cached, ZPageType::large, false, PageAge::eden,
+        page = cached == 0 ? nullptr : Heap::alloc_page(cached, ZPageType::large, PageAge::eden,
                                                        NonBlockingAllocationFlags());
         GC_EXPECT_TRUE(cached == 0 || page != nullptr);
     }
@@ -175,7 +175,7 @@ void* AllocateManagedFastMedium(void*)
     InitialCacheReservation initialCache;
     auto& manager = Heap::GetHeap().page_allocator();
     if (!ZPageSizeMediumEnabled) { return reinterpret_cast<void*>(1); }
-    ZPage* cached = Heap::alloc_page(ZPageSizeMediumMin, ZPageType::medium, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* cached = Heap::alloc_page(ZPageSizeMediumMin, ZPageType::medium, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     if (cached == nullptr) { return reinterpret_cast<void*>(2); }
     Heap::free_page(cached);
     const size_t capacity = manager.GetCommittedBytes();
@@ -275,14 +275,14 @@ void* AllocateNonBlockingCapacity(void*)
     auto& heap = Heap::GetHeap();
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* occupied = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, flags);
+    ZPage* occupied = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::eden, flags);
     if (occupied == nullptr) { return reinterpret_cast<void*>(1); }
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
     const uint64_t before = (*ZGeneration::old()).seqnum();
     // A valid page size that cannot fit while occupied consumes part of capacity.
     // The non-blocking allocation must return its failure without starting a GC.
-    ZPage* result = Heap::alloc_page(heap.GetMaxCapacity(), ZPageType::large, false, PageAge::eden, flags);
+    ZPage* result = Heap::alloc_page(heap.GetMaxCapacity(), ZPageType::large, PageAge::eden, flags);
     const uint64_t after = (*ZGeneration::old()).seqnum();
     const bool valid = result == nullptr && after == before;
     std::fprintf(stderr, "NONBLOCKING_CAPACITY_TARGET result=%p before=%llu after=%llu valid=%d\n",
@@ -296,7 +296,7 @@ void* AllocateFastMedium(void*)
     auto& manager = Heap::GetHeap().page_allocator();
     if (!ZPageSizeMediumEnabled) { return reinterpret_cast<void*>(1); }
     const size_t size = ZPageSizeMediumMin;
-    ZPage* cached = Heap::alloc_page(size, ZPageType::medium, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* cached = Heap::alloc_page(size, ZPageType::medium, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     if (cached == nullptr) { return reinterpret_cast<void*>(2); }
     Heap::free_page(cached);
     const size_t capacity = manager.GetCommittedBytes();
@@ -304,7 +304,7 @@ void* AllocateFastMedium(void*)
     ZAllocationFlags flags;
     flags.set_non_blocking();
     flags.set_fast_medium();
-    ZPage* result = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, false, PageAge::eden, flags);
+    ZPage* result = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, PageAge::eden, flags);
     const size_t actual = result == nullptr ? 0 : result->size();
     const bool valid = result != nullptr && actual == size && result->type() == ZPageType::medium &&
                        manager.GetCommittedBytes() == capacity && manager.GetUsedRegionSize() - before == actual;
@@ -367,7 +367,7 @@ void* AllocateFromDirtyCache(void*)
     const size_t bytes = small ? 256 : medium ? ZObjectSizeLimitSmall + 32 : ZObjectSizeLimitMedium + 32;
     const auto pageType = small ? ZPageType::small : medium ? ZPageType::medium : ZPageType::large;
     const size_t pageBytes = small ? ZPageSizeSmall : medium ? ZPageSizeMediumMin : AlignUp(bytes, ZGranuleSize);
-    ZPage* seed = Heap::alloc_page(pageBytes, pageType, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* seed = Heap::alloc_page(pageBytes, pageType, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     if (seed == nullptr) { return reinterpret_cast<void*>(1); }
     const uintptr_t base = seed->GetRegionStart();
     std::memset(reinterpret_cast<void*>(base), 0xa5, pageBytes);
@@ -396,7 +396,7 @@ void* AllocateFromDirtyCache(void*)
 
     uintptr_t object = 0;
     if (kind == ZeroCase::Page) {
-        ZPage* reused = Heap::alloc_page(pageBytes, pageType, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* reused = Heap::alloc_page(pageBytes, pageType, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         object = reused == nullptr ? 0 : reused->GetRegionStart();
         // Observe the dirty input span selected outside cache metadata.
         const bool preserved = object != 0 && dirtyWitness && BytesAre(object + witness, object + witness + 64, 0xa5);

@@ -46,7 +46,6 @@
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Common/SuspendibleThreadSet.h"
-#include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zStackWatermark.hpp"
 #include "Mutator/MutatorManager.h"

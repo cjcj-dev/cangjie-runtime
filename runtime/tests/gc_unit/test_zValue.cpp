@@ -125,3 +125,52 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     }
 }
 #endif
+
+namespace {
+struct MutableValueStorage : ZValueStorage<MutableValueStorage> {
+    static uint32_t slots;
+    static size_t alignment() { return sizeof(uintptr_t); }
+    static uint32_t count() { return slots; }
+    static uint32_t id() { return 0; }
+};
+uint32_t MutableValueStorage::slots = 4;
+}
+
+// Shrinking the logical domain keeps every accessed slot inside the original
+// allocation while distinguishing live S::count() from a construction cache.
+GC_TEST(ZValue, iterator_observes_current_storage_count)
+{
+    MutableValueStorage::slots = 4;
+    ZValue<MutableValueStorage, int> value(17);
+    ZValueIterator<MutableValueStorage, int> iter(&value);
+    ZValueIterator<MutableValueStorage, int> ids(&value);
+    ZValueConstIterator<MutableValueStorage, int> constIter(&value);
+    int* slot;
+    const int* constSlot;
+    uint32_t id;
+    iter.next(&slot);
+    ids.next(&slot, &id);
+    constIter.next(&constSlot);
+    MutableValueStorage::slots = 2;
+    unsigned plain = 1, indexed = 1, immutable = 1;
+    while (iter.next(&slot)) { ++plain; }
+    while (ids.next(&slot, &id)) { ++indexed; }
+    while (constIter.next(&constSlot)) { ++immutable; }
+    const auto count = value.count();
+    MutableValueStorage::slots = 4;
+    std::fprintf(stderr, "VALUE1331 count=%u plain=%u indexed=%u const=%u expected=2\n",
+                 count, plain, indexed, immutable);
+    GC_EXPECT_TRUE(count == 2 && plain == 2 && indexed == 2 && immutable == 2);
+}
+
+GC_TEST(ZValue, storage_reuses_existing_block_after_count_change)
+{
+    MutableValueStorage::slots = 4;
+    const uintptr_t first = MutableValueStorage::alloc(sizeof(uintptr_t));
+    MutableValueStorage::slots = 2;
+    const uintptr_t second = MutableValueStorage::alloc(sizeof(uintptr_t));
+    MutableValueStorage::slots = 4;
+    std::fprintf(stderr, "VALUE1331 allocation_stride=%zu expected=%zu\n",
+                 size_t(second - first), sizeof(uintptr_t));
+    GC_EXPECT_EQ(second - first, sizeof(uintptr_t));
+}
