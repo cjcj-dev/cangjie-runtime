@@ -1,0 +1,6 @@
+[  RUN   ] ManagedMetadata.EhAbsentStackMap
+2026-09-29 23:56:09.068056 3115130 F Check failed: funcDesc->GetStackMap() != nullptr
+2026-09-29 23:56:09.068281 3115130 F managed frame missing stackmap startPC=0x6540c69c697c ip=0x6540c69c6980
+METADATA_TARGET entry=2 desc=1 map=0 status=134 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.EhAbsentStackMap
+[========] 1 tests: 1 passed, 0 failed

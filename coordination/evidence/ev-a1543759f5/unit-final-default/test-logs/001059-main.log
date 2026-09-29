@@ -1,0 +1,9 @@
+[  RUN   ] Uncommitter.UncommitIdleUnitsReleasesPhysical
+[  RUN   ] Uncommitter.UncommitIdleUnitsReleasesPhysical
+DETAIL probe n=32
+DETAIL probe cache ready committed=67108864 cached=32
+DETAIL backendReleased=2097152 cancelFirst=0 unit=2097152 capacity before=67108864 after=65011712
+TARGET_UNCOMMIT_RELEASE_ASSERT bytes=2097152
+GC_UNIT_OTHER_VM_OKIDOKI Uncommitter.UncommitIdleUnitsReleasesPhysical
+[  PASS  ] Uncommitter.UncommitIdleUnitsReleasesPhysical
+[========] 1 tests: 1 passed, 0 failed

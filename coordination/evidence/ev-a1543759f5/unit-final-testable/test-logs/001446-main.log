@@ -1,0 +1,78 @@
+[  RUN   ] PackageInit.PublicUnloadAllowsPendingOwnerAndIdleU
+[  RUN   ] PackageInit.PublicUnloadAllowsPendingOwnerAndIdleU
+PACKAGE_INIT_TARGET runtime-start executed=1 pass=1
+PACKAGE_INIT_TARGET configured-scheduler-workers executed=1 pass=1
+PACKAGE_INIT_TARGET unattached-after-runtime-init executed=1 pass=1
+PACKAGE_INIT_TARGET b1-a-open executed=1 pass=1
+PACKAGE_INIT_TARGET fixture-waitqueue executed=1 pass=1
+PACKAGE_INIT_TARGET b1-a-symbols executed=1 pass=1
+PACKAGE_INIT_TARGET b1-u-load executed=1 pass=1
+PACKAGE_INIT_TARGET b1-u-symbols executed=1 pass=1
+PACKAGE_INIT_TARGET scheduler-admission executed=1 pass=1
+PACKAGE_INIT_TARGET b1-owner executed=1 pass=1
+PACKAGE_INIT_TARGET b1-owner-started executed=1 pass=1
+PACKAGE_INIT_TARGET b1-a-fini executed=1 pass=1
+PACKAGE_INIT_TARGET b1-public-platform-without-stw executed=1 pass=1
+PACKAGE_INIT_TARGET b1-dependency executed=1 pass=1
+PACKAGE_INIT_TARGET b1-owner-done executed=1 pass=1
+PACKAGE_INIT_TARGET b1-a-close executed=1 pass=1
+PACKAGE_INIT_TARGET b1-direct-close-done executed=1 pass=1
+PACKAGE_INIT_TARGET b1-u-public-close executed=1 pass=1
+PACKAGE_INIT_TARGET b1-public-close-done executed=1 pass=1
+2026-09-29 23:56:12.048915 3147630 I GC Workers for Young Generation: 1 (static)
+2026-09-29 23:56:12.049215 3147630 I GC Workers for Old Generation: 1 (static)
+2026-09-29 23:56:12.060062 3147796 I FinalizerProcessor thread started
+2026-09-29 23:56:12.061476 3147630 I Uncommit: Enabled delay=300s
+2026-09-29 23:56:12.061604 3147630 I Cangjie runtime started.
+2026-09-29 23:56:13.079626 3147796 I FinalizerProcessor thread stopped
+2026-09-29 23:56:13.080098 3147761 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-29 23:56:13.080249 3147761 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:13.080315 3147761 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:13.080364 3147761 I Critical: Finalizer 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:13.080413 3147761 I Critical: Finalizer 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.080461 3147761 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:13.080509 3147761 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.080557 3147761 I Major Collection: Major Collection 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.080606 3147761 I Memory: Allocation Rate 0/0 0/0 0/0 0/0 B/s
+2026-09-29 23:56:13.080654 3147761 I Minor Collection: Minor Collection 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.080702 3147761 I Old Generation: Old Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.080751 3147761 I Old Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.080799 3147761 I Old Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.080852 3147761 I Old Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.080900 3147761 I Old Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.080948 3147761 I Old Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.080996 3147761 I Old Phase: Concurrent Process Non-Strong 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081051 3147761 I Old Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081100 3147761 I Old Phase: Concurrent Remap Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081148 3147761 I Old Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081196 3147761 I Old Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081244 3147761 I Old Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081293 3147761 I Old Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081341 3147761 I Old Subphase: Concurrent References Enqueue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081390 3147761 I Old Subphase: Concurrent References Process 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081439 3147761 I Old Subphase: Concurrent Remap Remembered 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081487 3147761 I Old Subphase: Concurrent Remap Roots Colored 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081534 3147761 I Old Subphase: Concurrent Remap Roots Uncolored 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081581 3147761 I Old Subphase: PostTrace 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081630 3147761 I Test: Unobserved 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081678 3147761 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081727 3147761 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081775 3147761 I Young Generation: Young Generation (Collect Roots) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081822 3147761 I Young Generation: Young Generation (Promote All) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081869 3147761 I Young Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081918 3147761 I Young Pause: Pause Mark Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.081965 3147761 I Young Pause: Pause Mark Start (Major) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.082014 3147761 I Young Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.082068 3147761 I Young Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.082117 3147761 I Young Phase: Concurrent Mark ConPACKAGE_INIT_TARGET runtime-finish executed=1 pass=1
+tinue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.082198 3147761 I Young Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.082247 3147761 I Young Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.082295 3147761 I Young Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.082343 3147761 I Young Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.082391 3147761 I Young Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.082439 3147761 I Young Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.089141 3147596 I Cangjie runtime shutdown.
+GC_UNIT_OTHER_VM_OKIDOKI PackageInit.PublicUnloadAllowsPendingOwnerAndIdleU
+[  PASS  ] PackageInit.PublicUnloadAllowsPendingOwnerAndIdleU
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,7 @@
+[  RUN   ] SoftMemoryRuntime.Case039
+[  RUN   ] SoftMemoryRuntime.Case039
+2026-09-29 23:56:10.521122 3131505 E Invalid cjSoftMaxHeapSize
+MEMORY_RUNTIME input=[0xffffffffffffffff] rc=-1 valid=0 expected=0
+GC_UNIT_OTHER_VM_OKIDOKI SoftMemoryRuntime.Case039
+[  PASS  ] SoftMemoryRuntime.Case039
+[========] 1 tests: 1 passed, 0 failed

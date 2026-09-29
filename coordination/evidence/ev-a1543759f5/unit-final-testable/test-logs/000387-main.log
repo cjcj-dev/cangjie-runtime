@@ -1,0 +1,26 @@
+[  RUN   ] P82HeapIterator.ReachableSet
+[  RUN   ] P82HeapIterator.ReachableSet
+P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=2 verify=0 visitor=1
+P82_RESULT workers=2 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=2 verify=1 visitor=0
+P82_RESULT workers=2 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=2 verify=0 visitor=1
+P82_RESULT workers=2 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=2 verify=1 visitor=0
+P82_RESULT workers=2 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=4 verify=0 visitor=1
+P82_RESULT workers=4 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=4 verify=1 visitor=0
+P82_RESULT workers=4 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=4 verify=0 visitor=1
+P82_RESULT workers=4 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=4 verify=1 visitor=0
+P82_RESULT workers=4 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_REACHABLE_SET_ASSERT exact=1
+GC_UNIT_OTHER_VM_OKIDOKI P82HeapIterator.ReachableSet
+[  PASS  ] P82HeapIterator.ReachableSet
+[========] 1 tests: 1 passed, 0 failed

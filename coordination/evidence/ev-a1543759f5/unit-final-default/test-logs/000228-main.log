@@ -1,0 +1,4 @@
+[  RUN   ] ZForwardingEntries.CapacityArithmeticDoesNotWrap
+P1_CAPACITY checked=1 uint32_boundary=8589934592
+[  PASS  ] ZForwardingEntries.CapacityArithmeticDoesNotWrap
+[========] 1 tests: 1 passed, 0 failed

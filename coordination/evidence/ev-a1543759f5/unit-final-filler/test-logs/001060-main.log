@@ -1,0 +1,6 @@
+[  RUN   ] Uncommitter.TestUncommitIndependentPartitionThread
+[  RUN   ] Uncommitter.TestUncommitIndependentPartitionThread
+DETAIL partition-worker enabled=1 committed-before=75497472 committed-after=71303168 elapsed=26831913
+GC_UNIT_OTHER_VM_OKIDOKI Uncommitter.TestUncommitIndependentPartitionThread
+[  PASS  ] Uncommitter.TestUncommitIndependentPartitionThread
+[========] 1 tests: 1 passed, 0 failed

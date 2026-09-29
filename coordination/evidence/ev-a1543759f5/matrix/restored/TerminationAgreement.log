@@ -1,0 +1,6 @@
+[  RUN   ] P82HeapIterator.TerminationAgreement
+[  RUN   ] P82HeapIterator.TerminationAgreement
+P82_TERMINATION_ASSERT early_return=0 visits=1025
+GC_UNIT_OTHER_VM_OKIDOKI P82HeapIterator.TerminationAgreement
+[  PASS  ] P82HeapIterator.TerminationAgreement
+[========] 1 tests: 1 passed, 0 failed

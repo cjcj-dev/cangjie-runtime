@@ -1,0 +1,7 @@
+[  RUN   ] SoftMemoryRuntime.OfficialZero
+[  RUN   ] SoftMemoryRuntime.OfficialZero
+2026-09-29 23:56:10.894045 3136973 E Invalid cjSoftMaxHeapSize
+MEMORY_RUNTIME input=[0KB] rc=-1 valid=0 expected=0
+GC_UNIT_OTHER_VM_OKIDOKI SoftMemoryRuntime.OfficialZero
+[  PASS  ] SoftMemoryRuntime.OfficialZero
+[========] 1 tests: 1 passed, 0 failed

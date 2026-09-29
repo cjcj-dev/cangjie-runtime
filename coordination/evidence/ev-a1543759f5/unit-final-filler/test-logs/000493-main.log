@@ -1,0 +1,6 @@
+[  RUN   ] AllocationOwnership904.NonBlockingAllocationPreservesOwnedPage
+[  RUN   ] AllocationOwnership904.NonBlockingAllocationPreservesOwnedPage
+AllocationOwnership retained=1 used_before=2097152 used_after=4194304
+GC_UNIT_OTHER_VM_OKIDOKI AllocationOwnership904.NonBlockingAllocationPreservesOwnedPage
+[  PASS  ] AllocationOwnership904.NonBlockingAllocationPreservesOwnedPage
+[========] 1 tests: 1 passed, 0 failed
