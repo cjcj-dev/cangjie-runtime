@@ -10,4 +10,4 @@
 | Build<HeapReferenceMap> | ZStackWatermark::process_frame (`runtime/src/Heap/z/zStackWatermark.cpp:104-107`) | 保持 !pointers.IsValid() 返回，外层遍历继续 |
 
 规格：`/root/cj_build/reference/jdk/src/hotspot/share/runtime/frame.cpp:995-1011` 在 oop_map()!=nullptr 后才扫描；`runtime/stackWatermark.inline.hpp:42-59` 允许无 barrier 帧。
-任务书明确排除 frame size/ABI/has_barrier 改动。头保存可空元数据指针；只在非空时构造局部 FramePrologue，保持 MethodMap 路径不分配堆内存，不制造 frameSize=0。
+任务书明确排除 frame size/ABI/has_barrier 改动。头保存可空元数据指针；只在非空时构造内联 FramePrologue，保持 MethodMap 路径不分配堆内存，不制造 frameSize=0。

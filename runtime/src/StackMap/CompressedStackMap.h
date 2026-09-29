@@ -7,6 +7,7 @@
 
 #ifndef MRT_COMPRESSED_STACKMAP_H
 #define MRT_COMPRESSED_STACKMAP_H
+#include <new>
 #include "Common/Dataref.h"
 #include "Common/StackType.h"
 #include "Common/TypeDef.h"
@@ -125,13 +126,20 @@ private:
 };
 class CompressedStackMapHead {
 public:
-    explicit CompressedStackMapHead(const Uptr* table = nullptr) : table(table) {}
-    CompressedStackMapHead(CompressedStackMapHead&&) = default;
-    ~CompressedStackMapHead() = default;
+    CompressedStackMapHead() : table(nullptr) {}
+    explicit CompressedStackMapHead(const Uptr* table) : table(table), prologue(table) {}
+    CompressedStackMapHead(CompressedStackMapHead&& other) : table(other.table)
+    {
+        if (table != nullptr) { new (&prologue) FramePrologue(std::move(other.prologue)); }
+    }
+    ~CompressedStackMapHead()
+    {
+        if (table != nullptr) { prologue.~FramePrologue(); }
+    }
     PrologueRegisterClosure TakePrologueRegisters()
     {
         if (table == nullptr) { return PrologueRegisterClosure(); }
-        return FramePrologue(table).TakeRegisters();
+        return prologue.TakeRegisters();
     }
     static CompressedStackMapHead GetStackMapHead(Uptr addr, uint64_t* funcDesc = nullptr)
     {
@@ -163,7 +171,6 @@ public:
     CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC, bool countDerivedRows = false) const
     {
         if (table == nullptr) { return CompressedStackMapEntry(false); }
-        const FramePrologue prologue(table);
         StackMapTable stackMapTable(prologue.GetNextTable(), prologue.GetSlotFormat());
         if (stackMapTable.GetLookupResult(startPC, framePC) != StackMapLookupResult::FOUND) {
             return CompressedStackMapEntry(false);
@@ -183,7 +190,6 @@ public:
     StackMapInvalidReason GetInvalidReason(Uptr startPC, Uptr framePC) const
     {
         if (table == nullptr) { return StackMapInvalidReason::NO_MAP; }
-        const FramePrologue prologue(table);
         StackMapTable stackMapTable(prologue.GetNextTable(), prologue.GetSlotFormat());
         switch (stackMapTable.GetLookupResult(startPC, framePC)) {
             case StackMapLookupResult::ZERO_ENTRIES:
@@ -198,6 +204,11 @@ public:
 
 private:
     const Uptr* table;
+    // C++14 inline optional storage: absent maps do not construct a decoder.
+    // Keep MethodMap's allocation-free path and decode present prologues once.
+    union {
+        FramePrologue prologue;
+    };
 };
 using StackMapEntry = CompressedStackMapEntry;
 using StackMapHead = CompressedStackMapHead;
