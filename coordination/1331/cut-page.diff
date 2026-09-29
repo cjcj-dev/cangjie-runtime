@@ -1,0 +1,11 @@
+--- runtime/src/Heap/z/zPageTable.cpp	2026-09-30 01:48:15.784521326 +0800
++++ /root/cj_build/agent_scratch/sym_cangjie_runtime_1331_implement_r5895529148/cut-page/runtime/src/Heap/z/zPageTable.cpp	2026-09-30 01:58:59.961234310 +0800
+@@ -26,7 +26,7 @@
+     return required_count << ZGranuleSizeShift;
+ }
+ 
+-ZPageTable::ZPageTable() : _map(get_max_offset_for_map()) {}
++ZPageTable::ZPageTable() : _map(ZAddressOffsetMax) {}
+ 
+ ZPage* ZPageTable::get(MAddress addr) const
+ {

@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zPageTable.cpp b/runtime/src/Heap/z/zPageTable.cpp
+index abdb5bc056..6e5a79b93a 100644
+--- a/runtime/src/Heap/z/zPageTable.cpp
++++ b/runtime/src/Heap/z/zPageTable.cpp
+@@ -26,7 +26,7 @@ static size_t get_max_offset_for_map()
+     return required_count << ZGranuleSizeShift;
+ }
+ 
+-ZPageTable::ZPageTable() : _map(get_max_offset_for_map()) {}
++ZPageTable::ZPageTable() : _map(ZAddressOffsetMax) {}
+ 
+ ZPage* ZPageTable::get(MAddress addr) const
+ {
