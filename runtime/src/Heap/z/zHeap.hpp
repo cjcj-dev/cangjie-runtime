@@ -4,7 +4,6 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-
 #ifndef MRT_HEAP_H
 #define MRT_HEAP_H
 
@@ -35,13 +34,7 @@
 
 #include <atomic>
 #include <unordered_set>
-extern "C" {
-extern uintptr_t g_cjHeapStart;
-extern uintptr_t g_cjHeapEnd;
-extern uintptr_t g_cjHeapRangeCount;
-extern uintptr_t g_cjHeapRangeStart[];
-extern uintptr_t g_cjHeapRangeEnd[];
-}
+
 #include "Heap/z/zAllocationFlags.hpp"
 
 namespace MapleRuntime {
@@ -70,7 +63,6 @@ public:
     bool IsSurvivedObject(const BaseObject*) const;
     bool IsGarbage(const BaseObject* obj) const { return !IsSurvivedObject(obj); }
 
-
     bool IsGcStarted() const;
     bool IsGCEnabled() const;
     void EnableGC(bool val);
@@ -78,7 +70,6 @@ public:
     MAddress Allocate(size_t size, AllocType allocType);
 
     void RequestGC(GCReason reason);
-    void ResolveCycleRef();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     void DumpRoots(LogType logType);
     void DumpHeap(const CString& tag);
@@ -159,27 +150,15 @@ public:
     static void free_page(ZPage* page);
     static size_t free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages);
 
-
     void DumpHeap(HeapDumpKind kind);
     void object_iterate(ObjectClosure* object_cl, bool visit_weaks);
     void object_and_field_iterate_for_verify(ObjectClosure* object_cl, OopFieldClosure* field_cl, bool visit_weaks);
-
-
-
-
-
-
 
     ssize_t GetHeapPhysicalMemorySize() const;
 
     FinalizerProcessor& GetFinalizerProcessor();
 
-
-
-
-
     void StopGCWork();
-
 
 private:
     static Heap* _heap;
@@ -196,7 +175,6 @@ private:
     ZCrossVM _cross_vm;
     std::atomic<bool> isGCEnabled { true };
     bool _initialized { false };
-
 
 };
 } // namespace MapleRuntime

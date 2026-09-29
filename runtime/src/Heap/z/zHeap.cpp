@@ -77,7 +77,6 @@
 #endif
 #include "Sync/Sync.h"
 
-
 namespace MapleRuntime {
 Heap* Heap::_heap = nullptr;
 
@@ -108,10 +107,6 @@ Heap::Heap(const HeapParam& param, double garbageThreshold)
 Heap::~Heap()
 {
 }
-
-
-
-
 
 // ZGC zHeap.inline.hpp:82-90: the facade directly enters the object allocator.
 MAddress Heap::Allocate(size_t size, AllocType allocType)
@@ -148,10 +143,7 @@ void Heap::Fini()
     old().StopWorkers();
 }
 
-
 void Heap::RequestGC(GCReason reason) { ZCollectedHeap::heap()->collect(reason); }
-
-void Heap::ResolveCycleRef() { cross_vm().ResolveCycleRef(); }
 
 void Heap::MarkObjectIfActive(BaseObject* object)
 {
@@ -160,12 +152,6 @@ void Heap::MarkObjectIfActive(BaseObject* object)
     }
     ZBarrier::Mark<false, false, true, false>(from_object(object));
 }
-
-
-
-
-
-
 
 void Heap::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)
 {
@@ -201,11 +187,7 @@ bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
     return ZMark::FlushThreadMarkProducers(tls);
 }
 
-
 bool Heap::IsGhostFromObject(BaseObject* obj) const { return ZRelocate::IsFromObject(obj); }
-
-
-
 
 bool Heap::IsSurvivedObject(const BaseObject* obj) const
 {
@@ -224,9 +206,6 @@ bool Heap::IsGCEnabled() const { return isGCEnabled.load(); }
 
 void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
 
-
-
-
 size_t Heap::GetMaxCapacity() const { return _page_allocator.GetHeapCapacity(); }
 size_t Heap::soft_max_capacity() const { return _page_allocator.soft_max_capacity(); }
 
@@ -236,7 +215,6 @@ ZMemoryUsageInfo Heap::GetMemoryUsage() const
     const size_t old = _page_allocator.used_generation(ZGenerationId::old);
     return ComputeMemoryUsageInfo(_page_allocator.GetCommittedCapacity(), GetMaxCapacity(), young, old);
 }
-
 
 size_t Heap::GetCurrentCapacity() const { return _page_allocator.GetCommittedBytes(); }
 
@@ -257,12 +235,6 @@ ZRemembered& Heap::remembered()
 {
     return *ZGeneration::young()->remembered();
 }
-
-
-
-
-
-
 
 #if defined(_WIN64)
 ssize_t Heap::GetHeapPhysicalMemorySize() const
@@ -348,21 +320,6 @@ ssize_t Heap::GetHeapPhysicalMemorySize() const
 FinalizerProcessor& Heap::GetFinalizerProcessor() { return ZCollectedHeap::heap()->finalizer_processor(); }
 
 void Heap::StopGCWork() { ZCollectedHeap::stop(); }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 } // namespace MapleRuntime
 
