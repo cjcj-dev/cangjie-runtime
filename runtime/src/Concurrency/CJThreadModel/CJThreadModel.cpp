@@ -40,9 +40,7 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
     // Bound by CJThreadVisitRoots while holding the group's lock. No current-color fallback.
     const uintptr_t color = *g_uncoloredVisitColor;
     const uintptr_t nextColor = ZPointerMarkGoodMask | ZPointerRememberedMask;
-    ObjectRef& ref = reinterpret_cast<ObjectRef&>(data->obj);
-    ObjectRef& map = reinterpret_cast<ObjectRef&>(data->threadObject);
-    ObjectRef& execute = RootSlotAt(&data->execute);
+    CJThreadRoot root(*data, *g_uncoloredVisitColor);
     auto process = [&](ObjectRef& slot) {
         const zaddress_unsafe observed = slot.LoadPlain();
         if (is_null(observed)) {
@@ -54,17 +52,13 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
         ZUncoloredRoot::process(reinterpret_cast<zaddress_unsafe*>(&slot), color);
     };
     if (color != ZPointerStoreGoodMask) {
-        process(ref);
-        process(map);
-        process(execute);
+        root.oops_do(process);
         // zNMethod.cpp:379-398: only an armed group may be processed and
         // receive the partial GC guard. Never re-arm a disarmed group.
         __atomic_store_n(g_uncoloredVisitColor, nextColor, __ATOMIC_RELEASE);
     }
     if (handle != nullptr) {
-        (*reinterpret_cast<RootVisitor*>(handle))(ref);
-        (*reinterpret_cast<RootVisitor*>(handle))(map);
-        (*reinterpret_cast<RootVisitor*>(handle))(execute);
+        root.oops_do(*static_cast<RootVisitor*>(handle));
     }
 }
 
