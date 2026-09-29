@@ -1348,3 +1348,23 @@ GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, GenerationUsed)
     GC_EXPECT_TRUE(values);
     GC_EXPECT_EQ(count, size_t{1});
 }
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, GenerationStart)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    GcLogCapture capture;
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
+    const std::string text = capture.Finish();
+    size_t count = 0;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.find("rec=generation ") != std::string::npos &&
+            line.find("gc_tag=y name=Young_Generation event=start") != std::string::npos) ++count;
+    }
+    std::fprintf(stderr, "GCLOG_TARGET generation_start_records=%zu expected=1\n", count);
+    GC_EXPECT_EQ(count, size_t{1});
+}

@@ -32,7 +32,7 @@ Raw mechanical base inventory: 1309-consumers-base.txt (95 lines).
 
 # Test changes
 
-Removed obsolete phase_leaf path/depth/overflow and ZSTAT tests with their nonexistent producers (ZGC has no counterpart); replaced v4 family fixture with current lifecycle fixture. Added A1–A5/A7, count variation, generation isolation, duplicate terminal tests. A6 uses real product stderr. Added GcLifecycleLog.CollectionStart/CollectionEnd/CollectionAbort/GenerationUsed and testable AllocationStall; all run real driver or alloc_page entry and read stderr emitted by the linked SO.
+Removed obsolete phase_leaf path/depth/overflow and ZSTAT tests with their nonexistent producers (ZGC has no counterpart); replaced v4 family fixture with current lifecycle fixture. Added A1–A5/A7, count variation, generation isolation, duplicate terminal tests. A6 uses real product stderr. Added GcLifecycleLog.CollectionStart/CollectionEnd/CollectionAbort/GenerationStart/GenerationUsed/JNICriticalStall and testable AllocationStall; all run real driver or alloc_page entry and read stderr emitted by the linked SO.
 
 # Added consumer discovered by full-repository search
 
