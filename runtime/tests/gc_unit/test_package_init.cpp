@@ -1128,7 +1128,7 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryStaticRootIsEnumerated)
         type->SetType(TypeKind::TYPE_KIND_CLASS);
         type->SetInstanceSize(64);
         c.object = reinterpret_cast<MAddress>(MCC_NewObject(type, 64 + TYPEINFO_PTR_SIZE));
-        c.setRoot(static_cast<uintptr_t>(StoreGoodPointer(reinterpret_cast<BaseObject*>(c.object))));
+        c.setRoot(static_cast<uintptr_t>(GcUnit::StoreGoodPointer(reinterpret_cast<BaseObject*>(c.object))));
         c.done.store(true, std::memory_order_release);
     }, &context);
     Target("static-root-object-published", Await(context.done) && context.object != 0);
