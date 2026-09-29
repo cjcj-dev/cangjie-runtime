@@ -1163,7 +1163,10 @@ static void CheckRelocationRemsetOwnership(bool worker)
     young.set_phase(ZGenerationPhase::Relocate);
     BaseObject* result;
     if (worker) {
+        young.Workers()->set_active();
+        ZRelocate::StartRelocationTasks(young.id());
         young.relocate().relocate(&young.relocation_set());
+        young.Workers()->set_inactive();
         result = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(object)));
     } else {
         result = to_object(ZBarrier::load_barrier_on_oop_field(&root));
@@ -1250,6 +1253,8 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     while (owner->_ref_count.load(std::memory_order_acquire) != 2 &&
            std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
     const bool retained = owner->_ref_count.load(std::memory_order_acquire) == 2;
+    generation.Workers()->set_active();
+    ZRelocate::StartRelocationTasks(generation.id());
     std::thread worker([&] { generation.relocate().relocate(&generation.relocation_set()); });
     const MAddress from = reinterpret_cast<MAddress>(objects[0]);
     const auto publishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -1259,6 +1264,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     lock.unlock();
     mutator.join();
     worker.join();
+    generation.Workers()->set_inactive();
     ZPage* unused = *allocator->shared_medium_page_addr();
     const size_t allocated = unused == nullptr ? size : unused->GetRegionAllocatedSize();
     const bool published = winner != 0 && reinterpret_cast<MAddress>(result) == winner;
