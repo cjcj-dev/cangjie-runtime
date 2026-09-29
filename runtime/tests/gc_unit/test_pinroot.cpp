@@ -7,6 +7,7 @@
 #include "Heap/z/zHeuristics.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zStackWatermark.hpp"
 #include "Heap/z/zAddress.hpp"
@@ -1270,8 +1271,12 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     GC_EXPECT_TRUE(retained && published && copied && unused != nullptr);
 }
 
-static void CheckPromotionRemset1313(bool flip, int referent)
+extern "C" void CJ_MCC_StoreBarrierOnHeapField(volatile zpointer*);
+
+static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = false)
 {
+    std::unique_ptr<B09RuntimeFixture> runtime;
+    if (buffered) { runtime = std::make_unique<B09RuntimeFixture>(); }
     CreateStandaloneHeap(16);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
@@ -1302,6 +1307,14 @@ static void CheckPromotionRemset1313(bool flip, int referent)
     child->SetClassInfo(type);
     HeapSlotAt<>(reinterpret_cast<MAddress>(child) + 8).StoreColoured(StoreGoodPointer(nullptr));
     HeapSlotAt<>(reinterpret_cast<MAddress>(object) + 8).StoreColoured(StoreGoodPointer(referent == 2 ? nullptr : child));
+    Mutator* mutator = nullptr;
+    if (buffered) {
+        mutator = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + 8);
+        field.StoreColoured(to_zpointer(raw(StoreGoodPointer(nullptr)) ^ ZPointerMarkedOldMask));
+        CJ_MCC_StoreBarrierOnHeapField(reinterpret_cast<volatile zpointer*>(&field));
+        field.StoreColoured(StoreGoodPointer(nullptr));
+    }
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(source, object));
     ZPageTest::MakeRelocatable(*source);
     if (!flip) {
@@ -1326,11 +1339,22 @@ static void CheckPromotionRemset1313(bool flip, int referent)
     }
     auto* target = Heap::page(reinterpret_cast<MAddress>(result));
     auto* field = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(result) + 8);
+    if (buffered) {
+        auto& buffer = *mutator->GetGCData().storeBarrierBuffer;
+        const size_t pending = buffer.Pending();
+        const bool installed = pending == 1 && untype(buffer.basePointers[buffer.Current()]) == reinterpret_cast<uintptr_t>(object);
+        const bool relocatedSlot = StoreBarrierBuffer::is_in(reinterpret_cast<MAddress>(field));
+        std::fprintf(stderr, "BUFFER_REMAP1313_TARGET pending=%zu installed=%d relocated_slot=%d target_assertion=executed\n",
+            pending, installed, relocatedSlot);
+        GC_EXPECT_TRUE(installed && relocatedSlot);
+        buffer.on_new_phase();
+        MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    }
     const bool remembered = target->is_remembered(field);
     const bool old = target->age() == PageAge::old;
     std::fprintf(stderr, "PROMOTION1313_TARGET flip=%d referent=%d old=%d moved=%d remembered=%d expected=%d target_assertion=executed\n",
-        flip, referent, old, result != object, remembered, referent == 0);
-    GC_EXPECT_EQ(remembered, referent == 0);
+        flip, referent, old, result != object, remembered, referent == 0 || buffered);
+    GC_EXPECT_EQ(remembered, referent == 0 || buffered);
     GC_EXPECT_TRUE(old);
     GC_EXPECT_EQ(result == object, flip);
 }
@@ -1340,3 +1364,5 @@ GC_COMPONENT_OTHER_VM_TEST(Remset1313, RelocateNullControl) { CheckPromotionRems
 GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipYoung) { CheckPromotionRemset1313(true, 0); }
 GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipOldControl) { CheckPromotionRemset1313(true, 1); }
 GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipNullControl) { CheckPromotionRemset1313(true, 2); }
+
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, BufferedSlotRelocates) { CheckPromotionRemset1313(false, 2, true); }
