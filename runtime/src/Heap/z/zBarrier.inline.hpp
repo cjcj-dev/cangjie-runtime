@@ -298,9 +298,8 @@ inline zaddress ZBarrier::make_load_good(zpointer ptr)
     if (ZPointer::is_load_good_or_null(ptr)) {
         return RefField<>(ptr).GetTargetObject();
     }
-    ZGeneration* generation = remap_generation(ptr);
-    BaseObject* object = to_object(RefField<>(ptr).GetTargetObject());
-    return from_object(generation->relocate_or_remap_object(object));
+    return relocate_or_remap(to_zaddress_unsafe(untype(RefField<>(ptr).GetTargetObject())),
+                             remap_generation(ptr));
 }
 
 inline zaddress ZBarrier::make_load_good_no_relocate(zpointer ptr)
