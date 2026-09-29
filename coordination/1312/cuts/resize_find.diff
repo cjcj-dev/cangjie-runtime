@@ -1,6 +1,6 @@
 --- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
 +++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
-@@ -235,7 +235,7 @@
+@@ -233,7 +233,7 @@
  WeakHandle StringDedup::Table::Find(MArray* object, uint32_t hash) const
  {
      if (cleanupState != nullptr) {

@@ -1,6 +1,6 @@
 --- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
 +++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
-@@ -277,7 +277,7 @@
+@@ -275,7 +275,7 @@
              table.deadState.store(DeadState::good, std::memory_order_release);
              break;
          case DeadState::wait2:

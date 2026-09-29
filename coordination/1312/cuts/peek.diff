@@ -1,6 +1,6 @@
 --- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
 +++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
-@@ -101,7 +101,7 @@
+@@ -99,7 +99,7 @@
      {
          for (size_t index = 0; index < hashes.size(); ++index) {
              if (hashes[index] != hash) continue;

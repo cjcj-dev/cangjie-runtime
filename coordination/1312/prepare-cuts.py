@@ -13,6 +13,8 @@ spec={
  'resize_find':[(dedup,'WeakHandle value = cleanupState->Find(object, hash);','WeakHandle value; // Controlled cut: omit old buckets.')],
  'wait2':[(dedup,'case DeadState::wait2:\n            table.deadState.store(DeadState::wait1, std::memory_order_release);','case DeadState::wait2:\n            table.deadState.store(DeadState::wait2, std::memory_order_release);')],
  'blocked':[(barrier,'inline zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (ZResurrection::is_blocked()) {','inline zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (false) {'),(barrier,'inline zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (ZResurrection::is_blocked()) {','inline zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (false) {')],
+ 'compiler': [('runtime/src/CompilerCalls.cpp','    return StringDedup::Instance().Canonical(arrayInfo, candidate);','    return candidate; // Controlled cut: omit canonical consumer.')],
+ 'registration': [('runtime/src/Heap/z/zRootsIterator.hpp','std::array<OopStorage::ParState<true>, 4> states;', 'std::array<OopStorage::ParState<true>, 3> states;'),('runtime/src/Heap/z/zRootsIterator.cpp','{SyncWeakOopStorage(), workers},\n              {StringDedup::Instance().WeakStorage(), workers}}}', '{SyncWeakOopStorage(), workers}}}')],
  'restored':[]}
 for name, edits in spec.items():
  texts={}

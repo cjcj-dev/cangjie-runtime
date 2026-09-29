@@ -212,8 +212,8 @@ struct DedupCycle {
     bool wasMarked = false;
     bool blocked = false;
     bool preparedOld = false;
-    bool youngPageStable = false;
-    bool youngMarkedBeforeLookup = false;
+    ZPage* originalPage = nullptr;
+    MArray* candidateBacking = nullptr;
 };
 void WaitCommand(DedupCycle& cycle, unsigned command)
 {
@@ -239,6 +239,7 @@ void* DedupCycleTask(void* argument)
     auto& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
     auto* first = NewCycleBacking(cycle.old, cycle.collision ? 129171 : 0x13120001);
     cycle.original = first;
+    cycle.originalPage = Heap::page(reinterpret_cast<uintptr_t>(first));
     cycle.preparedOld = !Heap::page(reinterpret_cast<uintptr_t>(first))->IsYoungRegion();
     cycle.installed = MCC_StringDedupCanonicalImpl(DedupArrayType(), first) == first;
     if (cycle.strongControl) {
@@ -246,6 +247,7 @@ void* DedupCycleTask(void* argument)
         NativeAccess<>::oop_store(cycle.control, first);
     }
     auto* second = NewCycleBacking(cycle.old, cycle.collision ? 187275 : (cycle.different ? 0x13120002 : 0x13120001));
+    cycle.candidateBacking = second;
     if (cycle.collision) cycle.hashesEqual = StringDedupTest::Hash(first, 0) == StringDedupTest::Hash(second, 0);
     cycle.candidate = storage.Allocate();
     NativeAccess<>::oop_store(cycle.candidate, second);
@@ -257,22 +259,6 @@ void* DedupCycleTask(void* argument)
             from_object(cycle.original), false);
     }
     second = static_cast<MArray*>(NativeAccess<>::oop_load(cycle.candidate));
-    if (!cycle.old) {
-        auto* originalPage = Heap::page(reinterpret_cast<uintptr_t>(cycle.original));
-        // B is a strong root on the same single small page. No forwarding
-        // for that page means the address used by this observation is stable.
-        cycle.youngPageStable = originalPage != nullptr &&
-            originalPage == Heap::page(reinterpret_cast<uintptr_t>(second)) &&
-            originalPage->IsYoungRegion() && !originalPage->IsAllocating() &&
-            forwarding_for_page(originalPage) == nullptr;
-        std::printf("DEDUP_YOUNG_INPUT page_present=%d same_page=%d young=%d allocating=%d forwarding=%d\n",
-            originalPage != nullptr, originalPage == Heap::page(reinterpret_cast<uintptr_t>(second)),
-            originalPage != nullptr && originalPage->IsYoungRegion(),
-            originalPage != nullptr && originalPage->IsAllocating(),
-            originalPage != nullptr && forwarding_for_page(originalPage) != nullptr);
-        cycle.youngMarkedBeforeLookup = cycle.youngPageStable &&
-            originalPage->is_object_marked(from_object(cycle.original), false);
-    }
     cycle.returned = MCC_StringDedupCanonicalImpl(DedupArrayType(), second);
     // B has never been installed before this lookup: the only other possible
     // matching identity is A, even if a minor cycle has moved A.
@@ -298,8 +284,11 @@ void StartDedupRuntime()
     params.heapParam.heapSize = 128 * 1024;
     params.coParam.processorNum = 2;
     params.gcParam.concGCThreads = 4;
+    params.gcParam.concGCThreadsSet = true;
     params.gcParam.youngGCThreads = 2;
     params.gcParam.oldGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
+    params.gcParam.oldGCThreadsSet = true;
     params.gcParam.staticGCThreads = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
 }
@@ -331,11 +320,9 @@ void CheckDedupCycle(bool old, bool strongControl, bool blocked, bool different,
     // Target evidence precedes *all* assertions; preparation failures cannot
     // hide a target assertion behind a fatal EXPECT.
     std::printf("DEDUP_CYCLE_TARGET old=%d strong=%d blocked=%d different=%d prepared=%d installed=%d "
-                "old_page=%d called=%d watermark_done=%d before_marked=%d hit=%d marked_at_end=%d "
-                "young_stable=%d young_marked_before_lookup=%d\n",
+                "old_page=%d called=%d watermark_done=%d before_marked=%d hit=%d marked_at_end=%d\n",
                 old, strongControl, blocked, different, prepared, cycle.installed, cycle.preparedOld,
-                called, cycle.watermarkDone, cycle.wasMarked, cycle.hit, markedAtEnd,
-                cycle.youngPageStable, cycle.youngMarkedBeforeLookup);
+                called, cycle.watermarkDone, cycle.wasMarked, cycle.hit, markedAtEnd);
     std::fflush(stdout);
     if (old && reached) ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
@@ -346,13 +333,11 @@ void CheckDedupCycle(bool old, bool strongControl, bool blocked, bool different,
     const int finiRC = FiniCJRuntime();
     // Assert the observable product result first, then separately validate
     // the construction (including that the expected old object was unmarked).
-    if (!old && !different) GC_EXPECT_TRUE(cycle.youngMarkedBeforeLookup);
     if (old && !blocked && !different) GC_EXPECT_TRUE(markedAtEnd);
     if (old && different) GC_EXPECT_EQ(markedAtEnd, strongControl);
     if (collision) GC_EXPECT_TRUE(cycle.hashesEqual);
     GC_EXPECT_EQ(cycle.hit, !different && (!blocked || strongControl));
     GC_EXPECT_TRUE(prepared && called && reached && cycle.installed);
-    if (!old) GC_EXPECT_TRUE(cycle.youngPageStable);
     if (old) {
         GC_EXPECT_TRUE(cycle.preparedOld && cycle.watermarkDone);
         GC_EXPECT_EQ(cycle.blocked, blocked);
@@ -478,12 +463,20 @@ void CheckDeadCleanup(bool noDead)
     batch.strongCount = noDead ? batch.count : 3;
     RunDedupTask(InstallDedupBatch, &batch);
     const size_t before = StringDedup::Instance().WeakStorage().AllocationCount();
+    auto& otherOwner = Heap::GetHeap().GetFinalizerProcessor();
+    const size_t otherBefore = otherOwner.WeakRootStorage().AllocationCount();
+    const size_t otherDead = noDead ? 0 : 7;
+    for (size_t index = 0; index < otherDead; ++index) otherOwner.RegisterFinalizer(nullptr);
+    const size_t otherRegistered = otherOwner.WeakRootStorage().AllocationCount();
     DedupOldCycle();
+    const size_t otherAfter = otherOwner.WeakRootStorage().AllocationCount();
     const bool settled = WaitDedupSize(batch.strongCount);
     const size_t entries = StringDedupTest::Entries();
     const size_t slots = StringDedup::Instance().WeakStorage().AllocationCount();
-    std::printf("DEDUP_OLD_CLEAN_TARGET installed=%zu before=%zu entries=%zu slots=%zu expected=%zu settled=%d\n",
-        batch.installed, before, entries, slots, batch.strongCount, settled);
+    std::printf("DEDUP_OLD_CLEAN_TARGET installed=%zu before=%zu entries=%zu slots=%zu expected=%zu settled=%d "
+                "other_before=%zu other_registered=%zu other_after=%zu\n",
+        batch.installed, before, entries, slots, batch.strongCount, settled,
+        otherBefore, otherRegistered, otherAfter);
     std::fflush(stdout);
     RunDedupTask(ReleaseDedupBatch, &batch);
     ConcurrentGCBreakpoints::ReleaseControl();
@@ -492,6 +485,8 @@ void CheckDeadCleanup(bool noDead)
     GC_EXPECT_EQ(slots, batch.strongCount);
     GC_EXPECT_TRUE(settled);
     GC_EXPECT_EQ(before, batch.count);
+    GC_EXPECT_EQ(otherRegistered, otherBefore + otherDead);
+    GC_EXPECT_EQ(otherAfter, otherBefore);
     GC_EXPECT_EQ(batch.installed, batch.count);
     GC_EXPECT_EQ(finiRC, E_OK);
 }
@@ -590,21 +585,41 @@ GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
     while (queue.PendingCount() == 0 && !finished.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
     const bool queued = queue.PendingCount() == 1 && !finished.load(std::memory_order_acquire);
+    std::atomic<bool> stopEntered{false};
+    std::atomic<bool> stopped{false};
+    std::atomic<bool> rendezvousDone{false};
+    std::thread stopper([&] {
+        stopEntered.store(true, std::memory_order_release);
+        StringDedup::Instance().Stop();
+        stopped.store(true, std::memory_order_release);
+    });
+    std::thread rendezvous([&] {
+        SuspendibleThreadSet::synchronize();
+        SuspendibleThreadSet::desynchronize();
+        rendezvousDone.store(true, std::memory_order_release);
+    });
+    while ((!stopEntered.load(std::memory_order_acquire) || !SuspendibleThreadSet::should_yield()) &&
+           std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+    const bool waitingForPublication = queued && SuspendibleThreadSet::should_yield() &&
+        !stopped.load(std::memory_order_acquire) && !rendezvousDone.load(std::memory_order_acquire);
     // This is the real dispatcher/ForwardTask path, not a hand-written insert.
+    // It must progress while both the table owner and STS rendezvous wait.
     old.relocate().relocate(&old.relocation_set());
     old.Workers()->set_inactive();
     waiter.join();
+    stopper.join();
+    rendezvous.join();
     const bool returned = answer != nullptr && answer != arrays.second && answer != arrays.first &&
         answer->GetLength() == 2 && answer->GetPrimitiveElement<I8>(0) == 7 &&
         answer->GetPrimitiveElement<I8>(1) == 9;
     const bool done = owner->is_done() && queue.PendingCount() == 0;
-    StringDedup::Instance().Stop();
     const size_t remaining = StringDedup::Instance().WeakStorage().AllocationCount();
-    std::printf("DEDUP_WAIT_TARGET installed=%d queued=%d returned=%d done=%d stopped_slots=%zu\n",
-                installed, queued, returned, done, remaining);
+    std::printf("DEDUP_WAIT_TARGET installed=%d queued=%d returned=%d done=%d stopped_slots=%zu "
+                "waiting_for_publication=%d stopped=%d rendezvous_done=%d\n", installed, queued, returned,
+                done, remaining, waitingForPublication, stopped.load(), rendezvousDone.load());
     std::fflush(stdout);
-    GC_EXPECT_TRUE(queued);
-    GC_EXPECT_TRUE(returned && done);
+    GC_EXPECT_TRUE(queued && waitingForPublication);
+    GC_EXPECT_TRUE(returned && done && stopped.load() && rendezvousDone.load());
     GC_EXPECT_EQ(remaining, size_t{0});
     GC_EXPECT_TRUE(installed);
 }

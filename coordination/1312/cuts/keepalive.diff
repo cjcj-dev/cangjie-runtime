@@ -1,6 +1,6 @@
 --- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
 +++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
-@@ -518,7 +518,7 @@
+@@ -516,7 +516,7 @@
          NotifyWork();
          return candidate;
      }

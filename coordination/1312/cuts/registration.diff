@@ -1,0 +1,23 @@
+--- a/runtime/src/Heap/z/zRootsIterator.hpp
++++ b/runtime/src/Heap/z/zRootsIterator.hpp
+@@ -75,7 +75,7 @@
+     void Apply(const NativeSlotVisitor& visitor);
+     void report_num_dead();
+ private:
+-    std::array<OopStorage::ParState<true>, 4> states;
++    std::array<OopStorage::ParState<true>, 3> states;
+     ZGenerationIdOptional generation;
+ };
+ class StaticRootsAdapterIterator {
+--- a/runtime/src/Heap/z/zRootsIterator.cpp
++++ b/runtime/src/Heap/z/zRootsIterator.cpp
+@@ -103,8 +103,7 @@
+                                                      ZGenerationIdOptional generation)
+     : states{{{Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers},
+               {Heap::GetHeap().GetExportRootStorage(), workers},
+-              {SyncWeakOopStorage(), workers},
+-              {StringDedup::Instance().WeakStorage(), workers}}}, generation(generation) {}
++              {SyncWeakOopStorage(), workers}}}, generation(generation) {}
+ 
+ void OopStorageSetIteratorWeak::report_num_dead()
+ {

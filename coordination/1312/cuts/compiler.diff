@@ -1,0 +1,11 @@
+--- a/runtime/src/CompilerCalls.cpp
++++ b/runtime/src/CompilerCalls.cpp
+@@ -653,7 +653,7 @@
+ 
+ extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate)
+ {
+-    return StringDedup::Instance().Canonical(arrayInfo, candidate);
++    return candidate; // Controlled cut: omit canonical consumer.
+ }
+ 
+ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint64_t pc, const uint64_t funcDesc,
