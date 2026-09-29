@@ -759,10 +759,14 @@ struct P82Graph {
             objects.push_back(fx.PlaceObject(fx.region0()->GetRegionStart() + 4096 + i * 64));
         }
         fx.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(objects.back()) + 64);
+        auto* shared = fx.PlaceObject(fx.region1()->GetRegionStart() + 4096);
+        fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(shared) + 64);
         for (unsigned i = 0; i < objects.size(); ++i) {
-            WeakGraph::Field(objects[i]).StoreColoured((i + 1) % length == 0
-                ? zpointer::null : StoreGoodPointer(objects[i + 1]));
+            WeakGraph::Field(objects[i]).StoreColoured(StoreGoodPointer(
+                (i + 1) % length == 0 ? shared : objects[i + 1]));
         }
+        WeakGraph::Field(shared).StoreColoured(zpointer::null);
+        objects.push_back(shared);
         for (unsigned i = 0; i < roots.size(); ++i) {
             roots[i].StoreColoured(StoreGoodPointer(objects[(i % branches) * length]));
             rootSlots.push_back(&roots[i]);
