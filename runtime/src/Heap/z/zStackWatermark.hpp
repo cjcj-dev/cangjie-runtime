@@ -11,7 +11,7 @@
 #include "Common/BaseObject.h"
 #include "StackMap/StackMapTypeDef.h"
 #include "Heap/z/zUncoloredRoot.hpp"
-#include "Heap/z/zTLABUsage.hpp"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 
 namespace MapleRuntime {
 class Mutator;

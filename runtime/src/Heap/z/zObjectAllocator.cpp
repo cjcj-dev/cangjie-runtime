@@ -56,37 +56,24 @@ namespace MapleRuntime {
 void RegionManager::InitializeTLAB(AllocBuffer& buffer)
 {
     const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
-    buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads,
+    buffer.ResizeTLAB(Heap::GetHeap().tlab_capacity(), tlabRequestedFraction.Average() / threads,
                       ZObjectSizeLimitSmall);
-}
-
-// ZTLABUsage::reset (zTLABUsage.cpp:41), called before retiring allocating
-// regions in young mark-start (zGeneration.cpp:862).
-void RegionManager::ResetTLABUsage()
-{
-    const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
-    if (used != 0) {
-        // TruncatedSeq::davg uses AbsSeq's exponential average, alpha=0.3;
-        // its last value and average are stable throughout the next cycle.
-        tlabCapacity = lastTLABUsed == 0 ? used : tlabCapacity + 0.3 * (used - tlabCapacity);
-        lastTLABUsed = used;
-    }
 }
 
 // ZThreadLocalAllocBuffer::publish_statistics (zThreadLocalAllocBuffer.cpp:52).
 // Thread retirement statistics consume the already published backing history.
 void RegionManager::PublishTLABStatistics(const TLABStatistics& total)
 {
-    const size_t capacity = GetTLABCapacity();
+    const size_t capacity = Heap::GetHeap().tlab_capacity();
     if (total.Used() != 0) {
         tlabAllocatingThreads.Sample(total.allocatingThreads);
-        if (lastTLABUsed > 0.5 * capacity) {
+        if (Heap::GetHeap().tlab_used() > 0.5 * capacity) {
             tlabRequestedFraction.Sample(std::min(static_cast<double>(total.Used()) /
                                                  std::max(capacity, size_t{1}), 1.0));
         }
     }
     VLOG(REPORT, "TLAB totals: used=%zu capacity=%zu allocated=%zu refills=%zu refill-waste=%zu gc-waste=%zu threads=%zu slow-allocations=%zu",
-         lastTLABUsed, capacity, total.allocatedSize, total.refills, total.refillWaste, total.gcWaste,
+         Heap::GetHeap().tlab_used(), capacity, total.allocatedSize, total.refills, total.refillWaste, total.gcWaste,
          total.allocatingThreads, total.slowAllocations);
 }
 
@@ -96,9 +83,9 @@ void RegionManager::RetireTLAB(AllocBuffer& buffer, TLABStatistics& statistics)
 {
     statistics = TLABStatistics{};
     buffer.RetireTLAB(true);
-    buffer.AccumulateTLABStatistics(statistics, GetTLABUsed(), GetTLABCapacity());
+    buffer.AccumulateTLABStatistics(statistics, Heap::GetHeap().tlab_used(), Heap::GetHeap().tlab_capacity());
     const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
-    buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads, ZObjectSizeLimitSmall);
+    buffer.ResizeTLAB(Heap::GetHeap().tlab_capacity(), tlabRequestedFraction.Average() / threads, ZObjectSizeLimitSmall);
 }
 
 // zObjectAllocator.cpp:40-45
@@ -108,13 +95,6 @@ ZObjectAllocator::PerAge::PerAge(PageAge pageAge)
       sharedSmallPage(nullptr),
       sharedMediumPage(nullptr) {}
 
-// zHeap.cpp:229: shared-page TLAB accounting includes only small eden pages.
-static bool IsSmallEdenPage(const ZPage* page)
-{
-    return page->IsSmallRegion() && page->IsYoungRegion() &&
-           page->GetYoungAge() == static_cast<uint8_t>(untype(PageAge::eden));
-}
-
 // ZObjectAllocator::PerAge::alloc_page, ZHeap::alloc_page/account_alloc_page.
 ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
                                              PageAge age, ZAllocationFlags flags)
@@ -122,9 +102,6 @@ ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
     ZPage* page = Heap::alloc_page(size, role, false, age, flags);
     if (page == nullptr) { return nullptr; }
     page->reset(age);
-    if (IsSmallEdenPage(page)) {
-        tlabUsed.fetch_add(page->GetRegionSize(), std::memory_order_relaxed);
-    }
     // zObjectAllocator.cpp:40-45: the shared page is a per-CPU/per-age
     // pointer; the lifecycle role word records the page as recent
     // (zPageAllocator.cpp:1518 accounting follows the role).
@@ -143,9 +120,7 @@ void RegionManager::UndoSharedPage(ZPage* page)
 {
     page->SetRegionRole(ZPageRole::None);
 
-    if (IsSmallEdenPage(page)) {
-        tlabUsed.fetch_sub(page->GetRegionSize(), std::memory_order_relaxed);
-    }
+    Heap::GetHeap().account_undo_alloc_page(page);
     // ZHeap::undo_alloc_page: remove the unused page-table entry and return
     // the extent without suspending a caller holding an unpublished object.
     ZPage::RetirePage(page, [this, page] {

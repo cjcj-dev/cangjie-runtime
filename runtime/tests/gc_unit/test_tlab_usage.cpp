@@ -185,7 +185,7 @@ void* AllocateThroughCycle(void*)
     // ZHeap::account_alloc_page: the cycle denominator retains backing
     // capacity, including unused TLAB tails. These values come from actual
     // MCC_NewObject refills, never a test history setter.
-    const size_t cycleBacking = manager.GetTLABUsed();
+    const size_t cycleBacking = Heap::GetHeap().tlab_used();
     if (backingBytes <= requestedBytes || cycleBacking < backingBytes) {
         std::fprintf(stderr, "TLAB_BACKING requested=%zu observed=%zu cycle=%zu\n",
                      requestedBytes, backingBytes, cycleBacking);
@@ -219,6 +219,74 @@ GC_RUNTIME_OTHER_VM_TEST(TLABUsage, AllocationCycleKeepsGranuleBacking)
     ReleaseHandle(handle);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(result), uintptr_t{0});
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+// ZGC zTLABUsage.cpp:41-67: sample nonempty cycles, preserve idle cycles.
+namespace {
+void* ObserveUsageHistory(void* argument)
+{
+    const bool idle = argument != nullptr;
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
+    std::memset(storage, 0, sizeof(storage));
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(256);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    auto& heap = Heap::GetHeap();
+    heap.RequestGC(GC_REASON_YOUNG);
+    // All history inputs are produced by actual allocations and GC pauses.
+    for (size_t i = 0; i < 32; ++i) {
+        if (MCC_NewObject(type, 256 + TYPEINFO_PTR_SIZE) == nullptr) { return reinterpret_cast<void*>(1); }
+    }
+    heap.RequestGC(GC_REASON_YOUNG);
+    const size_t firstUsed = heap.tlab_used();
+    const size_t firstCapacity = heap.tlab_capacity();
+    if (idle) {
+        heap.RequestGC(GC_REASON_YOUNG);
+        heap.RequestGC(GC_REASON_YOUNG);
+        const size_t after = heap.tlab_capacity();
+        std::fprintf(stderr, "TLAB1306_IDLE_TARGET before=%zu after=%zu used=%zu\n",
+                     firstCapacity, after, firstUsed);
+        return reinterpret_cast<void*>(firstCapacity != 0 && after == firstCapacity ? 0 : 2);
+    }
+    for (size_t i = 0; i < 20000; ++i) {
+        if (MCC_NewObject(type, 256 + TYPEINFO_PTR_SIZE) == nullptr) { return reinterpret_cast<void*>(1); }
+    }
+    heap.RequestGC(GC_REASON_YOUNG);
+    const size_t secondUsed = heap.tlab_used();
+    const size_t actual = heap.tlab_capacity();
+    const double expected = firstCapacity + 0.3 * (static_cast<double>(secondUsed) - firstCapacity);
+    // The published capacity truncates fractional bytes; tolerate that one-byte observation loss.
+    const bool valid = firstUsed != 0 && secondUsed > firstUsed &&
+        actual >= static_cast<size_t>(expected) && actual <= static_cast<size_t>(expected) + 1;
+    std::fprintf(stderr, "TLAB1306_HISTORY_TARGET first=%zu first_capacity=%zu second=%zu actual=%zu expected=%zu\n",
+                 firstUsed, firstCapacity, secondUsed, actual, static_cast<size_t>(expected));
+    return reinterpret_cast<void*>(valid ? 0 : 3);
+}
+
+void CheckUsageHistory(bool idle)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    CJThreadHandle handle = RunCJTask(ObserveUsageHistory, reinterpret_cast<void*>(idle ? 1 : 0));
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
+    ReleaseHandle(handle);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(result), uintptr_t{0});
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(TLABUsage1306, TwoIdleCyclesPreserveCapacity)
+{
+    CheckUsageHistory(true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(TLABUsage1306, NonemptyCyclesUseDecayingAverage)
+{
+    CheckUsageHistory(false);
 }
 #endif
 
@@ -396,7 +464,7 @@ void SnapshotOwner(TLABSnapshotCase& state, unsigned index)
         // Read the owner's remaining product statistics only after publication.
         // They are assertion output, never injected into a downstream phase.
         owner->tlab()->AccumulateTLABStatistics(state.pending,
-            Heap::GetHeap().page_allocator().GetTLABUsed(), Heap::GetHeap().page_allocator().GetTLABCapacity());
+            Heap::GetHeap().tlab_used(), Heap::GetHeap().tlab_capacity());
     }
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
