@@ -185,13 +185,13 @@ bool Uncommitter::Activate()
         return false;
     }
     cycleStart = double(TimeUtil::NanoSeconds()) / SECOND_TO_NANO_SECOND;
-    uncommitted = 0;
     // ZGC zUncommitter.cpp:222-242: claim this partition's cache history.
     std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
     const size_t uncommitWatermark = partition.cache.min_size_watermark();
     const size_t budget = AlignUp(static_cast<size_t>(double(uncommitWatermark) * 0.9), ZGranuleSize);
     const size_t limit = partition.capacity - partition.minCapacity;
     toUncommit = std::min(limit, budget);
+    uncommitted = 0;
     partition.cache.reset_min_size_watermark();
     CHECK(toUncommit % ZGranuleSize == 0);
     return true;
@@ -221,11 +221,11 @@ size_t Uncommitter::Uncommit()
         const size_t flush = std::min({release, remaining, ChunkLimit(partition.currentMaxCapacity)});
         // zUncommitter.cpp:395: flush memory from the mapped cache for uncommit.
         flushed = partition.cache.remove_for_uncommit(flush, &flushedVmems);
-        partition.claimed += flushed;
         if (flushed == 0) {
             Cancel();
             return 0;
         }
+        partition.claimed += flushed;
     }
 
     // zUncommitter.cpp:405-411: unmap and uncommit flushed memory outside the
@@ -294,8 +294,8 @@ void Uncommitter::ResetCycle()
 {
     toUncommit = 0;
     uncommitted = 0;
-    cycleStart = 0;
-    cancelTime = 0;
+    cycleStart = 0.0;
+    cancelTime = 0.0;
     CHECK(CycleIsFinished());
     CHECK(!CycleIsCanceled());
     CHECK(!CycleIsActive());
@@ -346,8 +346,8 @@ void Uncommitter::UpdateNextCycleTimeoutOnFinish()
 }
 
 bool Uncommitter::CycleIsFinished() const { return toUncommit == 0; }
-bool Uncommitter::CycleIsActive() const { return cycleStart != 0; }
-bool Uncommitter::CycleIsCanceled() const { return cancelTime != 0; }
+bool Uncommitter::CycleIsActive() const { return cycleStart != 0.0; }
+bool Uncommitter::CycleIsCanceled() const { return cancelTime != 0.0; }
 
 // ZGC zUncommitter.cpp:109-169.
 void Uncommitter::run_thread()
