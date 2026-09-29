@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -133,7 +133,7 @@
+ // ZGC zGeneration.inline.hpp:158-160.
+ void ZGenerationYoung::remember(volatile zpointer* p)
+ {
+-    _remembered.remember(p);
++    (void)p;
+ }
+ 
+ bool ZGeneration::is_young() const { return id() == ZGenerationId::young; }

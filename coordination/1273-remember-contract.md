@@ -27,3 +27,5 @@ ROLE=implement
 validation/remember1273/cut-route.diff：仅恢复 remember 原判断与直接页调用，预期只 MissingPageDoesNotReturnSilently 转红，合法 old/young 保持绿；这是候选修改行刀，不能冒充基线已有行刀。
 validation/remember1273/cut-entry.diff：断基线已有真实弱屏障相位入口内 slow-path 调用，预期 old 记忆集和缺页拒绝两条转红，young 负对照保持绿。entry_cut_check 已 rc=0；交付用最终 head 再核。
 两刀分别在隔离源码副本构建 default SO，同一 default 测试 ELF 运行全部三项；恢复臂使用保存的未切 SO，候选/恢复逐字节相同。
+
+cut-consumer.diff：断新增 generation 委托内 _remembered.remember(p)，预期仅 old 槽用例红；证明数据确经新增消费者，而非另一路记入。候选新增行刀单列。
