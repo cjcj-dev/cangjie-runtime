@@ -1237,13 +1237,27 @@ void CheckCollectionLog(const char* target)
     params.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    // A deterministic unrooted large object makes the minor's used-at-start
+    // positive; the separately rooted pinned object then changes the major input.
+    alignas(TypeInfo) static unsigned char largeStorage[sizeof(TypeInfo)]{};
+    auto* largeType = reinterpret_cast<TypeInfo*>(largeStorage);
+    constexpr size_t largeBytes = 4 * 1024 * 1024;
+    largeType->SetType(TypeKind::TYPE_KIND_CLASS);
+    largeType->SetInstanceSize(largeBytes - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(largeStorage), sizeof(largeStorage));
+    {
+        ScopedObjectAccess access;
+        const uintptr_t address = heap.object_allocator().alloc(largeBytes);
+        GC_EXPECT_TRUE(address != 0);
+        reinterpret_cast<BaseObject*>(address)->SetClassInfo(largeType);
+    }
     GcLogCapture capture;
     size_t before[2], after[2];
     before[0] = heap.GetUsedPageSize();
     heap.RequestGC(GC_REASON_YOUNG);
     after[0] = heap.GetUsedPageSize();
-    auto& manager = MutatorManager::Instance();
-    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
@@ -1269,6 +1283,8 @@ void CheckCollectionLog(const char* target)
         if (line.find("rec=cycle ") == std::string::npos || line.find(std::string("event=") + target) == std::string::npos) continue;
         ++count;
         values = values && line.find("gc_tag=- ") != std::string::npos;
+        values = values && (line.find("name=Minor_Collection cause=young ") != std::string::npos ||
+                            line.find("name=Major_Collection cause=user ") != std::string::npos);
         if (std::strcmp(target, "end") == 0) {
             std::smatch match;
             if (!std::regex_match(line, match, end)) { values = false; continue; }
@@ -1281,7 +1297,7 @@ void CheckCollectionLog(const char* target)
     // Each event has its own entry so cutting start cannot hide the end assertion.
     GC_EXPECT_EQ(count, size_t{2});
     GC_EXPECT_TRUE(values);
-    GC_EXPECT_TRUE(before[0] != before[1]);
+    GC_EXPECT_TRUE(before[0] > 0 && before[1] > 0 && before[0] != before[1]);
 }
 }
 GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, CollectionStart) { CheckCollectionLog("start"); }
