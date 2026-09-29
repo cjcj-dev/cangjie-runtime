@@ -753,7 +753,7 @@ struct P82Graph {
     std::vector<NativeSlot> roots;
     std::vector<NativeSlot*> rootSlots;
     explicit P82Graph(GcHeapFixture& fx, bool duplicateRoots)
-        : roots(branches * (duplicateRoots ? 2 : 1))
+        : roots(branches * (duplicateRoots ? 2 : 1), NativeSlot(zpointer::null))
     {
         for (unsigned i = 0; i < branches * length; ++i) {
             objects.push_back(fx.PlaceObject(fx.region0()->GetRegionStart() + 4096 + i * 64));
@@ -976,7 +976,7 @@ GC_OTHER_VM_TEST(P82HeapIterator, OverflowRoots)
     RelocationReceiptTest::BindCollector(&Heap::GetHeap());
     // HotSpot globalDefinitions.hpp:1069: LP64 queue has 2^17 slots.
     constexpr size_t count = 132000;
-    std::vector<NativeSlot> slots(count);
+    std::vector<NativeSlot> slots(count, NativeSlot(zpointer::null));
     std::vector<NativeSlot*> roots;
     std::unordered_set<BaseObject*> expected;
     for (size_t i = 0; i < count; ++i) {

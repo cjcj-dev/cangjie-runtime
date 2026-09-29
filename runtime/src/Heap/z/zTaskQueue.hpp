@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <type_traits>
 
 namespace MapleRuntime {
 // HotSpot gc/shared/taskqueue.hpp:333-429 and taskqueue.inline.hpp:110-287.
@@ -16,19 +17,22 @@ class TaskQueueSuper {
 protected:
     static_assert((N & (N - 1)) == 0, "power of two queue");
     static constexpr uint32_t MASK = N - 1;
+    using Index = std::conditional_t<sizeof(void*) == 8, uint32_t, uint16_t>;
+    static constexpr unsigned TAG_SHIFT = sizeof(Index) * 8;
     struct Age {
-        uint32_t top;
-        uint32_t tag;
+        Index top;
+        Index tag;
+        Age(uint32_t top, uint32_t tag) : top(static_cast<Index>(top)), tag(static_cast<Index>(tag)) {}
     };
-    static uint64_t pack(Age age) { return (uint64_t(age.tag) << 32) | age.top; }
-    static Age unpack(uint64_t age) { return { uint32_t(age), uint32_t(age >> 32) }; }
+    static uintptr_t pack(Age age) { return (uintptr_t(age.tag) << TAG_SHIFT) | age.top; }
+    static Age unpack(uintptr_t age) { return { uint32_t(age), uint32_t(age >> TAG_SHIFT) }; }
     static uint32_t clean_size(uint32_t bottom, uint32_t top)
     {
         const uint32_t size = (bottom - top) & MASK;
         return size == MASK ? 0 : size;
     }
     alignas(64) std::atomic<uint32_t> bottom { 0 };
-    alignas(64) std::atomic<uint64_t> age { 0 };
+    alignas(64) std::atomic<uintptr_t> age { 0 };
 public:
     enum class PopResult { Empty, Contended, Success };
     unsigned size() const
@@ -52,10 +56,10 @@ class GenericTaskQueue : public TaskQueueSuper<N> {
     unsigned lastStolen = unsigned(-1);
     int seed = 17;
 
-    bool pop_local_slow(uint32_t localBottom, uint64_t oldAge)
+    bool pop_local_slow(uint32_t localBottom, uintptr_t oldAge)
     {
         const Age old = unpack(oldAge);
-        const uint64_t next = pack({ localBottom, old.tag + 1 });
+        const uintptr_t next = pack({ localBottom, old.tag + 1 });
         if (localBottom == old.top && age.compare_exchange_strong(oldAge, next)) {
             return true;
         }
@@ -88,7 +92,7 @@ public:
     }
     PopResult pop_global(E& task)
     {
-        uint64_t oldAge = age.load(std::memory_order_relaxed);
+        uintptr_t oldAge = age.load(std::memory_order_relaxed);
         const Age old = unpack(oldAge);
         std::atomic_thread_fence(std::memory_order_seq_cst);
         const uint32_t b = bottom.load(std::memory_order_acquire);
@@ -97,7 +101,7 @@ public:
         // the possibly concurrently overwritten trivially-copyable element.
         task = elems[old.top];
         const uint32_t top = (old.top + 1) & MASK;
-        const uint64_t next = pack({ top, old.tag + (top == 0 ? 1U : 0U) });
+        const uintptr_t next = pack({ top, old.tag + (top == 0 ? 1U : 0U) });
         return age.compare_exchange_strong(oldAge, next) ? PopResult::Success : PopResult::Contended;
     }
     bool is_last_stolen_queue_id_valid() const { return lastStolen != unsigned(-1); }
