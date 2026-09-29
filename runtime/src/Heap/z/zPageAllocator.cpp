@@ -7,6 +7,7 @@
 
 #include "RuntimeConfig.h"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zFuture.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -988,9 +989,10 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
     // virtual memory manager reserves ZVirtualToPhysicalRatio times the max
     // capacity, the physical memory manager creates the backing file.
     virtualMemory.reset(new ZVirtualMemoryManager(maxCapacity));
-    CHECK_DETAIL(virtualMemory->is_initialized(), "failed to reserve %zu bytes of heap address space", maxCapacity);
     physicalMemory.reset(new ZPhysicalMemoryManager(maxCapacity));
-    CHECK_DETAIL(physicalMemory->is_initialized(), "failed to create heap backing for %zu bytes", maxCapacity);
+    if (!virtualMemory->is_initialized() || !physicalMemory->is_initialized()) {
+        return;
+    }
     physicalMemory->warn_commit_limits(maxCapacity);
     physicalMemory->try_enable_uncommit(0, maxCapacity);
 
@@ -1028,8 +1030,10 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
     // HeapParam has no InitialHeapSize; use four granules (8 MB), bounded
     // by the configured maximum heap for small heaps.
     constexpr size_t initialHeapSize = 4 * ZGranuleSize;
-    CHECK_DETAIL(freeRegionManager.PrimeCache(std::min(initialHeapSize, maxCapacity)),
-                 "failed to allocate initial heap");
+    if (!freeRegionManager.PrimeCache(std::min(initialHeapSize, maxCapacity))) {
+        ZInitialize::error("Failed to allocate initial heap");
+        return;
+    }
 #if defined(MRT_DUMP_ADDRESS)
     VLOG(REPORT, "region metadata@%zx, heap @[0x%zx+%zu, 0x%zx)", metadataAddress, reservedStart, reservedEnd - reservedStart,
          reservedEnd);
@@ -1040,6 +1044,7 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
     }
     Heap::OnHeapCreated(reservedStart, heapReservations);
     Heap::OnHeapExtended(reservedEnd);
+    _initialized = true;
 }
 
 

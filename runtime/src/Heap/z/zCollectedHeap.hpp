@@ -31,6 +31,7 @@ public:
     ZCollectedHeap(const HeapParam& param, double garbageThreshold);
     ~ZCollectedHeap();
     static void stop();
+    bool initialize();
     void initialize_gc_workers();
     void initialize_gc();
     void finalize_gc();

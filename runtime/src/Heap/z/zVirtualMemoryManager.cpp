@@ -1,3 +1,4 @@
+#include "Heap/z/zInitialize.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -201,7 +202,7 @@ ZVirtualMemoryManager::ZVirtualMemoryManager(size_t max_capacity)
   VLOG(REPORT, "Reserved Space: limit %zuM, desired %zuM, requested %zuM", limit / MB, desired / MB, requested / MB);
 
   if (reserved < max_capacity) {
-    LOG(RTLOG_ERROR, "Failed to reserve %zuM address space for Cangjie heap", max_capacity / MB);
+    ZInitialize::error("Failed to reserve %zuM address space for Cangjie heap", max_capacity / MB);
     reserver.unreserve_all();
     return;
   }

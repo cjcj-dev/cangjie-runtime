@@ -357,6 +357,7 @@ public:
     MAddress GetSpaceStartAddress() const { return reservedStart; }
     MAddress GetSpaceEndAddress() const { return reservedEnd; }
 
+    bool is_initialized() const { return _initialized; }
     RegionManager();
     RegionManager(const HeapParam& param, double garbageThreshold);
 
@@ -570,6 +571,7 @@ private:
     mutable std::mutex pageAllocatorMutex;
     ZList<ZPageAllocation> stalled;
     bool stallClosed{false};
+    bool _initialized{false};
     void SatisfyStalledAllocations();
     void NotifyOutOfMemory();
     void RestartGC() const;
