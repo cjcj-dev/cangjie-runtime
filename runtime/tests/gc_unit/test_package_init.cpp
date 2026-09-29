@@ -1136,6 +1136,8 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryStaticRootIsEnumerated)
     bool matched = false;
     LoaderManager::GetInstance()->VisitStaticRoots([&](NativeSlot& slot) {
         ++visited;
+        std::fprintf(stderr, "STATIC_ROOT_SLOT slot=%#zx image_root=%#zx image_size=%zu\n",
+                     reinterpret_cast<MAddress>(&slot), reinterpret_cast<MAddress>(rootSlot()), sizeof(MAddress));
         if (reinterpret_cast<MAddress>(&slot) == reinterpret_cast<MAddress>(rootSlot())) {
             matched = true;
             observed = slot.GetAddress();
