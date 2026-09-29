@@ -23,14 +23,22 @@ void ZObjArrayAllocator::yield_for_safepoint() const
 {
     ScopedEnterSaferegion yield(true);
 }
+static bool is_ref_containing_flat_array(TypeInfo* arrayClass)
+{
+    TypeInfo* component = arrayClass->GetComponentTypeInfo();
+    return !component->IsRef() && component->HasRefField();
+}
+
 MArray* ZObjArrayAllocator::initialize(MAddress address) const
 {
     // ZGC zObjArrayAllocator.cpp:46-77: all specialization decisions are here.
-    if (!doZero || arraySize <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
+    if (!doZero) {
         return ObjArrayAllocator::initialize(address);
     }
-    TypeInfo* component = arrayClass.GetComponentTypeInfo();
-    if (!component->IsRef() && component->HasRefField()) {
+    if (arraySize <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
+        return ObjArrayAllocator::initialize(address);
+    }
+    if (is_ref_containing_flat_array(&arrayClass)) {
         return ObjArrayAllocator::initialize(address);
     }
     // Our compact header combines klass and state. Publish both in one release
