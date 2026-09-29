@@ -353,9 +353,13 @@ void* SelectRealLivePages(void* context)
             Heap::GetHeap().GetExportObject(roots[0])) != starts[0];
     } else {
         if (result.verifyPromotion) {
-            std::fprintf(stderr, "PROMOTION1315_PRECONDITION roots=%zu full_preclean_requested=1\n", result.roots);
+            // Threshold 0 makes every selected page promote, so the install
+            // task's track_if_promoted fills the registration array. A young
+            // cycle keeps the finished set in place for the observation below.
+            ZTenuringThreshold = 0;
+            std::fprintf(stderr, "PROMOTION1315_PRECONDITION roots=%zu tenuring_threshold=0\n", result.roots);
         }
-        Heap::GetHeap().RequestGC(result.verifyPromotion ? GC_REASON_USER : GC_REASON_YOUNG);
+        Heap::GetHeap().RequestGC(result.verifyPromotion ? GC_REASON_YOUNG : GC_REASON_YOUNG);
     }
     if (result.verifyPromotion) {
         // The promote-all cycle registered its relocated pages through
