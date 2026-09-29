@@ -27,6 +27,7 @@
 #include "gc_unittest.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "gc_heap_fixture.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -732,7 +733,8 @@ GC_TEST(MarkPublish1144, ListPreservesEmptyPayload)
 // ZGC zRemembered.cpp:546-554. The remembered old holder reaches a young
 // object whose field reaches an unmarked old object during major roots.
 // test_remembered_flush_gdb.py also observes the worker before termination.
-GC_TEST(Remembered1314, MajorRootsPublishesOtherGeneration)
+namespace {
+void CheckOtherGenerationPublication(bool remembered)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
@@ -764,7 +766,12 @@ GC_TEST(Remembered1314, MajorRootsPublishesOtherGeneration)
     fixture.region0()->remember(root);
     heap.remembered().register_found_old(fixture.region0());
     heap.remembered().flip();
-    heap.remembered().scan_and_follow(&young.Mark());
+    if (remembered) {
+        heap.remembered().scan_and_follow(&young.Mark());
+    } else {
+        young.MarkObject<false, false, true, false>(from_object(fixture.obj1));
+        young.Mark().MarkFollow();
+    }
     bool localEmpty = true;
     young.Workers()->threads_do([&](WorkerThread* worker) {
         localEmpty &= worker->gc_data()->markStacks[1].IsEmpty();
@@ -778,4 +785,16 @@ GC_TEST(Remembered1314, MajorRootsPublishesOtherGeneration)
     old.StopWorkers();
     GC_EXPECT_TRUE(localEmpty);
     GC_EXPECT_TRUE(published);
+}
+
+} // namespace
+
+GC_TEST(Remembered1314, MajorRootsPublishesOtherGeneration)
+{
+    CheckOtherGenerationPublication(true);
+}
+
+GC_TEST(Remembered1314, MarkTaskPublishesOtherGeneration)
+{
+    CheckOtherGenerationPublication(false);
 }
