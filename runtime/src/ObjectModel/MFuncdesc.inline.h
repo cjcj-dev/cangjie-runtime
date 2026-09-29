@@ -17,6 +17,16 @@ inline Uptr* MFuncDesc::GetStackMap() const { return stackMap.GetDataRef(); }
 
 inline U32 MFuncDesc::GetCodeSize() const { return codeSize; }
 
+inline bool MFuncDesc::HasReturnPoll() const
+{
+#ifdef __APPLE__
+    static_assert(offsetof(MFuncDesc, returnPollFlag) == 32, "compiler layout FuncDescReturnPollOffsetMachO");
+#else
+    static_assert(offsetof(MFuncDesc, returnPollFlag) == 28, "compiler layout FuncDescReturnPollOffsetELF");
+#endif
+    return (returnPollFlag & 1u) != 0;
+}
+
 inline Uptr* MFuncDesc::GetEHTable() const
 {
 #ifdef __APPLE__

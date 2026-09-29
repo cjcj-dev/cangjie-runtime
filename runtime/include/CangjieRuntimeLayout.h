@@ -16,6 +16,8 @@ constexpr unsigned ObjectHeaderSize = 8;
 constexpr unsigned ArrayLengthOffset = 8;
 constexpr unsigned ArrayHeaderSize = 16;
 constexpr unsigned TypeInfoSize = 96;
+constexpr unsigned FuncDescReturnPollOffsetMachO = 32;
+constexpr unsigned FuncDescReturnPollOffsetELF = 28;
 namespace TypeInfo {
 constexpr unsigned typeInfoNameIndex = 0;
 constexpr unsigned typeInfoNameOffset = 0;
