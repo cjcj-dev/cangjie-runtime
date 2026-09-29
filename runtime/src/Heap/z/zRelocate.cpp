@@ -718,9 +718,15 @@ ZForwarding* ZRelocateQueue::synchronize_poll()
 
 void ZRelocateQueue::clear()
 {
+    assert(nworkers == 0 && "Invalid state");
     if (queue.is_empty()) {
         return;
     }
+    ZArrayIterator<ZForwarding*> iter(&queue);
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
+        assert(forwarding->is_done() && "All should be done");
+    }
+    assert(false && "Clear was not empty");
     queue.clear();
     dec_needs_attention();
 }

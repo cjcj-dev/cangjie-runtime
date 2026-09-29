@@ -5,7 +5,6 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "gc_heap_fixture.hpp"
-#include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "Mutator/Mutator.h"
@@ -162,4 +161,72 @@ GC_OTHER_VM_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
     GC_EXPECT_FALSE(afterMutatorSafe);
     GC_EXPECT_FALSE(afterHandshakeSafe);
     GC_EXPECT_TRUE(owner->is_done());
+}
+
+// ZGC zRelocate.cpp:264-280: check each invalid state independently, so the
+// worker assertion cannot conceal the completion or nonempty assertions.
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS) && defined(__linux__)
+namespace {
+void ExpectClearRejection(int input, const char* diagnostic)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        dup2(output[1], STDERR_FILENO);
+        close(output[1]);
+        std::signal(SIGABRT, SIG_DFL);
+        GcHeapFixture heap;
+        heap.InstallPageOwner(heap.region0());
+        auto* owner = forwarding_for_page(heap.region0());
+        ZRelocateQueue queue;
+        if (input == 0) {
+            queue.activate(1);
+        } else {
+            // Feed the real queue through its producer. No synthetic queue
+            // entries or product callbacks are installed by the test.
+            std::thread([&] { queue.add_and_wait(owner); }).detach();
+            while (queue.synchronize_poll() == nullptr) std::this_thread::yield();
+            if (input == 2) owner->mark_done();
+        }
+        queue.deactivate();
+        _exit(0);
+    }
+    close(output[1]);
+    std::string message;
+    char buffer[512];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) message.append(buffer, count);
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+                          message.find(diagnostic) != std::string::npos;
+    std::fprintf(stderr, "CLEAR1316_TARGET input=%d executed=1 rejected=%d status=%d diagnostic=%s\n",
+                 input, rejected, status, message.c_str());
+    GC_EXPECT_TRUE(rejected);
+}
+}
+GC_TEST(RelocationPageQueue, ClearRejectsActiveWorkers)
+{
+    ExpectClearRejection(0, "Invalid state");
+}
+GC_TEST(RelocationPageQueue, ClearRejectsUnfinishedForwarding)
+{
+    ExpectClearRejection(1, "All should be done");
+}
+GC_TEST(RelocationPageQueue, ClearRejectsUnprunedCompletedForwarding)
+{
+    ExpectClearRejection(2, "Clear was not empty");
+}
+#endif
+
+GC_TEST(RelocationPageQueue, ClearAcceptsEmptyInactiveQueue)
+{
+    ZRelocateQueue queue;
+    queue.deactivate();
+    GC_EXPECT_FALSE(queue.is_active());
+    std::fprintf(stderr, "CLEAR1316_EMPTY executed=1\n");
 }
