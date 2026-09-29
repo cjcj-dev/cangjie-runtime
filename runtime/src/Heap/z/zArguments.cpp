@@ -35,27 +35,30 @@ void ZArguments::initialize_heap_flags_and_sizes()
 
 void ZArguments::select_max_gc_threads()
 {
-    // ZGC zArguments.cpp:67-118: explicit flags precede ergonomics at this entry.
+    // ZGC zArguments.cpp:54-118: explicit flags precede ergonomics at this entry.
     const GCParam param = CangjieRuntime::GetGCParam();
+    ParallelGCThreads = param.parallelGCThreads;
+    if (!param.parallelGCThreadsSet) { ParallelGCThreads = ZHeuristics::nparallel_workers(); }
+    CHECK_DETAIL(ParallelGCThreads != 0, "ParallelGCThreads must be positive");
     UseDynamicNumberOfGCThreads = !param.staticGCThreads;
     ConcGCThreads = param.concGCThreads;
     ZYoungGCThreads = param.youngGCThreads;
     ZOldGCThreads = param.oldGCThreads;
     uint32_t max_nworkers_generation;
-    if (param.concGCThreads == 0) {
+    if (!param.concGCThreadsSet) {
         max_nworkers_generation = ZHeuristics::nconcurrent_workers();
         uint32_t max_nworkers = max_nworkers_generation;
-        if (param.youngGCThreads != 0) {
+        if (param.youngGCThreadsSet) {
             max_nworkers = std::max(max_nworkers, ZYoungGCThreads);
         }
-        if (param.oldGCThreads != 0) {
+        if (param.oldGCThreadsSet) {
             max_nworkers = std::max(max_nworkers, ZOldGCThreads);
         }
         ConcGCThreads = max_nworkers;
     } else {
         max_nworkers_generation = ConcGCThreads;
     }
-    if (param.youngGCThreads == 0) {
+    if (!param.youngGCThreadsSet) {
         if (UseDynamicNumberOfGCThreads) {
             ZYoungGCThreads = max_nworkers_generation;
         } else {
@@ -63,7 +66,7 @@ void ZArguments::select_max_gc_threads()
             ZYoungGCThreads = static_young_threads;
         }
     }
-    if (param.oldGCThreads == 0) {
+    if (!param.oldGCThreadsSet) {
         if (UseDynamicNumberOfGCThreads) {
             ZOldGCThreads = max_nworkers_generation;
         } else {

@@ -15,11 +15,17 @@ Each process initializes once, without a GC workload; eight independent cases ru
 concurrently. A fixed one-second startup window precedes the single thread-name
 snapshot because pthread creation precedes worker-side OS naming. Optional fourth argument: comma-separated case names.
 
-The public GCParam fields `concGCThreads`, `youngGCThreads`, `oldGCThreads` use
-zero for ergonomics, following the existing runtime parameter convention.
-`staticGCThreads=false` is the dynamic default. Environment equivalents are
-`cjConcGCThreads`, `cjYoungGCThreads`, `cjOldGCThreads` (positive decimal integers)
-and `cjUseDynamicNumberOfGCThreads` (0 or 1, default 1).
+The public GCParam fields `parallelGCThreads`, `concGCThreads`, `youngGCThreads`,
+`oldGCThreads` each have a corresponding `*Set` boolean. False selects ergonomics
+regardless of the stored number; true selects the explicit value, and explicit
+zero is rejected. This is a runtime ABI change: rebuild callers with the new
+header. The fixture CLI uses `default` for a default origin.
+`staticGCThreads=false` keeps dynamic selection. Environment equivalents are
+`cjParallelGCThreads`, `cjConcGCThreads`, `cjYoungGCThreads`, `cjOldGCThreads`
+(positive decimal integers) and `cjUseDynamicNumberOfGCThreads` (0 or 1).
+`WorkerOrigins.*` exercises both initialization entries, explicit-zero rejection,
+and the actual runtime worker pool. `AllocationTransaction.*` exercises address
+failure and the testable-only `ZFailLargerCommits` develop flag (bytes, default 0).
 
 ZGC anchors: zArguments.cpp:67-118 and zWorkers.cpp:45-65. Configuration must be
 resolved before heap construction, including the shared relocation headroom.

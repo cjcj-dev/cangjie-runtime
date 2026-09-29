@@ -193,8 +193,11 @@ try:
     command('run')
     command('set var params.gcParam.backupGCInterval=1')
     command('set var params.gcParam.concGCThreads=2')
+    command('set var params.gcParam.concGCThreadsSet=true')
     command('set var params.gcParam.youngGCThreads=2')
+    command('set var params.gcParam.youngGCThreadsSet=true')
     command('set var params.gcParam.oldGCThreads=2')
+    command('set var params.gcParam.oldGCThreadsSet=true')
     command('set var params.gcParam.staticGCThreads=' + str(1 - DYNAMIC))
     if SITE == 'merge':
         stats_line = line_in(fixture_name, 'const auto before', fixture_source)
