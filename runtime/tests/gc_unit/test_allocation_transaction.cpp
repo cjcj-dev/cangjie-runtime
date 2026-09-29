@@ -74,7 +74,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, AddressIntactAllocates)
     ZPage* page = Allocate(16 * MB);
     std::fprintf(stderr, "ADDRESS_INTACT_TARGET page=%p used=%zu\n", page, manager.GetUsedBytes());
     GC_EXPECT_TRUE(page != nullptr);
-    GC_EXPECT_EQ(Heap::page(page->GetRegionStart()), page);
+    GC_EXPECT_TRUE(Heap::page(page->GetRegionStart()) == page);
     GC_EXPECT_EQ(manager.GetUsedBytes(), used + 16 * MB);
     *reinterpret_cast<uint64_t*>(page->GetRegionStart() + 4096) = 0x1317;
     GC_EXPECT_EQ(*reinterpret_cast<uint64_t*>(page->GetRegionStart() + 4096), uint64_t{0x1317});
