@@ -1549,13 +1549,15 @@ void CheckRemembered1261(bool buffered, bool youngHolder, bool crossYoungMark)
         StackWatermarkSet::on_safepoint(mutator);
     }
     const bool remembered = fx.region0()->is_remembered(p);
+    const bool drained = mutator.GetGCData().storeBarrierBuffer->IsEmpty();
     // Remset healing uses mark_good, including remembered=11, rather than
     // store_good (ZGC zBarrier.inline.hpp:435-444).
     const bool healed = ZPointer::is_marked_young(field.GetFieldValue());
     std::fprintf(stderr, "REMSET1261_TARGET buffered=%d young_holder=%d cross_mark=%d pending=%zu "
-        "written=%d store_good=%d remembered=%d healed=%d executed=1\n",
-        buffered, youngHolder, crossYoungMark, pending, written, storeGood, remembered, healed);
+        "written=%d store_good=%d remembered=%d healed=%d drained=%d executed=1\n",
+        buffered, youngHolder, crossYoungMark, pending, written, storeGood, remembered, healed, drained);
     GC_EXPECT_EQ(remembered, !youngHolder);
+    GC_EXPECT_TRUE(drained);
     GC_EXPECT_TRUE(written && storeGood);
     GC_EXPECT_EQ(pending, buffered ? 1u : 0u);
     if (crossYoungMark && !youngHolder) { GC_EXPECT_TRUE(healed); }
