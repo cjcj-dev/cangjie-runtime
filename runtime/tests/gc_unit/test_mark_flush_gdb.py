@@ -191,7 +191,7 @@ try:
         result['stripes_nonempty'] = any(result['stripe_heads'])
         product_source = Path(os.environ['MARK_FLUSH_PRODUCT_SOURCE']).read_text().splitlines()
         drain_line = next(i + 1 for i, text in enumerate(product_source)
-                          if 'if (!Drain(context,' in text)
+                          if 'context.SetStripe(stripes.StripeForWorker(nworkers, workerId));' in text)
         terminate_line = next(i + 1 for i, text in enumerate(product_source)
                               if 'if (terminate.TryTerminate(stripes,' in text)
         FlushConsumer('zMark.cpp:' + str(drain_line), True)
