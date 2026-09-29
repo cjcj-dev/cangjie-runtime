@@ -51,6 +51,26 @@ void ObservePush()
 }
 int main()
 {
+    // Unlike gc_unit_main, this executable has not called ZGlobalsPointers
+    // before entering the fixture. Preserve the zero -> attached assertion.
+    std::atomic<bool> bootstrapReady{false}, retryBootstrap{false};
+    bool absent = false, attached = false, stable = false;
+    std::thread bootstrap([&] {
+        ThreadLocal::InitializeCleaner();
+        auto* data = ThreadLocal::GetThreadLocalData()->nativeGCData;
+        bool listed = false;
+        for (CleanThreadLocalData::Iterator it; !it.End(); it.Step()) { listed |= &it.Current()->nativeData == data; }
+        absent = data->storeGoodMask == 0 && !listed;
+        bootstrapReady.store(true, std::memory_order_release);
+        while (!retryBootstrap.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        ThreadLocal::InitializeCleaner();
+        for (CleanThreadLocalData::Iterator it; !it.End(); it.Step()) { attached |= &it.Current()->nativeData == data; }
+        attached &= data->storeGoodMask != 0;
+        const auto masks = data->storeGoodMask;
+        ThreadLocal::InitializeCleaner();
+        stable = data == &ThreadLocal::GetGCData() && data->storeGoodMask == masks;
+    });
+    while (!bootstrapReady.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     RuntimeParam p{};
     p.heapParam.heapSize = 128 * 1024;
     p.coParam.processorNum = 1;
@@ -59,6 +79,10 @@ int main()
     p.gcParam.oldGCThreads = 1;
     p.gcParam.staticGCThreads = true;
     if (InitCJRuntime(&p) != E_OK) { return 2; }
+    retryBootstrap.store(true, std::memory_order_release);
+    bootstrap.join();
+    std::fprintf(stderr, "NATIVE_BOOTSTRAP_RETRY executed=1 absent=%d attached=%d stable=%d\n", absent, attached, stable);
+    if (!(absent && attached && stable)) { return 4; }
     ConcurrentGCBreakpoints::AcquireControl();
     auto task = RunCJTask(Allocate, nullptr);
     void* ret = nullptr;

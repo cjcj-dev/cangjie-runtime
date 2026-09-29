@@ -321,16 +321,23 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, ConcurrentRemovers)
     bool removed = false, retained = false;
     {
         CleanThreadLocalData::Iterator oldReaders;
-        finish.store(true, std::memory_order_release);
-        removed = WaitNative([&] { return !ContainsNative(data[0].load()) && !ContainsNative(data[1].load()); });
-        retained = !joined[0].load() && !joined[1].load();
-        // The first old snapshot still traverses both unlinked nodes.
-        size_t found = 0;
+        const ThreadGCData* observed[2]{};
+        uintptr_t masks[2]{};
+        // nonJavaThread.cpp:69 reloads mutable next links. Acquire the actual
+        // nodes before unlink; the read-side critical section protects these
+        // nodes, not a snapshot of membership after concurrent list mutation.
         for (; !oldReaders.End(); oldReaders.Step()) {
             const auto* seen = &oldReaders.Current()->nativeData;
-            if (seen == data[0].load() || seen == data[1].load()) { ++found; }
+            for (size_t i = 0; i < 2; ++i) {
+                if (seen == data[i].load()) { observed[i] = seen; masks[i] = seen->storeGoodMask; }
+            }
         }
-        retained &= found == 2;
+        finish.store(true, std::memory_order_release);
+        removed = WaitNative([&] { return !ContainsNative(data[0].load()) && !ContainsNative(data[1].load()); });
+        retained = !joined[0].load() && !joined[1].load() && observed[0] && observed[1];
+        if (retained) {
+            retained = observed[0]->storeGoodMask == masks[0] && observed[1]->storeGoodMask == masks[1];
+        }
     }
     const bool completed = WaitNative([&] { return joined[0].load() && joined[1].load(); });
     std::fprintf(stderr, "NATIVE_CONCURRENT_REMOVERS executed=1 ready=%d removed=%d retained=%d completed=%d\n",
@@ -342,31 +349,5 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, ConcurrentRemovers)
     }
     for (auto& thread : joiners) { thread.join(); }
     GC_EXPECT_TRUE(ready && removed && retained && completed);
-    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
-}
-
-GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, BootstrapRetry)
-{
-    std::atomic<bool> first{false}, retry{false};
-    bool absent = false, attached = false, stable = false;
-    std::thread bootstrap([&] {
-        ThreadLocal::InitializeCleaner();
-        auto* data = ThreadLocal::GetThreadLocalData()->nativeGCData;
-        absent = data->storeGoodMask == 0 && !ContainsNative(data);
-        first.store(true, std::memory_order_release);
-        while (!retry.load(std::memory_order_acquire)) { std::this_thread::yield(); }
-        ThreadLocal::InitializeCleaner();
-        attached = data->storeGoodMask != 0 && ContainsNative(data);
-        const auto masks = data->storeGoodMask;
-        ThreadLocal::InitializeCleaner();
-        stable = data == &ThreadLocal::GetGCData() && data->storeGoodMask == masks;
-    });
-    const bool initial = WaitNative([&] { return first.load(std::memory_order_acquire); });
-    InitNativeRuntime();
-    retry.store(true, std::memory_order_release);
-    bootstrap.join();
-    std::fprintf(stderr, "NATIVE_BOOTSTRAP_RETRY executed=1 initial=%d absent=%d attached=%d stable=%d\n",
-                 initial, absent, attached, stable);
-    GC_EXPECT_TRUE(initial && absent && attached && stable);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
