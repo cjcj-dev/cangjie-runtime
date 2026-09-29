@@ -194,6 +194,21 @@ class CompletenessTest(unittest.TestCase):
         rows = [r.replace("gc_tag=y", "gc_tag=Y") if "name=Pause_Relocate_Start " in r else r for r in complete_rows()]
         self.reject("generation-isolation", rows, "missing phase Pause_Relocate_Start")
 
+    def test_major_partial_roots_uses_combined_mark_start(self):
+        rows = [collection(kind="Major")]
+        rows += [r.replace("gc_tag=y", "gc_tag=Y").replace("name=Pause_Mark_Start ", "name=Pause_Mark_Start__Major_ ") for r in young_rows()]
+        rows.append(collection(event="abort", kind="Major"))
+        self.assertEqual(parse_gclog("\n".join(rows)).validate_complete().aborted, 1)
+
+    def test_old_generation_uses_literal_non_strong_phase(self):
+        rows = [collection(kind="Major")]
+        old = [r.replace("gc_tag=y", "gc_tag=O").replace("Young_Generation", "Old_Generation")
+               for r in young_rows() if "name=Pause_Mark_Start " not in r]
+        old[-1:-1] = [f"[GCLOG] v=5 rec=phase seq=1 gc_tag=O name={name} kind=conc start_ns=20 ns=1"
+                      for name in ("Concurrent_Process_Non-Strong", "Concurrent_Remap_Roots")]
+        rows += old + [collection(event="abort", kind="Major")]
+        self.assertEqual(parse_gclog("\n".join(rows)).validate_complete().aborted, 1)
+
     def test_duplicate_terminal_rejected(self):
         self.reject("duplicate-end", complete_rows() + [collection(event="end")], "duplicate collection end")
 

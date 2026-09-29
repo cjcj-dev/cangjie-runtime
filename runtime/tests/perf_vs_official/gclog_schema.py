@@ -162,7 +162,7 @@ class GcLogRecords:
                 ended_generations.setdefault(seq, set()).add(record.gc_tag)
                 required = dict(COMMON_PHASES)
                 if record.gc_tag == "O":
-                    required.update(Concurrent_Process_Non_Strong="conc", Concurrent_Remap_Roots="conc")
+                    required.update({"Concurrent_Process_Non-Strong": "conc", "Concurrent_Remap_Roots": "conc"})
                 else:
                     name = "Pause_Mark_Start__Major_" if record.gc_tag == "Y" and record.name != "Young_Generation__Promote_All_" else "Pause_Mark_Start"
                     required[name] = "pause"
