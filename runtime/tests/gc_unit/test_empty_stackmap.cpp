@@ -61,6 +61,8 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
         } else if (entry == Entry::EH) {
             FrameInfo frame(image.code);
             frame.mFrame.SetIP(image.code + 1);
+            FrameAddress address {};
+            frame.mFrame.SetFA(&address);
             ExceptionWrapper exception;
             EHFrameInfo eh(frame, exception);
             CalleeSavedRegisterContext context {};
