@@ -26,6 +26,25 @@ def main():
     source = args.source.resolve()
     evidence = args.evidence.resolve()
     evidence.mkdir(parents=True, exist_ok=True)
+    paths = [source / name for name in ('CMakeLists.txt', 'tests/gc_unit/CMakeLists.txt',
+                                        'tests/gc_unit/run_standalone.sh')]
+    def snapshot():
+        return {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+    before = snapshot()
+    (evidence / 'source-before.sha256').write_text(json.dumps(before, indent=2))
+    try:
+        exercise(args, source, evidence)
+    finally:
+        after = snapshot()
+        (evidence / 'source-after.sha256').write_text(json.dumps(after, indent=2))
+        result = subprocess.run(['git', '-C', str(source), 'diff', '--exit-code', '--'] +
+                                list(before), capture_output=True, text=True)
+        (evidence / 'source-restored.log').write_text('git diff --exit-code rc=' +
+            str(result.returncode) + '\n' + result.stdout + result.stderr)
+        assert before == after and result.returncode == 0, 'temporary source changes were not restored'
+
+
+def exercise(args, source, evidence):
     build = evidence / 'build'
     records = []
     def run(name, command, env=None):
