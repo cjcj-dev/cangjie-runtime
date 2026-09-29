@@ -747,6 +747,25 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
 }
 
+// ZGC zRootsIterator.cpp:159-162: registered export handles have JNI-global
+// lifetime and belong to the strong storage set even for strong-only walks.
+GC_OTHER_VM_TEST(HeapIterator, ExportRootIsIncludedInStrongMode)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager manager;
+    WeakClosureTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    WeakGraph graph(fx, fx.region0());
+    const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
+    std::unordered_set<BaseObject*> strong;
+    HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
+    Heap::GetHeap().RemoveExportObject(handle);
+    std::fprintf(stderr, "EXPORT_STRONG_ROOT_TARGET object=%p root=%zu referent=%zu child=%zu\n",
+                 graph.weak, strong.count(graph.weak), strong.count(graph.referent), strong.count(graph.child));
+    GC_EXPECT_TRUE(strong.count(graph.weak) == 1);
+    GC_EXPECT_TRUE(strong.count(graph.referent) == 0 && strong.count(graph.child) == 0);
+}
+
 // P8-2: use only existing visitor callbacks to hold an in-flight object.
 // The queue, bitmap, follow, and termination results come from the linked SO.
 namespace {
