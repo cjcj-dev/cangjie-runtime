@@ -5,7 +5,6 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zForwarding.hpp"
