@@ -25,6 +25,7 @@
 #include "Loader/CjFileLoader/CjFileLoader.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "Loader/PackageInit.h"
+#include "gc_heap_fixture.hpp"
 #include "loader_access_test.hpp"
 #include "LoaderManager.h"
 #include "Mutator/Handshake.h"
@@ -1106,13 +1107,13 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryStaticRootIsEnumerated)
     Target("static-root-library-open", library != nullptr);
     auto getMetadata = reinterpret_cast<void* (*)()>(dlsym(library, "PackageInitImageMetadata"));
     auto rootSlot = reinterpret_cast<MAddress* (*)()>(dlsym(library, "PackageInitImageRootSlot"));
-    auto setRoot = reinterpret_cast<void (*)(MAddress)>(dlsym(library, "PackageInitImageSetRoot"));
+    auto setRoot = reinterpret_cast<void (*)(uintptr_t)>(dlsym(library, "PackageInitImageSetRoot"));
     Target("static-root-library-symbols", getMetadata != nullptr && rootSlot != nullptr && setRoot != nullptr);
     auto* file = new CJFile(CString("package-init-library"), reinterpret_cast<Uptr>(getMetadata()));
     auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
     loader->AddLoadedFiles(file);
     struct StaticRootContext {
-        void (*setRoot)(MAddress) { nullptr };
+        void (*setRoot)(uintptr_t) { nullptr };
         MAddress object { 0 };
         std::atomic<bool> done { false };
     } context;
@@ -1127,7 +1128,7 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryStaticRootIsEnumerated)
         type->SetType(TypeKind::TYPE_KIND_CLASS);
         type->SetInstanceSize(64);
         c.object = reinterpret_cast<MAddress>(MCC_NewObject(type, 64 + TYPEINFO_PTR_SIZE));
-        c.setRoot(c.object);
+        c.setRoot(static_cast<uintptr_t>(StoreGoodPointer(reinterpret_cast<BaseObject*>(c.object))));
         c.done.store(true, std::memory_order_release);
     }, &context);
     Target("static-root-object-published", Await(context.done) && context.object != 0);

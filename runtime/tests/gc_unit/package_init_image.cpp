@@ -22,7 +22,10 @@ struct ImageMetadata {
 } metadata;
 }
 extern "C" MAddress* PackageInitImageRootSlot() { return reinterpret_cast<MAddress*>(&metadata.root); }
-extern "C" void PackageInitImageSetRoot(MAddress value) { (void)metadata.root.Exchange(to_zpointer(value)); }
+extern "C" void PackageInitImageSetRoot(uintptr_t value)
+{
+    (void)metadata.root.Exchange(to_zpointer(static_cast<MAddress>(value)));
+}
 extern "C" void* PackageInitImageMetadata()
 {
     metadata.roots[0] = &metadata.root;
