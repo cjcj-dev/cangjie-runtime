@@ -24,7 +24,15 @@ fi
 test -f "$bc/include/securec.h"
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+# Optional CI evidence: copy before the temporary build directory is removed.
+cleanup() {
+  if [[ -n "${BSD_BACKING_EVIDENCE_DIR:-}" ]]; then
+    mkdir -p "$BSD_BACKING_EVIDENCE_DIR"
+    cp -R "$work/." "$BSD_BACKING_EVIDENCE_DIR/"
+  fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
 
 cj="runtime/src/CJThread/src"
 case "$(uname -m)" in

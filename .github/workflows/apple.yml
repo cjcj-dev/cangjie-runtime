@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      backing_regression:
+        description: Run backing launcher baseline/candidate/cut/restored evidence
+        type: boolean
+        default: false
       p04_bsd_tu_only:
         description: 'Run only the P04 bsd TU compile job'
         required: false
@@ -150,6 +154,7 @@ jobs:
         env:
           EXPECTED_ARCH: ${{ matrix.macho_arch }}
         run: |
+          ulimit -c 0
           actual_arch="$(uname -m)"
           if [[ "$actual_arch" != "$EXPECTED_ARCH" ]]; then
             echo "expected runner architecture $EXPECTED_ARCH, got $actual_arch" >&2
@@ -316,6 +321,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Run BSD backing failure paths
         run: |
@@ -325,7 +332,18 @@ jobs:
             echo "runner arch mismatch" >&2
             exit 1
           fi
-          bash runtime/tests/bsd/run_backing_fail.sh
+          if [[ "${{ inputs.backing_regression }}" == "true" ]]; then
+            BSD_BACKING_REGRESSION_DIR="$RUNNER_TEMP/backing-launcher" \
+              python3 runtime/tests/bsd/check_backing_launcher.py
+          else
+            /bin/bash runtime/tests/bsd/run_backing_fail.sh
+          fi
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.backing_regression }}
+        with:
+          name: backing-launcher-${{ matrix.runner }}
+          path: ${{ runner.temp }}/backing-launcher
+          retention-days: 7
 
   # P04 bsd TUs are selected only when MACOS_FLAG=1 (Heap/CMakeLists.txt).
   # The matrix job above dies in LocalDeque.h on MRT_PRCTL before those TUs

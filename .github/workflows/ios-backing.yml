@@ -1,12 +1,18 @@
 name: iOS backing SDK contract
 on:
   workflow_dispatch:
+    inputs:
+      backing_regression:
+        description: Run only simulator backing launcher regression evidence
+        type: boolean
+        default: false
   push:
     branches: ['sym/1182-*']
 permissions:
   contents: read
 jobs:
   full-runtime:
+    if: ${{ !inputs.backing_regression }}
     strategy:
       fail-fast: false
       matrix:
@@ -121,6 +127,8 @@ jobs:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Probe simulator and run vm_remap path test from product source
         env:
           ARCH: ${{ matrix.arch }}
@@ -189,11 +197,16 @@ jobs:
           # execute it inside the booted simulator. map_ok drives the product
           # map -> mremap_mach -> vm_remap path and consumes its result.
           rc=0
+          launcher=(/bin/bash runtime/tests/bsd/run_backing_fail.sh)
+          if [[ "${{ inputs.backing_regression }}" == "true" ]]; then
+            launcher=(python3 runtime/tests/bsd/check_backing_launcher.py)
+          fi
+          BSD_BACKING_REGRESSION_DIR="$out/launcher" \
           BSD_BACKING_SDK=iphonesimulator \
           BSD_BACKING_ARCH="$ARCH" \
           BSD_BACKING_SIM_UDID="$udid" \
           BSD_BACKING_CASES="ctor_ok map_ok" \
-            bash runtime/tests/bsd/run_backing_fail.sh > "$out/sim-test.log" 2>&1 || rc=$?
+            "${launcher[@]}" > "$out/sim-test.log" 2>&1 || rc=$?
           cat "$out/sim-test.log"
           printf 'SIM_RUNTIME_TEST rc=%s cases=[ctor_ok map_ok]\n' "$rc" | tee -a "$out/sim-runtime.txt"
           uptime > "$out/uptime-after.txt"
