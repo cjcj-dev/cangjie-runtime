@@ -50,7 +50,7 @@ void CheckParallel(bool env, bool explicitFlag)
     GC_EXPECT_EQ(actual, expected);
     GC_EXPECT_EQ(ZCollectedHeap::heap()->safepoint_workers()->active_workers(), expected);
 }
-void RejectZero(const char* flag, bool env)
+void RejectWorkerCount(const char* flag, bool env, bool overBudget = false)
 {
     int output[2];
     GC_EXPECT_EQ(pipe(output), 0);
@@ -66,7 +66,14 @@ void RejectZero(const char* flag, bool env)
         if (std::strcmp(flag, "Conc") == 0) param.gcParam.concGCThreadsSet = true;
         if (std::strcmp(flag, "Young") == 0) param.gcParam.youngGCThreadsSet = true;
         if (std::strcmp(flag, "Old") == 0) param.gcParam.oldGCThreadsSet = true;
-        if (env) { setenv((std::string("cj") + flag + "GCThreads").c_str(), "0", 1); }
+        if (overBudget) {
+            param.gcParam.concGCThreads = 2;
+            param.gcParam.concGCThreadsSet = true;
+            if (std::strcmp(flag, "Young") == 0) param.gcParam.youngGCThreads = 3;
+            if (std::strcmp(flag, "Old") == 0) param.gcParam.oldGCThreads = 3;
+            if (env) setenv("cjConcGCThreads", "2", 1);
+        }
+        if (env) { setenv((std::string("cj") + flag + "GCThreads").c_str(), overBudget ? "3" : "0", 1); }
         WorkerInit(param, env);
         _exit(0);
     }
@@ -78,25 +85,26 @@ void RejectZero(const char* flag, bool env)
     close(output[0]);
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    std::fprintf(stderr, "WORKER_ZERO_TARGET flag=%s env=%d status=%d\n%s", flag, env, status, transcript.c_str());
+    std::fprintf(stderr, "WORKER_REJECTION_TARGET flag=%s env=%d over_budget=%d status=%d\n%s",
+                 flag, env, overBudget, status, transcript.c_str());
     GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
-    GC_EXPECT_TRUE(transcript.find(env ? "GC worker count must be a positive uint32" : "GCThreads must be") != std::string::npos);
+    GC_EXPECT_TRUE(transcript.find(env && !overBudget ? "GC worker count must be a positive uint32" : "GCThreads must be") != std::string::npos);
 }
-void ExplicitGenerations(bool env, bool statically, bool raiseDefault)
+void ExplicitGenerations(bool env, bool statically, bool raiseDefault, bool raiseOld = false)
 {
     auto param = WorkerParams();
     param.gcParam.concGCThreads = 10;
     param.gcParam.concGCThreadsSet = !raiseDefault;
-    param.gcParam.youngGCThreads = raiseDefault ? 12 : 4;
+    param.gcParam.youngGCThreads = raiseDefault && !raiseOld ? 12 : 4;
     param.gcParam.youngGCThreadsSet = true;
-    param.gcParam.oldGCThreads = 3;
+    param.gcParam.oldGCThreads = raiseOld ? 12 : 3;
     param.gcParam.oldGCThreadsSet = true;
     param.gcParam.staticGCThreads = statically;
     if (env) {
         if (raiseDefault) unsetenv("cjConcGCThreads");
         else setenv("cjConcGCThreads", "10", 1);
-        setenv("cjYoungGCThreads", raiseDefault ? "12" : "4", 1);
-        setenv("cjOldGCThreads", "3", 1);
+        setenv("cjYoungGCThreads", raiseDefault && !raiseOld ? "12" : "4", 1);
+        setenv("cjOldGCThreads", raiseOld ? "12" : "3", 1);
         setenv("cjUseDynamicNumberOfGCThreads", statically ? "0" : "1", 1);
     }
     WorkerInit(param, env);
@@ -104,8 +112,8 @@ void ExplicitGenerations(bool env, bool statically, bool raiseDefault)
     std::fprintf(stderr, "GENERATION_ORIGIN_TARGET env=%d static=%d raise=%d c=%u y=%u o=%u expected_c=%u\n",
                  env, statically, raiseDefault, ConcGCThreads, ZYoungGCThreads, ZOldGCThreads, total);
     GC_EXPECT_EQ(ConcGCThreads, total);
-    GC_EXPECT_EQ(ZYoungGCThreads, raiseDefault ? 12u : 4u);
-    GC_EXPECT_EQ(ZOldGCThreads, 3u);
+    GC_EXPECT_EQ(ZYoungGCThreads, raiseDefault && !raiseOld ? 12u : 4u);
+    GC_EXPECT_EQ(ZOldGCThreads, raiseOld ? 12u : 3u);
 }
 void OriginsDefault()
 {
@@ -134,6 +142,13 @@ void FrozenCPU(bool narrowBeforeInit)
     GC_EXPECT_TRUE(CPU_COUNT(&original) > 1);
     if (narrowBeforeInit) { GC_EXPECT_EQ(sched_setaffinity(0, sizeof(one), &one), 0); }
     auto param = WorkerParams();
+    // Keep the heuristic's heap budget above the CPU budget, without starting
+    // that many worker threads in this affinity-only fixture.
+    param.heapParam.heapSize = 32 * 1024 * 1024;
+    param.gcParam.parallelGCThreads = 1;
+    param.gcParam.parallelGCThreadsSet = true;
+    param.gcParam.concGCThreads = 2;
+    param.gcParam.concGCThreadsSet = true;
     WorkerInit(param, false);
     const uint32_t before = OS::InitialActiveProcessorCount();
     const uint32_t workers = ZHeuristics::nparallel_workers();
@@ -146,6 +161,7 @@ void FrozenCPU(bool narrowBeforeInit)
     GC_EXPECT_EQ(before, narrowBeforeInit ? 1u : static_cast<uint32_t>(CPU_COUNT(&original)));
     GC_EXPECT_EQ(after, before);
     GC_EXPECT_EQ(afterWorkers, workers);
+    GC_EXPECT_EQ(workers, (before * 60u + 99u) / 100u);
     if (narrowBeforeInit) GC_EXPECT_EQ(workers, 1u);
     else GC_EXPECT_TRUE(workers > 1);
 }
@@ -155,14 +171,14 @@ GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ParallelExplicitEnv) { CheckParallel(tru
 GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ParallelDefaultApi) { CheckParallel(false, false); }
 GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ParallelDefaultEnv) { CheckParallel(true, false); }
 GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, DefaultIgnoresResidualValues) { OriginsDefault(); }
-GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ParallelZeroApi) { RejectZero("Parallel", false); }
-GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ConcZeroApi) { RejectZero("Conc", false); }
-GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, YoungZeroApi) { RejectZero("Young", false); }
-GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, OldZeroApi) { RejectZero("Old", false); }
-GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ParallelZeroEnv) { RejectZero("Parallel", true); }
-GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ConcZeroEnv) { RejectZero("Conc", true); }
-GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, YoungZeroEnv) { RejectZero("Young", true); }
-GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, OldZeroEnv) { RejectZero("Old", true); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ParallelZeroApi) { RejectWorkerCount("Parallel", false); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ConcZeroApi) { RejectWorkerCount("Conc", false); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, YoungZeroApi) { RejectWorkerCount("Young", false); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, OldZeroApi) { RejectWorkerCount("Old", false); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ParallelZeroEnv) { RejectWorkerCount("Parallel", true); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ConcZeroEnv) { RejectWorkerCount("Conc", true); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, YoungZeroEnv) { RejectWorkerCount("Young", true); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, OldZeroEnv) { RejectWorkerCount("Old", true); }
 GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, FrozenInitialCPU) { FrozenCPU(false); }
 GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, NarrowInitialCPUControl) { FrozenCPU(true); }
 
@@ -172,3 +188,11 @@ GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ExplicitStaticApi) { ExplicitGenerations
 GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ExplicitStaticEnv) { ExplicitGenerations(true, true, false); }
 GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ExplicitYoungRaisesDefaultApi) { ExplicitGenerations(false, false, true); }
 GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ExplicitYoungRaisesDefaultEnv) { ExplicitGenerations(true, false, true); }
+
+// ZGC zArguments.cpp:105-118 rejects explicit per-generation budgets above ConcGCThreads.
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, YoungAboveTotalApi) { RejectWorkerCount("Young", false, true); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, YoungAboveTotalEnv) { RejectWorkerCount("Young", true, true); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, OldAboveTotalApi) { RejectWorkerCount("Old", false, true); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, OldAboveTotalEnv) { RejectWorkerCount("Old", true, true); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ExplicitOldRaisesDefaultApi) { ExplicitGenerations(false, false, true, true); }
+GC_RUNTIME_OTHER_VM_TEST(WorkerOrigins, ExplicitOldRaisesDefaultEnv) { ExplicitGenerations(true, false, true, true); }
