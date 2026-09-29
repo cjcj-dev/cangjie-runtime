@@ -94,6 +94,7 @@ set(GC_UNIT_SOURCES
     test_mark_port_203_storage.cpp
     test_mark_port_203_entries.cpp
     test_mark_discovery.cpp
+    test_mark_termination_1329.cpp
     test_mark_port_203_engine.cpp
     test_exit_detach_mark_end.cpp
     test_native_thread_detach.cpp

@@ -394,6 +394,7 @@ MAIN_SOURCES=(
   "$SRC/test_mark_port_203_storage.cpp"
   "$SRC/test_mark_port_203_entries.cpp"
   "$SRC/test_mark_discovery.cpp"
+  "$SRC/test_mark_termination_1329.cpp"
   "$SRC/test_mark_port_203_engine.cpp"
   "$SRC/test_exit_detach_mark_end.cpp"
   "$SRC/test_native_thread_detach.cpp"

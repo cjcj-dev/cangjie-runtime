@@ -82,11 +82,7 @@ public:
     static void DrainYoungRootWork(Heap& collector)
     {
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *Heap::GetHeap().young().MarkPtr());
-        WorkStack work;
-        std::vector<BaseObject*> reachable;
-        std::unordered_set<MAddress> slots;
-        std::unordered_set<MAddress> weak;
-        ZMark::TraceYoungClosure(work, false, reachable, slots, weak);
+        Heap::GetHeap().young().Mark().MarkFollow();
     }
 };
 }

@@ -1,4 +1,5 @@
 #include "gc_worker_fixture.hpp"
+#include "Heap/z/zGlobals.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -387,4 +388,19 @@ GC_TEST(ZWorkers, ZGenerationOwnsWorkersAndStatWorkers)
     young.StopWorkers();
     old.StopWorkers();
     GC_EXPECT_TRUE(young.Workers() == nullptr);
+}
+
+// ZGC zWorkers.cpp:41-43: construction selects the budget of its generation.
+GC_TEST(ZWorkers, ConstructorSelectsGenerationBudget)
+{
+    MapleRuntime::GcUnit::WorkerBudgetFixture budget(1);
+    ZYoungGCThreads = 2;
+    ZOldGCThreads = 3;
+    ZStatWorkers youngStats, oldStats;
+    ZWorkers young(ZGenerationId::young, &youngStats);
+    ZWorkers old(ZGenerationId::old, &oldStats);
+    const auto youngCount = young.active_workers();
+    const auto oldCount = old.active_workers();
+    std::fprintf(stderr, "MARK1329_WORKERS_TARGET executed=1 young=%u old=%u\n", youngCount, oldCount);
+    GC_EXPECT_TRUE(youngCount == 2 && oldCount == 3);
 }

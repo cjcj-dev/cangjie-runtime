@@ -1080,7 +1080,7 @@ GC_OTHER_VM_TEST(HeapIterator, PhantomRootDoesNotKeepAliveDuringOldMark)
         HeapIterator(true).Iterate([&](BaseObject* object) { visits += object == fx.obj0; });
     }
     ThreadLocal::FlushCurrentThreadMarkStacks();
-    collector.old().Mark().MarkFollow(false);
+    collector.old().Mark().MarkFollow();
     const bool live = fx.region0()->is_object_live(from_object(fx.obj0));
     collector.RemoveExportObject(handle);
     std::fprintf(stderr, "B10_ITERATOR_RESULT visits=%zu live=%d\n", visits, live);

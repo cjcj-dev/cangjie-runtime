@@ -33,11 +33,11 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
         fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + fx.obj0->GetSize());
     }
     const size_t size = fx.obj0->GetSize();
+    MarkLiveCache cache(1);
     if (finalizable) {
         GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
-            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), nullptr));
+            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), &cache));
     }
-    MarkLiveCache cache(1);
     const bool already = ZMark::MarkEntryObject(fx.obj0,
         MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache);
     const bool secondAlready = repeat ? ZMark::MarkEntryObject(fx.obj0,

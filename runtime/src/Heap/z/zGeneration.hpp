@@ -221,7 +221,6 @@ private:
     uint32_t _tenuring_threshold = 0;
     uint64_t minorTotalRuns = 0;
     uint64_t youngStartNs = 0;
-    WorkStack youngWorkStack;
     ZRemembered _remembered;
 };
 

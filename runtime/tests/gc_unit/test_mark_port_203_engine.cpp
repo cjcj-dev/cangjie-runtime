@@ -415,7 +415,7 @@ GC_TEST(MarkPort203Engine, DomainPrepareResizeKeepsCapacity)
 {
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
     ZMark domain(8, MarkingStacks::MarkingGeneration::YOUNG);
-    domain.PrepareWork(2);
+    domain.ResizeWorkers(2);
     GC_EXPECT_EQ(domain.Stripes().Count(), 8u);
     GC_EXPECT_TRUE(domain.Stripes().NStripes() <= 8u);
     domain.ResizeWorkers(4);
@@ -447,7 +447,7 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
 {
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
     ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
-    domain.PrepareWork(1);
+    domain.ResizeWorkers(1);
     GC_EXPECT_TRUE(!domain.PollStop());
     ZAbort::abort();
     GC_EXPECT_TRUE(domain.PollStop());
@@ -459,7 +459,7 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
     workers.set_active();
     workers.set_active_workers(1);
     domain.BindWorkers(&workers);
-    domain.PrepareWork(1);
+    domain.ResizeWorkers(1);
     GC_EXPECT_TRUE(!domain.PollStop());
     workers.request_resize_workers(2);
     GC_EXPECT_TRUE(domain.PollStop());
@@ -473,7 +473,7 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
     SuspendibleThreadSetJoiner stsJoiner;
     ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
-    domain.PrepareWork(1);
+    domain.ResizeWorkers(1);
     MarkThreadLocalStacks stacks(4);
     MarkContext context(1, 0, domain.Stripes(), stacks);
     constexpr size_t count = 64;
@@ -503,7 +503,7 @@ GC_TEST(MarkPort203Engine, TryEndFalseWhenResurrectedOrUnflushed)
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
     ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
-    domain.PrepareWork(1);
+    domain.ResizeWorkers(1);
     GC_EXPECT_TRUE(domain.Stripes().IsEmpty());
     GC_EXPECT_TRUE(!domain.Terminate().Resurrected());
     GC_EXPECT_TRUE(domain.TryEnd());
@@ -529,7 +529,7 @@ GC_TEST(RememberedWorkers719, MissingYoungPoolFailsAtDispatch)
         close(output[1]);
         signal(SIGABRT, SIG_DFL);
         ZMark mark(4, MarkingStacks::MarkingGeneration::YOUNG);
-        mark.PrepareWork(1);
+        mark.ResizeWorkers(1);
         if (Heap::GetHeap().young().Workers() != nullptr) _exit(91);
         ZRemembered remembered(&Heap::page_table(), &Heap::GetHeap().old().forwarding_table(),
                                &Heap::GetHeap().page_allocator());
@@ -585,12 +585,8 @@ void CheckYoungClosureAccounting(uint32_t workers)
         .StoreColoured(zpointer::null);
     const size_t expected = heap.obj0->GetSize();
     const uint64_t before = heap.region0()->live_bytes();
-    WorkStack work;
-    std::vector<BaseObject*> reached;
-    std::unordered_set<MAddress> slots;
-    std::unordered_set<MAddress> weak;
-    ZMark::PushYoungObject(heap.obj0, work, "young-closure-accounting");
-    ZMark::TraceYoungClosure(work, false, reached, slots, weak);
+    ZBarrier::MarkSlowPath(from_object(heap.obj0));
+    young.Mark().MarkFollow();
     const uint64_t after = heap.region0()->live_bytes();
     const bool marked = heap.region0()->is_object_strongly_live(from_object(heap.obj0));
     young.StopWorkers();
