@@ -6,6 +6,7 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zJNICritical.hpp"
+#include "Heap/z/zMark.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "gc_unittest.hpp"
 
