@@ -510,8 +510,8 @@ ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, Page
         page = manager.TakeRegion(num, role, expectPhysicalMem, age, flags);
     }
     if (page != nullptr) {
-        GetHeap().account_alloc_page(page);
         page_table().insert(page);
+        GetHeap().account_alloc_page(page);
     }
     return page;
 }
