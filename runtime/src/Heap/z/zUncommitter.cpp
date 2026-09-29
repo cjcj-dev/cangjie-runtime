@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 
 #include "Heap/Allocator/RegionSpace.h"
@@ -152,9 +153,13 @@ bool Uncommitter::Wait(uint64_t timeout)
     }
     if (!stopped.load(std::memory_order_acquire) && timeout > 0) {
         uint64_t now = TimeUtil::NanoSeconds();
-        const uint64_t deadline = now + timeout;
+        const uint64_t deadline = now + timeout * MILLI_SECOND_TO_NANO_SECOND;
         do {
-            condition.wait_for(guard, std::chrono::nanoseconds(deadline - now));
+            const uint64_t remaining = (deadline - now) / MILLI_SECOND_TO_NANO_SECOND;
+            if (remaining == 0) {
+                break;
+            }
+            condition.wait_for(guard, std::chrono::milliseconds(remaining));
             now = TimeUtil::NanoSeconds();
         } while (!stopped.load(std::memory_order_acquire) && now < deadline);
     }
@@ -179,7 +184,7 @@ bool Uncommitter::Activate()
         ResetCycle();
         return false;
     }
-    cycleStart = TimeUtil::NanoSeconds();
+    cycleStart = double(TimeUtil::NanoSeconds()) / SECOND_TO_NANO_SECOND;
     uncommitted = 0;
     // ZGC zUncommitter.cpp:222-242: claim this partition's cache history.
     std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
@@ -254,29 +259,34 @@ void Uncommitter::RegisterUncommit(size_t size)
     CHECK(size % ZGranuleSize == 0);
     toUncommit -= size;
     uncommitted += size;
-    nextUncommitNs = 0;
-    if (CycleIsFinished() || CycleIsCanceled()) {
+    if (CycleIsCanceled()) {
         return;
     }
-    const uint64_t elapsed = TimeUtil::NanoSeconds() - cycleStart;
-    if (elapsed == 0 || elapsed >= DelayNs()) {
+    if (CycleIsFinished()) {
         return;
     }
-    const double rate = static_cast<double>(uncommitted) / elapsed;
-    const double timeToComplete = toUncommit / rate;
-    const uint64_t left = DelayNs() - elapsed;
+    const double now = double(TimeUtil::NanoSeconds()) / SECOND_TO_NANO_SECOND;
+    const double elapsed = now - cycleStart;
+    if (elapsed == 0.0) {
+        nextUncommitTimeout = 0;
+        return;
+    }
+    const double rate = double(uncommitted) / elapsed;
+    const double timeToComplete = double(toUncommit) / rate;
+    const double left = double(DelayNs()) / SECOND_TO_NANO_SECOND - elapsed;
     if (left < timeToComplete) {
+        nextUncommitTimeout = 0;
         return;
     }
     const size_t remaining = toUncommit / size + 1;
-    const uint64_t millisLeft = left / MILLI_SECOND_TO_NANO_SECOND;
+    const uint64_t millisLeft = ToMillis(left);
     if (remaining < millisLeft) {
-        nextUncommitNs = (millisLeft / remaining) * MILLI_SECOND_TO_NANO_SECOND;
-    } else {
-        const double extra = left - timeToComplete;
-        const double random = static_cast<double>(std::rand()) / RAND_MAX;
-        nextUncommitNs = random < extra / left ? MILLI_SECOND_TO_NANO_SECOND : 0;
+        nextUncommitTimeout = millisLeft / remaining;
+        return;
     }
+    const double extra = left - timeToComplete;
+    const double random = static_cast<double>(std::rand()) / RAND_MAX;
+    nextUncommitTimeout = random < extra / left ? 1 : 0;
 }
 
 // ZGC zUncommitter.cpp:177-203.
@@ -306,10 +316,20 @@ void Uncommitter::Deactivate()
 }
 
 // ZGC zUncommitter.cpp:250-284.
-void Uncommitter::UpdateNextCycleTimeout(uint64_t fromTime)
+uint64_t Uncommitter::ToMillis(double seconds) const
 {
-    const uint64_t elapsed = TimeUtil::NanoSeconds() - fromTime;
-    nextCycleNs = elapsed < DelayNs() ? DelayNs() - elapsed : 0;
+    return uint64_t(std::floor(seconds * 1000.0));
+}
+
+void Uncommitter::UpdateNextCycleTimeout(double fromTime)
+{
+    const double now = double(TimeUtil::NanoSeconds()) / SECOND_TO_NANO_SECOND;
+    const double delay = double(DelayNs()) / SECOND_TO_NANO_SECOND;
+    if (now < fromTime + delay) {
+        nextCycleTimeout = ToMillis(delay) - ToMillis(now - fromTime);
+    } else {
+        nextCycleTimeout = 0;
+    }
 }
 
 void Uncommitter::UpdateNextCycleTimeoutOnCancel()
@@ -334,8 +354,8 @@ void Uncommitter::run_thread()
 {
     MutatorManager& mutators = MutatorManager::Instance();
     mutators.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    nextCycleNs = DelayNs();
-    while (Wait(nextCycleNs)) {
+    nextCycleTimeout = ToMillis(double(DelayNs()) / SECOND_TO_NANO_SECOND);
+    while (Wait(nextCycleTimeout)) {
         if (!Activate()) {
             continue;
         }
@@ -344,8 +364,8 @@ void Uncommitter::run_thread()
             if (released == 0 || CycleIsFinished()) {
                 break;
             }
-            if (nextUncommitNs != 0) {
-                Wait(nextUncommitNs);
+            if (nextUncommitTimeout != 0) {
+                Wait(nextUncommitTimeout);
             }
         }
         if (!ShouldContinue()) {
@@ -361,7 +381,7 @@ void Uncommitter::Cancel()
     // Both product callers own the allocator/cache serialization.
     // ZGC zUncommitter.cpp:286-290: begin cache history at cancellation.
     partition.cache.reset_min_size_watermark();
-    cancelTime = TimeUtil::NanoSeconds();
+    cancelTime = double(TimeUtil::NanoSeconds()) / SECOND_TO_NANO_SECOND;
 }
 
 } // namespace MapleRuntime

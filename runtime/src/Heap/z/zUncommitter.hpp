@@ -59,7 +59,8 @@ private:
     void RegisterUncommit(size_t size);
     void ResetCycle();
     void Deactivate();
-    void UpdateNextCycleTimeout(uint64_t fromTime);
+    uint64_t ToMillis(double seconds) const;
+    void UpdateNextCycleTimeout(double fromTime);
     void UpdateNextCycleTimeoutOnCancel();
     void UpdateNextCycleTimeoutOnFinish();
     bool CycleIsFinished() const;
@@ -73,10 +74,10 @@ private:
     std::atomic<bool> stopped{false};
     // Cycle state is protected by the partition page allocator lock.
     // Only the worker consumes progress between chunks.
-    uint64_t cancelTime = 0;
-    uint64_t cycleStart = 0;
-    uint64_t nextUncommitNs = 0;
-    uint64_t nextCycleNs = 0;
+    double cancelTime = 0.0;
+    double cycleStart = 0.0;
+    uint64_t nextUncommitTimeout = 0;
+    uint64_t nextCycleTimeout = 0;
     size_t toUncommit = 0;
     size_t uncommitted = 0; // cycle progress, not a second capacity account
 };

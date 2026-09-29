@@ -67,10 +67,11 @@ struct UncommitterTestAccess {
     static void PrepareChunk(Uncommitter& worker)
     {
         worker.partition.cache.reset_min_size_watermark();
-        worker.cycleStart = TimeUtil::NanoSeconds() + Uncommitter::DelayNs();
+        worker.cycleStart = double(TimeUtil::NanoSeconds()) / SECOND_TO_NANO_SECOND;
         worker.toUncommit = ZGranuleSize;
     }
-    static bool Wait(Uncommitter& worker, uint64_t deadline) { return worker.Wait(deadline - TimeUtil::NanoSeconds()); }
+    static bool Wait(Uncommitter& worker, uint64_t deadline) { const uint64_t now = TimeUtil::NanoSeconds();
+        return worker.Wait(deadline > now ? (deadline - now) / MILLI_SECOND_TO_NANO_SECOND : 0); }
 };
 }
 
@@ -334,7 +335,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CancelDelaysActivation)
     GC_EXPECT_FALSE(UncommitterTestAccess::Canceled());
     GC_EXPECT_FALSE(worker.CycleIsActive());
     GC_EXPECT_TRUE(worker.CycleIsFinished());
-    GC_EXPECT_TRUE(worker.nextCycleNs > 0);
+    GC_EXPECT_TRUE(worker.nextCycleTimeout > 0);
 }
 
 GC_COMPONENT_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)
@@ -479,7 +480,7 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, CancelStartsNewCacheWatermarkHistory)
     UncommitterTestAccess::ResetCancel();
     partition.cache.reset_min_size_watermark();
     worker.Start();
-    uint64_t canceledAt = 0;
+    double canceledAt = 0.0;
     size_t expected = 0;
     size_t actual = 0;
     bool observed = false;
@@ -513,8 +514,8 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, CancelStartsNewCacheWatermarkHistory)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     worker.Stop();
-    std::fprintf(stderr, "TARGET_CANCEL_HISTORY observed=%d cancel=%llu budget=%zu expected=%zu\n",
-                 observed, static_cast<unsigned long long>(canceledAt), actual, expected);
+    std::fprintf(stderr, "TARGET_CANCEL_HISTORY observed=%d cancel=%.9f budget=%zu expected=%zu\n",
+                 observed, canceledAt, actual, expected);
     GC_EXPECT_TRUE(observed);
     GC_EXPECT_EQ(actual, expected);
 }
