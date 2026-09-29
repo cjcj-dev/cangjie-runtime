@@ -5,41 +5,44 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Allocator/RegionSpace.h"
-
-#include <atomic>
-#include <cstdlib>
-#include <cstring>
-
-#include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/z/zDriver.hpp"
-#include "Heap/z/zDirector.hpp"
-#include "Heap/z/zUncommitter.hpp"
-#include "Base/TimeUtils.h"
-#if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
-#include "Sanitizer/SanitizerInterface.h"
-#endif
-#include "Common/ScopedObjectAccess.h"
-#include "Common/ColourEncoding.h"
-#include "Heap/z/zHeap.hpp"
-#include "Heap/z/zForwardingTable.hpp"
-#include "Mutator/Mutator.h"
+#include "Heap/z/zTLABUsage.hpp"
+#include "Base/LogFile.h"
 
 namespace MapleRuntime {
-void AllocBuffer::AccumulateTLABStatistics(TLABStatistics& total, size_t used, size_t capacity)
+ZTLABUsage::ZTLABUsage() : _used(0), _used_history() {}
+
+void ZTLABUsage::increase_used(size_t size)
 {
-    const size_t requested = tlabStatistics.Used();
-    if (requested != 0) {
-        if (used > 0.5 * capacity) {
-            tlabAllocationFraction.Sample(std::min(static_cast<double>(requested) /
-                                                   std::max(capacity, size_t{1}), 1.0));
-        }
-        tlabStatistics.allocatingThreads = 1;
-    }
-    tlabStatistics.refills = tlabRefills.exchange(0, std::memory_order_relaxed);
-    total.Update(tlabStatistics);
-    tlabStatistics = TLABStatistics{};
+    _used.fetch_add(size, std::memory_order_relaxed);
 }
 
-// ThreadLocalAllocBuffer::resize (threadLocalAllocBuffer.cpp:161).
+void ZTLABUsage::decrease_used(size_t size)
+{
+    CHECK(size <= _used.load(std::memory_order_relaxed));
+    _used.fetch_sub(size, std::memory_order_relaxed);
+}
+
+void ZTLABUsage::reset()
+{
+    const size_t used = _used.exchange(0);
+    // ZGC zTLABUsage.cpp:44-47: idle cycles do not enter the history.
+    if (used == 0) {
+        return;
+    }
+    const size_t oldUsed = tlab_used();
+    const size_t oldCapacity = tlab_capacity();
+    _used_history.add(used);
+    VLOG(REPORT, "TLAB usage update: used %zu -> %zu, capacity %zu -> %zu",
+         oldUsed, tlab_used(), oldCapacity, tlab_capacity());
+}
+
+size_t ZTLABUsage::tlab_used() const
+{
+    return _used_history.last();
+}
+
+size_t ZTLABUsage::tlab_capacity() const
+{
+    return _used_history.davg();
+}
 }
