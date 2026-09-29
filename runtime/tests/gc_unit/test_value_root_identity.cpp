@@ -450,11 +450,13 @@ GC_RUNTIME_OTHER_VM_TEST(ZMarkFlush, ConcurrentWorkerPublishesPartialMutatorStac
                 stacks.Push(mark.Stripes(), mark.Stripes().StripeForAddress(raw(address)),
                     MarkStackEntry(untype(ZAddress::offset(address)), false, false, false, false), true);
                 if (input == 2) {
-                    // A real owner saferegion transition publishes the input.
-                    // The GDB observer schedules this after the handshake to
-                    // exercise Flush's independent stripes operand.
+                    // ZGC zBarrierSet.cpp:271-273: real thread detach flushes
+                    // its remaining stack. Schedule this input after the
+                    // handshake to exercise Flush's independent stripes term.
                     mutator->EnterSaferegion(false);
-                    mutator->LeaveSaferegion();
+                    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+                    ready.store(true, std::memory_order_release); // STRIPES_INPUT_READY
+                    return;
                 }
                 before = stacks.Population();
                 ready.store(true, std::memory_order_release);

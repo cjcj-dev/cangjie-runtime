@@ -139,7 +139,9 @@ try:
     def produce_input(value):
         owner.switch()
         command('set {unsigned int}' + str(request_address) + ' = ' + str(value))
-        seeded = gdb.Breakpoint('test_value_root_identity.cpp:' + str(seeded_line), temporary=True)
+        input_line = (next(i + 1 for i in range(start, len(source))
+                           if 'STRIPES_INPUT_READY' in source[i]) if value == 2 else seeded_line)
+        seeded = gdb.Breakpoint('test_value_root_identity.cpp:' + str(input_line), temporary=True)
         command('set scheduler-locking on')
         command('continue')
         if seeded.is_valid():
@@ -183,7 +185,9 @@ try:
         result['handshake_stack'] = command('bt')
         if mode == 'stripes':
             produce_input(2)
-            result['owner_after_input'] = population(stack_address)
+            # Detach has released this owner's stack storage. Do not read the
+            # saved private-stack address after the producer has exited.
+            result['detached_input'] = True
             worker.switch()
         # Freeze other producers/consumers for the few instructions from the
         # handshake result to Flush's actual consumer. No product calls here.
@@ -204,7 +208,7 @@ try:
         result['input_valid'] = result.get('input_partial', False) and result['handshake_return'] is True
     elif mode == 'stripes':
         result['input_valid'] = (result['before'] == 0 and result['handshake_return'] is False
-                                 and result.get('owner_after_input') == 0
+                                 and result.get('detached_input') is True
                                  and result.get('stripes_nonempty') is True)
     else:
         result['input_valid'] = (result['before'] == 0 and result['handshake_return'] is False
