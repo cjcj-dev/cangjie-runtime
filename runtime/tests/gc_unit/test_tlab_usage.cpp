@@ -714,16 +714,15 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
     bool retained = false;
     bool statsPreserved = !exitDuringRoots;
     size_t allocated = 0;
-    // This is an independent product inventory, not the protecting handle.
-    // A deleted Mutator has detached from it; never dereference its old pointer.
-    ThreadGCData::VisitOwners([&](ThreadGCData&, Mutator* owner, ThreadLocalData*) {
-        if (owner != identity) { return; }
-        retained = true;
-        if (exitDuringRoots) {
-            allocated = owner->GetStackWatermark().stats().allocatedSize;
-            statsPreserved = owner->GetStackWatermark().IsDone(epoch) && allocated > 0;
-        }
-    });
+    // The root callback remains inside the product's old ThreadsListHandle.
+    // A fresh thread list intentionally excludes the removed identity
+    // (HotSpot runtime/threads.cpp:238-262). Observe its protected state, and
+    // do not dereference it if the exit already returned on a broken SO.
+    retained = observed && !state.exited.load(std::memory_order_acquire);
+    if (retained && exitDuringRoots) {
+        allocated = identity->GetStackWatermark().stats().allocatedSize;
+        statsPreserved = identity->GetStackWatermark().IsDone(epoch) && allocated > 0;
+    }
     std::fprintf(stderr, "THREAD_SNAPSHOT_LIFETIME_TARGET executed=1 exit=%d observed=%d removed=%d settled=%d retained=%d stats=%d allocated=%zu returned=%d\n",
                  exitDuringRoots, observed, removed, exitSettled, retained, statsPreserved, allocated, state.exited.load());
     // On a broken SO do not resume a consumer whose input object was reclaimed.
@@ -748,10 +747,9 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
             status >> where;
             return where.find("futex") != std::string::npos;
         });
-        bool outerRetained = false;
-        ThreadGCData::VisitOwners([&](ThreadGCData&, Mutator* owner, ThreadLocalData*) {
-            outerRetained |= owner == identity;
-        });
+        const bool outerRetained = !state.exited.load(std::memory_order_acquire) &&
+            identity->GetStackWatermark().IsDone(epoch) &&
+            identity->GetStackWatermark().stats().allocatedSize == allocated;
         std::fprintf(stderr, "THREAD_SNAPSHOT_NESTED_TARGET executed=1 consumed=%d settled=%d retained=%d returned=%d\n",
                      consumed, settled, outerRetained, state.exited.load());
         try {
