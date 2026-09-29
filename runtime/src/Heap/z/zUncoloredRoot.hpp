@@ -5,6 +5,7 @@
 #define MRT_Z_UNCOLORED_ROOT_HPP
 
 #include "Heap/z/zAddress.hpp"
+#include "Heap/z/zIterator.hpp"
 
 namespace MapleRuntime {
 class ZUncoloredRoot {
@@ -25,7 +26,57 @@ public:
     static void process_weak(zaddress_unsafe* p, uintptr_t color);
     static void process_no_keepalive(zaddress_unsafe* p, uintptr_t color);
 
-    static zaddress_unsafe* cast(BaseObject** p);
+    static zaddress_unsafe* cast(RefField<>* p);
+    using RootFunction = void (*)(zaddress_unsafe*, uintptr_t);
+    using ObjectFunction = void (*)(zaddress);
+};
+
+// zUncoloredRoot.hpp:87-94: the VM slot adapter dispatches to the root operation.
+class ZUncoloredRootClosure : public OopClosure {
+private:
+    void do_oop(RefField<>* p) final;
+public:
+    virtual void do_root(zaddress_unsafe* p) = 0;
+};
+
+class ZUncoloredRootMarkOopClosure : public ZUncoloredRootClosure {
+private:
+    const uintptr_t _color;
+public:
+    explicit ZUncoloredRootMarkOopClosure(uintptr_t color);
+    void do_root(zaddress_unsafe* p) override;
+};
+
+class ZUncoloredRootMarkYoungOopClosure : public ZUncoloredRootClosure {
+private:
+    const uintptr_t _color;
+public:
+    explicit ZUncoloredRootMarkYoungOopClosure(uintptr_t color);
+    void do_root(zaddress_unsafe* p) override;
+};
+
+class ZUncoloredRootProcessOopClosure : public ZUncoloredRootClosure {
+private:
+    const uintptr_t _color;
+public:
+    explicit ZUncoloredRootProcessOopClosure(uintptr_t color);
+    void do_root(zaddress_unsafe* p) override;
+};
+
+class ZUncoloredRootProcessWeakOopClosure : public ZUncoloredRootClosure {
+private:
+    const uintptr_t _color;
+public:
+    explicit ZUncoloredRootProcessWeakOopClosure(uintptr_t color);
+    void do_root(zaddress_unsafe* p) override;
+};
+
+class ZUncoloredRootProcessNoKeepaliveOopClosure : public ZUncoloredRootClosure {
+private:
+    const uintptr_t _color;
+public:
+    explicit ZUncoloredRootProcessNoKeepaliveOopClosure(uintptr_t color);
+    void do_root(zaddress_unsafe* p) override;
 };
 } // namespace MapleRuntime
 

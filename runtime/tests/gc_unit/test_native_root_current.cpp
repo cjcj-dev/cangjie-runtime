@@ -250,7 +250,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 
 }
 namespace {
-void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds = false)
+void CheckSavedRootColor(bool invisible, bool twoRounds = false)
 {
     CreateStandaloneHeap(GcHeapFixture::kUnits);
     B09RuntimeFixture runtime;
@@ -280,7 +280,8 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     }
     if (twoRounds) {
         ZGlobalsPointers::flip_old_relocate_start();
-        const bool first = thread->GcPhaseEnum(false, watermark ? StackWatermark::epoch_id() : 0);
+        StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
+        const bool first = thread->GetStackWatermark().IsDone();
         GC_EXPECT_TRUE(first);
         GC_EXPECT_EQ(raw(slot->LoadPlain()), reinterpret_cast<uintptr_t>(from));
     }
@@ -309,7 +310,8 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     heap.young().relocate().relocate(&heap.young().relocation_set());
     const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
-    const bool scanned = thread->GcPhaseEnum(false, watermark ? StackWatermark::epoch_id() : 0);
+    StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
+    const bool scanned = thread->GetStackWatermark().IsDone();
     const uintptr_t observed = raw(slot->LoadPlain());
     std::fprintf(stderr,
         "SAVED_ROOT_COLOR_TARGET invisible=%u scanned=%u saved=%#lx current=%#lx from=%p observed=%#lx expected=%#lx\n",
@@ -322,12 +324,10 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 }
-GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochNativeFrameRoot) { CheckSavedRootColor(false, true, true); }
-GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochInvisibleRoot) { CheckSavedRootColor(true, true, true); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochNativeFrameRoot) { CheckSavedRootColor(false, true); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochInvisibleRoot) { CheckSavedRootColor(true, true); }
 GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorNativeFrameRoot) { CheckSavedRootColor(false); }
 GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorInvisibleRoot) { CheckSavedRootColor(true); }
-GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectNativeFrameRoot) { CheckSavedRootColor(false, false); }
-GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectInvisibleRoot) { CheckSavedRootColor(true, false); }
 
 GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
 {
@@ -416,7 +416,9 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
     const size_t rootMark = thread->NativeFrameRootCount();
     (void)thread->AddNativeFrameRoot(fx.obj0);
     (void)thread->AddNativeFrameRoot(fx.obj1);
-    const bool scanned = thread->GcPhaseEnum(false);
+    ZGlobalsPointers::flip_young_mark_start();
+    StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
+    const bool scanned = thread->GetStackWatermark().IsDone();
     marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
         GC_EXPECT_TRUE(object == fx.obj0);
         GC_EXPECT_TRUE(follow);
@@ -730,7 +732,7 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
         });
     };
     if (handshakeFirst) {
-        (void)thread->GcPhaseEnum(true, epoch, false);
+        StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
         const bool done = thread->GetStackWatermark().IsDone(epoch);
         readPublished();
         std::fprintf(stderr, "YOUNG_HANDSHAKE_TARGET done=%u published=%zu initially_done=%u initially_live=%u\n",

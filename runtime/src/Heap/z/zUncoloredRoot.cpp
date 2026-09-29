@@ -4,4 +4,9 @@
 #include "Heap/z/zUncoloredRoot.hpp"
 
 namespace MapleRuntime {
+void ZUncoloredRootClosure::do_oop(RefField<>* p)
+{
+    do_root(ZUncoloredRoot::cast(p));
+}
+
 } // namespace MapleRuntime

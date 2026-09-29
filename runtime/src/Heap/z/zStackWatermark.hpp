@@ -17,15 +17,15 @@ namespace MapleRuntime {
 class Mutator;
 class StackWatermarkFramesIterator;
 
-class StackWatermarkProcessOopClosure {
+class StackWatermarkProcessOopClosure : public ZUncoloredRootClosure {
 public:
-    using RootFunction = void (*)(zaddress_unsafe*, uintptr_t);
+    using RootFunction = ZUncoloredRoot::RootFunction;
     static RootFunction select_function(void* context);
     StackWatermarkProcessOopClosure(void* context, uintptr_t color);
-    void do_root(zaddress_unsafe* p);
+    void do_root(zaddress_unsafe* p) override;
 private:
-    RootFunction function;
-    uintptr_t color;
+    const RootFunction function;
+    const uintptr_t color;
 };
 
 // HotSpot runtime/stackWatermark.hpp: state publication and frame iteration.
