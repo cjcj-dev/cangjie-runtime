@@ -907,14 +907,9 @@ bool HeapMarkReady()
 
 bool FlushTargetGCData(ThreadGCData& data, ZMark* domain)
 {
-    if (data.managedOwner) {
-        data.storeBarrierBuffer->Flush();
-    }
-    if (!HeapMarkReady()) {
-        return domain != nullptr ? data.FlushMarkStacks(*domain) : false;
-    }
-    return domain == nullptr ? ZMark::FlushGCDataMarkProducers(data)
-                             : ZMark::FlushGCDataMarkProducers(data, domain);
+    if (domain != nullptr) { return domain->Flush(data); }
+    const bool young = Heap::GetHeap().young().Mark().Flush(data);
+    return Heap::GetHeap().old().Mark().Flush(data) || young;
 }
 
 } // namespace

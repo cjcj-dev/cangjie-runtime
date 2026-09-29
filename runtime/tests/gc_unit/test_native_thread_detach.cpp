@@ -12,6 +12,7 @@
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/ThreadLocal.h"
 #include "TypeInfoManager.h"
+#include "ObjectModel/MObject.h"
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -136,14 +137,14 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, FinalPublication)
     const bool push = nativePushObserved.load();
     std::fprintf(stderr, "NATIVE_PUSH_WITNESS observed=%d\n", push);
 #endif
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
     // Evaluate the product outcome first, before setup assertions.
     GC_EXPECT_TRUE(marked && removed);
     GC_EXPECT_TRUE(reached && old && !before && ready && privateEntries == 1 && afterMark);
 #if defined(MRT_TESTABLE_INTERNALS)
     GC_EXPECT_TRUE(push);
 #endif
-    ConcurrentGCBreakpoints::RunToIdle();
-    ConcurrentGCBreakpoints::ReleaseControl();
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -194,4 +195,43 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, IteratorGracePeriod)
     joiner.join();
     GC_EXPECT_TRUE(found && removed && waiting && retained && progressed);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+extern "C" {
+std::atomic<int> native1286_shutdown_release{1};
+__attribute__((noinline)) void native1286_shutdown_ready() { std::fprintf(stderr, "NATIVE1286_SHUTDOWN_READY\n"); }
+}
+GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, ShutdownUnlinksLateNative)
+{
+    InitNativeRuntime();
+    std::atomic<ThreadGCData*> lateData{nullptr};
+    std::atomic<bool> exitLate{false};
+    std::thread late([&] {
+        ThreadLocal::InitializeCleaner();
+        lateData.store(&ThreadLocal::GetGCData(), std::memory_order_release);
+        while (!exitLate.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    });
+    const bool attached = WaitNative([&] { return lateData.load() != nullptr; });
+    ConcurrentGCBreakpoints::AcquireControl();
+    const bool active = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
+    native1286_shutdown_release.store(std::getenv("GC_NATIVE_GDB") ? 0 : 1);
+    std::thread release([&] {
+        while (!native1286_shutdown_release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        ConcurrentGCBreakpoints::ReleaseControl();
+    });
+    native1286_shutdown_ready();
+    const int fini = FiniCJRuntime();
+    release.join();
+    const bool beforeExit = ContainsNative(lateData.load());
+    exitLate.store(true, std::memory_order_release);
+    late.join();
+    const bool removed = !ContainsNative(lateData.load());
+    bool nativeOnly = true;
+    for (CleanThreadLocalData::Iterator it; !it.End(); it.Step()) {
+        nativeOnly &= !it.Current()->nativeData.managedOwner;
+    }
+    std::fprintf(stderr, "NATIVE_SHUTDOWN_LIFETIME executed=1 active=%d attached=%d fini=%d before_exit=%d removed=%d native_only=%d\n",
+                 active, attached, fini, beforeExit, removed, nativeOnly);
+    GC_EXPECT_TRUE(beforeExit && removed && nativeOnly);
+    GC_EXPECT_TRUE(active && attached && fini == E_OK);
 }
