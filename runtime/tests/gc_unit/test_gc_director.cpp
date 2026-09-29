@@ -1,4 +1,5 @@
 #include "gc_worker_fixture.hpp"
+#include "Heap/z/zGlobals.hpp"
 #include "gc_generation_test.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -563,7 +564,8 @@ void CheckDriverCauseResult(GCReason cause, bool minor, bool clearSoft, bool pre
     ZDriverPort& port = minor ? collected->driver_minor()->port() : collected->driver_major()->port();
     {
         ScopedEnterSaferegion safe(false);
-        const ZDriverRequest request(cause, 2, minor ? 0 : 2);
+        // ZGC zDriver.cpp:183,399-400 consumes the request without truncation.
+        const ZDriverRequest request(cause, ZYoungGCThreads, minor ? 0 : ZOldGCThreads);
         if (minor) collected->driver_minor()->collect(request);
         else collected->driver_major()->collect(request);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
