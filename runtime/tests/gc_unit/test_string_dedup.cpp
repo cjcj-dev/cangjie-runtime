@@ -143,7 +143,7 @@ GC_TEST(StringDedup, DedupWeakStorageIsYoungColoredRoot)
     std::printf("STRING_DEDUP_YOUNG_ROOT installed=%d entries=%zu\n", installed == arrays.first ? 1 : 0,
                 StringDedupTest::Entries());
     std::fflush(stdout);
-    auto target = from_object(installed);
+    BaseObject* target = installed;
     unsigned visited = 0;
     RootsIteratorAllColored colored;
     colored.Apply([&](NativeSlot& slot) {
