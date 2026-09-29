@@ -20,7 +20,7 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "schedule.h"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 
 namespace MapleRuntime {
 namespace {

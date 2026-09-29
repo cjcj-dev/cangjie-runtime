@@ -2,6 +2,9 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
+#include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
+#include "ObjectModel/MObject.h"
 #include "gc_generation_test.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "mark_publication_fixture.hpp"
@@ -12,6 +15,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "Heap/z/zForwardingTable.hpp"
@@ -761,3 +765,55 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
 }
 GC_OTHER_VM_TEST(YoungThreadRoots, UnfinishedThreadCompletesOnce) { CheckYoungThreadCompletion(false); }
 GC_OTHER_VM_TEST(YoungThreadRoots, HandshakeCompletedThreadIsIdempotent) { CheckYoungThreadCompletion(true); }
+
+// Product-runtime coverage: allocation and root registration are the producers;
+// the young GC phase dispatches the closure and produces the observed livemap.
+namespace {
+void CheckUncoloredRootRuntime(bool nullRoot)
+{
+    using namespace MapleRuntime;
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    auto& manager = MutatorManager::Instance();
+    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    mutator->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uintptr_t));
+    BaseObject* object = nullptr;
+    const size_t roots = mutator->NativeFrameRootCount();
+    RootSlot* slot;
+    {
+        ScopedObjectAccess access;
+        if (!nullRoot) { object = MObject::NewObject(type, 2 * sizeof(uintptr_t), AllocType::MOVEABLE_OBJECT); }
+        slot = mutator->AddNativeFrameRoot(object);
+    }
+    bool live = nullRoot;
+    bool done;
+    bool plain;
+    {
+        DriverLocker locker;
+        auto& young = Heap::GetHeap().young();
+        YoungTypeSetter collection(young, ZYoungType::minor);
+        ScopedEnterSaferegion safe(false);
+        young.pause_mark_start();
+        young.concurrent_mark();
+        done = mutator->GetStackWatermark().IsDone(StackWatermark::epoch_id());
+        plain = raw(slot->LoadPlain()) == reinterpret_cast<uintptr_t>(object);
+        if (!nullRoot) { live = Heap::page(reinterpret_cast<uintptr_t>(object))->is_object_strongly_live(from_object(object)); }
+        std::fprintf(stderr, "UNC_ROOT_TARGET executed=1 null=%u live=%u done=%u plain=%u\n",
+                     unsigned(nullRoot), unsigned(live), unsigned(done), unsigned(plain));
+        young.Workers()->set_inactive();
+    }
+    mutator->PopNativeFrameRootsTo(roots);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    GC_EXPECT_TRUE(live);
+    GC_EXPECT_TRUE(done && plain);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(UncoloredRootRuntime, NativeRootMarked) { CheckUncoloredRootRuntime(false); }
+GC_RUNTIME_OTHER_VM_TEST(UncoloredRootRuntime, NullRootCompletes) { CheckUncoloredRootRuntime(true); }

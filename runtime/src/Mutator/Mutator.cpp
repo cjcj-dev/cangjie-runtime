@@ -19,7 +19,6 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zMark.hpp"
-#include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zStackWatermark.hpp"
 #include "ObjectModel/RefField.inline.h"

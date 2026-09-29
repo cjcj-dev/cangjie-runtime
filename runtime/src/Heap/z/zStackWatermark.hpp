@@ -20,10 +20,10 @@ class StackWatermarkFramesIterator;
 class StackWatermarkProcessOopClosure : public ZUncoloredRootClosure {
 public:
     using RootFunction = ZUncoloredRoot::RootFunction;
-    static RootFunction select_function(void* context);
     StackWatermarkProcessOopClosure(void* context, uintptr_t color);
     void do_root(zaddress_unsafe* p) override;
 private:
+    static RootFunction select_function(void* context);
     const RootFunction function;
     const uintptr_t color;
 };

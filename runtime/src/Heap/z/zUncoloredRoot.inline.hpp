@@ -6,6 +6,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 
 namespace MapleRuntime {
 template<typename ObjectFunctionT>
