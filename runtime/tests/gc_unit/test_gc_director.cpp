@@ -338,6 +338,7 @@ void CheckTenuringFlags(size_t heapKB, uint32_t workers, bool maxSet, uint32_t m
     params.heapParam.heapSize = heapKB;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = workers;
+    params.gcParam.concGCThreadsSet = true;
     params.gcParam.maxTenuringThresholdSet = maxSet;
     params.gcParam.maxTenuringThreshold = maximum;
     params.gcParam.zTenuringThresholdSet = overrideSet;
@@ -407,6 +408,7 @@ void CheckConflictingTenuringFlags(bool environment)
         params.heapParam.heapSize = 64 * 1024;
         params.coParam.processorNum = 1;
         params.gcParam.concGCThreads = 2;
+        params.gcParam.concGCThreadsSet = true;
         params.gcParam.maxTenuringThresholdSet = true;
         params.gcParam.maxTenuringThreshold = 4;
         params.gcParam.zTenuringThresholdSet = true;
@@ -473,6 +475,7 @@ GC_RUNTIME_OTHER_VM_TEST(TenuringGeometry, ConfiguredMaximumSurvivesInitializati
     params.heapParam.heapSize = 512 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     const size_t configured = params.heapParam.heapSize * 1024;
     const size_t effective = ZHeuristics::max_heap_size();
@@ -509,8 +512,11 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     params.coParam.processorNum = 1;
     params.gcParam.backupGCInterval = timer ? 1 : 240;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
     params.gcParam.oldGCThreads = 2;
+    params.gcParam.oldGCThreadsSet = true;
     params.gcParam.staticGCThreads = std::strcmp(scenario, "allocation_rate_static") == 0;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto& heap = Heap::GetHeap();
@@ -701,8 +707,11 @@ void CheckExternalRequestWorkers(GCReason cause)
     params.heapParam.heapSize = 64 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 4;
+    params.gcParam.concGCThreadsSet = true;
     params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
     params.gcParam.oldGCThreads = 3;
+    params.gcParam.oldGCThreadsSet = true;
     params.gcParam.staticGCThreads = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto& heap = Heap::GetHeap();
@@ -739,6 +748,7 @@ GC_RUNTIME_OTHER_VM_TEST(YoungCompactionLimit, BudgetUsesFlag)
     params.heapParam.heapSize = 64 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     const size_t configured = params.heapParam.heapSize * 1024;
     const size_t expected = static_cast<size_t>(configured * (ZYoungCompactionLimit / 100));
@@ -755,6 +765,7 @@ GC_RUNTIME_OTHER_VM_TEST(YoungCompactionLimit, InitializationUsesFlagBudget)
     params.heapParam.heapSize = 64 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     const size_t configured = params.heapParam.heapSize * 1024;
     const size_t budget = static_cast<size_t>(configured * (ZYoungCompactionLimit / 100));
@@ -889,6 +900,7 @@ void CheckSoftMax(size_t heapKB, const char* configured, size_t softKB, bool sof
     params.heapParam.softHeapSizeSet = softSet;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     pid_t child = -1;
     if (managed) {
         child = fork();
@@ -987,6 +999,7 @@ void CheckSoftConfig(size_t softKB, const char* env, RTErrorCode expected, bool 
     params.heapParam.softHeapSizeSet = explicitZero || softKB != 0;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     const RTErrorCode actual = InitCJRuntime(&params);
     std::fprintf(stderr, "SOFT_CONSTRAINT_ASSERT soft_kb=%zu env=%s actual=%d expected=%d\n",
                  softKB, env == nullptr ? "unset" : env, actual, expected);
@@ -1170,6 +1183,7 @@ void CheckMemoryRuntime(const char* input, bool accepted, size_t expected)
     params.heapParam.heapSize = 64 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     const auto rc = InitCJRuntime(&params);
     const bool valid = accepted && expected <= 64 * MB;
     std::fprintf(stderr, "MEMORY_RUNTIME input=[%s] rc=%d valid=%d expected=%zu\n", input, rc, valid, expected);

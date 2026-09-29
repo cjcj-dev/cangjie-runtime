@@ -174,7 +174,6 @@ bool Uncommitter::Activate()
     nextUncommitNs = 0;
     uncommitted = 0;
     // ZGC zUncommitter.cpp:222-242: claim this partition's cache history.
-    std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
     const size_t uncommitWatermark = partition.cache.min_size_watermark();
     const size_t budget = AlignUp(static_cast<size_t>(double(uncommitWatermark) * 0.9), ZGranuleSize);
     const size_t limit = partition.capacity - partition.minCapacity;
@@ -196,7 +195,6 @@ size_t Uncommitter::Uncommit()
         if (stopped.load(std::memory_order_acquire) || canceled) {
             return 0;
         }
-        std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
         // ZGC zUncommitter.cpp:383-390: allocations during this cycle can
         // lower the watermark further, even without increasing capacity.
         const size_t allowed = std::max(partition.cache.min_size_watermark(), uncommitted) - uncommitted;
@@ -217,20 +215,18 @@ size_t Uncommitter::Uncommit()
     // allocator owner and safepoint participation; the claimed extents are not
     // allocatable.
     for (const ZVirtualMemory vmem : flushedVmems) {
-        const uint32_t partitionId = partition.numaId;
-        regions.freeRegionManager.unmap_virtual(vmem);
-        regions.freeRegionManager.uncommit_physical(vmem);
-        regions.freeRegionManager.free_physical(vmem, partitionId);
-        regions.freeRegionManager.free_virtual(vmem, partitionId);
+        partition.unmap_virtual(vmem);
+        partition.uncommit_physical(vmem);
+        partition.free_physical(vmem);
+        partition.free_virtual(vmem);
     }
 
     {
         // zUncommitter.cpp:413-420: rejoin, adjust claimed and capacity.
         ScopedObjectAccess participation;
         std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
-        std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
         partition.claimed -= flushed;
-        regions.freeRegionManager.decrease_capacity(partition.numaId, flushed, false);
+        partition.decrease_capacity(flushed, false);
         RegisterUncommit(flushed);
         return flushed;
     }

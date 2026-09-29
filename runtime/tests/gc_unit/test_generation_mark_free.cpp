@@ -18,8 +18,11 @@ void CollectAndCheck(ZGenerationId id, bool prepare)
     params.heapParam.heapSize = 64 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 4;
+    params.gcParam.concGCThreadsSet = true;
     params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
     params.gcParam.oldGCThreads = 2;
+    params.gcParam.oldGCThreadsSet = true;
     params.gcParam.staticGCThreads = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     ConcurrentGCBreakpoints::AcquireControl();
@@ -71,8 +74,11 @@ GC_RUNTIME_OTHER_VM_TEST(GenerationMarkFree, FollowTerminationDefersBelowThresho
     params.heapParam.heapSize = 64 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 4;
+    params.gcParam.concGCThreadsSet = true;
     params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
     params.gcParam.oldGCThreads = 2;
+    params.gcParam.oldGCThreadsSet = true;
     params.gcParam.staticGCThreads = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     ConcurrentGCBreakpoints::AcquireControl();

@@ -18,6 +18,7 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zHeuristics.hpp"
+#include "os/Processor.h"
 
 void MapleRuntime::GcUnit::CreateStandaloneHeap(size_t units)
 {
@@ -27,6 +28,8 @@ void MapleRuntime::GcUnit::CreateStandaloneHeap(size_t units)
         params.regionSize = ZGranuleSize / 1024;
         params.exemptionThreshold = 0.8;
         ZHeuristics::set_max_heap_size(params.heapSize * 1024);
+        OS::InitializeProcessorCount();
+        ParallelGCThreads = ZHeuristics::nparallel_workers();
         ZCollectedHeap::create(params, 0.5);
     }
     // ZGC nonJavaThread.cpp:82 attaches only after the heap exists. Listing
