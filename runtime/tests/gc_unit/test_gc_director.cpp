@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 #include "gc_generation_test.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -203,8 +204,8 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
     };
     Probe young(ZGenerationId::young);
     Probe old(ZGenerationId::old);
-    young.InitializeWorkers(2);
-    old.InitializeWorkers(2);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 2);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 2);
     young.set_phase(ZGenerationPhase::Mark);
     young.Workers()->set_active_workers(1);
     const auto before = young.seqnum();

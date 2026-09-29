@@ -786,10 +786,10 @@ const char* ZGeneration::phase_to_string() const
 }
 
 namespace MapleRuntime {
-void ZGeneration::InitializeWorkers(uint32_t capacity)
+void ZGeneration::InitializeWorkers()
 {
     CHECK(workers == nullptr);
-    workers = std::make_unique<ZWorkers>(_id, capacity, &statWorkers);
+    workers = std::make_unique<ZWorkers>(_id, &statWorkers);
     mark->BindWorkers(workers.get());
     if (_id == ZGenerationId::old) {
         weakRootsProcessor = std::make_unique<ZWeakRootsProcessor>(workers.get());

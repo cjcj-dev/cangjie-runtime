@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -43,7 +44,7 @@ struct PartialArrayTestAccess {
     static void StartFieldMark(Heap& collector)
     {
         auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-        if (old.Workers() == nullptr) old.InitializeWorkers(1);
+        if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
         Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
         Heap::GetHeap().old().Mark().Start();
         old.set_phase(ZGenerationPhase::Mark);

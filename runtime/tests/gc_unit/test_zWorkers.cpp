@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -90,8 +91,9 @@ struct Record {
 
 struct Fixture {
     ZStatWorkers stats;
+    MapleRuntime::GcUnit::WorkerBudgetFixture budget;
     ZWorkers workers;
-    Fixture(ZGenerationId id, uint32_t max) : workers(id, max, &stats) {}
+    Fixture(ZGenerationId id, uint32_t max) : budget(max), workers(id, &stats) {}
 };
 } // namespace
 
@@ -375,8 +377,8 @@ GC_TEST(ZWorkers, ZGenerationOwnsWorkersAndStatWorkers)
     };
     Probe young(ZGenerationId::young);
     Probe old(ZGenerationId::old);
-    young.InitializeWorkers(2);
-    old.InitializeWorkers(1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 2);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
     GC_EXPECT_TRUE(young.StatWorkers() != old.StatWorkers());
     Task task([] { std::this_thread::sleep_for(std::chrono::milliseconds(5)); });
     young.Workers()->run(&task);

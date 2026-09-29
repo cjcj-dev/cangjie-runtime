@@ -95,7 +95,7 @@ public:
     // computed after this object exists here, so the set is built when the
     // driver starts; StopWorkers is the matching end of that lifetime (see
     // ~WorkerThreads for why a destroy path exists at all).
-    void InitializeWorkers(uint32_t capacity);
+    void InitializeWorkers();
     void StopWorkers();
     void set_active_workers(uint32_t nworkers);
     ZWorkers* Workers() const { return workers.get(); }

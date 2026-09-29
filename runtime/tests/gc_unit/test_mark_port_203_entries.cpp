@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -313,7 +314,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     MarkPort203TestAccess::Bind(&collector, static_cast<int32_t>(helpers + 1));
     // ZGeneration owns its worker set (zGeneration.cpp:124-129).
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-        Heap::GetHeap().GetZGeneration(generation).InitializeWorkers(helpers + 1);
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(generation), helpers + 1);
     }
     Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -492,8 +493,8 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     auto& heap = Heap::GetHeap();
     auto& young = heap.young();
     MarkPort203TestAccess::Bind(&heap, static_cast<int32_t>(workers));
-    young.InitializeWorkers(workers);
-    heap.old().InitializeWorkers(workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.old(), workers);
     heap.old().set_phase(ZGenerationPhase::Mark);
     young.set_phase(ZGenerationPhase::MarkComplete);
 

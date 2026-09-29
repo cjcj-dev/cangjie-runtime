@@ -33,9 +33,8 @@ private:
     ZStatWorkers* const _stats;
 
 public:
-    // zWorkers.cpp:45-65. max_nworkers is ZYoungGCThreads/ZOldGCThreads in
-    // ZGC (zArguments); this runtime passes the concurrent budget in.
-    ZWorkers(ZGenerationId id, uint32_t max_nworkers, ZStatWorkers* stats);
+    // ZGC zWorkers.cpp:41-65: maximum selected from generation configuration.
+    ZWorkers(ZGenerationId id, ZStatWorkers* stats);
     ZWorkers(const ZWorkers&) = delete;
     ZWorkers& operator=(const ZWorkers&) = delete;
 

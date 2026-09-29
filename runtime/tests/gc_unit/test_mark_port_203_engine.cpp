@@ -454,7 +454,8 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
     ZAbort::reset();
 
     ZStatWorkers statWorkers;
-    ZWorkers workers(ZGenerationId::young, 2, &statWorkers);
+    MapleRuntime::GcUnit::WorkerBudgetFixture workersBudget(2);
+    ZWorkers workers(ZGenerationId::young, &statWorkers);
     workers.set_active();
     workers.set_active_workers(1);
     domain.BindWorkers(&workers);
@@ -555,7 +556,7 @@ GC_TEST(RememberedWorkers719, YoungPoolRunsFromNonWorkerThread)
     B09RuntimeFixture runtime;
     GC_EXPECT_EQ(WorkerThread::worker_id(), UINT32_MAX);
     auto& young = Heap::GetHeap().young();
-    young.InitializeWorkers(1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 1);
     ZMark& mark = young.Mark();
     mark.Start();
     ZRemembered remembered(&Heap::page_table(), &Heap::GetHeap().old().forwarding_table(),
@@ -577,7 +578,7 @@ void CheckYoungClosureAccounting(uint32_t workers)
     heap.region0()->reset(PageAge::eden);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     auto& young = Heap::GetHeap().young();
-    young.InitializeWorkers(workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, workers);
     young.Mark().Start();
     young.set_phase(ZGenerationPhase::Mark);
     HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE)
@@ -621,7 +622,7 @@ GC_TEST(RememberedClear845, ConsumedPreviousSlotsAreAbsentOnRescan)
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
     auto& young = heap.young();
-    young.InitializeWorkers(1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 1);
     young.Mark().Start();
     // Old marking makes the scan independent of incomplete old live bits.
     heap.old().set_phase(ZGenerationPhase::Mark);
