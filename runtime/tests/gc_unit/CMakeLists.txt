@@ -142,7 +142,25 @@ target_compile_definitions(cj_gc_unit PRIVATE
 # Prefer in-tree runtime library when building as part of the product tree.
 if (TARGET cangjie-runtime)
     target_link_libraries(cj_gc_unit PRIVATE cangjie-runtime)
+    if(TARGET RuntimeCopy)
+        target_sources(cj_gc_unit PRIVATE $<TARGET_OBJECTS:RuntimeCopy>)
+    endif()
 elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
+    if(NOT DEFINED GCV2_RUNTIME_OUTPUT_ROOT)
+        set(GCV2_RUNTIME_OUTPUT_ROOT "${GCV2_RUNTIME_LIB_DIR}/../..")
+    endif()
+    execute_process(
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/product_test_configuration.py"
+            "${CMAKE_SOURCE_DIR}" "${GCV2_RUNTIME_LIB_DIR}" "${GCV2_RUNTIME_OUTPUT_ROOT}"
+            --copy-object --compiler "${CMAKE_CXX_COMPILER}"
+        RESULT_VARIABLE _copy_rc OUTPUT_VARIABLE _copy_object
+        ERROR_VARIABLE _copy_error OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT _copy_rc EQUAL 0)
+        message(FATAL_ERROR "${_copy_error}")
+    endif()
+    if(_copy_object)
+        target_sources(cj_gc_unit PRIVATE "${_copy_object}")
+    endif()
     target_link_directories(cj_gc_unit PRIVATE ${GCV2_RUNTIME_LIB_DIR})
     target_link_libraries(cj_gc_unit PRIVATE cangjie-runtime boundscheck)
     set_target_properties(cj_gc_unit PROPERTIES
