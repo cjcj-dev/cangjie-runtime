@@ -1507,3 +1507,52 @@ GC_TEST(StoreAccess1085, ValueRecordNonReferentStore)
     GC_EXPECT_TRUE(stored);
 }
 #endif
+
+// #1261 T0.1/T0.2: construct writes through the product store entry, then
+// inspect its page bitmap and the field value. No bitmap is planted by setup.
+// ZGC zBarrier.inline.hpp:729-740; zStoreBarrierBuffer.cpp:173-196.
+namespace {
+void CheckRemembered1261(bool buffered, bool youngHolder, bool crossYoungMark)
+{
+    GcHeapFixture fx;
+    fx.region0()->reset(youngHolder ? PageAge::eden : PageAge::old);
+    fx.region1()->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    RestoreMarkFlips restore;
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(nullptr));
+    Mutator mutator;
+    InstalledMutatorScope installed(mutator);
+    auto* p = reinterpret_cast<volatile zpointer*>(&field);
+    // Healing stores take the real unbuffered slow path; normal stores buffer.
+    if (buffered) {
+        HeapAccess<>::oop_store(&field, fx.obj1);
+    } else {
+        (void)HeapAccess<>::oop_atomic_xchg(&field, fx.obj1);
+    }
+    const size_t pending = mutator.GetGCData().storeBarrierBuffer->Pending();
+    const bool written = to_object(field.GetTargetObject()) == fx.obj1;
+    const bool storeGood = ZPointer::is_store_good(field.GetFieldValue());
+    if (crossYoungMark) {
+        ZGlobalsPointers::flip_young_mark_start();
+        restore.young = true;
+    }
+    if (buffered) { mutator.FlushStoreBarrierBuffer(); }
+    const bool remembered = fx.region0()->is_remembered(p);
+    // Remset healing uses mark_good, including remembered=11, rather than
+    // store_good (ZGC zBarrier.inline.hpp:435-444).
+    const bool healed = ZPointer::is_marked_young(field.GetFieldValue());
+    std::fprintf(stderr, "REMSET1261_TARGET buffered=%d young_holder=%d cross_mark=%d pending=%zu "
+        "written=%d store_good=%d remembered=%d healed=%d executed=1\n",
+        buffered, youngHolder, crossYoungMark, pending, written, storeGood, remembered, healed);
+    GC_EXPECT_EQ(remembered, !youngHolder);
+    GC_EXPECT_TRUE(written && storeGood);
+    GC_EXPECT_EQ(pending, buffered ? 1u : 0u);
+    if (crossYoungMark && !youngHolder) { GC_EXPECT_TRUE(healed); }
+}
+}
+GC_TEST(Remembered1261, SlowOldStore) { CheckRemembered1261(false, false, false); }
+GC_TEST(Remembered1261, BufferedOldStore) { CheckRemembered1261(true, false, false); }
+GC_TEST(Remembered1261, BufferedYoungStore) { CheckRemembered1261(true, true, false); }
+GC_TEST(Remembered1261, BufferedOldAcrossYoungMark) { CheckRemembered1261(true, false, true); }
+GC_TEST(Remembered1261, BufferedYoungAcrossYoungMark) { CheckRemembered1261(true, true, true); }
