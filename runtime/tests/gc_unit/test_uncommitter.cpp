@@ -69,7 +69,7 @@ struct UncommitterTestAccess {
         worker.cycleStart = TimeUtil::NanoSeconds() + Uncommitter::DelayNs();
         worker.toUncommit = ZGranuleSize;
     }
-    static bool Wait(Uncommitter& worker, uint64_t deadline) { return worker.WaitUntil(deadline); }
+    static bool Wait(Uncommitter& worker, uint64_t deadline) { return worker.Wait(deadline - TimeUtil::NanoSeconds()); }
 };
 }
 

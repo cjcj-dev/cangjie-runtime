@@ -52,7 +52,8 @@ public:
     void Cancel();
 
 private:
-    bool WaitUntil(uint64_t deadline);
+    bool Wait(uint64_t timeout);
+    bool ShouldContinue();
     bool Activate();
     size_t Uncommit();
     void RegisterUncommit(size_t size);

@@ -143,21 +143,28 @@ void Uncommitter::terminate()
     condition.notify_all();
 }
 
-bool Uncommitter::WaitUntil(uint64_t deadline)
+// ZGC zUncommitter.cpp:58-94: disabled wait, then relative cycle/chunk timeout.
+bool Uncommitter::Wait(uint64_t timeout)
 {
     std::unique_lock<std::mutex> guard(lock);
-    while (!stopped.load(std::memory_order_acquire)) {
-        if (!Enabled()) {
-            condition.wait(guard);
-            continue;
-        }
-        const uint64_t now = TimeUtil::NanoSeconds();
-        if (now >= deadline) {
-            return true;
-        }
-        condition.wait_for(guard, std::chrono::nanoseconds(deadline - now));
+    while (!Enabled() && !stopped.load(std::memory_order_acquire)) {
+        condition.wait(guard);
     }
-    return false;
+    if (!stopped.load(std::memory_order_acquire) && timeout > 0) {
+        uint64_t now = TimeUtil::NanoSeconds();
+        const uint64_t deadline = now + timeout;
+        do {
+            condition.wait_for(guard, std::chrono::nanoseconds(deadline - now));
+            now = TimeUtil::NanoSeconds();
+        } while (!stopped.load(std::memory_order_acquire) && now < deadline);
+    }
+    return !stopped.load(std::memory_order_acquire);
+}
+
+bool Uncommitter::ShouldContinue()
+{
+    std::lock_guard<std::mutex> guard(lock);
+    return !stopped.load(std::memory_order_acquire);
 }
 
 bool Uncommitter::Activate()
@@ -241,7 +248,10 @@ size_t Uncommitter::Uncommit()
 
 void Uncommitter::RegisterUncommit(size_t size)
 {
+    CHECK(CycleIsActive());
+    CHECK(size > 0);
     CHECK(size <= toUncommit);
+    CHECK(size % ZGranuleSize == 0);
     toUncommit -= size;
     uncommitted += size;
     nextUncommitNs = 0;
@@ -325,20 +335,20 @@ void Uncommitter::run_thread()
     MutatorManager& mutators = MutatorManager::Instance();
     mutators.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     nextCycleNs = DelayNs();
-    while (WaitUntil(TimeUtil::NanoSeconds() + nextCycleNs)) {
+    while (Wait(nextCycleNs)) {
         if (!Activate()) {
             continue;
         }
-        while (!stopped.load(std::memory_order_acquire)) {
+        while (ShouldContinue()) {
             const size_t released = Uncommit();
             if (released == 0 || CycleIsFinished()) {
                 break;
             }
             if (nextUncommitNs != 0) {
-                WaitUntil(TimeUtil::NanoSeconds() + nextUncommitNs);
+                Wait(nextUncommitNs);
             }
         }
-        if (stopped.load(std::memory_order_acquire)) {
+        if (!ShouldContinue()) {
             break;
         }
         Deactivate();
