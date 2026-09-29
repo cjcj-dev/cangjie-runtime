@@ -143,6 +143,7 @@ GC_TEST(PageRemset1272, InitializedReadFaces)
 
 #if defined(MRT_DEBUG) && MRT_DEBUG == 1
 #include "Heap/z/zLiveMap.inline.hpp"
+#include "gc_cycle_sequence_fixture.hpp"
 namespace {
 // Header-only product methods are compiled with the same MRT_DEBUG setting
 // as the linked runtime. The child must match the exact product diagnostic.
@@ -167,9 +168,12 @@ void CheckRemsetPrecondition(const char* test, bool previous, bool live,
     auto* slot = reinterpret_cast<volatile zpointer*>(page.GetRegionStart());
     if (live) {
         if (advance) {
-            ZGeneration::old()->mark_start();
+            // This fixture supplies an older page, not a mark-start acceptance
+            // test. The preconditions under test remain the product header.
+            GenerationSequenceFixture::Advance(*ZGeneration::old());
             GC_EXPECT_FALSE(page.is_allocating());
             if (mark) {
+                ZGeneration::old()->set_phase(ZGenerationPhase::Mark);
                 bool increment = false;
                 page.livemap().set(ZGenerationId::old, 0, false, increment);
                 GC_EXPECT_TRUE(page.is_marked());
