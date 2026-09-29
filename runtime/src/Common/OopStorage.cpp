@@ -7,6 +7,24 @@
 namespace MapleRuntime {
 OopStorage::OopStorage() : activeArray(std::make_shared<ActiveArray>()) {}
 
+void OopStorage::register_num_dead_callback(NumDeadCallback callback)
+{
+    CHECK_DETAIL(numDeadCallback == nullptr, "dead-entry callback already registered");
+    numDeadCallback = callback;
+}
+
+bool OopStorage::should_report_num_dead() const
+{
+    return numDeadCallback != nullptr;
+}
+
+void OopStorage::report_num_dead(size_t numDead) const
+{
+    if (should_report_num_dead()) {
+        numDeadCallback(numDead);
+    }
+}
+
 OopStorage::~OopStorage()
 {
     CHECK_DETAIL(concurrentIterationCount == 0, "storage destroyed during concurrent iteration");
