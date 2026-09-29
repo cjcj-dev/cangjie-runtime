@@ -81,6 +81,7 @@ void EnsureImages()
         return;
     }
     std::memset(&gEmptyDesc, 0, sizeof(gEmptyDesc));
+    gEmptyDesc.returnPollFlag = 1; // This fixture models return-barrier frames.
     gEmptyDesc.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&gEmptyDesc.stackMapOffset) -
         reinterpret_cast<char*>(&gEmptyDesc.descriptorOffset));
     gEmptyDesc.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(gEmptyDesc.bits) -
