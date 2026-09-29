@@ -15,10 +15,6 @@ cxx="$(xcrun --sdk "$sdk_name" --find clang++)"
 target_arch="${BSD_BACKING_ARCH:-$(uname -m)}"
 # When BSD_BACKING_SIM_UDID is set, cases run inside that booted iOS
 # simulator via simctl spawn instead of directly on the host.
-run_prefix=()
-if [[ -n "${BSD_BACKING_SIM_UDID:-}" ]]; then
-  run_prefix=(xcrun simctl spawn "$BSD_BACKING_SIM_UDID")
-fi
 bc="runtime/third_party/third_party_bounds_checking_function"
 if [[ ! -f "$bc/include/securec.h" ]]; then
   git clone --depth 1 --branch OpenHarmony-v6.0-Release \
@@ -28,7 +24,15 @@ fi
 test -f "$bc/include/securec.h"
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+# Optional CI evidence: copy before the temporary build directory is removed.
+cleanup() {
+  if [[ -n "${BSD_BACKING_EVIDENCE_DIR:-}" ]]; then
+    mkdir -p "$BSD_BACKING_EVIDENCE_DIR"
+    cp -R "$work/." "$BSD_BACKING_EVIDENCE_DIR/"
+  fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
 
 cj="runtime/src/CJThread/src"
 case "$(uname -m)" in
@@ -135,7 +139,11 @@ run_case() {
   local needle="$3"
   local err="$work/${name}.err"
   set +e
-  "${run_prefix[@]}" "$work/backing_fail" "$name" >"$work/${name}.out" 2>"$err"
+  if [[ -n "${BSD_BACKING_SIM_UDID:-}" ]]; then
+    xcrun simctl spawn "$BSD_BACKING_SIM_UDID" "$work/backing_fail" "$name" >"$work/${name}.out" 2>"$err"
+  else
+    "$work/backing_fail" "$name" >"$work/${name}.out" 2>"$err"
+  fi
   local rc=$?
   set -e
   echo "BSD_BACKING_FAIL case=$name rc=$rc"
