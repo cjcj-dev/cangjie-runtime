@@ -1,5 +1,4 @@
 #include "Heap/z/zRootsIterator.hpp"
-#include "CompilerCalls.h"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -16,6 +15,11 @@
 #include <thread>
 
 #include "finalizer_processor_test.hpp"
+
+namespace MapleRuntime {
+extern "C" U64 CJ_MCC_CreateExportHandle(BaseObject*);
+extern "C" void CJ_MCC_RemoveExportedRef(U64);
+}
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
