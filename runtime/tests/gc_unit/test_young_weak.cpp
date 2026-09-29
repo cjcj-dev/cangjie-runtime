@@ -753,6 +753,7 @@ struct P82Graph {
     std::vector<NativeSlot> roots;
     std::vector<NativeSlot*> rootSlots;
     explicit P82Graph(GcHeapFixture& fx, bool duplicateRoots)
+        : roots(branches * (duplicateRoots ? 2 : 1))
     {
         for (unsigned i = 0; i < branches * length; ++i) {
             objects.push_back(fx.PlaceObject(fx.region0()->GetRegionStart() + 4096 + i * 64));
@@ -762,7 +763,6 @@ struct P82Graph {
             WeakGraph::Field(objects[i]).StoreColoured((i + 1) % length == 0
                 ? zpointer::null : StoreGoodPointer(objects[i + 1]));
         }
-        roots.resize(branches * (duplicateRoots ? 2 : 1));
         for (unsigned i = 0; i < roots.size(); ++i) {
             roots[i].StoreColoured(StoreGoodPointer(objects[(i % branches) * length]));
             rootSlots.push_back(&roots[i]);
