@@ -68,9 +68,7 @@ public:
 
     ~Mutator()
     {
-        // Wait for target inventory users while the lock and roots are still
-        // alive, before any Mutator member destruction can begin.
-        ZBarrierSet::on_thread_destroy(gcData);
+        // ThreadsSMRSupport::smr_delete has already waited for list readers.
         ReleaseAllocBuffer();
         tid = 0;
         stackBoundAddr = nullptr;
@@ -552,7 +550,7 @@ private:
     // If set implies this mutator should process suspension requests
     std::atomic<uint32_t> suspensionFlag = { 0 };
     ObjectRef rawObject{};
-    ThreadGCData gcData;
+    ThreadGCData gcData{true};
     int32_t jniActiveCritical = 0;
     std::deque<ObjectRef> nativeFrameRoots;
 

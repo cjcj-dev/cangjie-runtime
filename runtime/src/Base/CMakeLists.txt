@@ -5,6 +5,7 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "SingleWriterSynchronizer.cpp"
     "Log.cpp"
     "SysCall.cpp"
     "CString.cpp"

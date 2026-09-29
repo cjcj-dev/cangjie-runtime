@@ -921,12 +921,9 @@ bool HeapMarkReady()
 
 bool FlushTargetGCData(ThreadGCData& data, ZMark* domain)
 {
-    data.storeBarrierBuffer->Flush();
-    if (!HeapMarkReady()) {
-        return domain != nullptr ? data.FlushMarkStacks(*domain) : false;
-    }
-    return domain == nullptr ? ZMark::FlushGCDataMarkProducers(data)
-                             : ZMark::FlushGCDataMarkProducers(data, domain);
+    if (domain != nullptr) { return domain->Flush(data); }
+    const bool young = Heap::GetHeap().young().Mark().Flush(data);
+    return Heap::GetHeap().old().Mark().Flush(data) || young;
 }
 
 } // namespace
@@ -955,22 +952,11 @@ bool ZMark::HandshakeFlush(ZMark* domain)
     auto& manager = MutatorManager::Instance();
     bool flushed = false;
     if (manager.WorldStopped()) {
-        // ZGC zMark.cpp:954-970 (try_end): a stopped world flushes only
-        // non-Java (here: GC) threads. Mutator stacks are drained by the
-        // concurrent handshake flush below (zMark.cpp:535-606 form) and, on
-        // thread exit, by the detach flush that runs before the thread is
-        // counted stopped (threads.cpp:1089-1104 form, see
-        // MutatorManager::TransitMutatorToExit). Flushing foreign mutator
-        // data here would race that detach flush.
-        if (domain != nullptr && domain->gcWorkers != nullptr) {
-            domain->gcWorkers->threads_do([&](WorkerThread* worker) {
-                ThreadGCData* data = worker->gc_data();
-                if (data != nullptr && FlushTargetGCData(*data, domain)) {
-                    flushed = true;
-                }
-            });
+        // ZGC zMark.cpp:954-970: pause rendezvous excludes native producers;
+        // the NJT Iterator separately protects the complete owner inventory.
+        for (CleanThreadLocalData::Iterator it; !it.End(); it.Step()) {
+            flushed = FlushTargetGCData(it.Current()->nativeData, domain) || flushed;
         }
-        flushed = FlushThreadLocal(ThreadLocal::GetThreadLocalData(), domain) || flushed;
         return flushed;
     }
 
@@ -1014,7 +1000,9 @@ bool ZMark::Flush()
 // ZGC zMark.cpp:998-1004: buffer processing may produce more stack work.
 bool ZMark::Flush(ThreadGCData& data)
 {
-    data.storeBarrierBuffer->Flush();
+    if (data.managedOwner) {
+        data.storeBarrierBuffer->Flush();
+    }
     return data.FlushMarkStacks(*this);
 }
 

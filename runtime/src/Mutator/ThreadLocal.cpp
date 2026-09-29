@@ -15,6 +15,9 @@
 #include "Mutator/MutatorManager.h"
 #include "Mutator/Handshake.h"
 #include "Heap/z/zMark.hpp"
+#include "Base/SingleWriterSynchronizer.h"
+#include "Common/SuspendibleThreadSet.h"
+#include <mutex>
 
 namespace MapleRuntime {
 RwLock ThreadLocal::tlEnableLock;
@@ -98,11 +101,80 @@ void ThreadLocal::InitializeCleaner()
 {
     (void)cleaner;
     ThreadLocalData* tls = GetThreadLocalData();
-    ZBarrierSet::on_thread_attach(cleaner.nativeData, nullptr, tls, nullptr);
+    cleaner.AddToList(tls);
     tls->nativeGCData = &cleaner.nativeData;
     if (tls->mutator == nullptr) {
         tls->gcData = tls->nativeGCData;
     }
+}
+
+// HotSpot runtime/nonJavaThread.cpp:44-105. List mutation and grace-period
+// serialization have distinct locks; Iterator never takes the mutation lock.
+struct CleanThreadLocalData::List {
+    std::atomic<CleanThreadLocalData*> head{nullptr};
+    SingleWriterSynchronizer protect;
+    std::mutex mutex;
+    std::mutex syncMutex;
+};
+
+CleanThreadLocalData::List& CleanThreadLocalData::TheList()
+{
+    static List list;
+    return list;
+}
+
+CleanThreadLocalData::Iterator::Iterator()
+    : entered(TheList().protect.Enter()), current(TheList().head.load(std::memory_order_acquire)) {}
+
+CleanThreadLocalData::Iterator::~Iterator()
+{
+    TheList().protect.Exit(entered);
+}
+
+void CleanThreadLocalData::Iterator::Step()
+{
+    DCHECK(current != nullptr);
+    current = current->next.load(std::memory_order_acquire);
+}
+
+void CleanThreadLocalData::AddToList(ThreadLocalData* tls)
+{
+    auto& list = TheList();
+    std::lock_guard<std::mutex> lock(list.mutex);
+    if (registered) { return; }
+    ZBarrierSet::on_thread_attach(nativeData, nullptr, tls, nullptr);
+    // Bootstrap may run before colors are published; retry on the next attach.
+    if (nativeData.storeGoodMask == 0) { return; }
+    nativeTLS = tls;
+    next.store(list.head.load(std::memory_order_relaxed), std::memory_order_release);
+    list.head.store(this, std::memory_order_release);
+    registered = true;
+}
+
+void CleanThreadLocalData::RemoveFromList()
+{
+    if (!registered) { return; }
+    auto& list = TheList();
+    {
+        // ZGC zMark.cpp:910-917 keeps native final publication inside STS.
+        // Our workers return and have TLS cleanup after the task's joiner.
+        // Join before the list lock, and leave before waiting for readers.
+        SuspendibleThreadSetJoiner sts;
+        std::lock_guard<std::mutex> lock(list.mutex);
+        ZBarrierSet::on_thread_detach(nativeData);
+        auto* link = &list.head;
+        for (auto* node = link->load(std::memory_order_relaxed); node != nullptr;
+             link = &node->next, node = link->load(std::memory_order_relaxed)) {
+            if (node == this) {
+                link->store(next.load(std::memory_order_relaxed), std::memory_order_release);
+                break;
+            }
+        }
+        registered = false;
+    }
+    std::lock_guard<std::mutex> lock(list.syncMutex);
+    list.protect.Synchronize();
+    next.store(nullptr, std::memory_order_relaxed);
 }
 
 CleanThreadLocalData::CleanThreadLocalData()
@@ -118,7 +190,11 @@ CleanThreadLocalData::~CleanThreadLocalData()
     local->threadCache = nullptr;
 
     if (!ThreadLocal::TryGetRdLock()) {
-        // Runtime shutdown owns the write lock; process exit reclaims TLS.
+        // ScheduleExitMode's SCHD_STOP has stopped GC before ThreadLocalFini.
+        // Native list readers still need their grace period before TLS dies.
+        RemoveFromList();
+        local->gcData = nullptr;
+        local->nativeGCData = nullptr;
         return;
     }
     if (Runtime::CurrentRef() != nullptr) {
@@ -131,10 +207,7 @@ CleanThreadLocalData::~CleanThreadLocalData()
         MutatorManager::Instance().UnregisterMarkFlushThread(local);
     }
     // Bootstrap storage which never acquired masks was never attached.
-    if (nativeData.storeGoodMask != 0) {
-        ZBarrierSet::on_thread_detach(nativeData);
-        ZBarrierSet::on_thread_destroy(nativeData);
-    }
+    RemoveFromList();
     // gcData may borrow a parked/migrating Mutator. The cleaner owns only
     // nativeData, whose member destructor runs after this body.
     local->gcData = nullptr;

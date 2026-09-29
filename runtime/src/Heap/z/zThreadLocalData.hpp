@@ -27,7 +27,10 @@ struct ThreadGCData {
     MarkThreadLocalStacks markStacks[2];
     zaddress_unsafe* invisibleRoot = nullptr;
 
-    ThreadGCData() : storeBarrierBuffer(new StoreBarrierBuffer()) {}
+    // Stable owner kind; carrier binding never changes this identity.
+    const bool managedOwner;
+    explicit ThreadGCData(bool managed = false)
+        : storeBarrierBuffer(new StoreBarrierBuffer()), managedOwner(managed) {}
     ~ThreadGCData();
 
     struct Masks {
@@ -42,12 +45,6 @@ struct ThreadGCData {
     void InstallMasks(const Masks& masks);
     bool FlushMarkStacks(ZMark& domain);
     static void VisitOwners(const std::function<void(ThreadGCData&, Mutator*, ThreadLocalData*)>& visitor);
-private:
-    friend class ZBarrierSet;
-    // Container adaptation: initialization and publication share one lock.
-    void RegisterOwner(Mutator* owner, ThreadLocalData* nativeOwner, const std::function<void()>& initialize);
-    void UnregisterOwner();
-public:
     ThreadGCData(const ThreadGCData&) = delete;
     ThreadGCData& operator=(const ThreadGCData&) = delete;
 
