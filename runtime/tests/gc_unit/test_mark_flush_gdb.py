@@ -1,9 +1,10 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # Licensed under Apache-2.0 with Runtime Library Exception.
-"""Observe the partial owner stack at the real worker0 proactive flush.
+"""Observe publication and the final OR result at worker0 proactive flush.
 
 The test's ZBreakpoint controls the phase; GDB only reads product state and
-return values. In particular, no flush is called by the observer.
+return values and their direct consumer branch. Only test-owned input requests
+are changed; no flush is called by the observer.
 """
 import gdb
 import json
@@ -65,6 +66,8 @@ class FlushConsumer(gdb.Breakpoint):
         result['consumer_pc'] = hex(gdb.selected_frame().pc())
         result['consumer_stack'] = command('bt')
         return True
+
+
 active_worker = None
 
 
@@ -110,8 +113,6 @@ try:
     owner = None
     for thread in gdb.selected_inferior().threads():
         thread.switch()
-        mark = gdb.parse_and_eval('domain')
-        worker = gdb.selected_thread()
         frame = gdb.newest_frame()
         while frame:
             try:
