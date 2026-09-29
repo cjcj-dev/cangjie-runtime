@@ -17,6 +17,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zGenerationId.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
 #include "ObjectModel/RefField.inline.h"
@@ -378,10 +379,8 @@ inline void ZBarrier::remap_young_relocated(volatile zpointer* p, zpointer o)
 
 inline void ZBarrier::remember(volatile zpointer* p)
 {
-    const MAddress address = reinterpret_cast<MAddress>(p);
-    ZPage* page = Heap::page(address);
-    if (page != nullptr && !page->IsYoungRegion()) {
-        page->remember(reinterpret_cast<volatile zpointer*>(address));
+    if (Heap::is_old(reinterpret_cast<MAddress>(p))) {
+        ZGeneration::young()->remember(p);
     }
 }
 
