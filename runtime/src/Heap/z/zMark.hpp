@@ -142,6 +142,7 @@ public:
 
 private:
     bool RebalanceWork(MarkContext& context, size_t workerId);
+    bool is_array(zaddress address) const;
     void follow_object(BaseObject* object, bool finalizable);
     void push_partial_array(MarkContext& ctx, MAddress start, size_t length, bool finalizable);
     void follow_array_elements_small(MAddress start, size_t length, bool finalizable);

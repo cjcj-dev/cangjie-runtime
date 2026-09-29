@@ -760,6 +760,15 @@ void ZMark::MarkFollow(bool partial)
     }
 }
 
+// ZGC zMark.cpp:173-175: classify reference arrays before choosing the follower.
+bool ZMark::is_array(zaddress address) const
+{
+    TypeInfo* const type = to_object(address)->GetTypeInfo();
+    TypeInfo* const component = type->IsRawArray() ? type->GetComponentTypeInfo() : nullptr;
+    return component != nullptr &&
+           (component->IsObjectType() || component->IsArrayType() || component->IsInterface());
+}
+
 void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
 {
     const bool finalizable = entry.finalizable();
@@ -782,10 +791,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         ctx.Cache().IncLive(page, object->GetSize());
     }
     if (follow) {
-        TypeInfo* const type = object->GetTypeInfo();
-        TypeInfo* const component = type->IsRawArray() ? type->GetComponentTypeInfo() : nullptr;
-        if (component != nullptr &&
-            (component->IsObjectType() || component->IsArrayType() || component->IsInterface())) {
+        if (is_array(address)) {
             follow_array_object(ctx, reinterpret_cast<MArray*>(object), finalizable);
         } else {
             follow_object(object, finalizable);
