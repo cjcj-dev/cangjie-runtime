@@ -1,20 +1,31 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-// Licensed under Apache-2.0 with Runtime Library Exception.
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
 #pragma once
 #include "Common/TypeDef.h"
-#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 namespace MapleRuntime {
-// gc/shared/memAllocator.cpp:327-350: TLAB selection precedes heap allocation.
+class TypeInfo;
+class MArray;
+// HotSpot gc/shared/memAllocator.hpp:37-105.
 class MemAllocator {
 public:
-    MemAllocator(size_t size, AllocType type) : _size(size), _type(type) {}
-    MAddress allocate() const;
-private:
-    MAddress mem_allocate() const;
-    MAddress mem_allocate_inside_tlab_fast() const;
-    MAddress mem_allocate_inside_tlab_slow() const;
-    MAddress mem_allocate_outside_tlab() const;
-    const size_t _size;
-    const AllocType _type;
+    MArray* allocate() const;
+    virtual ~MemAllocator() = default;
+protected:
+    MemAllocator(TypeInfo& klass, MSize size) : arrayClass(klass), arraySize(size) {}
+    virtual MArray* initialize(MAddress address) const = 0;
+    void mem_clear(MAddress address) const;
+    MArray* finish(MAddress address) const;
+    TypeInfo& arrayClass;
+    const MSize arraySize;
+};
+class ObjArrayAllocator : public MemAllocator {
+public:
+    ObjArrayAllocator(TypeInfo& klass, MSize size, MIndex length, bool zero)
+        : MemAllocator(klass, size), nElems(length), doZero(zero) {}
+protected:
+    MArray* initialize(MAddress address) const override;
+    const MIndex nElems;
+    const bool doZero;
 };
 }

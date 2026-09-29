@@ -54,6 +54,7 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+static const ZStatCriticalPhase ZCriticalPhaseAllocationStall("Allocation Stall");
 
 
 
@@ -607,6 +608,7 @@ bool RegionManager::ClaimCapacityOrStall(AllocationStallRequest& request)
 
 bool RegionManager::StallAllocation(AllocationStallRequest& request)
 {
+    ZStatTimer timer(ZCriticalPhaseAllocationStall);
     // ZGC zPageAllocator.cpp:1443-1448: asynchronous minor request, then one wait.
     ZDriver::minor()->collect(ZDriverRequest(GC_REASON_ALLOCATION_STALL, ZYoungGCThreads, 0));
 

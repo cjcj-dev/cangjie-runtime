@@ -6,7 +6,7 @@
 
 
 #include "HeapManager.h"
-#include "Heap/shared/memAllocator.hpp"
+#include "Heap/shared/threadLocalMemAllocator.hpp"
 
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zHeuristics.hpp"
@@ -19,7 +19,7 @@ HeapManager::HeapManager() {}
 
 MAddress HeapManager::Allocate(size_t allocSize, AllocType allocType)
 {
-    return MemAllocator(RoundUp<size_t>(allocSize, 8), allocType).allocate();
+    return ThreadLocalMemAllocator(RoundUp<size_t>(allocSize, 8), allocType).allocate();
 }
 
 void HeapManager::Init(const HeapParam& param)

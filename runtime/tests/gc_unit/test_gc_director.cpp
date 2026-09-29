@@ -1238,3 +1238,164 @@ GC_TEST(SoftMemoryTable, MemoryRangeBounds)
         GC_EXPECT_EQ(actual, entry.expected);
     }
 }
+
+#include "gclog_capture.hpp"
+#include "Heap/z/concurrentGCBreakpoints.hpp"
+#include <regex>
+#include <sstream>
+namespace {
+void CheckCollectionLog(const char* target)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto& manager = MutatorManager::Instance();
+    manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    // A deterministic unrooted large object makes the minor's used-at-start
+    // positive; the separately rooted pinned object then changes the major input.
+    alignas(TypeInfo) static unsigned char largeStorage[sizeof(TypeInfo)]{};
+    auto* largeType = reinterpret_cast<TypeInfo*>(largeStorage);
+    constexpr size_t largeBytes = 4 * 1024 * 1024;
+    largeType->SetType(TypeKind::TYPE_KIND_CLASS);
+    largeType->SetInstanceSize(largeBytes - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(largeStorage), sizeof(largeStorage));
+    {
+        ScopedObjectAccess access;
+        const uintptr_t address = heap.object_allocator().alloc(largeBytes);
+        GC_EXPECT_TRUE(address != 0);
+        reinterpret_cast<BaseObject*>(address)->SetClassInfo(largeType);
+    }
+    GcLogCapture capture;
+    size_t before[2], after[2];
+    before[0] = heap.GetUsedPageSize();
+    heap.RequestGC(GC_REASON_YOUNG);
+    after[0] = heap.GetUsedPageSize();
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(void*));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    U64 root;
+    {
+        ScopedObjectAccess access;
+        root = heap.RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
+    }
+    before[1] = heap.GetUsedPageSize();
+    heap.RequestGC(GC_REASON_USER);
+    after[1] = heap.GetUsedPageSize();
+    const std::string text = capture.Finish();
+    heap.RemoveExportObject(root);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    std::istringstream lines(text);
+    std::string line;
+    size_t count = 0;
+    const std::regex end(".*name=(Minor|Major)_Collection cause=[^ ]+ event=end start_ns=[0-9]+ dur_ns=[0-9]+ used_at_start=([0-9]+) used_at_end=([0-9]+)");
+    bool values = true;
+    while (std::getline(lines, line)) {
+        if (line.find("rec=cycle ") == std::string::npos || line.find(std::string("event=") + target) == std::string::npos) continue;
+        ++count;
+        values = values && line.find("gc_tag=- ") != std::string::npos;
+        values = values && (line.find("name=Minor_Collection cause=young ") != std::string::npos ||
+                            line.find("name=Major_Collection cause=user ") != std::string::npos);
+        if (std::strcmp(target, "end") == 0) {
+            std::smatch match;
+            if (!std::regex_match(line, match, end)) { values = false; continue; }
+            const size_t i = match[1] == "Minor" ? 0 : 1;
+            values = values && std::stoull(match[2]) == before[i] && std::stoull(match[3]) == after[i];
+        }
+    }
+    std::fprintf(stderr, "GCLOG_TARGET event=%s count=%zu values=%d used0=%zu used1=%zu\n",
+                 target, count, values, before[0], before[1]);
+    // Each event has its own entry so cutting start cannot hide the end assertion.
+    GC_EXPECT_EQ(count, size_t{2});
+    GC_EXPECT_TRUE(values);
+    GC_EXPECT_TRUE(before[0] > 0 && before[1] > 0 && before[0] != before[1]);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, CollectionStart) { CheckCollectionLog("start"); }
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, CollectionEnd) { CheckCollectionLog("end"); }
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, CollectionAbort)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    GcLogCapture capture;
+    ConcurrentGCBreakpoints::AcquireControl();
+    const bool reached = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
+    ZAbort::abort();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    // Aborted drivers return before AtAfterGC; join via the real stop entry,
+    // rather than waiting for a normal-completion breakpoint notification.
+    Heap::GetHeap().StopGCWork();
+    const std::string text = capture.Finish();
+    size_t collectionAbort = 0, generationAbort = 0, collectionEnd = 0;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.find("rec=cycle ") != std::string::npos) {
+            collectionAbort += line.find("event=abort") != std::string::npos;
+            collectionEnd += line.find("event=end") != std::string::npos;
+        }
+        if (line.find("rec=generation ") != std::string::npos) generationAbort += line.find("event=abort") != std::string::npos;
+    }
+    std::fprintf(stderr, "GCLOG_TARGET event=abort collection=%zu generation=%zu end=%zu reached=%d\n",
+                 collectionAbort, generationAbort, collectionEnd, reached);
+    GC_EXPECT_EQ(collectionAbort, size_t{1});
+    GC_EXPECT_EQ(generationAbort, size_t{1});
+    GC_EXPECT_EQ(collectionEnd, size_t{0});
+    GC_EXPECT_TRUE(reached);
+}
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, GenerationUsed)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    GcLogCapture capture;
+    auto& heap = Heap::GetHeap();
+    heap.RequestGC(GC_REASON_YOUNG);
+    const size_t expectedStart = heap.young().StatHeap()->UsedAtCollectionStart();
+    const size_t expectedEnd = heap.young().StatHeap()->UsedAtCollectionEnd();
+    const std::string text = capture.Finish();
+    const std::regex record(".*rec=generation seq=[0-9]+ gc_tag=y name=Young_Generation event=end start_ns=[0-9]+ dur_ns=[0-9]+ used_at_collection_start=([0-9]+) used_at_collection_end=([0-9]+)");
+    std::smatch match;
+    std::istringstream lines(text);
+    std::string line;
+    size_t count = 0;
+    bool values = true;
+    while (std::getline(lines, line)) {
+        if (!std::regex_match(line, match, record)) continue;
+        ++count;
+        values = values && std::stoull(match[1]) == expectedStart && std::stoull(match[2]) == expectedEnd;
+    }
+    std::fprintf(stderr, "GCLOG_GENERATION_USED_TARGET count=%zu values=%d expected_start=%zu expected_end=%zu\n",
+                 count, values, expectedStart, expectedEnd);
+    GC_EXPECT_TRUE(values);
+    GC_EXPECT_EQ(count, size_t{1});
+}
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, GenerationStart)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    GcLogCapture capture;
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
+    const std::string text = capture.Finish();
+    size_t count = 0;
+    std::istringstream lines(text);
+    std::string line;
+    while (std::getline(lines, line)) {
+        if (line.find("rec=generation ") != std::string::npos &&
+            line.find("gc_tag=y name=Young_Generation event=start") != std::string::npos) ++count;
+    }
+    std::fprintf(stderr, "GCLOG_TARGET generation_start_records=%zu expected=1\n", count);
+    GC_EXPECT_EQ(count, size_t{1});
+}

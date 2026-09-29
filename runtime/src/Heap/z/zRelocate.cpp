@@ -88,6 +88,7 @@
 
 
 namespace MapleRuntime {
+static const ZStatCriticalPhase ZCriticalPhaseRelocationStall("Relocation Stall");
 
 // ZGC zRelocate.cpp:1051-1078: claim each thread once across the workers.
 class ZRelocateStoreBufferInstallBasePointersThreadClosure {
@@ -636,6 +637,7 @@ void ZRelocateQueue::leave()
 
 void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
 {
+    ZStatTimer timer(ZCriticalPhaseRelocationStall);
     std::unique_lock<std::mutex> guard(lock);
     if (forwarding->is_done()) {
         return;

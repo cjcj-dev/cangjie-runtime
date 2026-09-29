@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end managed/full and managed/young segmented-array root branches.
+# Managed construction plus externally driven native full/young init windows.
+# The native windows do not certify a managed-stack initialization window.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -38,49 +39,42 @@ SDK_LLVM="${CANGJIE_HOME:-}/third_party/llvm/lib"
 LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR to the compiler host runtime}:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   "$CJC_BIN" "$SRC" -O0 --static-std -o "$BIN" >"$BUILD_LOG" 2>&1
 
-if [[ "$MODE" == construct || "$MODE" == both ]]; then
-  set +e
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    MRT_GC_UNIT_MANAGED_SEGMENTED=none MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64MB \
-    timeout 60s "$BIN" >"$OUT/segmented_array_managed.construct.log" 2>&1
-  construct_rc=$?
-  set -e
-  test "$construct_rc" = 0
-  /usr/bin/grep -q '^SEGMENTED_ARRAY_MANAGED_FIXTURE_OK checksum=37$' "$OUT/segmented_array_managed.construct.log"
-  echo "SEGMENTED_ARRAY_CONSTRUCT_OK rc=$construct_rc"
-fi
+# The language fixture retains its real compiler allocation/checksum coverage.
+set +e
+LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64MB \
+  timeout 60s "$BIN" >"$OUT/segmented_array_managed.construct.log" 2>&1
+construct_rc=$?
+set -e
+test "$construct_rc" = 0
+/usr/bin/grep -q '^SEGMENTED_ARRAY_MANAGED_FIXTURE_OK checksum=37$' "$OUT/segmented_array_managed.construct.log"
+echo "SEGMENTED_ARRAY_CONSTRUCT_OK rc=$construct_rc"
 
+# The product has no test-mode GC request or fprintf hook. Consume the native
+# external fixture built by the same standalone invocation and selected SO.
+# Controller authorization: #1318 advisor 20260929T185603Z.
+run_external_window() {
+  local mode=$1 filter=$2 log=$3
+  local elf="$OUT/cj_gc_unit"
+  if [[ ! -x "$elf" ]]; then
+    echo "SEGMENTED_EXTERNAL_FIXTURE_MISSING elf=$elf" >&2
+    return 2
+  fi
+  local rc
+  set +e
+  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    MRT_LOG_LEVEL=e cjGCInterval=3600s \
+    timeout 60s "$elf" --gtest_filter="$filter" >"$log" 2>&1
+  rc=$?
+  set -e
+  test "$rc" = 0
+  /usr/bin/grep -q 'SEGMENTED_RESULT_TARGET .*mismatches=0 .*gc=1 header=1' "$log"
+  /usr/bin/grep -q 'SEGMENTED_PASSES=2' "$log"
+  echo "SEGMENTED_ARRAY_NATIVE_WINDOW_OK mode=$mode rc=$rc"
+}
 if [[ "$MODE" == both || "$MODE" == full ]]; then
-  set +e
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    MRT_GC_UNIT_MANAGED_SEGMENTED=full \
-    MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64MB \
-    timeout 60s "$BIN" >"$FULL_LOG" 2>&1
-  full_rc=$?
-  set -e
-  /usr/bin/grep -q "SEGMENTED_GC_WINDOW mode=full .*root=1 fields=0$" "$FULL_LOG" || { echo "SEGMENTED_ARRAY_GC_WINDOW_MISSING mode=full"; exit 1; }
-  full_done=$(/usr/bin/grep -c '^SEGMENTED_ARRAY_MANAGED_FIXTURE_OK checksum=37$' "$FULL_LOG" || true)
-  if [[ $full_rc -ne 0 || $full_done -ne 1 ]]; then
-    echo "SEGMENTED_ARRAY_MANAGED_FAIL mode=full rc=$full_rc done=$full_done" >&2
-    tail -30 "$FULL_LOG" >&2
-    exit 1
-  fi
-  echo "SEGMENTED_ARRAY_MANAGED_OK mode=full rc=0 done=1"
+  run_external_window full SegmentedArrayInit.EpochFlipRestartsAndRewritesPublishedBlock "$FULL_LOG"
 fi
-
 if [[ "$MODE" == both || "$MODE" == young ]]; then
-  set +e
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    MRT_GC_UNIT_MANAGED_SEGMENTED=young MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=64MB \
-    timeout 60s "$BIN" >"$YOUNG_LOG" 2>&1
-  young_rc=$?
-  set -e
-  /usr/bin/grep -q "SEGMENTED_GC_WINDOW mode=young .*root=1 fields=0$" "$YOUNG_LOG" || { echo "SEGMENTED_ARRAY_GC_WINDOW_MISSING mode=young"; exit 1; }
-  young_done=$(/usr/bin/grep -c '^SEGMENTED_ARRAY_MANAGED_FIXTURE_OK checksum=37$' "$YOUNG_LOG" || true)
-  if [[ $young_rc -ne 0 || $young_done -ne 1 ]]; then
-    echo "SEGMENTED_ARRAY_MANAGED_FAIL mode=young rc=$young_rc done=$young_done" >&2
-    tail -30 "$YOUNG_LOG" >&2
-    exit 1
-  fi
-  echo "SEGMENTED_ARRAY_MANAGED_OK mode=young rc=0 done=1"
+  run_external_window young SegmentedArrayInit.YoungGcRepairsIncompleteArrayRoot "$YOUNG_LOG"
 fi

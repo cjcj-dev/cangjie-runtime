@@ -32,8 +32,6 @@
 
 namespace MapleRuntime {
 
-static const ZStatCriticalPhase PFinalizer("Finalizer");
-static const ZStatCriticalPhase PFinalizerProcessorWaittingTime("finalizerProcessor waitting time");
 
 static const ZStatSubPhase ZSubPhaseConcurrentReferencesProcess("Concurrent References Process",
                                                                 ZGenerationId::old);
@@ -530,7 +528,6 @@ void FinalizerProcessor::Run()
     while (running.load(std::memory_order_acquire)) {
         bool hasPendingFinalizableJob = false;
         {
-            ZStatTimer zstatTimer(PFinalizerProcessorWaittingTime);
             while (running.load(std::memory_order_acquire)) {
                 hasPendingFinalizableJob = HasFinalizableJob();
                 if (hasPendingFinalizableJob) {
@@ -767,7 +764,6 @@ void FinalizerProcessor::ProcessFinalizableList()
 
 void FinalizerProcessor::ProcessFinalizables()
 {
-    ZStatTimer zstatTimer(PFinalizer);
     {
         // we leave saferegion to avoid GC visit those changing queues.
         ScopedObjectAccess soa;
