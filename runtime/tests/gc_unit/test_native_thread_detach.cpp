@@ -92,7 +92,8 @@ bool ContainsNative(const ThreadGCData* target)
 }
 }
 
-GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, FinalPublication)
+namespace {
+void CheckNativeFinalPublication(bool detach)
 {
     InitNativeRuntime();
     auto task = RunCJTask(AllocateNativeTarget, nullptr);
@@ -106,7 +107,7 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, FinalPublication)
     const bool old = page != nullptr && !page->IsYoungRegion();
     const bool before = old && page->is_object_marked(from_object(native1286_object), false);
     const bool debugger = std::getenv("GC_NATIVE_GDB") != nullptr;
-    native1286_allow_exit.store(debugger ? 0 : 1);
+    native1286_allow_exit.store(debugger || !detach ? 0 : 1);
     std::atomic<bool> produced{false};
     size_t privateEntries = 0;
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -125,14 +126,25 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, FinalPublication)
     });
     const bool ready = WaitNative([&] { return produced.load(std::memory_order_acquire); });
     native1286_ready();
-    if (!debugger) { producer.join(); }
+    if (!debugger && detach) { producer.join(); }
     const bool afterMark = ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED");
     if (debugger) { producer.join(); }
     page = Heap::page(reinterpret_cast<uintptr_t>(native1286_object));
     const bool marked = page != nullptr && page->is_object_marked(from_object(native1286_object), false);
+    if (!detach) {
+        native1286_allow_exit.store(1, std::memory_order_release);
+        producer.join();
+    }
     const bool removed = !ContainsNative(native1286_data);
-    std::fprintf(stderr, "NATIVE_FINAL_PUBLICATION executed=1 reached=%d old=%d before=%d ready=%d private=%zu marked=%d removed=%d after_mark=%d\n",
-                 reached, old, before, ready, privateEntries, marked, removed, afterMark);
+    std::fprintf(stderr, "NATIVE_FINAL_PUBLICATION executed=1 detach=%d reached=%d old=%d before=%d ready=%d private=%zu marked=%d removed=%d after_mark=%d\n",
+                 detach, reached, old, before, ready, privateEntries, marked, removed, afterMark);
+    // A disconnected publication can leave work beyond this cycle's mark end.
+    // Assert the observed result before cleanup can conceal that failure.
+    if (!(marked && removed)) {
+        std::fprintf(stderr, "NATIVE_FINAL_PUBLICATION_ASSERT_FAIL marked=%d removed=%d\n", marked, removed);
+        std::fflush(stderr);
+        _exit(1);
+    }
 #if defined(MRT_TESTABLE_INTERNALS)
     MarkThreadLocalStacks::SetPushCreatedBreakpoint(nullptr);
     const bool push = nativePushObserved.load();
@@ -148,6 +160,10 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, FinalPublication)
 #endif
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+}
+GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, FinalPublication) { CheckNativeFinalPublication(true); }
+GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, AttachedPublication) { CheckNativeFinalPublication(false); }
 
 GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, IteratorGracePeriod)
 {
