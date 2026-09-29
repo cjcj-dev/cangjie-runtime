@@ -142,8 +142,9 @@ public:
 class MarkOldRootsTask final : public ZTask {
 public:
     explicit MarkOldRootsTask(unsigned workers)
-        : ZTask("ZMarkOldRootsTask"), rootsColored(workers),
-          finalizerRoots(Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers) {}
+        : ZTask("ZMarkOldRootsTask"), rootsColored(workers, ZGenerationIdOptional::old),
+          finalizerRoots(Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers),
+          rootsUncolored(ZGenerationIdOptional::old) {}
     void work() override
     {
         finalizerRoots.OopsDo([](NativeSlot& slot) { ZMark::DiscoverFinalizableRoot(slot); });
@@ -199,7 +200,8 @@ public:
 class MarkYoungRootsTask final : public ZTask {
 public:
     explicit MarkYoungRootsTask(unsigned workers)
-        : ZTask("ZMarkYoungRootsTask"), rootsColored(workers) {}
+        : ZTask("ZMarkYoungRootsTask"), rootsColored(workers, ZGenerationIdOptional::young),
+          rootsUncolored(ZGenerationIdOptional::young) {}
 
     void work() override
     {
