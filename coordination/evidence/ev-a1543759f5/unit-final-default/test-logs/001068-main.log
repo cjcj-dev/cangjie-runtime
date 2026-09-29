@@ -1,0 +1,3 @@
+[  RUN   ] RelocateWorkers.YoungAndOldOwnDistinctThreads
+[  PASS  ] RelocateWorkers.YoungAndOldOwnDistinctThreads
+[========] 1 tests: 1 passed, 0 failed

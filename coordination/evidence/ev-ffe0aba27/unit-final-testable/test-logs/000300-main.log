@@ -1,0 +1,4 @@
+[  RUN   ] TLABUsage.BoundsAndDemand
+TLAB_EMPTY_IDENTITY product=(nil) caller=0x735d3ea5fd68
+[  PASS  ] TLABUsage.BoundsAndDemand
+[========] 1 tests: 1 passed, 0 failed

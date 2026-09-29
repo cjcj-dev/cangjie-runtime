@@ -1,0 +1,4 @@
+[  RUN   ] ThreadOffsetABI1140.g_cjThreadGCDataOffsetIsNotExported
+OFFSET_ABI_TARGET symbol=g_cjThreadGCDataOffset exported=0
+[  PASS  ] ThreadOffsetABI1140.g_cjThreadGCDataOffsetIsNotExported
+[========] 1 tests: 1 passed, 0 failed

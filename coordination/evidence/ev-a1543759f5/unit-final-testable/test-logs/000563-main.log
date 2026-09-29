@@ -1,0 +1,6 @@
+[  RUN   ] ZVirtualMemoryManagerTest.InitialSegmentsPreserveNineReservations
+[  RUN   ] ZVirtualMemoryManagerTest.InitialSegmentsPreserveNineReservations
+P04_SEGMENTS_TARGET first=9 second=9 expected=9
+GC_UNIT_OTHER_VM_OKIDOKI ZVirtualMemoryManagerTest.InitialSegmentsPreserveNineReservations
+[  PASS  ] ZVirtualMemoryManagerTest.InitialSegmentsPreserveNineReservations
+[========] 1 tests: 1 passed, 0 failed

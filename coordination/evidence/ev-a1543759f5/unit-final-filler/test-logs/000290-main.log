@@ -1,0 +1,7 @@
+[  RUN   ] RawNullExit.FinalizerAccept
+[  RUN   ] RawNullExit.FinalizerAccept
+RAW_NULL_EXIT_RETURN entry=1 same_page=1 allows=1
+RAW_NULL_EXIT_TARGET entry=1 reject=0 diagnostic=0 status=0
+GC_UNIT_OTHER_VM_OKIDOKI RawNullExit.FinalizerAccept
+[  PASS  ] RawNullExit.FinalizerAccept
+[========] 1 tests: 1 passed, 0 failed

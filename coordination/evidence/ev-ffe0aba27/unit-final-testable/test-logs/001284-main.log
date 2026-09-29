@@ -1,0 +1,6 @@
+[  RUN   ] FnlzRoots.RegistrationPreservesSlotAndYoungEpoch
+[  RUN   ] FnlzRoots.RegistrationPreservesSlotAndYoungEpoch
+B19_REGISTRATION_EPOCH_ASSERT observed=0xfffbd691f6e1510 expected=0xfffbd691f6e1510
+GC_UNIT_OTHER_VM_OKIDOKI FnlzRoots.RegistrationPreservesSlotAndYoungEpoch
+[  PASS  ] FnlzRoots.RegistrationPreservesSlotAndYoungEpoch
+[========] 1 tests: 1 passed, 0 failed

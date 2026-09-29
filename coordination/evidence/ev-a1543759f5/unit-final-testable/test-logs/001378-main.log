@@ -1,0 +1,14 @@
+[  RUN   ] ExitDetachMarkEnd.PauseCannotOverlapExitDetachWindow
+[  RUN   ] ExitDetachMarkEnd.PauseCannotOverlapExitDetachWindow
+EXIT_DETACH_PARKED between=Create/Push in_saferegion=0
+EXIT_DETACH_STATE parked=1 in_saferegion=0 pending_before=1 local_young_before=0
+EXIT_DETACH_PAUSE_WHILE_EXIT_PARKED world_stopped=0
+EXIT_DETACH_RESUMED
+EXIT_DETACH_FLUSH_BEGIN world_stopped=1
+EXIT_DETACH_FLUSH_END mark_end=0
+EXIT_DETACH_TARGET executed=1 arm=0 hook=1 parked=1 marked_young=1
+EXIT_DETACH_WINDOW_ASSERT parked=1 safe=0 lock_held=1
+EXIT_DETACH_EXCLUSION_ASSERT stopped_while_parked=0
+GC_UNIT_OTHER_VM_OKIDOKI ExitDetachMarkEnd.PauseCannotOverlapExitDetachWindow
+[  PASS  ] ExitDetachMarkEnd.PauseCannotOverlapExitDetachWindow
+[========] 1 tests: 1 passed, 0 failed

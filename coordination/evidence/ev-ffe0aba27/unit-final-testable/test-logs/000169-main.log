@@ -1,0 +1,7 @@
+[  RUN   ] CallRegisterRoots.PollCallerSurvives
+[  RUN   ] CallRegisterRoots.PollCallerSurvives
+CALL_ROOT_RESULT stub=5 invalid=0 visits=1 observed=100c0 healed=1
+CALL_ROOT_TARGET route=0 stub=5 invalid=0 status=0 rejected=0 accepted=1
+GC_UNIT_OTHER_VM_OKIDOKI CallRegisterRoots.PollCallerSurvives
+[  PASS  ] CallRegisterRoots.PollCallerSurvives
+[========] 1 tests: 1 passed, 0 failed

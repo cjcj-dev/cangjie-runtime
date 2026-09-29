@@ -1,0 +1,4 @@
+[  RUN   ] ZRememberedSetShape.PageRememberPublishesCurrentBit
+PAGE_REMEMBER_CURRENT_ASSERT remembered=1
+[  PASS  ] ZRememberedSetShape.PageRememberPublishesCurrentBit
+[========] 1 tests: 1 passed, 0 failed

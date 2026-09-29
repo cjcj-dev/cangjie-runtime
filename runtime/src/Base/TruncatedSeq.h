@@ -18,7 +18,7 @@ class TruncatedSeq {
 public:
     static constexpr int kMaxLength = 100;
 
-    explicit TruncatedSeq(int length = kMaxLength) : length_(length < kMaxLength ? length : kMaxLength)
+    explicit TruncatedSeq(int length = 10) : length_(length < kMaxLength ? length : kMaxLength)
     {
         for (int i = 0; i < kMaxLength; ++i) {
             sequence_[i] = 0.0;
@@ -27,6 +27,8 @@ public:
 
     void add(double val)
     {
+        // AbsSeq::add, numberSeq.cpp:35-52 (default alpha=0.3).
+        davg_ = num_ == 0 ? val : davg_ + 0.3 * (val - davg_);
         // numberSeq.cpp:150-169 — overwrite oldest, keep window sums.
         const double oldVal = sequence_[next_];
         sum_ -= oldVal;
@@ -39,6 +41,9 @@ public:
             ++num_;
         }
     }
+
+    double davg() const { return davg_; }
+    double last() const { return num_ == 0 ? 0.0 : sequence_[(next_ + length_ - 1) % length_]; }
 
     int num() const { return num_; }
     double sum() const { return sum_; }
@@ -101,6 +106,7 @@ public:
     }
 
 private:
+    double davg_ = 0.0;
     double sequence_[kMaxLength];
     int length_;
     int next_ = 0;

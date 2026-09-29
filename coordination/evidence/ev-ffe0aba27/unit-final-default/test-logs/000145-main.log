@@ -1,0 +1,6 @@
+[  RUN   ] ManagedMetadata.HeadAbsentDescriptor
+2026-09-30 00:27:54.335889 3529466 F Check failed: desc != nullptr
+2026-09-30 00:27:54.336320 3529466 F managed frame missing funcdesc startPC=0x5ce6449a677c ip=0x5ce6449a6780
+METADATA_TARGET entry=0 desc=0 map=0 status=134 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.HeadAbsentDescriptor
+[========] 1 tests: 1 passed, 0 failed

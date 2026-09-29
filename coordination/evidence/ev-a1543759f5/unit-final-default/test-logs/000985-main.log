@@ -1,0 +1,4 @@
+[  RUN   ] SoftMemoryTable.OfficialGB
+MEMORY_TABLE input=[20GB] reference_line=394 rc=3 accepted=1 bytes=21474836480 expected=21474836480
+[  PASS  ] SoftMemoryTable.OfficialGB
+[========] 1 tests: 1 passed, 0 failed

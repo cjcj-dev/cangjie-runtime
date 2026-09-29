@@ -1,0 +1,5 @@
+[  RUN   ] ExemptLife.NonOverlapCopyBeforeSourceLandsSourceImage
+[  RUN   ] ExemptLife.NonOverlapCopyBeforeSourceLandsSourceImage
+GC_UNIT_OTHER_VM_OKIDOKI ExemptLife.NonOverlapCopyBeforeSourceLandsSourceImage
+[  PASS  ] ExemptLife.NonOverlapCopyBeforeSourceLandsSourceImage
+[========] 1 tests: 1 passed, 0 failed

@@ -18,7 +18,14 @@ set(SRC_LIST
     "../Heap/z/zServiceability.cpp"
 )
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$" AND NOT WIN32)
-    list(APPEND SRC_LIST "Copy_aarch64.S")
+    add_library(RuntimeCopy OBJECT "Copy_aarch64.S")
+    list(APPEND SRC_LIST $<TARGET_OBJECTS:RuntimeCopy>)
 endif ()
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
 add_library(Base STATIC ${SRC_LIST})
+if(TARGET RuntimeCopy)
+    # Keep target-level additions (including coverage flags) identical to Base.
+    target_compile_options(RuntimeCopy PRIVATE $<TARGET_PROPERTY:Base,COMPILE_OPTIONS>)
+    target_compile_definitions(RuntimeCopy PRIVATE $<TARGET_PROPERTY:Base,COMPILE_DEFINITIONS>)
+    target_include_directories(RuntimeCopy PRIVATE $<TARGET_PROPERTY:Base,INCLUDE_DIRECTORIES>)
+endif()

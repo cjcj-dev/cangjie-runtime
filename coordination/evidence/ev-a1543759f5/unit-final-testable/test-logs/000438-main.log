@@ -1,0 +1,6 @@
+[  RUN   ] RelocationSetSelector.GenerationMediumFilterBoundaries
+[  RUN   ] RelocationSetSelector.GenerationMediumFilterBoundaries
+SELECTOR_MEDIUM_FILTER_TARGET actual=3 expected=3 matched=1
+GC_UNIT_OTHER_VM_OKIDOKI RelocationSetSelector.GenerationMediumFilterBoundaries
+[  PASS  ] RelocationSetSelector.GenerationMediumFilterBoundaries
+[========] 1 tests: 1 passed, 0 failed

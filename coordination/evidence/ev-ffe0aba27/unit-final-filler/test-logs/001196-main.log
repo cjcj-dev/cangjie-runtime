@@ -1,0 +1,4 @@
+[  RUN   ] ReferenceProcessor.ProcessReferencesFromNonWorkerCaller
+REFPROC_NON_WORKER_CALLER enqueued=0x40000800040 obj0=0x40000800040 caller_id=4294967295
+[  PASS  ] ReferenceProcessor.ProcessReferencesFromNonWorkerCaller
+[========] 1 tests: 1 passed, 0 failed

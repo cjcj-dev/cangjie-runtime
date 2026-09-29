@@ -1,0 +1,5 @@
+[  RUN   ] FnlzRoots.RegisteredFinalizerMovesAndCountsExactlyOnce
+[  RUN   ] FnlzRoots.RegisteredFinalizerMovesAndCountsExactlyOnce
+GC_UNIT_OTHER_VM_OKIDOKI FnlzRoots.RegisteredFinalizerMovesAndCountsExactlyOnce
+[  PASS  ] FnlzRoots.RegisteredFinalizerMovesAndCountsExactlyOnce
+[========] 1 tests: 1 passed, 0 failed

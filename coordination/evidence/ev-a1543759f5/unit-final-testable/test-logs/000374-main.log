@@ -1,0 +1,7 @@
+[  RUN   ] YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong
+[  RUN   ] YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong
+TARGET_YOUNG_STRONG_CLOSURE workers=1 root=1 weak=1 referent=1 child=1
+P1_FIELD_FOLLOW_ASSERT referent=1 child=1
+GC_UNIT_OTHER_VM_OKIDOKI YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong
+[  PASS  ] YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong
+[========] 1 tests: 1 passed, 0 failed

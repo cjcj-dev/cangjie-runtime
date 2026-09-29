@@ -1,0 +1,4 @@
+[  RUN   ] ZWorkers.WorkerTaskCapturesGcIdAtConstruction
+OBSERVED WorkerTask gc_id captured at construction
+[  PASS  ] ZWorkers.WorkerTaskCapturesGcIdAtConstruction
+[========] 1 tests: 1 passed, 0 failed

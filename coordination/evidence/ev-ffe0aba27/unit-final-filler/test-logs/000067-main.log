@@ -1,0 +1,4 @@
+[  RUN   ] UsedGeneration.CounterMatchesPageTableNonFreeSum
+USED_GENERATION young_counter=0 page_table=0 region0_size=2097152
+[  PASS  ] UsedGeneration.CounterMatchesPageTableNonFreeSum
+[========] 1 tests: 1 passed, 0 failed

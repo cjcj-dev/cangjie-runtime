@@ -1,0 +1,14 @@
+ARM=candidate configure_rc=0 build_rc=0 wall=24
+cdf63af67ac3ead0fac1ce899e0702d83108b7958d94df83c1ad4a8d4c387ba2  /root/sym_cangjie_runtime_1305_implement_r5892797534/keep/candidate/libcangjie-runtime.so
+ARM=restored configure_rc=0 build_rc=0 wall=24
+cdf63af67ac3ead0fac1ce899e0702d83108b7958d94df83c1ad4a8d4c387ba2  /root/sym_cangjie_runtime_1305_implement_r5892797534/keep/restored/libcangjie-runtime.so
+ARM=termination configure_rc=0 build_rc=0 wall=26
+267a11c980c0bfb3c24a755eb7e2764eb7a5247c1126f206e82bb233196aea4e  /root/sym_cangjie_runtime_1305_implement_r5892797534/keep/termination/libcangjie-runtime.so
+ARM=objects configure_rc=0 build_rc=0 wall=26
+4ea82534a2ef63efb882a5d7771ca7c955b3d22fdd4f72acbbc4a2a2411893fb  /root/sym_cangjie_runtime_1305_implement_r5892797534/keep/objects/libcangjie-runtime.so
+ARM=arrays configure_rc=0 build_rc=0 wall=26
+434a16cf1bfade064d1a40cdba04fb76249f2818605000aebce65acee12c3830  /root/sym_cangjie_runtime_1305_implement_r5892797534/keep/arrays/libcangjie-runtime.so
+ARM=bitmap configure_rc=0 build_rc=0 wall=26
+8edb8d1dc8fb0750fd15019a84eeaa69a91f846b47aefc0b8cf8d24fd13a8077  /root/sym_cangjie_runtime_1305_implement_r5892797534/keep/bitmap/libcangjie-runtime.so
+ARM=entry configure_rc=0 build_rc=0 wall=26
+e1f660d80eeb5b90fdb04871ea74e32b614ce741de451df1e110069deebf1a51  /root/sym_cangjie_runtime_1305_implement_r5892797534/keep/entry/libcangjie-runtime.so

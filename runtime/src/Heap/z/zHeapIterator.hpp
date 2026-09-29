@@ -6,11 +6,13 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
-#include <unordered_map>
+#include "Base/BitMap.h"
+#include "Heap/z/zGranuleMap.hpp"
 #include <vector>
 #include "Common/BaseObject.h"
 #include "Heap/z/zIterator.hpp"
+#include "Heap/z/zTaskTerminator.hpp"
+#include "Heap/z/zRootsIterator.hpp"
 #include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {
@@ -18,15 +20,9 @@ class MArray;
 class HeapIteratorContext;
 
 class HeapIteratorBitMap {
-    std::vector<std::atomic<uintptr_t>> words;
+    CHeapBitMap bitmap;
 public:
-    explicit HeapIteratorBitMap(size_t bits)
-        : words((bits + (sizeof(uintptr_t) * 8 - 1)) / (sizeof(uintptr_t) * 8))
-    {
-        for (auto& word : words) {
-            word.store(0, std::memory_order_relaxed);
-        }
-    }
+    explicit HeapIteratorBitMap(size_t bits) : bitmap(bits) {}
     bool try_set_bit(size_t index);
 };
 
@@ -39,24 +35,32 @@ public:
         MIndex index;
     };
     explicit HeapIterator(bool visitWeaks, bool forVerify = false, unsigned nworkers = 1);
+    ~HeapIterator();
     void Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor = {});
     void object_iterate(const ObjectVisitor& objectVisitor, uint32_t worker_id);
     void object_and_field_iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor,
                                   uint32_t worker_id);
+    template<bool VisitWeaks>
+    void push_roots(const HeapIteratorContext& context);
     void push_strong_roots(const HeapIteratorContext& context);
     void push_weak_roots(const HeapIteratorContext& context);
     template <bool VisitWeaks>
     void drain(const HeapIteratorContext& context);
+    template <bool VisitWeaks>
     void steal(const HeapIteratorContext& context);
+    bool steal(const HeapIteratorContext& context, BaseObject*& object);
+    bool steal_array_chunk(const HeapIteratorContext& context, ObjArrayTask& array);
     template <bool VisitWeaks>
     void drain_and_steal(const HeapIteratorContext& context);
-    bool try_set_bit(BaseObject* object);
+    bool mark_object(BaseObject* object);
+    void mark_visit_and_push(const HeapIteratorContext& context, BaseObject* object);
+    bool should_visit_object_at_mark() const;
+    bool should_visit_object_at_follow() const;
 
-    std::vector<std::vector<BaseObject*>> workerQueues;
-    std::vector<std::vector<ObjArrayTask>> workerArrayQueues;
+    using ObjectQueue = OverflowTaskQueue<BaseObject*>;
+    using ArrayQueue = OverflowTaskQueue<ObjArrayTask>;
 
 private:
-    friend class HeapIteratorContext;
     template <bool Weak>
     class ColoredRootOopClosure {
         HeapIterator& iter;
@@ -76,7 +80,6 @@ private:
         void do_root(ObjectRef& root);
     };
 
-    void Push(BaseObject* object, const ObjectVisitor& objectVisitor);
     template <bool VisitReferents>
     class OopClosure : public OopIterateClosure {
         HeapIterator* const iter;
@@ -102,19 +105,26 @@ private:
     void object_iterate_inner(const HeapIteratorContext& context);
     void follow_array(const HeapIteratorContext& context, MArray* object);
     void follow_array_chunk(const HeapIteratorContext& context, const ObjArrayTask& array);
+    HeapIteratorBitMap* object_bitmap(BaseObject* object);
     const bool visitWeaks;
     const bool forVerify;
-    const unsigned nworkers;
-    std::mutex bitmapLock;
-    std::unordered_map<uintptr_t, std::unique_ptr<HeapIteratorBitMap>> objectBitmaps;
+    ZGranuleMap<HeapIteratorBitMap*> objectBitmaps;
+    ZLock bitmapLock;
+    GenericTaskQueueSet<ObjectQueue> workerQueues;
+    GenericTaskQueueSet<ArrayQueue> workerArrayQueues;
+    RootsIteratorStrongColored rootsColored;
+    RootsIteratorStrongUncolored rootsUncolored;
+    RootsIteratorWeakColored rootsWeakColored;
+    TaskTerminator terminator;
 };
 
 class HeapIteratorContext {
 public:
-    HeapIteratorContext(HeapIterator& iter, const HeapIterator::ObjectVisitor* objectVisitor,
-                        const HeapIterator::EdgeVisitor* fieldVisitor, uint32_t workerId)
-        : iter(iter), objectVisitor(objectVisitor), fieldVisitor(fieldVisitor), workerId(workerId),
-          queue(iter.workerQueues[workerId]), arrayQueue(iter.workerArrayQueues[workerId])
+    HeapIteratorContext(const HeapIterator::ObjectVisitor* objectVisitor,
+                        const HeapIterator::EdgeVisitor* fieldVisitor, uint32_t workerId,
+                        HeapIterator::ObjectQueue* queue, HeapIterator::ArrayQueue* arrayQueue)
+        : objectVisitor(objectVisitor), fieldVisitor(fieldVisitor), workerId(workerId),
+          queue(queue), arrayQueue(arrayQueue)
     {
     }
     uint32_t worker_id() const { return workerId; }
@@ -123,14 +133,13 @@ public:
     void push_array_chunk(const HeapIterator::ObjArrayTask& array) const;
     bool pop(BaseObject*& object) const;
     bool pop_array_chunk(HeapIterator::ObjArrayTask& array) const;
-    bool is_drained() const { return queue.empty() && arrayQueue.empty(); }
+    bool is_drained() const { return queue->is_empty() && arrayQueue->is_empty(); }
 
-    HeapIterator& iter;
     const HeapIterator::ObjectVisitor* objectVisitor;
     const HeapIterator::EdgeVisitor* fieldVisitor;
-    uint32_t workerId;
-    std::vector<BaseObject*>& queue;
-    std::vector<HeapIterator::ObjArrayTask>& arrayQueue;
+    const uint32_t workerId;
+    HeapIterator::ObjectQueue* const queue;
+    HeapIterator::ArrayQueue* const arrayQueue;
 };
 
 } // namespace MapleRuntime

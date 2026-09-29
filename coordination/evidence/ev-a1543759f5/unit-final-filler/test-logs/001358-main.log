@@ -1,0 +1,7 @@
+[  RUN   ] WatermarkIteration.DiagnosticWalkRejectsUnstartedEpoch
+WM_ITERATION_TARGET executed=1 stale=1 rejected=1 status=134
+2026-09-29 23:56:40.928139 3243912 F Check failed: processing_started()
+2026-09-29 23:56:40.928672 3243912 F Processing should already have started
+WM_ITERATION_CONTROL executed=1 started=1 epoch_advanced=1 epoch_now=5424
+[  PASS  ] WatermarkIteration.DiagnosticWalkRejectsUnstartedEpoch
+[========] 1 tests: 1 passed, 0 failed

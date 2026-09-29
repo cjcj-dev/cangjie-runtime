@@ -1,0 +1,9 @@
+RESTORE_COMPARE_RC=0 file=runtime/src/Base/BitMap.h
+270ebeb89d3d477ce53d88877a710e6c1ddecc0de7a2c54ccc7cea73992e431e  /root/sym_cangjie_runtime_1305_implement_r5892797534/arms/candidate/runtime/src/Base/BitMap.h
+270ebeb89d3d477ce53d88877a710e6c1ddecc0de7a2c54ccc7cea73992e431e  /root/sym_cangjie_runtime_1305_implement_r5892797534/arms/restored/runtime/src/Base/BitMap.h
+RESTORE_COMPARE_RC=0 file=runtime/src/Heap/z/zRootsIterator.cpp
+4f47653cc0a18ef62685b9ace87008bfee284a0c4fa9930a7d0391f2131788d2  /root/sym_cangjie_runtime_1305_implement_r5892797534/arms/candidate/runtime/src/Heap/z/zRootsIterator.cpp
+4f47653cc0a18ef62685b9ace87008bfee284a0c4fa9930a7d0391f2131788d2  /root/sym_cangjie_runtime_1305_implement_r5892797534/arms/restored/runtime/src/Heap/z/zRootsIterator.cpp
+RESTORE_COMPARE_RC=0 file=runtime/src/Heap/z/zHeapIterator.cpp
+2e26a542e8cffb6e5cb1d58f945f45aaa598bc8157f8bf879e903d33ea8f6c5f  /root/sym_cangjie_runtime_1305_implement_r5892797534/arms/candidate/runtime/src/Heap/z/zHeapIterator.cpp
+2e26a542e8cffb6e5cb1d58f945f45aaa598bc8157f8bf879e903d33ea8f6c5f  /root/sym_cangjie_runtime_1305_implement_r5892797534/arms/restored/runtime/src/Heap/z/zHeapIterator.cpp

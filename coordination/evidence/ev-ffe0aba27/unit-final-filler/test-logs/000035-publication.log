@@ -1,0 +1,4 @@
+[  RUN   ] RelocateField782.LoadBadAddressConsumesForwarding
+DETAIL minor_field_colour stale=1 actual=0x40000a00040 expected=0x40000a00040
+[  PASS  ] RelocateField782.LoadBadAddressConsumesForwarding
+[========] 1 tests: 1 passed, 0 failed

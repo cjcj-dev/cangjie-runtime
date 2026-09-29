@@ -1,0 +1,6 @@
+[  RUN   ] FnlzRoots.SharedBlockHandlesSurviveRegistrationGrowth
+[  RUN   ] FnlzRoots.SharedBlockHandlesSurviveRegistrationGrowth
+ROOT_STORAGE_TARGET finalizer_registered=130 expected=130
+GC_UNIT_OTHER_VM_OKIDOKI FnlzRoots.SharedBlockHandlesSurviveRegistrationGrowth
+[  PASS  ] FnlzRoots.SharedBlockHandlesSurviveRegistrationGrowth
+[========] 1 tests: 1 passed, 0 failed

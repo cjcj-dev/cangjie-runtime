@@ -1,0 +1,6 @@
+[  RUN   ] RuntimeConfigV1.EnvironmentHeapDumpPath
+[  RUN   ] RuntimeConfigV1.EnvironmentHeapDumpPath
+RUNTIME_CONFIG_HEAP_DUMP_PATH actual=/usr.3103920 expected=/usr.3103920
+GC_UNIT_OTHER_VM_OKIDOKI RuntimeConfigV1.EnvironmentHeapDumpPath
+[  PASS  ] RuntimeConfigV1.EnvironmentHeapDumpPath
+[========] 1 tests: 1 passed, 0 failed
