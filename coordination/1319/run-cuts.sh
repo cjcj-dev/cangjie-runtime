@@ -45,7 +45,10 @@ done
 for arm in green head clear ordinary restored; do
  (
   out="$root/cases-$arm"; mkdir -p "$out"
-  export LD_LIBRARY_PATH="$root/keep/$arm"
+  # The green arm is byte-identical to the restored arm: same unpatched source,
+  # same configure line. Only the cut arms differ.
+  case "$arm" in green) soarm=restored ;; *) soarm=$arm ;; esac
+  export LD_LIBRARY_PATH="$root/keep/$soarm"
   "$root/keep/elf/cj_gc_unit" --gtest_list_tests > "$out/list.txt" 2>&1
   if [ "$arm" != head ]; then
    /usr/bin/grep '^SegmentedArrayInit\.' "$root/unit-testable/test-lists/main.txt" > "$out/tests.txt"
@@ -62,7 +65,7 @@ for arm in green head clear ordinary restored; do
    ) &
   done < "$out/tests.txt"
   wait
-  sha256sum "$root/keep/elf/cj_gc_unit" "$root/keep/$arm/"*.so > "$out/identity.sha256"
+  sha256sum "$root/keep/elf/cj_gc_unit" "$root/keep/$soarm/"*.so > "$out/identity.sha256"
  ) &
 done
 wait
