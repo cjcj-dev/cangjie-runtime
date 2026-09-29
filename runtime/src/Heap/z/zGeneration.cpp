@@ -14,7 +14,6 @@
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zMark.hpp"
 
@@ -483,13 +482,7 @@ void ZGenerationYoung::concurrent_mark_free()
     if (ZAbort::should_abort()) {
         return;
     }
-    // Cangjie String values use an explicitly populated dedup table. Clean its
-    // weak entries here; ZGC processes weak OopStorage entries through
-    // ZWeakRootsProcessor (zWeakRootsProcessor.cpp:55-74).
-    StringDedup::Instance().Clean([this](BaseObject* object) {
-        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-        return !region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Young>(object);
-    });
+
 }
 
 void ZGenerationYoung::concurrent_reset_relocation_set()
@@ -567,7 +560,6 @@ void ZGenerationYoung::concurrent_relocate()
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -605,10 +597,6 @@ void ZGenerationOld::process_non_strong_references()
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
     ZMark::ProcessFinalizers();
     Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();
-    StringDedup::Instance().Clean([this](BaseObject* object) {
-        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-        return region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Old>(object);
-    });
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
     ZRendezvousHandshakeClosure rendezvous;
     Handshake::execute(&rendezvous);
@@ -638,7 +626,6 @@ void ZGenerationOld::process_non_strong_references()
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -677,7 +664,6 @@ namespace MapleRuntime {
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -1292,7 +1278,6 @@ void ZGenerationYoung::EvacuateYoungRegions()
 
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 
 #include <array>
