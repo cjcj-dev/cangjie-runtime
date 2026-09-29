@@ -17,6 +17,8 @@ inline Uptr* MFuncDesc::GetStackMap() const { return stackMap.GetDataRef(); }
 
 inline U32 MFuncDesc::GetCodeSize() const { return codeSize; }
 
+inline bool MFuncDesc::HasReturnPoll() const { return (returnPollFlag & 1u) != 0; }
+
 inline Uptr* MFuncDesc::GetEHTable() const
 {
 #ifdef __APPLE__

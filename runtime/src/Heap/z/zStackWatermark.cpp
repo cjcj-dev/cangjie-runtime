@@ -119,8 +119,12 @@ private:
     static bool has_barrier(const FrameInfo& frame)
     {
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
-        // Other compiler targets have not yet supplied a return barrier ABI.
-        return frame.GetFrameType() == FrameType::MANAGED && frame.mFrame.GetSP() != 0;
+        // HotSpot runtime/stackWatermark.inline.hpp:42-59 queries the compiled
+        // method's barrier property. Cangjie records it in the function descriptor.
+        if (frame.GetFrameType() != FrameType::MANAGED) { return false; }
+        ElfUnloadQuiescence::ReadScope metadataReader;
+        const auto descriptor = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(frame.GetStartProc()));
+        return descriptor != nullptr && descriptor->HasReturnPoll();
 #else
         return false;
 #endif
