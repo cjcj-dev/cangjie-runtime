@@ -297,3 +297,42 @@ OFFICIAL_HEAP_UNIT(Invalid, "20XB", 0)
 OFFICIAL_HEAP_UNIT(MixedCase, "20mB", 20UL * 1024 * 1024)
 OFFICIAL_HEAP_UNIT(SingleLetter, "20M", 0)
 #undef OFFICIAL_HEAP_UNIT
+
+// ZGC zCollectedHeap.cpp:80-92: a failed backing constructor propagates
+// through the heap state to the initialization owner, before GC starts.
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, BackingFailureReachesInitializationOwner)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        dup2(output[1], STDERR_FILENO);
+        dup2(output[1], STDOUT_FILENO);
+        close(output[1]);
+        // /dev/null is a file, so it cannot supply a heap backing directory.
+        setenv("cjAllocateHeapAt", "/dev/null", 1);
+        setenv("cjHeapSize", "64MB", 1);
+        if (CJ_ScheduleManagerInit() != 0) { _exit(91); }
+        CJ_MRT_CjRuntimeInit();
+        _exit(92);
+    }
+    close(output[1]);
+    std::string diagnostic;
+    char chunk[1024];
+    for (ssize_t count; (count = read(output[0], chunk, sizeof(chunk))) > 0;) {
+        diagnostic.append(chunk, static_cast<size_t>(count));
+    }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool ownerRejected = diagnostic.find("Check failed: ZCollectedHeap::heap()->initialize()")
+        != std::string::npos;
+    const bool originalError = diagnostic.find("Failed to create heap backing file") != std::string::npos;
+    // Print before the combined target assertion: a wrong earlier failure
+    // must never conceal whether the owner consumed the construction result.
+    std::fprintf(stderr, "INIT1310_TARGET owner_rejected=%d original_error=%d status=%d\n%s",
+                 ownerRejected, originalError, status, diagnostic.c_str());
+    GC_EXPECT_TRUE(ownerRejected && originalError && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
