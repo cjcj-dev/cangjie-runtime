@@ -29,6 +29,12 @@
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 
+// The merged generation helpers expose the inline definition. Keep the phase
+// producer in the product SO so the producer cut still observes that call.
+namespace MapleRuntime {
+extern template void ZMark::MarkObject<false, false, false, false>(zaddress);
+}
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
