@@ -68,6 +68,7 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
             image.stackmap[3] = 0x11; // line/derived index widths = 1
         }
         const Uptr pc = reinterpret_cast<Uptr>(image.code);
+        std::fprintf(stderr, "METADATA_INPUT startPC=%p ip=%p\n", image.code, image.code + 1);
         ElfUnloadQuiescence::LinkImage(pc);
         if (entry == Entry::HEAD) {
             const auto head = CompressedStackMapHead::GetStackMapHead(pc, nullptr, pc + 4);
@@ -113,7 +114,13 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
             FrameInfo frame(image.code);
             frame.SetFrameType(FrameType::MANAGED);
             frame.mFrame.SetIP(image.code + 1);
-            (void)frame.CallerSP();
+            FrameAddress address {};
+            frame.mFrame.SetFA(&address);
+            const auto actual = frame.CallerSP();
+            const auto expected = descriptorPresent ? reinterpret_cast<Uptr>(&address) + sizeof(FrameAddress) : 0;
+            std::fprintf(stderr, "CALLER_SP actual=%p expected=%p assertion-executed\n",
+                         reinterpret_cast<void*>(actual), reinterpret_cast<void*>(expected));
+            if (actual != expected) { _exit(3); }
         } else {
 #if defined(__x86_64__)
             CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_OFF;
@@ -171,6 +178,58 @@ GC_TEST(ManagedMetadata, ReturnZeroRoots) { CheckMetadata(Entry::RETURN, true, t
 #endif
 #if defined(__aarch64__)
 GC_TEST(ManagedMetadata, CallerSpAbsentStackMap) { CheckMetadata(Entry::CALLER_SP, true, false, "managed frame missing stackmap"); }
+GC_TEST(ManagedMetadata, CallerSpPresent) { CheckMetadata(Entry::CALLER_SP, true, true, nullptr); }
 GC_TEST(ManagedMetadata, CallerSpNative) { CheckMetadata(Entry::CALLER_SP, false, false, nullptr); }
 #endif
+#endif
+
+#if defined(_WIN64)
+#include "os/Windows/UnwindWin.h"
+#include <windows.h>
+#include <cstdlib>
+using namespace MapleRuntime;
+extern "C" void MetadataNoDescriptor();
+extern "C" void MetadataNoMap();
+extern "C" void MetadataPresent();
+namespace {
+void CheckWindowsMetadata(bool caller, int kind)
+{
+    // These are real PE functions with .pdata/.xdata. Never execute their
+    // synthetic managed code: the product's PE lookup consumes it as input.
+    auto function = kind == 0 ? MetadataNoDescriptor : kind == 1 ? MetadataNoMap : MetadataPresent;
+    const Uptr pc = reinterpret_cast<Uptr>(function);
+    const Uptr ip = pc + 1;
+    WinModuleManager modules;
+    modules.Init();
+    ElfUnloadQuiescence::LinkImage(pc);
+    alignas(16) Uptr storage[16] {};
+    FrameAddress callerFrame {};
+    FrameAddress currentFrame {};
+    currentFrame.returnAddress = reinterpret_cast<uint32_t*>(ip);
+    currentFrame.callerFrameAddress = &callerFrame;
+    MachineFrame machine;
+    machine.SetFA(&currentFrame);
+    machine.SetIP(reinterpret_cast<uint32_t*>(ip));
+    storage[0] = reinterpret_cast<Uptr>(&callerFrame);
+    std::fprintf(stderr, "METADATA_INPUT startPC=%p ip=%p\n",
+                 reinterpret_cast<void*>(pc), reinterpret_cast<void*>(ip));
+    std::fflush(stderr);
+    FrameInfo result;
+    if (caller) {
+        auto status = UnwindContextStatus::RELIABLE;
+        result = GetCallerFrameInfo(modules, machine, status);
+    } else {
+        result = GetCurFrameInfo(modules, ip, reinterpret_cast<Uptr>(&storage[2]));
+    }
+    std::fprintf(stderr, "WINDOWS_FRAME actual=%p expected=%p assertion-executed\n",
+                 result.mFrame.GetFA(), &callerFrame);
+    GC_EXPECT_TRUE(result.mFrame.GetFA() == &callerFrame);
+}
+}
+GC_COMPONENT_TEST(ManagedMetadata, WinCurrentAbsentDescriptor) { CheckWindowsMetadata(false, 0); }
+GC_COMPONENT_TEST(ManagedMetadata, WinCurrentAbsentStackMap) { CheckWindowsMetadata(false, 1); }
+GC_COMPONENT_TEST(ManagedMetadata, WinCurrentPresent) { CheckWindowsMetadata(false, 2); }
+GC_COMPONENT_TEST(ManagedMetadata, WinCallerAbsentDescriptor) { CheckWindowsMetadata(true, 0); }
+GC_COMPONENT_TEST(ManagedMetadata, WinCallerAbsentStackMap) { CheckWindowsMetadata(true, 1); }
+GC_COMPONENT_TEST(ManagedMetadata, WinCallerPresent) { CheckWindowsMetadata(true, 2); }
 #endif

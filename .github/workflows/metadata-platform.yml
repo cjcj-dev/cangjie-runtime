@@ -1,0 +1,140 @@
+name: Managed metadata platform checks
+on:
+  workflow_dispatch:
+  push:
+    branches: ['sym/1284-implement-*']
+permissions:
+  contents: read
+jobs:
+  prepare:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux-arm64, windows-x64]
+        config: [default, testable]
+        include:
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: windows-x64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: false
+          path-type: inherit
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/gc_unit/metadata/build.py prepare --config ${{ matrix.config }}
+      - if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/gc_unit/metadata/build.py prepare --config ${{ matrix.config }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prepare-${{ matrix.platform }}-${{ matrix.config }}
+          path: |
+            ${{ runner.temp }}/metadata/*.log
+            ${{ runner.temp }}/metadata/*.json
+      - uses: actions/upload-artifact@v4
+        if: success() && matrix.config == 'testable'
+        with:
+          name: bundle-${{ matrix.platform }}
+          path: ${{ runner.temp }}/metadata/bundle/
+  arms:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux-arm64, runner: ubuntu-24.04-arm, arm: candidate}
+          - {platform: linux-arm64, runner: ubuntu-24.04-arm, arm: caller-sp}
+          - {platform: linux-arm64, runner: ubuntu-24.04-arm, arm: restored}
+          - {platform: linux-arm64, runner: ubuntu-24.04-arm, arm: device}
+          - {platform: windows-x64, runner: windows-2025, arm: candidate}
+          - {platform: windows-x64, runner: windows-2025, arm: current-desc}
+          - {platform: windows-x64, runner: windows-2025, arm: current-map}
+          - {platform: windows-x64, runner: windows-2025, arm: caller-desc}
+          - {platform: windows-x64, runner: windows-2025, arm: caller-map}
+          - {platform: windows-x64, runner: windows-2025, arm: restored}
+          - {platform: windows-x64, runner: windows-2025, arm: device}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: false
+          path-type: inherit
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle-${{ matrix.platform }}
+          path: ${{ runner.temp }}/metadata/bundle
+      - if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/gc_unit/metadata/build.py arm --arm ${{ matrix.arm }}
+      - if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/gc_unit/metadata/build.py arm --arm ${{ matrix.arm }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm-${{ matrix.platform }}-${{ matrix.arm }}
+          path: |
+            ${{ runner.temp }}/metadata/*.log
+            ${{ runner.temp }}/metadata/*.json
+            ${{ runner.temp }}/metadata/*.diff
+  pac-capability:
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [pac-off, pac-on]
+    env:
+      GITHUB_REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - shell: bash
+        run: |
+          ulimit -c 0
+          python3 runtime/tests/gc_unit/metadata/build.py capability --config ${{ matrix.config }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capability-${{ matrix.config }}
+          path: |
+            ${{ runner.temp }}/metadata/*.log
+            ${{ runner.temp }}/metadata/*.json
