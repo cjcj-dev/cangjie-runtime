@@ -142,15 +142,18 @@ GC_TEST(PageRemset1272, InitializedReadFaces)
 }
 
 #if defined(MRT_DEBUG) && MRT_DEBUG == 1
+#include "Heap/z/zLiveMap.inline.hpp"
 namespace {
 // Header-only product methods are compiled with the same MRT_DEBUG setting
 // as the linked runtime. The child must match the exact product diagnostic.
-void CheckRemsetPrecondition(const char* test, bool previous, bool live)
+void CheckRemsetPrecondition(const char* test, bool previous, bool live,
+                             const char* diagnostic = "BitMap index out of bounds",
+                             bool advance = false, bool mark = false)
 {
     if (std::getenv("REMSET1272_SCENE") == nullptr) {
         GC_EXPECT_EQ(setenv("REMSET1272_SCENE", "1", 1), 0);
         try {
-            RunInOtherVm(test, live ? "Must have liveness information" : "BitMap index out of bounds");
+            RunInOtherVm(test, diagnostic);
         } catch (...) {
             unsetenv("REMSET1272_SCENE");
             throw;
@@ -163,6 +166,22 @@ void CheckRemsetPrecondition(const char* test, bool previous, bool live)
                ZVirtualMemory(to_zoffset(ZPageSizeSmall), ZPageSizeSmall));
     auto* slot = reinterpret_cast<volatile zpointer*>(page.GetRegionStart());
     if (live) {
+        if (advance) {
+            ZGeneration::old()->mark_start();
+            GC_EXPECT_FALSE(page.is_allocating());
+            if (mark) {
+                bool increment = false;
+                page.livemap().set(ZGenerationId::old, 0, false, increment);
+                GC_EXPECT_TRUE(page.is_marked());
+                GC_EXPECT_TRUE(ZGeneration::old()->is_phase_mark());
+            } else {
+                ZGeneration::old()->set_phase(ZGenerationPhase::MarkComplete);
+                GC_EXPECT_FALSE(ZGeneration::old()->is_phase_mark());
+                GC_EXPECT_FALSE(page.is_marked());
+            }
+        }
+        std::fprintf(stderr, "REMSET1272_ENTER target=%s allocating=%d phase_mark=%d\n",
+                     diagnostic, page.is_allocating(), ZGeneration::old()->is_phase_mark());
         page.oops_do_remembered_in_live([](volatile zpointer*) {});
     } else {
         const bool result = previous ? page.was_remembered(slot) : page.is_remembered(slot);
@@ -184,6 +203,19 @@ GC_OTHER_VM_TEST(PageRemset1272, UninitializedPreviousRejected)
 // ZGC zPage.inline.hpp:406-408: a newly allocated page has no scan liveness.
 GC_OTHER_VM_TEST(PageRemset1272, AllocatingLiveScanRejected)
 {
-    CheckRemsetPrecondition("PageRemset1272.AllocatingLiveScanRejected", false, true);
+    CheckRemsetPrecondition("PageRemset1272.AllocatingLiveScanRejected", false, true,
+                             "Check failed: !is_allocating()");
+}
+
+GC_OTHER_VM_TEST(PageRemset1272, MarkPhaseLiveScanRejected)
+{
+    CheckRemsetPrecondition("PageRemset1272.MarkPhaseLiveScanRejected", false, true,
+                             "Check failed: !ZGeneration::old()->is_phase_mark()", true, true);
+}
+
+GC_OTHER_VM_TEST(PageRemset1272, UnmarkedLiveScanRejected)
+{
+    CheckRemsetPrecondition("PageRemset1272.UnmarkedLiveScanRejected", false, true,
+                             "Check failed: is_marked()", true, false);
 }
 #endif
