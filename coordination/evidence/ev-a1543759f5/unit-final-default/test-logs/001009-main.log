@@ -1,0 +1,6 @@
+[  RUN   ] RuntimeConfigV1.EmbeddedHeap
+[  RUN   ] RuntimeConfigV1.EmbeddedHeap
+RUNTIME_CONFIG_HEAP actual_kib=65536 expected_kib=65536
+GC_UNIT_OTHER_VM_OKIDOKI RuntimeConfigV1.EmbeddedHeap
+[  PASS  ] RuntimeConfigV1.EmbeddedHeap
+[========] 1 tests: 1 passed, 0 failed

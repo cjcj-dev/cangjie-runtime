@@ -1,0 +1,4 @@
+[  RUN   ] AccessBarrier976.AtomicReleaseStoreBuffersWithoutHealing
+ACCESS976_STORE_ASSERT before=0 after=1 raw=80001400081510
+[  PASS  ] AccessBarrier976.AtomicReleaseStoreBuffersWithoutHealing
+[========] 1 tests: 1 passed, 0 failed

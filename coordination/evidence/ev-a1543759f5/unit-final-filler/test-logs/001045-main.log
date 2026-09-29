@@ -1,0 +1,7 @@
+[  RUN   ] OfficialHeapUnit.HardInvalid
+[  RUN   ] OfficialHeapUnit.HardInvalid
+2026-09-29 23:56:40.445306 3235575 E Invalid cjHeapSize
+OFFICIAL_UNIT_ACCEPT input=20XB soft=0 actual=-1 expected=-1
+GC_UNIT_OTHER_VM_OKIDOKI OfficialHeapUnit.HardInvalid
+[  PASS  ] OfficialHeapUnit.HardInvalid
+[========] 1 tests: 1 passed, 0 failed

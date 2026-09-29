@@ -1,0 +1,3 @@
+[  RUN   ] AllocBufferHandoff.StackRootPublishedDuringMergeIsDelivered
+[  PASS  ] AllocBufferHandoff.StackRootPublishedDuringMergeIsDelivered
+[========] 1 tests: 1 passed, 0 failed

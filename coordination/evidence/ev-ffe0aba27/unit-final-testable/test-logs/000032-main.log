@@ -1,0 +1,3 @@
+[  RUN   ] ZArray.parallel_iterator_claims_each_index_once
+[  PASS  ] ZArray.parallel_iterator_claims_each_index_once
+[========] 1 tests: 1 passed, 0 failed

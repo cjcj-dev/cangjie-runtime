@@ -1,0 +1,18 @@
+[  RUN   ] P82HeapIterator.ArrayChunks
+[  RUN   ] P82HeapIterator.ArrayChunks
+P82_ARRAY_RESULT weak=0 stolen_continuation=0 exact_edges=2048 expected=4097
+P82_ARRAY_RESULT weak=1 stolen_continuation=0 exact_edges=2048 expected=4097
+P82_ARRAY_ASSERT exact=0
+[  FAIL  ] P82HeapIterator.ArrayChunks
+  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:971: EXPECT failed: exact
+[  FAIL  ] P82HeapIterator.ArrayChunks
+  other-vm child did not exit cleanly with sentinel for P82HeapIterator.ArrayChunks: Exited with exit status 1; sentinel=missing; stderr_read=complete; exec_ms=1; body_ms=516; exit_ms=not-started; pending_phase=body
+Child stderr tail (<=4096 bytes):
+[  RUN   ] P82HeapIterator.ArrayChunks
+P82_ARRAY_RESULT weak=0 stolen_continuation=0 exact_edges=2048 expected=4097
+P82_ARRAY_RESULT weak=1 stolen_continuation=0 exact_edges=2048 expected=4097
+P82_ARRAY_ASSERT exact=0
+[  FAIL  ] P82HeapIterator.ArrayChunks
+  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:971: EXPECT failed: exact
+
+[========] 1 tests: 0 passed, 1 failed

@@ -1,0 +1,4 @@
+[  RUN   ] SoftMemoryTable.OfficialZero
+MEMORY_TABLE input=[0KB] reference_line=394 rc=0 accepted=0 bytes=4711 expected=0
+[  PASS  ] SoftMemoryTable.OfficialZero
+[========] 1 tests: 1 passed, 0 failed

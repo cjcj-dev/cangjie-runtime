@@ -1,0 +1,6 @@
+[  RUN   ] AllocationOwnership904.ExplicitFreeWithdrawsOwnedPage
+[  RUN   ] AllocationOwnership904.ExplicitFreeWithdrawsOwnedPage
+AllocationOwnership explicit_free_withdrawn=1 used=0
+GC_UNIT_OTHER_VM_OKIDOKI AllocationOwnership904.ExplicitFreeWithdrawsOwnedPage
+[  PASS  ] AllocationOwnership904.ExplicitFreeWithdrawsOwnedPage
+[========] 1 tests: 1 passed, 0 failed

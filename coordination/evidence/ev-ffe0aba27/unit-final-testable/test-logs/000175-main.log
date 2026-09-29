@@ -1,0 +1,7 @@
+[  RUN   ] CallRegisterRoots.StackMoveRejectsThirdFrame
+[  RUN   ] CallRegisterRoots.StackMoveRejectsThirdFrame
+2026-09-30 00:27:55.660705 3582477 F GC register root at ordinary statepoint, start ip: 0x5a1becc18c08 frame pc: 0x5a1becc18c18
+CALL_ROOT_TARGET route=3 stub=8 invalid=1 status=134 rejected=1 accepted=0
+GC_UNIT_OTHER_VM_OKIDOKI CallRegisterRoots.StackMoveRejectsThirdFrame
+[  PASS  ] CallRegisterRoots.StackMoveRejectsThirdFrame
+[========] 1 tests: 1 passed, 0 failed

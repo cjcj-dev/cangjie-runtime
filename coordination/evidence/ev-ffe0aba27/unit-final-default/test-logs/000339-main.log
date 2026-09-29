@@ -1,0 +1,6 @@
+[  RUN   ] YoungThreadRoots.UnfinishedThreadCompletesOnce
+[  RUN   ] YoungThreadRoots.UnfinishedThreadCompletesOnce
+YOUNG_THREAD_COMPLETION_TARGET handshake=0 done=1 published=1 first=1 second=1 same=1
+GC_UNIT_OTHER_VM_OKIDOKI YoungThreadRoots.UnfinishedThreadCompletesOnce
+[  PASS  ] YoungThreadRoots.UnfinishedThreadCompletesOnce
+[========] 1 tests: 1 passed, 0 failed

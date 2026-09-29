@@ -1,0 +1,3 @@
+[  RUN   ] ValueSlotABI.NullHolderHeapStructStaysColored
+[  PASS  ] ValueSlotABI.NullHolderHeapStructStaysColored
+[========] 1 tests: 1 passed, 0 failed

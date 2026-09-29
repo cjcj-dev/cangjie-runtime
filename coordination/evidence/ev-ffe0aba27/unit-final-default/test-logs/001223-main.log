@@ -1,0 +1,6 @@
+[  RUN   ] MarkDiscovery1036.YoungWeakReferentRemainsStrong
+[  RUN   ] MarkDiscovery1036.YoungWeakReferentRemainsStrong
+MARK1036_TARGET finalizable=0 strong=0 young=1 workers=1 old_referent=0 cycle=0 discovered=0 target_live=1 target_strong=1 cleared=0
+GC_UNIT_OTHER_VM_OKIDOKI MarkDiscovery1036.YoungWeakReferentRemainsStrong
+[  PASS  ] MarkDiscovery1036.YoungWeakReferentRemainsStrong
+[========] 1 tests: 1 passed, 0 failed

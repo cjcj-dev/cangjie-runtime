@@ -1,0 +1,6 @@
+[  RUN   ] RelocationTargets.PromotedInPlaceTargetReusedAndSourceFreed
+[  RUN   ] RelocationTargets.PromotedInPlaceTargetReusedAndSourceFreed
+INPLACE_TARGET_RESULT target0=0x77a458001070 target1=0x77a458001070 top_bytes=48 retired=1 used=2097152 payload0=7954432 payload1=7954433
+GC_UNIT_OTHER_VM_OKIDOKI RelocationTargets.PromotedInPlaceTargetReusedAndSourceFreed
+[  PASS  ] RelocationTargets.PromotedInPlaceTargetReusedAndSourceFreed
+[========] 1 tests: 1 passed, 0 failed

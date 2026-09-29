@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zHeapIterator.cpp
++++ b/runtime/src/Heap/z/zHeapIterator.cpp
+@@ -278,7 +278,7 @@
+     do {
+         drain<VisitWeaks>(context);
+         steal<VisitWeaks>(context);
+-    } while (!context.is_drained() || !terminator.offer_termination());
++    } while (!context.is_drained());
+ }
+ 
+ template <bool VisitWeaks>

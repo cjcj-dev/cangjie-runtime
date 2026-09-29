@@ -1,0 +1,3 @@
+[  RUN   ] TrustP1.HeapSlotMustNotUseRootPlainShape
+[  PASS  ] TrustP1.HeapSlotMustNotUseRootPlainShape
+[========] 1 tests: 1 passed, 0 failed

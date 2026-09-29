@@ -1,0 +1,6 @@
+[  RUN   ] ThreadLifecycle.ManagedDetachMarksBothGenerations
+[  RUN   ] ThreadLifecycle.ManagedDetachMarksBothGenerations
+THREAD_DETACH_TARGET executed=1 managed=1 private_young=1 private_old=1 marked_young=1 marked_old=1 ended=1
+GC_UNIT_OTHER_VM_OKIDOKI ThreadLifecycle.ManagedDetachMarksBothGenerations
+[  PASS  ] ThreadLifecycle.ManagedDetachMarksBothGenerations
+[========] 1 tests: 1 passed, 0 failed

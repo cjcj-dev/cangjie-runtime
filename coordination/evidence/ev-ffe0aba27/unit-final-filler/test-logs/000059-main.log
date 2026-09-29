@@ -1,0 +1,3 @@
+[  RUN   ] ZUtils.atomic_copy_adjacent_ranges
+[  PASS  ] ZUtils.atomic_copy_adjacent_ranges
+[========] 1 tests: 1 passed, 0 failed

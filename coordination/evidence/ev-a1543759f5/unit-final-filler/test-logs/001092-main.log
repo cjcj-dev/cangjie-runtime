@@ -1,0 +1,4 @@
+[  RUN   ] ZWorkers.IndependentGenerationSets
+OBSERVED independent generation worker sets with disjoint threads
+[  PASS  ] ZWorkers.IndependentGenerationSets
+[========] 1 tests: 1 passed, 0 failed

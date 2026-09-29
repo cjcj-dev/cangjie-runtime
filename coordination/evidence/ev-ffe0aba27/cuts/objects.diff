@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zHeapIterator.cpp
++++ b/runtime/src/Heap/z/zHeapIterator.cpp
+@@ -260,7 +260,7 @@
+     if (steal_array_chunk(context, array)) {
+         follow_array_chunk(context, array);
+     } else if (steal(context, object)) {
+-        visit_and_follow<VisitWeaks>(context, object);
++        (void)object;
+     }
+ }
+ 

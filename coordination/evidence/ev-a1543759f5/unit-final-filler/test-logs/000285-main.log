@@ -1,0 +1,7 @@
+[  RUN   ] RawNullInstall.SmallPromotion
+[  RUN   ] RawNullInstall.SmallPromotion
+RAW_NULL_INSTALL_TARGET medium=0 promote=1 workers=1 page=0 allows=0 installed=1
+RAW_NULL_INSTALL_TARGET medium=0 promote=1 workers=1 page=1 allows=0 installed=1
+GC_UNIT_OTHER_VM_OKIDOKI RawNullInstall.SmallPromotion
+[  PASS  ] RawNullInstall.SmallPromotion
+[========] 1 tests: 1 passed, 0 failed

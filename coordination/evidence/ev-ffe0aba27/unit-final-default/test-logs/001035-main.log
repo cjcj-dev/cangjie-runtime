@@ -1,0 +1,9 @@
+[  RUN   ] MaxHeapSize.TooSmall
+[  RUN   ] MaxHeapSize.TooSmall
+MAX_REJECT_ASSERT input=1MB status=134 rejected=1 diagnosed=1
+2026-09-30 00:27:56.095973 3592346 E Invalid cjHeapSize: too small maximum heap
+2026-09-30 00:27:56.096438 3592346 F Check failed: GCArguments::initialize_heap_flags_and_sizes(param.heapParam)
+2026-09-30 00:27:56.096505 3592346 F Invalid heap size flags
+GC_UNIT_OTHER_VM_OKIDOKI MaxHeapSize.TooSmall
+[  PASS  ] MaxHeapSize.TooSmall
+[========] 1 tests: 1 passed, 0 failed

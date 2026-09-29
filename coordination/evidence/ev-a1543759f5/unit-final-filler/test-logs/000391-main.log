@@ -1,0 +1,4 @@
+[  RUN   ] StoreBuffer856.StrongOnlyPublishesPrevious
+BARRIER_ONLY_TARGET weak=0 remembered=1 kept=1 unchanged=1
+[  PASS  ] StoreBuffer856.StrongOnlyPublishesPrevious
+[========] 1 tests: 1 passed, 0 failed

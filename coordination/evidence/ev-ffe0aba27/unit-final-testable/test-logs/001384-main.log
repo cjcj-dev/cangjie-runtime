@@ -1,0 +1,9 @@
+[  RUN   ] ExitDetachMarkEnd.ControlHookDisarmed
+[  RUN   ] ExitDetachMarkEnd.ControlHookDisarmed
+EXIT_DETACH_JOINED before_pause=1
+EXIT_DETACH_FLUSH_BEGIN world_stopped=1
+EXIT_DETACH_FLUSH_END mark_end=0
+EXIT_DETACH_TARGET executed=1 arm=1 hook=0 parked=0 marked_young=1
+GC_UNIT_OTHER_VM_OKIDOKI ExitDetachMarkEnd.ControlHookDisarmed
+[  PASS  ] ExitDetachMarkEnd.ControlHookDisarmed
+[========] 1 tests: 1 passed, 0 failed

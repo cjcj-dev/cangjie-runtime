@@ -1,0 +1,4 @@
+[  RUN   ] PackageInit.DuplicateTokenRejected
+PACKAGE_INIT_TOKEN_GUARD nonOwner=0 status=134 target=1
+[  PASS  ] PackageInit.DuplicateTokenRejected
+[========] 1 tests: 1 passed, 0 failed

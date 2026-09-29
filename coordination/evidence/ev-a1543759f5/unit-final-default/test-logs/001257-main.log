@@ -1,0 +1,3 @@
+[  RUN   ] PartialArray.EncodeDecodeRoundtrip
+[  PASS  ] PartialArray.EncodeDecodeRoundtrip
+[========] 1 tests: 1 passed, 0 failed

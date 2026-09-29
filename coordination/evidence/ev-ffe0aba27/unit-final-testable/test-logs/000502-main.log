@@ -1,0 +1,4 @@
+[  RUN   ] BarrierOldAtomic.AllocBufferOverwriteRetiresOldValueControl
+DETAIL arm=with_alloc pending=1 old_receipt=1 new_receipt=0 remset=1 final_target=0x40000a00040
+[  PASS  ] BarrierOldAtomic.AllocBufferOverwriteRetiresOldValueControl
+[========] 1 tests: 1 passed, 0 failed

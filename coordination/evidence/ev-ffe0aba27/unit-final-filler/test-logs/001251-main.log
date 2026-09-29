@@ -1,0 +1,9 @@
+[  RUN   ] MarkPublish1144.EmptyStackRejectedForBothRoutes
+2026-09-30 00:28:29.389739 267200 F Check failed: !stack->IsEmpty()
+2026-09-30 00:28:29.389951 267200 F never publish an empty mark stripe stack
+MARK1144 publication publish=0 status=134
+2026-09-30 00:28:29.542750 270682 F Check failed: !stack->IsEmpty()
+2026-09-30 00:28:29.543108 270682 F never publish an empty mark stripe stack
+MARK1144 publication publish=1 status=134
+[  PASS  ] MarkPublish1144.EmptyStackRejectedForBothRoutes
+[========] 1 tests: 1 passed, 0 failed

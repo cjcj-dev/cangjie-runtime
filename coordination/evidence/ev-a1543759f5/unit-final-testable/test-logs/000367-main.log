@@ -1,0 +1,6 @@
+[  RUN   ] SharedSmallPage.SmallHeapUsesSharedSlotZero
+[  RUN   ] SharedSmallPage.SmallHeapUsesSharedSlotZero
+CPU_SLOT_ZERO_TARGET first=40000000000 second=40000000010 slot=0x57791f089c60
+GC_UNIT_OTHER_VM_OKIDOKI SharedSmallPage.SmallHeapUsesSharedSlotZero
+[  PASS  ] SharedSmallPage.SmallHeapUsesSharedSlotZero
+[========] 1 tests: 1 passed, 0 failed
