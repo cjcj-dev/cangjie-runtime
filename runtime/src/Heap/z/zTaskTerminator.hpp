@@ -3,14 +3,14 @@
 #define MRT_Z_TASK_TERMINATOR_HPP
 #include <algorithm>
 #include <chrono>
-#include <condition_variable>
 #include <mutex>
 #include <thread>
 #include "Heap/z/zTaskQueue.hpp"
+#include "Heap/z/zLock.inline.hpp"
 
 namespace MapleRuntime {
-// HotSpot gc/shared/taskTerminator.cpp:39-218. std::mutex/condition_variable
-// provide the Monitor lock, unlock and timed-wait operations.
+// HotSpot gc/shared/taskTerminator.cpp:39-218. The existing condition lock
+// supplies Monitor lock, unlock, notification and timed-wait operations.
 class TaskTerminator {
     class DelayContext {
         unsigned yieldCount = 0;
@@ -48,8 +48,7 @@ class TaskTerminator {
     unsigned nthreads;
     TaskQueueSetSuper* const queueSet;
     alignas(64) unsigned offeredTermination = 0;
-    alignas(64) std::mutex blocker;
-    std::condition_variable condition;
+    alignas(64) ZConditionLock blocker;
     std::thread::id spinMaster;
     size_t tasks_in_queue_set() const { return queueSet->tasks(); }
     void assert_queue_set_empty() const { queueSet->assert_empty(); }
@@ -60,8 +59,8 @@ class TaskTerminator {
     void prepare_for_return(std::thread::id self, size_t tasks = SIZE_MAX)
     {
         if (spinMaster == self) spinMaster = {};
-        if (tasks >= offeredTermination - 1) condition.notify_all();
-        else for (; tasks > 1; --tasks) condition.notify_one();
+        if (tasks >= offeredTermination - 1) blocker.notify_all();
+        else for (; tasks > 1; --tasks) blocker.notify();
     }
 public:
     TaskTerminator(unsigned nthreads, TaskQueueSetSuper* queueSet) : nthreads(nthreads), queueSet(queueSet) {}
@@ -93,7 +92,7 @@ public:
             return true;
         }
         const auto self = std::this_thread::get_id();
-        std::unique_lock<std::mutex> lock(blocker);
+        std::unique_lock<ZConditionLock> lock(blocker);
         assert(offeredTermination < nthreads);
         ++offeredTermination;
         if (offeredTermination == nthreads) {
@@ -123,7 +122,7 @@ public:
                 }
                 spinMaster = {};
             }
-            const bool timedOut = condition.wait_for(lock, std::chrono::milliseconds(1)) == std::cv_status::timeout;
+            const bool timedOut = blocker.wait(1);
             if (offeredTermination == nthreads) {
                 prepare_for_return(self);
                 assert_queue_set_empty();
