@@ -15,6 +15,7 @@
 #include "Heap/z/zIndexDistributor.inline.hpp"
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zPage.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "gc_unittest.hpp"
 
 namespace MapleRuntime {
@@ -395,4 +396,20 @@ GC_TEST(ZIndexDistributorTest, page_table_non_power_of_two_extent)
     std::fprintf(stderr, "PAGETABLE1331 visited_once=%zu slots=%zu\n", once, slots);
     GC_EXPECT_EQ(once, slots);
     for (auto& page : pages) { table.remove(page.get()); }
+}
+
+// Enter through Heap::alloc_page, then observe publication through the product
+// serial iterator. No manually populated map participates in this assertion.
+GC_TEST(ZIndexDistributorTest, page_table_serial_iterator_observes_heap_publication)
+{
+    ZPage* allocated = Heap::alloc_page(3 * ZGranuleSize, ZPageType::large, false, PageAge::eden);
+    size_t matches = 0;
+    ZPageTableIterator iterator(&Heap::page_table());
+    for (ZPage* page; iterator.next(&page);) {
+        matches += page == allocated;
+    }
+    std::fprintf(stderr, "PAGETABLE1331 heap_page=%p iterator_matches=%zu expected=1\n",
+                 static_cast<void*>(allocated), matches);
+    GC_EXPECT_TRUE(allocated != nullptr && matches == 1);
+    Heap::free_page(allocated);
 }

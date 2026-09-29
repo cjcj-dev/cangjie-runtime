@@ -65,16 +65,14 @@ void ZPageTable::replace(ZPage* old_page, ZPage* new_page)
 }
 
 ZPageTableIterator::ZPageTableIterator(const ZPageTable* table)
-    : _map(&table->_map), _index(0), _prev(nullptr)
+    : _iter(&table->_map), _prev(nullptr)
 {}
 
 bool ZPageTableIterator::next(ZPage** page)
 {
-    while (_index < _map->size()) {
-        ZPage* candidate = _map->at(_index++);
-        if (candidate != nullptr && candidate != _prev) {
-            _prev = candidate;
-            *page = candidate;
+    for (ZPage* entry; _iter.next(&entry);) {
+        if (entry != nullptr && entry != _prev) {
+            *page = _prev = entry;
             return true;
         }
     }

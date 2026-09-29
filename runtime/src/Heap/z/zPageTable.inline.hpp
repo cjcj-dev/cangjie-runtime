@@ -12,7 +12,7 @@
 namespace MapleRuntime {
 inline int ZPageTable::count() const
 {
-    const size_t size = _map.size();
+    const size_t size = _map._size;
     assert(size <= static_cast<size_t>(std::numeric_limits<int>::max()));
     return static_cast<int>(size);
 }

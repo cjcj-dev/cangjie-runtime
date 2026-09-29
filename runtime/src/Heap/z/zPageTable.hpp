@@ -41,8 +41,7 @@ public:
 };
 
 class ZPageTableIterator {
-    const ZGranuleMap<ZPage*>* _map;
-    size_t _index;
+    ZGranuleMapIterator<ZPage*, false> _iter;
     ZPage* _prev;
 
 public:
@@ -51,7 +50,7 @@ public:
 };
 
 class ZPageTableParallelIterator {
-    const ZPageTable* const _table;
+    const ZPageTable* _table;
     ZIndexDistributor _index_distributor;
 
 public:
