@@ -1,0 +1,6 @@
+[  RUN   ] P1Mark.DuplicateAnyThreadStopsAtConsumer
+[  RUN   ] P1Mark.DuplicateAnyThreadStopsAtConsumer
+P1_CONSUMER_ASSERT live=16 marked=1
+GC_UNIT_OTHER_VM_OKIDOKI P1Mark.DuplicateAnyThreadStopsAtConsumer
+[  PASS  ] P1Mark.DuplicateAnyThreadStopsAtConsumer
+[========] 1 tests: 1 passed, 0 failed

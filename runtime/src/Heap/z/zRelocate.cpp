@@ -42,7 +42,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Common/SuspendibleThreadSet.h"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"

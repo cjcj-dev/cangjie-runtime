@@ -7,49 +7,21 @@
 
 #pragma once
 
-#include <algorithm>
-#include <functional>
-#include <mutex>
-#include <unordered_set>
-
-#include "Common/MarkWorkStack.h"
-#include "Heap/z/zMarkStackEntry.hpp"
+#include <atomic>
+#include "Base/TruncatedSeq.h"
 
 namespace MapleRuntime {
-class TLABAllocationAverage {
+// ZGC zTLABUsage.hpp:43-59: live accounting and snapshotted cycle history.
+class ZTLABUsage {
 public:
-    void Sample(double value)
-    {
-        samples = std::min(samples + 1, 100u);
-        const unsigned weight = std::max(35u, 100u / samples);
-        average = ((100 - weight) * average + weight * value) / 100.0;
-    }
-    double Average() const { return average; }
+    ZTLABUsage();
+    void increase_used(size_t size);
+    void decrease_used(size_t size);
+    void reset();
+    size_t tlab_used() const;
+    size_t tlab_capacity() const;
 private:
-    unsigned samples = 0;
-    double average = 0;
+    std::atomic<size_t> _used;
+    TruncatedSeq _used_history;
 };
-
-// ThreadLocalAllocStats (threadLocalAllocBuffer.cpp:346-412), in bytes.
-struct TLABStatistics {
-    size_t allocatedSize = 0;
-    size_t refillWaste = 0;
-    size_t gcWaste = 0;
-    size_t refills = 0;
-    size_t slowAllocations = 0;
-    size_t allocatingThreads = 0;
-
-    size_t Used() const { return allocatedSize - refillWaste - gcWaste; }
-    void Update(const TLABStatistics& other)
-    {
-        allocatedSize += other.allocatedSize;
-        refillWaste += other.refillWaste;
-        gcWaste += other.gcWaste;
-        refills += other.refills;
-        slowAllocations += other.slowAllocations;
-        allocatingThreads += other.allocatingThreads;
-    }
-};
-
-// thread-local data structure
 }

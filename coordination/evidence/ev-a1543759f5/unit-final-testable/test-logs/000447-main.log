@@ -1,0 +1,3 @@
+[  RUN   ] StoreBuf.GcAssistedPhaseFlushDefersStoreBuffer
+[  PASS  ] StoreBuf.GcAssistedPhaseFlushDefersStoreBuffer
+[========] 1 tests: 1 passed, 0 failed

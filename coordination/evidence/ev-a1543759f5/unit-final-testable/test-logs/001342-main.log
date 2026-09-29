@@ -1,0 +1,12 @@
+[  RUN   ] YoungCombinedFollow828.InitialMultipleWorkers
+[  RUN   ] YoungCombinedFollow828.InitialMultipleWorkers
+[GCLOG] v=5 rec=phase seq=0 gc_tag=- name=Pause_Mark_Start kind=pause start_ns=1728268367685562 ns=17160
+[GCLOG] v=5 rec=stw seq=0 gc_tag=- reason=Pause_Mark_Start start_ns=1728268367679332 wait_ns=6040 held_ns=86660
+[GCLOG] v=5 rec=phase seq=0 gc_tag=- name=Concurrent_Mark_Roots kind=subphase start_ns=1728268367831142 ns=3345531
+[GCLOG] v=5 rec=phase seq=0 gc_tag=- name=Concurrent_Mark_Follow kind=subphase start_ns=1728268371212303 ns=3864680
+[GCLOG] v=5 rec=phase seq=0 gc_tag=- name=Concurrent_Mark kind=conc start_ns=1728268367830942 ns=7273491
+YOUNG828_RESULT workers=2 continuation=0 root_child=1 remset_child=1 previous_cleared=1 rearmed=1
+YOUNG828_PHASE_ASSERT roots=1 follow=1 split=0
+GC_UNIT_OTHER_VM_OKIDOKI YoungCombinedFollow828.InitialMultipleWorkers
+[  PASS  ] YoungCombinedFollow828.InitialMultipleWorkers
+[========] 1 tests: 1 passed, 0 failed

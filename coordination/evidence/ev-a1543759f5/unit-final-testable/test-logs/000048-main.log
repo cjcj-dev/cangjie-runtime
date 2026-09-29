@@ -1,0 +1,3 @@
+[  RUN   ] ZIndexDistributorTest.claim_tree_parallel_distributes_each_index_once
+[  PASS  ] ZIndexDistributorTest.claim_tree_parallel_distributes_each_index_once
+[========] 1 tests: 1 passed, 0 failed

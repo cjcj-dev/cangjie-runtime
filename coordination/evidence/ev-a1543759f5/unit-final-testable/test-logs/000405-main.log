@@ -1,0 +1,6 @@
+[  RUN   ] YoungMarkStart.DoesNotParkPreviousFromPages
+[  RUN   ] YoungMarkStart.DoesNotParkPreviousFromPages
+YOUNG_PAGE_PHASE_ASSERT executed=1 role=2 expected=2
+GC_UNIT_OTHER_VM_OKIDOKI YoungMarkStart.DoesNotParkPreviousFromPages
+[  PASS  ] YoungMarkStart.DoesNotParkPreviousFromPages
+[========] 1 tests: 1 passed, 0 failed

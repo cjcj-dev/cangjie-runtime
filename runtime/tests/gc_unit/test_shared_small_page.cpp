@@ -209,8 +209,8 @@ GC_OTHER_VM_TEST(SharedSmallPage, TLABAccountingOnlySmallEden)
     GC_EXPECT_TRUE(large != 0);
     GC_EXPECT_TRUE(!Heap::page(large)->IsSmallRegion());
     GC_EXPECT_TRUE(expected != 0);
-    manager.ResetTLABUsage();
-    GC_EXPECT_EQ(manager.GetTLABUsed(), expected);
+    Heap::GetHeap().reset_tlab_used();
+    GC_EXPECT_EQ(Heap::GetHeap().tlab_used(), expected);
 }
 
 // zCPU.inline.hpp:36-46 / zCPU.cpp:54-66: ZCPU::id() caches the CPU per thread

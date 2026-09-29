@@ -1,0 +1,7 @@
+[  RUN   ] RawNullExit.PinnedAccept
+[  RUN   ] RawNullExit.PinnedAccept
+RAW_NULL_EXIT_RETURN entry=2 same_page=1 allows=1
+RAW_NULL_EXIT_TARGET entry=2 reject=0 diagnostic=0 status=0
+GC_UNIT_OTHER_VM_OKIDOKI RawNullExit.PinnedAccept
+[  PASS  ] RawNullExit.PinnedAccept
+[========] 1 tests: 1 passed, 0 failed

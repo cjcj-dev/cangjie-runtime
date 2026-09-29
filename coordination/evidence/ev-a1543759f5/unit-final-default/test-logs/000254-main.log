@@ -1,0 +1,6 @@
+[  RUN   ] FinalizerRelease.EnqueueMove
+[  RUN   ] FinalizerRelease.EnqueueMove
+FINALIZER_RELEASE_TARGET branch=enqueue-move word=0x1510 null_any=1 mark_good=1
+GC_UNIT_OTHER_VM_OKIDOKI FinalizerRelease.EnqueueMove
+[  PASS  ] FinalizerRelease.EnqueueMove
+[========] 1 tests: 1 passed, 0 failed

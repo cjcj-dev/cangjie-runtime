@@ -1,0 +1,6 @@
+[  RUN   ] MarkingStacksProduct.MajorParallelEntersFromDoGarbageCollection
+[  RUN   ] MarkingStacksProduct.MajorParallelEntersFromDoGarbageCollection
+DETAIL major_weak family=common discovered=1 strong_mark=1 weak_mark=1 referent_mark=0 child_mark=0 referent_cleared=1
+GC_UNIT_OTHER_VM_OKIDOKI MarkingStacksProduct.MajorParallelEntersFromDoGarbageCollection
+[  PASS  ] MarkingStacksProduct.MajorParallelEntersFromDoGarbageCollection
+[========] 1 tests: 1 passed, 0 failed

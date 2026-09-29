@@ -1,0 +1,7 @@
+[  RUN   ] SoftMaxRadix.LeadingZeroEight
+[  RUN   ] SoftMaxRadix.LeadingZeroEight
+2026-09-30 00:27:57.534237 3629972 E Invalid cjSoftMaxHeapSize
+SOFT_CONSTRAINT_ASSERT soft_kb=0 env=08MB actual=-1 expected=-1
+GC_UNIT_OTHER_VM_OKIDOKI SoftMaxRadix.LeadingZeroEight
+[  PASS  ] SoftMaxRadix.LeadingZeroEight
+[========] 1 tests: 1 passed, 0 failed

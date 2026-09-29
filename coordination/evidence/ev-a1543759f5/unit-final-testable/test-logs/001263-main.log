@@ -1,0 +1,4 @@
+[  RUN   ] ArrayCopyBarrier.StructLoadHealsSource
+ARRAYCOPY_BARRIER_TARGET_EXECUTED struct=1 store=0 healed=1 recorded=1 good=1
+[  PASS  ] ArrayCopyBarrier.StructLoadHealsSource
+[========] 1 tests: 1 passed, 0 failed

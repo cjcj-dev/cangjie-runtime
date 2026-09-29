@@ -1,0 +1,7 @@
+[  RUN   ] OfficialHeapUnit.SoftInvalid
+[  RUN   ] OfficialHeapUnit.SoftInvalid
+2026-09-30 00:27:56.181309 3593486 E Invalid cjSoftMaxHeapSize
+OFFICIAL_UNIT_ACCEPT input=20XB soft=1 actual=-1 expected=-1
+GC_UNIT_OTHER_VM_OKIDOKI OfficialHeapUnit.SoftInvalid
+[  PASS  ] OfficialHeapUnit.SoftInvalid
+[========] 1 tests: 1 passed, 0 failed

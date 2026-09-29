@@ -1,0 +1,95 @@
+[  RUN   ] PackageInit.AdmissionCompetitionParksAndRetries
+[  RUN   ] PackageInit.AdmissionCompetitionParksAndRetries
+PACKAGE_INIT_TARGET runtime-start executed=1 pass=1
+PACKAGE_INIT_TARGET configured-scheduler-workers executed=1 pass=1
+PACKAGE_INIT_TARGET unattached-after-runtime-init executed=1 pass=1
+PACKAGE_INIT_TARGET scheduler-admission executed=1 pass=1
+PACKAGE_INIT_TARGET admission-begin-started executed=1 pass=1
+PACKAGE_INIT_TARGET scheduler-admission executed=1 pass=1
+PACKAGE_INIT_TARGET admission-wait-yields-worker executed=1 pass=1
+PACKAGE_INIT_TARGET admission-witness-completed executed=1 pass=1
+PACKAGE_INIT_TARGET lock-competition-is-not-unavailable executed=1 pass=1
+PACKAGE_INIT_TARGET admission-release-notified executed=1 pass=1
+2026-09-29 23:56:12.009360 3147431 I GC Workers for Young Generation: 1 (static)
+2026-09-29 23:56:12.009569 3147431 I GC Workers for Old Generation: 1 (static)
+2026-09-29 23:56:12.015498 3147606 I FinalizerProcessor thread started
+2026-09-29 23:56:12.015701 3147431 I Uncommit: Enabled delay=300s
+2026-09-29 23:56:12.015838 3147431 I Cangjie runtime started.
+2026-09-29 23:56:13.030665 3147562 I Pause Mark Start stw time 32 us
+2026-09-29 23:56:13.030869 3147562 I Pause Mark End stw time 5 us
+2026-09-29 23:56:13.030974 3147562 I Pause Relocate Start stw time 1 us
+2026-09-29 23:56:13.031044 3147562 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:13.031075 3147562 I Allocation Stalls:            0            0              0            0
+2026-09-29 23:56:13.031110 3147562 I Load: 55.02 (29%) / 44.01 (23%) / 56.85 (30%)
+2026-09-29 23:56:13.031157 3147562 I MMU: 2ms/98.7%, 5ms/99.5%, 10ms/99.7%, 20ms/99.9%, 50ms/99.9%, 100ms/100.0%
+2026-09-29 23:56:13.031189 3147562 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-29 23:56:13.031221 3147562 I Min Capacity: 0M
+2026-09-29 23:56:13.031251 3147562 I Max Capacity: 32M
+2026-09-29 23:56:13.031281 3147562 I Soft Max Capacity: 32M
+2026-09-29 23:56:13.031312 3147562 I Heap Statistics:
+2026-09-29 23:56:13.031342 3147562 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-29 23:56:13.031373 3147562 I Capacity:              8M           8M             8M           8M           8M           8M
+2026-09-29 23:56:13.031404 3147562 I Free:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:13.031434 3147562 I Used:                  0M           0M             0M           0M           0M           0M
+2026-09-29 23:56:13.031465 3147562 I Young Generation Statistics:
+2026-09-29 23:56:13.031495 3147562 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:13.031526 3147562 I Used:                  0M           0M             0M           0M
+2026-09-29 23:56:13.031556 3147562 I Live:                 N/A           0M             0M           0M
+2026-09-29 23:56:13.031587 3147562 I Garbage:              N/A           0M             0M           0M
+2026-09-29 23:56:13.031617 3147562 I Allocated:            N/A           0M             0M           0M
+2026-09-29 23:56:13.031647 3147562 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-29 23:56:13.031678 3147562 I Promoted:             N/A          N/A             0M           0M
+2026-09-29 23:56:13.031708 3147562 I Compacted:            N/A          N/A           N/A           0M
+2026-09-29 23:56:13.031738 3147562 I Young Generation 0M->0M 0.000s
+2026-09-29 23:56:13.031976 3147606 I FinalizerProcessor thread stopped
+2026-09-29 23:56:13.032348 3147572 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-29 23:56:13.032481 3147572 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:13.032596 3147572 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:13.032674 3147572 I Critical: Finalizer 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:13.032750 3147572 I Critical: Finalizer 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.032825 3147572 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:13.032900 3147572 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.032975 3147572 I Major Collection: Major Collection 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.033068 3147572 I Memory: Allocation Rate 0/0 0/0 0/0 0/0 B/s
+2026-09-29 23:56:13.033144 3147572 I Minor Collection: Minor Collection 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.033220 3147572 I Old Generation: Old Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.033295 3147572 I Old Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.033371 3147572 I Old Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-2PACKAGE_INIT_TARGET runtime-finish executed=1 pass=1
+9 23:56:13.033446 3147572 I Old Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.033752 3147572 I Old Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.033828 3147572 I Old Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.033903 3147572 I Old Phase: Concurrent Process Non-Strong 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.033978 3147572 I Old Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034066 3147572 I Old Phase: Concurrent Remap Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034143 3147572 I Old Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034218 3147572 I Old Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034294 3147572 I Old Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034368 3147572 I Old Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034443 3147572 I Old Subphase: Concurrent References Enqueue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034518 3147572 I Old Subphase: Concurrent References Process 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034593 3147572 I Old Subphase: Concurrent Remap Remembered 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034667 3147572 I Old Subphase: Concurrent Remap Roots Colored 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034741 3147572 I Old Subphase: Concurrent Remap Roots Uncolored 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034815 3147572 I Old Subphase: PostTrace 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034890 3147572 I Test: Unobserved 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.034964 3147572 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035049 3147572 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035124 3147572 I Young Generation: Young Generation (Collect Roots) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035201 3147572 I Young Generation: Young Generation (Promote All) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035275 3147572 I Young Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035350 3147572 I Young Pause: Pause Mark Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035425 3147572 I Young Pause: Pause Mark Start (Major) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035499 3147572 I Young Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035573 3147572 I Young Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035648 3147572 I Young Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035722 3147572 I Young Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035796 3147572 I Young Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035871 3147572 I Young Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.035945 3147572 I Young Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.036020 3147572 I Young Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.036107 3147572 I Young Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:13.040702 3147394 I Cangjie runtime shutdown.
+GC_UNIT_OTHER_VM_OKIDOKI PackageInit.AdmissionCompetitionParksAndRetries
+[  PASS  ] PackageInit.AdmissionCompetitionParksAndRetries
+[========] 1 tests: 1 passed, 0 failed

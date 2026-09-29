@@ -1,0 +1,6 @@
+[  RUN   ] ThreadRootCurrent.SavedColorDirectNativeFrameRoot
+[  RUN   ] ThreadRootCurrent.SavedColorDirectNativeFrameRoot
+SAVED_ROOT_COLOR_TARGET invisible=0 scanned=1 saved=0x1000 current=0x2000 from=0x40000000020 observed=0x40000000010 expected=0x40000000010
+GC_UNIT_OTHER_VM_OKIDOKI ThreadRootCurrent.SavedColorDirectNativeFrameRoot
+[  PASS  ] ThreadRootCurrent.SavedColorDirectNativeFrameRoot
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,7 @@
+[  RUN   ] PrimeCache.HeapConstructionPublishesMappedCapacity
+[  RUN   ] PrimeCache.HeapConstructionPublishesMappedCapacity
+PrimeCache startup cached=8388608 committed=8388608
+PrimeCache startup allocation complete
+GC_UNIT_OTHER_VM_OKIDOKI PrimeCache.HeapConstructionPublishesMappedCapacity
+[  PASS  ] PrimeCache.HeapConstructionPublishesMappedCapacity
+[========] 1 tests: 1 passed, 0 failed

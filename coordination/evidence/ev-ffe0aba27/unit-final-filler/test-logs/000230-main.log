@@ -1,0 +1,3 @@
+[  RUN   ] ZForwardingEntries.CollisionPreservesIdentityAndOtherKey
+[  PASS  ] ZForwardingEntries.CollisionPreservesIdentityAndOtherKey
+[========] 1 tests: 1 passed, 0 failed

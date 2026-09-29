@@ -1,0 +1,9 @@
+[  RUN   ] MaxHeapSize.AlignmentOverflow
+[  RUN   ] MaxHeapSize.AlignmentOverflow
+MAX_REJECT_ASSERT input=18014398509481983KB status=134 rejected=1 diagnosed=1
+2026-09-30 00:28:28.993999 257078 E Invalid cjHeapSize: maximum heap alignment overflows bytes
+2026-09-30 00:28:28.994192 257078 F Check failed: GCArguments::initialize_heap_flags_and_sizes(param.heapParam)
+2026-09-30 00:28:28.994240 257078 F Invalid heap size flags
+GC_UNIT_OTHER_VM_OKIDOKI MaxHeapSize.AlignmentOverflow
+[  PASS  ] MaxHeapSize.AlignmentOverflow
+[========] 1 tests: 1 passed, 0 failed

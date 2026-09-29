@@ -1,0 +1,7 @@
+[  RUN   ] RelocationTargets.InPlaceClaimsBeforeCopyWithRetainedPage
+[  RUN   ] RelocationTargets.InPlaceClaimsBeforeCopyWithRetainedPage
+INPLACE_CLAIM_RESULT refs0=-2 refs1=2 published0=0 published1=0 claimed_before_copy=1
+INPLACE_TARGET_RESULT target0=0x61a1a14868f0 target1=0x61a1a14868f0 top_bytes=48 retired=1 used=2097152 payload0=7954432 payload1=7954433
+GC_UNIT_OTHER_VM_OKIDOKI RelocationTargets.InPlaceClaimsBeforeCopyWithRetainedPage
+[  PASS  ] RelocationTargets.InPlaceClaimsBeforeCopyWithRetainedPage
+[========] 1 tests: 1 passed, 0 failed

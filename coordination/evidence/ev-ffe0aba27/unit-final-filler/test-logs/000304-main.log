@@ -1,0 +1,11 @@
+[  RUN   ] RawNullExit.Array16Reject
+[  RUN   ] RawNullExit.Array16Reject
+2026-09-30 00:28:29.322596 265835 F Check failed: false
+2026-09-30 00:28:29.322730 265835 F allocation exit must allow raw null
+265835 E signal SIGABRT (6) pc=0x7bed090969bc fa=0x40e6b si_addr=0x390eb
+[GCLOG] v=3 rec=crash seq=0 signo=6 signame=SIGABRT si_code=-6 si_codename=SI_TKILL si_addr=0x390eb pc=0x7bed090969bc pc_mod=libc.so.6 pc_off=0x969bc sym=pthread_kill rbp=0x40e6b gc_phase=Relocate gc_kind=fix in_par_fix=1 regs=rax=0x0,rbx=0x7bece08ec640,rcx=0x7bed090969bc,rdx=0x6,rsi=0x40e6b,rdi=0x390eb,rbp=0x40e6b,rsp=0x7bed08e7baa0,r8=0x7bed08e7bb70,r9=0x7bed08e7bc70,r10=0x8,r11=0x246,r12=0x6,r13=0x16,r14=0x7bed099e08c0,r15=0x7bed099e08d8,rip=0x7bed090969bc insn=4189c541f7dd3d00f0ffffb800000000 assert=allocation_exit_must_allow_raw_null
+265835 E CJNative Handle signal: 6.
+RAW_NULL_EXIT_TARGET entry=6 reject=1 diagnostic=1 status=134
+GC_UNIT_OTHER_VM_OKIDOKI RawNullExit.Array16Reject
+[  PASS  ] RawNullExit.Array16Reject
+[========] 1 tests: 1 passed, 0 failed

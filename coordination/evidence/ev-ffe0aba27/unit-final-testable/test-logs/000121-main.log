@@ -1,0 +1,4 @@
+[  RUN   ] LiveMap.LargeFirstPaintHasSingleWinner
+P02_SAME_OBJECT large=1 upgrade=0 claims=1 objects=1 bytes=16 live=1 strong=1
+[  PASS  ] LiveMap.LargeFirstPaintHasSingleWinner
+[========] 1 tests: 1 passed, 0 failed

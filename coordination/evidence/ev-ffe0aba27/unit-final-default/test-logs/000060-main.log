@@ -1,0 +1,7 @@
+[  RUN   ] ZUtils.atomic_copy_rejects_invalid_parameters
+cj_gc_unit: sym_cangjie_runtime_1305_implement_r5892797534/default/runtime/src/Base/Copy.h:78: static void MapleRuntime::Copy::assert_params_ok(const void *, void *, size_t): Assertion `reinterpret_cast<uintptr_t>(from) % alignment == 0 && "source must be aligned"' failed.
+cj_gc_unit: sym_cangjie_runtime_1305_implement_r5892797534/default/runtime/src/Base/Copy.h:79: static void MapleRuntime::Copy::assert_params_ok(const void *, void *, size_t): Assertion `reinterpret_cast<uintptr_t>(to) % alignment == 0 && "destination must be aligned"' failed.
+cj_gc_unit: sym_cangjie_runtime_1305_implement_r5892797534/default/runtime/src/Base/Copy.h:73: static void MapleRuntime::Copy::assert_disjoint(const uintptr_t *, uintptr_t *, size_t): Assertion `params_disjoint(from, to, count) && "source and destination overlap"' failed.
+cj_gc_unit: sym_cangjie_runtime_1305_implement_r5892797534/default/runtime/src/Heap/z/zUtils.inline.hpp:66: static void MapleRuntime::ZUtils::object_copy_disjoint_atomic(MapleRuntime::zaddress, MapleRuntime::zaddress, size_t, size_t): Assertion `(size & (sizeof(uintptr_t) - 1)) == 0' failed.
+[  PASS  ] ZUtils.atomic_copy_rejects_invalid_parameters
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zHeapIterator.cpp
++++ b/runtime/src/Heap/z/zHeapIterator.cpp
+@@ -258,7 +258,7 @@
+     ObjArrayTask array { nullptr, 0 };
+     BaseObject* object = nullptr;
+     if (steal_array_chunk(context, array)) {
+-        follow_array_chunk(context, array);
++        (void)array;
+     } else if (steal(context, object)) {
+         visit_and_follow<VisitWeaks>(context, object);
+     }

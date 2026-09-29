@@ -1,0 +1,4 @@
+[  RUN   ] WeakRootsProduct.JoinerLeaveWakesSynchronize
+WEAK_ROOTS_JOIN_YIELD_ASSERT_EXECUTED
+[  PASS  ] WeakRootsProduct.JoinerLeaveWakesSynchronize
+[========] 1 tests: 1 passed, 0 failed

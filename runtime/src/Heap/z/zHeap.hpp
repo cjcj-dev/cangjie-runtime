@@ -9,6 +9,7 @@
 #define MRT_HEAP_H
 
 #include "Heap/z/zServiceability.hpp"
+#include "Heap/z/zTLABUsage.hpp"
 #include "Heap/z/zCrossVM.hpp"
 
 #include <cstdint>
@@ -91,6 +92,11 @@ public:
     RegionManager& page_allocator();
     const RegionManager& page_allocator() const;
     uintptr_t alloc_tlab(size_t size);
+    size_t tlab_used() const;
+    size_t tlab_capacity() const;
+    void reset_tlab_used();
+    void account_alloc_page(ZPage* page);
+    void account_undo_alloc_page(ZPage* page);
     size_t max_tlab_size() const { return ZObjectSizeLimitSmall; }
     size_t unsafe_max_tlab_alloc() const;
     void undo_alloc_object_for_relocation(MAddress addr, size_t size);
@@ -275,6 +281,7 @@ private:
     std::unique_ptr<RegionSpace> _allocation_adapter;
     ZPageTable _page_table;
     ZObjectAllocator _object_allocator;
+    ZTLABUsage _tlab_usage;
     ZServiceability _serviceability;
     ZGenerationOld _old;
     ZGenerationYoung _young;

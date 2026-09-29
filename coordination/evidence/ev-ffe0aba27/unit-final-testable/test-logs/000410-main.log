@@ -1,0 +1,17 @@
+[  RUN   ] NativeRootCurrent.ColoredAndNullBoundary
+[  RUN   ] NativeRootCurrent.ColoredAndNullBoundary
+NATIVE_ROOT_MAPS 7642aa8a5000-7642aa8a7000 r--p 00000000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 7642aa8a7000-7642aa8b3000 r-xp 00002000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 7642aa8b3000-7642aa8b6000 r--p 0000e000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 7642aa8b6000-7642aa8b7000 r--p 00010000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 7642aa8b7000-7642aa8b8000 rw-p 00011000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 7642aa8b8000-7642aa92d000 r--p 00000000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7642aa92d000-7642aaa25000 r-xp 00075000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7642aaa25000-7642aaa71000 r--p 0016d000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7642aaa71000-7642aaa72000 ---p 001b9000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7642aaa72000-7642aaa75000 r--p 001b9000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7642aaa75000-7642aaa77000 rw-p 001bc000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+native_root_boundary executed=1 colored=1 null=1
+GC_UNIT_OTHER_VM_OKIDOKI NativeRootCurrent.ColoredAndNullBoundary
+[  PASS  ] NativeRootCurrent.ColoredAndNullBoundary
+[========] 1 tests: 1 passed, 0 failed

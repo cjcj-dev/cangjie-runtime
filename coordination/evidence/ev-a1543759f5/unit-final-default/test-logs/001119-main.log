@@ -1,0 +1,3 @@
+[  RUN   ] TypeFence.MaybeFromIsNotConstructible
+[  PASS  ] TypeFence.MaybeFromIsNotConstructible
+[========] 1 tests: 1 passed, 0 failed

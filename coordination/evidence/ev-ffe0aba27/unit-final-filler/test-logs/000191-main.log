@@ -1,0 +1,8 @@
+[  RUN   ] SretWatermark.CoversTransitiveCallerBeforeWrite
+[  RUN   ] SretWatermark.CoversTransitiveCallerBeforeWrite
+FRAME_ROOT_REMAP_ASSERT_EXECUTED startIP=0x628093ab8a5c before=0x40000000000 after=0x40000400000 relocated=0x40000400000 root=frame-slot
+SRET_COVER_ASSERT_EXECUTED pointer=1 register=0 covered=1 untouched=0 bounded=1
+SRET_VALUE_ASSERT_EXECUTED value=0x40000400018 expected=0x40000400018
+GC_UNIT_OTHER_VM_OKIDOKI SretWatermark.CoversTransitiveCallerBeforeWrite
+[  PASS  ] SretWatermark.CoversTransitiveCallerBeforeWrite
+[========] 1 tests: 1 passed, 0 failed

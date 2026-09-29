@@ -1,0 +1,7 @@
+[  RUN   ] MarkingSMR.WorkerPopRetiresInCurrentSlot
+SMR_TARGET worker=0 pending=1
+SMR_TARGET worker=1 pending=1
+SMR_TARGET worker=2 pending=1
+SMR_TARGET worker=3 pending=1
+[  PASS  ] MarkingSMR.WorkerPopRetiresInCurrentSlot
+[========] 1 tests: 1 passed, 0 failed

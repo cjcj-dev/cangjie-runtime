@@ -1,0 +1,38 @@
+[  RUN   ] StubRegisterRoots.RealReturnStub
+[  RUN   ] StubRegisterRoots.RealReturnStub
+STUB_RETURN_TARGET lane=0 actual=7fff1938b4d0 expected=7fff1938b4d0 match=1
+STUB_RETURN_TARGET lane=1 actual=7fff1938b4e0 expected=7fff1938b4e0 match=1
+STUB_RETURN_TARGET lane=2 actual=7fff1938b4f0 expected=7fff1938b4f0 match=1
+STUB_RETURN_TARGET lane=3 actual=7fff1938b500 expected=7fff1938b500 match=1
+STUB_RETURN_TARGET lane=4 actual=7fff1938b510 expected=7fff1938b510 match=1
+STUB_RETURN_TARGET lane=5 actual=7fff1938b520 expected=7fff1938b520 match=1
+STUB_RETURN_TARGET lane=6 actual=7fff1938b530 expected=7fff1938b530 match=1
+STUB_RETURN_TARGET lane=7 actual=7fff1938b540 expected=7fff1938b540 match=1
+STUB_RETURN_TARGET lane=8 actual=7fff1938b550 expected=7fff1938b550 match=1
+STUB_RETURN_TARGET lane=9 actual=7fff1938b560 expected=7fff1938b560 match=1
+STUB_RETURN_TARGET lane=10 actual=7fff1938b570 expected=7fff1938b570 match=1
+STUB_RETURN_TARGET lane=11 actual=7fff1938b580 expected=7fff1938b580 match=1
+STUB_RETURN_TARGET lane=12 actual=7fff1938b590 expected=7fff1938b590 match=1
+STUB_RETURN_TARGET lane=13 actual=7fff1938b5a0 expected=7fff1938b5a0 match=1
+STUB_RETURN_TARGET lane=14 actual=7fff1938b5b0 expected=7fff1938b5b0 match=1
+STUB_RETURN_TARGET lane=15 actual=7fff1938b5c0 expected=7fff1938b5c0 match=1
+STUB_RETURN_TARGET lane=16 actual=7fff1938b5d0 expected=7fff1938b5d0 match=1
+STUB_RETURN_TARGET lane=17 actual=7fff1938b5e0 expected=7fff1938b5e0 match=1
+STUB_RETURN_TARGET lane=18 actual=7fff1938b5f0 expected=7fff1938b5f0 match=1
+STUB_RETURN_TARGET lane=19 actual=7fff1938b600 expected=7fff1938b600 match=1
+STUB_RETURN_TARGET lane=20 actual=7fff1938b610 expected=7fff1938b610 match=1
+STUB_RETURN_TARGET lane=21 actual=7fff1938b620 expected=7fff1938b620 match=1
+STUB_RETURN_TARGET lane=22 actual=7fff1938b630 expected=7fff1938b630 match=1
+STUB_RETURN_TARGET lane=23 actual=7fff1938b640 expected=7fff1938b640 match=1
+STUB_RETURN_TARGET lane=24 actual=7fff1938b650 expected=7fff1938b650 match=1
+STUB_RETURN_TARGET lane=25 actual=7fff1938b660 expected=7fff1938b660 match=1
+STUB_RETURN_TARGET lane=26 actual=7fff1938b670 expected=7fff1938b670 match=1
+STUB_RETURN_TARGET lane=27 actual=7fff1938b680 expected=7fff1938b680 match=1
+STUB_RETURN_TARGET lane=28 actual=7fff1938b690 expected=7fff1938b690 match=1
+STUB_RETURN_TARGET lane=29 actual=7fff1938b6a0 expected=7fff1938b6a0 match=1
+STUB_RETURN_TARGET lane=30 actual=7fff1938b6b0 expected=7fff1938b6b0 match=1
+STUB_RETURN_TARGET lane=31 actual=7fff1938b6c0 expected=7fff1938b6c0 match=1
+STUB_RETURN_TARGET seen=ffffffff mismatches=0
+GC_UNIT_OTHER_VM_OKIDOKI StubRegisterRoots.RealReturnStub
+[  PASS  ] StubRegisterRoots.RealReturnStub
+[========] 1 tests: 1 passed, 0 failed

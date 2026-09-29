@@ -1,0 +1,7 @@
+[  RUN   ] SoftMaxHeapSize.ManagedExplicitMax
+[  RUN   ] SoftMaxHeapSize.ManagedExplicitMax
+SOFT_MAX_TARGET configured=default max=268435456 soft=268435456 expected=268435456
+SOFT_MAX_ASSERT hard_match=1 soft_match=1 expected_soft=268435456
+GC_UNIT_OTHER_VM_OKIDOKI SoftMaxHeapSize.ManagedExplicitMax
+[  PASS  ] SoftMaxHeapSize.ManagedExplicitMax
+[========] 1 tests: 1 passed, 0 failed

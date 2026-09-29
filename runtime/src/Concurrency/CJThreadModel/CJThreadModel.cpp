@@ -20,7 +20,7 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "schedule.h"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 
 namespace MapleRuntime {
 namespace {
@@ -41,18 +41,12 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
     const uintptr_t color = *g_uncoloredVisitColor;
     const uintptr_t nextColor = ZPointerMarkGoodMask | ZPointerRememberedMask;
     CJThreadRoot root(*data, *g_uncoloredVisitColor);
-    auto process = [&](ObjectRef& slot) {
-        const zaddress_unsafe observed = slot.LoadPlain();
-        if (is_null(observed)) {
-            return;
-        }
-        // zNMethod.cpp:384-395: the process closure owns both remapping from
-        // the saved epoch and marking. Do not split those responsibilities
-        // between this callback and its caller.
-        ZUncoloredRoot::process(reinterpret_cast<zaddress_unsafe*>(&slot), color);
-    };
     if (color != ZPointerStoreGoodMask) {
-        root.oops_do(process);
+        ZUncoloredRootProcessOopClosure closure(color);
+        OopClosure& process = closure;
+        root.oops_do([&](RootSlot& slot) {
+            process.do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
+        });
         // zNMethod.cpp:379-398: only an armed group may be processed and
         // receive the partial GC guard. Never re-arm a disarmed group.
         __atomic_store_n(g_uncoloredVisitColor, nextColor, __ATOMIC_RELEASE);
@@ -92,8 +86,10 @@ void CJThreadRoot::entry_barrier()
 {
     // ZGC zBarrierSetNMethod.cpp:53-97: recheck under the carrier lock.
     if (is_armed()) {
+        ZUncoloredRootProcessWeakOopClosure closure(color);
+        OopClosure& processWeak = closure;
         oops_do([&](RootSlot& slot) {
-            ZUncoloredRoot::process_weak(reinterpret_cast<zaddress_unsafe*>(&slot), color);
+            processWeak.do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
         });
         __atomic_store_n(&color, ZPointerStoreGoodMask, __ATOMIC_RELEASE);
     }

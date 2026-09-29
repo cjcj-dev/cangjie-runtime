@@ -1,0 +1,6 @@
+[  RUN   ] AllocationRate855.PreInitRelocationPageExcluded
+[  RUN   ] AllocationRate855.PreInitRelocationPageExcluded
+ALLOC_RATE_TARGET initialized=0 relocation=1 bytes=0 avg_before=0 avg_after=0 allocation=33554432 sampling_granule=0
+GC_UNIT_OTHER_VM_OKIDOKI AllocationRate855.PreInitRelocationPageExcluded
+[  PASS  ] AllocationRate855.PreInitRelocationPageExcluded
+[========] 1 tests: 1 passed, 0 failed

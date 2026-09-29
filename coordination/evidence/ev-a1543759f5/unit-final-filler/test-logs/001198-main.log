@@ -1,0 +1,6 @@
+[  RUN   ] MarkStackClear.SingleBuffer
+MARK_STACK_CLEAR_ENTER entries=1 buffers=1
+MARK_STACK_CLEAR_RESULT empty=1
+MARK_STACK_CLEAR_STATUS entries=1 status=0
+[  PASS  ] MarkStackClear.SingleBuffer
+[========] 1 tests: 1 passed, 0 failed

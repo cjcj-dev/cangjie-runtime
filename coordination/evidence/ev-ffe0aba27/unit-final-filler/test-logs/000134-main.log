@@ -1,0 +1,4 @@
+[  RUN   ] ReturnSafepointRegMap.PrologueReachesWatermark
+WATERMARK_POINTER_TARGET frontier=0x7fff513a2740 target=0x7fff513a2720 bounded=1
+[  PASS  ] ReturnSafepointRegMap.PrologueReachesWatermark
+[========] 1 tests: 1 passed, 0 failed

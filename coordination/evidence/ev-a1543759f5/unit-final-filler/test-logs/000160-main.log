@@ -1,0 +1,19 @@
+[  RUN   ] StubRegisterRoots.XmmSlots
+STUB_SLOT_TARGET reg=17 visits=2 expected=0x7fff87846050 match=1
+STUB_SLOT_TARGET reg=18 visits=2 expected=0x7fff87846060 match=1
+STUB_SLOT_TARGET reg=19 visits=2 expected=0x7fff87846070 match=1
+STUB_SLOT_TARGET reg=20 visits=2 expected=0x7fff87846080 match=1
+STUB_SLOT_TARGET reg=21 visits=2 expected=0x7fff87846090 match=1
+STUB_SLOT_TARGET reg=22 visits=2 expected=0x7fff878460a0 match=1
+STUB_SLOT_TARGET reg=23 visits=2 expected=0x7fff878460b0 match=1
+STUB_SLOT_TARGET reg=24 visits=2 expected=0x7fff878460c0 match=1
+STUB_SLOT_TARGET reg=25 visits=2 expected=0x7fff878460d0 match=1
+STUB_SLOT_TARGET reg=26 visits=2 expected=0x7fff878460e0 match=1
+STUB_SLOT_TARGET reg=27 visits=2 expected=0x7fff878460f0 match=1
+STUB_SLOT_TARGET reg=28 visits=2 expected=0x7fff87846100 match=1
+STUB_SLOT_TARGET reg=29 visits=2 expected=0x7fff87846110 match=1
+STUB_SLOT_TARGET reg=30 visits=2 expected=0x7fff87846120 match=1
+STUB_SLOT_TARGET reg=31 visits=2 expected=0x7fff87846130 match=1
+STUB_SLOT_TARGET reg=32 visits=2 expected=0x7fff87846140 match=1
+[  PASS  ] StubRegisterRoots.XmmSlots
+[========] 1 tests: 1 passed, 0 failed

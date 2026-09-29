@@ -1,0 +1,6 @@
+[  RUN   ] LogicalMarkHandshake1145.RunningOwnerPublishesBothGenerations
+[  RUN   ] LogicalMarkHandshake1145.RunningOwnerPublishesBothGenerations
+LOGICAL_HANDSHAKE_TARGET executed=1 unbound=0 self=1 private_young=1 private_old=1 marked_young=1 marked_old=1
+GC_UNIT_OTHER_VM_OKIDOKI LogicalMarkHandshake1145.RunningOwnerPublishesBothGenerations
+[  PASS  ] LogicalMarkHandshake1145.RunningOwnerPublishesBothGenerations
+[========] 1 tests: 1 passed, 0 failed

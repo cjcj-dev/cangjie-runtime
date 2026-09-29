@@ -1,0 +1,8 @@
+[  RUN   ] P82HeapIterator.ArrayChunks
+[  RUN   ] P82HeapIterator.ArrayChunks
+P82_ARRAY_RESULT weak=0 stolen_continuation=1 exact_edges=4097 expected=4097
+P82_ARRAY_RESULT weak=1 stolen_continuation=1 exact_edges=4097 expected=4097
+P82_ARRAY_ASSERT exact=1
+GC_UNIT_OTHER_VM_OKIDOKI P82HeapIterator.ArrayChunks
+[  PASS  ] P82HeapIterator.ArrayChunks
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] AccessBarrier976.NormalValueCopyColorsControl
+ACCESS976_BULK_ASSERT raw=0 api=2 actual=1510 expected=1510
+[  PASS  ] AccessBarrier976.NormalValueCopyColorsControl
+[========] 1 tests: 1 passed, 0 failed

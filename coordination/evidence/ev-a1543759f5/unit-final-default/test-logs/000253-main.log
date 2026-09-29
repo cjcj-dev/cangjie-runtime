@@ -1,0 +1,4 @@
+[  RUN   ] ExportRootRelease.KeepsStoreGoodNull
+EXPORT_ROOT_RELEASE_MARK_GOOD_ASSERTED word=0x1510
+[  PASS  ] ExportRootRelease.KeepsStoreGoodNull
+[========] 1 tests: 1 passed, 0 failed

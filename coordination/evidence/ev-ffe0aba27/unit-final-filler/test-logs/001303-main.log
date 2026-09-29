@@ -1,0 +1,7 @@
+[  RUN   ] ZVerify.AcceptsActualObjectAddress
+[  RUN   ] ZVerify.AcceptsActualObjectAddress
+[  RUN   ] ZVerify.AcceptsActualObjectAddress
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.AcceptsActualObjectAddress
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.AcceptsActualObjectAddress
+[  PASS  ] ZVerify.AcceptsActualObjectAddress
+[========] 1 tests: 1 passed, 0 failed

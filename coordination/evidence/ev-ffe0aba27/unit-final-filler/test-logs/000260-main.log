@@ -1,0 +1,6 @@
+[  RUN   ] P13Heuristics.FragmentationBudget
+[  RUN   ] P13Heuristics.FragmentationBudget
+FRAGMENTATION_BUDGET actual=50000 expected=50000
+GC_UNIT_OTHER_VM_OKIDOKI P13Heuristics.FragmentationBudget
+[  PASS  ] P13Heuristics.FragmentationBudget
+[========] 1 tests: 1 passed, 0 failed

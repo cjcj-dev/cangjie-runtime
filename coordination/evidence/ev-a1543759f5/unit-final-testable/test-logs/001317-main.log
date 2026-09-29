@@ -1,0 +1,4 @@
+[  RUN   ] MarkPort203Entries.RepeatedStrongClaimDoesNotAccountTwice
+M2_LIVE_RESULT finalizable=0 repeat=1 bytes=16 expected=16 strong=1
+[  PASS  ] MarkPort203Entries.RepeatedStrongClaimDoesNotAccountTwice
+[========] 1 tests: 1 passed, 0 failed
