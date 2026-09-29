@@ -15,16 +15,7 @@ namespace MapleRuntime {
 
 bool HeapIteratorBitMap::try_set_bit(size_t index)
 {
-    const size_t bits = sizeof(uintptr_t) * 8;
-    auto& word = words[index / bits];
-    const uintptr_t mask = uintptr_t(1) << (index % bits);
-    uintptr_t old = word.load(std::memory_order_relaxed);
-    while ((old & mask) == 0) {
-        if (word.compare_exchange_weak(old, old | mask, std::memory_order_relaxed)) {
-            return true;
-        }
-    }
-    return false;
+    return bitmap.par_set_bit(index);
 }
 
 HeapIterator::HeapIterator(bool visitWeaks, bool forVerify, unsigned nworkers)
@@ -53,13 +44,13 @@ HeapIterator::~HeapIterator()
 
 static size_t object_index_max()
 {
-    return ZGranuleSize / 8;
+    return ZGranuleSize >> ZObjectAlignmentSmallShift;
 }
 
 static size_t object_index(BaseObject* object)
 {
     const zoffset offset = ZAddress::offset(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(object)));
-    return (untype(offset) & (ZGranuleSize - 1)) / 8;
+    return (untype(offset) & (ZGranuleSize - 1)) >> ZObjectAlignmentSmallShift;
 }
 
 // ZGC zHeapIterator.cpp:312-327: acquire lookup, locked recheck, release install.
@@ -307,7 +298,8 @@ void HeapIterator::object_and_field_iterate(const ObjectVisitor& objectVisitor, 
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
     DCHECK(!ZResurrection::is_blocked());
-    HeapIteratorContext context(*this, &objectVisitor, fieldVisitor ? &fieldVisitor : nullptr, worker_id);
+    const HeapIteratorContext context(&objectVisitor, fieldVisitor ? &fieldVisitor : nullptr, worker_id,
+                                      workerQueues.queue(worker_id), workerArrayQueues.queue(worker_id));
     if (visitWeaks) {
         object_iterate_inner<true>(context);
     } else {

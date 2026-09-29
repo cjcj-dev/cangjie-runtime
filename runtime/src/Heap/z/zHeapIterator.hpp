@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
+#include "Base/BitMap.h"
 #include "Heap/z/zGranuleMap.hpp"
 #include <vector>
 #include "Common/BaseObject.h"
@@ -20,15 +20,9 @@ class MArray;
 class HeapIteratorContext;
 
 class HeapIteratorBitMap {
-    std::vector<std::atomic<uintptr_t>> words;
+    CHeapBitMap bitmap;
 public:
-    explicit HeapIteratorBitMap(size_t bits)
-        : words((bits + (sizeof(uintptr_t) * 8 - 1)) / (sizeof(uintptr_t) * 8))
-    {
-        for (auto& word : words) {
-            word.store(0, std::memory_order_relaxed);
-        }
-    }
+    explicit HeapIteratorBitMap(size_t bits) : bitmap(bits) {}
     bool try_set_bit(size_t index);
 };
 
@@ -127,10 +121,11 @@ private:
 
 class HeapIteratorContext {
 public:
-    HeapIteratorContext(HeapIterator& iter, const HeapIterator::ObjectVisitor* objectVisitor,
-                        const HeapIterator::EdgeVisitor* fieldVisitor, uint32_t workerId)
-        : iter(iter), objectVisitor(objectVisitor), fieldVisitor(fieldVisitor), workerId(workerId),
-          queue(iter.workerQueues.queue(workerId)), arrayQueue(iter.workerArrayQueues.queue(workerId))
+    HeapIteratorContext(const HeapIterator::ObjectVisitor* objectVisitor,
+                        const HeapIterator::EdgeVisitor* fieldVisitor, uint32_t workerId,
+                        HeapIterator::ObjectQueue* queue, HeapIterator::ArrayQueue* arrayQueue)
+        : objectVisitor(objectVisitor), fieldVisitor(fieldVisitor), workerId(workerId),
+          queue(queue), arrayQueue(arrayQueue)
     {
     }
     uint32_t worker_id() const { return workerId; }
@@ -141,7 +136,6 @@ public:
     bool pop_array_chunk(HeapIterator::ObjArrayTask& array) const;
     bool is_drained() const { return queue->is_empty() && arrayQueue->is_empty(); }
 
-    HeapIterator& iter;
     const HeapIterator::ObjectVisitor* objectVisitor;
     const HeapIterator::EdgeVisitor* fieldVisitor;
     uint32_t workerId;
