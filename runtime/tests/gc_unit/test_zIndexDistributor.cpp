@@ -402,7 +402,7 @@ GC_TEST(ZIndexDistributorTest, page_table_non_power_of_two_extent)
 // serial iterator. No manually populated map participates in this assertion.
 GC_TEST(ZIndexDistributorTest, page_table_serial_iterator_observes_heap_publication)
 {
-    ZPage* allocated = Heap::alloc_page(3 * ZGranuleSize, ZPageType::large, false, PageAge::eden);
+    ZPage* allocated = Heap::alloc_page(3 * ZGranuleSize, ZPageType::large, PageAge::eden, ZAllocationFlags{});
     size_t matches = 0;
     ZPageTableIterator iterator(&Heap::page_table());
     for (ZPage* page; iterator.next(&page);) {

@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "Heap/z/concurrentGCBreakpoints.hpp"
 #include <memory>
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.hpp"
@@ -138,8 +139,8 @@ PlainStructArrayTypeInfos& GetPlainStructArrayTypeInfos()
 // Neither initialization nor a synthetic payload is compiled into this test.
 class ArrayGCWindow {
 public:
-    ArrayGCWindow(Mutator* target, bool enabled, bool young, size_t requests)
-        : target(target), enabled(enabled), young(young), requests(requests) {}
+    ArrayGCWindow(Mutator* target, bool enabled, bool young, size_t requests, bool relocating = false)
+        : target(target), enabled(enabled), young(young), requests(requests), relocating(relocating) {}
     void start()
     {
         if (!enabled) { return; }
@@ -151,12 +152,20 @@ public:
         });
         target->IncObserver();
         requester = std::thread([&] {
+            if (relocating) { ConcurrentGCBreakpoints::AcquireControl(); }
             for (size_t i = 0; i < requests; ++i) {
-                Heap::GetHeap().RequestGC(young ? GC_REASON_YOUNG : GC_REASON_FORCE);
+                if (relocating) {
+                    if (!ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED")) {
+                        headerInvalid.store(true, std::memory_order_release);
+                    }
+                } else {
+                    Heap::GetHeap().RequestGC(young ? GC_REASON_YOUNG : GC_REASON_FORCE);
+                }
                 target->MutatorLock();
                 zaddress_unsafe* slot = target->GetGCData().invisible_root();
                 MArray* array = slot == nullptr ? nullptr : static_cast<MArray*>(to_object(safe(*slot)));
                 if (array != nullptr) {
+                    if (i == 0) { firstAddress.store(reinterpret_cast<uintptr_t>(array), std::memory_order_release); }
                     windowAddress.store(reinterpret_cast<uintptr_t>(array), std::memory_order_release);
                     windowSlot.store(reinterpret_cast<uintptr_t>(slot), std::memory_order_release);
 
@@ -177,7 +186,9 @@ public:
                     observed.push_back(reinterpret_cast<uintptr_t>(&root));
                 });
                 ordinaryPreserved.store(observed == ordinarySlots, std::memory_order_release);
+                if (relocating) { ConcurrentGCBreakpoints::RunToIdle(); }
             }
+            if (relocating) { ConcurrentGCBreakpoints::ReleaseControl(); }
             target->DecObserver();
         });
         const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -198,6 +209,8 @@ public:
     bool enabled;
     bool young;
     size_t requests;
+    bool relocating;
+    std::atomic<uintptr_t> firstAddress{0};
     uint64_t before = 0;
     bool armed = false;
     std::atomic<uint64_t> windowSequence{0};
@@ -214,6 +227,7 @@ constexpr MIndex kLargeRefLength = 1024 * 1024;
 void* RunArrayCase(void* argument)
 {
     const uintptr_t mode = reinterpret_cast<uintptr_t>(argument);
+    const bool relocating = (mode & 128) != 0;
     const bool plainStruct = (mode & 64) != 0;
     const bool primitive = (mode & 1) != 0 || plainStruct;
     const bool small = (mode & 2) != 0;
@@ -222,7 +236,7 @@ void* RunArrayCase(void* argument)
     const bool twice = (mode & 16) != 0;
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    const MIndex length = plainStruct ? (1024 * 1024 / sizeof(uint64_t)) :
+    const MIndex length = relocating ? 16384 : plainStruct ? (1024 * 1024 / sizeof(uint64_t)) :
         small ? 16 : kLargeRefLength + ((mode & 32) != 0 ? 1 : 0);
     auto& heap = Heap::GetHeap();
     const ZGenerationId generation = young ? ZGenerationId::young : ZGenerationId::old;
@@ -233,7 +247,12 @@ void* RunArrayCase(void* argument)
     // Initialize fixture metadata before a GC is queued.
     TypeInfo* arrayType = plainStruct ? GetPlainStructArrayTypeInfos().array :
         primitive ? GetByteArrayTypeInfos().array : GetReferenceArrayTypeInfos().array;
-    ArrayGCWindow window(mutator, young || full, young, twice ? 2 : 1);
+    if (relocating) {
+        // A sparse small page with an unreachable prefix makes compaction
+        // observable. This object is not placed in any root storage.
+        (void)MCC_NewObjArray(arrayType, length);
+    }
+    ArrayGCWindow window(mutator, young || full, young, (twice || relocating) ? 2 : 1, relocating);
     window.before = before;
     const bool emptyBefore = mutator->GetGCData().invisible_root() == nullptr;
     window.start();
@@ -272,7 +291,14 @@ void* RunArrayCase(void* argument)
     const bool ordinary = window.ordinaryPreserved.load(std::memory_order_acquire);
     const bool windowResult = !(young || full) ||
         (window.windowSlot.load(std::memory_order_acquire) != 0 &&
-         window.windowAddress.load(std::memory_order_acquire) == reinterpret_cast<uintptr_t>(array));
+         (relocating || window.windowAddress.load(std::memory_order_acquire) == reinterpret_cast<uintptr_t>(array)));
+    const bool repaired = !relocating ||
+        (window.firstAddress.load() != 0 && window.firstAddress.load() != window.windowAddress.load() &&
+         window.firstAddress.load() != reinterpret_cast<uintptr_t>(array));
+    if (relocating) {
+        std::fprintf(stderr, "INVISIBLE_REPAIR_TARGET from=%zx window_to=%zx returned=%zx repaired=%d mismatches=%zu\n",
+                     window.firstAddress.load(), window.windowAddress.load(), reinterpret_cast<uintptr_t>(array), repaired, mismatches);
+    }
     std::fprintf(stderr, "INVISIBLE_WINDOW_TARGET mode=%zu before_empty=%d after_empty=%d window_result=%d ordinary_preserved=%d slot=%zx result=%zx\n",
                  mode, emptyBefore, mutator->GetGCData().invisible_root() == nullptr, windowResult, ordinary,
                  window.windowSlot.load(), reinterpret_cast<uintptr_t>(array));
@@ -287,7 +313,7 @@ void* RunArrayCase(void* argument)
     }
     window.finish();
     mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>((mismatches == 0 && published && lengthValid && gc && header && uninterrupted && emptyBefore && windowResult && ordinary) ? 0 : 2);
+    return reinterpret_cast<void*>((mismatches == 0 && published && lengthValid && gc && header && uninterrupted && emptyBefore && windowResult && ordinary && repaired) ? 0 : 2);
 }
 
 void* RunLargePageIdentityCase(void*)
@@ -824,6 +850,10 @@ GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, OddPrimitiveTailUsesSegmentedCleari
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 33), 0);
 }
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, WindowRootRepairUsesRelocatedLocal)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 128 | 8), 0);
+}
 GC_RUNTIME_OTHER_VM_TEST(SegmentedArrayInit, PlainStructArrayYieldsToYoungGc)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunArrayCase, 64 | 4), 0);

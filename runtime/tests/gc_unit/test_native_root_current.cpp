@@ -786,7 +786,6 @@ void CheckUncoloredRootRuntime(bool nullRoot)
     BaseObject* object = nullptr;
     const size_t roots = mutator->NativeFrameRootCount();
     RootSlot* slot;
-    zaddress_unsafe invisibleMem = to_zaddress_unsafe(reinterpret_cast<uintptr_t>(from));
     {
         ScopedObjectAccess access;
         if (!nullRoot) { object = MObject::NewObject(type, 2 * sizeof(uintptr_t), AllocType::MOVEABLE_OBJECT); }
