@@ -83,8 +83,8 @@ FrameInfo Managed(Image& image)
 // frame.cpp:998. Absent map must not be decoded; the walk continues to the next frame.
 GC_TEST(AbsentStackMap, NullOffsetWalkContinues)
 {
-    Image absent;
-    Image present;
+    static Image absent;
+    static Image present;
     Link(absent, false, 0);
     Link(present, true, 0);
     std::vector<FrameInfo> frames;
@@ -107,7 +107,7 @@ GC_TEST(AbsentStackMap, NullOffsetWalkContinues)
 GC_TEST(AbsentStackMap, PresentMapStillReachesRegisterRoot)
 {
 #if defined(__linux__)
-    Image present;
+    static Image present;
     Link(present, true, 1);
     int output[2];
     GC_EXPECT_EQ(pipe(output), 0);
