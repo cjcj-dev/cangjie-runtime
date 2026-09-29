@@ -1,0 +1,6 @@
+[  RUN   ] StackMapBaseCapture.MissingRegisterStillRejected
+2026-09-29 23:56:39.595608 3216541 E register rbx is not recorded
+2026-09-29 23:56:39.595783 3216541 E register rbx is not recorded
+BASE_CAPTURE_TARGET reg=1 oop=0 derived_reg=0 count=0 missing=1 available=0 accepted=0 base_visits=0 derived_visits=0
+[  PASS  ] StackMapBaseCapture.MissingRegisterStillRejected
+[========] 1 tests: 1 passed, 0 failed

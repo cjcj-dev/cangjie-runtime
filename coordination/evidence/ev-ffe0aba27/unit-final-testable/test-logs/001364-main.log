@@ -1,0 +1,5 @@
+[  RUN   ] MarkPort203Engine.PublishWakesWaitingWorker
+WAKE_TARGET before_publish picked=0 saturated=0
+WAKE_TARGET after_publish woke=1 picked=1 saturated=0
+[  PASS  ] MarkPort203Engine.PublishWakesWaitingWorker
+[========] 1 tests: 1 passed, 0 failed

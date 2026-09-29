@@ -1,0 +1,3 @@
+[  RUN   ] DefectRegress.RelroNonHeapSkipsSelfHealCas
+[  PASS  ] DefectRegress.RelroNonHeapSkipsSelfHealCas
+[========] 1 tests: 1 passed, 0 failed

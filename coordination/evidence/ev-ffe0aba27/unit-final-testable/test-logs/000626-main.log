@@ -1,0 +1,10 @@
+[  RUN   ] TenuringFlags.EnvironmentMaximumWithAutomatic
+[  RUN   ] TenuringFlags.EnvironmentMaximumWithAutomatic
+TENURING_INIT_TARGET actual=4 fixed=1 expected=4 overhead=4194304 budget=16777216 match=1
+TENURING_CONSUMER_TARGET actual=1 expected=1
+TENURING_PROMOTION_TARGET actual=1 expected=1
+TENURING_RESULT_ASSERT threshold_match=1 promotion_match=1
+TENURING_MANAGED_EXIT status=0
+GC_UNIT_OTHER_VM_OKIDOKI TenuringFlags.EnvironmentMaximumWithAutomatic
+[  PASS  ] TenuringFlags.EnvironmentMaximumWithAutomatic
+[========] 1 tests: 1 passed, 0 failed

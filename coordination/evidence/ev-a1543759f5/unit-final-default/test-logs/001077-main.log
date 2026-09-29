@@ -1,0 +1,4 @@
+[  RUN   ] RuntimeWorkers.CollectedHeapOwnsActiveRuntimePool
+RUNTIME_WORKERS_RESULT workers=20 invalid=0
+[  PASS  ] RuntimeWorkers.CollectedHeapOwnsActiveRuntimePool
+[========] 1 tests: 1 passed, 0 failed

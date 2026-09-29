@@ -1,0 +1,5 @@
+                 U MapleRuntime::HeapIterator::object_iterate(std::function<void (MapleRuntime::BaseObject*)> const&, unsigned int)@CANGJIE
+                 U MapleRuntime::HeapIterator::object_and_field_iterate(std::function<void (MapleRuntime::BaseObject*)> const&, std::function<void (MapleRuntime::BaseObject*, void const*, unsigned long)> const&, unsigned int)@CANGJIE
+                 U MapleRuntime::HeapIterator::Iterate(std::function<void (MapleRuntime::BaseObject*)> const&, std::function<void (MapleRuntime::BaseObject*, void const*, unsigned long)> const&)@CANGJIE
+                 U MapleRuntime::HeapIterator::HeapIterator(bool, bool, unsigned int)@CANGJIE
+                 U MapleRuntime::HeapIterator::~HeapIterator()@CANGJIE

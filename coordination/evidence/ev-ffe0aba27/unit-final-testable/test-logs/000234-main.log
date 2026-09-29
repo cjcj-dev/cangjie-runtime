@@ -1,0 +1,6 @@
+[  RUN   ] SafepointHandshakeOrder.ReturnRejectsUnstartedEpoch
+K3_UNSTARTED_EXPOSURE_ASSERT returning=1 status=134 rejected=1
+2026-09-30 00:27:55.817634 3586339 F Check failed: processing_started()
+2026-09-30 00:27:55.817866 3586339 F Processing should already have started
+[  PASS  ] SafepointHandshakeOrder.ReturnRejectsUnstartedEpoch
+[========] 1 tests: 1 passed, 0 failed

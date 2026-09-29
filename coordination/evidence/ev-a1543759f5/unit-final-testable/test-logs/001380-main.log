@@ -1,0 +1,8 @@
+[  RUN   ] ExitDetachMarkEnd.LateRequestAtActiveTransitionReleasesLock
+[  RUN   ] ExitDetachMarkEnd.LateRequestAtActiveTransitionReleasesLock
+EXIT_LATE_REQUEST_WINDOW restoring=1 safe=1 lock_held=1 pending=1
+EXIT_LATE_REQUEST_RESULT executed=1 active=1 owner=1 lock_available=1
+EXIT_LATE_REQUEST_TARGET executed=1 blocked=1 completed=1 lock_available=1
+GC_UNIT_OTHER_VM_OKIDOKI ExitDetachMarkEnd.LateRequestAtActiveTransitionReleasesLock
+[  PASS  ] ExitDetachMarkEnd.LateRequestAtActiveTransitionReleasesLock
+[========] 1 tests: 1 passed, 0 failed

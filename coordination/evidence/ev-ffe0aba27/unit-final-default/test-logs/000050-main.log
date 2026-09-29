@@ -1,0 +1,3 @@
+[  RUN   ] ZIndexDistributorTest.shell_distributes_each_index_once
+[  PASS  ] ZIndexDistributorTest.shell_distributes_each_index_once
+[========] 1 tests: 1 passed, 0 failed

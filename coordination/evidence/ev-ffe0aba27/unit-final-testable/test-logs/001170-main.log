@@ -1,0 +1,3 @@
+[  RUN   ] RelocateWorkers.ClaimLoserWaitsForPageCompletionAndFindsEntry
+[  PASS  ] RelocateWorkers.ClaimLoserWaitsForPageCompletionAndFindsEntry
+[========] 1 tests: 1 passed, 0 failed

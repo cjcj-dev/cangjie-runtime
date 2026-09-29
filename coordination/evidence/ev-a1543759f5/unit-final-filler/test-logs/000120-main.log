@@ -1,0 +1,5 @@
+[  RUN   ] ZLiveMapTest.initial_generation_does_not_match_unmarked_map
+P02_INITIAL_LIVEMAP generation=0 sequence=1 marked=0
+P02_INITIAL_LIVEMAP generation=1 sequence=1 marked=0
+[  PASS  ] ZLiveMapTest.initial_generation_does_not_match_unmarked_map
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,7 @@
+[  RUN   ] SoftMaxHeapSize.ManagedDefaultErgonomics
+[  RUN   ] SoftMaxHeapSize.ManagedDefaultErgonomics
+SOFT_MAX_TARGET configured=default max=268435456 soft=241591910 expected=0
+SOFT_MAX_ASSERT hard_match=1 soft_match=1 expected_soft=241591910
+GC_UNIT_OTHER_VM_OKIDOKI SoftMaxHeapSize.ManagedDefaultErgonomics
+[  PASS  ] SoftMaxHeapSize.ManagedDefaultErgonomics
+[========] 1 tests: 1 passed, 0 failed

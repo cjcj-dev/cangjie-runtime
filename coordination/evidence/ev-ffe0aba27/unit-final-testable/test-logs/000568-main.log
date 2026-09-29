@@ -1,0 +1,8 @@
+[  RUN   ] ZVirtualMemoryManagerTest.CompilerTableRejectsOversizedPublication
+[  RUN   ] ZVirtualMemoryManagerTest.CompilerTableRejectsOversizedPublication
+2026-09-30 00:27:57.094790 3618748 F Check failed: heapReservations.size() <= kCap
+2026-09-30 00:27:57.095093 3618748 F compiler heap range capacity exceeded: 101 > 100
+P04_RANGE_LIMIT_TARGET status=134
+GC_UNIT_OTHER_VM_OKIDOKI ZVirtualMemoryManagerTest.CompilerTableRejectsOversizedPublication
+[  PASS  ] ZVirtualMemoryManagerTest.CompilerTableRejectsOversizedPublication
+[========] 1 tests: 1 passed, 0 failed

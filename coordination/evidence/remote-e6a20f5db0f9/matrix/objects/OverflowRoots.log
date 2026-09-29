@@ -1,0 +1,6 @@
+[  RUN   ] P82HeapIterator.OverflowRoots
+[  RUN   ] P82HeapIterator.OverflowRoots
+P82_OVERFLOW_ASSERT seen=132000 expected=132000
+GC_UNIT_OTHER_VM_OKIDOKI P82HeapIterator.OverflowRoots
+[  PASS  ] P82HeapIterator.OverflowRoots
+[========] 1 tests: 1 passed, 0 failed

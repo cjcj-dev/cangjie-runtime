@@ -1,0 +1,11 @@
+--- a/runtime/src/Base/BitMap.h
++++ b/runtime/src/Base/BitMap.h
+@@ -184,7 +184,7 @@
+         do {
+             const bm_word_t new_val = old_val | mask;
+             if (new_val == old_val) {
+-                return false; // Someone else beat us to it.
++                return true; // Controlled cut: report an already-set bit as newly marked.
+             }
+             bm_word_t expected = old_val;
+             if (__atomic_compare_exchange_n(addr, &expected, new_val, false, static_cast<int>(memory_order),

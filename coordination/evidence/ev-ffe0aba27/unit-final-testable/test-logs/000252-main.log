@@ -1,0 +1,4 @@
+[  RUN   ] ZForwardingEntries.MediumPageFromAddressRoundTrip
+MEDIUM_FROM_ADDRESS_ASSERT count=2 addresses=1 shift=12
+[  PASS  ] ZForwardingEntries.MediumPageFromAddressRoundTrip
+[========] 1 tests: 1 passed, 0 failed

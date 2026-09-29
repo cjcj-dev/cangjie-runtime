@@ -1,0 +1,4 @@
+[  RUN   ] ZWorkers.PendingRequestSurvivesOrdinaryRunUntilNextCycle
+OBSERVED ordinary task retains request; next cycle clears it
+[  PASS  ] ZWorkers.PendingRequestSurvivesOrdinaryRunUntilNextCycle
+[========] 1 tests: 1 passed, 0 failed

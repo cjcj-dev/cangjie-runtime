@@ -1,0 +1,7 @@
+[  RUN   ] SoftMaxConstraint.EnvironmentAboveMaximum
+[  RUN   ] SoftMaxConstraint.EnvironmentAboveMaximum
+2026-09-30 00:27:55.105459 3564108 E SoftMaxHeapSize must be less than or equal to the maximum heap size
+SOFT_CONSTRAINT_ASSERT soft_kb=32768 env=128MB actual=-1 expected=-1
+GC_UNIT_OTHER_VM_OKIDOKI SoftMaxConstraint.EnvironmentAboveMaximum
+[  PASS  ] SoftMaxConstraint.EnvironmentAboveMaximum
+[========] 1 tests: 1 passed, 0 failed

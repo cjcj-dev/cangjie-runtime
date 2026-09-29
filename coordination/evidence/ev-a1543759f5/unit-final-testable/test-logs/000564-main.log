@@ -1,0 +1,9 @@
+[  RUN   ] ZVirtualMemoryManagerTest.CompilerTablePublishesEveryRange
+[  RUN   ] ZVirtualMemoryManagerTest.CompilerTablePublishesEveryRange
+P04_RANGE_PUBLICATION_TARGET input=0 published=0
+P04_RANGE_PUBLICATION_TARGET input=1 published=1
+P04_RANGE_PUBLICATION_TARGET input=9 published=9
+P04_RANGE_PUBLICATION_TARGET input=100 published=100
+GC_UNIT_OTHER_VM_OKIDOKI ZVirtualMemoryManagerTest.CompilerTablePublishesEveryRange
+[  PASS  ] ZVirtualMemoryManagerTest.CompilerTablePublishesEveryRange
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,6 @@
+[  RUN   ] YoungMarkStart.ParkedRootDeferredToConcurrentMark
+[  RUN   ] YoungMarkStart.ParkedRootDeferredToConcurrentMark
+YOUNG_ROOT_PHASE_ASSERT executed=1 start_done=0 start_live=0 concurrent_done=1 concurrent_live=1
+GC_UNIT_OTHER_VM_OKIDOKI YoungMarkStart.ParkedRootDeferredToConcurrentMark
+[  PASS  ] YoungMarkStart.ParkedRootDeferredToConcurrentMark
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,13 @@
+[  RUN   ] ZJNICritical.ZeroWidthRawArrayReturnsContentAddress
+[  RUN   ] ZJNICritical.ZeroWidthRawArrayReturnsContentAddress
+RAWDATA_SHAPE_TARGET length=1 zero_width=1 raw=0x40000000010 expected=0x40000000010 copied=0 acquired=1 released=0
+2026-09-30 00:27:57.004235 3614135 I GC Workers for Young Generation: 1 (static)
+2026-09-30 00:27:57.006068 3614135 I GC Workers for Old Generation: 1 (static)
+2026-09-30 00:27:57.007054 3616180 I FinalizerProcessor thread started
+2026-09-30 00:27:57.007459 3614135 I Uncommit: Enabled delay=300s
+2026-09-30 00:27:57.007543 3614135 I Cangjie runtime started.
+2026-09-30 00:27:57.008946 3616180 I FinalizerProcessor thread stopped
+2026-09-30 00:27:57.033569 3613853 I Cangjie runtime shutdown.
+GC_UNIT_OTHER_VM_OKIDOKI ZJNICritical.ZeroWidthRawArrayReturnsContentAddress
+[  PASS  ] ZJNICritical.ZeroWidthRawArrayReturnsContentAddress
+[========] 1 tests: 1 passed, 0 failed

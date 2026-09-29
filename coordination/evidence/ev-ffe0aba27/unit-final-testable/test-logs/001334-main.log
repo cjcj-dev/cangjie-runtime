@@ -1,0 +1,7 @@
+[  RUN   ] MarkPort203Entries.FinalizableArrayClosureAccountsWithoutStrongUpgrade
+[  RUN   ] MarkPort203Entries.FinalizableArrayClosureAccountsWithoutStrongUpgrade
+M2_ARRAY_RESULT variant=major-finalizable array=1 children=160 objects=162 bytes=15016 expected_bytes=15016
+M2_LIVE_ASSERT objects_ok=1 bytes_ok=1 root_order=0
+GC_UNIT_OTHER_VM_OKIDOKI MarkPort203Entries.FinalizableArrayClosureAccountsWithoutStrongUpgrade
+[  PASS  ] MarkPort203Entries.FinalizableArrayClosureAccountsWithoutStrongUpgrade
+[========] 1 tests: 1 passed, 0 failed

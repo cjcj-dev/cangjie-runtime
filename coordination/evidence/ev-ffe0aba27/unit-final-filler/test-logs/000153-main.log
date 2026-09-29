@@ -1,0 +1,5 @@
+[  RUN   ] ManagedMetadata.ProfileAbsentDescriptor
+PROFILE_RESULT bytes=510 {"mutatorId":1266,"startTime":1730204831260,"endTime":1730204831261,"managedTime":0,"unknownTime":18446744073709540374,"nodes":[{"id":1,"callFrame":{"functionName":"(root)","scriptId":"0","url":"","lineNumber":0},"hitCount":0,"children":[2,3]},{"id":2,"callFrame":{"functionName":"(program)","scriptId":"0","url":"","lineNumber":0},"hitCount":0,"children":[]},{"id":3,"callFrame":{"functionName":"(idle)","scriptId":"0","url":"","lineNumber":0},"hitCount":1,"children":[]}],"samples":[3],"timeDeltas":[-11242]}
+METADATA_TARGET entry=5 desc=0 map=0 status=0 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.ProfileAbsentDescriptor
+[========] 1 tests: 1 passed, 0 failed

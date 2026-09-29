@@ -1,0 +1,6 @@
+[  RUN   ] RelocationEndCounts.YoungSmallAvailable
+[  RUN   ] RelocationEndCounts.YoungSmallAvailable
+RELOCATION_END_RESULT completed=2 occupied=0
+GC_UNIT_OTHER_VM_OKIDOKI RelocationEndCounts.YoungSmallAvailable
+[  PASS  ] RelocationEndCounts.YoungSmallAvailable
+[========] 1 tests: 1 passed, 0 failed

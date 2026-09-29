@@ -1,0 +1,3 @@
+[  RUN   ] ReferenceProcessor.StrongWeakReferentIsNotCleared
+[  PASS  ] ReferenceProcessor.StrongWeakReferentIsNotCleared
+[========] 1 tests: 1 passed, 0 failed

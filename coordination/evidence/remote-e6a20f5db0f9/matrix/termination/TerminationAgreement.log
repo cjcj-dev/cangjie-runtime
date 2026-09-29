@@ -1,0 +1,14 @@
+[  RUN   ] P82HeapIterator.TerminationAgreement
+[  RUN   ] P82HeapIterator.TerminationAgreement
+P82_TERMINATION_ASSERT early_return=1 visits=1025
+[  FAIL  ] P82HeapIterator.TerminationAgreement
+  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:872: EXPECT failed: !returnedWhileOwnerHeld
+[  FAIL  ] P82HeapIterator.TerminationAgreement
+  other-vm child did not exit cleanly with sentinel for P82HeapIterator.TerminationAgreement: Exited with exit status 1; sentinel=missing; stderr_read=complete; exec_ms=3; body_ms=29; exit_ms=not-started; pending_phase=body
+Child stderr tail (<=4096 bytes):
+[  RUN   ] P82HeapIterator.TerminationAgreement
+P82_TERMINATION_ASSERT early_return=1 visits=1025
+[  FAIL  ] P82HeapIterator.TerminationAgreement
+  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:872: EXPECT failed: !returnedWhileOwnerHeld
+
+[========] 1 tests: 0 passed, 1 failed

@@ -1,0 +1,4 @@
+[  RUN   ] StackMapBaseCapture.OopSlotWithDerivedRegister
+BASE_CAPTURE_TARGET reg=0 oop=1 derived_reg=1 count=1 missing=0 available=1 accepted=1 base_visits=1 derived_visits=1
+[  PASS  ] StackMapBaseCapture.OopSlotWithDerivedRegister
+[========] 1 tests: 1 passed, 0 failed

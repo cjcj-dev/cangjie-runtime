@@ -1,0 +1,7 @@
+[  RUN   ] OfficialHeapUnit.HardSingleLetter
+[  RUN   ] OfficialHeapUnit.HardSingleLetter
+2026-09-29 23:56:10.969354 3138131 E Invalid cjHeapSize
+OFFICIAL_UNIT_ACCEPT input=20M soft=0 actual=-1 expected=-1
+GC_UNIT_OTHER_VM_OKIDOKI OfficialHeapUnit.HardSingleLetter
+[  PASS  ] OfficialHeapUnit.HardSingleLetter
+[========] 1 tests: 1 passed, 0 failed

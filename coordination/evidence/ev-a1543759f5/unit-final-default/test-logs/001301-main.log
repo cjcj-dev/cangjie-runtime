@@ -1,0 +1,6 @@
+[  RUN   ] ZVerify.StackRootExpandsToActualHeapSlot
+[  RUN   ] ZVerify.StackRootExpandsToActualHeapSlot
+STACK_HEAP_SLOT_ASSERT_EXECUTED visits=1
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.StackRootExpandsToActualHeapSlot
+[  PASS  ] ZVerify.StackRootExpandsToActualHeapSlot
+[========] 1 tests: 1 passed, 0 failed

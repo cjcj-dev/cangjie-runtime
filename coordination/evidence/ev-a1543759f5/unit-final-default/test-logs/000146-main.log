@@ -1,0 +1,6 @@
+[  RUN   ] ManagedMetadata.HeadAbsentStackMap
+2026-09-29 23:56:07.112995 3085478 F Check failed: stackmapStart != nullptr
+2026-09-29 23:56:07.113207 3085478 F managed frame missing stackmap startPC=0x56bfb49ee75c ip=0x56bfb49ee760
+METADATA_TARGET entry=0 desc=1 map=0 status=134 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.HeadAbsentStackMap
+[========] 1 tests: 1 passed, 0 failed

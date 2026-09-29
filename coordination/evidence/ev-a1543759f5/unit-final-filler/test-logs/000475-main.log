@@ -1,0 +1,3 @@
+[  RUN   ] ZVirtualMemoryManagerTest.test_remove_from_low
+[  PASS  ] ZVirtualMemoryManagerTest.test_remove_from_low
+[========] 1 tests: 1 passed, 0 failed

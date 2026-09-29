@@ -1,0 +1,4 @@
+[  RUN   ] AccessBarrier976.RawArrayCopyPreservesBits
+ACCESS976_BULK_ASSERT raw=1 api=0 actual=1530 expected=1530
+[  PASS  ] AccessBarrier976.RawArrayCopyPreservesBits
+[========] 1 tests: 1 passed, 0 failed

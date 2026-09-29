@@ -1,0 +1,6 @@
+[  RUN   ] YoungWeakClosure.ExportOnlyMajorRootOwnsItsClosure
+[  RUN   ] YoungWeakClosure.ExportOnlyMajorRootOwnsItsClosure
+DETAIL export_only common_roots=0 foreign_roots=1 root_mark=1 child_mark=1
+GC_UNIT_OTHER_VM_OKIDOKI YoungWeakClosure.ExportOnlyMajorRootOwnsItsClosure
+[  PASS  ] YoungWeakClosure.ExportOnlyMajorRootOwnsItsClosure
+[========] 1 tests: 1 passed, 0 failed
