@@ -1281,13 +1281,13 @@ void CheckCollectionLog(const char* target)
     U64 root;
     {
         ScopedObjectAccess access;
-        root = heap.RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
+        root = heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
     }
     before[1] = heap.GetUsedPageSize();
     heap.RequestGC(GC_REASON_USER);
     after[1] = heap.GetUsedPageSize();
     const std::string text = capture.Finish();
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     std::istringstream lines(text);
     std::string line;

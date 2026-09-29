@@ -482,7 +482,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZMarkFlush, ConcurrentWorkerPublishesPartialMutatorStac
     GC_EXPECT_TRUE(reached && before == 1 && after == 0);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    Heap::GetHeap().RemoveExportObject(root);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 #endif

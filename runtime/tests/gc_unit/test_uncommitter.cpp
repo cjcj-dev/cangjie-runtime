@@ -104,7 +104,7 @@ GC_OTHER_VM_TEST(Uncommitter, TestNoUncommitAtCapacityFloor)
 // ZGC zUncommitter.cpp:72-85: a relative timeout must reach the timed wait.
 GC_OTHER_VM_TEST(Uncommitter, RelativeTimeoutReachesTimedWait)
 {
-    ZPartition partition(0, Heap::GetHeap().GetAllocator().GetRegionManager());
+    ZPartition partition(0, Heap::GetHeap().page_allocator());
     Uncommitter& worker = partition.uncommitter;
     const auto start = std::chrono::steady_clock::now();
     const bool continued = UncommitterTestAccess::Wait(
@@ -483,7 +483,7 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, CancelStartsNewCacheWatermarkHistory)
     BindUncommitWorkerThread();
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MRT_CjRuntimeInit();
-    auto& regions = Heap::GetHeap().GetAllocator().GetRegionManager();
+    auto& regions = Heap::GetHeap().page_allocator();
     auto& frm = regions.freeRegionManager;
     frm.StopUncommitters();
     auto& partition = UncommitterTestAccess::Partition();
