@@ -10,6 +10,9 @@ export CFLAGS="$m" CXXFLAGS="$m" ASMFLAGS="$m"
 mkdir -p unit-ohos
 uptime > unit-ohos/uptime-before.txt
 start=$SECONDS
+mkdir -p "$r/keep/ohos-host-libs"
+cp "$(clang++ -print-file-name=libc.so.6)" "$r/keep/ohos-host-libs/libc.so"
+export LD_LIBRARY_PATH="$r/keep/ohos-host-libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cmake -S "$r/ohos-tree/runtime" -B "$r/ohos-build" -DCJ_RUNTIME_COMMIT=79703227e1ba12ab1a0f20669e83177cea338cd1 \
   -DCMAKE_BUILD_TYPE=Release -DCOPYGC_FLAG=1 -DDOPRA_FLAG=1 -DRUNTIME_TRACE_FLAG=1 \
   -DCJ_SDK_VERSION=0.0.1 -DDISABLE_VERSION_CHECK=1 -DCMAKE_C_COMPILER=clang \

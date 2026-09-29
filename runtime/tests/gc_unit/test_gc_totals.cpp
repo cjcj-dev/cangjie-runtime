@@ -4,6 +4,7 @@
 #include "Cangjie.h"
 #include "Common/Handle.h"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zRootsIterator.hpp"
 #include "Mutator/Mutator.inline.h"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
