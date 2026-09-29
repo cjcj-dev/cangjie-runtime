@@ -566,25 +566,6 @@ namespace MapleRuntime {
 
 
 namespace MapleRuntime {
-bool ZMark::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
-                            MarkLiveCache* cache)
-{
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
-    CHECK_DETAIL(region->IsRelocatable(), "mark consumer requires a relocatable page");
-    bool firstLive = entry.inc_live();
-    bool already = false;
-    if (entry.mark()) {
-        already = !region->mark_object(from_object(obj), entry.finalizable(), firstLive);
-    }
-    if (!already && firstLive) {
-        if (cache != nullptr) {
-            cache->IncLive(region, obj->GetSize());
-        } else {
-            region->inc_live(1, obj->GetSize());
-        }
-    }
-    return already;
-}
 
 
 } // namespace MapleRuntime
@@ -618,29 +599,21 @@ static bool StealLocalRound(MarkContext& context, MarkStripeSet& stripes)
     return false;
 }
 
-static bool StealGlobalRound(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, size_t workerId,
-                             std::atomic<size_t>* stealSuccess, std::atomic<size_t>* stealFailure)
+static bool StealGlobalRound(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, size_t workerId)
 {
     MarkThreadLocalStacks& stacks = context.Stacks();
     MarkStripe* const home = context.Stripe();
     for (MarkStripe* victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
         MarkStripeStack* stack = victim->StealStack(smr, workerId);
         if (stack != nullptr) {
-            if (stealSuccess != nullptr) {
-                stealSuccess->fetch_add(1, std::memory_order_relaxed);
-            }
             stacks.Install(stripes, home, stack);
             return true;
-        }
-        if (stealFailure != nullptr) {
-            stealFailure->fetch_add(1, std::memory_order_relaxed);
         }
     }
     return false;
 }
 
-static bool RebalanceWork(MarkContext& context, MarkStripeSet& stripes, MarkTerminate& terminate, size_t workerId,
-                          size_t nworkers, ZMark* domain)
+bool ZMark::RebalanceWork(MarkContext& context, size_t workerId)
 {
     const size_t assumed = context.NStripes();
     const size_t nstripes = stripes.NStripes();
@@ -659,44 +632,39 @@ static bool RebalanceWork(MarkContext& context, MarkStripeSet& stripes, MarkTerm
     } else if (!terminate.Saturated()) {
         (void)context.Stacks().Flush(stripes);
     }
-    return domain != nullptr && domain->PollStop();
+    return PollStop();
 }
 
-static bool Drain(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, MarkTerminate& terminate,
-                  size_t workerId, size_t nworkers, const ZMark::Process& process, ZMark* domain)
+bool ZMark::Drain(MarkContext& context, size_t workerId)
 {
     MarkStackEntry entry;
     size_t processed = 0;
     context.SetStripe(stripes.StripeForWorker(nworkers, workerId));
     context.SetNStripes(stripes.NStripes());
     while (context.Stacks().Pop(smr, workerId, stripes, context.Stripe(), entry)) {
-        process(entry);
-        if ((processed++ & 31) == 0 && RebalanceWork(context, stripes, terminate, workerId, nworkers, domain)) {
+        MarkAndFollow(context, entry);
+        if ((processed++ & 31) == 0 && RebalanceWork(context, workerId)) {
             return false;
         }
     }
     return true;
 }
 
-ZMark::Result ZMark::FollowWork(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
-                                          MarkTerminate& terminate, size_t workerId, bool partial,
-                                          const Process& process, std::atomic<size_t>* stealSuccess,
-                                          std::atomic<size_t>* stealFailure, ZMark* domain)
+ZMark::Result ZMark::FollowWork(MarkContext& context, size_t workerId, bool partial)
 {
-    const size_t nworkers = terminate.workerCount;
     for (;;) {
-        if (!Drain(context, smr, stripes, terminate, workerId, nworkers, process, domain)) {
+        if (!Drain(context, workerId)) {
             terminate.Leave();
             return Result::Aborted;
         }
         if (StealLocalRound(context, stripes) ||
-            StealGlobalRound(context, smr, stripes, workerId, stealSuccess, stealFailure)) {
+            StealGlobalRound(context, smr, stripes, workerId)) {
             continue;
         }
         if (partial) {
             return Result::Partial;
         }
-        if (domain != nullptr && domain->TryProactiveFlush(workerId)) {
+        if (TryProactiveFlush(workerId)) {
             continue;
         }
         if (terminate.TryTerminate(stripes, context.NStripes())) {
@@ -764,9 +732,7 @@ void ZMark::FollowWorkComplete(bool partial)
 {
     const uint32_t workerId = WorkerThread::worker_id();
     MarkContext local(nworkers, workerId, stripes, Stacks());
-    (void)FollowWork(local, smr, stripes, terminate, workerId, partial,
-                     [this, &local](const MarkStackEntry& entry) { MarkAndFollow(local, entry); },
-                     nullptr, nullptr, this);
+    (void)FollowWork(local, workerId, partial);
     (void)local.Stacks().Flush(stripes);
     local.Cache().Flush();
 
@@ -777,9 +743,7 @@ bool ZMark::FollowWorkPartial()
 {
     const uint32_t workerId = WorkerThread::worker_id();
     MarkContext local(nworkers, workerId, stripes, Stacks());
-    const Result result = FollowWork(local, smr, stripes, terminate, workerId, true,
-                     [this, &local](const MarkStackEntry& entry) { MarkAndFollow(local, entry); },
-                     nullptr, nullptr, this);
+    const Result result = FollowWork(local, workerId, true);
     (void)local.Stacks().Flush(stripes);
     local.Cache().Flush();
     return result != Result::Aborted;
@@ -798,81 +762,34 @@ void ZMark::MarkFollow(bool partial)
 
 void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
 {
-    if (generation == MarkingStacks::MarkingGeneration::YOUNG) {
-        auto visitSlot = [](MAddress slot) {
-            auto& field = HeapSlotAt<>(slot);
-            ZBarrier::MarkBarrierOnYoungOopField(field);
-        };
-        auto publish = [this, &ctx](const MarkStackEntry& work) {
-            MAddress address = 0;
-            if (work.partial_array()) {
-                size_t length = 0;
-                MarkPartialArray::Decode(work, address, length);
-            } else {
-                address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(work.object_address()))));
-            }
-            MarkStripe* const stripeIndex = stripes.StripeForAddress(address);
-            const bool published = stripeIndex != ctx.Stripe();
-            ctx.Stacks().Push(stripes, stripeIndex, work, published);
-            if (published) {
-                terminate.Wake();
-            }
-        };
-        if (entry.partial_array()) {
-            MarkPartialArray::FollowPartialReferences(entry, visitSlot, publish);
-            return;
-        }
-        BaseObject* object = to_object(ZOffset::address(to_zoffset(entry.object_address())));
-        if (!Heap::IsHeapAddress(object)) {
-            return;
-        }
-        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-        if (!region->IsYoungRegion()) {
-            return;
-        }
-        const bool wasMarked = MarkEntryObject(object, entry, &ctx.Cache());
-        if (entry.mark() && wasMarked) {
-            return;
-        }
-        if (!object->HasRefField() || !entry.follow()) {
-            return;
-        }
-        FollowObjectReferences(object, entry.finalizable(), visitSlot, publish);
+    const bool finalizable = entry.finalizable();
+    if (entry.partial_array()) {
+        follow_partial_array(ctx, entry, finalizable);
         return;
     }
-    auto publish = [this, &ctx](const MarkStackEntry& work) {
-        MAddress address = 0;
-        if (work.partial_array()) {
-            size_t length = 0;
-            MarkPartialArray::Decode(work, address, length);
+
+    const zaddress address = ZOffset::address(to_zoffset(entry.object_address()));
+    const bool mark = entry.mark();
+    bool incLive = entry.inc_live();
+    const bool follow = entry.follow();
+    ZPage* const page = Heap::page(raw(address));
+    CHECK_DETAIL(page->IsRelocatable(), "mark consumer requires a relocatable page");
+    if (mark && !page->mark_object(address, finalizable, incLive)) {
+        return;
+    }
+    BaseObject* const object = to_object(address);
+    if (incLive) {
+        ctx.Cache().IncLive(page, object->GetSize());
+    }
+    if (follow) {
+        TypeInfo* const type = object->GetTypeInfo();
+        TypeInfo* const component = type->IsRawArray() ? type->GetComponentTypeInfo() : nullptr;
+        if (component != nullptr &&
+            (component->IsObjectType() || component->IsArrayType() || component->IsInterface())) {
+            follow_array_object(ctx, reinterpret_cast<MArray*>(object), finalizable);
         } else {
-            address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(work.object_address()))));
+            follow_object(object, finalizable);
         }
-        MarkStripe* const stripeIndex = stripes.StripeForAddress(address);
-        const bool published = stripeIndex != ctx.Stripe();
-        ctx.Stacks().Push(stripes, stripeIndex, work, published);
-        if (published) {
-            terminate.Wake();
-        }
-    };
-    if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
-        MarkPartialArray::FollowPartialReferences(entry, [&entry](MAddress slot) {
-            auto& field = HeapSlotAt<>(slot);
-            ZBarrier::MarkBarrierOnOldOopField(field, entry.finalizable());
-        }, publish);
-        return;
-    }
-    BaseObject* obj = to_object(ZOffset::address(to_zoffset(entry.object_address())));
-    const bool wasMarked = MarkEntryObject(obj, entry, &ctx.Cache());
-    if ((!entry.mark() || !wasMarked) && entry.follow()) {
-        if (!obj->HasRefField()) {
-            return;
-        }
-        auto visitSlot = [obj, &entry](MAddress slot) {
-            auto& field = HeapSlotAt<>(slot);
-            ZBarrier::MarkBarrierOnOldOopField(field, entry.finalizable());
-        };
-        FollowObjectReferences(obj, entry.finalizable(), visitSlot, publish);
     }
 }
 
@@ -1141,40 +1058,72 @@ void Decode(const MarkStackEntry& entry, MAddress& chunkStart, size_t& length)
     chunkStart = raw(ZOffset::address(to_zoffset(offset << MIN_SIZE_SHIFT)));
 }
 
-// ZGC zMark.cpp:208-263 follow_array_elements: small arrays are visited
-// locally, large arrays publish their aligned middle and trailing parts as
-// partial-array entries and follow the leading part locally.
-void FollowElements(MAddress start, size_t length, bool finalizable,
-                    const FieldVisitor& visit, const EntryPublisher& publish)
+} // namespace MarkPartialArray
+
+// ZGC zMark.cpp:185-196: worker continuations remain local until a full
+// stack is published by MarkThreadLocalStacks::Push.
+void ZMark::push_partial_array(MarkContext& ctx, MAddress start, size_t length, bool finalizable)
 {
-    if (length <= MIN_LENGTH) {
-        for (size_t i = 0; i < length; ++i) {
-            visit(start + i * sizeof(MAddress));
+    MarkStripe* const stripe = stripes.StripeForAddress(start);
+    const MarkStackEntry entry = MarkPartialArray::Encode(reinterpret_cast<const void*>(start), length, finalizable);
+    ctx.Stacks().Push(stripes, stripe, entry, false);
+}
+
+static void mark_barrier_on_oop_array(MAddress start, size_t length, bool finalizable, bool young)
+{
+    for (size_t i = 0; i < length; ++i) {
+        auto& field = HeapSlotAt<>(start + i * sizeof(MAddress));
+        if (young) {
+            ZBarrier::MarkBarrierOnYoungOopField(field);
+        } else {
+            ZBarrier::MarkBarrierOnOldOopField(field, finalizable);
         }
-        return;
     }
+}
+
+void ZMark::follow_array_elements_small(MAddress start, size_t length, bool finalizable)
+{
+    DCHECK_D(length <= MarkPartialArray::MIN_LENGTH, "Too large, should be split");
+    mark_barrier_on_oop_array(start, length, finalizable,
+                              generation == MarkingStacks::MarkingGeneration::YOUNG);
+}
+
+void ZMark::follow_array_elements_large(MarkContext& ctx, MAddress start, size_t length, bool finalizable)
+{
+    using namespace MarkPartialArray;
+    DCHECK_D(length > MIN_LENGTH, "Too small, should not be split");
     const MAddress end = start + length * sizeof(MAddress);
     const MAddress middleStart = AlignUp(start + sizeof(MAddress), MIN_SIZE);
     const size_t middleLength = AlignDown((end - middleStart) / sizeof(MAddress), MIN_LENGTH);
     const MAddress middleEnd = middleStart + middleLength * sizeof(MAddress);
-    auto push = [&](MAddress address, size_t count) {
-        publish(Encode(reinterpret_cast<const void*>(address), count, finalizable));
-    };
     if (end > middleEnd) {
-        push(middleEnd, (end - middleEnd) / sizeof(MAddress));
+        push_partial_array(ctx, middleEnd, (end - middleEnd) / sizeof(MAddress), finalizable);
     }
     MAddress part = middleEnd;
     while (part > middleStart) {
         const size_t count = AlignUp((part - middleStart) / sizeof(MAddress) / 2, MIN_LENGTH);
         part -= count * sizeof(MAddress);
-        push(part, count);
+        push_partial_array(ctx, part, count, finalizable);
     }
-    for (MAddress field = start; field < middleStart; field += sizeof(MAddress)) {
-        visit(field);
+    follow_array_elements_small(start, (middleStart - start) / sizeof(MAddress), finalizable);
+}
+
+void ZMark::follow_array_elements(MarkContext& ctx, MAddress start, size_t length, bool finalizable)
+{
+    if (length <= MarkPartialArray::MIN_LENGTH) {
+        follow_array_elements_small(start, length, finalizable);
+    } else {
+        follow_array_elements_large(ctx, start, length, finalizable);
     }
 }
 
-} // namespace MarkPartialArray
+void ZMark::follow_partial_array(MarkContext& ctx, const MarkStackEntry& entry, bool finalizable)
+{
+    MAddress start = 0;
+    size_t length = 0;
+    MarkPartialArray::Decode(entry, start, length);
+    follow_array_elements(ctx, start, length, finalizable);
+}
 
 // ZGC zMark.cpp:273-313: discovery is closure state, not an object-kind
 // branch in mark_and_follow. Finalizable traversal follows the referent.
@@ -1223,38 +1172,15 @@ void ZMark::follow_object(BaseObject* object, bool finalizable)
     }
 }
 
-void ZMark::FollowObjectReferences(BaseObject* object, bool finalizable,
-                            const MarkPartialArray::FieldVisitor& visit, const MarkPartialArray::EntryPublisher& publish)
+void ZMark::follow_array_object(MarkContext& ctx, MArray* array, bool finalizable)
 {
-    if (object->GetTypeInfo()->IsRawArray()) {
-        MArray* array = reinterpret_cast<MArray*>(object);
-        TypeInfo* component = array->GetComponentTypeInfo();
-        if (component->IsObjectType() || component->IsArrayType() || component->IsInterface()) {
-            // zMark.cpp:346-368: array following does not contain a safe
-            // iterator split. Invisible roots carry DontFollow upstream.
-            MarkPartialArray::FollowElements(reinterpret_cast<MAddress>(array->ConvertToCArray()), array->GetLength(), finalizable, visit, publish);
-            return;
-        }
-    }
-    follow_object(object, finalizable);
+    // Cangjie TypeInfo is native metadata; reference-array elements use the
+    // same worker continuation path as ZGC zMark.cpp:346-368.
+    follow_array_elements(ctx, reinterpret_cast<MAddress>(array->ConvertToCArray()),
+                          array->GetLength(), finalizable);
 }
 
-namespace MarkPartialArray {
-void FollowPartialReferences(const MarkStackEntry& entry,
-                             const FieldVisitor& visit, const EntryPublisher& publish)
-{
-    MAddress start = 0;
-    size_t length = 0;
-    Decode(entry, start, length);
-    FollowElements(start, length, entry.finalizable(), visit, publish);
-}
-
-}
-}
-
-namespace MapleRuntime {
-
-}
+} // namespace MapleRuntime
 
 #include "Heap/z/zMark.inline.hpp"
 
