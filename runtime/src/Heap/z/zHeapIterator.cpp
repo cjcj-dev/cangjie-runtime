@@ -28,24 +28,40 @@ bool HeapIteratorBitMap::try_set_bit(size_t index)
 }
 
 HeapIterator::HeapIterator(bool visitWeaks, bool forVerify, unsigned nworkers)
-    : visitWeaks(visitWeaks), forVerify(forVerify), nworkers(nworkers == 0 ? 1 : nworkers)
+    : visitWeaks(visitWeaks), forVerify(forVerify), nworkers(nworkers == 0 ? 1 : nworkers),
+      objectBitmaps(ZAddressOffsetMax)
 {
     workerQueues.resize(this->nworkers);
     workerArrayQueues.resize(this->nworkers);
 }
 
+HeapIterator::~HeapIterator()
+{
+    for (size_t i = 0; i < objectBitmaps.size(); ++i) {
+        delete objectBitmaps.at(i);
+    }
+}
+
+// ZGC zHeapIterator.cpp:312-327: acquire lookup, locked recheck, release install.
+HeapIteratorBitMap* HeapIterator::object_bitmap(BaseObject* object)
+{
+    const zoffset offset = ZAddress::offset(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(object)));
+    HeapIteratorBitMap* bitmap = objectBitmaps.get_acquire(offset);
+    if (bitmap == nullptr) {
+        std::lock_guard<std::mutex> lock(bitmapLock);
+        bitmap = objectBitmaps.get(offset);
+        if (bitmap == nullptr) {
+            bitmap = new HeapIteratorBitMap(ZGranuleSize / 8);
+            objectBitmaps.release_put(offset, bitmap);
+        }
+    }
+    return bitmap;
+}
+
 bool HeapIterator::try_set_bit(BaseObject* object)
 {
-    constexpr uintptr_t granule = 2 * 1024 * 1024;
-    constexpr size_t objectAlign = 8;
-    const uintptr_t address = reinterpret_cast<uintptr_t>(object);
-    const uintptr_t key = address / granule;
-    std::lock_guard<std::mutex> lock(bitmapLock);
-    auto found = objectBitmaps.find(key);
-    if (found == objectBitmaps.end()) {
-        found = objectBitmaps.emplace(key, std::make_unique<HeapIteratorBitMap>(granule / objectAlign)).first;
-    }
-    return found->second->try_set_bit((address % granule) / objectAlign);
+    const zoffset offset = ZAddress::offset(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(object)));
+    return object_bitmap(object)->try_set_bit((untype(offset) & (ZGranuleSize - 1)) / 8);
 }
 
 void HeapIteratorContext::visit_object(BaseObject* object) const

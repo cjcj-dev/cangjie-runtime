@@ -7,7 +7,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
+#include "Heap/z/zGranuleMap.hpp"
 #include <vector>
 #include "Common/BaseObject.h"
 #include "Heap/z/zIterator.hpp"
@@ -39,6 +39,7 @@ public:
         MIndex index;
     };
     explicit HeapIterator(bool visitWeaks, bool forVerify = false, unsigned nworkers = 1);
+    ~HeapIterator();
     void Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor = {});
     void object_iterate(const ObjectVisitor& objectVisitor, uint32_t worker_id);
     void object_and_field_iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor,
@@ -106,7 +107,8 @@ private:
     const bool forVerify;
     const unsigned nworkers;
     std::mutex bitmapLock;
-    std::unordered_map<uintptr_t, std::unique_ptr<HeapIteratorBitMap>> objectBitmaps;
+    HeapIteratorBitMap* object_bitmap(BaseObject* object);
+    ZGranuleMap<HeapIteratorBitMap*> objectBitmaps;
 };
 
 class HeapIteratorContext {
