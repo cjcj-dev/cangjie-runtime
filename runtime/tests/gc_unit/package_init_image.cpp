@@ -18,13 +18,14 @@ struct ImageMetadata {
     // must hand this table to the root enumeration. The GC root table holds
     // slot addresses, as LoaderManager.h:25-27 declares.
     NativeSlot root { MAddress { 0 } };
-    NativeSlot* roots[1] { &metadata.root };
+    NativeSlot* roots[1] { nullptr };
 } metadata;
 }
 extern "C" MAddress* PackageInitImageRootSlot() { return reinterpret_cast<MAddress*>(&metadata.root); }
 extern "C" void PackageInitImageSetRoot(MAddress value) { (void)metadata.root.Exchange(to_zpointer(value)); }
 extern "C" void* PackageInitImageMetadata()
 {
+    metadata.roots[0] = &metadata.root;
     metadata.header.cJFileSize = sizeof(metadata);
     metadata.header.tables[GC_FLAGS_TABLE] = { offsetof(ImageMetadata, flags), sizeof(metadata.flags) };
     metadata.header.tables[GLOBAL_INIT_FUNC_TABLE] = { offsetof(ImageMetadata, entries), sizeof(metadata.entries) };
