@@ -726,6 +726,20 @@ void CheckCarrierWalk(bool heapWalk)
         GC_EXPECT_EQ(armedBefore, armedAfter);
         GC_EXPECT_EQ(markedBefore, markedAfter);
     }
+    // Positive control for the bitmap observation: real mark workers must
+    // change the very same object's bit after the observation-only check.
+    {
+        DriverLocker lock;
+        heap.young().Workers()->set_active_workers(1);
+        heap.young().Workers()->set_active();
+        ThreadLocal::FlushCurrentThreadMarkStacks();
+        heap.young().concurrent_mark();
+        heap.young().Workers()->set_inactive();
+    }
+    const bool markedControl = page->is_object_marked_live(from_object(object));
+    std::fprintf(stderr, "VERIFY_CARRIER_MARK_CONTROL object=%p before=%d after=%d\n",
+                 object, markedBefore, markedControl);
+    GC_EXPECT_TRUE(markedControl);
 }
 } // namespace
 
