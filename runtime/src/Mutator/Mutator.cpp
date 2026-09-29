@@ -19,7 +19,6 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zMark.hpp"
-#include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zStackWatermark.hpp"
 #include "ObjectModel/RefField.inline.h"
@@ -726,83 +725,6 @@ void Mutator::VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor)
             pending.push_back(&RootSlotAt(static_cast<void*>(object)));
         }
     }
-}
-
-inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack)
-{
-    if (!IsHeaderedStackObject(obj)) {
-        return;
-    }
-    if (!rootSet.insert(obj).second) {
-        return;
-    }
-
-    if (obj->HasRefField()) {
-        rootStack.push(obj);
-    }
-}
-
-// Stack-map and FFI root carriers contain plain addresses and remain committed
-// until this root pass completes; no colored-value decode applies here.
-static BaseObject* PlainRootObject(zaddress_unsafe address)
-{
-    return to_object(safe(address));
-}
-
-
-
-// Eager ZUncoloredRoot::barrier (zUncoloredRoot.inline.hpp:38-59).
-// The handshake owns the actual ABI slot. Keep its observed color through
-// resolution, publish the current object, and only then restore a plain word.
-// The eager scan captures the saved thread color before the watermark installs
-// new masks; every root in that scan must keep using the captured color.
-static bool PushHeapRoot(RootSlot& root, bool young, uintptr_t color, bool follow = true)
-{
-    (void)young;
-    const zaddress_unsafe observed = root.LoadPlain();
-    BaseObject* object = PlainRootObject(observed);
-    if (!Heap::IsHeapAddress(object)) {
-        return false;
-    }
-    zaddress_unsafe* slot = reinterpret_cast<zaddress_unsafe*>(&root);
-    if (follow) {
-        ZUncoloredRoot::mark(slot, color);
-    } else {
-        ZUncoloredRoot::process_invisible(slot, color);
-    }
-    return Heap::IsHeapAddress(PlainRootObject(root.LoadPlain()));
-}
-
-static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool young, uintptr_t color)
-{
-    if (record == nullptr) {
-        return false;
-    }
-    // This is record+0 itself, not a copy of the field or its decoded value.
-    RootSlot& field = RootSlotAt(static_cast<void*>(record));
-    return PushHeapRoot(field, young, color);
-}
-
-bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
-{
-    (void)bySelf;
-    if (stackScanEpoch != 0) {
-        StackWatermarkSet::finish_processing(*this, reinterpret_cast<void*>(ZUncoloredRoot::mark));
-        return true;
-    }
-    const uintptr_t color = GetGCData().storeGoodMask;
-    RootVisitor visitor = [this, young, color](ObjectRef& root) {
-        VisitHeapRootSlots(root, [young, color](ObjectRef& slot) {
-            (void)PushHeapRoot(slot, young, color);
-        });
-    };
-    RootVisitor invisible = [this, young, color](ObjectRef& root) {
-        (void)PushHeapRoot(root, young, color, false);
-    };
-    DerivedPtrVisitor derived = MakeDerivedRootVisitor(visitor);
-    VisitHeapReferences(visitor, visitor, derived, visitor, invisible, young);
-    (void)scannedFrames;
-    return true;
 }
 
 DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor)

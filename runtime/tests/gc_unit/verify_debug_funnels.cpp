@@ -5,6 +5,8 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zTask.hpp"
+#include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -81,7 +83,9 @@ int main(int argc, char** argv)
             // its implementation is imported from the product, not instantiated here.
             ZIterator::basic_oop_iterate_safe(array, visitor);
         } else {
-            valuesMatch = mutator->GcPhaseEnum(false, 0, true, nullptr) &&
+            ZGlobalsPointers::flip_young_mark_start();
+            StackWatermarkSet::finish_processing(*mutator, reinterpret_cast<void*>(ZUncoloredRoot::mark));
+            valuesMatch = mutator->GetStackWatermark().IsDone() &&
                 raw(root->LoadPlain()) == reinterpret_cast<uintptr_t>(target);
         }
     };
