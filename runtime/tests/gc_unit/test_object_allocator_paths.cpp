@@ -548,3 +548,26 @@ GC_RUNTIME_OTHER_VM_TEST(HeapFacade1334, LargeAllocationOwner)
 {
     RunAllocatorCase(AllocateFacadeLarge);
 }
+
+namespace {
+void* CollectAndReadCount(bool young)
+{
+    const uint32_t before = ZCollectedHeap::heap()->total_collections();
+    Heap::GetHeap().RequestGC(young ? GC_REASON_YOUNG : GC_REASON_USER);
+    const uint32_t after = ZCollectedHeap::heap()->total_collections();
+    const bool advanced = after > before;
+    std::fprintf(stderr, "HEAP1334_COLLECTION_TARGET executed=1 young=%d before=%u after=%u advanced=%d\n",
+                 young, before, after, advanced);
+    return reinterpret_cast<void*>(uintptr_t(!advanced));
+}
+void* CollectYoungAndReadCount(void*) { return CollectAndReadCount(true); }
+void* CollectMajorAndReadCount(void*) { return CollectAndReadCount(false); }
+}
+GC_RUNTIME_OTHER_VM_TEST(HeapFacade1334, YoungCollectionCountOwner)
+{
+    RunAllocatorCase(CollectYoungAndReadCount);
+}
+GC_RUNTIME_OTHER_VM_TEST(HeapFacade1334, MajorCollectionCountOwner)
+{
+    RunAllocatorCase(CollectMajorAndReadCount);
+}
