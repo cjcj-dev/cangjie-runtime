@@ -1,0 +1,109 @@
+{
+ "repo": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_1312_implement_r5899117285",
+ "base": "333ead0c735573cec16a5855ded52d3f0a432b4f",
+ "head": "HEAD",
+ "mode": "product",
+ "ok": true,
+ "verdicts": [
+  {
+   "cut": "coordination/1312/cuts/phase.diff",
+   "file": "runtime/src/Heap/z/zGeneration.cpp",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/Heap/z/zGeneration.cpp"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "333ead0c735573cec16a5855ded52d3f0a432b4f:runtime/src/Heap/z/zGeneration.cpp"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "1 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [
+    "ZGenerationOld::process_non_strong_references（所在函数）"
+   ],
+   "ok": true
+  },
+  {
+   "cut": "coordination/1312/cuts/report.diff",
+   "file": "runtime/src/Heap/z/zWeakRootsProcessor.cpp",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/Heap/z/zWeakRootsProcessor.cpp"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "333ead0c735573cec16a5855ded52d3f0a432b4f:runtime/src/Heap/z/zWeakRootsProcessor.cpp"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "1 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [],
+   "ok": true
+  },
+  {
+   "cut": "coordination/1312/cuts/young.diff",
+   "file": "runtime/src/Heap/z/zRootsIterator.cpp",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/Heap/z/zRootsIterator.cpp"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "333ead0c735573cec16a5855ded52d3f0a432b4f:runtime/src/Heap/z/zRootsIterator.cpp"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "1 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [
+    "Apply（所在函数）"
+   ],
+   "ok": true
+  },
+  {
+   "cut": "*",
+   "file": "*",
+   "checks": [
+    {
+     "name": "至少一处断线落在真实相位入口函数",
+     "ok": true,
+     "detail": "AllocateImpl, DoGarbageCollection, DoTracing, DoYoungGarbageCollection, DrainStackWatermark, FindUselessExternObjects, ForwardObjectExclusive, ForwardObjectImpl, GCPhasePreForward, GcPhaseEnum, NoteLargeArrayInitRootVisit, PostResolveCycleTask, PostTrace, PostWriteReference, Preforward, PrepareForwardableRegion, runtime/src/Heap/z/zDriver.cpp:run_thread, ProcessOldNonStrongReferences, PublishForwardingCarrier, PublishMarkCoverage, PushYoungObject, ReclaimRetired, RecordCrossGenEdge, RehomeCompactedInPlaceRegion, RelocateObjectInner, RequestGC, RequestGCAndWait, ResolveCycleRef, ResolveCycleRefImpl, RouteOrCompactRegionImpl, RunCycle, RunGarbageCollection, SetRelocationRegion, StallAllocation, TakeRegion, TransitionToGCPhaseExclusive, TryAllocateForRelocation, TryMutatorRelocate, Uncommit, VerifyFaceEnabled, VerifyPhaseEnter, VisitGCRoots, VisitHeapRootSlots, VisitRawObjects, WaitForAck, WriteReference, ZeroAndFill, alloc_large_object, alloc_medium_object, alloc_object, alloc_object_in_medium_page, alloc_page, alloc_page_stall, alloc_small_object, allocate_new_tlab, concurrent_mark, flip_old_relocate_start, free_page, pause_relocate_start, relocate_or_remap_object, runtime/src/CangjieRuntimeApi.cpp:RunCJTaskImpl, runtime/src/CangjieRuntimeApi.cpp:UnloadCJLibrary, runtime/src/CompilerCalls.cpp:CJ_MCC_ArrayCopyRef, runtime/src/CompilerCalls.cpp:CJ_MCC_ArrayCopyStruct, runtime/src/CompilerCalls.cpp:CJ_MCC_ReadWeakRef, runtime/src/CompilerCalls.cpp:MCC_AcquireRawData, runtime/src/CompilerCalls.cpp:MCC_NewObject, runtime/src/CompilerCalls.cpp:MCC_WriteRefField_Strong, runtime/src/CompilerCalls.cpp:MCC_WriteRefField_Weak, runtime/src/CompilerCalls.cpp:MCC_WriteRefField, runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:MRT_TransitMutatorToExit, runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:MRT_VisitorCaller, runtime/src/Heap/z/workerThread.cpp:coordinator_distribute_task, runtime/src/Heap/z/zArguments.cpp:initialize, runtime/src/Heap/z/zArguments.cpp:select_max_gc_threads, runtime/src/Heap/z/zBarrier.inline.hpp:no_keep_alive_store_barrier_on_heap_oop_field, runtime/src/Heap/z/zBarrierSet.inline.hpp:no_keep_alive_store_barrier_heap, runtime/src/Heap/z/zBarrier.inline.hpp:load_barrier_on_oop_field_preloaded, runtime/src/Heap/z/zBarrier.cpp:no_keep_alive_heap_store_slow_path, runtime/src/Heap/z/zBarrier.inline.hpp:store_barrier_on_heap_oop_field, runtime/src/Heap/z/zBarrierSet.cpp:load_barrier_on_weak_oop_field_preloaded, runtime/src/Heap/z/zCollectedHeap.cpp:initialize_gc_workers, runtime/src/Heap/z/zCollectedHeap.cpp:stop, runtime/src/Heap/z/zCrossVM.cpp:ProcessExportRoots, runtime/src/Heap/z/zCrossVM.cpp:ResolveCurrentValueRoot, runtime/src/Heap/z/zDirector.cpp:rule_major_warmup, runtime/src/Heap/z/zDirector.cpp:run_thread, runtime/src/Heap/z/zDriver.cpp:collect_young, runtime/src/Heap/z/zDriver.cpp:collect_old, runtime/src/Heap/z/zDriver.cpp:ShouldPrecleanYoung, runtime/src/Heap/z/zGeneration.cpp:collect, runtime/src/Heap/z/zGeneration.cpp:concurrent_mark_free, runtime/src/Heap/z/zGeneration.cpp:mark_end, runtime/src/Heap/z/zGeneration.cpp:mark_start, runtime/src/Heap/z/zGeneration.cpp:pause, runtime/src/Heap/z/zGeneration.cpp:pause_verify, runtime/src/Heap/z/zHeap.cpp:IsSurvivedObject, runtime/src/Heap/z/zJNICritical.cpp:enter_inner, runtime/src/Heap/z/zMark.cpp:MarkFollow, runtime/src/Heap/z/zMarkingSMR.cpp:free_node, runtime/src/Heap/z/zObjArrayAllocator.cpp:initialize, runtime/src/Heap/z/zPage.inline.hpp:IsAllocating, runtime/src/Heap/z/zRelocate.cpp:iterate_objects, runtime/src/Heap/z/zRelocate.cpp:relocate, runtime/src/Heap/z/zRelocate.cpp:relocate_object, runtime/src/Heap/z/zRelocate.cpp:relocate_object_inner, runtime/src/Heap/z/zRelocate.cpp:resize_workers, runtime/src/Heap/z/zRelocate.cpp:try_relocate_object_inner, runtime/src/Heap/z/zRelocate.cpp:work, runtime/src/Heap/z/zRelocationSet.cpp:track_if_promoted, runtime/src/Heap/z/zRemembered.cpp:scan_and_follow, runtime/src/Heap/z/zRemembered.cpp:scan_page_and_clear_remset, runtime/src/Heap/z/zRootsIterator.cpp:Apply, runtime/src/Heap/z/zStackWatermark.cpp:process_head, runtime/src/Heap/z/zStackWatermark.cpp:start_processing_impl, runtime/src/Heap/z/zStat.cpp:Sort, runtime/src/Heap/z/zStat.cpp:Stats, runtime/src/Heap/z/zStat.cpp:accumulated_duration, runtime/src/Heap/z/zStat.cpp:accumulated_time, runtime/src/Heap/z/zStat.cpp:at_end, runtime/src/Heap/z/zStat.cpp:at_start, runtime/src/Heap/z/zStat.cpp:stats, runtime/src/Heap/z/zStoreBarrierBuffer.cpp:install_base_pointers, runtime/src/Heap/z/zWorkers.cpp:run, runtime/src/HeapManager.cpp:Init, runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:LibInit, runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:UnloadLibrary, runtime/src/Mutator/Mutator.cpp:Init, runtime/src/Mutator/Mutator.h:DoLeaveSaferegion, runtime/src/Mutator/ThreadLocal.cpp:~CleanThreadLocalData, runtime/src/Mutator/ThreadLocal.cpp:CleanThreadLocalData::RemoveFromList, runtime/src/Mutator/ThreadSMR.cpp:add_thread, runtime/src/Mutator/ThreadSMR.cpp:free_list, runtime/src/Mutator/ThreadSMR.cpp:remove_thread, runtime/src/ObjectModel/MArray.inline.h:NewKnownWidthArray, select_relocation_set, runtime/src/CompilerCalls.cpp:MCC_SetInstanceFieldValue, runtime/src/ObjectModel/FieldInfo.cpp:SetValue, runtime/src/Heap/z/zHeapIterator.cpp:push_weak_roots, runtime/src/Heap/z/zHeapIterator.cpp:Iterate, runtime/src/CjScheduler.cpp:MRT_CjRuntimeInitWithConfigV1, runtime/src/Heap/shared/gcArguments.cpp:parse_vm_init_args, runtime/src/Heap/z/zReferenceProcessor.cpp:discover_reference, runtime/src/CangjieRuntimeApi.cpp:InitCJInterpreter, runtime/src/Interpreter/InterpreterSpecific.cpp:InitInterpreter, runtime/src/Interpreter/InterpreterSpecific.cpp:CreateCJNativeInterface, runtime/src/Interpreter/InterpreterSpecific.cpp:InitializeInterpreterInterface, runtime/src/CangjieRuntimeApi.cpp:CJ_MRT_DemangleHandle, runtime/src/CompilerCalls.cpp:MCC_GetNumOfFieldTypes, runtime/src/CompilerCalls.cpp:MCC_GetFieldTypes, runtime/src/Common/OopStorage.cpp:Release, runtime/src/Mutator/MutatorManager.cpp:DestroyRuntimeMutator, runtime/src/Heap/z/zReferenceProcessor.cpp:EnqueueFinalizableReference, runtime/src/Heap/z/zReferenceProcessor.cpp:ProcessFinalizableList, runtime/src/Heap/z/zPhysicalMemoryManager.cpp:map, runtime/src/Heap/z/zPhysicalMemoryBacking_linux.cpp:map, runtime/src/Base/Globals.h:AlignUp, runtime/src/Base/Globals.h:AlignDown, runtime/src/Heap/z/zMarkStack.inline.hpp:PublishStack, runtime/src/Heap/z/zMarkStack.cpp:Flush, ZStatPhaseGeneration::RegisterEnd, CJThreadStackGuardExpand, CJ_MCC_HandleReturnSafepoint, runtime/src/Mutator/MutatorManager.cpp:HandleReturnSafepoint, runtime/src/arch/x86_64_windows/HandleSafepointStub.S:CJ_MCC_HandleSafepoint, runtime/src/Signal/SignalStack.cpp:SignalStack::Handler, runtime/src/Heap/z/zStackWatermark.cpp:StackWatermarkSet::on_safepoint, runtime/src/UnwindStack/StackInfo.cpp:StackFrameStream::CheckRegisterRoots, runtime/src/StackMap/CompressedStackMap.h:CompressedStackMapHead::GetStackMapHead, runtime/src/Heap/z/zMark.cpp:ZMark::EnumRefFieldRoot, runtime/src/Heap/z/zMark.cpp:MarkOldRootsTask::work, runtime/src/CompilerCalls.cpp:CJ_MCC_StoreBarrierOnHeapField, runtime/src/Heap/z/zGeneration.cpp:ZGenerationOld::process_non_strong_references, runtime/src/CompilerCalls.cpp:MCC_NewObjArray, runtime/src/CompilerCalls.cpp:MCC_NewArray64, runtime/src/CompilerCalls.cpp:MCC_NewArray8"
+    }
+   ],
+   "ok": true
+  }
+ ]
+}

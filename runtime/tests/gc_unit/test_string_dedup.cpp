@@ -9,6 +9,7 @@
 #include <thread>
 #include "CangjieRuntime.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zPage.inline.hpp"
@@ -211,6 +212,8 @@ struct DedupCycle {
     bool wasMarked = false;
     bool blocked = false;
     bool preparedOld = false;
+    bool youngPageStable = false;
+    bool youngMarkedBeforeLookup = false;
 };
 void WaitCommand(DedupCycle& cycle, unsigned command)
 {
@@ -254,6 +257,22 @@ void* DedupCycleTask(void* argument)
             from_object(cycle.original), false);
     }
     second = static_cast<MArray*>(NativeAccess<>::oop_load(cycle.candidate));
+    if (!cycle.old) {
+        auto* originalPage = Heap::page(reinterpret_cast<uintptr_t>(cycle.original));
+        // B is a strong root on the same single small page. No forwarding
+        // for that page means the address used by this observation is stable.
+        cycle.youngPageStable = originalPage != nullptr &&
+            originalPage == Heap::page(reinterpret_cast<uintptr_t>(second)) &&
+            originalPage->IsYoungRegion() && !originalPage->IsAllocating() &&
+            forwarding_for_page(originalPage) == nullptr;
+        std::printf("DEDUP_YOUNG_INPUT page_present=%d same_page=%d young=%d allocating=%d forwarding=%d\n",
+            originalPage != nullptr, originalPage == Heap::page(reinterpret_cast<uintptr_t>(second)),
+            originalPage != nullptr && originalPage->IsYoungRegion(),
+            originalPage != nullptr && originalPage->IsAllocating(),
+            originalPage != nullptr && forwarding_for_page(originalPage) != nullptr);
+        cycle.youngMarkedBeforeLookup = cycle.youngPageStable &&
+            originalPage->is_object_marked(from_object(cycle.original), false);
+    }
     cycle.returned = MCC_StringDedupCanonicalImpl(DedupArrayType(), second);
     // B has never been installed before this lookup: the only other possible
     // matching identity is A, even if a minor cycle has moved A.
@@ -312,9 +331,11 @@ void CheckDedupCycle(bool old, bool strongControl, bool blocked, bool different,
     // Target evidence precedes *all* assertions; preparation failures cannot
     // hide a target assertion behind a fatal EXPECT.
     std::printf("DEDUP_CYCLE_TARGET old=%d strong=%d blocked=%d different=%d prepared=%d installed=%d "
-                "old_page=%d called=%d watermark_done=%d before_marked=%d hit=%d marked_at_end=%d\n",
+                "old_page=%d called=%d watermark_done=%d before_marked=%d hit=%d marked_at_end=%d "
+                "young_stable=%d young_marked_before_lookup=%d\n",
                 old, strongControl, blocked, different, prepared, cycle.installed, cycle.preparedOld,
-                called, cycle.watermarkDone, cycle.wasMarked, cycle.hit, markedAtEnd);
+                called, cycle.watermarkDone, cycle.wasMarked, cycle.hit, markedAtEnd,
+                cycle.youngPageStable, cycle.youngMarkedBeforeLookup);
     std::fflush(stdout);
     if (old && reached) ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
@@ -325,11 +346,13 @@ void CheckDedupCycle(bool old, bool strongControl, bool blocked, bool different,
     const int finiRC = FiniCJRuntime();
     // Assert the observable product result first, then separately validate
     // the construction (including that the expected old object was unmarked).
+    if (!old && !different) GC_EXPECT_TRUE(cycle.youngMarkedBeforeLookup);
     if (old && !blocked && !different) GC_EXPECT_TRUE(markedAtEnd);
     if (old && different) GC_EXPECT_EQ(markedAtEnd, strongControl);
     if (collision) GC_EXPECT_TRUE(cycle.hashesEqual);
     GC_EXPECT_EQ(cycle.hit, !different && (!blocked || strongControl));
     GC_EXPECT_TRUE(prepared && called && reached && cycle.installed);
+    if (!old) GC_EXPECT_TRUE(cycle.youngPageStable);
     if (old) {
         GC_EXPECT_TRUE(cycle.preparedOld && cycle.watermarkDone);
         GC_EXPECT_EQ(cycle.blocked, blocked);
@@ -498,8 +521,9 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, ResizeThenOldCallbacksShrink)
     const size_t finalBuckets = StringDedupTest::Buckets();
     const size_t finalSlots = StringDedup::Instance().WeakStorage().AllocationCount();
     std::printf("DEDUP_RESIZE_TARGET installed=%zu grown=%d buckets=%zu state=%u first_state=%u "
-                "cleaned=%d final_buckets=%zu final_slots=%zu\n", batch.installed, grown, grownBuckets,
-                grownState, firstState, cleaned, finalBuckets, finalSlots);
+                "cleaned=%d final_buckets=%zu final_slots=%zu duplicate_hits=%zu expected_hits=%zu\n",
+                batch.installed, grown, grownBuckets, grownState, firstState, cleaned, finalBuckets, finalSlots,
+                batch.duplicateHits, (batch.count + 63) / 64);
     std::fflush(stdout);
     ConcurrentGCBreakpoints::ReleaseControl();
     const int finiRC = FiniCJRuntime();
@@ -512,6 +536,77 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, ResizeThenOldCallbacksShrink)
     GC_EXPECT_EQ(firstState, 1U);
     GC_EXPECT_TRUE(grown);
     GC_EXPECT_EQ(finiRC, E_OK);
+}
+
+// Component lock-order evidence only. The forwarding/marking inputs below
+// are explicit; real GC creation of these inputs is covered by cycle tests.
+// The waiter uses the real table/barrier/queue; only product ForwardTask
+// publishes the moved object and completes its page.
+GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
+{
+    ByteArrays arrays;
+    auto& heap = Heap::GetHeap();
+    auto& old = heap.old();
+    auto* page = arrays.heap.region0();
+    auto* companion = ZPage::InitRegion(ZPage::GranuleIndex(arrays.heap.heapStart) + 2,
+                                       ZGranuleSize, ZPageType::small);
+    PublishAllocatedPage(companion);
+    ZPageTest::MakeRelocatable(*companion);
+    auto* extra = reinterpret_cast<MArray*>(arrays.heap.PlaceObject(companion->GetRegionStart() + 64));
+    extra->SetLength(2);
+    extra->SetPrimitiveElement<I8>(0, 19);
+    extra->SetPrimitiveElement<I8>(1, 23);
+    companion->SetRegionAllocPtr(reinterpret_cast<uintptr_t>(extra) + extra->GetSize());
+    for (auto* array : {arrays.first, arrays.second}) {
+        array->SetPrimitiveElement<I8>(0, 7);
+        array->SetPrimitiveElement<I8>(1, 9);
+    }
+    const bool installed = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.first) == arrays.first;
+    GcHeapFixture::MarkStrong(page, arrays.first);
+    GcHeapFixture::MarkStrong(companion, extra);
+    BeginForwardingArena(Generation::Old, {page, companion});
+    auto* owner = forwarding_for_page(page);
+    GC_EXPECT_TRUE(owner != nullptr); // Input qualification, before starting threads.
+    // A negative page lease count is the product retain_page wait condition.
+    // Task ownership stays available for the real queue worker to claim.
+    owner->in_place_relocation_claim_page();
+    if (old.Workers() == nullptr) old.InitializeWorkers(1);
+    old.Workers()->set_active_workers(1);
+    old.Workers()->set_active();
+    ZGlobalsPointers::flip_old_relocate_start();
+    old.set_phase(ZGeneration::Phase::Relocate);
+    ZRelocate::StartRelocationTasks(old.id());
+    auto& queue = *old.relocate().queue();
+    std::atomic<bool> finished{false};
+    MArray* answer = nullptr;
+    std::thread waiter([&] {
+        // Same rendezvous membership as the maintenance step. No callback,
+        // replacement barrier, table result or forwarding entry is injected.
+        SuspendibleThreadSetJoiner joined;
+        answer = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.second);
+        finished.store(true, std::memory_order_release);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (queue.PendingCount() == 0 && !finished.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+    const bool queued = queue.PendingCount() == 1 && !finished.load(std::memory_order_acquire);
+    // This is the real dispatcher/ForwardTask path, not a hand-written insert.
+    old.relocate().relocate(&old.relocation_set());
+    old.Workers()->set_inactive();
+    waiter.join();
+    const bool returned = answer != nullptr && answer != arrays.second && answer != arrays.first &&
+        answer->GetLength() == 2 && answer->GetPrimitiveElement<I8>(0) == 7 &&
+        answer->GetPrimitiveElement<I8>(1) == 9;
+    const bool done = owner->is_done() && queue.PendingCount() == 0;
+    StringDedup::Instance().Stop();
+    const size_t remaining = StringDedup::Instance().WeakStorage().AllocationCount();
+    std::printf("DEDUP_WAIT_TARGET installed=%d queued=%d returned=%d done=%d stopped_slots=%zu\n",
+                installed, queued, returned, done, remaining);
+    std::fflush(stdout);
+    GC_EXPECT_TRUE(queued);
+    GC_EXPECT_TRUE(returned && done);
+    GC_EXPECT_EQ(remaining, size_t{0});
+    GC_EXPECT_TRUE(installed);
 }
 
 #endif // MRT_TESTABLE_INTERNALS

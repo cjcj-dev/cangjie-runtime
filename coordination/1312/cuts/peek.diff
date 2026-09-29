@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
++++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+@@ -101,7 +101,7 @@
+     {
+         for (size_t index = 0; index < hashes.size(); ++index) {
+             if (hashes[index] != hash) continue;
+-            auto* value = static_cast<MArray*>(values[index].peek());
++            auto* value = static_cast<MArray*>(values[index].resolve());
+             if (value != nullptr && value->GetLength() == object->GetLength() &&
+                 (value == object || std::memcmp(value->ConvertToCArray(), object->ConvertToCArray(),
+                                                 object->GetLength()) == 0)) {

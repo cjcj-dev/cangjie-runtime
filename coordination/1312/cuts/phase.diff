@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -596,7 +596,7 @@
+     // Finalizable graphs were followed during mark discovery. This phase
+     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
+     ZMark::ProcessFinalizers();
+-    Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();
++    // Controlled cut: omit old weak processing.
+     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
+     ZRendezvousHandshakeClosure rendezvous;
+     Handshake::execute(&rendezvous);
