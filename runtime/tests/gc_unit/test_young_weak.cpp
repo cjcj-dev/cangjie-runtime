@@ -773,11 +773,11 @@ struct P82Graph {
             roots[i].StoreColoured(StoreGoodPointer(objects[(i % branches) * length]));
             rootSlots.push_back(&roots[i]);
         }
-        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(rootSlots.data()), rootSlots.size());
+        LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(rootSlots.data()), rootSlots.size());
     }
     ~P82Graph()
     {
-        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(rootSlots.data()), rootSlots.size());
+        LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(rootSlots.data()), rootSlots.size());
     }
 };
 
@@ -933,7 +933,7 @@ GC_OTHER_VM_TEST(P82HeapIterator, ArrayChunks)
     for (MIndex i = 0; i < length; ++i) slots[i].StoreColoured(zpointer::null);
     NativeSlot root(StoreGoodPointer(array));
     NativeSlot* roots[] = { &root };
-    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     bool exact = true;
     for (bool weak : {false, true}) {
         HeapIterator iter(weak, false, 2);
@@ -968,7 +968,7 @@ GC_OTHER_VM_TEST(P82HeapIterator, ArrayChunks)
         std::fprintf(stderr, "P82_ARRAY_RESULT weak=%d stolen_continuation=%d exact_edges=%zu expected=%u\n",
                      weak, stolen == std::future_status::ready, size_t(count), unsigned(length));
     }
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::fprintf(stderr, "P82_ARRAY_ASSERT exact=%d\n", exact);
     GC_EXPECT_TRUE(exact);
 }
@@ -996,12 +996,12 @@ GC_OTHER_VM_TEST(P82HeapIterator, OverflowRoots)
     for (auto* region : {fx.region0(), fx.region1()}) {
         region->SetRegionAllocPtr(region->GetRegionStart() + 4096 + count / 2 * 16);
     }
-    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), roots.size());
+    LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), roots.size());
     std::unordered_set<BaseObject*> seen;
     auto visitor = [&](BaseObject* object) { seen.insert(object); };
     ZObjectClosure<decltype(visitor)> closure(visitor);
     Heap::GetHeap().object_iterate(&closure, false);
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), roots.size());
+    LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), roots.size());
     std::fprintf(stderr, "P82_OVERFLOW_ASSERT seen=%zu expected=%zu\n", seen.size(), expected.size());
     GC_EXPECT_TRUE(seen == expected);
 }
