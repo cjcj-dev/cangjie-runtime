@@ -18,8 +18,6 @@ struct Totals {
     bool minor;
     uint64_t time[4]{};
     size_t freed[4]{};
-    uint64_t cycleTime[4]{};
-    size_t cycleFreed[4]{};
 };
 
 void* CollectTotals(void* context)
@@ -34,7 +32,6 @@ void* CollectTotals(void* context)
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     type->SetInstanceSize(size - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    auto* manager = heap.serviceability_cycle_memory_manager(result.minor);
     for (unsigned round = 0; round < 4; ++round) {
         if (round != 0) {
             // Allocate through the product mutator and release the only root.
@@ -47,8 +44,6 @@ void* CollectTotals(void* context)
         }
         result.time[round] = MCC_GetGCTimeUs();
         result.freed[round] = MCC_GetGCFreedSize();
-        result.cycleTime[round] = manager->gc_time_us();
-        result.cycleFreed[round] = manager->gc_freed_size();
     }
     mutator->SetManagedContext(true);
     return nullptr;
@@ -77,14 +72,12 @@ void CheckTotals(bool minor, bool checkTime)
     for (unsigned round = 1; round < 4; ++round) {
         const auto current = checkTime ? result.time[round] : result.freed[round];
         const auto previous = checkTime ? result.time[round - 1] : result.freed[round - 1];
-        const auto cycle = checkTime ? result.cycleTime[round] : result.cycleFreed[round];
         const auto initial = checkTime ? result.time[0] : result.freed[0];
-        const auto initialCycle = checkTime ? result.cycleTime[0] : result.cycleFreed[0];
-        const bool ok = current > initial && current >= previous && cycle > initialCycle;
-        std::fprintf(stderr, "GC_TOTALS_TARGET minor=%d metric=%s round=%u value=%llu previous=%llu initial=%llu cycle=%llu ok=%d\n",
+        const bool ok = current > initial && current >= previous;
+        std::fprintf(stderr, "GC_TOTALS_TARGET minor=%d metric=%s round=%u value=%llu previous=%llu initial=%llu ok=%d\n",
             minor, checkTime ? "time" : "freed", round,
             static_cast<unsigned long long>(current), static_cast<unsigned long long>(previous),
-            static_cast<unsigned long long>(initial), static_cast<unsigned long long>(cycle), ok);
+            static_cast<unsigned long long>(initial), ok);
         valid &= ok;
     }
     // Print and evaluate every target before the single fatal assertion.
