@@ -9,7 +9,7 @@
 #include "Heap/z/zWorkers.inline.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.inline.h"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBreakpoint.hpp"
