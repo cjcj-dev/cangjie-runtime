@@ -1507,3 +1507,63 @@ GC_TEST(StoreAccess1085, ValueRecordNonReferentStore)
     GC_EXPECT_TRUE(stored);
 }
 #endif
+
+// ZGC zBarrier.inline.hpp:729-732 and zHeap.inline.hpp:44-57.
+// Enter the compiler slow tier in the product SO, then read its remset result.
+namespace {
+void CheckRemember1273(PageAge age)
+{
+    GcHeapFixture fx;
+    ZPage* const page = fx.region0();
+    page->reset(age);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    auto* slot = reinterpret_cast<volatile zpointer*>(&field);
+    field.StoreColoured(zpointer::null); // weak raw-null store must take the slow tier
+    const bool before = page->is_remembered(slot);
+    CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(slot);
+    const bool after = page->is_remembered(slot);
+    const bool unchanged = field.GetFieldValue() == zpointer::null;
+    std::fprintf(stderr, "REMEMBER1273_TARGET age=%u before=%d after=%d unchanged=%d\n",
+        static_cast<unsigned>(age), before, after, unchanged);
+    GC_EXPECT_TRUE(!before && after == (age == PageAge::old) && unchanged);
+}
+}
+GC_TEST(Remember1273, OldSlotIsRemembered) { CheckRemember1273(PageAge::old); }
+GC_TEST(Remember1273, YoungSlotIsNotRemembered) { CheckRemember1273(PageAge::eden); }
+
+#if defined(__linux__)
+GC_TEST(Remember1273, MissingPageDoesNotReturnSilently)
+{
+    int ready[2];
+    GC_EXPECT_EQ(pipe(ready), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(ready[0]);
+        GcHeapFixture fx;
+        auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+        auto* slot = reinterpret_cast<volatile zpointer*>(&field);
+        field.StoreColoured(zpointer::null);
+        Heap::page_table().remove(fx.region0());
+        if (Heap::page(reinterpret_cast<MAddress>(slot)) != nullptr) _exit(2);
+        // The slot remains mapped: only the product page-table entry is absent.
+        const char entered = 'E';
+        if (write(ready[1], &entered, 1) != 1) _exit(3);
+        CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive(slot);
+        _exit(0);
+    }
+    close(ready[1]);
+    char entered = 0;
+    const ssize_t bytes = read(ready[0], &entered, 1);
+    close(ready[0]);
+    int status = 0;
+    pid_t waited;
+    do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+    const int signal = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
+    const bool rejected = waited == child && bytes == 1 && entered == 'E' &&
+        (signal == SIGSEGV || signal == SIGABRT);
+    std::fprintf(stderr, "REMEMBER1273_MISSING_TARGET entered=%d wait_status=%d signal=%d rejected=%d\n",
+        bytes == 1 && entered == 'E', status, signal, rejected);
+    GC_EXPECT_TRUE(rejected);
+}
+#endif
