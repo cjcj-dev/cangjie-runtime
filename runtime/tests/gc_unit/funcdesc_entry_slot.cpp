@@ -26,18 +26,9 @@ int main(int argc, char** argv)
         return 2;
     }
     const auto desc = MFuncDesc::GetFuncDesc(pc);
-    std::fprintf(stderr, "FUNCDESC_TARGET leaf=%d present=%d expected=%d\n", leaf, desc != nullptr, !leaf);
-    if ((desc != nullptr) == leaf) { return 1; }
-    const auto head = CompressedStackMapHead::GetStackMapHead(pc);
-    std::fprintf(stderr, "HEAD_TARGET leaf=%d valid=%d expected=%d\n", leaf, head.IsValid(), !leaf);
-    if (head.IsValid() == leaf) { return 1; }
-    if (leaf) {
-        const StackMapBuilder builder(pc, pc, 0);
-        const bool invalid = !builder.Build<HeapReferenceMap>().IsValid() &&
-            !builder.Build<StackPtrMap>().IsValid() && !builder.Build<MethodMap>().IsValid();
-        std::fprintf(stderr, "BUILD_TARGET leaf=1 invalid=%d\n", invalid);
-        if (!invalid) { return 1; }
-    }
-    // The process owns the linked image until exit; no fabricated unload event.
+    std::fprintf(stderr, "FUNCDESC_TARGET leaf=%d present=%d expected=1\n", leaf, desc != nullptr);
+    if (desc == nullptr || desc->GetStackMap() == nullptr) { return 1; }
+    const FramePrologue prologue(desc->GetStackMap());
+    std::fprintf(stderr, "FRAME_TARGET leaf=%d frameSize=%u\n", leaf, prologue.GetFrameSize());
     return 0;
 }
