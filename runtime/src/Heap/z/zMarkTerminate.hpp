@@ -29,8 +29,8 @@ private:
 
     std::atomic<bool> resurrected{false};
     size_t workerCount = 0;
-    size_t working = 0;
-    size_t awakening = 0;
+    std::atomic<size_t> working{0};
+    std::atomic<size_t> awakening{0};
     mutable std::mutex mutex;
     std::condition_variable condition;
 };

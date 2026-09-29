@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "Heap/z/zPageFwd.hpp"
+#include "Heap/z/zGlobals.hpp"
 
 namespace MapleRuntime {
 class MarkLiveCache {
@@ -31,8 +32,7 @@ private:
 
     void Evict(Entry& entry);
     size_t shift;
-    static constexpr size_t CACHE_SIZE = 64;
-    Entry entries[CACHE_SIZE];
+    Entry entries[ZMarkCacheSize];
 };
 } // namespace MapleRuntime
 #endif
