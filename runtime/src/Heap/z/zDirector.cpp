@@ -78,7 +78,6 @@ void ZDirector::evaluate_rules()
 void ZDirector::notify_reevaluate()
 {
     std::lock_guard<std::mutex> lock(monitor);
-    reevaluate = true;
     condition.notify_one();
 }
 
@@ -89,9 +88,8 @@ bool ZDirector::wait_for_tick()
     if (stopped) {
         return false;
     }
-    condition.wait_for(lock, std::chrono::milliseconds(interval_ms),
-        [this] { return stopped || reevaluate; });
-    return !stopped;
+    condition.wait_for(lock, std::chrono::milliseconds(interval_ms));
+    return true;
 }
 
 static uint32_t young_gc_threads(const ZDirectorStats&)
@@ -656,7 +654,6 @@ static ZDirectorStats sample_stats()
 void ZDirector::run_thread()
 {
     while (wait_for_tick()) {
-        reevaluate = false;
         if (Runtime::CurrentRef() == nullptr || !Heap::GetHeap().IsGCEnabled()) {
             continue;
         }
