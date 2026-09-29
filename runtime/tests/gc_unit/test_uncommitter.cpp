@@ -411,18 +411,18 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, FreshCacheWaitsForWatermarkCycle)
     const size_t firstCycle = regions.GetCommittedCapacity();
     const uint64_t cacheAgeAtObservation = TimeUtil::NanoSeconds() - returnedAt;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (regions.GetCommittedCapacity() == before && std::chrono::steady_clock::now() < deadline) {
+    while (regions.GetCommittedCapacity() >= before - oldCacheBudget && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     partition.uncommitter.Stop();
     const size_t after = regions.GetCommittedCapacity();
-    std::fprintf(stderr, "TARGET_FRESH_CACHE before=%zu first=%zu later=%zu cache_age_ns=%llu delay_ns=%llu\n",
-                 before, firstCycle, after, static_cast<unsigned long long>(cacheAgeAtObservation),
+    std::fprintf(stderr, "TARGET_FRESH_CACHE before=%zu first=%zu later=%zu old_budget=%zu cache_age_ns=%llu delay_ns=%llu\n",
+                 before, firstCycle, after, oldCacheBudget, static_cast<unsigned long long>(cacheAgeAtObservation),
                  static_cast<unsigned long long>(Uncommitter::DelayNs()));
     GC_EXPECT_TRUE(firstCycle <= before);
     GC_EXPECT_TRUE(before - firstCycle <= oldCacheBudget);
     GC_EXPECT_TRUE(cacheAgeAtObservation < Uncommitter::DelayNs());
-    GC_EXPECT_TRUE(after < before);
+    GC_EXPECT_TRUE(after < before - oldCacheBudget);
     const size_t stopped = regions.GetCommittedCapacity();
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     GC_EXPECT_EQ(regions.GetCommittedCapacity(), stopped);
