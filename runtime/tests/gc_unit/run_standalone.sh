@@ -334,6 +334,7 @@ MAIN_SOURCES=(
   "$SRC/test_return_safepoint_regmap.cpp"
   "$SRC/test_stackmap_base_capture.cpp"
   "$SRC/test_stub_register_roots.cpp"
+  "$SRC/test_absent_stackmap.cpp"
   "$SRC/test_gctibzero.cpp"
   "$SRC/test_field_iterator.cpp"
   "$SRC/test_pinroot.cpp"
