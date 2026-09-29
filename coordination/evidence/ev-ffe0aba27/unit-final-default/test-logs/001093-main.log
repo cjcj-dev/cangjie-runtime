@@ -1,0 +1,4 @@
+[  RUN   ] ZWorkers.RunGivesEachActiveWorkerOneDistinctIdBelowActive
+OBSERVED three distinct thread-local worker ids 0..2 on three simultaneously held worker threads
+[  PASS  ] ZWorkers.RunGivesEachActiveWorkerOneDistinctIdBelowActive
+[========] 1 tests: 1 passed, 0 failed

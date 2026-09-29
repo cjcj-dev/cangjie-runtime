@@ -1,0 +1,5 @@
+[  RUN   ] RememberedLifecycle720.UnboundConstructionAbortsRegisterFoundOld
+2026-09-29 23:56:11.126663 3140652 F Check failed: _page_table != nullptr
+REMEMBERED720 unbound_signaled=1 sig=6
+[  PASS  ] RememberedLifecycle720.UnboundConstructionAbortsRegisterFoundOld
+[========] 1 tests: 1 passed, 0 failed

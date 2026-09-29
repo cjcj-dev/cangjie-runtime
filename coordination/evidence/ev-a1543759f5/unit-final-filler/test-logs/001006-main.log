@@ -1,0 +1,5 @@
+[  RUN   ] ConcurrentGCBreakpoints.SimpleCycle
+[  RUN   ] ConcurrentGCBreakpoints.SimpleCycle
+GC_UNIT_OTHER_VM_OKIDOKI ConcurrentGCBreakpoints.SimpleCycle
+[  PASS  ] ConcurrentGCBreakpoints.SimpleCycle
+[========] 1 tests: 1 passed, 0 failed

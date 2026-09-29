@@ -1,0 +1,4 @@
+[  RUN   ] PackageInit.AbortUsesNativeExit70
+package cache initialization failed: package=0x641e080b8700 unit=0x641e080b8720 phase=0 result=2
+[  PASS  ] PackageInit.AbortUsesNativeExit70
+[========] 1 tests: 1 passed, 0 failed

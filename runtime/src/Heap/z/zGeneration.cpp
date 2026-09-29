@@ -400,7 +400,7 @@ void ZGenerationYoung::mark_start()
     auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     auto& manager = space.GetRegionManager();
     {
-        manager.ResetTLABUsage();
+        Heap::GetHeap().reset_tlab_used();
         Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
     }
     reset_statistics();

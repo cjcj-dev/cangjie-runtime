@@ -1,0 +1,4 @@
+[  RUN   ] WriteGeneric.PayloadSharesWriteStructStoreBarrier
+TARGET_WRITE_GENERIC_PAYLOAD_STORE_BARRIER_EXECUTED pending=1
+[  PASS  ] WriteGeneric.PayloadSharesWriteStructStoreBarrier
+[========] 1 tests: 1 passed, 0 failed

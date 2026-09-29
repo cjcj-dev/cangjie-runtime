@@ -1,0 +1,244 @@
+[  RUN   ] GcDirector.ProductWarmupStopsAfterThreeCycles
+[  RUN   ] GcDirector.ProductWarmupStopsAfterThreeCycles
+2026-09-29 23:56:10.283075 3128909 I GC Workers for Young Generation: 1 (static)
+2026-09-29 23:56:10.283305 3128909 I GC Workers for Old Generation: 1 (static)
+2026-09-29 23:56:10.283704 3129420 I FinalizerProcessor thread started
+2026-09-29 23:56:10.284615 3128909 I Uncommit: Enabled delay=300s
+2026-09-29 23:56:10.284713 3128909 I Cangjie runtime started.
+2026-09-29 23:56:10.411715 3129384 I Pause Mark Start (Major) stw time 115577 us
+2026-09-29 23:56:10.411899 3129384 I Pause Mark End stw time 6 us
+2026-09-29 23:56:10.412012 3129384 I Pause Relocate Start stw time 1 us
+2026-09-29 23:56:10.412090 3129384 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.412137 3129384 I Allocation Stalls:            0            0              0            0
+2026-09-29 23:56:10.412186 3129384 I Load: 55.02 (29%) / 44.01 (23%) / 56.85 (30%)
+2026-09-29 23:56:10.412248 3129384 I MMU: 2ms/98.8%, 5ms/99.5%, 10ms/99.8%, 20ms/99.9%, 50ms/100.0%, 100ms/100.0%
+2026-09-29 23:56:10.412296 3129384 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-29 23:56:10.412342 3129384 I Pages:           Candidates     Selected     In-Place         Size        Empty    Relocated
+2026-09-29 23:56:10.412388 3129384 I Small                     0            0            0           0M           0M           0M
+2026-09-29 23:56:10.412435 3129384 I Medium                    0            0            0           0M           0M           0M
+2026-09-29 23:56:10.412481 3129384 I Large                     1            0            0          32M           0M           0M
+2026-09-29 23:56:10.412527 3129384 I Forwarding Usage: 0M
+2026-09-29 23:56:10.412573 3129384 I Age Table:       Live    Garbage            Small           Medium            Large
+2026-09-29 23:56:10.412619 3129384 I Eden         33554440 18446744073709551608       0 / 0            0 / 0            1 / 0     
+2026-09-29 23:56:10.412666 3129384 I Min Capacity: 0M
+2026-09-29 23:56:10.412711 3129384 I Max Capacity: 64M
+2026-09-29 23:56:10.412757 3129384 I Soft Max Capacity: 64M
+2026-09-29 23:56:10.412802 3129384 I Heap Statistics:
+2026-09-29 23:56:10.412851 3129384 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-29 23:56:10.412897 3129384 I Capacity:             40M          40M            40M          40M          40M          40M
+2026-09-29 23:56:10.412943 3129384 I Free:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.412989 3129384 I Used:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.413039 3129384 I Young Generation Statistics:
+2026-09-29 23:56:10.413085 3129384 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.413131 3129384 I Used:                 32M          32M            32M          32M
+2026-09-29 23:56:10.413180 3129384 I Live:                 N/A          32M            32M          32M
+2026-09-29 23:56:10.413227 3129384 I Garbage:              N/A 17592186044415M 17592186044415M 17592186044415M
+2026-09-29 23:56:10.413273 3129384 I Allocated:            N/A           0M             0M           0M
+2026-09-29 23:56:10.413319 3129384 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-29 23:56:10.413365 3129384 I Promoted:             N/A          N/A             0M           0M
+2026-09-29 23:56:10.413411 3129384 I Compacted:            N/A          N/A           N/A           0M
+2026-09-29 23:56:10.413457 3129384 I Young Generation 32M->32M 0.116s
+2026-09-29 23:56:10.414121 3129384 I Pause Mark End stw time 5 us
+2026-09-29 23:56:10.414704 3129384 I Pause Relocate Start stw time 1 us
+2026-09-29 23:56:10.414788 3129384 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.414834 3129384 I Allocation Stalls:            0            0              0            0
+2026-09-29 23:56:10.414881 3129384 I Load: 55.02 (29%) / 44.01 (23%) / 56.85 (30%)
+2026-09-29 23:56:10.414946 3129384 I MMU: 2ms/98.8%, 5ms/99.4%, 10ms/99.7%, 20ms/99.9%, 50ms/99.9%, 100ms/100.0%
+2026-09-29 23:56:10.414994 3129384 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-29 23:56:10.415044 3129384 I References:           Encountered   Discovered     Enqueued
+2026-09-29 23:56:10.415093 3129384 I Soft                            0            0            0
+2026-09-29 23:56:10.415144 3129384 I Weak                            0            0            0
+2026-09-29 23:56:10.415198 3129384 I Final                           0            0            0
+2026-09-29 23:56:10.415252 3129384 I Phantom                         0            0            0
+2026-09-29 23:56:10.415303 3129384 I Min Capacity: 0M
+2026-09-29 23:56:10.415349 3129384 I Max Capacity: 64M
+2026-09-29 23:56:10.415394 3129384 I Soft Max Capacity: 64M
+2026-09-29 23:56:10.415439 3129384 I Heap Statistics:
+2026-09-29 23:56:10.415485 3129384 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-29 23:56:10.415535 3129384 I Capacity:             40M          40M            40M          40M          40M          40M
+2026-09-29 23:56:10.415584 3129384 I Free:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.415634 3129384 I Used:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.415684 3129384 I Old Generation Statistics:
+2026-09-29 23:56:10.415735 3129384 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.415780 3129384 I Used:                  0M           0M             0M           0M
+2026-09-29 23:56:10.415826 3129384 I Live:                 N/A           0M             0M           0M
+2026-09-29 23:56:10.415872 3129384 I Garbage:              N/A           0M             0M           0M
+2026-09-29 23:56:10.415917 3129384 I Allocated:            N/A           0M             0M           0M
+2026-09-29 23:56:10.415963 3129384 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-29 23:56:10.416009 3129384 I Compacted:            N/A          N/A           N/A           0M
+2026-09-29 23:56:10.416060 3129384 I Old Generation 32M->32M 0.001s
+2026-09-29 23:56:10.418921 3129384 I Pause Mark Start (Major) stw time 19 us
+2026-09-29 23:56:10.419051 3129384 I Pause Mark End stw time 3 us
+2026-09-29 23:56:10.419175 3129384 I Pause Relocate Start stw time 1 us
+2026-09-29 23:56:10.419251 3129384 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.419297 3129384 I Allocation Stalls:            0            0              0            0
+2026-09-29 23:56:10.419345 3129384 I Load: 55.02 (29%) / 44.01 (23%) / 56.85 (30%)
+2026-09-29 23:56:10.419395 3129384 I MMU: 2ms/98.8%, 5ms/99.4%, 10ms/99.5%, 20ms/99.8%, 50ms/99.9%, 100ms/100.0%
+2026-09-29 23:56:10.419443 3129384 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-29 23:56:10.419488 3129384 I Pages:           Candidates     Selected     In-Place         Size        Empty    Relocated
+2026-09-29 23:56:10.419535 3129384 I Small                     0            0            0           0M           0M           0M
+2026-09-29 23:56:10.419581 3129384 I Medium                    0            0            0           0M           0M           0M
+2026-09-29 23:56:10.419627 3129384 I Large                     1            0            0          32M           0M           0M
+2026-09-29 23:56:10.419673 3129384 I Forwarding Usage: 0M
+2026-09-29 23:56:10.419719 3129384 I Age Table:       Live    Garbage            Small           Medium            Large
+2026-09-29 23:56:10.419764 3129384 I Eden                0          0       0 / 0            0 / 0            0 / 0     
+2026-09-29 23:56:10.419812 3129384 I Survivor 1   33554440 18446744073709551608       0 / 0            0 / 0            1 / 0     
+2026-09-29 23:56:10.419858 3129384 I Min Capacity: 0M
+2026-09-29 23:56:10.419915 3129384 I Max Capacity: 64M
+2026-09-29 23:56:10.419960 3129384 I Soft Max Capacity: 64M
+2026-09-29 23:56:10.420006 3129384 I Heap Statistics:
+2026-09-29 23:56:10.420057 3129384 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-29 23:56:10.420103 3129384 I Capacity:             40M          40M            40M          40M          40M          40M
+2026-09-29 23:56:10.420149 3129384 I Free:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.420196 3129384 I Used:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.420241 3129384 I Young Generation Statistics:
+2026-09-29 23:56:10.420288 3129384 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.420338 3129384 I Used:                 32M          32M             0M           0M
+2026-09-29 23:56:10.420383 3129384 I Live:                 N/A          32M             0M           0M
+2026-09-29 23:56:10.420429 3129384 I Garbage:              N/A 17592186044415M             0M           0M
+2026-09-29 23:56:10.420475 3129384 I Allocated:            N/A           0M             0M           0M
+2026-09-29 23:56:10.420521 3129384 I Reclaimed:            N/A          N/A 17592186044415M 17592186044415M
+2026-09-29 23:56:10.420567 3129384 I Promoted:             N/A          N/A            32M          32M
+2026-09-29 23:56:10.420612 3129384 I Compacted:            N/A          N/A           N/A           0M
+2026-09-29 23:56:10.420658 3129384 I Young Generation 32M->32M 0.000s
+2026-09-29 23:56:10.420900 3129384 I Pause Mark End stw time 13 us
+2026-09-29 23:56:10.421251 3129384 I Pause Relocate Start stw time 2 us
+2026-09-29 23:56:10.421346 3129384 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.421395 3129384 I Allocation Stalls:            0            0              0            0
+2026-09-29 23:56:10.421442 3129384 I Load: 55.02 (29%) / 44.01 (23%) / 56.85 (30%)
+2026-09-29 23:56:10.421495 3129384 I MMU: 2ms/98.6%, 5ms/99.4%, 10ms/99.4%, 20ms/99.7%, 50ms/99.9%, 100ms/99.9%
+2026-09-29 23:56:10.421543 3129384 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-29 23:56:10.421590 3129384 I References:           Encountered   Discovered     Enqueued
+2026-09-29 23:56:10.421635 3129384 I Soft                            0            0            0
+2026-09-29 23:56:10.421681 3129384 I Weak                            0            0            0
+2026-09-29 23:56:10.421725 3129384 I Final                           0            0            0
+2026-09-29 23:56:10.421773 3129384 I Phantom                         0            0            0
+2026-09-29 23:56:10.421818 3129384 I Min Capacity: 0M
+2026-09-29 23:56:10.421863 3129384 I Max Capacity: 64M
+2026-09-29 23:56:10.421907 3129384 I Soft Max Capacity: 64M
+2026-09-29 23:56:10.421954 3129384 I Heap Statistics:
+2026-09-29 23:56:10.421999 3129384 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-29 23:56:10.422051 3129384 I Capacity:             40M          40M            40M          40M          40M          40M
+2026-09-29 23:56:10.422096 3129384 I Free:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.422141 3129384 I Used:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.422189 3129384 I Old Generation Statistics:
+2026-09-29 23:56:10.422234 3129384 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.422279 3129384 I Used:                  0M          32M            32M          32M
+2026-09-29 23:56:10.422324 3129384 I Live:                 N/A           0M             0M           0M
+2026-09-29 23:56:10.422369 3129384 I Garbage:              N/A           0M             0M           0M
+2026-09-29 23:56:10.422433 3129384 I Allocated:            N/A          32M            32M          32M
+2026-09-29 23:56:10.422478 3129384 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-29 23:56:10.422523 3129384 I Compacted:            N/A          N/A           N/A           0M
+2026-09-29 23:56:10.422568 3129384 I Old Generation 32M->32M 0.001s
+2026-09-29 23:56:10.428813 3129384 I Pause Mark Start (Major) stw time 25 us
+2026-09-29 23:56:10.430820 3129384 I Pause Mark End stw time 7 us
+2026-09-29 23:56:10.430966 3129384 I Pause Relocate Start stw time 1 us
+2026-09-29 23:56:10.431065 3129384 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.431114 3129384 I Allocation Stalls:            0            0              0            0
+2026-09-29 23:56:10.431161 3129384 I Load: 55.02 (29%) / 44.01 (23%) / 56.85 (30%)
+2026-09-29 23:56:10.431211 3129384 I MMU: 2ms/98.6%, 5ms/99.4%, 10ms/99.4%, 20ms/99.6%, 50ms/99.8%, 100ms/99.9%
+2026-09-29 23:56:10.431258 3129384 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-29 23:56:10.431307 3129384 I Min Capacity: 0M
+2026-09-29 23:56:10.431353 3129384 I Max Capacity: 64M
+2026-09-29 23:56:10.431398 3129384 I Soft Max Capacity: 64M
+2026-09-29 23:56:10.431443 3129384 I Heap Statistics:
+2026-09-29 23:56:10.431490 3129384 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-29 23:56:10.431535 3129384 I Capacity:             40M          40M            40M          40M          40M          40M
+2026-09-29 23:56:10.431581 3129384 I Free:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.431626 3129384 I Used:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.431673 3129384 I Young Generation Statistics:
+2026-09-29 23:56:10.431719 3129384 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.431765 3129384 I Used:                  0M           0M             0M           0M
+2026-09-29 23:56:10.431810 3129384 I Live:                 N/A           0M             0M           0M
+2026-09-29 23:56:10.431857 3129384 I Garbage:              N/A           0M             0M           0M
+2026-09-29 23:56:10.431903 3129384 I Allocated:            N/A           0M             0M           0M
+2026-09-29 23:56:10.431948 3129384 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-29 23:56:10.431993 3129384 I Promoted:             N/A          N/A             0M           0M
+2026-09-29 23:56:10.432047 3129384 I Compacted:            N/A          N/A           N/A           0M
+2026-09-29 23:56:10.432100 3129384 I Young Generation 32M->32M 0.002s
+2026-09-29 23:56:10.432246 3129384 I Pause Mark End stw time 6 us
+2026-09-29 23:56:10.432546 3129384 I Pause Relocate Start stw time 1 us
+2026-09-29 23:56:10.432632 3129384 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.432678 3129384 I Allocation Stalls:            0            0              0            0
+2026-09-29 23:56:10.432726 3129384 I Load: 55.02 (29%) / 44.01 (23%) / 56.85 (30%)
+2026-09-29 23:56:10.432776 3129384 I MMU: 2ms/98.6%, 5ms/99.4%, 10ms/99.4%, 20ms/99.6%, 50ms/99.8%, 100ms/99.9%
+2026-09-29 23:56:10.432823 3129384 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-29 23:56:10.432869 3129384 I References:           Encountered   Discovered     Enqueued
+2026-09-29 23:56:10.432916 3129384 I Soft                            0            0            0
+2026-09-29 23:56:10.432973 3129384 I Weak                            0            0            0
+2026-09-29 23:56:10.433018 3129384 I Final                           0            0            0
+2026-09-29 23:56:10.433069 3129384 I Phantom                         0            0            0
+2026-09-29 23:56:10.433119 3129384 I Pages:           CDIRECTOR_WARMUP_TARGET cycles=3 warm=1 trustable=1 before=4 after=4
+DIRECTOR_NATIVE_DETACH_TARGET detached=1
+andidates     Selected     In-Place         Size        Empty    Relocated
+2026-09-29 23:56:10.433178 3129384 I Small                     0            0            0           0M           0M           0M
+2026-09-29 23:56:10.433224 3129384 I Medium                    0            0            0           0M           0M           0M
+2026-09-29 23:56:10.433269 3129384 I Large                     1            0            0          32M           0M           0M
+2026-09-29 23:56:10.433315 3129384 I Forwarding Usage: 0M
+2026-09-29 23:56:10.433360 3129384 I Min Capacity: 0M
+2026-09-29 23:56:10.433406 3129384 I Max Capacity: 64M
+2026-09-29 23:56:10.433453 3129384 I Soft Max Capacity: 64M
+2026-09-29 23:56:10.433504 3129384 I Heap Statistics:
+2026-09-29 23:56:10.433536 3129384 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-29 23:56:10.433568 3129384 I Capacity:             40M          40M            40M          40M          40M          40M
+2026-09-29 23:56:10.433615 3129384 I Free:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.433646 3129384 I Used:                 32M          32M            32M          32M          32M          32M
+2026-09-29 23:56:10.433678 3129384 I Old Generation Statistics:
+2026-09-29 23:56:10.433710 3129384 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:10.433742 3129384 I Used:                 32M          32M            32M          32M
+2026-09-29 23:56:10.433773 3129384 I Live:                 N/A          32M            32M          32M
+2026-09-29 23:56:10.433805 3129384 I Garbage:              N/A 17592186044415M 17592186044415M 17592186044415M
+2026-09-29 23:56:10.433837 3129384 I Allocated:            N/A           0M             0M           0M
+2026-09-29 23:56:10.433868 3129384 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-29 23:56:10.433900 3129384 I Compacted:            N/A          N/A           N/A           0M
+2026-09-29 23:56:10.433932 3129384 I Old Generation 32M->32M 0.000s
+2026-09-29 23:56:10.937033 3129420 I FinalizerProcessor thread stopped
+2026-09-29 23:56:10.938417 3129402 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-29 23:56:10.938565 3129402 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:10.938632 3129402 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:10.938686 3129402 I Critical: Finalizer 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:10.938739 3129402 I Critical: Finalizer 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.938791 3129402 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:10.938844 3129402 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.938897 3129402 I Major Collection: Major Collection 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.938949 3129402 I Memory: Allocation Rate 0/0 0/0 0/0 0/0 B/s
+2026-09-29 23:56:10.939000 3129402 I Minor Collection: Minor Collection 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939058 3129402 I Old Generation: Old Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939111 3129402 I Old Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939162 3129402 I Old Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939208 3129402 I Old Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939240 3129402 I Old Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939273 3129402 I Old Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939305 3129402 I Old Phase: Concurrent Process Non-Strong 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939338 3129402 I Old Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939370 3129402 I Old Phase: Concurrent Remap Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939403 3129402 I Old Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939435 3129402 I Old Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939483 3129402 I Old Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939516 3129402 I Old Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939548 3129402 I Old Subphase: Concurrent References Enqueue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939580 3129402 I Old Subphase: Concurrent References Process 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939613 3129402 I Old Subphase: Concurrent Remap Remembered 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939645 3129402 I Old Subphase: Concurrent Remap Roots Colored 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939677 3129402 I Old Subphase: Concurrent Remap Roots Uncolored 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939711 3129402 I Old Subphase: PostTrace 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939752 3129402 I Test: Unobserved 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939784 3129402 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939817 3129402 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939849 3129402 I Young Generation: Young Generation (Collect Roots) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939881 3129402 I Young Generation: Young Generation (Promote All) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939913 3129402 I Young Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939946 3129402 I Young Pause: Pause Mark Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.939978 3129402 I Young Pause: Pause Mark Start (Major) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.940011 3129402 I Young Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.940050 3129402 I Young Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.940083 3129402 I Young Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.940115 3129402 I Young Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.940147 3129402 I Young Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.940179 3129402 I Young Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.940212 3129402 I Young Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.940244 3129402 I Young Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:10.940276 3129402 I Young Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+GC_UNIT_OTHER_VM_OKIDOKI GcDirector.ProductWarmupStopsAfterThreeCycles
+[  PASS  ] GcDirector.ProductWarmupStopsAfterThreeCycles
+[========] 1 tests: 1 passed, 0 failed

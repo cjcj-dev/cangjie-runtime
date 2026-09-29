@@ -1,0 +1,5 @@
+[  RUN   ] ManagedMetadata.ProfileEmpty
+PROFILE_RESULT bytes=510 {"mutatorId":1266,"startTime":1728296322667,"endTime":1728296322669,"managedTime":0,"unknownTime":18446744073709538196,"nodes":[{"id":1,"callFrame":{"functionName":"(root)","scriptId":"0","url":"","lineNumber":0},"hitCount":0,"children":[2,3]},{"id":2,"callFrame":{"functionName":"(program)","scriptId":"0","url":"","lineNumber":0},"hitCount":0,"children":[]},{"id":3,"callFrame":{"functionName":"(idle)","scriptId":"0","url":"","lineNumber":0},"hitCount":1,"children":[]}],"samples":[3],"timeDeltas":[-13420]}
+METADATA_TARGET entry=6 desc=0 map=0 status=0 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.ProfileEmpty
+[========] 1 tests: 1 passed, 0 failed

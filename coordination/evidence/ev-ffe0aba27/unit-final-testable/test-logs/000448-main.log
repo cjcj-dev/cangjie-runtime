@@ -1,0 +1,4 @@
+[  RUN   ] StoreBuf.ProductNonHeapHolderBypassesPendingRelocationEntry
+TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED
+[  PASS  ] StoreBuf.ProductNonHeapHolderBypassesPendingRelocationEntry
+[========] 1 tests: 1 passed, 0 failed

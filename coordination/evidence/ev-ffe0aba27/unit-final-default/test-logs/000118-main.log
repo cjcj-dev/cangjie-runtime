@@ -1,0 +1,3 @@
+[  RUN   ] ZLiveMapPage.allocating_page_is_implicitly_live
+[  PASS  ] ZLiveMapPage.allocating_page_is_implicitly_live
+[========] 1 tests: 1 passed, 0 failed

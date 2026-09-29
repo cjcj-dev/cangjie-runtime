@@ -1,0 +1,95 @@
+[  RUN   ] TenuringFlags.OverrideZero
+[  RUN   ] TenuringFlags.OverrideZero
+TENURING_INIT_TARGET actual=0 fixed=1 expected=0 overhead=4194304 budget=16777216 match=1
+TENURING_CONSUMER_TARGET actual=0 expected=0
+TENURING_PROMOTION_TARGET actual=15 expected=15
+TENURING_RESULT_ASSERT threshold_match=1 promotion_match=1
+2026-09-30 00:28:28.594354 244013 I GC Workers for Young Generation: 2 (static)
+2026-09-30 00:28:28.594625 244013 I GC Workers for Old Generation: 2 (static)
+2026-09-30 00:28:28.595004 244896 I FinalizerProcessor thread started
+2026-09-30 00:28:28.595220 244013 I Uncommit: Enabled delay=300s
+2026-09-30 00:28:28.595310 244013 I Cangjie runtime started.
+2026-09-30 00:28:29.607041 244845 I Pause Mark Start stw time 24 us
+2026-09-30 00:28:29.607292 244845 I Pause Mark End stw time 9 us
+2026-09-30 00:28:29.607691 244845 I Pause Relocate Start stw time 1 us
+2026-09-30 00:28:29.607785 244845 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:28:29.607830 244845 I Allocation Stalls:            0            0              0            0
+2026-09-30 00:28:29.607882 244845 I Load: 92.33 (48%) / 88.38 (46%) / 91.12 (47%)
+2026-09-30 00:28:29.607946 244845 I MMU: 2ms/98.7%, 5ms/99.5%, 10ms/99.7%, 20ms/99.9%, 50ms/99.9%, 100ms/100.0%
+2026-09-30 00:28:29.607993 244845 I Mark: 8 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-30 00:28:29.608044 244845 I Pages:           Candidates     Selected     In-Place         Size        Empty    Relocated
+2026-09-30 00:28:29.608089 244845 I Small                     1            0            0           2M           0M           0M
+2026-09-30 00:28:29.608136 244845 I Medium                    0            0            0           0M           0M           0M
+2026-09-30 00:28:29.608181 244845 I Large                     0            0            0           0M           0M           0M
+2026-09-30 00:28:29.608227 244845 I Forwarding Usage: 0M
+2026-09-30 00:28:29.608271 244845 I Age Table:       Live    Garbage            Small           Medium            Large
+2026-09-30 00:28:29.608317 244845 I Eden             4096    2093056       1 / 0            0 / 0            0 / 0     
+2026-09-30 00:28:29.608362 244845 I Min Capacity: 0M
+2026-09-30 00:28:29.608408 244845 I Max Capacity: 64M
+2026-09-30 00:28:29.608452 244845 I Soft Max Capacity: 64M
+2026-09-30 00:28:29.608497 244845 I Heap Statistics:
+2026-09-30 00:28:29.608543 244845 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-30 00:28:29.608587 244845 I Capacity:              8M           8M             8M           8M           8M           8M
+2026-09-30 00:28:29.608633 244845 I Free:                 62M          62M            62M          62M          62M          62M
+2026-09-30 00:28:29.608677 244845 I Used:                  2M           2M             2M           2M           2M           2M
+2026-09-30 00:28:29.608723 244845 I Young Generation Statistics:
+2026-09-30 00:28:29.608767 244845 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:28:29.608813 244845 I Used:                  2M           2M             0M           0M
+2026-09-30 00:28:29.608858 244845 I Live:                 N/A           0M             0M           0M
+2026-09-30 00:28:29.608904 244845 I Garbage:              N/A           1M             0M           0M
+2026-09-30 00:28:29.608950 244845 I Allocated:            N/A           0M             0M           0M
+2026-09-30 00:28:29.608994 244845 I Reclaimed:            N/A          N/A             1M           1M
+2026-09-30 00:28:29.609045 244845 I Promoted:             N/A          N/A             0M           0M
+2026-09-30 00:28:29.609090 244845 I Compacted:            N/A          N/A           N/A           0M
+2026-09-30 00:28:29.609137 244845 I Young Generation 2M->2M 0.001s
+2026-09-30 00:28:29.609411 244896 I FinalizerProcessor thread stopped
+2026-09-30 00:28:29.610079 244874 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-30 00:28:29.610140 244874 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:28:29.610187 244874 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:28:29.610232 244874 I Critical: Finalizer 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:28:29.610278 244874 I Critical: Finalizer 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610340 244874 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:28:29.610387 244874 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610432 244874 I Major Collection: Major Collection 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610478 244874 I Memory: Allocation Rate 0/0 0/0 0/0 0/0 B/s
+2026-09-30 00:28:29.610523 244874 I Minor Collection: Minor Collection 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610569 244874 I Old Generation: Old Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610614 244874 I Old Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610660 244874 I Old Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610706 244874 I Old Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610750 244874 I Old Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610796 244874 I Old Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610840 244874 I Old Phase: Concurrent Process Non-Strong 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610886 244874 I Old Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610930 244874 I Old Phase: Concurrent Remap Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.610976 244874 I Old Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611021 244874 I Old Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611075 244874 I Old Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611121 244874 I Old Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611165 244874 I Old Subphase: Concurrent References Enqueue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611211 244874 I Old Subphase: Concurrent References Process 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611256 244874 I Old Subphase: Concurrent Remap Remembered 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611302 244874 I Old Subphase: Concurrent Remap Roots Colored 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611347 244874 I Old Subphase: Concurrent Remap Roots Uncolored 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611393 244874 I Old Subphase: PostTrace 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611438 244874 I Test: Unobserved 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611483 244874 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611530 244874 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611574 244874 I Young Generation: Young Generation (Collect Roots) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611619 244874 I Young Generation: Young Generation (Promote All) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611663 244874 I Young Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611710 244874 I Young Pause: Pause Mark Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611754 244874 I Young Pause: Pause Mark Start (Major) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611799 244874 I Young Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611845 244874 I Young Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611889 244874 I Young Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611934 244874 I Young Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.611980 244874 I Young Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.612024 244874 I Young Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.612074 244874 I Young Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.612119 244874 I Young Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.612164 244874 I Young Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:29.617513 243762 I Cangjie runtime shutdown.
+GC_UNIT_OTHER_VM_OKIDOKI TenuringFlags.OverrideZero
+[  PASS  ] TenuringFlags.OverrideZero
+[========] 1 tests: 1 passed, 0 failed

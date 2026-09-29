@@ -1,0 +1,20 @@
+SCHEMA_VERSION=1
+CONFIGURATION=MRT_GC_UNIT_OHOS_HOST
+PRODUCT_RECEIPT=PostResolveCycleTask-dispatch-disassembly
+QUALIFICATION=host-product-path-only;device-ABI-NOT_RUN-773
+FILTER_HANDLER=PASS
+FILTER_HANDLER_RC=0
+FILTER_RELOCATE=PASS
+FILTER_RELOCATE_RC=0
+FILTER_CALLBACK=PASS
+FILTER_CALLBACK_RC=0
+FILTER_MAJOR=PASS
+FILTER_MAJOR_RC=0
+FILTER_POST=PASS
+FILTER_POST_RC=0
+FILTER_EMPTY=PASS
+FILTER_EMPTY_RC=0
+RESULT=PASS
+e6a830b22e4c58b9687e3da3642a41f3750d191456f0b82a9dd1b7fb78fb648d  /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/unit/cj_gc_ohos_host_unit
+4418a8c7504d2991e08953dedb59190dedbc1f58b693c4390777dd1727e153ce  /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a  /root/sym_cangjie_runtime_1305_implement_r5892797534/ohos/build/runtime-staging/lib/x86_64_Release/libboundscheck.so

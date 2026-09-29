@@ -1,0 +1,7 @@
+[  RUN   ] RelocateLiveness.MutatorRejectsUnmarkedSource
+[  RUN   ] RelocateLiveness.MutatorRejectsUnmarkedSource
+cj_gc_unit: ../../../runtime/src/Heap/z/zRelocate.cpp:294: MapleRuntime::BaseObject *MapleRuntime::ZRelocate::relocate_object_inner(MapleRuntime::ZForwarding *, MapleRuntime::BaseObject *): Assertion `Heap::GetHeap().IsSurvivedObject(obj) && "Should be live"' failed.
+RELOCATE_LIVE_ASSERT worker=0 marked=0 status=134 target=1
+GC_UNIT_OTHER_VM_OKIDOKI RelocateLiveness.MutatorRejectsUnmarkedSource
+[  PASS  ] RelocateLiveness.MutatorRejectsUnmarkedSource
+[========] 1 tests: 1 passed, 0 failed

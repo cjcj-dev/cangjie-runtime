@@ -1,0 +1,4 @@
+[  RUN   ] StoreBuf.ProductWriteFlushPublishesPreviousYoungValue
+DETAIL young_prev buffered=1 young_before=0 young_after=1 old_after=0 previous=1 incoming=0 remset=1
+[  PASS  ] StoreBuf.ProductWriteFlushPublishesPreviousYoungValue
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] WeakRootsProduct.YoungBlockedAccessDoesNotDeathClean
+WEAK_ROOTS_YOUNG_NO_DEATH_CLEAN_ASSERT_EXECUTED
+[  PASS  ] WeakRootsProduct.YoungBlockedAccessDoesNotDeathClean
+[========] 1 tests: 1 passed, 0 failed

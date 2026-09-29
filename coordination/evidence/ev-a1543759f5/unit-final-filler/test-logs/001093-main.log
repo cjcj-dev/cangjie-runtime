@@ -1,0 +1,7 @@
+[  RUN   ] ZWorkers.CoordinatorReturnsAfterEveryWorkerCompleted
+[  RUN   ] ZWorkers.CoordinatorReturnsAfterEveryWorkerCompleted
+WORKER_COMPLETION_TARGET entered=1 finished=1 stillWaiting=1 completedAtReturn=3
+OBSERVED coordinator blocked until the third worker completed
+GC_UNIT_OTHER_VM_OKIDOKI ZWorkers.CoordinatorReturnsAfterEveryWorkerCompleted
+[  PASS  ] ZWorkers.CoordinatorReturnsAfterEveryWorkerCompleted
+[========] 1 tests: 1 passed, 0 failed

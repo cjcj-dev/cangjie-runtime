@@ -1,0 +1,7 @@
+[  RUN   ] CallRegisterRoots.HeapReferencesRejectsThirdFrame
+[  RUN   ] CallRegisterRoots.HeapReferencesRejectsThirdFrame
+2026-09-30 00:27:55.663824 3582731 F GC register root at ordinary statepoint, start ip: 0x5b5e84ad9c08 frame pc: 0x5b5e84ad9c18
+CALL_ROOT_TARGET route=1 stub=5 invalid=1 status=134 rejected=1 accepted=0
+GC_UNIT_OTHER_VM_OKIDOKI CallRegisterRoots.HeapReferencesRejectsThirdFrame
+[  PASS  ] CallRegisterRoots.HeapReferencesRejectsThirdFrame
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] ZForwardingEntries.ConcurrentSameKeyReturnsInitializedWinner
+P1_WINNER target_assertion executed=1 matched=1 a=0x7fffc80c1b50 b=0x7fffc80c1b50
+[  PASS  ] ZForwardingEntries.ConcurrentSameKeyReturnsInitializedWinner
+[========] 1 tests: 1 passed, 0 failed

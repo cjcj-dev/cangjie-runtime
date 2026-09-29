@@ -1,0 +1,7 @@
+[  RUN   ] StackWatermark.ReturnRootIdentityAcrossRequest
+K3_RETURN_WRITEBACK_ASSERT phase=first rewritten=1 value=0x63954ac36860 expected=0x63954ac36860
+RETURN_ROOT_RESULT phase=cold value=0x63954ac36860 safe=1
+K3_RETURN_WRITEBACK_ASSERT phase=repeat rewritten=1 value=0x63954ac36860 expected=0x63954ac36860
+RETURN_ROOT_RESULT phase=started value=0x63954ac36860 safe=1
+[  PASS  ] StackWatermark.ReturnRootIdentityAcrossRequest
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] UpstreamDemangle.ConcurrentPackageUsesPublicResult
+UPSTREAM_DEMANGLE_TARGET package=concurrent actual=std.concurrent.threadScope() expected=std.concurrent.threadScope()
+[  PASS  ] UpstreamDemangle.ConcurrentPackageUsesPublicResult
+[========] 1 tests: 1 passed, 0 failed

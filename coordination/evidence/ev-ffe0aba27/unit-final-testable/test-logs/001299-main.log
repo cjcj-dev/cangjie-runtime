@@ -1,0 +1,3 @@
+[  RUN   ] ReferenceProcessor.DuplicateWeakPendingAcceptedOnce
+[  PASS  ] ReferenceProcessor.DuplicateWeakPendingAcceptedOnce
+[========] 1 tests: 1 passed, 0 failed

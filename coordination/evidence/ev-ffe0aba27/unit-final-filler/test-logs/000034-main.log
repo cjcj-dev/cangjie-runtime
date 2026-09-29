@@ -1,0 +1,3 @@
+[  RUN   ] ZSafeDelete.deferred_delete_waits_for_disable
+[  PASS  ] ZSafeDelete.deferred_delete_waits_for_disable
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] StoreBuf.ResolvedInvalidPreviousIsClassifiedAndCleared
+DETAIL arm=resolved_invalid prev=0xfff9e0290b01510 installed_phase=0 installed_store_good=0x1510 retired_receipts=0 current=32 slot_remembered=1
+[  PASS  ] StoreBuf.ResolvedInvalidPreviousIsClassifiedAndCleared
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] WeakRootsProduct.PhantomCleanDeadClearsSlot
+WEAK_ROOTS_DEAD_CLEAN_ASSERT_EXECUTED
+[  PASS  ] WeakRootsProduct.PhantomCleanDeadClearsSlot
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,5 @@
+[  RUN   ] ExemptLife.PartialOverlapCopyLandsSourceImage
+[  RUN   ] ExemptLife.PartialOverlapCopyLandsSourceImage
+GC_UNIT_OTHER_VM_OKIDOKI ExemptLife.PartialOverlapCopyLandsSourceImage
+[  PASS  ] ExemptLife.PartialOverlapCopyLandsSourceImage
+[========] 1 tests: 1 passed, 0 failed

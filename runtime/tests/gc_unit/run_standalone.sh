@@ -18,8 +18,8 @@ if [[ -z "$RUNTIME_LIB_DIR" || ! -f "$RUNTIME_LIB_DIR/libcangjie-runtime.so" ]];
 fi
 
 if [[ -z "${GCV2_RUNTIME_OUTPUT_ROOT:-}" ]]; then
-  GCV2_RUNTIME_OUTPUT_ROOT=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" \
-    "$ROOT/runtime" "$RUNTIME_LIB_DIR")
+  GCV2_RUNTIME_OUTPUT_ROOT=$(python3 "$SRC/product_test_configuration.py" \
+    "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$RUNTIME_LIB_DIR/../.." --resolve-root)
 fi
 
 run_ohos_host_arm() {
@@ -472,10 +472,14 @@ compile_one() {
 export -f compile_one
 xargs -0 -n 3 -P "$BUILD_JOBS" bash -c 'compile_one "$1" "$2" "$3"' _ <"$COMPILE_MANIFEST"
 
+COPY_OBJECT=$(python3 "$SRC/product_test_configuration.py" \
+  "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT" --copy-object --compiler "$CXX")
+COPY_OBJECTS=()
+if [[ -n "$COPY_OBJECT" ]]; then COPY_OBJECTS+=("$COPY_OBJECT"); fi
 read -r -a CXX_COMMAND <<<"$CXX"
 set +e
 (
-  "${CXX_COMMAND[@]}" "${MAIN_COMPILE_FLAGS[@]}" "${MAIN_OBJECTS[@]}" \
+  "${CXX_COMMAND[@]}" "${MAIN_COMPILE_FLAGS[@]}" "${MAIN_OBJECTS[@]}" "${COPY_OBJECTS[@]}" \
     -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
     -lcangjie-runtime -lboundscheck -o "$OUT/cj_gc_unit"
 ) &

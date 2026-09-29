@@ -1,0 +1,4 @@
+[  RUN   ] BarrierOldAtomic.NoAllocBufferOverwriteRetiresOldValue
+DETAIL arm=no_alloc old_receipt=1 new_receipt=0 remset=1 final_target=0x40000a00040
+[  PASS  ] BarrierOldAtomic.NoAllocBufferOverwriteRetiresOldValue
+[========] 1 tests: 1 passed, 0 failed

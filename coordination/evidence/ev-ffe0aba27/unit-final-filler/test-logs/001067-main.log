@@ -1,0 +1,8 @@
+[  RUN   ] Uncommitter.CacheValleyLimitsActivationBudget
+[  RUN   ] Uncommitter.CacheValleyLimitsActivationBudget
+TARGET_INITIAL_WATERMARK budget=0
+TARGET_CACHE_VALLEY budget=18874368 expected=18874368 capacity=67108864
+TARGET_PARTITION_FLOOR budget=2097152
+GC_UNIT_OTHER_VM_OKIDOKI Uncommitter.CacheValleyLimitsActivationBudget
+[  PASS  ] Uncommitter.CacheValleyLimitsActivationBudget
+[========] 1 tests: 1 passed, 0 failed

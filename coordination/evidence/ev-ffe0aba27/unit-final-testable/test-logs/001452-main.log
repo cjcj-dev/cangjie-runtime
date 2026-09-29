@@ -1,0 +1,7 @@
+[  RUN   ] PackageInit.PublicUnloadWithoutRuntimeInitErasesHandler
+PACKAGE_INIT_TARGET uninit-load executed=1 pass=1
+PACKAGE_INIT_TARGET uninit-handle-present executed=1 pass=1
+PACKAGE_INIT_TARGET uninit-close executed=1 pass=1
+PACKAGE_INIT_TARGET uninit-handle-erased executed=1 pass=1
+[  PASS  ] PackageInit.PublicUnloadWithoutRuntimeInitErasesHandler
+[========] 1 tests: 1 passed, 0 failed

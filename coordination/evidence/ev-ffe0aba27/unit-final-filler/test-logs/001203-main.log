@@ -1,0 +1,6 @@
+[  RUN   ] MarkStackClear.DestructorAfterMultipleBuffers
+MARK_STACK_DTOR_ENTER buffers=3
+MARK_STACK_DTOR_RESULT empty=1
+MARK_STACK_DTOR_STATUS status=0
+[  PASS  ] MarkStackClear.DestructorAfterMultipleBuffers
+[========] 1 tests: 1 passed, 0 failed

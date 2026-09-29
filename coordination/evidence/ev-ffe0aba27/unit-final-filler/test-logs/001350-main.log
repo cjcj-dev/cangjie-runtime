@@ -1,0 +1,11 @@
+[  RUN   ] MarkingStacks.RejectsPublishedStackAndAcceptsDrainedStack
+[  RUN   ] MarkingStacks.RejectsPublishedStackAndAcceptsDrainedStack
+[  RUN   ] MarkingStacks.RejectsPublishedStackAndAcceptsDrainedStack
+[  RUN   ] MarkingStacks.RejectsPublishedStackAndAcceptsDrainedStack
+2026-09-30 00:28:29.645343 272207 F Check failed: stripes.IsEmpty()
+2026-09-30 00:28:29.645496 272207 F Shared marking stripes are not empty
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+GC_UNIT_OTHER_VM_OKIDOKI MarkingStacks.RejectsPublishedStackAndAcceptsDrainedStack
+GC_UNIT_OTHER_VM_OKIDOKI MarkingStacks.RejectsPublishedStackAndAcceptsDrainedStack
+[  PASS  ] MarkingStacks.RejectsPublishedStackAndAcceptsDrainedStack
+[========] 1 tests: 1 passed, 0 failed

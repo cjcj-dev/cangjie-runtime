@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument('--testable', default='0')
     parser.add_argument('--ohos', default='0')
     parser.add_argument('--gate', type=Path)
+    parser.add_argument('--copy-object', type=Path)
     return parser.parse_args()
 
 
@@ -116,6 +117,12 @@ def publish(args):
     if not re.fullmatch(r'[a-z0-9._+-]+', args.label):
         raise RuntimeError('invalid readable configuration label')
     inputs, cjthread_paths = generated_inputs(args)
+    copy_object = getattr(args, 'copy_object', None)
+    if copy_object is not None:
+        copy_object = copy_object.resolve()
+        inputs['internal_test_objects'] = {'copy_disjoint_words': {
+            'path': str(Path('lib') / args.library_subdir / 'gc-unit/Copy_aarch64.o'),
+            'sha256': sha(copy_object)}}
     signature_text = canonical_json(inputs)
     signature = hashlib.sha256(signature_text.encode()).hexdigest()
     config_id = args.label + '-' + signature
@@ -125,6 +132,8 @@ def publish(args):
     files = {str(relative_lib / args.runtime.name): args.runtime,
              str(relative_lib / args.boundscheck.name): args.boundscheck}
     files.update({str(path.relative_to(args.staging)): path for path in cjthread_paths})
+    if copy_object is not None:
+        files[inputs['internal_test_objects']['copy_disjoint_words']['path']] = copy_object
     hashes = {name: sha(path) for name, path in files.items()}
     manifest = (f'SCHEMA_VERSION=6\nCONFIG_ID={config_id}\n'
                 f'CONFIG_SIGNATURE_SHA256={signature}\nLIB_DIR={lib}\n'

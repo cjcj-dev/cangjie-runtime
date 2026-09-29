@@ -1,0 +1,4 @@
+[  RUN   ] BarrierOldAtomic.AtomicCasLostPreservesConcurrentWinner
+DETAIL arm=atomic_cas_lost winner=0x40000800100
+[  PASS  ] BarrierOldAtomic.AtomicCasLostPreservesConcurrentWinner
+[========] 1 tests: 1 passed, 0 failed

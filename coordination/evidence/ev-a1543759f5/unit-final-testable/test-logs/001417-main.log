@@ -1,0 +1,53 @@
+[  RUN   ] MarkAllocation.LargeHolderKeepsRootedExistingTargetLive
+[  RUN   ] MarkAllocation.LargeHolderKeepsRootedExistingTargetLive
+P1_TLAB_RETIRE_ASSERT_EXECUTED different=1 birth=2 owner=2
+P1_NEW_REGISTRATION_ASSERT_EXECUTED birth=2 owner=2 no_bitmap=1 pending_before=0 pending_after=0
+MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=1 phase=0 young=1 large=1 implicit=1 live=1 target_live=1 excluded=1
+MARK_ALLOC_COMPLETED_VALUE_ASSERT_EXECUTED length_valid=1
+MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED before=2 after=3 resampled=1
+MARK_ALLOC_ASSERT_RESULT status=0 bits=implicit:1,live:2,target_live:4,excluded:8,next_cycle:16,resampled:32,window:64,mark_end_live:128,completed_value:256
+2026-09-29 23:56:11.923230 3146874 I GC Workers for Young Generation: 5 (static)
+2026-09-29 23:56:11.923713 3146874 I GC Workers for Old Generation: 5 (static)
+2026-09-29 23:56:11.924354 3147282 I FinalizerProcessor thread started
+2026-09-29 23:56:11.924630 3146874 I Uncommit: Enabled delay=300s
+2026-09-29 23:56:11.924728 3146874 I Cangjie runtime started.
+2026-09-29 23:56:11.946244 3147370 I Pause Mark Start stw time 32 us
+2026-09-29 23:56:11.993016 3147196 I Pause Mark Start stw time 68 us
+2026-09-29 23:56:12.008344 3147196 I Pause Mark End stw time 15 us
+2026-09-29 23:56:12.012243 3147196 I Pause Relocate Start stw time 2 us
+2026-09-29 23:56:12.012442 3147196 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:12.012509 3147196 I Allocation Stalls:            0            0              0            0
+2026-09-29 23:56:12.012568 3147196 I Load: 55.02 (29%) / 44.01 (23%) / 56.85 (30%)
+2026-09-29 23:56:12.012641 3147196 I MMU: 2ms/99.1%, 5ms/99.6%, 10ms/99.8%, 20ms/99.9%, 50ms/99.9%, 100ms/100.0%
+2026-09-29 23:56:12.012698 3147196 I Mark: 16 stripe(s), 5 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-29 23:56:12.012753 3147196 I Pages:           Candidates     Selected     In-Place         Size        Empty    Relocated
+2026-09-29 23:56:12.012808 3147196 I Small                     2            0            0           4M           2M           0M
+2026-09-29 23:56:12.012863 3147196 I Medium                    0            0            0           0M           0M           0M
+2026-09-29 23:56:12.012918 3147196 I Large                     1            0            0          10M           0M           0M
+2026-09-29 23:56:12.012972 3147196 I Forwarding Usage: 0M
+2026-09-29 23:56:12.013026 3147196 I Age Table:       Live    Garbage            Small           Medium            Large
+2026-09-29 23:56:12.013088 3147196 I Eden          8388656    6291408       2 / 0            0 / 0            1 / 0     
+2026-09-29 23:56:12.013143 3147196 I Min Capacity: 0M
+2026-09-29 23:56:12.013196 3147196 I Max Capacity: 512M
+2026-09-29 23:56:12.013249 3147196 I Soft Max Capacity: 512M
+2026-09-29 23:56:12.013302 3147196 I Heap Statistics:
+2026-09-29 23:56:12.013355 3147196 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-29 23:56:12.013408 3147196 I Capacity:             18M          18M            18M          18M          18M          18M
+2026-09-29 23:56:12.013462 3147196 I Free:                498M         498M           500M         500M         500M         498M
+2026-09-29 23:56:12.013515 3147196 I Used:                 14M          14M            12M          12M          14M          12M
+2026-09-29 23:56:12.013568 3147196 I Young Generation Statistics:
+2026-09-29 23:56:12.013621 3147196 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:12.013675 3147196 I Used:                 14M          14M            12M          12M
+2026-09-29 23:56:12.013728 3147196 I Live:                 N/A           8M             8M           8M
+2026-09-29 23:56:12.013781 3147196 I Garbage:              N/A           5M             3M           3M
+2026-09-29 23:56:12.013834 3147196 I Allocated:            N/A           0M             0M           0M
+2026-09-29 23:56:12.013888 3147196 I Reclaimed:            N/A          N/A             2M           2M
+2026-09-29 23:56:12.013941 3147196 I Promoted:             N/A          N/A             0M           0M
+2026-09-29 23:56:12.013994 3147196 I Compacted:            N/A          N/A           N/A           0M
+2026-09-29 23:56:12.014051 3147196 I Young Generation 14M->12M 0.019s
+2026-09-29 23:56:12.014486 3147282 I FinalizerProcessor thread stopped
+2026-09-29 23:56:12.015567 3147236 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-29 23:56:12.015733 3147236 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:12.015806 3147236 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 GC_UNIT_OTHER_VM_OKIDOKI MarkAllocation.LargeHolderKeepsRootedExistingTargetLive
+[  PASS  ] MarkAllocation.LargeHolderKeepsRootedExistingTargetLive
+[========] 1 tests: 1 passed, 0 failed

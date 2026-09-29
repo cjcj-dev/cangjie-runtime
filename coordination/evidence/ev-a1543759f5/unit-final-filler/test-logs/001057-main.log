@@ -1,0 +1,5 @@
+[  RUN   ] Uncommitter.CycleCancelStopsUncommit
+[  RUN   ] Uncommitter.CycleCancelStopsUncommit
+GC_UNIT_OTHER_VM_OKIDOKI Uncommitter.CycleCancelStopsUncommit
+[  PASS  ] Uncommitter.CycleCancelStopsUncommit
+[========] 1 tests: 1 passed, 0 failed

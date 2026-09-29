@@ -1,0 +1,4 @@
+[  RUN   ] RememberedClear845.ConsumedPreviousSlotsAreAbsentOnRescan
+REMEMBERED845_ASSERT_EXECUTED published=1 remaining=0 repeated=0
+[  PASS  ] RememberedClear845.ConsumedPreviousSlotsAreAbsentOnRescan
+[========] 1 tests: 1 passed, 0 failed

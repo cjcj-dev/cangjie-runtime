@@ -1,0 +1,7 @@
+[  RUN   ] SoftMemoryRuntime.OfficialMB
+[  RUN   ] SoftMemoryRuntime.OfficialMB
+2026-09-29 23:56:10.881130 3136767 E SoftMaxHeapSize must be less than or equal to the maximum heap size
+MEMORY_RUNTIME input=[32768MB] rc=-1 valid=0 expected=34359738368
+GC_UNIT_OTHER_VM_OKIDOKI SoftMemoryRuntime.OfficialMB
+[  PASS  ] SoftMemoryRuntime.OfficialMB
+[========] 1 tests: 1 passed, 0 failed

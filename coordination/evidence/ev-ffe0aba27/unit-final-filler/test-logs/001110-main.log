@@ -1,0 +1,4 @@
+[  RUN   ] RememberedLifecycle720.ConstructedGenerationPublishesHighestGranule
+REMEMBERED720 highest=34357641216 found=1 page_matches=1
+[  PASS  ] RememberedLifecycle720.ConstructedGenerationPublishesHighestGranule
+[========] 1 tests: 1 passed, 0 failed
