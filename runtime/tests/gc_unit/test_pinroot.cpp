@@ -1403,6 +1403,7 @@ GC_COMPONENT_OTHER_VM_TEST(Remset1313, OldRelocateStartParity)
     old.InitializeWorkers(1);
     old.Workers()->set_active_workers(1);
     GenerationSequenceFixture::Advance(young);
+    GenerationSequenceFixture::Advance(young);
     old.set_phase(ZGenerationPhase::MarkComplete);
     {
         ScopedStopTheWorld pause("old relocate parity", false);
