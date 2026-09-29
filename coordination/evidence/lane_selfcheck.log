@@ -1,8 +1,8 @@
 PASS [4-header] 首行以 PROGRESS= 开头且含 LANE=
-PASS [1-delivery-ref] cjcjdev/refs/heads/sym/1305-implement-r5892797534 == e6a20f5db0f98b2cf3cd618e5e41dd9e054dc9ff
+PASS [1-delivery-ref] cjcjdev/refs/heads/sym/1305-implement-r5892797534 == 1adcf87dd003b42140787ac05b1391f193dc53b1
 INFO [2-diff] default: CAND-ONLY=0
 INFO [2-diff] filler: CAND-ONLY=0
 INFO [2-diff] testable: CAND-ONLY=0
-FAIL [2-diff] DIFF-e6a20f5db0f9-vs-9733dfc09d29.json 有臂未 ran: managed='NOT_RUN'
-PASS [3-so-hash] 候选≠切刀、候选∩恢复≠∅（候选 2 / 恢复 2 / 切刀 5 枚，启发式）
+FAIL [2-diff] DIFF-1adcf87dd003-vs-9733dfc09d29.json 有臂未 ran: managed='NOT_RUN'
+PASS [3-so-hash] 候选≠切刀、候选∩恢复≠∅（候选 2 / 恢复 0 / 切刀 1 枚，启发式）
 SUMMARY fail=1 warn=0 rc=1
