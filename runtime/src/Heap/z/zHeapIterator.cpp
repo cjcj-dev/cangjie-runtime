@@ -28,17 +28,24 @@ bool HeapIteratorBitMap::try_set_bit(size_t index)
 }
 
 HeapIterator::HeapIterator(bool visitWeaks, bool forVerify, unsigned nworkers)
-    : visitWeaks(visitWeaks), forVerify(forVerify), nworkers(nworkers == 0 ? 1 : nworkers),
+    : workerQueues(nworkers == 0 ? 1 : nworkers), workerArrayQueues(nworkers == 0 ? 1 : nworkers),
+      visitWeaks(visitWeaks), forVerify(forVerify), terminator(workerQueues.size(), &workerQueues),
       objectBitmaps(ZAddressOffsetMax)
 {
-    workerQueues.resize(this->nworkers);
-    workerArrayQueues.resize(this->nworkers);
+    for (unsigned i = 0; i < workerQueues.size(); ++i) {
+        workerQueues.register_queue(i, new ObjectQueue());
+        workerArrayQueues.register_queue(i, new ArrayQueue());
+    }
 }
 
 HeapIterator::~HeapIterator()
 {
     for (size_t i = 0; i < objectBitmaps.size(); ++i) {
         delete objectBitmaps.at(i);
+    }
+    for (unsigned i = 0; i < workerQueues.size(); ++i) {
+        delete workerQueues.queue(i);
+        delete workerArrayQueues.queue(i);
     }
 }
 
@@ -77,33 +84,23 @@ void HeapIteratorContext::push(BaseObject* object) const
         if (iter.forVerify) {
             visit_object(object);
         }
-        queue.push_back(object);
+        queue->push(object);
     }
 }
 
 void HeapIteratorContext::push_array_chunk(const HeapIterator::ObjArrayTask& array) const
 {
-    arrayQueue.push_back(array);
+    arrayQueue->push(array);
 }
 
 bool HeapIteratorContext::pop(BaseObject*& object) const
 {
-    if (queue.empty()) {
-        return false;
-    }
-    object = queue.back();
-    queue.pop_back();
-    return true;
+    return queue->pop_overflow(object) || queue->pop_local(object);
 }
 
 bool HeapIteratorContext::pop_array_chunk(HeapIterator::ObjArrayTask& array) const
 {
-    if (arrayQueue.empty()) {
-        return false;
-    }
-    array = arrayQueue.back();
-    arrayQueue.pop_back();
-    return true;
+    return arrayQueue->pop_overflow(array) || arrayQueue->pop_local(array);
 }
 
 void HeapIterator::Push(BaseObject* object, const ObjectVisitor& objectVisitor)
@@ -239,29 +236,26 @@ void HeapIterator::drain(const HeapIteratorContext& context)
     } while (!context.is_drained());
 }
 
+template <bool VisitWeaks>
 void HeapIterator::steal(const HeapIteratorContext& context)
 {
-    const uint32_t self = context.worker_id();
-    for (unsigned i = 0; i < nworkers; ++i) {
-        const unsigned other = (self + 1 + i) % nworkers;
-        if (other == self) {
-            continue;
-        }
-        auto& q = workerQueues[other];
-        if (!q.empty()) {
-            BaseObject* object = q.back();
-            q.pop_back();
-            context.queue.push_back(object);
-            return;
-        }
-        auto& aq = workerArrayQueues[other];
-        if (!aq.empty()) {
-            ObjArrayTask array = aq.back();
-            aq.pop_back();
-            context.arrayQueue.push_back(array);
-            return;
-        }
+    ObjArrayTask array { nullptr, 0 };
+    BaseObject* object = nullptr;
+    if (steal_array_chunk(context, array)) {
+        follow_array_chunk(context, array);
+    } else if (steal(context, object)) {
+        visit_and_follow<VisitWeaks>(context, object);
     }
+}
+
+bool HeapIterator::steal(const HeapIteratorContext& context, BaseObject*& object)
+{
+    return workerQueues.steal(context.worker_id(), object);
+}
+
+bool HeapIterator::steal_array_chunk(const HeapIteratorContext& context, ObjArrayTask& array)
+{
+    return workerArrayQueues.steal(context.worker_id(), array);
 }
 
 template <bool VisitWeaks>
@@ -269,8 +263,8 @@ void HeapIterator::drain_and_steal(const HeapIteratorContext& context)
 {
     do {
         drain<VisitWeaks>(context);
-        steal(context);
-    } while (!context.is_drained());
+        steal<VisitWeaks>(context);
+    } while (!context.is_drained() || !terminator.offer_termination());
 }
 
 template <bool VisitWeaks>
