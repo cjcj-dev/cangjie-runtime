@@ -7,6 +7,9 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "b09_runtime_fixture.hpp"
+#include "Mutator/Mutator.h"
+#include "Mutator/Handshake.h"
 #include "Heap/z/zRelocate.hpp"
 #include <atomic>
 #include <thread>
@@ -118,4 +121,45 @@ GC_TEST(RelocationPageQueue, EnqueueWakesSynchronizedWorker)
     queue.deactivate();
     GC_EXPECT_TRUE(selected == owner);
     GC_EXPECT_TRUE(owner->is_claimed() && owner->is_done());
+}
+
+// Waiting in the leaf barrier must preserve the unsafe mutator/handshake
+// context. Observe it while actually queued and after the product wait returns.
+GC_OTHER_VM_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    heap.InstallPageOwner(heap.region0());
+    auto* owner = forwarding_for_page(heap.region0());
+    ZRelocateQueue queue;
+    queue.activate(1);
+    Mutator mutator;
+    auto& handshake = mutator.GetHandshakeState();
+    bool afterMutatorSafe = true;
+    bool afterHandshakeSafe = true;
+    std::thread requester([&] {
+        ThreadLocal::SetMutator(&mutator);
+        ThreadLocal::SetThreadType(ThreadType::CJ_PROCESSOR);
+        mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
+        handshake.leave_safe();
+        queue.add_and_wait(owner);
+        afterMutatorSafe = mutator.InSaferegion();
+        afterHandshakeSafe = handshake.observed_safe();
+        ThreadLocal::SetMutator(nullptr);
+        ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    });
+    ZForwarding* selected = nullptr;
+    while ((selected = queue.synchronize_poll()) == nullptr) std::this_thread::yield();
+    const bool waitingMutatorSafe = mutator.InSaferegion();
+    const bool waitingHandshakeSafe = handshake.observed_safe();
+    selected->release_page();
+    selected->mark_done();
+    queue.leave();
+    requester.join();
+    queue.deactivate();
+    GC_EXPECT_FALSE(waitingMutatorSafe);
+    GC_EXPECT_FALSE(waitingHandshakeSafe);
+    GC_EXPECT_FALSE(afterMutatorSafe);
+    GC_EXPECT_FALSE(afterHandshakeSafe);
+    GC_EXPECT_TRUE(owner->is_done());
 }
