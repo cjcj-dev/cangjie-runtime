@@ -567,10 +567,7 @@ void ZGenerationOld::process_non_strong_references()
     // Finalizable graphs were followed during mark discovery. This phase
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
     ZMark::ProcessFinalizers();
-    if (Heap::GetHeap().old().WeakRootsProcessor() != nullptr) {
-        Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();
-    }
-    SyncRetireDead();
+    Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();
     StringDedup::Instance().Clean([this](BaseObject* object) {
         ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
         return region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Old>(object);
