@@ -122,9 +122,13 @@ else:
         save()
         raise SystemExit(0)
     extension = ".dll" if windows else ".so"
-    libs = list(tree.rglob("*cangjie-runtime" + extension))
+    libs = list((build / "runtime-staging").rglob("*cangjie-runtime" + extension))
     assert len(libs) == 1, libs
-    libdir = libs[0].parent
+    libdir = out / "linked-product"
+    libdir.mkdir()
+    for path in (build / "runtime-staging").rglob("*"):
+        if path.is_file() and (path.suffix in (".dll", ".so") or path.name.endswith(".dll.a")):
+            shutil.copy2(path, libdir / path.name)
     # Capture hashes at link completion, before any arm can replace the library.
     record["linked_runtime"] = {"path": str(libs[0]), "sha256": digest(libs[0])}
     checked(["llvm-nm" if windows else "nm", "--defined-only", libs[0]], "symbols")
