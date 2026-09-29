@@ -34,6 +34,7 @@
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkContext.hpp"
+#include "Common/SuspendibleThreadSet.h"
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 #include "ObjectModel/MArray.inline.h"
