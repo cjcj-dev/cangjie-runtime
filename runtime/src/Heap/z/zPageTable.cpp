@@ -64,21 +64,6 @@ void ZPageTable::replace(ZPage* old_page, ZPage* new_page)
     }
 }
 
-ZPageTableIterator::ZPageTableIterator(const ZPageTable* table)
-    : _iter(&table->_map), _prev(nullptr)
-{}
-
-bool ZPageTableIterator::next(ZPage** page)
-{
-    for (ZPage* entry; _iter.next(&entry);) {
-        if (entry != nullptr && entry != _prev) {
-            *page = _prev = entry;
-            return true;
-        }
-    }
-    return false;
-}
-
 ZGenerationPagesIterator::ZGenerationPagesIterator(const ZPageTable* page_table, ZGenerationId id,
                                                  ZPageAllocator* page_allocator)
     : _iterator(page_table), _generation_id(id), _page_allocator(page_allocator)
