@@ -96,6 +96,9 @@ function(cj_runtime_finalize_output_layout)
         --generator "${CMAKE_GENERATOR}" --make-program "${CMAKE_MAKE_PROGRAM}"
         --testable "$<BOOL:${MRT_TESTABLE_INTERNALS}>" --ohos "$<BOOL:${MRT_GC_UNIT_OHOS_HOST}>"
         ${_gate_args})
+    if(TARGET RuntimeCopy)
+        list(APPEND _publish_args --copy-object "$<TARGET_OBJECTS:RuntimeCopy>")
+    endif()
     if(CMAKE_TOOLCHAIN_FILE)
         list(APPEND _publish_args --toolchain "${CMAKE_TOOLCHAIN_FILE}")
     endif()
