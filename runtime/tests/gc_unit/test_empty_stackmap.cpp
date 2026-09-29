@@ -14,14 +14,19 @@ namespace {
 struct EmptyMetadata {
     int32_t slot = 0;
     uint32_t code[3] = {};
-    uint32_t descriptor[8] = {};
+    int32_t descriptor[8] = {};
+    alignas(Uptr) uint8_t stackmap[32] = {};
 };
 
-void CheckEmpty(bool descriptorPresent)
+void CheckEmpty(bool descriptorPresent, bool stackmapPresent = false)
 {
-    EmptyMetadata image;
+    static EmptyMetadata image;
+    image = {};
     if (descriptorPresent) {
         image.slot = reinterpret_cast<char*>(image.descriptor) - reinterpret_cast<char*>(&image.slot);
+    }
+    if (stackmapPresent) {
+        image.descriptor[0] = reinterpret_cast<char*>(image.stackmap) - reinterpret_cast<char*>(image.descriptor);
     }
     const Uptr pc = reinterpret_cast<Uptr>(image.code);
     int output[2];
@@ -30,13 +35,14 @@ void CheckEmpty(bool descriptorPresent)
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
         close(output[0]);
+        ElfUnloadQuiescence::LinkImage(pc);
         // The only result sent to the parent is computed from product APIs.
         const auto desc = MFuncDesc::GetFuncDesc(pc);
         const auto head = CompressedStackMapHead::GetStackMapHead(pc);
         StackMapBuilder builder(pc, pc, 0);
         unsigned result = 0;
         if ((desc != nullptr) == descriptorPresent) { result |= 1; }
-        if (!head.IsValid()) { result |= 2; }
+        if (head.IsValid() == stackmapPresent) { result |= 2; }
         if (!head.GetStackMapEntry(pc, pc).IsValid()) { result |= 4; }
         if (!builder.Build<HeapReferenceMap>().IsValid()) { result |= 8; }
         if (!builder.Build<StackPtrMap>().IsValid()) { result |= 16; }
@@ -53,8 +59,8 @@ void CheckEmpty(bool descriptorPresent)
     const auto waited = waitpid(child, &status, 0);
     // A decode fault cannot terminate this assertion's process or mask it
     // behind an earlier existence assertion.
-    std::fprintf(stderr, "EMPTY_STACKMAP_TARGET descriptor=%d result=%u bytes=%zd status=%d waited=%d\n",
-                 descriptorPresent, result, bytes, status, waited == child);
+    std::fprintf(stderr, "EMPTY_STACKMAP_TARGET descriptor=%d stackmap=%d result=%u bytes=%zd status=%d waited=%d\n",
+                 descriptorPresent, stackmapPresent, result, bytes, status, waited == child);
     GC_EXPECT_EQ(result, 127u);
     GC_EXPECT_EQ(bytes, static_cast<ssize_t>(sizeof(result)));
     GC_EXPECT_EQ(status, 0);
@@ -62,4 +68,5 @@ void CheckEmpty(bool descriptorPresent)
 }
 GC_TEST(EmptyStackMap, AbsentDescriptor) { CheckEmpty(false); }
 GC_TEST(EmptyStackMap, AbsentStackMap) { CheckEmpty(true); }
+GC_TEST(EmptyStackMap, PresentMetadata) { CheckEmpty(true, true); }
 #endif
