@@ -277,9 +277,9 @@ public:
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
-        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc);
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc, framePC);
 #else
-        auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc, framePC);
 #endif
         auto closure = head.TakePrologueRegisters();
         auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
@@ -293,9 +293,9 @@ public:
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
-        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc);
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc, framePC);
 #else
-        auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc, framePC);
 #endif
         return head.GetInvalidReason(startPC, framePC);
     }
@@ -314,9 +314,9 @@ inline HeapReferenceMap StackMapBuilder::Build<HeapReferenceMap>(bool countDeriv
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
-    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc);
+    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc, framePC);
 #else
-    auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
+    auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc, framePC);
 #endif
     auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
     return entry.IsValid() ? HeapReferenceMap(true, stackBase, entry) : HeapReferenceMap(stackBase);
@@ -329,9 +329,9 @@ inline MethodMap StackMapBuilder::Build<MethodMap>(bool countDerivedRows) const
     ElfUnloadQuiescence::ReadScope metadataReader;
     (void)countDerivedRows;
 #ifdef __APPLE__
-    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc);
+    auto head = CompressedStackMapHead::GetStackMapHead(stackBase, funcDesc, framePC);
 #else
-    auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc);
+    auto head = CompressedStackMapHead::GetStackMapHead(startPC, funcDesc, framePC);
 #endif
     auto entry = head.GetStackMapEntry(startPC, framePC);
     if (!entry.IsValid()) {

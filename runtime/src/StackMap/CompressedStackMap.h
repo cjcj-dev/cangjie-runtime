@@ -128,7 +128,7 @@ public:
     CompressedStackMapHead(CompressedStackMapHead&&) = default;
     ~CompressedStackMapHead() = default;
     PrologueRegisterClosure TakePrologueRegisters() { return prologue.TakeRegisters(); }
-    static CompressedStackMapHead GetStackMapHead(Uptr addr, uint64_t* funcDesc = nullptr)
+    static CompressedStackMapHead GetStackMapHead(Uptr addr, uint64_t* funcDesc = nullptr, Uptr framePC = 0)
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
         U8 *stackmapStart = nullptr;
@@ -140,8 +140,12 @@ public:
 #else
             FuncDescRef desc = MFuncDesc::GetFuncDesc(addr);
 #endif
+            CHECK_DETAIL(desc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
+                         reinterpret_cast<const void*>(addr), reinterpret_cast<const void*>(framePC));
             stackmapStart = reinterpret_cast<U8*>(desc->GetStackMap());
         }
+        CHECK_DETAIL(stackmapStart != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
+                     reinterpret_cast<const void*>(addr), reinterpret_cast<const void*>(framePC));
         return CompressedStackMapHead(reinterpret_cast<Uptr*>(stackmapStart));
     }
     static void DestroyStackMapHead(CompressedStackMapHead*& stackMapHead) noexcept

@@ -49,6 +49,8 @@ uintptr_t FrameInfo::CallerSP() const
             ElfUnloadQuiescence::ReadScope reader;
             FuncDescRef desc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(GetStartProc()));
             if (desc == nullptr) { return 0; }
+            CHECK_DETAIL(desc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
+                         GetStartProc(), mFrame.GetIP());
             const FramePrologue prologue(desc->GetStackMap());
             const size_t saved = prologue.GetSavedRegistersAboveFrameHead();
             return fp + sizeof(FrameAddress) + ((saved + 1) & ~size_t(1)) * sizeof(uintptr_t);

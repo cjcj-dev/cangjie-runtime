@@ -40,6 +40,10 @@ void InitPtrAuthRAMod(FrameInfo& callerFrameInfo, FrameInfo& calleeFrameInfo)
         FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(
             reinterpret_cast<Uptr>(FrameInfo::GetFuncStartPCFromFrameAddress(
                 reinterpret_cast<FrameAddress*>(calleeFrameInfo.mFrame.GetFA()))));
+        CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
+                     reinterpret_cast<const void*>(calleeFrameInfo.GetStartProc()), reinterpret_cast<const void*>(calleeFrameInfo.mFrame.GetIP()));
+        CHECK_DETAIL(funcDesc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
+                     reinterpret_cast<const void*>(calleeFrameInfo.GetStartProc()), reinterpret_cast<const void*>(calleeFrameInfo.mFrame.GetIP()));
         const FramePrologue prologue(funcDesc->GetStackMap());
         auto fa = calleeFrameInfo.mFrame.GetFA();
         const size_t count = prologue.GetSavedRegisterCount();

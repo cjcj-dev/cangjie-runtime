@@ -133,6 +133,7 @@ void StackManager::PrintStackTraceForCpuProfile(UnwindContext* unContext, unsign
 #else
         FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(frame.GetFuncStartPC()));
 #endif
+        if (funcDesc == nullptr) { continue; }
         StackMapBuilder stackMapBuild(reinterpret_cast<uintptr_t>(frame.GetFuncStartPC()),
             reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()), 0, reinterpret_cast<uint64_t*>(funcDesc));
         MethodMap methodMap = stackMapBuild.Build<MethodMap>();

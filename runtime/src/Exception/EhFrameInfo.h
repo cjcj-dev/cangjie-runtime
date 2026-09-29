@@ -109,6 +109,10 @@ public:
 #else
         FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(startProc));
 #endif
+        CHECK_DETAIL(funcDesc != nullptr, "managed frame missing funcdesc startPC=%p ip=%p",
+                     reinterpret_cast<const void*>(startProc), reinterpret_cast<const void*>(mFrame.GetIP()));
+        CHECK_DETAIL(funcDesc->GetStackMap() != nullptr, "managed frame missing stackmap startPC=%p ip=%p",
+                     reinterpret_cast<const void*>(startProc), reinterpret_cast<const void*>(mFrame.GetIP()));
         const FramePrologue prologue(funcDesc->GetStackMap());
         const auto& saved = prologue.GetRegisters();
         for (size_t i = 0; i < saved.calleeSaved.size(); ++i) {

@@ -222,6 +222,7 @@ class FramePrologue {
 public:
     explicit FramePrologue(const Uptr* table) : nextTable(reinterpret_cast<U8*>(const_cast<Uptr*>(table)), 0)
     {
+        CHECK_DETAIL(table != nullptr, "FramePrologue missing stackmap");
         frameSize = Read();
         slotFormat = Read();
         U32 bitmap = Read();
