@@ -283,17 +283,11 @@ inline void ZPage::remember(volatile zpointer* p)
 
 inline bool ZPage::is_remembered(volatile zpointer* p)
 {
-    if (!_remembered_set.is_initialized()) {
-        return false;
-    }
     return _remembered_set.at_current(local_offset(reinterpret_cast<MAddress>(p)));
 }
 
 inline bool ZPage::was_remembered(volatile zpointer* p)
 {
-    if (!_remembered_set.is_initialized()) {
-        return false;
-    }
     return _remembered_set.at_previous(local_offset(reinterpret_cast<MAddress>(p)));
 }
 
@@ -358,6 +352,10 @@ inline void ZPage::oops_do_remembered(Function function)
 template<typename Function>
 inline void ZPage::oops_do_remembered_in_live(Function function)
 {
+    DCHECK_D(!is_allocating(), "Must have liveness information");
+    DCHECK_D(!ZGeneration::old()->is_phase_mark(), "Must have liveness information");
+    DCHECK_D(is_marked(), "Must have liveness information");
+
     ZRememberedSetContainingInLiveIterator iter(this);
     for (ZRememberedSetContaining containing; iter.next(&containing);) {
         function(reinterpret_cast<volatile zpointer*>(containing._field_addr));
