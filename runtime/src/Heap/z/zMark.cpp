@@ -311,10 +311,10 @@ void ZMark::PushYoungObject(BaseObject* object, WorkStack& workStack, const char
     }
     (void)workStack;
     if (finalizable) {
-        const_cast<ZGeneration&>((*ZGeneration::young()))
+        (*ZGeneration::young())
             .MarkObjectIfActive<false, true, true, true>(from_object(object));
     } else {
-        const_cast<ZGeneration&>((*ZGeneration::young()))
+        (*ZGeneration::young())
             .MarkObjectIfActive<false, true, true, false>(from_object(object));
     }
 }
