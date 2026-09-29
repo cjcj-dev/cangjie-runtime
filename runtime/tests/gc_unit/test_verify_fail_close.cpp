@@ -29,6 +29,8 @@
 #include "Heap/z/zAccess.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeapIterator.hpp"
+#include "Heap/z/zWorkers.hpp"
+#include "TypeInfoManager.h"
 #include "Concurrency/ConcurrencyModel.h"
 
 using namespace MapleRuntime;
@@ -826,3 +828,72 @@ GC_OTHER_VM_TEST(ZVerifyReferent, RelocationChecksSourceReferent)
         old.Workers()->set_inactive();
     });
 }
+
+
+namespace {
+void CheckCarrierMarkTask(bool youngOnly, unsigned workers)
+{
+    RuntimeParam param{};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 512 * 1024;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto* native = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(native != nullptr);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uint64_t));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    BaseObject* young;
+    BaseObject* old;
+    void* youngCarrier;
+    void* oldCarrier;
+    {
+        ScopedObjectAccess access;
+        young = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(16, PageAge::eden));
+        old = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(16, PageAge::old));
+        young->SetClassInfo(type);
+        old->SetClassInfo(type);
+        auto* scheduler = Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
+        youngCarrier = MCC_NewCJThread(nullptr, young, scheduler);
+        oldCarrier = MCC_NewCJThread(nullptr, old, scheduler);
+    }
+    GC_EXPECT_TRUE(youngCarrier != nullptr && oldCarrier != nullptr);
+    const uintptr_t savedGuard = ZPointerStoreGoodMask;
+    size_t youngPublished = 0, oldPublished = 0, local = 0;
+    bool guardMatches = false, initiallyArmed = false;
+    {
+        DriverLocker lock;
+        YoungTypeSetter typeSetter(heap.young(), ZYoungType::major_partial_roots);
+        heap.young().pause_mark_start();
+        initiallyArmed = CJThreadRootsAreArmed(youngCarrier, ZPointerStoreGoodMask) &&
+                         CJThreadRootsAreArmed(oldCarrier, ZPointerStoreGoodMask);
+        auto& generation = youngOnly ? static_cast<ZGeneration&>(heap.young()) : static_cast<ZGeneration&>(heap.old());
+        generation.Workers()->set_active_workers(workers);
+        if (youngOnly) { heap.young().produceYoungRoots(); }
+        else { heap.old().mark_roots(); }
+        const uintptr_t expectedGuard = youngOnly
+            ? ZPointerLoadGoodMask | ZPointerMarkedYoung | (savedGuard & ZPointerMarkedOldMask) | ZPointerRemembered
+            : ZPointerStoreGoodMask;
+        guardMatches = !CJThreadRootsAreArmed(youngCarrier, expectedGuard) &&
+                       !CJThreadRootsAreArmed(oldCarrier, expectedGuard);
+        generation.Workers()->threads_do([&](WorkerThread* worker) {
+            if (worker->gc_data() != nullptr) {
+                local += worker->gc_data()->markStacks[0].Population();
+                local += worker->gc_data()->markStacks[1].Population();
+            }
+        });
+        youngPublished = heap.young().Mark().Stripes().Population();
+        oldPublished = heap.old().Mark().Stripes().Population();
+        std::fprintf(stderr, "CARRIER_ROOT_TASK_TARGET executed=1 young_only=%d workers=%u slots=%p/%p armed_before=%d guard_matches=%d young_published=%zu old_published=%zu local=%zu\n",
+                     youngOnly, workers, young, old, initiallyArmed, guardMatches, youngPublished, oldPublished, local);
+    }
+    GC_EXPECT_TRUE(initiallyArmed && guardMatches && local == 0 && youngPublished > 0 &&
+                   (youngOnly ? oldPublished == 0 : oldPublished > 0));
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, YoungCarrierPublishesOnlyYoung) { CheckCarrierMarkTask(true, 1); }
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, YoungCarrierParallelDispatch) { CheckCarrierMarkTask(true, 3); }
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, OldCarrierPublishesBothGenerations) { CheckCarrierMarkTask(false, 1); }
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, OldCarrierParallelDispatch) { CheckCarrierMarkTask(false, 3); }

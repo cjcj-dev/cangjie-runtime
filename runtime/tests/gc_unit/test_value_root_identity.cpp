@@ -14,6 +14,8 @@
 #include "TypeInfoManager.h"
 #include "ObjectModel/MObject.h"
 #include <cstring>
+#include <chrono>
+#include <thread>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -392,3 +394,57 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportTaskPublishesOldOnly)
 {
     CheckExportTaskPublication(false);
 }
+
+
+namespace {
+void CheckRootTaskHandshake(bool positiveControl)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    std::atomic<Mutator*> owner{nullptr};
+    std::atomic<bool> enter{false}, running{false}, finish{false}, done{false};
+    std::thread mutator([&] {
+        auto& manager = MutatorManager::Instance();
+        auto* current = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        owner.store(current, std::memory_order_release);
+        while (!enter.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        current->DoLeaveSaferegion();
+        running.store(true, std::memory_order_release);
+        while (!finish.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        current->DoEnterSaferegion();
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    while (owner.load(std::memory_order_acquire) == nullptr) { std::this_thread::yield(); }
+    bool observedHandshake = false, completedWithoutHandshake = false;
+    {
+        DriverLocker lock;
+        auto& heap = Heap::GetHeap();
+        YoungTypeSetter type(heap.young(), ZYoungType::major_partial_roots);
+        heap.young().pause_mark_start();
+        enter.store(true, std::memory_order_release);
+        while (!running.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        std::thread roots([&] {
+            if (positiveControl) { (void)heap.old().Mark().Flush(); }
+            else { heap.old().mark_roots(); }
+            done.store(true, std::memory_order_release);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!done.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+            if (owner.load()->GetHandshakeState().has_operation()) { observedHandshake = true; break; }
+            std::this_thread::yield();
+        }
+        completedWithoutHandshake = done.load(std::memory_order_acquire) && !observedHandshake;
+        finish.store(true, std::memory_order_release);
+        roots.join();
+        mutator.join();
+    }
+    std::fprintf(stderr, "ROOT_TASK_HANDSHAKE_TARGET executed=1 positive=%d handshake=%d completed_without_handshake=%d\n",
+                 positiveControl, observedHandshake, completedWithoutHandshake);
+    GC_EXPECT_TRUE(positiveControl ? observedHandshake : completedWithoutHandshake);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, OldRootTaskHasNoExtraHandshake) { CheckRootTaskHandshake(false); }
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, HandshakeObservationPositiveControl) { CheckRootTaskHandshake(true); }
