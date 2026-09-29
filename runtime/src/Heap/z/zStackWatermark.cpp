@@ -391,7 +391,7 @@ void ZStackWatermark::process_head(void* context)
     StackWatermarkProcessOopClosure closure(context, prev_head_color());
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-            closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
+            static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
         });
     };
     owner.VisitExceptionRoots(roots);
@@ -418,7 +418,7 @@ void ZStackWatermark::process(const FrameInfo& frame, const RegSlotsMap& registe
     StackWatermarkProcessOopClosure closure(context, prev_frame_color(frame));
     RootVisitor roots = [&](RootSlot& root) {
         owner.VisitHeapRootSlots(root, [&](RootSlot& slot) {
-            closure.do_root(reinterpret_cast<zaddress_unsafe*>(&slot));
+            static_cast<OopClosure&>(closure).do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
         });
     };
     DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(roots);
