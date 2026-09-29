@@ -250,7 +250,6 @@ static void CheckInPlaceRemset()
     ZForwarding* owners[2] = {forwarding_for_page(pages[0]), forwarding_for_page(pages[1])};
     GC_EXPECT_TRUE(owners[0] != nullptr && owners[1] != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
-    ZRelocate::StartRelocationTasks(generation.id());
     generation.relocate().relocate(&generation.relocation_set());
     std::fprintf(stderr, "REMSET_RESULT current_clear=%d previous_clear=%d done=%d\n",
         pages[0]->is_remset_cleared_current(), pages[0]->is_remset_cleared_previous(), owners[0]->is_done());
