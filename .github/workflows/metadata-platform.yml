@@ -64,10 +64,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - {platform: linux-arm64, runner: ubuntu-24.04-arm, arm: baseline}
           - {platform: linux-arm64, runner: ubuntu-24.04-arm, arm: candidate}
           - {platform: linux-arm64, runner: ubuntu-24.04-arm, arm: caller-sp}
           - {platform: linux-arm64, runner: ubuntu-24.04-arm, arm: restored}
           - {platform: linux-arm64, runner: ubuntu-24.04-arm, arm: device}
+          - {platform: windows-x64, runner: windows-2025, arm: baseline}
           - {platform: windows-x64, runner: windows-2025, arm: candidate}
           - {platform: windows-x64, runner: windows-2025, arm: current-desc}
           - {platform: windows-x64, runner: windows-2025, arm: current-map}

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import tarfile
 import subprocess
 import time
 
@@ -80,7 +81,18 @@ if args.mode == "arm" and args.arm in ("candidate", "device"):
     pass
 else:
     tree = out / "runtime"
-    shutil.copytree(source, tree)
+    if args.arm == "baseline":
+        base = "575e37b5f271065e08eb401a38fe60976f71a925"
+        checked(["git", "fetch", "--depth=1", "origin", base], "fetch-base", source.parent)
+        archive = out / "baseline.tar"
+        checked(["git", "archive", "--format=tar", "--output=" + str(archive), base + ":runtime"],
+                "archive-base", source.parent)
+        with tarfile.open(archive) as package:
+            package.extractall(tree, filter="data")
+        archive.unlink()
+        record["baseline_sha"] = base
+    else:
+        shutil.copytree(source, tree)
     product_sources = {str(p.relative_to(tree)): digest(p) for p in (tree / "src").rglob("*") if p.is_file()}
     record["uncut_product_source_sha256"] = hashlib.sha256(json.dumps(product_sources, sort_keys=True).encode()).hexdigest()
     if args.arm in cuts:
@@ -118,6 +130,8 @@ else:
         save()
         raise SystemExit(rc)
     if args.mode == "capability":
+        record["capability_products"] = {str(p.relative_to(build)): digest(p)
+            for p in (build / "runtime-staging").rglob("*.dylib")}
         record["behavior"] = "NOT_RUN: PAC metadata ABI/fixtures not supplied; build capability only"
         save()
         raise SystemExit(0)
@@ -158,7 +172,8 @@ else:
     reference = json.loads((bundle / "identity.json").read_text())
     assert reference["uncut_product_source_sha256"] == record["uncut_product_source_sha256"]
     same = digest(libs[0]) == reference["bundle"][libs[0].name]
-    assert same == (args.arm == "restored"), "runtime identity mismatch"
+    if args.arm != "baseline":
+        assert same == (args.arm == "restored"), "runtime identity mismatch"
     shutil.copy2(libs[0], bundle / libs[0].name)
 
 reference = json.loads((bundle / "identity.json").read_text())
@@ -173,7 +188,7 @@ os.environ["PATH"] = str(bundle) + os.pathsep + os.environ["PATH"]
 # The device knife cuts the real spawn line, not a product CHECK or an assertion.
 if args.arm == "device":
     before = Path(supervisor.__file__).read_text()
-    after = before.replace('[str(exe), case]', '[str(exe), "ManagedMetadata.Unknown"]')
+    after = before.replace('[str(exe), case]', '[str(exe), "ManagedMetadata.Unknown" if case.startswith("ManagedMetadata.") else case]')
     assert after != before
     (out / "cut.diff").write_text("".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True),
         fromfile="a/runtime/tests/gc_unit/metadata/run.py", tofile="b/runtime/tests/gc_unit/metadata/run.py")))
