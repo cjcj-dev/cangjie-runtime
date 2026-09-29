@@ -266,6 +266,9 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
         std::lock_guard<std::mutex> lock(resultLock);
         visitor(object);
     };
+    RootVisitor rawRootVisitor = [&resultVisitor](ObjectRef& root) {
+        resultVisitor(to_object(safe(root.LoadPlain())));
+    };
     (void)invisibleVisitor; // Watermark owns the invisible slot with its saved color.
     MarkYoungRootsTask task([&] {
         Runtime::Current().GetConcurrencyModel().VisitGCRoots();
