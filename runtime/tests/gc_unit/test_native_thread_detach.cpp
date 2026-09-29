@@ -10,6 +10,7 @@
 #include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "Mutator/Mutator.inline.h"
+#include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"
 #include "TypeInfoManager.h"
 #include "ObjectModel/MObject.h"
@@ -234,4 +235,115 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, ShutdownUnlinksLateNative)
                  active, attached, fini, beforeExit, removed, nativeOnly);
     GC_EXPECT_TRUE(beforeExit && removed && nativeOnly);
     GC_EXPECT_TRUE(active && attached && fini == E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, StableCarrierAndLogicalInventory)
+{
+    InitNativeRuntime();
+    std::atomic<bool> ready{false}, release{false};
+    ThreadGCData* native = nullptr;
+    Mutator* logical = nullptr;
+    std::thread carrier([&] {
+        auto& manager = MutatorManager::Instance();
+        logical = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        native = ThreadLocal::GetThreadLocalData()->nativeGCData;
+        ThreadLocal::InitializeCleaner();
+        ThreadLocal::InitializeCleaner();
+        manager.UnbindMutator(*logical);
+        ready.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        manager.BindMutator(*logical);
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    const bool observed = WaitNative([&] { return ready.load(std::memory_order_acquire); });
+    size_t natives = 0, logicals = 0;
+    bool classified = observed;
+    if (observed) {
+        ThreadGCData::VisitOwners([&](ThreadGCData& data, Mutator* owner, ThreadLocalData* tls) {
+            if (&data == native) {
+                ++natives;
+                classified &= !data.managedOwner && owner == nullptr && tls != nullptr && tls->mutator == nullptr;
+            }
+            if (owner == logical) {
+                ++logicals;
+                classified &= data.managedOwner && tls == nullptr && &data != native;
+            }
+        });
+    }
+    std::fprintf(stderr, "NATIVE_LOGICAL_INVENTORY executed=1 repeated_attach=2 parked=1 natives=%zu logicals=%zu classified=%d\n",
+                 natives, logicals, classified);
+    release.store(true, std::memory_order_release);
+    carrier.join();
+    GC_EXPECT_TRUE(natives == 1 && logicals == 1 && classified);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, ConcurrentRemovers)
+{
+    InitNativeRuntime();
+    std::atomic<ThreadGCData*> data[2]{};
+    std::atomic<bool> finish{false}, joined[2]{};
+    std::thread owners[2], joiners[2];
+    for (size_t i = 0; i < 2; ++i) {
+        owners[i] = std::thread([&, i] {
+            ThreadLocal::InitializeCleaner();
+            data[i].store(&ThreadLocal::GetGCData(), std::memory_order_release);
+            while (!finish.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        });
+    }
+    const bool ready = WaitNative([&] { return data[0].load() && data[1].load(); });
+    for (size_t i = 0; i < 2; ++i) {
+        joiners[i] = std::thread([&, i] { owners[i].join(); joined[i].store(true, std::memory_order_release); });
+    }
+    bool removed = false, retained = false;
+    {
+        CleanThreadLocalData::Iterator oldReaders;
+        finish.store(true, std::memory_order_release);
+        removed = WaitNative([&] { return !ContainsNative(data[0].load()) && !ContainsNative(data[1].load()); });
+        retained = !joined[0].load() && !joined[1].load();
+        // The first old snapshot still traverses both unlinked nodes.
+        size_t found = 0;
+        for (; !oldReaders.End(); oldReaders.Step()) {
+            const auto* seen = &oldReaders.Current()->nativeData;
+            if (seen == data[0].load() || seen == data[1].load()) { ++found; }
+        }
+        retained &= found == 2;
+    }
+    const bool completed = WaitNative([&] { return joined[0].load() && joined[1].load(); });
+    std::fprintf(stderr, "NATIVE_CONCURRENT_REMOVERS executed=1 ready=%d removed=%d retained=%d completed=%d\n",
+                 ready, removed, retained, completed);
+    if (!completed) {
+        // Preserve the target failure rather than hiding it behind join().
+        std::fflush(stderr);
+        _exit(1);
+    }
+    for (auto& thread : joiners) { thread.join(); }
+    GC_EXPECT_TRUE(ready && removed && retained && completed);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, BootstrapRetry)
+{
+    std::atomic<bool> first{false}, retry{false};
+    bool absent = false, attached = false, stable = false;
+    std::thread bootstrap([&] {
+        ThreadLocal::InitializeCleaner();
+        auto* data = ThreadLocal::GetThreadLocalData()->nativeGCData;
+        absent = data->storeGoodMask == 0 && !ContainsNative(data);
+        first.store(true, std::memory_order_release);
+        while (!retry.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        ThreadLocal::InitializeCleaner();
+        attached = data->storeGoodMask != 0 && ContainsNative(data);
+        const auto masks = data->storeGoodMask;
+        ThreadLocal::InitializeCleaner();
+        stable = data == &ThreadLocal::GetGCData() && data->storeGoodMask == masks;
+    });
+    const bool initial = WaitNative([&] { return first.load(std::memory_order_acquire); });
+    InitNativeRuntime();
+    retry.store(true, std::memory_order_release);
+    bootstrap.join();
+    std::fprintf(stderr, "NATIVE_BOOTSTRAP_RETRY executed=1 initial=%d absent=%d attached=%d stable=%d\n",
+                 initial, absent, attached, stable);
+    GC_EXPECT_TRUE(initial && absent && attached && stable);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

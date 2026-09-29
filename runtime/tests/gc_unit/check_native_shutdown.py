@@ -48,7 +48,7 @@ def main():
         running = mi.number(heap + '->_gc_thread_running._M_base._M_i', main_thread)
         major = mi.number(heap + '->_driver_major', main_thread)
         minor = mi.number(heap + '->_driver_minor', main_thread)
-        workers = mi.number(heap + '->_runtime_workers._created_workers._M_i', main_thread)
+        workers = mi.number(heap + '->_runtime_workers._workers._created_workers._M_i', main_thread)
         passed = observed_stop and active == 1 and phase == 1 and running == 0 and major == 0 and minor == 0 and workers == 0
         emit('NATIVE_SHUTDOWN_STOP_BEFORE_TLS', executed=1, passed=passed, stop_entered=observed_stop,
              gc_running=running, major=major, minor=minor, runtime_workers=workers)

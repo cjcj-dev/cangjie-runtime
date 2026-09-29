@@ -120,6 +120,7 @@ def main():
     parser.add_argument('libdir')
     parser.add_argument('log')
     parser.add_argument('--reverse', action='store_true')
+    parser.add_argument('--young', action='store_true')
     args = parser.parse_args()
     os.environ['LD_LIBRARY_PATH'] = str(Path(args.libdir).resolve())
     os.environ['GC_NATIVE_GDB'] = '1'
@@ -153,10 +154,30 @@ def main():
         native = mi.number('native1286_data->managedOwner', main_thread)
         if native != 0:
             raise RuntimeError('Target is a managed owner')
-        if args.reverse:
-            flush = mi.breakpoint('MapleRuntime::ThreadGCData::FlushMarkStacks',
-                                  'this == native1286_data && (int)domain.generation == 0')
+        phase_thread = main_thread
+        producer_thread = None
+        if args.young:
+            young_end = mi.breakpoint('MapleRuntime::ZGenerationYoung::pause_mark_end')
+            produced = mi.breakpoint('native1286_produced')
             mi.resume(main_thread)
+            event = mi.stop()
+            if event_field(event, 'bkptno') != young_end:
+                raise RuntimeError('Real young mark-end not reached')
+            phase_thread = event_field(event, 'thread-id')
+            mi.delete(young_end)
+            mi.expression('native1286_start_producer._M_i = 1', phase_thread)
+            event = mi.stop()
+            if event_field(event, 'bkptno') != produced:
+                raise RuntimeError('Young native production not reached')
+            producer_thread = event_field(event, 'thread-id')
+            mi.delete(produced)
+        generation = 1 if args.young else 0
+        if args.reverse:
+            if producer_thread:
+                mi.resume(producer_thread)
+            flush = mi.breakpoint('MapleRuntime::ThreadGCData::FlushMarkStacks',
+                                  'this == native1286_data && (int)domain.generation == ' + str(generation))
+            mi.resume(phase_thread)
             event = mi.stop()
             if event_field(event, 'bkptno') != flush:
                 raise RuntimeError('Native mark-end consumer not reached')
@@ -182,7 +203,9 @@ def main():
         else:
             removal = mi.breakpoint('MapleRuntime::CleanThreadLocalData::RemoveFromList',
                                     '&this->nativeData == native1286_data')
-            mi.expression('native1286_allow_exit._M_i = 1', main_thread)
+            mi.expression('native1286_allow_exit._M_i = 1', phase_thread)
+            if producer_thread:
+                mi.resume(producer_thread)
             event = mi.stop()
             if event_field(event, 'bkptno') != removal:
                 raise RuntimeError('Natural native remove not reached')
@@ -199,7 +222,7 @@ def main():
             wait = mi.breakpoint('SuspendibleThreadSet.cpp:80')
             flush = mi.breakpoint('MapleRuntime::ThreadGCData::FlushMarkStacks',
                                   'this == native1286_data')
-            mi.resume(main_thread)
+            mi.resume(phase_thread)
             event = mi.stop()
             driver = event_field(event, 'thread-id')
             admitted = mi.number('MapleRuntime::SuspendibleThreadSet::nthreads', driver)
@@ -232,9 +255,34 @@ def main():
              stack=stack, references=matches)
         if matches != 1:
             return 1
+        if args.young:
+            selected = mi.breakpoint('MapleRuntime::ZGenerationYoung::concurrent_select_relocation_set')
         mi.resume(publisher)
         mi.resume(exiting if args.reverse else driver)
         event = mi.stop()
+        if args.young:
+            if event_field(event, 'bkptno') != selected:
+                raise RuntimeError('Young mark completion not reached')
+            completion_thread = event_field(event, 'thread-id')
+            mi.delete(selected)
+            checked = mi.breakpoint('native1286_checked')
+            mi.expression('native1286_check_now._M_i = 1', completion_thread)
+            event = mi.stop()
+            if event_field(event, 'bkptno') != checked:
+                raise RuntimeError('Young result consumer not reached')
+            observer = event_field(event, 'thread-id')
+            marked = mi.number('native1286_marked', observer)
+            removed = mi.number('native1286_removed', observer)
+            private = mi.number('native1286_private', observer)
+            before = mi.number('native1286_before', observer)
+            passed = marked == 1 and removed == 1 and private == 1 and before == 0
+            emit('NATIVE_YOUNG_RESULT', executed=1, passed=passed, marked=marked, removed=removed, private=private, before=before)
+            if not passed:
+                return 1
+            mi.delete(checked)
+            mi.resume(observer)
+            mi.resume(completion_thread)
+            event = mi.stop()
         if 'reason="exited-normally"' not in event and 'exit-code="0"' not in event:
             raise RuntimeError('Fixture did not complete: ' + event)
         emit('NATIVE_FIXTURE_EXIT', rc=0)
