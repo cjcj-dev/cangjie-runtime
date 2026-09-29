@@ -18,3 +18,4 @@ OldClearReportsAndCleans
 OldNoDeadControl
 ResizeThenOldCallbacksShrink
 RelocationWaitAllowsWorkerAndStop
+DedupWeakStorageIsYoungColoredRoot

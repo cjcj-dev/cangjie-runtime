@@ -14,6 +14,7 @@
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zResurrection.hpp"
+#include "Heap/z/zRootsIterator.hpp"
 #include "Mutator/Mutator.inline.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -125,6 +126,33 @@ GC_TEST(StringDedup, ExplicitEqualStringBackingFindsEntry)
     std::printf("STRING_DEDUP_CANONICAL_HIT second_is_first=%d\n", hit);
     std::fflush(stdout);
     GC_EXPECT_TRUE(second == arrays.first);
+}
+
+// zRootsIterator.cpp:169-176 and zMark.cpp:853-867 (ZGC zRootsIterator.cpp:
+//194-199 AllColored includes _oop_storage_set_weak): a dedup entry lives in the
+// weak OopStorage set, and the young colored-root pass walks that set, so the
+// backing survives a minor cycle as a root rather than as a collectable weak
+// reference. The product fact observed here is the membership itself.
+GC_TEST(StringDedup, DedupWeakStorageIsYoungColoredRoot)
+{
+    ByteArrays arrays;
+    arrays.first->SetPrimitiveElement<I8>(0, 0x35);
+    arrays.first->SetPrimitiveElement<I8>(1, 0x24);
+    auto* installed = MCC_StringDedupCanonicalImpl(arrays.heap.typeInfo, arrays.first);
+    // Construction evidence, kept non-fatal so it cannot mask the target line.
+    std::printf("STRING_DEDUP_YOUNG_ROOT installed=%d entries=%zu\n", installed == arrays.first ? 1 : 0,
+                StringDedupTest::Entries());
+    std::fflush(stdout);
+    auto* target = from_object(installed);
+    unsigned visited = 0;
+    RootsIteratorAllColored colored;
+    colored.Apply([&](NativeSlot& slot) {
+        if (NativeAccess<>::oop_load(&slot) == target) ++visited;
+    });
+    std::printf("STRING_DEDUP_YOUNG_COLORED_ROOT visited=%u\n", visited);
+    std::fflush(stdout);
+    GC_EXPECT_TRUE(installed == arrays.first);
+    GC_EXPECT_EQ(visited, 1U);
 }
 
 // TestStringDeduplicationYoungGC adaptation: only explicit String ABI requests
