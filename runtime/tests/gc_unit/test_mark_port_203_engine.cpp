@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "Common/SuspendibleThreadSet.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zStat.hpp"
@@ -47,10 +47,6 @@ void DrainFollow(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, 
                                      seen.push_back(entry.partial_array_offset());
                                  });
 }
-
-struct ResetAbort {
-    ~ResetAbort() { ZAbort::reset(); }
-};
 
 bool WaitForCount(std::atomic<size_t>* counter, size_t target, std::chrono::milliseconds budget)
 {
@@ -244,7 +240,7 @@ GC_TEST(MarkPort203Engine, PartialReturnsBeforeTerminate)
     GC_EXPECT_EQ(seen.size(), 0u);
 }
 
-GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
+GC_OTHER_VM_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
 {
     B09RuntimeFixture runtime;
     MarkStripeSet stripes(2);
@@ -269,7 +265,6 @@ GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
     terminate.Leave();
     ZMark domain(2, MarkingStacks::MarkingGeneration::YOUNG);
     ZAbort::abort();
-    ResetAbort resetAbort;
     const auto result = ZMark::FollowWork(context, smr, stripes, terminate, 0, false,
         [](const MarkStackEntry&) {}, nullptr, nullptr, &domain);
     const size_t first = StealOffset(*stripes.At(0), smr, 0);
@@ -281,7 +276,7 @@ GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
     GC_EXPECT_EQ(second, 81u);
 }
 
-GC_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
+GC_OTHER_VM_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
 {
     B09RuntimeFixture runtime;
     MarkStripeSet stripes(4);
@@ -308,7 +303,6 @@ GC_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
     stacks.Install(stripes, stripes.At(0), local);
     ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
     ZAbort::abort();
-    ResetAbort resetAbort;
     const auto result = ZMark::FollowWork(context, smr, stripes, terminate, 1, false,
         [](const MarkStackEntry&) {}, nullptr, nullptr, &domain);
     const size_t first = StealOffset(*stripes.At(0), smr, 1);
@@ -443,16 +437,12 @@ GC_TEST(MarkPort203Engine, CrowdedRestoresNStripes)
     GC_EXPECT_EQ(stripes.NStripes(), 2u);
 }
 
-GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
+GC_OTHER_VM_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
 {
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
     ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
     domain.PrepareWork(1);
     GC_EXPECT_TRUE(!domain.PollStop());
-    ZAbort::abort();
-    GC_EXPECT_TRUE(domain.PollStop());
-    ZAbort::reset();
-
     ZStatWorkers statWorkers;
     ZWorkers workers(ZGenerationId::young, 2, &statWorkers);
     workers.set_active();
@@ -462,11 +452,15 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
     GC_EXPECT_TRUE(!domain.PollStop());
     workers.request_resize_workers(2);
     GC_EXPECT_TRUE(domain.PollStop());
+    domain.BindWorkers(nullptr);
+    GC_EXPECT_TRUE(!domain.PollStop());
+    ZAbort::abort();
+    GC_EXPECT_TRUE(domain.PollStop());
 }
 
 // ZMark::drain/rebalance_work (zMark.cpp:468-485): stop following while
 // retaining unpublished work until the worker flushes and the phase joins.
-GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
+GC_OTHER_VM_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
 {
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     MapleRuntime::GcUnit::WorkerFixture domainWorker;

@@ -11,7 +11,7 @@
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.inline.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/shared/stringdedup/stringDedup.hpp"
@@ -480,9 +480,6 @@ void ZGenerationYoung::concurrent_mark_free()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentMarkFreeYoung);
     mark_free();
-    if (ZAbort::should_abort()) {
-        return;
-    }
     // Cangjie String values use an explicitly populated dedup table. Clean its
     // weak entries here; ZGC processes weak OopStorage entries through
     // ZWeakRootsProcessor (zWeakRootsProcessor.cpp:55-74).
@@ -864,11 +861,6 @@ bool ZGenerationOld::mark_end()
     // Preserve export ownership discovery after the ordinary root closure,
     // while the mark-end pause excludes new mutator publication.
     Heap::GetHeap().cross_vm().ProcessExportRoots(oldExportOwners, discoveredExternObjects);
-    // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
-    // to the phase owner before verification or publishing mark completion.
-    if (ZAbort::should_abort()) {
-        return false;
-    }
 
     set_phase(ZGeneration::Phase::MarkComplete);
     // zGeneration.cpp:1275-1278: old mark-end sample.

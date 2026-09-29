@@ -23,7 +23,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/shared/stringdedup/stringDedup.hpp"
@@ -67,7 +67,6 @@ ZCollectedHeap::~ZCollectedHeap() = default;
 
 void ZCollectedHeap::initialize_gc()
 {
-    ZAbort::reset();
     ZStat::Initialize();
     ZStatMutatorAllocRate::initialize();
     const uint64_t now = TimeUtil::NanoSeconds();

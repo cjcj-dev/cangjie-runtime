@@ -27,7 +27,7 @@
 #include "Heap/z/zThread.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Inspector/CjHeapData.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zLock.hpp"

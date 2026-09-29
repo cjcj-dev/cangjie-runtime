@@ -1,3 +1,4 @@
+#include "Heap/z/zAbort.inline.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -328,7 +329,7 @@ void ZRemembered::scan_and_follow(ZMark* mark)
         ZWorkers* workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers();
         CHECK_DETAIL(workers != nullptr, "ZRemembered::scan_and_follow requires young workers");
         workers->run(&task);
-        if (mark->PollStop() || !mark->TryTerminateFlush()) {
+        if (ZAbort::should_abort() || !mark->TryTerminateFlush()) {
             return;
         }
     }

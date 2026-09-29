@@ -17,7 +17,7 @@
 #include "Cangjie.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"

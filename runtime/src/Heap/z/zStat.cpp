@@ -15,7 +15,7 @@
 #include "Base/LogFile.h"
 #include "CangjieRuntime.h"
 #include "os/LoadAverage.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zPageAllocator.hpp"

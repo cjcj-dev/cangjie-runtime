@@ -1,7 +1,7 @@
 #include "gc_generation_test.hpp"
 #include "CangjieRuntime.h"
 #include "Cangjie.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -51,22 +51,20 @@ GC_TEST(ZGeneration, ThreeStatePhase)
     GC_EXPECT_TRUE(young->is_phase_relocate());
 }
 
-GC_TEST(ZAbort, AllStaticAbortpoint)
+GC_OTHER_VM_TEST(ZAbort, AllStaticAbortpoint)
 {
     GC_EXPECT_TRUE(!ZAbort::should_abort());
     ZAbort::abort();
     GC_EXPECT_TRUE(ZAbort::should_abort());
-    ZAbort::reset();
-    GC_EXPECT_TRUE(!ZAbort::should_abort());
+    ZAbort::abort();
+    GC_EXPECT_TRUE(ZAbort::should_abort());
 }
 
-GC_TEST(ZCollectedHeap, StopAborts)
+GC_OTHER_VM_TEST(ZCollectedHeap, StopAborts)
 {
     Heap::GetHeap();
-    ZAbort::reset();
     ZCollectedHeap::stop();
     GC_EXPECT_TRUE(ZAbort::should_abort());
-    ZAbort::reset();
 }
 
 GC_RUNTIME_OTHER_VM_TEST(ZGeneration, CollectionScopeClearsTimer)

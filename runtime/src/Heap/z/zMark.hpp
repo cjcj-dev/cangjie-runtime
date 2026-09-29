@@ -41,7 +41,7 @@ enum class MarkingGeneration : uint8_t { MAJOR, YOUNG };
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Common/MarkWorkStack.h"
 #include "Heap/z/zCrossVM.hpp"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zMarkingSMR.hpp"
