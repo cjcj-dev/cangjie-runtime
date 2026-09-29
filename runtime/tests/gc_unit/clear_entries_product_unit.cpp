@@ -1644,6 +1644,10 @@ void ExerciseRelocationWait782(bool claimedPage)
         }
     }
     ZRelocateQueue* queue = generation.relocate().queue();
+    const auto pendingCount = [&] {
+        std::lock_guard<std::mutex> guard(queue->lock);
+        return queue->queue.length();
+    };
     std::atomic<bool> returned{false};
 #if defined(__linux__)
     std::atomic<long> waiterTid{0};
@@ -1657,11 +1661,11 @@ void ExerciseRelocationWait782(bool claimedPage)
         returned.store(true, std::memory_order_release);
     });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (queue->PendingCount() == 0 && !returned.load(std::memory_order_acquire) &&
+    while (pendingCount() == 0 && !returned.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
-    const bool queued = queue->PendingCount() != 0;
+    const bool queued = pendingCount() != 0;
     const bool blocked = !returned.load(std::memory_order_acquire);
     const MAddress before = forwarding->find(reinterpret_cast<MAddress>(from));
 #if defined(__linux__)

@@ -396,8 +396,11 @@ void* SelectRealLivePages(void* context)
         // The retirement test leaves root cleanup to FiniCJRuntime, after its
         // assertions. A failing remap must not be consumed by cleanup first.
     }
-    result.pending = generation_relocate_queue(Generation::Old).PendingCount() +
-                     generation_relocate_queue(Generation::Young).PendingCount();
+    for (auto id : {Generation::Old, Generation::Young}) {
+        auto& queue = generation_relocate_queue(id);
+        std::lock_guard<std::mutex> guard(queue.lock);
+        result.pending += queue.queue.length();
+    }
     if (result.verifyRetirement) {
         snapshot(result.usedAfter, result.mappedAfter, result.generationAfter, result.mappedGenerationAfter);
         // Real mutator allocation must be able to consume the returned source

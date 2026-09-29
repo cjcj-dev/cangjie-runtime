@@ -51,7 +51,7 @@ GC_TEST(RelocationPageQueue, ReleasedPageStillHasItsImmutableEntry)
     owner->release_page();
     ZRelocateQueue queue;
     GC_EXPECT_FALSE(owner->retain_page(&queue));
-    GC_EXPECT_EQ(Heap::GetHeap().old().remap_object(heap.obj0), heap.obj1);
+    GC_EXPECT_TRUE(Heap::GetHeap().old().remap_object(heap.obj0) == heap.obj1);
     GC_EXPECT_FALSE(owner->is_done());
 }
 
