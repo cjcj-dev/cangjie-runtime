@@ -157,8 +157,8 @@ public:
         }
         // A compiled frame may have no oop map (HotSpot frame.cpp:998).
         // Keep absence as a null metadata pointer, never a synthetic prologue.
-        if (stackmapStart == nullptr) { return CompressedStackMapHead(); }
-        return CompressedStackMapHead(reinterpret_cast<Uptr*>(stackmapStart));
+        return stackmapStart == nullptr ? CompressedStackMapHead() :
+            CompressedStackMapHead(reinterpret_cast<Uptr*>(stackmapStart));
     }
     static void DestroyStackMapHead(CompressedStackMapHead*& stackMapHead) noexcept
     {

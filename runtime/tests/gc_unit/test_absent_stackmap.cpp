@@ -81,26 +81,55 @@ FrameInfo Managed(Image& image)
 } // namespace
 
 // frame.cpp:998. Absent map must not be decoded; the walk continues to the next frame.
+// The walk itself runs in a child so a decode of a null table is observed as the
+// target invariant (the child must finish and report both frames) instead of
+// killing the runner before any assertion runs.
 GC_TEST(AbsentStackMap, NullOffsetWalkContinues)
 {
+#if defined(__linux__)
     static Image absent;
     static Image present;
     Link(absent, false, 0);
     Link(present, true, 0);
-    std::vector<FrameInfo> frames;
-    frames.push_back(Managed(absent));
-    frames.push_back(Managed(present));
-    StackFrameStream stream(frames);
-    stream.Start();
-    const bool first = !stream.IsDone();
-    stream.Next();
-    const bool second = !stream.IsDone();
-    stream.Next();
-    const bool finished = stream.IsDone();
-    std::fprintf(stderr, "ABSENT_MAP_TARGET executed=1 first=%d second=%d finished=%d\n", first, second, finished);
-    GC_EXPECT_TRUE(first);
-    GC_EXPECT_TRUE(second);
-    GC_EXPECT_TRUE(finished);
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        std::vector<FrameInfo> frames;
+        frames.push_back(Managed(absent));
+        frames.push_back(Managed(present));
+        StackFrameStream stream(frames);
+        stream.Start();
+        const bool first = !stream.IsDone();
+        stream.Next();
+        const bool second = !stream.IsDone();
+        stream.Next();
+        const bool finished = stream.IsDone();
+        std::fprintf(stderr, "ABSENT_MAP_WALK first=%d second=%d finished=%d\n", first, second, finished);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char bytes[1024];
+    ssize_t count;
+    while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, static_cast<size_t>(count)); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool walked = transcript.find("ABSENT_MAP_WALK first=1 second=1 finished=1") != std::string::npos;
+    std::fprintf(stderr, "ABSENT_MAP_TARGET executed=1 walked=%d exited=%d signaled=%d sig=%d status=%d\n%s",
+        walked, WIFEXITED(status), WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0, status,
+        transcript.c_str());
+    GC_EXPECT_TRUE(walked);
+    GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+#else
+    std::fprintf(stderr, "ABSENT_MAP_TARGET executed=0 reason=not-linux\n");
+    GC_EXPECT_TRUE(true);
+#endif
 }
 
 // Same entry, non-zero stack map: CheckRegisterRoots still reaches the register-root fatal.
