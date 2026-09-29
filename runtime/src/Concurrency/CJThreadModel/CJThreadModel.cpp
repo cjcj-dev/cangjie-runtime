@@ -20,7 +20,7 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "schedule.h"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 
 namespace MapleRuntime {
 namespace {
@@ -43,20 +43,12 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
     ObjectRef& ref = reinterpret_cast<ObjectRef&>(data->obj);
     ObjectRef& map = reinterpret_cast<ObjectRef&>(data->threadObject);
     ObjectRef& execute = RootSlotAt(&data->execute);
-    auto process = [&](ObjectRef& slot) {
-        const zaddress_unsafe observed = slot.LoadPlain();
-        if (is_null(observed)) {
-            return;
-        }
-        // zNMethod.cpp:384-395: the process closure owns both remapping from
-        // the saved epoch and marking. Do not split those responsibilities
-        // between this callback and its caller.
-        ZUncoloredRoot::process(reinterpret_cast<zaddress_unsafe*>(&slot), color);
-    };
     if (color != ZPointerStoreGoodMask) {
-        process(ref);
-        process(map);
-        process(execute);
+        ZUncoloredRootProcessOopClosure closure(color);
+        OopClosure& process = closure;
+        process.do_oop(&HeapSlotAt<>(static_cast<void*>(&ref)));
+        process.do_oop(&HeapSlotAt<>(static_cast<void*>(&map)));
+        process.do_oop(&HeapSlotAt<>(static_cast<void*>(&execute)));
         // zNMethod.cpp:379-398: only an armed group may be processed and
         // receive the partial GC guard. Never re-arm a disarmed group.
         __atomic_store_n(g_uncoloredVisitColor, nextColor, __ATOMIC_RELEASE);
@@ -82,13 +74,11 @@ void MutatorEntryCaller(void* argPtr, void* handle)
     ObjectRef& execute = RootSlotAt(&data->execute);
     if (color != ZPointerStoreGoodMask) {
         // zBarrierSetNMethod.cpp:78-84: ZUncoloredRootProcessWeakOopClosure.
-        auto processWeak = [&](ObjectRef& slot) {
-            // zUncoloredRoot.inline.hpp:75-78: process_weak keeps the oop alive.
-            ZUncoloredRoot::process_weak(reinterpret_cast<zaddress_unsafe*>(&slot), color);
-        };
-        processWeak(ref);
-        processWeak(map);
-        processWeak(execute);
+        ZUncoloredRootProcessWeakOopClosure closure(color);
+        OopClosure& processWeak = closure;
+        processWeak.do_oop(&HeapSlotAt<>(static_cast<void*>(&ref)));
+        processWeak.do_oop(&HeapSlotAt<>(static_cast<void*>(&map)));
+        processWeak.do_oop(&HeapSlotAt<>(static_cast<void*>(&execute)));
         // zBarrierSetNMethod.cpp:88-97: disarm by publishing store good.
         __atomic_store_n(g_uncoloredVisitColor, ZPointerStoreGoodMask, __ATOMIC_RELEASE);
     }

@@ -44,6 +44,12 @@ public:
     size_t OopsDo(const NativeSlotVisitor& visitor);
     size_t AllocationCount() const;
 
+    // oopStorage.hpp:174-190: the owner is notified after weak processing.
+    using NumDeadCallback = void (*)(size_t);
+    void register_num_dead_callback(NumDeadCallback callback);
+    bool should_report_num_dead() const;
+    void report_num_dead(size_t numDead) const;
+
     // oopStorage.cpp:1051-1127 / oopStorageParState.inline.hpp:52-65.
     // This state belongs to the root task and is shared by all its workers.
     class BasicParState {
@@ -53,6 +59,9 @@ public:
         BasicParState(const BasicParState&) = delete;
         BasicParState& operator=(const BasicParState&) = delete;
         size_t Iterate(const NativeSlotVisitor& visitor);
+        const OopStorage* Storage() const { return &storage; }
+        size_t num_dead() const { return numDead.load(std::memory_order_relaxed); }
+        void increment_num_dead(size_t count) { numDead.fetch_add(count, std::memory_order_relaxed); }
     private:
         struct IterationData {
             size_t segmentStart = 0;
@@ -64,6 +73,7 @@ public:
         std::shared_ptr<ActiveArray> activeArray;
         size_t blockCount;
         std::atomic<size_t> nextBlock{0};
+        std::atomic<size_t> numDead{0};
         const unsigned estimatedThreadCount;
         const bool concurrent;
     };
@@ -73,6 +83,9 @@ public:
         ParState(OopStorage& storage, unsigned estimatedThreadCount = 1)
             : basicState(storage, estimatedThreadCount, concurrent) {}
         size_t OopsDo(const NativeSlotVisitor& visitor) { return basicState.Iterate(visitor); }
+        const OopStorage* storage() const { return basicState.Storage(); }
+        size_t num_dead() const { return basicState.num_dead(); }
+        void increment_num_dead(size_t count) { basicState.increment_num_dead(count); }
     private:
         BasicParState basicState;
     };
@@ -86,6 +99,7 @@ private:
     size_t concurrentIterationCount = 0;
     Block* allocationHead = nullptr;
     size_t allocationCount = 0;
+    NumDeadCallback numDeadCallback = nullptr;
 };
 
 // Language finalizer scheduling adapter. This list owns no root slots: its
