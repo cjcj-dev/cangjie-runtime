@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zBarrier.inline.hpp
++++ b/runtime/src/Heap/z/zBarrier.inline.hpp
+@@ -288,7 +288,7 @@
+ {
+     const zpointer prev = load_atomic(p);
+     auto slow_path = [=](zaddress addr) {
+-        return no_keep_alive_heap_store_slow_path(p, addr);
++        return addr;
+     };
+     barrier(is_store_good_fast_path, slow_path, ColorStoreGood, nullptr, prev, false);
+ }

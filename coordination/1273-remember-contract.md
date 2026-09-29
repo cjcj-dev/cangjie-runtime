@@ -19,3 +19,11 @@ ROLE=implement
 
 拟用同一 ELF 调用步骤1真实导出入口。合法 old/young 输入观察槽记忆集；缺页输入在子进程中从 page_table remove 一个已有分配页，槽物理存储保持可读，进入步骤1，观察是否静默返回。缺页只为反向对照，不作为合法 old→young 漏记的归因。最终采纳与否等 advisor。
 冻结辅助函数直接调用者：zVerify.cpp:201,203,217,219；zRelocate.cpp:220；zRemembered.cpp:240。全部属于堆对象/字段的分代查询，尚未作运行期证明。
+
+## 主控答复（0929 10:0x）
+/root/cj_build/ops/advisor/outbox/sym_cangjie_runtime_1273_implement_r5882118270-20260929T015350Z.md 批准上述范围与缺页反向对照，撤销本包 INVESTIGATE I1–I3；不修改四写入维护函数。辅助函数调用者核查记录在本棒报告。
+
+## 受控破坏
+validation/remember1273/cut-route.diff：仅恢复 remember 原判断与直接页调用，预期只 MissingPageDoesNotReturnSilently 转红，合法 old/young 保持绿；这是候选修改行刀，不能冒充基线已有行刀。
+validation/remember1273/cut-entry.diff：断基线已有真实弱屏障相位入口内 slow-path 调用，预期 old 记忆集和缺页拒绝两条转红，young 负对照保持绿。entry_cut_check 已 rc=0；交付用最终 head 再核。
+两刀分别在隔离源码副本构建 default SO，同一 default 测试 ELF 运行全部三项；恢复臂使用保存的未切 SO，候选/恢复逐字节相同。
