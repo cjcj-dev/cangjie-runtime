@@ -198,6 +198,8 @@ def main(root: Path):
         summary["/".join(key)] = {
             "n_ok": len(ok),
             "n_try": len(rows),
+            "aborted_cycles": sum(r["aborted_cycles"] for r in rows),
+            "truncated_cycles": sum(r["truncated_cycles"] for r in rows),
             "wall_med": pctile(walls, 0.5),
             "wall_p90": pctile(walls, 0.9),
             "wall_p99": pctile(walls, 0.99),

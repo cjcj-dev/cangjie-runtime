@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from test_gclog_schema import complete_rows
 from gclog_schema import parse_gclog
@@ -43,6 +44,20 @@ class LifecycleCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('seq=1 generation=Young_Generation missing phase Pause_Relocate_Start', result.stdout)
         print('PILLARS_MISSING_PHASE_TARGET executed')
+
+    def test_summary_reports_truncated_collection(self):
+        from test_gclog_schema import collection
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / 'runs/load/heap/r1-subject'
+            run.mkdir(parents=True)
+            (run / 'stderr').write_text('\n'.join(ledger() + [collection(2)]))
+            (run / 'classification').write_text('COMPLETE')
+            (run / 'time.tsv').write_text('wall_s=0.001')
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name('analyze_stw.py')), str(root)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads((root / 'analysis2/summary.json').read_text())['load/heap/subject']
+            self.assertEqual((summary['aborted_cycles'], summary['truncated_cycles'], summary['cycles_med']), (0, 1, 1))
 
     def test_pause_window(self):
         result = self.run_cli([r.replace('held_ns=1', 'held_ns=0') if 'rec=stw' in r else r for r in ledger()])

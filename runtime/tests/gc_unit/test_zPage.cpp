@@ -1572,3 +1572,19 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NestedRawAcquireDuringBlock)
     GC_EXPECT_EQ(result.stackReleased, -2);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
+
+#include "gclog_capture.hpp"
+// The reused fixture enters through RunCJTask -> MCC_AcquireRawData. The log
+// value comes from the product wait scope, not from a manually called timer.
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, JNICriticalStall)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    GcLogCapture capture;
+    ZJNICritical_BlockedNewRawAcquireAllowsStopTheWorld();
+    const std::string text = capture.Finish();
+    const std::string expected = "name=JNI_Critical_Stall kind=critical ";
+    size_t count = 0, position = 0;
+    while ((position = text.find(expected, position)) != std::string::npos) { ++count; position += expected.size(); }
+    std::fprintf(stderr, "GCLOG_TARGET jni_critical_stall_records=%zu expected=1\n", count);
+    GC_EXPECT_EQ(count, size_t{1});
+}

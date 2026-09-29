@@ -30,7 +30,6 @@ void ZJNICritical::block()
     for (;;) {
         const int64_t n = count.load(std::memory_order_acquire);
         if (n < 0) {
-            ZStatTimer timer(ZCriticalPhaseJNICriticalStall);
             std::unique_lock<std::mutex> guard(lock);
             while (count.load(std::memory_order_acquire) < 0) {
                 attention.wait(guard);
