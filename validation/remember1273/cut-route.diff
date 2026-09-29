@@ -1,0 +1,15 @@
+--- a/runtime/src/Heap/z/zBarrier.inline.hpp
++++ b/runtime/src/Heap/z/zBarrier.inline.hpp
+@@ -379,8 +379,10 @@
+ 
+ inline void ZBarrier::remember(volatile zpointer* p)
+ {
+-    if (Heap::is_old(reinterpret_cast<MAddress>(p))) {
+-        ZGeneration::young()->remember(p);
++    const MAddress address = reinterpret_cast<MAddress>(p);
++    ZPage* page = Heap::page(address);
++    if (page != nullptr && !page->IsYoungRegion()) {
++        page->remember(reinterpret_cast<volatile zpointer*>(address));
+     }
+ }
+ 

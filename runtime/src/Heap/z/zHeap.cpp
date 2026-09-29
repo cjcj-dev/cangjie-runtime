@@ -530,14 +530,12 @@ bool Heap::is_in(MAddress addr)
 
 bool Heap::is_young(MAddress addr)
 {
-    ZPage* p = page(addr);
-    return p != nullptr && p->IsYoungRegion();
+    return page(addr)->IsYoungRegion();
 }
 
 bool Heap::is_old(MAddress addr)
 {
-    ZPage* p = page(addr);
-    return p != nullptr && !p->IsYoungRegion();
+    return !is_young(addr);
 }
 
 // heapDumper.cpp: VM_HeapDumper::doit. The requesting thread executes the
