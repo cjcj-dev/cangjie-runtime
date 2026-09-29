@@ -26,6 +26,7 @@
 #include "gc_heap_fixture.hpp"
 #include "selection_cycle_fixture.hpp"
 #include "Heap/z/zCrossVM.hpp"
+#include "Sync/Sync.h"
 #include "gc_unittest.hpp"
 
 #include "Concurrency/Concurrency.h"
@@ -731,12 +732,15 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
     RelocationReceiptTest::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
+    // ZGC zRootsIterator.cpp:177-198: use a weak OopStorage slot. Export
+    // handles are strong JNI-global counterparts and cannot model this input.
+    NativeSlot* handle = SyncWeakOopStorage().Allocate();
+    handle->StoreColoured(StoreGoodPointer(graph.weak));
     std::unordered_set<BaseObject*> strong;
     std::unordered_set<BaseObject*> inclusive;
     HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
     HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
-    Heap::GetHeap().RemoveExportObject(handle);
+    SyncWeakOopStorage().Release(handle);
     GC_EXPECT_TRUE(strong.count(graph.weak) == 0);
     GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);

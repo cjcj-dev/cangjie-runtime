@@ -66,7 +66,6 @@ public:
     virtual void Init(const ConcurrencyParam, ScheduleType) {}
     virtual void Fini() {}
     virtual void VisitGCRoots(RootVisitor* visitorHandle) = 0;
-    void VisitGCRoots();
     virtual void* GetThreadScheduler() const
     {
         std::abort();

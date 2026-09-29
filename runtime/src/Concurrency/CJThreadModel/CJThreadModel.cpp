@@ -34,28 +34,6 @@ extern "C" uintptr_t* MRT_BindUncoloredVisitColor(uintptr_t* slot)
     return previous;
 }
 
-extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
-{
-    LWTData* data = reinterpret_cast<LWTData*>(argPtr);
-    // Bound by CJThreadVisitRoots while holding the group's lock. No current-color fallback.
-    const uintptr_t color = *g_uncoloredVisitColor;
-    const uintptr_t nextColor = ZPointerMarkGoodMask | ZPointerRememberedMask;
-    CJThreadRoot root(*data, *g_uncoloredVisitColor);
-    if (color != ZPointerStoreGoodMask) {
-        ZUncoloredRootProcessOopClosure closure(color);
-        OopClosure& process = closure;
-        root.oops_do([&](RootSlot& slot) {
-            process.do_oop(&HeapSlotAt<>(static_cast<void*>(&slot)));
-        });
-        // zNMethod.cpp:379-398: only an armed group may be processed and
-        // receive the partial GC guard. Never re-arm a disarmed group.
-        __atomic_store_n(g_uncoloredVisitColor, nextColor, __ATOMIC_RELEASE);
-    }
-    if (handle != nullptr) {
-        root.oops_do(*static_cast<RootVisitor*>(handle));
-    }
-}
-
 namespace {
 // zBarrierSetNMethod.cpp:53-91: mutator entry slow path. Runs under the group
 // lock via CJThreadVisitRoots; heals with process_weak (keep-alive) and fully
@@ -223,16 +201,14 @@ void CJThreadModel::Init(const ConcurrencyParam param, ScheduleType scheduleType
     RegisterCJThreadHooks();
 }
 
-void ConcurrencyModel::VisitGCRoots()
-{
-    // A null handle selects the ZUncoloredRoot process closure in
-    // MRT_VisitorCaller, matching zNMethod.cpp:384-395.
-    VisitGCRoots(nullptr);
-}
-
 void CJThreadModel::VisitGCRoots(RootVisitor* visitorHandle)
 {
-    ScheduleAllCJThreadVisit(MRT_VisitorCaller, visitorHandle);
+    // ZGC zHeapIterator.cpp:364-371: heap inspection enters the barrier
+    // before observing the carrier's roots. GC tasks use their own closures.
+    VisitCJThreadRoots([&](CJThreadRoot& root) {
+        root.entry_barrier();
+        root.oops_do(*visitorHandle);
+    });
 }
 
 // Get current mutator from tls

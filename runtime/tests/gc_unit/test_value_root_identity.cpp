@@ -426,6 +426,8 @@ void CheckRootTaskHandshake(bool positiveControl)
         enter.store(true, std::memory_order_release);
         while (!running.load(std::memory_order_acquire)) { std::this_thread::yield(); }
         std::thread roots([&] {
+            // The real mark driver is a GC thread, including its handshake.
+            ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
             if (positiveControl) { (void)heap.old().Mark().Flush(); }
             else { heap.old().mark_roots(); }
             done.store(true, std::memory_order_release);

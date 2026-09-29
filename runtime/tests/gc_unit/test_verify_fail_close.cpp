@@ -656,7 +656,9 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, RejectsDisarmedBadRootAtVMOperation)
         ThreadLocal::SetCJThread(previous);
         data->obj = reinterpret_cast<BaseObject*>(0x1000);
         std::fprintf(stderr, "VERIFY_CARRIER_INPUT slot=%p value=%p armed=0\n", &data->obj, data->obj);
-        Heap::GetHeap().RequestGC(GC_REASON_USER);
+        DriverLocker lock;
+        YoungTypeSetter type(Heap::GetHeap().young(), ZYoungType::minor);
+        Heap::GetHeap().young().pause_mark_start();
     });
 }
 
@@ -742,6 +744,7 @@ void CheckCarrierWalk(bool heapWalk)
     std::fprintf(stderr, "VERIFY_CARRIER_MARK_CONTROL object=%p before=%d after=%d\n",
                  object, markedBefore, markedControl);
     GC_EXPECT_TRUE(markedControl);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 } // namespace
 
@@ -891,6 +894,7 @@ void CheckCarrierMarkTask(bool youngOnly, unsigned workers)
     }
     GC_EXPECT_TRUE(initiallyArmed && guardMatches && local == 0 && youngPublished > 0 &&
                    (youngOnly ? oldPublished == 0 : oldPublished > 0));
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 }
 GC_RUNTIME_OTHER_VM_TEST(ZRootTask, YoungCarrierPublishesOnlyYoung) { CheckCarrierMarkTask(true, 1); }

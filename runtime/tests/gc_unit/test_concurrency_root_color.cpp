@@ -117,7 +117,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     if (remap) {
         Heap::GetHeap().old().remap_young_roots();
     } else {
-        runtime.GetConcurrencyModel().VisitGCRoots();
+        runtime.GetConcurrencyModel().VisitGCRoots(&visitor);
     }
     observed = raw(RootSlotAt(&data->obj).LoadPlain());
     std::fprintf(stderr,
@@ -202,10 +202,9 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     // The saved store-good color is from the previous epoch, so the group is armed.
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     if (healBeforeRead) {
-        runtime.GetConcurrencyModel().VisitGCRoots();
-        // zNMethod.cpp:392-398: the GC partial color is mark good but never
-        // store good, so the group stays armed for the mutator entry.
-        GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+        heap.old().remap_young_roots();
+        // ZGC zGeneration.cpp:1428-1459: the remap closure disarms after healing.
+        GC_EXPECT_FALSE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     }
     auto* previous = CJThreadGetHandle();
     ThreadLocal::SetCJThread(thread);
