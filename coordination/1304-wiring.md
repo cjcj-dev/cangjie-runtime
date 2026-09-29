@@ -9,3 +9,7 @@
 | Uncommit/RegisterUncommit 的预算/进度 | run_thread :283 → deactivate/reset/next-timeout | active 且 finished/canceled 才能 deactivate；超时更新先于 reset | zUncommitter.cpp:109-169,177-284 |
 
 改动前消费者机械检索：`rg -n 'Cancel\(' runtime/src` 仅 zPageAllocator.cpp:215、zUncommitter.cpp:211 两处调用，另含定义与声明。真实入口为 ClaimPageMemory 的分配链及 run_thread 的后台线程链；Uncommit 在 PHASE_ENTRIES.txt:53 登记。
+
+本轮 Wait 返工（坐标 c3f54ca245a535d247d995fd2671954a067ec00a）：
+run_thread → Wait(nextCycleTimeout / nextUncommitTimeout) → TimeUtil::NanoSeconds 秒值 → ToMillis(waitUntil - now) → condition.wait_for。
+ZGC zUncommitter.cpp:72-85：now/wait_until 均 double 秒，毫秒消费前统一 to_millis。仅修此数据表示，不改共享锁。

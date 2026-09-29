@@ -152,16 +152,16 @@ bool Uncommitter::Wait(uint64_t timeout)
         condition.wait(guard);
     }
     if (!stopped.load(std::memory_order_acquire) && timeout > 0) {
-        uint64_t now = TimeUtil::NanoSeconds();
-        const uint64_t deadline = now + timeout * MILLI_SECOND_TO_NANO_SECOND;
+        double now = double(TimeUtil::NanoSeconds()) / SECOND_TO_NANO_SECOND;
+        const double waitUntil = now + double(timeout) / 1000.0;
         do {
-            const uint64_t remaining = (deadline - now) / MILLI_SECOND_TO_NANO_SECOND;
+            const uint64_t remaining = ToMillis(waitUntil - now);
             if (remaining == 0) {
                 break;
             }
             condition.wait_for(guard, std::chrono::milliseconds(remaining));
-            now = TimeUtil::NanoSeconds();
-        } while (!stopped.load(std::memory_order_acquire) && now < deadline);
+            now = double(TimeUtil::NanoSeconds()) / SECOND_TO_NANO_SECOND;
+        } while (!stopped.load(std::memory_order_acquire) && now < waitUntil);
     }
     return !stopped.load(std::memory_order_acquire);
 }
