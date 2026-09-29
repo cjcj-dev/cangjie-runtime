@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 ulimit -c 0
 root=/root/sym_cangjie_runtime_1319_implement_r5899659797
-head=b645992f7cbf11e985529f722cff62e72444f3c0
+head=ad53b14fcf577156267bc00ae135ec86fc59e8fb
 set -o pipefail
 mkdir -p "$root/keep/green" "$root/keep/default" "$root/keep/elf"
 cp "$root/testable/build/runtime-staging/lib/x86_64_Release/"{libcangjie-runtime,libboundscheck}.so "$root/keep/green/"

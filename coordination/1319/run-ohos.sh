@@ -10,7 +10,7 @@ maps="-ffile-prefix-map=$CCACHE_BASEDIR=/usr/src/cangjie-runtime -fdebug-prefix-
 export CFLAGS="$maps" CXXFLAGS="$maps" ASMFLAGS="$maps"
 uptime > "$root/ohos-uptime-before.txt"
 start=$SECONDS
-cmake -S "$root/testable/runtime" -B "$root/ohos-build" -DCJ_RUNTIME_COMMIT=b645992f7cbf11e985529f722cff62e72444f3c0 -DCMAKE_BUILD_TYPE=Release -DCOPYGC_FLAG=1 -DDOPRA_FLAG=1 -DRUNTIME_TRACE_FLAG=1 -DCJ_SDK_VERSION=0.0.1 -DDISABLE_VERSION_CHECK=1 -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_AR_PATH=ar -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_ASM_COMPILER_LAUNCHER=ccache -DMRT_TESTABLE_INTERNALS=ON -DMRT_GC_UNIT_OHOS_HOST=ON > "$root/ohos-configure.log" 2>&1
+cmake -S "$root/testable/runtime" -B "$root/ohos-build" -DCJ_RUNTIME_COMMIT=ad53b14fcf577156267bc00ae135ec86fc59e8fb -DCMAKE_BUILD_TYPE=Release -DCOPYGC_FLAG=1 -DDOPRA_FLAG=1 -DRUNTIME_TRACE_FLAG=1 -DCJ_SDK_VERSION=0.0.1 -DDISABLE_VERSION_CHECK=1 -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_AR_PATH=ar -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_ASM_COMPILER_LAUNCHER=ccache -DMRT_TESTABLE_INTERNALS=ON -DMRT_GC_UNIT_OHOS_HOST=ON > "$root/ohos-configure.log" 2>&1
 rc=$?; echo "$rc" > "$root/ohos-configure.rc"
 if [ "$rc" = 0 ]; then cmake --build "$root/ohos-build" -j"$(nproc)" > "$root/ohos-build.log" 2>&1; rc=$?; fi
 echo "$rc" > "$root/ohos-build.rc"
