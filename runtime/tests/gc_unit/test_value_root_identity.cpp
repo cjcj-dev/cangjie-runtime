@@ -6,6 +6,8 @@
 #include "Common/Handle.h"
 #include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zAbort.hpp"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "Mutator/Mutator.inline.h"
@@ -21,6 +23,12 @@ extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
 // performed by the real collector, with no manually populated root carriers.
 class RelocationReceiptTest {
 public:
+    static size_t EnumeratedOwners(BaseObject* expected)
+    {
+        const auto& owners = Heap::GetHeap().old().oldExportOwners;
+        return std::count_if(owners.begin(), owners.end(),
+            [&](const ValueRoot& root) { return root.object == expected; });
+    }
     static bool DiscoveredIdentity(BaseObject* expected)
     {
         auto& cross = Heap::GetHeap().cross_vm();
@@ -302,4 +310,80 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, MinorPreservesOldDiscoveredOwnership)
     ConcurrentGCBreakpoints::ReleaseControl();
     Heap::GetHeap().RemoveExportObject(root);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+namespace {
+struct ExportTaskInputs {
+    BaseObject* young = nullptr;
+    BaseObject* old = nullptr;
+    U64 handles[3]{};
+};
+void* AllocateExportTaskInputs(void* argument)
+{
+    auto& input = *static_cast<ExportTaskInputs*>(argument);
+    auto& heap = Heap::GetHeap();
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uint64_t));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    input.young = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(16, PageAge::eden));
+    input.old = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(16, PageAge::old));
+    input.young->SetClassInfo(type);
+    input.old->SetClassInfo(type);
+    input.handles[0] = heap.RegisterExportRoot(input.young);
+    input.handles[1] = heap.RegisterExportRoot(input.old);
+    input.handles[2] = heap.RegisterExportRoot(input.young);
+    return nullptr;
+}
+}
+
+// Observe the real root phase before mark-follow or mark-end can publish a
+// forgotten stack. Inputs use the public export registry; the product pause
+// owns both generation flips, and mark_roots owns task dispatch and merging.
+GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportTaskPublishesBothGenerations)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ExportTaskInputs input;
+    auto task = RunCJTask(AllocateExportTaskInputs, &input);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* returned = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &returned), E_OK);
+    ReleaseHandle(task);
+    size_t localYoung = 0, localOld = 0, publishedYoung = 0, publishedOld = 0;
+    size_t youngOwners = 0, oldOwners = 0;
+    {
+        DriverLocker lock;
+        auto& heap = Heap::GetHeap();
+        YoungTypeSetter type(heap.young(), ZYoungType::major_partial_roots);
+        heap.young().pause_mark_start();
+        heap.old().mark_roots();
+        heap.old().Workers()->threads_do([&](WorkerThread* worker) {
+            const auto* data = worker->gc_data();
+            if (data != nullptr) {
+                localYoung += data->markStacks[0].Population();
+                localOld += data->markStacks[1].Population();
+            }
+        });
+        // Include the driver: the deleted task-external route used its TLS.
+        localYoung += ThreadLocal::GetGCData().markStacks[0].Population();
+        localOld += ThreadLocal::GetGCData().markStacks[1].Population();
+        publishedYoung = heap.young().Mark().Stripes().Population();
+        publishedOld = heap.old().Mark().Stripes().Population();
+        youngOwners = RelocationReceiptTest::EnumeratedOwners(input.young);
+        oldOwners = RelocationReceiptTest::EnumeratedOwners(input.old);
+        std::fprintf(stderr, "EXPORT_TASK_TARGET executed=1 local_young=%zu local_old=%zu published_young=%zu published_old=%zu young_owners=%zu old_owners=%zu\n",
+            localYoung, localOld, publishedYoung, publishedOld, youngOwners, oldOwners);
+    }
+    // Shutdown owns cleanup even in a cut arm; evaluate the captured boundary
+    // result without an earlier existence assertion masking its verdict.
+    for (U64 handle : input.handles) { Heap::GetHeap().RemoveExportObject(handle); }
+    const auto fini = FiniCJRuntime();
+    GC_EXPECT_TRUE(localYoung == 0 && localOld == 0 && publishedYoung > 0 && publishedOld > 0);
+    GC_EXPECT_TRUE(youngOwners == 2 && oldOwners == 1);
+    GC_EXPECT_EQ(fini, E_OK);
 }
