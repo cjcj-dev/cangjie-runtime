@@ -37,15 +37,9 @@ MarkStackEntry Entry(size_t i)
     return MarkStackEntry(size_t(i + 1), size_t(i + 3), false);
 }
 
-void DrainFollow(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, MarkTerminate& terminate,
-                 size_t workerId, std::vector<size_t>& seen, bool partial)
+MarkStackEntry ObjectEntry(BaseObject* object)
 {
-    MapleRuntime::GcUnit::WorkerFixture workerThread(workerId);
-    SuspendibleThreadSetJoiner stsJoiner;
-    (void)ZMark::FollowWork(context, smr, stripes, terminate, workerId, partial,
-                                 [&seen](const MarkStackEntry& entry) {
-                                     seen.push_back(entry.partial_array_offset());
-                                 });
+    return MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, false, false, false);
 }
 
 struct ResetAbort {
@@ -78,68 +72,69 @@ size_t StealOffset(MarkStripe& stripe, MarkingSMR& smr, size_t workerId)
 
 GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
 {
+    B09RuntimeFixture runtime;
     for (size_t workers : {size_t{1}, size_t{2}}) {
-        MarkStripeSet stripes(4);
-        MarkTerminate terminate;
-        terminate.Reset(workers);
-        stripes.SetTerminate(&terminate);
-        MapleRuntime::GcUnit::WorkerFixture workerFixture;
-    MarkingSMR smr;
+        GcHeapFixture fx;
+        WorkerFixture worker;
+        ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
+        domain.PrepareWork(workers);
+        auto& stripes = domain.Stripes();
         MarkThreadLocalStacks seed(4);
+        std::vector<BaseObject*> objects;
         constexpr size_t count = 40;
         for (size_t i = 0; i < count; ++i) {
-            seed.Push(stripes, stripes.At(i % 4), Entry(i), true);
+            auto* object = fx.PlaceObject(fx.region0()->GetRegionStart() + i * 64);
+            objects.push_back(object);
+            seed.Push(stripes, stripes.At(i % stripes.NStripes()), ObjectEntry(object), true);
         }
+        fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + count * 64);
         (void)seed.Flush(stripes);
-        std::vector<std::vector<size_t>> seen(workers);
-        std::vector<std::unique_ptr<MarkThreadLocalStacks>> stacks;
-        std::vector<std::unique_ptr<MarkContext>> contexts;
-        for (size_t w = 0; w < workers; ++w) {
-            stacks.emplace_back(std::make_unique<MarkThreadLocalStacks>(4));
-            contexts.emplace_back(std::make_unique<MarkContext>(workers, w, stripes, *stacks[w]));
-        }
+        auto drain = [&](size_t id) {
+            WorkerFixture workerThread(id);
+            SuspendibleThreadSetJoiner joiner;
+            MarkThreadLocalStacks stacks(4);
+            MarkContext ctx(workers, id, stripes, stacks);
+            (void)domain.FollowWork(ctx, id, false);
+        };
         std::vector<std::thread> threads;
-        for (size_t w = 1; w < workers; ++w) {
-            threads.emplace_back([&, w]() {
-                DrainFollow(*contexts[w], smr, stripes, terminate, w, seen[w], false);
-            });
-        }
-        DrainFollow(*contexts[0], smr, stripes, terminate, 0, seen[0], false);
-        for (auto& t : threads) {
-            t.join();
-        }
-        GC_EXPECT_TRUE(stripes.IsEmpty());
-        size_t total = 0;
-        for (size_t w = 0; w < workers; ++w) {
-            total += seen[w].size();
-        }
-        GC_EXPECT_EQ(total, count);
+        for (size_t id = 1; id < workers; ++id) threads.emplace_back(drain, id);
+        drain(0);
+        for (auto& thread : threads) thread.join();
+        size_t marked = 0;
+        for (auto* object : objects) marked += fx.region0()->is_object_strongly_live(from_object(object));
+        std::fprintf(stderr, "DRAIN_PRODUCT workers=%zu entries=%zu marked=%zu\n", workers, count, marked);
+        GC_EXPECT_EQ(marked, count);
+        GC_EXPECT_EQ(fx.region0()->live_objects(), count);
         GC_EXPECT_TRUE(stripes.IsEmpty());
     }
 }
 
 GC_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
 {
-    MarkStripeSet stripes(2);
-    MarkTerminate terminate;
-    terminate.Reset(1);
-    stripes.SetTerminate(&terminate);
-    MapleRuntime::GcUnit::WorkerFixture workerFixture;
-    MarkingSMR smr;
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    WorkerFixture worker;
+    SuspendibleThreadSetJoiner joiner;
+    ZMark domain(2, MarkingStacks::MarkingGeneration::MAJOR);
+    domain.PrepareWork(2);
+    auto& stripes = domain.Stripes();
     MarkThreadLocalStacks stacks(2);
-    MarkContext context(1, 0, stripes, stacks);
-    context.SetStripe(stripes.At(0));
-    MarkStripeStack* localVictim = MarkStripeStack::Create(true);
-    localVictim->Push(Entry(11));
-    context.Stacks().Install(stripes, stripes.At(1), localVictim);
-    MarkStripeStack* global = MarkStripeStack::Create(true);
-    global->Push(Entry(22));
-    stripes.At(1)->PublishStack(global, true, stripes.Terminate());
-    std::vector<size_t> seen;
-    DrainFollow(context, smr, stripes, terminate, 0, seen, false);
-    GC_EXPECT_EQ(seen.size(), 2u);
-    GC_EXPECT_EQ(seen[0], 12u);
-    GC_EXPECT_EQ(seen[1], 23u);
+    MarkContext context(2, 0, stripes, stacks);
+    auto* local = MarkStripeStack::Create(true);
+    local->Push(ObjectEntry(fx.obj0));
+    stacks.Install(stripes, stripes.At(1), local);
+    auto* global = MarkStripeStack::Create(true);
+    global->Push(ObjectEntry(fx.obj1));
+    stripes.At(1)->PublishStack(global, true, &domain.Terminate());
+    ZAbort::abort();
+    ResetAbort reset;
+    const auto result = domain.FollowWork(context, 0, false);
+    GC_EXPECT_TRUE(fx.region0()->is_object_strongly_live(from_object(fx.obj0)));
+    GC_EXPECT_FALSE(fx.region1()->is_object_strongly_live(from_object(fx.obj1)));
+    GC_EXPECT_TRUE(result == ZMark::Result::Aborted);
+    auto* remaining = stripes.At(1)->StealStack(domain.Smr(), 0);
+    GC_EXPECT_TRUE(remaining != nullptr);
+    MarkStripeStack::Destroy(remaining);
 }
 
 GC_TEST(MarkPort203Engine, OverflowPreferredOverPublished)
@@ -226,34 +221,29 @@ GC_TEST(MarkPort203Engine, LocalSlotIndexFollowsStripePointer)
 
 GC_TEST(MarkPort203Engine, PartialReturnsBeforeTerminate)
 {
-    MarkStripeSet stripes(1);
-    MarkTerminate terminate;
-    terminate.Reset(1);
-    stripes.SetTerminate(&terminate);
-    MapleRuntime::GcUnit::WorkerFixture workerFixture;
-    MarkingSMR smr;
+    WorkerFixture worker;
+    ZMark domain(1, MarkingStacks::MarkingGeneration::MAJOR);
+    domain.PrepareWork(1);
     MarkThreadLocalStacks stacks(1);
-    MarkContext context(1, 0, stripes, stacks);
-    std::vector<size_t> seen;
-    auto result = ZMark::FollowWork(context, smr, stripes, terminate, 0, true,
-                                         [&seen](const MarkStackEntry& entry) {
-                                             seen.push_back(entry.partial_array_offset());
-                                         });
+    MarkContext context(1, 0, domain.Stripes(), stacks);
+    const auto result = domain.FollowWork(context, 0, true);
     GC_EXPECT_TRUE(result == ZMark::Result::Partial);
-    GC_EXPECT_TRUE(terminate.Saturated());
-    GC_EXPECT_EQ(seen.size(), 0u);
+    GC_EXPECT_TRUE(domain.Terminate().Saturated());
+    GC_EXPECT_TRUE(stacks.IsEmpty());
 }
 
 GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
 {
     B09RuntimeFixture runtime;
-    MarkStripeSet stripes(2);
-    MarkTerminate terminate;
-    terminate.Reset(2);
+    GcHeapFixture fx;
+    ZMark domain(2, MarkingStacks::MarkingGeneration::YOUNG);
+    domain.PrepareWork(2);
+    auto& stripes = domain.Stripes();
+    auto& terminate = domain.Terminate();
     stripes.SetTerminate(&terminate);
     WorkerFixture workerFixture;
     SuspendibleThreadSetJoiner stsJoiner;
-    MarkingSMR smr;
+    auto& smr = domain.Smr();
     MarkThreadLocalStacks stacks(2);
     MarkContext context(2, 0, stripes, stacks);
     MarkStripeStack* overflow = MarkStripeStack::Create(true);
@@ -264,14 +254,12 @@ GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
     stripes.At(0)->PublishStack(published, true, stripes.Terminate());
     MarkStripeStack* local = MarkStripeStack::Create(true);
     local->Push(Entry(80));
-    local->Push(Entry(81));
+    local->Push(ObjectEntry(fx.obj0));
     stacks.Install(stripes, stripes.At(0), local);
     terminate.Leave();
-    ZMark domain(2, MarkingStacks::MarkingGeneration::YOUNG);
     ZAbort::abort();
     ResetAbort resetAbort;
-    const auto result = ZMark::FollowWork(context, smr, stripes, terminate, 0, false,
-        [](const MarkStackEntry&) {}, nullptr, nullptr, &domain);
+    const auto result = domain.FollowWork(context, 0, false);
     const size_t first = StealOffset(*stripes.At(0), smr, 0);
     const size_t second = StealOffset(*stripes.At(0), smr, 0);
     std::fprintf(stderr, "REBALANCE_FLUSH_TARGET executed=1 branch=unsaturated result=%d first=%zu second=%zu\n",
@@ -284,14 +272,16 @@ GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
 GC_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
 {
     B09RuntimeFixture runtime;
-    MarkStripeSet stripes(4);
+    GcHeapFixture fx;
+    ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
+    domain.PrepareWork(2);
+    auto& stripes = domain.Stripes();
     stripes.SetNStripes(1);
-    MarkTerminate terminate;
-    terminate.Reset(2);
+    auto& terminate = domain.Terminate();
     stripes.SetTerminate(&terminate);
     WorkerFixture workerFixture(1);
     SuspendibleThreadSetJoiner stsJoiner;
-    MarkingSMR smr;
+    auto& smr = domain.Smr();
     for (size_t i = 0; i < 17; ++i) {
         MarkStripeStack* crowded = MarkStripeStack::Create(true);
         crowded->Push(Entry(100 + i));
@@ -304,13 +294,11 @@ GC_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
     MarkContext context(2, 1, stripes, stacks);
     MarkStripeStack* local = MarkStripeStack::Create(true);
     local->Push(Entry(80));
-    local->Push(Entry(81));
+    local->Push(ObjectEntry(fx.obj0));
     stacks.Install(stripes, stripes.At(0), local);
-    ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
     ZAbort::abort();
     ResetAbort resetAbort;
-    const auto result = ZMark::FollowWork(context, smr, stripes, terminate, 1, false,
-        [](const MarkStackEntry&) {}, nullptr, nullptr, &domain);
+    const auto result = domain.FollowWork(context, 1, false);
     const size_t first = StealOffset(*stripes.At(0), smr, 1);
     const size_t second = StealOffset(*stripes.At(0), smr, 1);
     std::fprintf(stderr, "REBALANCE_FLUSH_TARGET executed=1 branch=stripe result=%d first=%zu second=%zu\n",
@@ -322,53 +310,43 @@ GC_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
 
 GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
 {
-    MarkStripeSet stripes(2);
-    MarkTerminate terminate;
-    terminate.Reset(2);
-    stripes.SetTerminate(&terminate);
-    MapleRuntime::GcUnit::WorkerFixture workerFixture;
-    MarkingSMR smr;
-    MarkThreadLocalStacks waiterStacks(2);
-    MarkThreadLocalStacks producerStacks(2);
-    MarkContext waiter(2, 0, stripes, waiterStacks);
-    MarkContext producer(2, 1, stripes, producerStacks);
-    std::atomic<bool> waiterEntered{ false };
-    std::atomic<size_t> waiterPicked{ 0 };
-    std::vector<size_t> seen;
-    std::thread waitThread([&]() {
-        MapleRuntime::GcUnit::WorkerFixture workerThread(0);
-        SuspendibleThreadSetJoiner stsJoiner;
-        waiterEntered.store(true, std::memory_order_release);
-        // ZGC zMarkStack.inline.hpp:74: the publish-side wake is the only way a
-        // worker parked in MarkTerminate::TryTerminate learns about new work.
-        (void)ZMark::FollowWork(waiter, smr, stripes, terminate, 0, false,
-            [&](const MarkStackEntry& entry) {
-                seen.push_back(entry.partial_array_offset());
-                waiterPicked.fetch_add(1, std::memory_order_release);
-            });
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    WorkerFixture worker;
+    ZMark domain(2, MarkingStacks::MarkingGeneration::MAJOR);
+    domain.PrepareWork(2);
+    auto& stripes = domain.Stripes();
+    std::atomic<bool> entered{false};
+    std::thread waiter([&] {
+        WorkerFixture workerThread(0);
+        SuspendibleThreadSetJoiner joiner;
+        MarkThreadLocalStacks stacks(2);
+        MarkContext ctx(2, 0, stripes, stacks);
+        entered.store(true, std::memory_order_release);
+        (void)domain.FollowWork(ctx, 0, false);
     });
-    while (!waiterEntered.load(std::memory_order_acquire)) {
+    while (!entered.load(std::memory_order_acquire)) std::this_thread::yield();
+    const auto parkedDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (domain.Terminate().Saturated() && std::chrono::steady_clock::now() < parkedDeadline)
         std::this_thread::yield();
+    auto* stack = MarkStripeStack::Create(true);
+    stack->Push(ObjectEntry(fx.obj0));
+    stripes.At(0)->PublishStack(stack, true, &domain.Terminate());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!fx.region0()->is_object_strongly_live(from_object(fx.obj0)) &&
+           std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+    const bool woke = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
+    {
+        SuspendibleThreadSetJoiner joiner;
+        MarkThreadLocalStacks stacks(2);
+        MarkContext ctx(2, 1, stripes, stacks);
+        (void)domain.FollowWork(ctx, 1, false);
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    MarkStripeStack* stack = MarkStripeStack::Create(true);
-    stack->Push(Entry(4));
-    std::fprintf(stderr, "WAKE_TARGET before_publish picked=%zu saturated=%d\n",
-                 waiterPicked.load(std::memory_order_acquire),
-                 static_cast<int>(terminate.Saturated()));
-    stripes.At(0)->PublishStack(stack, true, stripes.Terminate());
-    // Bounded, so that a missing publish-side wake is a red assertion and not a
-    // hang. The producer drain below always terminates the parked worker.
-    const bool wokeOnPublish = WaitForCount(&waiterPicked, 1, std::chrono::milliseconds(2000));
-    std::fprintf(stderr, "WAKE_TARGET after_publish woke=%d picked=%zu saturated=%d\n",
-                 static_cast<int>(wokeOnPublish), waiterPicked.load(std::memory_order_acquire),
-                 static_cast<int>(terminate.Saturated()));
-    std::vector<size_t> producerSeen;
-    DrainFollow(producer, smr, stripes, terminate, 1, producerSeen, false);
-    waitThread.join();
-    GC_EXPECT_TRUE(wokeOnPublish);
+    waiter.join();
+    std::fprintf(stderr, "WAKE_TARGET entries=1 marked_before_producer=%d\n", woke);
+    GC_EXPECT_TRUE(woke);
     GC_EXPECT_TRUE(stripes.IsEmpty());
-    GC_EXPECT_EQ(seen.size() + producerSeen.size(), 1u);
+    GC_EXPECT_EQ(fx.region0()->live_objects(), 1u);
 }
 
 GC_TEST(MarkPort203Engine, LeaveUnblocksTryTerminateWaiter)
@@ -471,20 +449,23 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
     SuspendibleThreadSetJoiner stsJoiner;
+    GcHeapFixture fx;
     ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
     domain.PrepareWork(1);
     MarkThreadLocalStacks stacks(4);
     MarkContext context(1, 0, domain.Stripes(), stacks);
     constexpr size_t count = 64;
     for (size_t i = 0; i < count; ++i) {
-        stacks.Push(domain.Stripes(), domain.Stripes().At(0), Entry(i), true);
+        auto* object = fx.PlaceObject(fx.region0()->GetRegionStart() + i * 64);
+        stacks.Push(domain.Stripes(), domain.Stripes().At(0), ObjectEntry(object), true);
     }
+    fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + count * 64);
+    ZAbort::abort();
+    ResetAbort reset;
+    const auto result = domain.FollowWork(context, 0, false);
     size_t followed = 0;
-    const auto result = ZMark::FollowWork(context, domain.Smr(), domain.Stripes(), domain.Terminate(),
-        0, false, [&](const MarkStackEntry&) {
-            ++followed;
-            ZAbort::abort();
-        }, nullptr, nullptr, &domain);
+    for (size_t i = 0; i < count; ++i)
+        followed += fx.region0()->is_object_strongly_live(to_zaddress(fx.region0()->GetRegionStart() + i * 64));
     GC_EXPECT_TRUE(result == ZMark::Result::Aborted);
     GC_EXPECT_EQ(followed, 1u);
     (void)stacks.Flush(domain.Stripes());
@@ -727,4 +708,31 @@ GC_TEST(MarkPublish1144, ListPreservesEmptyPayload)
     GC_EXPECT_TRUE(observed == stack);
     GC_EXPECT_TRUE(observed->IsEmpty());
     MarkStripeStack::Destroy(observed);
+}
+
+// The registered phase entry dispatches the actual ZMarkTask to a worker.
+// An existing abort request bounds execution after the first consumed entry.
+GC_TEST(MarkConsumer1328, PhaseDispatchConsumesProducedEntry)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    WorkerFixture producer;
+    ZStatWorkers stats;
+    ZWorkers workers(ZGenerationId::old, 1, &stats);
+    workers.set_active_workers(1);
+    ZMark domain(1, MarkingStacks::MarkingGeneration::MAJOR);
+    domain.BindWorkers(&workers);
+    domain.PrepareWork(1);
+    domain.MarkObject<false, false, false, false>(from_object(fx.obj0));
+    (void)domain.Stacks().Flush(domain.Stripes());
+    ZAbort::abort();
+    ResetAbort reset;
+    domain.MarkFollow(true);
+    const bool marked = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
+    const auto objects = fx.region0()->live_objects();
+    std::fprintf(stderr, "PHASE1328_TARGET entries=1 marked=%d objects=%u\n", marked, objects);
+    // Clean remaining input even in a controlled dispatch-cut arm.
+    while (auto* stack = domain.Stripes().At(0)->StealStack(domain.Smr(), 0))
+        MarkStripeStack::Destroy(stack);
+    GC_EXPECT_TRUE(marked && objects == 1);
 }
