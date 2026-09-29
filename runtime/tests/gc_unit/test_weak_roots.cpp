@@ -156,6 +156,7 @@ GC_RUNTIME_OTHER_VM_TEST(WeakRootsProduct, CollectionReportsDeadToOwnerOnce)
     const bool retired = after == before;
     std::fprintf(stderr, "WEAK_OWNER_INPUT_ASSERT result=%d; WEAK_OWNER_RETIRE_ASSERT result=%d\n",
                  inputPresent, retired);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
     GC_EXPECT_TRUE(inputPresent);
     GC_EXPECT_TRUE(retired);
 }

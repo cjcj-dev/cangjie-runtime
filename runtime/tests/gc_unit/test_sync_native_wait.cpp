@@ -1,4 +1,7 @@
 #include "Common/WeakHandle.inline.h"
+#include "Cangjie.h"
+#include "ObjectModel/MObject.h"
+#include "TypeInfoManager.h"
 #include "Sync/Sync.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -75,3 +78,44 @@ GC_TEST(SyncNativeWait, WeakHandleResolveFollowsRelocatedObject)
 }
 
 
+
+namespace {
+void* CreateUnreachableWaitQueue(void* argument)
+{
+    auto& initialized = *static_cast<bool*>(argument);
+    alignas(TypeInfo) static unsigned char metadata[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(metadata);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(CJWaitQueue) - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(metadata), sizeof(metadata));
+    auto* queue = MObject::NewObject(type, sizeof(CJWaitQueue), AllocType::MOVEABLE_OBJECT);
+    initialized = queue != nullptr && MCC_WaitQueueInit(queue) == 0;
+    return nullptr;
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(SyncNativeWait, CollectionRetiresUnreachableOwnerOnce)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    const size_t before = SyncWeakOopStorage().AllocationCount();
+    bool initialized = false;
+    CJThreadHandle task = RunCJTask(CreateUnreachableWaitQueue, &initialized);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* result = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &result), E_OK);
+    ReleaseHandle(task);
+    const size_t registered = SyncWeakOopStorage().AllocationCount();
+    Heap::GetHeap().RequestGC(GC_REASON_USER);
+    const size_t after = SyncWeakOopStorage().AllocationCount();
+    std::fprintf(stderr, "SYNC_OWNER_RETIRE_ASSERT initialized=%d before=%zu registered=%zu after=%zu\n",
+                 initialized, before, registered, after);
+    const bool inputPresent = initialized && registered == before + 1;
+    const bool retired = after == before;
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    GC_EXPECT_TRUE(inputPresent);
+    GC_EXPECT_TRUE(retired);
+}
