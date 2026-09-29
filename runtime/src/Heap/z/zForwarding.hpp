@@ -199,11 +199,6 @@ public:
         accept,
     };
 
-    static bool young_marking()
-    {
-        return ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();
-    }
-
     void relocated_remembered_fields_register(MAddress field);
 
     bool relocated_remembered_fields_is_concurrently_scanned() const;
@@ -268,7 +263,6 @@ private:
     std::atomic<ZPublishState> _relocated_remembered_fields_state;
     std::vector<MAddress> _relocated_remembered_fields_array;
     uint32_t _relocated_remembered_fields_publish_young_seqnum;
-    mutable std::mutex _relocated_fields_lock;
 };
 
 // Attached-entry spelling used by existing consumers.

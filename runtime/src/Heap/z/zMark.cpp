@@ -368,6 +368,7 @@ public:
     {
         SuspendibleThreadSetJoiner stsJoiner;
         mark->FollowWorkComplete(partial);
+        Heap::GetHeap().mark_flush(ThreadLocal::GetGCData());
     }
 
 private:
@@ -768,8 +769,6 @@ void ZMark::FollowWorkComplete(bool partial)
                      nullptr, nullptr, this);
     (void)local.Stacks().Flush(stripes);
     local.Cache().Flush();
-
-    ThreadLocal::FlushCurrentThreadMarkStacks();
 }
 
 bool ZMark::FollowWorkPartial()
