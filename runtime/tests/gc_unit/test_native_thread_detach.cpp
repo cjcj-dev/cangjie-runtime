@@ -3,6 +3,7 @@
 #include "gc_unittest.hpp"
 #include "Cangjie.h"
 #include "Common/Handle.h"
+#include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -179,7 +180,7 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, IteratorGracePeriod)
     });
     GC_EXPECT_TRUE(WaitNative([&] { return data.load() != nullptr; }));
     std::thread joiner([&] { owner.join(); joined.store(true, std::memory_order_release); });
-    bool found = false, removed = false, waiting = false, retained = false;
+    bool found = false, removed = false, waiting = false, retained = false, pauseDuringGrace = false;
     std::thread late;
     {
         CleanThreadLocalData::Iterator first;
@@ -195,6 +196,12 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, IteratorGracePeriod)
             return where.find("futex") != std::string::npos;
         });
         retained = found && !joined.load() && first.Current()->nativeData.storeGoodMask == masks && masks != 0;
+        // A reader may request a real pause while the remover waits. Native
+        // removal must already have left STS or this forms a wait cycle.
+        {
+            ScopedStopTheWorld pause("native owner grace period");
+            pauseDuringGrace = MutatorManager::Instance().WorldStopped();
+        }
         // Enter after the first remover has begun its grace period. This
         // second generation must not delay the first generation's completion.
         late = std::thread([&] {
@@ -205,12 +212,12 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, IteratorGracePeriod)
         (void)WaitNative([&] { return lateReady.load(); });
     }
     const bool progressed = WaitNative([&] { return joined.load(std::memory_order_acquire); });
-    std::fprintf(stderr, "NATIVE_ITERATOR_GRACE executed=1 found=%d unlinked=%d waiting=%d retained=%d later_reader=%d completed=%d\n",
-                 found, removed, waiting, retained, lateReady.load(), progressed);
+    std::fprintf(stderr, "NATIVE_ITERATOR_GRACE executed=1 found=%d unlinked=%d waiting=%d retained=%d later_reader=%d completed=%d pause_during_grace=%d\n",
+                 found, removed, waiting, retained, lateReady.load(), progressed, pauseDuringGrace);
     lateRelease.store(true, std::memory_order_release);
     late.join();
     joiner.join();
-    GC_EXPECT_TRUE(found && removed && waiting && retained && progressed);
+    GC_EXPECT_TRUE(found && removed && waiting && retained && progressed && pauseDuringGrace);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
