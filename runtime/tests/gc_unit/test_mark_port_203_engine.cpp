@@ -722,3 +722,45 @@ GC_TEST(MarkPublish1144, ListPreservesEmptyPayload)
     GC_EXPECT_TRUE(observed->IsEmpty());
     MarkStripeStack::Destroy(observed);
 }
+
+namespace {
+void CheckLateNativeRoot(bool abortRequested)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    fixture.region0()->reset(PageAge::eden);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    young.InitializeWorkers(2);
+    young.Workers()->set_active();
+    young.Workers()->set_active_workers(1);
+    young.Mark().Start();
+    young.set_phase(ZGenerationPhase::Mark);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE).StoreColoured(zpointer::null);
+    const uint64_t before = fixture.region0()->live_bytes();
+    const size_t expected = fixture.obj0->GetSize();
+    // The product native-root producer leaves this root in the caller's
+    // local stack. The remset worker cannot consume it before the caller's
+    // terminate flush; the subsequent MarkFollow must close that work.
+    heap.MarkYoungObjectIfActive(fixture.obj0);
+    if (abortRequested) { ZAbort::abort(); }
+    young.mark_follow();
+    const uint64_t live = fixture.region0()->live_bytes() - before;
+    const bool marked = fixture.region0()->is_object_strongly_live(from_object(fixture.obj0));
+    std::fprintf(stderr, "REMSET1310_TARGET abort=%d marked=%d live=%llu expected=%zu\n",
+                 abortRequested, marked, static_cast<unsigned long long>(live), expected);
+    GC_EXPECT_TRUE(abortRequested ? (!marked && live == 0) : (marked && live == expected));
+    young.StopWorkers();
+}
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, LateNativeRootFollowed)
+{
+    CheckLateNativeRoot(false);
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, AbortLeavesLateRootUnmarked)
+{
+    CheckLateNativeRoot(true);
+}
