@@ -1131,6 +1131,9 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, LibraryStaticRootIsEnumerated)
         c.done.store(true, std::memory_order_release);
     }, &context);
     Target("static-root-object-published", Await(context.done) && context.object != 0);
+    std::fprintf(stderr, "STATIC_ROOT_META roots_addr=%#zx roots_size=%u image_root=%#zx\n",
+                 file->GetCJFileMeta().gcRootsAddr, file->GetCJFileMeta().gcRootSize,
+                 reinterpret_cast<MAddress>(rootSlot()));
     size_t visited = 0;
     MAddress observed = 0;
     bool matched = false;
