@@ -697,8 +697,15 @@ void CheckCarrierWalk(bool heapWalk)
     GC_EXPECT_FALSE(markedBefore);
     bool found = false;
     if (heapWalk) {
-        ScopedStopTheWorld stw("carrier graph", false);
-        HeapIterator(false).Iterate([&](BaseObject* visited) { found |= visited == object; });
+        // Heap inspection is a VM operation executed by the GC thread. Keep
+        // allocation on the registered native mutator, then enter that role.
+        const ThreadType savedType = ThreadLocal::GetThreadType();
+        ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+        {
+            ScopedStopTheWorld stw("carrier graph", false);
+            HeapIterator(false).Iterate([&](BaseObject* visited) { found |= visited == object; });
+        }
+        ThreadLocal::SetThreadType(savedType);
     } else {
         heap.old().pause_verify();
     }
