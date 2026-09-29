@@ -1,0 +1,6 @@
+[  RUN   ] RelocateWorkers.ProductEntryRestartsWithRequestedWorkers
+[  RUN   ] RelocateWorkers.ProductEntryRestartsWithRequestedWorkers
+ASSERT_RELOCATE_RESTART executed=1 active=3 done=1 queue_active=0
+GC_UNIT_OTHER_VM_OKIDOKI RelocateWorkers.ProductEntryRestartsWithRequestedWorkers
+[  PASS  ] RelocateWorkers.ProductEntryRestartsWithRequestedWorkers
+[========] 1 tests: 1 passed, 0 failed

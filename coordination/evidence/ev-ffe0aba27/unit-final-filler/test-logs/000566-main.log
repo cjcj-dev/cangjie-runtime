@@ -1,0 +1,13 @@
+[  RUN   ] DriverRegistration.ProductOwnedMinor
+[  RUN   ] DriverRegistration.ProductOwnedMinor
+REGISTRATION_TARGET minor registered=0x74cbb001d660 owned=0x74cbb001d660
+2026-09-30 00:28:28.648813 245202 I GC Workers for Young Generation: 1 (static)
+2026-09-30 00:28:28.649073 245202 I GC Workers for Old Generation: 1 (static)
+2026-09-30 00:28:28.649647 245754 I FinalizerProcessor thread started
+2026-09-30 00:28:28.649898 245202 I Uncommit: Enabled delay=300s
+2026-09-30 00:28:28.650022 245202 I Cangjie runtime started.
+2026-09-30 00:28:28.650567 245754 I FinalizerProcessor thread stopped
+2026-09-30 00:28:28.661282 245144 I Cangjie runtime shutdown.
+GC_UNIT_OTHER_VM_OKIDOKI DriverRegistration.ProductOwnedMinor
+[  PASS  ] DriverRegistration.ProductOwnedMinor
+[========] 1 tests: 1 passed, 0 failed

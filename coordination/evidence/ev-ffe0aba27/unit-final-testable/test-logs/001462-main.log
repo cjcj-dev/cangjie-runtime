@@ -1,0 +1,4 @@
+[  RUN   ] P10Roots.HandleMarkPopsNativeRoots
+P10_HANDLE_MARK_ASSERT_EXECUTED
+[  PASS  ] P10Roots.HandleMarkPopsNativeRoots
+[========] 1 tests: 1 passed, 0 failed

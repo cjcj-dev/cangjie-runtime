@@ -477,6 +477,30 @@ uintptr_t Heap::alloc_tlab(size_t size)
     return object_allocator().alloc(size);
 }
 
+// zHeap.cpp:229: shared-page TLAB accounting includes only small eden pages.
+static bool IsSmallEdenPage(const ZPage* page)
+{
+    return page->type() == ZPageType::small && page->age() == PageAge::eden;
+}
+
+size_t Heap::tlab_used() const { return _tlab_usage.tlab_used(); }
+size_t Heap::tlab_capacity() const { return _tlab_usage.tlab_capacity(); }
+void Heap::reset_tlab_used() { _tlab_usage.reset(); }
+
+void Heap::account_alloc_page(ZPage* page)
+{
+    if (IsSmallEdenPage(page)) {
+        _tlab_usage.increase_used(page->size());
+    }
+}
+
+void Heap::account_undo_alloc_page(ZPage* page)
+{
+    if (IsSmallEdenPage(page)) {
+        _tlab_usage.decrease_used(page->size());
+    }
+}
+
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, PageAge age, ZAllocationFlags flags)
 {
     RegionManager& manager = GetHeap().page_allocator();
@@ -486,6 +510,7 @@ ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, Page
     }
     if (page != nullptr) {
         page_table().insert(page);
+        GetHeap().account_alloc_page(page);
     }
     return page;
 }

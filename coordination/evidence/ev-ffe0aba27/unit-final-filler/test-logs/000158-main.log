@@ -1,0 +1,4 @@
+[  RUN   ] ManagedMetadata.ReturnZeroRoots
+METADATA_TARGET entry=3 desc=1 map=1 status=0 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.ReturnZeroRoots
+[========] 1 tests: 1 passed, 0 failed

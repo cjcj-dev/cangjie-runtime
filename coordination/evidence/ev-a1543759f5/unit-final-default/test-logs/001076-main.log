@@ -1,0 +1,7 @@
+[  RUN   ] RelocateWorkers.ParallelCursorClaimsEachIndexOnce
+[  RUN   ] RelocateWorkers.ParallelCursorClaimsEachIndexOnce
+RELOCATION_SET_PARALLEL_CURSOR installed=256 got=256 unique=256 duplicate=0
+ASSERT_RELOCATION_SET_PARALLEL_CURSOR_UNIQUE executed=1 duplicate=0 got=256
+GC_UNIT_OTHER_VM_OKIDOKI RelocateWorkers.ParallelCursorClaimsEachIndexOnce
+[  PASS  ] RelocateWorkers.ParallelCursorClaimsEachIndexOnce
+[========] 1 tests: 1 passed, 0 failed

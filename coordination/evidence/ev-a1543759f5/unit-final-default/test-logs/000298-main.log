@@ -1,0 +1,7 @@
+[  RUN   ] RawNullExit.Array8Accept
+[  RUN   ] RawNullExit.Array8Accept
+RAW_NULL_EXIT_RETURN entry=5 same_page=1 allows=1
+RAW_NULL_EXIT_TARGET entry=5 reject=0 diagnostic=0 status=0
+GC_UNIT_OTHER_VM_OKIDOKI RawNullExit.Array8Accept
+[  PASS  ] RawNullExit.Array8Accept
+[========] 1 tests: 1 passed, 0 failed

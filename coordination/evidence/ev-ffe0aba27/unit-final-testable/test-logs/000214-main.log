@@ -1,0 +1,6 @@
+[  RUN   ] RelocateInner958.MutatorDoesNotRememberPromotion
+[  RUN   ] RelocateInner958.MutatorDoesNotRememberPromotion
+RELOCATE958_RESULT worker=0 remembered=0 copied=1 published=1 old=1 target_assertion=executed
+GC_UNIT_OTHER_VM_OKIDOKI RelocateInner958.MutatorDoesNotRememberPromotion
+[  PASS  ] RelocateInner958.MutatorDoesNotRememberPromotion
+[========] 1 tests: 1 passed, 0 failed

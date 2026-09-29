@@ -1,0 +1,11 @@
+[  RUN   ] TenuringFlags.EnvironmentMaximum
+[  RUN   ] TenuringFlags.EnvironmentMaximum
+2026-09-29 23:56:07.709304 3095885 F Check failed: false
+2026-09-29 23:56:07.709504 3095885 F ZTenuringThreshold must be within bounds of MaxTenuringThreshold
+3095885 E signal SIGABRT (6) pc=0x744eb98969bc fa=0x2f3d4d si_addr=0x2f3d4d
+[GCLOG] v=3 rec=crash seq=0 signo=6 signame=SIGABRT si_code=-6 si_codename=SI_TKILL si_addr=0x2f3d4d pc=0x744eb98969bc pc_mod=libc.so.6 pc_off=0x969bc sym=pthread_kill rbp=0x2f3d4d gc_phase=none gc_kind=none in_par_fix=0 regs=rax=0x0,rbx=0x744eb9e7fd80,rcx=0x744eb98969bc,rdx=0x6,rsi=0x2f3d4d,rdi=0x2f3d4d,rbp=0x2f3d4d,rsp=0x7ffe40b912e0,r8=0x7ffe40b913b0,r9=0x7ffe40b914b0,r10=0x8,r11=0x246,r12=0x6,r13=0x16,r14=0x744eba06c8c0,r15=0x744eba06c8d8,rip=0x744eb98969bc insn=4189c541f7dd3d00f0ffffb800000000 assert=ZTenuringThreshold_must_be_within_bounds_of_MaxTenuringThreshold
+3095885 E CJNative Handle signal: 6.
+TENURING_CONFLICT_TARGET environment=1 status=134 rejected=1
+GC_UNIT_OTHER_VM_OKIDOKI TenuringFlags.EnvironmentMaximum
+[  PASS  ] TenuringFlags.EnvironmentMaximum
+[========] 1 tests: 1 passed, 0 failed

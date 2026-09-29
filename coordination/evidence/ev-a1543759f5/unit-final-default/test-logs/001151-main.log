@@ -1,0 +1,5 @@
+[  RUN   ] ArrayCopyOverlap.StructSame
+ARRAYCOPY_PRECONDITION heap=1 length=5 distinct=1
+ARRAYCOPY_TARGET_EXECUTED struct=1 backwards=1 refs=1 primitives=1
+[  PASS  ] ArrayCopyOverlap.StructSame
+[========] 1 tests: 1 passed, 0 failed

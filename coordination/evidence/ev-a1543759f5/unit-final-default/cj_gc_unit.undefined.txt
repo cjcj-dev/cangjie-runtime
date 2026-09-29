@@ -1,0 +1,1007 @@
+                 U abort@GLIBC_2.2.5
+                 U alarm@GLIBC_2.2.5
+                 U __assert_fail@GLIBC_2.2.5
+                 U calloc@GLIBC_2.2.5
+                 U CJ_CJThreadAttrCJFromCSet@CANGJIE
+                 U CJ_CJThreadAttrInit@CANGJIE
+                 U CJ_CJThreadAttrStackSizeSet@CANGJIE
+                 U CJ_CJThreadFree@CANGJIE
+                 U CJ_CJThreadGetArg@CANGJIE
+                 U CJ_CJThreadGetHandle@CANGJIE
+                 U CJ_CJThreadNew@CANGJIE
+                 U CJ_CJThreadResched@CANGJIE
+                 U CJ_CJThreadStackAddrGetByCJThrd@CANGJIE
+                 U CJ_CJThreadStackBaseAddrGetByCJThrd@CANGJIE
+                 U CJ_CJThreadStackSizeGetByCJThrd@CANGJIE
+                 U CJ_MCC_ArrayCopyRef@CANGJIE
+                 U CJ_MCC_ArrayCopyStruct@CANGJIE
+                 U CJ_MCC_AtomicCompareAndSwapReference@CANGJIE
+                 U CJ_MCC_AtomicReadReference@CANGJIE
+                 U CJ_MCC_AtomicSwapReference@CANGJIE
+                 U CJ_MCC_AtomicWriteReference@CANGJIE
+                 U CJ_MCC_HandleReturnSafepoint@CANGJIE
+                 U CJ_MCC_IsGCRunning@CANGJIE
+                 U CJ_MCC_LoadBarrierOnOopFieldPreloaded@CANGJIE
+                 U CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded@CANGJIE
+                 U CJ_MCC_ReadGenericPayload@CANGJIE
+                 U CJ_MCC_ReadRefField@CANGJIE
+                 U CJ_MCC_ReadStructField@CANGJIE
+                 U CJ_MCC_StoreBarrierOnHeapField@CANGJIE
+                 U CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive@CANGJIE
+                 U CJ_MCC_WriteGeneric@CANGJIE
+                 U CJ_MCC_WriteGenericPayload@CANGJIE
+                 U CJ_MCC_WriteRefField@CANGJIE
+                 U CJ_MCC_WriteRefField_Strong@CANGJIE
+                 U CJ_MCC_WriteRefField_Weak@CANGJIE
+                 U CJ_MRT_CjRuntimeInit@CANGJIE
+                 U CJ_MRT_CjRuntimeInitWithConfigV1@CANGJIE
+                 U CJ_MRT_DemangleHandle@CANGJIE
+                 U CJ_ScheduleAllCJThreadVisit@CANGJIE
+                 U CJ_ScheduleGetTlsHookRegister@CANGJIE
+                 U CJ_ScheduleManagerInit@CANGJIE
+                 U CJThreadBuild@CANGJIE
+                 U CJThreadRootsAreArmed@CANGJIE
+                 U CJ_WaitqueueDelete@CANGJIE
+                 U CJ_WaitqueueNew@CANGJIE
+                 U CJ_WaitqueuePark@CANGJIE
+                 U CJ_WaitqueueWakeAll@CANGJIE
+                 U closedir@GLIBC_2.2.5
+                 U close@GLIBC_2.2.5
+                 U __cxa_allocate_exception@CXXABI_1.3
+                 U __cxa_atexit@GLIBC_2.2.5
+                 U __cxa_begin_catch@CXXABI_1.3
+                 U __cxa_end_catch@CXXABI_1.3
+                 w __cxa_finalize@GLIBC_2.2.5
+                 U __cxa_free_exception@CXXABI_1.3
+                 U __cxa_guard_abort@CXXABI_1.3
+                 U __cxa_guard_acquire@CXXABI_1.3
+                 U __cxa_guard_release@CXXABI_1.3
+                 U __cxa_pure_virtual@CXXABI_1.3
+                 U __cxa_rethrow@CXXABI_1.3
+                 U __cxa_throw@CXXABI_1.3
+                 U dladdr@GLIBC_2.34
+                 U dlopen@GLIBC_2.34
+                 U dlsym@GLIBC_2.34
+                 U dup2@GLIBC_2.2.5
+                 U __errno_location@GLIBC_2.2.5
+                 U execl@GLIBC_2.2.5
+                 U execlp@GLIBC_2.2.5
+                 U _exit@GLIBC_2.2.5
+                 U _Exit@GLIBC_2.2.5
+                 U fclose@GLIBC_2.2.5
+                 U fflush@GLIBC_2.2.5
+                 U fgets@GLIBC_2.2.5
+                 U fileno@GLIBC_2.2.5
+                 U FiniCJRuntime@CANGJIE
+                 U fopen@GLIBC_2.2.5
+                 U fork@GLIBC_2.2.5
+                 U fprintf@GLIBC_2.2.5
+                 U fputs@GLIBC_2.2.5
+                 U free@GLIBC_2.2.5
+                 U ftruncate@GLIBC_2.2.5
+                 U fwrite@GLIBC_2.2.5
+                 U g_cjHeapEnd@CANGJIE
+                 U g_cjHeapRangeCount@CANGJIE
+                 U g_cjHeapRangeEnd@CANGJIE
+                 U g_cjHeapRangeStart@CANGJIE
+                 U g_cjHeapStart@CANGJIE
+                 U g_cjLoadBadMask@CANGJIE
+                 U g_cjLoadGoodMask@CANGJIE
+                 U g_cjMarkBadMask@CANGJIE
+                 U g_cjStoreBadMask@CANGJIE
+                 U g_cjStoreBarrierBufferBufferOffset@CANGJIE
+                 U g_cjStoreBarrierBufferCurrentOffset@CANGJIE
+                 U g_cjStoreBarrierEntryPOffset@CANGJIE
+                 U g_cjStoreBarrierEntryPrevOffset@CANGJIE
+                 U g_cjStoreBarrierEntrySize@CANGJIE
+                 U g_cjStoreGoodMask@CANGJIE
+                 U getcontext@GLIBC_2.2.5
+                 U getenv@GLIBC_2.2.5
+                 U getpgid@GLIBC_2.2.5
+                 U getpgrp@GLIBC_2.2.5
+                 U getpid@GLIBC_2.2.5
+                 U GetTaskRet@CANGJIE
+                 w __gmon_start__
+                 U __gxx_personality_v0@CXXABI_1.3
+                 U HandleReturnSafepoint@CANGJIE
+                 U HandleSafepoint@CANGJIE
+                 U InitCJRuntime@CANGJIE
+                 U __isoc99_sscanf@GLIBC_2.7
+                 w _ITM_deregisterTMCloneTable
+                 w _ITM_registerTMCloneTable
+                 U kill@GLIBC_2.2.5
+                 U __libc_single_threaded@GLIBC_2.32
+                 U __libc_start_main@GLIBC_2.34
+                 U llround@GLIBC_2.2.5
+                 U log@GLIBC_2.29
+                 U makecontext@GLIBC_2.2.5
+                 U malloc@GLIBC_2.2.5
+                 U MCC_AcquireRawData@CANGJIE
+                 U MCC_ApplyCJStaticMethod@CANGJIE
+                 U MCC_FutureInit@CANGJIE
+                 U MCC_GetGCCount@CANGJIE
+                 U MCC_GetInstanceFieldAnnotations@CANGJIE
+                 U MCC_GetMethodAnnotations@CANGJIE
+                 U MCC_GetParameterAnnotations@CANGJIE
+                 U MCC_GetStaticFieldAnnotations@CANGJIE
+                 U MCC_GetTypeInfoAnnotations@CANGJIE
+                 U MCC_NewArray16@CANGJIE
+                 U MCC_NewArray32@CANGJIE
+                 U MCC_NewArray64@CANGJIE
+                 U MCC_NewArray8@CANGJIE
+                 U MCC_NewArray@CANGJIE
+                 U MCC_NewCJThread@CANGJIE
+                 U MCC_NewCJThreadNoReturn@CANGJIE
+                 U MCC_NewExclusiveCJThread@CANGJIE
+                 U MCC_NewFinalizer@CANGJIE
+                 U MCC_NewObjArray@CANGJIE
+                 U MCC_NewObject@CANGJIE
+                 U MCC_NewPinnedObject@CANGJIE
+                 U MCC_PackageInitAbort@CANGJIE
+                 U MCC_PackageInitBegin@CANGJIE
+                 U MCC_PackageInitComplete@CANGJIE
+                 U MCC_PackageInitFail@CANGJIE
+                 U MCC_ReleaseRawData@CANGJIE
+                 U MCC_SetCurrentCJThreadObject@CANGJIE
+                 U MCC_SetInstanceFieldValue@CANGJIE
+                 U MCC_StartCpuProfiling@CANGJIE
+                 U MCC_StopCpuProfiling@CANGJIE
+                 U MCC_WaitQueueInit@CANGJIE
+                 U MCC_WriteRefField@CANGJIE
+                 U MCC_WriteRefField_Strong@CANGJIE
+                 U MCC_WriteStructField@CANGJIE
+                 U memcmp@GLIBC_2.2.5
+                 U memcpy@GLIBC_2.14
+                 U memmove@GLIBC_2.2.5
+                 U memset@GLIBC_2.2.5
+                 U mmap@GLIBC_2.2.5
+                 U mprotect@GLIBC_2.2.5
+                 U MRT_BindUncoloredVisitColor@CANGJIE
+                 U MRT_C2N_Leave@CANGJIE
+                 U MRT_CjRuntimeInit@CANGJIE
+                 U MRT_CjRuntimeStart@CANGJIE
+                 U MRT_EndForeignCJThread@CANGJIE
+                 U MRT_GetCurrentCJThreadObject@CANGJIE
+                 U MRT_GetThreadLocalData@CANGJIE
+                 U MRT_LeaveNative@CANGJIE
+                 U MRT_LeaveSaferegion@CANGJIE
+                 U MRT_NewForeignCJThread@CANGJIE
+                 U MRT_StackGrow@CANGJIE
+                 U MRT_VisitorCaller@CANGJIE
+                 U munmap@GLIBC_2.2.5
+                 U nanosleep@GLIBC_2.2.5
+                 U __once_proxy@GLIBCXX_3.4.11
+                 U opendir@GLIBC_2.2.5
+                 U open@GLIBC_2.2.5
+                 U pipe@GLIBC_2.2.5
+                 U poll@GLIBC_2.2.5
+                 U prctl@GLIBC_2.2.5
+                 U pread@GLIBC_2.2.5
+                 U printf@GLIBC_2.2.5
+                 U pthread_cond_clockwait@GLIBC_2.34
+                 U pthread_equal@GLIBC_2.2.5
+                 U pthread_mutex_lock@GLIBC_2.2.5
+                 U pthread_mutex_unlock@GLIBC_2.2.5
+                 U pthread_once@GLIBC_2.34
+                 U pthread_rwlock_tryrdlock@GLIBC_2.34
+                 U pthread_rwlock_unlock@GLIBC_2.34
+                 U pthread_self@GLIBC_2.2.5
+                 U pthread_setname_np@GLIBC_2.34
+                 U puts@GLIBC_2.2.5
+                 U raise@GLIBC_2.2.5
+                 U readdir@GLIBC_2.2.5
+                 U read@GLIBC_2.2.5
+                 U readlink@GLIBC_2.2.5
+                 U ReleaseHandle@CANGJIE
+                 U rewind@GLIBC_2.2.5
+                 U RunCJTask@CANGJIE
+                 U __sched_cpualloc@GLIBC_2.7
+                 U __sched_cpufree@GLIBC_2.7
+                 U sched_getaffinity@GLIBC_2.3.4
+                 U sched_getcpu@GLIBC_2.6
+                 U sched_setaffinity@GLIBC_2.3.4
+                 U sched_yield@GLIBC_2.2.5
+                 U setenv@GLIBC_2.2.5
+                 U setpgid@GLIBC_2.2.5
+                 U sigaction@CANGJIE
+                 U sigemptyset@GLIBC_2.2.5
+                 U siglongjmp@GLIBC_2.2.5
+                 U signal@CANGJIE
+                 U __sigsetjmp@GLIBC_2.2.5
+                 U snprintf@GLIBC_2.2.5
+                 U stderr@GLIBC_2.2.5
+                 U stdout@GLIBC_2.2.5
+                 U strcmp@GLIBC_2.2.5
+                 U strerror@GLIBC_2.2.5
+                 U strlen@GLIBC_2.2.5
+                 U strncmp@GLIBC_2.2.5
+                 U strstr@GLIBC_2.2.5
+                 U strtol@GLIBC_2.2.5
+                 U swapcontext@GLIBC_2.2.5
+                 U syscall@GLIBC_2.2.5
+                 U sysconf@GLIBC_2.2.5
+                 U tmpfile@GLIBC_2.2.5
+                 U unsetenv@GLIBC_2.2.5
+                 U unwindPCForReturnSafepointHandlerStub@CANGJIE
+                 U _Unwind_Resume@GCC_3.0
+                 U vsnprintf@GLIBC_2.2.5
+                 U vsprintf_s
+                 U waitpid@GLIBC_2.2.5
+                 U write@GLIBC_2.2.5
+                 U operator delete[](void*)@GLIBCXX_3.4
+                 U operator delete(void*)@GLIBCXX_3.4
+                 U operator delete(void*, std::nothrow_t const&)@GLIBCXX_3.4
+                 U operator delete(void*, std::align_val_t)@CXXABI_1.3.11
+                 U MapleRuntime::HandleMark::HandleMark(MapleRuntime::Mutator&)@CANGJIE
+                 U MapleRuntime::HandleMark::~HandleMark()@CANGJIE
+                 U MapleRuntime::MarkingSMR::hazard_ptr()@CANGJIE
+                 U MapleRuntime::MarkingSMR::free()@CANGJIE
+                 U MapleRuntime::MarkingSMR::reclaim()@CANGJIE
+                 U MapleRuntime::MarkingSMR::free_node(MapleRuntime::MarkStripeStackListNode*)@CANGJIE
+                 U MapleRuntime::MarkingSMR::MarkingSMR()@CANGJIE
+                 U MapleRuntime::MarkingSMR::~MarkingSMR()@CANGJIE
+                 U MapleRuntime::MarkStripe::StealStack(MapleRuntime::MarkingSMR&, unsigned long)@CANGJIE
+                 U MapleRuntime::MarkStripe::PublishStack(MapleRuntime::MarkStripeStack*, bool, MapleRuntime::MarkTerminate*)@CANGJIE
+                 U MapleRuntime::MethodInfo::SetMethodName(char const*)@CANGJIE
+                 U MapleRuntime::MethodInfo::SetActualParameterInfos(unsigned long)@CANGJIE
+                 U MapleRuntime::OopStorage::BasicParState::BasicParState(MapleRuntime::OopStorage&, unsigned int, bool)@CANGJIE
+                 U MapleRuntime::OopStorage::BasicParState::~BasicParState()@CANGJIE
+                 U MapleRuntime::OopStorage::OopsDo(std::function<void (MapleRuntime::HeapSlot<false>&)> const&)@CANGJIE
+                 U MapleRuntime::OopStorage::Release(MapleRuntime::HeapSlot<false>*)@CANGJIE
+                 U MapleRuntime::OopStorage::Allocate()@CANGJIE
+                 U MapleRuntime::OopStorage::OopStorage()@CANGJIE
+                 U MapleRuntime::OopStorage::~OopStorage()@CANGJIE
+                 U MapleRuntime::WeakHandle::release(MapleRuntime::OopStorage*)@CANGJIE
+                 U MapleRuntime::WeakHandle::WeakHandle(MapleRuntime::OopStorage*, MapleRuntime::BaseObject*)@CANGJIE
+                 U MapleRuntime::ZPageTable::heap_table()@CANGJIE
+                 U MapleRuntime::ZPageTable::insert(MapleRuntime::ZPage*)@CANGJIE
+                 U MapleRuntime::ZPageTable::remove(MapleRuntime::ZPage*)@CANGJIE
+                 U MapleRuntime::ZPartition::prime(MapleRuntime::FreeRegionManager&, unsigned long)@CANGJIE
+                 U MapleRuntime::ZStatCycle::Initialize(unsigned long)@CANGJIE
+                 U MapleRuntime::ZStatCycle::AtEnd(unsigned long, MapleRuntime::ZStatWorkers*, bool, bool)@CANGJIE
+                 U MapleRuntime::ZStatCycle::AtStart(unsigned long)@CANGJIE
+                 U MapleRuntime::AllocBuffer::RetireTLAB(bool)@CANGJIE
+                 U MapleRuntime::AllocBuffer::ClearRegion()@CANGJIE
+                 U MapleRuntime::AllocBuffer::AllocateImpl(unsigned long, MapleRuntime::AllocType)@CANGJIE
+                 U MapleRuntime::AllocBuffer::GetAllocBuffer()@CANGJIE
+                 U MapleRuntime::AllocBuffer::AccumulateTLABStatistics(MapleRuntime::TLABStatistics&, unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::AllocBuffer::~AllocBuffer()@CANGJIE
+                 U MapleRuntime::Concurrency::Init(ConcurrencyParam, ScheduleType)@CANGJIE
+                 U MapleRuntime::GCArguments::check_memory_size(unsigned long, unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::GCArguments::parse_memory_size(char const*, unsigned long*, unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::HeapManager::Allocate(unsigned long, MapleRuntime::AllocType)@CANGJIE
+                 U MapleRuntime::MarkContext::Cache()@CANGJIE
+                 U MapleRuntime::MarkContext::Stacks()@CANGJIE
+                 U MapleRuntime::MarkContext::SetStripe(MapleRuntime::MarkStripe*)@CANGJIE
+                 U MapleRuntime::MarkContext::MarkContext(unsigned long, unsigned long, MapleRuntime::MarkStripeSet&, MapleRuntime::MarkThreadLocalStacks&)@CANGJIE
+                 U MapleRuntime::ThreadLocal::FlushMarkStacks(MapleRuntime::ThreadLocalData*, MapleRuntime::ZMark&)@CANGJIE
+                 U MapleRuntime::ThreadLocal::InitializeCleaner()@CANGJIE
+                 U MapleRuntime::ThreadLocal::GetThreadLocalData()@CANGJIE
+                 U MapleRuntime::ThreadLocal::GetGCData()@CANGJIE
+                 U MapleRuntime::Uncommitter::ChunkLimit(unsigned long)@CANGJIE
+                 U MapleRuntime::Uncommitter::ParseDelayNs(char const*)@CANGJIE
+                 U MapleRuntime::Uncommitter::Stop()@CANGJIE
+                 U MapleRuntime::Uncommitter::Start()@CANGJIE
+                 U MapleRuntime::Uncommitter::Cancel()@CANGJIE
+                 U MapleRuntime::Uncommitter::DelayNs()@CANGJIE
+                 U MapleRuntime::Uncommitter::Activate()@CANGJIE
+                 U MapleRuntime::Uncommitter::Uncommit()@CANGJIE
+                 U MapleRuntime::Uncommitter::WaitUntil(unsigned long)@CANGJIE
+                 U MapleRuntime::Uncommitter::Uncommitter(MapleRuntime::ZPartition&)@CANGJIE
+                 U MapleRuntime::ZDriverPort::ack()@CANGJIE
+                 U MapleRuntime::ZDriverPort::receive()@CANGJIE
+                 U MapleRuntime::ZDriverPort::send_sync(MapleRuntime::ZDriverRequest const&)@CANGJIE
+                 U MapleRuntime::ZDriverPort::ZDriverPort()@CANGJIE
+                 U MapleRuntime::ZForwarding::detach_page()@CANGJIE
+                 U MapleRuntime::ZForwarding::retain_page(MapleRuntime::ZRelocateQueue*)@CANGJIE
+                 U MapleRuntime::ZForwarding::release_page()@CANGJIE
+                 U MapleRuntime::ZForwarding::WaitPageDone(MapleRuntime::ZForwarding*)@CANGJIE
+                 U MapleRuntime::ZForwarding::CurrentPageWork()@CANGJIE
+                 U MapleRuntime::ZForwarding::in_place_relocation_claim_page()@CANGJIE
+                 U MapleRuntime::ZForwarding::relocated_remembered_fields_publish()@CANGJIE
+                 U MapleRuntime::ZForwarding::relocated_remembered_fields_after_relocate()@CANGJIE
+                 U MapleRuntime::ZForwarding::relocated_remembered_fields_notify_concurrent_scan_of()@CANGJIE
+                 U MapleRuntime::ZForwarding::alloc(MapleRuntime::ZForwardingAllocator*, MapleRuntime::ZPage*, MapleRuntime::PageAge)@CANGJIE
+                 U MapleRuntime::ZForwarding::claim()@CANGJIE
+                 U MapleRuntime::ZForwarding::mark_done()@CANGJIE
+                 U MapleRuntime::ZGeneration::generation(MapleRuntime::ZGenerationId)@CANGJIE
+                 U MapleRuntime::ZGeneration::StopWorkers()@CANGJIE
+                 U MapleRuntime::ZGeneration::remap_object(MapleRuntime::BaseObject*)@CANGJIE
+                 U MapleRuntime::ZGeneration::at_collection_end()@CANGJIE
+                 U MapleRuntime::ZGeneration::InitializeWorkers(unsigned int)@CANGJIE
+                 U MapleRuntime::ZGeneration::at_collection_start(void*)@CANGJIE
+                 U MapleRuntime::ZGeneration::reset_relocation_set()@CANGJIE
+                 U MapleRuntime::ZGeneration::select_relocation_set(bool)@CANGJIE
+                 U MapleRuntime::ZGeneration::relocate_or_remap_object(MapleRuntime::BaseObject*)@CANGJIE
+                 U MapleRuntime::ZGeneration::RecordYoungSequenceAtRelocateStart(unsigned long)@CANGJIE
+                 U MapleRuntime::ZGeneration::old()@CANGJIE
+                 U MapleRuntime::ZGeneration::_old@CANGJIE
+                 U MapleRuntime::ZGeneration::young()@CANGJIE
+                 U MapleRuntime::ZGeneration::_young@CANGJIE
+                 U MapleRuntime::ZGeneration::set_phase(MapleRuntime::ZGenerationPhase)@CANGJIE
+                 U MapleRuntime::ZGeneration::ZGeneration(MapleRuntime::ZGenerationId)@CANGJIE
+                 U MapleRuntime::ZGeneration::~ZGeneration()@CANGJIE
+                 U MapleRuntime::ZHeuristics::max_heap_size()@CANGJIE
+                 U MapleRuntime::ZHeuristics::nparallel_workers()@CANGJIE
+                 U MapleRuntime::ZHeuristics::set_max_heap_size(unsigned long)@CANGJIE
+                 U MapleRuntime::ZHeuristics::nconcurrent_workers()@CANGJIE
+                 U MapleRuntime::ZHeuristics::relocation_headroom()@CANGJIE
+                 U MapleRuntime::ZHeuristics::set_medium_page_size()@CANGJIE
+                 U MapleRuntime::ZHeuristics::significant_heap_overhead()@CANGJIE
+                 U MapleRuntime::ZHeuristics::significant_young_overhead()@CANGJIE
+                 U MapleRuntime::ZHeuristics::use_per_cpu_shared_small_pages()@CANGJIE
+                 U MapleRuntime::ZRemembered::scan_and_follow(MapleRuntime::ZMark*)@CANGJIE
+                 U MapleRuntime::ZRemembered::register_found_old(MapleRuntime::ZPage*)@CANGJIE
+                 U MapleRuntime::ZRemembered::flip()@CANGJIE
+                 U MapleRuntime::ZRemembered::ZRemembered(MapleRuntime::ZPageTable*, MapleRuntime::ZForwardingTable const*, MapleRuntime::RegionManager*)@CANGJIE
+                 U MapleRuntime::ZVerifyOops@CANGJIE
+                 U MapleRuntime::CJFileLoader::AddLoadedFiles(MapleRuntime::BaseFile*)@CANGJIE
+                 U MapleRuntime::CJFileLoader::RemoveLoadedFiles(MapleRuntime::BaseFile*)@CANGJIE
+                 U MapleRuntime::HeapIterator::Iterate(std::function<void (MapleRuntime::BaseObject*)> const&, std::function<void (MapleRuntime::BaseObject*, void const*, unsigned long)> const&)@CANGJIE
+                 U MapleRuntime::HeapIterator::HeapIterator(bool, bool, unsigned int)@CANGJIE
+                 U MapleRuntime::HeapIterator::~HeapIterator()@CANGJIE
+                 U MapleRuntime::StackManager::PrintStackTraceForCpuProfile(MapleRuntime::UnwindContext*, unsigned long long)@CANGJIE
+                 U MapleRuntime::ThreadGCData::VisitOwners(std::function<void (MapleRuntime::ThreadGCData&, MapleRuntime::Mutator*, MapleRuntime::ThreadLocalData*)> const&)@CANGJIE
+                 U MapleRuntime::ThreadGCData::InstallMasks(MapleRuntime::ThreadGCData::Masks const&)@CANGJIE
+                 U MapleRuntime::ThreadGCData::PublishedMasks()@CANGJIE
+                 U MapleRuntime::ThreadGCData::~ThreadGCData()@CANGJIE
+                 U MapleRuntime::ValuePayload::ValuePayload(unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::ValuePayload::ValuePayload(unsigned long, unsigned long, MapleRuntime::ValuePayload::Kind)@CANGJIE
+                 U MapleRuntime::ValuePayload::ValuePayload(unsigned long, unsigned long, MapleRuntime::GCTib, MapleRuntime::ValuePayload::Kind)@CANGJIE
+                 U MapleRuntime::ValuePayload::ValuePayload(unsigned long, unsigned long, std::vector<unsigned long, std::allocator<unsigned long> >, MapleRuntime::ValuePayload::Kind)@CANGJIE
+                 U MapleRuntime::WorkerThread::_worker_id@CANGJIE
+                 U MapleRuntime::ZDriverMajor::collect(MapleRuntime::ZDriverRequest const&)@CANGJIE
+                 U MapleRuntime::ZDriverMinor::collect(MapleRuntime::ZDriverRequest const&)@CANGJIE
+                 U MapleRuntime::ZJNICritical::exit()@CANGJIE
+                 U MapleRuntime::ZJNICritical::block()@CANGJIE
+                 U MapleRuntime::ZJNICritical::count@CANGJIE
+                 U MapleRuntime::ZJNICritical::enter()@CANGJIE
+                 U MapleRuntime::ZJNICritical::unblock()@CANGJIE
+                 U MapleRuntime::ZMappedCache::remove_contiguous(unsigned long)@CANGJIE
+                 U MapleRuntime::ZMappedCache::min_size_watermark()@CANGJIE
+                 U MapleRuntime::ZMappedCache::remove_for_uncommit(unsigned long, MapleRuntime::ZArray<MapleRuntime::ZVirtualMemory>*)@CANGJIE
+                 U MapleRuntime::ZMappedCache::remove_discontiguous(unsigned long, MapleRuntime::ZArray<MapleRuntime::ZVirtualMemory>*)@CANGJIE
+                 U MapleRuntime::ZMappedCache::reset_min_size_watermark()@CANGJIE
+                 U MapleRuntime::ZMappedCache::insert(MapleRuntime::ZVirtualMemory const&)@CANGJIE
+                 U MapleRuntime::ZMappedCache::ZMappedCache()@CANGJIE
+                 U MapleRuntime::ZMappedCache::~ZMappedCache()@CANGJIE
+                 U MapleRuntime::ZStatSampler::first@CANGJIE
+                 U MapleRuntime::ZStatSampler::ZStatSampler(char const*, char const*, void (*)(MapleRuntime::ZStatSampler const&, MapleRuntime::ZStatSamplerHistory const&))@CANGJIE
+                 U MapleRuntime::ZStatWorkers::stats()@CANGJIE
+                 U MapleRuntime::ZStatWorkers::at_end()@CANGJIE
+                 U MapleRuntime::ZStatWorkers::at_start(unsigned int)@CANGJIE
+                 U MapleRuntime::ZStatWorkers::ZStatWorkers()@CANGJIE
+                 U MapleRuntime::ZVerifyRoots@CANGJIE
+                 U MapleRuntime::ArmThreadPoll(MapleRuntime::ThreadLocalData*)@CANGJIE
+                 U MapleRuntime::CartesianTree::TakeIdleUnits(unsigned long, unsigned int, unsigned int&, unsigned int&)@CANGJIE
+                 U MapleRuntime::CartesianTree::TakeUnitsImpl(unsigned int, unsigned int&, bool)@CANGJIE
+                 U MapleRuntime::CartesianTree::MergeInsertInternal(unsigned int, unsigned int, bool)@CANGJIE
+                 U MapleRuntime::CartesianTree::Node::RefreshFreeZPage()@CANGJIE
+                 U MapleRuntime::CollectedHeap::is_filler_object(MapleRuntime::BaseObject const*)@CANGJIE
+                 U MapleRuntime::CollectedHeap::fill_with_dummy_object(unsigned long, unsigned long, bool)@CANGJIE
+                 U MapleRuntime::ConcGCThreads@CANGJIE
+                 U MapleRuntime::LoaderManager::GetInstance()@CANGJIE
+                 U MapleRuntime::MarkLiveCache::Flush()@CANGJIE
+                 U MapleRuntime::MarkLiveCache::MarkLiveCache(unsigned long)@CANGJIE
+                 U MapleRuntime::MarkLiveCache::~MarkLiveCache()@CANGJIE
+                 U MapleRuntime::MarkStripeSet::SetNStripes(unsigned long)@CANGJIE
+                 U MapleRuntime::MarkStripeSet::TrySetNStripes(unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::MarkStripeSet::StripeForWorker(unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::MarkStripeSet::At(unsigned long)@CANGJIE
+                 U MapleRuntime::MarkStripeSet::Next(MapleRuntime::MarkStripe*)@CANGJIE
+                 U MapleRuntime::MarkStripeSet::MarkStripeSet(unsigned long)@CANGJIE
+                 U MapleRuntime::MarkTerminate::TryTerminate(MapleRuntime::MarkStripeSet&, unsigned long)@CANGJIE
+                 U MapleRuntime::MarkTerminate::Leave()@CANGJIE
+                 U MapleRuntime::MarkTerminate::Reset(unsigned long)@CANGJIE
+                 U MapleRuntime::MRT_PAGE_SIZE@CANGJIE
+                 U MapleRuntime::RegionManager::TakeRegion(unsigned long, MapleRuntime::ZPageType, bool, MapleRuntime::PageAge, MapleRuntime::ZAllocationFlags)@CANGJIE
+                 U MapleRuntime::RegionManager::ReclaimRegion(MapleRuntime::ZPage*)@CANGJIE
+                 U MapleRuntime::RegionManager::ReleaseRegion(MapleRuntime::ZPage*)@CANGJIE
+                 U MapleRuntime::RegionManager::ResetTLABUsage()@CANGJIE
+                 U MapleRuntime::RegionManager::ReservedSegments(MapleRuntime::ZVirtualMemoryManager&)@CANGJIE
+                 U MapleRuntime::RegionManager::ReturnPageMemory(MapleRuntime::PageMemory const&)@CANGJIE
+                 U MapleRuntime::RegionManager::free_page(MapleRuntime::ZPage*)@CANGJIE
+                 U MapleRuntime::RegionManager::RegionManager()@CANGJIE
+                 U MapleRuntime::RegionManager::~RegionManager()@CANGJIE
+                 U MapleRuntime::WorkerThreads::run_task(MapleRuntime::WorkerTask*)@CANGJIE
+                 U MapleRuntime::WorkerThreads::~WorkerThreads()@CANGJIE
+                 U MapleRuntime::ZResurrection::block()@CANGJIE
+                 U MapleRuntime::ZResurrection::blocked@CANGJIE
+                 U MapleRuntime::ZResurrection::unblock()@CANGJIE
+                 U MapleRuntime::CangjieRuntime::stackGrowConfig@CANGJIE
+                 U MapleRuntime::HandshakeState::enter_safe()@CANGJIE
+                 U MapleRuntime::HandshakeState::leave_safe()@CANGJIE
+                 U MapleRuntime::HandshakeState::try_process()@CANGJIE
+                 U MapleRuntime::HandshakeState::add_operation(MapleRuntime::HandshakeOperation*)@CANGJIE
+                 U MapleRuntime::HandshakeState::has_operation()@CANGJIE
+                 U MapleRuntime::HandshakeState::process_by_self()@CANGJIE
+                 U MapleRuntime::HandshakeState::get_op()@CANGJIE
+                 U MapleRuntime::MutatorManager::StopTheWorld(MapleRuntime::VMOperation*)@CANGJIE
+                 U MapleRuntime::MutatorManager::StartTheWorld()@CANGJIE
+                 U MapleRuntime::MutatorManager::VisitAllMutators(std::function<void (MapleRuntime::Mutator&)>)@CANGJIE
+                 U MapleRuntime::MutatorManager::CreateRuntimeMutator(MapleRuntime::ThreadType)@CANGJIE
+                 U MapleRuntime::MutatorManager::DestroyRuntimeMutator(MapleRuntime::ThreadType)@CANGJIE
+                 U MapleRuntime::MutatorManager::RegisterMarkFlushThread(MapleRuntime::ThreadLocalData*)@CANGJIE
+                 U MapleRuntime::MutatorManager::UnregisterMarkFlushThread(MapleRuntime::ThreadLocalData*)@CANGJIE
+                 U MapleRuntime::MutatorManager::Init()@CANGJIE
+                 U MapleRuntime::MutatorManager::Instance()@CANGJIE
+                 U MapleRuntime::PrintStackInfo::FillInStackTrace()@CANGJIE
+                 U MapleRuntime::StackWatermark::finish_processing(void*)@CANGJIE
+                 U MapleRuntime::StackWatermark::epoch_id()@CANGJIE
+                 U MapleRuntime::StackWatermark::~StackWatermark()@CANGJIE
+                 U MapleRuntime::SyncRetireDead()@CANGJIE
+                 U MapleRuntime::ZCollectedHeap::heap()@CANGJIE
+                 U MapleRuntime::ZCollectedHeap::stop()@CANGJIE
+                 U MapleRuntime::ZCollectedHeap::create(HeapParam const&, double)@CANGJIE
+                 U MapleRuntime::ZDriverRequest::ZDriverRequest(MapleRuntime::GCReason, unsigned int, unsigned int)@CANGJIE
+                 U MapleRuntime::ZGenerationOld::mark_roots()@CANGJIE
+                 U MapleRuntime::ZGenerationOld::mark_start()@CANGJIE
+                 U MapleRuntime::ZGenerationOld::concurrent_mark()@CANGJIE
+                 U MapleRuntime::ZGenerationOld::remap_young_roots()@CANGJIE
+                 U MapleRuntime::ZGenerationOld::ZGenerationOld()@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::synchronize()@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::desynchronize()@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::PruneAndClaim()@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::SynchronizePoll()@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::Add(void*, unsigned long)@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::Wait(MapleRuntime::ZForwarding*)@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::activate(unsigned int)@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::Complete(MapleRuntime::ZForwarding*)@CANGJIE
+                 U MapleRuntime::ZRelocationSet::reset(MapleRuntime::RegionManager*)@CANGJIE
+                 U MapleRuntime::ZRelocationSet::install(MapleRuntime::ZRelocationSetSelector const*)@CANGJIE
+                 U MapleRuntime::ZRememberedSet::initialize(unsigned long)@CANGJIE
+                 U MapleRuntime::ZRememberedSet::clear_previous()@CANGJIE
+                 U MapleRuntime::ZRememberedSet::swap_remset_bitmaps()@CANGJIE
+                 U MapleRuntime::ZRememberedSet::flip()@CANGJIE
+                 U MapleRuntime::ZRememberedSet::_current@CANGJIE
+                 U MapleRuntime::ZRememberedSet::ZRememberedSet()@CANGJIE
+                 U MapleRuntime::ZVerifyMarking@CANGJIE
+                 U MapleRuntime::ZVerifyObjects@CANGJIE
+                 U MapleRuntime::MarkStripeStack::Pop()@CANGJIE
+                 U MapleRuntime::MarkStripeStack::Push(MapleRuntime::MarkStackEntry const&)@CANGJIE
+                 U MapleRuntime::MarkStripeStack::Create(bool)@CANGJIE
+                 U MapleRuntime::MarkStripeStack::Destroy(MapleRuntime::MarkStripeStack*)@CANGJIE
+                 U MapleRuntime::StaticFieldInfo::SetValue(MapleRuntime::MObject*)@CANGJIE
+                 U MapleRuntime::ThreadLocalData::SetMutator(MapleRuntime::Mutator*)@CANGJIE
+                 U MapleRuntime::TypeInfoManager::NoteTypeInfoImage(unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::TypeInfoManager::GetTypeInfoManager()@CANGJIE
+                 U MapleRuntime::YoungTypeSetter::YoungTypeSetter(MapleRuntime::ZGeneration&, MapleRuntime::ZYoungType)@CANGJIE
+                 U MapleRuntime::YoungTypeSetter::~YoungTypeSetter()@CANGJIE
+                 U MapleRuntime::ZPageAllocation::Wait()@CANGJIE
+                 U MapleRuntime::ZPageAllocation::Satisfy(bool)@CANGJIE
+                 U MapleRuntime::ZPageAllocation::ZPageAllocation(unsigned long, unsigned char, bool, MapleRuntime::ZAllocationFlags)@CANGJIE
+                 U MapleRuntime::ZStackWatermark::OnStackGrow(long)@CANGJIE
+                 U MapleRuntime::ZStackWatermark::ZStackWatermark(MapleRuntime::Mutator&)@CANGJIE
+                 U MapleRuntime::ZStatUnitTimeNs(MapleRuntime::ZStatSampler const&, MapleRuntime::ZStatSamplerHistory const&)@CANGJIE
+                 U MapleRuntime::ConcurrencyModel::VisitGCRoots()@CANGJIE
+                 U MapleRuntime::ExceptionManager::OutOfMemory()@CANGJIE
+                 U MapleRuntime::MarkPartialArray::FollowElements(unsigned long, unsigned long, bool, std::function<void (unsigned long)> const&, std::function<void (MapleRuntime::MarkStackEntry const&)> const&)@CANGJIE
+                 U MapleRuntime::MarkPartialArray::FollowPartialReferences(MapleRuntime::MarkStackEntry const&, std::function<void (unsigned long)> const&, std::function<void (MapleRuntime::MarkStackEntry const&)> const&)@CANGJIE
+                 U MapleRuntime::MarkPartialArray::Decode(MapleRuntime::MarkStackEntry const&, unsigned long&, unsigned long&)@CANGJIE
+                 U MapleRuntime::MarkPartialArray::Encode(void const*, unsigned long, bool)@CANGJIE
+                 U MapleRuntime::PackageInitTable::PackageInitTable()@CANGJIE
+                 U MapleRuntime::PackageInitTable::~PackageInitTable()@CANGJIE
+                 U MapleRuntime::StackFrameCursor::ProcessAll(std::function<void (MapleRuntime::RootSlot&)> const&, MapleRuntime::Mutator&, std::function<void (MapleRuntime::zaddress_unsafe, MapleRuntime::DerivedSlot&)> const*, bool)@CANGJIE
+                 U MapleRuntime::StackFrameCursor::ProcessManagedFrame(std::function<void (MapleRuntime::RootSlot&)> const&, std::function<void (MapleRuntime::zaddress_unsafe, MapleRuntime::DerivedSlot&)> const*, MapleRuntime::RegSlotsMap const&, MapleRuntime::FrameInfo const&, MapleRuntime::Mutator&)@CANGJIE
+                 U MapleRuntime::StackFrameCursor::CollectReturnRegisterRoots(MapleRuntime::FrameInfo const&, std::vector<MapleRuntime::StackFrameCursor::ReturnRegisterRoot, std::allocator<MapleRuntime::StackFrameCursor::ReturnRegisterRoot> >&)@CANGJIE
+                 U MapleRuntime::StackFrameStream::Start()@CANGJIE
+                 U MapleRuntime::UpdatePollValues(MapleRuntime::ThreadLocalData*)@CANGJIE
+                 U MapleRuntime::ZAddressHeapBase@CANGJIE
+                 U MapleRuntime::ZBackingIndexMax@CANGJIE
+                 U MapleRuntime::ZForwardingTable::insert(MapleRuntime::ZForwarding*)@CANGJIE
+                 U MapleRuntime::ZGenerationYoung::mark_start()@CANGJIE
+                 U MapleRuntime::ZGenerationYoung::flip_promote(MapleRuntime::ZPage*, MapleRuntime::ZPage*)@CANGJIE
+                 U MapleRuntime::ZGenerationYoung::concurrent_mark()@CANGJIE
+                 U MapleRuntime::ZGenerationYoung::pause_mark_start()@CANGJIE
+                 U MapleRuntime::ZGenerationYoung::SelectTenuringThreshold(MapleRuntime::TenuringInputs const&)@CANGJIE
+                 U MapleRuntime::ZGenerationYoung::mark_end()@CANGJIE
+                 U MapleRuntime::ZGenerationYoung::ZGenerationYoung(MapleRuntime::ZPageTable*, MapleRuntime::ZForwardingTable const*, MapleRuntime::RegionManager*)@CANGJIE
+                 U MapleRuntime::ZGenerationYoung::ZGenerationYoung(MapleRuntime::ZPageTable*, MapleRuntime::ZForwardingTable const*, MapleRuntime::RegionManager*)@CANGJIE
+                 U MapleRuntime::ZGlobalsPointers::initialize()@CANGJIE
+                 U MapleRuntime::ZGlobalsPointers::flip_old_mark_start()@CANGJIE
+                 U MapleRuntime::ZGlobalsPointers::flip_young_mark_start()@CANGJIE
+                 U MapleRuntime::ZGlobalsPointers::flip_old_relocate_start()@CANGJIE
+                 U MapleRuntime::ZGlobalsPointers::flip_young_relocate_start()@CANGJIE
+                 U MapleRuntime::ZObjectAllocator::retire_pages(MapleRuntime::PageAgeRange)@CANGJIE
+                 U MapleRuntime::ZObjectAllocator::alloc_for_relocation(unsigned long, MapleRuntime::PageAge)@CANGJIE
+                 U MapleRuntime::ZObjectAllocator::alloc(unsigned long)@CANGJIE
+                 U MapleRuntime::ZPointerRemapped@CANGJIE
+                 U MapleRuntime::ZRestartableTask::resize_workers(unsigned int)@CANGJIE
+                 U MapleRuntime::ZRestartableTask::ZRestartableTask(char const*)@CANGJIE
+                 U MapleRuntime::CJThreadStackInfo::GetInfoFromStackTrace(unsigned int*, char**, char**, unsigned int*)@CANGJIE
+                 U MapleRuntime::FreeRegionManager::StopUncommitters()@CANGJIE
+                 U MapleRuntime::StackWatermarkSet::on_safepoint(MapleRuntime::Mutator&)@CANGJIE
+                 U MapleRuntime::StackWatermarkSet::start_processing(MapleRuntime::Mutator&)@CANGJIE
+                 U MapleRuntime::TYPEINFO_PTR_SIZE@CANGJIE
+                 U MapleRuntime::ZAddressOffsetMax@CANGJIE
+                 U MapleRuntime::ZBackingOffsetMax@CANGJIE
+                 U MapleRuntime::ZPointerMarkedOld@CANGJIE
+                 U MapleRuntime::ZVerifyForwarding@CANGJIE
+                 U MapleRuntime::ZVerifyRemembered@CANGJIE
+                 U MapleRuntime::FinalizerProcessor::WaitStarted()@CANGJIE
+                 U MapleRuntime::FinalizerProcessor::EnqueueReferences()@CANGJIE
+                 U MapleRuntime::FinalizerProcessor::ProcessReferences(std::function<bool (MapleRuntime::BaseObject*)> const&)@CANGJIE
+                 U MapleRuntime::FinalizerProcessor::RegisterFinalizer(MapleRuntime::BaseObject*)@CANGJIE
+                 U MapleRuntime::FinalizerProcessor::EnqueueFinalizableReference(MapleRuntime::BaseObject*)@CANGJIE
+                 U MapleRuntime::FinalizerProcessor::Run()@CANGJIE
+                 U MapleRuntime::FinalizerProcessor::FinalizerProcessor(MapleRuntime::ZWorkers*)@CANGJIE
+                 U MapleRuntime::HandshakeOperation::HandshakeOperation(MapleRuntime::HandshakeClosure*, MapleRuntime::Mutator*)@CANGJIE
+                 U MapleRuntime::HeapIteratorBitMap::try_set_bit(unsigned long)@CANGJIE
+                 U MapleRuntime::ReferenceProcessor::EnqueueReferences(std::function<bool (MapleRuntime::BaseObject*)> const&)@CANGJIE
+                 U MapleRuntime::ReferenceProcessor::ProcessReferences(std::function<bool (MapleRuntime::BaseObject*)> const&)@CANGJIE
+                 U MapleRuntime::ReferenceProcessor::discover_reference(MapleRuntime::BaseObject*, MapleRuntime::ReferenceType)@CANGJIE
+                 U MapleRuntime::ReferenceProcessor::ReferenceProcessor(MapleRuntime::ZWorkers*)@CANGJIE
+                 U MapleRuntime::ReferenceProcessor::~ReferenceProcessor()@CANGJIE
+                 U MapleRuntime::SafeThreadsListPtr::SafeThreadsListPtr()@CANGJIE
+                 U MapleRuntime::SafeThreadsListPtr::~SafeThreadsListPtr()@CANGJIE
+                 U MapleRuntime::StackGrowStackInfo::RecordStackPtrs(std::function<void (MapleRuntime::RootSlot&)> const&, std::function<void (MapleRuntime::RootSlot&)> const&, std::function<void (MapleRuntime::zaddress_unsafe, MapleRuntime::DerivedSlot&)> const&, MapleRuntime::Mutator&)@CANGJIE
+                 U MapleRuntime::StackGrowStackInfo::FillInStackTrace()@CANGJIE
+                 U MapleRuntime::StoreBarrierBuffer::Initialize(unsigned long)@CANGJIE
+                 U MapleRuntime::StoreBarrierBuffer::on_new_phase()@CANGJIE
+                 U MapleRuntime::StoreBarrierBuffer::buffer_for_store(bool)@CANGJIE
+                 U MapleRuntime::StoreBarrierBuffer::clear()@CANGJIE
+                 U MapleRuntime::StoreBarrierBuffer::Flush()@CANGJIE
+                 U MapleRuntime::StoreBarrierBuffer::is_in(unsigned long)@CANGJIE
+                 U MapleRuntime::StoreBarrierBuffer::StoreBarrierBuffer()@CANGJIE
+                 U MapleRuntime::SyncWeakOopStorage()@CANGJIE
+                 U MapleRuntime::ZAddressOffsetMask@CANGJIE
+                 U MapleRuntime::ZObjArrayAllocator::initialize()@CANGJIE
+                 U MapleRuntime::ZPageSizeMediumMax@CANGJIE
+                 U MapleRuntime::ZPageSizeMediumMin@CANGJIE
+                 U MapleRuntime::ZPageTableIterator::next(MapleRuntime::ZPage**)@CANGJIE
+                 U MapleRuntime::ZPageTableIterator::ZPageTableIterator(MapleRuntime::ZPageTable const*)@CANGJIE
+                 U MapleRuntime::ZPointerRemembered@CANGJIE
+                 U MapleRuntime::ZTenuringThreshold@CANGJIE
+                 U MapleRuntime::ElfUnloadQuiescence::IsLinkedAddress(unsigned long)@CANGJIE
+                 U MapleRuntime::ElfUnloadQuiescence::TaskAdmissionMutex()@CANGJIE
+                 U MapleRuntime::ElfUnloadQuiescence::TaskAdmissionScope::TaskAdmissionScope()@CANGJIE
+                 U MapleRuntime::ElfUnloadQuiescence::TaskAdmissionScope::~TaskAdmissionScope()@CANGJIE
+                 U MapleRuntime::ElfUnloadQuiescence::LinkImage(unsigned long)@CANGJIE
+                 U MapleRuntime::ElfUnloadQuiescence::ReadScope::ReadScope(MapleRuntime::ElfUnloadQuiescence::ReaderKind)@CANGJIE
+                 U MapleRuntime::ElfUnloadQuiescence::ReadScope::~ReadScope()@CANGJIE
+                 U MapleRuntime::forwarding_for_page(MapleRuntime::ZPage const*)@CANGJIE
+                 U MapleRuntime::MarkStripeStackList::Pop(MapleRuntime::MarkingSMR&, unsigned long)@CANGJIE
+                 U MapleRuntime::MarkStripeStackList::Push(MapleRuntime::MarkStripeStack*)@CANGJIE
+                 U MapleRuntime::ZPointerFinalizable@CANGJIE
+                 U MapleRuntime::ZPointerMarkedYoung@CANGJIE
+                 U MapleRuntime::CleanThreadLocalData::Iterator::Step()@CANGJIE
+                 U MapleRuntime::CleanThreadLocalData::Iterator::Iterator()@CANGJIE
+                 U MapleRuntime::CleanThreadLocalData::Iterator::~Iterator()@CANGJIE
+                 U MapleRuntime::MaxTenuringThreshold@CANGJIE
+                 U MapleRuntime::SuspendibleThreadSet::suspendAll@CANGJIE
+                 U MapleRuntime::SuspendibleThreadSet::yield_slow()@CANGJIE
+                 U MapleRuntime::SuspendibleThreadSet::synchronize()@CANGJIE
+                 U MapleRuntime::SuspendibleThreadSet::desynchronize()@CANGJIE
+                 U MapleRuntime::SuspendibleThreadSet::join()@CANGJIE
+                 U MapleRuntime::SuspendibleThreadSet::leave()@CANGJIE
+                 U MapleRuntime::ZForwardingAllocator::reset(unsigned long)@CANGJIE
+                 U MapleRuntime::ZForwardingAllocator::ZForwardingAllocator()@CANGJIE
+                 U MapleRuntime::ZForwardingAllocator::~ZForwardingAllocator()@CANGJIE
+                 U MapleRuntime::ZForwardingAllocator::~ZForwardingAllocator()@CANGJIE
+                 U MapleRuntime::ZRemsetTableIterator::next(MapleRuntime::ZRemsetTableEntry*)@CANGJIE
+                 U MapleRuntime::ZRemsetTableIterator::ZRemsetTableIterator(MapleRuntime::ZRemembered*, bool)@CANGJIE
+                 U MapleRuntime::MarkThreadLocalStacks::StealLocal(MapleRuntime::MarkStripeSet&, MapleRuntime::MarkStripe*)@CANGJIE
+                 U MapleRuntime::MarkThreadLocalStacks::Pop(MapleRuntime::MarkingSMR&, unsigned long, MapleRuntime::MarkStripeSet&, MapleRuntime::MarkStripe*, MapleRuntime::MarkStackEntry&)@CANGJIE
+                 U MapleRuntime::MarkThreadLocalStacks::Push(MapleRuntime::MarkStripeSet&, MapleRuntime::MarkStripe*, MapleRuntime::MarkStackEntry const&, bool)@CANGJIE
+                 U MapleRuntime::MarkThreadLocalStacks::Flush(MapleRuntime::MarkStripeSet&)@CANGJIE
+                 U MapleRuntime::MarkThreadLocalStacks::Install(MapleRuntime::MarkStripeSet&, MapleRuntime::MarkStripe*, MapleRuntime::MarkStripeStack*)@CANGJIE
+                 U MapleRuntime::MarkThreadLocalStacks::MarkThreadLocalStacks(unsigned long)@CANGJIE
+                 U MapleRuntime::MarkThreadLocalStacks::MarkThreadLocalStacks(unsigned long)@CANGJIE
+                 U MapleRuntime::MarkThreadLocalStacks::~MarkThreadLocalStacks()@CANGJIE
+                 U MapleRuntime::ZStatMutatorAllocRate::initialize()@CANGJIE
+                 U MapleRuntime::ZStatMutatorAllocRate::stats()@CANGJIE
+                 U MapleRuntime::ZStatMutatorAllocRate::counter()@CANGJIE
+                 U MapleRuntime::ZVirtualMemoryManager::remove_from_low_many_at_most(unsigned long, unsigned int, MapleRuntime::ZArray<MapleRuntime::ZVirtualMemory>*)@CANGJIE
+                 U MapleRuntime::ZVirtualMemoryManager::insert(MapleRuntime::ZVirtualMemory const&, unsigned int)@CANGJIE
+                 U MapleRuntime::ZVirtualMemoryManager::ZVirtualMemoryManager(unsigned long)@CANGJIE
+                 U MapleRuntime::ZVirtualMemoryManager::~ZVirtualMemoryManager()@CANGJIE
+                 U MapleRuntime::ComputeMemoryUsageInfo(unsigned long, unsigned long, unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::ZObjectAlignmentMedium@CANGJIE
+                 U MapleRuntime::ZObjectSizeLimitMedium@CANGJIE
+                 U MapleRuntime::ZPageSizeMediumEnabled@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryBacking::ZPhysicalMemoryBacking(unsigned long)@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryBacking::~ZPhysicalMemoryBacking()@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryManager::restore_segments(MapleRuntime::ZVirtualMemory const&, MapleRuntime::ZArray<MapleRuntime::zbacking_index> const&)@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryManager::free(MapleRuntime::ZVirtualMemory const&, unsigned int)@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryManager::alloc(MapleRuntime::ZVirtualMemory const&, unsigned int)@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryManager::commit(MapleRuntime::ZVirtualMemory const&, unsigned int)@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryManager::uncommit(MapleRuntime::ZVirtualMemory const&)@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryManager::ZPhysicalMemoryManager(unsigned long)@CANGJIE
+                 U MapleRuntime::ZRelocationSetSelector::select()@CANGJIE
+                 U MapleRuntime::ZRelocationSetSelector::ZRelocationSetSelector(double)@CANGJIE
+                 U MapleRuntime::ZVirtualMemoryReserver::unreserve_all()@CANGJIE
+                 U MapleRuntime::ZVirtualMemoryReserver::reserve_discontiguous(MapleRuntime::zoffset, unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::ZVirtualMemoryReserver::unreserve(MapleRuntime::ZVirtualMemory const&)@CANGJIE
+                 U MapleRuntime::ZVirtualMemoryReserver::ZVirtualMemoryReserver(unsigned long)@CANGJIE
+                 U MapleRuntime::ConcurrentGCBreakpoints::AcquireControl()@CANGJIE
+                 U MapleRuntime::ConcurrentGCBreakpoints::ReleaseControl()@CANGJIE
+                 U MapleRuntime::ConcurrentGCBreakpoints::RunTo(char const*)@CANGJIE
+                 U MapleRuntime::ConcurrentGCBreakpoints::RunToIdle()@CANGJIE
+                 U MapleRuntime::CreateCJNativeInterface(void*)@CANGJIE
+                 U MapleRuntime::MarkStripeStackListNode::SetNext(MapleRuntime::MarkStripeStackListNode*)@CANGJIE
+                 U MapleRuntime::MarkStripeStackListNode::MarkStripeStackListNode(MapleRuntime::MarkStripeStack*)@CANGJIE
+                 U MapleRuntime::ZPageSizeMediumMaxShift@CANGJIE
+                 U MapleRuntime::ZPointerRemappedOldMask@CANGJIE
+                 U MapleRuntime::generation_relocate_queue(MapleRuntime::Generation)@CANGJIE
+                 U MapleRuntime::ZPointerRemappedYoungMask@CANGJIE
+                 U MapleRuntime::MarkFlushOnEnterSaferegion()@CANGJIE
+                 U MapleRuntime::ZObjectAlignmentSmallShift@CANGJIE
+                 U MapleRuntime::generation_forwarding_table(MapleRuntime::Generation)@CANGJIE
+                 U MapleRuntime::MarkFlushEndLeaveSaferegion()@CANGJIE
+                 U MapleRuntime::ProcessSafepointIfRequested(MapleRuntime::ThreadLocalData*)@CANGJIE
+                 U MapleRuntime::ZObjectAlignmentMediumShift@CANGJIE
+                 U MapleRuntime::MarkFlushBeginLeaveSaferegion()@CANGJIE
+                 U MapleRuntime::Os::Path::GetBaseName(char const*)@CANGJIE
+                 U MapleRuntime::RegisterCurrentMarkFlushThread()@CANGJIE
+                 U MapleRuntime::MarkFlushPendingForCurrentThread()@CANGJIE
+                 U MapleRuntime::AssertBarrierTransitionMonotonicity(MapleRuntime::zpointer, MapleRuntime::zpointer)@CANGJIE
+                 U MapleRuntime::ZPointerStoreGoodMaskLowOrderBitsAddr@CANGJIE
+                 U MapleRuntime::Heap::alloc_page(unsigned long, MapleRuntime::ZPageType, bool, MapleRuntime::PageAge, MapleRuntime::ZAllocationFlags)@CANGJIE
+                 U MapleRuntime::Heap::alloc_page(MapleRuntime::ZPage*)@CANGJIE
+                 U MapleRuntime::Heap::page_table()@CANGJIE
+                 U MapleRuntime::Heap::remembered()@CANGJIE
+                 U MapleRuntime::Heap::StopGCWork()@CANGJIE
+                 U MapleRuntime::Heap::GetAllocator()@CANGJIE
+                 U MapleRuntime::Heap::heapStartAddr@CANGJIE
+                 U MapleRuntime::Heap::heapCurrentEnd@CANGJIE
+                 U MapleRuntime::Heap::page_allocator()@CANGJIE
+                 U MapleRuntime::Heap::GetExportObject(unsigned long)@CANGJIE
+                 U MapleRuntime::Heap::heapReservations@CANGJIE
+                 U MapleRuntime::Heap::RegisterExportRoot(MapleRuntime::BaseObject*)@CANGJIE
+                 U MapleRuntime::Heap::RemoveExportObject(unsigned long)@CANGJIE
+                 U MapleRuntime::Heap::RegisterStaticRoots(unsigned long, unsigned int)@CANGJIE
+                 U MapleRuntime::Heap::VisitAllExportRoots(std::function<void (MapleRuntime::HeapSlot<false>&)> const&)@CANGJIE
+                 U MapleRuntime::Heap::GetExportRootStorage()@CANGJIE
+                 U MapleRuntime::Heap::GetFinalizerProcessor()@CANGJIE
+                 U MapleRuntime::Heap::UnregisterStaticRoots(unsigned long, unsigned int)@CANGJIE
+                 U MapleRuntime::Heap::PublishGenerationPhase(MapleRuntime::ZGenerationId, MapleRuntime::ZGenerationPhase)@CANGJIE
+                 U MapleRuntime::Heap::page(unsigned long)@CANGJIE
+                 U MapleRuntime::Heap::_heap@CANGJIE
+                 U MapleRuntime::Heap::is_in(unsigned long)@CANGJIE
+                 U MapleRuntime::Heap::GetHeap()@CANGJIE
+                 U MapleRuntime::Heap::EnableGC(bool)@CANGJIE
+                 U MapleRuntime::Heap::is_young(unsigned long)@CANGJIE
+                 U MapleRuntime::Heap::free_page(MapleRuntime::ZPage*)@CANGJIE
+                 U MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason)@CANGJIE
+                 U MapleRuntime::ZCPU::initialize()@CANGJIE
+                 U MapleRuntime::ZCPU::_cpu@CANGJIE
+                 U MapleRuntime::ZCPU::_self@CANGJIE
+                 U MapleRuntime::ZCPU::id_slow()@CANGJIE
+                 U MapleRuntime::ZCPU::_affinity@CANGJIE
+                 U MapleRuntime::ZMark::FollowWork(MapleRuntime::MarkContext&, MapleRuntime::MarkingSMR&, MapleRuntime::MarkStripeSet&, MapleRuntime::MarkTerminate&, unsigned long, bool, std::function<void (MapleRuntime::MarkStackEntry const&)> const&, std::atomic<unsigned long>*, std::atomic<unsigned long>*, MapleRuntime::ZMark*)@CANGJIE
+                 U MapleRuntime::ZMark::MarkFollow(bool)@CANGJIE
+                 U MapleRuntime::ZMark::FlushStacks()@CANGJIE
+                 U MapleRuntime::ZMark::PrepareWork(unsigned long)@CANGJIE
+                 U MapleRuntime::ZMark::ResizeWorkers(unsigned long)@CANGJIE
+                 U MapleRuntime::ZMark::MarkEntryObject(MapleRuntime::BaseObject*, MapleRuntime::MarkStackEntry const&, MapleRuntime::MarkLiveCache*)@CANGJIE
+                 U MapleRuntime::ZMark::PushYoungObject(MapleRuntime::BaseObject*, MapleRuntime::MarkStack<MapleRuntime::MarkStackEntry>&, char const*)@CANGJIE
+                 U MapleRuntime::ZMark::VisitMinorRoots(std::function<void (MapleRuntime::BaseObject*)> const&, std::function<void (MapleRuntime::BaseObject*)> const&)@CANGJIE
+                 U MapleRuntime::ZMark::TraceYoungClosure(MapleRuntime::MarkStack<MapleRuntime::MarkStackEntry>&, bool, std::vector<MapleRuntime::BaseObject*, std::allocator<MapleRuntime::BaseObject*> >&, std::unordered_set<unsigned long, std::hash<unsigned long>, std::equal_to<unsigned long>, std::allocator<unsigned long> >&, std::unordered_set<unsigned long, std::hash<unsigned long>, std::equal_to<unsigned long>, std::allocator<unsigned long> >&, std::unordered_set<unsigned long, std::hash<unsigned long>, std::equal_to<unsigned long>, std::allocator<unsigned long> > const*)@CANGJIE
+                 U MapleRuntime::ZMark::Flush(MapleRuntime::ThreadGCData&)@CANGJIE
+                 U MapleRuntime::ZMark::Start()@CANGJIE
+                 U MapleRuntime::ZMark::Stacks()@CANGJIE
+                 U MapleRuntime::ZMark::TryEnd()@CANGJIE
+                 U MapleRuntime::ZMark::PollStop()@CANGJIE
+                 U MapleRuntime::ZMark::ZMark(unsigned long, MapleRuntime::MarkingStacks::MarkingGeneration)@CANGJIE
+                 U MapleRuntime::ZPage::generation()@CANGJIE
+                 U MapleRuntime::ZPage::NullRegion()@CANGJIE
+                 U MapleRuntime::ZPage::safeDestroy@CANGJIE
+                 U MapleRuntime::ZPage::remset_alloc()@CANGJIE
+                 U MapleRuntime::ZPage::reservedSegments@CANGJIE
+                 U MapleRuntime::ZPage::ResetPageSequence()@CANGJIE
+                 U MapleRuntime::ZPage::undo_alloc_object(unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::ZPage::set_is_relocate_promoted()@CANGJIE
+                 U MapleRuntime::ZPage::reset(MapleRuntime::PageAge)@CANGJIE
+                 U MapleRuntime::ZPage::ZPage(MapleRuntime::ZPageType, MapleRuntime::PageAge, MapleRuntime::ZVirtualMemory const&)@CANGJIE
+                 U MapleRuntime::ZPage::~ZPage()@CANGJIE
+                 U MapleRuntime::ZStat::Initialize()@CANGJIE
+                 U MapleRuntime::ZTask::ZTask(char const*)@CANGJIE
+                 U MapleRuntime::Handle::Handle(MapleRuntime::Mutator*, MapleRuntime::BaseObject*)@CANGJIE
+                 U MapleRuntime::Logger::GetLogPath(char const*, MapleRuntime::CString&)@CANGJIE
+                 U MapleRuntime::Logger::FormatLog(RTLogLevel, bool, char const*, ...)@CANGJIE
+                 U MapleRuntime::Logger::GetLogger()@CANGJIE
+                 U MapleRuntime::ZAbort::should_abort()@CANGJIE
+                 U MapleRuntime::ZAbort::abort()@CANGJIE
+                 U MapleRuntime::ZAbort::reset()@CANGJIE
+                 U MapleRuntime::CString::operator=(MapleRuntime::CString const&)@CANGJIE
+                 U MapleRuntime::CString::CString(char const*)@CANGJIE
+                 U MapleRuntime::CString::CString(MapleRuntime::CString const&)@CANGJIE
+                 U MapleRuntime::CString::CString()@CANGJIE
+                 U MapleRuntime::CString::~CString()@CANGJIE
+                 U MapleRuntime::EHTable::BuildEHTable(unsigned char const*)@CANGJIE
+                 U MapleRuntime::MObject::NewPinnedObject(MapleRuntime::TypeInfo*, unsigned int)@CANGJIE
+                 U MapleRuntime::MObject::NewObject(MapleRuntime::TypeInfo*, unsigned int, MapleRuntime::AllocType)@CANGJIE
+                 U MapleRuntime::Mutator::GetMutator()@CANGJIE
+                 U MapleRuntime::Mutator::GcPhaseEnum(bool, unsigned long, bool, unsigned long*)@CANGJIE
+                 U MapleRuntime::Mutator::InitStackInfo(MapleRuntime::ThreadLocalData*)@CANGJIE
+                 U MapleRuntime::Mutator::VisitStackRoots(std::function<void (MapleRuntime::RootSlot&)> const&, std::function<void (MapleRuntime::RootSlot&)> const&)@CANGJIE
+                 U MapleRuntime::Mutator::SetManagedContext(bool)@CANGJIE
+                 U MapleRuntime::Mutator::AddNativeFrameRoot(MapleRuntime::BaseObject*)@CANGJIE
+                 U MapleRuntime::Mutator::ReleaseAllocBuffer()@CANGJIE
+                 U MapleRuntime::Mutator::VisitHeapRootSlots(MapleRuntime::RootSlot&, std::function<void (MapleRuntime::RootSlot&)> const&)@CANGJIE
+                 U MapleRuntime::Mutator::VisitExceptionRoots(std::function<void (MapleRuntime::RootSlot&)> const&)@CANGJIE
+                 U MapleRuntime::Mutator::PopNativeFrameRootsTo(unsigned long)@CANGJIE
+                 U MapleRuntime::Mutator::VisitNativeFrameRoots(std::function<void (MapleRuntime::RootSlot&)> const&)@CANGJIE
+                 U MapleRuntime::Mutator::DestroyInterpreterPart()@CANGJIE
+                 U MapleRuntime::Runtime::runtime@CANGJIE
+                 U MapleRuntime::ZDriver::lock()@CANGJIE
+                 U MapleRuntime::ZDriver::major()@CANGJIE
+                 U MapleRuntime::ZDriver::minor()@CANGJIE
+                 U MapleRuntime::ZDriver::unlock()@CANGJIE
+                 U MapleRuntime::ZVerify::BeforeRelocation(MapleRuntime::ZForwarding*)@CANGJIE
+                 U MapleRuntime::ZVerify::BeforeZOperation()@CANGJIE
+                 U MapleRuntime::ZVerify::AfterWeakProcessing()@CANGJIE
+                 U MapleRuntime::ZVerify::AfterMark()@CANGJIE
+                 U MapleRuntime::TimeUtil::NanoSeconds()@CANGJIE
+                 U MapleRuntime::TypeInfo::SetFlagHasRefField()@CANGJIE
+                 U MapleRuntime::TypeInfo::SetGCTib(MapleRuntime::GCTib)@CANGJIE
+                 U MapleRuntime::ZBarrier::ColorLoadGood(MapleRuntime::zaddress, MapleRuntime::zpointer)@CANGJIE
+                 U MapleRuntime::ZBarrier::heap_store_slow_path(MapleRuntime::zpointer volatile*, MapleRuntime::zaddress, MapleRuntime::zpointer, bool)@CANGJIE
+                 U MapleRuntime::ZBarrier::keep_alive_slow_path(MapleRuntime::zaddress)@CANGJIE
+                 U MapleRuntime::ZBarrier::native_store_slow_path(MapleRuntime::zaddress)@CANGJIE
+                 U MapleRuntime::ZBarrier::clean_barrier_on_phantom_oop_field(MapleRuntime::zpointer volatile*)@CANGJIE
+                 U MapleRuntime::ZBarrier::no_keep_alive_heap_store_slow_path(MapleRuntime::zpointer volatile*, MapleRuntime::zaddress)@CANGJIE
+                 U MapleRuntime::ZBarrier::blocking_load_barrier_on_weak_slow_path(MapleRuntime::zpointer volatile*, MapleRuntime::zaddress)@CANGJIE
+                 U MapleRuntime::ZBarrier::blocking_keep_alive_on_phantom_slow_path(MapleRuntime::zpointer volatile*, MapleRuntime::zaddress)@CANGJIE
+                 U MapleRuntime::ZBarrier::blocking_load_barrier_on_phantom_slow_path(MapleRuntime::zpointer volatile*, MapleRuntime::zaddress)@CANGJIE
+                 U void MapleRuntime::ZBarrier::Mark<false, false, false, false>(MapleRuntime::zaddress)@CANGJIE
+                 U void MapleRuntime::ZBarrier::Mark<false, false, true, false>(MapleRuntime::zaddress)@CANGJIE
+                 U MapleRuntime::ZLiveMap::reset_segment(unsigned long)@CANGJIE
+                 U MapleRuntime::ZLiveMap::reset(MapleRuntime::ZGenerationId)@CANGJIE
+                 U MapleRuntime::ZLiveMap::ZLiveMap(unsigned int)@CANGJIE
+                 U MapleRuntime::ZWorkers::set_active()@CANGJIE
+                 U MapleRuntime::ZWorkers::set_inactive()@CANGJIE
+                 U MapleRuntime::ZWorkers::resizing_lock()@CANGJIE
+                 U MapleRuntime::ZWorkers::set_active_workers(unsigned int)@CANGJIE
+                 U MapleRuntime::ZWorkers::request_resize_workers(unsigned int)@CANGJIE
+                 U MapleRuntime::ZWorkers::run(MapleRuntime::ZRestartableTask*)@CANGJIE
+                 U MapleRuntime::ZWorkers::run(MapleRuntime::ZTask*)@CANGJIE
+                 U MapleRuntime::ZWorkers::run_all(MapleRuntime::ZTask*)@CANGJIE
+                 U MapleRuntime::ZWorkers::ZWorkers(MapleRuntime::ZGenerationId, unsigned int, MapleRuntime::ZStatWorkers*)@CANGJIE
+                 U MapleRuntime::Handshake::Current()@CANGJIE
+                 U MapleRuntime::Handshake::execute(MapleRuntime::HandshakeClosure*)@CANGJIE
+                 U MapleRuntime::Handshake::execute(MapleRuntime::HandshakeClosure*, MapleRuntime::Mutator*)@CANGJIE
+                 U MapleRuntime::MemorySet(unsigned long, unsigned long, int, unsigned long)@CANGJIE
+                 U MapleRuntime::StackInfo::ProcessOnIteration(MapleRuntime::FrameInfo const&)@CANGJIE
+                 U MapleRuntime::StackInfo::GetStackTraceByLiteFrameInfos(std::vector<unsigned long, std::allocator<unsigned long> > const&, std::vector<MapleRuntime::StackTraceElement, std::allocator<MapleRuntime::StackTraceElement> >&)@CANGJIE
+                 U MapleRuntime::ValueRoot::ValueRoot(MapleRuntime::BaseObject*)@CANGJIE
+                 U MapleRuntime::ZRelocate::relocate_object(MapleRuntime::ZForwarding*, MapleRuntime::BaseObject*)@CANGJIE
+                 U MapleRuntime::ZRelocate::StartRelocationTasks(MapleRuntime::ZGenerationId)@CANGJIE
+                 U MapleRuntime::ZRelocate::relocate(MapleRuntime::ZRelocationSet*)@CANGJIE
+                 U MapleRuntime::ZStatHeap::AtMarkStart(MapleRuntime::ZPageAllocatorStats const&)@CANGJIE
+                 U MapleRuntime::ZStatHeap::AtInitialize(unsigned long, unsigned long)@CANGJIE
+                 U MapleRuntime::ZStatHeap::ReclaimedAvg()@CANGJIE
+                 U MapleRuntime::ZStatHeap::AtRelocateEnd(MapleRuntime::ZPageAllocatorStats const&, bool)@CANGJIE
+                 U MapleRuntime::ZStatHeap::AtRelocateStart(MapleRuntime::ZPageAllocatorStats const&)@CANGJIE
+                 U MapleRuntime::ZStatHeap::AtCollectionStart(MapleRuntime::ZPageAllocatorStats const&)@CANGJIE
+                 U MapleRuntime::ZStatHeap::Stats()@CANGJIE
+                 U MapleRuntime::ZStatHeap::AtMarkEnd(MapleRuntime::ZPageAllocatorStats const&)@CANGJIE
+                 U MapleRuntime::ZStatHeap::ZStatHeap()@CANGJIE
+                 U operator new[](unsigned long)@GLIBCXX_3.4
+                 U MapleRuntime::BaseObject::GetTypeInfo() const@CANGJIE
+                 U MapleRuntime::BaseObject::GetSize() const@CANGJIE
+                 U MapleRuntime::MarkingSMR::pending_count() const@CANGJIE
+                 U MapleRuntime::OopStorage::AllocationCount() const@CANGJIE
+                 U MapleRuntime::ZPageTable::get(unsigned long) const@CANGJIE
+                 U MapleRuntime::ZStatCycle::Stats(unsigned long) const@CANGJIE
+                 U MapleRuntime::ZStatValue::Id() const@CANGJIE
+                 U MapleRuntime::ZStatValue::Name() const@CANGJIE
+                 U MapleRuntime::ZStatValue::Group() const@CANGJIE
+                 U MapleRuntime::AllocBuffer::ComputeTLABSize(unsigned long, unsigned long) const@CANGJIE
+                 U MapleRuntime::AllocBuffer::GetRegion() const@CANGJIE
+                 U MapleRuntime::GCStackInfo::VisitStackRoots(std::function<void (MapleRuntime::RootSlot&)> const&, MapleRuntime::Mutator&) const@CANGJIE
+                 U MapleRuntime::MarkContext::Stripe() const@CANGJIE
+                 U MapleRuntime::RegionSpace::GetRegionManager() const@CANGJIE
+                 U MapleRuntime::ThreadsList::includes(MapleRuntime::Mutator const*) const@CANGJIE
+                 U MapleRuntime::ZDriverPort::is_busy() const@CANGJIE
+                 U MapleRuntime::ZForwarding::page() const@CANGJIE
+                 U MapleRuntime::ZForwarding::verify() const@CANGJIE
+                 U MapleRuntime::ZForwarding::is_done() const@CANGJIE
+                 U MapleRuntime::ZGeneration::FragmentationLimit() const@CANGJIE
+                 U MapleRuntime::ZGeneration::ActiveRemsetIsCurrent(unsigned long) const@CANGJIE
+                 U MapleRuntime::ZGeneration::id() const@CANGJIE
+                 U MapleRuntime::ZGeneration::is_old() const@CANGJIE
+                 U MapleRuntime::ZGeneration::is_young() const@CANGJIE
+                 U MapleRuntime::ZRemembered::scan_field(MapleRuntime::zpointer volatile*) const@CANGJIE
+                 U MapleRuntime::LoaderManager::LibInit(char const*) const@CANGJIE
+                 U MapleRuntime::LoaderManager::GetLoader() const@CANGJIE
+                 U MapleRuntime::MarkStripeSet::Population() const@CANGJIE
+                 U MapleRuntime::MarkStripeSet::FirstNonEmptyStripe() const@CANGJIE
+                 U MapleRuntime::MarkStripeSet::IsEmpty() const@CANGJIE
+                 U MapleRuntime::MarkStripeSet::NStripes() const@CANGJIE
+                 U MapleRuntime::MarkStripeSet::StripeId(MapleRuntime::MarkStripe const*) const@CANGJIE
+                 U MapleRuntime::MarkStripeSet::IsCrowded() const@CANGJIE
+                 U MapleRuntime::MarkTerminate::Saturated() const@CANGJIE
+                 U MapleRuntime::RegionManager::GetAllocatedSize() const@CANGJIE
+                 U MapleRuntime::RegionManager::IsAllocationStalling() const@CANGJIE
+                 U MapleRuntime::RegionManager::GetYoungAllocatedSize() const@CANGJIE
+                 U MapleRuntime::MutatorManager::BindMutator(MapleRuntime::Mutator&) const@CANGJIE
+                 U MapleRuntime::MutatorManager::UnbindMutator(MapleRuntime::Mutator&) const@CANGJIE
+                 U MapleRuntime::PrintStackInfo::PrintStackTrace() const@CANGJIE
+                 U MapleRuntime::StackWatermark::last_processed_raw() const@CANGJIE
+                 U MapleRuntime::ZDriverRequest::cause() const@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::PendingCount() const@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::SynchronizedWorkerCount() const@CANGJIE
+                 U MapleRuntime::ZRelocateQueue::is_active() const@CANGJIE
+                 U MapleRuntime::ZRememberedSet::is_initialized() const@CANGJIE
+                 U MapleRuntime::ZRememberedSet::is_cleared_current() const@CANGJIE
+                 U MapleRuntime::ZRememberedSet::is_cleared_previous() const@CANGJIE
+                 U MapleRuntime::MarkStripeStack::Size() const@CANGJIE
+                 U MapleRuntime::MarkStripeStack::IsFull() const@CANGJIE
+                 U MapleRuntime::MarkStripeStack::IsEmpty() const@CANGJIE
+                 U MapleRuntime::MarkStripeStack::Capacity() const@CANGJIE
+                 U MapleRuntime::ZColorWatermark::covers(MapleRuntime::ZColorWatermark const&) const@CANGJIE
+                 U MapleRuntime::ZStackWatermark::prev_head_color() const@CANGJIE
+                 U MapleRuntime::ZStackWatermark::prev_frame_color(MapleRuntime::FrameInfo const&) const@CANGJIE
+                 U MapleRuntime::StackFrameStream::GetAnchorFAFromMutatorContext() const@CANGJIE
+                 U MapleRuntime::ZObjectAllocator::fast_available(MapleRuntime::PageAge) const@CANGJIE
+                 U MapleRuntime::FreeRegionManager::GetCachedBytes() const@CANGJIE
+                 U MapleRuntime::FreeRegionManager::capacity() const@CANGJIE
+                 U MapleRuntime::ReferenceProcessor::Discovered(MapleRuntime::ReferenceType) const@CANGJIE
+                 U MapleRuntime::ReferenceProcessor::uses_clear_all_soft_reference_policy() const@CANGJIE
+                 U MapleRuntime::ReferenceProcessor::Empty() const@CANGJIE
+                 U MapleRuntime::ReferenceProcessor::Enqueued(MapleRuntime::ReferenceType) const@CANGJIE
+                 U MapleRuntime::StoreBarrierBuffer::IsEmpty() const@CANGJIE
+                 U MapleRuntime::SigHandlerFrameinfo::PrintFrameInfo(unsigned int) const@CANGJIE
+                 U MapleRuntime::MarkThreadLocalStacks::Population() const@CANGJIE
+                 U MapleRuntime::MarkThreadLocalStacks::IsEmpty() const@CANGJIE
+                 U MapleRuntime::ZStatUnsampledCounter::GetAndReset() const@CANGJIE
+                 U MapleRuntime::ZVirtualMemoryManager::is_initialized() const@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryBacking::is_initialized() const@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryBacking::map(MapleRuntime::zaddress_unsafe, unsigned long, MapleRuntime::zbacking_offset) const@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryBacking::unmap(MapleRuntime::zaddress_unsafe, unsigned long) const@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryBacking::commit(MapleRuntime::zbacking_offset, unsigned long, unsigned int) const@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryBacking::uncommit(MapleRuntime::zbacking_offset, unsigned long) const@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryManager::is_initialized() const@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryManager::stash_segments(MapleRuntime::ZArraySlice<MapleRuntime::ZVirtualMemory const> const&, MapleRuntime::ZArray<MapleRuntime::zbacking_index>*) const@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryManager::map(MapleRuntime::ZVirtualMemory const&, unsigned int) const@CANGJIE
+                 U MapleRuntime::ZPhysicalMemoryManager::unmap(MapleRuntime::ZVirtualMemory const&) const@CANGJIE
+                 U MapleRuntime::ZVirtualMemoryReserver::reserved() const@CANGJIE
+                 U MapleRuntime::MarkStripeStackListNode::Next() const@CANGJIE
+                 U MapleRuntime::Heap::GetMaxCapacity() const@CANGJIE
+                 U MapleRuntime::Heap::IsSurvivedObject(MapleRuntime::BaseObject const*) const@CANGJIE
+                 U MapleRuntime::Heap::soft_max_capacity() const@CANGJIE
+                 U MapleRuntime::Heap::GetSpaceEndAddress() const@CANGJIE
+                 U MapleRuntime::Heap::unsafe_max_tlab_alloc() const@CANGJIE
+                 U MapleRuntime::ZPage::generation() const@CANGJIE
+                 U MapleRuntime::ZPage::allows_raw_null() const@CANGJIE
+                 U MapleRuntime::ZPage::clone_for_promotion() const@CANGJIE
+                 U MapleRuntime::Handle::operator()() const@CANGJIE
+                 U MapleRuntime::CString::Str() const@CANGJIE
+                 U MapleRuntime::EHTable::ScanEHTable(unsigned int const*, MapleRuntime::ExceptionWrapper const&, unsigned int const*, MapleRuntime::ScanResult&) const@CANGJIE
+                 U MapleRuntime::ZDriver::gc_cause() const@CANGJIE
+                 U MapleRuntime::ZWorkers::threads_do(std::function<void (MapleRuntime::WorkerThread*)> const&) const@CANGJIE
+                 U MapleRuntime::ZWorkers::active_workers() const@CANGJIE
+                 U MapleRuntime::ZWorkers::is_active() const@CANGJIE
+                 U MapleRuntime::FrameInfo::GetFuncName() const@CANGJIE
+                 U MapleRuntime::FrameInfo::PrintFrameInfo(unsigned int) const@CANGJIE
+                 U MapleRuntime::FrameInfo::CallerSP() const@CANGJIE
+                 U MapleRuntime::ZStatHeap::UsedAtMarkStart() const@CANGJIE
+                 U MapleRuntime::ZStatHeap::UsedAtRelocateEnd() const@CANGJIE
+                 U MapleRuntime::ZStatHeap::AllocatedAtMarkEnd() const@CANGJIE
+                 U MapleRuntime::ZStatHeap::UsedAtCollectionEnd() const@CANGJIE
+                 U MapleRuntime::ZStatHeap::UsedAtCollectionStart() const@CANGJIE
+                 U MapleRuntime::ZStatHeap::ReclaimedAtRelocateEnd() const@CANGJIE
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_last_of(char, unsigned long) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::get_allocator() const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find(char const*, unsigned long) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, unsigned long) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::size() const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::c_str() const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::empty() const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::rfind(char, unsigned long) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::substr(unsigned long, unsigned long) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::compare(char const*) const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_data() const@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::capacity() const@GLIBCXX_3.4.21
+                 U std::basic_ios<char, std::char_traits<char> >::rdbuf() const@GLIBCXX_3.4
+                 U std::basic_ios<char, std::char_traits<char> >::operator bool() const@GLIBCXX_3.4.21
+                 U std::basic_ios<char, std::char_traits<char> >::operator!() const@GLIBCXX_3.4
+                 U std::allocator<char>::allocator(std::allocator<char> const&)@GLIBCXX_3.4
+                 U std::allocator<char>::allocator()@GLIBCXX_3.4
+                 U std::allocator<char>::~allocator()@GLIBCXX_3.4
+                 U std::allocator<char>::~allocator()@GLIBCXX_3.4
+                 U std::logic_error::logic_error(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)@GLIBCXX_3.4.21
+                 U std::logic_error::logic_error(std::logic_error const&)@GLIBCXX_3.4.21
+                 U std::future_error::~future_error()@GLIBCXX_3.4.14
+                 U std::__future_base::_Result_base::_Result_base()@GLIBCXX_3.4.15
+                 U std::__future_base::_Result_base::~_Result_base()@GLIBCXX_3.4.15
+                 U std::basic_ifstream<char, std::char_traits<char> >::basic_ifstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)@GLIBCXX_3.4.21
+                 U std::basic_ifstream<char, std::char_traits<char> >::~basic_ifstream()@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::sgetc()@GLIBCXX_3.4
+                 U std::basic_streambuf<char, std::char_traits<char> >::sbumpc()@GLIBCXX_3.4
+                 U std::__exception_ptr::exception_ptr::_M_release()@CXXABI_1.3.13
+                 U std::__exception_ptr::exception_ptr::_M_addref()@CXXABI_1.3.13
+                 U std::condition_variable::notify_all()@GLIBCXX_3.4.11
+                 U std::condition_variable::condition_variable()@GLIBCXX_3.4.11
+                 U std::condition_variable::~condition_variable()@GLIBCXX_3.4.11
+                 U std::_Sp_make_shared_tag::_S_eq(std::type_info const&)@GLIBCXX_3.4.26
+                 U std::__atomic_futex_unsigned_base::_M_futex_notify_all(unsigned int*)@GLIBCXX_3.4.21
+                 U std::__atomic_futex_unsigned_base::_M_futex_wait_until(unsigned int*, unsigned int, bool, std::chrono::duration<long, std::ratio<1l, 1l> >, std::chrono::duration<long, std::ratio<1l, 1000000000l> >)@GLIBCXX_3.4.21
+                 U std::__atomic_futex_unsigned_base::_M_futex_wait_until_steady(unsigned int*, unsigned int, bool, std::chrono::duration<long, std::ratio<1l, 1l> >, std::chrono::duration<long, std::ratio<1l, 1000000000l> >)@GLIBCXX_3.4.29
+                 U std::_V2::generic_category()@GLIBCXX_3.4.21
+                 U std::chrono::_V2::steady_clock::now()@GLIBCXX_3.4.19
+                 U std::thread::_M_start_thread(std::unique_ptr<std::thread::_State, std::default_delete<std::thread::_State> >, void (*)())@GLIBCXX_3.4.22
+                 U std::thread::hardware_concurrency()@GLIBCXX_3.4.17
+                 U std::thread::join()@GLIBCXX_3.4.11
+                 U std::thread::detach()@GLIBCXX_3.4.11
+                 U std::thread::_State::~_State()@GLIBCXX_3.4.22
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_dispose()@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_capacity(unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_Alloc_hider::_Alloc_hider(char*, std::allocator<char> const&)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_construct(unsigned long, char)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_local_data()@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_set_length(unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_S_copy_chars(char*, char const*, char const*)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::data()@GLIBCXX_3.4.26
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::append(char const*)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::append(char const*, unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::append(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::insert(unsigned long, char const*)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::insert(unsigned long, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_data(char*)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::reserve(unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_S_copy(char*, char const*, unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_create(unsigned long&, unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::operator=(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::operator=(char const*)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::operator=(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::basic_string(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&&)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::basic_string(char const*, unsigned long, std::allocator<char> const&)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::basic_string(std::allocator<char> const&)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::basic_string(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::basic_string()@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::~basic_string()@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::operator[](unsigned long)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::operator+=(char const*)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::basic_istringstream(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::_Ios_Openmode)@GLIBCXX_3.4.21
+                 U std::__cxx11::basic_istringstream<char, std::char_traits<char>, std::allocator<char> >::~basic_istringstream()@GLIBCXX_3.4.21
+                 U std::__detail::_List_node_base::_M_hook(std::__detail::_List_node_base*)@GLIBCXX_3.4.15
+                 U std::__detail::_List_node_base::_M_unhook()@GLIBCXX_3.4.15
+                 U std::ios_base::Init::Init()@GLIBCXX_3.4
+                 U std::ios_base::Init::~Init()@GLIBCXX_3.4
+                 U std::exception::~exception()@GLIBCXX_3.4
+                 U operator new(unsigned long)@GLIBCXX_3.4
+                 U operator new(unsigned long, std::nothrow_t const&)@GLIBCXX_3.4
+                 U std::__once_call@GLIBCXX_3.4.11
+                 U std::future_category()@GLIBCXX_3.4.15
+                 U std::__once_callable@GLIBCXX_3.4.11
+                 U std::current_exception()@CXXABI_1.3.3
+                 U std::rethrow_exception(std::__exception_ptr::exception_ptr)@CXXABI_1.3.3
+                 U std::__throw_bad_alloc()@GLIBCXX_3.4
+                 U std::_Rb_tree_decrement(std::_Rb_tree_node_base*)@GLIBCXX_3.4
+                 U std::_Rb_tree_increment(std::_Rb_tree_node_base const*)@GLIBCXX_3.4
+                 U std::__throw_logic_error(char const*)@GLIBCXX_3.4
+                 U std::uncaught_exceptions()@GLIBCXX_3.4.22
+                 U std::__throw_future_error(int)@GLIBCXX_3.4.14
+                 U std::__throw_length_error(char const*)@GLIBCXX_3.4
+                 U std::__throw_out_of_range(char const*)@GLIBCXX_3.4
+                 U std::__throw_system_error(int)@GLIBCXX_3.4.11
+                 U std::__throw_invalid_argument(char const*)@GLIBCXX_3.4
+                 U std::__throw_bad_function_call()@GLIBCXX_3.4.14
+                 U std::__throw_bad_array_new_length()@GLIBCXX_3.4.29
+                 U std::_Rb_tree_insert_and_rebalance(bool, std::_Rb_tree_node_base*, std::_Rb_tree_node_base*, std::_Rb_tree_node_base&)@GLIBCXX_3.4
+                 U std::basic_istream<char, std::char_traits<char> >& std::getline<char, std::char_traits<char>, std::allocator<char> >(std::basic_istream<char, std::char_traits<char> >&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&)@GLIBCXX_3.4.21
+                 U std::nothrow@GLIBCXX_3.4
+                 U std::terminate()@GLIBCXX_3.4
+                 U std::basic_istream<char, std::char_traits<char> >& std::operator>><char, std::char_traits<char>, std::allocator<char> >(std::basic_istream<char, std::char_traits<char> >&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >&)@GLIBCXX_3.4.21
+                 w TLS init function for MapleRuntime::WorkerThread::_worker_id
+                 w TLS init function for MapleRuntime::ZCPU::_cpu
+                 w TLS init function for MapleRuntime::ZCPU::_self
+                 U vtable for __cxxabiv1::__class_type_info@CXXABI_1.3
+                 U vtable for __cxxabiv1::__si_class_type_info@CXXABI_1.3
+                 U vtable for MapleRuntime::Concurrency@CANGJIE
+                 U vtable for MapleRuntime::GCStackInfo@CANGJIE
+                 U vtable for MapleRuntime::PrintStackInfo@CANGJIE
+                 U vtable for MapleRuntime::ZGenerationOld@CANGJIE
+                 U vtable for MapleRuntime::ZGenerationYoung@CANGJIE
+                 U vtable for MapleRuntime::CJThreadStackInfo@CANGJIE
+                 U vtable for MapleRuntime::ConcurrentGCThread@CANGJIE
+                 U vtable for MapleRuntime::StackGrowStackInfo@CANGJIE
+                 U vtable for MapleRuntime::SigHandlerFrameinfo@CANGJIE
+                 U vtable for MapleRuntime::CJFile@CANGJIE
+                 U vtable for MapleRuntime::BaseFile@CANGJIE
+                 U vtable for MapleRuntime::FrameInfo@CANGJIE
+                 U vtable for std::thread::_State@GLIBCXX_3.4.22
+                 U vtable for std::future_error@GLIBCXX_3.4.14
+                 U vtable for std::exception@GLIBCXX_3.4

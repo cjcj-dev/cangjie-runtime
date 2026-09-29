@@ -1,0 +1,143 @@
+[  RUN   ] OtherVmExit.GroupMemberAfterSentinel
+GC_UNIT_OTHER_VM_OKIDOKI OtherVmExit.GroupMemberAfterSentinel
+[ TIMEOUT ] other-vm pid=2805819; collecting child stacks
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x0000725113cea5b7 in __libc_pause () at ../sysdeps/unix/sysv/linux/pause.c:29
+29	../sysdeps/unix/sysv/linux/pause.c: 没有那个文件或目录.
+
+Thread 1 (Thread 0x7251142983c0 (LWP 2805819) "exe"):
+#0  0x0000725113cea5b7 in __libc_pause () at ../sysdeps/unix/sysv/linux/pause.c:29
+#1  0x0000588b9cddb493 in LeaveGroupMember() ()
+#2  0x0000725113c45495 in __run_exit_handlers (status=0, listp=0x725113e1a838 <__exit_funcs>, run_list_atexit=run_list_atexit@entry=true, run_dtors=run_dtors@entry=true) at ./stdlib/exit.c:113
+#3  0x0000725113c45610 in __GI_exit (status=<optimized out>) at ./stdlib/exit.c:143
+#4  0x0000725113c29d97 in __libc_start_call_main (main=main@entry=0x588b9cdda050 <main>, argc=argc@entry=2, argv=argv@entry=0x7ffccecfe7b8) at ../sysdeps/nptl/libc_start_call_main.h:74
+#5  0x0000725113c29e40 in __libc_start_main_impl (main=0x588b9cdda050 <main>, argc=2, argv=0x7ffccecfe7b8, init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=0x7ffccecfe7a8) at ../csu/libc-start.c:392
+#6  0x0000588b9cdd9975 in _start ()
+[Inferior 1 (process 2805819) detached]
+[ STACKS ] collector status=0
+ASSERT OtherVmExit.GroupMemberAfterSentinel accepted=1 expected=1 reaped=1 PASS
+[  RUN   ] OtherVmExit.Clean
+GC_UNIT_OTHER_VM_OKIDOKI OtherVmExit.Clean
+ASSERT OtherVmExit.Clean accepted=1 expected=1 reaped=1 PASS
+[  RUN   ] OtherVmExit.NonzeroAfterSentinel
+GC_UNIT_OTHER_VM_OKIDOKI OtherVmExit.NonzeroAfterSentinel
+OBSERVED OtherVmExit.NonzeroAfterSentinel: other-vm child did not exit cleanly with sentinel for OtherVmExit.NonzeroAfterSentinel: Exited with exit status 7; sentinel=seen; stderr_read=complete; exec_ms=1; body_ms=0; exit_ms=0; pending_phase=none
+Child stderr tail (<=4096 bytes):
+[  RUN   ] OtherVmExit.NonzeroAfterSentinel
+GC_UNIT_OTHER_VM_OKIDOKI OtherVmExit.NonzeroAfterSentinel
+
+ASSERT_PHASE OtherVmExit.NonzeroAfterSentinel PASS
+ASSERT OtherVmExit.NonzeroAfterSentinel accepted=0 expected=0 reaped=1 PASS
+[  RUN   ] OtherVmExit.NonzeroWithGroupMember
+GC_UNIT_OTHER_VM_OKIDOKI OtherVmExit.NonzeroWithGroupMember
+[ TIMEOUT ] other-vm pid=2806605; collecting child stacks
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x00007dbc1e2ea5b7 in __libc_pause () at ../sysdeps/unix/sysv/linux/pause.c:29
+29	../sysdeps/unix/sysv/linux/pause.c: 没有那个文件或目录.
+
+Thread 1 (Thread 0x7dbc1e8943c0 (LWP 2806605) "exe"):
+#0  0x00007dbc1e2ea5b7 in __libc_pause () at ../sysdeps/unix/sysv/linux/pause.c:29
+#1  0x0000612fbec78493 in LeaveGroupMember() ()
+#2  0x0000612fbec78581 in OtherVmExit_NonzeroWithGroupMember()::$_1::operator()() const ()
+#3  0x0000612fbec78569 in OtherVmExit_NonzeroWithGroupMember()::$_1::__invoke() ()
+#4  0x00007dbc1e245495 in __run_exit_handlers (status=0, listp=0x7dbc1e41a838 <__exit_funcs>, run_list_atexit=run_list_atexit@entry=true, run_dtors=run_dtors@entry=true) at ./stdlib/exit.c:113
+#5  0x00007dbc1e245610 in __GI_exit (status=<optimized out>) at ./stdlib/exit.c:143
+#6  0x00007dbc1e229d97 in __libc_start_call_main (main=main@entry=0x612fbec77050 <main>, argc=argc@entry=2, argv=argv@entry=0x7fffe7a9d328) at ../sysdeps/nptl/libc_start_call_main.h:74
+#7  0x00007dbc1e229e40 in __libc_start_main_impl (main=0x612fbec77050 <main>, argc=2, argv=0x7fffe7a9d328, init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=0x7fffe7a9d318) at ../csu/libc-start.c:392
+#8  0x0000612fbec76975 in _start ()
+[Inferior 1 (process 2806605) detached]
+[ STACKS ] collector status=0
+OBSERVED OtherVmExit.NonzeroWithGroupMember: other-vm child did not exit cleanly with sentinel for OtherVmExit.NonzeroWithGroupMember: Exited with exit status 7; sentinel=seen; stderr_read=complete; exec_ms=1; body_ms=0; exit_ms=0; pending_phase=none
+Child stderr tail (<=4096 bytes):
+[  RUN   ] OtherVmExit.NonzeroWithGroupMember
+GC_UNIT_OTHER_VM_OKIDOKI OtherVmExit.NonzeroWithGroupMember
+
+ASSERT OtherVmExit.NonzeroWithGroupMember accepted=0 expected=0 reaped=1 PASS
+[  RUN   ] OtherVmExit.MissingSentinel
+OBSERVED OtherVmExit.MissingSentinel: other-vm child did not exit cleanly with sentinel for OtherVmExit.MissingSentinel: Exited with exit status 0; sentinel=missing; stderr_read=complete; exec_ms=1; body_ms=10; exit_ms=not-started; pending_phase=body
+Child stderr tail (<=4096 bytes):
+[  RUN   ] OtherVmExit.MissingSentinel
+
+ASSERT OtherVmExit.MissingSentinel accepted=0 expected=0 reaped=1 PASS
+[  RUN   ] OtherVmExit.SignalAfterSentinel
+GC_UNIT_OTHER_VM_OKIDOKI OtherVmExit.SignalAfterSentinel
+OBSERVED OtherVmExit.SignalAfterSentinel: other-vm child did not exit cleanly with sentinel for OtherVmExit.SignalAfterSentinel: Terminated by signal 9 (core not dumped); sentinel=seen; stderr_read=complete; exec_ms=1; body_ms=0; exit_ms=0; pending_phase=none
+Child stderr tail (<=4096 bytes):
+[  RUN   ] OtherVmExit.SignalAfterSentinel
+GC_UNIT_OTHER_VM_OKIDOKI OtherVmExit.SignalAfterSentinel
+
+ASSERT OtherVmExit.SignalAfterSentinel accepted=0 expected=0 reaped=1 PASS
+[  RUN   ] OtherVmExit.ExitStatus3
+exit-three-stderr
+OBSERVED OtherVmExit.ExitStatus3: other-vm child did not exit cleanly with sentinel for OtherVmExit.ExitStatus3: Exited with exit status 3; sentinel=missing; stderr_read=complete; exec_ms=1; body_ms=0; exit_ms=not-started; pending_phase=body
+Child stderr tail (<=4096 bytes):
+[  RUN   ] OtherVmExit.ExitStatus3
+exit-three-stderr
+
+ASSERT_DIAGNOSTIC OtherVmExit.ExitStatus3 PASS
+ASSERT OtherVmExit.ExitStatus3 accepted=0 expected=0 reaped=1 PASS
+[  RUN   ] OtherVmExit.Signal11
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+signal-eleven-stderr
+OBSERVED OtherVmExit.Signal11: other-vm child did not exit cleanly with sentinel for OtherVmExit.Signal11: Terminated by signal 11 (core dumped); sentinel=missing; stderr_read=complete; exec_ms=1; body_ms=76; exit_ms=not-started; pending_phase=body
+Child stderr tail (<=4096 bytes):
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+signal-eleven-stderr
+
+ASSERT_DIAGNOSTIC OtherVmExit.Signal11 PASS
+ASSERT OtherVmExit.Signal11 accepted=0 expected=0 reaped=1 PASS
+[  RUN   ] OtherVmExit.BodyStallBeforeSentinel
+[ TIMEOUT ] other-vm pid=2807639; collecting child stacks
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x00007655e82e574a in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7ffe953c6bc8, rem=0x7ffe953c6bc8) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+78	../sysdeps/unix/sysv/linux/clock_nanosleep.c: 没有那个文件或目录.
+
+Thread 1 (Thread 0x7655e88e93c0 (LWP 2807639) "exe"):
+#0  0x00007655e82e574a in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7ffe953c6bc8, rem=0x7ffe953c6bc8) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007655e82ea637 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00005d6544dea2bd in void std::this_thread::sleep_for<long, std::ratio<1l, 1l> >(std::chrono::duration<long, std::ratio<1l, 1l> > const&) ()
+#3  0x00005d6544de5f55 in OtherVmExit_BodyStallBeforeSentinel() ()
+#4  0x00005d6544de8029 in MapleRuntime::GcUnit::RunAll() ()
+#5  0x00005d6544de60d9 in main ()
+[Inferior 1 (process 2807639) detached]
+[ STACKS ] collector status=0
+OBSERVED OtherVmExit.BodyStallBeforeSentinel: other-vm child did not exit cleanly with sentinel for OtherVmExit.BodyStallBeforeSentinel: waitpid status unavailable (wait failed or deadline exceeded); sentinel=missing; stderr_read=incomplete; exec_ms=1; body_ms=60069; exit_ms=not-started; pending_phase=body
+Child stderr tail (<=4096 bytes):
+[  RUN   ] OtherVmExit.BodyStallBeforeSentinel
+
+ASSERT_PHASE OtherVmExit.BodyStallBeforeSentinel PASS
+ASSERT OtherVmExit.BodyStallBeforeSentinel accepted=0 expected=0 reaped=1 PASS
+[  RUN   ] OtherVmExit.ExitStallAfterSentinel
+GC_UNIT_OTHER_VM_OKIDOKI OtherVmExit.ExitStallAfterSentinel
+[ TIMEOUT ] other-vm pid=2920453; collecting child stacks
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x000073721c4ea5b7 in __libc_pause () at ../sysdeps/unix/sysv/linux/pause.c:29
+29	../sysdeps/unix/sysv/linux/pause.c: 没有那个文件或目录.
+
+Thread 1 (Thread 0x73721cad63c0 (LWP 2920453) "exe"):
+#0  0x000073721c4ea5b7 in __libc_pause () at ../sysdeps/unix/sysv/linux/pause.c:29
+#1  0x0000577f86366621 in OtherVmExit_ExitStallAfterSentinel()::$_3::operator()() const ()
+#2  0x0000577f86366609 in OtherVmExit_ExitStallAfterSentinel()::$_3::__invoke() ()
+#3  0x000073721c445495 in __run_exit_handlers (status=0, listp=0x73721c61a838 <__exit_funcs>, run_list_atexit=run_list_atexit@entry=true, run_dtors=run_dtors@entry=true) at ./stdlib/exit.c:113
+#4  0x000073721c445610 in __GI_exit (status=<optimized out>) at ./stdlib/exit.c:143
+#5  0x000073721c429d97 in __libc_start_call_main (main=main@entry=0x577f86365050 <main>, argc=argc@entry=2, argv=argv@entry=0x7ffe0456ff68) at ../sysdeps/nptl/libc_start_call_main.h:74
+#6  0x000073721c429e40 in __libc_start_main_impl (main=0x577f86365050 <main>, argc=2, argv=0x7ffe0456ff68, init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=0x7ffe0456ff58) at ../csu/libc-start.c:392
+#7  0x0000577f86364975 in _start ()
+[Inferior 1 (process 2920453) detached]
+[ STACKS ] collector status=0
+OBSERVED OtherVmExit.ExitStallAfterSentinel: other-vm child did not exit cleanly with sentinel for OtherVmExit.ExitStallAfterSentinel: waitpid status unavailable (wait failed or deadline exceeded); sentinel=seen; stderr_read=incomplete; exec_ms=1; body_ms=0; exit_ms=60079; pending_phase=exit
+Child stderr tail (<=4096 bytes):
+[  RUN   ] OtherVmExit.ExitStallAfterSentinel
+GC_UNIT_OTHER_VM_OKIDOKI OtherVmExit.ExitStallAfterSentinel
+
+ASSERT_PHASE OtherVmExit.ExitStallAfterSentinel PASS
+ASSERT OtherVmExit.ExitStallAfterSentinel accepted=0 expected=0 reaped=1 PASS
+OBSERVED_PROC EXPECTED_PROC utime=1 stime=2
+[ TIMEOUT ] other-vm pid=3079005; collecting child stacks
+[ STACKS ] collector status=32512
+[ PROC ] pid=3079005 wchan=0 stat.utime=1 stat.stime=2 (clock ticks)
+ASSERT_PROC_FALLBACK PASS

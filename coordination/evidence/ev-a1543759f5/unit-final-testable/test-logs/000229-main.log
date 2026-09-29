@@ -1,0 +1,4 @@
+[  RUN   ] SafepointHandshakeOrder.DetachedTargetCompletesWithoutExposingRoots
+K3_DETACHED_ASSERT claimed=1 completed=1 invoked=0 unchanged=1
+[  PASS  ] SafepointHandshakeOrder.DetachedTargetCompletesWithoutExposingRoots
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] FieldIterator.ShortBitmapConcreteVisitor
+FIELD_ITERATOR_RESULT path=short actual=3 expected=3 exact=1
+[  PASS  ] FieldIterator.ShortBitmapConcreteVisitor
+[========] 1 tests: 1 passed, 0 failed

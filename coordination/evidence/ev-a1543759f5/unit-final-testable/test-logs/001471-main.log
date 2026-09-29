@@ -1,0 +1,4 @@
+[  RUN   ] SyncNativeWait.RetireReleasesIdleClearedHandle
+SYNC_RETIRE_RELEASE_ASSERT_EXECUTED
+[  PASS  ] SyncNativeWait.RetireReleasesIdleClearedHandle
+[========] 1 tests: 1 passed, 0 failed

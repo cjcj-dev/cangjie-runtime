@@ -1,0 +1,6 @@
+[  RUN   ] ThreadLifecycle.NativeAttachPublishesInitialState
+[  RUN   ] ThreadLifecycle.NativeAttachPublishesInitialState
+THREAD_ATTACH_NATIVE_TARGET executed=1 initialized=1
+GC_UNIT_OTHER_VM_OKIDOKI ThreadLifecycle.NativeAttachPublishesInitialState
+[  PASS  ] ThreadLifecycle.NativeAttachPublishesInitialState
+[========] 1 tests: 1 passed, 0 failed

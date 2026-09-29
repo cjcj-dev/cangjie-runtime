@@ -21,12 +21,14 @@
 #include "Common/ColourEncoding.h"
 
 #include "Heap/z/zIndexDistributor.hpp"
+#include "Heap/z/zArray.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
 namespace MapleRuntime {
 
 // zGranuleMap.inline.hpp:37-103: one slot per ZGC granule.
 template <typename T>
 class ZGranuleMap {
+    template<typename, bool> friend class ZGranuleMapIterator;
 public:
     explicit ZGranuleMap(size_t max_offset)
         : _size(max_offset >> ZGranuleSizeShift),
@@ -77,6 +79,14 @@ private:
 
     size_t _size;
     T* _map;
+};
+
+// ZGC zGranuleMap.inline.hpp:117-119: reuse the shared array iterator.
+template<typename T, bool Parallel>
+class ZGranuleMapIterator : public ZArrayIteratorImpl<T, Parallel> {
+public:
+    explicit ZGranuleMapIterator(const ZGranuleMap<T>* map)
+        : ZArrayIteratorImpl<T, Parallel>(map->_map, map->_size) {}
 };
 
 } // namespace MapleRuntime

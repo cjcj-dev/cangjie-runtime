@@ -1,0 +1,4 @@
+[  RUN   ] MarkPort203Engine.LocalSlotIndexFollowsStripePointer
+SLOT_IDENTITY pushed=4 stripe0_slot=0 stripe3_slot=3
+[  PASS  ] MarkPort203Engine.LocalSlotIndexFollowsStripePointer
+[========] 1 tests: 1 passed, 0 failed

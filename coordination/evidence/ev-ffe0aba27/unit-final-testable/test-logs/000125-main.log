@@ -1,0 +1,4 @@
+[  RUN   ] ZLiveMapPage.small_8k_segment_clear_preserves_other_mark
+P02_SEGMENT_PRESERVATION units=2 separate_word=0 other_new=1 live_before=1 live_after=1 first_live=1 objects=3
+[  PASS  ] ZLiveMapPage.small_8k_segment_clear_preserves_other_mark
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] SoftMemoryTable.OfficialOctal
+MEMORY_TABLE input=[040MB] reference_line=394 rc=3 accepted=1 bytes=33554432 expected=33554432
+[  PASS  ] SoftMemoryTable.OfficialOctal
+[========] 1 tests: 1 passed, 0 failed

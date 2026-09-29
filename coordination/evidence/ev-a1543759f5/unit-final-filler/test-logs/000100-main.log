@@ -1,0 +1,4 @@
+[  RUN   ] DefectRegress.CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath
+POST_NONHEAP_HOLDER_TARGET_ASSERT_EXECUTED status=0
+[  PASS  ] DefectRegress.CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath
+[========] 1 tests: 1 passed, 0 failed

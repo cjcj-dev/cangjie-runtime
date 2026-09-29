@@ -1,0 +1,4 @@
+[  RUN   ] StoreAccess843.UnknownWeakResolvesBeforeBarrier
+TARGET_STORE_ACCESSOR weak=1 remembered=1 kept_alive=0 installed=1
+[  PASS  ] StoreAccess843.UnknownWeakResolvesBeforeBarrier
+[========] 1 tests: 1 passed, 0 failed

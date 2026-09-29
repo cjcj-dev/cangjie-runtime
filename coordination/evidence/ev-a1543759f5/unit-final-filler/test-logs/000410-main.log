@@ -1,0 +1,5 @@
+[  RUN   ] StoreAccess1085.ValueRecordNonReferentStore
+STORE1085_PRODUCT_RESULT installed=1 raw=80001400081510 offset=16
+STORE1085_TARGET_ASSERT waited=3225170 status=0 stored=1
+[  PASS  ] StoreAccess1085.ValueRecordNonReferentStore
+[========] 1 tests: 1 passed, 0 failed

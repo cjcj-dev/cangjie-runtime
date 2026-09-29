@@ -1,0 +1,3 @@
+[  RUN   ] ZForwardingEntries.survives_without_geometry
+[  PASS  ] ZForwardingEntries.survives_without_geometry
+[========] 1 tests: 1 passed, 0 failed

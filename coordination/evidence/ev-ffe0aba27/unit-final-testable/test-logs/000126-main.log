@@ -1,0 +1,5 @@
+[  RUN   ] ZLiveMapPage.separate_word_segment_clear_preserves_other_mark
+P02_SEGMENT_PRESERVATION units=1 separate_word=1 other_new=1 live_before=1 live_after=1 first_live=1 objects=3
+P02_SEGMENT_PRESERVATION units=2 separate_word=1 other_new=1 live_before=1 live_after=1 first_live=1 objects=3
+[  PASS  ] ZLiveMapPage.separate_word_segment_clear_preserves_other_mark
+[========] 1 tests: 1 passed, 0 failed

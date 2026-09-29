@@ -1,0 +1,70 @@
+[  RUN   ] TLABUsage.InlineBoundsThroughAllocationEntry
+[  RUN   ] TLABUsage.InlineBoundsThroughAllocationEntry
+TLAB_INLINE_BOUNDS_TARGET iteration=0 object=0x40000000000 top=0x40000000100 end=0x40000000900 start=0x40000000000 fits=0 bounds=1 advance=1
+TLAB_INLINE_BOUNDS_TARGET iteration=1 object=0x40000000100 top=0x40000000200 end=0x40000000900 start=0x40000000000 fits=1 bounds=1 advance=1
+TLAB_INLINE_BOUNDS_TARGET iteration=2 object=0x40000000200 top=0x40000000300 end=0x40000000900 start=0x40000000000 fits=1 bounds=1 advance=1
+TLAB_INLINE_BOUNDS_TARGET iteration=3 object=0x40000000300 top=0x40000000400 end=0x40000000900 start=0x40000000000 fits=1 bounds=1 advance=1
+TLAB_INLINE_BOUNDS_TARGET iteration=4 object=0x40000000400 top=0x40000000500 end=0x40000000900 start=0x40000000000 fits=1 bounds=1 advance=1
+TLAB_INLINE_BOUNDS_TARGET iteration=5 object=0x40000000500 top=0x40000000600 end=0x40000000900 start=0x40000000000 fits=1 bounds=1 advance=1
+TLAB_INLINE_BOUNDS_TARGET iteration=6 object=0x40000000600 top=0x40000000700 end=0x40000000900 start=0x40000000000 fits=1 bounds=1 advance=1
+TLAB_INLINE_BOUNDS_TARGET iteration=7 object=0x40000000700 top=0x40000000800 end=0x40000000900 start=0x40000000000 fits=1 bounds=1 advance=1
+TLAB_INLINE_BOUNDS_TARGET iteration=8 object=0x40000000800 top=0x40000000900 end=0x40000000900 start=0x40000000000 fits=1 bounds=1 advance=1
+TLAB_INLINE_BOUNDS_TARGET iteration=9 object=0x40000000900 top=0x40000000a00 end=0x40000001200 start=0x40000000900 fits=0 bounds=1 advance=1
+TLAB_INLINE_BOUNDS_TARGET iteration=10 object=0x40000000a00 top=0x40000000b00 end=0x40000001200 start=0x40000000900 fits=1 bounds=1 advance=1
+TLAB_INLINE_BRANCHES fits=9 refills=2
+2026-09-30 00:27:56.237830 3596170 I GC Workers for Young Generation: 5 (static)
+2026-09-30 00:27:56.238276 3596170 I GC Workers for Old Generation: 5 (static)
+2026-09-30 00:27:56.242288 3596414 I FinalizerProcessor thread started
+2026-09-30 00:27:56.242645 3596170 I Uncommit: Enabled delay=300s
+2026-09-30 00:27:56.243073 3596170 I Cangjie runtime started.
+2026-09-30 00:27:57.261398 3596414 I FinalizerProcessor thread stopped
+2026-09-30 00:27:57.262555 3595965 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-30 00:27:57.262663 3595965 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:27:57.262725 3595965 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:27:57.262778 3595965 I Critical: Finalizer 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:27:57.262831 3595965 I Critical: Finalizer 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.262878 3595965 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:27:57.262924 3595965 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.262970 3595965 I Major Collection: Major Collection 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263020 3595965 I Memory: Allocation Rate 0/0 0/0 0/0 0/0 B/s
+2026-09-30 00:27:57.263075 3595965 I Minor Collection: Minor Collection 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263127 3595965 I Old Generation: Old Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263181 3595965 I Old Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263234 3595965 I Old Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263287 3595965 I Old Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263340 3595965 I Old Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263392 3595965 I Old Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263444 3595965 I Old Phase: Concurrent Process Non-Strong 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263477 3595965 I Old Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263510 3595965 I Old Phase: Concurrent Remap Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263542 3595965 I Old Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263577 3595965 I Old Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263624 3595965 I Old Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263656 3595965 I Old Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263689 3595965 I Old Subphase: Concurrent References Enqueue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263721 3595965 I Old Subphase: Concurrent References Process 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263775 3595965 I Old Subphase: Concurrent Remap Remembered 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263807 3595965 I Old Subphase: Concurrent Remap Roots Colored 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263858 3595965 I Old Subphase: Concurrent Remap Roots Uncolored 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263904 3595965 I Old Subphase: PostTrace 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263950 3595965 I Test: Unobserved 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.263996 3595965 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264047 3595965 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264098 3595965 I Young Generation: Young Generation (Collect Roots) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264146 3595965 I Young Generation: Young Generation (Promote All) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264192 3595965 I Young Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264238 3595965 I Young Pause: Pause Mark Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264284 3595965 I Young Pause: Pause Mark Start (Major) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264330 3595965 I Young Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264380 3595965 I Young Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264433 3595965 I Young Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264505 3595965 I Young Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264552 3595965 I Young Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264598 3595965 I Young Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264644 3595965 I Young Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264689 3595965 I Young Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.264735 3595965 I Young Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:57.275122 3591183 I Cangjie runtime shutdown.
+GC_UNIT_OTHER_VM_OKIDOKI TLABUsage.InlineBoundsThroughAllocationEntry
+[  PASS  ] TLABUsage.InlineBoundsThroughAllocationEntry
+[========] 1 tests: 1 passed, 0 failed

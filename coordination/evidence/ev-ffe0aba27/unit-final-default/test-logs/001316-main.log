@@ -1,0 +1,4 @@
+[  RUN   ] WeakRootsProduct.PhantomCleanFinalizableRetainsSlot
+WEAK_ROOTS_FINALIZABLE_RETAIN_ASSERT_EXECUTED
+[  PASS  ] WeakRootsProduct.PhantomCleanFinalizableRetainsSlot
+[========] 1 tests: 1 passed, 0 failed

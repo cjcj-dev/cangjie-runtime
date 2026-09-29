@@ -1,0 +1,4 @@
+[  RUN   ] WeakRootsProduct.EmptyRendezvousCompletes
+WEAK_ROOTS_EMPTY_RENDEZVOUS_ASSERT_EXECUTED
+[  PASS  ] WeakRootsProduct.EmptyRendezvousCompletes
+[========] 1 tests: 1 passed, 0 failed

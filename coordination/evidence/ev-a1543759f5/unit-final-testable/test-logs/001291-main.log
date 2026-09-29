@@ -1,0 +1,4 @@
+[  RUN   ] ReferenceProcessor.FinalDiscoveryIsClaimedOnce
+P2_DISCOVERY_RESULT discovered=1 queued=1
+[  PASS  ] ReferenceProcessor.FinalDiscoveryIsClaimedOnce
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,6 @@
+[  RUN   ] Uncommitter.FreshCacheWaitsForWatermarkCycle
+[  RUN   ] Uncommitter.FreshCacheWaitsForWatermarkCycle
+TARGET_FRESH_CACHE before=75497472 first=75497472 later=73400320 cache_age_ns=750107399 delay_ns=1000000000
+GC_UNIT_OTHER_VM_OKIDOKI Uncommitter.FreshCacheWaitsForWatermarkCycle
+[  PASS  ] Uncommitter.FreshCacheWaitsForWatermarkCycle
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,62 @@
+[  RUN   ] AllocationStall.ProductShutdownAnswersPendingWaiters
+[  RUN   ] AllocationStall.ProductShutdownAnswersPendingWaiters
+STALL_COMPLETION_TARGET completed=1 first=1 late=1 pending=0
+2026-09-29 23:56:09.531711 3119864 I GC Workers for Young Generation: 1 (static)
+2026-09-29 23:56:09.532033 3119864 I GC Workers for Old Generation: 1 (static)
+2026-09-29 23:56:09.532585 3120713 I FinalizerProcessor thread started
+2026-09-29 23:56:09.533058 3119864 I Uncommit: Enabled delay=300s
+2026-09-29 23:56:09.533137 3119864 I Cangjie runtime started.
+2026-09-29 23:56:09.536569 3120713 I FinalizerProcessor thread stopped
+2026-09-29 23:56:09.542063 3120699 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-29 23:56:09.542210 3120699 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:09.542271 3120699 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:09.542318 3120699 I Critical: Finalizer 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:09.542366 3120699 I Critical: Finalizer 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542414 3120699 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:09.542460 3120699 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542505 3120699 I Major Collection: Major Collection 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542551 3120699 I Memory: Allocation Rate 0/0 0/0 0/0 0/0 B/s
+2026-09-29 23:56:09.542597 3120699 I Minor Collection: Minor Collection 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542645 3120699 I Old Generation: Old Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542693 3120699 I Old Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542738 3120699 I Old Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542784 3120699 I Old Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542830 3120699 I Old Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542875 3120699 I Old Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542924 3120699 I Old Phase: Concurrent Process Non-Strong 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.542970 3120699 I Old Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543016 3120699 I Old Phase: Concurrent Remap Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543067 3120699 I Old Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543113 3120699 I Old Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543159 3120699 I Old Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543209 3120699 I Old Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543255 3120699 I Old Subphase: Concurrent References Enqueue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543300 3120699 I Old Subphase: Concurrent References Process 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543346 3120699 I Old Subphase: Concurrent Remap Remembered 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543391 3120699 I Old Subphase: Concurrent Remap Roots Colored 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543437 3120699 I Old Subphase: Concurrent Remap Roots Uncolored 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543486 3120699 I Old Subphase: PostTrace 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543532 3120699 I Test: Unobserved 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543578 3120699 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.543624 3120699 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.544625 3120699 I Young Generation: Young Generation (Collect Roots) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.544758 3120699 I Young Generation: Young Generation (Promote All) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.544814 3120699 I Young Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.544865 3120699 I Young Pause: Pause Mark Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.544918 3120699 I Young Pause: Pause Mark Start (Major) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.544970 3120699 I Young Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.545023 3120699 I Young Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.545080 3120699 I Young Phase: Concurrent Mark ConSTALL_PRODUCT_LATE_TARGET queued=2 first_mark=1 first_done=1 late_done=1 first_null=1 late_null=1 retained=1 mark_stopped=1
+STALL_WAIT_TARGET safe=1 stalling=1 completed=1 pending=0
+STALL_SHUTDOWN_TARGET abort_observed=1 abort_retained=1 late_done=1 first_mark=1
+tinue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.545149 3120699 I Young Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.545201 3120699 I Young Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.545253 3120699 I Young Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.545304 3120699 I Young Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.545354 3120699 I Young Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.545406 3120699 I Young Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:09.560375 3119626 I Cangjie runtime shutdown.
+GC_UNIT_OTHER_VM_OKIDOKI AllocationStall.ProductShutdownAnswersPendingWaiters
+[  PASS  ] AllocationStall.ProductShutdownAnswersPendingWaiters
+[========] 1 tests: 1 passed, 0 failed

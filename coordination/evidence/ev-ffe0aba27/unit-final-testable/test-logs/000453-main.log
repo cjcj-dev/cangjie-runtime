@@ -1,0 +1,3 @@
+[  RUN   ] StoreBuf.NullAndPreMarkPreviousAreNormalSkips
+[  PASS  ] StoreBuf.NullAndPreMarkPreviousAreNormalSkips
+[========] 1 tests: 1 passed, 0 failed

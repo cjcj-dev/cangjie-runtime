@@ -1,0 +1,3 @@
+[  RUN   ] DefectRegress.ExportHandleDoubleRemoveNoAlias
+[  PASS  ] DefectRegress.ExportHandleDoubleRemoveNoAlias
+[========] 1 tests: 1 passed, 0 failed

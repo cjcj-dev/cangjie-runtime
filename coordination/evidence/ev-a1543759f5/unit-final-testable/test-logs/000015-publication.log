@@ -1,0 +1,8 @@
+[  RUN   ] RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan
+[  RUN   ] RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan
+OLD_PENDING_TARGET_ASSERT before=40001200010 root=40001200010 winner=40000000010 base=0 derived=0 deferred=1
+RAW_REMAP_TARGET_ASSERT promoted=0 managed=0 before=40001200010 after=40000000010 expected=40000000010 base=0 derived=0 final_root=40000000010 result=1
+RAW_REMAP_OUTCOME_ASSERT promoted=0 managed=0 old=1 status=0 completed=1
+GC_UNIT_OTHER_VM_OKIDOKI RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan
+[  PASS  ] RawRemapYoungProduct.MajorKeepsOldRawRootUntilNextRootScan
+[========] 1 tests: 1 passed, 0 failed
