@@ -164,7 +164,7 @@ class GcLogRecords:
                 if record.gc_tag == "O":
                     required.update(Concurrent_Process_Non_Strong="conc", Concurrent_Remap_Roots="conc")
                 else:
-                    name = "Pause_Mark_Start__Major_" if record.name == "Young_Generation__Collect_Roots_" else "Pause_Mark_Start"
+                    name = "Pause_Mark_Start__Major_" if record.gc_tag == "Y" and record.name != "Young_Generation__Promote_All_" else "Pause_Mark_Start"
                     required[name] = "pause"
                 observed = {(p.name, p.kind) for p in phases
                             if record.start_ns <= p.start_ns and p.start_ns + p.ns <= record.start_ns + record.dur_ns}

@@ -1297,8 +1297,10 @@ GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, CollectionAbort)
     ConcurrentGCBreakpoints::AcquireControl();
     const bool reached = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
     ZAbort::abort();
-    ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
+    // Aborted drivers return before AtAfterGC; join via the real stop entry,
+    // rather than waiting for a normal-completion breakpoint notification.
+    Heap::GetHeap().StopGCWork();
     const std::string text = capture.Finish();
     size_t collectionAbort = 0, generationAbort = 0, collectionEnd = 0;
     std::istringstream lines(text);
