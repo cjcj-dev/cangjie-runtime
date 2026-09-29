@@ -184,6 +184,7 @@ public:
         return n;
     }
 
+private:
     // Names and reasons are free text at the call sites ("enum roots & update old pointers within",
     // "young collection"), and a space would end the value halfway through for any key=value
     // reader. Fold anything outside the safe set into '_' so a value is always one token.

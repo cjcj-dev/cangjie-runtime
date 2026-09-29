@@ -71,10 +71,10 @@ def cycle_durs(text: str):
     records = parse_gclog(text).validate_complete()
     out = {record.seq: record.dur_ns for record in records.cycles if record.event == "end"}
     kinds = {record.seq: record.kind for record in records.cycles if record.event == "end"}
-    if out:
-        return out, kinds
     if records.any():
-        return {}, {}
+        # The validated ledger can contain only aborted/truncated collections;
+        # main reports those populations separately from completed durations.
+        return out, kinds
     reasons = BEGIN.findall(text)
     return {i: 0 for i, _ in enumerate(reasons, 1)}, {
         i: ("minor" if "YOUNG" in r.upper() or "MINOR" in r.upper() else "major")
@@ -135,6 +135,7 @@ def main(root: Path):
         w = wall_of(run_dir)
         pauses = cycle_pauses(text)
         durs, kinds = cycle_durs(text)
+        lifecycle = parse_gclog(text).validate_complete()
         n = len(durs)
         minor = sum(1 for k in kinds.values() if "young" in k.lower() or "minor" in k.lower())
         major = sum(1 for k in kinds.values() if "old" in k.lower() or "full" in k.lower() or "major" in k.lower())
@@ -143,6 +144,8 @@ def main(root: Path):
         gc_dur = sum(durs.values())
         cells[(wl, heap, arm)].append({
             "dir": str(run_dir),
+            "aborted_cycles": lifecycle.aborted,
+            "truncated_cycles": lifecycle.truncated,
             "class": cls,
             "wall": w,
             "pauses_ns": list(pauses.values()),
