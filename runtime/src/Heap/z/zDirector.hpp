@@ -25,7 +25,6 @@ public:
     ZDirector();
 
     static void evaluate_rules();
-    void notify_reevaluate();
 };
 } // namespace MapleRuntime
 

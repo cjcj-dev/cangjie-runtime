@@ -72,13 +72,8 @@ void ZDirector::evaluate_rules()
     if (_director == nullptr) {
         return;
     }
-    _director->notify_reevaluate();
-}
-
-void ZDirector::notify_reevaluate()
-{
-    std::lock_guard<std::mutex> lock(monitor);
-    condition.notify_one();
+    std::lock_guard<std::mutex> lock(_director->monitor);
+    _director->condition.notify_one();
 }
 
 bool ZDirector::wait_for_tick()
