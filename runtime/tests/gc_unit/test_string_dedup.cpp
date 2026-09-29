@@ -387,6 +387,7 @@ struct DedupBatch {
     size_t count = 0;
     size_t strongCount = 0;
     size_t installed = 0;
+    size_t duplicateHits = 0;
     std::vector<NativeSlot*> strong;
 };
 void* InstallDedupBatch(void* argument)
@@ -398,6 +399,12 @@ void* InstallDedupBatch(void* argument)
     for (size_t index = 0; index < batch.count; ++index) {
         auto* array = NewCycleBacking(true, index + 1);
         batch.installed += MCC_StringDedupCanonicalImpl(DedupArrayType(), array) == array;
+        // Revisit older keys while the independent processor can migrate
+        // buckets. A miss would install a duplicate and change slot count.
+        if (batch.count > 503 * 14 && index % 64 == 0) {
+            auto* same = NewCycleBacking(true, 1);
+            batch.duplicateHits += MCC_StringDedupCanonicalImpl(DedupArrayType(), same) != same;
+        }
         if (index < batch.strongCount) {
             auto* slot = storage.Allocate();
             NativeAccess<>::oop_store(slot, array);
@@ -497,6 +504,7 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, ResizeThenOldCallbacksShrink)
     ConcurrentGCBreakpoints::ReleaseControl();
     const int finiRC = FiniCJRuntime();
     GC_EXPECT_TRUE(grownBuckets > 503);
+    GC_EXPECT_EQ(batch.duplicateHits, (batch.count + 63) / 64);
     GC_EXPECT_TRUE(cleaned);
     GC_EXPECT_EQ(finalBuckets, size_t{503});
     GC_EXPECT_EQ(finalSlots, size_t{0});
