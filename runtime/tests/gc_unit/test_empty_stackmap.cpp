@@ -68,7 +68,9 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
             image.stackmap[3] = 0x11; // line/derived index widths = 1
         }
         const Uptr pc = reinterpret_cast<Uptr>(image.code);
-        std::fprintf(stderr, "METADATA_INPUT startPC=%p ip=%p\n", image.code, image.code + 1);
+        if (entry == Entry::CALLER_SP) {
+            std::fprintf(stderr, "METADATA_INPUT startPC=%p ip=%p\n", image.code, image.code + 1);
+        }
         ElfUnloadQuiescence::LinkImage(pc);
         if (entry == Entry::HEAD) {
             const auto head = CompressedStackMapHead::GetStackMapHead(pc, nullptr, pc + 4);
