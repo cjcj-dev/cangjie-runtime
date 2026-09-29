@@ -77,21 +77,20 @@ void ZDirector::evaluate_rules()
 
 void ZDirector::notify_reevaluate()
 {
-    std::lock_guard<std::mutex> lock(monitor);
-    reevaluate = true;
-    condition.notify_one();
+    ZLocker<ZConditionLock> lock(&monitor);
+    monitor.notify();
 }
 
 bool ZDirector::wait_for_tick()
 {
     const uint64_t interval_ms = 1000 / DecisionHz;
-    std::unique_lock<std::mutex> lock(monitor);
+    ZLocker<ZConditionLock> lock(&monitor);
     if (stopped) {
         return false;
     }
-    condition.wait_for(lock, std::chrono::milliseconds(interval_ms),
-        [this] { return stopped || reevaluate; });
-    return !stopped;
+    // ZGC zDirector.cpp:848-861: one timed wait; stop is tested on entry.
+    monitor.wait(interval_ms);
+    return true;
 }
 
 static uint32_t young_gc_threads(const ZDirectorStats&)
@@ -656,7 +655,6 @@ static ZDirectorStats sample_stats()
 void ZDirector::run_thread()
 {
     while (wait_for_tick()) {
-        reevaluate = false;
         if (Runtime::CurrentRef() == nullptr || !Heap::GetHeap().IsGCEnabled()) {
             continue;
         }
@@ -669,9 +667,9 @@ void ZDirector::run_thread()
 
 void ZDirector::terminate()
 {
-    std::lock_guard<std::mutex> locker(monitor);
+    ZLocker<ZConditionLock> locker(&monitor);
     stopped = true;
-    condition.notify_all();
+    monitor.notify_all();
 }
 
 } // namespace MapleRuntime
