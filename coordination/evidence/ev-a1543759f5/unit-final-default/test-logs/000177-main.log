@@ -1,0 +1,6 @@
+[  RUN   ] RelocationTargets.MediumInPlaceTargetSharedAcrossWorkers
+[  RUN   ] RelocationTargets.MediumInPlaceTargetSharedAcrossWorkers
+INPLACE_TARGET_RESULT target0=0x5d91d8a17df0 target1=0x5d91d8a17df0 top_bytes=1024 retired=1 used=4194304 payload0=7954432 payload1=7954433
+GC_UNIT_OTHER_VM_OKIDOKI RelocationTargets.MediumInPlaceTargetSharedAcrossWorkers
+[  PASS  ] RelocationTargets.MediumInPlaceTargetSharedAcrossWorkers
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] RememberedWorkers719.YoungPoolRunsFromNonWorkerThread
+REMEMBERED719 completed with empty mark stripes on non-worker caller
+[  PASS  ] RememberedWorkers719.YoungPoolRunsFromNonWorkerThread
+[========] 1 tests: 1 passed, 0 failed

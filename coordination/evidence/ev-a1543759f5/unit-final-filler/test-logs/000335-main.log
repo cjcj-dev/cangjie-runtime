@@ -1,0 +1,9 @@
+[  RUN   ] ObjectAllocator917.TLABEntryRequiresMutator
+[  RUN   ] ObjectAllocator917.TLABEntryRequiresMutator
+[  RUN   ] ObjectAllocator917.TLABEntryRequiresMutator
+2026-09-29 23:56:39.810096 3222136 F Check failed: ThreadLocal::GetMutator() != nullptr
+2026-09-29 23:56:39.810235 3222136 F Should be a mutator thread
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+GC_UNIT_OTHER_VM_OKIDOKI ObjectAllocator917.TLABEntryRequiresMutator
+[  PASS  ] ObjectAllocator917.TLABEntryRequiresMutator
+[========] 1 tests: 1 passed, 0 failed

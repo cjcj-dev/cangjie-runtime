@@ -1,0 +1,14 @@
+[  RUN   ] P82HeapIterator.OverflowRoots
+[  RUN   ] P82HeapIterator.OverflowRoots
+P82_OVERFLOW_ASSERT seen=0 expected=132000
+[  FAIL  ] P82HeapIterator.OverflowRoots
+  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:1004: EXPECT failed: seen == expected
+[  FAIL  ] P82HeapIterator.OverflowRoots
+  other-vm child did not exit cleanly with sentinel for P82HeapIterator.OverflowRoots: Exited with exit status 1; sentinel=missing; stderr_read=complete; exec_ms=1; body_ms=77; exit_ms=not-started; pending_phase=body
+Child stderr tail (<=4096 bytes):
+[  RUN   ] P82HeapIterator.OverflowRoots
+P82_OVERFLOW_ASSERT seen=0 expected=132000
+[  FAIL  ] P82HeapIterator.OverflowRoots
+  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:1004: EXPECT failed: seen == expected
+
+[========] 1 tests: 0 passed, 1 failed

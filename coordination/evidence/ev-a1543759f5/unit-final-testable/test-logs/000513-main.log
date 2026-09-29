@@ -1,0 +1,4 @@
+[  RUN   ] PageRemset1272.InitializedReadFaces
+REMSET1272_TARGET current=0 previous=1 after_swap
+[  PASS  ] PageRemset1272.InitializedReadFaces
+[========] 1 tests: 1 passed, 0 failed

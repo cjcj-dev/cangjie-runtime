@@ -1,0 +1,6 @@
+[  RUN   ] HeapIterator.StrongAndWeakInclusiveGraphs
+[  RUN   ] HeapIterator.StrongAndWeakInclusiveGraphs
+B10_OBJECT_RESULT visited_referent=1 strong_referent=0 inclusive_referent=1
+GC_UNIT_OTHER_VM_OKIDOKI HeapIterator.StrongAndWeakInclusiveGraphs
+[  PASS  ] HeapIterator.StrongAndWeakInclusiveGraphs
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,7 @@
+[  RUN   ] SoftMaxRadix.UppercaseHexadecimal
+[  RUN   ] SoftMaxRadix.UppercaseHexadecimal
+2026-09-30 00:28:28.662469 245878 E Invalid cjSoftMaxHeapSize
+SOFT_CONSTRAINT_ASSERT soft_kb=0 env=0X20MB actual=-1 expected=-1
+GC_UNIT_OTHER_VM_OKIDOKI SoftMaxRadix.UppercaseHexadecimal
+[  PASS  ] SoftMaxRadix.UppercaseHexadecimal
+[========] 1 tests: 1 passed, 0 failed

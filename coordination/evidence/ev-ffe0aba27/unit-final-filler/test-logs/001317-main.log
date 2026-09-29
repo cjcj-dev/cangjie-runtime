@@ -1,0 +1,4 @@
+[  RUN   ] WeakHandleProduct.PeekBlockedOldDoesNotKeepDead
+WEAK_HANDLE_PEEK_DEAD_ASSERT_EXECUTED
+[  PASS  ] WeakHandleProduct.PeekBlockedOldDoesNotKeepDead
+[========] 1 tests: 1 passed, 0 failed

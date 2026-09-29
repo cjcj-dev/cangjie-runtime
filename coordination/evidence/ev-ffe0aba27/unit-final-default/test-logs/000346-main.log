@@ -1,0 +1,7 @@
+[  RUN   ] ConcurrencyRootColor.NativeArgumentsAreNotRoots
+[  RUN   ] ConcurrencyRootColor.NativeArgumentsAreNotRoots
+CONCURRENCY_NATIVE_TARGET visits=0
+CONCURRENCY_MANAGED_CONTROL visits=3
+GC_UNIT_OTHER_VM_OKIDOKI ConcurrencyRootColor.NativeArgumentsAreNotRoots
+[  PASS  ] ConcurrencyRootColor.NativeArgumentsAreNotRoots
+[========] 1 tests: 1 passed, 0 failed

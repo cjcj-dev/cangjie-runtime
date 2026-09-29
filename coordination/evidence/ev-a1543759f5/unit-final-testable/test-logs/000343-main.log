@@ -1,0 +1,6 @@
+[  RUN   ] RawNullPage.OldPageRejectsRawNull
+[  RUN   ] RawNullPage.OldPageRejectsRawNull
+RAW_NULL_PAGE_TARGET young=1 old=0
+GC_UNIT_OTHER_VM_OKIDOKI RawNullPage.OldPageRejectsRawNull
+[  PASS  ] RawNullPage.OldPageRejectsRawNull
+[========] 1 tests: 1 passed, 0 failed

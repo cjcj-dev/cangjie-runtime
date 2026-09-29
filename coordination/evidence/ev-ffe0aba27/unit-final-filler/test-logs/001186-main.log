@@ -1,0 +1,7 @@
+[  RUN   ] FnlzRoots.ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies
+[  RUN   ] FnlzRoots.ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies
+ROOT_STORAGE_TARGET export_registered=130 first=0x5b7bd99eb440 grown=0x5b7bd99eb440
+ROOT_STORAGE_TARGET export_released_remaining=0
+GC_UNIT_OTHER_VM_OKIDOKI FnlzRoots.ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies
+[  PASS  ] FnlzRoots.ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] StringDedup.ExplicitEqualStringBackingFindsEntry
+STRING_DEDUP_CANONICAL_HIT second_is_first=1
+[  PASS  ] StringDedup.ExplicitEqualStringBackingFindsEntry
+[========] 1 tests: 1 passed, 0 failed

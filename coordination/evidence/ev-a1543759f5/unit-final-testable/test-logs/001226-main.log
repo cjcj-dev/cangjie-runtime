@@ -1,0 +1,3 @@
+[  RUN   ] I2ReadRef.LoadBadHeapSlotIsHealedToCurrentColour
+[  PASS  ] I2ReadRef.LoadBadHeapSlotIsHealedToCurrentColour
+[========] 1 tests: 1 passed, 0 failed

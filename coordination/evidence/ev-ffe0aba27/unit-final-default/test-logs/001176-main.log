@@ -1,0 +1,4 @@
+[  RUN   ] AccessBarrier976.PrimitiveValueLeadingGap
+VALUE976_PAYLOAD_TARGET refs=1 begin=0 end=8 matches=1
+[  PASS  ] AccessBarrier976.PrimitiveValueLeadingGap
+[========] 1 tests: 1 passed, 0 failed

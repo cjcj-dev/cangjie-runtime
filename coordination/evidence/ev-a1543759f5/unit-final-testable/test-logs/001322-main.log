@@ -1,0 +1,4 @@
+[  RUN   ] MarkPort203Entries.CacheCollisionAndExitWriteBothPageCounts
+M2_CACHE_RESULT collision_objects=1 collision_bytes=16 exit_objects=1 exit_bytes=16
+[  PASS  ] MarkPort203Entries.CacheCollisionAndExitWriteBothPageCounts
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,3 @@
+[  RUN   ] ZListTest.test_remove_middle_unlinks
+[  PASS  ] ZListTest.test_remove_middle_unlinks
+[========] 1 tests: 1 passed, 0 failed

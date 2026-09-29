@@ -1,0 +1,6 @@
+[  RUN   ] MaxHeapSize.TrailingWhitespace
+[  RUN   ] MaxHeapSize.TrailingWhitespace
+MAX_BYTES_ASSERT input=64MB  actual=67108864 expected=67108864 capacity=67108864 expected_capacity=67108864
+GC_UNIT_OTHER_VM_OKIDOKI MaxHeapSize.TrailingWhitespace
+[  PASS  ] MaxHeapSize.TrailingWhitespace
+[========] 1 tests: 1 passed, 0 failed

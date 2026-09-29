@@ -1,0 +1,4 @@
+[  RUN   ] ThreadOffsetABI1140.g_cjMarkBadMaskOffsetIsNotExported
+OFFSET_ABI_TARGET symbol=g_cjMarkBadMaskOffset exported=0
+[  PASS  ] ThreadOffsetABI1140.g_cjMarkBadMaskOffsetIsNotExported
+[========] 1 tests: 1 passed, 0 failed

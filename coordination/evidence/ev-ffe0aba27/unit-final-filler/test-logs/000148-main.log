@@ -1,0 +1,6 @@
+[  RUN   ] ManagedMetadata.PrologueAbsent
+2026-09-30 00:28:28.117205 229096 F Check failed: table != nullptr
+2026-09-30 00:28:28.117398 229096 F FramePrologue missing stackmap
+METADATA_TARGET entry=1 desc=1 map=0 status=134 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.PrologueAbsent
+[========] 1 tests: 1 passed, 0 failed

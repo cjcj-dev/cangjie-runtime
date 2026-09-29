@@ -1,0 +1,7 @@
+[  RUN   ] MaxHeapSize.ApiOverflow
+[  RUN   ] MaxHeapSize.ApiOverflow
+2026-09-30 00:27:58.364115 3657796 E Heap size conversion overflows bytes
+MAX_API_OVERFLOW_ASSERT rc=-1 expected=-1
+GC_UNIT_OTHER_VM_OKIDOKI MaxHeapSize.ApiOverflow
+[  PASS  ] MaxHeapSize.ApiOverflow
+[========] 1 tests: 1 passed, 0 failed

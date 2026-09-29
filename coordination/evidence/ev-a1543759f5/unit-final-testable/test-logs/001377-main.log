@@ -1,0 +1,4 @@
+[  RUN   ] MarkPublish1144.ListPreservesEmptyPayload
+MARK1144 list payload preserved=1
+[  PASS  ] MarkPublish1144.ListPreservesEmptyPayload
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,9 @@
+[  RUN   ] SoftMaxConstraint.ManagedUnitOverflow
+[  RUN   ] SoftMaxConstraint.ManagedUnitOverflow
+2026-09-30 00:28:28.660111 245898 E Invalid cjSoftMaxHeapSize
+2026-09-30 00:28:28.660336 245898 F Check failed: GCArguments::parse_vm_init_args(param.heapParam)
+2026-09-30 00:28:28.660407 245898 F Invalid heap size arguments
+SOFT_MANAGED_CONSTRAINT_ASSERT soft=17592186044416GB status=134 rejected=1
+GC_UNIT_OTHER_VM_OKIDOKI SoftMaxConstraint.ManagedUnitOverflow
+[  PASS  ] SoftMaxConstraint.ManagedUnitOverflow
+[========] 1 tests: 1 passed, 0 failed

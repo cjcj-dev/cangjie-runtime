@@ -1,0 +1,8 @@
+[  RUN   ] RelocateLiveness.MutatorCopiesMarkedSource
+[  RUN   ] RelocateLiveness.MutatorCopiesMarkedSource
+RELOCATION_AGE_TARGET worker=0 actual=15 expected=15
+RELOCATE_LIVE_RESULT worker=0 marked=1 source=0x40000000018 result=0x40000400000 payload=0x869
+RELOCATE_LIVE_ASSERT worker=0 marked=1 status=0 target=0
+GC_UNIT_OTHER_VM_OKIDOKI RelocateLiveness.MutatorCopiesMarkedSource
+[  PASS  ] RelocateLiveness.MutatorCopiesMarkedSource
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] WeakHandleProduct.EmptyHandleIsNull
+WEAK_HANDLE_EMPTY_ASSERT_EXECUTED
+[  PASS  ] WeakHandleProduct.EmptyHandleIsNull
+[========] 1 tests: 1 passed, 0 failed

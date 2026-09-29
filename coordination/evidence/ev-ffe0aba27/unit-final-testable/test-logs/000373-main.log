@@ -1,0 +1,9 @@
+[  RUN   ] ObjectAllocator917.YoungPhaseRequiresSafepoint
+[  RUN   ] ObjectAllocator917.YoungPhaseRequiresSafepoint
+[  RUN   ] ObjectAllocator917.YoungPhaseRequiresSafepoint
+2026-09-30 00:27:56.504078 3600021 F Check failed: MutatorManager::Instance().WorldStopped()
+2026-09-30 00:27:56.504305 3600021 F Should be at safepoint
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+GC_UNIT_OTHER_VM_OKIDOKI ObjectAllocator917.YoungPhaseRequiresSafepoint
+[  PASS  ] ObjectAllocator917.YoungPhaseRequiresSafepoint
+[========] 1 tests: 1 passed, 0 failed

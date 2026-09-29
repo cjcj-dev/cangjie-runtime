@@ -1,0 +1,3 @@
+[  RUN   ] ZGCIdPrinter.WorkerScopeRestoresThreadContext
+[  PASS  ] ZGCIdPrinter.WorkerScopeRestoresThreadContext
+[========] 1 tests: 1 passed, 0 failed

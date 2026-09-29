@@ -1,0 +1,8 @@
+[  RUN   ] ConcurrencyRootColor.DisarmedGroupRemainsDisarmedAfterGCVisit
+[  RUN   ] ConcurrencyRootColor.DisarmedGroupRemainsDisarmedAfterGCVisit
+CONCURRENCY_OLD_READ heal=1 saved=0x1510 current=0x4000 from=0x40000000020 observed=0x40000000010 expected=0x40000000010
+CONCURRENCY_OLD_GROUP observed=0x40000000010 expected=0x40000000010
+CONCURRENCY_GC_REVISIT armed=0 visits=3
+GC_UNIT_OTHER_VM_OKIDOKI ConcurrencyRootColor.DisarmedGroupRemainsDisarmedAfterGCVisit
+[  PASS  ] ConcurrencyRootColor.DisarmedGroupRemainsDisarmedAfterGCVisit
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,6 @@
+[  RUN   ] RuntimeConfigV1.EnvironmentHeap
+[  RUN   ] RuntimeConfigV1.EnvironmentHeap
+RUNTIME_CONFIG_HEAP actual_kib=65536 expected_kib=65536
+GC_UNIT_OTHER_VM_OKIDOKI RuntimeConfigV1.EnvironmentHeap
+[  PASS  ] RuntimeConfigV1.EnvironmentHeap
+[========] 1 tests: 1 passed, 0 failed

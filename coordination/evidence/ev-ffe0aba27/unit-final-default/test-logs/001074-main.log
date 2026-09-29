@@ -1,0 +1,5 @@
+[  RUN   ] RelocateWorkers.ProductSerialEntryRegistersWorkerAndClosesGeneration
+[  RUN   ] RelocateWorkers.ProductSerialEntryRegistersWorkerAndClosesGeneration
+GC_UNIT_OTHER_VM_OKIDOKI RelocateWorkers.ProductSerialEntryRegistersWorkerAndClosesGeneration
+[  PASS  ] RelocateWorkers.ProductSerialEntryRegistersWorkerAndClosesGeneration
+[========] 1 tests: 1 passed, 0 failed

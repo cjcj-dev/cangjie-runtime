@@ -1,0 +1,9 @@
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/default/runtime/tests/gc_unit/package_init_image.cpp:6:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/default/runtime/src/Loader/BinaryFile/CjFile/CjFileMeta.h:10:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/default/runtime/src/ObjectModel/ExtensionData.h:11:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/default/runtime/src/Common/TypeDef.h:15:
+In file included from /root/sym_cangjie_runtime_1305_implement_r5892797534/default/runtime/src/Heap/z/zAddress.hpp:342:
+/root/sym_cangjie_runtime_1305_implement_r5892797534/default/runtime/src/Heap/z/zAddress.inline.hpp:713:44: warning: unused parameter 'a' [-Wunused-parameter]
+inline void assert_is_oop_or_null(zaddress a)
+                                           ^
+1 warning generated.

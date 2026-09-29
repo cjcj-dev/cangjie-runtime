@@ -1,0 +1,3 @@
+[  RUN   ] ValueSlotABI.StackScalarReadIsPlain
+[  PASS  ] ValueSlotABI.StackScalarReadIsPlain
+[========] 1 tests: 1 passed, 0 failed

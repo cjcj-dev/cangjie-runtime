@@ -1,0 +1,6 @@
+[  RUN   ] AllocationStall.OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters
+[  RUN   ] AllocationStall.OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters
+ALLOCATION_CAPACITY_TARGET count=1 first=0x5eb744874970 second=(nil)
+GC_UNIT_OTHER_VM_OKIDOKI AllocationStall.OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters
+[  PASS  ] AllocationStall.OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters
+[========] 1 tests: 1 passed, 0 failed

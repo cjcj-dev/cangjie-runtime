@@ -1,0 +1,4 @@
+[  RUN   ] RelocateField782.LoadGoodAddressIsNotForwardedTwice
+DETAIL minor_field_colour stale=0 actual=0x40000800000 expected=0x40000800000
+[  PASS  ] RelocateField782.LoadGoodAddressIsNotForwardedTwice
+[========] 1 tests: 1 passed, 0 failed

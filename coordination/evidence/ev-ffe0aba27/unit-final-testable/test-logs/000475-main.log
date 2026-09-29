@@ -1,0 +1,4 @@
+[  RUN   ] StoreAccess843.ReflectionStrongKeepsPreviousAlive
+TARGET_STORE_ACCESSOR weak=0 remembered=1 kept_alive=1 installed=1
+[  PASS  ] StoreAccess843.ReflectionStrongKeepsPreviousAlive
+[========] 1 tests: 1 passed, 0 failed

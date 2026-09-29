@@ -1,0 +1,6 @@
+[  RUN   ] ZWorkers.RunAccumulatesParallelTimeInStatWorkers
+WORKER_STATS_TARGET entered=1 inFlightDuration=0.011560916 inFlightTime=0.034682628
+WORKER_WEIGHTED_TIME_TARGET duration=0.021674014 time=0.065022042 workers=3
+OBSERVED worker stats duration=0.031773 time=0.075121 after 3x and 1x runs
+[  PASS  ] ZWorkers.RunAccumulatesParallelTimeInStatWorkers
+[========] 1 tests: 1 passed, 0 failed

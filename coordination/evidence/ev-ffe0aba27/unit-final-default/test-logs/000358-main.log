@@ -1,0 +1,6 @@
+[  RUN   ] RelocationSetSelector.GenerationSelectsAllPartitions
+[  RUN   ] RelocationSetSelector.GenerationSelectsAllPartitions
+SELECTOR_PARTITION_ORDER_TARGET actual=1698 expected=1698 ordered=1
+GC_UNIT_OTHER_VM_OKIDOKI RelocationSetSelector.GenerationSelectsAllPartitions
+[  PASS  ] RelocationSetSelector.GenerationSelectsAllPartitions
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,9 @@
+[  RUN   ] ObjectAllocator917.FastAvailableRequiresMutator
+[  RUN   ] ObjectAllocator917.FastAvailableRequiresMutator
+[  RUN   ] ObjectAllocator917.FastAvailableRequiresMutator
+2026-09-30 00:27:54.691978 3547144 F Check failed: ThreadLocal::GetMutator() != nullptr
+2026-09-30 00:27:54.692219 3547144 F Should be a mutator thread
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+GC_UNIT_OTHER_VM_OKIDOKI ObjectAllocator917.FastAvailableRequiresMutator
+[  PASS  ] ObjectAllocator917.FastAvailableRequiresMutator
+[========] 1 tests: 1 passed, 0 failed

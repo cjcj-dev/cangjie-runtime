@@ -1,0 +1,4 @@
+[  RUN   ] DefectRegress.CompilerWriteHeapHolderKeepsBufferedPath
+HEAP_HOLDER_CONTROL_ASSERT_EXECUTED status=0
+[  PASS  ] DefectRegress.CompilerWriteHeapHolderKeepsBufferedPath
+[========] 1 tests: 1 passed, 0 failed

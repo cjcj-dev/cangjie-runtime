@@ -1,0 +1,5 @@
+[  RUN   ] PartialArray.ProductPushFollowRoundtrips
+[  RUN   ] PartialArray.ProductPushFollowRoundtrips
+GC_UNIT_OTHER_VM_OKIDOKI PartialArray.ProductPushFollowRoundtrips
+[  PASS  ] PartialArray.ProductPushFollowRoundtrips
+[========] 1 tests: 1 passed, 0 failed
