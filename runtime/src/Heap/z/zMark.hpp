@@ -63,15 +63,12 @@ class Mutator;
 class ZMark {
     friend class ZMarkTask;
 public:
-    static void EnumAllCommonRoots(ZWorkers& workers, ValueRootList& exportOwners);
+    static void EnumAllCommonRoots(ZWorkers& workers);
     static void DiscoverFinalizableRoot(NativeSlot& slot);
-    static void MergeMutatorRoots(WorkStack& workStack);
-    static void DoEnumeration(WorkStack& workStack, ValueRootList& exportOwners);
+    static void DoEnumeration();
     static void VisitStaticRoots(const NativeSlotVisitor& visitor);
-    static void EnumRefFieldRoot(RefField<>& ref, ValueRootList& exportOwners);
     static void ProcessFinalizers();
-    static void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
-                         const std::function<void(BaseObject*)>& invisibleVisitor);
+    static void VisitMinorRoots();
     static void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown");
     static void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin, bool finalizable);
     static void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,

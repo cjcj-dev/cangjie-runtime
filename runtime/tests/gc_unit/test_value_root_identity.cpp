@@ -23,12 +23,6 @@ extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
 // performed by the real collector, with no manually populated root carriers.
 class RelocationReceiptTest {
 public:
-    static size_t EnumeratedOwners(BaseObject* expected)
-    {
-        const auto& owners = Heap::GetHeap().old().oldExportOwners;
-        return std::count_if(owners.begin(), owners.end(),
-            [&](const ValueRoot& root) { return root.object == expected; });
-    }
     static bool DiscoveredIdentity(BaseObject* expected)
     {
         auto& cross = Heap::GetHeap().cross_vm();
@@ -357,7 +351,6 @@ static void CheckExportTaskPublication(bool includeYoung)
     GC_EXPECT_EQ(GetTaskRet(task, &returned), E_OK);
     ReleaseHandle(task);
     size_t localYoung = 0, localOld = 0, publishedYoung = 0, publishedOld = 0;
-    size_t youngOwners = 0, oldOwners = 0;
     {
         DriverLocker lock;
         auto& heap = Heap::GetHeap();
@@ -376,10 +369,8 @@ static void CheckExportTaskPublication(bool includeYoung)
         localOld += ThreadLocal::GetGCData().markStacks[1].Population();
         publishedYoung = heap.young().Mark().Stripes().Population();
         publishedOld = heap.old().Mark().Stripes().Population();
-        youngOwners = RelocationReceiptTest::EnumeratedOwners(input.young);
-        oldOwners = RelocationReceiptTest::EnumeratedOwners(input.old);
-        std::fprintf(stderr, "EXPORT_TASK_TARGET executed=1 local_young=%zu local_old=%zu published_young=%zu published_old=%zu young_owners=%zu old_owners=%zu\n",
-            localYoung, localOld, publishedYoung, publishedOld, youngOwners, oldOwners);
+        std::fprintf(stderr, "EXPORT_TASK_TARGET executed=1 local_young=%zu local_old=%zu published_young=%zu published_old=%zu\n",
+            localYoung, localOld, publishedYoung, publishedOld);
     }
     // Shutdown owns cleanup even in a cut arm; evaluate the captured boundary
     // result without an earlier existence assertion masking its verdict.
@@ -390,7 +381,6 @@ static void CheckExportTaskPublication(bool includeYoung)
     }
     const auto fini = FiniCJRuntime();
     GC_EXPECT_TRUE(localYoung == 0 && localOld == 0 && (!includeYoung || publishedYoung > 0) && publishedOld > 0);
-    GC_EXPECT_TRUE(youngOwners == (includeYoung ? 2u : 0u) && oldOwners == 1);
     GC_EXPECT_EQ(fini, E_OK);
 }
 

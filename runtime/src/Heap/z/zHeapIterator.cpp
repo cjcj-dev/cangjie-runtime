@@ -230,13 +230,12 @@ void HeapIterator::push_strong_roots(const HeapIteratorContext& context)
     rootsColored.Apply([&](NativeSlot& root) { colored.do_root(root); });
     UncoloredRootOopClosure uncolored(*this, context);
     RootVisitor plain = [&](ObjectRef& root) { uncolored.do_root(root); };
-    rootsUncolored.ApplyThreads([&](Mutator& mutator) {
+    ZHeapIteratorNMethodClosure carrier(plain);
+    rootsUncolored.Apply([&](Mutator& mutator) {
         mutator.VisitMutatorRoots([&](ObjectRef& root) { mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
             uncolored.do_root(slot);
         }); }, [](ObjectRef&) {});
-    });
-    ZHeapIteratorNMethodClosure carrier(plain);
-    rootsUncolored.Apply([&] { VisitCJThreadRoots([&](CJThreadRoot& root) { carrier.do_nmethod(root); }); });
+    }, [&](CJThreadRoot& root) { carrier.do_nmethod(root); });
 }
 
 void HeapIterator::push_weak_roots(const HeapIteratorContext& context)

@@ -153,13 +153,12 @@ void ZVerify::RootsStrong(bool afterOldMark)
     ZVerifyUncoloredRootClosure uncolored;
     RootVisitor plain = [&](ObjectRef& root) { uncolored.do_oop(root); };
     RootsIteratorStrongUncolored roots;
-    roots.ApplyThreads([&](Mutator& mutator) {
+    ZVerifyNMethodClosure carrier(plain);
+    roots.Apply([&](Mutator& mutator) {
         mutator.VisitProcessedRoots([&](ObjectRef& root) {
             mutator.VisitHeapRootSlots(root, plain);
         });
-    });
-    ZVerifyNMethodClosure carrier(plain);
-    roots.Apply([&] { VisitCJThreadRoots([&](CJThreadRoot& root) { carrier.do_nmethod(root); }); });
+    }, [&](CJThreadRoot& root) { carrier.do_nmethod(root); });
 }
 void ZVerify::RootsWeak()
 {

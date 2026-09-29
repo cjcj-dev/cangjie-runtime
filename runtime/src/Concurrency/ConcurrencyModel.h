@@ -40,6 +40,8 @@ class CJThreadRoot {
 public:
     CJThreadRoot(LWTData& data, uintptr_t& color) : data(data), color(color) {}
     bool is_armed() const;
+    uintptr_t saved_color() const { return color; }
+    void guard_with(uintptr_t value) { __atomic_store_n(&color, value, __ATOMIC_RELEASE); }
     void entry_barrier();
     void oops_do(const RootVisitor& visitor);
 private:
