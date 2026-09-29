@@ -88,6 +88,29 @@ struct CleanThreadLocalData {
     CleanThreadLocalData() noexcept;
     ~CleanThreadLocalData();
     ThreadGCData nativeData;
+    void AddToList(ThreadLocalData* tls);
+    void RemoveFromList();
+    ThreadLocalData* NativeTLS() const { return nativeTLS; }
+
+    class Iterator {
+    public:
+        Iterator();
+        ~Iterator();
+        bool End() const { return current == nullptr; }
+        CleanThreadLocalData* Current() const { return current; }
+        void Step();
+        Iterator(const Iterator&) = delete;
+        Iterator& operator=(const Iterator&) = delete;
+    private:
+        unsigned entered;
+        CleanThreadLocalData* current;
+    };
+private:
+    struct List;
+    static List& TheList();
+    std::atomic<CleanThreadLocalData*> next{nullptr};
+    ThreadLocalData* nativeTLS = nullptr;
+    bool registered = false;
 };
 
 class ThreadLocal { // merge this to ThreadLocalData.

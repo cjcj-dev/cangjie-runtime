@@ -52,32 +52,24 @@ ValuePayload::ValuePayload(MAddress address, size_t size, std::vector<size_t> of
     this->offsets.erase(std::unique(this->offsets.begin(), this->offsets.end()), this->offsets.end());
 }
 
-void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native, zaddress_unsafe* root)
+void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData*, zaddress_unsafe* root)
 {
     data.invisibleRoot = root;
     const auto masks = ThreadGCData::PublishedMasks();
     // Native bootstrap may precede heap/color initialization. A later binding
     // retries attachment before this owner can produce managed references.
     if (masks.storeGood == 0) { return; }
-    data.RegisterOwner(owner, native, [&] {
-        // ZGC zBarrierSet.cpp:256-267. Publish only after all state is ready.
-        data.InstallMasks(masks);
-        if (owner != nullptr) {
-            owner->GetStackWatermark().Reset();
-        }
+    // ZGC zBarrierSet.cpp:256-267. The lifecycle owner publishes the data.
+    data.InstallMasks(masks);
+    if (owner != nullptr) {
+        owner->GetStackWatermark().Reset();
         data.storeBarrierBuffer->Initialize(masks.storeGood);
-    });
+    }
 }
 
 void ZBarrierSet::on_thread_detach(ThreadGCData& data)
 {
     Heap::GetHeap().mark_flush(data);
-}
-
-void ZBarrierSet::on_thread_destroy(ThreadGCData& data)
-{
-    // ZGC zBarrierSet.cpp:248-251. GC data survives detach until SMR deletion.
-    data.UnregisterOwner();
 }
 
 BaseObject* ZBarrierSetRuntime::load_barrier_on_oop_field_preloaded(BaseObject* o, volatile zpointer* p)

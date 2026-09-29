@@ -16,7 +16,6 @@ public:
     static void on_slowpath_allocation_exit(BaseObject* new_obj);
     static void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native, zaddress_unsafe* root);
     static void on_thread_detach(ThreadGCData& data);
-    static void on_thread_destroy(ThreadGCData& data);
 
     template<DecoratorSet decorators, typename BarrierSetT = ZBarrierSet>
     class AccessBarrier {

@@ -214,8 +214,8 @@ void Mutator::ResetMutator()
     // ThreadsListHandles until smr_delete; only construction initializes them.
     // ZGC threads.cpp:1099-1104: the final GC-state flush runs in
     // Threads::remove before the thread is safepoint-safe, not here; see
-    // MutatorManager::TransitMutatorToExit. Registry-reader waiting belongs
-    // to on_thread_destroy.
+    // MutatorManager::TransitMutatorToExit. List-reader waiting belongs
+    // to ThreadsSMRSupport::smr_delete.
 }
 
 void Mutator::SetManagedContext(bool isManagedContext)
