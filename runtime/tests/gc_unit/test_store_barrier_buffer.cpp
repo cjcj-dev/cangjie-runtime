@@ -1536,8 +1536,18 @@ void CheckRemembered1261(bool buffered, bool youngHolder, bool crossYoungMark)
     if (crossYoungMark) {
         ZGlobalsPointers::flip_young_mark_start();
         restore.young = true;
+    } else if (buffered) {
+        // A changed old epoch enters watermark processing while the young
+        // epoch stays fixed, selecting on_new_phase_remember's remember arm.
+        ZGlobalsPointers::flip_old_mark_start();
+        restore.old = true;
     }
-    if (buffered) { mutator.FlushStoreBarrierBuffer(); }
+    if (buffered) {
+        // Flush() handles a full buffer in the current phase. A phase change
+        // is consumed by the real watermark safepoint entry instead.
+        mutator.SetManagedContext(false);
+        StackWatermarkSet::on_safepoint(mutator);
+    }
     const bool remembered = fx.region0()->is_remembered(p);
     // Remset healing uses mark_good, including remembered=11, rather than
     // store_good (ZGC zBarrier.inline.hpp:435-444).

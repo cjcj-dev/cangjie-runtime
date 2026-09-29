@@ -1105,9 +1105,9 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateLiveness, WorkerCopiesMarkedSource) { CheckRe
 // ZGC zRelocate.cpp:354-380,801-835: mutator publishes a copy; only the
 // worker remembers promoted fields. Observe the product bitmap, not a counter.
 #include "Heap/z/zBarrier.hpp"
-static void CheckRelocationRemsetOwnership(bool worker)
+static void CheckRelocationRemsetOwnership(bool worker, bool inPlace = false)
 {
-    CreateStandaloneHeap(16);
+    CreateStandaloneHeap(inPlace ? 3 : 16);
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
@@ -1166,7 +1166,8 @@ static void CheckRelocationRemsetOwnership(bool worker)
     } else {
         result = to_object(ZBarrier::load_barrier_on_oop_field(&root));
     }
-    GC_EXPECT_TRUE(result != nullptr && result != object);
+    GC_EXPECT_TRUE(result != nullptr);
+    const bool placementMatches = inPlace ? result == object : result != object;
     auto* target = Heap::page(reinterpret_cast<MAddress>(result));
     auto* field = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(result) + 8);
     const bool remembered = target->is_remembered(field);
@@ -1176,6 +1177,9 @@ static void CheckRelocationRemsetOwnership(bool worker)
                  worker, remembered, copied, published, target->age() == PageAge::old);
     GC_EXPECT_EQ(remembered, worker);
     GC_EXPECT_TRUE(copied && published && target->age() == PageAge::old);
+    std::fprintf(stderr, "REMSET1261_INPLACE_TARGET requested=%d placement=%d remembered=%d executed=1\n",
+        inPlace, placementMatches, remembered);
+    GC_EXPECT_TRUE(placementMatches);
 }
 GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, MutatorDoesNotRememberPromotion)
 {
@@ -1184,6 +1188,14 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, MutatorDoesNotRememberPromotion)
 GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerRemembersPromotion)
 {
     CheckRelocationRemsetOwnership(true);
+}
+
+// Three source pages consume the heap: two promoted sources and a young
+// child. The product must use its in-place promotion path and retain the edge.
+// ZGC zRelocate.cpp:906-927,1010-1047 plus 742-799.
+GC_COMPONENT_OTHER_VM_TEST(Remembered1261Promotion, InPlace)
+{
+    CheckRelocationRemsetOwnership(true, true);
 }
 
 #include "Heap/z/zObjectAllocator.hpp"

@@ -658,6 +658,7 @@ void* RunRemembered1261Cycle(void* argument)
     HeapAccess<>::oop_store(&fields[0], child);
     Mutator::GetMutator()->FlushStoreBarrierBuffer();
     const zpointer before = fields[0].GetFieldValue();
+    const bool storeGoodBefore = ZPointer::is_store_good(before);
     const bool rememberedBefore = Heap::page(holderBefore)->is_remembered(
         reinterpret_cast<volatile zpointer*>(fields));
     std::vector<U64> peers;
@@ -693,7 +694,7 @@ void* RunRemembered1261Cycle(void* argument)
         mode, ageBefore, reinterpret_cast<MAddress>(holder) != holderBefore, old, childYoung,
         raw(before), raw(after), rememberedBefore, remembered, loadGood, addressMatches, resolvedMatches, healed, medium);
     const bool result = old && childYoung && remembered && resolvedMatches && healed &&
-        ZPointer::is_store_good(before) && (mode != 2 || (rememberedBefore && medium));
+        storeGoodBefore && (mode != 2 || (rememberedBefore && medium));
     for (U64 root : peers) { heap.RemoveExportObject(root); }
     heap.RemoveExportObject(childRoot);
     heap.RemoveExportObject(holderRoot);
