@@ -1011,7 +1011,10 @@ bool ZMark::FlushAllGenerations()
 bool ZMark::TryProactiveFlush(size_t workerId)
 {
     constexpr size_t proactiveFlushMax = 10;
-    if (workerId != 0 || workNProactiveFlush.load(std::memory_order_relaxed) == proactiveFlushMax) {
+    if (workerId != 0) {
+        return false;
+    }
+    if (workNProactiveFlush.load(std::memory_order_relaxed) == proactiveFlushMax) {
         return false;
     }
     workNProactiveFlush.fetch_add(1, std::memory_order_relaxed);
@@ -1020,8 +1023,8 @@ bool ZMark::TryProactiveFlush(size_t workerId)
 
 bool ZMark::TryTerminateFlush()
 {
-    terminate.SetResurrected(false);
     workNTerminateFlush.fetch_add(1, std::memory_order_relaxed);
+    terminate.SetResurrected(false);
     if (ZVerifyMarking) { verify_worker_stacks_empty(); }
     return Flush() || terminate.Resurrected();
 }

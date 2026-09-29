@@ -429,6 +429,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZMarkFlush, ConcurrentWorkerPublishesPartialMutatorStac
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"));
     BaseObject* object = Heap::GetHeap().GetExportObject(root);
     std::atomic<bool> ready{false};
+    std::atomic<unsigned> requests{1};
     std::atomic<bool> observe{false};
     std::atomic<bool> observed{false};
     std::atomic<bool> release{false};
@@ -443,11 +444,13 @@ GC_RUNTIME_OTHER_VM_TEST(ZMarkFlush, ConcurrentWorkerPublishesPartialMutatorStac
         // One valid, already-live object's mark-only work is sufficient to
         // create an unfilled stack, without introducing a second root model.
         const auto address = from_object(object);
-        stacks.Push(mark.Stripes(), mark.Stripes().StripeForAddress(raw(address)),
-            MarkStackEntry(untype(ZAddress::offset(address)), false, false, false, false), true);
-        before = stacks.Population();
-        ready.store(true, std::memory_order_release);
         while (!release.load(std::memory_order_acquire)) {
+            if (requests.exchange(0, std::memory_order_acq_rel) != 0) {
+                stacks.Push(mark.Stripes(), mark.Stripes().StripeForAddress(raw(address)),
+                    MarkStackEntry(untype(ZAddress::offset(address)), false, false, false, false), true);
+                before = stacks.Population();
+                ready.store(true, std::memory_order_release);
+            }
             ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
             if (observe.load(std::memory_order_acquire) && !observed.load()) {
                 after = stacks.Population();
