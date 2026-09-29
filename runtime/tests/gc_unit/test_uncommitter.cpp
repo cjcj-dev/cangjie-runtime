@@ -355,9 +355,14 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CacheValleyLimitsActivationBudget)
     auto& partition = UncommitterTestAccess::Partition();
     auto& worker = partition.uncommitter;
     UncommitterTestAccess::ResetCancel();
+    // prime grows capacity: ZGC cancel resets history to the cache that
+    // existed before that growth, so the initial watermark need not be zero.
+    const size_t initialWatermark = partition.cache.min_size_watermark();
+    const size_t initialBudget = AlignUp(static_cast<size_t>(double(initialWatermark) * 0.9), ZGranuleSize);
     GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
-    std::fprintf(stderr, "TARGET_INITIAL_WATERMARK budget=%zu\n", UncommitterTestAccess::Budget(worker));
-    GC_EXPECT_EQ(UncommitterTestAccess::Budget(worker), 0U);
+    std::fprintf(stderr, "TARGET_INITIAL_WATERMARK budget=%zu expected=%zu\n",
+                 UncommitterTestAccess::Budget(worker), initialBudget);
+    GC_EXPECT_EQ(UncommitterTestAccess::Budget(worker), initialBudget);
 
     const size_t total = partition.capacity;
     const size_t allocated = total - 10 * ZGranuleSize;
@@ -380,8 +385,9 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CacheValleyLimitsActivationBudget)
     GC_EXPECT_EQ(UncommitterTestAccess::Budget(worker), ZGranuleSize);
 }
 
-// Real worker entry: a freshly filled cache starts with a zero historical
-// watermark. Its first activation only resets history; a later cycle reclaims.
+// Real worker entry: freshly returned memory cannot enlarge the historical
+// budget. Earlier cached memory remains eligible after capacity-growth cancel
+// (ZGC zUncommitter.cpp:286-290); the next cycle can include the new memory.
 GC_RUNTIME_OTHER_VM_TEST(Uncommitter, FreshCacheWaitsForWatermarkCycle)
 {
     GC_EXPECT_EQ(setenv("cjUncommitDelay", "1s", 1), 0);
@@ -395,6 +401,8 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, FreshCacheWaitsForWatermarkCycle)
     GC_EXPECT_TRUE(page != nullptr);
     UncommitterTestAccess::ResetCancel();
     const size_t before = regions.GetCommittedCapacity();
+    const size_t oldCacheBudget = AlignUp(
+        static_cast<size_t>(double(partition.cache.min_size_watermark()) * 0.9), ZGranuleSize);
     partition.uncommitter.Start();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     const uint64_t returnedAt = TimeUtil::NanoSeconds();
@@ -411,7 +419,8 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, FreshCacheWaitsForWatermarkCycle)
     std::fprintf(stderr, "TARGET_FRESH_CACHE before=%zu first=%zu later=%zu cache_age_ns=%llu delay_ns=%llu\n",
                  before, firstCycle, after, static_cast<unsigned long long>(cacheAgeAtObservation),
                  static_cast<unsigned long long>(Uncommitter::DelayNs()));
-    GC_EXPECT_EQ(firstCycle, before);
+    GC_EXPECT_TRUE(firstCycle <= before);
+    GC_EXPECT_TRUE(before - firstCycle <= oldCacheBudget);
     GC_EXPECT_TRUE(cacheAgeAtObservation < Uncommitter::DelayNs());
     GC_EXPECT_TRUE(after < before);
     const size_t stopped = regions.GetCommittedCapacity();
