@@ -314,6 +314,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, MinorPreservesOldDiscoveredOwnership)
 
 namespace {
 struct ExportTaskInputs {
+    bool includeYoung = true;
     BaseObject* young = nullptr;
     BaseObject* old = nullptr;
     U64 handles[3]{};
@@ -332,9 +333,9 @@ void* AllocateExportTaskInputs(void* argument)
     input.old = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(16, PageAge::old));
     input.young->SetClassInfo(type);
     input.old->SetClassInfo(type);
-    input.handles[0] = heap.RegisterExportRoot(input.young);
+    if (input.includeYoung) { input.handles[0] = heap.RegisterExportRoot(input.young); }
     input.handles[1] = heap.RegisterExportRoot(input.old);
-    input.handles[2] = heap.RegisterExportRoot(input.young);
+    if (input.includeYoung) { input.handles[2] = heap.RegisterExportRoot(input.young); }
     return nullptr;
 }
 }
@@ -342,13 +343,14 @@ void* AllocateExportTaskInputs(void* argument)
 // Observe the real root phase before mark-follow or mark-end can publish a
 // forgotten stack. Inputs use the public export registry; the product pause
 // owns both generation flips, and mark_roots owns task dispatch and merging.
-GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportTaskPublishesBothGenerations)
+static void CheckExportTaskPublication(bool includeYoung)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     ExportTaskInputs input;
+    input.includeYoung = includeYoung;
     auto task = RunCJTask(AllocateExportTaskInputs, &input);
     GC_EXPECT_TRUE(task != nullptr);
     void* returned = nullptr;
@@ -381,9 +383,22 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportTaskPublishesBothGenerations)
     }
     // Shutdown owns cleanup even in a cut arm; evaluate the captured boundary
     // result without an earlier existence assertion masking its verdict.
-    for (U64 handle : input.handles) { Heap::GetHeap().RemoveExportObject(handle); }
+    Heap::GetHeap().RemoveExportObject(input.handles[1]);
+    if (includeYoung) {
+        Heap::GetHeap().RemoveExportObject(input.handles[0]);
+        Heap::GetHeap().RemoveExportObject(input.handles[2]);
+    }
     const auto fini = FiniCJRuntime();
-    GC_EXPECT_TRUE(localYoung == 0 && localOld == 0 && publishedYoung > 0 && publishedOld > 0);
-    GC_EXPECT_TRUE(youngOwners == 2 && oldOwners == 1);
+    GC_EXPECT_TRUE(localYoung == 0 && localOld == 0 && (!includeYoung || publishedYoung > 0) && publishedOld > 0);
+    GC_EXPECT_TRUE(youngOwners == (includeYoung ? 2u : 0u) && oldOwners == 1);
     GC_EXPECT_EQ(fini, E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportTaskPublishesBothGenerations)
+{
+    CheckExportTaskPublication(true);
+}
+GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportTaskPublishesOldOnly)
+{
+    CheckExportTaskPublication(false);
 }
