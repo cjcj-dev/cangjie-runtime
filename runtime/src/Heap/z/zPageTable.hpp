@@ -13,7 +13,7 @@
 
 namespace MapleRuntime {
 class ZPage;
-class ZPageAllocator;
+class RegionManager;
 
 template<typename T>
 class ZPageTableParallelIterator {
@@ -66,10 +66,10 @@ public:
 class ZGenerationPagesIterator {
     ZPageTableIterator _iterator;
     ZGenerationId _generation_id;
-    ZPageAllocator* _page_allocator;
+    RegionManager* _page_allocator;
 
 public:
-    ZGenerationPagesIterator(const ZPageTable* page_table, ZGenerationId id, ZPageAllocator* page_allocator);
+    ZGenerationPagesIterator(const ZPageTable* page_table, ZGenerationId id, RegionManager* page_allocator);
     ~ZGenerationPagesIterator();
     bool next(ZPage** page);
     void yield(const std::function<void()>& function);
@@ -78,10 +78,10 @@ public:
 class ZGenerationPagesParallelIterator {
     ZPageTableParallelIterator<ZPage*> _iterator;
     ZGenerationId _generation_id;
-    ZPageAllocator* _page_allocator;
+    RegionManager* _page_allocator;
 
 public:
-    ZGenerationPagesParallelIterator(const ZPageTable* page_table, ZGenerationId id, ZPageAllocator* page_allocator);
+    ZGenerationPagesParallelIterator(const ZPageTable* page_table, ZGenerationId id, RegionManager* page_allocator);
     ~ZGenerationPagesParallelIterator();
     template<typename Function>
     void do_pages(Function function);

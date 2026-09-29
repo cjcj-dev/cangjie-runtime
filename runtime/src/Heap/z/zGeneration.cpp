@@ -177,7 +177,6 @@ double ZGeneration::FragmentationLimit() const
 }
 
 
-
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
 // young sequence once for the whole old relocation, not once per forwarding.
 void ZGeneration::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
@@ -194,10 +193,7 @@ bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 }
 
 
-
-
 // ZGeneration::mark_object, zGeneration.inline.hpp:119-123.
-
 
 
 class VM_ZOperation : public VMOperation {
@@ -314,7 +310,6 @@ public:
         return true;
     }
 };
-
 
 
 void ZGeneration::at_collection_start(void* timer)
@@ -497,7 +492,6 @@ void ZGenerationYoung::concurrent_reset_relocation_set()
     ZStatTimerYoung timer(ZPhaseConcurrentResetRelocationSetYoung);
     reset_relocation_set();
     auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().ResetFlipPromotedPages();
 }
 
 void ZGenerationYoung::concurrent_select_relocation_set()
@@ -660,15 +654,8 @@ void ZGenerationOld::process_non_strong_references()
 namespace MapleRuntime {
 
 
-
-
-
-
-
 // Registered finalizers are discovered during old root marking and fixed by
 // VisitNativePointers. Only queued/running finalizables are strong mark roots.
-
-
 
 
 } // namespace MapleRuntime
@@ -1162,7 +1149,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
     ZRelocationSetSelector selector(FragmentationLimit());
     const ZGenerationId id = _id == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old;
     {
-        ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, nullptr);
+        ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, &Heap::GetHeap().page_allocator());
         for (ZPage* page; pt_iter.next(&page);) {
             if (!page->is_relocatable()) {
                 continue;
@@ -1196,7 +1183,6 @@ void ZGeneration::select_relocation_set(bool promote_all)
     }
     ZRelocationSetIterator rs_iter(&_relocation_set);
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
-        forwarding->page()->SetRegionRole(ZPageRole::From);
         _forwarding_table.insert(forwarding);
     }
     // ZGC zGeneration.cpp:268-269: publish after installing the set/table.
@@ -1236,10 +1222,6 @@ namespace MapleRuntime {
 #endif
 
 namespace MapleRuntime {
-
-
-
-
 
 
 } // namespace MapleRuntime
@@ -1331,9 +1313,25 @@ void ZGenerationYoung::EvacuateYoungRegions()
 #include "Heap/z/zRelocate.hpp"
 
 
-
 namespace MapleRuntime {
 // ZGC zGeneration.cpp:287-293.
 void ZGeneration::synchronize_relocation() { relocate().synchronize(); }
 void ZGeneration::desynchronize_relocation() { relocate().desynchronize(); }
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+static const ZStatSubPhase PPostTrace("PostTrace", ZGenerationId::old);
+
+void ZGenerationOld::PostTrace()
+{
+    ZStatTimerOld zstatTimer(PPostTrace);
+    // Value-only cycle roots still depend on the preceding relocation receipts.
+    // Complete their owner handoff while that authority is queryable.
+    // zGeneration.cpp:1261 mark_end does not reset forwarding.
+    Heap::GetHeap().cross_vm().PrepareCycleRef(discoveredExternObjects);
+    if (ZAbort::should_abort()) {
+        return;
+    }
+}
+
+}

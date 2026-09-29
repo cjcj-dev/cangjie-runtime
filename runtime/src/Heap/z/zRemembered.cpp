@@ -264,12 +264,12 @@ public:
           _remset_table_iterator(remembered, true)
     {
         _mark->PrepareWork();
-        ZPage::EnableSafeDestroy();
+        Heap::GetHeap().page_allocator().enable_safe_destroy();
     }
 
     ~ZRememberedScanMarkFollowTask()
     {
-        ZPage::DisableSafeDestroy();
+        Heap::GetHeap().page_allocator().disable_safe_destroy();
         _mark->FinishWork();
         _remembered->clear_found_old_previous_set();
     }

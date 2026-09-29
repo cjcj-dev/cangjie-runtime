@@ -56,8 +56,6 @@
 namespace MapleRuntime {
 
 
-
-
 void FreeRegionManager::Initialize(ZVirtualMemoryManager& virtualMemoryManager,
                                    ZPhysicalMemoryManager& physicalMemoryManager, size_t maxCapacity)
 {
@@ -611,7 +609,7 @@ void RegionManager::promote_used(const ZPage* from, const ZPage* to)
 
 void RegionManager::safe_destroy_page(ZPage* page)
 {
-    ZPage::RetireDescriptor(page);
+    _safe_destroy.schedule_delete(page);
 }
 
 void RegionManager::free_page(ZPage* page)
@@ -620,36 +618,47 @@ void RegionManager::free_page(ZPage* page)
     // the descriptor. Forwarding remains owned by the relocation set.
     const ZGenerationId id = page->generation_id();
     const size_t size = page->size();
-    const PageMemory memory{page->granule_index(), size, 0, true};
-    safe_destroy_page(page);
+    PageMemory memory;
+    prepare_memory_for_free(page, &memory);
     decrease_used_generation(id, size);
     ReturnRetiredPageMemory(memory);
 }
 
-void RegionManager::ReclaimRegion(ZPage* region)
+void RegionManager::enable_safe_destroy() const
 {
-    // zPageAllocator.cpp:2263,2280: per-generation used, region-granular.
-    NoteUsedGenerationDelta(region->GetOwnerGeneration(), -static_cast<ssize_t>(region->GetRegionSize()));
-    ZPage::RetirePage(region, [this, region] { ReclaimRetiredRegion(region); });
+    _safe_destroy.enable_deferred_delete();
 }
 
-void RegionManager::ReclaimRetiredRegion(ZPage* region)
+void RegionManager::disable_safe_destroy() const
 {
-    // convert "I traced the paths" into a machine check, but none of the designs proved the
-    // caller enumeration and five of the six ReclaimRegion callers have already detached the
-    // region, so an abort here would trade an unproven assumption for a hard stop. Count and
-    // name it instead, under the default-off account gate; a non-zero funnel_held is the
-    // signal that the enumeration was wrong.
-    size_t num = region->GetRegionSize();
-    size_t unitIndex = region->granule_index();
-    DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-        region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
+    _safe_destroy.disable_deferred_delete();
+}
 
-    {
-        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_DIRTY);
+void RegionManager::prepare_memory_for_free(ZPage* page, PageMemory* memory)
+{
+    const size_t index = page->granule_index();
+    const size_t size = page->size();
+    const uint32_t partition = page->partition_id();
+    safe_destroy_page(page);
+    memory->index = index;
+    memory->size = size;
+    memory->partition = partition;
+    memory->committed = true;
+}
+
+void RegionManager::VisitPageOwners(const std::function<void(ZPage*)>& visitor) const
+{
+    for (ZGenerationId id : {ZGenerationId::young, ZGenerationId::old}) {
+        ZGenerationPagesIterator iter(&ZPageTable::heap_table(), id, const_cast<RegionManager*>(this));
+        for (ZPage* page; iter.next(&page);) {
+            visitor(page);
+        }
     }
-    region->RetirePageMemory();
-    ReturnPageMemory(PageMemory{ unitIndex, num, 0, true });
+}
+
+void RegionManager::ReclaimRegion(ZPage* region)
+{
+    Heap::free_page(region);
 }
 
 // ZGC zPageAllocator.cpp:426-440: capture generation epochs at request construction.
@@ -697,16 +706,10 @@ void RegionManager::ReturnPageMemory(const PageMemory& memory)
     ZPage* region = Heap::page(ZPage::GranuleAddress(memory.index));
     if (region != nullptr) {
         CHECK(region->granule_index() == memory.index && region->GetRegionSize() == memory.size);
-        // Only materialized page geometry is retired. Its allocation-time
-        // partial mappings have already been consumed; ZArray is non-copyable.
-        const size_t index = memory.index;
-        const size_t pageBytes = memory.size;
-        const uint32_t partition = memory.partition;
-        const bool committed = memory.committed;
-        ZPage::RetirePage(region, [this, region, index, pageBytes, partition, committed] {
-            region->RetirePageMemory();
-            ReturnRetiredPageMemory(PageMemory{index, pageBytes, partition, committed});
-        });
+        ZPageTable::heap_table().remove(region);
+        PageMemory retired;
+        prepare_memory_for_free(region, &retired);
+        ReturnRetiredPageMemory(retired);
         return;
     }
     // An allocation cancelled before materialization has no page descriptor.
@@ -727,7 +730,6 @@ void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory)
     TrackUsedPeakLocked();
     SatisfyStalledAllocations();
 }
-
 
 
 // ZGC zPageAllocator.cpp:2167-2189: reserve capacity, dequeue, then notify.
@@ -825,30 +827,10 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
 
 size_t RegionManager::ReleaseRegion(ZPage* region)
 {
-    const size_t size = region->GetRegionSize();
-    NoteUsedGenerationDelta(region->GetOwnerGeneration(), -static_cast<ssize_t>(size));
-    ZPage::RetirePage(region, [this, region] { ReleaseRetiredRegion(region); });
+    const size_t size = region->size();
+    Heap::free_page(region);
     return size;
 }
-
-void RegionManager::ReleaseRetiredRegion(ZPage* region)
-{
-    // routedest: census only, see ReclaimRegion.
-
-    size_t num = region->GetRegionSize();
-    size_t unitIndex = region->granule_index();
-    DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-        region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
-
-    {
-        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RELEASE_REGION);
-    }
-    region->RetirePageMemory();
-    // ZPageAllocator::free_page (zPageAllocator.cpp:2083-2165): freed memory
-    // enters the mapped cache; only ZUncommitter uncommits.
-    ReturnPageMemory(PageMemory{ unitIndex, num, 0, true });
-}
-
 
 void RegionManager::PromoteAllRegions()
 {
@@ -1083,19 +1065,5 @@ size_t RegionManager::GetAllocatedSize() const
         return pageAllocatorUsed;
     }
 
-
-size_t RegionManager::GetLargeObjectSize() const
-{
-    size_t bytes = 0;
-    ZPage::SafeDestroyScope scope;
-    ZPageTableIterator iter(&ZPageTable::heap_table());
-    for (ZPage* region; iter.next(&region);) {
-        const ZPageRole role = region->GetRegionRole();
-        if (role == ZPageRole::OldLarge || role == ZPageRole::RecentLarge) {
-            bytes += region->GetRegionSize();
-        }
-    }
-    return bytes;
-}
 
 }

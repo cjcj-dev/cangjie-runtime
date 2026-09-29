@@ -51,28 +51,7 @@
 #include "Heap/z/zRelocate.hpp"
 
 
-
 namespace MapleRuntime {
-
-static const ZStatSubPhase PPostTrace("PostTrace", ZGenerationId::old);
-
-void ZGenerationOld::PostTrace()
-{
-    ZStatTimerOld zstatTimer(PPostTrace);
-    // Value-only cycle roots still depend on the preceding relocation receipts.
-    // Complete their owner handoff while that authority is queryable.
-    // zGeneration.cpp:1261 mark_end does not reset forwarding.
-    Heap::GetHeap().cross_vm().PrepareCycleRef(discoveredExternObjects);
-    if (ZAbort::should_abort()) {
-        return;
-    }
-}
-} // namespace MapleRuntime
-
-namespace MapleRuntime {
-void RegionManager::ResetFlipPromotedPages()
-{
-}
 
 ZRelocationSet::ZRelocationSet(ZGeneration* generation)
     : _generation(generation),
@@ -82,7 +61,7 @@ ZRelocationSet::ZRelocationSet(ZGeneration* generation)
 {
 }
 
-ZWorkers* ZRelocationSet::workers() const { return _generation != nullptr ? _generation->Workers() : nullptr; }
+ZWorkers* ZRelocationSet::workers() const { return _generation->Workers(); }
 
 class ZRelocationSetInstallTask : public ZTask {
 private:
@@ -157,17 +136,11 @@ public:
 void ZRelocationSet::install(const ZRelocationSetSelector* selector)
 {
     ZRelocationSetInstallTask task(this, selector);
-    if (ZWorkers* w = workers()) {
-        w->run(&task);
-    } else {
-        task.work();
-    }
+    workers()->run(&task);
     _forwardings = task.forwardings();
     _nforwardings = task.nforwardings();
     // zRelocationSet.cpp:179: forwarding-allocator usage after install.
-    if (_generation != nullptr) {
-        _generation->StatRelocation()->AtInstallRelocationSet(_allocator.size());
-    }
+    _generation->StatRelocation()->AtInstallRelocationSet(_allocator.size());
 }
 
 static void destroy_and_clear(RegionManager* page_allocator, ZArray<ZPage*>* array)
@@ -188,7 +161,6 @@ void ZRelocationSet::reset(RegionManager* page_allocator)
         forwarding->~ZForwarding();
     }
     _nforwardings = 0;
-    _forwardings = nullptr;
     destroy_and_clear(page_allocator, &_in_place_relocate_promoted_pages);
     destroy_and_clear(page_allocator, &_flip_promoted_pages);
     _relocate_promoted_pages.clear();
@@ -206,8 +178,12 @@ void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)
 
 void ZRelocationSet::register_relocate_promoted(const ZArray<ZPage*>& pages)
 {
+    if (pages.is_empty()) {
+        return;
+    }
     std::lock_guard<std::mutex> locker(_promotion_lock);
     for (int i = 0; i < pages.length(); ++i) {
+        CHECK(!_relocate_promoted_pages.contains(pages.at(i)));
         _relocate_promoted_pages.push(pages.at(i));
     }
 }
@@ -215,6 +191,7 @@ void ZRelocationSet::register_relocate_promoted(const ZArray<ZPage*>& pages)
 void ZRelocationSet::register_in_place_relocate_promoted(ZPage* page)
 {
     std::lock_guard<std::mutex> locker(_promotion_lock);
+    CHECK(!_in_place_relocate_promoted_pages.contains(page));
     _in_place_relocate_promoted_pages.push(page);
 }
 

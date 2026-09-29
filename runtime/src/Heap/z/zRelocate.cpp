@@ -85,8 +85,6 @@
 #include "Heap/z/zGeneration.hpp"
 
 
-
-
 namespace MapleRuntime {
 
 // ZGC zRelocate.cpp:1051-1078: claim each thread once across the workers.
@@ -441,11 +439,7 @@ public:
             ZPage* target = targets->get(partition, owner->to_age());
             target->ResetCensusBoundary();
             allocator->share_target_page(target, partition);
-            // ZGC zRelocate.cpp:1026-1037: the in-place page is retained as the
-            // relocation target and stays live; route it out of the From role
-            // at this completion branch so no later role scan can reclaim it.
-            ZPageRole expect = ZPageRole::From;
-            (void)source->CASRegionRole(expect, ZPageRole::None);
+
         } else {
             Heap::free_page(source);
         }
@@ -750,12 +744,6 @@ void ZRelocateQueue::desynchronize()
     attention.notify_all();
 }
 
-ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(void* region, MAddress from)
-{
-    auto owner = forwarding_for_page(static_cast<ZPage*>(region));
-    CHECK_DETAIL(!owner || owner->covers(from), "relocation request outside forwarding from=%#zx", from);
-    return Add(owner);
-}
 
 ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(ZForwarding* forwarding)
 {
@@ -965,9 +953,6 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
     return forward_object(forwarding, object);
 }
 }
-
-
-
 
 
 namespace MapleRuntime {

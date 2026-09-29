@@ -62,7 +62,6 @@ namespace MapleRuntime {
 enum class ZPageRole : uint8_t {
     None = 0, // free, or a from-page claimed off its list ("lone")
     RecentFull,
-    From,
     Garbage,
     OldLarge,
     RecentLarge,
@@ -73,7 +72,6 @@ inline const char* RegionRoleName(ZPageRole role)
     switch (role) {
         case ZPageRole::None: return "none";
         case ZPageRole::RecentFull: return "recent full regions";
-        case ZPageRole::From: return "from regions";
         case ZPageRole::Garbage: return "garbage regions";
         case ZPageRole::OldLarge: return "old large regions";
         case ZPageRole::RecentLarge: return "recent large regions";
@@ -83,7 +81,7 @@ inline const char* RegionRoleName(ZPageRole role)
 
 // Descriptor incarnation id used by the forwarding carrier / ghost walk
 // (page-descriptor package retires it with the reused slot).
-using RegionLifeId = uint64_t;
+
 
 // Atomic accessor for C++ bit fields packed in ZPageRelocationScratch.
 template<typename T>
@@ -137,16 +135,11 @@ private:
     ZLiveMap _livemap;
     ZRememberedSet _remembered_set;
     bool _relocate_promoted;
-    // RetirePage hook: run by ~ZPage so safeDestroy can stay ZSafeDelete<ZPage>
-    // (zPageAllocator.cpp:2248-2250 ZSafeDelete<ZPage> _safe_destroy).
-    std::function<void()> _retireHook;
 public:
     using Page = ZPage;
     // The table serializes publication/unbinding of this facade's owner.
     friend class ForwardingTable;
 public:
-
-    unsigned RelocateObserve() const;
 
 
     // regarding a object as a large object when the size is greater than 8 units.
@@ -202,19 +195,6 @@ public:
 
     ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
 
-    uint8_t GetRegionLifeSeq() const
-    {
-        return static_cast<uint8_t>(__atomic_load_n(&_scratch.regionLifeSequence, __ATOMIC_ACQUIRE));
-    }
-
-    RegionLifeId GetRegionLifeId() const
-    {
-        return _scratch.regionLifeId.load(std::memory_order_acquire);
-    }
-
-    bool IsCompacted() const;
-
-    bool IsRoutingState();
 
     // enroltime: when does a region actually join the relocation set?
     //
@@ -239,7 +219,6 @@ public:
     ZLiveMap& livemap();
     const ZLiveMap& livemap() const;
 
-    ZForwarding* GetFromPageCarrier() const;
 
     MAddress GetCensusBoundary() const
     {
@@ -326,7 +305,6 @@ public:
     ALWAYS_INLINE size_t GetAddressOffset(MAddress address) const;
 
 
-
     // Reservation boundaries for the compiler heap-slot address-domain ABI.
     // Page and backing maps use global granule offsets, including holes.
     struct ReservedSegment {
@@ -336,30 +314,6 @@ public:
     };
 
     static std::vector<ReservedSegment> reservedSegments;
-
-    // zPageAllocator.cpp:2248-2250 ZSafeDelete<ZPage> _safe_destroy: the
-    // deferred-deleted object is the ZPage descriptor itself. The RetirePage
-    // memory handback rides _retireHook, run from ~ZPage.
-    static ZSafeDelete<ZPage> safeDestroy;
-
-    // zPageAllocator.cpp:2287-2293
-    static void EnableSafeDestroy();
-    static void DisableSafeDestroy();
-
-    // zPageTable.cpp:83-98 ZGenerationPagesIterator: enable_safe_destroy in
-    // the constructor, disable_safe_destroy in the destructor.
-    class SafeDestroyScope {
-    public:
-        SafeDestroyScope() { EnableSafeDestroy(); }
-        ~SafeDestroyScope() { DisableSafeDestroy(); }
-
-        SafeDestroyScope(const SafeDestroyScope&) = delete;
-        SafeDestroyScope& operator=(const SafeDestroyScope&) = delete;
-    };
-
-    static void RetirePage(ZPage* region, std::function<void()> retire);
-    static void RetireDescriptor(ZPage* page);
-
 
     // Metadata over one unit range at an arbitrary native address (fixtures
     // that build a heap outside the zoffset address domain).
@@ -376,14 +330,9 @@ public:
 
     static bool ContainsReservedRange(uintptr_t start, size_t size);
 
-    static void VisitPageOwners(const std::function<void(ZPage*)>& visitor);
-
-
 
     static ZPage* InitRegion(size_t granuleIndex, size_t pageSize, ZPageType uclass,
                                   PageAge age = PageAge::old);
-
-    static void WaitCopiedBeforePayloadWipe(ZPage* region, const char* site);
 
 
     BaseObject* GetFirstObject() const { return from_region_addr(GetRegionStart()); }
@@ -398,18 +347,12 @@ public:
     size_t GetRegionSizeForDetachCheck() const;
 
 
-    size_t GetGhostRegionSize() const;
-
-
     size_t GetAvailableSize() const;
 
     size_t GetRegionAllocatedSize() const { return GetRegionAllocPtr() - GetRegionStart(); }
 
 
     // reset so that this region can be reused for allocation
-    void RetirePageMemory();
-
-
 
 
     ZGenerationId generation_id() const;
@@ -427,26 +370,20 @@ public:
 
     // ZForwarding::retain_page (zForwarding.cpp:86-108). Three-state: 0 refuses,
     // <0 waits for done then refuses, >0 CAS +1.
-    bool RetainForwarding();
 
-    void ReleaseForwarding();
 
     // ZForwarding::retain_page: the three-state count is the gate, not the list
     // type. Mutator relocation retains the page until forwarding completes.
-    bool TryLockReadFromRegion() { return RetainForwarding(); }
 
-    void UnlockReadFromRegion() { ReleaseForwarding(); }
 
     // RAII retain_page / release_page. ok() is false when the page is already
     // released or claimed — the late reader must not touch from-side state.
     class RetainScope {
     public:
-        explicit RetainScope(ZPage* region) : RetainScope(forwarding_for_page(region)) {}
         explicit RetainScope(ZForwarding* forwarding)
             : owner(forwarding), region(owner ? owner->page() : nullptr),
               retained(owner && owner->retain_page(&generation_relocate_queue((owner->from_age() == PageAge::old ? Generation::Old : Generation::Young))))
         {
-            CHECK(!retained || owner->page_life_current());
         }
         ~RetainScope() { Release(); }
         void Release()
@@ -472,55 +409,16 @@ public:
         bool retained;
     };
 
-    bool ClaimForwarding();
-
-    void MarkForwardingDone();
-
-    bool IsForwardingDone() const;
 
     // ZGC has no terminal kept: a page not selected this cycle is an ordinary
     // candidate next cycle (zRelocationSetSelector.cpp:114-196 rebuilds from
     // the page table; zGeneration.cpp:205-213). Drop the in-cycle publish so
     // Next cycle must not treat last cycle's in-place done as this cycle's done.
-    ZForwarding* PeekForwardingOwner() const
-    {
-        return forwarding_for_page(const_cast<ZPage*>(this));
-    }
 
-    int32_t CopyInflightWord() const
-    {
-        return _scratch.copyInflight.load(std::memory_order_acquire);
-    }
-
-    int32_t ForwardingRefCount() const;
-
-    bool ForwardingClaimed() const;
 
     void LockWriteRegion() { _scratch.rwLock.LockWrite(); }
 
     void UnlockWriteRegion() { _scratch.rwLock.UnlockWrite(); }
-
-    // zForwarding.cpp:110-181 in_place_relocation_claim_page + detach_page.
-    class InPlaceClaimScope {
-    public:
-        MRT_EXPORT InPlaceClaimScope(ZPage* region, ZForwarding::Retire site);
-
-        ~InPlaceClaimScope()
-        {
-            if (!retiring) return;
-            owner->release_page();
-            if (ZForwarding::CurrentPageWork() != owner) owner->mark_done();
-        }
-
-        InPlaceClaimScope(const InPlaceClaimScope&) = delete;
-        InPlaceClaimScope& operator=(const InPlaceClaimScope&) = delete;
-        InPlaceClaimScope(InPlaceClaimScope&&) = delete;
-        InPlaceClaimScope& operator=(InPlaceClaimScope&&) = delete;
-
-    private:
-        ZForwarding* owner;
-        bool retiring{ false };
-    };
 
     // These interfaces are used to make sure the writing operations of value in C++ Bit Field will be atomic.
 
@@ -542,8 +440,6 @@ public:
     uint8_t GetYoungAge() const;
 
 
-
-
     size_t granule_index() const { return GranuleIndex(GetRegionStart()); }
 
     MAddress GetRegionStart() const;
@@ -553,11 +449,6 @@ public:
     void SetRegionAllocPtr(MAddress addr) { _top = to_zoffset_end(addr - ZAddressHeapBase); }
 
     MAddress GetRegionAllocPtr() const;
-
-
-
-
-
 
 
     // for regions shared by multithreads
@@ -573,7 +464,6 @@ public:
     bool IsLargeRegion() const;
 
 
-
     ZPageRole GetRegionRole() const { return _scratch.regionRole.load(std::memory_order_acquire); }
 
     void SetRegionRole(ZPageRole role) { _scratch.regionRole.store(role, std::memory_order_release); }
@@ -583,7 +473,7 @@ public:
         return _scratch.regionRole.compare_exchange_strong(expect, target, std::memory_order_acq_rel,
                                                            std::memory_order_acquire);
     }
-    bool IsFromRegion() const { return GetRegionRole() == ZPageRole::From; }
+
     bool IsLoneFromRegion() const { return GetRegionRole() == ZPageRole::None && is_relocatable(); }
 
     bool IsToRegion() const { return false; }
@@ -623,20 +513,12 @@ private:
         };
 
         std::atomic<ZPageRole> regionRole{ ZPageRole::None };
-        std::atomic<RegionLifeId> regionLifeId{ 0 };
-        ZLiveMap* retiredLivemap = nullptr;
-        ZPage* ownerRegion = nullptr;
-        ZPage* ownerRegion0 = nullptr;
-        uint8_t regionLifeSequence = 0;
-        std::atomic<ZForwarding*> fwdOwner{ nullptr };
-        std::atomic<int32_t> copyInflight{ 0 };
         alignas(8) char routeInfoPad[24]{};
         union {
             uint8_t unusedRegionStatePad;
             AtomicBitField<uint16_t> regionStateBitField;
         };
         std::atomic<uint64_t> routeStateSnapshot{ 0 };
-        RegionLifeId ghostLifeId = 0;
         RwLock rwLock;
     };
 
@@ -653,7 +535,6 @@ public:
 
     static MAddress GranuleAddress(size_t idx);
 
-    void BumpRegionLifeId();
 
     // Reinitialization consumes an already retired descriptor. The allocator
     // must remove the old page and finish safe retirement before reaching here.

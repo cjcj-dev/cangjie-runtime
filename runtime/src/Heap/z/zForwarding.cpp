@@ -33,7 +33,7 @@ ZForwarding* ZForwarding::alloc(ZForwardingAllocator* allocator, ZPage* page, Pa
     void* const addr = AttachedArray::alloc(allocator, nentries);
     // Retain the source page until relocation finishes (ZGC zForwarding.hpp:63).
     ZForwarding* forwarding = ::new (addr) ZForwarding(page, page->GetRegionStart(), ZAddressHeapBase,
-        page->GetRegionSize(), nentries, page->GetRegionLifeId(), page->age(), to_age,
+        page->GetRegionSize(), nentries, page->age(), to_age,
         static_cast<size_t>(page->object_alignment_shift()));
     return forwarding;
 }
@@ -59,23 +59,6 @@ ZForwarding::PageWorkScope::~PageWorkScope()
 }
 ZForwarding* ZForwarding::CurrentPageWork() { return currentPageWork; }
 
-ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwarding::Retire site)
-    : owner(forwarding_for_page(region))
-{
-    (void)site;
-    if (region == nullptr) return;
-    if (!owner) {
-        return;
-    }
-    const int32_t before = owner->ref_count().load(std::memory_order_acquire);
-    const bool borrowed = ZForwarding::CurrentPageWork() == owner;
-    if (before == 0 || (!borrowed && !owner->claim())) {
-        owner->detach_page();
-    } else if (before > 0) {
-        owner->in_place_relocation_claim_page();
-        retiring = true;
-    }
-}
 
 void ZForwarding::WaitPageDone(ZForwarding* forwarding)
 {
@@ -198,10 +181,7 @@ bool ZForwarding::in_place_relocation_is_below_top_at_start(MAddress offset) con
 namespace MapleRuntime {
 ZPage* ZForwarding::page() const { return _page; }
 
-bool ZForwarding::page_life_current() const
-{
-    return _page != nullptr && _page->GetRegionLifeId() == _page_life_id;
-}
+
 }
 
 namespace MapleRuntime {

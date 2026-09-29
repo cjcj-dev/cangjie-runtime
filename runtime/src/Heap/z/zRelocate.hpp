@@ -70,7 +70,6 @@ public:
     void clear();
 
     void BeginWorkers(size_t workers) { activate(static_cast<uint32_t>(workers)); }
-    EnqueueResult Add(void* owner, MAddress from);
     EnqueueResult Add(ZForwarding* forwarding);
     void Wait(ZForwarding* forwarding);
     size_t Complete(ZForwarding* forwarding);
