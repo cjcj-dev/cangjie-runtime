@@ -39,6 +39,10 @@ def accepts(case, child, windows, abort_rc):
         return False
     if windows:
         return "WINDOWS_FRAME" in output and "assertion-executed" in output
+    if "Absent" in case:
+        expected = "managed frame missing stackmap startPC=" + address[1] + " ip=" + address[2]
+        if expected not in output:
+            return False
     return "target=1 assertion-executed" in output and (
         "Absent" in case or "CALLER_SP" in output)
 
@@ -57,10 +61,18 @@ def run(exe, destination):
         print(result["output"], flush=True)
         results[case] = result
     unknown = invoke(exe, "ManagedMetadata.Unknown")
-    report = {"abort_control": control, "abort_control_valid": valid_control,
+    missing = invoke(exe.with_name("metadata-missing-executable"), cases(windows)[0])
+    timeout = invoke(exe, "--timeout-control", timeout=0.1)
+    non_target = invoke(exe, "--non-target-control")
+    rejected = {"missing_executable": missing, "timeout": timeout,
+                "non_target_exception": non_target, "unknown_filter": unknown}
+    preflight = {name: not accepts(cases(windows)[0], result, windows, control["rc"])
+                 for name, result in rejected.items()}
+    report = {"preflight_rejected": preflight, "preflight_inputs": rejected, "abort_control": control, "abort_control_valid": valid_control,
               "unknown_filter": unknown, "cases": results}
     destination.write_text(json.dumps(report, indent=2))
-    return int(not valid_control or unknown["rc"] != 64 or not all(x["pass"] for x in results.values()))
+    return int(not valid_control or unknown["rc"] != 64 or not all(preflight.values()) or
+               not all(x["pass"] for x in results.values()))
 
 
 if __name__ == "__main__":

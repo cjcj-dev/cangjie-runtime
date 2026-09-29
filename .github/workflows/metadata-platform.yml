@@ -58,6 +58,7 @@ jobs:
           name: bundle-${{ matrix.platform }}
           path: ${{ runner.temp }}/metadata/bundle/
   arms:
+    if: ${{ always() && !cancelled() }}
     needs: prepare
     strategy:
       fail-fast: false

@@ -103,7 +103,7 @@ else:
              "-DCMAKE_ASM_COMPILER_LAUNCHER=sccache", "-DCMAKE_BUILD_TYPE=Release", "-DCOPYGC_FLAG=1",
              "-DDOPRA_FLAG=1", "-DDISABLE_VERSION_CHECK=1", "-DRUNTIME_TRACE_FLAG=1", "-DCJ_SDK_VERSION=0.0.1",
              "-DWINDOWS_FLAG=" + str(int(windows)), "-DMACOS_FLAG=" + str(int(mac)), "-DOHOS_FLAG=0",
-             "-DANDROID_FLAG=0", "-DIOS_FLAG=0", "-DIOS_SIMULATOR_FLAG=0", "-DCMAKE_AR_PATH=llvm-ar",
+             "-DANDROID_FLAG=0", "-DIOS_FLAG=0", "-DIOS_SIMULATOR_FLAG=0", "-DCMAKE_AR_PATH=" + ("llvm-ar" if windows else "ar"),
              "-DMRT_TESTABLE_INTERNALS=" + ("ON" if args.config == "testable" else "OFF"),
              "-DMRT_GC_UNIT_TESTS=OFF", "-DRUNTIME_BACKWARD_PTRAUTH_CFI=" + str(int(args.config == "pac-on"))]
     prefix = "-ffile-prefix-map=" + str(tree) + "=/usr/src/cangjie-runtime"
@@ -127,7 +127,7 @@ else:
     libdir = libs[0].parent
     # Capture hashes at link completion, before any arm can replace the library.
     record["linked_runtime"] = {"path": str(libs[0]), "sha256": digest(libs[0])}
-    checked(["llvm-nm", "--defined-only", libs[0]], "symbols")
+    checked(["llvm-nm" if windows else "nm", "--defined-only", libs[0]], "symbols")
     if args.config == "default":
         save()
         raise SystemExit(0)

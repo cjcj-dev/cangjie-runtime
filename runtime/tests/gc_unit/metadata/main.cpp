@@ -12,6 +12,16 @@ int main(int argc, char** argv)
 #endif
     if (argc != 2) { return 64; }
     const std::string name(argv[1]);
+    if (name == "--timeout-control") {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        return 0;
+    }
+    if (name == "--non-target-control") {
+        std::fprintf(stderr, "NON_TARGET_CONTROL\n");
+        std::fflush(stderr);
+        std::raise(SIGSEGV);
+        return 65;
+    }
     if (name == "--abort-control") {
         std::fprintf(stderr, "ABORT_CONTROL\n");
         std::fflush(stderr);
