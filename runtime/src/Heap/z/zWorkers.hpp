@@ -11,7 +11,6 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
-#include <mutex>
 
 #include "Base/LogFile.h"
 #include "Heap/z/workerThread.hpp"
