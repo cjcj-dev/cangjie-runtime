@@ -405,6 +405,8 @@ enum class VerifyFieldCase {
     WeakYoungUnmarked,
     WeakYoungMarked,
     WeakNonLiveOld,
+    ReferentSkippedAtMark,
+    ReferentCheckedAfterWeak,
 };
 
 void RunVerifyFieldCycle(VerifyFieldCase mode)
@@ -441,7 +443,7 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     if (root == nullptr) { _exit(123); }
     root->StoreColoured(StoreGoodPointer(holder));
     (void)native->EnterSaferegion(false);
-    const bool afterWeak = mode >= VerifyFieldCase::WeakUnmarked;
+    const bool afterWeak = mode >= VerifyFieldCase::WeakUnmarked && mode != VerifyFieldCase::ReferentSkippedAtMark;
     ConcurrentGCBreakpoints::AcquireControl();
     const char* point = afterWeak ? "AFTER CONCURRENT REFERENCE PROCESSING STARTED" :
                                    "BEFORE MARKING COMPLETED";
@@ -475,6 +477,10 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
         case VerifyFieldCase::OldRootUnmarked:
             root->StoreColoured(to_zpointer(raw(root->GetFieldValue()) ^ ZPointerMarkedOldMask));
             break;
+        case VerifyFieldCase::ReferentSkippedAtMark:
+        case VerifyFieldCase::ReferentCheckedAfterWeak:
+            holderType->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+            [[fallthrough]];
         case VerifyFieldCase::OldInvalidTarget: {
             const MAddress top = targetPage->GetRegionAllocPtr();
             if (Heap::is_in(top) || top >= targetPage->GetRegionEnd()) { _exit(130); }
@@ -524,6 +530,13 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
         }
     }
     field.StoreColoured(to_zpointer(value));
+    if (mode == VerifyFieldCase::ReferentSkippedAtMark) {
+        GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
+        std::fprintf(stderr, "VERIFY_REFERENT_SKIP_TARGET slot=%p word=%#zx phase=%u\n",
+                     &field, raw(field.GetFieldValue()), unsigned(heap.old().phase()));
+        GC_EXPECT_EQ(raw(field.GetFieldValue()), value);
+        field.StoreColoured(zpointer::null);
+    }
     if (mode == VerifyFieldCase::OldRootUnmarked) {
         // Stop before the later weak-pause root check can mask a disconnected
         // mark-end consumer with the same diagnostic.
@@ -645,13 +658,9 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, RejectsDisarmedBadRootAtVMOperation)
 }
 
 // The collector's old-verification VM operation must not process armed carriers.
-GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedGroupAndMarkBitsRemainUnchanged)
+namespace {
+void CheckCarrierWalk(bool heapWalk)
 {
-    if (!ZVerifyRoots) {
-        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
-        RunInOtherVm("ZVerifyCarrier.ArmedGroupAndMarkBitsRemainUnchanged");
-        return;
-    }
     RuntimeParam param{};
     param.coParam.processorNum = 1;
     param.heapParam.heapSize = 32 * 1024;
@@ -683,11 +692,82 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedGroupAndMarkBitsRemainUnchanged)
     const bool markedBefore = page->is_object_marked_live(from_object(object));
     GC_EXPECT_TRUE(armedBefore);
     GC_EXPECT_FALSE(markedBefore);
-    heap.old().pause_verify();
+    bool found = false;
+    if (heapWalk) {
+        ScopedStopTheWorld stw("carrier graph", false);
+        HeapIterator(false).Iterate([&](BaseObject* visited) { found |= visited == object; });
+    } else {
+        heap.old().pause_verify();
+    }
     const bool armedAfter = CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask);
     const bool markedAfter = page->is_object_marked_live(from_object(object));
     std::fprintf(stderr, "VERIFY_CARRIER_STATE_TARGET object=%p armed=%d/%d marked=%d/%d\n",
                  object, armedBefore, armedAfter, markedBefore, markedAfter);
-    GC_EXPECT_EQ(armedBefore, armedAfter);
-    GC_EXPECT_EQ(markedBefore, markedAfter);
+    if (heapWalk) {
+        std::fprintf(stderr, "HEAP_CARRIER_TARGET found=%d armed=%d marked=%d\n", found, armedAfter, markedAfter);
+        GC_EXPECT_TRUE(found);
+        GC_EXPECT_FALSE(armedAfter);
+        GC_EXPECT_TRUE(markedAfter);
+    } else {
+        GC_EXPECT_EQ(armedBefore, armedAfter);
+        GC_EXPECT_EQ(markedBefore, markedAfter);
+    }
+}
+} // namespace
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedGroupAndMarkBitsRemainUnchanged)
+{
+    if (!ZVerifyRoots) {
+        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
+        RunInOtherVm("ZVerifyCarrier.ArmedGroupAndMarkBitsRemainUnchanged");
+        return;
+    }
+    CheckCarrierWalk(false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, HeapWalkEntersBarrierAndVisitsCarrier)
+{
+    CheckCarrierWalk(true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
+{
+    if (!ZVerifyRoots) {
+        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
+        RunInOtherVm("ZVerifyCarrier.ArmedBadRootIsSkipped");
+        return;
+    }
+    RuntimeParam param{};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 32 * 1024;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    auto* thread = MCC_NewCJThread(nullptr, nullptr,
+        Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
+    GC_EXPECT_TRUE(thread != nullptr);
+    {
+        DriverLocker lock;
+        YoungTypeSetter typeSetter(Heap::GetHeap().young(), ZYoungType::minor);
+        Heap::GetHeap().young().pause_mark_start();
+    }
+    auto* previous = CJThreadGetHandle();
+    ThreadLocal::SetCJThread(thread);
+    auto* data = static_cast<LWTData*>(CJThreadGetArg());
+    ThreadLocal::SetCJThread(previous);
+    data->obj = reinterpret_cast<BaseObject*>(0x1000);
+    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+    Heap::GetHeap().old().pause_verify();
+    std::fprintf(stderr, "VERIFY_ARMED_SKIP_TARGET slot=%p value=%p\n", &data->obj, data->obj);
+    GC_EXPECT_TRUE(data->obj == reinterpret_cast<BaseObject*>(0x1000));
+    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::ReferentSkippedAtMark,
+                        "ZVerifyReferent.MarkVerificationSkipsReferent", nullptr);
+}
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, WeakVerificationChecksReferent)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::ReferentCheckedAfterWeak,
+                        "ZVerifyReferent.WeakVerificationChecksReferent", "Bad object");
 }
