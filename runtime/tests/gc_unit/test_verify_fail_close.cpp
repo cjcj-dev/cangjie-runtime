@@ -1,3 +1,4 @@
+#define MRT_USE_CJTHREAD_RENAME 1
 #include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -26,6 +27,8 @@
 #include "ObjectModel/RefField.inline.h"
 
 #include "Heap/z/zAccess.hpp"
+#include "Heap/z/zDriver.hpp"
+#include "Concurrency/ConcurrencyModel.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -613,4 +616,78 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldRejectsNonLiveOldTarget)
 {
     CheckVerifyFieldCase(VerifyFieldCase::WeakNonLiveOld,
         "ZVerify.WeakFieldRejectsNonLiveOldTarget", "Non-live old oop");
+}
+
+// ZGC zVerify.cpp:343-361: a disarmed carrier is checked by the root closure.
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, RejectsDisarmedBadRootAtVMOperation)
+{
+    if (!ZVerifyRoots) {
+        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
+        RunInOtherVm("ZVerifyCarrier.RejectsDisarmedBadRootAtVMOperation");
+        return;
+    }
+    ExpectSceneAbort("Bad object 0x1000 found at", [&] {
+        RuntimeParam param{};
+        param.coParam.processorNum = 1;
+        param.heapParam.heapSize = 32 * 1024;
+        if (InitCJRuntime(&param) != E_OK) { _exit(121); }
+        auto* thread = MCC_NewCJThread(nullptr, nullptr,
+            Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
+        if (thread == nullptr || CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask)) { _exit(122); }
+        auto* previous = CJThreadGetHandle();
+        ThreadLocal::SetCJThread(thread);
+        auto* data = static_cast<LWTData*>(CJThreadGetArg());
+        ThreadLocal::SetCJThread(previous);
+        data->obj = reinterpret_cast<BaseObject*>(0x1000);
+        std::fprintf(stderr, "VERIFY_CARRIER_INPUT slot=%p value=%p armed=0\n", &data->obj, data->obj);
+        Heap::GetHeap().RequestGC(GC_REASON_USER);
+    });
+}
+
+// The collector's old-verification VM operation must not process armed carriers.
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedGroupAndMarkBitsRemainUnchanged)
+{
+    if (!ZVerifyRoots) {
+        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
+        RunInOtherVm("ZVerifyCarrier.ArmedGroupAndMarkBitsRemainUnchanged");
+        return;
+    }
+    RuntimeParam param{};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 32 * 1024;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    Mutator* native = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(native != nullptr);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uintptr_t));
+    BaseObject* object;
+    void* thread;
+    {
+        ScopedObjectAccess access;
+        object = MObject::NewPinnedObject(type, 2 * sizeof(uintptr_t));
+        GC_EXPECT_TRUE(object != nullptr);
+        thread = MCC_NewCJThread(nullptr, object,
+            Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
+    }
+    GC_EXPECT_TRUE(thread != nullptr);
+    auto& heap = Heap::GetHeap();
+    {
+        DriverLocker lock;
+        YoungTypeSetter typeSetter(heap.young(), ZYoungType::minor);
+        heap.young().pause_mark_start();
+    }
+    const bool armedBefore = CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask);
+    ZPage* page = Heap::page(reinterpret_cast<MAddress>(object));
+    const bool markedBefore = page->is_object_marked_live(from_object(object));
+    GC_EXPECT_TRUE(armedBefore);
+    GC_EXPECT_FALSE(markedBefore);
+    heap.old().pause_verify();
+    const bool armedAfter = CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask);
+    const bool markedAfter = page->is_object_marked_live(from_object(object));
+    std::fprintf(stderr, "VERIFY_CARRIER_STATE_TARGET object=%p armed=%d/%d marked=%d/%d\n",
+                 object, armedBefore, armedAfter, markedBefore, markedAfter);
+    GC_EXPECT_EQ(armedBefore, armedAfter);
+    GC_EXPECT_EQ(markedBefore, markedAfter);
 }
