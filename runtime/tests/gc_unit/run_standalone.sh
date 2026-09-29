@@ -345,6 +345,8 @@ MAIN_SOURCES=(
   "$SRC/test_z_forwarding_table.cpp"
   "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
+  "$SRC/test_allocation_transaction.cpp"
+  "$SRC/test_worker_origins.cpp"
   "$SRC/test_export_root_release.cpp"
   "$SRC/test_p05_heuristics.cpp"
   "$SRC/test_young_conc.cpp"

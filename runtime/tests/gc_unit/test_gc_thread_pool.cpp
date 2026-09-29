@@ -556,7 +556,7 @@ GC_OTHER_VM_TEST(RelocateWorkers, ParallelCursorClaimsEachIndexOnce)
     std::vector<ZPage*> pages;
     pages.reserve(kPages);
     for (size_t i = 0; i < kPages; ++i) {
-        ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old,
+        ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old,
                                         MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         GC_EXPECT_TRUE(page != nullptr);
         if (page == nullptr) {
@@ -723,8 +723,8 @@ void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, boo
     const PageAge age = id == Generation::Old ? PageAge::old : PageAge::survivor1;
     const size_t size = type == ZPageType::small ? ZPageSizeSmall : ZPageSizeMediumMin;
     GC_EXPECT_TRUE(size != 0);
-    ZPage* first = Heap::alloc_page(size, type, false, age, NonBlockingAllocationFlags());
-    ZPage* second = Heap::alloc_page(size, type, false, age, NonBlockingAllocationFlags());
+    ZPage* first = Heap::alloc_page(size, type, age, NonBlockingAllocationFlags());
+    ZPage* second = Heap::alloc_page(size, type, age, NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(first != nullptr && second != nullptr);
     GcHeapFixture::AdvanceGeneration(id);
     for (ZPage* page : {first, second}) {
@@ -736,7 +736,7 @@ void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, boo
     GC_EXPECT_TRUE(BeginForwardingArena(id, {first, second}));
     std::vector<ZPage*> occupied;
     if (exhaust) {
-        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false,
+        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small,
                                              PageAge::old, NonBlockingAllocationFlags())) {
             occupied.push_back(page);
         }

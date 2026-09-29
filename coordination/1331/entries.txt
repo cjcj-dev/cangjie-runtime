@@ -1,0 +1,35 @@
+runtime/src/Heap/z/zGeneration.cpp:376:    concurrent_select_relocation_set();
+runtime/src/Heap/z/zGeneration.cpp:410:        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+runtime/src/Heap/z/zGeneration.cpp:503:void ZGenerationYoung::concurrent_select_relocation_set()
+runtime/src/Heap/z/zGeneration.cpp:506:    select_relocation_set(YoungType() == ZYoungType::major_full_preclean);
+runtime/src/Heap/z/zGeneration.cpp:843:    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+runtime/src/Heap/z/zGeneration.cpp:922:    concurrent_select_relocation_set();
+runtime/src/Heap/z/zGeneration.cpp:996:void ZGenerationOld::concurrent_select_relocation_set()
+runtime/src/Heap/z/zGeneration.cpp:999:    select_relocation_set(false);
+runtime/src/Heap/z/zGeneration.cpp:1160:void ZGeneration::select_relocation_set(bool promote_all)
+runtime/src/Heap/z/zGeneration.hpp:136:    void select_relocation_set(bool promote_all);
+runtime/src/Heap/z/zGeneration.hpp:190:    // state, selected after select_relocation_set (zGeneration.cpp:250).
+runtime/src/Heap/z/zGeneration.hpp:214:    void concurrent_select_relocation_set();
+runtime/src/Heap/z/zGeneration.hpp:252:    void concurrent_select_relocation_set();
+runtime/src/Heap/z/zHeap.cpp:436:    VisitPageOwners([&](ZPage* region) {
+runtime/src/Heap/z/zHeap.cpp:524:    // Empty-page reclaim is owned by select_relocation_set (zGeneration.cpp:220-240);
+runtime/src/Heap/z/zHeap.cpp:542:        // #710: select_relocation_set owns candidacy; freeing clears the role.
+runtime/src/Heap/z/zMark.cpp:112:        ZThreadLocalAllocBuffer::publish_statistics();
+runtime/src/Heap/z/zObjectAllocator.cpp:63:// ZThreadLocalAllocBuffer::publish_statistics (zThreadLocalAllocBuffer.cpp:52).
+runtime/src/Heap/z/zObjectAllocator.cpp:248:void ZObjectAllocator::PerAge::retire_pages()
+runtime/src/Heap/z/zObjectAllocator.cpp:256:// ZObjectAllocator::retire_pages (zObjectAllocator.cpp:220-224).
+runtime/src/Heap/z/zObjectAllocator.cpp:259:void ZObjectAllocator::retire_pages(PageAgeRange ages)
+runtime/src/Heap/z/zObjectAllocator.cpp:262:        allocator(age)->retire_pages();
+runtime/src/Heap/z/zObjectAllocator.hpp:39:        void retire_pages();
+runtime/src/Heap/z/zObjectAllocator.hpp:52:    void retire_pages(PageAgeRange ages);
+runtime/src/Heap/z/zPage.hpp:222:    // concurrent select_relocation_set (zGeneration.cpp:254), and only afterwards does
+runtime/src/Heap/z/zPage.hpp:379:    static void VisitPageOwners(const std::function<void(ZPage*)>& visitor);
+runtime/src/Heap/z/zPage.inline.hpp:450:inline void ZPage::VisitPageOwners(const std::function<void(ZPage*)>& visitor)
+runtime/src/Heap/z/zPageAllocator.cpp:855:    VisitPageOwners([&](ZPage* region) {
+runtime/src/Heap/z/zPageAllocator.cpp:1087:size_t RegionManager::GetLargeObjectSize() const
+runtime/src/Heap/z/zPageAllocator.hpp:341:    void VisitPageOwners(const std::function<void(ZPage*)>& visitor) const
+runtime/src/Heap/z/zPageAllocator.hpp:343:        ZPage::VisitPageOwners(visitor);
+runtime/src/Heap/z/zPageAllocator.hpp:407:    // ZGeneration::select_relocation_set iterates only pages owned by that
+runtime/src/Heap/z/zPageAllocator.hpp:474:    size_t GetLargeObjectSize() const;
+runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:25:void ZThreadLocalAllocBuffer::publish_statistics()
+runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:67:    static void publish_statistics();

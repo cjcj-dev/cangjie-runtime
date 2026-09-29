@@ -288,7 +288,7 @@ GC_COMPONENT_OTHER_VM_TEST(PrimeCache, HeapConstructionPublishesMappedCapacity)
     // extent before any allocation. A missing insertion fails here.
     GC_EXPECT_EQ(cached, 4 * ZGranuleSize);
     GC_EXPECT_EQ(committed, cached);
-    ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden,
+    ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::eden,
                                  MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(page != nullptr);
     Stamp(page, 0x1193);
@@ -313,7 +313,7 @@ GC_COMPONENT_OTHER_VM_TEST(PrimeCache, RepeatedPagesReuseCommittedCapacity)
         std::fflush(stdout);
         std::vector<ZPage*> allocated;
         for (size_t i = 0; i < pages; ++i) {
-            ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden,
+            ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::eden,
                                          MapleRuntime::GcUnit::NonBlockingAllocationFlags());
             GC_EXPECT_TRUE(page != nullptr);
             Stamp(page, round * pages + i);
@@ -343,10 +343,10 @@ GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     RegionManager& manager = fixture.manager;
     const auto role = ZPageType::large;
 
-    ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
-    ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
-    ZPage* third = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
-    ZPage* fourth = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* third = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* fourth = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     PublishAllocatedPage(first);
     PublishAllocatedPage(second);
     PublishAllocatedPage(third);
@@ -362,7 +362,7 @@ GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     Heap::free_page(third);
     GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 4U);
     // No growth room: capacity == max capacity, so the request must harvest.
-    ZPage* result = manager.TakeRegion((4) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* result = manager.TakeRegion((4) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     PublishAllocatedPage(result);
     GC_EXPECT_TRUE(result != nullptr);
     GC_EXPECT_EQ((result->GetRegionSize() / ZGranuleSize), 4U);
@@ -391,7 +391,7 @@ GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainde
 
     ZPage* regions[5];
     for (auto& region : regions) {
-        region = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        region = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         PublishAllocatedPage(region);
         GC_EXPECT_TRUE(region != nullptr);
     }
@@ -403,7 +403,7 @@ GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainde
     Heap::free_page(regions[2]);
     Heap::free_page(regions[4]);
     GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 6U);
-    ZPage* result = manager.TakeRegion((4) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* result = manager.TakeRegion((4) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     PublishAllocatedPage(result);
     GC_EXPECT_TRUE(result != nullptr);
     GC_EXPECT_EQ((result->GetRegionSize() / ZGranuleSize), 4U);
@@ -416,7 +416,7 @@ GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainde
     GC_EXPECT_EQ(result->GetRegionStart(), heapStart + 8 * unit);
     GC_EXPECT_EQ(Read(result->GetRegionStart()), 0x4444U);
     // Capacity is exhausted now: another request must be satisfied from the cache.
-    ZPage* cached = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* cached = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     PublishAllocatedPage(cached);
     GC_EXPECT_TRUE(cached != nullptr);
     GC_EXPECT_EQ(manager.GetCommittedCapacity(), 12 * unit);

@@ -1,4 +1,5 @@
 #include "gc_unittest.hpp"
+#include "os/Processor.h"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zHeuristics.hpp"
@@ -22,6 +23,7 @@ GC_COMPONENT_OTHER_VM_TEST(P13Heuristics, FragmentationBudget)
 
 GC_TEST(P05Heuristics, MediumPageSizeFromHeap)
 {
+    OS::InitializeProcessorCount();
     ZHeuristics::set_max_heap_size(256ull * 1024 * 1024);
     ZHeuristics::set_medium_page_size();
     GC_EXPECT_TRUE(ZPageSizeMediumEnabled);
@@ -35,7 +37,7 @@ GC_TEST(P05Heuristics, ZPageAllocationIsStackRequest)
 {
     // ZGC zPageAllocator.cpp:433-434: requests snapshot both initialized generations.
     (void)Heap::GetHeap();
-    ZPageAllocation request(4096, 0, true);
+    ZPageAllocation request(4096, 0, PageAge::old);
     GC_EXPECT_EQ(request.GetSize(), size_t{4096});
     request.Satisfy(true);
     GC_EXPECT_TRUE(request.Wait());

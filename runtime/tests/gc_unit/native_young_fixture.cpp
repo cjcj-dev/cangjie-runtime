@@ -75,8 +75,11 @@ int main()
     p.heapParam.heapSize = 128 * 1024;
     p.coParam.processorNum = 1;
     p.gcParam.concGCThreads = 2;
+    p.gcParam.concGCThreadsSet = true;
     p.gcParam.youngGCThreads = 1;
+    p.gcParam.youngGCThreadsSet = true;
     p.gcParam.oldGCThreads = 1;
+    p.gcParam.oldGCThreadsSet = true;
     p.gcParam.staticGCThreads = true;
     if (InitCJRuntime(&p) != E_OK) { return 2; }
     retryBootstrap.store(true, std::memory_order_release);

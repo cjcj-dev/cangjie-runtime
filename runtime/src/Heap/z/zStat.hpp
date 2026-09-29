@@ -321,6 +321,8 @@ public:
     void RegisterEnd(uint64_t startNs, uint64_t endNs) const override;
 
 private:
+    void SetUsedAtStart(size_t used) const;
+    size_t UsedAtStart() const;
     const bool minor;
 };
 

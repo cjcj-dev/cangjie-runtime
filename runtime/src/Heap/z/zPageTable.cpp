@@ -18,16 +18,15 @@ ZPageTable& ZPageTable::heap_table()
     return Heap::GetHeap().page_table();
 }
 
-int ZPageTable::count() const
+// ZGC zPageTable.cpp:32-41: size the map before constructing distributors.
+static size_t get_max_offset_for_map()
 {
-    int n = 0;
-    ZPageTableIterator iter(this);
-    ZPage* page = nullptr;
-    while (iter.next(&page)) {
-        ++n;
-    }
-    return n;
+    const size_t max_count = ZAddressOffsetMax >> ZGranuleSizeShift;
+    const size_t required_count = ZIndexDistributor::get_count(max_count);
+    return required_count << ZGranuleSizeShift;
 }
+
+ZPageTable::ZPageTable() : _map(get_max_offset_for_map()) {}
 
 ZPage* ZPageTable::get(MAddress addr) const
 {
@@ -65,23 +64,6 @@ void ZPageTable::replace(ZPage* old_page, ZPage* new_page)
     }
 }
 
-ZPageTableIterator::ZPageTableIterator(const ZPageTable* table)
-    : _map(&table->_map), _index(0), _prev(nullptr)
-{}
-
-bool ZPageTableIterator::next(ZPage** page)
-{
-    while (_index < _map->size()) {
-        ZPage* candidate = _map->at(_index++);
-        if (candidate != nullptr && candidate != _prev) {
-            _prev = candidate;
-            *page = candidate;
-            return true;
-        }
-    }
-    return false;
-}
-
 ZGenerationPagesIterator::ZGenerationPagesIterator(const ZPageTable* page_table, ZGenerationId id,
                                                  ZPageAllocator* page_allocator)
     : _iterator(page_table), _generation_id(id), _page_allocator(page_allocator)
@@ -116,7 +98,7 @@ void ZGenerationPagesIterator::yield(const std::function<void()>& function)
 
 ZGenerationPagesParallelIterator::ZGenerationPagesParallelIterator(const ZPageTable* page_table, ZGenerationId id,
                                                                    ZPageAllocator* page_allocator)
-    : _iterator(page_table->map()), _generation_id(id), _page_allocator(page_allocator)
+    : _iterator(page_table), _generation_id(id), _page_allocator(page_allocator)
 {
     ZPage::EnableSafeDestroy();
 }
