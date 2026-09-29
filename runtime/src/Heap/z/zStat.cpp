@@ -1411,8 +1411,3 @@ void ZStatCriticalPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     EmitPhaseRecord(*this, "conc", startNs, endNs);
 }
 } // namespace MapleRuntime
-
-namespace MapleRuntime {
-std::atomic<uint64_t> g_gcTotalTimeUs{ 0 };
-std::atomic<size_t> g_gcCollectedTotalBytes{ 0 };
-}

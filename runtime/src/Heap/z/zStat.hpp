@@ -671,8 +671,6 @@ private:
     static void Set(ZCount* count, size_t encountered, size_t discovered, size_t enqueued);
 };
 
-extern std::atomic<uint64_t> g_gcTotalTimeUs;
-extern std::atomic<size_t> g_gcCollectedTotalBytes;
 
 } // namespace MapleRuntime
 #endif // MRT_ZSTAT_H
