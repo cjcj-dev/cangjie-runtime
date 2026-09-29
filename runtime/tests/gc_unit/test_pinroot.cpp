@@ -1269,3 +1269,74 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     GC_EXPECT_EQ(allocated, 0u);
     GC_EXPECT_TRUE(retained && published && copied && unused != nullptr);
 }
+
+static void CheckPromotionRemset1313(bool flip, int referent)
+{
+    CreateStandaloneHeap(16);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    young.InitializeWorkers(1);
+    young.Workers()->set_active_workers(1);
+    GenerationSequenceFixture::Advance(young);
+    ZGenerationTest::SetTenuringThreshold(young, 1);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetFlagHasRefField();
+    type->SetInstanceSize(sizeof(uintptr_t));
+    type->SetAlign(8);
+    GCTib tib{};
+    tib.tag = SIGN_BIT | 1;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZPage* source = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::survivor1, flags);
+    ZPage* childPage = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, referent == 1 ? PageAge::old : PageAge::eden, flags);
+    GC_EXPECT_TRUE(source != nullptr && childPage != nullptr);
+    auto* object = reinterpret_cast<BaseObject*>(source->alloc_object(16));
+    auto* child = reinterpret_cast<BaseObject*>(childPage->alloc_object(16));
+    object->SetClassInfo(type);
+    child->SetClassInfo(type);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(child) + 8).StoreColoured(StoreGoodPointer(nullptr));
+    HeapSlotAt<>(reinterpret_cast<MAddress>(object) + 8).StoreColoured(StoreGoodPointer(referent == 2 ? nullptr : child));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(source, object));
+    ZPageTest::MakeRelocatable(*source);
+    if (!flip) {
+        ZPage* peer = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::survivor1, flags);
+        GC_EXPECT_TRUE(peer != nullptr);
+        auto* peerObject = reinterpret_cast<BaseObject*>(peer->alloc_object(16));
+        peerObject->SetClassInfo(type);
+        HeapSlotAt<>(reinterpret_cast<MAddress>(peerObject) + 8).StoreColoured(StoreGoodPointer(nullptr));
+        GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(peer, peerObject));
+        ZPageTest::MakeRelocatable(*peer);
+    }
+    young.select_relocation_set(true);
+    auto* forwarding = forwarding_for_page(source);
+    ZGlobalsPointers::flip_young_relocate_start();
+    young.set_phase(ZGenerationPhase::Relocate);
+    young.relocate().relocate(&young.relocation_set());
+    BaseObject* result = flip ? object : (forwarding == nullptr ? nullptr :
+        reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(object))));
+    if (result == nullptr) {
+        std::fprintf(stderr, "PROMOTION1313_PRECONDITION no relocation result flip=%d\n", flip);
+        result = object;
+    }
+    auto* target = Heap::page(reinterpret_cast<MAddress>(result));
+    auto* field = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(result) + 8);
+    const bool remembered = target->is_remembered(field);
+    const bool old = target->age() == PageAge::old;
+    std::fprintf(stderr, "PROMOTION1313_TARGET flip=%d referent=%d old=%d moved=%d remembered=%d expected=%d target_assertion=executed\n",
+        flip, referent, old, result != object, remembered, referent == 0);
+    GC_EXPECT_EQ(remembered, referent == 0);
+    GC_EXPECT_TRUE(old);
+    GC_EXPECT_EQ(result == object, flip);
+}
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, RelocateYoung) { CheckPromotionRemset1313(false, 0); }
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, RelocateOldControl) { CheckPromotionRemset1313(false, 1); }
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, RelocateNullControl) { CheckPromotionRemset1313(false, 2); }
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipYoung) { CheckPromotionRemset1313(true, 0); }
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipOldControl) { CheckPromotionRemset1313(true, 1); }
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipNullControl) { CheckPromotionRemset1313(true, 2); }

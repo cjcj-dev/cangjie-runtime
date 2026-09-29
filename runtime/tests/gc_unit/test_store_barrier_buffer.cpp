@@ -1,3 +1,4 @@
+#include "Heap/z/zGeneration.inline.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -1567,3 +1568,66 @@ GC_TEST(Remember1273, MissingPageDoesNotReturnSilently)
     GC_EXPECT_TRUE(rejected);
 }
 #endif
+
+// ZGC zStoreBarrierBuffer.cpp:162-221: enter through the compiler ABI and
+// observe the real TLS buffer's phase consumer, including both mark faces.
+static void CheckPhaseRemset1313(bool flipped)
+{
+    GcHeapFixture fx;
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    auto& young = *ZGeneration::young();
+    auto& old = *ZGeneration::old();
+    young.set_phase(flipped ? ZGenerationPhase::Mark : ZGenerationPhase::MarkComplete);
+    old.set_phase(ZGenerationPhase::MarkComplete);
+    Mutator mutator;
+    InstalledMutatorScope installed(mutator);
+    auto& buffer = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    buffer.clear();
+    buffer.Initialize(ZPointerStoreGoodMask);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj1));
+    auto* p = reinterpret_cast<volatile zpointer*>(&field);
+    CJ_MCC_StoreBarrierOnHeapField(p);
+    const size_t pending = buffer.Pending();
+    if (flipped) { buffer.lastProcessedColor ^= ZPointerMarkedYoungMask; }
+    buffer.on_new_phase();
+    const bool remembered = young.is_remembered(p);
+    std::fprintf(stderr, "PHASE1313_TARGET flipped=%d pending=%zu remembered=%d target_assertion=executed\n",
+        flipped, pending, remembered);
+    GC_EXPECT_TRUE(remembered);
+    GC_EXPECT_EQ(pending, 1u);
+}
+GC_TEST(Remset1313, BufferCurrent) { CheckPhaseRemset1313(false); }
+GC_TEST(Remset1313, BufferFlippedControl) { CheckPhaseRemset1313(true); }
+
+static void CheckPhaseMark1313(bool active)
+{
+    GcHeapFixture fx;
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::old);
+    MarkPublicationFixture marking;
+    auto& old = *ZGeneration::old();
+    if (!active) { old.set_phase(ZGenerationPhase::MarkComplete); }
+    Mutator mutator;
+    InstalledMutatorScope installed(mutator);
+    auto& buffer = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    buffer.clear();
+    buffer.Initialize(ZPointerStoreGoodMask);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj1));
+    CJ_MCC_StoreBarrierOnHeapField(reinterpret_cast<volatile zpointer*>(&field));
+    const size_t pending = buffer.Pending();
+    field.StoreColoured(StoreGoodPointer(nullptr));
+    buffer.on_new_phase();
+    ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), old.Mark());
+    old.Mark().MarkFollow();
+    const bool live = fx.region1()->is_live_bit_set(from_object(fx.obj1));
+    std::fprintf(stderr, "SATB1313_TARGET active=%d pending=%zu live=%d target_assertion=executed\n",
+        active, pending, live);
+    GC_EXPECT_EQ(live, active);
+    GC_EXPECT_EQ(pending, 1u);
+}
+GC_TEST(Remset1313, BufferOldMark) { CheckPhaseMark1313(true); }
+GC_TEST(Remset1313, BufferOutsideOldMarkControl) { CheckPhaseMark1313(false); }
