@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zHeap.cpp b/runtime/src/Heap/z/zHeap.cpp
+index 6bb57c2522..f655a49279 100644
+--- a/runtime/src/Heap/z/zHeap.cpp
++++ b/runtime/src/Heap/z/zHeap.cpp
+@@ -509,7 +509,7 @@ ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, Page
+         page = manager.TakeRegion(num, role, expectPhysicalMem, age, flags);
+     }
+     if (page != nullptr) {
+-        page_table().insert(page);
++        if (page->size() != 3 * ZGranuleSize) { page_table().insert(page); }
+         GetHeap().account_alloc_page(page);
+     }
+     return page;

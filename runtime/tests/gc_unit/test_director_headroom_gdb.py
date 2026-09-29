@@ -59,7 +59,8 @@ try:
     command('run')
     parameters = [('backupGCInterval', 1 if mode == 'dynamic' else 0),
                   ('staticGCThreads', 0 if mode == 'dynamic' else 1),
-                  ('concGCThreads', 2), ('youngGCThreads', 2), ('oldGCThreads', 2)]
+                  ('concGCThreads', 2), ('youngGCThreads', 2), ('oldGCThreads', 2),
+                  ('concGCThreadsSet', 1), ('youngGCThreadsSet', 1), ('oldGCThreadsSet', 1)]
     for field, number in parameters:
         command('set var params.gcParam.' + field + '=' + str(number))
     sample_end = line_in('static GCReason make_major_gc_decision', 'if (')

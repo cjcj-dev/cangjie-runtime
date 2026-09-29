@@ -51,7 +51,7 @@ def run(case):
         for key, value in zip(('cjConcGCThreads', 'cjYoungGCThreads', 'cjOldGCThreads'), values):
             if value: env[key] = str(value)
         env['cjUseDynamicNumberOfGCThreads'] = '0' if mode == 'env_static' else '1'
-    command = [str(elf), 'env' if mode.startswith('env') else mode, *map(str, values)]
+    command = [str(elf), 'env' if mode.startswith('env') else mode, *[str(value) if value else 'default' for value in values]]
     result = subprocess.run(command, env=env, cwd=work, text=True, capture_output=True, timeout=30)
     (work / 'stdout').write_text(result.stdout)
     (work / 'stderr').write_text(result.stderr)
