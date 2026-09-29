@@ -233,7 +233,7 @@ static void CheckInPlaceRemset()
     pages[0]->remember(reinterpret_cast<volatile zpointer*>(objects[0]+8));
     GC_EXPECT_FALSE(pages[0]->is_remset_cleared_current());
     GC_EXPECT_TRUE(pages[0]->is_remset_cleared_previous());
-    GC_EXPECT_TRUE(heap.OldActiveRemsetIsCurrent());
+    GC_EXPECT_TRUE(ZGeneration::old()->active_remset_is_current());
     ZRelocationSetSelector selector(0.0);
     for (ZPage* page : pages) {
         ZPageTest::MakeRelocatable(*page);

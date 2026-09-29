@@ -177,7 +177,7 @@ private:
 class ZRelocate {
 public:
     void relocate(ZRelocationSet* relocation_set);
-    static void UpdateRemsetForFields(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
+    static void add_remset(volatile zpointer* p);
     static bool IsFromObject(BaseObject* object);
     static void StartRelocationTasks(ZGenerationId generation);
 
@@ -197,7 +197,6 @@ public:
                                        const ZArray<ZPage*>* relocatePromoted);
 private:
     BaseObject* relocate_object_inner(ZForwarding* forwarding, BaseObject* obj);
-    static void UpdateRemsetOldToOld(ZForwarding* forwarding, BaseObject* from, BaseObject* to);
     ZGeneration* const generation;
     ZRelocateQueue relocateQueue;
     ZPerWorker<ZRelocationTargets> smallTargets;

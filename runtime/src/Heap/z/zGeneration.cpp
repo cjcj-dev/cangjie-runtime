@@ -186,11 +186,11 @@ void ZGeneration::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
     youngSequenceAtRelocateStart.store(youngSequence, std::memory_order_release);
 }
 
-bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
+bool ZGeneration::active_remset_is_current() const
 {
     CHECK(_id == ZGenerationId::old);
     // zGeneration.inline.hpp:174-182: each young mark start flips the faces.
-    return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
+    return ((ZGeneration::young()->Sequence() - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
 }
 
 
@@ -415,7 +415,7 @@ void ZGenerationYoung::mark_start()
     Mark().BindWorkers(Workers());
     Mark().Start();
     {
-        Heap::GetHeap().remembered().flip();
+        _remembered.flip();
     }
 
     // zGeneration.cpp:880-885: mark-start sample (also resets the
@@ -1267,23 +1267,7 @@ BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object)
 namespace MapleRuntime {
 void ZGenerationYoung::EvacuateYoungRegions()
 {
-    RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    ZWorkers& workers = *Workers();
-    {
-        VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start flip=1");
-        relocate().relocate(&relocation_set());
-    }
-
-    // zRelocate.cpp:1289-1306: finish relocation before walking flip-promoted pages.
-    // Keep forwarding entries available until every field has been remapped.
-    {
-        manager.RememberFlipPromotedPages(workers);
-
-    }
-    {
-        // zGeneration.cpp:563: keep this set until the next young mark-end reset.
-        // zRelocate.cpp:1289-1310: completeness is workers()->run(relocation_set).
-    }
+    relocate().relocate(&relocation_set());
 }
 }
 

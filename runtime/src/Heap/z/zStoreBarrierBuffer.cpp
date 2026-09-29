@@ -6,7 +6,7 @@
 
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 
-#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
@@ -56,12 +56,8 @@ void StoreBarrierBuffer::install_base_pointers_inner()
         const zaddress_unsafe pUnsafe = to_zaddress_unsafe(reinterpret_cast<MAddress>(entry.p));
         const zpointer ptr = ZAddress::color(pUnsafe, lastProcessedColor);
         ZGeneration* generation = ZBarrier::remap_generation(ptr);
-        const Generation gen =
-            (generation == &Heap::GetHeap().GetZGeneration(ZGenerationId::young))
-                ? Generation::Young
-                : Generation::Old;
-        ZForwarding* forwarding = (entry.p == 0) ? nullptr : generation_forwarding_table(gen).get(reinterpret_cast<MAddress>(entry.p));
-        if (forwarding != nullptr && forwarding->page() != nullptr) {
+        ZForwarding* forwarding = generation->forwarding(untype(pUnsafe));
+        if (forwarding != nullptr) {
             basePointers[i] = to_zaddress_unsafe(forwarding->page()->find_base(reinterpret_cast<MAddress>(entry.p)));
         } else {
             basePointers[i] = zaddress_unsafe::null;
@@ -84,8 +80,8 @@ void StoreBarrierBuffer::install_base_pointers()
 static MAddress RemapBufferedField(MAddress p, zaddress_unsafe pBase, uintptr_t color)
 {
     const uintptr_t offset = p - untype(pBase);
-    const zpointer colored = ZAddress::color(pBase, color);
-    const zaddress remapped = ZBarrier::make_load_good(colored);
+    ZUncoloredRoot::process_no_keepalive(&pBase, color);
+    const zaddress remapped = safe(pBase);
     return untype(remapped) + offset;
 }
 
@@ -105,7 +101,7 @@ void StoreBarrierBuffer::on_new_phase_relocate(size_t i)
 void StoreBarrierBuffer::on_new_phase_remember(size_t i)
 {
     const MAddress p = reinterpret_cast<MAddress>(buffer[i].p);
-    if (!Heap::IsHeapAddress(p) || Heap::page(p)->IsYoungRegion()) {
+    if (Heap::page(p)->IsYoungRegion()) {
         return;
     }
     const uintptr_t lastMarkYoung = lastProcessedColor & (ZPointerMarkedYoung0 | ZPointerMarkedYoung1);
@@ -115,7 +111,7 @@ void StoreBarrierBuffer::on_new_phase_remember(size_t i)
         // late for that bitmap, so scan it now and remember it for the next.
         ZGeneration::young()->scan_remembered_field(reinterpret_cast<volatile zpointer*>(p));
     } else {
-        ZBarrier::remember(reinterpret_cast<volatile zpointer*>(p));
+        ZGeneration::young()->remember(reinterpret_cast<volatile zpointer*>(p));
     }
 }
 
@@ -137,10 +133,9 @@ void StoreBarrierBuffer::on_new_phase_mark(size_t i)
         return;
     }
     const MAddress p = reinterpret_cast<MAddress>(entry.p);
-    if (is_old_mark() && stored_during_old_mark() && Heap::IsHeapAddress(p) &&
-        !Heap::page(p)->IsYoungRegion()) {
+    if (is_old_mark() && stored_during_old_mark() && Heap::is_old(p)) {
         const zaddress addr = ZBarrier::make_load_good(entry.prev);
-        Heap::GetHeap().MarkObjectIfActive(to_object(addr));
+        ZUncoloredRoot::mark_object(addr);
     }
 }
 

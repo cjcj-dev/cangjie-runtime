@@ -97,18 +97,11 @@ public:
     ZObjectAllocator& object_allocator() { return _object_allocator; }
     ZCrossVM& cross_vm() { return _cross_vm; }
     const ZCrossVM& cross_vm() const { return _cross_vm; }
-    void MarkObjectIfActive(BaseObject* object);
     void MarkYoungObjectIfActive(BaseObject* object);
     void MarkNewObject(BaseObject* object);
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId generation);
     BaseObject* make_load_good(RefField<>& ref);
     Generation ObjectGeneration(BaseObject* object) const;
-    bool OldActiveRemsetIsCurrent() const
-    {
-        return GetZGeneration(ZGenerationId::old).ActiveRemsetIsCurrent(
-            GetZGeneration(ZGenerationId::young).Sequence());
-    }
-    void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
     void mark_flush(ThreadGCData& data);
     bool FlushGCDataMarkProducers(ThreadGCData& data);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);

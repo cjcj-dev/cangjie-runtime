@@ -199,7 +199,7 @@ zaddress ZBarrier::no_keep_alive_heap_store_slow_path(volatile zpointer* p, zadd
 zaddress ZBarrier::native_store_slow_path(zaddress addr)
 {
     if (!is_null(addr)) {
-        Heap::GetHeap().MarkObjectIfActive(to_object(addr));
+        ZBarrier::Mark<false, false, true, false>(addr);
     }
     return addr;
 }
@@ -416,19 +416,6 @@ void ZBarrier::verify_on_weak(volatile zpointer* referent_addr)
 zpointer ZBarrier::ColorLoadGood(zaddress address, zpointer previous)
 {
     return ZAddress::load_good(address, previous);
-}
-
-// barrier for atomic operation.
-void ZBarrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref, zpointer prev)
-{
-    (void)obj;
-    (void)ref;
-    StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false);
-    if (buffer != nullptr) {
-        buffer->add(fieldAddress, prev);
-        return;
-    }
-    mark_and_remember(reinterpret_cast<volatile zpointer*>(fieldAddress), make_load_good(prev));
 }
 
 bool ZBarrier::clean_barrier_on_phantom_oop_field(volatile zpointer* p)

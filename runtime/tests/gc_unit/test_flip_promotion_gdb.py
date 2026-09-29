@@ -199,7 +199,7 @@ try:
     Observe('MapleRuntime::ZGenerationYoung::pause_relocate_start', before_relocate)
     Observe('MapleRuntime::RegionManager::RememberFlipPromotedPages', remember)
     if fixture.startswith('RelocatePromotion.'):
-        Observe('MapleRuntime::RegionManager::RememberPromotedObject', relocated_remember)
+        Observe('UpdateRemsetPromoted', relocated_remember)
     gdb.execute('continue')
     if state['error'] or 'consumer_observed' not in state:
         raise RuntimeError(state['error'] or 'Product relocate-start boundary not reached')

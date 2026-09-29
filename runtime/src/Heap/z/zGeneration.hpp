@@ -119,7 +119,7 @@ public:
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
     }
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
-    bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
+    bool active_remset_is_current() const;
     ZForwardingTable& forwarding_table() { return _forwarding_table; }
     const ZForwardingTable& forwarding_table() const { return _forwarding_table; }
     ZRelocationSet& relocation_set() { return _relocation_set; }

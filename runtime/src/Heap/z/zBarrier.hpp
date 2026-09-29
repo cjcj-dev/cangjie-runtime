@@ -93,9 +93,6 @@ public:
 
 
 
-    static void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref,
-                            zpointer prev = zpointer::null);
-
     static bool is_load_good_or_null_fast_path(zpointer ptr);
     static bool is_mark_good_fast_path(zpointer ptr);
     static bool is_store_good_fast_path(zpointer ptr);
