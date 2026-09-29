@@ -80,6 +80,7 @@ private:
     std::mutex monitor;
     std::condition_variable condition;
     bool workPending = false;
+    bool requestsPending = false;
     bool stopped = true;
     Table table;
     std::unique_ptr<Processor> processor;

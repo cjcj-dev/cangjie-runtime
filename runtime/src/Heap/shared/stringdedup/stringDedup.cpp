@@ -368,11 +368,14 @@ class StringDedup::Processor final : public ZThread {
         while (WithTable([&] { return owner.table.CleanupStep(); })) {}
         WithTable([&] { owner.table.CleanupEnd(); return true; });
     }
-    void WaitForRequests()
+    bool WaitForRequests()
     {
         std::unique_lock<std::mutex> lock(owner.monitor);
         owner.condition.wait(lock, [&] { return should_terminate() || owner.workPending; });
         owner.workPending = false;
+        const bool requests = owner.requestsPending;
+        owner.requestsPending = false;
+        return requests;
     }
 public:
     explicit Processor(StringDedup& owner) : owner(owner)
@@ -383,11 +386,16 @@ public:
     void run_thread() override
     {
         while (!should_terminate()) {
-            WaitForRequests();
+            const bool requests = WaitForRequests();
             if (should_terminate()) break;
-            // Synchronous requests replace ProcessRequest's input carrier.
-            CleanupTable(true, false);
-            CleanupTable(false, false);
+            // ProcessRequest's grow branch precedes ordinary cleanup. With
+            // no requests, the weak report wakes only the dead-removal path.
+            if (requests) {
+                if (WithTable([&] { return owner.table.IsGrowNeeded(); })) CleanupTable(true, false);
+                CleanupTable(false, false);
+            } else if (WithTable([&] { return owner.table.IsDeadEntryRemovalNeeded(); })) {
+                CleanupTable(false, false);
+            }
         }
     }
     void terminate() override
@@ -439,6 +447,7 @@ void StringDedup::Stop()
 void StringDedup::NotifyWork()
 {
     std::lock_guard<std::mutex> lock(monitor);
+    requestsPending = true;
     workPending = true;
     condition.notify_all();
 }
@@ -511,6 +520,7 @@ ArrayRef StringDedup::Canonical(const TypeInfo* arrayInfo, ArrayRef candidate)
     }
     auto* found = static_cast<MArray*>(value.resolve());
     CHECK_DETAIL(found != nullptr, "dedup resolved entry must remain live");
+    NotifyWork();
     return found;
 }
 } // namespace MapleRuntime
