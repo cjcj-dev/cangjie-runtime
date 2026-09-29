@@ -99,9 +99,7 @@ FrameInfo GetCurFrameInfo(WinModuleManager& winModuleManager, Uptr pc, Uptr sp)
         frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(sp + stackOffset - 8));
     } else {
         FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(startProc));
-        Uptr* stackMapEntry = funcDesc->GetStackMap();
-        uint32_t validPos = 0;
-        stackOffset = EHFrameInfo::ReadVarInt(&stackMapEntry, validPos);
+        stackOffset = FramePrologue(funcDesc->GetStackMap()).GetFrameSize();
         Uptr* calleeFA = reinterpret_cast<Uptr*>(sp - 0x10);
         Uptr winRbp = reinterpret_cast<Uptr>(*calleeFA);
         frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(winRbp + stackOffset));
@@ -162,9 +160,7 @@ FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFr
     } else {
         if (status != UnwindContextStatus::RISKY && !(frameInfo.mFrame.IsRuntimeFrame())) {
             FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(startProc));
-            Uptr* stackMapEntry = funcDesc->GetStackMap();
-            uint32_t validPos = 0;
-            uint32_t stackOffset = EHFrameInfo::ReadVarInt(&stackMapEntry, validPos);
+            uint32_t stackOffset = FramePrologue(funcDesc->GetStackMap()).GetFrameSize();
             Uptr callerRbp = reinterpret_cast<Uptr>(curFrame.GetFA()->callerFrameAddress);
             frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(callerRbp + stackOffset));
         } else {
