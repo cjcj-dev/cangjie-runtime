@@ -199,7 +199,10 @@ static void CheckInPlaceRemset()
                                      : static_cast<ZGeneration&>(heap.old());
     generation.InitializeWorkers(workers);
     generation.Workers()->set_active_workers(workers);
-    heap.old().relocate_start();
+    {
+        ScopedStopTheWorld pause("old relocate start", false);
+        heap.old().relocate_start();
+    }
     GenerationSequenceFixture::Advance(generation);
     if (promote) { ZGenerationTest::SetTenuringThreshold(heap.young(), 1); }
 
@@ -1273,7 +1276,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
 
 extern "C" void CJ_MCC_StoreBarrierOnHeapField(volatile zpointer*);
 
-static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = false)
+static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = false, bool phase = false)
 {
     std::unique_ptr<B09RuntimeFixture> runtime;
     if (buffered) { runtime = std::make_unique<B09RuntimeFixture>(); }
@@ -1330,7 +1333,18 @@ static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = fa
     auto* forwarding = forwarding_for_page(source);
     ZGlobalsPointers::flip_young_relocate_start();
     young.set_phase(ZGenerationPhase::Relocate);
-    young.relocate().relocate(&young.relocation_set());
+    size_t expectedFreed = young.freed();
+    ZRelocationSetIterator selected(&young.relocation_set());
+    for (ZForwarding* owner; selected.next(&owner);) { expectedFreed += owner->size(); }
+    if (phase) {
+        young.concurrent_relocate();
+        const size_t actualFreed = young.freed();
+        std::fprintf(stderr, "FREED1313_TARGET flip=%d actual=%zu expected=%zu target_assertion=executed\n",
+                     flip, actualFreed, expectedFreed);
+        GC_EXPECT_EQ(actualFreed, expectedFreed);
+    } else {
+        young.relocate().relocate(&young.relocation_set());
+    }
     BaseObject* result = flip ? object : (forwarding == nullptr ? nullptr :
         reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(object))));
     if (result == nullptr) {
@@ -1366,3 +1380,44 @@ GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipOldControl) { CheckPromotionRemset131
 GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipNullControl) { CheckPromotionRemset1313(true, 2); }
 
 GC_COMPONENT_OTHER_VM_TEST(Remset1313, BufferedSlotRelocates) { CheckPromotionRemset1313(false, 2, true); }
+
+// ZGC zGeneration.cpp:850-853,933-940; zRelocate.cpp:1010.
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, PhaseRelocateFreed)
+{
+    CheckPromotionRemset1313(false, 0, false, true);
+}
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, PhaseFlipFreedControl)
+{
+    CheckPromotionRemset1313(true, 0, false, true);
+}
+
+// The old start captures parity once; later young starts only change the reader.
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, OldRelocateStartParity)
+{
+    B09RuntimeFixture runtime;
+    CreateStandaloneHeap(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& old = Heap::GetHeap().old();
+    auto& young = Heap::GetHeap().young();
+    old.InitializeWorkers(1);
+    old.Workers()->set_active_workers(1);
+    GenerationSequenceFixture::Advance(young);
+    old.set_phase(ZGenerationPhase::MarkComplete);
+    {
+        ScopedStopTheWorld pause("old relocate parity", false);
+        old.relocate_start();
+    }
+    const bool phase = old.GcPhase() == ZGenerationPhase::Relocate;
+    const bool queue = old.relocate().queue()->is_active();
+    const bool initial = old.active_remset_is_current();
+    GenerationSequenceFixture::Advance(young);
+    const bool flipped = old.active_remset_is_current();
+    GenerationSequenceFixture::Advance(young);
+    const bool restored = old.active_remset_is_current();
+    std::fprintf(stderr, "PARITY1313_TARGET phase=%d queue=%d initial=%d flipped=%d restored=%d target_assertion=executed\n",
+                 phase, queue, initial, flipped, restored);
+    GC_EXPECT_TRUE(initial && !flipped && restored);
+    GC_EXPECT_TRUE(phase && queue);
+    old.concurrent_relocate();
+}
