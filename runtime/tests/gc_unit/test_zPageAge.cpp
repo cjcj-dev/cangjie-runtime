@@ -180,8 +180,8 @@ void CheckRemsetPrecondition(const char* test, bool previous, bool live,
                 GC_EXPECT_FALSE(page.is_marked());
             }
         }
-        std::fprintf(stderr, "REMSET1272_ENTER target=%s allocating=%d phase_mark=%d\n",
-                     diagnostic, page.is_allocating(), ZGeneration::old()->is_phase_mark());
+        std::fprintf(stderr, "REMSET1272_ENTER test=%s allocating=%d phase_mark=%d\n",
+                     test, page.is_allocating(), ZGeneration::old()->is_phase_mark());
         page.oops_do_remembered_in_live([](volatile zpointer*) {});
     } else {
         const bool result = previous ? page.was_remembered(slot) : page.is_remembered(slot);
