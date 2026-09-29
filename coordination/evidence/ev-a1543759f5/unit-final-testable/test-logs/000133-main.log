@@ -1,0 +1,5 @@
+[  RUN   ] UnwindRegress.SignalFrameAppendDoesNotOverlap
+3112433 E   #0  0x5c97ddb2b7a0 in sprintf_s from /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+SIGNAL_FRAME_DIRECT_SPRINTF_CALLS=1 SIGNAL_FRAME_OVERLAPPING_SPRINTF_CALLS=0
+[  PASS  ] UnwindRegress.SignalFrameAppendDoesNotOverlap
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] ManagedMetadata.HeadPresent
+METADATA_TARGET entry=0 desc=1 map=1 status=0 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.HeadPresent
+[========] 1 tests: 1 passed, 0 failed

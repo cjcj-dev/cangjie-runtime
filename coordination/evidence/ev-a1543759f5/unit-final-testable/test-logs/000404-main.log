@@ -1,0 +1,6 @@
+[  RUN   ] P10OldMarkThread.ParkedMutatorStackRootConsumedByWorker
+[  RUN   ] P10OldMarkThread.ParkedMutatorStackRootConsumedByWorker
+P10_OLD_MARK_THREAD_ASSERT_EXECUTED live=1 done=1 epoch=6416
+GC_UNIT_OTHER_VM_OKIDOKI P10OldMarkThread.ParkedMutatorStackRootConsumedByWorker
+[  PASS  ] P10OldMarkThread.ParkedMutatorStackRootConsumedByWorker
+[========] 1 tests: 1 passed, 0 failed

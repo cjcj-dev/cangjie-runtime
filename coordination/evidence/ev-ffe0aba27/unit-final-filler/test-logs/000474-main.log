@@ -1,0 +1,3 @@
+[  RUN   ] ZVirtualMemory.shrink_from_front
+[  PASS  ] ZVirtualMemory.shrink_from_front
+[========] 1 tests: 1 passed, 0 failed

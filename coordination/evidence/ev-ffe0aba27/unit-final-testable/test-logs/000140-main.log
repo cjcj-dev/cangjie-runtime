@@ -1,0 +1,4 @@
+[  RUN   ] FramePrologue.DecodesSizeAndSavedSlots
+PROLOGUE_RESULT size=12345678 format=1 slots=1 above_head=1 next=7
+[  PASS  ] FramePrologue.DecodesSizeAndSavedSlots
+[========] 1 tests: 1 passed, 0 failed

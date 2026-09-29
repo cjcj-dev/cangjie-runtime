@@ -1,0 +1,4 @@
+[  RUN   ] SyncNativeWait.FutureInitHasNoHeapWaitQueue
+SYNC_FUTURE_INIT_NATIVE_ASSERT_EXECUTED
+[  PASS  ] SyncNativeWait.FutureInitHasNoHeapWaitQueue
+[========] 1 tests: 1 passed, 0 failed

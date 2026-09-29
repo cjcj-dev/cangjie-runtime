@@ -1,0 +1,8 @@
+[  RUN   ] Uncommitter.PeriodicUncommitStopsAfterCancel
+[  RUN   ] Uncommitter.PeriodicUncommitStopsAfterCancel
+DETAIL probe n=32
+DETAIL probe cache ready committed=67108864 cached=32
+DETAIL backendReleased=0 cancelFirst=1 unit=2097152 capacity before=67108864 after=67108864
+GC_UNIT_OTHER_VM_OKIDOKI Uncommitter.PeriodicUncommitStopsAfterCancel
+[  PASS  ] Uncommitter.PeriodicUncommitStopsAfterCancel
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] P10Roots.PackedWatermarkState
+P10_WATERMARK_PACK_ASSERT_EXECUTED state=23
+[  PASS  ] P10Roots.PackedWatermarkState
+[========] 1 tests: 1 passed, 0 failed

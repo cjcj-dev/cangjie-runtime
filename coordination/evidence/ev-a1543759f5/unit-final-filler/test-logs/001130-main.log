@@ -1,0 +1,4 @@
+[  RUN   ] LoadPreloaded.WeakCompetingStoreReturnsObservedValue
+PRELOADED_WEAK_RESULT actual=0x40000800040 expected=0x40000800040
+[  PASS  ] LoadPreloaded.WeakCompetingStoreReturnsObservedValue
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] StackWatermark.RemapRetainsLogicalStackIdentityAcrossGrow
+GROW_RESULT mark=7ffe72a23438 last=7ffe72a23450 color=7
+[  PASS  ] StackWatermark.RemapRetainsLogicalStackIdentityAcrossGrow
+[========] 1 tests: 1 passed, 0 failed

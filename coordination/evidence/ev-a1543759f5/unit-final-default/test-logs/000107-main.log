@@ -1,0 +1,3 @@
+[  RUN   ] DefectRegress.ExportHandleStaleReuseDoesNotTouchNewOccupant
+[  PASS  ] DefectRegress.ExportHandleStaleReuseDoesNotTouchNewOccupant
+[========] 1 tests: 1 passed, 0 failed

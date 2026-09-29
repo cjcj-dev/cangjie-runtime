@@ -1,0 +1,7 @@
+[  RUN   ] ConcurrencyRootColor.ThreadObjectOverwriteKeepsOldGroupAlive
+[  RUN   ] ConcurrencyRootColor.ThreadObjectOverwriteKeepsOldGroupAlive
+CONCURRENCY_KEEPALIVE_BEFORE obj=0 thread=0
+CONCURRENCY_KEEPALIVE_TARGET obj=1 thread=1
+GC_UNIT_OTHER_VM_OKIDOKI ConcurrencyRootColor.ThreadObjectOverwriteKeepsOldGroupAlive
+[  PASS  ] ConcurrencyRootColor.ThreadObjectOverwriteKeepsOldGroupAlive
+[========] 1 tests: 1 passed, 0 failed

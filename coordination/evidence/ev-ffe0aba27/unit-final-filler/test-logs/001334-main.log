@@ -1,0 +1,71 @@
+[  RUN   ] ZVerify.RuntimeRejectsStaleMarkStackAtStart
+[  RUN   ] ZVerify.RuntimeRejectsStaleMarkStackAtStart
+[  RUN   ] ZVerify.RuntimeRejectsStaleMarkStackAtStart
+[  RUN   ] ZVerify.RuntimeRejectsStaleMarkStackAtStart
+VERIFY_PRODUCT_MAPS_BEGIN
+5e17adcc5000-5e17adce3000 r--p 00000000 103:05 9437799                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+5e17adce3000-5e17adedf000 r-xp 0001e000 103:05 9437799                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+5e17adedf000-5e17adfa2000 r--p 0021a000 103:05 9437799                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+5e17adfa2000-5e17adfa5000 r--p 002dc000 103:05 9437799                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+5e17adfa5000-5e17adfa7000 rw-p 002df000 103:05 9437799                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+5e17adfa7000-5e17adfb0000 rw-p 00000000 00:00 0 
+5e17ed75d000-5e17ed7c0000 rw-p 00000000 00:00 0                          [heap]
+71cba3a00000-71cba3a28000 r--p 00000000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71cba3a28000-71cba3bbd000 r-xp 00028000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71cba3bbd000-71cba3c15000 r--p 001bd000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71cba3c15000-71cba3c16000 ---p 00215000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71cba3c16000-71cba3c1a000 r--p 00215000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71cba3c1a000-71cba3c1c000 rw-p 00219000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+71cba3c1c000-71cba3c29000 rw-p 00000000 00:00 0 
+71cba3e00000-71cba3e9a000 r--p 00000000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+71cba3e9a000-71cba3fab000 r-xp 0009a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+71cba3fab000-71cba401a000 r--p 001ab000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+71cba401a000-71cba401b000 ---p 0021a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+71cba401b000-71cba4026000 r--p 0021a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+71cba4026000-71cba4029000 rw-p 00225000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+71cba4029000-71cba402c000 rw-p 00000000 00:00 0 
+71cba402d000-71cba4033000 rw-p 00000000 00:00 0 
+71cba4033000-71cba4036000 r--p 00000000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+71cba4036000-71cba404d000 r-xp 00003000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+71cba404d000-71cba4051000 r--p 0001a000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+71cba4051000-71cba4052000 r--p 0001d000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+71cba4052000-71cba4053000 rw-p 0001e000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+71cba4053000-71cba4061000 r--p 00000000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+71cba4061000-71cba40dd000 r-xp 0000e000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+71cba40dd000-71cba4138000 r--p 0008a000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+71cba4138000-71cba4139000 r--p 000e4000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+71cba4139000-71cba413a000 rw-p 000e5000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+71cba414a000-71cba414c000 r--p 00000000 103:05 9883874                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+71cba414c000-71cba4158000 r-xp 00002000 103:05 9883874                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+71cba4158000-71cba415b000 r--p 0000e000 103:05 9883874                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+71cba415b000-71cba415c000 r--p 00010000 103:05 9883874                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+71cba415c000-71cba415d000 rw-p 00011000 103:05 9883874                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+71cba415d000-71cba41cf000 r--p 00000000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+71cba41cf000-71cba42bb000 r-xp 00072000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+71cba42bb000-71cba42fe000 r--p 0015e000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+71cba42fe000-71cba42ff000 ---p 001a1000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+71cba42ff000-71cba4302000 r--p 001a1000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+71cba4302000-71cba4304000 rw-p 001a4000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+71cba4304000-71cba431c000 rw-p 00000000 00:00 0 
+71cba431c000-71cba431e000 r--p 00000000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+71cba431e000-71cba4348000 r-xp 00002000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+71cba4348000-71cba4353000 r--p 0002c000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+71cba4354000-71cba4356000 r--p 00037000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+71cba4356000-71cba4358000 rw-p 00039000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7ffed053b000-7ffed055c000 rw-p 00000000 00:00 0                          [stack]
+7ffed05c9000-7ffed05cd000 r--p 00000000 00:00 0                          [vvar]
+7ffed05cd000-7ffed05cf000 r-xp 00000000 00:00 0                          [vdso]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
+VERIFY_PRODUCT_MAPS_END
+VERIFY_RUNTIME_MARK_START published_stacks=1
+2026-09-30 00:28:29.543317 270494 F Check failed: stripes.IsEmpty()
+2026-09-30 00:28:29.543351 270494 F Shared marking stripes are not empty
+270494 E signal SIGABRT (6) pc=0x71cba3a969bc fa=0x4209e si_addr=0x41aac
+[GCLOG] v=3 rec=crash seq=1 signo=6 signame=SIGABRT si_code=-6 si_codename=SI_TKILL si_addr=0x41aac pc=0x71cba3a969bc pc_mod=libc.so.6 pc_off=0x969bc sym=pthread_kill rbp=0x4209e gc_phase=Mark gc_kind=active in_par_fix=0 regs=rax=0x0,rbx=0x71cba0f3c640,rcx=0x71cba3a969bc,rdx=0x6,rsi=0x4209e,rdi=0x41aac,rbp=0x4209e,rsp=0x71cba0f39560,r8=0x71cba0f39630,r9=0x71cba0f39730,r10=0x8,r11=0x246,r12=0x6,r13=0x16,r14=0x71cba43038c0,r15=0x71cba43038d8,rip=0x71cba3a969bc insn=4189c541f7dd3d00f0ffffb800000000 assert=Shared_marking_stripes_are_not_empty
+270494 E CJNative Handle signal: 6.
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+VERIFY_TARGET_ASSERT_EXECUTED diagnostic=Shared marking stripes are not empty matched=1
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.RuntimeRejectsStaleMarkStackAtStart
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.RuntimeRejectsStaleMarkStackAtStart
+[  PASS  ] ZVerify.RuntimeRejectsStaleMarkStackAtStart
+[========] 1 tests: 1 passed, 0 failed

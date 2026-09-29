@@ -1,0 +1,51 @@
+[  RUN   ] SegmentedArrayInit.LargeReferenceArrayPublishesClearedPayload
+[  RUN   ] SegmentedArrayInit.LargeReferenceArrayPublishesClearedPayload
+SEGMENTED_RESULT_TARGET mode=0 size=8388608 length=1 published=1 mismatches=0 before=1 after=1 gc=1 expected=0x1510 uninterrupted=1
+2026-09-30 00:27:57.369058 3623551 I GC Workers for Young Generation: 5 (static)
+2026-09-30 00:27:57.369901 3623551 I GC Workers for Old Generation: 5 (static)
+2026-09-30 00:27:57.371224 3626281 I FinalizerProcessor thread started
+2026-09-30 00:27:57.371442 3623551 I Uncommit: Enabled delay=300s
+2026-09-30 00:27:57.371649 3623551 I Cangjie runtime started.
+2026-09-30 00:27:58.414297 3626281 I FinalizerProcessor thread stopped
+2026-09-30 00:27:58.415110 3626207 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-30 00:27:58.415255 3626207 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:27:58.415320 3626207 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:27:58.415377 3626207 I Critical: Finalizer 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:27:58.415432 3626207 I Critical: Finalizer 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.415487 3626207 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:27:58.415537 3626207 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.415588 3626207 I Major Collection: Major Collection 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.415638 3626207 I Memory: Allocation Rate 0/0 0/0 0/0 0/0 B/s
+2026-09-30 00:27:58.415688 3626207 I Minor Collection: Minor Collection 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.415738 3626207 I Old Generation: Old Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.415787 3626207 I Old Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.415837 3626207 I Old Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.415895 3626207 I Old Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.415945 3626207 I Old Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.415994 3626207 I Old Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416051 3626207 I Old Phase: Concurrent Process Non-Strong 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416102 3626207 I Old Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416152 3626207 I Old Phase: Concurrent Remap Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416201 3626207 I Old Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416254 3626207 I Old Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416307 3626207 I Old Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416363 3626207 I Old Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416419 3626207 I Old Subphase: Concurrent References Enqueue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416454 3626207 I Old Subphase: Concurrent References Process 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416488 3626207 I Old Subphase: Concurrent Remap Remembered 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416522 3626207 I Old Subphase: Concurrent Remap Roots Colored 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416556 3626207 I Old Subphase: Concurrent Remap Roots Uncolored 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416590 3626207 I Old Subphase: PostTrace 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416624 3626207 I Test: Unobserved 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416658 3626207 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416692 3626207 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416726 3626207 I Young Generation: Young Generation (Collect Roots) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416760 3626207 I Young Generation: Young Generation (Promote All) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416793 3626207 I Young Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416827 3626207 I Young Pause: Pause Mark Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416861 3626207 I Young Pause: Pause Mark Start (Major) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416895 3626207 I Young Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416928 3626207 I Young Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:27:58.416962 3626207 I Young Phase: Concurrent Mark ConGC_UNIT_OTHER_VM_OKIDOKI SegmentedArrayInit.LargeReferenceArrayPublishesClearedPayload
+[  PASS  ] SegmentedArrayInit.LargeReferenceArrayPublishesClearedPayload
+[========] 1 tests: 1 passed, 0 failed

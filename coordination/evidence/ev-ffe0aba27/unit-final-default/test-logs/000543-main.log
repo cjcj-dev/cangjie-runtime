@@ -1,0 +1,92 @@
+[  RUN   ] PrecleanWithoutShutdown.WhiteBox
+2026-09-30 00:27:55.060306 3562024 I GC Workers for Young Generation: 1 (static)
+2026-09-30 00:27:55.063028 3562024 I GC Workers for Old Generation: 1 (static)
+2026-09-30 00:27:55.063432 3563135 I FinalizerProcessor thread started
+2026-09-30 00:27:55.063750 3562024 I Uncommit: Enabled delay=300s
+2026-09-30 00:27:55.063831 3562024 I Cangjie runtime started.
+2026-09-30 00:27:55.086945 3562982 I Pause Mark Start stw time 52 us
+2026-09-30 00:27:55.087179 3562982 I Pause Mark End stw time 7 us
+2026-09-30 00:27:55.087308 3562982 I Pause Relocate Start stw time 1 us
+2026-09-30 00:27:55.087401 3562982 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:27:55.087455 3562982 I Allocation Stalls:            0            0              0            0
+2026-09-30 00:27:55.087521 3562982 I Load: 91.61 (48%) / 87.40 (46%) / 90.88 (47%)
+2026-09-30 00:27:55.087589 3562982 I MMU: 2ms/98.8%, 5ms/99.5%, 10ms/99.8%, 20ms/99.9%, 50ms/100.0%, 100ms/100.0%
+2026-09-30 00:27:55.087645 3562982 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-30 00:27:55.087699 3562982 I Min Capacity: 0M
+2026-09-30 00:27:55.087752 3562982 I Max Capacity: 64M
+2026-09-30 00:27:55.087806 3562982 I Soft Max Capacity: 64M
+2026-09-30 00:27:55.087859 3562982 I Heap Statistics:
+2026-09-30 00:27:55.087912 3562982 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-30 00:27:55.087966 3562982 I Capacity:              8M           8M             8M           8M           8M           8M
+2026-09-30 00:27:55.088020 3562982 I Free:                 64M          64M            64M          64M          64M          64M
+2026-09-30 00:27:55.088083 3562982 I Used:                  0M           0M             0M           0M           0M           0M
+2026-09-30 00:27:55.088136 3562982 I Young Generation Statistics:
+2026-09-30 00:27:55.088189 3562982 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:27:55.088242 3562982 I Used:                  0M           0M             0M           0M
+2026-09-30 00:27:55.088295 3562982 I Live:                 N/A           0M             0M           0M
+2026-09-30 00:27:55.088348 3562982 I Garbage:              N/A           0M             0M           0M
+2026-09-30 00:27:55.088402 3562982 I Allocated:            N/A           0M             0M           0M
+2026-09-30 00:27:55.088455 3562982 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-30 00:27:55.088509 3562982 I Promoted:             N/A          N/A             0M           0M
+2026-09-30 00:27:55.088563 3562982 I Compacted:            N/A          N/A           N/A           0M
+2026-09-30 00:27:55.088616 3562982 I Young Generation (Promote All) 0M->0M 0.001s
+2026-09-30 00:27:55.088692 3562982 I Pause Mark Start (Major) stw time 19 us
+2026-09-30 00:27:55.088812 3562982 I Pause Mark End stw time 5 us
+2026-09-30 00:27:55.088924 3562982 I Pause Relocate Start stw time 1 us
+2026-09-30 00:27:55.089012 3562982 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:27:55.089074 3562982 I Allocation Stalls:            0            0              0            0
+2026-09-30 00:27:55.089130 3562982 I Load: 91.61 (48%) / 87.40 (46%) / 90.88 (47%)
+2026-09-30 00:27:55.089187 3562982 I MMU: 2ms/97.7%, 5ms/99.1%, 10ms/99.5%, 20ms/99.8%, 50ms/99.9%, 100ms/100.0%
+2026-09-30 00:27:55.089243 3562982 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-30 00:27:55.089297 3562982 I Min Capacity: 0M
+2026-09-30 00:27:55.089350 3562982 I Max Capacity: 64M
+2026-09-30 00:27:55.089402 3562982 I Soft Max Capacity: 64M
+2026-09-30 00:27:55.089456 3562982 I Heap Statistics:
+2026-09-30 00:27:55.089509 3562982 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-30 00:27:55.089563 3562982 I Capacity:              8M           8M             8M           8M           8M           8M
+2DRIVER_CAUSE_TARGET cause=1 minor=0 done=1 young=2 old=1 clear=1 expected_clear=1 expected_young=2
+PRECLEAN_TASK_COMPLETED cause=1 result=0 shutdown=excluded
+026-09-30 00:27:55.089616 3562982 I Free:                 64M          64M            64M          64M          64M          64M
+2026-09-30 00:27:55.089697 3562982 I Used:                  0M           0M             0M           0M           0M           0M
+2026-09-30 00:27:55.089751 3562982 I Young Generation Statistics:
+2026-09-30 00:27:55.089804 3562982 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:27:55.089857 3562982 I Used:                  0M           0M             0M           0M
+2026-09-30 00:27:55.089911 3562982 I Live:                 N/A           0M             0M           0M
+2026-09-30 00:27:55.089964 3562982 I Garbage:              N/A           0M             0M           0M
+2026-09-30 00:27:55.090018 3562982 I Allocated:            N/A           0M             0M           0M
+2026-09-30 00:27:55.090079 3562982 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-30 00:27:55.090133 3562982 I Promoted:             N/A          N/A             0M           0M
+2026-09-30 00:27:55.090186 3562982 I Compacted:            N/A          N/A           N/A           0M
+2026-09-30 00:27:55.090240 3562982 I Young Generation (Collect Roots) 0M->0M 0.000s
+2026-09-30 00:27:55.090344 3562982 I Pause Mark End stw time 4 us
+2026-09-30 00:27:55.090443 3562982 I Pause Relocate Start stw time 1 us
+2026-09-30 00:27:55.090515 3562982 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:27:55.090567 3562982 I Allocation Stalls:            0            0              0            0
+2026-09-30 00:27:55.090620 3562982 I Load: 91.61 (48%) / 87.40 (46%) / 90.88 (47%)
+2026-09-30 00:27:55.090675 3562982 I MMU: 2ms/97.7%, 5ms/99.0%, 10ms/99.5%, 20ms/99.8%, 50ms/99.9%, 100ms/100.0%
+2026-09-30 00:27:55.090729 3562982 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-30 00:27:55.090782 3562982 I References:           Encountered   Discovered     Enqueued
+2026-09-30 00:27:55.090834 3562982 I Soft                            0            0            0
+2026-09-30 00:27:55.090886 3562982 I Weak                            0            0            0
+2026-09-30 00:27:55.090938 3562982 I Final                           0            0            0
+2026-09-30 00:27:55.090989 3562982 I Phantom                         0            0            0
+2026-09-30 00:27:55.091048 3562982 I Min Capacity: 0M
+2026-09-30 00:27:55.091100 3562982 I Max Capacity: 64M
+2026-09-30 00:27:55.091151 3562982 I Soft Max Capacity: 64M
+2026-09-30 00:27:55.091203 3562982 I Heap Statistics:
+2026-09-30 00:27:55.091257 3562982 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-30 00:27:55.091310 3562982 I Capacity:              8M           8M             8M           8M           8M           8M
+2026-09-30 00:27:55.091364 3562982 I Free:                 64M          64M            64M          64M          64M          64M
+2026-09-30 00:27:55.091417 3562982 I Used:                  0M           0M             0M           0M           0M           0M
+2026-09-30 00:27:55.091471 3562982 I Old Generation Statistics:
+2026-09-30 00:27:55.091524 3562982 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:27:55.091578 3562982 I Used:                  0M           0M             0M           0M
+2026-09-30 00:27:55.091631 3562982 I Live:                 N/A           0M             0M           0M
+2026-09-30 00:27:55.091685 3562982 I Garbage:              N/A           0M             0M           0M
+2026-09-30 00:27:55.091738 3562982 I Allocated:            N/A           0M             0M           0M
+2026-09-30 00:27:55.091792 3562982 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-30 00:27:55.091847 3562982 I Compacted:            N/A          N/A           N/A           0M
+2026-09-30 00:27:55.091901 3562982 I Old Generation 0M->0M 0.000s
+PRECLEAN_CHILD_EXIT cause=1 status=0
+[  PASS  ] PrecleanWithoutShutdown.WhiteBox
+[========] 1 tests: 1 passed, 0 failed

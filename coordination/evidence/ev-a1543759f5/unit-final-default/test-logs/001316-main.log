@@ -1,0 +1,4 @@
+[  RUN   ] SyncNativeWait.WeakHandleOnSyncStorageResolves
+SYNC_NATIVE_WEAK_RESOLVE_ASSERT_EXECUTED
+[  PASS  ] SyncNativeWait.WeakHandleOnSyncStorageResolves
+[========] 1 tests: 1 passed, 0 failed

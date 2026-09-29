@@ -1,0 +1,5 @@
+[  RUN   ] YoungConc.BulkWritePublishesSatbWithoutYoungRegions
+[  RUN   ] YoungConc.BulkWritePublishesSatbWithoutYoungRegions
+GC_UNIT_OTHER_VM_OKIDOKI YoungConc.BulkWritePublishesSatbWithoutYoungRegions
+[  PASS  ] YoungConc.BulkWritePublishesSatbWithoutYoungRegions
+[========] 1 tests: 1 passed, 0 failed

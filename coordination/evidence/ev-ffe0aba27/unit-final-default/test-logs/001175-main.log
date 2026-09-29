@@ -1,0 +1,4 @@
+[  RUN   ] AccessBarrier976.PrimitiveValueNoReferences
+VALUE976_PAYLOAD_TARGET refs=0 begin=0 end=31 matches=1
+[  PASS  ] AccessBarrier976.PrimitiveValueNoReferences
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,8 @@
+[  RUN   ] ZStat.ProductPhaseSamplesReachStatistics
+[  RUN   ] ZStat.ProductPhaseSamplesReachStatistics
+ZSTAT_PRODUCT_RECORD Major Collection: Major Collection 0/0 0/0 0/0 0/0 ns
+ZSTAT_PRODUCT_RECORD Major Collection: Major Collection 3364992/3364992 3364992/3364992 3364992/3364992 3364992/3364992 ns
+ZSTAT_SAMPLE_TARGET executed=1 status=0 before=1 changed=1 returned=1
+GC_UNIT_OTHER_VM_OKIDOKI ZStat.ProductPhaseSamplesReachStatistics
+[  PASS  ] ZStat.ProductPhaseSamplesReachStatistics
+[========] 1 tests: 1 passed, 0 failed

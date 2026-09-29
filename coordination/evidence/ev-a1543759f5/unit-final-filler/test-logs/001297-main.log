@@ -1,0 +1,68 @@
+[  RUN   ] PackageInit.LibInitTransitionsNativeCallerToManagedBody
+[  RUN   ] PackageInit.LibInitTransitionsNativeCallerToManagedBody
+PACKAGE_INIT_TARGET runtime-start executed=1 pass=1
+PACKAGE_INIT_TARGET configured-scheduler-workers executed=1 pass=1
+PACKAGE_INIT_TARGET unattached-after-runtime-init executed=1 pass=1
+PACKAGE_INIT_TARGET scheduler-admission executed=1 pass=1
+PACKAGE_INIT_TARGET libinit-native-caller-control executed=1 pass=1
+PACKAGE_INIT_TARGET libinit-body-has-managed-access executed=1 pass=1
+PACKAGE_INIT_TARGET libinit-managed-entry-return executed=1 pass=1
+PACKAGE_INIT_TARGET libinit-restores-native-state executed=1 pass=1
+PACKAGE_INIT_TARGET libinit-body-actually-executed executed=1 pass=1
+2026-09-29 23:56:40.888521 3242483 I GC Workers for Young Generation: 1 (static)
+2026-09-29 23:56:40.888825 3242483 I GC Workers for Old Generation: 1 (static)
+2026-09-29 23:56:40.889311 3243188 I FinalizerProcessor thread started
+2026-09-29 23:56:40.889666 3242483 I Uncommit: Enabled delay=300s
+2026-09-29 23:56:40.889791 3242483 I Cangjie runtime started.
+2026-09-29 23:56:41.909799 3243188 I FinalizerProcessor thread stopped
+2026-09-29 23:56:41.910123 3243169 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-29 23:56:41.910416 3243169 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:41.910528 3243169 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:41.910603 3243169 I Critical: Finalizer 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:41.910676 3243169 I Critical: Finalizer 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.910749 3243169 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:41.910822 3243169 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.910895 3243169 I Major Collection: Major Collection 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.910968 3243169 I Memory: Allocation Rate 0/0 0/0 0/0 0/0 B/s
+2026-09-29 23:56:41.911051 3243169 I Minor Collection: Minor Collection 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911124 3243169 I Old Generation: Old Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911197 3243169 I Old Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911270 3243169 I Old Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911343 3243169 I Old Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911415 3243169 I Old Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911487 3243169 I Old Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911559 3243169 I Old Phase: Concurrent Process Non-Strong 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911632 3243169 I Old Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911702 3243169 I Old Phase: Concurrent Remap Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911760 3243169 I Old Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911818 3243169 I Old Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911875 3243169 I Old Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911933 3243169 I Old Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.911991 3243169 I Old Subphase: Concurrent References Enqueue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912055 3243169 I Old Subphase: Concurrent References Process 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912113 3243169 I Old Subphase: Concurrent Remap Remembered 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912171 3243169 I Old Subphase: Concurrent Remap Roots Colored 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912229 3243169 I Old Subphase: Concurrent Remap Roots Uncolored 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912287 3243169 I Old Subphase: PostTrace 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912345 3243169 I Test: Unobserved 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912403 3243169 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912462 3243169 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912520 3243169 I Young Generation: Young Generation (Collect Roots) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912578 3243169 I Young Generation: Young Generation (Promote All) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912635 3243169 I Young Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912693 3243169 I Young Pause: Pause Mark Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912751 3243169 I Young Pause: Pause Mark Start (Major) 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912809 3243169 I Young Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912867 3243169 I Young Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.912924 3243169 I Young Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.913006 3243169 I Young Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.913072 3243169 I Young Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.913131 3243169 I Young Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.913189 3243169 I Young Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.913247 3243169 I Young Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.913305 3243169 I Young Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-29 23:56:41.919724 3242417 I Cangjie runtime shutdown.
+PACKAGE_INIT_TARGET runtime-finish executed=1 pass=1
+GC_UNIT_OTHER_VM_OKIDOKI PackageInit.LibInitTransitionsNativeCallerToManagedBody
+[  PASS  ] PackageInit.LibInitTransitionsNativeCallerToManagedBody
+[========] 1 tests: 1 passed, 0 failed

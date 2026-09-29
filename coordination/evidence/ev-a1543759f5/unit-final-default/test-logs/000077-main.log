@@ -1,0 +1,4 @@
+[  RUN   ] ZStat.RegistrySortedWithoutChangingIdentity
+ZSTAT_SORT_ASSERT_EXECUTED comparisons=44 sorted=1
+[  PASS  ] ZStat.RegistrySortedWithoutChangingIdentity
+[========] 1 tests: 1 passed, 0 failed

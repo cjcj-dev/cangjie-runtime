@@ -1,0 +1,4 @@
+[  RUN   ] ThreadOffsetABI1158.g_cjStoreBarrierBufferOffsetIsNotExported
+OFFSET_ABI_TARGET symbol=g_cjStoreBarrierBufferOffset exported=0
+[  PASS  ] ThreadOffsetABI1158.g_cjStoreBarrierBufferOffsetIsNotExported
+[========] 1 tests: 1 passed, 0 failed

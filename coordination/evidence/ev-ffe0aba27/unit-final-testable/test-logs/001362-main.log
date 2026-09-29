@@ -1,0 +1,4 @@
+[  RUN   ] MarkPort203Engine.RebalanceImbalancePublishesLocalStack
+REBALANCE_FLUSH_TARGET executed=1 branch=unsaturated result=2 first=2 second=81
+[  PASS  ] MarkPort203Engine.RebalanceImbalancePublishesLocalStack
+[========] 1 tests: 1 passed, 0 failed

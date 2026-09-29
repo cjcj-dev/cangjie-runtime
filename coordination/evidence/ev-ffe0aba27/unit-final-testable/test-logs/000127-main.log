@@ -1,0 +1,4 @@
+[  RUN   ] ZLiveMapPage.reset_publication_preserves_peer_mark
+P02_RESET_PUBLICATION peer_live=1 objects=2 claims=2
+[  PASS  ] ZLiveMapPage.reset_publication_preserves_peer_mark
+[========] 1 tests: 1 passed, 0 failed

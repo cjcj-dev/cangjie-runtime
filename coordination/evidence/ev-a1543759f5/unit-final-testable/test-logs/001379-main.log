@@ -1,0 +1,7 @@
+[  RUN   ] ExitDetachMarkEnd.RequestAtActiveTransitionReleasesLock
+[  RUN   ] ExitDetachMarkEnd.RequestAtActiveTransitionReleasesLock
+EXIT_REQUEST_RESULT executed=1 active=1 owner=1 lock_available=1
+EXIT_REQUEST_TARGET executed=1 blocked=1 completed=1 lock_available=1
+GC_UNIT_OTHER_VM_OKIDOKI ExitDetachMarkEnd.RequestAtActiveTransitionReleasesLock
+[  PASS  ] ExitDetachMarkEnd.RequestAtActiveTransitionReleasesLock
+[========] 1 tests: 1 passed, 0 failed

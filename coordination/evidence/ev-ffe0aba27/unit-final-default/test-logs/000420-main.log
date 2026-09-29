@@ -1,0 +1,4 @@
+[  RUN   ] BarrierOldAtomic.AtomicColourOnlyHealsRealSlot
+DETAIL arm=atomic_colour before=0x100002000102510 after=0x80001000081530 returned=0x40000800040 target=0x40000800040 load_good=1
+[  PASS  ] BarrierOldAtomic.AtomicColourOnlyHealsRealSlot
+[========] 1 tests: 1 passed, 0 failed

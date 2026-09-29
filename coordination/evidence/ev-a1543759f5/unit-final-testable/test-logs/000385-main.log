@@ -1,0 +1,5 @@
+[  RUN   ] HeapIterator.WeakRootIsIncludedOnlyInWeakInclusiveMode
+[  RUN   ] HeapIterator.WeakRootIsIncludedOnlyInWeakInclusiveMode
+GC_UNIT_OTHER_VM_OKIDOKI HeapIterator.WeakRootIsIncludedOnlyInWeakInclusiveMode
+[  PASS  ] HeapIterator.WeakRootIsIncludedOnlyInWeakInclusiveMode
+[========] 1 tests: 1 passed, 0 failed

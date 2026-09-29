@@ -1,0 +1,14 @@
+[  RUN   ] SoftMaxHeapSize.ExplicitEnvironment
+[  RUN   ] SoftMaxHeapSize.ExplicitEnvironment
+SOFT_MAX_TARGET configured=128MB max=536870912 soft=134217728 expected=134217728
+SOFT_MAX_ASSERT hard_match=1 soft_match=1 expected_soft=134217728
+2026-09-30 00:27:57.509594 3628069 I GC Workers for Young Generation: 2 (static)
+2026-09-30 00:27:57.511014 3628069 I GC Workers for Old Generation: 2 (static)
+2026-09-30 00:27:57.511990 3629531 I FinalizerProcessor thread started
+2026-09-30 00:27:57.512423 3628069 I Uncommit: Enabled delay=300s
+2026-09-30 00:27:57.512515 3628069 I Cangjie runtime started.
+2026-09-30 00:27:57.516069 3629531 I FinalizerProcessor thread stopped
+2026-09-30 00:27:57.526302 3627864 I Cangjie runtime shutdown.
+GC_UNIT_OTHER_VM_OKIDOKI SoftMaxHeapSize.ExplicitEnvironment
+[  PASS  ] SoftMaxHeapSize.ExplicitEnvironment
+[========] 1 tests: 1 passed, 0 failed

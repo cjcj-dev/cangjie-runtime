@@ -1,0 +1,50 @@
+[  RUN   ] SegmentedArrayInit.YoungGcRepairsIncompleteArrayRoot
+[  RUN   ] SegmentedArrayInit.YoungGcRepairsIncompleteArrayRoot
+SEGMENTED_GC_WINDOW mode=young before=1 after=2 root=1 fields=0
+SEGMENTED_PASSES_TARGET requested=1 passes=2 expected=2
+SEGMENTED_RESULT_TARGET mode=4 size=8388608 length=1 published=1 mismatches=0 before=1 after=2 gc=1 expected=0x2630 uninterrupted=1
+2026-09-29 23:56:11.892549 3146624 I GC Workers for Young Generation: 5 (static)
+2026-09-29 23:56:11.893485 3146624 I GC Workers for Old Generation: 5 (static)
+2026-09-29 23:56:11.893956 3146962 I FinalizerProcessor thread started
+2026-09-29 23:56:11.897135 3146624 I Uncommit: Enabled delay=300s
+2026-09-29 23:56:11.897381 3146624 I Cangjie runtime started.
+2026-09-29 23:56:12.921943 3146900 I Pause Mark Start stw time 42 us
+2026-09-29 23:56:12.922207 3146900 I Pause Mark End stw time 9 us
+2026-09-29 23:56:12.922398 3146900 I Pause Relocate Start stw time 1 us
+2026-09-29 23:56:12.922477 3146900 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:12.922509 3146900 I Allocation Stalls:            0            0              0            0
+2026-09-29 23:56:12.922547 3146900 I Load: 55.02 (29%) / 44.01 (23%) / 56.85 (30%)
+2026-09-29 23:56:12.922590 3146900 I MMU: 2ms/98.5%, 5ms/99.4%, 10ms/99.7%, 20ms/99.9%, 50ms/99.9%, 100ms/100.0%
+2026-09-29 23:56:12.922623 3146900 I Mark: 16 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-29 23:56:12.922655 3146900 I Pages:           Candidates     Selected     In-Place         Size        Empty    Relocated
+2026-09-29 23:56:12.922687 3146900 I Small                     0            0            0           0M           0M           0M
+2026-09-29 23:56:12.922719 3146900 I Medium                    0            0            0           0M           0M           0M
+2026-09-29 23:56:12.922750 3146900 I Large                     1            0            0          10M           0M           0M
+2026-09-29 23:56:12.922782 3146900 I Forwarding Usage: 0M
+2026-09-29 23:56:12.922814 3146900 I Age Table:       Live    Garbage            Small           Medium            Large
+2026-09-29 23:56:12.922845 3146900 I Eden          8388624    2097136       0 / 0            0 / 0            1 / 0     
+2026-09-29 23:56:12.922877 3146900 I Min Capacity: 0M
+2026-09-29 23:56:12.922908 3146900 I Max Capacity: 512M
+2026-09-29 23:56:12.922939 3146900 I Soft Max Capacity: 512M
+2026-09-29 23:56:12.922970 3146900 I Heap Statistics:
+2026-09-29 23:56:12.923001 3146900 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-29 23:56:12.923033 3146900 I Capacity:             18M          18M            18M          18M          18M          18M
+2026-09-29 23:56:12.923072 3146900 I Free:                502M         502M           502M         502M         502M         502M
+2026-09-29 23:56:12.923103 3146900 I Used:                 10M          10M            10M          10M          10M          10M
+2026-09-29 23:56:12.923135 3146900 I Young Generation Statistics:
+2026-09-29 23:56:12.923166 3146900 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:12.923198 3146900 I Used:                 10M          10M            10M          10M
+2026-09-29 23:56:12.923229 3146900 I Live:                 N/A           8M             8M           8M
+2026-09-29 23:56:12.923260 3146900 I Garbage:              N/A           1M             1M           1M
+2026-09-29 23:56:12.923292 3146900 I Allocated:            N/A           0M             0M           0M
+2026-09-29 23:56:12.923323 3146900 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-29 23:56:12.923354 3146900 I Promoted:             N/A          N/A             0M           0M
+2026-09-29 23:56:12.923385 3146900 I Compacted:            N/A          N/A           N/A           0M
+2026-09-29 23:56:12.923417 3146900 I Young Generation 10M->10M 0.001s
+2026-09-29 23:56:12.928830 3146962 I FinalizerProcessor thread stopped
+2026-09-29 23:56:12.929413 3146941 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-29 23:56:12.929521 3146941 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:12.929562 3146941 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:12.929594 3146941 I Critical: Finalizer 0/0GC_UNIT_OTHER_VM_OKIDOKI SegmentedArrayInit.YoungGcRepairsIncompleteArrayRoot
+[  PASS  ] SegmentedArrayInit.YoungGcRepairsIncompleteArrayRoot
+[========] 1 tests: 1 passed, 0 failed

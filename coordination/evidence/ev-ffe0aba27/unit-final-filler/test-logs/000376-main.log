@@ -1,0 +1,3 @@
+[  RUN   ] StoreBuf.PendingOldMarkEntrySurvivesYoungMarkFlip
+[  PASS  ] StoreBuf.PendingOldMarkEntrySurvivesYoungMarkFlip
+[========] 1 tests: 1 passed, 0 failed

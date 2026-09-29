@@ -1,0 +1,4 @@
+[  RUN   ] SoftMemoryTable.OfficialSpaces
+MEMORY_TABLE input=[ 2 0 MB ] reference_line=394 rc=3 accepted=1 bytes=20971520 expected=20971520
+[  PASS  ] SoftMemoryTable.OfficialSpaces
+[========] 1 tests: 1 passed, 0 failed

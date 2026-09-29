@@ -1,0 +1,7 @@
+[  RUN   ] MarkPort203Entries.ParallelNormalThenInvisibleAccountsOnce
+[  RUN   ] MarkPort203Entries.ParallelNormalThenInvisibleAccountsOnce
+M2_ARRAY_RESULT variant=legacy-parallel array=1 children=0 objects=1 bytes=12440 expected_bytes=12440
+M2_LIVE_ASSERT objects_ok=1 bytes_ok=1 root_order=-1
+GC_UNIT_OTHER_VM_OKIDOKI MarkPort203Entries.ParallelNormalThenInvisibleAccountsOnce
+[  PASS  ] MarkPort203Entries.ParallelNormalThenInvisibleAccountsOnce
+[========] 1 tests: 1 passed, 0 failed
