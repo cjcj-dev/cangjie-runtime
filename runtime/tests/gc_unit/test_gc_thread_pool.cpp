@@ -858,7 +858,7 @@ GC_OTHER_VM_TEST(ForwardingRetain1316, YoungScanWaitsForInPlacePublication)
     auto* queue = old.relocate().queue();
     GC_EXPECT_TRUE(owner->retain_page(queue));
     std::vector<ZPage*> occupied;
-    while (auto* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false,
+    while (auto* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small,
                                         PageAge::old, NonBlockingAllocationFlags())) {
         occupied.push_back(page);
     }
