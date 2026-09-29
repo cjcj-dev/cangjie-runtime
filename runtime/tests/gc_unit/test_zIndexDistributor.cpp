@@ -8,11 +8,14 @@
 // [0, count) is claimed exactly once across concurrent workers.
 
 #include <atomic>
+#include <memory>
 #include <thread>
 #include <vector>
 
 #include "Heap/z/zIndexDistributor.inline.hpp"
 #include "Heap/z/zPageTable.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "gc_unittest.hpp"
 
 namespace MapleRuntime {
@@ -325,50 +328,88 @@ GC_COMPONENT_TEST(ZIndexDistributorTest, shell_distributes_each_index_once)
 
 // Product wiring: ZPageTableParallelIterator (zPageTable.hpp:73) holds a
 // ZIndexDistributor and emits each page once, from its start granule only.
-GC_COMPONENT_TEST(ZIndexDistributorTest, page_table_parallel_iterator_emits_each_page_once)
+GC_TEST(ZIndexDistributorTest, page_table_parallel_iterator_emits_each_page_once)
 {
-    struct Page {
-        MAddress offset;
-        size_t id;
-        zoffset start_offset() const { return static_cast<zoffset>(offset); }
-        zoffset start() const { return start_offset(); }
-    };
-    constexpr size_t domain = 4096;
-    constexpr size_t granule = ZGranuleSize;
-    constexpr MAddress base = 0;
-    ZGranuleMap<Page*> table(domain * granule);
-    Page pages[] = {{base, 0}, {base + (domain / 2) * granule, 1}, {base + (domain - 1) * granule, 2}};
-    table.put(static_cast<zoffset>(0), 3 * granule, &pages[0]);
-    table.put(static_cast<zoffset>((domain / 2) * granule), 2 * granule, &pages[1]);
-    table.put(static_cast<zoffset>((domain - 1) * granule), granule, &pages[2]);
-    std::vector<size_t> expected(3);
-    Page* last = nullptr;
-    for (size_t i = 0; i < table.size(); ++i) {
-        Page* page = table.at(i);
-        if (page != nullptr && page != last) {
-            ++expected[page->id];
-            last = page;
-        }
-    }
-    std::vector<std::atomic<size_t>> actual(expected.size());
-    for (auto& count : actual) {
-        count.store(0);
-    }
-    ZPageTableParallelIterator<Page*> iterator(table);
+    const size_t saved = ZAddressOffsetMax;
+    ZAddressOffsetMax = 4096 * ZGranuleSize;
+    ZPageTable table;
+    ZAddressOffsetMax = saved;
+    ZPage first(ZPageType::large, PageAge::eden, ZVirtualMemory(zoffset(0), 3 * ZGranuleSize));
+    ZPage middle(ZPageType::large, PageAge::eden,
+                 ZVirtualMemory(zoffset(2048 * ZGranuleSize), 2 * ZGranuleSize));
+    ZPage last(ZPageType::large, PageAge::eden,
+               ZVirtualMemory(zoffset(4095 * ZGranuleSize), ZGranuleSize));
+    ZPage* pages[] = {&first, &middle, &last};
+    for (auto* page : pages) { table.insert(page); }
+    std::atomic<size_t> actual[3]{};
+    ZPageTableParallelIterator iterator(&table);
     std::vector<std::thread> threads;
     for (size_t worker = 0; worker < 4; ++worker) {
         threads.emplace_back([&]() {
-            iterator.do_pages([&](Page* page) {
-                actual[page->id].fetch_add(1, std::memory_order_relaxed);
+            iterator.do_pages([&](ZPage* page) {
+                for (size_t i = 0; i < 3; ++i) {
+                    if (page == pages[i]) { ++actual[i]; }
+                }
                 return true;
             });
         });
     }
-    for (auto& thread : threads) {
-        thread.join();
+    for (auto& thread : threads) { thread.join(); }
+    for (size_t i = 0; i < 3; ++i) {
+        GC_EXPECT_EQ(actual[i].load(), 1u);
+        table.remove(pages[i]);
     }
-    for (size_t i = 0; i < expected.size(); ++i) {
-        GC_EXPECT_EQ(expected[i], 1u);
-        GC_EXPECT_EQ(actual[i].load(), expected[i]);
+}
+
+GC_TEST(ZIndexDistributorTest, page_table_non_power_of_two_extent)
+{
+    const size_t saved = ZAddressOffsetMax;
+    ZAddressOffsetMax = 4097 * ZGranuleSize;
+    ZPageTable table;
+    ZAddressOffsetMax = saved;
+    const size_t expected = ZIndexDistributor::get_count(4097);
+    const size_t slots = table.count();
+    // Report the target before the distributor's own precondition can hide it.
+    std::fprintf(stderr, "PAGETABLE1331 slots=%zu expected=%zu\n", slots, expected);
+    GC_EXPECT_EQ(slots, expected);
+    std::vector<std::unique_ptr<ZPage>> pages;
+    for (size_t i = 0; i < slots; ++i) {
+        pages.emplace_back(new ZPage(ZPageType::large, PageAge::eden,
+                           ZVirtualMemory(zoffset(i * ZGranuleSize), ZGranuleSize)));
+        table.insert(pages.back().get());
     }
+    std::vector<std::atomic<unsigned>> visits(slots);
+    for (auto& n : visits) { n.store(0); }
+    ZPageTableParallelIterator iterator(&table);
+    std::vector<std::thread> threads;
+    for (unsigned i = 0; i < 4; ++i) {
+        threads.emplace_back([&]() {
+            iterator.do_pages([&](ZPage* page) {
+                ++visits[untype(page->start()) >> ZGranuleSizeShift];
+                return true;
+            });
+        });
+    }
+    for (auto& thread : threads) { thread.join(); }
+    size_t once = 0;
+    for (auto& n : visits) { once += n.load() == 1; }
+    std::fprintf(stderr, "PAGETABLE1331 visited_once=%zu slots=%zu\n", once, slots);
+    GC_EXPECT_EQ(once, slots);
+    for (auto& page : pages) { table.remove(page.get()); }
+}
+
+// Enter through Heap::alloc_page, then observe publication through the product
+// serial iterator. No manually populated map participates in this assertion.
+GC_TEST(ZIndexDistributorTest, page_table_serial_iterator_observes_heap_publication)
+{
+    ZPage* allocated = Heap::alloc_page(3 * ZGranuleSize, ZPageType::large, false, PageAge::eden);
+    size_t matches = 0;
+    ZPageTableIterator iterator(&Heap::page_table());
+    for (ZPage* page; iterator.next(&page);) {
+        matches += page == allocated;
+    }
+    std::fprintf(stderr, "PAGETABLE1331 heap_page=%p iterator_matches=%zu expected=1\n",
+                 static_cast<void*>(allocated), matches);
+    GC_EXPECT_TRUE(allocated != nullptr && matches == 1);
+    Heap::free_page(allocated);
 }

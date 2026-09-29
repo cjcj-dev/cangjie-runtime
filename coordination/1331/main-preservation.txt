@@ -1,0 +1,15 @@
+git grep -c objectBitmaps cjcjdev/main -- runtime/src/Heap/z/zHeapIterator.hpp
+rc=0
+cjcjdev/main:runtime/src/Heap/z/zHeapIterator.hpp:1
+
+git grep -c bitmapLock cjcjdev/main -- runtime/src/Heap/z/zHeapIterator.hpp
+rc=0
+cjcjdev/main:runtime/src/Heap/z/zHeapIterator.hpp:1
+
+git grep -c objectBitmaps HEAD -- runtime/src/Heap/z/zHeapIterator.hpp
+rc=0
+HEAD:runtime/src/Heap/z/zHeapIterator.hpp:1
+
+git grep -c bitmapLock HEAD -- runtime/src/Heap/z/zHeapIterator.hpp
+rc=0
+HEAD:runtime/src/Heap/z/zHeapIterator.hpp:1

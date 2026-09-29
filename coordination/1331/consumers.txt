@@ -1,0 +1,60 @@
+runtime/src/Heap/z/zGeneration.cpp:1165:        ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, nullptr);
+runtime/src/Heap/z/zMarkingSMR.cpp:26:    ZPerWorkerIterator<WorkerState> iter(&_worker_states);
+runtime/src/Heap/z/zMarkingSMR.cpp:90:    ZPerWorkerIterator<WorkerState> iter(&_worker_states);
+runtime/src/Heap/z/zPage.hpp:349:    // zPageTable.cpp:83-98 ZGenerationPagesIterator: enable_safe_destroy in
+runtime/src/Heap/z/zPage.inline.hpp:455:        ZPageTableIterator iter(&ZPageTable::heap_table());
+runtime/src/Heap/z/zPage.inline.hpp:808:inline void ZGenerationPagesParallelIterator::do_pages(Function function)
+runtime/src/Heap/z/zPageAllocator.cpp:1091:    ZPageTableIterator iter(&ZPageTable::heap_table());
+runtime/src/Heap/z/zPageAllocator.inline.hpp:50:        ZPageTableIterator iter(&ZPageTable::heap_table());
+runtime/src/Heap/z/zPageTable.cpp:67:ZPageTableIterator::ZPageTableIterator(const ZPageTable* table)
+runtime/src/Heap/z/zPageTable.cpp:71:bool ZPageTableIterator::next(ZPage** page)
+runtime/src/Heap/z/zPageTable.cpp:84:ZGenerationPagesIterator::ZGenerationPagesIterator(const ZPageTable* page_table, ZGenerationId id,
+runtime/src/Heap/z/zPageTable.cpp:92:ZGenerationPagesIterator::~ZGenerationPagesIterator()
+runtime/src/Heap/z/zPageTable.cpp:97:bool ZGenerationPagesIterator::next(ZPage** page)
+runtime/src/Heap/z/zPageTable.cpp:109:void ZGenerationPagesIterator::yield(const std::function<void()>& function)
+runtime/src/Heap/z/zPageTable.cpp:116:ZGenerationPagesParallelIterator::ZGenerationPagesParallelIterator(const ZPageTable* page_table, ZGenerationId id,
+runtime/src/Heap/z/zPageTable.cpp:123:ZGenerationPagesParallelIterator::~ZGenerationPagesParallelIterator()
+runtime/src/Heap/z/zPageTable.hpp:19:    friend class ZPageTableIterator;
+runtime/src/Heap/z/zPageTable.hpp:20:    friend class ZGenerationPagesIterator;
+runtime/src/Heap/z/zPageTable.hpp:21:    friend class ZGenerationPagesParallelIterator;
+runtime/src/Heap/z/zPageTable.hpp:43:class ZPageTableIterator {
+runtime/src/Heap/z/zPageTable.hpp:49:    explicit ZPageTableIterator(const ZPageTable* table);
+runtime/src/Heap/z/zPageTable.hpp:63:class ZGenerationPagesIterator {
+runtime/src/Heap/z/zPageTable.hpp:64:    ZPageTableIterator _iterator;
+runtime/src/Heap/z/zPageTable.hpp:69:    ZGenerationPagesIterator(const ZPageTable* page_table, ZGenerationId id, ZPageAllocator* page_allocator);
+runtime/src/Heap/z/zPageTable.hpp:70:    ~ZGenerationPagesIterator();
+runtime/src/Heap/z/zPageTable.hpp:75:class ZGenerationPagesParallelIterator {
+runtime/src/Heap/z/zPageTable.hpp:81:    ZGenerationPagesParallelIterator(const ZPageTable* page_table, ZGenerationId id, ZPageAllocator* page_allocator);
+runtime/src/Heap/z/zPageTable.hpp:82:    ~ZGenerationPagesParallelIterator();
+runtime/src/Heap/z/zPhysicalMemoryManager.cpp:49:  ZPerNUMAIterator<ZBackingIndexRegistry> iter(&_partition_registries);
+runtime/src/Heap/z/zReferenceProcessor.cpp:87:    ZPerWorkerIterator<Node*> iter(&discovered_list);
+runtime/src/Heap/z/zReferenceProcessor.cpp:284:    ZPerWorkerIterator<Node*> iter(&discovered_list);
+runtime/src/Heap/z/zReferenceProcessor.cpp:296:    ZPerWorkerIterator<Node*> iter(const_cast<ZPerWorker<Node*>*>(&discovered_list));
+runtime/src/Heap/z/zReferenceProcessor.cpp:307:    ZPerWorkerIterator<Counters> iter_encountered(&encountered_count);
+runtime/src/Heap/z/zReferenceProcessor.cpp:313:    ZPerWorkerIterator<Counters> iter_discovered(&discovered_count);
+runtime/src/Heap/z/zReferenceProcessor.cpp:319:    ZPerWorkerIterator<Counters> iter_enqueued(&enqueued_count);
+runtime/src/Heap/z/zReferenceProcessor.cpp:332:    ZPerWorkerConstIterator<Counters> iter_encountered(&encountered_count);
+runtime/src/Heap/z/zReferenceProcessor.cpp:338:    ZPerWorkerConstIterator<Counters> iter_discovered(&discovered_count);
+runtime/src/Heap/z/zReferenceProcessor.cpp:344:    ZPerWorkerConstIterator<Counters> iter_enqueued(&enqueued_count);
+runtime/src/Heap/z/zReferenceProcessor.cpp:417:    ZPerWorkerConstIterator<Counters> iter(&encountered_count);
+runtime/src/Heap/z/zReferenceProcessor.cpp:427:    ZPerWorkerConstIterator<Counters> iter(&discovered_count);
+runtime/src/Heap/z/zReferenceProcessor.cpp:437:    ZPerWorkerConstIterator<Counters> iter(&enqueued_count);
+runtime/src/Heap/z/zReferenceProcessor.cpp:446:    ZPerWorkerIterator<Node*> iter(const_cast<ZPerWorker<Node*>*>(&discovered_list));
+runtime/src/Heap/z/zRelocate.hpp:134:        ZPerNUMAIterator<std::array<ZPage*, kAges>> iter(&targets);
+runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:28:    ZPerWorkerIterator<TLABStatistics> iter(statistics);
+runtime/src/Heap/z/zValue.hpp:18:class ZValueStorage {
+runtime/src/Heap/z/zValue.hpp:29:class ZContendedStorage : public ZValueStorage<ZContendedStorage> {
+runtime/src/Heap/z/zValue.hpp:36:class ZPerCPUStorage : public ZValueStorage<ZPerCPUStorage> {
+runtime/src/Heap/z/zValue.hpp:43:class ZPerNUMAStorage : public ZValueStorage<ZPerNUMAStorage> {
+runtime/src/Heap/z/zValue.hpp:50:class ZPerWorkerStorage : public ZValueStorage<ZPerWorkerStorage> {
+runtime/src/Heap/z/zValue.hpp:116:template <typename T> using ZPerCPUIterator = ZValueIterator<ZPerCPUStorage, T>;
+runtime/src/Heap/z/zValue.hpp:117:template <typename T> using ZPerNUMAIterator = ZValueIterator<ZPerNUMAStorage, T>;
+runtime/src/Heap/z/zValue.hpp:118:template <typename T> using ZPerWorkerIterator = ZValueIterator<ZPerWorkerStorage, T>;
+runtime/src/Heap/z/zValue.hpp:134:template <typename T> using ZPerCPUConstIterator = ZValueConstIterator<ZPerCPUStorage, T>;
+runtime/src/Heap/z/zValue.hpp:135:template <typename T> using ZPerNUMAConstIterator = ZValueConstIterator<ZPerNUMAStorage, T>;
+runtime/src/Heap/z/zValue.hpp:136:template <typename T> using ZPerWorkerConstIterator = ZValueConstIterator<ZPerWorkerStorage, T>;
+runtime/src/Heap/z/zValue.inline.hpp:24:template <typename T> uintptr_t ZValueStorage<T>::_end = 0;
+runtime/src/Heap/z/zValue.inline.hpp:25:template <typename T> uintptr_t ZValueStorage<T>::_top = 0;
+runtime/src/Heap/z/zValue.inline.hpp:28:uintptr_t ZValueStorage<S>::alloc(size_t size)
+runtime/src/Heap/z/zVirtualMemoryManager.cpp:244:  ZPerNUMAIterator<ZVirtualMemoryRegistry> iter(&_partition_registries);
+runtime/src/Heap/z/zVirtualMemoryManager.cpp:268:  ZPerNUMAIterator<ZVirtualMemoryRegistry> iter(&_partition_registries);

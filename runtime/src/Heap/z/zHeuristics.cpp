@@ -5,10 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <thread>
-#if defined(__linux__) || defined(hongmeng)
-#include <sched.h>
-#endif
+#include "os/Processor.h"
 
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -29,22 +26,12 @@ size_t round_down_pow2(size_t value)
 
 uint32_t nworkers_based_on_ncpus(double cpu_share_in_percent)
 {
-    unsigned ncpu = std::max(1u, std::thread::hardware_concurrency());
-#if defined(__linux__) || defined(hongmeng)
-    cpu_set_t cpus;
-    CPU_ZERO(&cpus);
-    if (sched_getaffinity(0, sizeof(cpus), &cpus) == 0 && CPU_COUNT(&cpus) > 0) {
-        ncpu = static_cast<unsigned>(CPU_COUNT(&cpus));
-    }
-#endif
+    const uint32_t ncpu = OS::InitialActiveProcessorCount();
     return static_cast<uint32_t>(std::ceil(ncpu * cpu_share_in_percent / 100.0));
 }
 
 uint32_t nworkers_based_on_heap_size(double heap_share_in_percent)
 {
-    if (g_maxHeapSize == 0 || ZPageSizeSmall == 0) {
-        return 1;
-    }
     return static_cast<uint32_t>(g_maxHeapSize * (heap_share_in_percent / 100.0) / ZPageSizeSmall);
 }
 
@@ -78,8 +65,7 @@ void ZHeuristics::set_medium_page_size()
 
 size_t ZHeuristics::relocation_headroom()
 {
-    const size_t medium = ZPageSizeMediumEnabled ? ZPageSizeMediumMax : 0;
-    const size_t per_numa = (static_cast<size_t>(ConcGCThreads) * ZPageSizeSmall) + medium;
+    const size_t per_numa = (static_cast<size_t>(ConcGCThreads) * ZPageSizeSmall) + ZPageSizeMediumMax;
     return per_numa * std::max<size_t>(1, NumaTopology::SealProcessTopology().Count());
 }
 
