@@ -5,7 +5,10 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Product partial-array chunking must visit each input slot exactly once.
-// ZGC zMark.cpp:208-270: follow the leading range and consume published tails.
+// ZGC zMark.cpp:208-270: follow the leading range and consume local tails.
+// ExpectPartition checks the live work partition after each product drain.
+// check_partial_array_visits.py also checks actual slot multiplicity (including
+// a repeated small follower whose barriers no longer change marking state).
 
 #include <cstdint>
 #include <csignal>
@@ -99,6 +102,55 @@ std::set<size_t> OffSet(size_t length)
     return s;
 }
 
+// Observe the actual product-owned pending ranges before the next drain.
+// ZGC zMark.cpp:234-254 partitions remaining work without overlap. Healed
+// fields account for completed work; no synthetic entries are fed downstream.
+void ExpectPartition(ZMark& domain, Slot* addr, size_t length,
+                     const std::vector<zpointer>& original, size_t step)
+{
+    const MAddress start = reinterpret_cast<MAddress>(addr);
+    auto* fields = reinterpret_cast<RefField<>*>(addr);
+    std::vector<size_t> visits(length, 0);
+    size_t healed = 0;
+    for (size_t i = 0; i < length; ++i) {
+        if (fields[i].GetFieldValue() != original[i]) {
+            ++visits[i];
+            ++healed;
+        }
+    }
+    size_t pending = 0;
+    bool inRange = true;
+    bool aligned = true;
+    for (auto* stack : domain.Stacks().stacks) {
+        if (stack == nullptr) continue;
+        for (size_t i = 0; i < stack->Size(); ++i) {
+            const auto entry = stack->entries(stack)[i];
+            if (!entry.partial_array()) continue;
+            MAddress chunk = 0;
+            size_t count = 0;
+            MarkPartialArray::Decode(entry, chunk, count);
+            ++pending;
+            aligned &= chunk % sizeof(Slot) == 0;
+            const bool valid = chunk >= start && chunk <= start + length * sizeof(Slot) &&
+                               count <= (start + length * sizeof(Slot) - chunk) / sizeof(Slot);
+            inRange &= valid;
+            if (!valid || chunk % sizeof(Slot) != 0) continue;
+            const size_t begin = (chunk - start) / sizeof(Slot);
+            for (size_t j = 0; j < count; ++j) ++visits[begin + j];
+        }
+    }
+    size_t missing = 0;
+    size_t repeated = 0;
+    for (size_t count : visits) {
+        missing += count == 0;
+        repeated += count > 1;
+    }
+    std::fprintf(stderr, "ARRAY_PARTITION step=%zu entries=%zu pending=%zu healed=%zu "
+                         "range=%d aligned=%d missing=%zu repeated=%zu\n",
+                 step, length, pending, healed, inRange, aligned, missing, repeated);
+    GC_EXPECT_TRUE(inRange && aligned && missing == 0 && repeated == 0);
+}
+
 std::set<size_t> OnSet(GcHeapFixture& fx, Slot* addr, size_t length)
 {
     WorkerFixture worker;
@@ -106,11 +158,13 @@ std::set<size_t> OnSet(GcHeapFixture& fx, Slot* addr, size_t length)
     domain.PrepareWork(1);
     auto* fields = reinterpret_cast<RefField<>*>(addr);
     std::vector<BaseObject*> objects;
+    std::vector<zpointer> original;
     for (size_t i = 0; i < length; ++i) {
         auto* object = fx.PlaceObject(fx.region0()->GetRegionStart() + i * 64);
         HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE).StoreColoured(zpointer::null);
         objects.push_back(object);
         fields[i].StoreColoured(StoreGoodPointer(object));
+        original.push_back(fields[i].GetFieldValue());
     }
     fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + (length + 1) * 64);
     RestoreMarkFlips restore;
@@ -120,7 +174,15 @@ std::set<size_t> OnSet(GcHeapFixture& fx, Slot* addr, size_t length)
     Heap::GetHeap().old().set_phase(ZGenerationPhase::Mark);
     MarkContext context(1, 0, domain.Stripes(), domain.Stacks());
     domain.follow_array_elements(context, reinterpret_cast<MAddress>(addr), length, false);
-    (void)domain.FollowWork(context, 0, true);
+    size_t step = 0;
+    ExpectPartition(domain, addr, length, original, step);
+    while (!domain.Stacks().IsEmpty()) {
+        // The existing product abort check returns after one consumed entry.
+        ZAbort::abort();
+        (void)domain.Drain(context, 0);
+        ZAbort::reset();
+        ExpectPartition(domain, addr, length, original, ++step);
+    }
     context.Cache().Flush();
     Heap::GetHeap().old().set_phase(previous);
     std::set<size_t> observed;
