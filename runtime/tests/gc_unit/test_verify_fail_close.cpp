@@ -664,6 +664,10 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, RejectsDisarmedBadRootAtVMOperation)
 
 // The collector's old-verification VM operation must not process armed carriers.
 namespace {
+// Real carriers can be scheduled during runtime shutdown. Supply a valid
+// empty task body while preserving the observed object slots.
+void CarrierTaskBody() {}
+
 void CheckCarrierWalk(bool heapWalk)
 {
     RuntimeParam param{};
@@ -682,7 +686,7 @@ void CheckCarrierWalk(bool heapWalk)
         ScopedObjectAccess access;
         object = MObject::NewPinnedObject(type, 2 * sizeof(uintptr_t));
         GC_EXPECT_TRUE(object != nullptr);
-        thread = MCC_NewCJThread(nullptr, object,
+        thread = MCC_NewCJThread(reinterpret_cast<void*>(CarrierTaskBody), object,
             Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
     }
     GC_EXPECT_TRUE(thread != nullptr);
@@ -859,8 +863,8 @@ void CheckCarrierMarkTask(bool youngOnly, unsigned workers)
         young->SetClassInfo(type);
         old->SetClassInfo(type);
         auto* scheduler = Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
-        youngCarrier = MCC_NewCJThread(nullptr, young, scheduler);
-        oldCarrier = MCC_NewCJThread(nullptr, old, scheduler);
+        youngCarrier = MCC_NewCJThread(reinterpret_cast<void*>(CarrierTaskBody), young, scheduler);
+        oldCarrier = MCC_NewCJThread(reinterpret_cast<void*>(CarrierTaskBody), old, scheduler);
     }
     GC_EXPECT_TRUE(youngCarrier != nullptr && oldCarrier != nullptr);
     const uintptr_t savedGuard = ZPointerStoreGoodMask;

@@ -740,6 +740,7 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     std::unordered_set<BaseObject*> inclusive;
     HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
     HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
+    handle->StoreColoured(zpointer{});
     SyncWeakOopStorage().Release(handle);
     GC_EXPECT_TRUE(strong.count(graph.weak) == 0);
     GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);

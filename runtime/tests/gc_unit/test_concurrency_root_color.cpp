@@ -202,8 +202,10 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     // The saved store-good color is from the previous epoch, so the group is armed.
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     if (healBeforeRead) {
-        heap.old().remap_young_roots();
-        // ZGC zGeneration.cpp:1428-1459: the remap closure disarms after healing.
+        RootVisitor visitor = [](RootSlot&) {};
+        runtime.GetConcurrencyModel().VisitGCRoots(&visitor);
+        // ZGC zBarrierSetNMethod.cpp:53-97: inspection enters the barrier
+        // before observing slots and disarms after healing.
         GC_EXPECT_FALSE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     }
     auto* previous = CJThreadGetHandle();
