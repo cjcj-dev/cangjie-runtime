@@ -392,7 +392,8 @@ extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
     CHECK(srcSize <= dstSize);
     auto* layout = static_cast<MArray*>(Heap::IsHeapAddress(dstField) ? dstObj : srcObj);
-    const size_t stride = layout->GetElementSize();
+    // Headerless native payloads have no array metadata; retain their byte-sized elements.
+    const size_t stride = layout == nullptr ? 1 : layout->GetElementSize();
     CHECK(stride != 0 && srcSize % stride == 0);
     const size_t length = srcSize / stride;
     if (length == 0) {

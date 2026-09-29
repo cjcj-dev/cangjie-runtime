@@ -87,7 +87,7 @@ public:
     // Cangjie inline-value arrays use the same raw payload copy.
     static void value_arraycopy(MArray* layout, MAddress src, MAddress dst, size_t length)
     {
-        AccessInternal::value_copy_internal(src, dst, length * layout->GetElementSize());
+        AccessInternal::value_copy_internal(src, dst, length * (layout == nullptr ? 1 : layout->GetElementSize()));
     }
     static constexpr std::memory_order order()
     {

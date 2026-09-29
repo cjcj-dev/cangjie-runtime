@@ -417,6 +417,10 @@ template<DecoratorSet decorators, typename BarrierSetT>
 inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::value_arraycopy_in_heap(
     MArray* layout, MAddress src, MAddress dst, size_t length)
 {
+    if (layout == nullptr) {
+        Raw::value_arraycopy(layout, src, dst, length);
+        return;
+    }
     const size_t stride = layout->GetElementSize();
     if (Heap::IsHeapAddress(src) && Heap::IsHeapAddress(dst)) {
         struct_arraycopy_in_heap_no_check_cast(layout, dst, src, length);
