@@ -55,7 +55,10 @@ public:
     bool steal_array_chunk(const HeapIteratorContext& context, ObjArrayTask& array);
     template <bool VisitWeaks>
     void drain_and_steal(const HeapIteratorContext& context);
-    bool try_set_bit(BaseObject* object);
+    bool mark_object(BaseObject* object);
+    void mark_visit_and_push(const HeapIteratorContext& context, BaseObject* object);
+    bool should_visit_object_at_mark() const;
+    bool should_visit_object_at_follow() const;
 
     using ObjectQueue = OverflowTaskQueue<BaseObject*>;
     using ArrayQueue = OverflowTaskQueue<ObjArrayTask>;
@@ -83,7 +86,6 @@ private:
         void do_root(ObjectRef& root);
     };
 
-    void Push(BaseObject* object, const ObjectVisitor& objectVisitor);
     template <bool VisitReferents>
     class OopClosure : public OopIterateClosure {
         HeapIterator* const iter;

@@ -65,8 +65,9 @@ HeapIteratorBitMap* HeapIterator::object_bitmap(BaseObject* object)
     return bitmap;
 }
 
-bool HeapIterator::try_set_bit(BaseObject* object)
+bool HeapIterator::mark_object(BaseObject* object)
 {
+    if (object == nullptr) return false;
     const zoffset offset = ZAddress::offset(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(object)));
     return object_bitmap(object)->try_set_bit((untype(offset) & (ZGranuleSize - 1)) / 8);
 }
@@ -78,14 +79,20 @@ void HeapIteratorContext::visit_object(BaseObject* object) const
     }
 }
 
+bool HeapIterator::should_visit_object_at_mark() const { return forVerify; }
+bool HeapIterator::should_visit_object_at_follow() const { return !forVerify; }
+
+void HeapIterator::mark_visit_and_push(const HeapIteratorContext& context, BaseObject* object)
+{
+    if (mark_object(object)) {
+        if (should_visit_object_at_mark()) context.visit_object(object);
+        context.push(object);
+    }
+}
+
 void HeapIteratorContext::push(BaseObject* object) const
 {
-    if (object != nullptr && iter.try_set_bit(object)) {
-        if (iter.forVerify) {
-            visit_object(object);
-        }
-        queue->push(object);
-    }
+    queue->push(object);
 }
 
 void HeapIteratorContext::push_array_chunk(const HeapIterator::ObjArrayTask& array) const
@@ -101,12 +108,6 @@ bool HeapIteratorContext::pop(BaseObject*& object) const
 bool HeapIteratorContext::pop_array_chunk(HeapIterator::ObjArrayTask& array) const
 {
     return arrayQueue->pop_overflow(array) || arrayQueue->pop_local(array);
-}
-
-void HeapIterator::Push(BaseObject* object, const ObjectVisitor& objectVisitor)
-{
-    HeapIteratorContext context(*this, &objectVisitor, nullptr, 0);
-    context.push(object);
 }
 
 template <bool VisitReferents>
@@ -126,7 +127,7 @@ void HeapIterator::OopClosure<VisitReferents>::do_oop(RefField<>* field)
     if (context.fieldVisitor != nullptr && *context.fieldVisitor) {
         (*context.fieldVisitor)(base, field, raw(field->GetFieldValue()));
     }
-    context.push(load_oop(field));
+    iter->mark_visit_and_push(context, load_oop(field));
 }
 
 template <bool VisitReferents>
@@ -168,7 +169,7 @@ template <bool VisitWeaks>
 void HeapIterator::visit_and_follow(const HeapIteratorContext& context, BaseObject* object)
 {
     DCHECK(object->IsValidObject());
-    if (!forVerify) {
+    if (should_visit_object_at_follow()) {
         context.visit_object(object);
     }
     follow<VisitWeaks>(context, object);
@@ -189,7 +190,7 @@ void HeapIterator::ColoredRootOopClosure<Weak>::do_root(NativeSlot& root)
     if (context.fieldVisitor != nullptr && *context.fieldVisitor) {
         (*context.fieldVisitor)(nullptr, &root, raw(root.GetFieldValue()));
     }
-    context.push(load_oop(&root));
+    iter.mark_visit_and_push(context, load_oop(&root));
 }
 
 void HeapIterator::UncoloredRootOopClosure::do_root(ObjectRef& root)
@@ -197,7 +198,7 @@ void HeapIterator::UncoloredRootOopClosure::do_root(ObjectRef& root)
     if (context.fieldVisitor != nullptr && *context.fieldVisitor) {
         (*context.fieldVisitor)(nullptr, &root, raw(root.LoadPlain()));
     }
-    context.push(to_object(safe(root.LoadPlain())));
+    iter.mark_visit_and_push(context, to_object(safe(root.LoadPlain())));
 }
 
 void HeapIterator::push_strong_roots(const HeapIteratorContext& context)
