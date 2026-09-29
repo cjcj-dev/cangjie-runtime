@@ -8,6 +8,7 @@
 #include <atomic>
 
 #include "gc_heap_fixture.hpp"
+#include "b09_runtime_fixture.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zTask.hpp"
@@ -841,6 +842,7 @@ GC_RUNTIME_OTHER_VM_TEST(RelocationEndCounts, OldMediumYoungStart)
 // The young phase must then wait for that worker's publication before scanning.
 GC_OTHER_VM_TEST(ForwardingRetain1316, YoungScanWaitsForInPlacePublication)
 {
+    B09RuntimeFixture runtime;
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
     auto& old = heap.old();

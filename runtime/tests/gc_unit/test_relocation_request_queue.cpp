@@ -93,3 +93,29 @@ GC_TEST(RelocationPageQueue, EntryPublicationDoesNotCompleteThePage)
     GC_EXPECT_FALSE(prematurelyReturned);
     GC_EXPECT_EQ(owner->find(from), to);
 }
+
+GC_TEST(RelocationPageQueue, EnqueueWakesSynchronizedWorker)
+{
+    GcHeapFixture heap;
+    heap.InstallPageOwner(heap.region0());
+    auto* owner = forwarding_for_page(heap.region0());
+    ZRelocateQueue queue;
+    queue.activate(1);
+    std::atomic<bool> synchronized{false};
+    std::thread synchronizer([&] { queue.synchronize(); synchronized.store(true); });
+    ZForwarding* selected = nullptr;
+    std::thread worker([&] {
+        while ((selected = queue.synchronize_poll()) == nullptr) std::this_thread::yield();
+        selected->release_page();
+        selected->mark_done();
+        queue.leave();
+    });
+    while (!synchronized.load()) std::this_thread::yield();
+    queue.add_and_wait(owner);
+    queue.desynchronize();
+    worker.join();
+    synchronizer.join();
+    queue.deactivate();
+    GC_EXPECT_TRUE(selected == owner);
+    GC_EXPECT_TRUE(owner->is_claimed() && owner->is_done());
+}
