@@ -348,6 +348,7 @@ struct FrameRootMapImage {
     uint32_t pc[4];
     int32_t stackMapOffset;
     uint32_t descriptorRest[6];
+    uint32_t returnPollFlag;
     uint8_t bits[256];
 };
 FrameRootMapImage frameRootMapImage;
@@ -356,6 +357,7 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, boo
 {
     auto& image = frameRootMapImage;
     std::memset(&image, 0, sizeof(image));
+    image.returnPollFlag = 1;
     image.descriptorOffset = static_cast<int32_t>(reinterpret_cast<char*>(&image.stackMapOffset) -
         reinterpret_cast<char*>(&image.descriptorOffset));
     image.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(image.bits) -
