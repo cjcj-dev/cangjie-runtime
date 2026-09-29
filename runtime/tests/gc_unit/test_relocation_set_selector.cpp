@@ -58,7 +58,7 @@ struct SelectorPageFixture {
     ZPage* takeSmall()
     {
         const size_t n = ZPageSizeSmall / ZGranuleSize;
-        return manager.TakeRegion((n) * ZGranuleSize, ZPageType::small, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        return manager.TakeRegion((n) * ZGranuleSize, ZPageType::small, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     }
 };
 }
@@ -142,7 +142,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationSetSelector, GenerationSelectsAllPartitions
     for (size_t i = 0; i < partitions; ++i) {
         // Multiplication by an odd number permutes all 11-bit indices.
         const size_t index = (i * 683) % partitions;
-        ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         GC_EXPECT_TRUE(page != nullptr);
         expected[index] = page;
     }
@@ -210,7 +210,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationSetSelector, GenerationMediumFilterBoundari
     for (int shift = 0; shift <= 2; ++shift) {
         const size_t size = maximum >> shift;
         for (size_t extra : {size_t(0), size_t(8)}) {
-            ZPage* page = Heap::alloc_page(size, ZPageType::medium, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+            ZPage* page = Heap::alloc_page(size, ZPageType::medium, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
             GC_EXPECT_TRUE(page != nullptr);
             pages.push_back(page);
             if (extra != 0) { expected.push_back(page); }

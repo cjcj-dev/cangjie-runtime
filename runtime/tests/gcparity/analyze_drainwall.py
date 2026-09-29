@@ -11,14 +11,13 @@ import sys
 from pathlib import Path
 
 
-MINOR_CYCLE_RE = re.compile(r"rec=cycle .*kind=minor")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "perf_vs_official"))
+from gclog_schema import parse_gclog
 
 
 def cycle_durations_ms(text: str, kind: str) -> list[float]:
-    return [
-        float(value) / 1e6
-        for value in re.findall(rf"rec=cycle .*kind={kind} .*dur_ns=([0-9]+)", text)
-    ]
+    records = parse_gclog(text).validate_complete()
+    return [r.dur_ns / 1e6 for r in records.cycles if r.event == "end" and r.kind == kind]
 
 
 def p90_nearest(values: list[float]) -> float:
@@ -130,7 +129,7 @@ def main() -> int:
         }
         top_minor = {
             arm: [
-                float(len(MINOR_CYCLE_RE.findall(logs[arm][round_number])))
+                float(len(cycle_durations_ms(logs[arm][round_number], "minor")))
                 for round_number in rounds
             ]
             for arm in ("base", "fix")

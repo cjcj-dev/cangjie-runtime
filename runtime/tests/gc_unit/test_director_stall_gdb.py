@@ -52,8 +52,11 @@ try:
     cmd('run')
     cmd('set var params.gcParam.backupGCInterval=1')
     cmd('set var params.gcParam.concGCThreads=4')
+    cmd('set var params.gcParam.concGCThreadsSet=true')
     cmd('set var params.gcParam.youngGCThreads=4')
+    cmd('set var params.gcParam.youngGCThreadsSet=true')
     cmd('set var params.gcParam.oldGCThreads=4')
+    cmd('set var params.gcParam.oldGCThreadsSet=true')
     bp = gdb.Breakpoint('MapleRuntime::RegionManager::ClaimCapacityOrStall', temporary=True)
     bp.condition = '((MapleRuntime::ZPageAllocation*)$rsi)->size >= 67108864'
     cmd('continue')
