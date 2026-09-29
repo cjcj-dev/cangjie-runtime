@@ -46,7 +46,6 @@ struct DedupConfig {
 // stringDedupTable.cpp:90-180. Parallel vectors preserve the upstream bucket
 // shape; std::vector is the C++ storage adapter for GrowableArrayCHeap.
 class StringDedup::Table::Bucket {
-    OopStorage* storage = nullptr;
     std::vector<uint32_t> hashes;
     std::vector<WeakHandle> values;
     void ExpandIfFull()
@@ -58,15 +57,14 @@ class StringDedup::Table::Bucket {
         }
     }
 public:
-    void Initialize(OopStorage* source, size_t reserve)
+    void Initialize(size_t reserve)
     {
-        storage = source;
         hashes.reserve(reserve);
         values.reserve(reserve);
     }
     ~Bucket()
     {
-        for (WeakHandle& value : values) value.release(storage);
+        for (WeakHandle& value : values) value.release(&StringDedup::Instance().WeakStorage());
     }
     static size_t NeededCapacity(size_t needed)
     {
@@ -89,7 +87,7 @@ public:
     }
     void DeleteAt(size_t index)
     {
-        values[index].release(storage);
+        values[index].release(&StringDedup::Instance().WeakStorage());
         // GrowableArray::delete_at replaces the removed entry with the last.
         hashes[index] = hashes.back();
         values[index] = values.back();
@@ -199,7 +197,7 @@ StringDedup::Table::~Table() = default;
 std::unique_ptr<StringDedup::Table::Bucket[]> StringDedup::Table::MakeBuckets(size_t count, size_t reserve)
 {
     auto result = std::make_unique<Bucket[]>(count);
-    for (size_t index = 0; index < count; ++index) result[index].Initialize(&storage, reserve);
+    for (size_t index = 0; index < count; ++index) result[index].Initialize(reserve);
     return result;
 }
 
