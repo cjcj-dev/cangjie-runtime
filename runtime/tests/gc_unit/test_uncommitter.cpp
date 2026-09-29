@@ -363,7 +363,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CacheValleyLimitsActivationBudget)
     GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
     const size_t actual = UncommitterTestAccess::Budget(worker);
     std::fprintf(stderr, "TARGET_CACHE_VALLEY budget=%zu expected=%zu capacity=%zu\n",
-                 actual, 9 * ZGranuleSize, partition.capacity);
+                 actual, 9 * ZGranuleSize, partition.capacity.load());
     GC_EXPECT_EQ(actual, 9 * ZGranuleSize);
     GC_EXPECT_EQ(partition.cache.min_size_watermark(), total);
 
@@ -436,7 +436,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, AllocationDuringCycleLowersUncommitAllow
         released += UncommitterTestAccess::Uncommit(worker);
     }
     std::fprintf(stderr, "TARGET_CURRENT_WATERMARK released=%zu capacity=%zu expected=%zu\n",
-                 released, partition.capacity, 2 * ZGranuleSize);
+                 released, partition.capacity.load(), 2 * ZGranuleSize);
     GC_EXPECT_EQ(released, 2 * ZGranuleSize);
-    GC_EXPECT_EQ(partition.capacity, before - released);
+    GC_EXPECT_EQ(partition.capacity.load(), before - released);
 }

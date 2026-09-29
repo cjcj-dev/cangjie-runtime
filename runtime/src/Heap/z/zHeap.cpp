@@ -500,6 +500,13 @@ ZPage* Heap::alloc_page(size_t num, ZPageType role, PageAge age, ZAllocationFlag
     return page;
 }
 
+// ZGC zHeap.cpp:265-272: undo accounting precedes the ordinary page-free path.
+void Heap::undo_alloc_page(ZPage* page)
+{
+    account_undo_alloc_page(page);
+    free_page(page);
+}
+
 void Heap::free_page(ZPage* page)
 {
     if (page == nullptr) {

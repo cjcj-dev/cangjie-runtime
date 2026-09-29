@@ -4,10 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC zPhysicalMemoryManager.cpp:48-393. ZNMT registration (infra I16) and
-// the ZFailLargerCommits diagnostic flag are not carried; ZUncommit /
-// ZUncommitDelay are read from the environment (infra I15).
-
+// ZGC zPhysicalMemoryManager.cpp:48-393; NMT is a HotSpot service.
+// ZFailLargerCommits is available in the testable develop configuration.
 #include "Heap/z/zPhysicalMemoryManager.hpp"
 
 #include <algorithm>

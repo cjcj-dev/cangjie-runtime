@@ -523,7 +523,6 @@ private:
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
     ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, ZAllocationFlags flags);
-    void UndoSharedPage(ZPage* page);
 
     MAddress reservedStart = 0;
     MAddress reservedEnd = 0;

@@ -114,23 +114,6 @@ ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
     return page;
 }
 
-// ZObjectAllocator::PerAge::undo_alloc_page: this unpublished candidate was
-// never used by a caller. Undo its page charge, not a TLAB's ownership.
-void RegionManager::UndoSharedPage(ZPage* page)
-{
-    page->SetRegionRole(ZPageRole::None);
-
-    Heap::GetHeap().account_undo_alloc_page(page);
-    // ZHeap::undo_alloc_page: remove the unused page-table entry and return
-    // the extent without suspending a caller holding an unpublished object.
-    ZPage::RetirePage(page, [this, page] {
-        const size_t pageBytes = page->GetRegionSize();
-        const size_t index = page->granule_index();
-        page->RetirePageMemory();
-        ReturnRetiredPageMemory(VirtualMemoryOf(index, pageBytes));
-    });
-}
-
 // ZGC zObjectAllocator.cpp:56-64.
 ZPage* ZObjectAllocator::PerAge::alloc_page(ZPageType type, size_t size, ZAllocationFlags flags)
 {
@@ -139,7 +122,7 @@ ZPage* ZObjectAllocator::PerAge::alloc_page(ZPageType type, size_t size, ZAlloca
 
 void ZObjectAllocator::PerAge::undo_alloc_page(ZPage* page)
 {
-    Heap::GetHeap().page_allocator().UndoSharedPage(page);
+    Heap::GetHeap().undo_alloc_page(page);
 }
 
 // ZGC zObjectAllocator.cpp:66-110: reserve the object before publishing its page.
