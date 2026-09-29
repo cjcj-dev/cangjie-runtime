@@ -2,6 +2,7 @@
 #define MRT_Z_ACCESS_BACKEND_HPP
 
 #include "ObjectModel/RefField.inline.h"
+#include "ObjectModel/MArray.h"
 #include "Heap/z/zValuePayload.hpp"
 #include <algorithm>
 #include <cstring>
@@ -72,11 +73,11 @@ public:
             for (size_t i = 0; i < length; ++i) { store(dst + i, load(src + i)); }
         }
     }
-    static void oop_arraycopy(BaseObject*, MAddress src, size_t srcSize,
-                              BaseObject*, MAddress dst, size_t dstSize)
+    static void oop_arraycopy(BaseObject*, MAddress src,
+                              BaseObject*, MAddress dst, size_t length)
     {
         oop_arraycopy(reinterpret_cast<zpointer*>(src), reinterpret_cast<zpointer*>(dst),
-                      std::min(srcSize, dstSize) / sizeof(zpointer));
+                      length);
     }
     static void value_copy(const ValuePayload& src, const ValuePayload& dst)
     {
@@ -84,11 +85,9 @@ public:
         AccessInternal::value_copy_internal(src.address, dst.address, src.size);
     }
     // Cangjie inline-value arrays use the same raw payload copy.
-    static void value_arraycopy(BaseObject*, MAddress src, size_t srcSize,
-                                BaseObject*, MAddress dst, size_t dstSize)
+    static void value_arraycopy(MArray* layout, MAddress src, MAddress dst, size_t length)
     {
-        CHECK(srcSize <= dstSize);
-        AccessInternal::value_copy_internal(src, dst, srcSize);
+        AccessInternal::value_copy_internal(src, dst, length * layout->GetElementSize());
     }
     static constexpr std::memory_order order()
     {

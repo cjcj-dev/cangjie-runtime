@@ -398,14 +398,13 @@ inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::value_copy_in_h
 
 template<DecoratorSet decorators, typename BarrierSetT>
 inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::oop_arraycopy_in_heap(
-    BaseObject* srcObj, MAddress src, size_t srcSize, BaseObject* dstObj, MAddress dst, size_t dstSize)
+    BaseObject* srcObj, MAddress src, BaseObject* dstObj, MAddress dst, size_t length)
 {
-    const size_t length = std::min(srcSize, dstSize) / sizeof(zpointer);
     if (Heap::IsHeapAddress(src) && Heap::IsHeapAddress(dst)) {
         oop_arraycopy_in_heap(reinterpret_cast<zpointer*>(src), reinterpret_cast<zpointer*>(dst), length);
         return;
     }
-    if (src == dst || length == 0) { return; }
+    if (src == dst) { return; }
     for (size_t i = 0; i < length; ++i) {
         const size_t offset = (src > dst ? i : length - i - 1) * sizeof(zpointer);
         ValuePayload source(src + offset, sizeof(zpointer));
@@ -416,22 +415,14 @@ inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::oop_arraycopy_i
 
 template<DecoratorSet decorators, typename BarrierSetT>
 inline void ZBarrierSet::AccessBarrier<decorators, BarrierSetT>::value_arraycopy_in_heap(
-    BaseObject* srcObj, MAddress src, size_t srcSize, BaseObject* dstObj, MAddress dst, size_t dstSize)
+    MArray* layout, MAddress src, MAddress dst, size_t length)
 {
-    CHECK(srcSize <= dstSize);
-    auto* layout = static_cast<MArray*>(Heap::IsHeapAddress(dst) ? dstObj : srcObj);
-    if (layout == nullptr) {
-        Raw::value_arraycopy(srcObj, src, srcSize, dstObj, dst, dstSize);
-        return;
-    }
     const size_t stride = layout->GetElementSize();
-    CHECK(stride != 0 && srcSize % stride == 0);
     if (Heap::IsHeapAddress(src) && Heap::IsHeapAddress(dst)) {
-        struct_arraycopy_in_heap_no_check_cast(layout, dst, src, srcSize / stride);
+        struct_arraycopy_in_heap_no_check_cast(layout, dst, src, length);
         return;
     }
-    if (src == dst || srcSize == 0) { return; }
-    const size_t length = srcSize / stride;
+    if (src == dst) { return; }
     for (size_t i = 0; i < length; ++i) {
         const size_t offset = (src > dst ? i : length - i - 1) * stride;
         ValuePayload source(src + offset, stride, layout->GetComponentTypeInfo()->GetGCTib(),
