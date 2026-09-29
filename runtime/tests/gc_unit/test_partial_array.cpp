@@ -176,12 +176,16 @@ std::set<size_t> OnSet(GcHeapFixture& fx, Slot* addr, size_t length)
     domain.follow_array_elements(context, reinterpret_cast<MAddress>(addr), length, false);
     size_t step = 0;
     ExpectPartition(domain, addr, length, original, step);
-    while (!domain.Stacks().IsEmpty()) {
-        // The existing product abort check returns after one consumed entry.
+    while (!domain.Stacks().IsEmpty() || !domain.Stripes().IsEmpty()) {
+        // FollowWork steals non-home stripes before entering Drain. Reset the
+        // one-worker termination round after the previous aborted step left it.
+        // Neither the pending product entries nor their ownership are changed.
+        domain.Terminate().Reset(1);
         ZAbort::abort();
-        (void)domain.Drain(context, 0);
+        (void)domain.FollowWork(context, 0, true);
         ZAbort::reset();
         ExpectPartition(domain, addr, length, original, ++step);
+        GC_EXPECT_TRUE(step <= length * 2 + 32);
     }
     context.Cache().Flush();
     Heap::GetHeap().old().set_phase(previous);
