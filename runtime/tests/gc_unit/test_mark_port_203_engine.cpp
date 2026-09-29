@@ -46,18 +46,6 @@ struct ResetAbort {
     ~ResetAbort() { ZAbort::reset(); }
 };
 
-bool WaitForCount(std::atomic<size_t>* counter, size_t target, std::chrono::milliseconds budget)
-{
-    const auto deadline = std::chrono::steady_clock::now() + budget;
-    while (counter->load(std::memory_order_acquire) < target) {
-        if (std::chrono::steady_clock::now() >= deadline) {
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return true;
-}
-
 size_t StealOffset(MarkStripe& stripe, MarkingSMR& smr, size_t workerId)
 {
     MarkStripeStack* stack = stripe.StealStack(smr, workerId);

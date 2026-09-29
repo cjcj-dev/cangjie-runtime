@@ -1,4 +1,3 @@
-#include "mark_consumer_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -18,6 +17,7 @@
 
 // gc_heap_fixture.hpp first: its access-unlocking window must see zPage.hpp.
 #include "gc_heap_fixture.hpp"
+#include "mark_consumer_fixture.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zMark.hpp"
@@ -258,7 +258,11 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_FALSE(region->is_marked());
     GC_EXPECT_FALSE(region->is_object_live(from_object(fx.obj0)));
 
-    ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false)); consumer.context.Cache().Flush(); }()); // first consumer visit
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    } // first consumer visit
     GC_EXPECT_TRUE(region->is_marked());
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
@@ -267,7 +271,11 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
     GC_EXPECT_FALSE(region->IsKnownEmpty());
 
-    ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false)); consumer.context.Cache().Flush(); }()); // duplicate consumer visit
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    } // duplicate consumer visit
     GC_EXPECT_EQ(region->live_objects(), 1u);
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 
@@ -282,7 +290,11 @@ GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
 {
     GcHeapFixture fx;
     ZPage* region = fx.region0();
-    ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true)); consumer.context.Cache().Flush(); }());
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true));
+        consumer.context.Cache().Flush();
+    }
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_FALSE(region->is_object_strongly_live(from_object(fx.obj0)));
     GC_EXPECT_TRUE(region->is_object_marked(from_object(fx.obj0), true));
@@ -291,7 +303,11 @@ GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 
     // The strong mark completes the pair without another live claim.
-    ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false)); consumer.context.Cache().Flush(); }());
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
     GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
     GC_EXPECT_FALSE(RegionSpace::IsResurrectedObject(fx.obj0));
     GC_EXPECT_EQ(region->live_objects(), 1u);
@@ -449,15 +465,23 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
     BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
     if (initiallyFinalizable) {
-        ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, true)); consumer.context.Cache().Flush(); }());
+        {
+            MarkConsumerFixture consumer;
+            consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, true));
+            consumer.context.Cache().Flush();
+        }
     }
     std::atomic<unsigned> ready{0};
-    auto mark = [&](unsigned worker) {
+    auto mark = [&](unsigned) {
         ready.fetch_add(1, std::memory_order_release);
         while (ready.load(std::memory_order_acquire) != 2) {
             std::this_thread::yield();
         }
-        ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false)); consumer.context.Cache().Flush(); }());
+        {
+            MarkConsumerFixture consumer;
+            consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false));
+            consumer.context.Cache().Flush();
+        }
     };
 
     std::thread first(mark, 0);
@@ -516,16 +540,32 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     region->SetRegionAllocPtr(start + 1024 + seed->GetSize());
     // Initialize both old segments through real marks at different starts, so
     // both target bits are known clear before the controlled next-cycle reset.
-    ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(warmFirst))), true, true, false, false)); consumer.context.Cache().Flush(); }());
-    ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(warmOther))), true, true, false, false)); consumer.context.Cache().Flush(); }());
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(warmFirst))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(warmOther))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false)); consumer.context.Cache().Flush(); }());
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
 
     std::atomic<unsigned> ready{0};
     auto mark = [&](BaseObject* object) {
         ready.fetch_add(1, std::memory_order_release);
         while (ready.load(std::memory_order_acquire) != 2) { std::this_thread::yield(); }
-        ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false)); consumer.context.Cache().Flush(); }());
+        {
+            MarkConsumerFixture consumer;
+            consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false));
+            consumer.context.Cache().Flush();
+        }
     };
     std::thread first([&] { mark(firstObject); });
     std::thread other([&] { mark(otherObject); });
@@ -546,7 +586,11 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     GC_EXPECT_TRUE(firstLive);
     GC_EXPECT_EQ(objects, 3u);
     GC_EXPECT_EQ(region->live_bytes(), 3 * firstObject->GetSize());
-    ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(otherObject))), true, true, false, false)); consumer.context.Cache().Flush(); }());
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(otherObject))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
     GC_EXPECT_EQ(region->live_objects(), 3u);
     std::vector<BaseObject*> visited;
     region->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
@@ -581,13 +625,21 @@ GC_TEST(ZLiveMapPage, reset_publication_preserves_peer_mark)
     BaseObject* other = fx.PlaceObject(region->GetRegionStart() + 256);
     BaseObject* seed = fx.PlaceObject(region->GetRegionStart() + 512);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(seed) + seed->GetSize());
-    ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false)); consumer.context.Cache().Flush(); }());
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     std::atomic<unsigned> ready{0};
-    auto mark = [&](unsigned worker, BaseObject* object) {
+    auto mark = [&](unsigned, BaseObject* object) {
         ready.fetch_add(1, std::memory_order_release);
         while (ready.load(std::memory_order_acquire) != 2) { std::this_thread::yield(); }
-        ([&] { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false)); consumer.context.Cache().Flush(); }());
+        {
+            MarkConsumerFixture consumer;
+            consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false));
+            consumer.context.Cache().Flush();
+        }
     };
     std::thread first([&] { mark(0, fx.obj0); });
     std::thread peer([&] { mark(1, other); });
