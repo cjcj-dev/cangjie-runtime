@@ -1,0 +1,55 @@
+Set cache size limit to 50.0 GB
+default rc=123 wall=1
+default/runtime/tests/gc_unit/test_uncommitter.cpp:494:45: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+default/runtime/tests/gc_unit/test_uncommitter.cpp:508:56: error: no member named 'cacheMutex' in 'MapleRuntime::RegionManager'
+default/runtime/tests/gc_unit/test_uncommitter.cpp:519:43: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+testable rc=123 wall=1
+testable/runtime/tests/gc_unit/test_uncommitter.cpp:494:45: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+testable/runtime/tests/gc_unit/test_uncommitter.cpp:508:56: error: no member named 'cacheMutex' in 'MapleRuntime::RegionManager'
+testable/runtime/tests/gc_unit/test_uncommitter.cpp:519:43: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+head configure=0 build=0 wall=17
+clear configure=0 build=0 wall=17
+ordinary configure=0 build=0 wall=17
+restored configure=0 build=0 wall=17
+OHOS_RC=2 wall=18
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:494:45: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:508:56: error: no member named 'cacheMutex' in 'MapleRuntime::RegionManager'
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:519:43: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:494:45: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:508:56: error: no member named 'cacheMutex' in 'MapleRuntime::RegionManager'
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:519:43: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+cp: 对 '/root/sym_cangjie_runtime_1319_implement_r5899659797/unit-testable/cj_gc_unit' 调用 stat 失败: 没有那个文件或目录
+/usr/bin/grep: /root/sym_cangjie_runtime_1319_implement_r5899659797/unit-testable/test-lists/main.txt: 没有那个文件或目录
+/usr/bin/grep: /root/sym_cangjie_runtime_1319_implement_r5899659797/unit-testable/test-lists/main.txt: 没有那个文件或目录
+/usr/bin/grep: /root/sym_cangjie_runtime_1319_implement_r5899659797/unit-testable/test-lists/main.txt: 没有那个文件或目录
+/usr/bin/grep: /root/sym_cangjie_runtime_1319_implement_r5899659797/unit-testable/test-lists/main.txt: 没有那个文件或目录
+sha256sum: /root/sym_cangjie_runtime_1319_implement_r5899659797/keep/elf/cj_gc_unit: 没有那个文件或目录
+sha256sum: /root/sym_cangjie_runtime_1319_implement_r5899659797/keep/elf/cj_gc_unit: 没有那个文件或目录
+sha256sum: /root/sym_cangjie_runtime_1319_implement_r5899659797/keep/elf/cj_gc_unit: 没有那个文件或目录
+sha256sum: /root/sym_cangjie_runtime_1319_implement_r5899659797/keep/elf/cj_gc_unit: 没有那个文件或目录
+sha256sum: /root/sym_cangjie_runtime_1319_implement_r5899659797/keep/elf/cj_gc_unit: 没有那个文件或目录
+sha256sum: /root/sym_cangjie_runtime_1319_implement_r5899659797/unit-default/cj_gc_unit: 没有那个文件或目录
+sha256sum: /root/sym_cangjie_runtime_1319_implement_r5899659797/unit-default/cj_gc_forwarding_publication_unit: 没有那个文件或目录
+CASES green
+ThreadRootCurrent.SavedColorInvisibleRoot 127
+ThreadRootCurrent.SavedColorNativeFrameRoot 127
+UNIT_FILLER_RC=2 wall=0
+ThreadRootCurrent.TwoEpochInvisibleRoot 127
+cat: /root/sym_cangjie_runtime_1319_implement_r5899659797/unit-filler/parallel_tally.txt: 没有那个文件或目录
+ThreadRootCurrent.TwoEpochNativeFrameRoot 127
+CASES head
+ThreadRootCurrent.SavedColorInvisibleRoot 127
+ThreadRootCurrent.SavedColorNativeFrameRoot 127
+ThreadRootCurrent.TwoEpochInvisibleRoot 127
+ThreadRootCurrent.TwoEpochNativeFrameRoot 127
+CASES clear
+* 
+CASES ordinary
+* 
+CASES restored
+ThreadRootCurrent.SavedColorInvisibleRoot 127
+ThreadRootCurrent.SavedColorNativeFrameRoot 127
+ThreadRootCurrent.TwoEpochInvisibleRoot 127
+ThreadRootCurrent.TwoEpochNativeFrameRoot 127
+cat: '/root/sym_cangjie_runtime_1319_implement_r5899659797/cases-clear/*.rc': 没有那个文件或目录
+cat: '/root/sym_cangjie_runtime_1319_implement_r5899659797/cases-ordinary/*.rc': 没有那个文件或目录
