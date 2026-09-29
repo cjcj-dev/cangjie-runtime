@@ -4,6 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Common/Aarch64StubLayout.h"
+MRT_AARCH64_STUB_CALLEE_GPRS(MRT_AARCH64_CHECK_CALLEE_SLOT)
+
 #define cfi_adjust_cfa_offset(off)      .cfi_adjust_cfa_offset off
 #define cfi_rel_offset(reg, off)        .cfi_rel_offset reg, off
 #define cfi_restore(reg)                .cfi_restore reg
@@ -72,21 +75,21 @@ CJ_MCC_ExclusiveScope:
     cfi_def_cfa_register(x29)
 
     // Save callee-saved registers (GC scans from x29+0x20)
-    stp     x19, x20, [x29, #0x20]
-    cfi_rel_offset(x19, 0x20)
-    cfi_rel_offset(x20, 0x28)
-    stp     x21, x22, [x29, #0x30]
-    cfi_rel_offset(x21, 0x30)
-    cfi_rel_offset(x22, 0x38)
-    stp     x23, x24, [x29, #0x40]
-    cfi_rel_offset(x23, 0x40)
-    cfi_rel_offset(x24, 0x48)
-    stp     x25, x26, [x29, #0x50]
-    cfi_rel_offset(x25, 0x50)
-    cfi_rel_offset(x26, 0x58)
-    stp     x27, x28, [x29, #0x60]
-    cfi_rel_offset(x27, 0x60)
-    cfi_rel_offset(x28, 0x68)
+    stp     x19, x20, [x29, #.Lmrt_a64_callee_x19]
+    cfi_rel_offset(x19, .Lmrt_a64_callee_x19)
+    cfi_rel_offset(x20, .Lmrt_a64_callee_x20)
+    stp     x21, x22, [x29, #.Lmrt_a64_callee_x21]
+    cfi_rel_offset(x21, .Lmrt_a64_callee_x21)
+    cfi_rel_offset(x22, .Lmrt_a64_callee_x22)
+    stp     x23, x24, [x29, #.Lmrt_a64_callee_x23]
+    cfi_rel_offset(x23, .Lmrt_a64_callee_x23)
+    cfi_rel_offset(x24, .Lmrt_a64_callee_x24)
+    stp     x25, x26, [x29, #.Lmrt_a64_callee_x25]
+    cfi_rel_offset(x25, .Lmrt_a64_callee_x25)
+    cfi_rel_offset(x26, .Lmrt_a64_callee_x26)
+    stp     x27, x28, [x29, #.Lmrt_a64_callee_x27]
+    cfi_rel_offset(x27, .Lmrt_a64_callee_x27)
+    cfi_rel_offset(x28, .Lmrt_a64_callee_x28)
 
     stp     d8, d9, [x29, #0x70]
     stp     d10, d11, [x29, #0x80]
@@ -249,19 +252,19 @@ unwindPCForExclusiveStub:
     ldp     d12, d13, [x29, #0x90]
     ldp     d14, d15, [x29, #0xa0]
 
-    ldp     x19, x20, [x29, #0x20]
+    ldp     x19, x20, [x29, #.Lmrt_a64_callee_x19]
     cfi_restore(x19)
     cfi_restore(x20)
-    ldp     x21, x22, [x29, #0x30]
+    ldp     x21, x22, [x29, #.Lmrt_a64_callee_x21]
     cfi_restore(x21)
     cfi_restore(x22)
-    ldp     x23, x24, [x29, #0x40]
+    ldp     x23, x24, [x29, #.Lmrt_a64_callee_x23]
     cfi_restore(x23)
     cfi_restore(x24)
-    ldp     x25, x26, [x29, #0x50]
+    ldp     x25, x26, [x29, #.Lmrt_a64_callee_x25]
     cfi_restore(x25)
     cfi_restore(x26)
-    ldp     x27, x28, [x29, #0x60]
+    ldp     x27, x28, [x29, #.Lmrt_a64_callee_x27]
     cfi_restore(x27)
     cfi_restore(x28)
 

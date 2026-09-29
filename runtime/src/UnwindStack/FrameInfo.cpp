@@ -6,6 +6,7 @@
 
 
 #include "Base/Types.h"
+#include "Common/Aarch64StubLayout.h"
 #include "Common/StackType.h"
 #include "Common/TypeDef.h"
 #include "os/Loader.h"
@@ -41,24 +42,15 @@ uintptr_t FrameInfo::CallerSP() const
     switch (GetFrameType()) {
         case FrameType::RETURN_SAFEPOINT:
         case FrameType::SAFEPOINT:
-        case FrameType::STACKGROW: return fp + 0x310;
+        case FrameType::STACKGROW: return fp + MRT_AARCH64_STUB_FRAME_BYTES;
         case FrameType::C2R_STUB: return fp + 8 * 14;
         case FrameType::C2N_STUB: return fp + 8 * 32;
         case FrameType::MANAGED: {
             ElfUnloadQuiescence::ReadScope reader;
             FuncDescRef desc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(GetStartProc()));
             if (desc == nullptr) { return 0; }
-            Uptr* table = desc->GetStackMap();
-            uint32_t position = 0;
-            (void)EHFrameInfo::ReadVarInt(&table, position);
-            (void)EHFrameInfo::ReadVarInt(&table, position);
-            uint32_t bitmap = EHFrameInfo::ReadVarInt(&table, position);
-            size_t saved = 0;
-            while (bitmap != 0) {
-                const uint32_t offset = EHFrameInfo::ReadVarInt(&table, position);
-                if (offset != 0 && offset != 1) { ++saved; }
-                bitmap &= bitmap - 1;
-            }
+            const FramePrologue prologue(desc->GetStackMap());
+            const size_t saved = prologue.GetSavedRegistersAboveFrameHead();
             return fp + sizeof(FrameAddress) + ((saved + 1) & ~size_t(1)) * sizeof(uintptr_t);
         }
         default: return 0;

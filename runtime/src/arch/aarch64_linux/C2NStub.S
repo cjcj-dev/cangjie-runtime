@@ -4,6 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Common/Aarch64StubLayout.h"
+MRT_AARCH64_STUB_CALLEE_GPRS(MRT_AARCH64_CHECK_CALLEE_SLOT)
+
 #define cfi_adjust_cfa_offset(off)      .cfi_adjust_cfa_offset off
 #define cfi_rel_offset(reg, off)        .cfi_rel_offset reg, off
 #define cfi_restore(reg)                .cfi_restore reg
@@ -15,7 +18,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #define StubFrameContextSize          (8 * 32)
-#define StubCalleeSaveAreaSize        (8 * 4)
+#define StubCalleeSaveAreaSize        MRT_AARCH64_STUB_CALLEE_BASE
 #define FuncAddrAndCpStacksizeOffset  (8 * 2)
 #define SafeStateOffset               (8 * 2)
 
@@ -113,25 +116,25 @@ CJ_MCC_C2NStub:
     cfi_def_cfa_register (x29)
 
     // save all used callee-saved registers.
-    stp  x19, x20, [sp, #StubCalleeSaveAreaSize]
-    cfi_rel_offset (x19, StubCalleeSaveAreaSize)
-    cfi_rel_offset (x20, StubCalleeSaveAreaSize+8)
+    stp  x19, x20, [sp, #.Lmrt_a64_callee_x19]
+    cfi_rel_offset (x19, .Lmrt_a64_callee_x19)
+    cfi_rel_offset (x20, .Lmrt_a64_callee_x20)
 
-    stp  x21, x22, [sp, #StubCalleeSaveAreaSize+0x10]
-    cfi_rel_offset (x21, StubCalleeSaveAreaSize+0x10)
-    cfi_rel_offset (x22, StubCalleeSaveAreaSize+0x18)
+    stp  x21, x22, [sp, #.Lmrt_a64_callee_x21]
+    cfi_rel_offset (x21, .Lmrt_a64_callee_x21)
+    cfi_rel_offset (x22, .Lmrt_a64_callee_x22)
 
-    stp  x23, x24, [sp, #StubCalleeSaveAreaSize+0x20]
-    cfi_rel_offset (x23, StubCalleeSaveAreaSize+0x20)
-    cfi_rel_offset (x24, StubCalleeSaveAreaSize+0x28)
+    stp  x23, x24, [sp, #.Lmrt_a64_callee_x23]
+    cfi_rel_offset (x23, .Lmrt_a64_callee_x23)
+    cfi_rel_offset (x24, .Lmrt_a64_callee_x24)
 
-    stp  x25, x26, [sp, #StubCalleeSaveAreaSize+0x30]
-    cfi_rel_offset (x25, StubCalleeSaveAreaSize+0x30)
-    cfi_rel_offset (x26, StubCalleeSaveAreaSize+0x38)
+    stp  x25, x26, [sp, #.Lmrt_a64_callee_x25]
+    cfi_rel_offset (x25, .Lmrt_a64_callee_x25)
+    cfi_rel_offset (x26, .Lmrt_a64_callee_x26)
 
-    stp  x27, x28, [sp, #StubCalleeSaveAreaSize+0x40]
-    cfi_rel_offset (x27, StubCalleeSaveAreaSize+0x40)
-    cfi_rel_offset (x28, StubCalleeSaveAreaSize+0x48)
+    stp  x27, x28, [sp, #.Lmrt_a64_callee_x27]
+    cfi_rel_offset (x27, .Lmrt_a64_callee_x27)
+    cfi_rel_offset (x28, .Lmrt_a64_callee_x28)
 
 #if defined(ENABLE_FORWARD_PTRAUTH_CFI)
     mov x16, sp
@@ -275,7 +278,7 @@ unwindPCForC2NStub:
     .global unwindPCForC2NStubExceptionReturn
 unwindPCForC2NStubExceptionReturn:
 #endif
-    str x0, [sp, #StubCalleeSaveAreaSize+0x48]
+    str x0, [sp, #.Lmrt_a64_callee_x28]
 
     /* set potential return value */
     mov  x0, x21
@@ -294,19 +297,19 @@ unwindPCForC2NStubExceptionReturn:
 
 .L_stack_restore:
     // restore all used callee-saved registers.
-    ldp  x19, x20, [sp, #StubCalleeSaveAreaSize]
+    ldp  x19, x20, [sp, #.Lmrt_a64_callee_x19]
     cfi_restore (x19)
     cfi_restore (x20)
-    ldp  x21, x22, [sp, #StubCalleeSaveAreaSize+0x10]
+    ldp  x21, x22, [sp, #.Lmrt_a64_callee_x21]
     cfi_restore (x21)
     cfi_restore (x22)
-    ldp  x23, x24, [sp, #StubCalleeSaveAreaSize+0x20]
+    ldp  x23, x24, [sp, #.Lmrt_a64_callee_x23]
     cfi_restore (x23)
     cfi_restore (x24)
-    ldp  x25, x26, [sp, #StubCalleeSaveAreaSize+0x30]
+    ldp  x25, x26, [sp, #.Lmrt_a64_callee_x25]
     cfi_restore (x25)
     cfi_restore (x26)
-    ldp  x27, x28, [sp, #StubCalleeSaveAreaSize+0x40]
+    ldp  x27, x28, [sp, #.Lmrt_a64_callee_x27]
     cfi_restore (x27)
     cfi_restore (x28)
 
@@ -321,7 +324,7 @@ unwindPCForC2NStubExceptionReturn:
 .L_stack_check_fail:
     bl  MCC_ThrowStackOverflowError
     bl  MRT_GetThreadLocalData
-    str x0, [sp, #StubCalleeSaveAreaSize+0x48]
+    str x0, [sp, #.Lmrt_a64_callee_x28]
     b   .L_stack_restore
     .cfi_endproc
     .size CJ_MCC_C2NStub, .-CJ_MCC_C2NStub

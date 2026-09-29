@@ -458,7 +458,7 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     callerMachine.SetFA(&caller.fa);
     callerMachine.SetSP(FrameInfo(context.frameInfo.mFrame, FrameType::RETURN_SAFEPOINT).CallerSP());
     const FrameInfo callerFrame(callerMachine, FrameType::MANAGED);
-    GC_EXPECT_FALSE(owner.GetStackWatermark().is_frame_safe(callerFrame));
+    GC_EXPECT_FALSE(owner.GetStackWatermark().processing_started());
     // safepoint.cpp:831: return polls expose a frame only after epoch start.
     // A real ordinary poll supplies that precondition; no helper starts it.
     ArmThreadPoll(tls);
@@ -471,7 +471,7 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     std::fprintf(stderr, "K3_RETURN_WRITEBACK_ASSERT phase=first rewritten=%d value=%p expected=%p\n",
                  cold.rewritten, coldValue, replaced);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(coldValue), reinterpret_cast<uintptr_t>(replaced));
-    GC_EXPECT_TRUE(owner.GetStackWatermark().is_frame_safe(callerFrame));
+    owner.GetStackWatermark().assert_is_frame_safe(callerFrame);
     std::fprintf(stderr, "RETURN_ROOT_RESULT phase=cold value=%p safe=1\n", coldValue);
     StorePlain(RootSlotAt(StubSlot(stub, kReturnSlot)), from_object(original));
     RewriteReturnRoot warm(original, replaced);
@@ -482,7 +482,7 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     std::fprintf(stderr, "K3_RETURN_WRITEBACK_ASSERT phase=repeat rewritten=%d value=%p expected=%p\n",
                  warm.rewritten, warmValue, replaced);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(warmValue), reinterpret_cast<uintptr_t>(replaced));
-    GC_EXPECT_TRUE(owner.GetStackWatermark().is_frame_safe(callerFrame));
+    owner.GetStackWatermark().assert_is_frame_safe(callerFrame);
     std::fprintf(stderr, "RETURN_ROOT_RESULT phase=started value=%p safe=1\n", warmValue);
 }
 #endif

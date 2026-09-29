@@ -191,7 +191,6 @@ struct PrologueRegisterClosure {
         return *this;
     }
 
-    enum class Type : U32 { CALLEE_REGISTER, OFFSET };
     ~PrologueRegisterClosure() = default;
     void RecordCalleeSaved(RegSlotsMap& regSlotsMap, uintptr_t base) const
     {
@@ -216,56 +215,45 @@ struct PrologueRegisterClosure {
     std::vector<U32> offset;
 };
 
-using PrologueVisitor = std::function<void(PrologueRegisterClosure::Type, U32)>;
-// Prologue Table : 1 columns
-// | VarInt   |  the first row is a varInt that records the bit map of callee-saved register.
-// | VarInt[] |  the next n rows is a varInt matrix that records the offset of the slot saving callee-saved register.
-class PrologueVarInt {
+// One function-metadata decoder supplies frame size and saved-register locations.
+// HotSpot CodeBlob::frame_size / frame_x86.inline.hpp:455-470. Cangjie also
+// needs the compiler's saved-register prologue for movable-stack pointers.
+class FramePrologue {
 public:
-    PrologueVarInt(U8* ptr, U32 bitPos, const PrologueVisitor& visitor) : prologue(ptr, bitPos)
+    explicit FramePrologue(const Uptr* table) : nextTable(reinterpret_cast<U8*>(const_cast<Uptr*>(table)), 0)
     {
-        ResolvePrologue(visitor);
+        frameSize = Read();
+        slotFormat = Read();
+        U32 bitmap = Read();
+        for (U32 reg = 0; bitmap != 0; ++reg, bitmap >>= 1) {
+            if ((bitmap & 1) != 0) { registers.calleeSaved.push_back(reg); }
+        }
+        for (size_t i = 0; i < registers.calleeSaved.size(); ++i) { registers.offset.push_back(Read()); }
     }
-    explicit PrologueVarInt(const BitsManager& bitsManager, const PrologueVisitor& visitor) : prologue(bitsManager)
-    {
-        ResolvePrologue(visitor);
-    }
-
-    ~PrologueVarInt() = default;
-
+    U32 GetFrameSize() const { return frameSize; }
+    U32 GetSlotFormat() const { return slotFormat; }
+    const PrologueRegisterClosure& GetRegisters() const { return registers; }
+    PrologueRegisterClosure TakeRegisters() { return std::move(registers); }
     BitsManager GetNextTable() const { return nextTable; }
+    size_t GetSavedRegisterCount() const { return registers.calleeSaved.size(); }
+    size_t GetSavedRegistersAboveFrameHead() const
+    {
+        size_t count = 0;
+        for (U32 offset : registers.offset) { if (offset > 1) { ++count; } }
+        return count;
+    }
 
 private:
-    void ResolvePrologue(const PrologueVisitor& visitor)
+    U32 Read()
     {
-        VarInt regBits(prologue);
-        VarPair varPair = regBits.GetValue();
-        U32 bitMap = varPair.first;
-        U32 bitLen = varPair.second;
-        U32 size = 0;
-        for (U32 i = 0; bitMap != 0; ++i, bitMap >>= 1) {
-            constexpr U32 bitMask = 0x1;
-            if ((bitMap & bitMask) == 0) {
-                continue;
-            }
-            if (LIKELY(visitor != nullptr)) {
-                visitor(PrologueRegisterClosure::Type::CALLEE_REGISTER, i);
-            }
-            ++size;
-        }
-        BitsManager offsetBitManager = prologue.GetNext(bitLen);
-        for (U32 i = 0; i < size; ++i) {
-            VarInt offsetVarInt(offsetBitManager);
-            VarPair offsetPair = offsetVarInt.GetValue();
-            if (LIKELY(visitor != nullptr)) {
-                visitor(PrologueRegisterClosure::Type::OFFSET, offsetPair.first);
-            }
-            offsetBitManager = offsetBitManager.GetNext(offsetPair.second);
-        }
-        nextTable = offsetBitManager;
+        const VarPair value = VarInt(nextTable).GetValue();
+        nextTable = nextTable.GetNext(value.second);
+        return value.first;
     }
-    BitsManager prologue;
     BitsManager nextTable;
+    U32 frameSize;
+    U32 slotFormat;
+    PrologueRegisterClosure registers;
 };
 
 // Register Table Header : 2 columns

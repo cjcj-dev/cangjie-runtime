@@ -51,7 +51,12 @@ public:
     void after_unwind();
     void on_iteration(const FrameInfo& frame);
     void ensure_safe(const FrameInfo& frame);
-    bool is_frame_safe(const FrameInfo& frame) const;
+    // HotSpot stackWatermark.hpp:154 NOT_DEBUG_RETURN.
+#if (defined(MRT_DEBUG) && (MRT_DEBUG == 1)) || defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+    void assert_is_frame_safe(const FrameInfo& frame);
+#else
+    void assert_is_frame_safe(const FrameInfo&) {}
+#endif
     void process_one();
     // continuationEntry.cpp:79-98 walks frames before continuationFreezeThaw.cpp:787
     // copies. stackWatermark.cpp:225 yield_processing must not drop this lock
@@ -72,6 +77,7 @@ protected:
     std::atomic<uint32_t> state;
 
 private:
+    bool is_frame_safe(const FrameInfo& frame) const;
     std::atomic<uintptr_t> waterMark { 0 };
     std::unique_ptr<StackWatermarkFramesIterator> iterator;
     friend class StackWatermarkFramesIterator;

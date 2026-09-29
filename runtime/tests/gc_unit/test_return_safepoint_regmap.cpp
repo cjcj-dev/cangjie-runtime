@@ -9,6 +9,10 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <condition_variable>
+#include <chrono>
+#include <mutex>
+#include <thread>
 
 #include "CangjieRuntime.h"
 #include "Loader/ElfUnloadQuiescence.h"
@@ -240,6 +244,98 @@ GC_TEST(ReturnSafepointRegMap, PrologueReachesStackGrow)
     PointerChain chain(false);
     chain.CheckGrow();
 }
+
+GC_TEST(FramePrologue, DecodesSizeAndSavedSlots)
+{
+    alignas(uintptr_t) uint8_t bytes[64] {};
+    Bits bits {bytes};
+    bits.Put(15, 4); bits.Put(0x12345678, 32); // full-width frame size
+    bits.Var(1); bits.Var(0x15); // format, registers 0/2/4
+    bits.Var(0); bits.Var(1); bits.Var(9);
+    bits.Var(7); // next-table sentinel
+    const FramePrologue prologue(reinterpret_cast<Uptr*>(bytes));
+    const auto& saved = prologue.GetRegisters();
+    const bool slots = saved.calleeSaved == std::vector<U32>({0, 2, 4}) &&
+        saved.offset == std::vector<U32>({0, 1, 9});
+    std::fprintf(stderr, "PROLOGUE_RESULT size=%x format=%u slots=%d above_head=%zu next=%u\n",
+        prologue.GetFrameSize(), prologue.GetSlotFormat(), slots,
+        prologue.GetSavedRegistersAboveFrameHead(), VarInt(prologue.GetNextTable()).GetValue().first);
+    GC_EXPECT_EQ(prologue.GetFrameSize(), U32(0x12345678));
+    GC_EXPECT_EQ(prologue.GetSlotFormat(), U32(1));
+    GC_EXPECT_TRUE(slots);
+    GC_EXPECT_EQ(prologue.GetSavedRegistersAboveFrameHead(), size_t(1));
+    GC_EXPECT_EQ(VarInt(prologue.GetNextTable()).GetValue().first, U32(7));
+}
+
+#if (defined(MRT_DEBUG) && (MRT_DEBUG == 1)) || defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+namespace {
+struct SafetyAssertionRendezvous {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool processing = false;
+    bool release = false;
+    bool checking = false;
+    bool returned = false;
+};
+SafetyAssertionRendezvous* safetyRendezvous;
+void HoldRootProcessing(zaddress_unsafe*, uintptr_t)
+{
+    auto& r = *safetyRendezvous;
+    std::unique_lock<std::mutex> guard(r.mutex);
+    r.processing = true;
+    r.changed.notify_all();
+    r.changed.wait(guard, [&] { return r.release; });
+}
+}
+
+GC_TEST(StackWatermark, SafetyAssertionWaitsForProcessing)
+{
+    PointerChain chain(false);
+    StackWatermarkSet::on_safepoint(chain.owner);
+    MachineFrame machine;
+    machine.SetSP(reinterpret_cast<uintptr_t>(chain.frames));
+    const FrameInfo safeFrame(machine, FrameType::MANAGED);
+    SafetyAssertionRendezvous rendezvous;
+    safetyRendezvous = &rendezvous;
+    // The normal finish-processing root closure runs while the product owns
+    // its watermark lock. No test hook or replacement implementation is used.
+    std::thread processing([&] {
+        chain.owner.GetStackWatermark().finish_processing(reinterpret_cast<void*>(&HoldRootProcessing));
+    });
+    std::unique_lock<std::mutex> guard(rendezvous.mutex);
+    const bool reached = rendezvous.changed.wait_for(guard, std::chrono::seconds(5),
+        [&] { return rendezvous.processing; });
+    guard.unlock();
+    std::thread checking([&] {
+        {
+            std::lock_guard<std::mutex> mark(rendezvous.mutex);
+            rendezvous.checking = true;
+            rendezvous.changed.notify_all();
+        }
+        chain.owner.GetStackWatermark().assert_is_frame_safe(safeFrame);
+        std::lock_guard<std::mutex> mark(rendezvous.mutex);
+        rendezvous.returned = true;
+        rendezvous.changed.notify_all();
+    });
+    guard.lock();
+    const bool started = rendezvous.changed.wait_for(guard, std::chrono::seconds(5),
+        [&] { return rendezvous.checking; });
+    const bool early = rendezvous.changed.wait_for(guard, std::chrono::milliseconds(200),
+        [&] { return rendezvous.returned; });
+    rendezvous.release = true;
+    rendezvous.changed.notify_all();
+    guard.unlock();
+    processing.join();
+    checking.join();
+    safetyRendezvous = nullptr;
+    std::fprintf(stderr, "SAFETY_LOCK_RESULT processing=%d checking=%d returned_while_processing=%d completed=%d\n",
+        reached, started, early, rendezvous.returned);
+    GC_EXPECT_TRUE(reached && started);
+    GC_EXPECT_FALSE(early);
+    GC_EXPECT_TRUE(rendezvous.returned);
+}
+
+#endif
 
 GC_TEST(ReturnSafepointRegMap, OrdinaryCallRejectsRegisterRoot)
 {
