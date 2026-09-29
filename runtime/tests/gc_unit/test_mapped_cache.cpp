@@ -358,8 +358,8 @@ GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     const uintptr_t fourthAddress = fourth->GetRegionStart();
     Stamp(first, 0x1111);
     Stamp(third, 0x3333);
-    manager.ReclaimRegion(first);
-    manager.ReclaimRegion(third);
+    Heap::free_page(first);
+    Heap::free_page(third);
     GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 4U);
     // No growth room: capacity == max capacity, so the request must harvest.
     ZPage* result = manager.TakeRegion((4) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
@@ -399,9 +399,9 @@ GC_COMPONENT_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainde
     const uintptr_t heapStart = manager.GetRegionHeapStart();
     Stamp(regions[4], 0x4444);
     // Same-class cache entries are harvested most recently inserted first.
-    manager.ReclaimRegion(regions[0]);
-    manager.ReclaimRegion(regions[2]);
-    manager.ReclaimRegion(regions[4]);
+    Heap::free_page(regions[0]);
+    Heap::free_page(regions[2]);
+    Heap::free_page(regions[4]);
     GC_EXPECT_EQ((manager.GetCachedBytes() / ZGranuleSize), 6U);
     ZPage* result = manager.TakeRegion((4) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     PublishAllocatedPage(result);

@@ -349,7 +349,7 @@ void* SelectRealLivePages(void* context)
         ZForwarding* forwarding = Heap::GetHeap().young().forwarding_table().get(starts[i]);
         if (forwarding != nullptr) {
             ++result.published;
-            result.completed += forwarding->is_done() && forwarding->ref_count().load() == 0 &&
+            result.completed += forwarding->is_done() && forwarding->_ref_count.load() == 0 &&
                 forwarding->find(starts[i]) != 0;
             ZPage* now = Heap::page(starts[i]);
             result.retired += now == nullptr;

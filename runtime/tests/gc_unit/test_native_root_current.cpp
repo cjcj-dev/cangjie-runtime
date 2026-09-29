@@ -390,13 +390,13 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, YoungRelocateSkipsForeignIncompleteFrom)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), held));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0(), fx.obj0));
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region0(), fx.region1()}));
-    GC_EXPECT_TRUE(!fx.region1()->IsForwardingDone());
+    GC_EXPECT_TRUE(!forwarding_for_page(fx.region1())->is_done());
     GC_EXPECT_TRUE(forwarding_for_page(fx.region1()) != nullptr);
     heap.young().set_phase(ZGenerationPhase::Relocate);
     ZRelocate::StartRelocationTasks(ZGenerationId::young);
     heap.young().EvacuateYoungRegions();
     GC_EXPECT_TRUE(forwarding_for_page(fx.region1()) != nullptr);
-    GC_EXPECT_TRUE(!fx.region1()->IsForwardingDone());
+    GC_EXPECT_TRUE(!forwarding_for_page(fx.region1())->is_done());
 }
 
 GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)

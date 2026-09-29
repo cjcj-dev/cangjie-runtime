@@ -1,3 +1,4 @@
+#include "gc_heap_fixture.hpp"
 #include <future>
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -21,7 +22,6 @@
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "gc_unittest.hpp"
-#include "gc_heap_fixture.hpp"
 
 #include <type_traits>
 #include <chrono>
@@ -113,8 +113,8 @@ GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
     GC_EXPECT_EQ(objectSize % sizeof(std::atomic<uint64_t>), static_cast<size_t>(0));
     GC_EXPECT_TRUE((fwd->length() & (fwd->length() - 1)) == 0);
 
-    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
-    GC_EXPECT_FALSE(fwd->claimed().load(std::memory_order_acquire));
+    GC_EXPECT_EQ(fwd->_ref_count.load(std::memory_order_acquire), 1);
+    GC_EXPECT_FALSE(fwd->is_claimed());
     GC_EXPECT_FALSE(fwd->is_done());
 
     const MAddress from = kStart + 16;
@@ -134,23 +134,23 @@ GC_TEST(ZForwarding, PageUsesRefCountProtocol)
     ZForwarding* fwd = ZForwarding::alloc(1, kStart, kStart, 0x1000, nullptr, 7);
     GC_EXPECT_TRUE(fwd != nullptr);
     GC_EXPECT_EQ(fwd->page_life_id(), static_cast<RegionLifeId>(7));
-    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
+    GC_EXPECT_EQ(fwd->_ref_count.load(std::memory_order_acquire), 1);
 
     ZRelocateQueue queue;
-    queue.BeginWorkers(1);
+    queue.activate(1);
     GC_EXPECT_TRUE(fwd->retain_page(&queue));
-    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 2);
+    GC_EXPECT_EQ(fwd->_ref_count.load(std::memory_order_acquire), 2);
     fwd->release_page();
-    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
+    GC_EXPECT_EQ(fwd->_ref_count.load(std::memory_order_acquire), 1);
 
     GC_EXPECT_TRUE(fwd->claim());
     fwd->in_place_relocation_claim_page();
-    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), -1);
+    GC_EXPECT_EQ(fwd->_ref_count.load(std::memory_order_acquire), -1);
     fwd->mark_done();
     GC_EXPECT_FALSE(fwd->retain_page(&queue));
     GC_EXPECT_TRUE(fwd->is_done());
     fwd->release_page();
-    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 0);
+    GC_EXPECT_EQ(fwd->_ref_count.load(std::memory_order_acquire), 0);
     GC_EXPECT_FALSE(fwd->retain_page(&queue));
     fwd->Destroy();
 }
@@ -256,7 +256,7 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 {
     GcHeapFixture heap;
     auto& queue = generation_relocate_queue(Generation::Old);
-    queue.BeginWorkers(1);
+    queue.activate(1);
     auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
     GC_EXPECT_TRUE(fwd->claim());
     fwd->in_place_relocation_claim_page();

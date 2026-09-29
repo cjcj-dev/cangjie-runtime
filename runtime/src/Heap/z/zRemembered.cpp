@@ -162,7 +162,7 @@ bool ZRemembered::scan_forwarding(ZForwarding* forwarding, void* context_void) c
 {
     auto* context = static_cast<ZRememberedScanForwardingContext*>(context_void);
     bool result = false;
-    if (forwarding->retain_page(&generation_relocate_queue((forwarding->from_age() == PageAge::old ? Generation::Old : Generation::Young)))) {
+    if (forwarding->retain_page(ZGeneration::old()->relocate().queue())) {
         forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
         context->_containing_array.clear();
         fill_containing(&context->_containing_array, forwarding->page());

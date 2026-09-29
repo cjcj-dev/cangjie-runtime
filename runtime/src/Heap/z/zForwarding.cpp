@@ -38,62 +38,6 @@ ZForwarding* ZForwarding::alloc(ZForwardingAllocator* allocator, ZPage* page, Pa
     return forwarding;
 }
 
-namespace {
-thread_local ZForwarding* currentPageWork = nullptr;
-}
-
-ZForwarding::PageWorkScope::PageWorkScope(ZForwarding* forwarding, bool complete)
-    : previous(currentPageWork), forwarding(forwarding), complete(complete)
-{
-    if (complete) CHECK(forwarding != nullptr && forwarding->claim());
-    currentPageWork = forwarding;
-}
-ZForwarding::PageWorkScope::~PageWorkScope()
-{
-    if (complete) {
-        if (forwarding->ref_count().load(std::memory_order_acquire) != 0) forwarding->release_page();
-        forwarding->detach_page();
-        forwarding->mark_done();
-    }
-    currentPageWork = previous;
-}
-ZForwarding* ZForwarding::CurrentPageWork() { return currentPageWork; }
-
-ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwarding::Retire site)
-    : owner(forwarding_for_page(region))
-{
-    (void)site;
-    if (region == nullptr) return;
-    if (!owner) {
-        return;
-    }
-    const int32_t before = owner->ref_count().load(std::memory_order_acquire);
-    const bool borrowed = ZForwarding::CurrentPageWork() == owner;
-    if (before == 0 || (!borrowed && !owner->claim())) {
-        owner->detach_page();
-    } else if (before > 0) {
-        owner->in_place_relocation_claim_page();
-        retiring = true;
-    }
-}
-
-void ZForwarding::WaitPageDone(ZForwarding* forwarding)
-{
-    if (forwarding == nullptr) {
-        return;
-    }
-    // Legacy page cleanup runs inside the completion owner itself.
-    if (CurrentPageWork() == forwarding || forwarding->is_done()) return;
-    auto& queue = generation_relocate_queue((forwarding->from_age() == PageAge::old ? Generation::Old : Generation::Young));
-    const auto request = queue.Add(forwarding);
-    CHECK_DETAIL(request.accepted, "forwarding wait requires a page task");
-    queue.Wait(request.forwarding);
-}
-
-
-} // namespace MapleRuntime
-
-namespace MapleRuntime {
 bool ZForwarding::claim()
 {
     bool expected = false;
@@ -145,12 +89,12 @@ ZPage* ZForwarding::detach_page()
 
 void ZForwarding::mark_done()
 {
-    _done.store(true, std::memory_order_release);
+    _done.store(true, std::memory_order_relaxed);
 }
 
 bool ZForwarding::is_done() const
 {
-    return _done.load(std::memory_order_acquire);
+    return _done.load(std::memory_order_relaxed);
 }
 
 void ZForwarding::in_place_relocation_claim_page()
@@ -196,12 +140,13 @@ bool ZForwarding::in_place_relocation_is_below_top_at_start(MAddress offset) con
 }
 
 namespace MapleRuntime {
-ZPage* ZForwarding::page() const { return _page; }
-
-bool ZForwarding::page_life_current() const
+ZPage* ZForwarding::page() const
 {
-    return _page != nullptr && _page->GetRegionLifeId() == _page_life_id;
+    DCHECK(_ref_count.load(std::memory_order_relaxed) != 0);
+    return _page;
 }
+
+
 }
 
 namespace MapleRuntime {
