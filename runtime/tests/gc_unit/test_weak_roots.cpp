@@ -1,4 +1,6 @@
 #include "Common/SuspendibleThreadSet.h"
+#include "Common/Runtime.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include "Common/WeakHandle.inline.h"
 #include "Heap/z/zAccess.hpp"
 #include "Heap/z/zAddress.inline.hpp"
@@ -129,4 +131,43 @@ GC_TEST(WeakRootsProduct, YoungBlockedAccessDoesNotDeathClean)
     GC_EXPECT_FALSE(ZBarrier::clean_barrier_on_phantom_oop_field(SlotOf(slot)));
     GC_EXPECT_TRUE(to_object(ZPointer::uncolor(*SlotOf(slot))) == fx.obj0);
     std::fprintf(stderr, "WEAK_ROOTS_YOUNG_NO_DEATH_CLEAN_ASSERT_EXECUTED\n");
+}
+
+namespace {
+std::atomic<size_t> ownerReports{0};
+std::atomic<size_t> ownerDead{0};
+
+void ReceiveDeadEntries(size_t count)
+{
+    ownerDead.store(count, std::memory_order_relaxed);
+    ownerReports.fetch_add(1, std::memory_order_relaxed);
+}
+}
+
+// oopStorageSetParState.inline.hpp:76-91: run a real driver collection,
+// observing the result delivered by the product storage callback API.
+GC_RUNTIME_OTHER_VM_TEST(WeakRootsProduct, CollectionReportsDeadToOwnerOnce)
+{
+    RuntimeParam params{};
+    params.heapParam.heapSize = 64 * 1024;
+    params.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+    auto& storage = Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage();
+    storage.register_num_dead_callback(ReceiveDeadEntries);
+    NativeSlot* dead = storage.Allocate();
+    NativeAccess<>::oop_store(dead, nullptr);
+    ownerReports.store(0, std::memory_order_relaxed);
+    ownerDead.store(0, std::memory_order_relaxed);
+    Heap::GetHeap().RequestGC(GC_REASON_USER);
+    const size_t calls = ownerReports.load(std::memory_order_relaxed);
+    const size_t count = ownerDead.load(std::memory_order_relaxed);
+    storage.Release(dead);
+    std::fprintf(stderr, "WEAK_OWNER_CALLBACK_ASSERT calls=%zu dead=%zu\n", calls, count);
+    // Separate observations: a missing count cannot mask the exactly-once assertion.
+    const bool countMatches = count == 1;
+    const bool callsMatch = calls == 1;
+    std::fprintf(stderr, "WEAK_OWNER_COUNT_ASSERT result=%d; WEAK_OWNER_ONCE_ASSERT result=%d\n",
+                 countMatches, callsMatch);
+    GC_EXPECT_TRUE(countMatches);
+    GC_EXPECT_TRUE(callsMatch);
 }
