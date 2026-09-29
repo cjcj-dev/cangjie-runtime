@@ -1,0 +1,2 @@
+LANE=sym_cangjie_runtime_1330_implement_r5895631037
+#1330 按派发 scope 迁移锁，涉及 #1304/#1307/#1313-1317 的文件。仅锁成员与持锁/等待/通知表达式；_relocated_fields_lock 与 cacheMutex 明确不迁。zHeapIterator.hpp:112 当前已是 ZLock bitmapLock（冻结 d1f697a），普查原文这项已过时，保留现状。zDirector.cpp:85 当前 predicate wait 带 reevaluate；ZGC zDirector.cpp:848-861 单次 monitor.wait(interval_ms)，计划移除 reevaluate 状态并按上游返回 true。请主控记录交集，若其他在飞棒正在改这些函数请裁决。本棒先做其余明确独立的成员迁移。

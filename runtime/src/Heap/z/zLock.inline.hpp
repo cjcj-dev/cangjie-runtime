@@ -27,7 +27,7 @@ inline void ZLock::unlock()
     _lock.unlock();
 }
 
-// zLock.inline.hpp:76-78 (PlatformMonitor::wait on the held lock; 0 == forever)
+// ZGC zLock.inline.hpp:92-94: true on wakeup, false on timeout; 0 waits forever.
 inline bool ZConditionLock::wait(uint64_t millis)
 {
     std::unique_lock<std::mutex> held(_lock, std::adopt_lock);
@@ -38,7 +38,7 @@ inline bool ZConditionLock::wait(uint64_t millis)
         timed_out = _cv.wait_for(held, std::chrono::milliseconds(millis)) == std::cv_status::timeout;
     }
     held.release();
-    return timed_out;
+    return !timed_out;
 }
 
 template <typename T>

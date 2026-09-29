@@ -74,7 +74,7 @@ void StoreBarrierBuffer::install_base_pointers()
     if (!kBufferStoreBarriers) {
         return;
     }
-    std::lock_guard<std::mutex> locker(basePointerLock);
+    ZLocker<ZLock> locker(&basePointerLock);
     if (ZPointer::remap_bits(lastInstalledColor) != ZPointerRemapped) {
         install_base_pointers_inner();
     }

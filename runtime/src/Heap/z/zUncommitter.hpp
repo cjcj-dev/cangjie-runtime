@@ -7,11 +7,10 @@
 #ifndef MRT_UNCOMMITTER_H
 #define MRT_UNCOMMITTER_H
 
+#include "Heap/z/zLock.inline.hpp"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <condition_variable>
-#include <mutex>
 
 #include "Base/Globals.h"
 #include "Heap/z/zThread.hpp"
@@ -60,8 +59,7 @@ private:
 
     ZPartition& partition;
     bool started = false;
-    std::mutex lock;
-    std::condition_variable condition;
+    ZConditionLock lock;
     std::atomic<bool> stopped{false};
     // Cycle state is protected by the partition page allocator lock.
     // Only the worker consumes progress between chunks.

@@ -1,0 +1,2 @@
+LANE=sym_cangjie_runtime_1330_implement_r5895631037
+任务要求通知 wait(1000) 为 true、超时 wait(10) 为 false，同时要求“把返回值取反时只有这条红”。ZGC zLock.inline.hpp:92-94 返回 OS_OK；当前 runtime/src/Heap/z/zLock.inline.hpp:41 返回 timed_out。整体取反必同时翻转通知和超时两条断言。计划两项均保留，采用单分支破坏分别证明：通知分支返回 false 只红通知；超时分支返回 true 只红超时。整体语义回退则两项红，均属于目标机制。请确认精确转红应按分支单刀处理。继续源码对齐，不等待此答复停止工作。

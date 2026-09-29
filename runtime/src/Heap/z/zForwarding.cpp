@@ -126,8 +126,8 @@ void ZForwarding::release_page()
             if (_ref_count.compare_exchange_weak(count, next, std::memory_order_acq_rel,
                                                 std::memory_order_relaxed)) {
                 if (next == 0 || next == -1) {
-                    std::lock_guard<std::mutex> lock(_ref_lock);
-                    _ref_changed.notify_all();
+                    ZLocker<ZConditionLock> lock(&_ref_lock);
+                    _ref_lock.notify_all();
                 }
                 return;
             }
@@ -137,8 +137,10 @@ void ZForwarding::release_page()
 ZPage* ZForwarding::detach_page()
 {
         if (_ref_count.load(std::memory_order_acquire) != 0) {
-            std::unique_lock<std::mutex> lock(_ref_lock);
-            _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == 0; });
+            ZLocker<ZConditionLock> lock(&_ref_lock);
+            while (_ref_count.load(std::memory_order_acquire) != 0) {
+                _ref_lock.wait();
+            }
         }
         return _page;
     }
@@ -163,8 +165,10 @@ void ZForwarding::in_place_relocation_claim_page()
                 continue;
             }
             if (count != 1) {
-                std::unique_lock<std::mutex> lock(_ref_lock);
-                _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == -1; });
+                ZLocker<ZConditionLock> lock(&_ref_lock);
+                while (_ref_count.load(std::memory_order_acquire) != -1) {
+                _ref_lock.wait();
+            }
             }
             break;
         }

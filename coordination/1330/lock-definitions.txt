@@ -1,0 +1,5 @@
+COMMAND: git grep -n -E class ZLock|class ZConditionLock|class ZLocker 4b8ba5a8779058ad1e5323b98698081c1a289140 -- runtime/src
+RC=0
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zLock.hpp:14:class ZLock {
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zLock.hpp:24:class ZConditionLock {
+4b8ba5a8779058ad1e5323b98698081c1a289140:runtime/src/Heap/z/zLock.hpp:41:class ZLocker {

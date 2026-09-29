@@ -12,7 +12,7 @@ namespace MapleRuntime {
 void MarkTerminate::Reset(size_t workers)
 {
     CHECK_DETAIL(workers != 0, "mark termination needs a worker");
-    std::lock_guard<std::mutex> lock(mutex);
+    ZLocker<ZConditionLock> lock(&mutex);
     workerCount = workers;
     working = workers;
     awakening = 0;
@@ -21,11 +21,11 @@ void MarkTerminate::Reset(size_t workers)
 void MarkTerminate::Leave()
 {
     SuspendibleThreadSetLeaver stsLeaver;
-    std::lock_guard<std::mutex> lock(mutex);
+    ZLocker<ZConditionLock> lock(&mutex);
     CHECK_DETAIL(working != 0, "mark worker left twice");
     --working;
     if (working == 0) {
-        condition.notify_all();
+        mutex.notify_all();
     }
 }
 
@@ -40,16 +40,16 @@ void MarkTerminate::MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStrip
 bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
 {
     SuspendibleThreadSetLeaver stsLeaver;
-    std::unique_lock<std::mutex> lock(mutex);
+    ZLocker<ZConditionLock> lock(&mutex);
     CHECK_DETAIL(working != 0, "mark worker left termination twice");
     --working;
     if (working == 0) {
 
-        condition.notify_all();
+        mutex.notify_all();
         return true;
     }
     MaybeReduceStripes(stripes, usedNStripes);
-    condition.wait(lock);
+    mutex.wait();
     if (awakening != 0) {
         --awakening;
     }
@@ -62,7 +62,7 @@ bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
 
 void MarkTerminate::Wake()
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    ZLocker<ZConditionLock> lock(&mutex);
     if (working == 0) {
         return;
     }
@@ -70,12 +70,12 @@ void MarkTerminate::Wake()
         return;
     }
     ++awakening;
-    condition.notify_one();
+    mutex.notify();
 }
 
 bool MarkTerminate::Saturated() const
 {
-    std::lock_guard<std::mutex> lock(mutex);
+    ZLocker<ZConditionLock> lock(&mutex);
     return working + awakening == workerCount;
 }
 

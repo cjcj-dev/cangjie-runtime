@@ -366,8 +366,10 @@ ZRelocateMediumAllocator::~ZRelocateMediumAllocator()
 }
 ZPage* ZRelocateMediumAllocator::alloc_and_retire_target_page(ZForwarding* forwarding, ZPage* target)
 {
-    std::unique_lock<std::mutex> guard(lock);
-    changed.wait(guard, [&] { return !inPlace; });
+    ZLocker<ZConditionLock> guard(&lock);
+    while (inPlace) {
+        lock.wait();
+    }
     const uint32_t partition = forwarding->page()->partition_id();
     const PageAge age = forwarding->to_age();
     if (sharedTargets->get(partition, age) == target) {
@@ -383,12 +385,12 @@ ZPage* ZRelocateMediumAllocator::alloc_and_retire_target_page(ZForwarding* forwa
 }
 void ZRelocateMediumAllocator::share_target_page(ZPage* page, uint32_t partition)
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     CHECK(inPlace && page != nullptr);
     CHECK(sharedTargets->get(partition, page->age()) == nullptr);
     sharedTargets->set(partition, page->age(), page);
     inPlace = false;
-    changed.notify_all();
+    lock.notify_all();
 }
 uintptr_t ZRelocateMediumAllocator::alloc_object(ZPage* page, size_t size) const
 {
@@ -619,34 +621,34 @@ void ZRelocateQueue::resize_workers(uint32_t workers)
     CHECK_DETAIL(workers != 0 && nworkers == 0 && nsynchronized == 0,
                  "invalid relocate queue resize workers=%u nworkers=%u nsync=%u",
                  workers, nworkers, nsynchronized);
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     nworkers = workers;
 }
 
 void ZRelocateQueue::leave()
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     nworkers--;
     const bool done = prune();
     const bool last = synchronizeFlag && nworkers == nsynchronized;
     if (done || last) {
-        attention.notify_all();
+        lock.notify_all();
     }
 }
 
 void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
 {
-    std::unique_lock<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     if (forwarding->is_done()) {
         return;
     }
     queue.append(forwarding);
     if (queue.length() == 1) {
         inc_needs_attention();
-        attention.notify_all();
+        lock.notify_all();
     }
     while (!forwarding->is_done()) {
-        attention.wait(guard);
+        lock.wait();
     }
 }
 
@@ -675,7 +677,7 @@ bool ZRelocateQueue::prune()
 ZForwarding* ZRelocateQueue::prune_and_claim()
 {
     if (prune()) {
-        attention.notify_all();
+        lock.notify_all();
     }
     for (int i = 0; i < queue.length(); i++) {
         ZForwarding* forwarding = queue.at(i);
@@ -690,7 +692,7 @@ void ZRelocateQueue::synchronize_thread()
 {
     nsynchronized++;
     if (nsynchronized == nworkers) {
-        attention.notify_all();
+        lock.notify_all();
     }
 }
 
@@ -704,7 +706,7 @@ ZForwarding* ZRelocateQueue::synchronize_poll()
     if (!needs_attention()) {
         return nullptr;
     }
-    std::unique_lock<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     if (ZForwarding* forwarding = prune_and_claim()) {
         return forwarding;
     }
@@ -713,7 +715,7 @@ ZForwarding* ZRelocateQueue::synchronize_poll()
     }
     synchronize_thread();
     do {
-        attention.wait(guard);
+        lock.wait();
         if (ZForwarding* forwarding = prune_and_claim()) {
             desynchronize_thread();
             return forwarding;
@@ -734,20 +736,20 @@ void ZRelocateQueue::clear()
 
 void ZRelocateQueue::synchronize()
 {
-    std::unique_lock<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     synchronizeFlag = true;
     inc_needs_attention();
     while (nworkers != nsynchronized) {
-        attention.wait(guard);
+        lock.wait();
     }
 }
 
 void ZRelocateQueue::desynchronize()
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     synchronizeFlag = false;
     dec_needs_attention();
-    attention.notify_all();
+    lock.notify_all();
 }
 
 ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(void* region, MAddress from)
@@ -762,7 +764,7 @@ ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(ZForwarding* forwarding)
     if (forwarding == nullptr) {
         return { nullptr, false, false, nullptr };
     }
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     if (forwarding->is_done()) {
         return { forwarding, false, true, forwarding };
     }
@@ -778,7 +780,7 @@ ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(ZForwarding* forwarding)
     if (queue.length() == 1) {
         inc_needs_attention();
     }
-    attention.notify_all();
+    lock.notify_all();
     return { forwarding, true, true, forwarding };
 }
 
@@ -789,22 +791,22 @@ void ZRelocateQueue::Wait(ZForwarding* forwarding)
 
 size_t ZRelocateQueue::Complete(ZForwarding* forwarding)
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     (void)forwarding;
     const bool done = prune();
-    attention.notify_all();
+    lock.notify_all();
     return done ? 1 : 0;
 }
 
 ZForwarding* ZRelocateQueue::PruneAndClaim()
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     return prune_and_claim();
 }
 
 ZRelocateQueue::Selection ZRelocateQueue::SynchronizePoll()
 {
-    std::unique_lock<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     if (ZForwarding* forwarding = prune_and_claim()) {
         return { forwarding, nullptr, false };
     }
@@ -816,11 +818,11 @@ ZRelocateQueue::Selection ZRelocateQueue::SynchronizePoll()
         isActive.store(false, std::memory_order_release);
         nworkers = 0;
         nsynchronized = 0;
-        attention.notify_all();
+        lock.notify_all();
         return { nullptr, nullptr, true };
     }
     for (;;) {
-        attention.wait(guard);
+        lock.wait();
         if (!isActive.load(std::memory_order_acquire)) {
             return { nullptr, nullptr, true };
         }
@@ -833,13 +835,13 @@ ZRelocateQueue::Selection ZRelocateQueue::SynchronizePoll()
 
 size_t ZRelocateQueue::PendingCount() const
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     return static_cast<size_t>(queue.length());
 }
 
 size_t ZRelocateQueue::SynchronizedWorkerCount() const
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     return nsynchronized;
 }
 

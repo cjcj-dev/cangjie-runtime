@@ -13,11 +13,11 @@
 #ifndef MRT_Z_FORWARDING_H
 #define MRT_Z_FORWARDING_H
 
+#include "Heap/z/zLock.inline.hpp"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <condition_variable>
 #include <mutex>
 #include <limits>
 #include <memory>
@@ -239,7 +239,7 @@ public:
     std::atomic<int32_t>& ref_count() { return _ref_count; }
     std::atomic<bool>& claimed() { return _claimed; }
     std::atomic<bool>& done() { return _done; }
-    std::mutex& ref_lock() const { return _ref_lock; }
+    ZConditionLock& ref_lock() const { return _ref_lock; }
 
 private:
     // zForwarding.inline.hpp:59-76
@@ -261,8 +261,7 @@ private:
     std::atomic<bool> _in_place;
     MAddress _in_place_top_at_start;
     std::atomic<std::thread::id> _in_place_thread;
-    mutable std::mutex _ref_lock;
-    std::condition_variable _ref_changed;
+    mutable ZConditionLock _ref_lock;
     std::atomic<int32_t> _ref_count;
     std::atomic<bool> _done;
     std::atomic<ZPublishState> _relocated_remembered_fields_state;

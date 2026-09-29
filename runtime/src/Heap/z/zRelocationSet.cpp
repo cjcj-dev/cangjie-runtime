@@ -196,7 +196,7 @@ void ZRelocationSet::reset(RegionManager* page_allocator)
 
 void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)
 {
-    std::lock_guard<std::mutex> locker(_promotion_lock);
+    ZLocker<ZLock> locker(&_promotion_lock);
     for (int i = 0; i < pages.length(); ++i) {
         // zRelocationSet.cpp:208: no duplicates allowed.
         CHECK(!_flip_promoted_pages.contains(pages.at(i)));
@@ -206,7 +206,7 @@ void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)
 
 void ZRelocationSet::register_relocate_promoted(const ZArray<ZPage*>& pages)
 {
-    std::lock_guard<std::mutex> locker(_promotion_lock);
+    ZLocker<ZLock> locker(&_promotion_lock);
     for (int i = 0; i < pages.length(); ++i) {
         _relocate_promoted_pages.push(pages.at(i));
     }
@@ -214,7 +214,7 @@ void ZRelocationSet::register_relocate_promoted(const ZArray<ZPage*>& pages)
 
 void ZRelocationSet::register_in_place_relocate_promoted(ZPage* page)
 {
-    std::lock_guard<std::mutex> locker(_promotion_lock);
+    ZLocker<ZLock> locker(&_promotion_lock);
     _in_place_relocate_promoted_pages.push(page);
 }
 

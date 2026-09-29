@@ -503,7 +503,7 @@ void CheckResizeBeforeRemainingForwarding(Generation id)
     {
         // Same lock as the product resize writer, avoiding an unsynchronized
         // read of WorkerThreads' active count while a batch is restarting.
-        std::lock_guard<std::mutex> lock(*workers->resizing_lock());
+        ZLocker<ZLock> lock(workers->resizing_lock());
         activeWhilePending = workers->active_workers();
     }
     const bool remainingPending = !owners[3]->is_done();

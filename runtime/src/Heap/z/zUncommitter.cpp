@@ -138,24 +138,28 @@ void Uncommitter::Stop()
 // zUncommitter.cpp:171-175
 void Uncommitter::terminate()
 {
-    std::lock_guard<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     stopped.store(true, std::memory_order_release);
-    condition.notify_all();
+    lock.notify_all();
 }
 
 bool Uncommitter::WaitUntil(uint64_t deadline)
 {
-    std::unique_lock<std::mutex> guard(lock);
+    ZLocker<ZConditionLock> guard(&lock);
     while (!stopped.load(std::memory_order_acquire)) {
         if (!Enabled()) {
-            condition.wait(guard);
+            lock.wait();
             continue;
         }
         const uint64_t now = TimeUtil::NanoSeconds();
         if (now >= deadline) {
             return true;
         }
-        condition.wait_for(guard, std::chrono::nanoseconds(deadline - now));
+        const uint64_t remainingMillis = (deadline - now) / 1000000;
+        if (remainingMillis == 0) {
+            return true;
+        }
+        lock.wait(remainingMillis);
     }
     return false;
 }
@@ -164,7 +168,7 @@ bool Uncommitter::Activate()
 {
     RegionManager& regions = partition.regionManager;
     ScopedObjectAccess participation;
-    std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+    ZLocker<ZLock> guard(&regions.pageAllocatorMutex);
     const uint64_t now = TimeUtil::NanoSeconds();
     if (canceled) {
         return false;
@@ -192,7 +196,7 @@ size_t Uncommitter::Uncommit()
         // zUncommitter.cpp:367: join before taking the allocation owner.
         // Allocation/cancel and cache claim must not observe separate owners.
         ScopedObjectAccess participation;
-        std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+        ZLocker<ZLock> guard(&regions.pageAllocatorMutex);
         if (stopped.load(std::memory_order_acquire) || canceled) {
             return 0;
         }
@@ -227,7 +231,7 @@ size_t Uncommitter::Uncommit()
     {
         // zUncommitter.cpp:413-420: rejoin, adjust claimed and capacity.
         ScopedObjectAccess participation;
-        std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+        ZLocker<ZLock> guard(&regions.pageAllocatorMutex);
         std::lock_guard<std::mutex> cacheGuard(regions.freeRegionManager.cacheMutex);
         partition.claimed -= flushed;
         regions.freeRegionManager.decrease_capacity(partition.numaId, flushed, false);
@@ -291,7 +295,7 @@ void Uncommitter::run_thread()
         }
         ScopedObjectAccess participation;
         RegionManager& regions = partition.regionManager;
-        std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+        ZLocker<ZLock> guard(&regions.pageAllocatorMutex);
         deadline = (canceled ? cancelTime : cycleStart) + DelayNs();
         toUncommit = 0;
         uncommitted = 0;

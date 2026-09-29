@@ -672,7 +672,7 @@ void ZPageAllocation::Satisfy(bool value)
 bool RegionManager::ClaimCapacityOrStall(AllocationStallRequest& request)
 {
     {
-        std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+        ZLocker<ZLock> lock(&pageAllocatorMutex);
         if (ClaimAllocationLocked(request)) { return true; }
         if (request.Flags().non_blocking() || stallClosed) { return false; }
         stalled.insert_last(&request);
@@ -688,7 +688,7 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request)
     const bool satisfied = request.Wait();
     // Pair with the posting owner before the caller destroys its request.
     // zPageAllocator.cpp:1454-1464.
-    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    ZLocker<ZLock> lock(&pageAllocatorMutex);
     return satisfied;
 }
 
@@ -718,7 +718,7 @@ void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory)
 {
     // ZGC zPageAllocator.cpp:1999 / 2150: return memory, decrease used,
     // and satisfy stalled requests under the allocator lock.
-    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    ZLocker<ZLock> lock(&pageAllocatorMutex);
     CHECK(memory.committed);
     freeRegionManager.AddGarbageMemory(memory.index, memory.size);
     const size_t bytes = memory.size;
@@ -753,13 +753,13 @@ static bool HasAllocSeenOld(const ZPageAllocation* request)
 
 bool RegionManager::IsAllocationStalling() const
 {
-    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    ZLocker<ZLock> lock(&pageAllocatorMutex);
     return stalled.first() != nullptr;
 }
 
 bool RegionManager::IsAllocationStallingForOld() const
 {
-    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    ZLocker<ZLock> lock(&pageAllocatorMutex);
     const ZPageAllocation* request = stalled.first();
     return request != nullptr && HasAllocSeenYoung(request) && !HasAllocSeenOld(request);
 }
@@ -788,13 +788,13 @@ void RegionManager::RestartGC() const
 
 void RegionManager::HandleAllocStallingForYoung()
 {
-    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    ZLocker<ZLock> lock(&pageAllocatorMutex);
     RestartGC();
 }
 
 void RegionManager::HandleAllocStallingForOld(bool clearedAllSoftRefs)
 {
-    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    ZLocker<ZLock> lock(&pageAllocatorMutex);
     if (clearedAllSoftRefs) { NotifyOutOfMemory(); }
     RestartGC();
 }
@@ -804,7 +804,7 @@ void RegionManager::HandleAllocStallingForOld(bool clearedAllSoftRefs)
 // The exiting driver closes the queue and publishes each remaining failure once.
 void RegionManager::StopStalledAllocations()
 {
-    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    ZLocker<ZLock> lock(&pageAllocatorMutex);
     stallClosed = true;
     while (ZPageAllocation* request = stalled.first()) {
         stalled.remove(request);
@@ -878,12 +878,12 @@ retry:
         ZPage* region = freeRegionManager.MaterializePageMemory(
             request.Memory(), type, request.ExpectsPhysicalMemory(), committedBytes, age);
         if (request.Memory().virtualClaimed) {
-            std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+            ZLocker<ZLock> lock(&pageAllocatorMutex);
             const uintptr_t end = ZPage::GranuleAddress(request.Memory().index) + size;
             inactiveZone.store(std::max(inactiveZone.load(std::memory_order_relaxed), end), std::memory_order_release);
         }
         if (region == nullptr) {
-            std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+            ZLocker<ZLock> lock(&pageAllocatorMutex);
             (void)committedBytes;
             freeRegionManager.FreeMemoryAllocFailed(request.Memory());
             CHECK(pageAllocatorUsed >= size);

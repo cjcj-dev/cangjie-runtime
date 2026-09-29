@@ -7,13 +7,12 @@
 #ifndef MRT_ZSTAT_H
 #define MRT_ZSTAT_H
 
+#include "Heap/z/zLock.inline.hpp"
 #include <atomic>
 #include <cstdint>
-#include <mutex>
 #include <string>
 #include <array>
 #include <memory>
-#include <condition_variable>
 #include <thread>
 #include <algorithm>
 #include <vector>
@@ -36,7 +35,7 @@ struct ZStatWorkersStats {
 // after every task; stats() also counts the batch that is still running.
 class ZStatWorkers {
 private:
-    std::mutex _stat_lock;
+    ZLock _stat_lock;
     uint32_t _active_workers;
     uint64_t _start_of_last;
     uint64_t _accumulated_duration;
@@ -109,7 +108,7 @@ public:
 
 private:
     using Sequence = ZStatNumberSeq;
-    mutable std::mutex lock;
+    mutable ZLock lock;
     uint64_t start = 0;
     uint64_t end = 0;
     uint32_t warmupCycles = 0;
@@ -488,7 +487,7 @@ public:
     void PrintStalls() const;
 
 private:
-    mutable std::mutex _statLock;
+    mutable ZLock _statLock;
 
     struct ZAtInitialize {
         size_t minCapacity = 0;

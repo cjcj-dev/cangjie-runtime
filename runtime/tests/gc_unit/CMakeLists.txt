@@ -82,6 +82,7 @@ set(GC_UNIT_SOURCES
     test_generation_mark_free.cpp
 
     test_exempt_unlock.cpp
+    test_zlock.cpp
     test_isfromreg.cpp
     test_current_object_ref.cpp
     test_i2_readref.cpp

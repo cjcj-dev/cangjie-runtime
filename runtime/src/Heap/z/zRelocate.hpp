@@ -7,12 +7,11 @@
 #ifndef MRT_Z_RELOCATE_HPP
 #define MRT_Z_RELOCATE_HPP
 
+#include "Heap/z/zLock.inline.hpp"
 #include <atomic>
 #include <array>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
-#include <mutex>
 
 #include "Common/TypeDef.h"
 #include "Heap/z/zArray.hpp"
@@ -99,8 +98,7 @@ private:
     void synchronize_thread();
     void desynchronize_thread();
 
-    mutable std::mutex lock;
-    std::condition_variable attention;
+    mutable ZConditionLock lock;
     ZArray<ZForwarding*> queue;
     uint32_t nworkers{ 0 };
     uint32_t nsynchronized{ 0 };
@@ -169,8 +167,7 @@ private:
     ZGeneration* generation;
     std::atomic<size_t> inPlaceCount{0};
     ZRelocationTargets* sharedTargets;
-    std::mutex lock;
-    std::condition_variable changed;
+    ZConditionLock lock;
     bool inPlace{false};
 };
 

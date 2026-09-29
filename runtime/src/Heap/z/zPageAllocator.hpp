@@ -5,9 +5,9 @@
 #ifndef MRT_ALLOCATION_STALL_QUEUE_H
 #define MRT_ALLOCATION_STALL_QUEUE_H
 
+#include "Heap/z/zLock.inline.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -567,7 +567,7 @@ private:
     }
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
     friend class Uncommitter;
-    mutable std::mutex pageAllocatorMutex;
+    mutable ZLock pageAllocatorMutex;
     ZList<ZPageAllocation> stalled;
     bool stallClosed{false};
     void SatisfyStalledAllocations();

@@ -6,6 +6,7 @@
 
 // gc/z/zLock.hpp:31-39: ZLock owns its platform mutex.
 #pragma once
+#include <cstdint>
 #include <condition_variable>
 #include <mutex>
 
