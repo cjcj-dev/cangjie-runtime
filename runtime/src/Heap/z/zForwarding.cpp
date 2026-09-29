@@ -247,11 +247,13 @@ void ZForwarding::relocated_remembered_fields_notify_concurrent_scan_of()
         }
         if (expected == ZPublishState::published) {
             ZPublishState published = ZPublishState::published;
-            if (_relocated_remembered_fields_state.compare_exchange_strong(
-                    published, ZPublishState::reject, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                _relocated_remembered_fields_array.clear();
-            }
+            _relocated_remembered_fields_state.compare_exchange_strong(
+                published, ZPublishState::reject, std::memory_order_acq_rel, std::memory_order_relaxed);
+            CHECK_DETAIL(published == ZPublishState::published, "Unexpected relocated remembered fields notify state");
+            _relocated_remembered_fields_array.clear();
+            return;
         }
+        CHECK_DETAIL(expected == ZPublishState::reject, "Unexpected relocated remembered fields notify state");
     }
 }
 
