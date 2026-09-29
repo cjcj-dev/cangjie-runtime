@@ -17,10 +17,11 @@
 #include "Heap/Allocator/CartesianTree.h"
 #define private public
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zHeap.hpp"
 #undef private
 #include "Cangjie.h"
-#include "Heap/z/zHeap.hpp"
 #include "Heap/z/zDriver.hpp"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/z_globals.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "gc_allocation_flags.hpp"
@@ -239,7 +240,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, AllocationStallsTracksQueue)
 {
     auto& manager = InitAllocationRuntime();
     // Hold the existing product driver lock so GC cannot consume the occupied pages.
-    ZDriver::lock();
+    DriverLocker driverPause;
     std::vector<ZPage*> pages;
     while (ZPage* page = Allocate(ZPageSizeSmall)) { pages.push_back(page); }
     GC_EXPECT_FALSE(pages.empty());
@@ -259,7 +260,9 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, AllocationStallsTracksQueue)
     pages.pop_back();
     waiter.join();
     const size_t after = manager.Stats(ZGeneration::young()).allocation_stalls();
-    // The test process ends before releasing the driver into a synthetic root set.
+    // The shared harness stops the VM after returning. Set its product abort
+    // state before releasing the driver so the pending request exits at abortpoint.
+    ZAbort::abort();
     std::fprintf(stderr, "STALL_STATS_TARGET before=%zu during=%zu after=%zu result=%p\n",
                  baseline, during, after, result.load());
     GC_EXPECT_EQ(during, baseline + 1);
@@ -271,23 +274,24 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, HeapAccountingSmallEden)
 {
     auto& manager = InitAllocationRuntime(256 * 1024);
     auto& heap = Heap::GetHeap();
-    const size_t before = heap.tlab_used();
+    // ZGC zTLABUsage.cpp:41-67 publishes history only at reset; observe live accounting here.
+    const size_t before = heap._tlab_usage._used.load(std::memory_order_relaxed);
     const size_t used = manager.GetUsedBytes();
     const size_t youngBefore = manager.used_generation(ZGenerationId::young);
     ZPage* eden = Allocate(ZPageSizeSmall, PageAge::eden);
     GC_EXPECT_TRUE(eden != nullptr);
     std::fprintf(stderr, "HEAP_ACCOUNT_TARGET before=%zu allocated=%zu expected=%zu\n",
-                 before, heap.tlab_used(), before + ZPageSizeSmall);
-    GC_EXPECT_EQ(heap.tlab_used(), before + ZPageSizeSmall);
+                 before, heap._tlab_usage._used.load(std::memory_order_relaxed), before + ZPageSizeSmall);
+    GC_EXPECT_EQ(heap._tlab_usage._used.load(std::memory_order_relaxed), before + ZPageSizeSmall);
     heap.undo_alloc_page(eden);
-    GC_EXPECT_EQ(heap.tlab_used(), before);
+    GC_EXPECT_EQ(heap._tlab_usage._used.load(std::memory_order_relaxed), before);
     GC_EXPECT_EQ(manager.GetUsedBytes(), used);
     GC_EXPECT_EQ(manager.used_generation(ZGenerationId::young), youngBefore);
     ZPage* old = Allocate(ZPageSizeSmall);
     ZPage* large = Allocate(8 * MB, PageAge::eden);
     ZPage* medium = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, PageAge::eden, NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(old != nullptr && large != nullptr && medium != nullptr);
-    GC_EXPECT_EQ(heap.tlab_used(), before);
+    GC_EXPECT_EQ(heap._tlab_usage._used.load(std::memory_order_relaxed), before);
     heap.undo_alloc_page(old);
     heap.undo_alloc_page(large);
     heap.undo_alloc_page(medium);
