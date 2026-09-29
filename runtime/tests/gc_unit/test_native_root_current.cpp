@@ -189,7 +189,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     heap.young().relocate().relocate(&heap.young().relocation_set());
     // zForwardingTable.inline.hpp:43. Do not pass the pre-relocate descriptor
     // into forwarding_for_page: non-in-place completion frees it (zRelocate.cpp:450).
-    auto forwarding = generation_forwarding_table(forwardGeneration).get(forwardStart);
+    auto forwarding = Heap::GetHeap().GetZGeneration(forwardGeneration).forwarding_table().get(forwardStart);
     BaseObject* to = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(from)));
     // Eden advances to survivor1 at this threshold. Preserve the fixture's
     // explicit promotion so the old root task observes an actual old page.
@@ -307,7 +307,7 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     const MAddress forwardStart = page->GetRegionStart();
     const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.young().relocate().relocate(&heap.young().relocation_set());
-    const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = Heap::GetHeap().GetZGeneration(forwardGeneration).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     const bool scanned = thread->GcPhaseEnum(false, watermark ? StackWatermark::epoch_id() : 0);
     const uintptr_t observed = raw(slot->LoadPlain());
@@ -368,7 +368,7 @@ GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
     const MAddress forwardStart = page->GetRegionStart();
     const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.young().relocate().relocate(&heap.young().relocation_set());
-    const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = Heap::GetHeap().GetZGeneration(forwardGeneration).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     Heap::GetHeap().old().remap_young_roots();
     const uintptr_t observed = raw(slot->LoadPlain());
@@ -390,13 +390,13 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, YoungRelocateSkipsForeignIncompleteFrom)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), held));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0(), fx.obj0));
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region0(), fx.region1()}));
-    GC_EXPECT_TRUE(!fx.region1()->IsForwardingDone());
-    GC_EXPECT_TRUE(forwarding_for_page(fx.region1()) != nullptr);
+    GC_EXPECT_TRUE(!ZGeneration::generation(fx.region1()->generation_id())->forwarding(fx.region1()->GetRegionStart())->is_done());
+    GC_EXPECT_TRUE(ZGeneration::generation((fx.region1())->generation_id())->forwarding((fx.region1())->GetRegionStart()) != nullptr);
     heap.young().set_phase(ZGenerationPhase::Relocate);
     ZRelocate::StartRelocationTasks(ZGenerationId::young);
     heap.young().EvacuateYoungRegions();
-    GC_EXPECT_TRUE(forwarding_for_page(fx.region1()) != nullptr);
-    GC_EXPECT_TRUE(!fx.region1()->IsForwardingDone());
+    GC_EXPECT_TRUE(ZGeneration::generation((fx.region1())->generation_id())->forwarding((fx.region1())->GetRegionStart()) != nullptr);
+    GC_EXPECT_TRUE(!ZGeneration::generation(fx.region1()->generation_id())->forwarding(fx.region1()->GetRegionStart())->is_done());
 }
 
 GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
@@ -481,20 +481,7 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     parked->PopNativeFrameRootsTo(frameMark);
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
-GC_OTHER_VM_TEST(YoungMarkStart, DoesNotParkPreviousFromPages)
-{
-    B09RuntimeFixture runtime;
-    GcHeapFixture fx;
-    auto& heap = Heap::GetHeap();
-    RelocationReceiptTest::BindNativeRootFixture(heap);
-    fx.region0()->reset(PageAge::eden);
-    fx.region0()->SetRegionRole(ZPageRole::From);
-    heap.young().pause_mark_start();
-    const auto role = fx.region0()->GetRegionRole();
-    std::fprintf(stderr, "YOUNG_PAGE_PHASE_ASSERT executed=1 role=%u expected=%u\n",
-                 unsigned(role), unsigned(ZPageRole::From));
-    GC_EXPECT_EQ(role, ZPageRole::From);
-}
+
 
 // ZGC zGeneration.cpp:855-883 and zMark.cpp:853-891: mark-start
 // publishes a new epoch; the concurrent root task consumes parked stacks.

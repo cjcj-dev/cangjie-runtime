@@ -285,7 +285,7 @@ static void ExercisePartitionWorker(bool enabled)
     ZPage* region = regions.TakeRegion((n) * ZGranuleSize, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(region != nullptr);
     const size_t beforeReclaim = regions.GetCommittedCapacity();
-    regions.ReturnPageMemory(PageMemory{region->granule_index(), n * ZGranuleSize, 0, true});
+    regions.free_page(region);
     GC_EXPECT_EQ(regions.GetCommittedCapacity(), beforeReclaim);
     const size_t before = regions.GetCommittedCapacity();
     const uint64_t start = TimeUtil::NanoSeconds();
@@ -358,7 +358,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CacheValleyLimitsActivationBudget)
     const size_t allocated = total - 10 * ZGranuleSize;
     ZPage* page = regions.TakeRegion(allocated, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(page != nullptr);
-    regions.ReturnPageMemory(PageMemory{page->granule_index(), allocated, 0, true});
+    regions.free_page(page);
     UncommitterTestAccess::ResetCancel();
     GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
     const size_t actual = UncommitterTestAccess::Budget(worker);
@@ -392,7 +392,7 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, FreshCacheWaitsForWatermarkCycle)
     partition.uncommitter.Start();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     const uint64_t returnedAt = TimeUtil::NanoSeconds();
-    regions.ReturnPageMemory(PageMemory{page->granule_index(), 64 * MB, 0, true});
+    regions.free_page(page);
     std::this_thread::sleep_for(std::chrono::milliseconds(750));
     const size_t firstCycle = regions.GetCommittedCapacity();
     const uint64_t cacheAgeAtObservation = TimeUtil::NanoSeconds() - returnedAt;
@@ -430,7 +430,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, AllocationDuringCycleLowersUncommitAllow
     const size_t allocated = before - 2 * ZGranuleSize;
     ZPage* page = regions.TakeRegion(allocated, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(page != nullptr);
-    regions.ReturnPageMemory(PageMemory{page->granule_index(), allocated, 0, true});
+    regions.free_page(page);
     size_t released = 0;
     for (int chunk = 0; chunk < 3; ++chunk) {
         released += UncommitterTestAccess::Uncommit(worker);

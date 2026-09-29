@@ -249,7 +249,7 @@ public:
             }
             const size_t bytes = page->size();
             Heap::page_table().remove(page);
-            ZPage::RetireDescriptor(page);
+            Heap::GetHeap().page_allocator().safe_destroy_page(page);
             offset += bytes;
         }
         Heap::GetHeap().page_allocator().free_page(_owner);

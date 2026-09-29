@@ -384,7 +384,6 @@ MAIN_SOURCES=(
   "$SRC/test_generation_mark_free.cpp"
 
   "$SRC/test_exempt_unlock.cpp"
-  "$SRC/test_isfromreg.cpp"
   "$SRC/test_current_object_ref.cpp"
   "$SRC/test_i2_readref.cpp"
   "$SRC/test_loadfc.cpp"

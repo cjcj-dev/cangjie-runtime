@@ -618,10 +618,10 @@ void RegionManager::free_page(ZPage* page)
     // the descriptor. Forwarding remains owned by the relocation set.
     const ZGenerationId id = page->generation_id();
     const size_t size = page->size();
-    PageMemory memory;
-    prepare_memory_for_free(page, &memory);
+    ZArray<ZVirtualMemory> vmems;
+    prepare_memory_for_free(page, &vmems);
     decrease_used_generation(id, size);
-    ReturnRetiredPageMemory(memory);
+    free_memory(&vmems);
 }
 
 void RegionManager::enable_safe_destroy() const
@@ -634,16 +634,11 @@ void RegionManager::disable_safe_destroy() const
     _safe_destroy.disable_deferred_delete();
 }
 
-void RegionManager::prepare_memory_for_free(ZPage* page, PageMemory* memory)
+void RegionManager::prepare_memory_for_free(ZPage* page, ZArray<ZVirtualMemory>* vmems)
 {
-    const size_t index = page->granule_index();
-    const size_t size = page->size();
-    const uint32_t partition = page->partition_id();
+    const ZVirtualMemory vmem = page->virtual_memory();
     safe_destroy_page(page);
-    memory->index = index;
-    memory->size = size;
-    memory->partition = partition;
-    memory->committed = true;
+    vmems->push(vmem);
 }
 
 void RegionManager::VisitPageOwners(const std::function<void(ZPage*)>& visitor) const
@@ -698,36 +693,21 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request)
     return satisfied;
 }
 
-void RegionManager::ReturnPageMemory(const PageMemory& memory)
-{
-    ZPage* region = Heap::page(ZPage::GranuleAddress(memory.index));
-    if (region != nullptr) {
-        CHECK(region->granule_index() == memory.index && region->GetRegionSize() == memory.size);
-        ZPageTable::heap_table().remove(region);
-        PageMemory retired;
-        prepare_memory_for_free(region, &retired);
-        ReturnRetiredPageMemory(retired);
-        return;
-    }
-    // An allocation cancelled before materialization has no page descriptor.
-    // Reclaim/Release also arrive here after completing descriptor retirement.
-    ReturnRetiredPageMemory(memory);
-}
 
-void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory)
+
+// ZGC zPageAllocator.cpp:2149-2165: memory is returned under the allocator
+// lock, independently of when safe_destroy consumes the descriptor.
+void RegionManager::free_memory(ZArray<ZVirtualMemory>* vmems)
 {
-    // ZGC zPageAllocator.cpp:1999 / 2150: return memory, decrease used,
-    // and satisfy stalled requests under the allocator lock.
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
-    CHECK(memory.committed);
-    freeRegionManager.AddGarbageMemory(memory.index, memory.size);
-    const size_t bytes = memory.size;
-    CHECK(pageAllocatorUsed >= bytes);
-    pageAllocatorUsed -= bytes;
-    TrackUsedPeakLocked();
+    for (const ZVirtualMemory vmem : *vmems) {
+        freeRegionManager.AddGarbageMemory(untype(vmem.start()) >> ZGranuleSizeShift, vmem.size());
+        CHECK(pageAllocatorUsed >= vmem.size());
+        pageAllocatorUsed -= vmem.size();
+        TrackUsedPeakLocked();
+    }
     SatisfyStalledAllocations();
 }
-
 
 // ZGC zPageAllocator.cpp:2167-2189: reserve capacity, dequeue, then notify.
 void RegionManager::SatisfyStalledAllocations()
@@ -1052,7 +1032,7 @@ ZPageAllocatorStats RegionManager::UpdateAndStats(const ZGeneration* generation)
 size_t RegionManager::GetAllocatedSize() const
 {
         // zPageAllocator.cpp:1311 ZPageAllocator::used: page-granular committed
-        // counter maintained at TakeRegion/ReturnPageMemory/reclaim, not a
+        // counter maintained at allocation and free_page, not a
         // list sum. Pages count as used until free_page.
         return pageAllocatorUsed;
     }

@@ -213,7 +213,6 @@ public:
     static std::atomic<uint64_t>& EnrolAfterFlip();
 
     ZPage();
-    ~ZPage();
     static ZPage* NullRegion();
 
     ZLiveMap& livemap();
@@ -340,6 +339,7 @@ public:
     bool IsEmpty() const;
 
     size_t GetRegionSize() const;
+    const ZVirtualMemory& virtual_memory() const { return _virtual; }
 
     // Read-only, defensive extent for the phase-1 detach census. InitZPage
     // calls the census before _scratch.regionEnd is installed on a never-used
@@ -376,42 +376,6 @@ public:
     // type. Mutator relocation retains the page until forwarding completes.
 
 
-    // RAII retain_page / release_page. ok() is false when the page is already
-    // released or claimed — the late reader must not touch from-side state.
-    class RetainScope {
-    public:
-        explicit RetainScope(ZForwarding* forwarding);
-        ~RetainScope() { Release(); }
-        void Release()
-        {
-            if (retained) {
-                owner->release_page();
-                retained = false;
-            }
-        }
-        bool ok() const { return retained; }
-        bool covers(ZPage* page) const { return retained && region == page; }
-        ZForwarding* forwarding() const { return owner; }
-        ZForwarding* HoldForwarding() const { return owner; }
-
-        RetainScope(const RetainScope&) = delete;
-        RetainScope& operator=(const RetainScope&) = delete;
-        RetainScope(RetainScope&&) = delete;
-        RetainScope& operator=(RetainScope&&) = delete;
-
-    private:
-        ZForwarding* owner;
-        ZPage* region;
-        bool retained;
-    };
-
-
-    // ZGC has no terminal kept: a page not selected this cycle is an ordinary
-    // candidate next cycle (zRelocationSetSelector.cpp:114-196 rebuilds from
-    // the page table; zGeneration.cpp:205-213). Drop the in-cycle publish so
-    // Next cycle must not treat last cycle's in-place done as this cycle's done.
-
-
     void LockWriteRegion() { _scratch.rwLock.LockWrite(); }
 
     void UnlockWriteRegion() { _scratch.rwLock.UnlockWrite(); }
@@ -427,10 +391,8 @@ public:
 
     static bool HasYoungRegions();
 
-    // Promotion replaces current page metadata instead of retargeting the same
-    // liveness object. The old Young livemap remains available only through the
-    // from-page carrier (parked in retiredLivemap); the new Old current metadata
-    // starts with a fresh livemap.
+    // Promotion installs a new descriptor; the relocation set retains the
+    // old Young descriptor and its livemap until reset.
     void PromoteYoungRegion();
 
     uint8_t GetYoungAge() const;

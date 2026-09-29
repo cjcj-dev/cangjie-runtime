@@ -1,3 +1,4 @@
+#include "gc_forwarding_fixture.hpp"
 #include <future>
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -39,11 +40,12 @@ static_assert(!std::is_convertible<zaddress_unsafe, zoffset>::value);
 
 GC_TEST(ZGranuleMap, GetPutRemove)
 {
-    constexpr MAddress kStart = 0x40000000;
+    const MAddress kStart = ZAddressHeapBase + 0x40000000;
     constexpr size_t kSize = ZGranuleSize;
     ZGranuleMap<ZForwarding*> map(4 * kSize);
 
-    ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
+    ZTestForwarding fwdStorage(4, kStart, kSize);
+    ZForwarding* fwd = fwdStorage.get();
     GC_EXPECT_TRUE(fwd != nullptr);
     const zoffset start = static_cast<zoffset>(0);
     const zoffset interior = static_cast<zoffset>(8);
@@ -55,7 +57,7 @@ GC_TEST(ZGranuleMap, GetPutRemove)
 
     map.put(start, kSize, nullptr);
     GC_EXPECT_TRUE(map.get(start) == nullptr);
-    fwd->Destroy();
+
 }
 
 // The removed native-address adapter is replaced by the ZGC offset map.
@@ -103,8 +105,9 @@ GC_TEST(ZGranuleMap, MaximumAddressSpaceExtent)
 
 GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
 {
-    constexpr MAddress kStart = 0x50000000;
-    ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, 0x1000);
+    const MAddress kStart = ZAddressHeapBase + 0x50000000;
+    ZTestForwarding fwdStorage(4, kStart, ZGranuleSize);
+    ZForwarding* fwd = fwdStorage.get();
     GC_EXPECT_TRUE(fwd != nullptr);
     const size_t objectSize = ZForwarding::AttachedArray::object_size();
     GC_EXPECT_TRUE(objectSize >= sizeof(ZForwarding));
@@ -122,7 +125,7 @@ GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
     GC_EXPECT_EQ(fwd->insert(from, to), to);
     GC_EXPECT_EQ(fwd->find(from), to);
     GC_EXPECT_EQ(fwd->find(kStart + 24), static_cast<MAddress>(0));
-    fwd->Destroy();
+
 }
 
 // The provisional table is not a different lifetime object: it enters the same
@@ -130,10 +133,10 @@ GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
 // This couples the two pieces changed together by the provisional-table port.
 GC_TEST(ZForwarding, PageUsesRefCountProtocol)
 {
-    constexpr MAddress kStart = 0x58000000;
-    ZForwarding* fwd = ZForwarding::alloc(1, kStart, kStart, 0x1000, nullptr, 7);
+    const MAddress kStart = ZAddressHeapBase + 0x58000000;
+    ZTestForwarding fwdStorage(1, kStart, ZGranuleSize);
+    ZForwarding* fwd = fwdStorage.get();
     GC_EXPECT_TRUE(fwd != nullptr);
-    GC_EXPECT_EQ(fwd->page_life_id(), static_cast<RegionLifeId>(7));
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
 
     ZRelocateQueue queue;
@@ -152,7 +155,7 @@ GC_TEST(ZForwarding, PageUsesRefCountProtocol)
     fwd->release_page();
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 0);
     GC_EXPECT_FALSE(fwd->retain_page(&queue));
-    fwd->Destroy();
+
 }
 
 GC_TEST(ZForwardingTable, kZfwdTableConsumeOn)
@@ -164,14 +167,15 @@ GC_TEST(ZForwardingTable, kZfwdTableConsumeOn)
 
 GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
 {
-    constexpr MAddress kStart = 0x60000000;
+    const MAddress kStart = ZAddressHeapBase + 0x60000000;
     constexpr size_t kSize = ZGranuleSize;
     ZGranuleMap<ZForwarding*> entries(4 * kSize);
 
-    ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
+    ZTestForwarding fwdStorage(4, kStart, kSize);
+    ZForwarding* fwd = fwdStorage.get();
     GC_EXPECT_TRUE(fwd != nullptr);
     const MAddress from = kStart + 16;
-    const MAddress to = 0x70000000;
+    const MAddress to = ZAddressHeapBase + 0x70000000;
     const zoffset start = static_cast<zoffset>(0);
     const zoffset fromOffset = static_cast<zoffset>(from - kStart);
     entries.put(start, kSize, fwd);
@@ -184,7 +188,7 @@ GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
     GC_EXPECT_EQ(entries.get(fromOffset)->find(from), to);
 
     entries.put(start, kSize, nullptr);
-    fwd->Destroy();
+
 }
 
 // Protocol cases ported from zRemembered.cpp:284-324 and
@@ -192,7 +196,8 @@ GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
 GC_TEST(ZForwardingRemembered, PublishedFieldsConsumedOnce)
 {
     GcHeapFixture heap;
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
+    ZTestForwarding fwdStorage(1, heap.heapStart, ZGranuleSize);
+    auto* fwd = fwdStorage.get();
     const MAddress field = heap.heapStart + sizeof(void*);
     fwd->relocated_remembered_fields_register(field);
     fwd->relocated_remembered_fields_publish();
@@ -205,14 +210,15 @@ GC_TEST(ZForwardingRemembered, PublishedFieldsConsumedOnce)
     GC_EXPECT_EQ(observed, field);
     fwd->relocated_remembered_fields_apply_to_published([&](MAddress) { ++count; });
     GC_EXPECT_EQ(count, 1u);
-    fwd->Destroy();
+
 }
 
 GC_TEST(ZForwardingRemembered, RetainedScanRejectsPublication)
 {
     GcHeapFixture heap;
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
-    GC_EXPECT_TRUE(fwd->retain_page(&generation_relocate_queue(Generation::Old)));
+    ZTestForwarding fwdStorage(1, heap.heapStart, ZGranuleSize);
+    auto* fwd = fwdStorage.get();
+    GC_EXPECT_TRUE(fwd->retain_page(&(*Heap::GetHeap().GetZGeneration(Generation::Old).relocate().queue())));
     fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
     GC_EXPECT_TRUE(fwd->relocated_remembered_fields_is_concurrently_scanned());
@@ -223,7 +229,7 @@ GC_TEST(ZForwardingRemembered, RetainedScanRejectsPublication)
     size_t count = 0;
     fwd->relocated_remembered_fields_apply_to_published([&](MAddress) { ++count; });
     GC_EXPECT_EQ(count, 0u);
-    fwd->Destroy();
+
 }
 
 GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
@@ -237,14 +243,15 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
             marking ? ZGenerationPhase::Mark : ZGenerationPhase::Relocate);
         Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old,
             marking ? ZGenerationPhase::Relocate : ZGenerationPhase::Mark);
-        auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
+        ZTestForwarding fwdStorage(1, heap.heapStart, ZGranuleSize);
+    auto* fwd = fwdStorage.get();
         fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
         fwd->relocated_remembered_fields_after_relocate();
         fwd->release_page();
         fwd->mark_done();
         size_t count = 0;
         fwd->relocated_remembered_fields_apply_to_published([&](MAddress) { ++count; });
-        fwd->Destroy();
+
         Heap::GetHeap().PublishGenerationPhase(ZGenerationId::young, youngPhase);
         Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, oldPhase);
         GC_EXPECT_EQ(count, marking ? 1u : 0u);
@@ -255,9 +262,10 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
 GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 {
     GcHeapFixture heap;
-    auto& queue = generation_relocate_queue(Generation::Old);
+    auto& queue = (*Heap::GetHeap().GetZGeneration(Generation::Old).relocate().queue());
     queue.BeginWorkers(1);
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
+    ZTestForwarding fwdStorage(1, heap.heapStart, ZGranuleSize);
+    auto* fwd = fwdStorage.get();
     GC_EXPECT_TRUE(fwd->claim());
     fwd->in_place_relocation_claim_page();
     std::atomic<bool> readerStarted{false};
@@ -287,7 +295,7 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     queue.leave();
     reader.join();
     queue.deactivate();
-    fwd->Destroy();
+
     GC_EXPECT_TRUE(queued);
     GC_EXPECT_FALSE(returnedBeforeDone);
     GC_EXPECT_FALSE(returnedAfterRelease);

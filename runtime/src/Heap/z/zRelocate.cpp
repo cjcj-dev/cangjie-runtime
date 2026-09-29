@@ -937,11 +937,10 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
     if (const MAddress to = forwarding->find(from)) {
         return reinterpret_cast<BaseObject*>(to);
     }
-    ZPage::RetainScope lease{forwarding};
-    if (lease.ok()) {
+    if (forwarding->retain_page(&relocateQueue)) {
         DCHECK(generation->is_phase_relocate());
         BaseObject* to = relocate_object_inner(forwarding, object);
-        lease.Release();
+        forwarding->release_page();
         if (to != nullptr) {
             return to;
         }

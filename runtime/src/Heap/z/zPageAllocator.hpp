@@ -309,7 +309,6 @@ class RegionManager {
     friend class ZObjectAllocator;
     friend struct PinRootTestAccess;
     friend struct IkeKeepTestAccess;
-    friend struct IsFromRegTestAccess;
 
 public:
     /* region memory layout:
@@ -376,7 +375,6 @@ public:
     bool StallAllocation(AllocationStallRequest& request);
     bool ClaimCapacityOrStall(AllocationStallRequest& request);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
-    void ReturnPageMemory(const PageMemory& memory);
     bool IsAllocationStalling() const;
     bool IsAllocationStallingForOld() const;
     void HandleAllocStallingForYoung();
@@ -494,10 +492,10 @@ public:
 
 private:
     mutable ZSafeDelete<ZPage> _safe_destroy;
-    void prepare_memory_for_free(ZPage* page, PageMemory* memory);
+    void prepare_memory_for_free(ZPage* page, ZArray<ZVirtualMemory>* vmems);
+    void free_memory(ZArray<ZVirtualMemory>* vmems);
     // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the
     // page table no longer publishes the old descriptor.
-    void ReturnRetiredPageMemory(const PageMemory& memory);
 
 
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);

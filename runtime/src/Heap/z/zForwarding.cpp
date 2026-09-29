@@ -250,12 +250,3 @@ void ZForwarding::verify() const
 }
 
 } // namespace MapleRuntime
-
-namespace MapleRuntime {
-ZPage::RetainScope::RetainScope(ZForwarding* forwarding)
-    : owner(forwarding), region(owner ? owner->page() : nullptr),
-      retained(owner && owner->retain_page(ZGeneration::generation(
-          owner->from_age() == PageAge::old ? ZGenerationId::old : ZGenerationId::young)->relocate().queue()))
-{
-}
-}

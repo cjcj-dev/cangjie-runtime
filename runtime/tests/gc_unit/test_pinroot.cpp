@@ -90,7 +90,7 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, boo
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owners[2] = {forwarding_for_page(pages[0]), forwarding_for_page(pages[1])};
+    ZForwarding* owners[2] = {ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart()), ZGeneration::generation((pages[1])->generation_id())->forwarding((pages[1])->GetRegionStart())};
     GC_EXPECT_TRUE(owners[0] != nullptr && owners[1] != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
     if (retain) {
@@ -243,7 +243,7 @@ static void CheckInPlaceRemset()
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owners[2] = {forwarding_for_page(pages[0]), forwarding_for_page(pages[1])};
+    ZForwarding* owners[2] = {ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart()), ZGeneration::generation((pages[1])->generation_id())->forwarding((pages[1])->GetRegionStart())};
     GC_EXPECT_TRUE(owners[0] != nullptr && owners[1] != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
     ZRelocate::StartRelocationTasks(generation.id());
@@ -300,11 +300,13 @@ static void CheckMutatorRelocation(bool stopped)
         ZPageTest::MakeRelocatable(*pages[i]);
         selector.register_live_page(pages[i]);
     }
+    if (generation.Workers() == nullptr) generation.InitializeWorkers(1);
+    generation.Workers()->set_active_workers(1);
     selector.select();
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owner = forwarding_for_page(pages[0]);
+    ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
     auto relocate = [&] {
@@ -469,7 +471,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owner = forwarding_for_page(pages[0]);
+    ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
 #if defined(__x86_64__) && defined(__linux__)
     const auto savedGrow = CangjieRuntime::stackGrowConfig;
@@ -920,7 +922,7 @@ static void CheckGrowCopiesHealedFrameRoot()
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owner = forwarding_for_page(pages[0]);
+    ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(parked != nullptr);
@@ -1041,7 +1043,7 @@ void RunRelocateLiveness(bool worker, bool marked)
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owner = forwarding_for_page(pages[0]);
+    ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
     BaseObject* source = marked ? live[0] : dead[0];
@@ -1156,7 +1158,7 @@ static void CheckRelocationRemsetOwnership(bool worker)
     young.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&young.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { young.forwarding_table().insert(owner); }
-    auto* forwarding = forwarding_for_page(source);
+    auto* forwarding = ZGeneration::generation((source)->generation_id())->forwarding((source)->GetRegionStart());
     GC_EXPECT_TRUE(forwarding != nullptr && forwarding->to_age() == PageAge::old);
     zpointer root = StoreGoodPointer(object);
     ZGlobalsPointers::flip_young_relocate_start();
@@ -1231,7 +1233,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owner = forwarding_for_page(pages[0]);
+    ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
     zpointer root = StoreGoodPointer(objects[0]);
     ZGlobalsPointers::flip_old_relocate_start();

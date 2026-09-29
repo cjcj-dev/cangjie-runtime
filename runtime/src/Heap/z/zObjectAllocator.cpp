@@ -148,10 +148,7 @@ void RegionManager::UndoSharedPage(ZPage* page)
     }
     // ZHeap::undo_alloc_page: remove the unused page-table entry and return
     // the extent without suspending a caller holding an unpublished object.
-    ZPageTable::heap_table().remove(page);
-    PageMemory memory;
-    prepare_memory_for_free(page, &memory);
-    ReturnRetiredPageMemory(memory);
+    Heap::free_page(page);
 }
 
 // ZGC zObjectAllocator.cpp:56-64.

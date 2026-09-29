@@ -74,9 +74,6 @@ ZPage* ZPage::NullRegion()
 uintptr_t ZPage::heapStartAddress = 0;
 std::vector<ZPage::ReservedSegment> ZPage::reservedSegments;
 
-ZPage::~ZPage()
-{
-}
 
 std::atomic<size_t> ZPage::youngRegionCount { 0 };
 namespace {

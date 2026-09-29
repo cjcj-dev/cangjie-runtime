@@ -111,12 +111,11 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
 {
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    auto publication = forwarding_for_page(
-        fixture.region0(), reinterpret_cast<MAddress>(fixture.obj0));
+    auto publication = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(publication));
     GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1)),
         reinterpret_cast<MAddress>(fixture.obj1));
-    auto owner = forwarding_for_page(fixture.region0());
+    auto owner = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     owner->verify();
     ExpectSceneAbort("Invalid number of live objects", [&] {
@@ -142,7 +141,6 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsBadLiveAccounting)
     }
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    fixture.region0()->SetRegionRole(ZPageRole::From);
     ExpectSceneAbort("Invalid number of live objects", [&] {
         fixture.region0()->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
         auto& old = Heap::GetHeap().old();
@@ -166,10 +164,9 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     }
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    auto publication = forwarding_for_page(
-        fixture.region0(), reinterpret_cast<MAddress>(fixture.obj0));
+    auto publication = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    auto owner = forwarding_for_page(fixture.region0());
+    auto owner = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
@@ -192,9 +189,8 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
     }
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    auto* owner = forwarding_for_page(fixture.region0());
+    auto* owner = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
-    fixture.region0()->SetRegionRole(ZPageRole::From);
     RememberedSet& remset = HeapTestRemset();
     remset.Initialize(fixture.heapStart, 2 * ZGranuleSize);
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
