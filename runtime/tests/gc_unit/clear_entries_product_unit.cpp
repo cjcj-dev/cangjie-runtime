@@ -35,7 +35,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zBarrier.hpp"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zRemembered.inline.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"

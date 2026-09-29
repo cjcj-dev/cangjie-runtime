@@ -2,6 +2,9 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
+#include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
+#include "ObjectModel/MObject.h"
 #include "gc_generation_test.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "mark_publication_fixture.hpp"
@@ -12,6 +15,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zStackWatermark.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "Heap/z/zForwardingTable.hpp"
@@ -250,7 +254,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 
 }
 namespace {
-void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds = false)
+void CheckSavedRootColor(bool invisible, bool twoRounds = false)
 {
     CreateStandaloneHeap(GcHeapFixture::kUnits);
     B09RuntimeFixture runtime;
@@ -280,7 +284,8 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     }
     if (twoRounds) {
         ZGlobalsPointers::flip_old_relocate_start();
-        const bool first = thread->GcPhaseEnum(false, watermark ? StackWatermark::epoch_id() : 0);
+        StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
+        const bool first = thread->GetStackWatermark().IsDone();
         GC_EXPECT_TRUE(first);
         GC_EXPECT_EQ(raw(slot->LoadPlain()), reinterpret_cast<uintptr_t>(from));
     }
@@ -309,7 +314,8 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     heap.young().relocate().relocate(&heap.young().relocation_set());
     const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
-    const bool scanned = thread->GcPhaseEnum(false, watermark ? StackWatermark::epoch_id() : 0);
+    StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
+    const bool scanned = thread->GetStackWatermark().IsDone();
     const uintptr_t observed = raw(slot->LoadPlain());
     std::fprintf(stderr,
         "SAVED_ROOT_COLOR_TARGET invisible=%u scanned=%u saved=%#lx current=%#lx from=%p observed=%#lx expected=%#lx\n",
@@ -322,12 +328,10 @@ void CheckSavedRootColor(bool invisible, bool watermark = true, bool twoRounds =
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 }
-GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochNativeFrameRoot) { CheckSavedRootColor(false, true, true); }
-GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochInvisibleRoot) { CheckSavedRootColor(true, true, true); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochNativeFrameRoot) { CheckSavedRootColor(false, true); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, TwoEpochInvisibleRoot) { CheckSavedRootColor(true, true); }
 GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorNativeFrameRoot) { CheckSavedRootColor(false); }
 GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorInvisibleRoot) { CheckSavedRootColor(true); }
-GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectNativeFrameRoot) { CheckSavedRootColor(false, false); }
-GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, SavedColorDirectInvisibleRoot) { CheckSavedRootColor(true, false); }
 
 GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
 {
@@ -416,7 +420,9 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
     const size_t rootMark = thread->NativeFrameRootCount();
     (void)thread->AddNativeFrameRoot(fx.obj0);
     (void)thread->AddNativeFrameRoot(fx.obj1);
-    const bool scanned = thread->GcPhaseEnum(false);
+    ZGlobalsPointers::flip_young_mark_start();
+    StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
+    const bool scanned = thread->GetStackWatermark().IsDone();
     marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
         GC_EXPECT_TRUE(object == fx.obj0);
         GC_EXPECT_TRUE(follow);
@@ -730,7 +736,7 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
         });
     };
     if (handshakeFirst) {
-        (void)thread->GcPhaseEnum(true, epoch, false);
+        StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
         const bool done = thread->GetStackWatermark().IsDone(epoch);
         readPublished();
         std::fprintf(stderr, "YOUNG_HANDSHAKE_TARGET done=%u published=%zu initially_done=%u initially_live=%u\n",
@@ -759,3 +765,55 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
 }
 GC_OTHER_VM_TEST(YoungThreadRoots, UnfinishedThreadCompletesOnce) { CheckYoungThreadCompletion(false); }
 GC_OTHER_VM_TEST(YoungThreadRoots, HandshakeCompletedThreadIsIdempotent) { CheckYoungThreadCompletion(true); }
+
+// Product-runtime coverage: allocation and root registration are the producers;
+// the young GC phase dispatches the closure and produces the observed livemap.
+namespace {
+void CheckUncoloredRootRuntime(bool nullRoot)
+{
+    using namespace MapleRuntime;
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    auto& manager = MutatorManager::Instance();
+    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    mutator->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uintptr_t));
+    BaseObject* object = nullptr;
+    const size_t roots = mutator->NativeFrameRootCount();
+    RootSlot* slot;
+    {
+        ScopedObjectAccess access;
+        if (!nullRoot) { object = MObject::NewObject(type, 2 * sizeof(uintptr_t), AllocType::MOVEABLE_OBJECT); }
+        slot = mutator->AddNativeFrameRoot(object);
+    }
+    bool live = nullRoot;
+    bool done;
+    bool plain;
+    {
+        DriverLocker locker;
+        auto& young = Heap::GetHeap().young();
+        YoungTypeSetter collection(young, ZYoungType::minor);
+        ScopedEnterSaferegion safe(false);
+        young.pause_mark_start();
+        young.concurrent_mark();
+        done = mutator->GetStackWatermark().IsDone(StackWatermark::epoch_id());
+        plain = raw(slot->LoadPlain()) == reinterpret_cast<uintptr_t>(object);
+        if (!nullRoot) { live = Heap::page(reinterpret_cast<uintptr_t>(object))->is_object_strongly_live(from_object(object)); }
+        std::fprintf(stderr, "UNC_ROOT_TARGET executed=1 null=%u live=%u done=%u plain=%u\n",
+                     unsigned(nullRoot), unsigned(live), unsigned(done), unsigned(plain));
+        young.Workers()->set_inactive();
+    }
+    mutator->PopNativeFrameRootsTo(roots);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    GC_EXPECT_TRUE(live);
+    GC_EXPECT_TRUE(done && plain);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(UncoloredRootRuntime, NativeRootMarked) { CheckUncoloredRootRuntime(false); }
+GC_RUNTIME_OTHER_VM_TEST(UncoloredRootRuntime, NullRootCompletes) { CheckUncoloredRootRuntime(true); }
