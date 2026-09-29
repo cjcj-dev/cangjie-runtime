@@ -321,8 +321,6 @@ public:
 
     void WaitForCpuProfiling() const;
 
-    bool GcPhaseEnum(bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
-                     size_t* scannedFrames = nullptr);
     AllocBuffer* tlab() { return &allocBuffer; }
     static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
 
