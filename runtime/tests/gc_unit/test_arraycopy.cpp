@@ -65,7 +65,8 @@ void CheckOverlap(bool structure, bool backwards, size_t length = 4, bool same =
     bool referencesMatch = true;
     bool primitivesMatch = true;
     for (size_t i = 0; i < count; ++i) {
-        const size_t expected = i >= dstIndex && i < dstIndex + length ? srcIndex + i - dstIndex : i;
+        const size_t copied = emptyDestination ? 0 : length;
+        const size_t expected = i >= dstIndex && i < dstIndex + copied ? srcIndex + i - dstIndex : i;
         const MAddress destination = content + i * stride;
         BaseObject* actual = HeapAccess<>::oop_load(&(HeapSlotAt<>(destination + refOffset)));
         referencesMatch &= actual == original[expected];
@@ -97,6 +98,26 @@ GC_TEST(ArrayCopyOverlap, GenericRefBackward) { CheckOverlap(false, true, 4, fal
 GC_TEST(ArrayCopyOverlap, GenericStructBackward) { CheckOverlap(true, true, 4, false, true); }
 GC_TEST(ArrayCopyOverlap, RefBothEmpty) { CheckOverlap(false, true, 0, false, false, true); }
 GC_TEST(ArrayCopyOverlap, StructBothEmpty) { CheckOverlap(true, true, 0, false, false, true); }
+
+GC_TEST(ArrayCopyOverlap, RefEmptyDestination) { CheckOverlap(false, true, 4, false, false, true); }
+GC_TEST(ArrayCopyOverlap, GenericRefEmptyDestination) { CheckOverlap(false, true, 4, false, true, true); }
+
+namespace {
+void CheckHeaderlessCopy(size_t length)
+{
+    GcHeapFixture heap;
+    std::array<unsigned char, 8> bytes = {1, 2, 3, 4, 5, 6, 7, 8};
+    auto expected = bytes;
+    std::memmove(expected.data() + 1, expected.data(), length);
+    CJ_MCC_ArrayCopyStruct(nullptr, reinterpret_cast<MAddress>(bytes.data() + 1), bytes.size() - 1,
+                          nullptr, reinterpret_cast<MAddress>(bytes.data()), length);
+    const bool matches = bytes == expected;
+    std::fprintf(stderr, "ARRAYCOPY_HEADERLESS_TARGET length=%zu matches=%d\n", length, matches);
+    GC_EXPECT_TRUE(matches);
+}
+}
+GC_TEST(ArrayCopyOverlap, HeaderlessBackward) { CheckHeaderlessCopy(7); }
+GC_TEST(ArrayCopyOverlap, HeaderlessEmpty) { CheckHeaderlessCopy(0); }
 
 namespace {
 class ArrayCopyMutatorScope {
