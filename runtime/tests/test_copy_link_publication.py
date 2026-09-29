@@ -64,6 +64,10 @@ def main():
     library = next(copied.glob('lib/*/libcangjie-runtime.so')).parent
     env.update(GCV2_RUNTIME_LIB_DIR=str(library), GCV2_RUNTIME_OUTPUT_ROOT=str(copied),
                LD_LIBRARY_PATH=str(library), GC_UNIT_OUT=str(evidence / 'standalone'))
+    commands = json.loads((build / 'compile_commands.json').read_text())
+    copy_commands = [x for x in commands if x['file'].endswith('/Copy_aarch64.S')]
+    assert len(copy_commands) == 1
+    (evidence / 'copy-compile-command.json').write_text(json.dumps(copy_commands, indent=2))
     if args.arm == 'baseline':
         assert args.profile != 'gcunit', 'baseline reproducer is the reported standalone entry'
         (evidence / 'products.sha256').write_text(''.join(
@@ -79,8 +83,6 @@ def main():
         return
     inputs = json.loads((copied / 'runtime-build-inputs.txt').read_text())
     obj = copied / inputs['internal_test_objects']['copy_disjoint_words']['path']
-    commands = json.loads((build / 'compile_commands.json').read_text())
-    assert len([x for x in commands if x['file'].endswith('/Copy_aarch64.S')]) == 1
     # Exercise the actual publisher with a changed object input. The SO pair
     # remains identical; the publication identity must change with object bytes.
     publish = ['python3', source / 'build/publish_runtime_output.py',
@@ -97,8 +99,6 @@ def main():
     archive = next((build / 'runtime-staging/ar').glob('*/libBase.a'))
     member = subprocess.check_output(['ar', 'p', str(archive), 'Copy_aarch64.S.o'])
     assert hashlib.sha256(member).hexdigest() == hashlib.sha256(obj.read_bytes()).hexdigest()
-    (evidence / 'copy-compile-command.json').write_text(json.dumps(
-        [x for x in commands if x['file'].endswith('/Copy_aarch64.S')], indent=2))
     helper = source / 'tests/gc_unit/product_test_configuration.py'
     validate = ['python3', helper, source, library, copied, '--copy-object', '--compiler', 'clang++']
     assert run('identity-normal-relocated', validate) == 0
