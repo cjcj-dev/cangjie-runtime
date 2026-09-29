@@ -445,9 +445,17 @@ GC_RUNTIME_OTHER_VM_TEST(ZMarkFlush, ConcurrentWorkerPublishesPartialMutatorStac
         // create an unfilled stack, without introducing a second root model.
         const auto address = from_object(object);
         while (!release.load(std::memory_order_acquire)) {
-            if (requests.exchange(0, std::memory_order_acq_rel) != 0) {
+            const unsigned input = requests.exchange(0, std::memory_order_acq_rel);
+            if (input != 0) {
                 stacks.Push(mark.Stripes(), mark.Stripes().StripeForAddress(raw(address)),
                     MarkStackEntry(untype(ZAddress::offset(address)), false, false, false, false), true);
+                if (input == 2) {
+                    // A real owner saferegion transition publishes the input.
+                    // The GDB observer schedules this after the handshake to
+                    // exercise Flush's independent stripes operand.
+                    mutator->EnterSaferegion(false);
+                    mutator->LeaveSaferegion();
+                }
                 before = stacks.Population();
                 ready.store(true, std::memory_order_release);
             }

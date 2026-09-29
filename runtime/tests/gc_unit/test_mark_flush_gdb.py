@@ -36,7 +36,35 @@ def population(address):
     return sum(sizes)
 
 
-result = {'before': None, 'after': None, 'returned': None, 'entered': False, 'signal_targets': []}
+mode = os.environ.get('MARK_FLUSH_INPUT', 'partial')
+if mode not in ('partial', 'stripes', 'empty'):
+    raise RuntimeError('unknown flush input: ' + mode)
+result = {'mode': mode, 'before': None, 'after': None, 'handshake_return': None,
+          'flush_return': None, 'entered': False, 'signal_targets': []}
+
+
+def stripe_heads(mark):
+    vector = mark.dereference()['stripes']['stripes']['_M_impl']
+    begin, end = vector['_M_start'], vector['_M_finish']
+    return [int((begin + i).dereference()[kind]['head']['_M_b']['_M_p'])
+            for i in range(int(end - begin)) for kind in ('published', 'overflowed')]
+
+
+class FlushConsumer(gdb.Breakpoint):
+    def __init__(self, location, value):
+        super().__init__(location, internal=True)
+        self.value = value
+
+    def stop(self):
+        if gdb.selected_thread().num != active_worker:
+            return False
+        # Release builds inline Flush and TryProactiveFlush into FollowWork.
+        # Its two immediate successors consume the final boolean directly:
+        # true -> next Drain, false -> TryTerminate (ZGC zMark.cpp:635-664).
+        result['flush_return'] = self.value
+        result['consumer_pc'] = hex(gdb.selected_frame().pc())
+        result['consumer_stack'] = command('bt')
+        return True
 active_worker = None
 
 
@@ -54,7 +82,7 @@ class WorkerZero(gdb.Breakpoint):
 
 class Returned(gdb.Breakpoint):
     def stop(self):
-        result['returned'] = bool(int(gdb.parse_and_eval('$al')))
+        result['handshake_return'] = bool(int(gdb.parse_and_eval('$al')))
         return True
 
 
@@ -82,6 +110,8 @@ try:
     owner = None
     for thread in gdb.selected_inferior().threads():
         thread.switch()
+        mark = gdb.parse_and_eval('domain')
+        worker = gdb.selected_thread()
         frame = gdb.newest_frame()
         while frame:
             try:
@@ -103,17 +133,19 @@ try:
     if boundary.is_valid():
         raise RuntimeError('mark-follow phase entry not reached')
     driver = gdb.selected_thread()
-    owner.switch()
-    print('OWNER_INPUT_STACK ' + command('bt'), flush=True)
-    command('set {unsigned int}' + str(request_address) + ' = 1')
-    print('OWNER_INPUT_REQUEST ' + command('p *(unsigned int*)' + str(request_address)), flush=True)
     seeded_line = next(i + 1 for i in range(start, len(source)) if 'before = stacks.Population();' in source[i])
-    seeded = gdb.Breakpoint('test_value_root_identity.cpp:' + str(seeded_line), temporary=True)
-    command('set scheduler-locking on')
-    command('continue')
-    if seeded.is_valid():
-        raise RuntimeError('partial stack input not published by owner')
-    result['before'] = population(stack_address)
+
+    def produce_input(value):
+        owner.switch()
+        command('set {unsigned int}' + str(request_address) + ' = ' + str(value))
+        seeded = gdb.Breakpoint('test_value_root_identity.cpp:' + str(seeded_line), temporary=True)
+        command('set scheduler-locking on')
+        command('continue')
+        if seeded.is_valid():
+            raise RuntimeError('owner input boundary not reached')
+
+    if mode == 'partial':
+        produce_input(1)
     driver.switch()
     command('set scheduler-locking off')
     entry = WorkerZero('MapleRuntime::ZMark::TryProactiveFlush(unsigned long)')
@@ -133,6 +165,8 @@ try:
         command('continue')
         if handshake.is_valid():
             raise RuntimeError('proactive handshake not reached')
+        mark = gdb.parse_and_eval('domain')
+        worker = gdb.selected_thread()
         frame = gdb.newest_frame()
         while frame.type() == gdb.INLINE_FRAME:
             frame = frame.older()
@@ -142,12 +176,43 @@ try:
         print('MARK_FLUSH_STACK ' + command('bt'), flush=True)
         returned = Returned('*' + hex(frame.older().pc()), temporary=True, internal=True)
         command('continue')
+        if returned.is_valid():
+            raise RuntimeError('handshake return boundary not reached')
         result['after'] = population(stack_address)
+        result['handshake_stack'] = command('bt')
+        if mode == 'stripes':
+            produce_input(2)
+            result['owner_after_input'] = population(stack_address)
+            worker.switch()
+        # Freeze other producers/consumers for the few instructions from the
+        # handshake result to Flush's actual consumer. No product calls here.
+        command('set scheduler-locking on')
+        result['stripe_heads'] = stripe_heads(mark)
+        result['stripes_nonempty'] = any(result['stripe_heads'])
+        product_source = Path(os.environ['MARK_FLUSH_PRODUCT_SOURCE']).read_text().splitlines()
+        drain_line = next(i + 1 for i, text in enumerate(product_source)
+                          if 'if (!Drain(context,' in text)
+        terminate_line = next(i + 1 for i, text in enumerate(product_source)
+                              if 'if (terminate.TryTerminate(stripes,' in text)
+        FlushConsumer('zMark.cpp:' + str(drain_line), True)
+        FlushConsumer('zMark.cpp:' + str(terminate_line), False)
+        command('continue')
     result['no_finalizer_signal'] = result.get('finalizer_condition') not in result['signal_targets']
     result['published'] = result['after'] == 0
+    if mode == 'partial':
+        result['input_valid'] = result.get('input_partial', False) and result['handshake_return'] is True
+    elif mode == 'stripes':
+        result['input_valid'] = (result['before'] == 0 and result['handshake_return'] is False
+                                 and result.get('owner_after_input') == 0
+                                 and result.get('stripes_nonempty') is True)
+    else:
+        result['input_valid'] = (result['before'] == 0 and result['handshake_return'] is False
+                                 and result.get('stripes_nonempty') is False)
+    result['expected_return'] = bool(result['handshake_return'] or result.get('stripes_nonempty'))
+    result['return_correct'] = (result['flush_return'] is not None and
+                                result['flush_return'] == result['expected_return'])
     result['passed'] = all((result['no_finalizer_signal'], result['entered'],
-                          result.get('input_partial', False), result['published'],
-                          result['returned'] is not None))
+                          result['input_valid'], result['published'], result['return_correct']))
     print('MARK_PROACTIVE_ASSERT ' + json.dumps(result, sort_keys=True), flush=True)
     Path(os.environ['MARK_FLUSH_RESULT']).write_text(json.dumps(result) + '\n')
     command('quit ' + ('0' if result['passed'] else '1'))
