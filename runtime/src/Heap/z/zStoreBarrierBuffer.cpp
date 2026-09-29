@@ -51,6 +51,10 @@ StoreBarrierBuffer* StoreBarrierBuffer::buffer_for_store(bool heal)
 
 void StoreBarrierBuffer::install_base_pointers_inner()
 {
+    ASSERT(ZPointer::remap_bits(lastInstalledColor) == ZPointer::remap_bits(lastProcessedColor));
+    ASSERT((ZPointer::remap_bits(lastProcessedColor) & ZPointerRemappedYoungMask) == 0 ||
+           (ZPointer::remap_bits(lastProcessedColor) & ZPointerRemappedOldMask) == 0);
+
     for (size_t i = Current(); i < kStoreBarrierBufferLength; ++i) {
         const StoreBarrierEntry& entry = buffer[i];
         const zaddress_unsafe pUnsafe = to_zaddress_unsafe(reinterpret_cast<MAddress>(entry.p));
