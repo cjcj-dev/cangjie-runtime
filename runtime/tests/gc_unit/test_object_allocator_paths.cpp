@@ -574,8 +574,8 @@ GC_RUNTIME_OTHER_VM_TEST(HeapFacade1334, MajorCollectionCountOwner)
 
 namespace {
 // gc/shared/memAllocator.cpp:255-325: the TLAB slow path lives in MemAllocator.
-// Both branches are reached with ordinary objects through Heap::Allocate, the
-// product entry HeapManager.cpp:20 builds the MemAllocator from. No hook, no
+// Both branches are reached with ordinary objects through MCC_NewObject, the
+// product entry HeapManager.cpp:20 builds the TLAB allocator from. No hook, no
 // counter and no direct call into the TLAB refill schedule.
 void* AllocateUntilSlowBranch(void*)
 {
@@ -585,9 +585,9 @@ void* AllocateUntilSlowBranch(void*)
     const size_t size = 256;
     type->SetInstanceSize(size - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    Heap& heap = Heap::GetHeap();
-    // The first object creates the TLAB; it must land in the TLAB region.
-    const uintptr_t first = heap.Allocate(size, AllocType::MOVEABLE_OBJECT);
+    // The product entry is MCC_NewObject -> HeapManager.cpp:20 -> the TLAB
+    // selection; Heap::Allocate is the outside-TLAB fallback it calls.
+    const uintptr_t first = reinterpret_cast<uintptr_t>(MCC_NewObject(type, size));
     const ZPage* firstRegion = AllocBuffer::GetAllocBuffer()->GetRegion();
     const bool created = first != 0 && firstRegion != nullptr && Heap::page(first) == firstRegion;
     size_t retained = 0;
@@ -597,7 +597,7 @@ void* AllocateUntilSlowBranch(void*)
     size_t previousLimit = AllocBuffer::GetAllocBuffer()->RefillWasteLimit();
     const ZPage* previousRegion = firstRegion;
     for (size_t i = 0; i < 200000 && (retained == 0 || refilled == 0); ++i) {
-        const uintptr_t addr = heap.Allocate(size, AllocType::MOVEABLE_OBJECT);
+        const uintptr_t addr = reinterpret_cast<uintptr_t>(MCC_NewObject(type, size));
         if (addr == 0) { break; }
         const ZPage* region = AllocBuffer::GetAllocBuffer()->GetRegion();
         const size_t limit = AllocBuffer::GetAllocBuffer()->RefillWasteLimit();

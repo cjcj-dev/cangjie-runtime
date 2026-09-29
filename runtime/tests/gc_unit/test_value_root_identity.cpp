@@ -428,7 +428,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZMarkFlush, ConcurrentWorkerPublishesPartialMutatorStac
     ConcurrentGCBreakpoints::AcquireControl();
     BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"));
-    BaseObject* object = Heap::GetHeap().GetExportObject(root);
+    BaseObject* object = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     std::atomic<bool> ready{false};
     std::atomic<unsigned> requests{1};
     std::atomic<bool> observe{false};

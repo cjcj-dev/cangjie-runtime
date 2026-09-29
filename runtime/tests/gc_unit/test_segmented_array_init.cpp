@@ -15,6 +15,7 @@
 #include <cstring>
 #include <vector>
 #include <memory>
+#include "LoaderManager.h"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.hpp"
 #if defined(__linux__)
@@ -298,7 +299,7 @@ void* RunYoungSelectionLifetimeCase(void*)
     heap.RequestGC(GC_REASON_YOUNG);
     // Read through the page table, never through either saved descriptor.
     const bool emptyReleased = Heap::page(deadAddress) == nullptr;
-    BaseObject* const survivor = heap.GetExportObject(root);
+    BaseObject* const survivor = heap.cross_vm().export_roots().GetExportRoot(root);
     ZPage* const current = survivor == nullptr ? nullptr : Heap::page(reinterpret_cast<uintptr_t>(survivor));
     const bool liveProcessed = current != nullptr && current->age() != beforeAge &&
         reinterpret_cast<uintptr_t>(survivor) == liveAddress;
@@ -345,7 +346,7 @@ void* RunFlipPromotionCase(void* argument)
     }
     Mutator::GetMutator()->SetManagedContext(false);
     heap.RequestGC(promote ? GC_REASON_USER : GC_REASON_YOUNG);
-    array = static_cast<MArray*>(heap.GetExportObject(root));
+    array = static_cast<MArray*>(heap.cross_vm().export_roots().GetExportRoot(root));
     fields = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
     const zpointer after = fields[0].GetFieldValue();
     const bool sameAddress = reinterpret_cast<uintptr_t>(array) == address;
@@ -392,7 +393,7 @@ void* RunOldRelocationStatisticsCase(void*)
     const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(survivor);
     mutator->SetManagedContext(false);
     heap.RequestGC(GC_REASON_USER);
-    auto* current = heap.GetExportObject(root);
+    auto* current = heap.cross_vm().export_roots().GetExportRoot(root);
     const bool retainedOld = current != nullptr &&
         !Heap::page(reinterpret_cast<uintptr_t>(current))->IsYoungRegion();
     const auto input = ZGeneration::old()->StatHeap()->Stats();
@@ -425,7 +426,7 @@ void* RunOrdinaryBirthCase(void*)
     ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(fresh));
     // ZGC zGeneration.cpp:205-259 permits relocation; reload the live object
     // through its root before checking that fresh eden allocation is separate.
-    BaseObject* currentSurvivor = heap.GetExportObject(root);
+    BaseObject* currentSurvivor = heap.cross_vm().export_roots().GetExportRoot(root);
     const bool fromNewPage = currentSurvivor != nullptr &&
         page != Heap::page(reinterpret_cast<uintptr_t>(currentSurvivor));
     const bool noExplicitMark = !page->is_marked();
@@ -445,7 +446,7 @@ void* RunVisibleArrayGraph(void*)
     NativeSlot root(zpointer::null);
     NativeAccess<>::oop_store(&(root), array);
     NativeSlot* roots[] = { &root };
-    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::vector<size_t> visits(array->GetLength(), 0);
     size_t invalid = 0;
     size_t objects = 0;
@@ -465,7 +466,7 @@ void* RunVisibleArrayGraph(void*)
                 }
             });
     }
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     for (size_t count : visits) { invalid += count != 1; }
     const bool complete = objects == 1 && invalid == 0;
     std::fprintf(stderr, "SEGMENTED_GRAPH_RANGE_ASSERT objects=%zu fields=%zu invalid=%zu pass=%d\n",
@@ -551,7 +552,7 @@ void* RunLargeYoungClosureCase(void*)
     auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
     HeapAccess<>::oop_store(&(field), target);
     const bool holderYoung = Heap::page(reinterpret_cast<uintptr_t>(holder))->IsYoungRegion();
-    const U64 holderRoot = Heap::GetHeap().RegisterExportRoot(holder);
+    const U64 holderRoot = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(holder);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
     bool live;
@@ -629,7 +630,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     markPhase.reset();
     // The next real driver cycle resamples allocation watermarks and relocates.
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
-    holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
+    holder = static_cast<MArray*>(heap.cross_vm().export_roots().GetExportRoot(holderRoot));
     page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
     BaseObject* completedTarget = HeapAccess<>::oop_load(&(completedField));
@@ -708,7 +709,7 @@ void* RunNativeTaskRootCase(void*)
     NativeSlot root(zpointer::null);
     NativeAccess<>::oop_store(&(root), array);
     NativeSlot* roots[] = { &root };
-    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     size_t objects = 0;
     {
         ScopedEnterSaferegion saferegion(false);
@@ -716,7 +717,7 @@ void* RunNativeTaskRootCase(void*)
         HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == array; });
     }
     Heap::GetHeap().RequestGC(GC_REASON_USER);
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::fprintf(stderr, "NATIVE_TASK_HEAP_TARGET managed_visits=%zu gc_returned=1\n", objects);
     Mutator::GetMutator()->SetManagedContext(true);
     return reinterpret_cast<void*>(objects == 1 ? 0 : 42);
