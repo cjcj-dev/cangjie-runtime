@@ -42,7 +42,7 @@ namespace MapleRuntime {
 struct PartialArrayTestAccess {
     static void StartFieldMark(Heap& collector)
     {
-        auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+        auto& old = (*ZGeneration::old());
         if (old.Workers() == nullptr) old.InitializeWorkers(1);
         Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
         Heap::GetHeap().old().Mark().Start();
@@ -181,8 +181,8 @@ GC_TEST(PartialArray, PageOffsetChunkRoundtrips)
 GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
 {
     GcHeapFixture fx;
-    Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
+    ZAddress::OnHeapCreated(fx.heapStart);
+    ZAddress::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     SlotBuf buf(MarkPartialArray::MIN_LENGTH, fx.heapStart + 2 * ZGranuleSize);
     Heap& collector = Heap::GetHeap();
     WorkStack workStack;

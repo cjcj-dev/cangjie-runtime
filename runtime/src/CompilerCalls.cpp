@@ -468,7 +468,7 @@ extern "C" size_t MCC_GetBlockingCJThreadNumber() { return ScheduleCJThreadCount
 
 extern "C" size_t MCC_GetNativeThreadNumber() { return ScheduleRunningOSThreadCount(); }
 
-extern "C" size_t MCC_GetGCCount() { return Heap::GetHeap().total_collections(); }
+extern "C" size_t MCC_GetGCCount() { return ZCollectedHeap::heap()->total_collections(); }
 
 extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs.load(std::memory_order_acquire); }
 
@@ -2296,22 +2296,22 @@ extern "C" void CJ_MCC_IVCallInstrumentation(TypeInfo* cls, const char* callBase
 
 void CJ_MCC_CrossAccessBarrier(U64 cjExport)
 {
-    Heap::GetHeap().CrossAccessBarrier(cjExport);
+    Heap::GetHeap().cross_vm().CrossAccessBarrier(cjExport);
 }
 
 U64 CJ_MCC_CreateExportHandle(BaseObject *obj)
 {
-    U64 id = Heap::GetHeap().RegisterExportRoot(obj);
+    U64 id = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(obj);
     return id;
 }
 
 BaseObject* CJ_MCC_GetExportedRef(U64 id)
 {
-    return Heap::GetHeap().GetExportObject(id);
+    return Heap::GetHeap().cross_vm().export_roots().GetExportRoot(id);
 }
 void CJ_MCC_RemoveExportedRef(U64 id)
 {
-    Heap::GetHeap().RemoveExportObject(id);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(id);
 }
 
 extern "C" uintptr_t CJ_MCC_GetJSLambdaAddr(const ObjectPtr obj)

@@ -238,7 +238,7 @@ zaddress ZBarrier::MarkSlowPath(zaddress address)
 // ZZBarrier::mark_from_young_slow_path, zBarrier.cpp:158-183.
 zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
 {
-    auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+    auto& young = (*ZGeneration::young());
     ASSERT(young.IsPhaseMark());
     if (is_null(address)) return address;
     if (Heap::page(raw(address))->IsYoungRegion()) {
@@ -246,7 +246,7 @@ zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
         return address;
     }
     if (young.IsMajorRoots()) {
-        Heap::GetHeap().GetZGeneration(ZGenerationId::old).MarkObject<false, true, true, false>(address);
+        (*ZGeneration::old()).MarkObject<false, true, true, false>(address);
         return address;
     }
     return address;
@@ -255,7 +255,7 @@ zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
 // ZZBarrier::mark_from_old_slow_path, zBarrier.cpp:185-203.
 zaddress ZBarrier::MarkFromOldSlowPath(zaddress address)
 {
-    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+    auto& old = (*ZGeneration::old());
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, false>(address);
@@ -267,8 +267,8 @@ zaddress ZBarrier::MarkFromOldSlowPath(zaddress address)
 // ZZBarrier::mark_finalizable_slow_path, zBarrier.cpp:218-232.
 zaddress ZBarrier::MarkFinalizableSlowPath(zaddress address)
 {
-    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-    auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+    auto& old = (*ZGeneration::old());
+    auto& young = (*ZGeneration::young());
     ASSERT(old.IsPhaseMark() || young.IsPhaseMark());
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
@@ -282,8 +282,8 @@ zaddress ZBarrier::MarkFinalizableSlowPath(zaddress address)
 // ZZBarrier::mark_finalizable_from_old_slow_path, zBarrier.cpp:234-250.
 zaddress ZBarrier::MarkFinalizableFromOldSlowPath(zaddress address)
 {
-    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-    CHECK(old.IsPhaseMark() || Heap::GetHeap().GetZGeneration(ZGenerationId::young).IsPhaseMark());
+    auto& old = (*ZGeneration::old());
+    CHECK(old.IsPhaseMark() || (*ZGeneration::young()).IsPhaseMark());
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, true>(address);
@@ -314,7 +314,7 @@ zaddress ZBarrier::keep_alive_slow_path(zaddress addr)
 // ZGC zBarrier.cpp:61-144: distinct weak/phantom keep-alive and load slow paths.
 static void keep_alive_young(zaddress addr)
 {
-    auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+    auto& young = (*ZGeneration::young());
     if (young.IsPhaseMark()) {
         ZBarrier::MarkYoung<true, false, true>(addr);
     }

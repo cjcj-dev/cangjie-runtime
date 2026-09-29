@@ -1,3 +1,4 @@
+#include "LoaderManager.h"
 // Real runtime reservation and MCC consumers; no range publication or MCC substitutes.
 #include <list>
 #include <map>
@@ -129,7 +130,7 @@ static int RunConsumers()
     }
     auto** plainSlot = static_cast<void**>(mapped);
     NativeSlot* roots[] = { &globalSlot };
-    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     const uintptr_t address = reinterpret_cast<uintptr_t>(payload);
     const uintptr_t colored = raw(ZAddress::store_good(to_zaddress(address)));
     const uintptr_t coloredNull = raw(ZAddress::store_good(zaddress::null));
@@ -153,7 +154,7 @@ static int RunConsumers()
     exercise("heap_null", nullptr, heapSlot, false);
     exercise("hole", holder, plainSlot, true);
     exercise("global", reinterpret_cast<void*>(1), reinterpret_cast<void**>(&globalSlot), false);
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::printf("SLOT_DOMAIN_RESULT assertions=%u failures=%u\n", assertions, failures);
     return assertions == 0 ? 92 : failures == 0 ? 0 : 1;
 }

@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -164,7 +165,7 @@ public:
                      ValueRootList& exportOwners, unsigned workers)
         : ZTask("ZMarkOldRootsTask"), rootsColored(workers),
           finalizerRoots(Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers),
-          exportRoots(Heap::GetHeap().GetExportRootStorage(), workers),
+          exportRoots(Heap::GetHeap().cross_vm().export_roots().RootStorage(), workers),
           finalizable(std::move(finalizable)), domain(domain), uncolored(std::move(uncolored)),
           exportOwners(exportOwners) {}
     void work() override
@@ -281,13 +282,13 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
             }
             resultVisitor(object);
         });
-        Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) {
+        Heap::GetHeap().cross_vm().export_roots().VisitGCRoots([&](NativeSlot& slot) {
             ZBarrier::MarkBarrierOnOopField(slot, false);
             resultVisitor(to_object(slot.GetTargetObject()));
         });
-    }, rawRootVisitor, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
+    }, rawRootVisitor, (*(*ZGeneration::young()).Workers()).active_workers());
     SuspendibleThreadSetJoiner joiner;
-    (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).run(&task);
+    (*(*ZGeneration::young()).Workers()).run(&task);
 
 }
 
@@ -310,10 +311,10 @@ void ZMark::PushYoungObject(BaseObject* object, WorkStack& workStack, const char
     }
     (void)workStack;
     if (finalizable) {
-        const_cast<ZGeneration&>(Heap::GetHeap().GetZGeneration(ZGenerationId::young))
+        const_cast<ZGeneration&>((*ZGeneration::young()))
             .MarkObjectIfActive<false, true, true, true>(from_object(object));
     } else {
-        const_cast<ZGeneration&>(Heap::GetHeap().GetZGeneration(ZGenerationId::young))
+        const_cast<ZGeneration&>((*ZGeneration::young()))
             .MarkObjectIfActive<false, true, true, false>(from_object(object));
     }
 }
@@ -739,7 +740,7 @@ void ZMark::Start()
     // zMark.cpp:118-123: stripe count goes to the generation's mark account.
     const ZGenerationId statId =
         generation == MarkingStacks::MarkingGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
-    Heap::GetHeap().GetZGeneration(statId).StatMark()->AtMarkStart(targetNStripes);
+    (*ZGeneration::generation(static_cast<ZGenerationId>(statId))).StatMark()->AtMarkStart(targetNStripes);
 }
 
 void ZMark::PrepareWork()
@@ -1059,7 +1060,7 @@ bool ZMark::TryEnd()
     // zMark.cpp:983-987: completed mark publishes its flush/continue counters.
     const ZGenerationId statId =
         generation == MarkingStacks::MarkingGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
-    Heap::GetHeap().GetZGeneration(statId).StatMark()->AtMarkEnd(nproactiveflush, nterminateflush,
+    (*ZGeneration::generation(static_cast<ZGenerationId>(statId))).StatMark()->AtMarkEnd(nproactiveflush, nterminateflush,
                                                                  ntrycomplete, ncontinue);
     return true;
 }

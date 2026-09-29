@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 #include "gc_allocation_flags.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -206,12 +207,12 @@ void* AllocateMediumNonBlocking(void*)
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     type->SetInstanceSize(bytes - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    const uint64_t before = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t before = (*ZGeneration::old()).seqnum();
     const uintptr_t result = heap.object_allocator().alloc_for_relocation(bytes, PageAge::eden);
     if (result != 0) { reinterpret_cast<BaseObject*>(result)->SetClassInfo(type); }
     const ZPage* page = result == 0 ? nullptr : Heap::page(result);
     const size_t actual = page == nullptr ? 0 : page->size();
-    const uint64_t after = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t after = (*ZGeneration::old()).seqnum();
     const bool valid = page != nullptr && page->type() == ZPageType::medium && actual == ZPageSizeMediumMax && before == after;
     std::fprintf(stderr, "MEDIUM_NONBLOCKING_TARGET actual=%zu expected=%zu before=%llu after=%llu valid=%d\n",
                  actual, ZPageSizeMediumMax, (unsigned long long)before, (unsigned long long)after, valid);
@@ -230,18 +231,18 @@ void* AllocateMediumBlockingFailure(void*)
     type->SetInstanceSize(occupiedBytes - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     auto* occupied = MCC_NewObject(type, occupiedBytes);
-    const U64 root = heap.RegisterExportRoot(occupied);
+    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(occupied);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    const uint64_t before = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t before = (*ZGeneration::old()).seqnum();
     // The rooted large object leaves less than a medium page. A blocking
     // allocator must attempt collection before reporting the terminal failure.
     const uintptr_t result = heap.object_allocator().alloc(ZObjectSizeLimitSmall + 8);
-    const uint64_t after = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t after = (*ZGeneration::old()).seqnum();
     const bool valid = result == 0 && after > before;
     std::fprintf(stderr, "MEDIUM_BLOCKING_TARGET result=%#zx occupied=%zu before=%llu after=%llu valid=%d\n",
                  result, occupiedBytes, (unsigned long long)before, (unsigned long long)after, valid);
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     mutator->SetManagedContext(true);
     return reinterpret_cast<void*>(valid ? 0 : 1);
 }
@@ -256,16 +257,16 @@ void* AllocateRelocationCapacity(void*)
     type->SetInstanceSize(occupiedBytes - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     auto* occupied = MCC_NewObject(type, occupiedBytes);
-    const U64 root = heap.RegisterExportRoot(occupied);
+    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(occupied);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    const uint64_t before = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t before = (*ZGeneration::old()).seqnum();
     const uintptr_t result = heap.object_allocator().alloc_for_relocation(heap.GetMaxCapacity(), PageAge::old);
-    const uint64_t after = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t after = (*ZGeneration::old()).seqnum();
     const bool valid = result == 0 && after == before;
     std::fprintf(stderr, "RELOCATION_CAPACITY_TARGET result=%#zx before=%llu after=%llu valid=%d\n",
                  result, (unsigned long long)before, (unsigned long long)after, valid);
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     mutator->SetManagedContext(true);
     return reinterpret_cast<void*>(valid ? 0 : 1);
 }
@@ -278,11 +279,11 @@ void* AllocateNonBlockingCapacity(void*)
     if (occupied == nullptr) { return reinterpret_cast<void*>(1); }
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    const uint64_t before = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t before = (*ZGeneration::old()).seqnum();
     // A valid page size that cannot fit while occupied consumes part of capacity.
     // The non-blocking allocation must return its failure without starting a GC.
     ZPage* result = Heap::alloc_page(heap.GetMaxCapacity(), ZPageType::large, false, PageAge::eden, flags);
-    const uint64_t after = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t after = (*ZGeneration::old()).seqnum();
     const bool valid = result == nullptr && after == before;
     std::fprintf(stderr, "NONBLOCKING_CAPACITY_TARGET result=%p before=%llu after=%llu valid=%d\n",
                  result, (unsigned long long)before, (unsigned long long)after, valid);
@@ -503,3 +504,47 @@ void CheckNoPageAllocationPacing()
 }
 }
 GC_RUNTIME_OTHER_VM_TEST(PageAllocationPacing, DefaultConfiguration) { CheckNoPageAllocationPacing(); }
+
+namespace {
+void* AllocateFacadeObjects(void* argument)
+{
+    const bool large = argument != nullptr;
+    const size_t size = large ? ZObjectSizeLimitMedium + 8 : 256;
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(size - TYPEINFO_PTR_SIZE);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    Heap& heap = Heap::GetHeap();
+    const uintptr_t first = heap.Allocate(size, AllocType::MOVEABLE_OBJECT);
+    const uintptr_t second = heap.Allocate(size, AllocType::MOVEABLE_OBJECT);
+    if (first != 0) { reinterpret_cast<BaseObject*>(first)->SetClassInfo(type); }
+    if (second != 0) { reinterpret_cast<BaseObject*>(second)->SetClassInfo(type); }
+    const ZPage* page = first == 0 ? nullptr : Heap::page(first);
+    const ZPage* next = second == 0 ? nullptr : Heap::page(second);
+    const bool shape = page != nullptr && next != nullptr && first != second &&
+        (large ? (page->is_large() && next->is_large() && page != next) :
+                 (page->is_small() && page == next && second == first + size));
+    // Read product results before asserting: an ownership fault must not be
+    // hidden behind an existence assertion or an exception in the test.
+    const bool owner = page != nullptr && next != nullptr &&
+        page->age() == PageAge::eden && next->age() == PageAge::eden &&
+        page->is_young() && next->is_young();
+    std::fprintf(stderr, "HEAP1334_SHAPE_TARGET executed=1 large=%d first=%#zx second=%#zx shape=%d\n",
+                 large, first, second, shape);
+    std::fprintf(stderr, "HEAP1334_OWNER_TARGET executed=1 large=%d age=%u next_age=%u owner=%d\n",
+                 large, page == nullptr ? 255u : unsigned(untype(page->age())),
+                 next == nullptr ? 255u : unsigned(untype(next->age())), owner);
+    return reinterpret_cast<void*>(uintptr_t(!shape ? 1 : !owner ? 2 : 0));
+}
+void* AllocateFacadeSmall(void*) { return AllocateFacadeObjects(nullptr); }
+void* AllocateFacadeLarge(void*) { return AllocateFacadeObjects(reinterpret_cast<void*>(1)); }
+}
+GC_RUNTIME_OTHER_VM_TEST(HeapFacade1334, SmallAllocationOwner)
+{
+    RunAllocatorCase(AllocateFacadeSmall);
+}
+GC_RUNTIME_OTHER_VM_TEST(HeapFacade1334, LargeAllocationOwner)
+{
+    RunAllocatorCase(AllocateFacadeLarge);
+}

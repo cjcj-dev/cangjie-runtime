@@ -138,14 +138,14 @@ bool ZRelocate::IsFromObject(BaseObject* obj)
             return false;
         }
         const MAddress addr = reinterpret_cast<MAddress>(obj);
-        return Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
-               Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
+        return (*ZGeneration::young()).forwarding_table().get(addr) != nullptr ||
+               (*ZGeneration::old()).forwarding_table().get(addr) != nullptr;
     }
 
 void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 {
-    ZWorkers& workers = *Heap::GetHeap().GetZGeneration(generation).Workers();
-    auto& queue = *Heap::GetHeap().GetZGeneration(generation).relocate().queue();
+    ZWorkers& workers = *(*ZGeneration::generation(static_cast<ZGenerationId>(generation))).Workers();
+    auto& queue = *(*ZGeneration::generation(static_cast<ZGenerationId>(generation))).relocate().queue();
     CHECK(!queue.IsActive());
     queue.BeginWorkers(workers.active_workers());
 }
@@ -225,7 +225,7 @@ static void RemapAndMaybeAddRemset(RefField<>& field)
 
 void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 {
-    ZArray<ZPage*>* pages = Heap::GetHeap().GetZGeneration(ZGenerationId::young)
+    ZArray<ZPage*>* pages = (*ZGeneration::young())
                                 .relocation_set().flip_promoted_pages();
     class PageTask final : public ZRestartableTask {
     public:

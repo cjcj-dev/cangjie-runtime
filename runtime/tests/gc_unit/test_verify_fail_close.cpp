@@ -255,7 +255,7 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
     }
     GcVerifyFixture fixture;
     fixture.region0()->reset(PageAge::old);
-    auto& cycle = Heap::GetHeap().GetZGeneration(Generation::Young);
+    auto& cycle = (*ZGeneration::young());
     cycle.set_phase(ZGenerationPhase::Mark);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
@@ -278,7 +278,7 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
     GcVerifyFixture fixture;
     fixture.region0()->reset(PageAge::old);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    auto& cycle = Heap::GetHeap().GetZGeneration(Generation::Young);
+    auto& cycle = (*ZGeneration::young());
     cycle.set_phase(ZGenerationPhase::MarkComplete);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);

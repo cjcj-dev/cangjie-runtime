@@ -285,7 +285,7 @@ void* SelectRealLivePages(void* context)
             } else {
                 *reinterpret_cast<uint64_t*>(starts[result.roots] + TYPEINFO_PTR_SIZE) = result.roots + 1;
             }
-            roots[result.roots] = Heap::GetHeap().RegisterExportRoot(reinterpret_cast<BaseObject*>(object));
+            roots[result.roots] = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(reinterpret_cast<BaseObject*>(object));
             sourcePages[result.roots] = page;
             sourceStarts[result.roots] = page->GetRegionStart();
             ++result.roots;
@@ -310,7 +310,7 @@ void* SelectRealLivePages(void* context)
     }
     // Live objects in three real small pages force a non-empty relocation set.
     if (result.verifyCritical) {
-        auto* array = static_cast<MArray*>(Heap::GetHeap().GetExportObject(roots[0]));
+        auto* array = static_cast<MArray*>(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(roots[0]));
         bool copied = true;
         void* raw = MCC_AcquireRawData(array, &copied);
         std::atomic<bool> finished{false};
@@ -331,17 +331,17 @@ void* SelectRealLivePages(void* context)
         // A completed collector publishes the root before we inspect it.
         if (result.collectionFinishedWhileHeld) {
             result.movedWhileHeld = reinterpret_cast<uintptr_t>(
-                Heap::GetHeap().GetExportObject(roots[0])) != starts[0];
+                Heap::GetHeap().cross_vm().export_roots().GetExportRoot(roots[0])) != starts[0];
         }
         mutator->LeaveSaferegion();
-        array = static_cast<MArray*>(Heap::GetHeap().GetExportObject(roots[0]));
+        array = static_cast<MArray*>(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(roots[0]));
         MCC_ReleaseRawData(array, raw);
         mutator->EnterSaferegion(false);
         collector.join();
         mutator->LeaveSaferegion();
         result.collectionFinished = finished.load(std::memory_order_acquire);
         result.movedAfterRelease = reinterpret_cast<uintptr_t>(
-            Heap::GetHeap().GetExportObject(roots[0])) != starts[0];
+            Heap::GetHeap().cross_vm().export_roots().GetExportRoot(roots[0])) != starts[0];
     } else {
         Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     }
@@ -390,8 +390,8 @@ void* SelectRealLivePages(void* context)
 
         }
         if (!result.verifyRetirement) {
-            result.retained += Heap::GetHeap().GetExportObject(roots[i]) != nullptr;
-            Heap::GetHeap().RemoveExportObject(roots[i]);
+            result.retained += Heap::GetHeap().cross_vm().export_roots().GetExportRoot(roots[i]) != nullptr;
+            Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(roots[i]);
         }
         // The retirement test leaves root cleanup to FiniCJRuntime, after its
         // assertions. A failing remap must not be consumed by cleanup first.
@@ -586,7 +586,7 @@ void* HoldArrayForMovingEnter(void* context)
             auto* object = root();
             auto* page = Heap::page(reinterpret_cast<uintptr_t>(object));
             if (page != previous && roots < 3) {
-                result.roots[roots++] = Heap::GetHeap().RegisterExportRoot(object);
+                result.roots[roots++] = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(object);
                 previous = page;
             }
         }
@@ -595,7 +595,7 @@ void* HoldArrayForMovingEnter(void* context)
     result.allocated.store(true, std::memory_order_release);
     while (!result.pin.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     mutator->LeaveSaferegion();
-    auto* array = static_cast<MArray*>(Heap::GetHeap().GetExportObject(result.roots[0]));
+    auto* array = static_cast<MArray*>(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(result.roots[0]));
     bool copied = true;
     void* raw = MCC_AcquireRawData(array, &copied);
     mutator->EnterSaferegion(false);
@@ -617,7 +617,7 @@ void* AcquireMovingArray(void* context)
     result.waiterReady.store(true, std::memory_order_release);
     while (!result.enter.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     mutator->LeaveSaferegion();
-    auto* array = static_cast<MArray*>(Heap::GetHeap().GetExportObject(result.roots[0]));
+    auto* array = static_cast<MArray*>(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(result.roots[0]));
     result.before = reinterpret_cast<uintptr_t>(array->ConvertToCArray());
     std::fprintf(stderr, "JNI_MOVING_BEFORE mask=%#lx global=%#lx forwarding=%p\n",
         mutator->GetGCData().storeGoodMask, ZPointerStoreGoodMask,
@@ -627,7 +627,7 @@ void* AcquireMovingArray(void* context)
     std::fprintf(stderr, "JNI_MOVING_AFTER mask=%#lx global=%#lx forwarding=%p\n",
         mutator->GetGCData().storeGoodMask, ZPointerStoreGoodMask,
         Heap::GetHeap().old().forwarding_table().get(reinterpret_cast<uintptr_t>(array)));
-    auto* current = static_cast<MArray*>(Heap::GetHeap().GetExportObject(result.roots[0]));
+    auto* current = static_cast<MArray*>(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(result.roots[0]));
     result.current = reinterpret_cast<uintptr_t>(current->ConvertToCArray());
     result.returned = reinterpret_cast<uintptr_t>(raw);
     // A mismatching address is asserted without accessing the old page.
@@ -676,14 +676,14 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockedAcquireReloadsRelocatedArray)
     collector.join();
     ConcurrentGCBreakpoints::ReleaseControl();
     std::fprintf(stderr, "JNI_MOVING_AFTER_GC current=%p\n",
-        static_cast<MArray*>(Heap::GetHeap().GetExportObject(result.roots[0]))->ConvertToCArray());
+        static_cast<MArray*>(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(result.roots[0]))->ConvertToCArray());
     std::fprintf(stderr, "JNI_MOVING_ENTER_TARGET before=%#lx current=%#lx returned=%#lx payload=%d copied=%d\n",
                  result.before, result.current, result.returned, result.payload, result.copied);
     GC_EXPECT_EQ(result.returned, result.current);
     GC_EXPECT_TRUE(result.payload);
     GC_EXPECT_TRUE(result.current != result.before);
     GC_EXPECT_FALSE(result.copied);
-    for (auto root : result.roots) { Heap::GetHeap().RemoveExportObject(root); }
+    for (auto root : result.roots) { Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root); }
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -874,7 +874,7 @@ extern "C" void AnnotationCollect(uintptr_t* result)
             auto* object = MCC_NewObject(garbage, 4096);
             auto* page = Heap::page(reinterpret_cast<uintptr_t>(object));
             if (page != previous) {
-                roots[count++] = Heap::GetHeap().RegisterExportRoot(object);
+                roots[count++] = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(object);
                 previous = page;
             }
         }
@@ -883,7 +883,7 @@ extern "C" void AnnotationCollect(uintptr_t* result)
         auto* forwarding = Heap::GetHeap().young().forwarding_table().get(r.before);
         std::fprintf(stderr, "ANNOTATION_FORWARDING from=%zx winner=%zx root=%zx\n", r.before,
             forwarding == nullptr ? 0 : forwarding->find(r.before), r.after);
-        for (size_t i = 0; i < count; ++i) { Heap::GetHeap().RemoveExportObject(roots[i]); }
+        for (size_t i = 0; i < count; ++i) { Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(roots[i]); }
     }
     result[0] = 0;
     result[1] = 581;
@@ -983,12 +983,12 @@ void CollectSparsePages()
         auto* object = MCC_NewObject(type, 4096);
         auto* page = Heap::page(reinterpret_cast<uintptr_t>(object));
         if (page != previous) {
-            roots[count++] = Heap::GetHeap().RegisterExportRoot(object);
+            roots[count++] = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(object);
             previous = page;
         }
     }
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
-    for (size_t i = 0; i < count; ++i) { Heap::GetHeap().RemoveExportObject(roots[i]); }
+    for (size_t i = 0; i < count; ++i) { Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(roots[i]); }
 }
 struct ArgumentResult {
     TypeInfo* argumentType = nullptr;
@@ -1013,7 +1013,7 @@ extern "C" void InitializeReflectedReceiver(MObject* receiver, void* argument, T
     if (receiver != nullptr) { receiver->Store<U64>(TYPEINFO_PTR_SIZE, 584); }
     if (argument != nullptr) { r.argumentValue = static_cast<U64*>(argument)[1] == 581; }
     CollectSparsePages();
-    auto* source = Heap::GetHeap().GetExportObject(r.sourceRoot);
+    auto* source = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(r.sourceRoot);
     Mutator::GetMutator()->VisitMutatorRoots([&](RootSlot& root) {
         auto* object = to_object(safe(root.LoadPlain()));
         if (object == nullptr) { return; }
@@ -1048,7 +1048,7 @@ void* RunArguments(void* context)
     r.argumentType = type[0]; r.receiverType = type[1];
     auto* source = MCC_NewObject(type[0], 24);
     source->Store<U64>(TYPEINFO_PTR_SIZE + sizeof(Uptr), 581);
-    r.sourceRoot = Heap::GetHeap().RegisterExportRoot(source);
+    r.sourceRoot = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(source);
     auto* array = ObjectManager::NewObjArray(1, type[3]);
     array->SetRefElement(0, source);
     ParameterInfo parameter{}; parameter.SetType(type[0]);
@@ -1063,7 +1063,7 @@ void* RunArguments(void* context)
     CJArray args{};
     StorePlain(RootSlotAt(&args.rawPtr), from_object(array)); args.length = 1;
     r.returned = reinterpret_cast<uintptr_t>(MCC_ApplyCJStaticMethod(&method, &args, nullptr));
-    Heap::GetHeap().RemoveExportObject(r.sourceRoot);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(r.sourceRoot);
     return nullptr;
 }
 }
@@ -1201,12 +1201,12 @@ void* AllocateForSequenceRead(void* context)
     type->SetInstanceSize(size - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     result.object = static_cast<BaseObject*>(MCC_NewObject(type, size));
-    result.root = Heap::GetHeap().RegisterExportRoot(result.object);
+    result.root = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(result.object);
     if (result.collected) {
         Mutator::GetMutator()->SetManagedContext(false);
         Heap::GetHeap().RequestGC(GC_REASON_USER);
         Heap::GetHeap().RequestGC(GC_REASON_USER);
-        result.object = Heap::GetHeap().GetExportObject(result.root);
+        result.object = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(result.root);
         Mutator::GetMutator()->SetManagedContext(true);
     }
     return nullptr;

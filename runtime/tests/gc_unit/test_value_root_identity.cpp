@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
@@ -94,7 +95,7 @@ void* AllocateExportForeignRoot(void* argument)
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     auto* object = static_cast<BaseObject*>(MCC_NewObject(type, TYPEINFO_PTR_SIZE + sizeof(void*)));
-    *static_cast<U64*>(argument) = Heap::GetHeap().RegisterExportRoot(object);
+    *static_cast<U64*>(argument) = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(object);
     return nullptr;
 }
 struct SparseRoot {
@@ -139,13 +140,13 @@ void* AllocateSparseExportRoot(void* argument)
             BaseObject* object = handle();
             ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(object));
             if (page != selectedPage) {
-                result.roots.push_back(Heap::GetHeap().RegisterExportRoot(selected));
+                result.roots.push_back(Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(selected));
                 if (result.roots.size() == 1) result.from = reinterpret_cast<uintptr_t>(selected);
                 selectedPage = page;
             }
             selected = object;
         }
-        result.roots.push_back(Heap::GetHeap().RegisterExportRoot(selected));
+        result.roots.push_back(Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(selected));
         result.root = result.roots.front();
     }
     HandleMark fillMark(*mutator);
@@ -165,7 +166,7 @@ void* AllocateSparseExportRoot(void* argument)
     std::fprintf(stderr, "VALUE_ROOT_CAPACITY used=%zu large_roots=%zu\n",
         Heap::GetHeap().page_allocator().GetUsedBytes(), capacityRoots.size());
     Heap::GetHeap().RequestGC(GC_REASON_USER);
-    result.to = reinterpret_cast<uintptr_t>(Heap::GetHeap().GetExportObject(result.root));
+    result.to = reinterpret_cast<uintptr_t>(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(result.root));
     auto* forwarding = Heap::GetHeap().old().forwarding_table().get(result.to);
     result.table = forwarding != nullptr;
     result.fromKey = forwarding != nullptr && forwarding->find(result.to) != 0;
@@ -194,11 +195,11 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportDiscoveryPreservesCurrentIdentity)
     ConcurrentGCBreakpoints::AcquireControl();
     BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    auto* expected = Heap::GetHeap().GetExportObject(root);
+    auto* expected = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     GC_EXPECT_TRUE(RelocationReceiptTest::DiscoveredIdentity(expected));
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    Heap::GetHeap().RemoveExportObject(root);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -221,18 +222,18 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, YoungFlipBetweenEnumerationAndConsumption)
     BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"));
     const uintptr_t savedColor = g_cjLoadGoodMask;
-    BaseObject* before = Heap::GetHeap().GetExportObject(root);
+    BaseObject* before = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     const bool colorChanged = !ZPointer::is_load_good(ZAddress::color(zaddress::null, savedColor));
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    BaseObject* after = Heap::GetHeap().GetExportObject(root);
+    BaseObject* after = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     const bool currentIdentity = RelocationReceiptTest::DiscoveredIdentity(after);
     std::fprintf(stderr, "VALUE_ROOT_EPOCH_TARGET before=%p after=%p color_changed=%d current_identity=%d\n",
         before, after, colorChanged, currentIdentity);
     GC_EXPECT_TRUE(colorChanged && before == after && currentIdentity);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    Heap::GetHeap().RemoveExportObject(root);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -254,7 +255,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, CurrentDestinationOnForwardedPage)
     ConcurrentGCBreakpoints::AcquireControl();
     BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    auto* current = Heap::GetHeap().GetExportObject(root.root);
+    auto* current = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root.root);
     const bool identity = RelocationReceiptTest::DiscoveredIdentity(current);
     std::fprintf(stderr, "VALUE_ROOT_DESTINATION_TARGET moved=%d table=%d from_key=%d identity=%d\n",
         root.from != root.to, root.table, root.fromKey, identity);
@@ -265,7 +266,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, CurrentDestinationOnForwardedPage)
     GC_EXPECT_TRUE(root.from != root.to && identity && !root.fromKey);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    for (U64 id : root.roots) Heap::GetHeap().RemoveExportObject(id);
+    for (U64 id : root.roots) Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(id);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -286,12 +287,12 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, MinorPreservesOldDiscoveredOwnership)
     ConcurrentGCBreakpoints::AcquireControl();
     BreakpointFailureCleanup cleanup;
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    BaseObject* before = Heap::GetHeap().GetExportObject(root);
+    BaseObject* before = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     const bool produced = RelocationReceiptTest::DiscoveredOwnership(before);
     const auto oldSequence = Heap::GetHeap().old().seqnum();
     const auto youngSequence = Heap::GetHeap().young().seqnum();
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
-    BaseObject* after = Heap::GetHeap().GetExportObject(root);
+    BaseObject* after = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     const bool preserved = RelocationReceiptTest::DiscoveredOwnership(after);
     const bool minorCompleted = Heap::GetHeap().young().seqnum() > youngSequence &&
         Heap::GetHeap().old().seqnum() == oldSequence;
@@ -299,16 +300,16 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, MinorPreservesOldDiscoveredOwnership)
         produced, preserved, minorCompleted);
     GC_EXPECT_TRUE(produced && preserved && before == after && minorCompleted);
     ConcurrentGCBreakpoints::RunToIdle();
-    const bool consumed = RelocationReceiptTest::CycleHandoffIdentity(Heap::GetHeap().GetExportObject(root));
+    const bool consumed = RelocationReceiptTest::CycleHandoffIdentity(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root));
     GC_EXPECT_TRUE(consumed);
     // A subsequent owner cycle must pass the real mark-start empty check.
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
-    const bool rediscovered = RelocationReceiptTest::DiscoveredOwnership(Heap::GetHeap().GetExportObject(root));
+    const bool rediscovered = RelocationReceiptTest::DiscoveredOwnership(Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root));
     std::fprintf(stderr, "DISCOVERED_OWNER_NEXT_CYCLE rediscovered=%d\n", rediscovered);
     GC_EXPECT_TRUE(rediscovered);
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    Heap::GetHeap().RemoveExportObject(root);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -333,9 +334,9 @@ void* AllocateExportTaskInputs(void* argument)
     input.old = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(16, PageAge::old));
     input.young->SetClassInfo(type);
     input.old->SetClassInfo(type);
-    if (input.includeYoung) { input.handles[0] = heap.RegisterExportRoot(input.young); }
-    input.handles[1] = heap.RegisterExportRoot(input.old);
-    if (input.includeYoung) { input.handles[2] = heap.RegisterExportRoot(input.young); }
+    if (input.includeYoung) { input.handles[0] = heap.cross_vm().export_roots().RegisterExportRoot(input.young); }
+    input.handles[1] = heap.cross_vm().export_roots().RegisterExportRoot(input.old);
+    if (input.includeYoung) { input.handles[2] = heap.cross_vm().export_roots().RegisterExportRoot(input.young); }
     return nullptr;
 }
 }
@@ -383,10 +384,10 @@ static void CheckExportTaskPublication(bool includeYoung)
     }
     // Shutdown owns cleanup even in a cut arm; evaluate the captured boundary
     // result without an earlier existence assertion masking its verdict.
-    Heap::GetHeap().RemoveExportObject(input.handles[1]);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(input.handles[1]);
     if (includeYoung) {
-        Heap::GetHeap().RemoveExportObject(input.handles[0]);
-        Heap::GetHeap().RemoveExportObject(input.handles[2]);
+        Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(input.handles[0]);
+        Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(input.handles[2]);
     }
     const auto fini = FiniCJRuntime();
     GC_EXPECT_TRUE(localYoung == 0 && localOld == 0 && (!includeYoung || publishedYoung > 0) && publishedOld > 0);

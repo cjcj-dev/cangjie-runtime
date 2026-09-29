@@ -79,9 +79,6 @@
 
 
 namespace MapleRuntime {
-MAddress Heap::heapStartAddr = 0;
-MAddress Heap::heapCurrentEnd = 0;
-std::vector<HeapSlotAddressRange> Heap::heapReservations;
 Heap* Heap::_heap = nullptr;
 
 class ScopedFileHandler {
@@ -105,17 +102,11 @@ Heap::Heap(const HeapParam& param, double garbageThreshold)
 {
     _heap = this;
     RunType::InitRunTypeMap();
-    exportRootsTable = new ExportRootTable();
-    staticRootTable = new StaticRootTable();
     ZStat::NotifyHeapConstructed();
 }
 
 Heap::~Heap()
 {
-    delete exportRootsTable;
-    exportRootsTable = nullptr;
-    delete staticRootTable;
-    staticRootTable = nullptr;
 }
 
 
@@ -170,31 +161,15 @@ void Heap::MarkObjectIfActive(BaseObject* object)
     ZBarrier::Mark<false, false, true, false>(from_object(object));
 }
 
-void Heap::MarkYoungObjectIfActive(BaseObject* object)
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    GetZGeneration(ZGenerationId::young)
-        .MarkObjectIfActive<false, false, true, false>(from_object(object));
-}
 
-void Heap::MarkNewObject(BaseObject* obj)
-{
-    // Registration follows object initialization (BaseObject::RegisterFinalizer).
-    // ZMark::AnyThread / DontFollow: publish mark-only work for this current object.
-    ZGeneration& cycle = GetZGeneration(ObjectGeneration(obj));
-    cycle.MarkObjectIfActive<false, false, false, false>(from_object(obj));
-}
 
-BaseObject* Heap::make_load_good(RefField<>& ref)
-{
-    return to_object(ZBarrier::make_load_good(ref.GetFieldValue()));
-}
+
+
+
 
 void Heap::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)
 {
-    ZGeneration& cycle = GetZGeneration(generation);
+    ZGeneration& cycle = (*ZGeneration::generation(static_cast<ZGenerationId>(generation)));
     const ZGenerationPhase before = cycle.GcPhase();
     if (generation == ZGenerationId::old &&
         value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
@@ -230,10 +205,7 @@ bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
 bool Heap::IsGhostFromObject(BaseObject* obj) const { return ZRelocate::IsFromObject(obj); }
 
 
-BaseObject* Heap::relocate_or_remap_object(BaseObject* object, ZGenerationId generation)
-{
-    return GetZGeneration(generation).relocate_or_remap_object(object);
-}
+
 
 bool Heap::IsSurvivedObject(const BaseObject* obj) const
 {
@@ -252,7 +224,7 @@ bool Heap::IsGCEnabled() const { return isGCEnabled.load(); }
 
 void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
 
-OopStorage& Heap::GetExportRootStorage() { return exportRootsTable->RootStorage(); }
+
 
 
 size_t Heap::GetMaxCapacity() const { return _page_allocator.GetHeapCapacity(); }
@@ -286,23 +258,11 @@ ZRemembered& Heap::remembered()
     return *ZGeneration::young()->remembered();
 }
 
-void Heap::RegisterStaticRoots(Uptr addr, U32 size)
-{
-    staticRootTable->RegisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
-}
 
-void Heap::UnregisterStaticRoots(Uptr addr, U32 size)
-{
-    staticRootTable->UnregisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
-}
 
-void Heap::VisitStaticRoots(const NativeSlotVisitor& visitor)
-{
-    staticRootTable->VisitRoots(visitor);
-#ifdef INTERPRETER_ENABLED
-    VisitInterpreterGlobalRoots(&visitor);
-#endif
-}
+
+
+
 
 #if defined(_WIN64)
 ssize_t Heap::GetHeapPhysicalMemorySize() const
@@ -391,52 +351,19 @@ void Heap::StopGCWork() { ZCollectedHeap::stop(); }
 
 
 
-void Heap::VisitAllExportRoots(const NativeSlotVisitor &visitor)
-{
-    exportRootsTable->VisitGCRoots(visitor);
-}
 
-BaseObject* Heap::GetExportObject(U64 id)
-{
-    return exportRootsTable->GetExportRoot(id);
-}
 
-U64 Heap::RegisterExportRoot(BaseObject *obj)
-{
-    if (!IsHeapAddress(obj)) {
-        return std::numeric_limits<U64>::max();
-    }
-    return exportRootsTable->RegisterExportRoot(obj);
-}
 
-void Heap::RemoveExportObject(U64 id)
-{
-    exportRootsTable->RemoveExportRoot(id);
-}
 
-void Heap::CrossAccessBarrier(I64 id)
-{
-    BaseObject* recordObj = GetExportObject(id);
-    if (recordObj == nullptr) {
-        return;
-    }
-    // GetExportObject loads the native slot through its colored load barrier.
-    // Preserve that current identity, including an in-place destination whose
-    // address is also another object's from-key (ZUncoloredRoot::make_load_good,
-    // zUncoloredRoot.inline.hpp:62-69). Page ownership cannot reclassify it.
-    cross_vm().ResurrectExportObject(recordObj);
-    SetExportObjActiveState(id, true);
-}
 
-void Heap::SetExportObjActiveState(U64 id, bool state)
-{
-    exportRootsTable->SetActiveState(id, state);
-}
 
-bool Heap::CheckExportObjState(U64 id, BaseObject *exportObj)
-{
-    return exportRootsTable->CheckActiveState(id, exportObj);
-}
+
+
+
+
+
+
+
 } // namespace MapleRuntime
 
 namespace MapleRuntime {

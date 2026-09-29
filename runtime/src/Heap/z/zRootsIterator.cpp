@@ -1,3 +1,5 @@
+#include "LoaderManager.h"
+#include "Heap/z/zRootsIterator.hpp"
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -37,50 +39,7 @@ HandleMark::HandleMark(Mutator& mutator) : mutator(mutator), mark(mutator.Native
 HandleMark::~HandleMark() { mutator.PopNativeFrameRootsTo(mark); }
 
 // Fill gc roots entry to buckets
-void StaticRootTable::RegisterRoots(StaticRootArray* addr, U32 size)
-{
-    std::lock_guard<std::mutex> lock(gcRootsLock);
-    // L741: map::insert keeps first value; must not inflate totalRootsCount on dup key.
-    auto result = gcRootsBuckets.insert(std::pair<StaticRootArray*, U32>(addr, size));
-    if (!result.second) {
-        LOG(RTLOG_ERROR,
-            "StaticRootTable::RegisterRoots duplicate key %p size %u (kept size %u); totalRootsCount not increased",
-            addr, size, result.first->second);
-        return;
-    }
-    totalRootsCount += size;
-}
 
-void StaticRootTable::UnregisterRoots(StaticRootArray* addr, U32 size)
-{
-    std::lock_guard<std::mutex> lock(gcRootsLock);
-    auto iter = gcRootsBuckets.find(addr);
-    if (iter == gcRootsBuckets.end()) {
-        LOG(RTLOG_ERROR, "StaticRootTable::UnregisterRoots missing key %p size %u", addr, size);
-        return;
-    }
-    if (iter->second != size) {
-        LOG(RTLOG_ERROR,
-            "StaticRootTable::UnregisterRoots size mismatch key %p caller %u registered %u; using registered",
-            addr, size, iter->second);
-        totalRootsCount -= iter->second;
-    } else {
-        totalRootsCount -= size;
-    }
-    gcRootsBuckets.erase(iter);
-}
-
-void StaticRootTable::VisitRoots(const NativeSlotVisitor& visitor)
-{
-    std::lock_guard<std::mutex> lock(gcRootsLock);
-    for (auto iter = gcRootsBuckets.begin(); iter != gcRootsBuckets.end(); iter++) {
-        U32 gcRootsSize = iter->second;
-        StaticRootArray* array = iter->first;
-        for (USize i = 0; i < gcRootsSize; i++) {
-            visitor(*array->content[i]);
-        }
-    }
-}
 
 void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
 {
@@ -101,7 +60,7 @@ OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(unsigned workers,
 OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(unsigned workers,
                                                      ZGenerationIdOptional generation)
     : states{{{Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers},
-              {Heap::GetHeap().GetExportRootStorage(), workers},
+              {Heap::GetHeap().cross_vm().export_roots().RootStorage(), workers},
               {SyncWeakOopStorage(), workers}}}, generation(generation) {}
 
 void OopStorageSetIteratorWeak::report_num_dead()
@@ -130,7 +89,7 @@ void OopStorageSetIteratorWeak::Apply(const NativeSlotVisitor& visitor)
 void StaticRootsAdapterIterator::Apply(const NativeSlotVisitor& visitor)
 {
     if (!claimed.exchange(true, std::memory_order_relaxed)) {
-        Heap::GetHeap().VisitStaticRoots(visitor);
+        LoaderManager::GetInstance()->VisitStaticRoots(visitor);
     }
 }
 
@@ -182,7 +141,7 @@ void ZMark::VisitStrongPlainRoots(
 
 void ZMark::VisitStaticRoots(const NativeSlotVisitor& visitor)
 {
-    Heap::GetHeap().VisitStaticRoots(visitor);
+    LoaderManager::GetInstance()->VisitStaticRoots(visitor);
 }
 
 void ZMark::MergeMutatorRoots(WorkStack& workStack)
@@ -197,7 +156,7 @@ void ZMark::DoEnumeration(WorkStack& workStack, ValueRootList& exportOwners)
     // suspendible set. Its barriers must not color young roots across the
     // young mark-start flip before the new mark domain is ready.
     SuspendibleThreadSetJoiner joiner;
-    EnumAllCommonRoots((*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()), exportOwners);
+    EnumAllCommonRoots((*(*ZGeneration::old()).Workers()), exportOwners);
     MergeMutatorRoots(workStack);
 }
 

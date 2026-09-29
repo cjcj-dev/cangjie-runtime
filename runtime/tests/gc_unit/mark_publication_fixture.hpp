@@ -16,14 +16,14 @@ struct MarkPublicationFixture {
     MarkPublicationFixture()
     {
         current = this;
-        if (Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
-            Heap::GetHeap().GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
+        if ((*ZGeneration::young()).Workers() == nullptr) {
+            (*ZGeneration::young()).InitializeWorkers(1);
         }
-        if (Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers() == nullptr) {
-            Heap::GetHeap().GetZGeneration(ZGenerationId::old).InitializeWorkers(1);
+        if ((*ZGeneration::old()).Workers() == nullptr) {
+            (*ZGeneration::old()).InitializeWorkers(1);
         }
-        auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-        auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+        auto& young = (*ZGeneration::young());
+        auto& old = (*ZGeneration::old());
         // ZGenerationYoung::mark_start advances the sequence with the remset
         // flip (zGeneration.cpp:855-881), before mark work can be published.
         GenerationSequenceFixture::AdvanceYoung(young);
@@ -59,7 +59,7 @@ struct MarkPublicationFixture {
     }
     void CompleteOldMarkForAdmissionTest()
     {
-        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::MarkComplete);
+        (*ZGeneration::old()).set_phase(ZGenerationPhase::MarkComplete);
     }
     template<class Visitor> void Drain(Visitor&& visitor)
     {

@@ -230,8 +230,8 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
 {
     GcHeapFixture heap;
     auto& collector = Heap::GetHeap();
-    const ZGenerationPhase youngPhase = Heap::GetHeap().GetZGeneration(ZGenerationId::young).GcPhase();
-    const ZGenerationPhase oldPhase = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
+    const ZGenerationPhase youngPhase = (*ZGeneration::young()).GcPhase();
+    const ZGenerationPhase oldPhase = (*ZGeneration::old()).GcPhase();
     for (bool marking : { false, true }) {
         Heap::GetHeap().PublishGenerationPhase(ZGenerationId::young,
             marking ? ZGenerationPhase::Mark : ZGenerationPhase::Relocate);

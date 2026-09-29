@@ -138,8 +138,8 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     field.StoreColoured(prev);
 
     Heap& heap = Heap::GetHeap();
-    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    const ZGenerationPhase phaseBefore = (*ZGeneration::old()).GcPhase();
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
     InstalledMutatorScope mutatorScope(mutator);
@@ -168,7 +168,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     }
     buf.Flush();
     DrainPublishedMarkObjects(retired);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    (*ZGeneration::old()).set_phase(phaseBefore);
     GC_EXPECT_EQ(retired.size(), 1u);
 }
 
@@ -265,8 +265,8 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     field.StoreColoured(StoreBadPointer(fx.obj0));
 
     Heap& heap = Heap::GetHeap();
-    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    const ZGenerationPhase phaseBefore = (*ZGeneration::old()).GcPhase();
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -282,7 +282,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     mutator.FlushStoreBarrierBuffer();
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
     DrainPublishedMarkObjects(retired);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    (*ZGeneration::old()).set_phase(phaseBefore);
     size_t oldCount = 0;
     size_t newCount = 0;
     for (BaseObject* object : retired) {
@@ -383,8 +383,8 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     const zpointer newWord = StoreGoodPointer(newReferent);
 
     Heap& heap = Heap::GetHeap();
-    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    const ZGenerationPhase phaseBefore = (*ZGeneration::old()).GcPhase();
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -402,7 +402,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
     mutator.FlushStoreBarrierBuffer();
     DrainPublishedMarkObjects(retired);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    (*ZGeneration::old()).set_phase(phaseBefore);
     size_t oldReceipts = 0;
     size_t newReceipts = 0;
     for (BaseObject* object : retired) {
@@ -441,8 +441,8 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     field.StoreColoured(StoreBadPointer(fx.obj0));
 
     Heap& heap = Heap::GetHeap();
-    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    const ZGenerationPhase phaseBefore = (*ZGeneration::old()).GcPhase();
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
     ThreadLocal::GetThreadLocalData()->buffer = &alloc;
@@ -461,7 +461,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     mutator.FlushStoreBarrierBuffer(true);
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
 
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    (*ZGeneration::old()).set_phase(phaseBefore);
 }
 
 GC_TEST(StoreBuf, NonNullPrevPublishesMarkBeforeRememberingSlot)

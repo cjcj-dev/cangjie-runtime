@@ -1,3 +1,5 @@
+#include "LoaderManager.h"
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -242,8 +244,8 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     MarkPortRuntime runtime(manager);
     GcHeapFixture fx;
     // Install the synthetic payload reservation before publishing GC roots.
-    Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
+    ZAddress::OnHeapCreated(fx.heapStart);
+    ZAddress::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     // The 2 MiB small page already covers the entire reference array.
     fx.region1()->reset(major ? PageAge::old : PageAge::eden);
     // The product allocates and owns this page's livemap (InitRegion ->
@@ -313,9 +315,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     MarkPort203TestAccess::Bind(&collector, static_cast<int32_t>(helpers + 1));
     // ZGeneration owns its worker set (zGeneration.cpp:124-129).
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-        Heap::GetHeap().GetZGeneration(generation).InitializeWorkers(helpers + 1);
+        (*ZGeneration::generation(static_cast<ZGenerationId>(generation))).InitializeWorkers(helpers + 1);
     }
-    Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
+    (*ZGeneration::generation(static_cast<ZGenerationId>(major ? ZGenerationId::old : ZGenerationId::young))).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = Heap::GetHeap().page_allocator();
     fx.region1()->SetRegionRole(ZPageRole::RecentFull);
     const size_t rootCount = commonRoot && helpers != 0 ? 17 * 64 : 1;
@@ -329,9 +331,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
             rootSlots[i].StoreColoured(StoreGoodPointer(array));
             roots[i] = &rootSlots[i];
         }
-        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
+        LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
     } else if (!markOnly && duplicateRootOrder == 0) {
-        handle = Heap::GetHeap().RegisterExportRoot(array);
+        handle = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(array);
     }
     ArrayClosureResult result;
     result.region = fx.region1();
@@ -356,14 +358,14 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
             root.StoreColoured(StoreGoodPointer(nullptr));
         });
     } else if (!markOnly && duplicateRootOrder == 0 && commonRoot) {
-        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
+        LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
     } else if (!markOnly && duplicateRootOrder == 0) {
-        Heap::GetHeap().RemoveExportObject(handle);
+        Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(handle);
     }
 
     // Worker TLS cleanup must finish while the heap generation owns publication.
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-        Heap::GetHeap().GetZGeneration(generation).StopWorkers();
+        (*ZGeneration::generation(static_cast<ZGenerationId>(generation))).StopWorkers();
     }
     MarkPort203TestAccess::Bind(nullptr);
     std::fprintf(stderr, "M2_ARRAY_RESULT variant=%s array=%d children=%zu objects=%u bytes=%zu expected_bytes=%zu\n",
@@ -518,7 +520,7 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     HeapSlotAt<>(reinterpret_cast<MAddress>(oldSlot)).StoreColoured(StoreGoodPointer(remembered));
     fx.region0()->remember(oldSlot);
     young.register_with_remset(fx.region0());
-    const U64 handle = heap.RegisterExportRoot(root);
+    const U64 handle = heap.cross_vm().export_roots().RegisterExportRoot(root);
     YoungTypeSetter type(young, ZYoungType::minor);
     young.pause_mark_start();
     FILE* phaseLog = std::tmpfile();
@@ -559,7 +561,7 @@ void RunCombinedYoungFollow(size_t workers, bool continuation)
     std::fprintf(stderr,
         "YOUNG828_RESULT workers=%zu continuation=%d root_child=%d remset_child=%d previous_cleared=%d rearmed=%d\n",
         workers, continuation, rootLive, rememberedLive, previousCleared, rearmed);
-    heap.RemoveExportObject(handle);
+    heap.cross_vm().export_roots().RemoveExportRoot(handle);
     // One combined target assertion prevents an earlier receipt from hiding
     // either input's contribution to the phase result.
     GC_EXPECT_TRUE(rootLive && rememberedLive && previousCleared && rearmed);

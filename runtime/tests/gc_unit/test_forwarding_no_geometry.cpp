@@ -44,7 +44,7 @@ struct MutatorPublishTestAccess {
     }
     static BaseObject* ForwardImpl(Heap& collector, BaseObject* from, ZPage* page)
     {
-        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+        (*ZGeneration::old()).set_phase(ZGenerationPhase::Relocate);
         ZPage::RetainScope lease(page);
         GC_EXPECT_TRUE(lease.ok());
         return ZGeneration::generation(page->generation_id())->relocate().relocate_object(forwarding_for_page(page), from);
@@ -75,7 +75,7 @@ GC_TEST(ForwardingNoGeometry, GenerationLookupFindHitSkipsCopy)
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
     Heap& collector = Heap::GetHeap();
-    GC_EXPECT_TRUE(Heap::GetHeap().relocate_or_remap_object(heap.obj0, ZGenerationId::old) == heap.obj1);
+    GC_EXPECT_TRUE(ZGeneration::old()->relocate_or_remap_object(heap.obj0) == heap.obj1);
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }
 #endif // MRT_TESTABLE_INTERNALS

@@ -186,7 +186,7 @@ GC_TEST(RelocationPageQueue, ReleasedPageStillHasItsImmutableEntry)
     f.Publish();
     f.owner->release_page();
     GC_EXPECT_FALSE(f.owner->retain_page(&f.queue));
-    BaseObject* const answer = Heap::GetHeap().GetZGeneration(f.heap.region0()->GetOwnerGeneration())
+    BaseObject* const answer = (*ZGeneration::generation(static_cast<ZGenerationId>(f.heap.region0()->GetOwnerGeneration())))
         .remap_object(f.heap.obj0);
     GC_EXPECT_EQ(answer, f.heap.obj1);
     GC_EXPECT_FALSE(f.owner->is_done());

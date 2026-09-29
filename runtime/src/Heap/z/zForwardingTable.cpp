@@ -25,12 +25,12 @@ void ZForwardingTable::remove(ZForwarding* forwarding)
 
 ZForwardingTable& generation_forwarding_table(Generation generation)
 {
-    return Heap::GetHeap().GetZGeneration(generation).forwarding_table();
+    return (*ZGeneration::generation(static_cast<ZGenerationId>(generation))).forwarding_table();
 }
 
 ZRelocateQueue& generation_relocate_queue(Generation generation)
 {
-    return *Heap::GetHeap().GetZGeneration(generation).relocate().queue();
+    return *(*ZGeneration::generation(static_cast<ZGenerationId>(generation))).relocate().queue();
 }
 
 ZForwarding* forwarding_for_page(const ZPage* page)

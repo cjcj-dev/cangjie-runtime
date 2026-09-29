@@ -98,8 +98,8 @@ void ZRemembered::oops_do_forwarded_via_containing(const std::vector<ZRemembered
     for (const ZRememberedSetContaining containing : *array) {
         if (from_addr != containing._addr) {
             from_addr = containing._addr;
-            BaseObject* to = Heap::GetHeap().relocate_or_remap_object(
-                reinterpret_cast<BaseObject*>(from_addr), ZGenerationId::old);
+            BaseObject* to = ZGeneration::old()->relocate_or_remap_object(
+                reinterpret_cast<BaseObject*>(from_addr));
             to_addr = reinterpret_cast<MAddress>(to);
             object_size = to != nullptr ? RegionSpace::GetAllocSize(*to) : 0;
         }
@@ -115,7 +115,7 @@ bool ZRemembered::should_scan_page(ZPage* page) const
     if (ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_relocate()) {
         return true;
     }
-    ZForwarding* forwarding = Heap::GetHeap().GetZGeneration(ZGenerationId::old).forwarding(
+    ZForwarding* forwarding = (*ZGeneration::old()).forwarding(
         untype(ZOffset::address_unsafe(page->start())));
     if (forwarding == nullptr) {
         return true;
@@ -325,7 +325,7 @@ void ZRemembered::scan_and_follow(ZMark* mark)
 {
     {
         ZRememberedScanMarkFollowTask task(this, mark);
-        ZWorkers* workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers();
+        ZWorkers* workers = (*ZGeneration::young()).Workers();
         CHECK_DETAIL(workers != nullptr, "ZRemembered::scan_and_follow requires young workers");
         workers->run(&task);
         if (mark->PollStop() || !mark->TryTerminateFlush()) {

@@ -54,7 +54,7 @@ bool StringDedup::Accepts(const TypeInfo* arrayInfo, ArrayRef candidate)
 BaseObject* StringDedup::Resolve(WeakSlot& slot)
 {
     RefField<> reference(slot.value);
-    BaseObject* object = Heap::GetHeap().make_load_good(reference);
+    BaseObject* object = to_object(ZBarrier::make_load_good(reference.GetFieldValue()));
     slot.value = ZAddress::store_good_or_null(from_object(object));
     return object;
 }

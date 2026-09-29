@@ -233,7 +233,7 @@ public:
     bool do_operation() override
     {
         ZStatTimerYoung timer(ZPhasePauseMarkStartYoung);
-        Heap::GetHeap().increment_total_collections();
+        ZCollectedHeap::heap()->increment_total_collections();
         ZGeneration::young()->mark_start();
         return true;
     }
@@ -246,7 +246,7 @@ public:
     bool do_operation() override
     {
         ZStatTimerYoung timer(ZPhasePauseMarkStartYoungAndOld);
-        Heap::GetHeap().increment_total_collections();
+        ZCollectedHeap::heap()->increment_total_collections();
         ZGeneration::young()->mark_start();
         ZGeneration::old()->mark_start();
         return true;
@@ -836,7 +836,7 @@ bool ZGenerationOld::uses_clear_all_soft_reference_policy() const
 void ZGenerationOld::mark_start()
 {
     // zGeneration.cpp:1248
-    _total_collections_at_start = Heap::GetHeap().total_collections();
+    _total_collections_at_start = ZCollectedHeap::heap()->total_collections();
     CHECK(_id == ZGenerationId::old);
     ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();

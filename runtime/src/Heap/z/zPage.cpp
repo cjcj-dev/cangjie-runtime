@@ -323,7 +323,7 @@ ZForwarding* ZPage::GetFromPageCarrier() const
         if (start == 0) {
             return nullptr;
         }
-        ZForwarding* carrier = Heap::GetHeap().GetZGeneration(GetOwnerGeneration()).forwarding_table().get(start);
+        ZForwarding* carrier = (*ZGeneration::generation(static_cast<ZGenerationId>(GetOwnerGeneration()))).forwarding_table().get(start);
         return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
     }
 

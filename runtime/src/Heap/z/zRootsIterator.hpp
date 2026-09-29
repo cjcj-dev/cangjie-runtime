@@ -168,24 +168,6 @@ private:
 };
 using RootsIteratorAllUncolored = RootsIteratorStrongUncolored;
 
-class StaticRootTable {
-public:
-    struct StaticRootArray {
-        NativeSlot* content[0];
-    };
-
-    StaticRootTable() { totalRootsCount = 0; }
-    ~StaticRootTable() = default;
-    void RegisterRoots(StaticRootArray* addr, U32 size);
-    void UnregisterRoots(StaticRootArray* addr, U32 size);
-    void VisitRoots(const NativeSlotVisitor& visitor);
-
-
-private:
-    std::mutex gcRootsLock;                         // lock gcRootsBuckets
-    std::map<StaticRootArray*, U32> gcRootsBuckets; // record gc roots entry of CFile
-    USize totalRootsCount;
-};
 
 class ExportObject : public BaseObject {
 public:
@@ -214,6 +196,7 @@ public:
 
     U64 RegisterExportRoot(BaseObject* exportObj)
     {
+        if (!is_heap_address(exportObj)) { return std::numeric_limits<U64>::max(); }
         std::lock_guard<std::mutex> lg(tableMutex);
         if (accessableId.empty()) {
             exportRoots.emplace_back(true);

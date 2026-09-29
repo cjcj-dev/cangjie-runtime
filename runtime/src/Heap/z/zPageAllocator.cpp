@@ -914,8 +914,8 @@ void RegionManager::DumpRegionStats(const char* msg) const
          GetHeapCapacity(), GetCommittedCapacity(), GetAllocatedSize(),
          used_generation(ZGenerationId::young), used_generation(ZGenerationId::old));
     if (Heap::heap() != nullptr) {
-        const ZPageAllocatorStats young = Stats(&Heap::GetHeap().GetZGeneration(ZGenerationId::young));
-        const ZPageAllocatorStats old = Stats(&Heap::GetHeap().GetZGeneration(ZGenerationId::old));
+        const ZPageAllocatorStats young = Stats(&(*ZGeneration::young()));
+        const ZPageAllocatorStats old = Stats(&(*ZGeneration::old()));
         VLOG(REPORT,
              "stats young used=%zu used_generation=%zu used_high=%zu used_low=%zu freed=%zu promoted=%zu compacted=%zu stalls=%zu",
              young.used(), young.used_generation(), young.used_high(), young.used_low(),
@@ -1038,8 +1038,8 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
     for (const auto& segment : segments) {
         heapReservations.push_back({ segment.start, segment.End() });
     }
-    Heap::OnHeapCreated(reservedStart, heapReservations);
-    Heap::OnHeapExtended(reservedEnd);
+    ZAddress::OnHeapCreated(reservedStart, heapReservations);
+    ZAddress::OnHeapExtended(reservedEnd);
 }
 
 

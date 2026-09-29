@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 #include "gc_allocation_flags.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -124,7 +125,7 @@ GC_RUNTIME_OTHER_VM_TEST(RequestWorkers, StallAfterYoungPrelude)
     U64 root;
     {
         ScopedObjectAccess access;
-        root = heap.RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
+        root = heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
     }
     ConcurrentGCBreakpoints::AcquireControl();
     const bool stopped = ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
@@ -152,7 +153,7 @@ GC_RUNTIME_OTHER_VM_TEST(RequestWorkers, StallAfterYoungPrelude)
     waiter.join();
     GC_EXPECT_TRUE(stopped && queued);
     GC_EXPECT_TRUE(result == nullptr);
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
@@ -177,7 +178,7 @@ void RunProductStallWaiters(bool stopping = false)
     U64 root;
     {
         ScopedObjectAccess access;
-        root = heap.RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
+        root = heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
     }
     if (stopping) {
         // Hold the real driver owner before queuing allocation requests. Shutdown
@@ -198,7 +199,7 @@ void RunProductStallWaiters(bool stopping = false)
             ScopedObjectAccess access;
             waitingMutators[index].store(Mutator::GetMutator(), std::memory_order_release);
             results[index] = Heap::alloc_page(bytes, ZPageType::large);
-            completedSequence[index] = heap.GetZGeneration(ZGenerationId::old).seqnum();
+            completedSequence[index] = (*ZGeneration::old()).seqnum();
         }
         done[index].store(true, std::memory_order_release);
         // The controller reads the published mutator state until both results
@@ -216,7 +217,7 @@ void RunProductStallWaiters(bool stopping = false)
     // Existing ZGC breakpoint stops the real old mark-start, before the late
     // request snapshots its sequence. No diagnostic callback supplies the input.
     const bool markStopped = stopping || ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED");
-    const uint64_t firstMark = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t firstMark = (*ZGeneration::old()).seqnum();
     std::thread late(allocate, 1);
     deadline = std::chrono::steady_clock::now() + kHangLimit;
     while (std::chrono::steady_clock::now() < deadline) {
@@ -264,13 +265,13 @@ void RunProductStallWaiters(bool stopping = false)
     first.join();
     late.join();
     if (stopper.joinable()) { stopper.join(); }
-    const bool retained = heap.GetExportObject(root) != nullptr;
+    const bool retained = heap.cross_vm().export_roots().GetExportRoot(root) != nullptr;
     std::fprintf(stderr, "STALL_PRODUCT_LATE_TARGET queued=%zu first_mark=%llu first_done=%llu late_done=%llu "
                  "first_null=%d late_null=%d retained=%d mark_stopped=%d\n", queued,
                  (unsigned long long)firstMark, (unsigned long long)completedSequence[0],
                  (unsigned long long)completedSequence[1], results[0] == nullptr, results[1] == nullptr,
                  retained, markStopped);
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     const bool pending = heap.page_allocator().IsAllocationStalling();
     std::fprintf(stderr, "STALL_WAIT_TARGET safe=%d stalling=%d completed=%d pending=%d\n",
@@ -341,7 +342,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
         ScopedObjectAccess access;
         BaseObject* occupied = allocateObject(occupiedType, occupiedBytes);
         GC_EXPECT_TRUE(occupied != nullptr);
-        occupiedRoot = heap.RegisterExportRoot(occupied);
+        occupiedRoot = heap.cross_vm().export_roots().RegisterExportRoot(occupied);
     }
     auto deadline = std::chrono::steady_clock::now() + kHangLimit;
     BaseObject* results[2]{};
@@ -355,7 +356,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
             ScopedObjectAccess access;
             waitingMutators[index].store(Mutator::GetMutator(), std::memory_order_release);
             results[index] = allocateObject(requestType, requestedBytes);
-            if (results[index] != nullptr) { resultRoots[index] = heap.RegisterExportRoot(results[index]); }
+            if (results[index] != nullptr) { resultRoots[index] = heap.cross_vm().export_roots().RegisterExportRoot(results[index]); }
         }
         done[index].store(true, std::memory_order_release);
         // The controller reads the published mutator state until both results
@@ -380,7 +381,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     // Removing the root makes the next minor collection reclaim this object
     // through select_relocation_set -> free_empty_pages -> free_page (ZGC
     // zGeneration.cpp:220-240), which reserves returned capacity for a waiter.
-    heap.RemoveExportObject(occupiedRoot);
+    heap.cross_vm().export_roots().RemoveExportRoot(occupiedRoot);
     ZDriver::unlock();
     deadline = std::chrono::steady_clock::now() + kHangLimit;
     while (!done[0].load() && !done[1].load() && std::chrono::steady_clock::now() < deadline) {
@@ -414,7 +415,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     std::fprintf(stderr, "STALL_CAPACITY_TARGET successes=%zu failed=%zu pending=%d first=%p second=%p competing=%p\n",
                  successes, failed, pending, results[0], results[1], competing);
     for (size_t i = 0; i < 2; ++i) {
-        if (results[i] != nullptr) { heap.RemoveExportObject(resultRoots[i]); }
+        if (results[i] != nullptr) { heap.cross_vm().export_roots().RemoveExportRoot(resultRoots[i]); }
     }
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(competing == nullptr);
@@ -452,7 +453,7 @@ void CheckDirectorStallGate(bool waitingForOld)
     U64 root;
     {
         ScopedObjectAccess access;
-        root = heap.RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
+        root = heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
     }
     ConcurrentGCBreakpoints::AcquireControl();
     // Before old mark-start: request later sees old, so it must NOT suppress.
@@ -495,7 +496,7 @@ void CheckDirectorStallGate(bool waitingForOld)
         std::_Exit(1);
     }
     waiter.join();
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     std::fprintf(stderr, "DIRECTOR_STALL_TARGET waiting_for_old=%d observed=%d entered=%d stalled=%d "
         "mark_stopped=%d log=%s\n", waitingForOld, observed, entered, stalling, markStopped, actualLogPath.c_str());

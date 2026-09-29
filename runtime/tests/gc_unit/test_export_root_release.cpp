@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -17,7 +18,7 @@ using namespace MapleRuntime::GcUnit;
 GC_TEST(ExportRootRelease, KeepsStoreGoodNull)
 {
     GcHeapFixture fx;
-    OopStorage& storage = Heap::GetHeap().GetExportRootStorage();
+    OopStorage& storage = Heap::GetHeap().cross_vm().export_roots().RootStorage();
     NativeSlot* keep = storage.Allocate();
     NativeSlot* slot = storage.Allocate();
     GC_EXPECT_TRUE(keep != nullptr);
@@ -65,8 +66,8 @@ void CheckEnqueueRelease(int obsolete)
 {
     WorkerFixture worker;
     GcHeapFixture fx;
-    Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
+    ZAddress::OnHeapCreated(fx.heapStart);
+    ZAddress::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZGranuleSize);
     ZStatWorkers stats;
     ZWorkers pool(ZGenerationId::old, 1, &stats);
     FinalizerProcessor fp(&pool);
@@ -136,7 +137,7 @@ void CheckWorkerRelease(int obsolete)
         object->SetClassInfo(type);
         // The local processor is not part of the global heap root registry.
         // Retain the object there too if an unrelated collection overlaps.
-        keepAlive = heap.RegisterExportRoot(object);
+        keepAlive = heap.cross_vm().export_roots().RegisterExportRoot(object);
         // Existing fixture access prepares the queue through the product
         // registration/enqueue functions. The observed clear is executed by
         // Run -> ProcessFinalizables on its own thread.
@@ -162,7 +163,7 @@ void CheckWorkerRelease(int obsolete)
     GC_EXPECT_EQ(finalizerCalls.load(std::memory_order_acquire), obsolete == 0 ? 1u : 0u);
     {
         ScopedObjectAccess access;
-        heap.RemoveExportObject(keepAlive);
+        heap.cross_vm().export_roots().RemoveExportRoot(keepAlive);
     }
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     // The child VM terminates the idle worker after the test completion sentinel.
