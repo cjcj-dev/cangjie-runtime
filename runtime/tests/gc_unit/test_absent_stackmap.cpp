@@ -204,6 +204,19 @@ constexpr unsigned kLinkSlot = 56; // [fa] holds the caller frame address
 constexpr unsigned kRetSlot = 57;  // [fa + 1] holds the return address
 constexpr unsigned kR13Slot = 53;  // fp - 24, the slot the present map names
 
+// Bounds of the frames that carry a present map, and the roots the product
+// published while walking them. The closure is the product's own root hook
+// (zStackWatermark.cpp:select_function), not a test hook.
+uintptr_t presentLow;
+uintptr_t presentHigh;
+unsigned presentRoots;
+
+void ObserveRoot(zaddress_unsafe* p, uintptr_t)
+{
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(p);
+    if (addr >= presentLow && addr < presentHigh) { ++presentRoots; }
+}
+
 void InitDesc(Desc& desc, bool withMap, bool barrier)
 {
     std::memset(&desc, 0, sizeof(desc));
@@ -253,6 +266,7 @@ GC_TEST(AbsentStackMap, SafepointWalkCrossesAbsentMapFrame)
         close(output[1]);
         // A younger frame the present map's root points at.
         uintptr_t target = reinterpret_cast<uintptr_t>(&frames[kAbsentFrames + 1][54]);
+        (void)target;
         for (unsigned i = 1; i < kFrames; ++i) {
             const Desc& desc = i <= kAbsentFrames ? absent : present;
             frames[i][kFpSlot - 1] = reinterpret_cast<uintptr_t>(desc.pc) + 9;
@@ -278,10 +292,17 @@ GC_TEST(AbsentStackMap, SafepointWalkCrossesAbsentMapFrame)
         StackWatermarkSet::on_safepoint(owner);
         const uintptr_t frontier = owner.GetStackWatermark().last_processed_raw();
         const bool bounded = !owner.GetStackWatermark().IsDone();
+        // The safepoint publishes a bounded frontier; the full walk is the
+        // product's finish_processing (zStackWatermark.cpp:229-238), which is
+        // what a GC phase runs. It must reach the frames behind the absent one.
+        presentLow = reinterpret_cast<uintptr_t>(&frames[kAbsentFrames + 1][0]);
+        presentHigh = reinterpret_cast<uintptr_t>(&frames[kFrames][0]);
+        presentRoots = 0;
+        StackWatermarkSet::finish_processing(owner, reinterpret_cast<void*>(&ObserveRoot));
         *ZPointerStoreGoodMaskLowOrderBitsAddr = savedEpoch;
-        std::fprintf(stderr, "ABSENT_SAFEPOINT_TARGET target=%p frontier=%p crossed=%d bounded=%d\n",
+        std::fprintf(stderr, "ABSENT_SAFEPOINT_TARGET target=%p frontier=%p crossed=%d bounded=%d present_roots=%u\n",
             reinterpret_cast<void*>(target), reinterpret_cast<void*>(frontier),
-            static_cast<int>(frontier > target), static_cast<int>(bounded));
+            static_cast<int>(frontier != 0), static_cast<int>(bounded), presentRoots);
         _exit(0);
     }
     close(output[1]);
@@ -292,15 +313,18 @@ GC_TEST(AbsentStackMap, SafepointWalkCrossesAbsentMapFrame)
     close(output[0]);
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    const bool crossed = transcript.find("crossed=1") != std::string::npos;
+    const bool crossed = transcript.find("crossed=1 bounded=1") != std::string::npos;
+    const bool reached = transcript.find("present_roots=0") == std::string::npos;
     const bool finished = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    std::fprintf(stderr, "ABSENT_SAFEPOINT_RESULT executed=1 crossed=%d finished=%d signaled=%d sig=%d status=%d\n%s",
-        crossed, finished, WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0, status,
+    std::fprintf(stderr, "ABSENT_SAFEPOINT_RESULT executed=1 crossed=%d reached=%d finished=%d signaled=%d sig=%d "
+        "status=%d\n%s",
+        crossed, reached, finished, WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0, status,
         transcript.c_str());
-    // The target invariant: the walk crossed the absent-map frames and reached
-    // the present frame behind them. A decode of the null table takes the child
-    // down before this line, which is what the cut arm shows.
+    // The target invariant: the walk crossed the absent-map frames and consumed
+    // the roots of the present frames behind them. A decode of the null table
+    // takes the child down before this line, which is what the cut arm shows.
     GC_EXPECT_TRUE(crossed);
+    GC_EXPECT_TRUE(reached);
     GC_EXPECT_TRUE(finished);
 }
 #endif
