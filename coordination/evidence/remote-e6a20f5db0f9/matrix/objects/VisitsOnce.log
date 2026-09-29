@@ -1,0 +1,26 @@
+[  RUN   ] P82HeapIterator.VisitsOnce
+[  RUN   ] P82HeapIterator.VisitsOnce
+P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=2 verify=0 visitor=0
+P82_RESULT workers=2 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=2 verify=1 visitor=0
+P82_RESULT workers=2 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=2 verify=0 visitor=0
+P82_RESULT workers=2 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=2 verify=1 visitor=0
+P82_RESULT workers=2 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=0 visitor=0
+P82_RESULT workers=4 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=1 visitor=0
+P82_RESULT workers=4 weak=0 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=0 visitor=0
+P82_RESULT workers=4 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=1 visitor=0
+P82_RESULT workers=4 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_VISITS_ONCE_ASSERT once=1
+GC_UNIT_OTHER_VM_OKIDOKI P82HeapIterator.VisitsOnce
+[  PASS  ] P82HeapIterator.VisitsOnce
+[========] 1 tests: 1 passed, 0 failed

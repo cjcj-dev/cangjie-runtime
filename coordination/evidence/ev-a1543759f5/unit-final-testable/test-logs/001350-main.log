@@ -1,0 +1,6 @@
+[  RUN   ] MarkDiscovery1036.OldWeakReferentMultipleWorkers
+[  RUN   ] MarkDiscovery1036.OldWeakReferentMultipleWorkers
+MARK1036_TARGET finalizable=0 strong=0 young=0 workers=2 old_referent=0 cycle=0 discovered=1 target_live=0 target_strong=0 cleared=1
+GC_UNIT_OTHER_VM_OKIDOKI MarkDiscovery1036.OldWeakReferentMultipleWorkers
+[  PASS  ] MarkDiscovery1036.OldWeakReferentMultipleWorkers
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,181 @@
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ArrayChunks.log:P82_ARRAY_RESULT weak=0 stolen_continuation=1 exact_edges=4097 expected=4097
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ArrayChunks.log:P82_ARRAY_RESULT weak=1 stolen_continuation=1 exact_edges=4097 expected=4097
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ArrayChunks.log:P82_ARRAY_ASSERT exact=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/OverflowRoots.log:P82_OVERFLOW_ASSERT seen=132000 expected=132000
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=2 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=2 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=2 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=2 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=4 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=4 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=4 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_RESULT workers=4 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/ReachableSet.log:P82_REACHABLE_SET_ASSERT exact=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/TerminationAgreement.log:P82_TERMINATION_ASSERT early_return=1 visits=1025
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/TerminationAgreement.log:[  FAIL  ] P82HeapIterator.TerminationAgreement
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/TerminationAgreement.log:  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:872: EXPECT failed: !returnedWhileOwnerHeld
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/TerminationAgreement.log:[  FAIL  ] P82HeapIterator.TerminationAgreement
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/TerminationAgreement.log:P82_TERMINATION_ASSERT early_return=1 visits=1025
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/TerminationAgreement.log:[  FAIL  ] P82HeapIterator.TerminationAgreement
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/TerminationAgreement.log:  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:872: EXPECT failed: !returnedWhileOwnerHeld
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=2 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=2 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=2 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=2 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=4 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=4 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=4 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_RESULT workers=4 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/termination/VisitsOnce.log:P82_VISITS_ONCE_ASSERT once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ArrayChunks.log:P82_ARRAY_RESULT weak=0 stolen_continuation=1 exact_edges=4097 expected=4097
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ArrayChunks.log:P82_ARRAY_RESULT weak=1 stolen_continuation=1 exact_edges=4097 expected=4097
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ArrayChunks.log:P82_ARRAY_ASSERT exact=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/OverflowRoots.log:P82_OVERFLOW_ASSERT seen=132000 expected=132000
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=2 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=2 weak=0 verify=1 seen=4 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=2 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=2 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=4 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=4 weak=0 verify=1 seen=260 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=4 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=4 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_REACHABLE_SET_ASSERT exact=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:[  FAIL  ] P82HeapIterator.ReachableSet
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:890: EXPECT failed: exact
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:[  FAIL  ] P82HeapIterator.ReachableSet
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=2 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=2 weak=0 verify=1 seen=4 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=2 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=2 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=4 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=4 weak=0 verify=1 seen=260 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=4 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_RESULT workers=4 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:P82_REACHABLE_SET_ASSERT exact=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:[  FAIL  ] P82HeapIterator.ReachableSet
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/ReachableSet.log:  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:890: EXPECT failed: exact
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/TerminationAgreement.log:P82_TERMINATION_ASSERT early_return=0 visits=257
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=2 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=2 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=2 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=2 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=4 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=4 weak=0 verify=1 seen=260 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=4 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_RESULT workers=4 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/objects/VisitsOnce.log:P82_VISITS_ONCE_ASSERT once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:P82_ARRAY_RESULT weak=0 stolen_continuation=0 exact_edges=2048 expected=4097
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:P82_ARRAY_RESULT weak=1 stolen_continuation=0 exact_edges=2048 expected=4097
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:P82_ARRAY_ASSERT exact=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:[  FAIL  ] P82HeapIterator.ArrayChunks
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:971: EXPECT failed: exact
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:[  FAIL  ] P82HeapIterator.ArrayChunks
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:P82_ARRAY_RESULT weak=0 stolen_continuation=0 exact_edges=2048 expected=4097
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:P82_ARRAY_RESULT weak=1 stolen_continuation=0 exact_edges=2048 expected=4097
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:P82_ARRAY_ASSERT exact=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:[  FAIL  ] P82HeapIterator.ArrayChunks
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ArrayChunks.log:  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:971: EXPECT failed: exact
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/OverflowRoots.log:P82_OVERFLOW_ASSERT seen=132000 expected=132000
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=2 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=2 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=2 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=2 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=4 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=4 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=4 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_RESULT workers=4 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/ReachableSet.log:P82_REACHABLE_SET_ASSERT exact=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/TerminationAgreement.log:P82_TERMINATION_ASSERT early_return=0 visits=1025
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=2 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=2 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=2 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=2 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=4 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=4 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=4 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_RESULT workers=4 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/arrays/VisitsOnce.log:P82_VISITS_ONCE_ASSERT once=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ArrayChunks.log:P82_ARRAY_RESULT weak=0 stolen_continuation=1 exact_edges=4097 expected=4097
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ArrayChunks.log:P82_ARRAY_RESULT weak=1 stolen_continuation=1 exact_edges=4097 expected=4097
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ArrayChunks.log:P82_ARRAY_ASSERT exact=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/OverflowRoots.log:P82_OVERFLOW_ASSERT seen=132000 expected=132000
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=2 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=2 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=2 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=2 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=4 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=4 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=4 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_RESULT workers=4 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/ReachableSet.log:P82_REACHABLE_SET_ASSERT exact=1
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/TerminationAgreement.log:P82_TERMINATION_ASSERT early_return=0 visits=1028
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=2 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=2 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=2 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=2 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=4 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=4 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=4 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=4 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_VISITS_ONCE_ASSERT once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:[  FAIL  ] P82HeapIterator.VisitsOnce
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:908: EXPECT failed: once
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:[  FAIL  ] P82HeapIterator.VisitsOnce
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=2 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=2 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=2 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=2 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=4 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=4 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=4 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_RESULT workers=4 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:P82_VISITS_ONCE_ASSERT once=0
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:[  FAIL  ] P82HeapIterator.VisitsOnce
+/root/sym_cangjie_runtime_1305_implement_r5892797534/matrix/bitmap/VisitsOnce.log:  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:908: EXPECT failed: once
+P82_OVERFLOW_ASSERT seen=0 expected=132000
+[  FAIL  ] P82HeapIterator.OverflowRoots
+  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:1004: EXPECT failed: seen == expected
+[  FAIL  ] P82HeapIterator.OverflowRoots
+P82_OVERFLOW_ASSERT seen=0 expected=132000
+[  FAIL  ] P82HeapIterator.OverflowRoots
+  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:1004: EXPECT failed: seen == expected

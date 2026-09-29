@@ -1,0 +1,6 @@
+[  RUN   ] SharedSmallPage.MigrationUsesCurrentCPU
+[  RUN   ] SharedSmallPage.MigrationUsesCurrentCPU
+CPU_MIGRATION_TARGET cpu_a=0 cpu_b=191 first=0x6114825016b0 second=0x611482501930 per_cpu=1 first_slot=1
+GC_UNIT_OTHER_VM_OKIDOKI SharedSmallPage.MigrationUsesCurrentCPU
+[  PASS  ] SharedSmallPage.MigrationUsesCurrentCPU
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] StackWatermark.PackedEpochDoneIsIdempotent
+PREV_FRAME_COLOR color=7
+[  PASS  ] StackWatermark.PackedEpochDoneIsIdempotent
+[========] 1 tests: 1 passed, 0 failed

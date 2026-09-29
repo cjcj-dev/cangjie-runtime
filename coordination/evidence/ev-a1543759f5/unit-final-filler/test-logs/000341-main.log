@@ -1,0 +1,8 @@
+[  RUN   ] ConcurrencyRootColor.ThreadObjectStorePreservesOtherRootEpoch
+[  RUN   ] ConcurrencyRootColor.ThreadObjectStorePreservesOtherRootEpoch
+CONCURRENCY_ROOT_COLOR saved=0x1510 current=0x2000 from=0x40000000020 observed=0x40000000010 expected=0x40000000010
+CONCURRENCY_STORE_TARGET observed=0x40000000020 expected=0x40000000020
+CONCURRENCY_ROOT_SECOND_TARGET observed=0x40000000010 expected=0x40000000010
+GC_UNIT_OTHER_VM_OKIDOKI ConcurrencyRootColor.ThreadObjectStorePreservesOtherRootEpoch
+[  PASS  ] ConcurrencyRootColor.ThreadObjectStorePreservesOtherRootEpoch
+[========] 1 tests: 1 passed, 0 failed

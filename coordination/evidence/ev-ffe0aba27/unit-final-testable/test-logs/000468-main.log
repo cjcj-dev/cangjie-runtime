@@ -1,0 +1,3 @@
+[  RUN   ] StoreBuf.ThreadRootVisitorIncludesExecuteClosure
+[  PASS  ] StoreBuf.ThreadRootVisitorIncludesExecuteClosure
+[========] 1 tests: 1 passed, 0 failed

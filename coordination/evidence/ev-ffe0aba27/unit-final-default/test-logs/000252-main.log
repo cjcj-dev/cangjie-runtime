@@ -1,0 +1,6 @@
+[  RUN   ] FutureWait966.GCThreadPreservesHandshakeState
+[  RUN   ] FutureWait966.GCThreadPreservesHandshakeState
+FUTURE_GC_CONTROL_TARGET blocked_unchanged=1 returned_unchanged=1 cause=0
+GC_UNIT_OTHER_VM_OKIDOKI FutureWait966.GCThreadPreservesHandshakeState
+[  PASS  ] FutureWait966.GCThreadPreservesHandshakeState
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] StackWatermark.SharedPollWordArmAndDisarm
+POLL_WORD_RESULT armed=1 disarmed=fffffffffffffffe
+[  PASS  ] StackWatermark.SharedPollWordArmAndDisarm
+[========] 1 tests: 1 passed, 0 failed

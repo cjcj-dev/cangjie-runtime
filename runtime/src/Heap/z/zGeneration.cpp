@@ -9,7 +9,7 @@
 #include "Heap/z/zWorkers.inline.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.inline.h"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBreakpoint.hpp"
@@ -406,7 +406,7 @@ void ZGenerationYoung::mark_start()
     auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     auto& manager = space.GetRegionManager();
     {
-        manager.ResetTLABUsage();
+        Heap::GetHeap().reset_tlab_used();
         Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
     }
     reset_statistics();
@@ -604,10 +604,7 @@ void ZGenerationOld::process_non_strong_references()
     // Finalizable graphs were followed during mark discovery. This phase
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
     ZMark::ProcessFinalizers();
-    if (Heap::GetHeap().old().WeakRootsProcessor() != nullptr) {
-        Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();
-    }
-    SyncRetireDead();
+    Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();
     StringDedup::Instance().Clean([this](BaseObject* object) {
         ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
         return region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Old>(object);

@@ -1,0 +1,6 @@
+[  RUN   ] ReturnSafepointRegMap.OrdinaryCallRejectsRegisterRoot
+2026-09-30 00:27:55.654121 3582419 F GC register root at ordinary statepoint, start ip: 0x59bc857a484c frame pc: 0x59bc857a485c
+ORDINARY_CALL_TARGET rejected=1 status=134
+TARGET_ASSERT_EXECUTED OrdinaryCallRejectsRegisterRoot
+[  PASS  ] ReturnSafepointRegMap.OrdinaryCallRejectsRegisterRoot
+[========] 1 tests: 1 passed, 0 failed

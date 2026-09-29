@@ -1,0 +1,6 @@
+[  RUN   ] MarkingStacksProduct.MajorForeignEntersFromDoGarbageCollection
+[  RUN   ] MarkingStacksProduct.MajorForeignEntersFromDoGarbageCollection
+DETAIL major_weak family=export discovered=1 strong_mark=1 weak_mark=1 referent_mark=0 child_mark=0 referent_cleared=1
+GC_UNIT_OTHER_VM_OKIDOKI MarkingStacksProduct.MajorForeignEntersFromDoGarbageCollection
+[  PASS  ] MarkingStacksProduct.MajorForeignEntersFromDoGarbageCollection
+[========] 1 tests: 1 passed, 0 failed

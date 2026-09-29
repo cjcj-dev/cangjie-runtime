@@ -1,0 +1,6 @@
+[  RUN   ] MarkDiscovery1036.FinalizableClosureFollowsWithoutDiscovery
+[  RUN   ] MarkDiscovery1036.FinalizableClosureFollowsWithoutDiscovery
+MARK1036_TARGET finalizable=1 strong=0 young=0 workers=1 old_referent=0 cycle=0 discovered=0 target_live=1 target_strong=0 cleared=0
+GC_UNIT_OTHER_VM_OKIDOKI MarkDiscovery1036.FinalizableClosureFollowsWithoutDiscovery
+[  PASS  ] MarkDiscovery1036.FinalizableClosureFollowsWithoutDiscovery
+[========] 1 tests: 1 passed, 0 failed

@@ -1,0 +1,4 @@
+[  RUN   ] SoftMemoryTable.Case074
+MEMORY_TABLE input=[0x3ffffffffffffek] reference_line=385 rc=0 accepted=0 bytes=4711 expected=0
+[  PASS  ] SoftMemoryTable.Case074
+[========] 1 tests: 1 passed, 0 failed

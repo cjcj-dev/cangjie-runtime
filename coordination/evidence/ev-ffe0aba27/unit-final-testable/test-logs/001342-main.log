@@ -1,0 +1,7 @@
+[  RUN   ] MarkPort203Entries.StripedInvisibleThenNormalAccountsOnce
+[  RUN   ] MarkPort203Entries.StripedInvisibleThenNormalAccountsOnce
+M2_ARRAY_RESULT variant=striped array=1 children=160 objects=161 bytes=15000 expected_bytes=15000
+M2_LIVE_ASSERT objects_ok=1 bytes_ok=1 root_order=1
+GC_UNIT_OTHER_VM_OKIDOKI MarkPort203Entries.StripedInvisibleThenNormalAccountsOnce
+[  PASS  ] MarkPort203Entries.StripedInvisibleThenNormalAccountsOnce
+[========] 1 tests: 1 passed, 0 failed

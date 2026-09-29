@@ -1,0 +1,4 @@
+[  RUN   ] P1Mark.ResurrectAndInactivePhasePolicies
+P1_RESURRECT_ASSERT pending=1 resurrected=1
+[  PASS  ] P1Mark.ResurrectAndInactivePhasePolicies
+[========] 1 tests: 1 passed, 0 failed

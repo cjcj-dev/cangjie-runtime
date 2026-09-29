@@ -1,0 +1,48 @@
+[  RUN   ] FlipPromotion.SurvivingYoungFieldsAreNotRewritten
+[  RUN   ] FlipPromotion.SurvivingYoungFieldsAreNotRewritten
+FLIP_PROMOTION_TARGET promote=0 same_address=1 old=0 before=1510 after=1510 store_good=0 target=1
+2026-09-29 23:56:11.911856 3146895 I GC Workers for Young Generation: 5 (static)
+2026-09-29 23:56:11.912581 3146895 I GC Workers for Old Generation: 5 (static)
+2026-09-29 23:56:11.913173 3147141 I FinalizerProcessor thread started
+2026-09-29 23:56:11.914410 3146895 I Uncommit: Enabled delay=300s
+2026-09-29 23:56:11.914528 3146895 I Cangjie runtime started.
+2026-09-29 23:56:11.956066 3147111 I Pause Mark Start stw time 5002 us
+2026-09-29 23:56:11.971008 3147111 I Pause Mark End stw time 11 us
+2026-09-29 23:56:11.971299 3147111 I Pause Relocate Start stw time 1 us
+2026-09-29 23:56:11.971463 3147111 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:11.971523 3147111 I Allocation Stalls:            0            0              0            0
+2026-09-29 23:56:11.971584 3147111 I Load: 55.02 (29%) / 44.01 (23%) / 56.85 (30%)
+2026-09-29 23:56:11.971649 3147111 I MMU: 2ms/99.1%, 5ms/99.7%, 10ms/99.8%, 20ms/99.9%, 50ms/99.9%, 100ms/100.0%
+2026-09-29 23:56:11.971701 3147111 I Mark: 16 stripe(s), 4 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-29 23:56:11.971750 3147111 I Pages:           Candidates     Selected     In-Place         Size        Empty    Relocated
+2026-09-29 23:56:11.971797 3147111 I Small                     0            0            0           0M           0M           0M
+2026-09-29 23:56:11.971844 3147111 I Medium                    0            0            0           0M           0M           0M
+2026-09-29 23:56:11.971893 3147111 I Large                     1            0            0          10M           0M           0M
+2026-09-29 23:56:11.971937 3147111 I Forwarding Usage: 0M
+2026-09-29 23:56:11.971983 3147111 I Age Table:       Live    Garbage            Small           Medium            Large
+2026-09-29 23:56:11.972027 3147111 I Eden          8388624    2097136       0 / 0            0 / 0            1 / 0     
+2026-09-29 23:56:11.972077 3147111 I Min Capacity: 0M
+2026-09-29 23:56:11.972121 3147111 I Max Capacity: 512M
+2026-09-29 23:56:11.972164 3147111 I Soft Max Capacity: 512M
+2026-09-29 23:56:11.972206 3147111 I Heap Statistics:
+2026-09-29 23:56:11.972248 3147111 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-29 23:56:11.972291 3147111 I Capacity:             18M          18M            18M          18M          18M          18M
+2026-09-29 23:56:11.972333 3147111 I Free:                502M         502M           502M         502M         502M         502M
+2026-09-29 23:56:11.972376 3147111 I Used:                 10M          10M            10M          10M          10M          10M
+2026-09-29 23:56:11.972418 3147111 I Young Generation Statistics:
+2026-09-29 23:56:11.972460 3147111 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-29 23:56:11.972503 3147111 I Used:                 10M          10M            10M          10M
+2026-09-29 23:56:11.972544 3147111 I Live:                 N/A           8M             8M           8M
+2026-09-29 23:56:11.972587 3147111 I Garbage:              N/A           1M             1M           1M
+2026-09-29 23:56:11.972628 3147111 I Allocated:            N/A           0M             0M           0M
+2026-09-29 23:56:11.972670 3147111 I Reclaimed:            N/A          N/A             0M           0M
+2026-09-29 23:56:11.972712 3147111 I Promoted:             N/A          N/A             0M           0M
+2026-09-29 23:56:11.972759 3147111 I Compacted:            N/A          N/A           N/A           0M
+2026-09-29 23:56:11.972801 3147111 I Young Generation 10M->10M 0.020s
+2026-09-29 23:56:11.978183 3147141 I FinalizerProcessor thread stopped
+2026-09-29 23:56:11.979069 3147119 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-29 23:56:11.979210 3147119 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:11.979266 3147119 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-29 23:56:11.979319 3147119 I Critical: Finalizer GC_UNIT_OTHER_VM_OKIDOKI FlipPromotion.SurvivingYoungFieldsAreNotRewritten
+[  PASS  ] FlipPromotion.SurvivingYoungFieldsAreNotRewritten
+[========] 1 tests: 1 passed, 0 failed

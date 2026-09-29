@@ -1,0 +1,5 @@
+[  RUN   ] StoreBuf.AllocatingPreviousValueIsImplicitlyLive
+DETAIL allocating age=15 allocating=1 pending=1 retired=0 remset=1
+DETAIL allocating age=0 allocating=1 pending=1 retired=0 remset=1
+[  PASS  ] StoreBuf.AllocatingPreviousValueIsImplicitlyLive
+[========] 1 tests: 1 passed, 0 failed

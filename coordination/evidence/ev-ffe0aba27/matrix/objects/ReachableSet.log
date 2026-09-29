@@ -1,0 +1,54 @@
+[  RUN   ] P82HeapIterator.ReachableSet
+[  RUN   ] P82HeapIterator.ReachableSet
+P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=2 verify=0 visitor=0
+P82_RESULT workers=2 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=2 verify=1 visitor=0
+P82_RESULT workers=2 weak=0 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=2 verify=0 visitor=0
+P82_RESULT workers=2 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=2 verify=1 visitor=0
+P82_RESULT workers=2 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=0 visitor=0
+P82_RESULT workers=4 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=1 visitor=0
+P82_RESULT workers=4 weak=0 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=0 visitor=0
+P82_RESULT workers=4 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=1 visitor=0
+P82_RESULT workers=4 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_REACHABLE_SET_ASSERT exact=0
+[  FAIL  ] P82HeapIterator.ReachableSet
+  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:890: EXPECT failed: exact
+[  FAIL  ] P82HeapIterator.ReachableSet
+  other-vm child did not exit cleanly with sentinel for P82HeapIterator.ReachableSet: Exited with exit status 1; sentinel=missing; stderr_read=complete; exec_ms=2; body_ms=2030; exit_ms=not-started; pending_phase=body
+Child stderr tail (<=4096 bytes):
+[  RUN   ] P82HeapIterator.ReachableSet
+P82_RESULT workers=1 weak=0 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=0 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=1 verify=0 seen=1025 expected=1025 exact=1 once=1
+P82_RESULT workers=1 weak=1 verify=1 seen=1025 expected=1025 exact=1 once=1
+P82_STEAL_OBSERVATION workers=2 verify=0 visitor=0
+P82_RESULT workers=2 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=2 verify=1 visitor=0
+P82_RESULT workers=2 weak=0 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=2 verify=0 visitor=0
+P82_RESULT workers=2 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=2 verify=1 visitor=0
+P82_RESULT workers=2 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=0 visitor=0
+P82_RESULT workers=4 weak=0 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=1 visitor=0
+P82_RESULT workers=4 weak=0 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=0 visitor=0
+P82_RESULT workers=4 weak=1 verify=0 seen=257 expected=1025 exact=0 once=1
+P82_STEAL_OBSERVATION workers=4 verify=1 visitor=0
+P82_RESULT workers=4 weak=1 verify=1 seen=260 expected=1025 exact=0 once=1
+P82_REACHABLE_SET_ASSERT exact=0
+[  FAIL  ] P82HeapIterator.ReachableSet
+  sym_cangjie_runtime_1305_implement_r5892797534/testable/runtime/tests/gc_unit/test_young_weak.cpp:890: EXPECT failed: exact
+
+[========] 1 tests: 0 passed, 1 failed

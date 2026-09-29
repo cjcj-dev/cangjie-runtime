@@ -1,0 +1,20 @@
+[  RUN   ] ThreadRootCurrent.C2ObjectRefHistoricalColor
+[  RUN   ] ThreadRootCurrent.C2ObjectRefHistoricalColor
+NATIVE_ROOT_MAPS 71bb721f7000-71bb721f9000 r--p 00000000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 71bb721f9000-71bb72205000 r-xp 00002000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 71bb72205000-71bb72208000 r--p 0000e000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 71bb72208000-71bb72209000 r--p 00010000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 71bb72209000-71bb7220a000 rw-p 00011000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 71bb7220a000-71bb7227f000 r--p 00000000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 71bb7227f000-71bb72377000 r-xp 00075000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 71bb72377000-71bb723c3000 r--p 0016d000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 71bb723c3000-71bb723c4000 ---p 001b9000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 71bb723c4000-71bb723c7000 r--p 001b9000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 71bb723c7000-71bb723c9000 rw-p 001bc000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_ORACLE before=0x80000000021510 from=0x40000000010 to=0x40000000000 slot=0x80000000021510 young=0
+A2_THREAD_ROOT_TARGET kind=C2 from=0x40000000010 to=0x40000000000 slot=0x40000000000 current_marked=1 stale_marked=0 healed=1
+native_root_marker_current executed=1 entry=major current=1 stale=0 expected=0x40000000000 result=1
+native_root_healed_current executed=1 before=0x80000000021510 after=0x80000000021510 expected=0x40000000000 result=1
+GC_UNIT_OTHER_VM_OKIDOKI ThreadRootCurrent.C2ObjectRefHistoricalColor
+[  PASS  ] ThreadRootCurrent.C2ObjectRefHistoricalColor
+[========] 1 tests: 1 passed, 0 failed

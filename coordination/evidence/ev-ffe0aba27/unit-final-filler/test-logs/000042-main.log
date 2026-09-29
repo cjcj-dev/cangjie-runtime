@@ -1,0 +1,3 @@
+[  RUN   ] ZIndexDistributorTest.test_claim_tree_claim_level_end_index
+[  PASS  ] ZIndexDistributorTest.test_claim_tree_claim_level_end_index
+[========] 1 tests: 1 passed, 0 failed

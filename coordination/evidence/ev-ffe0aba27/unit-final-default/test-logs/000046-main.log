@@ -1,0 +1,3 @@
+[  RUN   ] ZIndexDistributorTest.test_claim_tree_concurrent_claims_are_accounted
+[  PASS  ] ZIndexDistributorTest.test_claim_tree_concurrent_claims_are_accounted
+[========] 1 tests: 1 passed, 0 failed

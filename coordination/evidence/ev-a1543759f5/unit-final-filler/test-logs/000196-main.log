@@ -1,0 +1,6 @@
+[  RUN   ] StackGrowCopy.HealsFrameRootBeforeCopy
+[  RUN   ] StackGrowCopy.HealsFrameRootBeforeCopy
+GROW_COPY_ROOT_RESULT offset=-491118608 before=0x40000000000 oldAfter=0x40000400000 copied=0x40000400000 relocated=0x40000400000 slot=0x701df545dfa0 sp=0x701df545df30 base=0x701df545e010 watermark=0 done=1
+GC_UNIT_OTHER_VM_OKIDOKI StackGrowCopy.HealsFrameRootBeforeCopy
+[  PASS  ] StackGrowCopy.HealsFrameRootBeforeCopy
+[========] 1 tests: 1 passed, 0 failed

@@ -140,6 +140,7 @@ private:
     void Wait();
     void Wait(U32 timeoutMilliSeconds);
     bool EnqueueFinalizableReference(BaseObject* obj);
+    static void ReportNumDead(size_t numDead);
     bool HasFinalizableJob();
     void FinishFinalizableBatch();
     void ProcessFinalizables();

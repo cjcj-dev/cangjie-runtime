@@ -1,0 +1,7 @@
+[  RUN   ] SoftMaxConstraint.ParameterOverflow
+[  RUN   ] SoftMaxConstraint.ParameterOverflow
+2026-09-30 00:28:28.644978 245623 E Heap size conversion overflows bytes
+SOFT_CONSTRAINT_ASSERT soft_kb=18014398509481984 env=unset actual=-1 expected=-1
+GC_UNIT_OTHER_VM_OKIDOKI SoftMaxConstraint.ParameterOverflow
+[  PASS  ] SoftMaxConstraint.ParameterOverflow
+[========] 1 tests: 1 passed, 0 failed

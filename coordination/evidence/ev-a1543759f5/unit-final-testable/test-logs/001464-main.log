@@ -1,0 +1,4 @@
+[  RUN   ] WeakRootsProduct.PhantomCleanLiveRetainsSlot
+WEAK_ROOTS_LIVE_RETAIN_ASSERT_EXECUTED
+[  PASS  ] WeakRootsProduct.PhantomCleanLiveRetainsSlot
+[========] 1 tests: 1 passed, 0 failed

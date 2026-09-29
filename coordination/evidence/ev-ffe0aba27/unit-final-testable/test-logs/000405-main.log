@@ -1,0 +1,20 @@
+[  RUN   ] NativeRootCurrent.MinorPublication
+[  RUN   ] NativeRootCurrent.MinorPublication
+NATIVE_ROOT_MAPS 7d9d971c7000-7d9d971c9000 r--p 00000000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 7d9d971c9000-7d9d971d5000 r-xp 00002000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 7d9d971d5000-7d9d971d8000 r--p 0000e000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 7d9d971d8000-7d9d971d9000 r--p 00010000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 7d9d971d9000-7d9d971da000 rw-p 00011000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+NATIVE_ROOT_MAPS 7d9d971da000-7d9d9724f000 r--p 00000000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7d9d9724f000-7d9d97347000 r-xp 00075000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7d9d97347000-7d9d97393000 r--p 0016d000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7d9d97393000-7d9d97394000 ---p 001b9000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7d9d97394000-7d9d97397000 r--p 001b9000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_MAPS 7d9d97397000-7d9d97399000 rw-p 001bc000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+NATIVE_ROOT_ORACLE before=0x80000000021510 from=0x40000000010 to=0x40000000000 slot=0x80000000021510 young=0
+native_root_marker_current executed=1 entry=minor current=0 stale=0 expected=0x40000000000 result=1
+native_root_healed_current executed=1 before=0x80000000021510 after=0x100000000002630 expected=0x40000000000 result=1
+native_root_after_reset executed=1 marked=1 slot=0x80000000001a30 expected=0x40000000000
+GC_UNIT_OTHER_VM_OKIDOKI NativeRootCurrent.MinorPublication
+[  PASS  ] NativeRootCurrent.MinorPublication
+[========] 1 tests: 1 passed, 0 failed

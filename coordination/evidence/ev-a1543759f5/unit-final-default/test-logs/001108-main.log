@@ -1,0 +1,4 @@
+[  RUN   ] RememberedLifecycle720.HeapPublicationReachesConstructedRemembered
+REMEMBERED720 heap_publication_found=1
+[  PASS  ] RememberedLifecycle720.HeapPublicationReachesConstructedRemembered
+[========] 1 tests: 1 passed, 0 failed

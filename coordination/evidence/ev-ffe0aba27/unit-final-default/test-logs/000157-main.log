@@ -1,0 +1,6 @@
+[  RUN   ] ManagedMetadata.ReturnPcMiss
+2026-09-30 00:27:54.368164 3531087 F Check failed: map.IsValid() || builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ROOT_INDICES
+2026-09-30 00:27:54.368403 3531087 F return frame missing stackmap entry startPC=0x5a7240a1777c ip=0x5a7240a17780
+METADATA_TARGET entry=3 desc=1 map=1 status=134 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.ReturnPcMiss
+[========] 1 tests: 1 passed, 0 failed

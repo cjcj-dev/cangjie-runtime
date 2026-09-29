@@ -1,0 +1,4 @@
+[  RUN   ] CycleRefSaferegion.CycleRootConsumerPublishesWorkStackRoots
+CYCLE_REF_CONSUMER_TARGET_ASSERT reached owner_after_extern=1 drained=1
+[  PASS  ] CycleRefSaferegion.CycleRootConsumerPublishesWorkStackRoots
+[========] 1 tests: 1 passed, 0 failed

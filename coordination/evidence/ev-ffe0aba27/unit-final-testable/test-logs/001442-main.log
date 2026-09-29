@@ -1,0 +1,75 @@
+[  RUN   ] PackageInit.LibInitBodyDoesNotHoldGlobalReader
+[  RUN   ] PackageInit.LibInitBodyDoesNotHoldGlobalReader
+PACKAGE_INIT_TARGET runtime-start executed=1 pass=1
+PACKAGE_INIT_TARGET configured-scheduler-workers executed=1 pass=1
+PACKAGE_INIT_TARGET unattached-after-runtime-init executed=1 pass=1
+PACKAGE_INIT_TARGET fixture-waitqueue executed=1 pass=1
+PACKAGE_INIT_TARGET library-fixture-executable executed=1 pass=1
+PACKAGE_INIT_TARGET unrelated-library-open executed=1 pass=1
+PACKAGE_INIT_TARGET unrelated-library-metadata executed=1 pass=1
+PACKAGE_INIT_TARGET scheduler-admission executed=1 pass=1
+PACKAGE_INIT_TARGET libinit-body-execute executed=1 pass=1
+PACKAGE_INIT_TARGET libinit-body-started executed=1 pass=1
+PACKAGE_INIT_TARGET unrelated-unload-reached-drain executed=1 pass=1
+PACKAGE_INIT_TARGET libinit-dependency-execute executed=1 pass=1
+PACKAGE_INIT_TARGET libinit-return executed=1 pass=1
+PACKAGE_INIT_TARGET libinit-and-unrelated-unload-progress executed=1 pass=1
+PACKAGE_INIT_TARGET unrelated-unload-completed executed=1 pass=1
+PACKAGE_INIT_TARGET unrelated-library-close executed=1 pass=1
+2026-09-30 00:27:59.169686 3680907 I GC Workers for Young Generation: 1 (static)
+2026-09-30 00:27:59.172504 3680907 I GC Workers for Old Generation: 1 (static)
+2026-09-30 00:27:59.172768 3681858 I FinalizerProcessor thread started
+2026-09-30 00:27:59.172937 3680907 I Uncommit: Enabled delay=300s
+2026-09-30 00:27:59.173051 3680907 I Cangjie runtime started.
+2026-09-30 00:28:00.186720 3681858 I FinalizerProcessor thread stopped
+2026-09-30 00:28:00.187141 3681584 I GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)
+2026-09-30 00:28:00.187270 3681584 I Contention: Mark Segment Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:28:00.187334 3681584 I Contention: Mark SeqNum Reset Contention 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:28:00.187388 3681584 I Critical: Finalizer 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:28:00.187440 3681584 I Critical: Finalizer 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.187491 3681584 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ops/s
+2026-09-30 00:28:00.187542 3681584 I Critical: finalizerProcessor waitting time 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.187592 3681584 I Major Collection: Major Collection 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.187646 3681584 I Memory: Allocation Rate 0/0 0/0 0/0 0/0 B/s
+2026-09-30 00:28:00.187696 3681584 I Minor Collection: Minor Collection 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.187753 3681584 I Old Generation: Old Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.187808 3681584 I Old Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.187860 3681584 I Old Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.187915 3681584 I Old Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.187971 3681584 I Old Phase: Concurrent Mark Continue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188028 3681584 I Old Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188092 3681584 I Old Phase: Concurrent Process Non-Strong 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188149 3681584 I Old Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188206 3681584 I Old Phase: Concurrent Remap Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188261 3681584 I Old Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188314 3681584 I Old Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188368 3681584 I Old Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188421 3681584 I Old Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188473 3681584 I Old Subphase: Concurrent References Enqueue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188523 3681584 I Old Subphase: Concurrent References Process 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188572 3681584 I Old Subphase: Concurrent Remap Remembered 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188628 3681584 I Old Subphase: Concurrent Remap Roots Colored 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188693 3681584 I Old Subphase: Concurrent Remap Roots Uncolored 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188748 3681584 I Old Subphase: PostTrace 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188799 3681584 I Test: Unobserved 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188850 3681584 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188906 3681584 I Young Generation: Young Generation 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.188960 3681584 I Young Generation: Young Generation (Collect Roots) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189013 3681584 I Young Generation: Young Generation (Promote All) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189073 3681584 I Young Pause: Pause Mark End 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189127 3681584 I Young Pause: Pause Mark Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189179 3681584 I Young Pause: Pause Mark Start (Major) 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189233 3681584 I Young Pause: Pause Relocate Start 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189287 3681584 I Young Phase: Concurrent Mark 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189340 3681584 I Young Phase: Concurrent Mark ConPACKAGE_INIT_TARGET runtime-finish executed=1 pass=1
+tinue 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189412 3681584 I Young Phase: Concurrent Mark Free 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189468 3681584 I Young Phase: Concurrent Relocate 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189524 3681584 I Young Phase: Concurrent Reset Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189576 3681584 I Young Phase: Concurrent Select Relocation Set 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189632 3681584 I Young Subphase: Concurrent Mark Follow 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.189687 3681584 I Young Subphase: Concurrent Mark Roots 0/0 0/0 0/0 0/0 ns
+2026-09-30 00:28:00.195853 3680806 I Cangjie runtime shutdown.
+GC_UNIT_OTHER_VM_OKIDOKI PackageInit.LibInitBodyDoesNotHoldGlobalReader
+[  PASS  ] PackageInit.LibInitBodyDoesNotHoldGlobalReader
+[========] 1 tests: 1 passed, 0 failed

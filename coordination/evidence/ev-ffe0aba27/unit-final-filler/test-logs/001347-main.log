@@ -1,0 +1,115 @@
+[  RUN   ] ZVerify.WeakFieldRejectsNonLiveOldTarget
+[  RUN   ] ZVerify.WeakFieldRejectsNonLiveOldTarget
+[  RUN   ] ZVerify.WeakFieldRejectsNonLiveOldTarget
+[  RUN   ] ZVerify.WeakFieldRejectsNonLiveOldTarget
+VERIFY_PRODUCT_MAPS_BEGIN
+5e11a8dea000-5e11a8e08000 r--p 00000000 103:05 9437799                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+5e11a8e08000-5e11a9004000 r-xp 0001e000 103:05 9437799                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+5e11a9004000-5e11a90c7000 r--p 0021a000 103:05 9437799                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+5e11a90c7000-5e11a90ca000 r--p 002dc000 103:05 9437799                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+5e11a90ca000-5e11a90cc000 rw-p 002df000 103:05 9437799                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-default/cj_gc_unit
+5e11a90cc000-5e11a90d5000 rw-p 00000000 00:00 0 
+5e11c3f45000-5e11c3fa8000 rw-p 00000000 00:00 0                          [heap]
+7c576bc00000-7c576bc28000 r--p 00000000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7c576bc28000-7c576bdbd000 r-xp 00028000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7c576bdbd000-7c576be15000 r--p 001bd000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7c576be15000-7c576be16000 ---p 00215000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7c576be16000-7c576be1a000 r--p 00215000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7c576be1a000-7c576be1c000 rw-p 00219000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7c576be1c000-7c576be29000 rw-p 00000000 00:00 0 
+7c576bef9000-7c576befc000 r--p 00000000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7c576befc000-7c576bf13000 r-xp 00003000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7c576bf13000-7c576bf17000 r--p 0001a000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7c576bf17000-7c576bf18000 r--p 0001d000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7c576bf18000-7c576bf19000 rw-p 0001e000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7c576bf19000-7c576bf27000 r--p 00000000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7c576bf27000-7c576bfa3000 r-xp 0000e000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7c576bfa3000-7c576bffe000 r--p 0008a000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7c576bffe000-7c576bfff000 r--p 000e4000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7c576bfff000-7c576c000000 rw-p 000e5000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7c576c000000-7c576c09a000 r--p 00000000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7c576c09a000-7c576c1ab000 r-xp 0009a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7c576c1ab000-7c576c21a000 r--p 001ab000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7c576c21a000-7c576c21b000 ---p 0021a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7c576c21b000-7c576c226000 r--p 0021a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7c576c226000-7c576c229000 rw-p 00225000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7c576c229000-7c576c22c000 rw-p 00000000 00:00 0 
+7c576c230000-7c576c236000 rw-p 00000000 00:00 0 
+7c576c246000-7c576c248000 r--p 00000000 103:05 9883874                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+7c576c248000-7c576c254000 r-xp 00002000 103:05 9883874                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+7c576c254000-7c576c257000 r--p 0000e000 103:05 9883874                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+7c576c257000-7c576c258000 r--p 00010000 103:05 9883874                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+7c576c258000-7c576c259000 rw-p 00011000 103:05 9883874                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+7c576c259000-7c576c2cb000 r--p 00000000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7c576c2cb000-7c576c3b7000 r-xp 00072000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7c576c3b7000-7c576c3fa000 r--p 0015e000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7c576c3fa000-7c576c3fb000 ---p 001a1000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7c576c3fb000-7c576c3fe000 r--p 001a1000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7c576c3fe000-7c576c400000 rw-p 001a4000 103:05 9887405                   /root/sym_cangjie_runtime_1305_implement_r5892797534/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7c576c400000-7c576c418000 rw-p 00000000 00:00 0 
+7c576c418000-7c576c41a000 r--p 00000000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7c576c41a000-7c576c444000 r-xp 00002000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7c576c444000-7c576c44f000 r--p 0002c000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7c576c450000-7c576c452000 r--p 00037000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7c576c452000-7c576c454000 rw-p 00039000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7ffcae486000-7ffcae4a7000 rw-p 00000000 00:00 0                          [stack]
+7ffcae4e1000-7ffcae4e5000 r--p 00000000 00:00 0                          [vvar]
+7ffcae4e5000-7ffcae4e7000 r-xp 00000000 00:00 0                          [vdso]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
+VERIFY_PRODUCT_MAPS_END
+2026-09-30 00:28:29.536902 269986 I GC Workers for Young Generation: 1 (static)
+2026-09-30 00:28:29.537414 269986 I GC Workers for Old Generation: 1 (static)
+2026-09-30 00:28:29.537977 270428 I FinalizerProcessor thread started
+2026-09-30 00:28:29.538208 269986 I Uncommit: Enabled delay=300s
+2026-09-30 00:28:29.538330 269986 I Cangjie runtime started.
+2026-09-30 00:28:29.539164 270240 I Pause Mark Start stw time 18 us
+2026-09-30 00:28:29.539381 270240 I Pause Mark End stw time 5 us
+2026-09-30 00:28:29.539888 270240 I Pause Relocate Start stw time 2 us
+2026-09-30 00:28:29.540012 270240 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:28:29.540068 270240 I Allocation Stalls:            0            0              0            0
+2026-09-30 00:28:29.540115 270240 I Load: 92.33 (48%) / 88.38 (46%) / 91.12 (47%)
+2026-09-30 00:28:29.540168 270240 I MMU: 2ms/99.1%, 5ms/99.6%, 10ms/99.8%, 20ms/99.9%, 50ms/100.0%, 100ms/100.0%
+2026-09-30 00:28:29.540214 270240 I Mark: 4 stripe(s), 1 proactive flush(es), 1 terminate flush(es), 0 completion(s), 0 continuation(s) 
+2026-09-30 00:28:29.540258 270240 I Pages:           Candidates     Selected     In-Place         Size        Empty    Relocated
+2026-09-30 00:28:29.540303 270240 I Small                     1            0            0           2M           0M           0M
+2026-09-30 00:28:29.540347 270240 I Medium                    0            0            0           0M           0M           0M
+2026-09-30 00:28:29.540391 270240 I Large                     0            0            0           0M           0M           0M
+2026-09-30 00:28:29.540434 270240 I Forwarding Usage: 0M
+2026-09-30 00:28:29.540478 270240 I Age Table:       Live    Garbage            Small           Medium            Large
+2026-09-30 00:28:29.540522 270240 I Eden               32    2097120       1 / 0            0 / 0            0 / 0     
+2026-09-30 00:28:29.540566 270240 I Min Capacity: 0M
+2026-09-30 00:28:29.540615 270240 I Max Capacity: 32M
+2026-09-30 00:28:29.540666 270240 I Soft Max Capacity: 32M
+2026-09-30 00:28:29.540716 270240 I Heap Statistics:
+2026-09-30 00:28:29.540766 270240 I                Mark Start     Mark End Relocate Start Relocate End         High          Low
+2026-09-30 00:28:29.540816 270240 I Capacity:              8M           8M             8M           8M           8M           8M
+2026-09-30 00:28:29.540867 270240 I Free:                 30M          30M            30M          30M          30M          30M
+2026-09-30 00:28:29.540918 270240 I Used:                  2M           2M             2M           2M           2M           2M
+2026-09-30 00:28:29.540968 270240 I Young Generation Statistics:
+2026-09-30 00:28:29.541018 270240 I                Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:28:29.541077 270240 I Used:                  2M           2M             0M           0M
+2026-09-30 00:28:29.541126 270240 I Live:                 N/A           0M             0M           0M
+2026-09-30 00:28:29.541182 270240 I Garbage:              N/A           1M             0M           0M
+2026-09-30 00:28:29.541231 270240 I Allocated:            N/A           0M             0M           0M
+2026-09-30 00:28:29.541286 270240 I Reclaimed:            N/A          N/A             1M           1M
+2026-09-30 00:28:29.541342 270240 I Promoted:             N/A          N/A             0M           0M
+2026-09-30 00:28:29.541394 270240 I Compacted:            N/A          N/A           N/A           0M
+2026-09-30 00:28:29.541443 270240 I Young Generation (Promote All) 2M->2M 0.001s
+2026-09-30 00:28:29.541509 270240 I Pause Mark Start (Major) stw time 16 us
+2026-09-30 00:28:29.541624 270240 I Pause Mark End stw time 3 us
+2026-09-30 00:28:29.541751 270240 I Pause Relocate Start stw time 1 us
+2026-09-30 00:28:29.541845 270240 I                      Mark Start     Mark End Relocate Start Relocate End
+2026-09-30 00:28:29.541893 270240 I Allocation Stalls:            0            0              0            0
+2026-09-30 00:28:29.541939 270240 I Load:VERIFY_FIELD_QUALIFIED mode=12 holder=0x40000000000 target=0x40000000010 word=0x80000000021930
+VERIFY_FIELD_LIVENESS holder_live=1 target_live=0
+2026-09-30 00:28:29.546908 270240 F Check failed: Heap::is_young(raw(address)) || Heap::GetHeap().IsSurvivedObject(to_object(address))
+2026-09-30 00:28:29.547065 270240 F Non-live old oop at 0x40000000008
+270240 E signal SIGABRT (6) pc=0x7c576bc969bc fa=0x41fa0 si_addr=0x41d3c
+[GCLOG] v=3 rec=crash seq=1 signo=6 signame=SIGABRT si_code=-6 si_codename=SI_TKILL si_addr=0x41d3c pc=0x7c576bc969bc pc_mod=libc.so.6 pc_off=0x969bc sym=pthread_kill rbp=0x41fa0 gc_phase=MarkComplete gc_kind=active in_par_fix=0 regs=rax=0x0,rbx=0x7c5768f3c640,rcx=0x7c576bc969bc,rdx=0x6,rsi=0x41fa0,rdi=0x41d3c,rbp=0x41fa0,rsp=0x7c5768f38ed0,r8=0x7c5768f38fa0,r9=0x7c5768f390a0,r10=0x8,r11=0x246,r12=0x6,r13=0x16,r14=0x7c576c3ff8c0,r15=0x7c576c3ff8d8,rip=0x7c576bc969bc insn=4189c541f7dd3d00f0ffffb800000000 assert=Non-live_old_oop_at_0x40000000008
+270240 E CJNative Handle signal: 6.
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=134 matched=1
+VERIFY_TARGET_ASSERT_EXECUTED diagnostic=Non-live old oop matched=1
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.WeakFieldRejectsNonLiveOldTarget
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.WeakFieldRejectsNonLiveOldTarget
+[  PASS  ] ZVerify.WeakFieldRejectsNonLiveOldTarget
+[========] 1 tests: 1 passed, 0 failed

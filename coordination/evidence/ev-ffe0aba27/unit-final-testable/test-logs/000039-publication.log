@@ -1,0 +1,8 @@
+[  RUN   ] RelocateMiss782.ClaimedPageWaitsForWorkerPublication
+RELOCATE_WAIT_WINDOW tid=3577641 observed=1 ms=600 begin=1 end=1 wakeups=0 notify_wakeups=1 still_waiting=1
+RELOCATE_MISS_TARGET claimed=1 queued=1 blocked=1 before=0 result=40000000000 mapping=40000000000 expected=40000000000 done=1 valid=1
+RELOCATE_QUEUE_NOTIFICATION notified=1
+ASSERT_RELOCATE_WAIT_NO_PERIODIC_WAKEUPS executed=1 wakeups=0 limit=5
+ASSERT_RELOCATE_WAIT_NOTIFY_CONTROL executed=1 switches=1 range=1..5
+[  PASS  ] RelocateMiss782.ClaimedPageWaitsForWorkerPublication
+[========] 1 tests: 1 passed, 0 failed

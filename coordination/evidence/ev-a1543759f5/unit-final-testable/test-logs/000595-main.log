@@ -1,0 +1,3 @@
+[  RUN   ] GcDirector.CollectionCountsFollowYoungMarkStarts
+[  PASS  ] GcDirector.CollectionCountsFollowYoungMarkStarts
+[========] 1 tests: 1 passed, 0 failed

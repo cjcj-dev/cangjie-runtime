@@ -1,0 +1,174 @@
+[  RUN   ] ZVerify.BeforeRelocationRejectsMissingRememberedField
+[  RUN   ] ZVerify.BeforeRelocationRejectsMissingRememberedField
+[  RUN   ] ZVerify.BeforeRelocationRejectsMissingRememberedField
+[  RUN   ] ZVerify.BeforeRelocationRejectsMissingRememberedField
+VERIFY_PRODUCT_MAPS_BEGIN
+40000000000-40001400000 rw-s 00000000 00:01 4113324                      /memfd:cangjie_heap (deleted)
+40001400000-40800000000 ---p 00000000 00:00 0 
+632907ab4000-632907ad6000 r--p 00000000 103:05 9437801                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+632907ad6000-632907d39000 r-xp 00022000 103:05 9437801                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+632907d39000-632907e23000 r--p 00285000 103:05 9437801                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+632907e23000-632907e27000 r--p 0036e000 103:05 9437801                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+632907e27000-632907e29000 rw-p 00372000 103:05 9437801                   /root/sym_cangjie_runtime_1305_implement_r5892797534/unit-final-testable/cj_gc_unit
+632907e29000-632907e32000 rw-p 00000000 00:00 0 
+632947ae2000-632947bd3000 rw-p 00000000 00:00 0                          [heap]
+7dfd70000000-7dfd70021000 rw-p 00000000 00:00 0 
+7dfd70021000-7dfd74000000 ---p 00000000 00:00 0 
+7dfd78000000-7dfd78021000 rw-p 00000000 00:00 0 
+7dfd78021000-7dfd7c000000 ---p 00000000 00:00 0 
+7dfd7c000000-7dfd7c021000 rw-p 00000000 00:00 0 
+7dfd7c021000-7dfd80000000 ---p 00000000 00:00 0 
+7dfd80000000-7dfd80021000 rw-p 00000000 00:00 0 
+7dfd80021000-7dfd84000000 ---p 00000000 00:00 0 
+7dfd84000000-7dfd84021000 rw-p 00000000 00:00 0 
+7dfd84021000-7dfd88000000 ---p 00000000 00:00 0 
+7dfd88000000-7dfd88021000 rw-p 00000000 00:00 0 
+7dfd88021000-7dfd8c000000 ---p 00000000 00:00 0 
+7dfd8c000000-7dfd8c021000 rw-p 00000000 00:00 0 
+7dfd8c021000-7dfd90000000 ---p 00000000 00:00 0 
+7dfd90000000-7dfd90021000 rw-p 00000000 00:00 0 
+7dfd90021000-7dfd94000000 ---p 00000000 00:00 0 
+7dfd94000000-7dfd94021000 rw-p 00000000 00:00 0 
+7dfd94021000-7dfd98000000 ---p 00000000 00:00 0 
+7dfd98000000-7dfd98021000 rw-p 00000000 00:00 0 
+7dfd98021000-7dfd9c000000 ---p 00000000 00:00 0 
+7dfd9c000000-7dfd9c021000 rw-p 00000000 00:00 0 
+7dfd9c021000-7dfda0000000 ---p 00000000 00:00 0 
+7dfda0000000-7dfda0021000 rw-p 00000000 00:00 0 
+7dfda0021000-7dfda4000000 ---p 00000000 00:00 0 
+7dfda4000000-7dfda4021000 rw-p 00000000 00:00 0 
+7dfda4021000-7dfda8000000 ---p 00000000 00:00 0 
+7dfda8000000-7dfda8021000 rw-p 00000000 00:00 0 
+7dfda8021000-7dfdac000000 ---p 00000000 00:00 0 
+7dfdac000000-7dfdac021000 rw-p 00000000 00:00 0 
+7dfdac021000-7dfdb0000000 ---p 00000000 00:00 0 
+7dfdb0000000-7dfdb0021000 rw-p 00000000 00:00 0 
+7dfdb0021000-7dfdb4000000 ---p 00000000 00:00 0 
+7dfdb4000000-7dfdb4021000 rw-p 00000000 00:00 0 
+7dfdb4021000-7dfdb8000000 ---p 00000000 00:00 0 
+7dfdb8000000-7dfdb8021000 rw-p 00000000 00:00 0 
+7dfdb8021000-7dfdbc000000 ---p 00000000 00:00 0 
+7dfdbc000000-7dfdbc021000 rw-p 00000000 00:00 0 
+7dfdbc021000-7dfdc0000000 ---p 00000000 00:00 0 
+7dfdc0000000-7dfdc0021000 rw-p 00000000 00:00 0 
+7dfdc0021000-7dfdc4000000 ---p 00000000 00:00 0 
+7dfdc4000000-7dfdc4021000 rw-p 00000000 00:00 0 
+7dfdc4021000-7dfdc8000000 ---p 00000000 00:00 0 
+7dfdca56d000-7dfdca5ed000 rw-p 00000000 00:00 0                          [anon:PagePool]
+7dfdca5ed000-7dfdca5ee000 ---p 00000000 00:00 0 
+7dfdca5ee000-7dfdca6ee000 rw-p 00000000 00:00 0 
+7dfdca6ee000-7dfdca6ef000 ---p 00000000 00:00 0 
+7dfdca6ef000-7dfdca7ef000 rw-p 00000000 00:00 0 
+7dfdca7ef000-7dfdca7f0000 ---p 00000000 00:00 0 
+7dfdca7f0000-7dfdca8f0000 rw-p 00000000 00:00 0 
+7dfdca8f0000-7dfdca8f1000 ---p 00000000 00:00 0 
+7dfdca8f1000-7dfdca9f1000 rw-p 00000000 00:00 0 
+7dfdca9f1000-7dfdca9f2000 ---p 00000000 00:00 0 
+7dfdca9f2000-7dfdcaaf2000 rw-p 00000000 00:00 0 
+7dfdcaaf2000-7dfdcaaf3000 ---p 00000000 00:00 0 
+7dfdcaaf3000-7dfdcabf3000 rw-p 00000000 00:00 0 
+7dfdcabf3000-7dfdcabf4000 ---p 00000000 00:00 0 
+7dfdcabf4000-7dfdcacf4000 rw-p 00000000 00:00 0 
+7dfdcacf4000-7dfdcacf5000 ---p 00000000 00:00 0 
+7dfdcacf5000-7dfdcadf5000 rw-p 00000000 00:00 0 
+7dfdcadf5000-7dfdcadf6000 ---p 00000000 00:00 0 
+7dfdcadf6000-7dfdcaef6000 rw-p 00000000 00:00 0 
+7dfdcaef6000-7dfdcaef7000 ---p 00000000 00:00 0 
+7dfdcaef7000-7dfdcaff7000 rw-p 00000000 00:00 0 
+7dfdcaff7000-7dfdcaff8000 ---p 00000000 00:00 0 
+7dfdcaff8000-7dfdcb0f8000 rw-p 00000000 00:00 0 
+7dfdcb0f8000-7dfdcb0f9000 ---p 00000000 00:00 0 
+7dfdcb0f9000-7dfdcb1f9000 rw-p 00000000 00:00 0 
+7dfdcb1f9000-7dfdcb1fa000 ---p 00000000 00:00 0 
+7dfdcb1fa000-7dfdcb2fa000 rw-p 00000000 00:00 0 
+7dfdcb2fa000-7dfdcb2fb000 ---p 00000000 00:00 0 
+7dfdcb2fb000-7dfdcb3fb000 rw-p 00000000 00:00 0 
+7dfdcb3fb000-7dfdcb3fc000 ---p 00000000 00:00 0 
+7dfdcb3fc000-7dfdcb4fc000 rw-p 00000000 00:00 0 
+7dfdcb4fc000-7dfdcb4fd000 ---p 00000000 00:00 0 
+7dfdcb4fd000-7dfdcb5fd000 rw-p 00000000 00:00 0 
+7dfdcb5fd000-7dfdcb5fe000 ---p 00000000 00:00 0 
+7dfdcb5fe000-7dfdcb6fe000 rw-p 00000000 00:00 0 
+7dfdcb6fe000-7dfdcb6ff000 ---p 00000000 00:00 0 
+7dfdcb6ff000-7dfdcb7ff000 rw-p 00000000 00:00 0 
+7dfdcb7ff000-7dfdcb800000 ---p 00000000 00:00 0 
+7dfdcb800000-7dfdcc000000 rw-p 00000000 00:00 0 
+7dfdcc000000-7dfdcc021000 rw-p 00000000 00:00 0 
+7dfdcc021000-7dfdd0000000 ---p 00000000 00:00 0 
+7dfdd0000000-7dfdd0021000 rw-p 00000000 00:00 0 
+7dfdd0021000-7dfdd4000000 ---p 00000000 00:00 0 
+7dfdd4000000-7dfdd4021000 rw-p 00000000 00:00 0 
+7dfdd4021000-7dfdd8000000 ---p 00000000 00:00 0 
+7dfdd804d000-7dfdd809f000 rw-p 00000000 00:00 0 
+7dfdd809f000-7dfdd80a0000 ---p 00000000 00:00 0 
+7dfdd80a0000-7dfdd81a0000 rw-p 00000000 00:00 0 
+7dfdd81a0000-7dfdd81a1000 ---p 00000000 00:00 0 
+7dfdd81a1000-7dfdd82a1000 rw-p 00000000 00:00 0 
+7dfdd82a1000-7dfdd833b000 rw-p 00000000 00:00 0 
+7dfdd833b000-7dfdd833c000 ---p 00000000 00:00 0 
+7dfdd833c000-7dfdd8b3c000 rw-p 00000000 00:00 0 
+7dfdd8b3c000-7dfdd8b3d000 ---p 00000000 00:00 0 
+7dfdd8b3d000-7dfdd933d000 rw-p 00000000 00:00 0 
+7dfdd933d000-7dfdd933e000 ---p 00000000 00:00 0 
+7dfdd933e000-7dfdd9b3e000 rw-p 00000000 00:00 0 
+7dfdd9b3e000-7dfdd9c00000 rw-p 00000000 00:00 0 
+7dfdd9c00000-7dfdd9e00000 rw-p 00000000 00:00 0 
+7dfdd9e00000-7dfdd9e28000 r--p 00000000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7dfdd9e28000-7dfdd9fbd000 r-xp 00028000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7dfdd9fbd000-7dfdda015000 r--p 001bd000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7dfdda015000-7dfdda016000 ---p 00215000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7dfdda016000-7dfdda01a000 r--p 00215000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7dfdda01a000-7dfdda01c000 rw-p 00219000 103:05 19156946                  /usr/lib/x86_64-linux-gnu/libc.so.6
+7dfdda01c000-7dfdda029000 rw-p 00000000 00:00 0 
+7dfdda043000-7dfdda074000 rw-p 00000000 00:00 0 
+7dfdda0b6000-7dfdda119000 rw-p 00000000 00:00 0 
+7dfdda119000-7dfdda127000 r--p 00000000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7dfdda127000-7dfdda1a3000 r-xp 0000e000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7dfdda1a3000-7dfdda1fe000 r--p 0008a000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7dfdda1fe000-7dfdda1ff000 r--p 000e4000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7dfdda1ff000-7dfdda200000 rw-p 000e5000 103:05 19156949                  /usr/lib/x86_64-linux-gnu/libm.so.6
+7dfdda200000-7dfdda29a000 r--p 00000000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7dfdda29a000-7dfdda3ab000 r-xp 0009a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7dfdda3ab000-7dfdda41a000 r--p 001ab000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7dfdda41a000-7dfdda41b000 ---p 0021a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7dfdda41b000-7dfdda426000 r--p 0021a000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7dfdda426000-7dfdda429000 rw-p 00225000 103:05 19138657                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30
+7dfdda429000-7dfdda42c000 rw-p 00000000 00:00 0 
+7dfdda43e000-7dfdda4de000 rw-p 00000000 00:00 0 
+7dfdda4de000-7dfdda4e1000 r--p 00000000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7dfdda4e1000-7dfdda4f8000 r-xp 00003000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7dfdda4f8000-7dfdda4fc000 r--p 0001a000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7dfdda4fc000-7dfdda4fd000 r--p 0001d000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7dfdda4fd000-7dfdda4fe000 rw-p 0001e000 103:05 19138654                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+7dfdda50d000-7dfdda50e000 ---p 00000000 00:00 0 
+7dfdda50e000-7dfdda510000 r--p 00000000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+7dfdda510000-7dfdda51c000 r-xp 00002000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+7dfdda51c000-7dfdda51f000 r--p 0000e000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+7dfdda51f000-7dfdda520000 r--p 00010000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+7dfdda520000-7dfdda521000 rw-p 00011000 103:05 9884453                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+7dfdda521000-7dfdda596000 r--p 00000000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7dfdda596000-7dfdda68e000 r-xp 00075000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7dfdda68e000-7dfdda6da000 r--p 0016d000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7dfdda6da000-7dfdda6db000 ---p 001b9000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7dfdda6db000-7dfdda6de000 r--p 001b9000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7dfdda6de000-7dfdda6e0000 rw-p 001bc000 103:05 9887376                   /root/sym_cangjie_runtime_1305_implement_r5892797534/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+7dfdda6e0000-7dfdda6f8000 rw-p 00000000 00:00 0 
+7dfdda6f8000-7dfdda6fa000 r--p 00000000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7dfdda6fa000-7dfdda724000 r-xp 00002000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7dfdda724000-7dfdda72f000 r--p 0002c000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7dfdda72f000-7dfdda730000 r--p 00000000 00:00 0 
+7dfdda730000-7dfdda732000 r--p 00037000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7dfdda732000-7dfdda734000 rw-p 00039000 103:05 19156943                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7fff23344000-7fff23366000 rw-p 00000000 00:00 0                          [stack]
+7fff2336f000-7fff23373000 r--p 00000000 00:00 0                          [vvar]
+7fff23373000-7fff23375000 r-xp 00000000 00:00 0                          [vdso]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
+VERIFY_PRODUCT_MAPS_END
+2026-09-30 00:27:59.389192 3686226 F Check failed: Heap::GetHeap().OldActiveRemsetIsCurrent() ? page->is_remembered(reinterpret_cast<volatile zpointer*>(slot)) : page->was_remembered(reinterpret_cast<volatile zpointer*>(slot))
+2026-09-30 00:27:59.389371 3686226 F Missing remembered field 0x40000800008 in source 0x40000800000
+VERIFY_SHARED_STACK_ASSERT_EXECUTED status=6 matched=1
+VERIFY_TARGET_ASSERT_EXECUTED diagnostic=Missing remembered field matched=1
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.BeforeRelocationRejectsMissingRememberedField
+GC_UNIT_OTHER_VM_OKIDOKI ZVerify.BeforeRelocationRejectsMissingRememberedField
+[  PASS  ] ZVerify.BeforeRelocationRejectsMissingRememberedField
+[========] 1 tests: 1 passed, 0 failed

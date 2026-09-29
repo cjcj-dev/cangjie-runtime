@@ -1,0 +1,6 @@
+[  RUN   ] ThreadLifecycle.ManagedAttachAndRebindPreserveState
+[  RUN   ] ThreadLifecycle.ManagedAttachAndRebindPreserveState
+THREAD_ATTACH_MANAGED_TARGET executed=1 initialized=1 rebind_preserved=1
+GC_UNIT_OTHER_VM_OKIDOKI ThreadLifecycle.ManagedAttachAndRebindPreserveState
+[  PASS  ] ThreadLifecycle.ManagedAttachAndRebindPreserveState
+[========] 1 tests: 1 passed, 0 failed

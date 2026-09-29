@@ -1,0 +1,5 @@
+[  RUN   ] RelocateWorkers.ProductYoungRuntimeEntryClosesRelocationRequestGeneration
+[  RUN   ] RelocateWorkers.ProductYoungRuntimeEntryClosesRelocationRequestGeneration
+GC_UNIT_OTHER_VM_OKIDOKI RelocateWorkers.ProductYoungRuntimeEntryClosesRelocationRequestGeneration
+[  PASS  ] RelocateWorkers.ProductYoungRuntimeEntryClosesRelocationRequestGeneration
+[========] 1 tests: 1 passed, 0 failed

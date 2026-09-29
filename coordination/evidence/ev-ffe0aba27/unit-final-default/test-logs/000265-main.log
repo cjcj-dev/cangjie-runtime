@@ -1,0 +1,6 @@
+[  RUN   ] TLABUsage.NativeFrameRootScan
+[  RUN   ] TLABUsage.NativeFrameRootScan
+NATIVE_FRAME_TARGET executed=1 derived=0 visits=0
+GC_UNIT_OTHER_VM_OKIDOKI TLABUsage.NativeFrameRootScan
+[  PASS  ] TLABUsage.NativeFrameRootScan
+[========] 1 tests: 1 passed, 0 failed

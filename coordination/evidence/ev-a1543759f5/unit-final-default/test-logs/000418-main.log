@@ -1,0 +1,4 @@
+[  RUN   ] BarrierOldAtomic.AtomicFromToHealsRealSlot
+DETAIL arm=atomic_from_to before=0x100002000102510 after=0x80001000081530 returned=0x40000800040 target=0x40000800040 load_good=1
+[  PASS  ] BarrierOldAtomic.AtomicFromToHealsRealSlot
+[========] 1 tests: 1 passed, 0 failed

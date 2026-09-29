@@ -1,0 +1,6 @@
+[  RUN   ] SafepointHandshakeOrder.ZOperationSkipsStackRoots
+[  RUN   ] SafepointHandshakeOrder.ZOperationSkipsStackRoots
+K3_ZOP_SKIP_ASSERT old=0x40000000000 observed=0x40000000000 forwarding=0
+GC_UNIT_OTHER_VM_OKIDOKI SafepointHandshakeOrder.ZOperationSkipsStackRoots
+[  PASS  ] SafepointHandshakeOrder.ZOperationSkipsStackRoots
+[========] 1 tests: 1 passed, 0 failed

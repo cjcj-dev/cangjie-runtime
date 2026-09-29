@@ -1,0 +1,6 @@
+[  RUN   ] ManagedMetadata.ReturnAbsentDescriptor
+2026-09-30 00:28:28.123329 229294 F Check failed: descriptor != nullptr
+2026-09-30 00:28:28.123555 229294 F return frame missing funcdesc startPC=0x5f661919477c ip=0x5f661919477c
+METADATA_TARGET entry=3 desc=0 map=0 status=134 target=1 assertion-executed
+[  PASS  ] ManagedMetadata.ReturnAbsentDescriptor
+[========] 1 tests: 1 passed, 0 failed

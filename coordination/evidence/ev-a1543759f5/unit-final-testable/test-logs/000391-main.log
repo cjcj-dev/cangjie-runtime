@@ -1,0 +1,7 @@
+[  RUN   ] HeapIterator.ReferenceArrayChunksInBothModes
+[  RUN   ] HeapIterator.ReferenceArrayChunksInBothModes
+B10_ARRAY_RESULT weak=0 edges=2049 length=2049 array=1 tail=1 referent=0 child=0
+B10_ARRAY_RESULT weak=1 edges=2049 length=2049 array=1 tail=1 referent=1 child=1
+GC_UNIT_OTHER_VM_OKIDOKI HeapIterator.ReferenceArrayChunksInBothModes
+[  PASS  ] HeapIterator.ReferenceArrayChunksInBothModes
+[========] 1 tests: 1 passed, 0 failed
