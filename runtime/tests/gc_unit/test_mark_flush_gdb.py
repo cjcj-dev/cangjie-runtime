@@ -28,7 +28,15 @@ def population(address):
     return sum(sizes)
 
 
-result = {'before': None, 'after': None, 'returned': None, 'entered': False}
+result = {'before': None, 'after': None, 'returned': None, 'entered': False, 'signal_targets': []}
+active_worker = None
+
+
+class Signal(gdb.Breakpoint):
+    def stop(self):
+        if gdb.selected_thread().num == active_worker:
+            result['signal_targets'].append(int(gdb.parse_and_eval('$rdi')))
+        return False
 
 
 class WorkerZero(gdb.Breakpoint):
@@ -59,15 +67,20 @@ try:
         raise RuntimeError('test setup boundary not reached')
     controller = gdb.selected_thread()
     stack_address = None
-    request_address = None
+    request = gdb.parse_and_eval('requests')
+    if request.type.sizeof != gdb.lookup_type('unsigned int').sizeof:
+        raise RuntimeError('unsupported test request representation')
+    request_address = int(request.address)
     owner = None
     for thread in gdb.selected_inferior().threads():
         thread.switch()
         frame = gdb.newest_frame()
         while frame:
             try:
-                request_address = int(frame.read_var('requests')['_M_i'].address)
-                stack_address = int(frame.read_var('stacks').address)
+                stack = frame.read_var('stacks')
+                while stack.type.code in (gdb.TYPE_CODE_PTR, gdb.TYPE_CODE_REF, gdb.TYPE_CODE_RVALUE_REF):
+                    stack = stack.referenced_value()
+                stack_address = int(stack.address)
                 owner = thread
                 break
             except (gdb.error, ValueError):
@@ -113,11 +126,15 @@ try:
         frame = gdb.newest_frame()
         while frame.type() == gdb.INLINE_FRAME:
             frame = frame.older()
+        active_worker = gdb.selected_thread().num
+        result['finalizer_condition'] = int(gdb.parse_and_eval('&MapleRuntime::ZCollectedHeap::_collected_heap->_finalizer_processor.wakeCondition'))
+        Signal('pthread_cond_signal', internal=True)
         print('MARK_FLUSH_STACK ' + command('bt'), flush=True)
         returned = Returned('*' + hex(frame.older().pc()), temporary=True, internal=True)
         command('continue')
         result['after'] = population(stack_address)
-    result['passed'] = (result['entered'] and result['before'] == 1 and
+    result['no_finalizer_signal'] = result.get('finalizer_condition') not in result['signal_targets']
+    result['passed'] = (result['no_finalizer_signal'] and result['entered'] and result['before'] == 1 and
                         result['after'] == 0 and result['returned'] is not None)
     print('MARK_PROACTIVE_ASSERT ' + json.dumps(result, sort_keys=True), flush=True)
     Path(os.environ['MARK_FLUSH_RESULT']).write_text(json.dumps(result) + '\n')
