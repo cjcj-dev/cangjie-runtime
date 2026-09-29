@@ -392,7 +392,7 @@ public:
                 auto* p = reinterpret_cast<volatile zpointer*>(field);
                 toPage->remember(p);
                 if (forwarding->in_place()) {
-                    CHECK(toPage->is_remembered(p));
+                    ASSERT(toPage->is_remembered(p));
                 }
             }
         }
