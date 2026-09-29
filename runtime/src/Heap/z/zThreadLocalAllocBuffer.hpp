@@ -16,11 +16,47 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zMarkStackEntry.hpp"
 
-#include "Heap/z/zTLABUsage.hpp"
+
 #include "Heap/z/zValue.hpp"
 #include "Heap/z/zPageFwd.hpp"
 #include "Base/Globals.h"
 namespace MapleRuntime {
+class TLABAllocationAverage {
+public:
+    void Sample(double value)
+    {
+        samples = std::min(samples + 1, 100u);
+        const unsigned weight = std::max(35u, 100u / samples);
+        average = ((100 - weight) * average + weight * value) / 100.0;
+    }
+    double Average() const { return average; }
+private:
+    unsigned samples = 0;
+    double average = 0;
+};
+
+// ThreadLocalAllocStats (threadLocalAllocBuffer.cpp:346-412), in bytes.
+struct TLABStatistics {
+    size_t allocatedSize = 0;
+    size_t refillWaste = 0;
+    size_t gcWaste = 0;
+    size_t refills = 0;
+    size_t slowAllocations = 0;
+    size_t allocatingThreads = 0;
+
+    size_t Used() const { return allocatedSize - refillWaste - gcWaste; }
+    void Update(const TLABStatistics& other)
+    {
+        allocatedSize += other.allocatedSize;
+        refillWaste += other.refillWaste;
+        gcWaste += other.gcWaste;
+        refills += other.refills;
+        slowAllocations += other.slowAllocations;
+        allocatingThreads += other.allocatingThreads;
+    }
+};
+
+
 class Mutator;
 // ZGC zThreadLocalAllocBuffer.hpp:31-46: worker statistics are distinct
 // from the active thread's ThreadLocalAllocBuffer and its watermark snapshot.
