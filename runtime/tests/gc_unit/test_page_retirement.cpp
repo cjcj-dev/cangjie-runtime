@@ -434,9 +434,11 @@ GC_TEST(PageRetirement1315, DescriptorSurvivesIteratorAndMemoryReturns)
     GC_EXPECT_TRUE(page != nullptr);
     const MAddress start = page->GetRegionStart();
     const size_t usedBefore = allocator.used_generation(ZGenerationId::old);
+    const size_t cachedBefore = allocator.GetCachedBytes();
     bool found = false;
     bool survived = false;
     bool returned = false;
+    bool memoryReturned = false;
     {
         ZGenerationPagesIterator iterator(&Heap::page_table(), ZGenerationId::old, &allocator);
         for (ZPage* candidate; iterator.next(&candidate);) {
@@ -447,9 +449,14 @@ GC_TEST(PageRetirement1315, DescriptorSurvivesIteratorAndMemoryReturns)
         std::fprintf(stderr, "PAGE1315_PRECONDITION iterator_found=%d free_withdrawn=%d\n", found, withdrawn);
         survived = page->generation_id() == ZGenerationId::old && page->size() == ZGranuleSize;
         returned = allocator.used_generation(ZGenerationId::old) + ZGranuleSize == usedBefore;
-        std::fprintf(stderr, "PAGE1315_DESCRIPTOR_TARGET executed=1 survived=%d memory_returned=%d\n",
-                     survived, returned);
+        // The allocator's own returned-memory accounting (cached bytes fed by
+        // free_memory) is independent of the used-generation counter above.
+        memoryReturned = allocator.GetCachedBytes() == cachedBefore + ZGranuleSize;
+        std::fprintf(stderr, "PAGE1315_DESCRIPTOR_TARGET executed=1 survived=%d memory_returned=%d stats_returned=%d cached_delta=%zu size=%zu\n",
+                     survived, memoryReturned, returned,
+                     allocator.GetCachedBytes() - cachedBefore, static_cast<size_t>(ZGranuleSize));
         GC_EXPECT_TRUE(survived);
+        GC_EXPECT_TRUE(memoryReturned);
         GC_EXPECT_TRUE(returned);
         GC_EXPECT_TRUE(found && withdrawn);
     }

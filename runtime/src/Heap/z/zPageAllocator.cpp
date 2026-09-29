@@ -624,6 +624,21 @@ void RegionManager::free_page(ZPage* page)
     free_memory(&vmems);
 }
 
+// ZGC zPageAllocator.cpp:2269-2284: every page is prepared and accounted in
+// the loop; the extracted vmems are returned once after it.
+void RegionManager::free_pages(ZGenerationId id, const ZArray<ZPage*>* pages)
+{
+    ZArray<ZVirtualMemory> vmems;
+    for (int i = 0; i < pages->length(); ++i) {
+        ZPage* const page = pages->at(i);
+        CHECK(page->generation_id() == id);
+        const size_t size = page->size();
+        prepare_memory_for_free(page, &vmems);
+        decrease_used_generation(id, size);
+    }
+    free_memory(&vmems);
+}
+
 void RegionManager::enable_safe_destroy() const
 {
     _safe_destroy.enable_deferred_delete();

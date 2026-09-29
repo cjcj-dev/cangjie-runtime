@@ -234,6 +234,8 @@ struct ForwardingSelectionResult {
     size_t previousMembers{0};
     size_t markReceipts{0};
     size_t promotedRoots{0};
+    size_t registered{0};
+    size_t registeredDistinct{0};
     bool verifyPin{false};
     bool verifyCritical{false};
     bool collectionFinishedWhileHeld{false};
@@ -356,6 +358,21 @@ void* SelectRealLivePages(void* context)
         Heap::GetHeap().RequestGC(result.verifyPromotion ? GC_REASON_USER : GC_REASON_YOUNG);
     }
     if (result.verifyPromotion) {
+        // The promote-all cycle registered its relocated pages through
+        // ZRelocationSet::register_relocate_promoted; the registration array
+        // is the product's own record, read here after the collection.
+        ZArray<ZPage*>* const registeredPages = Heap::GetHeap().young().relocation_set().relocate_promoted_pages();
+        result.registered = static_cast<size_t>(registeredPages->length());
+        for (int i = 0; i < registeredPages->length(); ++i) {
+            ZPage* const candidate = registeredPages->at(i);
+            bool seen = false;
+            for (int j = 0; j < i && !seen; ++j) {
+                seen = registeredPages->at(j) == candidate;
+            }
+            result.registeredDistinct += seen ? 0 : 1;
+        }
+        std::fprintf(stderr, "PROMOTION1315_UNIQUENESS_TARGET executed=1 registered=%zu distinct=%zu\n",
+                     result.registered, result.registeredDistinct);
         for (size_t i = 0; i < result.roots; ++i) {
             BaseObject* root = Heap::GetHeap().GetExportObject(roots[i]);
             ZPage* page = root == nullptr ? nullptr : Heap::page(reinterpret_cast<MAddress>(root));
@@ -1686,7 +1703,10 @@ GC_RUNTIME_OTHER_VM_TEST(PageIdentity1315, PromoteAllRegistersUniquePages)
     void* taskResult = nullptr;
     GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
     ReleaseHandle(handle);
+    // Target: no page is registered twice (zRelocationSet.cpp:213-228).
+    GC_EXPECT_EQ(result.registered, result.registeredDistinct);
     GC_EXPECT_EQ(result.promotedRoots, result.roots);
+    GC_EXPECT_TRUE(result.registered > 0);
     GC_EXPECT_TRUE(result.roots > 0);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

@@ -394,6 +394,7 @@ public:
     void disable_safe_destroy() const;
     void VisitPageOwners(const std::function<void(ZPage*)>& visitor) const;
     void free_page(ZPage* page);
+    void free_pages(ZGenerationId id, const ZArray<ZPage*>* pages);
     void StampCensusBoundaries();
     void PromoteAllRegions();
 

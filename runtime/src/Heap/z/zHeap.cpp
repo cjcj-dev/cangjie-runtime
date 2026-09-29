@@ -529,21 +529,20 @@ void Heap::free_page(ZPage* page)
 
 size_t Heap::free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages)
 {
-    (void)id;
-    size_t freed = 0;
     if (pages == nullptr) {
         return 0;
     }
+    size_t freed = 0;
+    // ZGC zHeap.cpp:283-295: remove every page table entry first, then hand
+    // the whole batch to the allocator.
     for (int i = 0; i < pages->length(); ++i) {
         ZPage* page = pages->at(i);
-        if (page == nullptr) {
-            continue;
-        }
         // #710: select_relocation_set owns candidacy; freeing clears the role.
         page->SetRegionRole(ZPageRole::None);
+        page_table().remove(page);
         freed += page->size();
-        free_page(page);
     }
+    GetHeap().page_allocator().free_pages(id, pages);
     return freed;
 }
 
