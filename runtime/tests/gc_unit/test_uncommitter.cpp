@@ -101,6 +101,22 @@ GC_OTHER_VM_TEST(Uncommitter, TestNoUncommitAtCapacityFloor)
     GC_EXPECT_EQ(UncommitterTestAccess::Uncommit(worker), 0U);
 }
 
+// ZGC zUncommitter.cpp:72-85: a relative timeout must reach the timed wait.
+GC_OTHER_VM_TEST(Uncommitter, RelativeTimeoutReachesTimedWait)
+{
+    ZPartition partition(0, Heap::GetHeap().GetAllocator().GetRegionManager());
+    Uncommitter& worker = partition.uncommitter;
+    const auto start = std::chrono::steady_clock::now();
+    const bool continued = UncommitterTestAccess::Wait(
+        worker, TimeUtil::NanoSeconds() + 100ULL * MILLI_SECOND_TO_NANO_SECOND);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    // Permit the two sub-millisecond truncations; scheduling delay has no upper bound.
+    std::printf("TARGET_WAIT elapsed_ms=%lld continued=%d\n", static_cast<long long>(elapsed), continued);
+    GC_EXPECT_TRUE(elapsed >= 98);
+    GC_EXPECT_TRUE(continued);
+}
+
 // ZUncommitter::terminate must wake a worker even during a long delay.
 GC_OTHER_VM_TEST(Uncommitter, StopWakesDelayedWorker)
 {
