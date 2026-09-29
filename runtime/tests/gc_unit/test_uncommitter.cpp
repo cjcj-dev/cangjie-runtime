@@ -11,11 +11,11 @@
 #include <thread>
 
 #include "Heap/Allocator/CartesianTree.h"
-#include "Common/ScopedObjectAccess.h"
 #define private public
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #undef private
+#include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "zunittest.hpp"
