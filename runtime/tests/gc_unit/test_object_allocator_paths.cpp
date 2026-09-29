@@ -606,8 +606,7 @@ void* AllocateUntilSlowBranch(void*)
             // allocation lands outside while the waste limit grew by one step.
             limitRaisedBy = limit - previousLimit;
             retained = (Heap::page(addr) != region) ? 1 : 0;
-        } else if (limit < previousLimit && region != nullptr && region != previousRegion &&
-                   Heap::page(addr) == region) {
+        } else if (region != nullptr && region != previousRegion && Heap::page(addr) == region) {
             // memAllocator.cpp:287-306 retired the TLAB and published a new
             // one; the object that triggered the refill lives in it.
             refilled = 1;
