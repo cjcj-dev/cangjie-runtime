@@ -1293,7 +1293,10 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         // zUncoloredRoot.inline.hpp:35-64: the next real root processing
         // makes this very slot load-good and writes it back. No winner is
         // handed to this entry by the test.
-        (void)mutator->GcPhaseEnum(false);
+        // safepointMechanism.cpp:150-160: the epoch must start at the
+        // request-processing entry before an iterator can expose a frame.
+        ArmThreadPoll(ThreadLocal::GetThreadLocalData());
+        HandleSafepoint(ThreadLocal::GetThreadLocalData());
     }
     const uintptr_t observedRoot = nestedField == nullptr ? raw(root->LoadPlain()) : raw(nestedField->LoadPlain());
     const bool result = expected != 0 && (!oldPending || expected != before) &&

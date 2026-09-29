@@ -61,6 +61,21 @@ extern "C" bool MRT_LeaveSaferegion()
     return mutator->LeaveSaferegion();
 }
 
+extern "C" bool MRT_LeaveNative()
+{
+    Mutator* mutator = Mutator::GetMutator();
+    if (mutator == nullptr) {
+        return false;
+    }
+    const bool transitioned = mutator->LeaveSaferegion();
+    if (transitioned) {
+        // HotSpot javaThread.cpp:1103-1118: process requests before exposing
+        // the caller on return from native code. N2C entry does not unwind.
+        StackWatermarkSet::before_unwind(*mutator);
+    }
+    return transitioned;
+}
+
 extern "C" void MRT_SetGrowFlag(bool flag)
 {
     if (!CJThreadSetStackGrow(flag)) {
@@ -211,16 +226,10 @@ void Mutator::SetManagedContext(bool isManagedContext)
 void Mutator::HandleSuspensionRequest()
 {
     for (;;) {
-        Handshake::Current().process_by_self();
         SetInSaferegion(SAFE_REGION_TRUE);
         MarkFlushOnEnterSaferegion();
-        if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
-            TransitionToCpuProfile(true);
-        } else if (HasSuspensionRequest(SUSPENSION_FOR_SYNC)) {
+        if (HasSuspensionRequest(SUSPENSION_FOR_SYNC)) {
             SuspendForSync();
-            if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
-                TransitionToCpuProfile(true);
-            }
         } else if (HasPreemptRequest()) {
             SuspendForPreempt();
         } else if (HasSuspensionRequest(SUSPENSION_FOR_EXIT)) {
@@ -239,7 +248,8 @@ void Mutator::HandleSuspensionRequest()
             SetSuspensionFlag(SUSPENSION_FOR_SYNC);
         }
         // Leave saferegion if current mutator has no suspend request, otherwise try again
-        if (LIKELY(!HasAnySuspensionRequest() && !HasObserver())) {
+        if (LIKELY(!HasSuspensionRequest(SUSPENSION_FOR_SYNC) &&
+                   !HasSuspensionRequest(SUSPENSION_FOR_EXIT) && !HasPreemptRequest() && !HasObserver())) {
             return;
         }
     }

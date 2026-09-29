@@ -192,7 +192,7 @@ L_exc_after_executor:
     movq    -96(%rbp), %rax
     cmpq    $0, %rax
     je      L_exc_skip_leave
-    callq   _MRT_LeaveSaferegion
+    callq   _MRT_LeaveNative
     callq   _MRT_GetThreadLocalData
     movq    %rax, %r13
     jmp     L_exc_do_delete

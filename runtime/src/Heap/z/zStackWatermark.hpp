@@ -113,6 +113,7 @@ private:
 
 class StackWatermarkSet {
 public:
+    static void safepoint_synchronize_begin();
     static void on_safepoint(Mutator& mutator);
     static void before_unwind(Mutator& mutator);
     static void after_unwind(Mutator& mutator);

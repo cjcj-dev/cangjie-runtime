@@ -102,7 +102,7 @@ CJ_MCC_I2NStub:
     movapd  %xmm1, -240(%rbp)
 
     // LeaveSaferegion()
-    callq   MRT_LeaveSaferegion@PLT
+    callq   MRT_LeaveNative@PLT
 
     // DeleteC2NContext(threadLocalData)
     movq    -48(%rbp), %rdi

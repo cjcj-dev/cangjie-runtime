@@ -77,22 +77,39 @@ bool IsGcThread()
     return false;
 }
 
-extern "C" void HandleSafepoint(ThreadLocalData* tlData)
+// HotSpot safepointMechanism.cpp:135-164. Every request-processing entrance
+// uses the same block -> watermark -> handshake loop -> poll publication.
+static void ProcessSafepoint(ThreadLocalData* tlData)
 {
-    // safepointMechanism.cpp:81-94: ordinary polls test bit0. A disarmed ~1
-    // or a watermark SP is not an armed safepoint; return polls use their stub.
-    if (tlData == nullptr || !tlData->IsPollArmed()) {
-        return;
-    }
-    Handshake::Current().process_by_self();
+    std::atomic_thread_fence(std::memory_order_acquire);
     Mutator* mutator = tlData->mutator;
-    if (mutator != nullptr) {
-        mutator->DoEnterSaferegion();
-        mutator->DoLeaveSaferegion();
-        StackWatermarkSet::on_safepoint(*mutator);
+    bool recheck;
+    do {
+        if (mutator != nullptr) {
+            if (GlobalPoll() || mutator->HasAnySuspensionRequest()) {
+                mutator->HandleSuspensionRequest();
+            }
+            StackWatermarkSet::on_safepoint(*mutator);
+        }
+        HandshakeState& handshake = Handshake::Current();
+        recheck = handshake.has_operation() && handshake.process_by_self();
+    } while (recheck);
+    // HotSpot safepointMechanism.cpp:163: sample requests follow stack and
+    // handshake processing, so their frame walk observes the current epoch.
+    if (mutator != nullptr && mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
+        (void)mutator->TransitionToCpuProfile(true);
     }
     UpdatePollValues(tlData);
-    DLOG(SIGNAL, "HandleSafepoint, thread restarted.");
+}
+
+void ProcessSafepointIfRequested(ThreadLocalData* tlData)
+{
+    if (tlData != nullptr && tlData->IsPollArmed()) { ProcessSafepoint(tlData); }
+}
+
+extern "C" void HandleSafepoint(ThreadLocalData* tlData)
+{
+    ProcessSafepointIfRequested(tlData);
 }
 
 // safepoint.cpp:818-839: name the return oops, keep them live across the
@@ -114,36 +131,19 @@ extern "C" void HandleReturnSafepoint(ThreadLocalData* tlData)
             bindings.push_back(Binding { root.slot, Handle(mutator, root.object) });
         }
     }
-    Handshake::Current().process_by_self();
     if (mutator != nullptr) {
-        mutator->DoEnterSaferegion();
-        mutator->DoLeaveSaferegion();
-        StackWatermarkSet::on_safepoint(*mutator);
         StackWatermarkSet::after_unwind(*mutator);
     }
+    ProcessSafepointIfRequested(tlData);
     for (Binding& binding : bindings) {
         StorePlain(*binding.slot, from_object(binding.handle()));
-    }
-    if (tlData != nullptr) {
-        UpdatePollValues(tlData);
     }
 }
 
 #if defined (__arm__)
 extern "C" void HandleSafepointForArm(ThreadLocalData* tlData)
 {
-    if (!tlData->IsPollArmed()) {
-        return;
-    }
-    Handshake::Current().process_by_self();
-    Mutator* mutator = tlData->mutator;
-    if (mutator != nullptr) {
-        mutator->DoEnterSaferegion();
-        mutator->DoLeaveSaferegion();
-        StackWatermarkSet::on_safepoint(*mutator);
-    }
-    UpdatePollValues(tlData);
-    DLOG(SIGNAL, "HandleSafepoint, thread restarted.");
+    ProcessSafepointIfRequested(tlData);
 }
 #endif
 
@@ -435,12 +435,6 @@ void MutatorManager::DemandSuspensionForSync()
         mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
     });
     ArmAllThreadPolls();
-    class SyncHandshakeClosure : public HandshakeClosure {
-    public:
-        SyncHandshakeClosure() : HandshakeClosure("STW") {}
-        void do_thread(Mutator*) override {}
-    } cl;
-    Handshake::execute(&cl);
 }
 
 void MutatorManager::RegisterMarkFlushThread(ThreadLocalData* tls)
@@ -468,11 +462,13 @@ bool MutatorManager::TlsHasMarkFlushPending(ThreadLocalData* tls)
 bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
 {
     const bool pending = Handshake::Current().has_operation();
-    Handshake::Current().process_by_self();
+    ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
     return pending;
 }
 
-void MutatorManager::StopTheWorld()
+VMOperation* VMThread::currentOperation = nullptr;
+
+void MutatorManager::StopTheWorld(VMOperation* operation)
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     bool saferegionEntered = false;
@@ -484,6 +480,7 @@ void MutatorManager::StopTheWorld()
     }
 #endif
     syncMutex.lock();
+    VMThread::currentOperation = operation;
     // ZGC safepoint.cpp:341: suspend GC workers before locking the thread
     // list, since concurrent root workers can still be visiting that list.
     if (ZCollectedHeap::heap() != nullptr) {
@@ -532,6 +529,7 @@ void MutatorManager::StartTheWorld() noexcept
     if (ZCollectedHeap::heap() != nullptr) {
         ZCollectedHeap::heap()->safepoint_synchronize_end();
     }
+    VMThread::currentOperation = nullptr;
     // Release syncMutex to allow other thread call STW.
     syncMutex.unlock();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)

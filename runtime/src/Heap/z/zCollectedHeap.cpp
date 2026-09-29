@@ -174,10 +174,10 @@ void ZCollectedHeap::stop()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-// ZGC zCollectedHeap.cpp:339-349. Cangjie stack-watermark publication is
-// performed by the mutator suspension handshake; GC workers rendezvous here.
+// ZGC zCollectedHeap.cpp:339-349: process thread roots before rendezvous.
 void ZCollectedHeap::safepoint_synchronize_begin()
 {
+    StackWatermarkSet::safepoint_synchronize_begin();
     ZGeneration::young()->synchronize_relocation();
     ZGeneration::old()->synchronize_relocation();
     SuspendibleThreadSet::synchronize();

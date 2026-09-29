@@ -260,7 +260,7 @@ unwindPCForExclusiveStub:
     movq    -96(%rbp), %rax
     cmpq    $0, %rax
     je      .L_exc_skip_leave
-    callq   MRT_LeaveSaferegion
+    callq   MRT_LeaveNative
     callq   MRT_GetThreadLocalData
     movq    %rax, %r13
     jmp     .L_exc_do_delete

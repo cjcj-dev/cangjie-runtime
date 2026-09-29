@@ -230,7 +230,7 @@ L_exc_return_point:
 
     ldr     x0, [x29, #0xc0]            // enterSafe
     cbz     x0, L_exc_skip_leave
-    bl      _MRT_LeaveSaferegion
+    bl      _MRT_LeaveNative
     bl      _MRT_GetThreadLocalData
     mov     x19, x0
     b       L_exc_do_delete

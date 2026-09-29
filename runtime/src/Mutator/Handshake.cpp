@@ -24,9 +24,25 @@ HandshakeState& Handshake::Current()
     return thread != nullptr ? thread->GetHandshakeState() : nativeHandshakeState;
 }
 
+HandshakeOperation::HandshakeOperation(HandshakeClosure* cl, Mutator* target)
+    : cl_(cl), target_(target), requester_(ThreadLocal::GetMutator()) {}
+
+// HotSpot handshake.cpp:316-330: closures may read both target stack oops
+// and handles owned by the requester, before either thread resumes.
+void HandshakeOperation::prepare(Mutator* target, Mutator* executingThread)
+{
+    if (target != nullptr && target->IsGCDetached()) { return; }
+    if (target != nullptr && target != executingThread) {
+        StackWatermarkSet::start_processing(*target);
+    }
+    if (requester_ != nullptr && requester_ != executingThread) {
+        StackWatermarkSet::start_processing(*requester_);
+    }
+}
+
 void HandshakeOperation::do_handshake(Mutator* thread)
 {
-    cl_->do_thread(thread);
+    if (thread == nullptr || !thread->IsGCDetached()) { cl_->do_thread(thread); }
     pending_.fetch_sub(1, std::memory_order_release);
 }
 
@@ -80,7 +96,7 @@ void HandshakeState::remove_op(HandshakeOperation* op)
     }
 }
 
-void HandshakeState::process_by_self()
+bool HandshakeState::process_by_self()
 {
     for (;;) {
         std::lock_guard<std::mutex> lock(lock_);
@@ -91,14 +107,13 @@ void HandshakeState::process_by_self()
         if (op->target() != nullptr && op->target() != handshakee_) {
             break;
         }
+        op->prepare(handshakee_, handshakee_);
         op->do_handshake(handshakee_);
         remove_op(op);
     }
-    Mutator* mutator = handshakee_;
-    if (mutator != nullptr && mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
-        (void)mutator->TransitionToCpuProfile(true);
-    }
-    UpdatePollValues(ThreadLocal::GetThreadLocalData());
+    // All current operations are synchronous; only an asynchronous operation
+    // that blocks would require the safepoint loop to recheck (handshake.cpp:640).
+    return false;
 }
 
 bool HandshakeState::possibly_can_process()
@@ -144,6 +159,7 @@ bool HandshakeState::try_process()
         lock_.unlock();
         return false;
     }
+    op->prepare(handshakee_, ThreadLocal::GetMutator());
     op->do_handshake(handshakee_);
     remove_op(op);
     lock_.unlock();
@@ -171,7 +187,7 @@ void WaitHandshakeOperation(HandshakeOperation& op, const ThreadsListHandle& thr
             Mutator* target = threads.thread_at(i);
             if (op.target() != nullptr && target != op.target()) { continue; }
             if (target == current) {
-                target->GetHandshakeState().process_by_self();
+                ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
             } else {
                 (void)target->GetHandshakeState().try_process();
             }

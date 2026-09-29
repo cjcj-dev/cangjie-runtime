@@ -6,6 +6,8 @@
 #include "Heap/z/zThreadLocalData.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.h"
+#include "Mutator/ThreadSMR.h"
+#include "Mutator/VMOperation.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -268,6 +270,7 @@ bool StackWatermark::is_frame_safe(const FrameInfo& frame) const
 
 void StackWatermark::ensure_safe(const FrameInfo& frame)
 {
+    CHECK_DETAIL(processing_started(), "Processing should already have started");
     if (IsDone(epoch_id())) { return; }
     // real_fp in HotSpot is the sender's SP, not the machine frame pointer.
     const uintptr_t senderSP = frame.CallerSP();
@@ -293,7 +296,8 @@ void StackWatermark::before_unwind()
     // stackWatermark.inline.hpp:86-106. Processing was started by on_safepoint
     // (javaThread.cpp:1112). A finished watermark has nothing to expose, and a
     // runtime leave has no Java frame: do not classify it.
-    if (!processing_started() || IsDone() || !HasExposableFrame(owner)) {
+    CHECK_DETAIL(processing_started(), "Processing should already have started");
+    if (IsDone() || !HasExposableFrame(owner)) {
         return;
     }
     StackFrameStream frames(&owner.GetUnwindContext());
@@ -308,7 +312,8 @@ void StackWatermark::before_unwind()
 void StackWatermark::after_unwind()
 {
     // stackWatermark.inline.hpp:109-124.
-    if (!processing_started() || IsDone() || !HasExposableFrame(owner)) {
+    CHECK_DETAIL(processing_started(), "Processing should already have started");
+    if (IsDone() || !HasExposableFrame(owner)) {
         return;
     }
     StackFrameStream frames(&owner.GetUnwindContext());
@@ -318,12 +323,11 @@ void StackWatermark::after_unwind()
 }
 
 // stackWatermark.inline.hpp:70-71,127-131: on_iteration assumes processing has
-// already been started by on_safepoint; a watermark that never started exposes
-// nothing and has no iterator to walk. Same guard shape as before_unwind /
-// after_unwind above.
+// already been started before a frame is exposed.
 void StackWatermark::on_iteration(const FrameInfo& frame)
 {
-    if (!processing_started() || IsDone() || !HasExposableFrame(owner)) { return; }
+    CHECK_DETAIL(processing_started(), "Processing should already have started");
+    if (IsDone() || !HasExposableFrame(owner)) { return; }
     ensure_safe(frame);
 }
 
@@ -429,6 +433,16 @@ void ZStackWatermark::OnStackGrow(intptr_t offset)
 {
     std::lock_guard<std::mutex> guard(lock);
     ShiftForGrow(offset);
+}
+
+// HotSpot runtime/stackWatermarkSet.cpp:163-171.
+void StackWatermarkSet::safepoint_synchronize_begin()
+{
+    if (VMThread::vm_operation()->skip_thread_oop_barriers()) { return; }
+    ThreadsListHandle threads;
+    for (size_t i = 0; i < threads.length(); ++i) {
+        start_processing(*threads.thread_at(i));
+    }
 }
 
 void StackWatermarkSet::on_safepoint(Mutator& mutator) { mutator.GetStackWatermark().on_safepoint(); }

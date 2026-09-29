@@ -19,6 +19,13 @@
 
 #include <cstdint>
 #include <cstring>
+#if defined(__linux__)
+#include <csignal>
+#include <string>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+#include "Mutator/MutatorManager.h"
 
 extern "C" void HandleReturnSafepoint(MapleRuntime::ThreadLocalData* tlData);
 extern "C" uint32_t unwindPCForReturnSafepointHandlerStub;
@@ -198,6 +205,32 @@ public:
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+// handshake.cpp:317-320,337-340: a pinned identity can retire before a
+// queued operation is claimed; completion still releases its requester.
+GC_TEST(SafepointHandshakeOrder, DetachedTargetCompletesWithoutExposingRoots)
+{
+    HandshakeRuntime host;
+    Mutator owner;
+    class Observe final : public HandshakeClosure {
+    public:
+        Observe() : HandshakeClosure("K3-detached") {}
+        void do_thread(Mutator*) override { invoked = true; }
+        bool invoked = false;
+    } closure;
+    HandshakeOperation operation(&closure, &owner);
+    owner.GetHandshakeState().add_operation(&operation);
+    const uint32_t saved = *ZPointerStoreGoodMaskLowOrderBitsAddr;
+    *ZPointerStoreGoodMaskLowOrderBitsAddr = saved ^ 1;
+    owner.SetGCDetached();
+    const uint32_t before = owner.GetStackWatermark().PackedState();
+    const bool claimed = owner.GetHandshakeState().try_process();
+    const bool unchanged = before == owner.GetStackWatermark().PackedState();
+    *ZPointerStoreGoodMaskLowOrderBitsAddr = saved;
+    std::fprintf(stderr, "K3_DETACHED_ASSERT claimed=%d completed=%d invoked=%d unchanged=%d\n",
+                 claimed, operation.is_completed(), closure.invoked, unchanged);
+    GC_EXPECT_TRUE(claimed && operation.is_completed() && !closure.invoked && unchanged);
+}
+
 // No-frame threads still pass through the product head-processing entry.
 GC_TEST(StackWatermark, PackedEpochDoneIsIdempotent)
 {
@@ -258,7 +291,7 @@ GC_TEST(StackWatermark, SharedPollWordArmAndDisarm)
     HandshakeState& state = Handshake::Current();
     state.add_operation(&operation);
     const uintptr_t armed = tls->GetPollWord();
-    state.process_by_self();
+    HandleSafepoint(tls);
     const uintptr_t disarmed = tls->GetPollWord();
     GC_EXPECT_EQ(armed, ThreadLocalData::PollBit);
     GC_EXPECT_EQ(disarmed, ThreadLocalData::DisarmedPollWord);
@@ -317,6 +350,59 @@ GC_TEST(StackWatermark, RemapRetainsLogicalStackIdentityAcrossGrow)
         watermark.last_processed_raw(), watermark.prev_frame_color(frame));
 }
 
+#if defined(__linux__)
+namespace {
+void CheckUnstartedExposure(bool returning)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        HandshakeRuntime runtime;
+        Mutator owner;
+        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+        tls->SetMutator(&owner);
+        alignas(16) uintptr_t stub[64] {};
+        owner.GetUnwindContext().frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&stub[16]));
+        owner.GetUnwindContext().frameInfo.mFrame.SetIP(&unwindPCForReturnSafepointHandlerStub);
+        *ZPointerStoreGoodMaskLowOrderBitsAddr = StackWatermark::epoch_id() ^ 1;
+        tls->SetPollWord(ThreadLocalData::DisarmedPollWord);
+        if (returning) { HandleReturnSafepoint(tls); }
+        else { MRT_LeaveNative(); }
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char bytes[512];
+    ssize_t count;
+    while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, count); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find("Processing should already have started") != std::string::npos;
+    std::fprintf(stderr, "K3_UNSTARTED_EXPOSURE_ASSERT returning=%d status=%d rejected=%d\n%s",
+                 returning, status, rejected, transcript.c_str());
+    GC_EXPECT_TRUE(rejected);
+}
+}
+
+GC_COMPONENT_TEST(SafepointHandshakeOrder, ReturnRejectsUnstartedEpoch)
+{
+    CheckUnstartedExposure(true);
+}
+
+GC_COMPONENT_TEST(SafepointHandshakeOrder, NativeRejectsUnstartedEpoch)
+{
+    CheckUnstartedExposure(false);
+}
+#endif
+
 // safepoint.cpp:818-839: a return oop stays the value published by request
 // processing, including when this epoch's frame walk has already started.
 GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
@@ -373,12 +459,17 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     callerMachine.SetSP(FrameInfo(context.frameInfo.mFrame, FrameType::RETURN_SAFEPOINT).CallerSP());
     const FrameInfo callerFrame(callerMachine, FrameType::MANAGED);
     GC_EXPECT_FALSE(owner.GetStackWatermark().processing_started());
+    // safepoint.cpp:831: return polls expose a frame only after epoch start.
+    // A real ordinary poll supplies that precondition; no helper starts it.
+    ArmThreadPoll(tls);
+    HandleSafepoint(tls);
     RewriteReturnRoot cold(original, replaced);
     HandshakeOperation coldOp(&cold, &owner);
     Handshake::Current().add_operation(&coldOp);
     HandleReturnSafepoint(tls);
     const BaseObject* coldValue = to_object(safe(RootSlotAt(StubSlot(stub, kReturnSlot)).LoadPlain()));
-    GC_EXPECT_TRUE(cold.rewritten);
+    std::fprintf(stderr, "K3_RETURN_WRITEBACK_ASSERT phase=first rewritten=%d value=%p expected=%p\n",
+                 cold.rewritten, coldValue, replaced);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(coldValue), reinterpret_cast<uintptr_t>(replaced));
     owner.GetStackWatermark().assert_is_frame_safe(callerFrame);
     std::fprintf(stderr, "RETURN_ROOT_RESULT phase=cold value=%p safe=1\n", coldValue);
@@ -388,7 +479,8 @@ GC_TEST(StackWatermark, ReturnRootIdentityAcrossRequest)
     Handshake::Current().add_operation(&warmOp);
     HandleReturnSafepoint(tls);
     const BaseObject* warmValue = to_object(safe(RootSlotAt(StubSlot(stub, kReturnSlot)).LoadPlain()));
-    GC_EXPECT_TRUE(warm.rewritten);
+    std::fprintf(stderr, "K3_RETURN_WRITEBACK_ASSERT phase=repeat rewritten=%d value=%p expected=%p\n",
+                 warm.rewritten, warmValue, replaced);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(warmValue), reinterpret_cast<uintptr_t>(replaced));
     owner.GetStackWatermark().assert_is_frame_safe(callerFrame);
     std::fprintf(stderr, "RETURN_ROOT_RESULT phase=started value=%p safe=1\n", warmValue);
