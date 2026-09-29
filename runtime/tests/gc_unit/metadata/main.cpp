@@ -3,12 +3,27 @@
 #if defined(_WIN64)
 #include <windows.h>
 #include <crtdbg.h>
+#elif defined(__linux__)
+#include <link.h>
 #endif
 int main(int argc, char** argv)
 {
 #if defined(_WIN64)
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
+#if defined(_WIN64)
+    char modulePath[MAX_PATH] {};
+    HMODULE module = GetModuleHandleA("libcangjie-runtime.dll");
+    if (module == nullptr || !GetModuleFileNameA(module, modulePath, MAX_PATH)) { return 66; }
+    std::fprintf(stderr, "RUNTIME_MODULE %s\n", modulePath);
+#elif defined(__linux__)
+    dl_iterate_phdr([](dl_phdr_info* info, size_t, void*) {
+        if (std::strstr(info->dlpi_name, "libcangjie-runtime.so") != nullptr) {
+            std::fprintf(stderr, "RUNTIME_MODULE %s\n", info->dlpi_name);
+        }
+        return 0;
+    }, nullptr);
 #endif
     if (argc != 2) { return 64; }
     const std::string name(argv[1]);

@@ -56,7 +56,11 @@ def run(exe, destination):
     results = {}
     for case in cases(windows):
         result = invoke(exe, case)
-        result["pass"] = valid_control and accepts(case, result, windows, control["rc"])
+        loaded = re.search(r"^RUNTIME_MODULE (.+)$", result["output"], re.MULTILINE)
+        expected_module = exe.parent / ("libcangjie-runtime.dll" if windows else "libcangjie-runtime.so")
+        result["module_matches"] = bool(loaded and Path(loaded[1].strip()).resolve() == expected_module.resolve())
+        result["pass"] = (valid_control and result["module_matches"] and
+                          accepts(case, result, windows, control["rc"]))
         print("SUPERVISOR_ASSERT", case, "PASS" if result["pass"] else "FAIL", "assertion-executed", flush=True)
         print(result["output"], flush=True)
         results[case] = result

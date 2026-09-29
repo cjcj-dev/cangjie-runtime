@@ -7,10 +7,13 @@ endif()
 add_executable(metadata main.cpp ../test_empty_stackmap.cpp)
 if(WIN32)
     target_sources(metadata PRIVATE windows_input.S)
+    target_include_directories(metadata PRIVATE ${RUNTIME}/src/Heap/z/os/windows ${RUNTIME}/src/os/Windows)
 endif()
 target_include_directories(metadata PRIVATE .. ${RUNTIME}/src ${RUNTIME}/include
     ${RUNTIME}/src/Loader/BinaryFile ${RUNTIME}/src/Heap
-    ${PRODUCT_BUILD}/src/Heap ${PRODUCT_BUILD}/src/Heap/Allocator)
+    ${PRODUCT_BUILD}/src/Heap ${PRODUCT_BUILD}/src/Heap/Allocator
+    ${PRODUCT_BUILD}/runtime-staging/include
+    ${RUNTIME}/third_party/third_party_bounds_checking_function/include)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_include_directories(metadata PRIVATE ${RUNTIME}/src/Heap/z/os/linux)
     target_link_options(metadata PRIVATE -Wl,--exclude-libs,ALL)
