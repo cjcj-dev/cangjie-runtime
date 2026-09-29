@@ -226,14 +226,17 @@ void InitDesc(Desc& desc, bool withMap, bool barrier)
         desc.stackMapOffset = static_cast<int32_t>(reinterpret_cast<char*>(desc.bits) -
             reinterpret_cast<char*>(&desc.stackMapOffset));
         Bits bits {desc.bits};
+        // The map used by ReturnSafepointRegMap: PC0 has no incoming stack
+        // pointer, PC16 names R13, whose prologue slot is fp-24. GC roots are
+        // only the zero-valued fp-16 slots, so the published root value is the
+        // slot address itself.
+        bits.Var(0); bits.Var(0); bits.Var(4); bits.Var(3);
+        bits.Var(2); bits.Var(0); bits.Var(1); bits.Var(0); bits.Var(0); bits.Var(1); bits.Var(0); bits.Var(0);
+        bits.Put(0, 32); bits.Put(1, 1); bits.Put(0, 1);
+        bits.Put(16, 32); bits.Put(1, 1); bits.Put(0, 1);
+        bits.Var(1); bits.Var(16); bits.Put(1u << 13, 16);
+        bits.Var(1); bits.Var(8); bits.Put(1, 8); bits.Var(0);
         bits.Var(0); bits.Var(0); bits.Var(0);
-        bits.Var(2); bits.Var(1); bits.Var(1); bits.Var(1); bits.Var(1); bits.Var(0);
-        bits.Put(0, 32); bits.Put(0, 1); bits.Put(0, 1); bits.Put(0, 1); bits.Put(0, 1);
-        bits.Put(16, 32); bits.Put(1, 1); bits.Put(0, 1); bits.Put(0, 1); bits.Put(0, 1);
-        bits.Var(1); bits.Var(33); bits.Put(0, 33);
-        bits.Var(0); bits.Var(0); bits.Var(0);
-        bits.Var(0); bits.Var(0);
-        bits.Var(0);
     }
     // A return-poll flag is the product's has_barrier property
     // (zStackWatermark.cpp:121-129); set it so the absent frames are the
