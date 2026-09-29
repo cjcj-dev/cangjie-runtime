@@ -1,0 +1,61 @@
+# kkk2_build_two lane=sym_cangjie_runtime_1331_implement_r5895529148 head=d1f697a053fec85a657286ce5d1c4aeb8fba09b7 dirty_files=9 source_sha256=0049d408c77577f0…
+-- first errors (default):
+default-build.log:6787:../../../runtime/src/Heap/z/zPage.inline.hpp:388:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+default-build.log:6801:../../../runtime/src/Heap/z/zPage.inline.hpp:389:9: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+default-build.log:6809:../../../runtime/src/Heap/z/zPage.inline.hpp:400:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+default-build.log:6823:../../../runtime/src/Heap/z/zPage.inline.hpp:455:9: error: unknown type name 'ZPageTableIterator'; did you mean 'ZRemsetTableIterator'?
+default-build.log:6832:../../../runtime/src/Heap/z/zPage.inline.hpp:455:34: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+default-build.log:6840:../../../runtime/src/Heap/z/zPage.inline.hpp:457:26: error: cannot initialize a parameter of type 'MapleRuntime::ZRemsetTableEntry *' with an rvalue of type 'MapleRuntime::ZPage **'
+default-build.log:6848:../../../runtime/src/Heap/z/zPage.inline.hpp:688:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+default-build.log:6862:../../../runtime/src/Heap/z/zPage.inline.hpp:793:13: error: use of undeclared identifier 'ZGenerationPagesParallelIterator'; did you mean 'ZRelocationSetParallelIterator'?
+default-build.log:6871:../../../runtime/src/Heap/z/zPage.inline.hpp:792:1: error: template parameter list matching the non-templated nested type 'MapleRuntime::ZRelocationSetIteratorImpl<true>' should be empty ('template
+default-build.log:6874:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: use of undeclared identifier '_iterator'; did you mean 'std::iterator'?
+default-build.log:6883:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: use of undeclared identifier '_iterator'; did you mean 'std::iterator'?
+default-build.log:6892:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: unknown type name '_iterator'; did you mean 'PageAgeRange::iterator'?
+default-build.log:6901:../../../runtime/src/Heap/z/zPage.inline.hpp:795:14: error: cannot use dot operator on a type
+default-build.log:7372:../../../runtime/src/Heap/z/zPage.inline.hpp:388:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+default-build.log:7387:../../../runtime/src/Heap/z/zPage.inline.hpp:389:9: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+default-build.log:7396:../../../runtime/src/Heap/z/zPage.inline.hpp:400:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+default-build.log:7411:../../../runtime/src/Heap/z/zPage.inline.hpp:455:9: error: unknown type name 'ZPageTableIterator'; did you mean 'ZRemsetTableIterator'?
+default-build.log:7421:../../../runtime/src/Heap/z/zPage.inline.hpp:455:34: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+default-build.log:7430:../../../runtime/src/Heap/z/zPage.inline.hpp:457:26: error: cannot initialize a parameter of type 'MapleRuntime::ZRemsetTableEntry *' with an rvalue of type 'MapleRuntime::ZPage **'
+default-build.log:7439:../../../runtime/src/Heap/z/zPage.inline.hpp:688:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+default-build.log:7454:../../../runtime/src/Heap/z/zPage.inline.hpp:793:13: error: use of undeclared identifier 'ZGenerationPagesParallelIterator'; did you mean 'ZRelocationSetParallelIterator'?
+default-build.log:7464:../../../runtime/src/Heap/z/zPage.inline.hpp:792:1: error: template parameter list matching the non-templated nested type 'MapleRuntime::ZRelocationSetIteratorImpl<true>' should be empty ('template
+default-build.log:7467:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: use of undeclared identifier '_iterator'; did you mean 'std::iterator'?
+default-build.log:7477:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: use of undeclared identifier '_iterator'; did you mean 'std::iterator'?
+default-build.log:7487:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: unknown type name '_iterator'; did you mean 'PageAgeRange::iterator'?
+-- SO (default):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+== testable configure_rc=0 build_rc=2 wall=28s
+-- first errors (testable):
+testable-build.log:6469:../../../runtime/src/Heap/z/zPage.inline.hpp:388:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+testable-build.log:6483:../../../runtime/src/Heap/z/zPage.inline.hpp:389:9: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+testable-build.log:6491:../../../runtime/src/Heap/z/zPage.inline.hpp:400:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+testable-build.log:6505:../../../runtime/src/Heap/z/zPage.inline.hpp:455:9: error: unknown type name 'ZPageTableIterator'; did you mean 'ZRemsetTableIterator'?
+testable-build.log:6514:../../../runtime/src/Heap/z/zPage.inline.hpp:455:34: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+testable-build.log:6522:../../../runtime/src/Heap/z/zPage.inline.hpp:457:26: error: cannot initialize a parameter of type 'MapleRuntime::ZRemsetTableEntry *' with an rvalue of type 'MapleRuntime::ZPage **'
+testable-build.log:6530:../../../runtime/src/Heap/z/zPage.inline.hpp:688:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+testable-build.log:6544:../../../runtime/src/Heap/z/zPage.inline.hpp:793:13: error: use of undeclared identifier 'ZGenerationPagesParallelIterator'; did you mean 'ZRelocationSetParallelIterator'?
+testable-build.log:6553:../../../runtime/src/Heap/z/zPage.inline.hpp:792:1: error: template parameter list matching the non-templated nested type 'MapleRuntime::ZRelocationSetIteratorImpl<true>' should be empty ('templat
+testable-build.log:6556:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: use of undeclared identifier '_iterator'; did you mean 'std::iterator'?
+testable-build.log:6565:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: use of undeclared identifier '_iterator'; did you mean 'std::iterator'?
+testable-build.log:6574:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: unknown type name '_iterator'; did you mean 'PageAgeRange::iterator'?
+testable-build.log:6583:../../../runtime/src/Heap/z/zPage.inline.hpp:795:14: error: cannot use dot operator on a type
+testable-build.log:6759:../../../runtime/src/Heap/z/zPage.inline.hpp:388:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+testable-build.log:6773:../../../runtime/src/Heap/z/zPage.inline.hpp:389:9: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+testable-build.log:6781:../../../runtime/src/Heap/z/zPage.inline.hpp:400:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+testable-build.log:6795:../../../runtime/src/Heap/z/zPage.inline.hpp:455:9: error: unknown type name 'ZPageTableIterator'; did you mean 'ZRemsetTableIterator'?
+testable-build.log:6804:../../../runtime/src/Heap/z/zPage.inline.hpp:455:34: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+testable-build.log:6812:../../../runtime/src/Heap/z/zPage.inline.hpp:457:26: error: cannot initialize a parameter of type 'MapleRuntime::ZRemsetTableEntry *' with an rvalue of type 'MapleRuntime::ZPage **'
+testable-build.log:6820:../../../runtime/src/Heap/z/zPage.inline.hpp:688:15: error: incomplete type 'MapleRuntime::ZPageTable' named in nested name specifier
+testable-build.log:6834:../../../runtime/src/Heap/z/zPage.inline.hpp:793:13: error: use of undeclared identifier 'ZGenerationPagesParallelIterator'; did you mean 'ZRelocationSetParallelIterator'?
+testable-build.log:6843:../../../runtime/src/Heap/z/zPage.inline.hpp:792:1: error: template parameter list matching the non-templated nested type 'MapleRuntime::ZRelocationSetIteratorImpl<true>' should be empty ('templat
+testable-build.log:6846:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: use of undeclared identifier '_iterator'; did you mean 'std::iterator'?
+testable-build.log:6855:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: use of undeclared identifier '_iterator'; did you mean 'std::iterator'?
+testable-build.log:6864:../../../runtime/src/Heap/z/zPage.inline.hpp:795:5: error: unknown type name '_iterator'; did you mean 'PageAgeRange::iterator'?
+-- SO (testable):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+c1205ffc1878a3d3663bdf78089ff3a07746ee6f2562d96e5fe28ed34ed5272a  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+-- logs: /root/sym_cangjie_runtime_1331_implement_r5895529148/{default,testable}-{configure,build}.log

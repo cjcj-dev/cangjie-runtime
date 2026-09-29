@@ -72,14 +72,8 @@ void ZDirector::evaluate_rules()
     if (_director == nullptr) {
         return;
     }
-    _director->notify_reevaluate();
-}
-
-void ZDirector::notify_reevaluate()
-{
-    std::lock_guard<std::mutex> lock(monitor);
-    reevaluate = true;
-    condition.notify_one();
+    std::lock_guard<std::mutex> lock(_director->monitor);
+    _director->condition.notify_one();
 }
 
 bool ZDirector::wait_for_tick()
@@ -89,19 +83,18 @@ bool ZDirector::wait_for_tick()
     if (stopped) {
         return false;
     }
-    condition.wait_for(lock, std::chrono::milliseconds(interval_ms),
-        [this] { return stopped || reevaluate; });
-    return !stopped;
+    condition.wait_for(lock, std::chrono::milliseconds(interval_ms));
+    return true;
 }
 
 static uint32_t young_gc_threads(const ZDirectorStats&)
 {
-    return ZYoungGCThreads == 0 ? 1 : ZYoungGCThreads;
+    return ZYoungGCThreads;
 }
 
 static uint32_t old_gc_threads(const ZDirectorStats&)
 {
-    return ZOldGCThreads == 0 ? 1 : ZOldGCThreads;
+    return ZOldGCThreads;
 }
 
 static bool rule_minor_timer(const ZDirectorStats& stats)
@@ -121,14 +114,15 @@ static double estimated_gc_workers(double serial_gc_time, double parallelizable_
     return parallelizable_gc_time / parallelizable_time_until_deadline;
 }
 
-static uint32_t discrete_young_gc_workers(double gc_workers, uint32_t cap)
+// HotSpot utilities/globalDefinitions.hpp: clamp; runtime builds as C++14.
+static uint32_t clamp(uint32_t value, uint32_t low, uint32_t high)
 {
-    const uint32_t limit = cap == 0 ? 1 : cap;
-    if (!std::isfinite(gc_workers) || gc_workers >= static_cast<double>(limit)) {
-        return limit;
-    }
-    const uint32_t want = static_cast<uint32_t>(std::ceil(std::max(gc_workers, 1.0)));
-    return std::max(1u, std::min(want, limit));
+    return std::min(std::max(value, low), high);
+}
+
+static uint32_t discrete_young_gc_workers(double gc_workers)
+{
+    return clamp(static_cast<uint32_t>(std::ceil(gc_workers)), 1u, ZYoungGCThreads);
 }
 
 static double select_young_gc_workers(const ZDirectorStats& stats, double serial_gc_time,
@@ -140,7 +134,7 @@ static double select_young_gc_workers(const ZDirectorStats& stats, double serial
         return static_cast<double>(cap);
     }
     const double gc_workers = estimated_gc_workers(serial_gc_time, parallelizable_gc_time, time_until_oom);
-    const uint32_t actual_gc_workers = discrete_young_gc_workers(gc_workers, cap);
+    const uint32_t actual_gc_workers = discrete_young_gc_workers(gc_workers);
     const double last_gc_workers = stats.young_stats.cycle.lastActiveWorkers;
     if (static_cast<double>(actual_gc_workers) < last_gc_workers) {
         const double gc_duration_delta =
@@ -185,7 +179,7 @@ static ZDriverRequest rule_minor_allocation_rate_dynamic(const ZDirectorStats& s
         (stats.young_stats.cycle.parallelTimeSd * one_in_1000) - parallel_gc_time_passed);
     const double gc_workers =
         select_young_gc_workers(stats, serial_gc_time, parallelizable_gc_time, time_until_oom);
-    const uint32_t actual_gc_workers = discrete_young_gc_workers(gc_workers, young_gc_threads(stats));
+    const uint32_t actual_gc_workers = discrete_young_gc_workers(gc_workers);
     const double actual_gc_duration = serial_gc_time + (parallelizable_gc_time / actual_gc_workers);
     const double time_until_gc = time_until_oom - actual_gc_duration;
     VLOG(REPORT, "Rule Minor: Allocation Rate (Dynamic GC Workers), MaxAllocRate: %.1fMB/s (+/-%.1f%%), "
@@ -489,15 +483,6 @@ struct ZWorkerCounts {
     uint32_t old_workers;
 };
 
-static uint32_t clamp_workers(uint32_t count, uint32_t hi)
-{
-    const uint32_t cap = hi == 0 ? 1 : hi;
-    if (count < 1) {
-        return 1;
-    }
-    return count > cap ? cap : count;
-}
-
 static ZWorkerCounts select_worker_threads(const ZDirectorStats& stats, uint32_t young_workers,
     ZWorkerSelectionType type)
 {
@@ -510,17 +495,17 @@ static ZWorkerCounts select_worker_threads(const ZDirectorStats& stats, uint32_t
         return {active_young_workers, active_old_workers};
     }
     const double young_to_old_ratio = calculate_young_to_old_worker_ratio(stats);
-    uint32_t old_workers = clamp_workers(static_cast<uint32_t>(young_workers * young_to_old_ratio), ZOldGCThreads);
+    uint32_t old_workers = clamp(static_cast<uint32_t>(young_workers * young_to_old_ratio), 1u, ZOldGCThreads);
     if (type != ZWorkerSelectionType::normal && old_workers + young_workers > ConcGCThreads) {
         const double old_ratio = young_to_old_ratio / (1.0 + young_to_old_ratio);
         const double young_ratio = 1.0 - old_ratio;
         const uint32_t young_workers_clamped =
-            clamp_workers(static_cast<uint32_t>(ConcGCThreads * young_ratio), ZYoungGCThreads);
+            clamp(static_cast<uint32_t>(ConcGCThreads * young_ratio), 1u, ZYoungGCThreads);
         const uint32_t old_workers_clamped =
-            clamp_workers(ConcGCThreads - young_workers_clamped, ZOldGCThreads);
+            clamp(ConcGCThreads - young_workers_clamped, 1u, ZOldGCThreads);
         if (type == ZWorkerSelectionType::start_major) {
             old_workers = old_workers_clamped;
-            young_workers = clamp_workers(std::max(old_workers, young_workers), ZYoungGCThreads);
+            young_workers = clamp(std::max(old_workers, young_workers), 1u, ZYoungGCThreads);
         } else if (type == ZWorkerSelectionType::minor_during_old) {
             young_workers = young_workers_clamped;
             old_workers = old_workers_clamped;
@@ -656,7 +641,6 @@ static ZDirectorStats sample_stats()
 void ZDirector::run_thread()
 {
     while (wait_for_tick()) {
-        reevaluate = false;
         if (Runtime::CurrentRef() == nullptr || !Heap::GetHeap().IsGCEnabled()) {
             continue;
         }

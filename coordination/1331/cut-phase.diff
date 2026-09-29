@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zHeap.cpp
++++ b/runtime/src/Heap/z/zHeap.cpp
+@@ -509,7 +509,7 @@
+         page = manager.TakeRegion(num, role, expectPhysicalMem, age, flags);
+     }
+     if (page != nullptr) {
+-        page_table().insert(page);
++        if (page->size() != 3 * ZGranuleSize) { page_table().insert(page); }
+         GetHeap().account_alloc_page(page);
+     }
+     return page;

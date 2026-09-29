@@ -1,0 +1,96 @@
+原始机械命中	处置理由
+runtime/src/Base/GcLog.h:27://   [GCLOG] v=5 rec=cycle seq= gc_tag= kind= reason= start_ns= dur_ns= live_before= live_after=	生产接口迁移为collection/generation生命周期v6；phase/STW保持v5。
+runtime/src/Base/GcLog.h:29://   [GCLOG] v=5 rec=generation seq= gc_tag= name= start_ns= dur_ns= live_before= live_after=	生产接口迁移为collection/generation生命周期v6；phase/STW保持v5。
+runtime/src/Base/GcLog.h:68:        // Always-on stderr (same shape as rec=crash): MRT_GC_LOG alone must emit rec=cycle.	生产接口迁移为collection/generation生命周期v6；phase/STW保持v5。
+runtime/src/Base/GcLog.h:71:        // "rec=cycle=0 ⇒ no GC" readings (walkcost/hostslow).	生产接口迁移为collection/generation生命周期v6；phase/STW保持v5。
+runtime/src/Base/GcLog.h:76:        EmitLine("[GCLOG] v=%u rec=cycle seq=%llu gc_tag=%c kind=%s reason=%s start_ns=%llu dur_ns=%llu "	生产接口迁移为collection/generation生命周期v6；phase/STW保持v5。
+runtime/src/Base/GcLog.h:93:        EmitLine("[GCLOG] v=%u rec=generation seq=%llu gc_tag=%c name=%s start_ns=%llu dur_ns=%llu "	生产接口迁移为collection/generation生命周期v6；phase/STW保持v5。
+runtime/src/Base/GcLog.h:113:    // was the world stopped".  rec=cycle is wall time for the whole collection and rec=phase is	生产接口迁移为collection/generation生命周期v6；phase/STW保持v5。
+runtime/src/Heap/z/zCollectedHeap.cpp:89:    MRT_ASSERT(!_finalizer_processor.IsRunning(), "Invalid finalizerProcessor status");	断言检查finalizer运行状态；不是被删除的计时器，保留机制。
+runtime/src/Heap/z/zReferenceProcessor.cpp:36:static const ZStatCriticalPhase PFinalizerProcessorWaittingTime("finalizerProcessor waitting time");	删除两个critical计时实例及调用；其余finalizer状态断言和注释保留。
+runtime/src/Heap/z/zReferenceProcessor.cpp:507:    CHECK_DETAIL(running.load(std::memory_order_acquire), "invalid finalizerProcessor status");	删除两个critical计时实例及调用；其余finalizer状态断言和注释保留。
+runtime/src/Heap/z/zReferenceProcessor.cpp:719:// 2. Leave safe region (calling in finalizerProcessor thread)	删除两个critical计时实例及调用；其余finalizer状态断言和注释保留。
+runtime/src/Heap/z/zReferenceProcessor.hpp:110:    // wait started flag set, call after create finalizerProcessor thread	描述finalizer线程的成员/注释，不消费日志，保留。
+runtime/src/Heap/z/zReferenceProcessor.hpp:153:    std::condition_variable startedCondition; // notify finalizerProcessor thread is started	描述finalizer线程的成员/注释，不消费日志，保留。
+runtime/src/Heap/z/zStat.cpp:1292:    // rec=cycle is the collection-level structured record; rec=phase covers	开始/结束/中止从ZGC对应的RegisterStart/RegisterEnd分路发射。
+runtime/src/Heap/z/zStat.cpp:1329:    GcLog::Generation(GcLog::CurrentSeq(), Name(), startNs, endNs - startNs,	开始/结束/中止从ZGC对应的RegisterStart/RegisterEnd分路发射。
+runtime/src/Heap/z/zStat.hpp:476:    // Host statistics readback (zDriver epilogue, rec=cycle): the reclaimed	统计读取接口注释，不是日志消费；统计API明确不进本包。
+runtime/src/Mutator/MutatorManager.h:366:        // rec=cycle/rec=phase instead.	诊断说明注释，无记录格式读取。
+runtime/tests/gc_unit/check_driver_receipt_wiring.sh:34:anchor_count=$(/usr/bin/grep -c 'GcLog::Cycle(unsigned long' "$tmp/copy_collector.txt" || true)	删除无调用者且依赖已删除CopyCollector的死脚本。
+runtime/tests/gc_unit/wait_phase_entry_cycle.py:13:from gclog_schema import parse_gclog	在线逐行reader只在event=end时确认完成；开始/中止不触发ACK。
+runtime/tests/gc_unit/wait_phase_entry_cycle.py:41:                        if acknowledged or not line.startswith(b"[GCLOG] ") or b" rec=generation " not in line:	在线逐行reader只在event=end时确认完成；开始/中止不触发ACK。
+runtime/tests/gc_unit/wait_phase_entry_cycle.py:43:                        records = parse_gclog(line.decode("utf-8"))	在线逐行reader只在event=end时确认完成；开始/中止不触发ACK。
+runtime/tests/gc_unit/wait_phase_entry_cycle.py:44:                        for cycle in records.generations:	在线逐行reader只在event=end时确认完成；开始/中止不触发ACK。
+runtime/tests/gcparity/analyze_drainwall.py:14:MINOR_CYCLE_RE = re.compile(r"rec=cycle .*kind=minor")	替换旧正则为共享reader+validate_complete，按完整end事件统计。
+runtime/tests/gcparity/analyze_drainwall.py:20:        for value in re.findall(rf"rec=cycle .*kind={kind} .*dur_ns=([0-9]+)", text)	替换旧正则为共享reader+validate_complete，按完整end事件统计。
+runtime/tests/gcparity/analyze_drainwall.py:120:    # invocations, not only top-level rec=cycle kind=minor records.	替换旧正则为共享reader+validate_complete，按完整end事件统计。
+runtime/tests/perf_vs_official/analyze_hapillar.py:20:from gclog_schema import parse_gclog	仅读取phase/STW不变字段，无cycle/generation字段访问，保留。
+runtime/tests/perf_vs_official/analyze_hapillar.py:68:        records = parse_gclog(stderr)	仅读取phase/STW不变字段，无cycle/generation字段访问，保留。
+runtime/tests/perf_vs_official/analyze_stw.py:5:Never concatenate the same file twice — a prior extra loop doubled rec=cycle and held_ns.	完整性校验后按end事件统计；删除finalizer特殊分支，输出中止/截断数。
+runtime/tests/perf_vs_official/analyze_stw.py:14:from gclog_schema import parse_gclog, pillar_for	完整性校验后按end事件统计；删除finalizer特殊分支，输出中止/截断数。
+runtime/tests/perf_vs_official/analyze_stw.py:59:    records = parse_gclog(text)	完整性校验后按end事件统计；删除finalizer特殊分支，输出中止/截断数。
+runtime/tests/perf_vs_official/analyze_stw.py:71:    records = parse_gclog(text)	完整性校验后按end事件统计；删除finalizer特殊分支，输出中止/截断数。
+runtime/tests/perf_vs_official/analyze_stw.py:72:    out = {record.seq: record.dur_ns for record in records.cycles}	完整性校验后按end事件统计；删除finalizer特殊分支，输出中止/截断数。
+runtime/tests/perf_vs_official/analyze_stw.py:73:    kinds = {record.seq: record.kind for record in records.cycles}	完整性校验后按end事件统计；删除finalizer特殊分支，输出中止/截断数。
+runtime/tests/perf_vs_official/analyze_stw.py:91:    records = parse_gclog(text)	完整性校验后按end事件统计；删除finalizer特殊分支，输出中止/截断数。
+runtime/tests/perf_vs_official/analyze_stw.py:92:    if records.cycles:	完整性校验后按end事件统计；删除finalizer特殊分支，输出中止/截断数。
+runtime/tests/perf_vs_official/analyze_stw.py:109:        if name == "finalizerProcessor_waitting_time":	完整性校验后按end事件统计；删除finalizer特殊分支，输出中止/截断数。
+runtime/tests/perf_vs_official/analyze_youngstw.py:20:from gclog_schema import parse_gclog	仅读取不变phase/STW字段；旧相位名指标按任务C8不进本包。
+runtime/tests/perf_vs_official/analyze_youngstw.py:204:    records = parse_gclog(stderr)	仅读取不变phase/STW字段；旧相位名指标按任务C8不进本包。
+runtime/tests/perf_vs_official/gclog_schema.py:19:    rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "	迁移当前producer逐字段reader与生命周期验证；删除v4cycle/leaf/ZSTAT/unknown分支。
+runtime/tests/perf_vs_official/gclog_schema.py:25:    rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "	迁移当前producer逐字段reader与生命周期验证；删除v4cycle/leaf/ZSTAT/unknown分支。
+runtime/tests/perf_vs_official/gclog_schema.py:30:    rf"^\[GCLOG\] v=(\S+) rec=generation seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) "	迁移当前producer逐字段reader与生命周期验证；删除v4cycle/leaf/ZSTAT/unknown分支。
+runtime/tests/perf_vs_official/gclog_schema.py:131:        return bool(self.cycles or self.generations or self.phases or self.phase_leaves or self.stw)	迁移当前producer逐字段reader与生命周期验证；删除v4cycle/leaf/ZSTAT/unknown分支。
+runtime/tests/perf_vs_official/gclog_schema.py:187:def parse_gclog(text: str) -> GcLogRecords:	迁移当前producer逐字段reader与生命周期验证；删除v4cycle/leaf/ZSTAT/unknown分支。
+runtime/tests/perf_vs_official/gclog_schema.py:236:            records.generations.append(GenerationRecord(	迁移当前producer逐字段reader与生命周期验证；删除v4cycle/leaf/ZSTAT/unknown分支。
+runtime/tests/perf_vs_official/gclog_schema.py:252:                records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5),	迁移当前producer逐字段reader与生命周期验证；删除v4cycle/leaf/ZSTAT/unknown分支。
+runtime/tests/perf_vs_official/gclog_schema.py:263:            records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5), *numbers))	迁移当前producer逐字段reader与生命周期验证；删除v4cycle/leaf/ZSTAT/unknown分支。
+runtime/tests/perf_vs_official/gclog_schema.py:299:            records.cycles.append(ZCycleRecord(	迁移当前producer逐字段reader与生命周期验证；删除v4cycle/leaf/ZSTAT/unknown分支。
+runtime/tests/perf_vs_official/gclog_schema.py:309:    return [(record.seq, record.name, record.ns) for record in parse_gclog(text).phases]	迁移当前producer逐字段reader与生命周期验证；删除v4cycle/leaf/ZSTAT/unknown分支。
+runtime/tests/perf_vs_official/phase_entry_guard.py:17:from gclog_schema import parse_gclog	以共享reader读取当前字段，按end事件保留已有entry顺序/窗口断言。
+runtime/tests/perf_vs_official/phase_entry_guard.py:20:records = parse_gclog(text)	以共享reader读取当前字段，按end事件保留已有entry顺序/窗口断言。
+runtime/tests/perf_vs_official/phase_entry_guard.py:22:if not records.generations:	以共享reader读取当前字段，按end事件保留已有entry顺序/窗口断言。
+runtime/tests/perf_vs_official/phase_entry_guard.py:34:minor_spans = [r for r in records.generations if r.gc_tag == "y"]	以共享reader读取当前字段，按end事件保留已有entry顺序/窗口断言。
+runtime/tests/perf_vs_official/phase_entry_guard.py:47:    spans = records.generations	以共享reader读取当前字段，按end事件保留已有entry顺序/窗口断言。
+runtime/tests/perf_vs_official/phase_entry_guard.py:73:    f"SCHEMA_LEDGER_GUARD mode={mode} generations={len(records.generations)} stw={len(records.stw)} "	以共享reader读取当前字段，按end事件保留已有entry顺序/窗口断言。
+runtime/tests/perf_vs_official/test_gclog_schema.py:11:from gclog_schema import parse_gclog, parse_zstat, phase_ns_records	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:14:GOOD_PHASE = "[GCLOG] v=4 rec=phase seq=7 gc_tag=- name=young.probe kind=conc start_ns=1 ns=999"	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:16:    "[GCLOG] v=4 rec=phase_leaf seq=7 gc_tag=- name=young.copy_leaf ns=19 kind=conc "	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:20:    "[GCLOG] v=4 rec=cycle seq=7 gc_tag=- kind=minor reason=young start_ns=1 dur_ns=100 "	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:31:        gc = parse_gclog(text)	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:33:        self.assertEqual((len(gc.cycles), len(gc.phases), len(gc.phase_leaves), len(gc.stw)), (1, 1, 1, 1))	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:35:        self.assertEqual((len(zs.phases), len(zs.cycles), zs.phases[0].conc_ns), (1, 1, 19))	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:38:        row = GOOD_PHASE.replace("v=4", "v=5").replace("kind=conc", "kind=subphase")	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:39:        self.assertEqual(parse_gclog(row).phases[0].kind, "subphase")	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:41:            parse_gclog(row.replace("kind=subphase", "kind=invalid"))	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:44:        row = ("[GCLOG] v=5 rec=generation seq=7 gc_tag=Y name=Young_Generation "	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:46:        record = parse_gclog(row).generations[0]	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:51:                parse_gclog(bad)	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:55:        self.assertEqual([phase.gc_tag for phase in parse_gclog(text).phases], list("yYO-"))	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:63:                parse_gclog(line)	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:68:            "[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=nine_nine_nine kind=conc start_ns=1 ns=999",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:78:            parse_gclog("[GCLOG] v=2 rec=phase seq=7 gc_tag=- name=young.probe kind=conc start_ns=1 us=1")	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:82:            parse_gclog("[GCLOG] v=4 rec=phase seq=7 gc_tag=- name=young.probe kind=conc start_ns=1 us=1")	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:86:            parse_gclog(GOOD_PHASE + "\n[GCLOG] v=x rec=phase seq=8 gc_tag=- name=bad kind=conc start_ns=1 ns=1")	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:90:            parse_gclog(GOOD_PHASE + "\n[GCLOG] rec=phase seq=8 gc_tag=- name=bad kind=conc start_ns=1 ns=1")	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:94:            "[GCLOG] v=-1 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:95:            "[GCLOG] v=4 v=4 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:96:            "[GCLOG] v=6 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:100:                parse_gclog(line)	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:104:            "[GCLOG] v=2 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 us=1",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:109:                parse_gclog(line)	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:113:            parse_gclog("[GCLOG] v=4 rec=phase_extra seq=1 gc_tag=- name=p ns=1")	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:117:            "[GCLOG] v=4 rec=phase seq=x gc_tag=- name=p kind=conc start_ns=1 ns=1",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:118:            "[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=x",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:119:            f"[GCLOG] v=4 rec=phase seq={1 << 64} gc_tag=- name=p kind=conc start_ns=1 ns=1",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:120:            f"[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns={1 << 64}",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:124:                parse_gclog(line)	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:129:            "[GCLOG] v=4 rec=phase name=p seq=1 gc_tag=- kind=conc start_ns=1 ns=1",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:130:            "[GCLOG] v=4 rec=phase seq=1 gc_tag=- seq=1 name=p kind=conc start_ns=1 ns=1",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:131:            "[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1 extra=1",	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:135:                parse_gclog(line)	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:139:            parse_gclog(GOOD_LEAF.replace("name=young.copy_leaf", "name=other"))	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:148:                parse_gclog(line)	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:152:            parse_gclog(GOOD_LEAF.replace("depth=2", "depth=3"))	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_gclog_schema.py:156:            parse_gclog(GOOD_LEAF.replace("path_ok=1", "path_ok=0"))	迁移有效断言到当前schema；无producer的leaf/ZSTAT用例随实现删除，补A1-A7。
+runtime/tests/perf_vs_official/test_phase_entry_guard.py:15:    return (f"[GCLOG] v=5 rec=generation seq={seq} gc_tag={tag} name={name} "	fixture改为v6代end/v5phase；原entry/tag/顺序断言保留。

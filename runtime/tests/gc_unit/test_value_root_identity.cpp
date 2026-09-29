@@ -15,6 +15,10 @@
 #include "ObjectModel/MObject.h"
 #include <cstring>
 #include <chrono>
+#include <atomic>
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkStack.hpp"
+#include "Mutator/Handshake.h"
 #include <thread>
 
 using namespace MapleRuntime;
@@ -450,3 +454,81 @@ void CheckRootTaskHandshake(bool positiveControl)
 }
 GC_RUNTIME_OTHER_VM_TEST(ZRootTask, OldRootTaskHasNoExtraHandshake) { CheckRootTaskHandshake(false); }
 GC_RUNTIME_OTHER_VM_TEST(ZRootTask, HandshakeObservationPositiveControl) { CheckRootTaskHandshake(true); }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+// ZGC zMark.cpp:535-622: a worker handshake publishes an owner's partial
+// stack before the mark-completed breakpoint. The owner stays attached and
+// outside saferegion until observation, so exit/saferegion flush cannot help.
+GC_RUNTIME_OTHER_VM_TEST(ZMarkFlush, ConcurrentWorkerPublishesPartialMutatorStack)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    U64 root = 0;
+    auto task = RunCJTask(AllocateExportForeignRoot, &root);
+    GC_EXPECT_TRUE(task != nullptr);
+    void* returned = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(task, &returned), E_OK);
+    ReleaseHandle(task);
+    ConcurrentGCBreakpoints::AcquireControl();
+    BreakpointFailureCleanup cleanup;
+    GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"));
+    BaseObject* object = Heap::GetHeap().GetExportObject(root);
+    std::atomic<bool> ready{false};
+    std::atomic<unsigned> requests{1};
+    std::atomic<bool> observe{false};
+    std::atomic<bool> observed{false};
+    std::atomic<bool> release{false};
+    size_t before = 0;
+    size_t after = 0;
+    std::thread owner([&] {
+        auto& manager = MutatorManager::Instance();
+        Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        mutator->LeaveSaferegion();
+        auto& mark = Heap::GetHeap().old().Mark();
+        auto& stacks = mark.Stacks();
+        // One valid, already-live object's mark-only work is sufficient to
+        // create an unfilled stack, without introducing a second root model.
+        const auto address = from_object(object);
+        while (!release.load(std::memory_order_acquire)) {
+            const unsigned input = requests.exchange(0, std::memory_order_acq_rel);
+            if (input != 0) {
+                stacks.Push(mark.Stripes(), mark.Stripes().StripeForAddress(raw(address)),
+                    MarkStackEntry(untype(ZAddress::offset(address)), false, false, false, false), true);
+                if (input == 2) {
+                    // ZGC zBarrierSet.cpp:271-273: real thread detach flushes
+                    // its remaining stack. Schedule this input after the
+                    // handshake to exercise Flush's independent stripes term.
+                    mutator->EnterSaferegion(false);
+                    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+                    ready.store(true, std::memory_order_release); // STRIPES_INPUT_READY
+                    return;
+                }
+                before = stacks.Population();
+                ready.store(true, std::memory_order_release);
+            }
+            ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
+            if (observe.load(std::memory_order_acquire) && !observed.load()) {
+                after = stacks.Population();
+                observed.store(true, std::memory_order_release);
+            }
+            std::this_thread::yield();
+        }
+        mutator->EnterSaferegion(false);
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    while (!ready.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    const bool reached = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
+    observe.store(true, std::memory_order_release);
+    while (!observed.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+    release.store(true, std::memory_order_release);
+    owner.join();
+    std::fprintf(stderr, "MARK_FLUSH_PARTIAL_TARGET reached=%d before=%zu after=%zu\n", reached, before, after);
+    GC_EXPECT_TRUE(reached && before == 1 && after == 0);
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    Heap::GetHeap().RemoveExportObject(root);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+#endif
