@@ -15,16 +15,24 @@ def command(text):
     return gdb.execute(text, to_string=True)
 
 
+snapshot = []
+
+
 def population(address):
+    global snapshot
     # Read the product-owned stack receipts without executing inferior calls.
     stacks = gdb.Value(address).cast(gdb.lookup_type(
         'MapleRuntime::MarkThreadLocalStacks').pointer()).dereference()['stacks']['_M_impl']
     begin, end = stacks['_M_start'], stacks['_M_finish']
     sizes = []
+    snapshot = []
     for index in range(int(end - begin)):
         stack = (begin + index).dereference()
         if int(stack):
-            sizes.append(max(1, int(stack.dereference()['top'])))
+            top = int(stack.dereference()['top'])
+            capacity = int(stack.dereference()['entries']['_length'])
+            snapshot.append({'top': top, 'capacity': capacity})
+            sizes.append(max(1, top))
     return sum(sizes)
 
 
@@ -114,6 +122,8 @@ try:
         result['entered'] = True
         entry.delete()
         result['before'] = population(stack_address)
+        result['before_stacks'] = snapshot
+        result['input_partial'] = bool(snapshot) and all(0 < item['top'] < item['capacity'] for item in snapshot)
         product = gdb.solib_name(gdb.selected_frame().pc())
         expected = Path(os.environ['GCV2_RUNTIME_LIB_DIR'], 'libcangjie-runtime.so').resolve()
         if Path(product).resolve() != expected:
@@ -134,8 +144,10 @@ try:
         command('continue')
         result['after'] = population(stack_address)
     result['no_finalizer_signal'] = result.get('finalizer_condition') not in result['signal_targets']
-    result['passed'] = (result['no_finalizer_signal'] and result['entered'] and result['before'] == 1 and
-                        result['after'] == 0 and result['returned'] is not None)
+    result['published'] = result['after'] == 0
+    result['passed'] = all((result['no_finalizer_signal'], result['entered'],
+                          result.get('input_partial', False), result['published'],
+                          result['returned'] is not None))
     print('MARK_PROACTIVE_ASSERT ' + json.dumps(result, sort_keys=True), flush=True)
     Path(os.environ['MARK_FLUSH_RESULT']).write_text(json.dumps(result) + '\n')
     command('quit ' + ('0' if result['passed'] else '1'))
