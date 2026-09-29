@@ -2,7 +2,7 @@
   "kind": "runtime-default",
   "sha": "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
   "repo": "/root/sym_cangjie_runtime_1322_implement_r5899654110/baseline-source",
-  "sdk": "/root/sharedbuild/official-sdk/nightly-1.3.0-alpha.20260925001050/0f130c4ce186b29818e01457c81eb1467b5b2a0210754c706d22e44c33addd48",
+  "sdk": "/root/sharedbuild/official-sdk/nightly-1.3.0-alpha.20260925001050/bd29abef90c9599f018598496f723bbb4bdb889f747c15d27dc9f12053f373fc",
   "optimization": "Release",
   "builder": "/root/sym_cangjie_runtime_1322_implement_r5899654110/runtime.sh",
   "inputs": {},
