@@ -25,6 +25,7 @@
 namespace MapleRuntime {
 enum class StackMapInvalidReason : U8 {
     NONE,
+    NO_MAP,
     ZERO_ENTRIES,
     PC_MISS,
     ZERO_ROOT_INDICES,
@@ -124,10 +125,14 @@ private:
 };
 class CompressedStackMapHead {
 public:
-    explicit CompressedStackMapHead(const Uptr* table) : prologue(table) {}
+    explicit CompressedStackMapHead(const Uptr* table = nullptr) : table(table) {}
     CompressedStackMapHead(CompressedStackMapHead&&) = default;
     ~CompressedStackMapHead() = default;
-    PrologueRegisterClosure TakePrologueRegisters() { return prologue.TakeRegisters(); }
+    PrologueRegisterClosure TakePrologueRegisters()
+    {
+        if (table == nullptr) { return PrologueRegisterClosure(); }
+        return FramePrologue(table).TakeRegisters();
+    }
     static CompressedStackMapHead GetStackMapHead(Uptr addr, uint64_t* funcDesc = nullptr)
     {
         ElfUnloadQuiescence::ReadScope metadataReader;
@@ -142,6 +147,9 @@ public:
 #endif
             stackmapStart = reinterpret_cast<U8*>(desc->GetStackMap());
         }
+        // A compiled frame may have no oop map (HotSpot frame.cpp:998).
+        // Keep absence as a null metadata pointer, never a synthetic prologue.
+        if (stackmapStart == nullptr) { return CompressedStackMapHead(); }
         return CompressedStackMapHead(reinterpret_cast<Uptr*>(stackmapStart));
     }
     static void DestroyStackMapHead(CompressedStackMapHead*& stackMapHead) noexcept
@@ -154,6 +162,8 @@ public:
 
     CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC, bool countDerivedRows = false) const
     {
+        if (table == nullptr) { return CompressedStackMapEntry(false); }
+        const FramePrologue prologue(table);
         StackMapTable stackMapTable(prologue.GetNextTable(), prologue.GetSlotFormat());
         if (stackMapTable.GetLookupResult(startPC, framePC) != StackMapLookupResult::FOUND) {
             return CompressedStackMapEntry(false);
@@ -172,6 +182,8 @@ public:
 
     StackMapInvalidReason GetInvalidReason(Uptr startPC, Uptr framePC) const
     {
+        if (table == nullptr) { return StackMapInvalidReason::NO_MAP; }
+        const FramePrologue prologue(table);
         StackMapTable stackMapTable(prologue.GetNextTable(), prologue.GetSlotFormat());
         switch (stackMapTable.GetLookupResult(startPC, framePC)) {
             case StackMapLookupResult::ZERO_ENTRIES:
@@ -185,7 +197,7 @@ public:
     }
 
 private:
-    FramePrologue prologue;
+    const Uptr* table;
 };
 using StackMapEntry = CompressedStackMapEntry;
 using StackMapHead = CompressedStackMapHead;
