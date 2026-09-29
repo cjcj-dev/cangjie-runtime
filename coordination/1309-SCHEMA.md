@@ -27,9 +27,13 @@ Raw mechanical base inventory: 1309-consumers-base.txt (95 lines).
 - test_gclog_schema.py and test_phase_entry_guard.py: fixtures migrated, retain existing valid ns/range/order/tag/entry assertions.
 - check_driver_receipt_wiring.sh: removed; it names a removed CopyCollector product function and has no callers.
 - zStat.hpp/MutatorManager.h comments: no executable consumer; no change to counter/stat APIs outside this issue.
-- Other inventory hits in .md/.sh are documentation or selectors using phase/STW fields that remain unchanged; individually classified in final inventory companion.
+- All 95 raw hits have individual dispositions in 1309-consumer-disposition.tsv.
 - cjcj release-gates.mjs: parse exact v5 phase ns, identify missing floor names explicitly as UNKNOWN. Controller prohibits floor changes; cjcj#748 owns that specification migration.
 
 # Test changes
 
 Removed obsolete phase_leaf path/depth/overflow and ZSTAT tests with their nonexistent producers (ZGC has no counterpart); replaced v4 family fixture with current lifecycle fixture. Added A1–A5/A7, count variation, generation isolation, duplicate terminal tests. A6 uses real product stderr. Added GcLifecycleLog.CollectionStart/CollectionEnd/CollectionAbort/GenerationUsed and testable AllocationStall; all run real driver or alloc_page entry and read stderr emitted by the linked SO.
+
+# Added consumer discovered by full-repository search
+
+`git grep -n parse_zstat -- tools` found tools/zstat_pillars.py:15/63. Controller authorized migration in `/root/cj_build/ops/advisor/outbox/sym_cangjie_runtime_1309_implement_r5897254554-20260929T195920Z.md`. It now validates the current lifecycle and reports phase-kind/pillar inclusive work. Independent same-seq/same-generation STW containment and absolute collection windows remain assertions. Removed the ZSTAT double ledger whose producer no longer exists; absent pillar mappings are reported unavailable. Collection wall coverage uses interval union because the two drivers can overlap (ZGC zDriver.cpp:201-225,463-488). Added four real CLI positive/negative tests.
