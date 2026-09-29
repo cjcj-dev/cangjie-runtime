@@ -323,7 +323,7 @@ static ZPage* AllocateRelocationTarget(ZForwarding* forwarding)
     flags.set_non_blocking();
     flags.set_gc_relocation();
     ZPage* source = forwarding->page();
-    return Heap::alloc_page(forwarding->size(), source->type(), false, forwarding->to_age(), flags);
+    return Heap::alloc_page(forwarding->size(), source->type(), forwarding->to_age(), flags);
 }
 
 static void RetireRelocationTarget(ZGeneration* generation, ZPage* page)

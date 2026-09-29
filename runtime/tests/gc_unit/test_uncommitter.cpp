@@ -33,12 +33,12 @@ namespace MapleRuntime {
 struct UncommitterTestAccess {
     static ZPartition& Partition()
     {
-        return *Heap::GetHeap().GetAllocator().GetRegionManager().freeRegionManager.partitions.front();
+        return *Heap::GetHeap().GetAllocator().GetRegionManager().partitions.front();
     }
     static Uncommitter& Current() { return Partition().uncommitter; }
     static void StopAll()
     {
-        Heap::GetHeap().GetAllocator().GetRegionManager().freeRegionManager.StopUncommitters();
+        Heap::GetHeap().GetAllocator().GetRegionManager().StopUncommitters();
     }
     static void ResetCancel()
     {
@@ -222,7 +222,7 @@ struct ProbeHeap {
     }
 };
 
-static void InitializeUncommitCache(FreeRegionManager& frm, ProbeHeap& heap)
+static void InitializeUncommitCache(RegionManager& frm, ProbeHeap& heap)
 {
     const size_t bytes = heap.units * ZGranuleSize;
     (void)bytes; // ProbeHeap initialized the capacity owner and its free cache together.
@@ -230,7 +230,7 @@ static void InitializeUncommitCache(FreeRegionManager& frm, ProbeHeap& heap)
     // ZPartition::prime now runs during heap construction. Only fill the
     // remaining capacity, using the same product prime implementation.
     auto& partition = *frm.partitions.front();
-    GC_EXPECT_TRUE(partition.prime(frm, partition.currentMaxCapacity - partition.capacity));
+    GC_EXPECT_TRUE(partition.prime(partition.currentMaxCapacity - partition.capacity));
 }
 
 static size_t ProbeProductUncommit(bool cancelFirst)
@@ -242,7 +242,7 @@ static size_t ProbeProductUncommit(bool cancelFirst)
     ProbeHeap heap(n);
     auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& rm = space.GetRegionManager();
-    FreeRegionManager& frm = rm.freeRegionManager;
+    RegionManager& frm = rm;
     InitializeUncommitCache(frm, heap);
     std::fprintf(stderr, "DETAIL probe cache ready committed=%zu cached=%u\n", frm.capacity(), (frm.GetCachedBytes() / ZGranuleSize));
     std::fflush(stderr);
@@ -280,12 +280,12 @@ static void ExercisePartitionWorker(bool enabled)
     MRT_CjRuntimeInit();
     RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& regions = space.GetRegionManager();
-    space.GetRegionManager().freeRegionManager.StopUncommitters();
+    space.GetRegionManager().StopUncommitters();
     const size_t n = 64 * MB / ZGranuleSize;
-    ZPage* region = regions.TakeRegion((n) * ZGranuleSize, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* region = regions.TakeRegion((n) * ZGranuleSize, ZPageType::large, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(region != nullptr);
     const size_t beforeReclaim = regions.GetCommittedCapacity();
-    regions.ReturnPageMemory(PageMemory{region->granule_index(), n * ZGranuleSize, 0, true});
+    regions.ReturnPageMemory(RegionManager::VirtualMemoryOf(region->granule_index(), n * ZGranuleSize));
     GC_EXPECT_EQ(regions.GetCommittedCapacity(), beforeReclaim);
     const size_t before = regions.GetCommittedCapacity();
     const uint64_t start = TimeUtil::NanoSeconds();
@@ -345,7 +345,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CacheValleyLimitsActivationBudget)
     BindUncommitWorkerThread();
     ProbeHeap heap(64 * MB / ZGranuleSize);
     auto& regions = Heap::GetHeap().GetAllocator().GetRegionManager();
-    auto& frm = regions.freeRegionManager;
+    auto& frm = regions;
     InitializeUncommitCache(frm, heap);
     auto& partition = UncommitterTestAccess::Partition();
     auto& worker = partition.uncommitter;
@@ -356,9 +356,9 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, CacheValleyLimitsActivationBudget)
 
     const size_t total = partition.capacity;
     const size_t allocated = total - 10 * ZGranuleSize;
-    ZPage* page = regions.TakeRegion(allocated, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* page = regions.TakeRegion(allocated, ZPageType::large, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(page != nullptr);
-    regions.ReturnPageMemory(PageMemory{page->granule_index(), allocated, 0, true});
+    regions.ReturnPageMemory(RegionManager::VirtualMemoryOf(page->granule_index(), allocated));
     UncommitterTestAccess::ResetCancel();
     GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
     const size_t actual = UncommitterTestAccess::Budget(worker);
@@ -383,16 +383,16 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, FreshCacheWaitsForWatermarkCycle)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MRT_CjRuntimeInit();
     auto& regions = Heap::GetHeap().GetAllocator().GetRegionManager();
-    regions.freeRegionManager.StopUncommitters();
+    regions.StopUncommitters();
     auto& partition = UncommitterTestAccess::Partition();
-    ZPage* page = regions.TakeRegion(64 * MB, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* page = regions.TakeRegion(64 * MB, ZPageType::large, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(page != nullptr);
     UncommitterTestAccess::ResetCancel();
     const size_t before = regions.GetCommittedCapacity();
     partition.uncommitter.Start();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     const uint64_t returnedAt = TimeUtil::NanoSeconds();
-    regions.ReturnPageMemory(PageMemory{page->granule_index(), 64 * MB, 0, true});
+    regions.ReturnPageMemory(RegionManager::VirtualMemoryOf(page->granule_index(), 64 * MB));
     std::this_thread::sleep_for(std::chrono::milliseconds(750));
     const size_t firstCycle = regions.GetCommittedCapacity();
     const uint64_t cacheAgeAtObservation = TimeUtil::NanoSeconds() - returnedAt;
@@ -420,7 +420,7 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, AllocationDuringCycleLowersUncommitAllow
     BindUncommitWorkerThread();
     ProbeHeap heap(64 * MB / ZGranuleSize);
     auto& regions = Heap::GetHeap().GetAllocator().GetRegionManager();
-    InitializeUncommitCache(regions.freeRegionManager, heap);
+    InitializeUncommitCache(regions, heap);
     auto& partition = UncommitterTestAccess::Partition();
     auto& worker = partition.uncommitter;
     UncommitterTestAccess::ResetCancel();
@@ -428,9 +428,9 @@ GC_COMPONENT_OTHER_VM_TEST(Uncommitter, AllocationDuringCycleLowersUncommitAllow
     GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
     const size_t before = partition.capacity;
     const size_t allocated = before - 2 * ZGranuleSize;
-    ZPage* page = regions.TakeRegion(allocated, ZPageType::large, true, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* page = regions.TakeRegion(allocated, ZPageType::large, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(page != nullptr);
-    regions.ReturnPageMemory(PageMemory{page->granule_index(), allocated, 0, true});
+    regions.ReturnPageMemory(RegionManager::VirtualMemoryOf(page->granule_index(), allocated));
     size_t released = 0;
     for (int chunk = 0; chunk < 3; ++chunk) {
         released += UncommitterTestAccess::Uncommit(worker);

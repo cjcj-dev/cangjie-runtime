@@ -1643,7 +1643,7 @@ void ExerciseRelocationWait782(bool claimedPage)
         destination->SetRegionAllocPtr(destination->GetRegionEnd());
         ZAllocationFlags flags;
         flags.set_non_blocking();
-        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags)) {
+        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags)) {
             occupied.push_back(page);
         }
     }

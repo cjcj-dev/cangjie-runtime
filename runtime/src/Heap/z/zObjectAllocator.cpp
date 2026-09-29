@@ -99,7 +99,7 @@ ZObjectAllocator::PerAge::PerAge(PageAge pageAge)
 ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
                                              PageAge age, ZAllocationFlags flags)
 {
-    ZPage* page = Heap::alloc_page(size, role, false, age, flags);
+    ZPage* page = Heap::alloc_page(size, role, age, flags);
     if (page == nullptr) { return nullptr; }
     page->reset(age);
     // zObjectAllocator.cpp:40-45: the shared page is a per-CPU/per-age
@@ -127,7 +127,7 @@ void RegionManager::UndoSharedPage(ZPage* page)
         const size_t pageBytes = page->GetRegionSize();
         const size_t index = page->granule_index();
         page->RetirePageMemory();
-        ReturnRetiredPageMemory(PageMemory{index, pageBytes, 0, true});
+        ReturnRetiredPageMemory(VirtualMemoryOf(index, pageBytes));
     });
 }
 
@@ -344,7 +344,6 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
 
 namespace MapleRuntime {
 RegionManager::RegionManager()
-        : freeRegionManager(*this)
     {
         tlabAllocatingThreads.Sample(1);
         tlabRequestedFraction.Sample(0.1);

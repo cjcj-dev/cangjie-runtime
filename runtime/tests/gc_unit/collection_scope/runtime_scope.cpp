@@ -15,8 +15,11 @@ int main()
     params.heapParam.heapSize = 64 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
     params.gcParam.oldGCThreads = 2;
+    params.gcParam.oldGCThreadsSet = true;
     params.gcParam.staticGCThreads = true;
     const int rc = InitCJRuntime(&params);
     std::printf("SCOPE_INIT_RC=%d\n", rc);

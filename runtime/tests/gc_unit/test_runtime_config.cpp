@@ -179,6 +179,7 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiKilobytes)
     params.heapParam.heapSize = 65537;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     const size_t actual = ZHeuristics::max_heap_size();
     const size_t capacity = Heap::GetHeap().GetMaxCapacity();
@@ -196,6 +197,7 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiEnvironmentBytes)
     params.heapParam.heapSize = 128 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     const size_t actual = ZHeuristics::max_heap_size();
     const size_t capacity = Heap::GetHeap().GetMaxCapacity();
@@ -218,6 +220,7 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, ApiMinimum)
     params.heapParam.heapSize = 2 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     const auto rc = InitCJRuntime(&params);
     std::fprintf(stderr, "MAX_API_MINIMUM_ASSERT rc=%d expected=%d\n", rc, E_OK);
     GC_EXPECT_EQ(rc, E_OK);
@@ -253,6 +256,7 @@ GC_RUNTIME_OTHER_VM_TEST(MaxHeapSize, EnvironmentOverridesApiOverflow)
     params.heapParam.heapSize = SIZE_MAX;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     const auto rc = InitCJRuntime(&params);
     std::fprintf(stderr, "MAX_API_SOURCE_ASSERT rc=%d expected=%d\n", rc, E_OK);
     GC_EXPECT_EQ(rc, E_OK);
@@ -273,6 +277,7 @@ void CheckOfficialHeapUnit(const char* input, size_t expected, bool soft)
     params.heapParam.heapSize = 32UL * 1024 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 2;
+    params.gcParam.concGCThreadsSet = true;
     const auto rc = InitCJRuntime(&params);
     const auto expectedRc = expected == 0 ? E_ARGS : E_OK;
     std::fprintf(stderr, "OFFICIAL_UNIT_ACCEPT input=%s soft=%d actual=%d expected=%d\n",

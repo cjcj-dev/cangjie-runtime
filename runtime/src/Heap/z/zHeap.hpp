@@ -186,9 +186,7 @@ public:
     static bool is_young(MAddress addr);
     static bool is_old(MAddress addr);
     static ZPageTable& page_table();
-    static ZPage* alloc_page(size_t num, ZPageType role, bool expectPhysicalMem = false,
-                                  PageAge age = PageAge::eden, ZAllocationFlags flags = {});
-    static ZPage* alloc_page(ZPage* page);
+    static ZPage* alloc_page(size_t num, ZPageType role,                                   PageAge age = PageAge::eden, ZAllocationFlags flags = {});
     static void free_page(ZPage* page);
     static size_t free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages);
 
