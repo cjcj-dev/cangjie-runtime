@@ -15,19 +15,6 @@ namespace MapleRuntime {
 class ZPage;
 class ZPageAllocator;
 
-template<typename T>
-class ZPageTableParallelIterator {
-public:
-    explicit ZPageTableParallelIterator(const ZGranuleMap<T>& table);
-
-    template<typename Function>
-    void do_pages(Function function);
-
-private:
-    const ZGranuleMap<T>& table;
-    ZIndexDistributor distributor;
-};
-
 class ZPageTable {
     friend class ZPageTableIterator;
     friend class ZGenerationPagesIterator;
@@ -36,7 +23,7 @@ class ZPageTable {
     ZGranuleMap<ZPage*> _map;
 
 public:
-    ZPageTable() : _map(ZAddressOffsetMax) {}
+    ZPageTable();
 
 
     int count() const;
@@ -63,6 +50,16 @@ public:
     bool next(ZPage** page);
 };
 
+class ZPageTableParallelIterator {
+    const ZPageTable* const _table;
+    ZIndexDistributor _index_distributor;
+
+public:
+    explicit ZPageTableParallelIterator(const ZPageTable* table);
+    template<typename Function>
+    void do_pages(Function function);
+};
+
 class ZGenerationPagesIterator {
     ZPageTableIterator _iterator;
     ZGenerationId _generation_id;
@@ -76,7 +73,7 @@ public:
 };
 
 class ZGenerationPagesParallelIterator {
-    ZPageTableParallelIterator<ZPage*> _iterator;
+    ZPageTableParallelIterator _iterator;
     ZGenerationId _generation_id;
     ZPageAllocator* _page_allocator;
 

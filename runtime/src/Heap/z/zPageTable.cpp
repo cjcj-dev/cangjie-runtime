@@ -18,16 +18,15 @@ ZPageTable& ZPageTable::heap_table()
     return Heap::GetHeap().page_table();
 }
 
-int ZPageTable::count() const
+// ZGC zPageTable.cpp:32-41: size the map before constructing distributors.
+static size_t get_max_offset_for_map()
 {
-    int n = 0;
-    ZPageTableIterator iter(this);
-    ZPage* page = nullptr;
-    while (iter.next(&page)) {
-        ++n;
-    }
-    return n;
+    const size_t max_count = ZAddressOffsetMax >> ZGranuleSizeShift;
+    const size_t required_count = ZIndexDistributor::get_count(max_count);
+    return required_count << ZGranuleSizeShift;
 }
+
+ZPageTable::ZPageTable() : _map(get_max_offset_for_map()) {}
 
 ZPage* ZPageTable::get(MAddress addr) const
 {
@@ -116,7 +115,7 @@ void ZGenerationPagesIterator::yield(const std::function<void()>& function)
 
 ZGenerationPagesParallelIterator::ZGenerationPagesParallelIterator(const ZPageTable* page_table, ZGenerationId id,
                                                                    ZPageAllocator* page_allocator)
-    : _iterator(page_table->map()), _generation_id(id), _page_allocator(page_allocator)
+    : _iterator(page_table), _generation_id(id), _page_allocator(page_allocator)
 {
     ZPage::EnableSafeDestroy();
 }

@@ -790,6 +790,21 @@ inline bool ZPage::IsSmallRegion() const { return is_small(); }
 inline bool ZPage::IsLargeRegion() const { return is_large(); }
 
 template<typename Function>
+inline void ZPageTableParallelIterator::do_pages(Function function)
+{
+    _index_distributor.do_indices([&](int index) {
+        ZPage* const page = _table->at(static_cast<size_t>(index));
+        if (page != nullptr) {
+            const size_t start_index = untype(page->start()) >> ZGranuleSizeShift;
+            if (static_cast<size_t>(index) == start_index) {
+                return function(page);
+            }
+        }
+        return true;
+    });
+}
+
+template<typename Function>
 inline void ZGenerationPagesParallelIterator::do_pages(Function function)
 {
     _iterator.do_pages([&](ZPage* page) {
