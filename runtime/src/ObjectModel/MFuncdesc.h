@@ -16,6 +16,7 @@ class MFuncDesc {
 public:
     inline Uptr* GetStackMap() const;
     inline U32 GetCodeSize() const;
+    inline bool HasReturnPoll() const;
     inline Uptr* GetEHTable() const;
     inline CString GetFuncName() const;
     inline CString GetFuncDir() const;
@@ -38,6 +39,8 @@ private:
 #else
     DataRefOffset32<Uptr> ehTable;
 #endif
+
+    U32 returnPollFlag;
 
     DISABLE_CLASS_IMPLICIT_CONSTRUCTORS(MFuncDesc);
     DISABLE_CLASS_IMPLICIT_DESTRUCTION(MFuncDesc);

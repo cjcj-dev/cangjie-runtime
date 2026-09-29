@@ -34,6 +34,7 @@ struct Descriptor {
     uint32_t pc[4];
     int32_t stackMapOffset;
     uint32_t rest[6];
+    uint32_t returnPollFlag;
     uint8_t bits[256];
 };
 struct Bits {
