@@ -20,13 +20,22 @@ def population(address):
                for i in range(int(end - begin)) if int((begin + i).dereference()))
 
 
-class BeforeWorkerFlush(gdb.Breakpoint):
+class BeforeWorkerFlush(gdb.FinishBreakpoint):
+    def __init__(self):
+        super().__init__(gdb.newest_frame(), internal=True)
+
     def stop(self):
         tls = gdb.parse_and_eval('(MapleRuntime::ThreadLocalData*)MapleRuntime::threadLocalData')
         address = int(tls['gcData'])
         count = population(address)
         owners[address] = count
         print('REMEMBERED1314_PRECONDITION ' + json.dumps({'owner': address, 'old_local': count}), flush=True)
+        return False
+
+
+class WorkInner(gdb.Breakpoint):
+    def stop(self):
+        BeforeWorkerFlush()
         return False
 
 
@@ -56,13 +65,7 @@ for command in ['set pagination off', 'set confirm off', 'set breakpoint pending
                 'handle SIGUSR2 nostop noprint pass', 'handle SIGSEGV nostop noprint pass',
                 'set environment GC_UNIT_FILTER Remembered1314.MajorRootsPublishesOtherGeneration']:
     gdb.execute(command)
-# Source line is found from the candidate source provided through GDB's source path.
-import os
-source = os.environ['REMEMBERED_SOURCE']
-with open(source, encoding='utf-8') as stream:
-    line = next(i for i, value in enumerate(stream, 1)
-                if 'mark_flush(ThreadLocal::GetGCData())' in value)
-BeforeWorkerFlush('zRemembered.cpp:%d' % line)
+WorkInner('MapleRuntime::ZRememberedScanMarkFollowTask::work_inner()')
 BeforeTermination('MapleRuntime::ZMark::TryTerminateFlush()')
 gdb.execute('run')
 rc = int(gdb.parse_and_eval('$_exitcode'))

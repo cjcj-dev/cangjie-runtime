@@ -305,13 +305,19 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 GC_TEST(Remembered1314, RegisterNoneAndReject)
 {
     GcHeapFixture heap;
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
-    const MAddress field = heap.heapStart + sizeof(void*);
-    fwd->relocated_remembered_fields_register(field);
+    Heap::GetHeap().young().set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(ZGeneration::young()->seqnum());
+    auto* fwd = ZForwarding::alloc(1, heap.heapStart, heap.heapStart, ZGranuleSize, heap.region0());
+    auto* source = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE);
+    heap.region0()->remember(source);
+    const MAddress field = reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE;
+    ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, heap.obj1);
     const bool stored = fwd->relocated_remembered_fields_published_contains(field);
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
-    fwd->relocated_remembered_fields_register(field + sizeof(void*));
-    const bool rejected = !fwd->relocated_remembered_fields_published_contains(field + sizeof(void*));
+    BaseObject* later = heap.PlaceObject(heap.heapStart + ZGranuleSize + 128);
+    ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, later);
+    const bool rejected = !fwd->relocated_remembered_fields_published_contains(
+        reinterpret_cast<MAddress>(later) + TYPEINFO_PTR_SIZE);
     fwd->relocated_remembered_fields_publish();
     const bool cleared = !fwd->relocated_remembered_fields_published_contains(field);
     fwd->Destroy();
@@ -324,22 +330,41 @@ GC_TEST(Remembered1314, RegisterNoneAndReject)
 GC_TEST(Remembered1314, RegisterAcceptFails)
 {
     GcHeapFixture heap;
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
+    auto* fwd = ZForwarding::alloc(1, heap.heapStart, heap.heapStart, ZGranuleSize, heap.region0());
     fwd->relocated_remembered_fields_after_relocate();
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     fwd->release_page();
     fwd->mark_done();
     fwd->relocated_remembered_fields_apply_to_published([](MAddress) {});
+    Heap::GetHeap().young().set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(ZGeneration::young()->seqnum());
+    auto* source = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE);
+    heap.region0()->remember(source);
+    int diagnostic[2];
+    GC_EXPECT_EQ(pipe(diagnostic), 0);
     const pid_t child = fork();
     if (child == 0) {
-        fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
+        close(diagnostic[0]);
+        dup2(diagnostic[1], STDERR_FILENO);
+        close(diagnostic[1]);
+        // The real product relocation consumer computes the destination field
+        // from the source bitmap, then calls its inline register implementation.
+        ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, heap.obj1);
         _exit(0);
     }
+    close(diagnostic[1]);
+    std::string message;
+    char buffer[1024];
+    ssize_t length;
+    while ((length = read(diagnostic[0], buffer, sizeof(buffer))) > 0) { message.append(buffer, length); }
+    close(diagnostic[0]);
     int status = 0;
     GC_EXPECT_TRUE(child > 0);
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
-    std::fprintf(stderr, "REGISTER1314_ACCEPT_TARGET rejected=%d status=%d calls=1\n", rejected, status);
+    const bool target = message.find("Unexpected relocated remembered fields register state") != std::string::npos;
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT && target;
+    std::fprintf(stderr, "REGISTER1314_ACCEPT_TARGET rejected=%d status=%d target_diagnostic=%d calls=1\n",
+                 rejected, status, target);
     fwd->Destroy();
     GC_EXPECT_TRUE(rejected);
 }

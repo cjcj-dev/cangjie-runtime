@@ -757,6 +757,10 @@ GC_TEST(Remembered1314, MajorRootsPublishesOtherGeneration)
     young.set_phase(ZGenerationPhase::Mark);
     old.set_phase(ZGenerationPhase::Mark);
     YoungTypeSetter majorRoots(young, ZYoungType::major_full_roots);
+    RestoreMarkFlips restore;
+    ZGlobalsPointers::flip_young_mark_start();
+    ZGlobalsPointers::flip_old_mark_start();
+    restore.young = restore.old = true;
     fixture.region0()->remember(root);
     heap.remembered().register_found_old(fixture.region0());
     heap.remembered().flip();
