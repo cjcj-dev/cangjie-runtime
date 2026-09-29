@@ -107,7 +107,7 @@ public:
         }
         char safe[MAX_PHASE_NAME + 1];
         FoldToToken(name, safe);
-        // Same always-on channel as Cycle (see Cycle comment).
+        // Same stderr channel as the collection lifecycle records.
         EmitLine("[GCLOG] v=%u rec=phase seq=%llu gc_tag=%c name=%s kind=%s start_ns=%llu ns=%llu", 5u,
                  static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safe, kind,
                  static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(ns));
@@ -184,38 +184,6 @@ public:
         return n;
     }
 
-    // Resident set in KB, read from /proc/self/statm. Returns 0 where the file is unavailable,
-    // which a reader must treat as "not measured" rather than as zero residency.
-    static size_t ResidentKB()
-    {
-#if defined(__linux__) || defined(hongmeng)
-        FILE* statm = fopen("/proc/self/statm", "re");
-        if (statm == nullptr) {
-            return 0;
-        }
-        unsigned long long totalPages = 0;
-        unsigned long long residentPages = 0;
-        int matched = fscanf(statm, "%llu %llu", &totalPages, &residentPages);
-        (void)fclose(statm);
-        // 2: both fields must be present, otherwise the read is not usable.
-        if (matched != 2) {
-            return 0;
-        }
-        long pageSize = sysconf(_SC_PAGESIZE);
-        if (pageSize <= 0) {
-            return 0;
-        }
-        // 1024: bytes per KB.
-        return static_cast<size_t>(residentPages) * static_cast<size_t>(pageSize) / 1024;
-#else
-        return 0;
-#endif
-    }
-
-private:
-    // Fixed buffer + fprintf(stderr): independent of LogFile REPORT enablement and of any
-    // MRT_REPORT file path. Mirrors rec=crash intent (always visible when the feature is on)
-    // without requiring signal-handler AS-safety (cycle/phase run on the GC thread).
     // Names and reasons are free text at the call sites ("enum roots & update old pointers within",
     // "young collection"), and a space would end the value halfway through for any key=value
     // reader. Fold anything outside the safe set into '_' so a value is always one token.

@@ -56,7 +56,7 @@ def parse_logs(d: Path, arm: str):
 
 def cycle_pauses(text: str):
     by_seq = defaultdict(int)
-    records = parse_gclog(text)
+    records = parse_gclog(text).validate_complete()
     for record in records.stw:
         by_seq[record.seq] += record.held_ns
     if by_seq:
@@ -68,9 +68,9 @@ def cycle_pauses(text: str):
 
 
 def cycle_durs(text: str):
-    records = parse_gclog(text)
-    out = {record.seq: record.dur_ns for record in records.cycles}
-    kinds = {record.seq: record.kind for record in records.cycles}
+    records = parse_gclog(text).validate_complete()
+    out = {record.seq: record.dur_ns for record in records.cycles if record.event == "end"}
+    kinds = {record.seq: record.kind for record in records.cycles if record.event == "end"}
     if out:
         return out, kinds
     if records.any():
@@ -88,11 +88,8 @@ def pillars(text: str):
     conc = 0
     total = 0
     wait = 0
-    records = parse_gclog(text)
+    records = parse_gclog(text).validate_complete()
     if records.cycles:
-        # P15: rec=phase_leaf is gone (no ZGC counterpart). Pillar totals now
-        # come from owned rec=phase records; the work-level phase population
-        # is the same one the retired Timer observed.
         for record in records.phases:
             if record.seq == 0:
                 continue
@@ -106,10 +103,9 @@ def pillars(text: str):
         us = record.ns / 1000.0
         names[name] += us
         total += us
-        if name == "finalizerProcessor_waitting_time":
+        if record.kind == "critical":
             wait += us
-            continue
-        if CONC_PHASE.search(name):
+        if record.kind == "conc":
             conc += us
     return dict(acc), dict(names), total, conc, wait
 

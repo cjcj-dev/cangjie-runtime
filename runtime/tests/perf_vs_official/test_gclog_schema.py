@@ -7,42 +7,30 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from analyze_stw import cycle_pauses
-from gclog_schema import parse_gclog, parse_zstat, phase_ns_records
+from analyze_stw import cycle_pauses, cycle_durs
+from gclog_schema import parse_gclog, phase_ns_records
 
 
-GOOD_PHASE = "[GCLOG] v=4 rec=phase seq=7 gc_tag=- name=young.probe kind=conc start_ns=1 ns=999"
-GOOD_LEAF = (
-    "[GCLOG] v=4 rec=phase_leaf seq=7 gc_tag=- name=young.copy_leaf ns=19 kind=conc "
-    "depth=2 path_ok=1 path=young.copy_leaf>young.copy"
-)
-GOOD_CYCLE = (
-    "[GCLOG] v=4 rec=cycle seq=7 gc_tag=- kind=minor reason=young start_ns=1 dur_ns=100 "
-    "live_before=9 live_after=8 collected=1 heap_used=8 threshold=10 rss_kb=11"
-)
-GOOD_STW = "[GCLOG] v=4 rec=stw seq=7 gc_tag=- reason=young start_ns=1 wait_ns=3 held_ns=4"
-GOOD_ZPHASE = "[ZSTAT] v=1 rec=zphase seq=7 name=young.copy pause_ns=0 conc_ns=19 n=1"
-GOOD_ZCYCLE = "[ZSTAT] v=1 rec=zcycle seq=7 pause_ns=0 conc_ns=19 max_pause_ns=0 phases=1"
+GOOD_PHASE = "[GCLOG] v=5 rec=phase seq=7 gc_tag=- name=young.probe kind=conc start_ns=1 ns=999"
+GOOD_CYCLE = "[GCLOG] v=6 rec=cycle seq=7 gc_tag=- name=Minor_Collection cause=young event=start"
+GOOD_STW = "[GCLOG] v=5 rec=stw seq=7 gc_tag=- reason=young start_ns=1 wait_ns=3 held_ns=4"
 
 
 class GcLogSchemaTest(unittest.TestCase):
-    def test_v4_all_record_families_exact(self) -> None:
-        text = "\n".join((GOOD_CYCLE, GOOD_PHASE, GOOD_LEAF, GOOD_STW, GOOD_ZPHASE, GOOD_ZCYCLE))
-        gc = parse_gclog(text)
-        zs = parse_zstat(text)
-        self.assertEqual((len(gc.cycles), len(gc.phases), len(gc.phase_leaves), len(gc.stw)), (1, 1, 1, 1))
-        self.assertEqual((gc.phases[0].ns, gc.phase_leaves[0].ns, gc.stw[0].held_ns), (999, 19, 4))
-        self.assertEqual((len(zs.phases), len(zs.cycles), zs.phases[0].conc_ns), (1, 1, 19))
+    def test_current_record_families_exact(self):
+        gc = parse_gclog("\n".join((GOOD_CYCLE, GOOD_PHASE, GOOD_STW))).validate_complete()
+        self.assertEqual((len(gc.cycles), len(gc.phases), len(gc.stw)), (1, 1, 1))
+        self.assertEqual((gc.phases[0].ns, gc.stw[0].held_ns, gc.truncated), (999, 4, 1))
 
     def test_subphase_is_not_concurrent(self) -> None:
-        row = GOOD_PHASE.replace("v=4", "v=5").replace("kind=conc", "kind=subphase")
+        row = GOOD_PHASE.replace("v=5", "v=5").replace("kind=conc", "kind=subphase")
         self.assertEqual(parse_gclog(row).phases[0].kind, "subphase")
         with self.assertRaises(ValueError):
             parse_gclog(row.replace("kind=subphase", "kind=invalid"))
 
     def test_generation_record_preserves_identity_and_ns(self) -> None:
-        row = ("[GCLOG] v=5 rec=generation seq=7 gc_tag=Y name=Young_Generation "
-               "start_ns=1 dur_ns=99 live_before=9 live_after=8")
+        row = ("[GCLOG] v=6 rec=generation seq=7 gc_tag=Y name=Young_Generation "
+               "event=end start_ns=1 dur_ns=99 used_at_collection_start=9 used_at_collection_end=8")
         record = parse_gclog(row).generations[0]
         self.assertEqual((record.seq, record.gc_tag, record.dur_ns), (7, "Y", 99))
         for bad in (row.replace("dur_ns=99", "dur_ns=x"), row + " extra=1",
@@ -57,15 +45,15 @@ class GcLogSchemaTest(unittest.TestCase):
     def test_missing_unknown_tag_and_v3_rejected(self) -> None:
         bad = (GOOD_PHASE.replace("gc_tag=- ", ""),
                GOOD_PHASE.replace("gc_tag=-", "gc_tag=x"),
-               GOOD_PHASE.replace("v=4", "v=3"))
+               GOOD_PHASE.replace("v=5", "v=3"))
         for line in bad:
             with self.subTest(line=line), self.assertRaises(ValueError):
                 parse_gclog(line)
 
     def test_sub_microsecond_phase_keeps_ns(self) -> None:
         text = "\n".join((
-            "[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=one kind=pause start_ns=1 ns=1",
-            "[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=nine_nine_nine kind=conc start_ns=1 ns=999",
+            "[GCLOG] v=5 rec=phase seq=1 gc_tag=- name=one kind=pause start_ns=1 ns=1",
+            "[GCLOG] v=5 rec=phase seq=1 gc_tag=- name=nine_nine_nine kind=conc start_ns=1 ns=999",
         ))
         self.assertEqual(phase_ns_records(text), [(1, "one", 1), (1, "nine_nine_nine", 999)])
 
@@ -79,7 +67,7 @@ class GcLogSchemaTest(unittest.TestCase):
 
     def test_malformed_v4_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            parse_gclog("[GCLOG] v=4 rec=phase seq=7 gc_tag=- name=young.probe kind=conc start_ns=1 us=1")
+            parse_gclog("[GCLOG] v=5 rec=phase seq=7 gc_tag=- name=young.probe kind=conc start_ns=1 us=1")
 
     def test_mixed_bad_version_fails_closed(self) -> None:
         with self.assertRaises(ValueError):
@@ -92,7 +80,7 @@ class GcLogSchemaTest(unittest.TestCase):
     def test_negative_duplicate_unknown_version_rejected(self) -> None:
         bad = (
             "[GCLOG] v=-1 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",
-            "[GCLOG] v=4 v=4 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",
+            "[GCLOG] v=5 v=4 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",
             "[GCLOG] v=6 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",
         )
         for line in bad:
@@ -110,14 +98,14 @@ class GcLogSchemaTest(unittest.TestCase):
 
     def test_phase_family_unknown_record_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            parse_gclog("[GCLOG] v=4 rec=phase_extra seq=1 gc_tag=- name=p ns=1")
+            parse_gclog("[GCLOG] v=5 rec=phase_extra seq=1 gc_tag=- name=p ns=1")
 
     def test_non_numeric_and_overflow_numbers_rejected(self) -> None:
         bad = (
-            "[GCLOG] v=4 rec=phase seq=x gc_tag=- name=p kind=conc start_ns=1 ns=1",
-            "[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=x",
-            f"[GCLOG] v=4 rec=phase seq={1 << 64} gc_tag=- name=p kind=conc start_ns=1 ns=1",
-            f"[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns={1 << 64}",
+            "[GCLOG] v=5 rec=phase seq=x gc_tag=- name=p kind=conc start_ns=1 ns=1",
+            "[GCLOG] v=5 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=x",
+            f"[GCLOG] v=5 rec=phase seq={1 << 64} gc_tag=- name=p kind=conc start_ns=1 ns=1",
+            f"[GCLOG] v=5 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns={1 << 64}",
         )
         for line in bad:
             with self.subTest(line=line), self.assertRaises(ValueError):
@@ -125,45 +113,89 @@ class GcLogSchemaTest(unittest.TestCase):
 
     def test_missing_reordered_duplicate_extra_fields_rejected(self) -> None:
         bad = (
-            "[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=p",
-            "[GCLOG] v=4 rec=phase name=p seq=1 gc_tag=- kind=conc start_ns=1 ns=1",
-            "[GCLOG] v=4 rec=phase seq=1 gc_tag=- seq=1 name=p kind=conc start_ns=1 ns=1",
-            "[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1 extra=1",
+            "[GCLOG] v=5 rec=phase seq=1 gc_tag=- name=p",
+            "[GCLOG] v=5 rec=phase name=p seq=1 gc_tag=- kind=conc start_ns=1 ns=1",
+            "[GCLOG] v=5 rec=phase seq=1 gc_tag=- seq=1 name=p kind=conc start_ns=1 ns=1",
+            "[GCLOG] v=5 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1 extra=1",
         )
         for line in bad:
             with self.subTest(line=line), self.assertRaises(ValueError):
                 parse_gclog(line)
 
-    def test_leaf_name_matches_first_path_component(self) -> None:
-        with self.assertRaisesRegex(ValueError, "name/path mismatch"):
-            parse_gclog(GOOD_LEAF.replace("name=young.copy_leaf", "name=other"))
-
-    def test_leaf_path_component_delimiter_and_empty_component_rejected(self) -> None:
-        bad = (
-            GOOD_LEAF.replace("path=young.copy_leaf>young.copy", "path=young.copy_leaf>>young.copy"),
-            GOOD_LEAF.replace("name=young.copy_leaf", "name=young>copy_leaf"),
-        )
-        for line in bad:
-            with self.subTest(line=line), self.assertRaises(ValueError):
-                parse_gclog(line)
-
-    def test_leaf_depth_mismatch_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "depth mismatch"):
-            parse_gclog(GOOD_LEAF.replace("depth=2", "depth=3"))
-
-    def test_leaf_path_overflow_marker_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "overflow marker"):
-            parse_gclog(GOOD_LEAF.replace("path_ok=1", "path_ok=0"))
-
-    def test_malformed_zstat_candidate_rejected(self) -> None:
+    def test_retired_leaf_rejected(self):
         with self.assertRaises(ValueError):
-            parse_zstat(GOOD_ZPHASE + " extra=1")
+            parse_gclog("[GCLOG] v=4 rec=phase_leaf seq=7 gc_tag=- name=p ns=1 kind=pause depth=1 path_ok=1 path=p")
 
     def test_subject_malformed_gclog_is_not_masked_by_official_fallback(self) -> None:
         with self.assertRaises(ValueError):
-            cycle_pauses("stw time 9 us\n" + GOOD_CYCLE.replace("v=4", "v=x"))
+            cycle_pauses("stw time 9 us\n" + GOOD_CYCLE.replace("v=6", "v=x"))
         self.assertEqual(cycle_pauses("stw time 9 us"), {1: 9000})
 
+
+
+# A1-A7 exercise the same completed-run validation used by the analyzers.
+def collection(seq=1, event="start", kind="Minor"):
+    row = f"[GCLOG] v=6 rec=cycle seq={seq} gc_tag=- name={kind}_Collection cause=young event={event}"
+    return row + (" start_ns=1 dur_ns=100 used_at_start=9 used_at_end=8" if event == "end" else "")
+
+
+def young_rows(seq=1):
+    prefix = f"[GCLOG] v=6 rec=generation seq={seq} gc_tag=y name=Young_Generation event="
+    names = [("Pause_Mark_Start", "pause"), ("Concurrent_Mark", "conc"), ("Pause_Mark_End", "pause"),
+             ("Concurrent_Mark_Free", "conc"), ("Concurrent_Reset_Relocation_Set", "conc"),
+             ("Concurrent_Select_Relocation_Set", "conc"), ("Pause_Relocate_Start", "pause"),
+             ("Concurrent_Relocate", "conc")]
+    return [prefix + "start"] + [
+        f"[GCLOG] v=5 rec=phase seq={seq} gc_tag=y name={name} kind={kind} start_ns={i + 2} ns=1"
+        for i, (name, kind) in enumerate(names)] + [
+        prefix + "end start_ns=1 dur_ns=99 used_at_collection_start=9 used_at_collection_end=8"]
+
+
+def complete_rows(seq=1):
+    return [collection(seq)] + young_rows(seq) + [collection(seq, "end")]
+
+
+class CompletenessTest(unittest.TestCase):
+    def reject(self, label, rows, error):
+        with self.assertRaisesRegex(ValueError, error):
+            cycle_durs("\n".join(rows))
+        print(f"TARGET_ASSERTION {label} executed", flush=True)
+
+    def test_A1_missing_start(self):
+        self.reject("A1", complete_rows()[1:] + complete_rows(2), "seq=1 missing collection start")
+
+    def test_A2_missing_end(self):
+        self.reject("A2", complete_rows()[:-1] + complete_rows(2), "seq=1 missing collection end")
+
+    def test_A3_missing_phase(self):
+        self.reject("A3", [r for r in complete_rows() if "name=Pause_Relocate_Start " not in r],
+                    "seq=1 generation=Young_Generation missing phase Pause_Relocate_Start")
+
+    def test_A4_abort(self):
+        rows = [collection(), young_rows()[0], young_rows()[-1].split("event=")[0] + "event=abort", collection(event="abort")]
+        records = parse_gclog("\n".join(rows)).validate_complete()
+        self.assertEqual((records.aborted, records.truncated), (1, 0))
+        self.assertEqual(cycle_durs("\n".join(rows)), ({}, {}))
+        print("TARGET_ASSERTION A4 executed", flush=True)
+
+    def test_A5_truncated_last(self):
+        records = parse_gclog("\n".join(complete_rows() + [collection(2)])).validate_complete()
+        self.assertEqual((records.aborted, records.truncated), (0, 1))
+        print("TARGET_ASSERTION A5 executed", flush=True)
+
+    def test_A7_analyzer_does_not_return_empty(self):
+        self.reject("A7", complete_rows()[1:], "seq=1 missing collection start")
+
+    def test_counts_change_with_input(self):
+        self.assertEqual(len(cycle_durs("\n".join(complete_rows()))[0]), 1)
+        self.assertEqual(len(cycle_durs("\n".join(complete_rows() + complete_rows(2)))[0]), 2)
+
+    def test_wrong_generation_cannot_supply_phase(self):
+        rows = [r.replace("gc_tag=y", "gc_tag=Y") if "name=Pause_Relocate_Start " in r else r for r in complete_rows()]
+        self.reject("generation-isolation", rows, "missing phase Pause_Relocate_Start")
+
+    def test_duplicate_terminal_rejected(self):
+        self.reject("duplicate-end", complete_rows() + [collection(event="end")], "duplicate collection end")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

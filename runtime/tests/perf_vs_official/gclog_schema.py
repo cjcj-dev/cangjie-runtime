@@ -1,56 +1,34 @@
 #!/usr/bin/env python3
-"""Strict, fail-closed readers for the GCLOG v4 and ZSTAT v1 ledgers."""
+"""Exact readers for the current GCLOG producer; completed-run validation is explicit.
 
+Streaming/entry observers can parse an unfinished ledger. Measurement consumers must
+call validate_complete() before using its values.
+"""
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 
-
 U64_MAX = (1 << 64) - 1
 TOKEN = r"[A-Za-z0-9._-]+"
-PATH = r"[-A-Za-z0-9._>]+"
-
-# Candidate discovery deliberately does not require a numeric version.  A malformed
-# ``v=x rec=phase`` line must reach dispatch and fail the exact record fullmatch.
 RECORD_TOKENS = re.compile(r"(?:^| )rec=([^ ]+)")
-
 GC_CYCLE = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "
-    r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+) collected=(\S+) "
-    r"heap_used=(\S+) rss_kb=(\S+)$"
-)
-# v=4 layout (historical logs): threshold= field between heap_used= and rss_kb=.
-GC_CYCLE_V4 = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "
-    r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+) collected=(\S+) "
-    r"heap_used=(\S+) threshold=(\S+) rss_kb=(\S+)$"
+    rf"\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=(-) name=({TOKEN}) cause=({TOKEN}) "
+    r"event=(start|abort|end)(?: start_ns=(\S+) dur_ns=(\S+) used_at_start=(\S+) used_at_end=(\S+))?"
 )
 GC_GENERATION = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=generation seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) "
-    r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+)$"
+    rf"\[GCLOG\] v=(\S+) rec=generation seq=(\S+) gc_tag=([yYO]) name=({TOKEN}) "
+    r"event=(start|abort|end)(?: start_ns=(\S+) dur_ns=(\S+) "
+    r"used_at_collection_start=(\S+) used_at_collection_end=(\S+))?"
 )
 GC_PHASE = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=phase seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) kind=(pause|conc|subphase|unknown) "
-    r"start_ns=(\S+) ns=(\S+)$"
-)
-GC_PHASE_LEAF = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=phase_leaf seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) ns=(\S+) "
-    rf"kind=(pause|conc|unknown) depth=(\S+) path_ok=(\S+) path=({PATH})$"
+    rf"\[GCLOG\] v=(\S+) rec=phase seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) "
+    r"kind=(pause|conc|subphase|critical) start_ns=(\S+) ns=(\S+)"
 )
 GC_STW = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=stw seq=(\S+) gc_tag=([yYO-]) reason=({TOKEN}) start_ns=(\S+) wait_ns=(\S+) held_ns=(\S+)$"
+    rf"\[GCLOG\] v=(\S+) rec=stw seq=(\S+) gc_tag=([yYO-]) reason=({TOKEN}) "
+    r"start_ns=(\S+) wait_ns=(\S+) held_ns=(\S+)"
 )
-ZSTAT_PHASE = re.compile(
-    rf"^\[ZSTAT\] v=(\S+) rec=zphase seq=(\S+) name=({TOKEN}) pause_ns=(\S+) "
-    r"conc_ns=(\S+) n=(\S+)$"
-)
-ZSTAT_CYCLE = re.compile(
-    r"^\[ZSTAT\] v=(\S+) rec=zcycle seq=(\S+) pause_ns=(\S+) conc_ns=(\S+) "
-    r"max_pause_ns=(\S+) phases=(\S+)$"
-)
-
-
 PILLARS = (
     ("ref_fix", re.compile(r"ref.?fix|fix.?ref|FixRef|ref_fix", re.I)),
     ("mark", re.compile(r"mark", re.I)),
@@ -59,32 +37,32 @@ PILLARS = (
     ("copy", re.compile(r"copy|reloc|evac(?!_finish)", re.I)),
 )
 
-
 @dataclass(frozen=True)
 class CycleRecord:
     seq: int
     gc_tag: str
-    kind: str
-    reason: str
-    start_ns: int
-    dur_ns: int
-    live_before: int
-    live_after: int
-    collected: int
-    heap_used: int
-    rss_kb: int
+    name: str
+    cause: str
+    event: str
+    start_ns: int | None = None
+    dur_ns: int | None = None
+    used_at_start: int | None = None
+    used_at_end: int | None = None
 
+    @property
+    def kind(self):
+        return {"Minor_Collection": "minor", "Major_Collection": "major"}[self.name]
 
 @dataclass(frozen=True)
 class GenerationRecord:
     seq: int
     gc_tag: str
     name: str
-    start_ns: int
-    dur_ns: int
-    live_before: int
-    live_after: int
-
+    event: str
+    start_ns: int | None = None
+    dur_ns: int | None = None
+    used_at_collection_start: int | None = None
+    used_at_collection_end: int | None = None
 
 @dataclass(frozen=True)
 class PhaseRecord:
@@ -95,20 +73,6 @@ class PhaseRecord:
     start_ns: int
     ns: int
 
-
-@dataclass(frozen=True)
-class PhaseLeafRecord:
-    seq: int
-    gc_tag: str
-    name: str
-    ns: int
-    kind: str
-    depth: int
-    path_ok: int
-    path: str
-    components: tuple[str, ...]
-
-
 @dataclass(frozen=True)
 class StwRecord:
     seq: int
@@ -118,199 +82,172 @@ class StwRecord:
     wait_ns: int
     held_ns: int
 
+# ZGC zGeneration.cpp:538-581,1015-1070: only unconditional collect phases.
+# Continue is conditional on mark-end retries; verify is configuration-dependent.
+COMMON_PHASES = {
+    "Concurrent_Mark": "conc", "Pause_Mark_End": "pause",
+    "Concurrent_Mark_Free": "conc", "Concurrent_Reset_Relocation_Set": "conc",
+    "Concurrent_Select_Relocation_Set": "conc", "Pause_Relocate_Start": "pause",
+    "Concurrent_Relocate": "conc",
+}
+YOUNG_NAMES = {"Young_Generation", "Young_Generation__Promote_All_", "Young_Generation__Collect_Roots_"}
 
 @dataclass
 class GcLogRecords:
     cycles: list[CycleRecord] = field(default_factory=list)
     generations: list[GenerationRecord] = field(default_factory=list)
     phases: list[PhaseRecord] = field(default_factory=list)
-    phase_leaves: list[PhaseLeafRecord] = field(default_factory=list)
     stw: list[StwRecord] = field(default_factory=list)
+    events: list = field(default_factory=list, repr=False)
+    aborted: int = 0
+    truncated: int = 0
 
-    def any(self) -> bool:
-        return bool(self.cycles or self.generations or self.phases or self.phase_leaves or self.stw)
+    def any(self):
+        return bool(self.events)
+
+    def validate_complete(self):
+        """Validate a process-exit ledger, retaining abort/truncation separately."""
+        self.aborted = self.truncated = 0
+        starts = [r.seq for r in self.cycles if r.event == "start"]
+        last = starts[-1] if starts else None
+        collections = {}
+        active_generations = {}
+        ended_generations = {}
+        for record in self.events:
+            seq = record.seq
+            if isinstance(record, CycleRecord):
+                if record.event == "start":
+                    if seq in collections:
+                        raise ValueError(f"seq={seq} duplicate collection start")
+                    collections[seq] = [record, None]
+                    continue
+                if seq not in collections:
+                    raise ValueError(f"seq={seq} missing collection start")
+                start, terminal = collections[seq]
+                if terminal is not None or (start.name, start.cause) != (record.name, record.cause):
+                    raise ValueError(f"seq={seq} mismatched/duplicate collection {record.event}")
+                if record.event == "end" and any(k[0] == seq for k in active_generations):
+                    raise ValueError(f"seq={seq} missing generation end")
+                if record.event == "end":
+                    required_tags = {"y"} if start.kind == "minor" else {"Y", "O"}
+                    missing_tags = required_tags - ended_generations.get(seq, set())
+                    if missing_tags:
+                        raise ValueError(f"seq={seq} missing generation end tags={','.join(sorted(missing_tags))}")
+                collections[seq][1] = record
+                self.aborted += record.event == "abort"
+                continue
+            # Critical waits can run on a mutator without an assigned GC id.
+            if isinstance(record, PhaseRecord) and record.kind == "critical" and seq == 0:
+                continue
+            if seq not in collections:
+                raise ValueError(f"seq={seq} missing collection start")
+            if collections[seq][1] is not None:
+                raise ValueError(f"seq={seq} record after collection terminal")
+            key = (seq, record.gc_tag)
+            if isinstance(record, GenerationRecord):
+                if record.event == "start":
+                    if (record.gc_tag == "O") != (record.name == "Old_Generation"):
+                        raise ValueError(f"seq={seq} generation={record.name} mismatched generation tag {record.gc_tag}")
+                    if key in active_generations:
+                        raise ValueError(f"seq={seq} generation={record.name} missing generation end")
+                    active_generations[key] = (record, [])
+                    continue
+                if key not in active_generations:
+                    raise ValueError(f"seq={seq} generation={record.name} missing generation start")
+                start, phases = active_generations.pop(key)
+                if start.name != record.name:
+                    raise ValueError(f"seq={seq} generation={record.name} mismatched generation start")
+                if record.event == "abort":
+                    continue
+                ended_generations.setdefault(seq, set()).add(record.gc_tag)
+                required = dict(COMMON_PHASES)
+                if record.gc_tag == "O":
+                    required.update(Concurrent_Process_Non_Strong="conc", Concurrent_Remap_Roots="conc")
+                else:
+                    name = "Pause_Mark_Start__Major_" if record.name == "Young_Generation__Collect_Roots_" else "Pause_Mark_Start"
+                    required[name] = "pause"
+                observed = {(p.name, p.kind) for p in phases
+                            if record.start_ns <= p.start_ns and p.start_ns + p.ns <= record.start_ns + record.dur_ns}
+                for name, kind in required.items():
+                    if (name, kind) not in observed:
+                        raise ValueError(f"seq={seq} generation={record.name} missing phase {name}")
+            elif isinstance(record, PhaseRecord) and key in active_generations:
+                active_generations[key][1].append(record)
+        for seq, (_, terminal) in collections.items():
+            if terminal is None:
+                if seq != last:
+                    raise ValueError(f"seq={seq} missing collection end")
+                self.truncated += 1
+        return self
 
 
-@dataclass(frozen=True)
-class ZPhaseRecord:
-    seq: int
-    name: str
-    pause_ns: int
-    conc_ns: int
-    n: int
-
-
-@dataclass(frozen=True)
-class ZCycleRecord:
-    seq: int
-    pause_ns: int
-    conc_ns: int
-    max_pause_ns: int
-    phases: int
-
-
-@dataclass
-class ZStatRecords:
-    phases: list[ZPhaseRecord] = field(default_factory=list)
-    cycles: list[ZCycleRecord] = field(default_factory=list)
-
-
-def _u64(value: str, field_name: str, line: str) -> int:
-    try:
-        number = int(value, 10)
-    except ValueError as exc:
-        raise ValueError(f"non-numeric {field_name} in structured record: {line}") from exc
-    if not 0 <= number <= U64_MAX:
+def _u64(value, field_name, line):
+    if re.fullmatch(r"[0-9]+", value) is None:
+        raise ValueError(f"non-numeric {field_name} in structured record: {line}")
+    number = int(value)
+    if number > U64_MAX:
         raise ValueError(f"{field_name} outside uint64 range: {number}")
     return number
 
 
-def _version_any(value: str, expected: tuple[int, ...], family: str, line: str) -> None:
-    version = _u64(value, "v", line)
-    if version not in expected:
-        raise ValueError(f"unsupported {family} schema v={version}; expected one of {expected}")
-
-
-def _version(value: str, expected: int, family: str, line: str) -> None:
-    version = _u64(value, "v", line)
-    if version != expected:
-        raise ValueError(f"unsupported {family} schema v={version}; expected v={expected}")
-
-
-def _exact(pattern: re.Pattern[str], line: str, family: str) -> re.Match[str]:
-    match = pattern.fullmatch(line)
-    if match is None:
-        raise ValueError(f"malformed {family} record: {line}")
-    return match
-
-
 def parse_gclog(text: str) -> GcLogRecords:
-    """Parse every supported GCLOG record, rejecting any malformed candidate."""
     records = GcLogRecords()
+    patterns = {"cycle": GC_CYCLE, "generation": GC_GENERATION, "phase": GC_PHASE, "stw": GC_STW}
     for line in text.splitlines():
         if not line.startswith("[GCLOG]"):
             continue
-        rec_tokens = RECORD_TOKENS.findall(line)
-        phase_candidates = [token for token in rec_tokens if token.startswith("phase")]
-        if phase_candidates:
-            if len(rec_tokens) != 1 or len(phase_candidates) != 1:
-                raise ValueError(f"malformed GCLOG phase-family dispatch: {line}")
-            family = phase_candidates[0]
-            if family == "phase":
-                match = _exact(GC_PHASE, line, "GCLOG phase")
-                _version_any(match.group(1), (4, 5), "GCLOG phase", line)
-                records.phases.append(PhaseRecord(
-                    _u64(match.group(2), "seq", line), match.group(3), match.group(4), match.group(5),
-                    _u64(match.group(6), "start_ns", line),
-                    _u64(match.group(7), "ns", line)))
-                continue
-            if family == "phase_leaf":
-                match = _exact(GC_PHASE_LEAF, line, "GCLOG phase_leaf")
-                _version(match.group(1), 4, "GCLOG phase_leaf", line)
-                seq = _u64(match.group(2), "seq", line)
-                ns = _u64(match.group(5), "ns", line)
-                depth = _u64(match.group(7), "depth", line)
-                path_ok = _u64(match.group(8), "path_ok", line)
-                components = tuple(match.group(9).split(">"))
-                if any(not component or re.fullmatch(TOKEN, component) is None for component in components):
-                    raise ValueError(f"invalid phase_leaf path component: {line}")
-                if match.group(4) != components[0]:
-                    raise ValueError(
-                        f"phase_leaf name/path mismatch: name={match.group(4)} path={match.group(9)}")
-                if depth != len(components):
-                    raise ValueError(
-                        f"phase_leaf depth mismatch: depth={depth} components={len(components)}")
-                if path_ok not in (0, 1):
-                    raise ValueError(f"invalid phase_leaf path_ok={path_ok}")
-                if path_ok == 0:
-                    raise ValueError(f"phase_leaf path overflow marker: {line}")
-                records.phase_leaves.append(PhaseLeafRecord(
-                    seq, match.group(3), match.group(4), ns, match.group(6), depth, path_ok,
-                    match.group(9), components))
-                continue
-            raise ValueError(f"unknown GCLOG phase-family record rec={family}")
-
-        if "generation" in rec_tokens:
-            match = _exact(GC_GENERATION, line, "GCLOG generation")
-            _version(match.group(1), 5, "GCLOG generation", line)
-            records.generations.append(GenerationRecord(
-                _u64(match.group(2), "seq", line), match.group(3), match.group(4),
-                *[_u64(match.group(index), name, line) for index, name in zip(
-                    range(5, 9), ("start_ns", "dur_ns", "live_before", "live_after"))]))
+        tokens = RECORD_TOKENS.findall(line)
+        if tokens == ["crash"]:  # independently versioned crash signature, not a GC ledger event
             continue
-        if "cycle" in rec_tokens:
-            match = GC_CYCLE.fullmatch(line)
-            if match is not None:
-                _version(match.group(1), 5, "GCLOG cycle", line)
-                seq = _u64(match.group(2), "seq", line)
-                if seq == 0:
-                    raise ValueError("GCLOG cycle seq must be greater than zero")
-                numbers = [_u64(match.group(index), name, line) for index, name in zip(
-                    range(6, 12),
-                    ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used"))]
-                rss_kb = _u64(match.group(12), "rss_kb", line)
-                records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5),
-                                                  *numbers, rss_kb))
-                continue
-            match = _exact(GC_CYCLE_V4, line, "GCLOG cycle")
-            _version(match.group(1), 4, "GCLOG cycle", line)
-            seq = _u64(match.group(2), "seq", line)
-            if seq == 0:
-                raise ValueError("GCLOG cycle seq must be greater than zero")
-            numbers = [_u64(match.group(index), name, line) for index, name in zip(
-                (6, 7, 8, 9, 10, 11, 13),
-                ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used", "rss_kb"))]
-            records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5), *numbers))
-            continue
-        if "stw" in rec_tokens:
-            match = _exact(GC_STW, line, "GCLOG stw")
-            _version_any(match.group(1), (4, 5), "GCLOG stw", line)
-            records.stw.append(StwRecord(
-                _u64(match.group(2), "seq", line), match.group(3), match.group(4),
-                _u64(match.group(5), "start_ns", line),
-                _u64(match.group(6), "wait_ns", line), _u64(match.group(7), "held_ns", line)))
+        if len(tokens) != 1 or tokens[0] not in patterns:
+            raise ValueError(f"unknown or malformed GCLOG dispatch: {line}")
+        family = tokens[0]
+        match = patterns[family].fullmatch(line)
+        if match is None:
+            raise ValueError(f"malformed GCLOG {family} record: {line}")
+        fields = list(match.groups())
+        version = _u64(fields.pop(0), "v", line)
+        expected = 6 if family in ("cycle", "generation") else 5
+        if version != expected:
+            raise ValueError(f"unsupported GCLOG {family} schema v={version}; expected v={expected}")
+        fields[0] = _u64(fields[0], "seq", line)
+        if family in ("cycle", "generation"):
+            if fields[0] == 0:
+                raise ValueError(f"GCLOG {family} seq must be greater than zero")
+            event_index = 4 if family == "cycle" else 3
+            event = fields[event_index]
+            values = fields[event_index + 1:]
+            if (event == "end") != (values[0] is not None):
+                raise ValueError(f"malformed GCLOG {family} {event} fields: {line}")
+            if event == "end":
+                fields[event_index + 1:] = [_u64(v, "duration/used", line) for v in values]
+            if family == "cycle":
+                if fields[2] not in ("Minor_Collection", "Major_Collection"):
+                    raise ValueError(f"unknown collection name: {fields[2]}")
+                record = CycleRecord(*fields)
+                records.cycles.append(record)
+            else:
+                if fields[2] not in YOUNG_NAMES | {"Old_Generation"}:
+                    raise ValueError(f"unknown generation name/tag: {fields[1:3]}")
+                record = GenerationRecord(*fields)
+                records.generations.append(record)
+        elif family == "phase":
+            fields[4:] = [_u64(v, "phase duration", line) for v in fields[4:]]
+            record = PhaseRecord(*fields)
+            records.phases.append(record)
+        else:
+            fields[3:] = [_u64(v, "stw duration", line) for v in fields[3:]]
+            record = StwRecord(*fields)
+            records.stw.append(record)
+        records.events.append(record)
     return records
 
 
-def parse_zstat(text: str) -> ZStatRecords:
-    """Parse every ZSTAT v1 candidate with exact field order and uint64 values."""
-    records = ZStatRecords()
-    for line in text.splitlines():
-        if not line.startswith("[ZSTAT]"):
-            continue
-        rec_tokens = RECORD_TOKENS.findall(line)
-        candidates = [token for token in rec_tokens if token.startswith("zphase") or token.startswith("zcycle")]
-        if not candidates:
-            continue
-        if len(rec_tokens) != 1 or len(candidates) != 1:
-            raise ValueError(f"malformed ZSTAT dispatch: {line}")
-        family = candidates[0]
-        if family == "zphase":
-            match = _exact(ZSTAT_PHASE, line, "ZSTAT zphase")
-            _version(match.group(1), 1, "ZSTAT zphase", line)
-            records.phases.append(ZPhaseRecord(
-                _u64(match.group(2), "seq", line), match.group(3),
-                _u64(match.group(4), "pause_ns", line), _u64(match.group(5), "conc_ns", line),
-                _u64(match.group(6), "n", line)))
-            continue
-        if family == "zcycle":
-            match = _exact(ZSTAT_CYCLE, line, "ZSTAT zcycle")
-            _version(match.group(1), 1, "ZSTAT zcycle", line)
-            records.cycles.append(ZCycleRecord(
-                _u64(match.group(2), "seq", line), _u64(match.group(3), "pause_ns", line),
-                _u64(match.group(4), "conc_ns", line), _u64(match.group(5), "max_pause_ns", line),
-                _u64(match.group(6), "phases", line)))
-            continue
-        raise ValueError(f"unknown ZSTAT record rec={family}")
-    return records
+def phase_ns_records(text):
+    return [(r.seq, r.name, r.ns) for r in parse_gclog(text).phases]
 
 
-def phase_ns_records(text: str) -> list[tuple[int, str, int]]:
-    return [(record.seq, record.name, record.ns) for record in parse_gclog(text).phases]
-
-
-def pillar_for(path: str) -> str | None:
-    """Apply fixed pillar priority to the complete leaf-to-root path."""
+def pillar_for(path):
     for pillar, pattern in PILLARS:
         if pattern.search(path):
             return pillar
