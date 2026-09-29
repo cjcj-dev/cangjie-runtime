@@ -141,8 +141,34 @@ target_compile_definitions(cj_gc_unit PRIVATE
     MRT_GC_UNIT_TESTS=1)
 # Prefer in-tree runtime library when building as part of the product tree.
 if (TARGET cangjie-runtime)
-    target_link_libraries(cj_gc_unit PRIVATE cangjie-runtime)
+    # Link the product SO without inheriting its private implementation archives.
+    # HotSpot CompileGtest.gmk:109: internal Copy is an explicit product object.
+    add_dependencies(cj_gc_unit cangjie-runtime boundscheck)
+    target_link_libraries(cj_gc_unit PRIVATE
+        "$<TARGET_FILE:cangjie-runtime>" "$<TARGET_FILE:boundscheck>" pthread dl)
+    if(TARGET RuntimeCopy)
+        target_sources(cj_gc_unit PRIVATE $<TARGET_OBJECTS:RuntimeCopy>)
+    endif()
 elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
+    if(NOT DEFINED GCV2_RUNTIME_OUTPUT_ROOT)
+        set(GCV2_RUNTIME_OUTPUT_ROOT "${GCV2_RUNTIME_LIB_DIR}/../..")
+    endif()
+    set(_copy_compiler "${CMAKE_CXX_COMPILER} ${CMAKE_CXX_COMPILER_ARG1}")
+    if(CMAKE_CXX_COMPILER_TARGET)
+        string(APPEND _copy_compiler " --target=${CMAKE_CXX_COMPILER_TARGET}")
+    endif()
+    execute_process(
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/product_test_configuration.py"
+            "${CMAKE_SOURCE_DIR}" "${GCV2_RUNTIME_LIB_DIR}" "${GCV2_RUNTIME_OUTPUT_ROOT}"
+            --copy-object --compiler "${_copy_compiler}"
+        RESULT_VARIABLE _copy_rc OUTPUT_VARIABLE _copy_object
+        ERROR_VARIABLE _copy_error OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT _copy_rc EQUAL 0)
+        message(FATAL_ERROR "${_copy_error}")
+    endif()
+    if(_copy_object)
+        target_sources(cj_gc_unit PRIVATE "${_copy_object}")
+    endif()
     target_link_directories(cj_gc_unit PRIVATE ${GCV2_RUNTIME_LIB_DIR})
     target_link_libraries(cj_gc_unit PRIVATE cangjie-runtime boundscheck)
     set_target_properties(cj_gc_unit PROPERTIES
