@@ -6,6 +6,9 @@
 #include <csignal>
 #include <string>
 #include "CangjieRuntime.h"
+#include "Common/Runtime.h"
+#include "Mutator/MutatorManager.h"
+#include "StackManager.h"
 #include "Exception/Exception.h"
 #include "Exception/EhFrameInfo.h"
 #include "StackMap/StackMap.h"
@@ -14,16 +17,29 @@
 #if defined(__linux__)
 #include <sys/wait.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 
+// CompilerCalls.h also defines alias bodies, so declare the existing C ABI.
+extern "C" bool MCC_StartCpuProfiling();
+extern "C" bool MCC_StopCpuProfiling(int fd);
 using namespace MapleRuntime;
 namespace {
+// The profiler thread visits an empty manager; the stack/profile entry points
+// and their serialized result are supplied by the linked product SO.
+class ProfileRuntime final : public Runtime {
+public:
+    explicit ProfileRuntime(MutatorManager& manager) { mutatorManager = &manager; runtime = this; }
+    ~ProfileRuntime() override { runtime = nullptr; }
+    RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
+    void SetGCThreshold(uint64_t) override {}
+};
 struct Metadata {
     int32_t slot = 0;
     uint32_t code[4] = {};
     int32_t descriptor[8] = {};
     alignas(Uptr) uint8_t stackmap[64] = {};
 };
-enum class Entry { HEAD, PROLOGUE, EH, RETURN, CALLER_SP };
+enum class Entry { HEAD, PROLOGUE, EH, RETURN, CALLER_SP, PROFILE, PROFILE_EMPTY };
 
 void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, const char* message,
                    bool zeroRootRow = false, bool miss = false)
@@ -68,6 +84,31 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
             EHFrameInfo eh(frame, exception);
             CalleeSavedRegisterContext context {};
             eh.RestoreToCallerContext(context);
+        } else if (entry == Entry::PROFILE || entry == Entry::PROFILE_EMPTY) {
+#if defined(__x86_64__)
+            struct { uintptr_t start; FrameAddress frame; FrameAddress anchor; } stack {};
+            stack.start = pc + 9; // compiler frame ABI: startPC at fa[-1] minus 9
+            stack.frame.callerFrameAddress = &stack.anchor;
+            UnwindContext context;
+            context.frameInfo.mFrame.SetFA(&stack.frame);
+            context.frameInfo.mFrame.SetIP(image.code);
+            context.anchorFA = reinterpret_cast<uint32_t*>(entry == Entry::PROFILE ? &stack.anchor : &stack.frame);
+            MutatorManager manager;
+            ProfileRuntime runtime(manager);
+            const int fd = syscall(SYS_memfd_create, "metadata-profile", 0);
+            if (fd < 0 || !MCC_StartCpuProfiling()) { _exit(4); }
+            StackManager::PrintStackTraceForCpuProfile(&context, 1266);
+            if (!MCC_StopCpuProfiling(fd)) { _exit(4); }
+            char json[4096] {};
+            const auto n = pread(fd, json, sizeof(json) - 1, 0);
+            close(fd);
+            std::fprintf(stderr, "PROFILE_RESULT bytes=%zd %s\n", n, json);
+            // The public serializer must expose the posted empty sample, not
+            // merely successful return from the producer or an untouched queue.
+            if (n <= 0 || std::string(json).find("\"samples\":[3]") == std::string::npos) { _exit(3); }
+#else
+            _exit(125);
+#endif
         } else if (entry == Entry::CALLER_SP) {
             FrameInfo frame(image.code);
             frame.SetFrameType(FrameType::MANAGED);
@@ -121,6 +162,8 @@ GC_TEST(ManagedMetadata, EhAbsentDescriptor) { CheckMetadata(Entry::EH, false, f
 GC_TEST(ManagedMetadata, EhAbsentStackMap) { CheckMetadata(Entry::EH, true, false, "managed frame missing stackmap"); }
 GC_TEST(ManagedMetadata, EhPresent) { CheckMetadata(Entry::EH, true, true, nullptr); }
 #if defined(__x86_64__)
+GC_TEST(ManagedMetadata, ProfileAbsentDescriptor) { CheckMetadata(Entry::PROFILE, false, false, nullptr); }
+GC_TEST(ManagedMetadata, ProfileEmpty) { CheckMetadata(Entry::PROFILE_EMPTY, false, false, nullptr); }
 GC_TEST(ManagedMetadata, ReturnAbsentDescriptor) { CheckMetadata(Entry::RETURN, false, false, "return frame missing funcdesc"); }
 GC_TEST(ManagedMetadata, ReturnZeroEntries) { CheckMetadata(Entry::RETURN, true, true, "return frame missing stackmap entry"); }
 GC_TEST(ManagedMetadata, ReturnPcMiss) { CheckMetadata(Entry::RETURN, true, true, "return frame missing stackmap entry", true, true); }
