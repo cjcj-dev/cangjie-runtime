@@ -877,6 +877,8 @@ void ScheduleThreadsFree(struct Schedule *schedule)
 
 static void ScheduleJoinedThreadsFree(struct Schedule *schedule)
 {
+    // No carrier can touch the parked inventory after all joins have completed.
+    DulinkInit(&schedule->schdThread.threadHead);
     struct Dulink *node = schedule->schdThread.allThreadList.next;
     while (node != &schedule->schdThread.allThreadList) {
         struct Thread *thread = DULINK_ENTRY(node, struct Thread, allThreadDulink);
@@ -885,7 +887,6 @@ static void ScheduleJoinedThreadsFree(struct Schedule *schedule)
             continue;
         }
         DulinkRemove(&thread->allThreadDulink);
-        DulinkRemove(&thread->link2schd);
         SemaphoreDestroy(&thread->sem);
         CJThreadMemFree(static_cast<struct CJThread*>(thread->cjthread0));
         free(thread);
@@ -1180,8 +1181,9 @@ bool ScheduleProcessorExit(struct Schedule *schedule)
             // Detects that the current processor is running FFI and exits directly. If the
             // FFI ends and is ready to leave the security zone, the stw mechanism is triggered
             // and the thread is blocked.
+            struct Thread *nativeThread = processor->thread;
             if (ScheduleProcessorSkipFFI(processor)) {
-                processor->thread->exitBlocked = true;
+                nativeThread->exitBlocked = true;
                 completed = false;
                 break;
             }
