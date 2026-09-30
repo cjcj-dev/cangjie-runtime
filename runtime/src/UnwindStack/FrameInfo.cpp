@@ -88,13 +88,13 @@ uintptr_t FrameInfo::CallerSP() const
 #endif
 }
 
-void FrameInfo::ResolveProcInfo()
+bool FrameInfo::ResolveProcInfo()
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     startProc = GetFuncStartPC();
     if (startProc == nullptr) {
         lsdaStart = nullptr;
-        return;
+        return false;
     }
 #ifdef __APPLE__
     FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(mFrame.GetFA());
@@ -105,9 +105,10 @@ void FrameInfo::ResolveProcInfo()
         // The frame does not start at a valid function entry (e.g. a corrupted stack
         // while dumping a crash): no exception table can be resolved for it.
         lsdaStart = nullptr;
-        return;
+        return false;
     }
     lsdaStart = reinterpret_cast<uint8_t*>(funcDesc->GetEHTable());
+    return true;
 }
 
 void FrameInfo::PrintFrameInfo(uint32_t frameIdx) const

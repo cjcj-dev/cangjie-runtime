@@ -156,7 +156,9 @@ void StackFrameStream::AnalyseAndSetFrameType(UnwindContext& uwContext)
         } else if (ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(mFrame.GetIP()), true)) {
             frameInfo.SetFrameType(FrameType::MANAGED);
             isReliableN2CStub = false;
-            frameInfo.ResolveProcInfo();
+            // CodeCache ownership precedes metadata lookup; executable bytes
+            // alone do not prove this is a managed function (codeCache.cpp:750).
+            if (!frameInfo.ResolveProcInfo()) { frameInfo.SetFrameType(FrameType::NATIVE); }
         } else {
             // C++ / runtime-transition frames are not managed. GetFuncStartPC
             // loads fa-1 and faults when that slot is not a function entry.

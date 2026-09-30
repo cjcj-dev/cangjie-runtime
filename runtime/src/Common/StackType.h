@@ -290,7 +290,7 @@ public:
     MachineFrame GetMachineFrame() const { return mFrame; }
 
     // Get startProc and lsdaStart by parsing the ip.
-    void ResolveProcInfo();
+    bool ResolveProcInfo();
     uintptr_t CallerSP() const;
 
     // print this frame symbol

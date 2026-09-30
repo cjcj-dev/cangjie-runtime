@@ -13,6 +13,7 @@
 #include "Exception/EhFrameInfo.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
+#include "UnwindStack/StackInfo.h"
 #include "gc_unittest.hpp"
 #include "metadata_code_fixture.hpp"
 #if defined(__linux__)
@@ -163,6 +164,32 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
     GC_EXPECT_TRUE(target);
 }
 }
+GC_TEST(ManagedMetadata, ExecutableWithoutDescriptorIsNative)
+{
+    const uint32_t* pc = emptyStackmapCodePC(0, false);
+    ElfUnloadQuiescence::LinkImage(reinterpret_cast<Uptr>(pc));
+    struct FrameInput {
+        ArchUInt start;
+        FrameAddress frame;
+    } input {};
+#if defined(__x86_64__)
+    input.start = reinterpret_cast<ArchUInt>(pc) + 9;
+#elif defined(__arm__)
+    input.start = reinterpret_cast<ArchUInt>(pc) + 12;
+#else
+    input.start = reinterpret_cast<ArchUInt>(pc);
+#endif
+    UnwindContext context;
+    context.frameInfo.mFrame.SetIP(pc + 1);
+    context.frameInfo.mFrame.SetFA(&input.frame);
+    context.SetUnwindContextStatus(UnwindContextStatus::RISKY);
+    StackFrameStream frames(&context, StackFrameStream::WalkMode::SENDER);
+    frames.Start();
+    const bool native = !frames.IsDone() && frames.Current().GetFrameType() == FrameType::NATIVE;
+    std::fprintf(stderr, "METADATA_EXECUTABLE_CLASSIFICATION_TARGET native=%d executed=1\n", native);
+    GC_EXPECT_TRUE(native);
+}
+
 GC_TEST(ManagedMetadata, DataAddressIsNotCode)
 {
     struct DataPC {
