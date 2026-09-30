@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 #include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
@@ -68,8 +69,8 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     if (finalizable) {
         finalReference = finalLayout.Place(fx.heapStart + 128, fx.obj0);
         fx.region0()->SetRegionAllocPtr(fx.heapStart + 192);
-        handle = heap.RegisterExportRoot(finalReference);
-    } else { handle = heap.RegisterExportRoot(cycle ? fx.obj1 : fx.obj0); }
+        handle = heap.cross_vm().export_roots().RegisterExportRoot(finalReference);
+    } else { handle = heap.cross_vm().export_roots().RegisterExportRoot(cycle ? fx.obj1 : fx.obj0); }
     if (young) {
         if (oldReferent) {
             // ZPage::is_object_strongly_live treats allocating pages as live.
@@ -102,7 +103,7 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     }
     BaseObject* pending = heap.GetFinalizerProcessor().SwapPendingList(nullptr);
     const bool cleared = referent.GetTargetObject() == zaddress::null;
-    if (handle != 0) heap.RemoveExportObject(handle);
+    if (handle != 0) heap.cross_vm().export_roots().RemoveExportRoot(handle);
     const bool finalCarrier = !finalizable || (pending == finalReference && MReference::next(finalReference) == finalReference);
     if (finalizable) {
         std::fprintf(stderr, "MARK1036_FINAL_CARRIER result=%d\n", finalCarrier);

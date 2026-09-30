@@ -384,7 +384,7 @@ FinalizerProcessor::~FinalizerProcessor() { strongStorage.Release(referencePendi
 
 void FinalizerProcessor::Start()
 {
-    Heap::GetHeap().GetAllocator().GetRegionManager().StartUncommitters();
+    Heap::GetHeap().page_allocator().StartUncommitters();
     running.store(true, std::memory_order_release);
     pthread_attr_t attr;
     size_t stackSize = CangjieRuntime::GetConcurrencyParam().thStackSize * KB;
@@ -402,7 +402,8 @@ void FinalizerProcessor::Start()
 
 void FinalizerProcessor::Stop()
 {
-    Heap::GetHeap().GetAllocator().GetRegionManager().StopUncommitters();
+    CHECK_DETAIL(running.load(std::memory_order_acquire), "invalid finalizerProcessor status");
+    Heap::GetHeap().page_allocator().StopUncommitters();
     running.store(false, std::memory_order_release);
     Notify();
     WaitStop();

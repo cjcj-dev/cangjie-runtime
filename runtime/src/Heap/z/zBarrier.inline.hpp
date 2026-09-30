@@ -48,7 +48,7 @@ inline void ZBarrier::MarkIfYoung(zaddress address)
 template<bool resurrect, bool gcThread, bool follow>
 inline void ZBarrier::MarkYoung(zaddress address)
 {
-    auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+    auto& young = (*ZGeneration::young());
     ASSERT(young.IsPhaseMark());
     assert_is_oop(address);
     ASSERT(Heap::page(raw(address))->IsYoungRegion());
@@ -220,35 +220,32 @@ inline ZGeneration* ZBarrier::remap_generation(zpointer ptr)
     CHECK_DETAIL(!ZPointer::is_load_good(ptr), "load-good reference does not need remap");
     Heap& heap = Heap::GetHeap();
     if (ZPointer::is_old_load_good(ptr)) {
-        return &heap.GetZGeneration(ZGenerationId::young);
+        return &(*ZGeneration::young());
     }
     if (ZPointer::is_young_load_good(ptr)) {
-        return &heap.GetZGeneration(ZGenerationId::old);
+        return &(*ZGeneration::old());
     }
     if ((raw(ptr) & ZPointerRememberedMask) == ZPointerRememberedMask) {
-        return &heap.GetZGeneration(ZGenerationId::old);
+        return &(*ZGeneration::old());
     }
     const MAddress address = untype(RefField<>(ptr).GetTargetObject());
     if (address == 0) {
-        return &heap.GetZGeneration(ZGenerationId::old);
+        return &(*ZGeneration::old());
     }
-    if (heap.GetZGeneration(Generation::Young).forwarding_table().get(address) != nullptr) {
-        return &heap.GetZGeneration(ZGenerationId::young);
+    if ((*ZGeneration::young()).forwarding_table().get(address) != nullptr) {
+        return &(*ZGeneration::young());
     }
-    return &heap.GetZGeneration(ZGenerationId::old);
+    return &(*ZGeneration::old());
 }
 
 inline zaddress ZBarrier::relocate_or_remap(zaddress_unsafe addr, ZGeneration* generation)
 {
-    const ZGenerationId id = (generation == &Heap::GetHeap().GetZGeneration(ZGenerationId::young))
-        ? ZGenerationId::young
-        : ZGenerationId::old;
-    return from_object(Heap::GetHeap().relocate_or_remap_object(to_object(safe(addr)), id));
+    return from_object(generation->relocate_or_remap_object(to_object(safe(addr))));
 }
 
 inline zaddress ZBarrier::remap(zaddress_unsafe addr, ZGeneration* generation)
 {
-    return relocate_or_remap(addr, generation);
+    return from_object(generation->remap_object(to_object(safe(addr))));
 }
 
 // ZGC zBarrier.inline.hpp:695-727: strong, native and no-keep-alive entries.
@@ -292,9 +289,8 @@ inline zaddress ZBarrier::make_load_good(zpointer ptr)
     if (ZPointer::is_load_good_or_null(ptr)) {
         return RefField<>(ptr).GetTargetObject();
     }
-    ZGeneration* generation = remap_generation(ptr);
-    BaseObject* object = to_object(RefField<>(ptr).GetTargetObject());
-    return from_object(generation->relocate_or_remap_object(object));
+    return relocate_or_remap(to_zaddress_unsafe(untype(RefField<>(ptr).GetTargetObject())),
+                             remap_generation(ptr));
 }
 
 inline zaddress ZBarrier::make_load_good_no_relocate(zpointer ptr)
@@ -378,7 +374,7 @@ inline void ZBarrier::remember(volatile zpointer* p)
 inline void ZBarrier::mark_and_remember(volatile zpointer* p, zaddress addr)
 {
     if (!is_null(addr)) {
-        Heap::GetHeap().MarkObjectIfActive(to_object(addr));
+        ZBarrier::Mark<false, false, true, false>(addr);
     }
     remember(p);
 }

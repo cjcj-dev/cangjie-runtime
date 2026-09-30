@@ -14,10 +14,9 @@ class ZDeferredConstructed {
         T _t;
     };
 
-    // DEBUG_ONLY(_initialized) in ZGC. Kept in every build here: the test
-    // binaries compile the same headers without NDEBUG while linking the
-    // release product, so a debug-only field would change the class layout.
+#ifndef NDEBUG
     bool _initialized;
+#endif
 
     ZDeferredConstructed(const ZDeferredConstructed&) = delete;
     ZDeferredConstructed& operator=(const ZDeferredConstructed&) = delete;
