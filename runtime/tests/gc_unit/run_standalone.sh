@@ -322,6 +322,7 @@ MAIN_SOURCES=(
   "$SRC/test_align.cpp"
   "$SRC/test_used_generation.cpp"
   "$SRC/test_zstat.cpp"
+  "$SRC/test_gc_totals.cpp"
   "$SRC/test_zstat_heap.cpp"
   "$SRC/test_zserviceability.cpp"
   "$SRC/test_trustp1_phase1.cpp"
@@ -343,6 +344,7 @@ MAIN_SOURCES=(
   "$SRC/test_remap_young_roots.cpp"
   "$SRC/test_zForwarding.cpp"
   "$SRC/test_z_forwarding_table.cpp"
+  "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
   "$SRC/test_allocation_transaction.cpp"
   "$SRC/test_worker_origins.cpp"
@@ -520,7 +522,9 @@ STANDALONE_SYMBOLS=(
 )
 STANDALONE_FULL_SYMBOLS=(
   _ZNK12MapleRuntime5ZPage19clone_for_promotionEv
-  _ZN12MapleRuntime5ZMark15MarkEntryObjectEPNS_10BaseObjectERKNS_14MarkStackEntryEPNS_13MarkLiveCacheE
+  _ZN12MapleRuntime5ZMark13MarkAndFollowERNS_11MarkContextERKNS_14MarkStackEntryE
+  _ZN12MapleRuntime5ZMark5DrainERNS_11MarkContextEm
+  _ZN12MapleRuntime5ZMark10MarkObjectILb0ELb0ELb0ELb0EEEvNS_8zaddressE
   _ZN12MapleRuntime8ZBarrier4MarkILb0ELb0ELb1ELb0EEEvNS_8zaddressE
   _ZN12MapleRuntime8ZBarrier4MarkILb0ELb0ELb0ELb0EEEvNS_8zaddressE
 )

@@ -26,6 +26,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zServiceability.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -223,11 +224,12 @@ private:
     GCReason _gc_cause;
     ZGCCauseSetter<ZDriverMinor> _gc_cause_setter;
     ZStatTimer _stat_timer;
+    ZServiceabilityCycleTracer _tracer;
 public:
     explicit ZDriverScopeMinor(const ZDriverRequest& request)
         : _gc_id(), _gc_cause(request.cause()),
           _gc_cause_setter(ZDriver::minor(), _gc_cause),
-          _stat_timer(ZPhaseCollectionMinor)
+          _stat_timer(ZPhaseCollectionMinor), _tracer(true)
     {
         ZGeneration::young()->set_active_workers(request.young_nworkers());
     }
@@ -239,11 +241,12 @@ private:
     GCReason _gc_cause;
     ZGCCauseSetter<ZDriverMajor> _gc_cause_setter;
     ZStatTimer _stat_timer;
+    ZServiceabilityCycleTracer _tracer;
 public:
     explicit ZDriverScopeMajor(const ZDriverRequest& request)
         : _gc_id(), _gc_cause(request.cause()),
           _gc_cause_setter(ZDriver::major(), _gc_cause),
-          _stat_timer(ZPhaseCollectionMajor)
+          _stat_timer(ZPhaseCollectionMajor), _tracer(false)
     {
         ZGeneration::young()->set_active_workers(request.young_nworkers());
         ZGeneration::old()->set_active_workers(request.old_nworkers());

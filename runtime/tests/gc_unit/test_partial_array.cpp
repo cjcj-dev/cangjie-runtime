@@ -1,4 +1,3 @@
-#include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -6,7 +5,10 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Product partial-array chunking must visit each input slot exactly once.
-// ZGC zMark.cpp:208-270: follow the leading range and consume published tails.
+// ZGC zMark.cpp:208-270: follow the leading range and consume local tails.
+// ExpectPartition checks the live work partition after each product drain.
+// check_partial_array_visits.py also checks actual slot multiplicity (including
+// a repeated small follower whose barriers no longer change marking state).
 
 #include <cstdint>
 #include <csignal>
@@ -17,6 +19,17 @@
 #include <unistd.h>
 #include <vector>
 
+#include <sstream>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <condition_variable>
+#include <unordered_map>
+#include <unordered_set>
+#include <list>
+#define private public
+#include "Heap/z/zMark.hpp"
+#undef private
 #include "Base/Globals.h"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zBarrier.hpp"
@@ -24,6 +37,7 @@
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkContext.hpp"
+#include "Common/SuspendibleThreadSet.h"
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 #include "ObjectModel/MArray.inline.h"
@@ -88,36 +102,122 @@ std::set<size_t> OffSet(size_t length)
     return s;
 }
 
-std::set<size_t> OnSet(Slot* addr, size_t length)
+// Observe the actual product-owned pending ranges before the next drain.
+// ZGC zMark.cpp:234-254 partitions remaining work without overlap. Healed
+// fields account for completed work; no synthetic entries are fed downstream.
+void ExpectPartition(ZMark& domain, Slot* addr, size_t length,
+                     const std::vector<zpointer>& original, size_t step)
 {
-    std::set<size_t> s;
-    std::vector<MarkStackEntry> pending;
-    const MAddress base = reinterpret_cast<MAddress>(addr);
-    auto visit = [&](MAddress field) {
-        GC_EXPECT_TRUE(field >= base);
-        GC_EXPECT_EQ((field - base) % sizeof(Slot), 0u);
-        const size_t index = (field - base) / sizeof(Slot);
-        GC_EXPECT_TRUE(index < length);
-        GC_EXPECT_TRUE(s.insert(index).second);
-    };
-    auto publish = [&](const MarkStackEntry& entry) { pending.push_back(entry); };
-    MarkPartialArray::FollowElements(base, length, false, visit, publish);
-    while (!pending.empty()) {
-        const MarkStackEntry entry = pending.back();
-        pending.pop_back();
-        GC_EXPECT_TRUE(entry.partial_array());
-        MarkPartialArray::FollowPartialReferences(entry, visit, publish);
+    const MAddress start = reinterpret_cast<MAddress>(addr);
+    auto* fields = reinterpret_cast<RefField<>*>(addr);
+    std::vector<size_t> visits(length, 0);
+    size_t healed = 0;
+    for (size_t i = 0; i < length; ++i) {
+        if (fields[i].GetFieldValue() != original[i]) {
+            ++visits[i];
+            ++healed;
+        }
     }
-    return s;
+    size_t pending = 0;
+    bool inRange = true;
+    bool aligned = true;
+    std::vector<MarkStripeStack*> chunks = domain.Stacks().stacks;
+    // The fixture has one executing worker, paused between drain calls. Full
+    // local chunks may have moved to either product-owned shared list; observe
+    // both without popping, relocating or synthesizing their entries.
+    for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
+        auto* owner = domain.Stripes().At(stripe);
+        for (auto* list : { &owner->published, &owner->overflowed }) {
+            for (auto* node = list->head.load(); node != nullptr; node = node->Next()) {
+                chunks.push_back(node->Stack());
+            }
+        }
+    }
+    for (auto* stack : chunks) {
+        if (stack == nullptr) continue;
+        for (size_t i = 0; i < stack->Size(); ++i) {
+            const auto entry = stack->entries(stack)[i];
+            if (!entry.partial_array()) continue;
+            MAddress chunk = 0;
+            size_t count = 0;
+            MarkPartialArray::Decode(entry, chunk, count);
+            ++pending;
+            aligned &= chunk % sizeof(Slot) == 0;
+            const bool valid = chunk >= start && chunk <= start + length * sizeof(Slot) &&
+                               count <= (start + length * sizeof(Slot) - chunk) / sizeof(Slot);
+            inRange &= valid;
+            if (!valid || chunk % sizeof(Slot) != 0) continue;
+            const size_t begin = (chunk - start) / sizeof(Slot);
+            for (size_t j = 0; j < count; ++j) ++visits[begin + j];
+        }
+    }
+    size_t missing = 0;
+    size_t repeated = 0;
+    for (size_t count : visits) {
+        missing += count == 0;
+        repeated += count > 1;
+    }
+    std::fprintf(stderr, "ARRAY_PARTITION step=%zu entries=%zu pending=%zu healed=%zu "
+                         "range=%d aligned=%d missing=%zu repeated=%zu\n",
+                 step, length, pending, healed, inRange, aligned, missing, repeated);
+    GC_EXPECT_TRUE(inRange && aligned && missing == 0 && repeated == 0);
 }
 
-std::set<size_t> ExpectSame(Slot* addr, size_t length)
+std::set<size_t> OnSet(GcHeapFixture& fx, Slot* addr, size_t length)
+{
+    WorkerFixture worker;
+    SuspendibleThreadSetJoiner joiner;
+    auto& domain = Heap::GetHeap().old().Mark();
+    domain.PrepareWork(1);
+    auto* fields = reinterpret_cast<RefField<>*>(addr);
+    std::vector<BaseObject*> objects;
+    std::vector<zpointer> original;
+    for (size_t i = 0; i < length; ++i) {
+        auto* object = fx.PlaceObject(fx.region0()->GetRegionStart() + i * 64);
+        HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE).StoreColoured(zpointer::null);
+        objects.push_back(object);
+        fields[i].StoreColoured(StoreGoodPointer(object));
+        original.push_back(fields[i].GetFieldValue());
+    }
+    fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + (length + 1) * 64);
+    RestoreMarkFlips restore;
+    ZGlobalsPointers::flip_old_mark_start();
+    restore.old = true;
+    const auto previous = Heap::GetHeap().old().phase();
+    Heap::GetHeap().old().set_phase(ZGenerationPhase::Mark);
+    MarkContext context(1, 0, domain.Stripes(), domain.Stacks());
+    domain.follow_array_elements(context, reinterpret_cast<MAddress>(addr), length, false);
+    size_t step = 0;
+    ExpectPartition(domain, addr, length, original, step);
+    while (!domain.Stacks().IsEmpty() || !domain.Stripes().IsEmpty()) {
+        // FollowWork steals non-home stripes before entering Drain. Reset the
+        // one-worker termination round after the previous aborted step left it.
+        // Neither the pending product entries nor their ownership are changed.
+        domain.Terminate().Reset(1);
+        ZAbort::abort();
+        (void)domain.FollowWork(context, 0, true);
+        ZAbort::reset();
+        ExpectPartition(domain, addr, length, original, ++step);
+        GC_EXPECT_TRUE(step <= length * 2 + 32);
+    }
+    context.Cache().Flush();
+    Heap::GetHeap().old().set_phase(previous);
+    std::set<size_t> observed;
+    for (size_t i = 0; i < length; ++i) {
+        if (fx.region0()->is_object_strongly_live(from_object(objects[i]))) observed.insert(i);
+    }
+    std::fprintf(stderr, "ARRAY_COVERAGE entries=%zu marked=%zu live=%u\n",
+                 length, observed.size(), fx.region0()->live_objects());
+    GC_EXPECT_EQ(fx.region0()->live_objects(), length);
+    return observed;
+}
+
+std::set<size_t> ExpectSame(GcHeapFixture& fx, Slot* addr, size_t length)
 {
     const std::set<size_t> off = OffSet(length);
-    const std::set<size_t> on = OnSet(addr, length);
-    GC_EXPECT_EQ(off.size(), on.size());
+    const std::set<size_t> on = OnSet(fx, addr, length);
     GC_EXPECT_TRUE(off == on);
-    GC_EXPECT_EQ(off.size(), length);
+    GC_EXPECT_EQ(on.size(), length);
     return on;
 }
 
@@ -144,7 +244,7 @@ GC_TEST(PartialArray, EncodeDecodeRoundtrip)
     GcHeapFixture fx;
     SlotBuf buf(MarkPartialArray::MIN_LENGTH, fx.heapStart + 2 * ZGranuleSize);
     MarkStackEntry entry = MarkPartialArray::Encode(buf.slots, MarkPartialArray::MIN_LENGTH);
-    GC_EXPECT_TRUE(MarkPartialArray::IsPartialArrayEntry(entry));
+    GC_EXPECT_TRUE(entry.partial_array());
     // zMarkStackEntry.hpp:82-83: 32-bit page offset + 30-bit length.
     GC_EXPECT_EQ(entry.partial_array_offset(),
                  untype(ZAddress::offset(to_zaddress(reinterpret_cast<MAddress>(buf.slots)))) >>
@@ -193,7 +293,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     PartialArrayTestAccess::StoreTarget(collector, chunk[0], fx.obj0);
 
     const MarkStackEntry partial = MarkPartialArray::Encode(chunk, MarkPartialArray::MIN_LENGTH);
-    GC_EXPECT_TRUE(MarkPartialArray::IsPartialArrayEntry(partial));
+    GC_EXPECT_TRUE(partial.partial_array());
 
     // #607 fields publish into the generation mark domain, as ZMark's
     // barrier does; the old caller-owned staging stack is not that consumer.
@@ -206,7 +306,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     GC_EXPECT_FALSE(workStack.empty());
     const MarkStackEntry reached = workStack.back();
     workStack.pop_back();
-    GC_EXPECT_FALSE(MarkPartialArray::IsPartialArrayEntry(reached));
+    GC_EXPECT_FALSE(reached.partial_array());
     GC_EXPECT_TRUE(to_object(ZOffset::address(to_zoffset(reached.object_address()))) == fx.obj0);
 }
 #endif // MRT_TESTABLE_INTERNALS
@@ -215,8 +315,8 @@ GC_TEST(PartialArray, EmptyAndSingle)
 {
     GcHeapFixture fx;
     SlotBuf buf(8, fx.heapStart + 2 * ZGranuleSize);
-    ExpectSame(buf.slots, 0);
-    ExpectSame(buf.slots, 1);
+    ExpectSame(fx, buf.slots, 0);
+    ExpectSame(fx, buf.slots, 1);
 }
 
 GC_TEST(PartialArray, ThresholdExact)
@@ -224,7 +324,7 @@ GC_TEST(PartialArray, ThresholdExact)
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH;
     SlotBuf buf(n, fx.heapStart + 2 * ZGranuleSize);
-    ExpectSame(buf.slots, n);
+    ExpectSame(fx, buf.slots, n);
 }
 
 GC_TEST(PartialArray, ThresholdMinusOne)
@@ -232,7 +332,7 @@ GC_TEST(PartialArray, ThresholdMinusOne)
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH - 1;
     SlotBuf buf(n, fx.heapStart + 2 * ZGranuleSize);
-    ExpectSame(buf.slots, n);
+    ExpectSame(fx, buf.slots, n);
 }
 
 GC_TEST(PartialArray, ThresholdPlusOne)
@@ -240,7 +340,7 @@ GC_TEST(PartialArray, ThresholdPlusOne)
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH + 1;
     SlotBuf buf(n, fx.heapStart + 2 * ZGranuleSize);
-    ExpectSame(buf.slots, n);
+    ExpectSame(fx, buf.slots, n);
 }
 
 GC_TEST(PartialArray, MultiChunk)
@@ -248,7 +348,7 @@ GC_TEST(PartialArray, MultiChunk)
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH * 8 + 17;
     SlotBuf buf(n, fx.heapStart + 2 * ZGranuleSize);
-    ExpectSame(buf.slots, n);
+    ExpectSame(fx, buf.slots, n);
 }
 
 GC_OTHER_VM_TEST(PartialArray, BoundaryRefs)
@@ -256,7 +356,7 @@ GC_OTHER_VM_TEST(PartialArray, BoundaryRefs)
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH * 3;
     SlotBuf buf(n, fx.heapStart + 2 * ZGranuleSize);
-    const std::set<size_t> on = ExpectSame(buf.slots, n);
+    const std::set<size_t> on = ExpectSame(fx, buf.slots, n);
     GC_EXPECT_TRUE(on.count(0) == 1);
     GC_EXPECT_TRUE(on.count(MarkPartialArray::MIN_LENGTH - 1) == 1);
     GC_EXPECT_TRUE(on.count(MarkPartialArray::MIN_LENGTH) == 1);
@@ -268,5 +368,104 @@ GC_TEST(PartialArray, UnalignedStart)
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH * 4 + 3;
     SlotBuf buf(n + 16, fx.heapStart + 2 * ZGranuleSize);
-    ExpectSame(buf.slots + 3, n);
+    ExpectSame(fx, buf.slots + 3, n);
+}
+
+// ZGC zMark.cpp:185-196, 471-489. Stop after the first real drain entry
+// using the existing abort state, then inspect the product-owned continuations.
+GC_TEST(MarkConsumer1328, CrossStripePartialStaysLocalAndOverflowed)
+{
+    GcHeapFixture fx;
+    WorkerFixture worker;
+    ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
+    domain.PrepareWork(4);
+    auto& stripes = domain.Stripes();
+    MarkThreadLocalStacks stacks(4);
+    MarkContext context(4, 0, stripes, stacks);
+    MAddress start = AlignUp(fx.heapStart + 2 * ZGranuleSize, MarkPartialArray::MIN_SIZE);
+    while (stripes.StripeForAddress(start) == context.Stripe()) start += MarkPartialArray::MIN_SIZE;
+    constexpr size_t length = 3 * MarkPartialArray::MIN_LENGTH + 17;
+    std::memset(reinterpret_cast<void*>(start), 0, length * sizeof(MAddress));
+    auto* target = stripes.StripeForAddress(start + MarkPartialArray::MIN_SIZE);
+    GC_EXPECT_TRUE(target != context.Stripe());
+    auto* full = MarkStripeStack::Create(true);
+    const size_t capacity = full->Capacity();
+    const auto empty = MarkPartialArray::Encode(reinterpret_cast<void*>(start), 0);
+    while (!full->IsFull()) full->Push(empty);
+    stacks.Install(stripes, target, full);
+    stacks.Push(stripes, context.Stripe(), MarkPartialArray::Encode(reinterpret_cast<void*>(start), length), false);
+    ZAbort::abort();
+    const bool drained = domain.Drain(context, 0);
+    ZAbort::reset();
+    auto* local = stacks.StealLocal(stripes, target);
+    const size_t localCount = local == nullptr ? 0 : local->Size();
+    const size_t published = target->published.Length();
+    const size_t overflowed = target->overflowed.Length();
+    std::fprintf(stderr, "PARTIAL1328_TARGET entries=1 capacity=%zu local=%zu published=%zu overflowed=%zu wake=%zu\n",
+                 capacity, localCount, published, overflowed, domain.Terminate().awakening);
+    if (local != nullptr) MarkStripeStack::Destroy(local);
+    while (auto* stack = target->StealStack(domain.Smr(), 0)) MarkStripeStack::Destroy(stack);
+    // One target verdict includes placement and wake state, before diagnostics.
+    GC_EXPECT_TRUE(localCount > 0 && published == 0 && overflowed == 1 && domain.Terminate().awakening == 0);
+    GC_EXPECT_FALSE(drained);
+}
+
+GC_TEST(MarkConsumer1328, PartialDoesNotWakeWithoutFullStack)
+{
+    GcHeapFixture fx;
+    WorkerFixture worker;
+    SuspendibleThreadSetJoiner joiner;
+    ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
+    domain.PrepareWork(4);
+    auto& stripes = domain.Stripes();
+    MarkThreadLocalStacks stacks(4);
+    MarkContext context(4, 0, stripes, stacks);
+    MAddress start = AlignUp(fx.heapStart + 2 * ZGranuleSize, MarkPartialArray::MIN_SIZE);
+    while (stripes.StripeForAddress(start) == context.Stripe()) start += MarkPartialArray::MIN_SIZE;
+    constexpr size_t length = 3 * MarkPartialArray::MIN_LENGTH + 17;
+    std::memset(reinterpret_cast<void*>(start), 0, length * sizeof(MAddress));
+    domain.Terminate().Leave();
+    domain.MarkAndFollow(context, MarkPartialArray::Encode(reinterpret_cast<void*>(start), length));
+    auto* target = stripes.StripeForAddress(start + MarkPartialArray::MIN_SIZE);
+    auto* local = stacks.StealLocal(stripes, target);
+    const size_t count = local == nullptr ? 0 : local->Size();
+    const size_t wake = domain.Terminate().awakening;
+    if (local != nullptr) MarkStripeStack::Destroy(local);
+    std::fprintf(stderr, "PARTIAL1328_WAKE entries=1 local=%zu wake=%zu\n", count, wake);
+    GC_EXPECT_TRUE(count > 0 && target->published.IsEmpty() && wake == 0);
+    // Positive control: the same terminate state responds to a real wake.
+    domain.Terminate().Wake();
+    GC_EXPECT_EQ(domain.Terminate().awakening, 1u);
+}
+
+GC_TEST(MarkConsumer1328, YoungDrainRejectsAllocatingOldPage)
+{
+    const char* childFlag = "GC_UNIT_1328_INVALID_PAGE";
+    if (std::getenv(childFlag) != nullptr) {
+        signal(SIGABRT, SIG_DFL);
+        GcHeapFixture fx;
+        WorkerFixture worker;
+        // ZGC zPage.inline.hpp:184-186: allocating, irrespective of generation.
+        fx.region0()->reset(PageAge::old);
+        ZMark domain(1, MarkingStacks::MarkingGeneration::YOUNG);
+        domain.PrepareWork(1);
+        MarkThreadLocalStacks stacks(1);
+        MarkContext ctx(1, 0, domain.Stripes(), stacks);
+        stacks.Push(domain.Stripes(), ctx.Stripe(),
+            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, false, false, false), false);
+        std::fprintf(stderr, "INVALID_PAGE1328_INPUT entries=1 old=%d relocatable=%d\n",
+                     !fx.region0()->IsYoungRegion(), fx.region0()->IsRelocatable());
+        domain.Drain(ctx, 0);
+        return;
+    }
+    GC_EXPECT_EQ(setenv(childFlag, "1", 1), 0);
+    try {
+        RunInOtherVm("MarkConsumer1328.YoungDrainRejectsAllocatingOldPage",
+                     "mark consumer requires a relocatable page");
+    } catch (...) {
+        unsetenv(childFlag);
+        throw;
+    }
+    unsetenv(childFlag);
+    std::fprintf(stderr, "INVALID_PAGE1328_TARGET entries=1 matched_page_assert=1\n");
 }

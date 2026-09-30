@@ -478,9 +478,19 @@ extern "C" size_t MCC_GetNativeThreadNumber() { return ScheduleRunningOSThreadCo
 
 extern "C" size_t MCC_GetGCCount() { return ZCollectedHeap::heap()->total_collections(); }
 
-extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs.load(std::memory_order_acquire); }
+extern "C" uint64_t MCC_GetGCTimeUs()
+{
+    auto& heap = Heap::GetHeap();
+    return heap.serviceability_cycle_memory_manager(true)->gc_time_us() +
+           heap.serviceability_cycle_memory_manager(false)->gc_time_us();
+}
 
-extern "C" size_t MCC_GetGCFreedSize() { return g_gcCollectedTotalBytes.load(std::memory_order_acquire); }
+extern "C" size_t MCC_GetGCFreedSize()
+{
+    auto& heap = Heap::GetHeap();
+    return heap.serviceability_cycle_memory_manager(true)->gc_freed_size() +
+           heap.serviceability_cycle_memory_manager(false)->gc_freed_size();
+}
 
 extern "C" bool MCC_StartCpuProfiling()
 {

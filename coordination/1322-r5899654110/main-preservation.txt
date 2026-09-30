@@ -1,0 +1,63 @@
+
+SYMBOL=ZStatPhaseCollection MAIN
+cjcjdev/main:runtime/src/Heap/z/zDriver.cpp:2
+cjcjdev/main:runtime/src/Heap/z/zStat.cpp:5
+cjcjdev/main:runtime/src/Heap/z/zStat.hpp:2
+HEAD
+HEAD:runtime/src/Heap/z/zDriver.cpp:2
+HEAD:runtime/src/Heap/z/zStat.cpp:5
+HEAD:runtime/src/Heap/z/zStat.hpp:2
+
+SYMBOL=ZUncoloredRoot MAIN
+cjcjdev/main:runtime/src/CompilerCalls.cpp:1
+cjcjdev/main:runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:5
+cjcjdev/main:runtime/src/Heap/z/zCrossVM.cpp:3
+cjcjdev/main:runtime/src/Heap/z/zHeap.cpp:1
+cjcjdev/main:runtime/src/Heap/z/zMark.cpp:3
+cjcjdev/main:runtime/src/Heap/z/zStackWatermark.cpp:2
+cjcjdev/main:runtime/src/Heap/z/zStackWatermark.hpp:2
+cjcjdev/main:runtime/src/Heap/z/zUncoloredRoot.cpp:2
+cjcjdev/main:runtime/src/Heap/z/zUncoloredRoot.hpp:12
+cjcjdev/main:runtime/src/Heap/z/zUncoloredRoot.inline.hpp:28
+cjcjdev/main:runtime/src/Mutator/Mutator.cpp:1
+cjcjdev/main:runtime/src/ObjectModel/RefField.h:1
+cjcjdev/main:runtime/src/UnwindStack/StackFrameCursor.h:1
+HEAD
+HEAD:runtime/src/CompilerCalls.cpp:1
+HEAD:runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:5
+HEAD:runtime/src/Heap/z/zCrossVM.cpp:3
+HEAD:runtime/src/Heap/z/zHeap.cpp:1
+HEAD:runtime/src/Heap/z/zMark.cpp:3
+HEAD:runtime/src/Heap/z/zStackWatermark.cpp:2
+HEAD:runtime/src/Heap/z/zStackWatermark.hpp:2
+HEAD:runtime/src/Heap/z/zUncoloredRoot.cpp:2
+HEAD:runtime/src/Heap/z/zUncoloredRoot.hpp:12
+HEAD:runtime/src/Heap/z/zUncoloredRoot.inline.hpp:28
+HEAD:runtime/src/Mutator/Mutator.cpp:1
+HEAD:runtime/src/ObjectModel/RefField.h:1
+HEAD:runtime/src/UnwindStack/StackFrameCursor.h:1
+
+SYMBOL=ZStackWatermark MAIN
+cjcjdev/main:runtime/src/Heap/z/zStackWatermark.cpp:10
+cjcjdev/main:runtime/src/Heap/z/zStackWatermark.hpp:2
+cjcjdev/main:runtime/src/Mutator/Mutator.h:4
+HEAD
+HEAD:runtime/src/Heap/z/zStackWatermark.cpp:10
+HEAD:runtime/src/Heap/z/zStackWatermark.hpp:2
+HEAD:runtime/src/Mutator/Mutator.h:4
+
+SYMBOL=ZReferenceProcessor MAIN
+cjcjdev/main:runtime/src/Heap/z/zMark.cpp:1
+cjcjdev/main:runtime/src/Heap/z/zReferenceProcessor.cpp:4
+cjcjdev/main:runtime/src/Heap/z/zReferenceProcessor.hpp:1
+HEAD
+HEAD:runtime/src/Heap/z/zMark.cpp:1
+HEAD:runtime/src/Heap/z/zReferenceProcessor.cpp:4
+HEAD:runtime/src/Heap/z/zReferenceProcessor.hpp:1
+
+SYMBOL=ZPageAllocation MAIN
+cjcjdev/main:runtime/src/Heap/z/zPageAllocator.cpp:20
+cjcjdev/main:runtime/src/Heap/z/zPageAllocator.hpp:19
+HEAD
+HEAD:runtime/src/Heap/z/zPageAllocator.cpp:20
+HEAD:runtime/src/Heap/z/zPageAllocator.hpp:19

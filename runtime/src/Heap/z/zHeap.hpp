@@ -120,6 +120,10 @@ public:
     size_t GetMaxCapacity() const;
     size_t soft_max_capacity() const;
     ZMemoryUsageInfo GetMemoryUsage() const;
+    GCMemoryManager* serviceability_cycle_memory_manager(bool minor)
+    {
+        return _serviceability.cycle_memory_manager(minor);
+    }
 
     // or current capacity: a continuous address space to help heap management such as GC.
     size_t GetCurrentCapacity() const;

@@ -1,0 +1,1 @@
+主控 0930 答复：当前没有与现 runtime 匹配的染色 SDK——sdkdepot b99430a… 的 std 仍是旧 ABI（缺 CJ_MRT_RequestStringDedup），配对的新 std 要等 cjcj#135 在新 pin 上产出。托管 gc_totals.cj 臂记 NOT_RUN（缺配对染色 SDK，等 #135），⛔ 改共享 SDK、⛔ 以 managed 例外宣称 std API 验收通过；native 侧对累计时间/回收量的产品接线证据与切刀照做，带此缺口交 Review。#135 产出后另派一轮补托管臂。

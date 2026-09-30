@@ -146,6 +146,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     ObjectRef* threadRoot = nullptr;
     size_t frameMark = 0;
     RootSlot* historicalSlot = nullptr;
+    zaddress_unsafe invisibleMem = to_zaddress_unsafe(reinterpret_cast<uintptr_t>(from));
     alignas(16) uintptr_t stackStorage[8] {};
     if (threadKind == 0) {
         LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
@@ -165,10 +166,8 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
             historicalSlot = &RootSlotAt(static_cast<void*>(&stackStorage[2]));
             threadRoot = thread->AddNativeFrameRoot(reinterpret_cast<BaseObject*>(&stackStorage[2]));
         } else if (threadKind == 3) {
-            thread->PublishInvisibleRoot(from);
-            thread->VisitMutatorRoots([&](ObjectRef& root) {
-                if (raw(root.LoadPlain()) == reinterpret_cast<uintptr_t>(from)) historicalSlot = &root;
-            });
+            thread->GetGCData().set_invisible_root(&invisibleMem);
+            historicalSlot = reinterpret_cast<RootSlot*>(&invisibleMem);
         } else {
             threadRoot = thread->AddNativeFrameRoot(from);
             historicalSlot = threadRoot;
@@ -235,7 +234,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         ::MapleRuntime::GcUnit::Fail(__FILE__, __LINE__, "native_root_healed_current");
     }
     if (threadKind != 0) {
-        if (threadKind == 3) (void)thread->WithdrawInvisibleRoot();
+        if (threadKind == 3) thread->GetGCData().clear_invisible_root();
         else thread->PopNativeFrameRootsTo(frameMark);
         return;
     }
@@ -278,9 +277,10 @@ void CheckSavedRootColor(bool invisible, bool twoRounds = false)
     (void)thread->EnterSaferegion(false);
     const size_t roots = thread->NativeFrameRootCount();
     RootSlot* slot;
+    zaddress_unsafe invisibleMem = to_zaddress_unsafe(reinterpret_cast<uintptr_t>(from));
     if (invisible) {
-        thread->PublishInvisibleRoot(from);
-        slot = reinterpret_cast<RootSlot*>(thread->GetGCData().invisibleRoot);
+        thread->GetGCData().set_invisible_root(&invisibleMem);
+        slot = reinterpret_cast<RootSlot*>(thread->GetGCData().invisible_root());
     } else {
         slot = thread->AddNativeFrameRoot(from);
     }
@@ -325,7 +325,7 @@ void CheckSavedRootColor(bool invisible, bool twoRounds = false)
     // Evaluate the product result before cleanup can consume it again.
     GC_EXPECT_EQ(observed, expected);
     GC_EXPECT_TRUE(scanned);
-    if (invisible) { thread->WithdrawInvisibleRoot(); }
+    if (invisible) { thread->GetGCData().clear_invisible_root(); }
     thread->PopNativeFrameRootsTo(roots);
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
@@ -396,13 +396,13 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, YoungRelocateSkipsForeignIncompleteFrom)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), held));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0(), fx.obj0));
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {fx.region0(), fx.region1()}));
-    GC_EXPECT_TRUE(!fx.region1()->IsForwardingDone());
+    GC_EXPECT_TRUE(!forwarding_for_page(fx.region1())->is_done());
     GC_EXPECT_TRUE(forwarding_for_page(fx.region1()) != nullptr);
     heap.young().set_phase(ZGenerationPhase::Relocate);
     ZRelocate::StartRelocationTasks(ZGenerationId::young);
     heap.young().EvacuateYoungRegions();
     GC_EXPECT_TRUE(forwarding_for_page(fx.region1()) != nullptr);
-    GC_EXPECT_TRUE(!fx.region1()->IsForwardingDone());
+    GC_EXPECT_TRUE(!forwarding_for_page(fx.region1())->is_done());
 }
 
 GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)

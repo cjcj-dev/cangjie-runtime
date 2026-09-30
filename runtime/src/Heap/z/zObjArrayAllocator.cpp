@@ -48,7 +48,8 @@ MArray* ZObjArrayAllocator::initialize(MAddress address) const
 
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "large array initialization requires a mutator");
-    mutator->PublishInvisibleRoot(array);
+    zaddress_unsafe mem = to_zaddress_unsafe(reinterpret_cast<uintptr_t>(array));
+    mutator->GetGCData().set_invisible_root(&mem);
 
     const size_t contentOffset = MArray::GetContentOffset();
     CHECK_DETAIL(arraySize >= contentOffset, "large array size is smaller than its header");
@@ -66,7 +67,7 @@ MArray* ZObjArrayAllocator::initialize(MAddress address) const
     // only the first pass can request a restart. Primitive payloads never do.
     auto initializeMemory = [&]() {
         for (size_t processed = 0; processed < contentSize;) {
-            MArray* current = static_cast<MArray*>(mutator->LoadInvisibleRoot());
+            MArray* current = static_cast<MArray*>(to_object(safe(mem)));
             CHECK_DETAIL(current != nullptr, "large array lost its invisible root");
             const size_t segment = std::min(contentSize - processed,
                                             static_cast<size_t>(MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE));
@@ -100,7 +101,8 @@ MArray* ZObjArrayAllocator::initialize(MAddress address) const
         CHECK_DETAIL(complete, "array initialization must complete on the second pass");
     }
 
-    MArray* complete = static_cast<MArray*>(mutator->WithdrawInvisibleRoot());
+    mutator->GetGCData().clear_invisible_root();
+    MArray* complete = static_cast<MArray*>(to_object(safe(mem)));
     complete->SetInvisibleObject(false);
     return complete;
 }

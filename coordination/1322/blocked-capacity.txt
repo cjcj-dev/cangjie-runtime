@@ -1,0 +1,5 @@
+Tue Sep 29 18:48:47 UTC 2026
+文件系统        大小  已用  可用 已用% 挂载点
+/dev/nvme0n1p5  443G  408G   13G   98% /
+ 02:48:47 up 20 days,  2:57,  1 user,  load average: 11.29, 33.91, 52.05
+356K	/root/sym_cangjie_runtime_1322_implement_r5896137675
