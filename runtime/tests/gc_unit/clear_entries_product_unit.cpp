@@ -1553,7 +1553,7 @@ void CheckMinorFieldColour(bool stale)
         // Preserve all other colour families; the previous young remap bit
         // directs make_load_good to the young generation's forwarding table.
         const uintptr_t logicalRemap = ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask;
-        bits = ColouredPointer(fx.obj0, ZPointer::remap_bits(logicalRemap));
+        bits = ColouredPointer(fx.obj0, logicalRemap);
     }
     GC_EXPECT_TRUE(ZPointer::is_load_good(bits) == !stale);
     GC_EXPECT_TRUE(ZPointer::is_old_load_good(bits));
