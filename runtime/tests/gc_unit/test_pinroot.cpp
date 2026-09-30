@@ -342,7 +342,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, RunningWorldCopiesOnlyRequestedObj
     CheckMutatorRelocation(false);
 }
 
-#if defined(__x86_64__) && defined(__linux__)
+#if (defined(__x86_64__) || defined(__aarch64__)) && defined(__linux__)
 namespace {
 struct FrameRootMapImage {
     int32_t descriptorOffset;
@@ -378,11 +378,19 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, boo
         // R13 saved at fp-24; the entry PC has no incoming register pointer.
         // At PC 16 the saved R13 belongs to the preceding frame, so consuming
         // the caller register map instead of its incoming snapshot is visible.
+#if defined(__aarch64__)
+        var(0); var(0); var(1); var(2);
+#else
         var(0); var(0); var(4); var(3);
+#endif
         var(2); var(0); var(1); var(0); var(0); var(1); var(0); var(0);
         put(0, 32); put(1, 1); put(0, 1);
         put(16, 32); put(1, 1); put(1, 1);
+#if defined(__aarch64__)
+        var(1); var(20); put(1u << 19, 20);
+#else
         var(1); var(16); put(1u << 13, 16);
+#endif
         var(1); var(8); var(1); put(0xf0, 8); put(1, 1);
         var(0); var(0); var(0);
         return;
@@ -472,7 +480,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
     ZForwarding* owner = forwarding_for_page(pages[0]);
     GC_EXPECT_TRUE(owner != nullptr);
-#if defined(__x86_64__) && defined(__linux__)
+#if (defined(__x86_64__) || defined(__aarch64__)) && defined(__linux__)
     const auto savedGrow = CangjieRuntime::stackGrowConfig;
     if (sret) { CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON; }
     InitializeFrameRootMap(sret, registerPointer, ((requestEntry >= 5 && requestEntry <= 7) || requestEntry == 9));
@@ -494,6 +502,12 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         if (hasPointer && sret) {
             frames[0][1] = reinterpret_cast<uintptr_t>(&frames[6][2]);
             frames[6][1] = reinterpret_cast<uintptr_t>(&frames[8][2]);
+#if defined(__aarch64__)
+            if (registerPointer) {
+                frames[0][6] = frames[0][1];
+                frames[6][6] = frames[6][1];
+            }
+#endif
         }
         if (inplaceSret) { frames[0][2] = reinterpret_cast<uintptr_t>(objects[0][1]); }
         if (sret) {
@@ -552,7 +566,11 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         } closure(&frames[3][2]);
         HandshakeOperation operation(&closure, parked);
         parked->GetHandshakeState().add_operation(&operation);
+#if defined(__aarch64__)
+        alignas(16) uintptr_t returnStub[16 + MRT_AARCH64_STUB_FRAME_BYTES / sizeof(uintptr_t)] {};
+#else
         alignas(16) uintptr_t returnStub[32] {};
+#endif
         if (requestEntry == 5) {
             returnStub[16] = reinterpret_cast<uintptr_t>(&frames[2][4]);
             returnStub[17] = startIP + 16;
