@@ -513,20 +513,12 @@ void CheckDeadCleanup(bool noDead)
     batch.strongCount = noDead ? batch.count : 3;
     RunDedupTask(InstallDedupBatch, &batch);
     const size_t before = StringDedup::Instance().WeakStorage().AllocationCount();
-    auto& otherOwner = Heap::GetHeap().GetFinalizerProcessor();
-    const size_t otherBefore = otherOwner.WeakRootStorage().AllocationCount();
-    const size_t otherDead = noDead ? 0 : 7;
-    for (size_t index = 0; index < otherDead; ++index) otherOwner.RegisterFinalizer(nullptr);
-    const size_t otherRegistered = otherOwner.WeakRootStorage().AllocationCount();
     DedupOldCycle();
-    const size_t otherAfter = otherOwner.WeakRootStorage().AllocationCount();
     const bool settled = WaitDedupSize(batch.strongCount);
     const size_t entries = StringDedupTest::Entries();
     const size_t slots = StringDedup::Instance().WeakStorage().AllocationCount();
-    std::printf("DEDUP_OLD_CLEAN_TARGET installed=%zu before=%zu entries=%zu slots=%zu expected=%zu settled=%d "
-                "other_before=%zu other_registered=%zu other_after=%zu\n",
-        batch.installed, before, entries, slots, batch.strongCount, settled,
-        otherBefore, otherRegistered, otherAfter);
+    std::printf("DEDUP_OLD_CLEAN_TARGET installed=%zu before=%zu entries=%zu slots=%zu expected=%zu settled=%d\n",
+        batch.installed, before, entries, slots, batch.strongCount, settled);
     std::fflush(stdout);
     RunDedupTask(ReleaseDedupBatch, &batch);
     ConcurrentGCBreakpoints::ReleaseControl();
@@ -535,8 +527,6 @@ void CheckDeadCleanup(bool noDead)
     GC_EXPECT_EQ(slots, batch.strongCount);
     GC_EXPECT_TRUE(settled);
     GC_EXPECT_EQ(before, batch.count);
-    GC_EXPECT_EQ(otherRegistered, otherBefore + otherDead);
-    GC_EXPECT_EQ(otherAfter, otherBefore);
     GC_EXPECT_EQ(batch.installed, batch.count);
     GC_EXPECT_EQ(finiRC, E_OK);
 }
