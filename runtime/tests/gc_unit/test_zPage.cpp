@@ -505,7 +505,7 @@ void* SelectRealLivePages(void* context)
         // assertions. A failing remap must not be consumed by cleanup first.
     }
     for (auto id : {Generation::Old, Generation::Young}) {
-        auto& queue = (*Heap::GetHeap().GetZGeneration(id).relocate().queue());
+        auto& queue = (*(*ZGeneration::generation(static_cast<ZGenerationId>(id))).relocate().queue());
         std::lock_guard<std::mutex> guard(queue.lock);
         result.pending += queue.queue.length();
     }

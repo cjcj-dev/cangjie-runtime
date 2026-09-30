@@ -224,7 +224,7 @@ GC_TEST(ZForwardingRemembered, RetainedScanRejectsPublication)
     GcHeapFixture heap;
     ZTestForwarding fwdStorage(1, heap.heapStart, ZGranuleSize);
     auto* fwd = fwdStorage.get();
-    GC_EXPECT_TRUE(fwd->retain_page(&(*Heap::GetHeap().GetZGeneration(Generation::Old).relocate().queue())));
+    GC_EXPECT_TRUE(fwd->retain_page(&(*(*ZGeneration::generation(static_cast<ZGenerationId>(Generation::Old))).relocate().queue())));
     fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
     GC_EXPECT_TRUE(fwd->relocated_remembered_fields_is_concurrently_scanned());
@@ -268,7 +268,7 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
 GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 {
     GcHeapFixture heap;
-    auto& queue = (*Heap::GetHeap().GetZGeneration(Generation::Old).relocate().queue());
+    auto& queue = (*(*ZGeneration::generation(static_cast<ZGenerationId>(Generation::Old))).relocate().queue());
     queue.activate(1);
     ZTestForwarding fwdStorage(1, heap.heapStart, ZGranuleSize);
     auto* fwd = fwdStorage.get();

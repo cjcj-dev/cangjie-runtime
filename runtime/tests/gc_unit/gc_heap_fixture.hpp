@@ -104,8 +104,8 @@ inline RememberedSet& HeapTestRemset()
 
 inline bool InitFwdTables()
 {
-    Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table() = ZForwardingTable();
-    Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table() = ZForwardingTable();
+    (*ZGeneration::generation(static_cast<ZGenerationId>(Generation::Young))).forwarding_table() = ZForwardingTable();
+    (*ZGeneration::generation(static_cast<ZGenerationId>(Generation::Old))).forwarding_table() = ZForwardingTable();
     return true;
 }
 
@@ -297,7 +297,7 @@ struct GcHeapFixture {
     // this is fixture setup, not evidence of a complete GC entry path.
     void InstallPageOwner(ZPage* region)
     {
-        if (Heap::GetHeap().GetZGeneration(region->GetOwnerGeneration()).forwarding_table().get(region->GetRegionStart()) == nullptr) {
+        if ((*ZGeneration::generation(static_cast<ZGenerationId>(region->GetOwnerGeneration()))).forwarding_table().get(region->GetRegionStart()) == nullptr) {
             const Generation generation = region->GetOwnerGeneration();
             ZPage* const current0 = region0();
             ZPage* const current1 = region1();

@@ -89,7 +89,7 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), fx.obj1));
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {region, fx.region1()}));
-        ForwardingEntries* entries = Heap::GetHeap().GetZGeneration(region->GetOwnerGeneration()).forwarding_table().get(region->GetRegionStart());
+        ForwardingEntries* entries = (*ZGeneration::generation(static_cast<ZGenerationId>(region->GetOwnerGeneration()))).forwarding_table().get(region->GetRegionStart());
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;
     }
@@ -113,7 +113,7 @@ bool RunParallelProductEntryClosesGeneration()
     auto& manager = Heap::GetHeap().page_allocator();
     PrepareOwnerRegion(fx);
 
-    ZRelocateQueue& queue = (*Heap::GetHeap().GetZGeneration(Generation::Old).relocate().queue());
+    ZRelocateQueue& queue = (*(*ZGeneration::generation(static_cast<ZGenerationId>(Generation::Old))).relocate().queue());
     auto& old = Heap::GetHeap().old();
     if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 3);
     old.Workers()->set_active_workers(3);
@@ -131,7 +131,7 @@ bool RunSerialProductEntryClosesGeneration()
     auto& manager = Heap::GetHeap().page_allocator();
     PrepareOwnerRegion(fx);
 
-    ZRelocateQueue& queue = (*Heap::GetHeap().GetZGeneration(Generation::Old).relocate().queue());
+    ZRelocateQueue& queue = (*(*ZGeneration::generation(static_cast<ZGenerationId>(Generation::Old))).relocate().queue());
     // ZRelocate uses the generation worker entry even with one participant.
     auto& old = Heap::GetHeap().old();
     if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
@@ -171,7 +171,7 @@ bool RunYoungRuntimeProductEntry()
     RegionManager& space = Heap::GetHeap().page_allocator();
     RegionManager& manager = space;
 
-    ZRelocateQueue& queue = (*Heap::GetHeap().GetZGeneration(Generation::Young).relocate().queue());
+    ZRelocateQueue& queue = (*(*ZGeneration::generation(static_cast<ZGenerationId>(Generation::Young))).relocate().queue());
 
     Heap& collector = Heap::GetHeap();
 #if defined(MRT_TESTABLE_INTERNALS)

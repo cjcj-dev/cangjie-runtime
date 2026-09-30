@@ -189,7 +189,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     heap.young().relocate().relocate(&heap.young().relocation_set());
     // zForwardingTable.inline.hpp:43. Do not pass the pre-relocate descriptor
     // into forwarding_for_page: non-in-place completion frees it (zRelocate.cpp:450).
-    auto forwarding = Heap::GetHeap().GetZGeneration(forwardGeneration).forwarding_table().get(forwardStart);
+    auto forwarding = (*ZGeneration::generation(static_cast<ZGenerationId>(forwardGeneration))).forwarding_table().get(forwardStart);
     BaseObject* to = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(from)));
     // Eden advances to survivor1 at this threshold. Preserve the fixture's
     // explicit promotion so the old root task observes an actual old page.
@@ -309,7 +309,7 @@ void CheckSavedRootColor(bool invisible, bool twoRounds = false)
     const MAddress forwardStart = page->GetRegionStart();
     const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.young().relocate().relocate(&heap.young().relocation_set());
-    const MAddress expected = Heap::GetHeap().GetZGeneration(forwardGeneration).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = (*ZGeneration::generation(static_cast<ZGenerationId>(forwardGeneration))).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
     const bool scanned = thread->GetStackWatermark().IsDone();
@@ -369,7 +369,7 @@ GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
     const MAddress forwardStart = page->GetRegionStart();
     const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.young().relocate().relocate(&heap.young().relocation_set());
-    const MAddress expected = Heap::GetHeap().GetZGeneration(forwardGeneration).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = (*ZGeneration::generation(static_cast<ZGenerationId>(forwardGeneration))).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     Heap::GetHeap().old().remap_young_roots();
     const uintptr_t observed = raw(slot->LoadPlain());

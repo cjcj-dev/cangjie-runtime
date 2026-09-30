@@ -30,9 +30,9 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     heap.InstallPageOwner(heap.region0());
     const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
     const Generation generation = heap.region0()->GetOwnerGeneration();
-    const MAddress result = Heap::GetHeap().GetZGeneration(generation).forwarding_table().get(from)->find(from);
+    const MAddress result = (*ZGeneration::generation(static_cast<ZGenerationId>(generation))).forwarding_table().get(from)->find(from);
     GC_EXPECT_EQ(result, static_cast<MAddress>(0));
-    GC_EXPECT_TRUE(Heap::GetHeap().GetZGeneration(generation).forwarding_table().get(from) != nullptr);
+    GC_EXPECT_TRUE((*ZGeneration::generation(static_cast<ZGenerationId>(generation))).forwarding_table().get(from) != nullptr);
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
