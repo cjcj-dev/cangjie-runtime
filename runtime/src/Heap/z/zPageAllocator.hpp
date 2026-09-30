@@ -354,7 +354,7 @@ public:
     MAddress GetSpaceEndAddress() const { return reservedEnd; }
 
     bool is_initialized() const { return _initialized; }
-    bool prime_cache(size_t size) { return freeRegionManager.PrimeCache(size); }
+    bool prime_cache(size_t size) { return PrimeCache(size); }
     RegionManager();
     RegionManager(const HeapParam& param, double garbageThreshold);
 
