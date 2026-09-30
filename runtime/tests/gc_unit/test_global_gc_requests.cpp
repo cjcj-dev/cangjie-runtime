@@ -67,6 +67,38 @@ void TimerRequest(const char* config)
     std::fprintf(stderr, "GLOBAL_GC_DIRECTOR_TARGET executed=1 config=%s before=%u after=%u\n", config, before, after);
     GC_EXPECT_TRUE(after > before);
 }
+
+void RejectMetadata(const char* config, bool missingBarrier)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        if (dup2(output[1], STDERR_FILENO) < 0) _exit(126);
+        close(output[1]);
+        signal(SIGABRT, SIG_DFL);
+        requestMetadata.flags = missingBarrier ? CJGCFlagsTable{1, 0, 0} : CJGCFlagsTable{0, 1, 0};
+        setenv("cjEnableGC", config, 1);
+        LoadRequestImage(false, true);
+        InitRequests(config, false);
+        _exit(0);
+    }
+    close(output[1]);
+    std::string transcript;
+    char buffer[512];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) transcript.append(buffer, count);
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+        transcript.find("no safepoint or barrier defined in file") != std::string::npos;
+    std::fprintf(stderr, "GLOBAL_GC_METADATA_TARGET executed=1 config=%s barrier=%d status=%d rejected=%d\n%s",
+                 config, missingBarrier, status, rejected, transcript.c_str());
+    GC_EXPECT_TRUE(rejected);
+}
 }
 
 GC_RUNTIME_OTHER_VM_TEST(GlobalGCRequests, ZeroLateFalse) { ExplicitRequest("0", false, false); }
@@ -77,4 +109,8 @@ GC_RUNTIME_OTHER_VM_TEST(GlobalGCRequests, ZeroLateTrue) { ExplicitRequest("0", 
 GC_RUNTIME_OTHER_VM_TEST(GlobalGCRequests, OneLateTrue) { ExplicitRequest("1", true, false); }
 GC_RUNTIME_OTHER_VM_TEST(GlobalGCRequests, ZeroDirector) { TimerRequest("0"); }
 GC_RUNTIME_OTHER_VM_TEST(GlobalGCRequests, OneDirector) { TimerRequest("1"); }
+GC_RUNTIME_OTHER_VM_TEST(GlobalGCRequests, ZeroMissingBarrier) { RejectMetadata("0", true); }
+GC_RUNTIME_OTHER_VM_TEST(GlobalGCRequests, OneMissingBarrier) { RejectMetadata("1", true); }
+GC_RUNTIME_OTHER_VM_TEST(GlobalGCRequests, ZeroMissingSafepoint) { RejectMetadata("0", false); }
+GC_RUNTIME_OTHER_VM_TEST(GlobalGCRequests, OneMissingSafepoint) { RejectMetadata("1", false); }
 #endif
