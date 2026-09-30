@@ -6,6 +6,7 @@ generations={}
 carriers={}
 joined=set()
 tls_completed=set()
+native_destructor_data=set()
 teardown_seen=False
 bootstrap_tid=0
 held_tid=0
@@ -111,7 +112,8 @@ class OwnerCallerRet(gdb.Breakpoint):
         data=destructors.pop(gdb.selected_thread().global_num,None)
         if data is not None:
             destructor_result(data,"owner_caller_return")
-            tls_completed.add(gdb.selected_thread().ptid[1])
+            if data in native_destructor_data:
+                tls_completed.add(gdb.selected_thread().ptid[1])
         return False
 class DestructorEntry(gdb.Breakpoint):
     def __init__(self,name,field):
@@ -119,6 +121,7 @@ class DestructorEntry(gdb.Breakpoint):
     def stop(self):
         data=int(gdb.parse_and_eval("(unsigned long)&((MapleRuntime::"+self.field[0]+"*)$rdi)->"+self.field[1]))
         destructors[gdb.selected_thread().global_num]=data
+        if self.field[0]=="CleanThreadLocalData": native_destructor_data.add(data)
         return_address=ptr(int(gdb.parse_and_eval("$rsp")))
         if return_address not in caller_returns:
             caller_returns.add(return_address)
@@ -143,7 +146,8 @@ class DestructorRet(gdb.Breakpoint):
         data=destructors.pop(gdb.selected_thread().global_num,None)
         if data is not None:
             destructor_result(data,"product_destructor_ret")
-            tls_completed.add(gdb.selected_thread().ptid[1])
+            if data in native_destructor_data:
+                tls_completed.add(gdb.selected_thread().ptid[1])
         return False
 for cls,field in (("Mutator","gcData"),("CleanThreadLocalData","nativeData")):
     name="MapleRuntime::"+cls+"::~"+cls+"()"
