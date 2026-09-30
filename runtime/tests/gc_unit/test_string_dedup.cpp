@@ -7,6 +7,10 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <fstream>
+#include <string>
+#include <unistd.h>
+#include <sys/wait.h>
 #include "CangjieRuntime.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Common/SuspendibleThreadSet.h"
@@ -579,6 +583,34 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, ResizeThenOldCallbacksShrink)
 // publishes the moved object and completes its page.
 GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
 {
+    // Queue observations belong to the debugger, not to a product-only
+    // PendingCount API (ZGC zRelocate.cpp:134-191). Run this same fixture under
+    // the read-only observer; all original behavioral assertions remain below.
+    if (std::getenv("DEDUP_QUEUE_OBSERVER_FILE") == nullptr) {
+        char executable[4096]{};
+        const auto length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+        GC_EXPECT_TRUE(length > 0);
+        executable[length] = '\0';
+        const std::string snapshot = std::string(executable) + ".queue-observation-" + std::to_string(getpid());
+        const std::string source = __FILE__;
+        const std::string observer = source.substr(0, source.find_last_of('/')) +
+            "/test_string_dedup_queue_gdb.py";
+        const pid_t child = fork();
+        GC_EXPECT_TRUE(child >= 0);
+        if (child == 0) {
+            setenv("DEDUP_QUEUE_OBSERVER_FILE", snapshot.c_str(), 1);
+            setenv("DEDUP_QUEUE_OBSERVER_SOURCE", source.c_str(), 1);
+            execlp("gdb", "gdb", "-nx", "-batch", "-x", observer.c_str(),
+                   "--args", executable, static_cast<char*>(nullptr));
+            _exit(127);
+        }
+        int status = 0;
+        const auto waited = waitpid(child, &status, 0);
+        unlink(snapshot.c_str());
+        GC_EXPECT_TRUE(waited == child && WIFEXITED(status));
+        GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+        return;
+    }
     ByteArrays arrays;
     auto& heap = Heap::GetHeap();
     auto& old = heap.old();
@@ -612,6 +644,14 @@ GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
     old.set_phase(ZGeneration::Phase::Relocate);
     ZRelocate::StartRelocationTasks(old.id());
     auto& queue = *old.relocate().queue();
+    const auto pendingCount = [&] {
+        // All threads are frozen at this source line. GDB reads queue.queue._len
+        // and writes only its result file; this code does not read private data.
+        std::ifstream snapshot(std::getenv("DEDUP_QUEUE_OBSERVER_FILE")); // DEDUP_QUEUE_SNAPSHOT
+        size_t count = 0;
+        GC_EXPECT_TRUE(static_cast<bool>(snapshot >> count));
+        return count;
+    };
     std::atomic<bool> finished{false};
     MArray* answer = nullptr;
     std::thread waiter([&] {
@@ -622,9 +662,9 @@ GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
         finished.store(true, std::memory_order_release);
     });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (queue.PendingCount() == 0 && !finished.load(std::memory_order_acquire) &&
+    while (pendingCount() == 0 && !finished.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
-    const bool queued = queue.PendingCount() == 1 && !finished.load(std::memory_order_acquire);
+    const bool queued = pendingCount() == 1 && !finished.load(std::memory_order_acquire);
     std::atomic<bool> stopEntered{false};
     std::atomic<bool> stopped{false};
     std::atomic<bool> rendezvousDone{false};
@@ -652,7 +692,7 @@ GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
     const bool returned = answer != nullptr && answer != arrays.second && answer != arrays.first &&
         answer->GetLength() == 2 && answer->GetPrimitiveElement<I8>(0) == 7 &&
         answer->GetPrimitiveElement<I8>(1) == 9;
-    const bool done = owner->is_done() && queue.PendingCount() == 0;
+    const bool done = owner->is_done() && pendingCount() == 0;
     const size_t remaining = StringDedup::Instance().WeakStorage().AllocationCount();
     std::printf("DEDUP_WAIT_TARGET installed=%d queued=%d returned=%d done=%d stopped_slots=%zu "
                 "waiting_for_publication=%d stopped=%d rendezvous_done=%d\n", installed, queued, returned,
