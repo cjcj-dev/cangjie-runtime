@@ -85,6 +85,7 @@ GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
         fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + count * 64);
         (void)seed.Flush(stripes);
         auto drain = [&](size_t id) {
+            ThreadLocal::InitializeCleaner();
             WorkerFixture workerThread(id);
             SuspendibleThreadSetJoiner joiner;
             (void)domain.FollowWork(false);
@@ -307,6 +308,7 @@ GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
     auto& stripes = domain.Stripes();
     std::atomic<bool> entered{false};
     std::thread waiter([&] {
+        ThreadLocal::InitializeCleaner();
         WorkerFixture workerThread(0);
         SuspendibleThreadSetJoiner joiner;
         entered.store(true, std::memory_order_release);
