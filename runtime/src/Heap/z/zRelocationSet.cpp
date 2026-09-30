@@ -52,19 +52,6 @@
 
 namespace MapleRuntime {
 
-static const ZStatSubPhase PPostTrace("PostTrace", ZGenerationId::old);
-
-void ZGenerationOld::PostTrace()
-{
-    ZStatTimerOld zstatTimer(PPostTrace);
-    // Value-only cycle roots still depend on the preceding relocation receipts.
-    // Complete their owner handoff while that authority is queryable.
-    // zGeneration.cpp:1261 mark_end does not reset forwarding.
-    Heap::GetHeap().cross_vm().PrepareCycleRef(discoveredExternObjects);
-}
-} // namespace MapleRuntime
-
-namespace MapleRuntime {
 ZRelocationSet::ZRelocationSet(ZGeneration* generation)
     : _generation(generation),
       _allocator(),
