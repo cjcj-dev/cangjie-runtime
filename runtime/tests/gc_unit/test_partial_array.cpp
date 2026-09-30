@@ -196,7 +196,6 @@ std::set<size_t> OnSet(GcHeapFixture& fx, Slot* addr, size_t length)
         domain.Terminate().Reset(1);
         ZAbort::abort();
         (void)domain.FollowWork(context, 0, true);
-        ZAbort::reset();
         ExpectPartition(domain, addr, length, original, ++step);
         GC_EXPECT_TRUE(step <= length * 2 + 32);
     }
@@ -311,7 +310,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
 }
 #endif // MRT_TESTABLE_INTERNALS
 
-GC_TEST(PartialArray, EmptyAndSingle)
+GC_OTHER_VM_TEST(PartialArray, EmptyAndSingle)
 {
     GcHeapFixture fx;
     SlotBuf buf(8, fx.heapStart + 2 * ZGranuleSize);
@@ -319,7 +318,7 @@ GC_TEST(PartialArray, EmptyAndSingle)
     ExpectSame(fx, buf.slots, 1);
 }
 
-GC_TEST(PartialArray, ThresholdExact)
+GC_OTHER_VM_TEST(PartialArray, ThresholdExact)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH;
@@ -327,7 +326,7 @@ GC_TEST(PartialArray, ThresholdExact)
     ExpectSame(fx, buf.slots, n);
 }
 
-GC_TEST(PartialArray, ThresholdMinusOne)
+GC_OTHER_VM_TEST(PartialArray, ThresholdMinusOne)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH - 1;
@@ -335,7 +334,7 @@ GC_TEST(PartialArray, ThresholdMinusOne)
     ExpectSame(fx, buf.slots, n);
 }
 
-GC_TEST(PartialArray, ThresholdPlusOne)
+GC_OTHER_VM_TEST(PartialArray, ThresholdPlusOne)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH + 1;
@@ -343,7 +342,7 @@ GC_TEST(PartialArray, ThresholdPlusOne)
     ExpectSame(fx, buf.slots, n);
 }
 
-GC_TEST(PartialArray, MultiChunk)
+GC_OTHER_VM_TEST(PartialArray, MultiChunk)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH * 8 + 17;
@@ -363,7 +362,7 @@ GC_OTHER_VM_TEST(PartialArray, BoundaryRefs)
     GC_EXPECT_TRUE(on.count(n - 1) == 1);
 }
 
-GC_TEST(PartialArray, UnalignedStart)
+GC_OTHER_VM_TEST(PartialArray, UnalignedStart)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH * 4 + 3;
@@ -373,7 +372,7 @@ GC_TEST(PartialArray, UnalignedStart)
 
 // ZGC zMark.cpp:185-196, 471-489. Stop after the first real drain entry
 // using the existing abort state, then inspect the product-owned continuations.
-GC_TEST(MarkConsumer1328, CrossStripePartialStaysLocalAndOverflowed)
+GC_OTHER_VM_TEST(MarkConsumer1328, CrossStripePartialStaysLocalAndOverflowed)
 {
     GcHeapFixture fx;
     WorkerFixture worker;
@@ -396,7 +395,6 @@ GC_TEST(MarkConsumer1328, CrossStripePartialStaysLocalAndOverflowed)
     stacks.Push(stripes, context.Stripe(), MarkPartialArray::Encode(reinterpret_cast<void*>(start), length), false);
     ZAbort::abort();
     const bool drained = domain.Drain(context, 0);
-    ZAbort::reset();
     auto* local = stacks.StealLocal(stripes, target);
     const size_t localCount = local == nullptr ? 0 : local->Size();
     const size_t published = target->published.Length();
