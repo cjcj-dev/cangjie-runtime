@@ -43,6 +43,7 @@ invoke_native:
 )");
 static uintptr_t initial, expected;
 static bool passed, armed, contextSaved;
+static int mode;
 static uint32_t savedState;
 class ObserveHandshake final: public HandshakeClosure {
 public:
@@ -70,6 +71,11 @@ extern "C" void native_arm()
  if (armed) {
   operation=new HandshakeOperation(&closure,&owner);
   Handshake::Current().add_operation(operation);
+ } else if (mode==2) {
+  StackWatermarkSet::start_processing(owner);
+  initial=owner.GetStackWatermark().last_processed_raw();
+  savedState=owner.GetStackWatermark().PackedState();
+  UpdatePollValues(ThreadLocal::GetThreadLocalData());
  }
 }
 extern "C" void native_observe()
@@ -78,8 +84,9 @@ extern "C" void native_observe()
  auto& watermark=owner.GetStackWatermark();
  auto frontier=watermark.last_processed_raw();
  passed=contextSaved && (armed ? initial!=0 && frontier>initial && frontier==expected && !owner.InSaferegion()
+              : mode==2 ? initial!=0 && frontier==initial && watermark.PackedState()==savedState && !watermark.IsDone() && !owner.InSaferegion()
               : frontier==0 && watermark.PackedState()==savedState && !watermark.processing_started() && !owner.InSaferegion());
- std::fprintf(stderr,"NATIVE_FRAME_PAIR_TARGET armed=%d saved=%d initial=%p frontier=%p expected=%p lazy=%d active=%d pass=%d executed=1\n",armed,contextSaved,(void*)initial,(void*)frontier,(void*)expected,!watermark.processing_started(),!owner.InSaferegion(),passed);
+ std::fprintf(stderr,"NATIVE_FRAME_PAIR_TARGET mode=%d saved=%d initial=%p frontier=%p expected=%p lazy=%d active=%d pass=%d executed=1\n",mode,contextSaved,(void*)initial,(void*)frontier,(void*)expected,!watermark.processing_started(),!owner.InSaferegion(),passed);
  // End the experiment before return-poll processing changes its result.
  watermark.Reset();
  owner.SetManagedContext(false);
@@ -88,7 +95,8 @@ extern "C" void native_observe()
 }
 int main(int argc,char** argv)
 {
- armed=argc>1 && std::atoi(argv[1])!=0;
+ mode=argc>1?std::atoi(argv[1]):0;
+ armed=mode==1;
  const int depth=argc>2?std::atoi(argv[2]):9;
  CangjieRuntime::stackGrowConfig=StackGrowConfig::STACK_GROW_ON;
  RuntimeParam param {}; param.coParam.processorNum=1; param.heapParam.heapSize=32*1024;

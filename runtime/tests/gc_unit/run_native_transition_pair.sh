@@ -20,7 +20,7 @@ sha256sum "$LLC" "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" "$GCV2_RUNTIME_LI
  -L"$GCV2_RUNTIME_LIB_DIR" -Wl,-rpath,"$GCV2_RUNTIME_LIB_DIR" -lcangjie-runtime -lboundscheck -o "$OUT/native-transition-pair"
 sha256sum "$OUT/native-transition-pair" "$OUT/return.o" > "$OUT/outputs.sha256"
 result=0
-for mode in 0 1; do
+for mode in 0 1 2; do
  for depth in 9 500; do
   set +e
   LD_LIBRARY_PATH="$GCV2_RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" timeout 30 "$OUT/native-transition-pair" "$mode" "$depth" > "$OUT/mode-$mode-depth-$depth.log" 2>&1
