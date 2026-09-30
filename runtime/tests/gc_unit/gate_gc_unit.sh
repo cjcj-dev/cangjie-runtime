@@ -326,20 +326,14 @@ export GC_UNIT_OUT="${GC_UNIT_OUT:-$SRC/build_standalone}"
 
 STAMP="$GC_UNIT_OUT/.gate_stamp"
 SO="$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so"
-# ELF versioned exports print as `name@@VERSION`; accept both that and the
-# unversioned form. An exact `$` anchor after the bare name misses the
-# versioned export and silently keeps SEGMENTED_MANAGED_CAN_RUN at 0.
-if nm -D "$SO" | /usr/bin/grep -E 'PendingStalledAllocations' >/dev/null; then
+if python3 "$SRC/testable_product_hooks.py" --source "$ROOT/runtime/src" --so "$SO"; then
   SEGMENTED_MANAGED_CAN_RUN=1
   if [[ ! -f "$SEGMENTED_MANAGED_SCRIPT" || ! -f "$SRC/segmented_array_managed.cj" ]]; then
-    echo "GC_UNIT_GATE_FAIL: product SO exposes segmented-array test hooks but the managed test is missing" >&2
+    echo "GC_UNIT_GATE_FAIL: product SO exposes current test hooks but the managed test is missing" >&2
     exit 2
   fi
-elif [[ "$TESTABLE_INTERNALS" == "1" ]]; then
-  # In a TESTABLE build the hook is part of the same contract as the managed
-  # fixture.  Treat its absence as a configuration error instead of silently
-  # converting the managed phase to NOT_RUN.
-  echo "GC_UNIT_GATE_FAIL: TESTABLE_INTERNALS=1 but product SO lacks segmented-array test hooks" >&2
+elif [[ "$SO_TESTABLE" == "1" || "$TESTABLE_INTERNALS" == "1" ]]; then
+  echo "GC_UNIT_GATE_FAIL: TESTABLE_INTERNALS=1 but product SO lacks current test hooks" >&2
   exit 2
 fi
 
