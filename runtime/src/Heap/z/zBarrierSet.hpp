@@ -13,7 +13,7 @@ namespace MapleRuntime {
 class MArray;
 class ZBarrierSet : public BarrierSet {
 public:
-    ZBarrierSet() : BarrierSet(ZBarrierSetKind) {}
+    ZBarrierSet() : BarrierSet(FakeRtti(GetName<ZBarrierSet>::value)) {}
     void on_thread_create(ThreadGCData& data) override;
     void on_thread_destroy(ThreadGCData& data) override;
     void on_slowpath_allocation_exit(BaseObject* new_obj) override;

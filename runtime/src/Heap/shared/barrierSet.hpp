@@ -1,6 +1,8 @@
 #ifndef MRT_BARRIER_SET_HPP
 #define MRT_BARRIER_SET_HPP
 
+#include "Base/fakeRttiSupport.hpp"
+
 namespace MapleRuntime {
 class BaseObject;
 class Mutator;
@@ -12,10 +14,16 @@ class BarrierSet {
 public:
     enum Name { ZBarrierSetKind };
     template<Name kind> struct GetType;
+    template<typename BarrierSetT> struct GetName;
 
-    explicit BarrierSet(Name kind) : _kind(kind) {}
+protected:
+    using FakeRtti = FakeRttiSupport<BarrierSet, Name>;
+
+public:
+
+    explicit BarrierSet(const FakeRtti& fake_rtti) : _fake_rtti(fake_rtti) {}
     virtual ~BarrierSet() = default;
-    Name kind() const { return _kind; }
+    Name kind() const { return _fake_rtti.concrete_tag(); }
     static BarrierSet* barrier_set() { return _barrier_set; }
     static void set_barrier_set(BarrierSet* barrier_set);
 
@@ -27,11 +35,15 @@ public:
 
 private:
     static BarrierSet* _barrier_set;
-    const Name _kind;
+    FakeRtti _fake_rtti;
 };
 
 template<> struct BarrierSet::GetType<BarrierSet::ZBarrierSetKind> {
     using type = ZBarrierSet;
+};
+
+template<> struct BarrierSet::GetName<ZBarrierSet> {
+    static constexpr Name value = ZBarrierSetKind;
 };
 }
 #endif

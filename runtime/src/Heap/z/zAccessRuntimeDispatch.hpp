@@ -68,7 +68,7 @@ struct BarrierResolver {
     static FunctionPointerT resolve_barrier_gc()
     {
         BarrierSet* barrier_set = BarrierSet::barrier_set();
-        CHECK_DETAIL(barrier_set != nullptr, "GC barriers invoked before BarrierSet is set");
+        assert(barrier_set != nullptr && "GC barriers invoked before BarrierSet is set");
         switch (barrier_set->kind()) {
             case BarrierSet::ZBarrierSetKind:
                 return PostRuntimeDispatch<
