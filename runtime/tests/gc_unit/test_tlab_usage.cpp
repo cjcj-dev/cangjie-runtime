@@ -81,7 +81,7 @@ GC_RUNTIME_OTHER_VM_TEST(ThreadStoreMask, YoungPhasePublishesToOwners)
     young.Workers()->set_active_workers(1);
     young.pause_mark_start();
     const uintptr_t published = ZPointerStoreBadMask;
-    ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
+    ZMark::VisitMinorRoots();
     const uintptr_t after = current->GetGCData().storeBadMask;
     // Consume the carrier slot and field through the fixed target ABI, as the
     // paired compiler lowering does. Do not derive either offset from offsetof.
@@ -582,7 +582,7 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
     last->MutatorLock();
     state.refillOwner.store(first, std::memory_order_release);
     state.epoch.store(StackWatermark::epoch_id(), std::memory_order_release);
-    std::thread roots([&] { ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {}); });
+    std::thread roots([&] { ZMark::VisitMinorRoots(); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (!state.refilled.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
@@ -729,7 +729,7 @@ GC_RUNTIME_OTHER_VM_TEST(TLABOwnership, ParkedRootDoesNotRetireRunningOwner)
     young.pause_mark_start();
     state.flipped.store(true, std::memory_order_release);
     while (!state.refilled.load(std::memory_order_acquire)) { std::this_thread::yield(); }
-    ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
+    ZMark::VisitMinorRoots();
     const size_t parkedAfter = state.parkedOwner->tlab()->TLABSize();
     state.rootsDone.store(true, std::memory_order_release);
     void* result = nullptr;
@@ -797,21 +797,18 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
     young.Workers()->set_active_workers(1);
     young.pause_mark_start();
     const uint32_t epoch = StackWatermark::epoch_id();
-    std::atomic<bool> rootObserved{false};
-    std::atomic<bool> releaseRoot{false};
+    std::atomic<SMRThread*> rootExecutor{nullptr};
+    std::atomic<bool> releaseExecutor{false};
+    // Hold an existing watermark lock across the root task's snapshot lifetime.
+    // Its published executor hazard proves the product handle has been acquired.
+    auto& blockedWatermark = state.owner[0].load()->GetStackWatermark();
+    blockedWatermark.BeginGrowFlush();
     std::atomic<bool> innerDone{false};
     std::atomic<bool> releaseOuter{false};
-    // The real root task has already constructed its ThreadsListHandle when
-    // the first product root value reaches this existing result consumer.
-    const auto consumeRoots = [&] {
-        ZMark::VisitMinorRoots([&](BaseObject* object) {
-            if (object == state.marker.load()) {
-                rootObserved.store(true, std::memory_order_release);
-                while (!releaseRoot.load(std::memory_order_acquire)) { std::this_thread::yield(); }
-            }
-        }, [](BaseObject*) {});
-    };
+    const auto consumeRoots = [&] { ZMark::VisitMinorRoots(); };
     std::thread roots([&] {
+        SMRThread executor;
+        rootExecutor.store(&executor, std::memory_order_release);
         if (nested) {
             ThreadsListHandle outer;
             consumeRoots();
@@ -820,8 +817,14 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
         } else {
             consumeRoots();
         }
+        while (!releaseExecutor.load(std::memory_order_acquire)) { std::this_thread::yield(); }
     });
-    const bool observed = WaitForSMR([&] { return rootObserved.load(std::memory_order_acquire); });
+    const bool observed = WaitForSMR([&] {
+        auto* executor = rootExecutor.load(std::memory_order_acquire);
+        if (executor == nullptr) { return false; }
+        const uintptr_t hazard = executor->hazard.load(std::memory_order_acquire);
+        return hazard != 0 && (hazard & 1) == 0;
+    });
     bool removed = false;
     bool exitSettled = false;
     if (exitDuringRoots && observed) {
@@ -843,7 +846,7 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
     bool retained = false;
     bool statsPreserved = !exitDuringRoots;
     size_t allocated = 0;
-    // The root callback remains inside the product's old ThreadsListHandle.
+    // The blocked root worker remains inside the product's old ThreadsListHandle.
     // A fresh thread list intentionally excludes the removed identity
     // (HotSpot runtime/threads.cpp:238-262). Observe its protected state, and
     // do not dereference it if the exit already returned on a broken SO.
@@ -864,7 +867,7 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
         std::fflush(stderr);
         _exit(1);
     }
-    releaseRoot.store(true, std::memory_order_release);
+    blockedWatermark.EndGrowFlush();
     if (nested) {
         const bool consumed = WaitForSMR([&] { return innerDone.load(std::memory_order_acquire); });
         // Give the exit thread a definite chance to report premature completion,
@@ -890,6 +893,7 @@ void CheckConcurrentRootSnapshot(bool exitDuringRoots, bool nested = false)
         }
         releaseOuter.store(true, std::memory_order_release);
     }
+    releaseExecutor.store(true, std::memory_order_release);
     roots.join();
     state.finish.store(true, std::memory_order_release);
     state.exitTarget.store(true, std::memory_order_release);

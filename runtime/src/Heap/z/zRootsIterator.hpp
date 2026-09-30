@@ -24,6 +24,7 @@
 #include "Mutator/ThreadSMR.h"
 namespace MapleRuntime {
 class Mutator;
+class CJThreadRoot;
 
 class HandleMark {
     Mutator& mutator;
@@ -63,7 +64,7 @@ public:
         : OopStorageSetIteratorStrong(workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    std::array<OopStorage::ParState<true>, 1> states;
+    std::array<OopStorage::ParState<true>, 2> states;
     ZGenerationIdOptional generation;
 };
 class OopStorageSetIteratorWeak {
@@ -138,34 +139,34 @@ private:
     ParallelApply<StaticRootsAdapterIterator> statics;
 };
 
+// ZGC zRootsIterator.hpp:130-160. Cangjie has no class unloading:
+// all live carriers participate in both Strong and All; no weak-only set.
+class CJThreadRootsIterator {
+public:
+    void Apply(const std::function<void(CJThreadRoot&)>& visitor);
+private:
+    std::atomic<bool> claimed{false};
+};
 class RootsIteratorStrongUncolored {
 public:
     explicit RootsIteratorStrongUncolored(ZGenerationIdOptional generation = ZGenerationIdOptional::none)
         : javaThreads(generation) {}
-    void Apply(const std::function<void()>& visitor)
-    {
-        std::function<void()> copy = visitor;
-        uncolored.apply(&copy);
-    }
-    void ApplyThreads(const std::function<void(Mutator&)>& visitor)
-    {
-        std::function<void(Mutator&)> copy = visitor;
-        javaThreads.apply(&copy);
-    }
+    void Apply(const std::function<void(Mutator&)>& threadVisitor,
+               const std::function<void(CJThreadRoot&)>& carrierVisitor);
 private:
-    struct Once {
-        void Apply(const std::function<void()>& visitor)
-        {
-            if (!claimed.exchange(true, std::memory_order_relaxed)) {
-                visitor();
-            }
-        }
-        std::atomic<bool> claimed{false};
-    };
-    ParallelApply<Once> uncolored;
     ParallelApply<JavaThreadsIterator> javaThreads;
+    ParallelApply<CJThreadRootsIterator> carriersStrong;
 };
-using RootsIteratorAllUncolored = RootsIteratorStrongUncolored;
+class RootsIteratorAllUncolored {
+public:
+    explicit RootsIteratorAllUncolored(ZGenerationIdOptional generation = ZGenerationIdOptional::none)
+        : javaThreads(generation) {}
+    void Apply(const std::function<void(Mutator&)>& threadVisitor,
+               const std::function<void(CJThreadRoot&)>& carrierVisitor);
+private:
+    ParallelApply<JavaThreadsIterator> javaThreads;
+    ParallelApply<CJThreadRootsIterator> carriersAll;
+};
 
 class StaticRootTable {
 public:

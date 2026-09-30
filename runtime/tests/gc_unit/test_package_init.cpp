@@ -142,7 +142,7 @@ struct Task {
 };
 void* Run(void* argument, unsigned int)
 {
-    // LWTData::fn is explicitly native and excluded by MRT_VisitorCaller;
+    // LWTData::fn is explicitly native and excluded by CJThreadRoot::oops_do;
     // the three managed slots remain null. Stay within COARGS_SIZE_MAX.
     auto* task = static_cast<Task*>(static_cast<LWTData*>(argument)->fn);
     const Task work = *task;

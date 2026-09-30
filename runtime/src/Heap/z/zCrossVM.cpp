@@ -304,8 +304,16 @@ private:
 };
 }
 
-void ZCrossVM::ProcessExportRoots(ValueRootList& exportOwners, ValueRootMap& discoveredExternObjects)
+void ZCrossVM::ProcessExportRoots(ValueRootMap& discoveredExternObjects)
 {
+    // Cross-VM ownership inventory is separate from the strong GC root walk.
+    // The root barrier already produced a current identity; do not mark twice.
+    ValueRootList exportOwners;
+    Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) {
+        BaseObject* object = to_object(ZBarrier::load_barrier_on_oop_field(
+            reinterpret_cast<volatile zpointer*>(&slot)));
+        if (Heap::IsHeapAddress(object)) { exportOwners.emplace_back(object); }
+    });
     while (!exportOwners.empty()) {
         if (ZAbort::should_abort()) {
             return;
@@ -365,13 +373,9 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(const ValueRoot& root) const
         // when this generation's forwarding table has no entry for it.
         BaseObject* current = ZBarrier::remap_generation(colorPtr)
             ->relocate_or_remap_object(value);
-        if (current == nullptr || !Heap::IsHeapAddress(current) ||
-            ZBarrier::JudgeHandOutTarget(current) != HandVerdict::Usable) {
-            ZBarrier::FailClosedLoad("value root relocate_or_remap requires usable to", value, 0);
-        }
         return current;
     }
-    return ZBarrier::ValidateCurrentValue(value);
+    return value;
 }
 
 void ZCrossVM::CurrentizeValueRootSet(ValueRootSet& roots) const

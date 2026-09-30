@@ -299,13 +299,15 @@ public:
     bool block_jni_critical() const override { return true; }
 };
 
-class VM_ZVerifyOld : public VM_ZOperation {
+class VM_ZVerifyOld : public VMOperation {
 public:
-    const char* name() const override { return "Verify Old"; }
-    bool do_operation() override
+    bool skip_thread_oop_barriers() const override { return true; }
+    void doit() { ZVerify::AfterWeakProcessing(); }
+    void pause()
     {
-        ZVerify::AfterWeakProcessing();
-        return true;
+        // ZGC zGeneration.cpp:1136-1153: a plain VM operation.
+        ScopedStopTheWorld stw("Verify Old", false, 0, this);
+        doit();
     }
 };
 
@@ -424,7 +426,7 @@ void ZGenerationYoung::produceYoungRoots()
 {
     ZStatTimerYoung timer(ZSubPhaseConcurrentMarkRootsYoung);
     // ZGC zMark.cpp:932-936: the root task publishes its worker stacks.
-    ZMark::VisitMinorRoots([](BaseObject*) {}, [](BaseObject*) {});
+    ZMark::VisitMinorRoots();
 }
 
 void ZGenerationYoung::mark_follow()
@@ -856,7 +858,7 @@ bool ZGenerationOld::mark_end()
     }
     // Preserve export ownership discovery after the ordinary root closure,
     // while the mark-end pause excludes new mutator publication.
-    Heap::GetHeap().cross_vm().ProcessExportRoots(oldExportOwners, discoveredExternObjects);
+    Heap::GetHeap().cross_vm().ProcessExportRoots(discoveredExternObjects);
     // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
     // to the phase owner before verification or publishing mark completion.
     if (ZAbort::should_abort()) {
@@ -923,9 +925,7 @@ void ZGenerationOld::collect(void* timer)
 void ZGenerationOld::mark_roots()
 {
     ZStatTimerOld timer(ZSubPhaseConcurrentMarkRootsOld);
-    oldMarkWorkStack.clear();
-    oldExportOwners.clear();
-    ZMark::DoEnumeration(oldMarkWorkStack, oldExportOwners);
+    ZMark::DoEnumeration();
 }
 
 void ZGenerationOld::mark_follow()
@@ -989,6 +989,19 @@ void ZGenerationOld::concurrent_select_relocation_set()
     select_relocation_set(false);
 }
 
+// ZGC zGeneration.cpp:1428-1459: remap carrier roots with process, then disarm.
+class ZRemapNMethodClosure {
+public:
+    void DoNMethod(CJThreadRoot& root)
+    {
+        if (!root.is_armed()) { return; }
+        ZUncoloredRootProcessOopClosure closure(root.saved_color());
+        OopClosure& process = closure;
+        root.oops_do([&](RootSlot& slot) { process.do_oop(&HeapSlotAt<>(static_cast<void*>(&slot))); });
+        root.guard_with(ZPointerStoreGoodMask);
+    }
+};
+
 // zGeneration.cpp:1470-1527: shared iterators, one worker task, then restore
 // the old generation's active worker budget. Native stack/record expansion is
 // the Cangjie adapter for the ZGC uncolored-root closure.
@@ -996,6 +1009,7 @@ class ZRemapYoungRootsTask final : public ZTask {
     ZRemsetTableIterator remset;
     RootsIteratorAllColored colored;
     RootsIteratorAllUncolored uncolored;
+    ZRemapNMethodClosure carrierClosure;
 public:
     explicit ZRemapYoungRootsTask(unsigned workers)
         : ZTask("ZRemapYoungRootsTask"), remset(&Heap::GetHeap().remembered(), false),
@@ -1008,11 +1022,10 @@ public:
         }
         {
             ZStatTimerWorker timer(ZSubPhaseConcurrentRemapRootsUncoloredOld);
-            uncolored.Apply([] { Runtime::Current().GetConcurrencyModel().VisitGCRoots(); });
-            uncolored.ApplyThreads([&](Mutator& mutator) {
+            uncolored.Apply([&](Mutator& mutator) {
                 // ZGC ZRemapThreadClosure (zGeneration.cpp:1419-1424).
                 StackWatermarkSet::finish_processing(mutator);
-            });
+            }, [&](CJThreadRoot& root) { carrierClosure.DoNMethod(root); });
         }
         {
             ZStatTimerWorker timer(ZSubPhaseConcurrentRemapRememberedOld);

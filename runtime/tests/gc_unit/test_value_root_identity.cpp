@@ -14,11 +14,12 @@
 #include "TypeInfoManager.h"
 #include "ObjectModel/MObject.h"
 #include <cstring>
+#include <chrono>
 #include <atomic>
-#include <thread>
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Mutator/Handshake.h"
+#include <thread>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -28,12 +29,6 @@ extern "C" ObjRef MCC_NewObject(const TypeInfo*, MSize);
 // performed by the real collector, with no manually populated root carriers.
 class RelocationReceiptTest {
 public:
-    static size_t EnumeratedOwners(BaseObject* expected)
-    {
-        const auto& owners = Heap::GetHeap().old().oldExportOwners;
-        return std::count_if(owners.begin(), owners.end(),
-            [&](const ValueRoot& root) { return root.object == expected; });
-    }
     static bool DiscoveredIdentity(BaseObject* expected)
     {
         auto& cross = Heap::GetHeap().cross_vm();
@@ -362,7 +357,6 @@ static void CheckExportTaskPublication(bool includeYoung)
     GC_EXPECT_EQ(GetTaskRet(task, &returned), E_OK);
     ReleaseHandle(task);
     size_t localYoung = 0, localOld = 0, publishedYoung = 0, publishedOld = 0;
-    size_t youngOwners = 0, oldOwners = 0;
     {
         DriverLocker lock;
         auto& heap = Heap::GetHeap();
@@ -381,10 +375,8 @@ static void CheckExportTaskPublication(bool includeYoung)
         localOld += ThreadLocal::GetGCData().markStacks[1].Population();
         publishedYoung = heap.young().Mark().Stripes().Population();
         publishedOld = heap.old().Mark().Stripes().Population();
-        youngOwners = RelocationReceiptTest::EnumeratedOwners(input.young);
-        oldOwners = RelocationReceiptTest::EnumeratedOwners(input.old);
-        std::fprintf(stderr, "EXPORT_TASK_TARGET executed=1 local_young=%zu local_old=%zu published_young=%zu published_old=%zu young_owners=%zu old_owners=%zu\n",
-            localYoung, localOld, publishedYoung, publishedOld, youngOwners, oldOwners);
+        std::fprintf(stderr, "EXPORT_TASK_TARGET executed=1 local_young=%zu local_old=%zu published_young=%zu published_old=%zu\n",
+            localYoung, localOld, publishedYoung, publishedOld);
     }
     // Shutdown owns cleanup even in a cut arm; evaluate the captured boundary
     // result without an earlier existence assertion masking its verdict.
@@ -395,7 +387,6 @@ static void CheckExportTaskPublication(bool includeYoung)
     }
     const auto fini = FiniCJRuntime();
     GC_EXPECT_TRUE(localYoung == 0 && localOld == 0 && (!includeYoung || publishedYoung > 0) && publishedOld > 0);
-    GC_EXPECT_TRUE(youngOwners == (includeYoung ? 2u : 0u) && oldOwners == 1);
     GC_EXPECT_EQ(fini, E_OK);
 }
 
@@ -407,6 +398,62 @@ GC_RUNTIME_OTHER_VM_TEST(ZValueRoot, ExportTaskPublishesOldOnly)
 {
     CheckExportTaskPublication(false);
 }
+
+
+namespace {
+void CheckRootTaskHandshake(bool positiveControl)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    std::atomic<Mutator*> owner{nullptr};
+    std::atomic<bool> enter{false}, running{false}, finish{false}, done{false};
+    std::thread mutator([&] {
+        auto& manager = MutatorManager::Instance();
+        auto* current = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        owner.store(current, std::memory_order_release);
+        while (!enter.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        current->DoLeaveSaferegion();
+        running.store(true, std::memory_order_release);
+        while (!finish.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        current->DoEnterSaferegion();
+        manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    });
+    while (owner.load(std::memory_order_acquire) == nullptr) { std::this_thread::yield(); }
+    bool observedHandshake = false, completedWithoutHandshake = false;
+    {
+        DriverLocker lock;
+        auto& heap = Heap::GetHeap();
+        YoungTypeSetter type(heap.young(), ZYoungType::major_partial_roots);
+        heap.young().pause_mark_start();
+        enter.store(true, std::memory_order_release);
+        while (!running.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        std::thread roots([&] {
+            // The real mark driver is a GC thread, including its handshake.
+            ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+            if (positiveControl) { (void)heap.old().Mark().Flush(); }
+            else { heap.old().mark_roots(); }
+            done.store(true, std::memory_order_release);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!done.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+            if (owner.load()->GetHandshakeState().has_operation()) { observedHandshake = true; break; }
+            std::this_thread::yield();
+        }
+        completedWithoutHandshake = done.load(std::memory_order_acquire) && !observedHandshake;
+        finish.store(true, std::memory_order_release);
+        roots.join();
+        mutator.join();
+    }
+    std::fprintf(stderr, "ROOT_TASK_HANDSHAKE_TARGET executed=1 positive=%d handshake=%d completed_without_handshake=%d\n",
+                 positiveControl, observedHandshake, completedWithoutHandshake);
+    GC_EXPECT_TRUE(positiveControl ? observedHandshake : completedWithoutHandshake);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, OldRootTaskHasNoExtraHandshake) { CheckRootTaskHandshake(false); }
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, HandshakeObservationPositiveControl) { CheckRootTaskHandshake(true); }
 
 #if defined(MRT_TESTABLE_INTERNALS)
 // ZGC zMark.cpp:535-622: a worker handshake publishes an owner's partial

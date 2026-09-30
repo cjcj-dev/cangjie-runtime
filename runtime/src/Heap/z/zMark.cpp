@@ -59,49 +59,13 @@
 
 namespace MapleRuntime {
 
-// RefFieldRoot is root in tagged pointer format.
-void ZMark::EnumRefFieldRoot(RefField<>& field, ValueRootList& exportOwners)
-{
-    RefField<> oldField(field);
-    CHECK_DETAIL(!Heap::IsHeapAddress(to_object(oldField.GetTargetObject())) ||
-                     (raw(oldField.GetFieldValue()) &
-                      (ZPointerRemappedMask | ZPointerMarkedYoungMask | ZPointerMarkedOldMask)) != 0,
-                 "NativeSlot requires colored value at EnumRefFieldRoot slot=%p word=%#zx",
-                 &field, raw(oldField.GetFieldValue()));
-    ZBarrier::MarkBarrierOnOopField(field, false);
-    BaseObject* latest = to_object(field.GetTargetObject());
-    if (!Heap::IsHeapAddress(latest)) {
-        return;
-    }
-    // Ownership state carries current identity and color, never GC work entries.
-    exportOwners.emplace_back(latest);
-}
-
-
-
-
-// Shared by mark roots and Cangjie foreign-root traversal.
-
 namespace {
-// VisitMinorRoots reports the same slots the watermark marks. ZGC publishes
-// only into the mark stack (zMark.cpp:706); the product visitor is extra state
-// the root-function pointer cannot carry.
-thread_local const RootVisitor* markResultVisitor = nullptr;
-
-void MarkAndReportRoot(zaddress_unsafe* p, uintptr_t color)
-{
-    ZUncoloredRoot::mark(p, color);
-    if (markResultVisitor != nullptr) {
-        (*markResultVisitor)(*reinterpret_cast<RootSlot*>(p));
-    }
-}
-
 // ZGC zMark.cpp:703-708,827-828,883: both generations use this thread closure.
 // Cangjie has no return statepoint: retain the saved head color for the full
 // scan and expand stack objects/headerless records before visiting heap slots.
 class MarkThreadClosure {
 public:
-    explicit MarkThreadClosure(const RootVisitor* result = nullptr) : result(result)
+    MarkThreadClosure()
     {
         ZThreadLocalAllocBuffer::reset_statistics();
     }
@@ -113,16 +77,9 @@ public:
     static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }
     void DoThread(Mutator& mutator)
     {
-        const RootVisitor* const previous = markResultVisitor;
-        markResultVisitor = result;
-        StackWatermarkProcessOopClosure::RootFunction const function =
-            result == nullptr ? root_function() : MarkAndReportRoot;
-        StackWatermarkSet::finish_processing(mutator, reinterpret_cast<void*>(function));
-        markResultVisitor = previous;
+        StackWatermarkSet::finish_processing(mutator, reinterpret_cast<void*>(root_function()));
         ZThreadLocalAllocBuffer::update_stats(mutator);
     }
-private:
-    const RootVisitor* const result;
 };
 } // namespace
 
@@ -138,34 +95,56 @@ namespace {
         }
     };
 
+// ZGC zMark.cpp:711-795. The scheduler holds the carrier lock while
+// these closures inspect and publish the saved guard.
+class MarkNMethodClosure {
+public:
+    void DoNMethod(CJThreadRoot& root)
+    {
+        if (!root.is_armed()) { return; }
+        ZUncoloredRootMarkOopClosure closure(root.saved_color());
+        OopClosure& mark = closure;
+        root.oops_do([&](RootSlot& slot) { mark.do_oop(&HeapSlotAt<>(static_cast<void*>(&slot))); });
+        root.guard_with(ZPointerStoreGoodMask);
+    }
+};
+class MarkYoungNMethodClosure {
+public:
+    void DoNMethod(CJThreadRoot& root)
+    {
+        if (!root.is_armed()) { return; }
+        const uintptr_t oldMarked = root.saved_color() & ZPointerMarkedOldMask;
+        const uintptr_t nextColor = ZPointerLoadGoodMask | ZPointerMarkedYoung | oldMarked | ZPointerRemembered;
+        ZUncoloredRootMarkYoungOopClosure closure(root.saved_color());
+        OopClosure& mark = closure;
+        root.oops_do([&](RootSlot& slot) { mark.do_oop(&HeapSlotAt<>(static_cast<void*>(&slot))); });
+        root.guard_with(nextColor);
+    }
+};
+
 // ZMarkOldRootsTask, zMark.cpp:797-834. Root results are published to the
 // generation mark domain by closures, then flushed by each participating worker.
 class MarkOldRootsTask final : public ZTask {
 public:
-    MarkOldRootsTask(ZMark& domain,
-                     std::function<void()> uncolored,
-                     ValueRootList& exportOwners, unsigned workers)
-        : ZTask("ZMarkOldRootsTask"), rootsColored(workers),
-          exportRoots(Heap::GetHeap().GetExportRootStorage(), workers),
-          domain(domain), uncolored(std::move(uncolored)),
-          exportOwners(exportOwners) {}
+    explicit MarkOldRootsTask(unsigned workers)
+        : ZTask("ZMarkOldRootsTask"), rootsColored(workers, ZGenerationIdOptional::old),
+          rootsUncolored(ZGenerationIdOptional::old) {}
     void work() override
     {
-        ValueRootList localExportOwners;
-        exportRoots.OopsDo([&](NativeSlot& slot) {
-            ZMark::EnumRefFieldRoot(slot, localExportOwners);
-        });
-        {
-            std::lock_guard<std::mutex> lock(exportOwnersMutex);
-            exportOwners.splice(exportOwners.end(), localExportOwners);
-        }
         rootsColored.Apply([&](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
         });
-        rootsUncolored.Apply(uncolored);
-        rootsUncolored.ApplyThreads([&](Mutator& mutator) {
+        rootsUncolored.Apply([&](Mutator& mutator) {
             threadClosure.DoThread(mutator);
-        });
+        }, [&](CJThreadRoot& root) { carrierClosure.DoNMethod(root); });
+        // Cross-VM ownership roots remain pending alignment under #1334.
+        if (!foreignClaimed.exchange(true, std::memory_order_relaxed)) {
+            Heap::GetHeap().cross_vm().VisitSurrectedExportRoots([](BaseObject* object) {
+                if (Heap::IsHeapAddress(object)) {
+                    ZBarrier::Mark<false, false, true, false>(from_object(object));
+                }
+            });
+        }
         // zMark.cpp:830-834: flush and free worker stacks for both generations
         // here, since the set of workers executing during root scanning can be
         // different from the set of workers executing during mark.
@@ -173,31 +152,18 @@ public:
     }
 private:
     RootsIteratorStrongColored rootsColored;
-    OopStorage::ParState<true> exportRoots;
     RootsIteratorStrongUncolored rootsUncolored;
     MarkOopClosure coloredClosure;
     MarkThreadClosure threadClosure;
-    ZMark& domain;
-    std::function<void()> uncolored;
-    ValueRootList& exportOwners;
-    std::mutex exportOwnersMutex;
+    MarkNMethodClosure carrierClosure;
+    std::atomic<bool> foreignClaimed{false};
 };
 } // namespace
 
-void ZMark::EnumAllCommonRoots(ZWorkers& workers, ValueRootList& exportOwners)
+void ZMark::EnumAllCommonRoots(ZWorkers& workers)
 {
     CHECK_DETAIL(Heap::GetHeap().old().MarkPtr() != nullptr, "old mark domain must start before roots");
-    MarkOldRootsTask task(Heap::GetHeap().old().Mark(),
-                         [&] {
-        VisitStrongPlainRoots([&](ObjectRef& root) {
-            ZUncoloredRoot::mark_object(safe(root.LoadPlain()));
-        }, {});
-        Heap::GetHeap().cross_vm().VisitSurrectedExportRoots([](BaseObject* object) {
-            if (Heap::IsHeapAddress(object)) {
-                ZBarrier::Mark<false, false, true, false>(from_object(object));
-            }
-        });
-    }, exportOwners, workers.active_workers());
+    MarkOldRootsTask task(workers.active_workers());
     workers.run(&task);
 }
 
@@ -215,17 +181,25 @@ public:
 // Cangjie's stack/value-root scanner replaces HotSpot thread/nmethod closures.
 class MarkYoungRootsTask final : public ZTask {
 public:
-    MarkYoungRootsTask(std::function<void()> uncolored, const RootVisitor& visitor, unsigned workers)
-        : ZTask("ZMarkYoungRootsTask"), rootsColored(workers), threadClosure(&visitor),
-          uncolored(std::move(uncolored)) {}
+    explicit MarkYoungRootsTask(unsigned workers)
+        : ZTask("ZMarkYoungRootsTask"), rootsColored(workers, ZGenerationIdOptional::young),
+          rootsUncolored(ZGenerationIdOptional::young) {}
 
     void work() override
     {
         rootsColored.Apply([this](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
         });
-        rootsUncolored.Apply(uncolored);
-        rootsUncolored.ApplyThreads([&](Mutator& mutator) { threadClosure.DoThread(mutator); });
+        rootsUncolored.Apply([&](Mutator& mutator) { threadClosure.DoThread(mutator); },
+                             [&](CJThreadRoot& root) { carrierClosure.DoNMethod(root); });
+        // Cross-VM ownership roots remain pending alignment under #1334.
+        if (!foreignClaimed.exchange(true, std::memory_order_relaxed)) {
+            Heap::GetHeap().cross_vm().VisitMinorValueRoots([](BaseObject* object) {
+                if (Heap::IsHeapAddress(object)) {
+                    ZBarrier::Mark<false, false, true, false>(from_object(object));
+                }
+            });
+        }
         // zMark.cpp:887-891: flush and free worker stacks for both generations.
         ThreadLocal::FlushCurrentThreadMarkStacks();
     }
@@ -233,38 +207,15 @@ private:
     RootsIteratorAllColored rootsColored;
     MarkYoungOopClosure coloredClosure;
     MarkThreadClosure threadClosure;
-    std::function<void()> uncolored;
+    MarkYoungNMethodClosure carrierClosure;
+    std::atomic<bool> foreignClaimed{false};
     RootsIteratorAllUncolored rootsUncolored;
 };
 } // namespace
 
-void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
-                                 const std::function<void(BaseObject*)>& invisibleVisitor)
+void ZMark::VisitMinorRoots()
 {
-    // The C++ result container supplied by the young phase is shared by
-    // root workers; marking itself still uses the worker-local mark stacks.
-    std::mutex resultLock;
-    const auto resultVisitor = [&visitor, &resultLock](BaseObject* object) {
-        std::lock_guard<std::mutex> lock(resultLock);
-        visitor(object);
-    };
-    RootVisitor rawRootVisitor = [&resultVisitor](ObjectRef& root) {
-        resultVisitor(to_object(safe(root.LoadPlain())));
-    };
-    (void)invisibleVisitor; // Watermark owns the invisible slot with its saved color.
-    MarkYoungRootsTask task([&] {
-        VisitStrongPlainRoots(rawRootVisitor, {});
-        Heap::GetHeap().cross_vm().VisitMinorValueRoots([&](BaseObject* object) {
-            if (Heap::IsHeapAddress(object)) {
-                ZBarrier::Mark<false, false, true, false>(from_object(object));
-            }
-            resultVisitor(object);
-        });
-        Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) {
-            ZBarrier::MarkBarrierOnOopField(slot, false);
-            resultVisitor(to_object(slot.GetTargetObject()));
-        });
-    }, rawRootVisitor, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
+    MarkYoungRootsTask task(Heap::GetHeap().young().Workers()->active_workers());
     SuspendibleThreadSetJoiner joiner;
     (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).run(&task);
 

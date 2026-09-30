@@ -17,7 +17,6 @@
 #include "ObjectModel/MClass.h"
 
 namespace MapleRuntime {
-enum class HandVerdict : uint8_t;
 
 class AllStatic {
     AllStatic() = delete;
@@ -39,10 +38,6 @@ public:
     static bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
                                          bool allowNull = false);
 
-    static HandVerdict JudgeHandOutTarget(BaseObject* target);
-    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits);
-    static BaseObject* ValidateCurrentValue(BaseObject* target);
-    static void CheckStoreGoodTarget(const char* consumer, BaseObject* target);
     static RefField<> GetAndTryTagRefField(BaseObject* target);
 
 

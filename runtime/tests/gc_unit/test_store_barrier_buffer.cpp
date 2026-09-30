@@ -847,8 +847,6 @@ GC_TEST(StoreBuf, BulkPreservesSourceStorageProtocol)
     GC_EXPECT_EQ(raw(local.LoadPlain()), reinterpret_cast<uintptr_t>(fx.obj0));
 }
 
-extern "C" void MRT_VisitorCaller(void*, void*);
-
 GC_TEST(StoreBuf, ThreadRootVisitorIncludesExecuteClosure)
 {
     GcHeapFixture fx;
@@ -863,9 +861,8 @@ GC_TEST(StoreBuf, ThreadRootVisitorIncludesExecuteClosure)
         }
     };
     uintptr_t color = ZPointerStoreGoodMask;
-    auto* previous = MRT_BindUncoloredVisitColor(&color);
-    MRT_VisitorCaller(&data, &visitor);
-    MRT_BindUncoloredVisitColor(previous);
+    CJThreadRoot root(data, color);
+    root.oops_do(visitor);
     GC_EXPECT_EQ(executeVisits, 1u);
     GC_EXPECT_TRUE(data.execute == static_cast<void*>(fx.obj1));
 }

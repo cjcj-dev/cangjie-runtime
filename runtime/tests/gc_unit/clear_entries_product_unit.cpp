@@ -105,11 +105,6 @@ public:
         return ZBarrier::GetAndTryTagRefField(value);
     }
 
-    static void CheckStoreGoodTarget(Heap& collector, BaseObject* value)
-    {
-        ZBarrier::CheckStoreGoodTarget("ForwardingLookupWitness", value);
-    }
-
     static BaseObject* ForwardUpdateRawRef(Heap& collector, ObjectRef& root)
     {
         const zaddress_unsafe observed = root.LoadPlain();
@@ -1557,8 +1552,12 @@ void CheckMinorFieldColour(bool stale)
     if (stale) {
         // Preserve all other colour families; the previous young remap bit
         // directs make_load_good to the young generation's forwarding table.
-        bits = ColouredPointer(fx.obj0, ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask);
+        const uintptr_t logicalRemap = ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask;
+        bits = ColouredPointer(fx.obj0, ZPointer::remap_bits(logicalRemap));
     }
+    GC_EXPECT_TRUE(ZPointer::is_load_good(bits) == !stale);
+    GC_EXPECT_TRUE(ZPointer::is_old_load_good(bits));
+    GC_EXPECT_TRUE(ZPointer::is_young_load_good(bits) == !stale);
     RefField<> field(bits);
     (void)NativeAccess<>::oop_load(&field);
     const MAddress actual = untype(field.GetTargetObject());
