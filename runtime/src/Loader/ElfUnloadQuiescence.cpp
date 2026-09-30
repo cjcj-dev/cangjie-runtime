@@ -4,7 +4,7 @@
 
 #include "Loader/ElfUnloadQuiescence.h"
 
-#include <array>
+#include <map>
 #include <algorithm>
 #include "Base/ImmortalWrapper.h"
 #include <climits>
@@ -34,7 +34,6 @@
 
 namespace MapleRuntime {
 namespace {
-constexpr size_t MAX_LINKED_IMAGES = 4096;
 struct AdmissionWaitqueue {
     Waitqueue queue {};
     AdmissionWaitqueue() { CHECK_DETAIL(WaitqueueNew(&queue) == 0, "ELF admission waitqueue creation failed"); }
@@ -49,10 +48,65 @@ void WakeAdmissionWaiters()
     const int rc = WaitqueueWakeAll(AdmissionWaiters(), nullptr, nullptr);
     CHECK_DETAIL(rc == 0 || rc == ERRNO_QUEUE_IS_EMPTY, "ELF admission wake failed: %d", rc);
 }
-std::array<std::atomic<Uptr>, MAX_LINKED_IMAGES> linkedImages {};
+using ImageMap = ElfUnloadQuiescence::ImageAddressMap;
+struct ImageInterval {
+    Uptr start;
+    Uptr last;
+    std::shared_ptr<const ImageMap> image;
+    bool executable;
+};
 struct ImageDirectory {
     std::mutex mutex;
-    std::vector<std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap>> images;
+    std::vector<std::shared_ptr<const ImageMap>> images;
+    std::vector<ImageInterval> intervals;
+
+    // CodeCache::find_blob (codeCache.cpp:750): publish address ownership
+    // before metadata lookup. Split overlapping LOAD segments and duplicate
+    // metadata registrations into disjoint intervals at publication time.
+    void Rebuild()
+    {
+        struct Event { Uptr address; size_t index; bool begin; };
+        std::vector<ImageInterval> ranges;
+        std::vector<Event> events;
+        for (const auto& image : images) {
+            for (const auto& range : image->ranges) {
+                if (range.size == 0) { continue; }
+                const Uptr last = range.start + std::min<Uptr>(range.size - 1, ~Uptr(0) - range.start);
+                const size_t index = ranges.size();
+                ranges.push_back({range.start, last, image, range.executable});
+                events.push_back({range.start, index, true});
+                if (last != ~Uptr(0)) { events.push_back({last + 1, index, false}); }
+            }
+        }
+        std::sort(events.begin(), events.end(), [](const Event& a, const Event& b) {
+            return a.address < b.address;
+        });
+        intervals.clear();
+        std::map<size_t, const ImageInterval*> active;
+        size_t executable = 0;
+        for (size_t i = 0; i < events.size();) {
+            const Uptr start = events[i].address;
+            do {
+                const auto& event = events[i++];
+                const auto& range = ranges[event.index];
+                if (event.begin) { active.emplace(event.index, &range); executable += range.executable; }
+                else { active.erase(event.index); executable -= range.executable; }
+            } while (i < events.size() && events[i].address == start);
+            if (!active.empty()) {
+                const Uptr last = i == events.size() ? ~Uptr(0) : events[i].address - 1;
+                intervals.push_back({start, last, active.begin()->second->image, executable != 0});
+            }
+        }
+    }
+
+    std::shared_ptr<const ImageMap> Find(Uptr address, bool codeOnly = false) const
+    {
+        auto found = std::upper_bound(intervals.begin(), intervals.end(), address,
+            [](Uptr pc, const ImageInterval& interval) { return pc < interval.start; });
+        if (found == intervals.begin()) { return nullptr; }
+        --found;
+        return address <= found->last && (!codeOnly || found->executable) ? found->image : nullptr;
+    }
 };
 ImageDirectory& ImageMaps()
 {
@@ -61,7 +115,7 @@ ImageDirectory& ImageMaps()
 }
 thread_local U32 readerDepth = 0;
 thread_local bool unloadWriter = false;
-thread_local Uptr unloadWriterImage = 0;
+thread_local std::vector<std::shared_ptr<const ImageMap>> unloadWriterImages;
 thread_local Uptr purgeAuthorizedImage = 0;
 thread_local const ElfUnloadQuiescence::TaskAdmissionScope* purgeAdmission = nullptr;
 } // namespace
@@ -166,12 +220,18 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     return nullptr;
 }
 
-std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::RegisteredImageForAddress(Uptr address)
+std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::RegisteredImageForAddress(Uptr address, bool codeOnly)
 {
     auto& maps = ImageMaps();
     std::lock_guard<std::mutex> lock(maps.mutex);
-    for (const auto& image : maps.images) {
-        if (image->Contains(address)) { return image; }
+    const auto image = maps.Find(address, codeOnly);
+    if (image != nullptr) { return image; }
+    // The writer owns these exact generations until fini completes. They are
+    // not republished into the public directory after UnlinkImage.
+    if (unloadWriter) {
+        for (const auto& owned : unloadWriterImages) {
+            if (owned->Contains(address, codeOnly)) { return owned; }
+        }
     }
     return nullptr;
 }
@@ -251,7 +311,13 @@ ElfUnloadQuiescence::UnloadScope::UnloadScope(Uptr imageAddress)
                  reinterpret_cast<void*>(imageAddress));
     U64 previous = State().fetch_or(WRITER_BIT, std::memory_order_acq_rel);
     CHECK_DETAIL((previous & WRITER_BIT) == 0, "ELF unload writers must be serialized");
-    unloadWriterImage = imageIdentity;
+    {
+        auto& maps = ImageMaps();
+        std::lock_guard<std::mutex> lock(maps.mutex);
+        for (const auto& image : maps.images) {
+            if (image->identity == imageIdentity) { unloadWriterImages.push_back(image); }
+        }
+    }
     unloadWriter = true;
 }
 
@@ -277,7 +343,7 @@ ElfUnloadQuiescence::UnloadScope::~UnloadScope()
     CHECK_DETAIL(synchronized, "ELF unload must drain readers before purge");
     CHECK_DETAIL(admissionOpen, "ELF unload must reopen lookup admission after purge");
     unloadWriter = false;
-    unloadWriterImage = 0;
+    unloadWriterImages.clear();
 }
 
 bool ElfUnloadQuiescence::SharedTaskAdmissionScope::TryAcquire(void* scope)
@@ -555,14 +621,7 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     auto& maps = ImageMaps();
     std::lock_guard<std::mutex> lock(maps.mutex);
     maps.images.push_back(image);
-    for (auto& slot : linkedImages) {
-        Uptr observed = slot.load(std::memory_order_acquire);
-        if (observed == image->identity) { return image; }
-        if (observed == 0 && slot.compare_exchange_strong(observed, image->identity,
-                                                          std::memory_order_release,
-                                                          std::memory_order_relaxed)) { return image; }
-    }
-    CHECK_DETAIL(false, "ELF linked-image registry capacity %zu exhausted", MAX_LINKED_IMAGES);
+    maps.Rebuild();
     return image;
 }
 
@@ -574,37 +633,13 @@ void ElfUnloadQuiescence::UnlinkImage(Uptr imageAddress)
         return image->metadata == imageAddress;
     });
     CHECK_DETAIL(found != maps.images.end(), "ELF unload image was not linked");
-    const Uptr identity = (*found)->identity;
     maps.images.erase(found);
-    for (const auto& image : maps.images) {
-        if (image->identity == identity) { return; }
-    }
-    for (auto& slot : linkedImages) {
-        if (slot.load(std::memory_order_acquire) == identity) {
-            slot.store(0, std::memory_order_release);
-            return;
-        }
-    }
-    CHECK_DETAIL(false, "ELF unload image identity was not linked");
+    maps.Rebuild();
 }
 
-bool ElfUnloadQuiescence::IsLinkedAddress(Uptr address)
+bool ElfUnloadQuiescence::IsLinkedAddress(Uptr address, bool codeOnly)
 {
-    Uptr identity = ResolveImageIdentity(address);
-    if (identity == 0) {
-        return false;
-    }
-    // The dlclose thread is still executing the image's fini callback. Its own
-    // frames remain mapped until that callback returns, after this scope ends.
-    if (unloadWriter && unloadWriterImage == identity) {
-        return true;
-    }
-    for (auto& slot : linkedImages) {
-        if (slot.load(std::memory_order_acquire) == identity) {
-            return true;
-        }
-    }
-    return false;
+    return RegisteredImageForAddress(address, codeOnly) != nullptr;
 }
 
 bool ElfUnloadQuiescence::IsAddressInImage(Uptr address, Uptr imageAddress)
