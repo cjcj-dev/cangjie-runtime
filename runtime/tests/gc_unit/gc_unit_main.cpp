@@ -74,6 +74,8 @@ int main(int argc, char** argv)
     const int completed = MapleRuntime::GcUnit::CompleteTestRun(result);
     // The process-level runtime stand-in owns a VM thread; it leaves in the
     // exit section, after the heap stopped its GC work.
-    MapleRuntime::GcUnit::ShutdownDeliveryRuntime();
+    if (MapleRuntime::GcUnit::ShutdownDeliveryRuntime != nullptr) {
+        MapleRuntime::GcUnit::ShutdownDeliveryRuntime();
+    }
     return completed;
 }
