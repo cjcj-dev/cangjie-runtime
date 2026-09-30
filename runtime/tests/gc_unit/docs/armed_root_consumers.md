@@ -33,7 +33,7 @@ rg -n 'VisitGCRoots|VisitRootLists|ProcessFinalizableList' runtime/src/Heap/z/zR
 | old 的 young 根 remap，armed / disarmed | Heap/z/zGeneration.cpp:921-930,935-980 | old.collect :845 → concurrent_remap_young_roots :977 | armed 读三槽并 disarm。依赖完整 old collection 的后续相位；本测试不直接启动它，后台请求条件可达。 |
 | mutator 入口屏障，fast / slow | Concurrency/CJThreadModel/CJThreadModel.cpp:85-94 → :41-46,:63-73 | CjScheduler.cpp:391 | 已入队 WrapperTask 可在非 STW 区段运行。fast 不读组槽；slow 在锁内 recheck、process_weak 遍历三槽、disarm。第一次读取可能发生在此处，不能只盯住 :392。 |
 | WrapperTask 直接 obj 消费 | CjScheduler.cpp:392-393 | CJThreadNew 指定的函数，CjScheduler.cpp:421 | 本载体唯一选择的 wrapper，入口屏障后读槽并解引用 TypeInfo；首要候选，待栈证实。也不能排除武装前或恢复后消费原始 nullptr；抓栈应保留实际 future 值。 |
-| WrapperExecuteClosure / WrapperClosure | CjScheduler.cpp:519-521 / :653-654 | 对应创建器 :541 / :677 | 两者也读 obj，但本载体函数是 WrapperTask，调度不将它替换为另两个函数，故不能读取本载体的该槽。 |
+| WrapperExclusiveClosure / WrapperOfExecuteClosure | CjScheduler.cpp:519-521 / :653-654 | 对应创建器 :541 / :677 | 两者也读 obj，但本载体函数是 WrapperTask，调度不将它替换为另两个函数，故不能读取本载体的该槽。 |
 | StoreCJThreadObject 的 keep-alive 全组遍历 | Concurrency/CJThreadModel/CJThreadModel.cpp:98-111 | Sync/Sync.cpp:747 以下的 MCC_SetCurrentCJThreadObject | 当前载体入口屏障+全组三槽遍历，写的是 threadObject。测试在取得地址后恢复 TLS，未调用此 setter；需该载体进入此运行路径才可能间接读 obj。 |
 | 堆迭代 full / strong+weak | Heap/z/zHeapIterator.cpp:215-223,227-250 | HeapIterator::push_roots，含 weak 的变体仍共用 strong carrier | entry_barrier 后遍历载体。本测试没有发起堆迭代；pause_verify 的 Objects（若开启）走对象页验证，不是此根迭代入口。 |
 | inspector 并发模型根 | Concurrency/CJThreadModel/CJThreadModel.cpp:204-211 | Inspector/CjHeapData.cpp:365-377（ProcessRootConcurrencyModel） | entry_barrier 后遍历载体。用例没有请求 heap dump，因此没有该入口；不能从函数名把它算作 pause_verify 的消费者。 |
@@ -46,7 +46,7 @@ rg -n 'VisitGCRoots|VisitRootLists|ProcessFinalizableList' runtime/src/Heap/z/zR
 | ZGC 锚 | 不变量 | 我方锚 | 判定 |
 |---|---|---|---|
 | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zVerify.cpp:354-359` | do_nmethod 在 armed 判断处跳过验证 | zVerify.cpp:140-144 | ✅ 同一 closure 分路，跳过 oops_do；不是入口屏障消费者的证明。 |
-| `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zBarrierSetNMethod.cpp:78-91`（含 :53 起 slow path） | 入口 heal 根后 disarm，才允许后续对象消费 | CJThreadModel.cpp:63-73；CjScheduler.cpp:391-393 | ⚠ 基础设施载体差异：CJThread 的 LWTData 根组代替 nmethod oop table；本表未对产品行为作验收。分路与根组处理已定位，实际信号消费者待栈。 |
+| `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zBarrierSetNMethod.cpp:78-91`（含 :53 起 slow path） | 入口 heal 根后 disarm，才允许后续对象消费 | CJThreadModel.cpp:63-73；CjScheduler.cpp:391-393 | ⚠ 入口行为尚未取得运行证据；CJThread 的 LWTData 根组是本树对 nmethod oop table 的映射，本条不以该映射宣称形态验收通过。分路与根组处理已定位，实际信号消费者待栈。 |
 
 ## 捕获的范围与限制
 

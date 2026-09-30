@@ -48,8 +48,14 @@ int main(int argc, char** argv) {
     return failed ? 7 : 0;
 }
 CPP
-"${CXX:-clang++}" -O0 -g -pthread "$OUT/control.cpp" -o "$OUT/main"
-cp "$OUT/main" "$OUT/publication"
+if [[ $# -eq 2 ]]; then
+  # Cut/recovery runs reuse the exact same already-built native control pair.
+  cp "$2/main" "$OUT/main"
+  cp "$2/publication" "$OUT/publication"
+else
+  "${CXX:-clang++}" -O0 -g -pthread "$OUT/control.cpp" -o "$OUT/main"
+  cp "$OUT/main" "$OUT/publication"
+fi
 sha256sum "$OUT/main" "$OUT/publication" >"$OUT/elf.sha256"
 run_arm() {
   local arm=$1 rc
