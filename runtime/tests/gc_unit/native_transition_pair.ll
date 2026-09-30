@@ -10,7 +10,7 @@ recurse:
  store volatile i32 %depth, i32* @native_depth
  br label %exit
 native:
- call void asm sideeffect "subq $$16, %rsp; movq $$0, (%rsp); leaq native_arm(%rip), %rax; movq %rax, 8(%rsp); callq CJ_MCC_C2NStub; addq $$16, %rsp", "~{rax},~{rcx},~{rdx},~{rdi},~{rsi},~{r8},~{r9},~{r10},~{r11},~{memory},~{dirflag},~{fpsr},~{flags}"()
+ call void asm sideeffect "subq $$16, %rsp; movq $$0, (%rsp); leaq native_arm(%rip), %rax; movq %rax, 8(%rsp); callq CJ_MCC_C2NStub", "~{rax},~{rcx},~{rdx},~{rdi},~{rsi},~{r8},~{r9},~{r10},~{r11},~{memory},~{dirflag},~{fpsr},~{flags}"()
  call void @native_observe()
  br label %exit
 exit:
