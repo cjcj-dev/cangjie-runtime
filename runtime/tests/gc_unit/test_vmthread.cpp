@@ -104,8 +104,12 @@ GC_RUNTIME_TEST(VMThread1308, SubmitterWaitsForCompletion)
     std::thread caller([&] {
         submitter = std::this_thread::get_id();
         VMThread::execute(&operation);
-        completeAtReturn.store(operation.complete.load(std::memory_order_acquire), std::memory_order_release);
-        returned.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> guard(operation.lock);
+            completeAtReturn.store(operation.complete.load(std::memory_order_acquire), std::memory_order_release);
+            returned.store(true, std::memory_order_release);
+        }
+        operation.condition.notify_all();
     });
     bool reached = false;
     bool prematurelyReturned = false;
@@ -113,7 +117,8 @@ GC_RUNTIME_TEST(VMThread1308, SubmitterWaitsForCompletion)
         std::unique_lock<std::mutex> guard(operation.lock);
         reached = operation.condition.wait_for(guard, std::chrono::seconds(5),
                                                [&] { return operation.entered; });
-        prematurelyReturned = returned.load(std::memory_order_acquire);
+        prematurelyReturned = reached && operation.condition.wait_for(guard, std::chrono::seconds(1),
+            [&] { return returned.load(std::memory_order_acquire); });
         operation.released = true;
         operation.condition.notify_all();
     }
@@ -122,8 +127,8 @@ GC_RUNTIME_TEST(VMThread1308, SubmitterWaitsForCompletion)
                  operation.onVMThread, operation.executor != submitter,
                  static_cast<int>(submitter == std::thread::id{}),
                  static_cast<int>(operation.executor == std::thread::id{}));
-    std::fprintf(stderr, "VM1308_COMPLETION_TARGET executed=1 reached=%d early=%d complete_at_return=%d\n",
-                 reached, prematurelyReturned, completeAtReturn.load());
+    std::fprintf(stderr, "VM1308_COMPLETION_TARGET executed=1 reached=%d early=%d complete_at_return=%d observe_ms=1000 wait_expired=%d\n",
+                 reached, prematurelyReturned, completeAtReturn.load(), reached && !prematurelyReturned);
     // Precondition evidence, deliberately non-fatal so it cannot mask the
     // target assertion below.
     GC_EXPECT_TRUE(reached);
