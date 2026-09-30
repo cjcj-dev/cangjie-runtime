@@ -1341,6 +1341,7 @@ static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = fa
     size_t expectedFreed = young.freed();
     ZRelocationSetIterator selected(&young.relocation_set());
     for (ZForwarding* owner; selected.next(&owner);) { expectedFreed += owner->size(); }
+    ZRelocate::StartRelocationTasks(young.id());
     if (phase) {
         young.concurrent_relocate();
         const size_t actualFreed = young.freed();
