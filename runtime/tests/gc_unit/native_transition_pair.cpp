@@ -12,6 +12,7 @@
 #include "CangjieRuntime.h"
 #include "Cangjie.h"
 #include "Loader/ElfUnloadQuiescence.h"
+#include "UnwindStack/StackInfo.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,7 +20,6 @@
 #include <unistd.h>
 using namespace MapleRuntime;
 extern "C" void native_chain(int);
-extern "C" uint32_t unwindPCForC2NStub;
 extern "C" uintptr_t native_anchor;
 uintptr_t native_anchor;
 extern "C" void invoke_native(ThreadLocalData*, int);
@@ -58,7 +58,12 @@ extern "C" void native_arm()
  auto& owner=*Mutator::GetMutator();
  owner.GetUnwindContext().anchorFA=reinterpret_cast<uint32_t*>(native_anchor);
  auto* stub=reinterpret_cast<uintptr_t*>(owner.GetUnwindContext().frameInfo.mFrame.GetFA());
- contextSaved=stub != nullptr && owner.GetUnwindContext().frameInfo.mFrame.GetIP()==&unwindPCForC2NStub;
+ contextSaved=stub != nullptr && owner.GetUnwindContext().frameInfo.mFrame.GetIP()!=nullptr;
+ if (contextSaved) {
+  StackFrameStream frames(&owner.GetUnwindContext(),StackFrameStream::WalkMode::SENDER);
+  frames.Start();
+  contextSaved=!frames.IsDone() && frames.Current().GetFrameType()==FrameType::C2N_STUB;
+ }
  // A missing producer result reaches the target assertion after returning;
  // it must not turn into an earlier invalid frame access or assertion.
  if (!contextSaved) { return; }
