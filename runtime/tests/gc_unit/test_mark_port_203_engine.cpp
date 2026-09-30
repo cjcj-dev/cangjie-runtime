@@ -714,7 +714,7 @@ void CheckLateNativeRoot(bool abortRequested, bool checkFree = false)
     // The product native-root producer leaves this root in the caller's
     // local stack. The remset worker cannot consume it before the caller's
     // terminate flush; the subsequent MarkFollow must close that work.
-    heap.MarkYoungObjectIfActive(fixture.obj0);
+    ZBarrier::Mark<false, false, true, false>(from_object(fixture.obj0));
     if (abortRequested) { ZAbort::abort(); }
     young.mark_follow();
     const uint64_t live = fixture.region0()->live_bytes() - before;

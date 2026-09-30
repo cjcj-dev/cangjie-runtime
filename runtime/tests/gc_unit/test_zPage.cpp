@@ -6,6 +6,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "gc_heap_fixture.hpp"
+#include "LoaderManager.h"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"

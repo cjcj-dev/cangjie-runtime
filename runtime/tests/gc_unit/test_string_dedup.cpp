@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include "CangjieRuntime.h"
+#include "gc_worker_fixture.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
@@ -663,7 +664,7 @@ GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
     // A negative page lease count is the product retain_page wait condition.
     // Task ownership stays available for the real queue worker to claim.
     owner->in_place_relocation_claim_page();
-    if (old.Workers() == nullptr) old.InitializeWorkers(1);
+    if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
     old.Workers()->set_active_workers(1);
     old.Workers()->set_active();
     ZGlobalsPointers::flip_old_relocate_start();

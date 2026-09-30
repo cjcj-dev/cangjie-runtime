@@ -959,7 +959,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         state.from->SetStateCode(ObjectState::NORMAL);
         ZGeneration::generation(state.region->generation_id())->forwarding(state.region->GetRegionStart())->mark_done();
         (*ZGeneration::old()).set_phase(ZGenerationPhase::Relocate);
-        auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+        auto& manager = Heap::GetHeap().page_allocator();
         auto& old = Heap::GetHeap().old();
         if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
         old.Workers()->set_active_workers(1);
