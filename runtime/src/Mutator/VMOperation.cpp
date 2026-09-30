@@ -1,4 +1,5 @@
 #include "Mutator/VMOperation.h"
+#include "Base/GcLog.h"
 #include "Base/Log.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/MutatorManager.h"
@@ -107,9 +108,22 @@ void VMThread::inner_execute(VMOperation* operation)
     currentOperation = operation;
     auto& manager = MutatorManager::Instance();
     const bool endSafepoint = operation->evaluate_at_safepoint() && !manager.WorldStopped();
-    if (endSafepoint) { manager.StopTheWorld(); }
+    // The VM thread owns the safepoint now, so the pause ledger the collector
+    // phase guards read moves here with it (zStat.cpp:711-759 reports the same
+    // scope at the collection exit). Non-GC callers keep their own scope.
+    uint64_t startTime = 0;
+    uint64_t stoppedTime = 0;
+    if (endSafepoint) {
+        startTime = TimeUtil::NanoSeconds();
+        manager.StopTheWorld();
+        stoppedTime = TimeUtil::NanoSeconds();
+    }
     evaluate_operation(operation);
-    if (endSafepoint) { manager.StartTheWorld(); }
+    if (endSafepoint) {
+        const uint64_t endTime = TimeUtil::NanoSeconds();
+        GcLog::Stw(operation->name(), startTime, stoppedTime - startTime, endTime - stoppedTime);
+        manager.StartTheWorld();
+    }
     currentOperation = previous;
 }
 
