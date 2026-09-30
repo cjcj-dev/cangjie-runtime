@@ -19,11 +19,12 @@ namespace MapleRuntime {
 // Object and its array are one allocation: [ObjectT | padding | ArrayT[length]].
 template <typename ObjectT, typename ArrayT>
 class ZAttachedArray {
-public:
+private:
     static size_t object_size();
 
     static size_t array_size(size_t length);
 
+public:
     static void* alloc(size_t length);
 
     template <typename Allocator>

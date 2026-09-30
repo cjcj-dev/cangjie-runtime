@@ -116,7 +116,7 @@ GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
     ZTestForwarding fwdStorage(4, kStart, ZGranuleSize);
     ZForwarding* fwd = fwdStorage.get();
     GC_EXPECT_TRUE(fwd != nullptr);
-    const size_t objectSize = ZForwarding::AttachedArray::object_size();
+    const size_t objectSize = (sizeof(ZForwarding) + sizeof(ZForwardingEntry) - 1) & ~(sizeof(ZForwardingEntry) - 1);
     GC_EXPECT_TRUE(objectSize >= sizeof(ZForwarding));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(fwd->entries()),
                  reinterpret_cast<uintptr_t>(fwd) + objectSize);
