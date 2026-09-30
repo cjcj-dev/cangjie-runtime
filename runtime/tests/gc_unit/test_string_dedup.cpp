@@ -130,9 +130,8 @@ GC_TEST(StringDedup, ExplicitEqualStringBackingFindsEntry)
 
 // zRootsIterator.cpp:169-176 and zMark.cpp:853-867 (ZGC zRootsIterator.cpp:
 //194-199 AllColored includes _oop_storage_set_weak): a dedup entry lives in the
-// weak OopStorage set, and the young colored-root pass walks that set, so the
-// backing survives a minor cycle as a root rather than as a collectable weak
-// reference. The product fact observed here is the membership itself.
+// weak OopStorage set, not the strong set, and the young colored-root pass
+// walks it. This checks root routing; the cycle test checks backing identity.
 GC_TEST(StringDedup, DedupWeakStorageIsYoungColoredRoot)
 {
     ByteArrays arrays;
@@ -145,14 +144,27 @@ GC_TEST(StringDedup, DedupWeakStorageIsYoungColoredRoot)
     std::fflush(stdout);
     BaseObject* target = installed;
     unsigned visited = 0;
+    unsigned weakVisited = 0;
+    unsigned strongVisited = 0;
+    OopStorageSetIteratorWeak weak;
+    weak.Apply([&](NativeSlot& slot) {
+        if (NativeAccess<ON_PHANTOM_OOP_REF | AS_NO_KEEPALIVE>::oop_load(&slot) == target) ++weakVisited;
+    });
+    OopStorageSetIteratorStrong strong;
+    strong.Apply([&](NativeSlot& slot) {
+        if (NativeAccess<>::oop_load(&slot) == target) ++strongVisited;
+    });
     RootsIteratorAllColored colored;
     colored.Apply([&](NativeSlot& slot) {
         if (NativeAccess<>::oop_load(&slot) == target) ++visited;
     });
-    std::printf("STRING_DEDUP_YOUNG_COLORED_ROOT visited=%u\n", visited);
+    std::printf("STRING_DEDUP_YOUNG_COLORED_ROOT visited=%u weak=%u strong=%u\n",
+                visited, weakVisited, strongVisited);
     std::fflush(stdout);
-    GC_EXPECT_TRUE(installed == arrays.first);
     GC_EXPECT_EQ(visited, 1U);
+    GC_EXPECT_EQ(weakVisited, 1U);
+    GC_EXPECT_EQ(strongVisited, 0U);
+    GC_EXPECT_TRUE(installed == arrays.first);
 }
 
 // TestStringDeduplicationYoungGC adaptation: only explicit String ABI requests
