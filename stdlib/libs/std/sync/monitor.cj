@@ -15,7 +15,7 @@ package std.sync
 public class Monitor <: ReentrantMutex {
     let carrier: ReferenceMonitor
     public init() {
-        carrier = ReferenceMonitor(getMutexCarrier())
+        carrier = ReferenceMonitor(mutex)
         let isNull = !carrier.initialize()
         if (isNull) {
             throw IllegalSynchronizationStateException("Failed to initialize monitor.")
@@ -24,7 +24,7 @@ public class Monitor <: ReentrantMutex {
 
     init(mutex: Mutex) {
         super(mutex)
-        carrier = ReferenceMonitor(getMutexCarrier())
+        carrier = ReferenceMonitor(mutex.carrier)
         let isNull = !carrier.initialize()
         if (isNull) {
             throw IllegalSynchronizationStateException("Failed to initialize monitor.")
