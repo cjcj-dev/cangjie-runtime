@@ -602,7 +602,20 @@ bool RunMaintenanceSchedule(const char* fixture)
     char executable[4096]{};
     const auto length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
     GC_EXPECT_TRUE(length > 0);
-    const auto source = std::filesystem::absolute(__FILE__);
+    std::filesystem::path source = __FILE__;
+    if (source.is_relative()) {
+        auto directory = std::filesystem::path(executable).parent_path();
+        while (!directory.empty()) {
+            if (std::filesystem::is_regular_file(directory / source)) {
+                source = directory / source;
+                break;
+            }
+            const auto parent = directory.parent_path();
+            if (parent == directory) break;
+            directory = parent;
+        }
+    }
+    source = std::filesystem::absolute(source);
     const auto scheduler = source.parent_path() / "test_string_dedup_maintenance_gdb.py";
     GC_EXPECT_TRUE(std::filesystem::is_regular_file(scheduler));
     const std::string prefix = std::string(executable) + ".maintenance-" + std::to_string(getpid());
