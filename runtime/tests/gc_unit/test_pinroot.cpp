@@ -439,30 +439,16 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, boo
 }
 #endif
 
-// threads.cpp:961 exits the calling thread from the thread list before :987
-// waits for the VM thread, so the owner has to leave the mutator set before
-// the stand-in is torn down. A body can reach that point three ways -- fall
-// off the end, take an early return, or unwind from a failed GC_EXPECT (those
-// throw, gc_unittest.hpp:87-92) -- so the pairing is a scope guard declared
-// right after the mutator it owns, not a call on one exit path. Teardown only;
-// the sequence under test runs above it.
-class OwnerMutatorScope {
-public:
-    OwnerMutatorScope() = default;
-    void attach(Mutator* newOwner) { owner = newOwner; }
-    ~OwnerMutatorScope()
-    {
-        if (owner == nullptr) { return; }
-        // Leave the state the body entered, then leave the manager: the way a
-        // normal thread end does.
-        (void)owner->DoLeaveSaferegion();
-        MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    }
-    OwnerMutatorScope(const OwnerMutatorScope&) = delete;
-    OwnerMutatorScope& operator=(const OwnerMutatorScope&) = delete;
-private:
-    Mutator* owner = nullptr;
-};
+// threads.cpp:935-942: the VM thread is terminated only after the other threads
+// are gone, so the owner leaves the mutator set before the stand-in is torn
+// down. End the mutator this body created the way a normal thread end does --
+// leave the state it entered, then leave the manager. Teardown only; the
+// sequence under test runs above it.
+static void EndOwnerMutator(Mutator* owner)
+{
+    (void)owner->DoLeaveSaferegion();
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
 
 class ScopedOwnerMutator final {
 public:
@@ -570,9 +556,6 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     ScopedOwnerMutator ownerScope(parked);
     GC_EXPECT_TRUE(parked != nullptr);
-    // Declared after the fixture, so it runs before the stand-in is torn down.
-    OwnerMutatorScope ownerScope;
-    ownerScope.attach(parked);
     parked->SetManagedContext(true);
     (void)parked->EnterSaferegion(false);
     if (parked->GetGCData().storeGoodMask == 0) {
@@ -1003,9 +986,6 @@ static void CheckGrowCopiesHealedFrameRoot()
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     ScopedOwnerMutator ownerScope(parked);
     GC_EXPECT_TRUE(parked != nullptr);
-    // Declared after the fixture, so it runs before the stand-in is torn down.
-    OwnerMutatorScope ownerScope;
-    ownerScope.attach(parked);
     if (parked->GetGCData().storeGoodMask == 0) {
         parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
     }
