@@ -4,9 +4,9 @@
 #define MRT_VM_OPERATION_H
 
 #include <atomic>
-#include <thread>
 
 namespace MapleRuntime {
+struct NativeThreadIdentity;
 // HotSpot runtime/vmOperation.hpp: safepoint processing policy is a virtual
 // property of the operation, not a property of the safepoint caller.
 class VMOperation {
@@ -37,7 +37,7 @@ public:
     static bool HasExited() { return vmExited.load(std::memory_order_acquire); }
 private:
     static std::atomic<bool> vmExited;
-    static std::thread::id shutdownThread;
+    static NativeThreadIdentity* shutdownThread;
 };
 } // namespace MapleRuntime
 #endif

@@ -28,6 +28,12 @@ MRT_EXPORT thread_local uint64_t threadLocalData[sizeof(ThreadLocalData) / sizeo
 #endif
 };
 thread_local CleanThreadLocalData cleaner;
+static thread_local NativeThreadIdentity* nativeThreadIdentity = nullptr;
+
+NativeThreadIdentity* ThreadLocal::CurrentNativeThreadIdentity()
+{
+    return nativeThreadIdentity;
+}
 
 void ThreadLocalData::SetMutator(Mutator* newMutator)
 {
@@ -178,6 +184,8 @@ void CleanThreadLocalData::RemoveFromList()
 
 CleanThreadLocalData::CleanThreadLocalData()
 {
+    nativeThreadIdentity = new (std::nothrow) NativeThreadIdentity();
+    CHECK_DETAIL(nativeThreadIdentity != nullptr, "native thread identity allocation failed");
     // Add a side effect to make sure the constructor wont be optimized out.
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
@@ -216,6 +224,8 @@ CleanThreadLocalData::~CleanThreadLocalData()
     if (cache != nullptr) {
         delete reinterpret_cast<ThreadCache*>(cache);
     }
+    delete nativeThreadIdentity;
+    nativeThreadIdentity = nullptr;
 }
 
 extern "C" void MCC_CheckThreadLocalDataOffset()

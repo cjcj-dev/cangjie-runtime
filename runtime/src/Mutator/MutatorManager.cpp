@@ -468,11 +468,12 @@ bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
 
 VMOperation* VMThread::currentOperation = nullptr;
 std::atomic<bool> VMExit::vmExited{false};
-std::thread::id VMExit::shutdownThread;
+NativeThreadIdentity* VMExit::shutdownThread = nullptr;
 
 void VMExit::SetVMExited()
 {
-    shutdownThread = std::this_thread::get_id();
+    shutdownThread = ThreadLocal::CurrentNativeThreadIdentity();
+    CHECK_DETAIL(shutdownThread != nullptr, "shutdown owner has no native thread identity");
     vmExited.store(true, std::memory_order_release);
     MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) {
         if (mutator.InSaferegion()) {
@@ -483,7 +484,7 @@ void VMExit::SetVMExited()
 
 void VMExit::WaitIfVMExited()
 {
-    if (HasExited() && std::this_thread::get_id() != shutdownThread) {
+    if (HasExited() && ThreadLocal::CurrentNativeThreadIdentity() != shutdownThread) {
         MutatorManager::Instance().MutatorManagementRLock();
         LOG(RTLOG_FATAL, "VM exit thread lock unexpectedly released");
     }

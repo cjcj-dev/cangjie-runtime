@@ -84,6 +84,8 @@ void MarkFlushEndLeaveSaferegion();
 bool MarkFlushPendingForCurrentThread();
 void RegisterCurrentMarkFlushThread();
 
+struct NativeThreadIdentity {};
+
 struct CleanThreadLocalData {
     CleanThreadLocalData() noexcept;
     ~CleanThreadLocalData();
@@ -175,6 +177,7 @@ public:
     }
 
     static void DetachForShutdown();
+    static NativeThreadIdentity* CurrentNativeThreadIdentity();
 
 private:
 };
