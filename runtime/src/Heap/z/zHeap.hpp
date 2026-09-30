@@ -167,9 +167,9 @@ private:
     ZPageTable _page_table;
     ZObjectAllocator _object_allocator;
     ZServiceability _serviceability;
-    ZTLABUsage _tlab_usage;
     ZGenerationOld _old;
     ZGenerationYoung _young;
+    ZTLABUsage _tlab_usage;
     // Cangjie foreign-cycle ownership has no Java/JNI counterpart.
     ZCrossVM _cross_vm;
     std::atomic<bool> isGCEnabled { true };
