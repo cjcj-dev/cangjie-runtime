@@ -69,6 +69,8 @@ def stopped(event):
         gdb.write("GC_UNIT_SIGSEGV_CAPTURE_UNAVAILABLE maps: %s\n" % error)
     gdb.write("GC_UNIT_SIGSEGV_CAPTURE_STATUS inferior=%d status=%s\n" %
               (inferior.num, "FAILED" if failed else "COMPLETE"))
+    if failed:
+        gdb.write("GC_UNIT_SIGSEGV_CAPTURE_FAILED incomplete stopped-process evidence\n")
     gdb.write("GC_UNIT_SIGSEGV_CAPTURE_END\n")
 
 

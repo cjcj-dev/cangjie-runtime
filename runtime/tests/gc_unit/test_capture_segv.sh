@@ -96,7 +96,6 @@ wait "$green_pid" "$signal_pid" "$restored_pid" "$nested_pid"
 for arm in green restored nested; do
   [[ $(cat "$OUT/$arm.rc") -eq 0 ]]
   /usr/bin/grep -qxF '[========] 2 tests: 2 passed, 0 failed' "$OUT/$arm/parallel_tally.txt"
-  /usr/bin/grep -qF 'GC_UNIT_SIGSEGV_CAPTURE_READY' "$OUT/$arm.log"
 done
 [[ $(cat "$OUT/signal.rc") -eq 1 ]]
 /usr/bin/grep -qxF '[========] 2 tests: 0 passed, 2 failed' "$OUT/signal/parallel_tally.txt"
@@ -104,6 +103,9 @@ done
 [[ $(cat "$OUT/signal/test-rc/000001-publication.rc") -eq 7 ]]
 ! /usr/bin/grep -qF 'GC_UNIT_SIGSEGV_CAPTURE_BEGIN' "$OUT/signal/test-logs/000001-publication.log"
 echo 'CAPTURE_STATUS_ASSERTIONS_OK target_rc=7 unrelated_rc=7 nested_rc=0'
+for arm in green restored nested; do
+  /usr/bin/grep -qF 'GC_UNIT_SIGSEGV_CAPTURE_READY' "$OUT/$arm.log"
+done
 /usr/bin/grep -qF 'GC_UNIT_SIGSEGV_CAPTURE_BEGIN' "$OUT/signal.log"
 # Check only the all-thread section; the separate fault bt cannot satisfy it.
 sed -n '/GC_UNIT_SIGSEGV_COMMAND thread apply all bt full/,/GC_UNIT_SIGSEGV_COMMAND bt full/p' "$OUT/signal.log" >"$OUT/all-thread.log"
@@ -118,4 +120,19 @@ echo 'CAPTURE_ALL_THREADS_ASSERTION_OK'
 /usr/bin/grep -qF 'GC_UNIT_SIGSEGV_COMMAND info registers' "$OUT/signal.log"
 /usr/bin/grep -qF 'status=COMPLETE' "$OUT/signal.log"
 /usr/bin/grep -qF 'captured=yes' "$OUT/signal.log"
+python3 - "$OUT/signal.log" <<'PYCONTROL'
+import re, sys
+text = open(sys.argv[1]).read()
+match = re.search(r'CAPTURE_BEGIN inferior=(\d+) pid=(\d+) tid=([^\n]+)', text)
+assert match, 'fault PID/TID missing'
+inferior, pid, tid = match.groups()
+assert int(inferior) >= 3, 'signal must be in the second fork/exec descendant'
+assert 'GC_UNIT_SIGSEGV_MAPS_BEGIN pid=' + pid in text, 'maps belong to fault PID'
+assert 'GC_UNIT_SIGSEGV_CAPTURE_STATUS inferior=' + inferior + ' status=COMPLETE' in text
+assert 'GC_UNIT_SIGSEGV_INFERIOR_EXIT inferior=' + inferior in text
+assert text.count('GC_UNIT_SIGSEGV_INFERIOR_EXIT ') == 3, 'root and both descendants drained'
+assert 'GC_UNIT_SIGSEGV_ROOT_STATUS exit_code=7 captured_inferiors=1' in text
+assert re.search(r'^rip\s+0x', text, re.M), 'stopped fault registers missing'
+print('CAPTURE_IDENTITY_ASSERTIONS_OK fault_inferior=' + inferior + ' pid=' + pid)
+PYCONTROL
 echo 'CAPTURE_SEGV_CONTROL_OK green=0 signal=1 restored=0 target_rc=7 unrelated_rc=7'
