@@ -787,11 +787,6 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         nullptr, [](void*, unsigned int) -> void* { return nullptr; }, &initialData, sizeof(initialData),
         CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
     GC_EXPECT_TRUE(thread != nullptr);
-    {
-        DriverLocker lock;
-        YoungTypeSetter typeSetter(Heap::GetHeap().young(), ZYoungType::minor);
-        Heap::GetHeap().young().pause_mark_start();
-    }
     auto* previous = CJThreadGetHandle();
     ThreadLocal::SetCJThread(thread);
     auto* data = static_cast<LWTData*>(CJThreadGetArg());
@@ -803,6 +798,11 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
         return count;
     };
     GC_EXPECT_EQ(countCarrierRoots(), 1u);
+    {
+        DriverLocker lock;
+        YoungTypeSetter typeSetter(Heap::GetHeap().young(), ZYoungType::minor);
+        Heap::GetHeap().young().pause_mark_start();
+    }
     auto* savedObject = data->obj;
     data->obj = reinterpret_cast<BaseObject*>(0x1000);
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
