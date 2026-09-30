@@ -511,7 +511,9 @@ BaseObject* FinalizerProcessor::RegisterFinalizer(BaseObject* object)
         InvokeManaged(registerMethod, handle());
         result = handle();
     }
-    ExceptionManager::CheckAndThrowPendingException("Finalizer.register");
+    if (ExceptionManager::HasPendingException()) {
+        ExceptionManager::CheckAndThrowPendingException("Finalizer.register");
+    }
     return result;
 }
 
@@ -563,7 +565,9 @@ void FinalizerProcessor::InvokeFinalize(BaseObject* object)
                            reinterpret_cast<void*>(MRT_GetThreadLocalData()), 0);
         mutator->SetManagedContext(wasManaged);
     }
-    ExceptionManager::CheckAndThrowPendingException("Finalizer.invokeFinalize");
+    if (ExceptionManager::HasPendingException()) {
+        ExceptionManager::CheckAndThrowPendingException("Finalizer.invokeFinalize");
+    }
 }
 
 extern "C" MRT_EXPORT void CJ_MCC_SetReferenceMethods(void* registration, void* handler, void* finalizer)
