@@ -64,26 +64,6 @@ class ZForwarding {
 public:
     using AttachedArray = ZAttachedArray<ZForwarding, std::atomic<uint64_t>>;
 
-    enum class Retire : uint32_t {
-        DISPEL_GHOST = 0,
-        TAKE_GARBAGE = 1,
-        RECLAIM_DIRTY = 2,
-        RELEASE_REGION = 4,
-    };
-
-    class PageWorkScope {
-    public:
-        explicit PageWorkScope(ZForwarding* forwarding, bool complete = false);
-        ~PageWorkScope();
-        PageWorkScope(const PageWorkScope&) = delete;
-        PageWorkScope& operator=(const PageWorkScope&) = delete;
-    private:
-        ZForwarding* previous;
-        ZForwarding* forwarding;
-        bool complete;
-    };
-    static ZForwarding* CurrentPageWork();
-    static void WaitPageDone(ZForwarding* forwarding);
     static constexpr uint32_t kAlignShift = 3;
 
     struct Receipt {
@@ -126,7 +106,6 @@ public:
     bool is_promotion() const { return _from_age != PageAge::old && _to_age == PageAge::old; }
     ZPage* page() const;
     RegionLifeId page_life_id() const { return _page_life_id; }
-    bool page_life_current() const;
     void verify() const;
     size_t length() const { return _entries.length(); }
 
@@ -231,10 +210,6 @@ public:
     void in_place_relocation_finish();
     bool in_place_relocation_is_below_top_at_start(MAddress offset) const;
 
-    std::atomic<int32_t>& ref_count() { return _ref_count; }
-    std::atomic<bool>& claimed() { return _claimed; }
-    std::atomic<bool>& done() { return _done; }
-    std::mutex& ref_lock() const { return _ref_lock; }
 
 private:
     // zForwarding.inline.hpp:59-76

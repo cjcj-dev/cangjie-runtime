@@ -82,7 +82,7 @@ public:
     {
         ZPage* region = capacity;
         capacity = nullptr;
-        manager.ReclaimRegion(region);
+        Heap::free_page(region);
     }
 };
 } // namespace

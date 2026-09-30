@@ -100,7 +100,6 @@ public:
     static constexpr bool Finalizable = true;
 
     enum class Result { Completed, Partial, Aborted };
-    using Process = std::function<void(const MarkStackEntry&)>;
 
     explicit ZMark(size_t capacity, MarkingStacks::MarkingGeneration generation);
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
@@ -114,7 +113,6 @@ public:
     void FollowWorkComplete(bool partial);
     bool FollowWorkPartial();
     void MarkAndFollow(MarkContext& context, const MarkStackEntry& entry);
-    static bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry, MarkLiveCache* cache);
     void BindWorkers(ZWorkers* workers) { gcWorkers = workers; }
     bool PollStop();
     MarkStripeSet& Stripes() { return stripes; }
@@ -137,15 +135,20 @@ public:
     void Free();
     MarkingStacks::MarkingGeneration Generation() const { return generation; }
 
-    static Result FollowWork(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
-                             MarkTerminate& terminate, size_t workerId, bool partial,
-                             const Process& process, std::atomic<size_t>* stealSuccess = nullptr,
-                             std::atomic<size_t>* stealFailure = nullptr, ZMark* domain = nullptr);
+    Result FollowWork(MarkContext& context, size_t workerId, bool partial);
+    bool Drain(MarkContext& context, size_t workerId);
+
 
 private:
+    bool RebalanceWork(MarkContext& context, size_t workerId);
+    bool is_array(zaddress address) const;
     void follow_object(BaseObject* object, bool finalizable);
-    void FollowObjectReferences(BaseObject* object, bool finalizable,
-        const MarkPartialArray::FieldVisitor& visit, const MarkPartialArray::EntryPublisher& publish);
+    void push_partial_array(MarkContext& ctx, MAddress start, size_t length, bool finalizable);
+    void follow_array_elements_small(MAddress start, size_t length, bool finalizable);
+    void follow_array_elements_large(MarkContext& ctx, MAddress start, size_t length, bool finalizable);
+    void follow_array_elements(MarkContext& ctx, MAddress start, size_t length, bool finalizable);
+    void follow_partial_array(MarkContext& ctx, const MarkStackEntry& entry, bool finalizable);
+    void follow_array_object(MarkContext& ctx, MArray* array, bool finalizable);
     size_t CalculateNStripes(size_t nworkers) const;
     void EnsureWorkers(size_t nworkers);
     static bool HandshakeFlush(ZMark* domain);
