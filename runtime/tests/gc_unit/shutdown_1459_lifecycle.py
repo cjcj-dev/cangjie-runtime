@@ -11,6 +11,11 @@ bootstrap_tid=0
 held_tid=0
 held_thread=0
 joiner_thread=0
+joining={}
+semaphore_carriers={}
+gate_thread=0
+gate_used=False
+shutdown_started=False
 hold_target=os.environ.get("SHUTDOWN1459_HOLD_TARGET", "")
 published=0
 selected=gdb.execute("show environment GC_UNIT_OTHER_VM_CHILD",to_string=True).split(" = ",1)[1].strip().replace(".", "_")
@@ -126,6 +131,10 @@ class DestructorEntry(gdb.Breakpoint):
             held_tid=tid
             held_thread=gdb.selected_thread().num
             print("EVENT TLS_HELD tid=%d buffer=%s" % (tid,hex(buffer(data))),flush=True)
+            if tid in joining:
+                global joiner_thread
+                joiner_thread=joining[tid]
+                print("EVENT JOIN_WITH_HELD tid=%d"%tid,flush=True)
             return True
         return False
 class DestructorRet(gdb.Breakpoint):
@@ -165,12 +174,49 @@ class CarrierEntry(gdb.Breakpoint):
         if self.bootstrap: bootstrap_tid=carriers[handle]
         print("SHUTDOWN1459_CARRIER_ENTRY "+json.dumps(dict(handle=hex(handle),tid=carriers[handle])))
         return False
+class ShutdownBegin(gdb.Breakpoint):
+    def stop(self):
+        global shutdown_started
+        shutdown_started=True
+        return False
+class WaitEntry(gdb.Breakpoint):
+    def stop(self):
+        tid=gdb.selected_thread().ptid[1]
+        caller=gdb.newest_frame().older()
+        if tid in carriers.values() and caller and caller.name() in ("CJ_ThreadEntry", "CJ_ThreadSleep"):
+            semaphore_carriers[int(gdb.parse_and_eval("$rdi"))]=tid
+        return False
+class GateReturned(gdb.Breakpoint):
+    def __init__(self,address,number):
+        super().__init__("*"+hex(address),internal=True,temporary=True)
+        self.thread=number
+    def stop(self):
+        global gate_thread
+        gate_thread=gdb.selected_thread().num
+        print("EVENT PRODUCER_GATE",flush=True)
+        return True
+class PostEntry(gdb.Breakpoint):
+    def stop(self):
+        global gate_used
+        tid=semaphore_carriers.get(int(gdb.parse_and_eval("$rdi")))
+        target=(hold_target=="bootstrap" and tid==bootstrap_tid) or (hold_target=="worker" and tid and tid!=bootstrap_tid)
+        if shutdown_started and target and not gate_used:
+            gate_used=True
+            print("EVENT GATE_ARMED tid=%d sem=%s caller=%s"%(tid,hex(int(gdb.parse_and_eval("$rdi"))),gdb.newest_frame().older().name()),flush=True)
+            GateReturned(ptr(int(gdb.parse_and_eval("$rsp"))),gdb.selected_thread().num)
+        return False
+ShutdownBegin("*FiniCJRuntime",internal=True)
+WaitEntry("*sem_wait",internal=True)
+PostEntry("*sem_post",internal=True)
 class JoinReturned(gdb.Breakpoint):
     def __init__(self,address,handle,number):
         super().__init__("*"+hex(address),internal=True,temporary=True)
         self.thread=number
         self.handle=handle
+        self.done=False
     def stop(self):
+        if self.done: return False
+        self.done=True
         rc=int(gdb.parse_and_eval("$rax"))
         tid=carriers[self.handle]
         check(rc==0,"carrier_join_success",tid=tid,rc=rc)
@@ -183,6 +229,7 @@ class JoinEntry(gdb.Breakpoint):
     def stop(self):
         handle=int(gdb.parse_and_eval("$rdi"))
         if handle in carriers:
+            joining[carriers[handle]]=gdb.selected_thread().num
             if blocked_mode:
                 blocked_tid=int(gdb.parse_and_eval("*(long*)&shutdown1459BlockedTid"))
                 if carriers[handle]==blocked_tid:
@@ -205,6 +252,7 @@ class Teardown(gdb.Breakpoint):
             check(False,"unreturned_native_storage_retained")
             print("EVENT BLOCKED_TEARDOWN_RED",flush=True)
             return True
+        before_failures=len(failures)
         for handle,tid in carriers.items():
             owners=[r for r in records.values() if r["tid"]==tid]
             check(tid in joined,"carrier_join_before_teardown",tid=tid)
@@ -213,6 +261,9 @@ class Teardown(gdb.Breakpoint):
             check(not owners or tid in tls_completed,"carrier_tls_before_teardown",tid=tid,owners=len(owners))
         if held_tid and held_tid not in tls_completed:
             print("EVENT TEARDOWN_WITH_HELD tid=%d" % held_tid,flush=True)
+            return True
+        if len(failures)>before_failures:
+            print("EVENT TEARDOWN_INCOMPLETE_RED",flush=True)
             return True
         return False
 CarrierEntry("*StartCJRuntime",bootstrap=True)

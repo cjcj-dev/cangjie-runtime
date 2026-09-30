@@ -31,7 +31,22 @@ def command(text):
 try:
     session.expect_exact("EVENT controller ready")
     session.expect_exact("EVENT TLS_HELD")
-    event = session.expect_exact(["EVENT JOIN_WITH_HELD", "EVENT TEARDOWN_WITH_HELD"])
+    state = command("python print('CONTROLLER_STATE',gate_thread,joiner_thread,teardown_seen)")
+    import re
+    match = re.search(r"CONTROLLER_STATE (\d+) (\d+) (True|False)",state)
+    if match is None:
+        raise RuntimeError("controller state not observed")
+    gate, joiner, teardown = match.groups()
+    if gate != "0":
+        command("python gdb.execute('thread %d'%gate_thread)")
+        session.sendline("continue &")
+        event = session.expect_exact(["EVENT JOIN_WITH_HELD", "EVENT TEARDOWN_WITH_HELD"])
+    elif joiner != "0":
+        event = 0
+    elif teardown == "True":
+        event = 1
+    else:
+        event = session.expect_exact(["EVENT JOIN_WITH_HELD", "EVENT TEARDOWN_WITH_HELD"])
     if event == 0:
         # One controlled observation after letting the caller enter libc join.
         time.sleep(0.2)
