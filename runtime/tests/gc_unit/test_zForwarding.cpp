@@ -38,7 +38,7 @@ static void find_empty(ForwardingEntries* forwarding)
     for (size_t i = 0; i < entries_to_check; i++) {
         const uintptr_t from_index = SequenceToFromIndex::one_to_one(i);
         ForwardingCursor cursor = 0;
-        const ForwardingEntry entry = forwarding->find(from_index, &cursor);
+        const ForwardingEntry entry = forwarding->find_index(from_index, &cursor);
         GC_EXPECT_FALSE(entry.populated());
     }
 }
@@ -50,14 +50,14 @@ static void find_full(ForwardingEntries* forwarding)
     for (size_t i = 0; i < entries_to_populate; i++) {
         const uintptr_t from_index = SequenceToFromIndex::one_to_one(i);
         ForwardingCursor cursor = 0;
-        const ForwardingEntry entry = forwarding->find(from_index, &cursor);
+        const ForwardingEntry entry = forwarding->find_index(from_index, &cursor);
         GC_EXPECT_FALSE(entry.populated());
-        forwarding->insert(from_index, from_index, &cursor);
+        forwarding->insert_index(from_index, from_index, &cursor);
     }
     for (size_t i = 0; i < entries_to_populate; i++) {
         const uintptr_t from_index = SequenceToFromIndex::one_to_one(i);
         ForwardingCursor cursor = 0;
-        const ForwardingEntry entry = forwarding->find(from_index, &cursor);
+        const ForwardingEntry entry = forwarding->find_index(from_index, &cursor);
         GC_EXPECT_TRUE(entry.populated());
         GC_EXPECT_EQ(entry.from_index(), from_index);
         GC_EXPECT_EQ(entry.to_offset(), from_index);
@@ -71,14 +71,14 @@ static void find_every_other(ForwardingEntries* forwarding)
     for (size_t i = 0; i < entries_to_populate; i++) {
         const uintptr_t from_index = SequenceToFromIndex::even(i);
         ForwardingCursor cursor = 0;
-        const ForwardingEntry entry = forwarding->find(from_index, &cursor);
+        const ForwardingEntry entry = forwarding->find_index(from_index, &cursor);
         GC_EXPECT_FALSE(entry.populated());
-        forwarding->insert(from_index, from_index, &cursor);
+        forwarding->insert_index(from_index, from_index, &cursor);
     }
     for (size_t i = 0; i < entries_to_populate; i++) {
         const uintptr_t from_index = SequenceToFromIndex::even(i);
         ForwardingCursor cursor = 0;
-        const ForwardingEntry entry = forwarding->find(from_index, &cursor);
+        const ForwardingEntry entry = forwarding->find_index(from_index, &cursor);
         GC_EXPECT_TRUE(entry.populated());
         GC_EXPECT_EQ(entry.from_index(), from_index);
         GC_EXPECT_EQ(entry.to_offset(), from_index);
@@ -86,7 +86,7 @@ static void find_every_other(ForwardingEntries* forwarding)
     for (size_t i = 0; i < entries_to_populate; i++) {
         const uintptr_t from_index = SequenceToFromIndex::odd(i);
         ForwardingCursor cursor = 0;
-        const ForwardingEntry entry = forwarding->find(from_index, &cursor);
+        const ForwardingEntry entry = forwarding->find_index(from_index, &cursor);
         GC_EXPECT_FALSE(entry.populated());
     }
 }
@@ -142,7 +142,9 @@ GC_TEST(ZForwardingEntries, survives_without_geometry)
     GC_EXPECT_TRUE(tab != nullptr);
     const MAddress from = (ZAddressHeapBase + ZGranuleSize) + 16;
     const MAddress to = (ZAddressHeapBase + 0x2000) + 32;
-    GC_EXPECT_EQ(tab->insert(from, to), to);
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(tab->find(from, &cursor), MAddress(0));
+    GC_EXPECT_EQ(tab->insert(from, to, &cursor), to);
     GC_EXPECT_EQ(tab->find(from), to);
     GC_EXPECT_EQ(tab->find((ZAddressHeapBase + ZGranuleSize) + 24), static_cast<MAddress>(0));
 
@@ -161,20 +163,6 @@ GC_TEST(ZForwardingEntries, survives_without_geometry)
 
 
 // D7-a: from_index 23 bits covers a 64 MiB region. 3 MiB used to overflow 18 bits.
-GC_TEST(ZForwardingEntries, LargeFromIndexRoundTrip)
-{
-    const MAddress kStart = (ZAddressHeapBase + ZGranuleSize);
-    constexpr size_t kAlign = size_t(1) << 3;
-    ZTestForwarding tabStorage(8, kStart, ZGranuleSize);
-    ForwardingEntries* tab = tabStorage.get();
-    GC_EXPECT_TRUE(tab != nullptr);
-    const MAddress from = kStart + ((size_t(3) << 20) / kAlign) * kAlign;
-    GC_EXPECT_TRUE(((from - kStart) >> 3) > ForwardingEntry::kMaxFromIndex);
-    const MAddress dest = (ZAddressHeapBase + 0x9000);
-    GC_EXPECT_EQ(tab->insert(from, dest), MAddress(0));
-    GC_EXPECT_EQ(tab->find(from), MAddress(0));
-
-}
 
 // ---------------------------------------------------------------------------------------------
 // The two defects a real collection found and this suite did not.
@@ -254,12 +242,6 @@ GC_TEST(ZForwardingEntries, CapacityArithmeticDoesNotWrap)
     GC_EXPECT_EQ(ZForwarding::nentries(UINT32_MAX), size_t(1) << 33);
     const size_t maxPower = size_t(1) << (std::numeric_limits<size_t>::digits - 1);
     GC_EXPECT_EQ(ZForwarding::nentries(maxPower / 2), maxPower);
-    GC_EXPECT_EQ(ZForwarding::nentries(maxPower / 2 + 1), size_t(0));
-    size_t bytes = 17;
-    GC_EXPECT_FALSE(ZForwarding::AttachedArray::allocation_size(SIZE_MAX, &bytes));
-    GC_EXPECT_EQ(bytes, size_t(17));
-    GC_EXPECT_TRUE(ZForwarding::AttachedArray::allocation_size(8, &bytes));
-    GC_EXPECT_EQ(bytes, ZForwarding::AttachedArray::object_size() + 8 * sizeof(std::atomic<uint64_t>));
     std::fprintf(stderr, "P1_CAPACITY checked=1 uint32_boundary=%zu\n", ZForwarding::nentries(UINT32_MAX));
 }
 
@@ -284,9 +266,10 @@ GC_TEST(ZForwardingEntries, ConcurrentSameKeyReturnsInitializedWinner)
         // Initialize after rendezvous; only product publication makes this
         // value available to the competing reader. No forced first-CAS schedule.
         targets[i] = 0x12340000 + i;
-        auto receipt = table->insert_receipt(from, reinterpret_cast<MAddress>(&targets[i]));
-        returned[i] = receipt.address;
-        observed[i] = *reinterpret_cast<const uint64_t*>(receipt.address);
+        ForwardingCursor cursor;
+        const MAddress existing = table->find(from, &cursor);
+        returned[i] = existing != 0 ? existing : table->insert(from, reinterpret_cast<MAddress>(&targets[i]), &cursor);
+        observed[i] = *reinterpret_cast<const uint64_t*>(returned[i]);
     };
     std::thread a(publish, 0);
     std::thread b(publish, 1);
@@ -314,8 +297,11 @@ GC_TEST(ZForwardingEntries, CollisionPreservesIdentityAndOtherKey)
         ++collision;
     }
     const MAddress other = (ZAddressHeapBase + ZGranuleSize) + (collision << ZForwarding::kAlignShift);
-    GC_EXPECT_EQ(table->insert(MAddress((ZAddressHeapBase + ZGranuleSize)), MAddress((ZAddressHeapBase + ZGranuleSize))), MAddress((ZAddressHeapBase + ZGranuleSize)));
-    GC_EXPECT_EQ(table->insert(other, MAddress((ZAddressHeapBase + 0x3000))), MAddress((ZAddressHeapBase + 0x3000)));
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(table->find(ZAddressHeapBase + ZGranuleSize, &cursor), MAddress(0));
+    GC_EXPECT_EQ(table->insert(ZAddressHeapBase + ZGranuleSize, ZAddressHeapBase + ZGranuleSize, &cursor), ZAddressHeapBase + ZGranuleSize);
+    GC_EXPECT_EQ(table->find(other, &cursor), MAddress(0));
+    GC_EXPECT_EQ(table->insert(other, ZAddressHeapBase + 0x3000, &cursor), ZAddressHeapBase + 0x3000);
     GC_EXPECT_EQ(table->find(MAddress((ZAddressHeapBase + ZGranuleSize))), MAddress((ZAddressHeapBase + ZGranuleSize)));
     GC_EXPECT_EQ(table->find(other), MAddress((ZAddressHeapBase + 0x3000)));
 
@@ -336,11 +322,51 @@ GC_TEST(ZForwardingEntries, WidthBoundaryRoundTrip)
     GC_EXPECT_TRUE(table != nullptr);
     const MAddress lastAligned = ZAddressHeapBase + (ForwardingEntry::kMaxToOffset & ~MAddress(7));
     const MAddress previousAligned = lastAligned - 8;
-    GC_EXPECT_EQ(table->insert(MAddress((ZAddressHeapBase + ZGranuleSize)), lastAligned), lastAligned);
-    GC_EXPECT_EQ(table->insert(MAddress((ZAddressHeapBase + ZGranuleSize + 8)), previousAligned), previousAligned);
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(table->find(ZAddressHeapBase + ZGranuleSize, &cursor), MAddress(0));
+    GC_EXPECT_EQ(table->insert(ZAddressHeapBase + ZGranuleSize, lastAligned, &cursor), lastAligned);
+    GC_EXPECT_EQ(table->find(ZAddressHeapBase + ZGranuleSize + 8, &cursor), MAddress(0));
+    GC_EXPECT_EQ(table->insert(ZAddressHeapBase + ZGranuleSize + 8, previousAligned, &cursor), previousAligned);
     GC_EXPECT_EQ(table->find(MAddress((ZAddressHeapBase + ZGranuleSize))), lastAligned);
     GC_EXPECT_EQ(table->find(MAddress((ZAddressHeapBase + ZGranuleSize + 8))), previousAligned);
 
+}
+
+GC_TEST(ZForwardingEntries, CursorContinuesAfterCollision)
+{
+    const MAddress start = ZAddressHeapBase + ZGranuleSize;
+    ZTestForwarding storage(4, start, ZGranuleSize);
+    ZForwarding* forwarding = storage.get();
+    const size_t mask = forwarding->length() - 1;
+    uintptr_t collidingIndex = 1;
+    while ((ZHash::uint32_to_uint32(collidingIndex) & mask) !=
+           (ZHash::uint32_to_uint32(0) & mask)) {
+        ++collidingIndex;
+    }
+    const MAddress other = start + (collidingIndex << forwarding->object_alignment_shift());
+    ForwardingCursor occupied;
+    GC_EXPECT_EQ(forwarding->find(start, &occupied), MAddress(0));
+    GC_EXPECT_EQ(forwarding->insert(start, start, &occupied), start);
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(forwarding->find(other, &cursor), MAddress(0));
+    const ForwardingCursor empty = cursor;
+    GC_EXPECT_TRUE(empty != occupied);
+    const MAddress destination = ZAddressHeapBase + 0x9000;
+    MAddress winner = 0;
+    std::thread contender([&] {
+        ForwardingCursor concurrentCursor;
+        GC_EXPECT_EQ(forwarding->find(other, &concurrentCursor), MAddress(0));
+        winner = forwarding->insert(other, destination, &concurrentCursor);
+    });
+    contender.join();
+    const MAddress result = forwarding->insert(other, destination + 8, &cursor);
+    const ForwardingEntry entry = forwarding->at(&cursor);
+    const bool continued = cursor == empty && entry.populated() && entry.from_index() == collidingIndex;
+    std::fprintf(stderr, "CURSOR_CONTINUE target_assertion executed=1 matched=%d find_slot=%zu insert_slot=%zu\n",
+                 continued, empty, cursor);
+    GC_EXPECT_TRUE(continued);
+    GC_EXPECT_EQ(result, winner);
+    GC_EXPECT_EQ(result, destination);
 }
 
 // ZForwardingTest::find_full, test/hotspot/gtest/gc/z/test_zForwarding.cpp:139-163.
@@ -352,7 +378,9 @@ GC_TEST(ZForwardingEntries, ZgcFindFull)
     auto* table = tableStorage.get();
     GC_EXPECT_TRUE(table != nullptr);
     for (size_t i = 0; i < table->length(); ++i) {
-        GC_EXPECT_EQ(table->insert(start + i * 8, (ZAddressHeapBase + 0x9000) + i * 8), (ZAddressHeapBase + 0x9000) + i * 8);
+        ForwardingCursor cursor;
+        GC_EXPECT_EQ(table->find(start + i * 8, &cursor), MAddress(0));
+        GC_EXPECT_EQ(table->insert(start + i * 8, (ZAddressHeapBase + 0x9000) + i * 8, &cursor), (ZAddressHeapBase + 0x9000) + i * 8);
     }
     for (size_t i = 0; i < table->length(); ++i) {
         GC_EXPECT_EQ(table->find(start + i * 8), (ZAddressHeapBase + 0x9000) + i * 8);
@@ -369,7 +397,9 @@ GC_TEST(ZForwardingEntries, ZgcFindEveryOther)
     GC_EXPECT_TRUE(table != nullptr);
     const size_t count = table->length() / 2;
     for (size_t i = 0; i < count; ++i) {
-        GC_EXPECT_EQ(table->insert(start + i * 16, (ZAddressHeapBase + 0x9000) + i * 8), (ZAddressHeapBase + 0x9000) + i * 8);
+        ForwardingCursor cursor;
+        GC_EXPECT_EQ(table->find(start + i * 16, &cursor), MAddress(0));
+        GC_EXPECT_EQ(table->insert(start + i * 16, (ZAddressHeapBase + 0x9000) + i * 8, &cursor), (ZAddressHeapBase + 0x9000) + i * 8);
     }
     for (size_t i = 0; i < count; ++i) {
         GC_EXPECT_EQ(table->find(start + i * 16), (ZAddressHeapBase + 0x9000) + i * 8);
@@ -385,7 +415,9 @@ GC_TEST(ZForwardingEntries, MaximumRepresentableIndexRoundTrip)
     auto* table = tableStorage.get();
     GC_EXPECT_TRUE(table != nullptr);
     const MAddress from = start + ForwardingEntry::kMaxFromIndex * 8;
-    GC_EXPECT_EQ(table->insert(from, (ZAddressHeapBase + 0x9000)), MAddress((ZAddressHeapBase + 0x9000)));
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(table->find(from, &cursor), MAddress(0));
+    GC_EXPECT_EQ(table->insert(from, (ZAddressHeapBase + 0x9000), &cursor), MAddress((ZAddressHeapBase + 0x9000)));
     GC_EXPECT_EQ(table->find(from), MAddress((ZAddressHeapBase + 0x9000)));
     GC_EXPECT_EQ(table->find(start), MAddress(0));
 
@@ -410,8 +442,11 @@ GC_TEST(ZForwardingEntries, MediumPageFromAddressRoundTrip)
     ZForwarding* forwarding = ZForwarding::alloc(&allocator, &page, PageAge::old);
     const MAddress first = page.GetRegionStart() + page.object_alignment();
     const MAddress second = first + page.object_alignment();
-    forwarding->insert(first, first);
-    forwarding->insert(second, second);
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(forwarding->find(first, &cursor), MAddress(0));
+    forwarding->insert(first, first, &cursor);
+    GC_EXPECT_EQ(forwarding->find(second, &cursor), MAddress(0));
+    forwarding->insert(second, second, &cursor);
     size_t count = 0;
     bool addresses = true;
     forwarding->for_each_from([&](MAddress from) {

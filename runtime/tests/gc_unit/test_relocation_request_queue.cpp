@@ -49,7 +49,9 @@ GC_TEST(RelocationPageQueue, ReleasedPageStillHasItsImmutableEntry)
     auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
     const auto from = reinterpret_cast<MAddress>(heap.obj0);
     const auto to = reinterpret_cast<MAddress>(heap.obj1);
-    GC_EXPECT_EQ(owner->insert(from, to), to);
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(owner->find(from, &cursor), MAddress(0));
+    GC_EXPECT_EQ(owner->insert(from, to, &cursor), to);
     owner->release_page();
     ZRelocateQueue queue;
     GC_EXPECT_FALSE(owner->retain_page(&queue));
@@ -82,7 +84,9 @@ GC_TEST(RelocationPageQueue, EntryPublicationDoesNotCompleteThePage)
     std::atomic<bool> returned{false};
     std::thread requester([&] { queue.add_and_wait(owner); returned.store(true); });
     while (queue.synchronize_poll() == nullptr) std::this_thread::yield();
-    const auto receipt = owner->insert(from, to);
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(owner->find(from, &cursor), MAddress(0));
+    const auto receipt = owner->insert(from, to, &cursor);
     const bool prematurelyDone = owner->is_done();
     const bool prematurelyReturned = returned.load();
     owner->release_page();

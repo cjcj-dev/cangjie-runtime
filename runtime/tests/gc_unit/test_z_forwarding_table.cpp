@@ -116,11 +116,11 @@ GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
     ZTestForwarding fwdStorage(4, kStart, ZGranuleSize);
     ZForwarding* fwd = fwdStorage.get();
     GC_EXPECT_TRUE(fwd != nullptr);
-    const size_t objectSize = ZForwarding::AttachedArray::object_size();
+    const size_t objectSize = (sizeof(ZForwarding) + sizeof(ZForwardingEntry) - 1) & ~(sizeof(ZForwardingEntry) - 1);
     GC_EXPECT_TRUE(objectSize >= sizeof(ZForwarding));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(fwd->entries()),
                  reinterpret_cast<uintptr_t>(fwd) + objectSize);
-    GC_EXPECT_EQ(objectSize % sizeof(std::atomic<uint64_t>), static_cast<size_t>(0));
+    GC_EXPECT_EQ(objectSize % sizeof(ZForwardingEntry), static_cast<size_t>(0));
     GC_EXPECT_TRUE((fwd->length() & (fwd->length() - 1)) == 0);
 
     GC_EXPECT_EQ(fwd->_ref_count.load(std::memory_order_acquire), 1);
@@ -129,7 +129,9 @@ GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
 
     const MAddress from = kStart + 16;
     const MAddress to = kStart + 0x2000;
-    GC_EXPECT_EQ(fwd->insert(from, to), to);
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(fwd->find(from, &cursor), MAddress(0));
+    GC_EXPECT_EQ(fwd->insert(from, to, &cursor), to);
     GC_EXPECT_EQ(fwd->find(from), to);
     GC_EXPECT_EQ(fwd->find(kStart + 24), static_cast<MAddress>(0));
 
@@ -191,7 +193,9 @@ GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
     fwd->detach_page();
     GC_EXPECT_TRUE(entries.get(start) == fwd);
 
-    GC_EXPECT_EQ(fwd->insert(from, to), to);
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(fwd->find(from, &cursor), MAddress(0));
+    GC_EXPECT_EQ(fwd->insert(from, to, &cursor), to);
     GC_EXPECT_EQ(entries.get(fromOffset)->find(from), to);
 
     entries.put(start, kSize, nullptr);
