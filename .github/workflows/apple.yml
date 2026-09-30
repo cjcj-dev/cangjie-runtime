@@ -314,6 +314,7 @@ jobs:
       fail-fast: false
       matrix:
         runner: [macos-15, macos-15-intel]
+        build_type: [release, debug]
     steps:
       - uses: actions/checkout@v4
       - name: Build native product
@@ -323,7 +324,7 @@ jobs:
           export GC_UNIT_GATE_SKIP=1
           uptime
           cd runtime
-          python3 build.py build --target native --build-type release
+          python3 build.py build --target native --build-type "${{ matrix.build_type }}"
       - name: Install symbol reader
         run: brew list llvm >/dev/null 2>&1 || brew install llvm
       - name: Exercise native product and independent cuts
@@ -334,7 +335,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: backing-product-${{ matrix.runner }}
+          name: backing-product-${{ matrix.runner }}-${{ matrix.build_type }}
           path: ${{ runner.temp }}/backing-product
           retention-days: 7
 

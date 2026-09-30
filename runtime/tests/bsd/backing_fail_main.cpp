@@ -71,6 +71,25 @@ static int backing_operation(const char* name, bool committing, bool failing)
     return result == expected ? 0 : 1;
 }
 
+static int invalid_alignment(const char* name, bool committing, bool invalid_offset)
+{
+    prepare();
+    const size_t length = page_size();
+    MapleRuntime::ZPhysicalMemoryBacking backing(length);
+    if (!backing.is_initialized()) {
+        std::fprintf(stderr, "CASE %s setup ctor\n", name);
+        return 2;
+    }
+    const uintptr_t offset = invalid_offset ? 1 : 0;
+    const size_t amount = invalid_offset ? length : 1;
+    std::fprintf(stderr, "ASSERT_ENTRY %s offset=%zu length=%zu\n", name, offset, amount);
+    const size_t result = committing
+        ? backing.commit(MapleRuntime::to_zbacking_offset(offset), amount, 0)
+        : backing.uncommit(MapleRuntime::to_zbacking_offset(offset), amount);
+    std::fprintf(stderr, "ASSERT %s returned=%zu expected=alignment assertion\n", name, result);
+    return 1;
+}
+
 static int map_ok()
 {
     prepare();
@@ -176,6 +195,18 @@ int main(int argc, char** argv)
     }
     if (std::strcmp(argv[1], "uncommit_fail") == 0) {
         return backing_operation(argv[1], false, true);
+    }
+    if (std::strcmp(argv[1], "commit_offset_bad") == 0) {
+        return invalid_alignment(argv[1], true, true);
+    }
+    if (std::strcmp(argv[1], "commit_length_bad") == 0) {
+        return invalid_alignment(argv[1], true, false);
+    }
+    if (std::strcmp(argv[1], "uncommit_offset_bad") == 0) {
+        return invalid_alignment(argv[1], false, true);
+    }
+    if (std::strcmp(argv[1], "uncommit_length_bad") == 0) {
+        return invalid_alignment(argv[1], false, false);
     }
     if (std::strcmp(argv[1], "map_ok") == 0) {
         return map_ok();

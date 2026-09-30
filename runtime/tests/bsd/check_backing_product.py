@@ -57,6 +57,9 @@ defined = (OUT / 'defined.txt').read_text()
 assert 'ZPhysicalMemoryBacking' in defined
 assert 'ReserveMemory' in defined
 compile_command = shlex.split(recipes['zPhysicalMemoryBacking_bsd.cpp']['command'])
+ASSERTIONS = not any(token.startswith('-DNDEBUG') for token in compile_command)
+if ASSERTIONS:
+    CASES += ('commit_offset_bad', 'commit_length_bad', 'uncommit_offset_bad', 'uncommit_length_bad')
 caller = OUT / 'caller'
 command = ['clang++', '-std=c++14', '-pthread']
 command += [token for token in compile_command if token.startswith(('-I', '-D'))]
@@ -75,6 +78,14 @@ CUTS = {
     'uncommit_consume': ('zPhysicalMemoryBacking_bsd.cpp', '    return 0;',
                          '    return length;', 'uncommit_fail'),
 }
+if ASSERTIONS:
+    for operation in ('commit', 'uncommit'):
+        for component, expression in (
+                ('offset', 'untype(offset)'), ('length', 'length')):
+            CUTS[operation + '_' + component] = (
+                'zPhysicalMemoryBacking_bsd.cpp',
+                '  assert(' + expression + ' % static_cast<size_t>(sysconf(_SC_PAGESIZE)) == 0);',
+                '  (void)0;', operation + '_' + component + '_bad')
 
 
 def arm(name):
@@ -89,10 +100,12 @@ def arm(name):
         recipe = recipes[filename]
         source = Path(recipe['file'])
         original = source.read_text()
-        if name == 'commit_consume':
-            prefix, body = original.split('bool ZPhysicalMemoryBacking::commit_inner', 1)
+        if name == 'commit_consume' or name.startswith(('commit_', 'uncommit_')):
+            marker = ('size_t ZPhysicalMemoryBacking::uncommit' if name.startswith('uncommit_')
+                      else 'bool ZPhysicalMemoryBacking::commit_inner')
+            prefix, body = original.split(marker, 1)
             assert old in body
-            changed = prefix + 'bool ZPhysicalMemoryBacking::commit_inner' + body.replace(old, new, 1)
+            changed = prefix + marker + body.replace(old, new, 1)
         else:
             assert original.count(old) == 1, (name, original.count(old))
             changed = original.replace(old, new)
@@ -131,13 +144,22 @@ def arm(name):
         log = directory / (case + '.log')
         rc = run([str(caller), case], log, env=environment)
         text = log.read_text()
-        observed = ('CASE ' + case + ' ') in text if case.startswith('ctor_') else ('ASSERT ' + case + ' ') in text
+        if case.endswith('_bad'):
+            expression = 'untype(offset)' if '_offset_' in case else 'length'
+            observed = ('ASSERT_ENTRY ' + case + ' ') in text
+            if rc == -6:
+                observed = observed and ('Assertion failed: (' + expression + ' %') in text
+            else:
+                observed = observed and ('ASSERT ' + case + ' returned=') in text
+        else:
+            observed = ('CASE ' + case + ' ') in text if case.startswith('ctor_') else ('ASSERT ' + case + ' ') in text
         if case == 'commit_fail' and name != 'commit_consume':
             observed = observed and 'Failed to commit memory (' in text
         if case == 'uncommit_fail':
             observed = observed and 'Failed to uncommit memory (' in text
         assert str(target) in text, 'dyld must load this arm product'
-        results[case] = dict(rc=rc, observed=observed)
+        expected_rc = -6 if case.endswith('_bad') else 0
+        results[case] = dict(rc=rc, observed=observed, expected_rc=expected_rc)
     return dict(arm=name, hashes=hashes, results=results)
 
 
@@ -148,7 +170,7 @@ by_name = {record['arm']: record for record in records}
 assert by_name['green']['hashes'] == by_name['restored']['hashes']
 for record in records:
     expected_red = {CUTS[record['arm']][3]} if record['arm'] in CUTS else set()
-    actual_red = {case for case, result in record['results'].items() if result['rc'] != 0}
+    actual_red = {case for case, result in record['results'].items() if result['rc'] != result['expected_rc']}
     assert actual_red == expected_red, (record['arm'], actual_red, expected_red)
     assert all(result['observed'] for result in record['results'].values()), record['arm']
     if expected_red:
