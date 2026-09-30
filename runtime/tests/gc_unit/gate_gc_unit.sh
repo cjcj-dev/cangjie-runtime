@@ -469,38 +469,35 @@ run_language_tests() {
   FINALIZER_STATE=FAIL
   FINALIZER_SOURCE=FRESH
   STATUS_REASON=FINALIZER_TRIGGER_FAILURE
-  if bash "$FINALIZER_SCRIPT"; then
-    FINALIZER_RUNNER_RC=0
-  else
-    FINALIZER_RUNNER_RC=$?
+  if ! bash "$FINALIZER_SCRIPT"; then
+    FINALIZER_RUNNER_RC=${PIPESTATUS[0]}
     echo "GC_UNIT_GATE_FAIL: end-to-end finalizer trigger test failed" >&2
     return 1
   fi
+  FINALIZER_RUNNER_RC=0
   FINALIZER_STATE=PASS
 
   PHASE_ENTRY_STATE=FAIL
   PHASE_ENTRY_SOURCE=FRESH
   STATUS_REASON=PHASE_ENTRY_TRIGGER_FAILURE
-  if bash "$PHASE_ENTRY_SCRIPT"; then
-    PHASE_ENTRY_RUNNER_RC=0
-  else
-    PHASE_ENTRY_RUNNER_RC=$?
+  if ! bash "$PHASE_ENTRY_SCRIPT"; then
+    PHASE_ENTRY_RUNNER_RC=${PIPESTATUS[0]}
     echo "GC_UNIT_GATE_FAIL: forwarding-carrier phase entry test failed" >&2
     return 1
   fi
+  PHASE_ENTRY_RUNNER_RC=0
   PHASE_ENTRY_STATE=PASS
 
   if [[ $SO_REENTRY_CAN_RUN -eq 1 ]]; then
     SO_REENTRY_STATE=FAIL
     SO_REENTRY_SOURCE=FRESH
     STATUS_REASON=SO_REENTRY_BOUNDED_FAILURE
-    if bash "$SO_REENTRY_SCRIPT"; then
-      SO_REENTRY_RUNNER_RC=0
-    else
-      SO_REENTRY_RUNNER_RC=$?
+    if ! bash "$SO_REENTRY_SCRIPT"; then
+      SO_REENTRY_RUNNER_RC=${PIPESTATUS[0]}
       echo "GC_UNIT_GATE_FAIL: bounded stack-overflow recovery test failed" >&2
       return 1
     fi
+    SO_REENTRY_RUNNER_RC=0
     SO_REENTRY_STATE=PASS
   fi
 
@@ -508,13 +505,12 @@ run_language_tests() {
     SEGMENTED_MANAGED_STATE=FAIL
     SEGMENTED_MANAGED_SOURCE=FRESH
     STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
-    if bash "$SEGMENTED_MANAGED_SCRIPT" both; then
-      SEGMENTED_RUNNER_RC=0
-    else
-      SEGMENTED_RUNNER_RC=$?
+    if ! bash "$SEGMENTED_MANAGED_SCRIPT" both; then
+      SEGMENTED_RUNNER_RC=${PIPESTATUS[0]}
       echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
       return 1
     fi
+    SEGMENTED_RUNNER_RC=0
     SEGMENTED_MANAGED_STATE=PASS
   fi
 
