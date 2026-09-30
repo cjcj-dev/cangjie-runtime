@@ -291,7 +291,7 @@ void ZCrossVM::ProcessExportRoots(ValueRootMap& discoveredExternObjects)
     // Cross-VM ownership inventory is separate from the strong GC root walk.
     // The root barrier already produced a current identity; do not mark twice.
     ValueRootList exportOwners;
-    Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) {
+    Heap::GetHeap().cross_vm().export_roots().VisitGCRoots([&](NativeSlot& slot) {
         BaseObject* object = to_object(ZBarrier::load_barrier_on_oop_field(
             reinterpret_cast<volatile zpointer*>(&slot)));
         if (Heap::IsHeapAddress(object)) { exportOwners.emplace_back(object); }
