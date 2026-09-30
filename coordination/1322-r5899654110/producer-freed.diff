@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zServiceability.cpp
++++ b/runtime/src/Heap/z/zServiceability.cpp
+@@ -37,7 +37,7 @@
+     // HotSpot management.cpp:1915-1936 exposes before/after pool usage.
+     // Cangjie's cumulative freed-byte consumer accumulates positive net drops;
+     // concurrent mutator allocation may make a collection's net drop zero.
+-    _accumulated_freed += before > after ? before - after : 0;
++    (void)before; (void)after; /* cut: completed usage not published */
+ }
+ 
+ uint64_t GCMemoryManager::gc_time_us() const
