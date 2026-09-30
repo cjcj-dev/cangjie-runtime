@@ -65,6 +65,14 @@ def main():
         if cached:
             required = [name for name in required if name not in (
                 'test-manifest.tsv', 'gate_tally.txt', 'gate_run.log')]
+        if receipt['status']['FINALIZER_TRIGGER_SOURCE'] == 'CACHE':
+            required = [name for name in required if name not in (
+                'finalizer_trigger.build.log', 'finalizer_trigger.run.log',
+                'phase_entry_trigger.build.log')]
+        if cached or receipt['status']['FINALIZER_TRIGGER_SOURCE'] == 'CACHE':
+            source = receipt['cache_source']
+            if not source or not (Path(source['evidence_dir']) / 'invocation.json').is_file():
+                errors.append(f'CACHE_SOURCE_ASSERT {receipt["run_id"]} missing source')
         missing = sorted(set(required) - set(outputs))
         print(f'OWNERSHIP_ASSERT run={receipt["run_id"]} missing={missing}', flush=True)
         if missing:
