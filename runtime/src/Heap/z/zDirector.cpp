@@ -641,10 +641,10 @@ static ZDirectorStats sample_stats()
 void ZDirector::run_thread()
 {
     while (wait_for_tick()) {
+        const ZDirectorStats stats = sample_stats();
         if (!ConcurrentGCThread::IsRuntimeInitialized()) {
             continue;
         }
-        const ZDirectorStats stats = sample_stats();
         if (!MapleRuntime::start_gc(stats)) {
             adjust_gc(stats);
         }
