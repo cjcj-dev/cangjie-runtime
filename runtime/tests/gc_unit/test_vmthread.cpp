@@ -1,4 +1,5 @@
 #include "gc_unittest.hpp"
+#include "Cangjie.h"
 #include "gc_worker_fixture.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
@@ -39,9 +40,19 @@ public:
 };
 }
 
-GC_COMPONENT_OTHER_VM_TEST(VMThread1308, PauseAndSynchronousCompletion)
+GC_RUNTIME_OTHER_VM_TEST(VMThread1308, PauseAndSynchronousCompletion)
 {
-    CreateStandaloneHeap(64);
+    RuntimeParam parameters{};
+    parameters.heapParam.heapSize = 128 * 1024;
+    parameters.coParam.processorNum = 1;
+    parameters.gcParam.concGCThreads = 2;
+    parameters.gcParam.concGCThreadsSet = true;
+    parameters.gcParam.youngGCThreads = 1;
+    parameters.gcParam.youngGCThreadsSet = true;
+    parameters.gcParam.oldGCThreads = 1;
+    parameters.gcParam.oldGCThreadsSet = true;
+    parameters.gcParam.staticGCThreads = true;
+    GC_EXPECT_EQ(InitCJRuntime(&parameters), E_OK);
     auto& heap = Heap::GetHeap();
     InitializeGenerationWorkers(heap.young(), 1);
     InitializeGenerationWorkers(heap.old(), 1);
@@ -80,4 +91,5 @@ GC_COMPONENT_OTHER_VM_TEST(VMThread1308, PauseAndSynchronousCompletion)
     GC_EXPECT_TRUE(identity);
     GC_EXPECT_TRUE(completion);
     GC_EXPECT_TRUE(reached);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

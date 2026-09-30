@@ -84,6 +84,7 @@ void VMThread::execute(VMOperation* operation)
         vmThread.inner_execute(operation);
         return;
     }
+    CHECK_DETAIL(is_running(), "VM thread must be ready before operation submission");
     if (!operation->doit_prologue()) { return; }
     operation->set_calling_thread(ThreadLocal::GetThreadLocalData());
     vmThread.wait_until_executed(operation);
