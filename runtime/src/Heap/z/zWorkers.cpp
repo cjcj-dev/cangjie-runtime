@@ -24,9 +24,15 @@ static const char* generation_name(ZGenerationId id)
     return (id == ZGenerationId::young) ? "Young" : "Old";
 }
 
+// ZGC zWorkers.cpp:41-43: the generation owns its configured maximum.
+static uint32_t max_nworkers(ZGenerationId id)
+{
+    return id == ZGenerationId::young ? ZYoungGCThreads : ZOldGCThreads;
+}
+
 // zWorkers.cpp:45-65
-ZWorkers::ZWorkers(ZGenerationId id, uint32_t max_nworkers, ZStatWorkers* stats)
-    : _workers(workers_name(id), max_nworkers),
+ZWorkers::ZWorkers(ZGenerationId id, ZStatWorkers* stats)
+    : _workers(workers_name(id), max_nworkers(id)),
       _generation_name(generation_name(id)),
       _resize_lock(),
       _requested_nworkers(0),
@@ -55,10 +61,6 @@ uint32_t ZWorkers::active_workers() const
 
 void ZWorkers::set_active_workers(uint32_t nworkers)
 {
-    const uint32_t max = _workers.max_workers();
-    if (nworkers > max) {
-        nworkers = max;
-    }
     VLOG(REPORT, "Using %u Workers for %s Generation", nworkers, _generation_name);
     std::lock_guard<std::mutex> locker(_resize_lock);
     _workers.set_active_workers(nworkers);
