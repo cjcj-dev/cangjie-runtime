@@ -777,8 +777,14 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     param.coParam.processorNum = 1;
     param.heapParam.heapSize = 32 * 1024;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    auto* thread = MCC_NewCJThread(nullptr, nullptr,
-        Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
+    extern struct CJThread* CJThreadBuild(ScheduleHandle, const CJThreadAttr*, CJThreadFunc,
+                                         const void*, unsigned int, CJThreadCreateSource, uintptr_t);
+    extern void CJ_CJThreadFree(struct CJThread*, bool);
+    LWTData initialData{};
+    auto* thread = CJThreadBuild(
+        reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
+        nullptr, [](void*, unsigned int) -> void* { return nullptr; }, &initialData, sizeof(initialData),
+        CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
     GC_EXPECT_TRUE(thread != nullptr);
     {
         DriverLocker lock;
@@ -789,6 +795,13 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     ThreadLocal::SetCJThread(thread);
     auto* data = static_cast<LWTData*>(CJThreadGetArg());
     ThreadLocal::SetCJThread(previous);
+    auto countCarrierRoots = [&]() {
+        size_t count = 0;
+        RootVisitor visitor = [&](RootSlot& root) { count += &root == &RootSlotAt(&data->obj); };
+        Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
+        return count;
+    };
+    GC_EXPECT_EQ(countCarrierRoots(), 1u);
     auto* savedObject = data->obj;
     data->obj = reinterpret_cast<BaseObject*>(0x1000);
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
@@ -797,6 +810,12 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     GC_EXPECT_TRUE(data->obj == reinterpret_cast<BaseObject*>(0x1000));
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     data->obj = savedObject;
+    std::fprintf(stderr, "VERIFY_ARMED_RESTORE_TARGET restored=%d\n", data->obj == savedObject);
+    GC_EXPECT_TRUE(data->obj == savedObject);
+    CJ_CJThreadFree(thread, false);
+    const size_t remainingRoots = countCarrierRoots();
+    std::fprintf(stderr, "VERIFY_ARMED_RELEASE_TARGET remaining=%zu\n", remainingRoots);
+    GC_EXPECT_EQ(remainingRoots, 0u);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
