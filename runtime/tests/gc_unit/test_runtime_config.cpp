@@ -327,7 +327,10 @@ void CheckInitializationFailure(InitFailure failure)
         setenv("cjHeapSize", failure == InitFailure::Virtual ? "8GB" : "64MB", 1);
         if (CJ_ScheduleManagerInit() != 0) { _exit(91); }
         if (failure == InitFailure::Virtual) {
-            const rlimit limit{1ULL << 30, 1ULL << 30};
+            // Runtime bootstrap first reserves a native PagePool equal to
+            // the 8 GB heap (CangjieRuntime.cpp:160). Leave that room, then
+            // constrain the actual heap reservation below its 8 GB minimum.
+            const rlimit limit{12ULL << 30, 12ULL << 30};
             if (setrlimit(RLIMIT_AS, &limit) != 0) { _exit(93); }
         }
 #if defined(MRT_TESTABLE_INTERNALS)
