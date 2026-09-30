@@ -10,6 +10,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include "Heap/z/zBarrierSet.hpp"
 namespace MapleRuntime {
 char ZInitialize::_error_message[ErrorMessageLength] = {};
 bool ZInitialize::had_error_flag = false;
@@ -17,13 +18,14 @@ bool ZInitialize::finished = false;
 
 ZInitializer::ZInitializer(ZBarrierSet* barrier_set) { ZInitialize::initialize(barrier_set); }
 
-void ZInitialize::initialize(ZBarrierSet*)
+void ZInitialize::initialize(ZBarrierSet* barrier_set)
 {
     ZGlobalsPointers::initialize();
     ZCPU::initialize();
     ZStatValue::initialize();
     ZThreadLocalAllocBuffer::initialize();
     ZLargePages::initialize();
+    BarrierSet::set_barrier_set(barrier_set);
     ZJNICritical::initialize();
     ZDriver::initialize();
 }

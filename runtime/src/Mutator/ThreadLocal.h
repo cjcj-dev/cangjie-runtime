@@ -118,6 +118,7 @@ public:
     static ThreadLocalData* GetThreadLocalData();
     static void InitializeCleaner();
     static ThreadGCData& GetGCData();
+    static ThreadGCData& GetNativeGCData();
     static void FlushCurrentThreadMarkStacks();
     static MarkThreadLocalStacks& GetMarkStacks(ZMark& domain);
     static bool FlushMarkStacks(ThreadLocalData* tls, ZMark& domain);

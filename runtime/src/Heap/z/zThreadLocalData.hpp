@@ -44,8 +44,7 @@ struct ThreadGCData {
     // Stable owner kind; carrier binding never changes this identity.
     const bool managedOwner;
     explicit ThreadGCData(bool managed = false)
-        : storeBarrierBuffer(new StoreBarrierBuffer()), managedOwner(managed) {}
-    ~ThreadGCData();
+        : storeBarrierBuffer(nullptr), managedOwner(managed) {}
 
     struct Masks {
         uintptr_t loadGood;
