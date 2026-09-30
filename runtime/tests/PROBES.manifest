@@ -1,4 +1,7 @@
 # runtime/tests inventory.
+signal_shutdown.cpp                      manual     build_signal_shutdown.sh builds against product SO; native and single-p modes exercise real FiniCJRuntime
+build_signal_shutdown.sh                 manual     Product runtime/boundscheck directory and output directory; builds one shutdown test ELF
+check_signal_shutdown.py                 manual     Product SO, signal-shutdown ELF and gdb; observes pending exit, terminal state and retained runtime after Fini returns
 #
 # Why this file exists: as of 8f13560c this directory held 21 items and exactly one
 # of them ran. Seven probes had runner scripts that nothing invoked, five files had
