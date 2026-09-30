@@ -15,15 +15,13 @@ public:
     {
         auto* field = reinterpret_cast<volatile zpointer*>(p);
         if constexpr (decorators & AS_RAW) { return reinterpret_cast<BaseObject*>(raw(Raw::load(field))); }
-        else if constexpr (decorators & IN_HEAP) { return Barrier::oop_load_in_heap(field); }
-        else { return Barrier::oop_load_not_in_heap(field); }
+        else { return Barrier::oop_load(field); }
     }
     template<typename P> static void oop_store(P* p, BaseObject* value)
     {
         auto* field = reinterpret_cast<volatile zpointer*>(p);
         if constexpr (decorators & AS_RAW) { Raw::store(field, to_zpointer(reinterpret_cast<uintptr_t>(value))); }
-        else if constexpr (decorators & IN_HEAP) { Barrier::oop_store_in_heap(field, value); }
-        else { Barrier::oop_store_not_in_heap(field, value); }
+        else { Barrier::oop_store(field, value); }
     }
     static BaseObject* oop_load_at(BaseObject* base, ptrdiff_t offset)
     {
@@ -53,16 +51,14 @@ public:
     {
         auto* field = reinterpret_cast<volatile zpointer*>(p);
         if constexpr (decorators & AS_RAW) { return reinterpret_cast<BaseObject*>(raw(Raw::atomic_xchg(field, to_zpointer(reinterpret_cast<uintptr_t>(value))))); }
-        else if constexpr (decorators & IN_HEAP) { return Barrier::oop_atomic_xchg_in_heap(field, value); }
-        else { return Barrier::oop_atomic_xchg_not_in_heap(field, value); }
+        else { return Barrier::oop_atomic_xchg(field, value); }
     }
     template<typename P> static BaseObject* oop_atomic_cmpxchg(P* p, BaseObject* compare, BaseObject* value)
     {
         auto* field = reinterpret_cast<volatile zpointer*>(p);
         if constexpr (decorators & AS_RAW) { return reinterpret_cast<BaseObject*>(raw(Raw::atomic_cmpxchg(field,
             to_zpointer(reinterpret_cast<uintptr_t>(compare)), to_zpointer(reinterpret_cast<uintptr_t>(value))))); }
-        else if constexpr (decorators & IN_HEAP) { return Barrier::oop_atomic_cmpxchg_in_heap(field, compare, value); }
-        else { return Barrier::oop_atomic_cmpxchg_not_in_heap(field, compare, value); }
+        else { return Barrier::oop_atomic_cmpxchg(field, compare, value); }
     }
     static void value_copy(const ValuePayload& src, const ValuePayload& dst)
     {
