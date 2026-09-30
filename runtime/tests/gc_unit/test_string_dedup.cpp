@@ -700,11 +700,19 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, ShrinkingOldBucketKeepsCanonicalIdentity)
                 window, grown, probe.found, probe.expected, slots);
     std::fflush(stdout);
     ReleaseMaintenanceWindow();
+    const bool migrated = WaitDedupSize(batch.strongCount);
+    OldBucketProbe migratedProbe;
+    migratedProbe.expected = reinterpret_cast<ArrayRef>(NativeAccess<>::oop_load(batch.strong.front()));
+    RunDedupTask(ProbeOldBucket, &migratedProbe);
+    std::printf("DEDUP_SHRINK_MIGRATED_TARGET settled=%d found=%p expected=%p\n",
+                migrated, migratedProbe.found, migratedProbe.expected);
+    std::fflush(stdout);
     RunDedupTask(ReleaseDedupBatch, &batch);
     ConcurrentGCBreakpoints::ReleaseControl();
     const int finiRC = FiniCJRuntime();
-    GC_EXPECT_TRUE(probe.found == probe.expected);
+    GC_EXPECT_TRUE(probe.found == probe.expected && migratedProbe.found == migratedProbe.expected);
     GC_EXPECT_TRUE(window && grown);
+    GC_EXPECT_TRUE(migrated);
     GC_EXPECT_EQ(finiRC, E_OK);
 }
 
