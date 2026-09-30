@@ -389,8 +389,8 @@ if [[ "$LANGUAGE_TEST_MODE" != "defer" ]]; then
   else
     LANGUAGE_ADMISSION_REASON=$(cat "$GC_UNIT_OUT/language_admission.log")
     echo "$LANGUAGE_ADMISSION_REASON" >&2
-    STATUS_REASON="$LANGUAGE_ADMISSION_REASON"
     if [[ "$LANGUAGE_TEST_MODE" == "only" ]]; then
+      STATUS_REASON="$LANGUAGE_ADMISSION_REASON"
       exit 2
     fi
   fi
