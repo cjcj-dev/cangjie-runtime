@@ -72,7 +72,11 @@ main(): Int64 {
     checks.check("weak_cleared", weak.value.isNone())
     checks.check("finalizer_once", finalized.load() == 1)
     checks.check("finalizable_child", finalizedValue.load() == 1356)
-    checks.check("strong_referent", strongWeak.value.getOrThrow().value == retained.value)
+    let strongSurvived = match (strongWeak.value) {
+        case Some(value) => value.value == retained.value
+        case None => false
+    }
+    checks.check("strong_referent", strongSurvived)
     gc(heavy: true)
     sleep(100 * Duration.millisecond)
     checks.check("finalizer_not_repeated", finalized.load() == 1)

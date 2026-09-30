@@ -452,7 +452,14 @@ void FinalizerProcessor::InvokeManaged(void* entry, BaseObject* argument)
     const bool wasManaged = mutator->IsManagedContext();
     mutator->SetManagedContext(true);
     const uintptr_t data = MRT_GetThreadLocalData();
-    ExecuteCangjieStub(argument, 0, 0, entry, reinterpret_cast<void*>(data), 0);
+    uintptr_t unit = 0;
+#if defined(__aarch64__)
+    // The managed Unit result uses the AArch64 indirect-result register x8.
+    ExecuteCangjieStub(argument, 0, 0, entry, reinterpret_cast<void*>(data), &unit);
+#else
+    // Unit is an sret parameter before the explicit managed arguments.
+    ExecuteCangjieStub(&unit, argument, 0, entry, reinterpret_cast<void*>(data), 0);
+#endif
     mutator->SetManagedContext(wasManaged);
 }
 
