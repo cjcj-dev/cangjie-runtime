@@ -666,6 +666,40 @@ GC_RUNTIME_TEST(PrecleanWithoutShutdown, Timer) { CheckPrecleanWithoutShutdown(G
 GC_RUNTIME_TEST(PrecleanWithoutShutdown, AllocationStall) { CheckPrecleanWithoutShutdown(GC_REASON_ALLOCATION_STALL, true, true); }
 GC_RUNTIME_TEST(PrecleanWithoutShutdown, User) { CheckPrecleanWithoutShutdown(GC_REASON_USER, false, true); }
 
+extern "C" const void* CJ_MRT_RuntimeNewSubScheduler();
+
+GC_RUNTIME_TEST(RuntimeStartup, SubSchedulerIsolation)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        try {
+            RuntimeParam params{};
+            params.heapParam.heapSize = 64 * 1024;
+            params.coParam.processorNum = 1;
+            GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
+            const void* scheduler = CJ_MRT_RuntimeNewSubScheduler();
+            GC_EXPECT_TRUE(scheduler != nullptr);
+            CJThreadHandle task = RunCJTaskToSchedule(
+                [](void* argument) -> void* { return argument; }, nullptr, const_cast<void*>(scheduler));
+            GC_EXPECT_TRUE(task != nullptr);
+            void* result = nullptr;
+            GC_EXPECT_EQ(GetTaskRet(task, &result), E_OK);
+            ReleaseHandle(task);
+            std::fprintf(stderr, "STARTUP_SUBSCHEDULER_TASK_COMPLETED scheduler=%p\n", scheduler);
+            std::fflush(nullptr);
+            _exit(0);
+        } catch (const std::exception& error) {
+            std::fprintf(stderr, "STARTUP_SUBSCHEDULER_FAILED %s\n", error.what());
+            std::fflush(nullptr);
+            _exit(1);
+        }
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorTimer) { CheckDriverCause(GC_REASON_TIMER, true, false, false); }
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorAllocationRate) { CheckDriverCause(GC_REASON_ALLOCATION_RATE, true, false, false); }
 GC_RUNTIME_OTHER_VM_TEST(DriverCause, MinorHighUsage) { CheckDriverCause(GC_REASON_HIGH_USAGE, true, false, false); }
