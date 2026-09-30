@@ -13,6 +13,11 @@ static void* RescheduleTask(void* argument)
     return argument;
 }
 
+static void* UITask(void* argument)
+{
+    return argument;
+}
+
 int main()
 {
     RuntimeParam parameters{};
@@ -39,6 +44,26 @@ int main()
         }
         ReleaseHandle(tasks[index]);
     }
+    void* uiScheduler = InitUIScheduler();
+    if (!uiScheduler || RunUIScheduler(1) != E_OK) {
+        return 5;
+    }
+    unsigned int uiArgument = 16;
+    CJThreadHandle uiTask = nullptr;
+    std::thread uiProducer([&] {
+        uiTask = RunCJTaskToSchedule(UITask, &uiArgument, uiScheduler);
+    });
+    uiProducer.join();
+    if (!uiTask || RunUIScheduler(10) != E_OK) {
+        return 6;
+    }
+    void* uiResult = nullptr;
+    int uiStatus = GetTaskRet(uiTask, &uiResult);
+    std::printf("SCHEDULER_UI_TARGET status=%d result_matches=%d\n", uiStatus, uiResult == &uiArgument);
+    if (uiStatus != E_OK || uiResult != &uiArgument) {
+        return 1;
+    }
+    ReleaseHandle(uiTask);
     std::this_thread::sleep_for(std::chrono::seconds(6));
     return FiniCJRuntime() == E_OK ? 0 : 4;
 }

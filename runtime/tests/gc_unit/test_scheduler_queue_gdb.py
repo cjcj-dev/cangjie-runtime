@@ -17,6 +17,8 @@ inferior_exit = None
 queue_checks = 0
 snapshot_callers = {}
 snapshot_returns = 0
+read_modes = {}
+thread_modes = {}
 
 
 def record_exit(event):
@@ -45,6 +47,10 @@ class CountAccess(gdb.Breakpoint):
         owner = read_integer(schedule + layout['mutex'] + layout['owner'], 4)
         tid = gdb.selected_thread().ptid[1]
         value = read_integer(count_address, 8)
+        if self.function == 'CJ_ProcessorGlobalRead':
+            mode = thread_modes.get(gdb.selected_thread().ptid[1], 'unknown')
+            key = str(mode) + ':' + ('empty' if value == 0 else 'nonempty')
+            read_modes[key] = read_modes.get(key, 0) + 1
         if self.function == 'CJ_ScheduleGlobalQueueCount':
             caller = gdb.newest_frame().older()
             caller_name = caller.name() if caller else 'unknown'
@@ -82,6 +88,12 @@ class SnapshotReturn(gdb.FinishBreakpoint):
         return False
 
 
+class ReadEntry(gdb.Breakpoint):
+    def stop(self):
+        thread_modes[gdb.selected_thread().ptid[1]] = bool(int(gdb.parse_and_eval('$rsi')) & 0xff)
+        return False
+
+
 class QueueUnlock(gdb.Breakpoint):
     def stop(self):
         global failure, queue_checks
@@ -109,7 +121,9 @@ try:
     for setting in ('pagination off', 'confirm off', 'print thread-events off', 'disassembly-flavor att'):
         gdb.execute('set ' + setting)
     gdb.execute('start')
-    functions = ('CJ_ScheduleGlobalWrite', 'CJ_ProcessorGlobalRead', 'CJ_ScheduleGlobalQueueCount')
+    functions = ('CJ_ScheduleGlobalWrite', 'CJ_ProcessorGlobalRead',
+                 'CJ_ScheduleGlobalQueueCount', 'CJ_ScheduleAnyCJThread')
+    ReadEntry('*CJ_ProcessorGlobalRead', internal=True)
     for function in functions:
         listing = gdb.execute('disassemble ' + function, to_string=True)
         count = 0
@@ -132,6 +146,7 @@ try:
     print('SCHEDULER_LOCK_RESULT ' + json.dumps(dict(observations=observations,
         failure=failure, covered=covered, queue_checks=queue_checks,
         snapshot_callers=snapshot_callers, snapshot_returns=snapshot_returns,
+        read_modes=read_modes,
         inferior_exit=inferior_exit, program=exit_code), sort_keys=True))
     if failure:
         gdb.execute('quit 1')
