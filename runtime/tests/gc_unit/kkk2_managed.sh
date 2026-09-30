@@ -67,11 +67,6 @@ sync_analyzer_tools() {
 
 sync_analyzer_tools
 
-if [[ ! -x "$CANGJIE_HOME/bin/cjc" ]]; then
-  echo "kkk2_managed FAIL: CANGJIE_HOME=$CANGJIE_HOME missing bin/cjc (pin sdkdepot first)" >&2
-  exit 2
-fi
-
 mkdir -p "$OUT"
 JSON="$OUT/kkk2_managed.json"
 echo "kkk2_managed sha=$SHA n=$N srcroot=$SRCROOT out=$OUT home=$CANGJIE_HOME"

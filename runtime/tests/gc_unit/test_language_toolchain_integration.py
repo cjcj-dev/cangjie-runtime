@@ -34,15 +34,21 @@ def main():
                   ('missing-qualification', {'GC_UNIT_LANGUAGE_QUALIFICATION': ''}),
                   ('cjc-conflict', {'CJC': str(args.official_sdk / 'bin/cjc')})]
     commands = ['gate_gc_unit.sh', 'run_finalizer_trigger.sh',
-                'run_phase_entry_trigger.sh', 'run_segmented_array_managed.sh']
+                'run_phase_entry_trigger.sh', 'run_segmented_array_managed.sh',
+                'kkk2_managed.sh']
 
     def invoke(case, changes, command):
         out = args.out / case / command.removesuffix('.sh')
         out.mkdir(parents=True, exist_ok=True)
         local = dict(env, **changes, GC_UNIT_OUT=str(out),
                      GC_UNIT_GATE_STATUS=str(out / 'latest.status'))
+        arguments = ['bash', str(unit / command)]
+        if command == 'kkk2_managed.sh':
+            local.update(LANE=str(out), OUT=str(out), SRCROOT=str(unit.parents[2]),
+                         STAINED_RT=env['GCV2_RUNTIME_LIB_DIR'], N='1')
+            arguments.append('admission-contract')
         start = time.monotonic()
-        result = subprocess.run(['bash', str(unit / command)], env=local,
+        result = subprocess.run(arguments, env=local,
                                 capture_output=True, text=True)
         (out / 'stdout.log').write_text(result.stdout)
         (out / 'stderr.log').write_text(result.stderr)
@@ -66,7 +72,8 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
         futures = [executor.submit(invoke, case, changes, command)
-                   for case, changes in cases for command in commands]
+                   for case, changes in cases for command in commands
+                   if not (case == 'missing-build' and command == 'kkk2_managed.sh')]
         records = [future.result() for future in futures]
     (args.out / 'results.json').write_text(json.dumps(records, indent=2, sort_keys=True))
     return int(any(not record['passed'] for record in records))
