@@ -202,8 +202,7 @@ void CangjieRuntime::Init()
         "Garbage threshold: %.2f\n\tGC interval: %zums\n\tBackup GC interval: %zus\n\t"
         "Log level: %d\n\tThread stack size: %zu(KB)\n\tCangjie stack size: %zu(KB)\n\tProcessor number: %d",
         param.heapParam.heapSize, param.heapParam.regionSize, param.heapParam.exemptionThreshold,
-        param.heapParam.heapUtilization, reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).
-        GetRegionManager().GetCacheRatio(), 1 + param.heapParam.heapGrowth,
+        param.heapParam.heapUtilization, Heap::GetHeap().page_allocator().GetCacheRatio(), 1 + param.heapParam.heapGrowth,
         param.gcParam.gcThreshold / KB, param.gcParam.garbageThreshold,
         param.gcParam.gcInterval / MILLI_SECOND_TO_NANO_SECOND, param.gcParam.backupGCInterval / SECOND_TO_NANO_SECOND,
         static_cast<int>(param.logParam.logLevel), param.coParam.thStackSize,

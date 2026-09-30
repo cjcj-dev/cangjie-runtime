@@ -10,6 +10,8 @@
 
 #include <atomic>
 #include <mutex>
+#include <map>
+#include "ObjectModel/RefField.h"
 #include <vector>
 
 #include "Interpreter/Options.h"
@@ -18,10 +20,32 @@
 #include "Loader/ILoader.h"
 
 namespace MapleRuntime {
+class StaticRootTable {
+public:
+    struct StaticRootArray {
+        NativeSlot* content[0];
+    };
+
+    StaticRootTable() { totalRootsCount = 0; }
+    ~StaticRootTable() = default;
+    void RegisterRoots(StaticRootArray* addr, U32 size);
+    void UnregisterRoots(StaticRootArray* addr, U32 size);
+    void VisitRoots(const NativeSlotVisitor& visitor);
+
+
+private:
+    std::mutex gcRootsLock;                         // lock gcRootsBuckets
+    std::map<StaticRootArray*, U32> gcRootsBuckets; // record gc roots entry of CFile
+    USize totalRootsCount;
+};
+
 class LoaderManager {
 public:
     LoaderManager() noexcept;
     ~LoaderManager() noexcept;
+    void RegisterStaticRoots(Uptr addr, U32 size);
+    void UnregisterStaticRoots(Uptr addr, U32 size);
+    void VisitStaticRoots(const NativeSlotVisitor& visitor);
     void Init();
     void Fini();
     void AddPreLoadedImageMetaAddr(Uptr address);
@@ -63,6 +87,7 @@ private:
 #ifdef __OHOS__
     void RegisterLoadFunc();
 #endif
+    StaticRootTable _static_roots;
     static bool isReleased;
     ILoader* loader;
     std::atomic<bool> initStatus;

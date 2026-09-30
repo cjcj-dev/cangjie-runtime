@@ -4,3 +4,10 @@
 
 #pragma once
 #include "Heap/z/zAbort.hpp"
+
+namespace MapleRuntime {
+inline bool ZAbort::should_abort()
+{
+    return _should_abort.load(std::memory_order_relaxed);
+}
+} // namespace MapleRuntime

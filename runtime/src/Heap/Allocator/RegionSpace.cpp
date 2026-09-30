@@ -27,23 +27,6 @@
 
 
 
-namespace MapleRuntime {
-
-RegionManager& RegionSpace::GetRegionManager() const noexcept
-{
-    return Heap::GetHeap().page_allocator();
-}
-
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-bool RegionSpace::IsHeapObject(MAddress addr) const
-{
-    return IsHeapAddress(addr);
-}
-#endif
-
-
-} // namespace MapleRuntime
-
 #include "Base/ImmortalWrapper.h"
 namespace MapleRuntime {
 // PagePool
