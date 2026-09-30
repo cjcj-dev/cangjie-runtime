@@ -23,6 +23,11 @@ def required(name):
     return Path(value).resolve(strict=True)
 
 
+def directory_identity(directory):
+    files = {path.name: sha256(path) for path in sorted(directory.iterdir()) if path.is_file()}
+    return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+
+
 def sdk_identity(sdk):
     compiler = sdk / 'bin/cjc'
     resolved = compiler.resolve(strict=True)
@@ -63,7 +68,9 @@ def admit():
         if sha256(sdk / relative) != expected:
             raise ValueError(f'LANGUAGE_TOOLCHAIN_INCOMPATIBLE component={relative}')
     host_hash = sha256(host / 'libcangjie-runtime.so')
-    if host_hash != proof['compiler_host']:
+    host_identity = directory_identity(host)
+    if (host_hash != proof['compiler_host'] or host_identity != proof['compiler_host_set'] or
+            directory_identity(sdk / 'host/compiler') != host_identity):
         raise ValueError('LANGUAGE_COMPILER_HOST_INCOMPATIBLE')
     if sha256(checker) != proof['colour_checker'] or sha256(colour_host) != proof['colour_host']:
         raise ValueError('LANGUAGE_COLOUR_REFERENCE_INCOMPATIBLE')
@@ -79,6 +86,7 @@ def admit():
         raise ValueError('BUILD_SDK_COMPILER_INVALID')
     identity = {'build': sdk_identity(build), 'language': language,
                 'compiler_host': host_hash, 'compiler_host_dir': str(host),
+                'compiler_host_set': host_identity, 'qualified_components': proof['components'],
                 'qualification': sha256(qualification), 'checker': sha256(checker),
                 'colour_host': sha256(colour_host),
                 'admission': sha256(Path(__file__)),
