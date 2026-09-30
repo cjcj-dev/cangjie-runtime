@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-fixture="$(mktemp -d /tmp/gc-unit-gate-contract.XXXXXX)"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/gc-unit-gate-contract.XXXXXX")"
 trap 'rm -rf "$fixture"' EXIT
 
 # The parent gate supplies its own compiler, runtime, status, mode, and skip
@@ -13,7 +13,7 @@ trap 'rm -rf "$fixture"' EXIT
 unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
   GCV2_RUNTIME_OUTPUT_ROOT MRT_TESTABLE_INTERNALS \
   GC_UNIT_GATE_LANGUAGE_TESTS GC_UNIT_GATE_SKIP GC_UNIT_GATE_STATUS \
-  GC_UNIT_OUT GC_UNIT_TALLY_FILE GC_UNIT_FILTER \
+  GC_UNIT_OUT GC_UNIT_TALLY_FILE GC_UNIT_FILTER GC_UNIT_GATE_RESULT \
   MRT_GC_UNIT_OHOS_HOST GC_UNIT_OHOS_HOST_TEST_ELF \
   GC_UNIT_OHOS_HOST_RECEIPT GC_UNIT_OHOS_HEADER_ROOT_TOKEN
 # Synthetic gate arms likewise supply their own header root. The copied-pair
@@ -24,6 +24,7 @@ mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/runti
   "$fixture/lib" "$fixture/bin" \
   "$fixture/sdk/bin"
 cp "$ROOT/runtime/tests/gc_unit/gate_gc_unit.sh" "$fixture/runtime/tests/gc_unit/"
+cp "$ROOT/runtime/tests/gc_unit/gate_evidence.py" "$fixture/runtime/tests/gc_unit/"
 cp "$ROOT/runtime/build/resolve_runtime_output.sh" "$fixture/runtime/build/"
 cp "$ROOT/runtime/build/resolve_runtime_headers.py" "$fixture/runtime/build/"
 cp "$ROOT/runtime/tests/gc_unit/product_test_configuration.py" "$fixture/runtime/tests/gc_unit/"
@@ -374,7 +375,11 @@ for source in fresh cache; do
   out="$fixture/no-cjc-$source-out"
   mkdir -p "$out"
   if [[ "$source" == cache ]]; then
-    touch "$out/.gate_stamp"
+    PATH="$fixture/bin:$PATH" CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+      GC_UNIT_GATE_TRACE="$fixture/no-cjc-seed.trace" \
+      GC_UNIT_OUT="$out" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+      GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/no-cjc-seed.status" \
+      bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/no-cjc-seed.log" 2>&1
   fi
   set +e
   PATH="$fixture/bin:$PATH" CJC="$fixture/missing-cjc" GC_UNIT_GATE_TRACE="$fixture/no-cjc-$source.trace" \
