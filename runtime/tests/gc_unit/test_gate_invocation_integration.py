@@ -9,6 +9,15 @@ import subprocess
 import time
 
 
+def run_inventory(unit):
+    """Path->digest of every file each finished gate invocation owns."""
+    runs = {}
+    for run in sorted((unit / 'gate-runs').glob('run.*')) if (unit / 'gate-runs').is_dir() else []:
+        runs[run] = {str(path.relative_to(run)): hashlib.sha256(path.read_bytes()).hexdigest()
+                     for path in sorted(run.rglob('*')) if path.is_file()}
+    return runs
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, required=True)
@@ -39,6 +48,11 @@ def main():
                             args.runtime.resolve() / 'tests/gc_unit/gate_gc_unit.sh')])
     records = []
     errors = []
+    # Round-boundary history. A terminal self-consistency check cannot tell a
+    # preserved first round from a first round rewritten by the second one, so
+    # the path->digest baseline of every run is taken the moment its own call
+    # returns and is compared after each later call.
+    history = {}
     for call in range(args.calls):
         start = time.monotonic()
         with (root / f'call-{call}.stdout.log').open('w') as stdout, (
@@ -47,6 +61,14 @@ def main():
         records.append({'call': call, 'rc': result.returncode, 'wall': time.monotonic() - start})
         if result.returncode != args.expected_rc:
             errors.append(f'ENTRY_RC call={call} actual={result.returncode} expected={args.expected_rc}')
+        runs = run_inventory(root / 'unit')
+        for run, before in history.items():
+            changed = sorted(name for name, digest in before.items() if runs.get(run, {}).get(name) != digest)
+            print(f'ROUND_HISTORY_ASSERT after_call={call} run={run.name} changed={changed}', flush=True)
+            if changed:
+                errors.append(f'ROUND_HISTORY_ASSERT after_call={call} run={run.name} changed={changed}')
+        for run, snapshot in runs.items():
+            history.setdefault(run, snapshot)
     receipts = sorted((root / 'unit/gate-runs').glob('*/invocation.json'))
     if not receipts:
         errors.append('NO_INVOCATIONS')
