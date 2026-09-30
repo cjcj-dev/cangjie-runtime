@@ -149,5 +149,6 @@ if mode == "lifetime":
     Freed("*CJ_CJThreadFree")
 if mode == "ordinary":
     gdb.execute("disable breakpoints")
+print("EVENT controller ready", flush=True)
 end
 continue -a &

@@ -31,6 +31,7 @@ def command(value):
 
 
 try:
+    session.expect_exact("EVENT controller ready")
     if mode in ("asleep", "gap", "lifetime"):
         session.expect_exact("EVENT empty final check complete")
         if mode in ("asleep", "lifetime"):
