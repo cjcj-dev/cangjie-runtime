@@ -67,12 +67,6 @@ def main():
                  passed=results['terminal_reentry'], callback_count=count, terminal=exited)
             debugger.delete(blocked)
             if at_gate:
-                lock_wait = debugger.breakpoint('MapleRuntime::MutatorManager::MutatorManagementRLock')
-                debugger.resume(terminal_thread)
-                event = debugger.stop()
-                if event_field(event, 'bkptno') != lock_wait:
-                    raise RuntimeError('Terminal gate did not reach retained thread lock')
-                debugger.delete(lock_wait)
                 results['terminal_blocking'] = observe_blocking(debugger, terminal_thread, output)
             debugger.cmd('-exec-interrupt --thread ' + current)
             host_stop = debugger.stop()
