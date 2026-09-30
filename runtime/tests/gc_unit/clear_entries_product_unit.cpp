@@ -1257,8 +1257,14 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     // The thread must predate the relocation color flip: its raw roots still
     // name the from-page, so its saved load-good mask must describe that epoch.
     if (!oldPending) LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
-    MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::young), 2);
-    MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::old), 2);
+    if (ZGeneration::young()->Workers() == nullptr) {
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::young), 2);
+    }
+    ZGeneration::young()->set_active_workers(2);
+    if (ZGeneration::old()->Workers() == nullptr) {
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::old), 2);
+    }
+    ZGeneration::old()->set_active_workers(2);
     // This fixture invokes the old body without the driver's young prelude.
     // Supply the product mark-start sequence event before publishing old roots.
     auto& oldCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
