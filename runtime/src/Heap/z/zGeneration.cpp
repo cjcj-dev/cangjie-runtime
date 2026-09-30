@@ -130,12 +130,6 @@ ZGenerationIdOptional ZGeneration::id_optional() const
     return static_cast<ZGenerationIdOptional>(id());
 }
 
-// ZGC zGeneration.inline.hpp:158-160.
-void ZGenerationYoung::remember(volatile zpointer* p)
-{
-    _remembered.remember(p);
-}
-
 bool ZGeneration::is_young() const { return id() == ZGenerationId::young; }
 bool ZGeneration::is_old() const { return id() == ZGenerationId::old; }
 ZGenerationYoung* ZGeneration::young() { return _young; }

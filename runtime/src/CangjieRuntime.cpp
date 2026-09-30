@@ -26,6 +26,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zReferenceProcessor.hpp"
+#include "os/Processor.h"
 #include "Heap/z/zHeap.hpp"
 #include "LoaderManager.h"
 #include "LogManager.h"
@@ -155,6 +156,7 @@ inline T* NewAndInit(A arg)
 // HeapManager must be initialized before HeapManager because of inherited properties of signal handlers.
 void CangjieRuntime::Init()
 {
+    OS::InitializeProcessorCount();
     PagePool::Instance().Init(ZHeuristics::max_heap_size() / MRT_PAGE_SIZE);
 #ifdef CANGJIE_GWPASAN_SUPPORT
     // setup gwpasan before heap initialized

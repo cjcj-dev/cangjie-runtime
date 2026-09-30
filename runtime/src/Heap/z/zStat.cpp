@@ -16,6 +16,7 @@
 #include "CangjieRuntime.h"
 #include "os/LoadAverage.h"
 #include "Heap/z/zAbort.inline.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zPageAllocator.hpp"
@@ -1280,26 +1281,48 @@ ZStatPhaseCollection::ZStatPhaseCollection(const char* name, bool minor)
     : ZStatPhase(minor ? "Minor Collection" : "Major Collection", name), minor(minor)
 {}
 
-// zStat.cpp:655-687 — the abort early-exit keeps an aborted cycle out of
-// every downstream statistic.
-void ZStatPhaseCollection::RegisterStart(uint64_t startNs) const { (void)startNs; }
+// ZGC zStat.cpp:640-652: each driver owns its collection-start used value.
+void ZStatPhaseCollection::SetUsedAtStart(size_t used) const
+{
+    if (minor) { ZDriver::minor()->set_used_at_start(used); }
+    else { ZDriver::major()->set_used_at_start(used); }
+}
+
+size_t ZStatPhaseCollection::UsedAtStart() const
+{
+    return minor ? ZDriver::minor()->used_at_start() : ZDriver::major()->used_at_start();
+}
+
+void ZStatPhaseCollection::RegisterStart(uint64_t startNs) const
+{
+    (void)startNs;
+    const GCReason cause = minor ? ZDriver::minor()->gc_cause() : ZDriver::major()->gc_cause();
+    SetUsedAtStart(Heap::GetHeap().GetUsedPageSize());
+    GcLog::Collection(GcLog::CurrentSeq(), Name(), g_gcRequests[cause].name, "start");
+}
 
 void ZStatPhaseCollection::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 {
+    const GCReason cause = minor ? ZDriver::minor()->gc_cause() : ZDriver::major()->gc_cause();
     if (ZAbort::should_abort()) {
+        GcLog::Collection(GcLog::CurrentSeq(), Name(), g_gcRequests[cause].name, "abort");
         return;
     }
-    // rec=cycle is the collection-level structured record; rec=phase covers
-    // pause/concurrent/subphase/critical work (same population the retired
-    // Timer observed).
     ZStatDurationSample(sampler, endNs - startNs);
+    const size_t usedAtEnd = Heap::GetHeap().GetUsedPageSize();
+    GcLog::Collection(GcLog::CurrentSeq(), Name(), g_gcRequests[cause].name, "end",
+                      startNs, endNs - startNs, UsedAtStart(), usedAtEnd);
 }
 
 ZStatPhaseGeneration::ZStatPhaseGeneration(const char* name, ZGenerationId id)
     : ZStatPhase(id == ZGenerationId::old ? "Old Generation" : "Young Generation", name), id(id)
 {}
 
-void ZStatPhaseGeneration::RegisterStart(uint64_t startNs) const { (void)startNs; }
+void ZStatPhaseGeneration::RegisterStart(uint64_t startNs) const
+{
+    (void)startNs;
+    GcLog::Generation(GcLog::CurrentSeq(), Name(), "start");
+}
 
 // zStat.cpp:711-759 — the per-collection report is printed once from here;
 // the stalls/Load/Mark/References/relocation/heap units are added as those
@@ -1307,6 +1330,7 @@ void ZStatPhaseGeneration::RegisterStart(uint64_t startNs) const { (void)startNs
 void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 {
     if (ZAbort::should_abort()) {
+        GcLog::Generation(GcLog::CurrentSeq(), Name(), "abort");
         return;
     }
     ZStatDurationSample(sampler, endNs - startNs);
@@ -1326,7 +1350,7 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     }
     generation.StatHeap()->Print(&generation);
     // zStat.cpp:737-741 — closing used-before/after line.
-    GcLog::Generation(GcLog::CurrentSeq(), Name(), startNs, endNs - startNs,
+    GcLog::Generation(GcLog::CurrentSeq(), Name(), "end", startNs, endNs - startNs,
                       generation.StatHeap()->UsedAtCollectionStart(), generation.StatHeap()->UsedAtCollectionEnd());
     LOG(RTLOG_INFO, "%s %zuM->%zuM %.3fs", Name(), generation.StatHeap()->UsedAtCollectionStart() / MB,
         generation.StatHeap()->UsedAtCollectionEnd() / MB, (endNs - startNs) / 1e9);
@@ -1408,7 +1432,7 @@ void ZStatCriticalPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 {
     ZStatDurationSample(sampler, endNs - startNs);
     ZStatInc(counter, 1);
-    EmitPhaseRecord(*this, "conc", startNs, endNs);
+    EmitPhaseRecord(*this, "critical", startNs, endNs);
 }
 } // namespace MapleRuntime
 

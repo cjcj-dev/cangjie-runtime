@@ -98,6 +98,7 @@ public:
     void reset_tlab_used();
     void account_alloc_page(ZPage* page);
     void account_undo_alloc_page(ZPage* page);
+    void undo_alloc_page(ZPage* page);
     size_t max_tlab_size() const { return ZObjectSizeLimitSmall; }
     size_t unsafe_max_tlab_alloc() const;
     void undo_alloc_object_for_relocation(MAddress addr, size_t size);
@@ -187,9 +188,7 @@ public:
     static bool is_young(MAddress addr);
     static bool is_old(MAddress addr);
     static ZPageTable& page_table();
-    static ZPage* alloc_page(size_t num, ZPageType role, bool expectPhysicalMem = false,
-                                  PageAge age = PageAge::eden, ZAllocationFlags flags = {});
-    static ZPage* alloc_page(ZPage* page);
+    static ZPage* alloc_page(size_t num, ZPageType role,                                   PageAge age = PageAge::eden, ZAllocationFlags flags = {});
     static void free_page(ZPage* page);
     static size_t free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages);
 

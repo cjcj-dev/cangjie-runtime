@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zObjArrayAllocator.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 
 #include <atomic>
@@ -116,6 +117,12 @@ void ZCollectedHeap::initialize_gc_workers()
 
 
 // ZGC zCollectedHeap.cpp:137-146. Cangjie allocation sizes are bytes.
+MArray* ZCollectedHeap::array_allocate(TypeInfo& klass, MSize size, MIndex length, bool doZero)
+{
+    const ZObjArrayAllocator allocator(klass, size, length, doZero);
+    return allocator.allocate();
+}
+
 uintptr_t ZCollectedHeap::allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize)
 {
     (void)minSize;

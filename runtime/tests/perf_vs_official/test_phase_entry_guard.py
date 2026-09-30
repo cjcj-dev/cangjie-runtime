@@ -12,8 +12,8 @@ GUARD = Path(__file__).with_name("phase_entry_guard.py")
 
 
 def generation(seq, name, tag, start=1, duration=100):
-    return (f"[GCLOG] v=5 rec=generation seq={seq} gc_tag={tag} name={name} "
-            f"start_ns={start} dur_ns={duration} live_before=9 live_after=8")
+    return (f"[GCLOG] v=6 rec=generation seq={seq} gc_tag={tag} name={name} "
+            f"event=end start_ns={start} dur_ns={duration} used_at_collection_start=9 used_at_collection_end=8")
 
 
 def cycle(seq, kind="minor"):
@@ -22,7 +22,7 @@ def cycle(seq, kind="minor"):
 
 
 def entry(seq, ns=1, start=1, tag="y", name="Pause_Mark_Start"):
-    return (f"[GCLOG] v=4 rec=phase seq={seq} gc_tag={tag} name={name} "
+    return (f"[GCLOG] v=5 rec=phase seq={seq} gc_tag={tag} name={name} "
             f"kind=pause start_ns={start} ns={ns}")
 
 
@@ -31,10 +31,8 @@ def log(mode="minor"):
     # Keeping them in negative cases isolates the entry assertion.
     return [
         cycle(1, mode),
-        "[GCLOG] v=4 rec=stw seq=1 gc_tag=- reason=prepare start_ns=1 wait_ns=1 held_ns=1",
-        "[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=outer kind=pause start_ns=1 ns=1",
-        "[GCLOG] v=4 rec=phase_leaf seq=1 gc_tag=- name=outer ns=1 kind=pause "
-        "depth=2 path_ok=1 path=outer>parent",
+        "[GCLOG] v=5 rec=stw seq=1 gc_tag=- reason=prepare start_ns=1 wait_ns=1 held_ns=1",
+        "[GCLOG] v=5 rec=phase seq=1 gc_tag=- name=outer kind=pause start_ns=1 ns=1",
         f"PHASE_ENTRY_{mode.upper()}_OK checksum=1",
     ]
 

@@ -95,6 +95,7 @@ public:
 
 protected:
     friend class ZObjArrayAllocator;
+    friend class MemAllocator;
     // HotSpot MemAllocator::mem_clear (memAllocator.cpp:366-374).
     // The header is initialized separately by SetClassInfo, after the payload.
     static void ClearMemory(MAddress address, size_t size)
@@ -106,13 +107,13 @@ protected:
     // SetClassInfo turns a managed address into a valid "BaseObject"
     // can only be invoked when object initialised in order to avoid competetion.
     // caller should ensure that address is valid (not doing null check here)
-    static inline BaseObject* SetClassInfo(MAddress address, TypeInfo* klass)
+    static inline BaseObject* SetClassInfo(MAddress address, TypeInfo* klass, bool invisible = false)
     {
         static_assert(offsetof(BaseObject, stateWord) == 0, "compiler layout ObjectStateWordOffset");
         auto ref = from_alloc_addr(address);
         // Whole word, not just the address halves: this memory may have been a from-version, and
         // SetTypeInfo would leave its stateCode behind (StateWord::InitTypeInfoAndState).
-        ref->stateWord.InitTypeInfoAndState(klass);
+        ref->stateWord.InitTypeInfoAndState(klass, invisible);
         return ref;
     }
 

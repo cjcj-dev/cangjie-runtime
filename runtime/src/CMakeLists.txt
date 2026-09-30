@@ -251,6 +251,7 @@ elseif (WINDOWS_FLAG MATCHES 1)
         "os/Windows/WinModuleManager.cpp"
     )
 endif()
+    list(APPEND SRC_LIST "os/Processor.cpp")
     add_library(runtime STATIC ${SRC_LIST})
     add_library(cangjie-runtime SHARED ${SRC_LIST})
     add_custom_target(check_heal_slot_writes ALL

@@ -57,6 +57,7 @@ constexpr uint64_t ZMarkCompleteTimeout = 200;
 extern std::atomic<size_t> SoftMaxHeapSize;
 extern uint32_t MaxTenuringThreshold;
 extern int32_t ZTenuringThreshold;
+extern uint32_t ParallelGCThreads;
 extern uint32_t ConcGCThreads;
 extern uint32_t ZYoungGCThreads;
 extern uint32_t ZOldGCThreads;

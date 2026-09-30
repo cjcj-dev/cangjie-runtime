@@ -59,7 +59,8 @@ try:
     command('run')
     parameters = [('backupGCInterval', 1 if mode == 'dynamic' else 0),
                   ('staticGCThreads', 0 if mode == 'dynamic' else 1),
-                  ('concGCThreads', 2), ('youngGCThreads', 2), ('oldGCThreads', 2)]
+                  ('concGCThreads', 2), ('youngGCThreads', 2), ('oldGCThreads', 2),
+                  ('concGCThreadsSet', 1), ('youngGCThreadsSet', 1), ('oldGCThreadsSet', 1)]
     for field, number in parameters:
         command('set var params.gcParam.' + field + '=' + str(number))
     sample_end = line_in('static GCReason make_major_gc_decision', 'if (')
@@ -83,7 +84,7 @@ try:
             command('set language c++')
             command('set $flags=(MapleRuntime::ZAllocationFlags*)calloc(1,sizeof(MapleRuntime::ZAllocationFlags))')
             command('set $page=MapleRuntime::Heap::alloc_page(8388608,MapleRuntime::ZPageType::large,'
-                    'false,MapleRuntime::PageAge::eden,*$flags)')
+                    'MapleRuntime::PageAge::eden,*$flags)')
             emit('REAL_YOUNG_PAGE', page=str(value('$page')))
         next(t for t in gdb.selected_inferior().threads() if t.name == 'ZDirector').switch()
         advance('zDirector.cpp:' + str(sample_end))

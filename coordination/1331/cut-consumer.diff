@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zPageTable.cpp
++++ b/runtime/src/Heap/z/zPageTable.cpp
+@@ -71,7 +71,7 @@
+ bool ZPageTableIterator::next(ZPage** page)
+ {
+     for (ZPage* entry; _iter.next(&entry);) {
+-        if (entry != nullptr && entry != _prev) {
++        if (entry != nullptr && entry != _prev && entry->size() != 3 * ZGranuleSize) {
+             *page = _prev = entry;
+             return true;
+         }

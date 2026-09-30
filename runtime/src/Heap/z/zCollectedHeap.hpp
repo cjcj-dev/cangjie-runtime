@@ -18,6 +18,8 @@
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;
+class TypeInfo;
+class MArray;
 class ZDirector;
 class ZDriverMajor;
 class ZDriverMinor;
@@ -38,6 +40,7 @@ public:
     void collect(GCReason reason);
     void safepoint_synchronize_begin();
     void safepoint_synchronize_end();
+    MArray* array_allocate(TypeInfo& klass, MSize size, MIndex length, bool doZero);
     uintptr_t allocate_new_tlab(size_t minSize, size_t requestedSize, size_t* actualSize);
 
     Heap& collected_heap() { return _heap; }

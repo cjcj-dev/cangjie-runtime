@@ -369,6 +369,7 @@ public:
     {
         SuspendibleThreadSetJoiner stsJoiner;
         mark->FollowWorkComplete(partial);
+        Heap::GetHeap().mark_flush(ThreadLocal::GetGCData());
     }
 
 private:
@@ -769,8 +770,6 @@ void ZMark::FollowWorkComplete(bool partial)
                      nullptr, nullptr, this);
     (void)local.Stacks().Flush(stripes);
     local.Cache().Flush();
-
-    ThreadLocal::FlushCurrentThreadMarkStacks();
 }
 
 bool ZMark::FollowWorkPartial()
@@ -914,11 +913,6 @@ bool ZMark::FlushStacks()
 }
 
 namespace {
-bool HeapMarkReady()
-{
-    return true;
-}
-
 bool FlushTargetGCData(ThreadGCData& data, ZMark* domain)
 {
     if (domain != nullptr) { return domain->Flush(data); }
@@ -939,9 +933,6 @@ bool ZMark::FlushThreadLocal(ThreadLocalData* tls, ZMark* domain)
     }
     if (tls->gcData != nullptr) {
         published = FlushTargetGCData(*tls->gcData, domain) || published;
-    }
-    if (!HeapMarkReady()) {
-        return published;
     }
     return (domain == nullptr ? ZMark::FlushThreadMarkProducers(tls)
                               : ZMark::FlushThreadMarkProducers(tls, domain)) || published;
@@ -979,12 +970,7 @@ bool ZMark::HandshakeFlush(ZMark* domain)
         ZMark* domain_;
         std::atomic<bool> flushed_;
     } cl(domain);
-    if (HeapMarkReady()) {
-        Heap::GetHeap().GetFinalizerProcessor().Notify();
-        Handshake::execute(&cl);
-    } else {
-        flushed = FlushThreadLocal(ThreadLocal::GetThreadLocalData(), domain);
-    }
+    Handshake::execute(&cl);
     flushed = FlushThreadLocal(ThreadLocal::GetThreadLocalData(), domain) || flushed;
     if (cl.flushed()) {
         flushed = true;
@@ -994,7 +980,7 @@ bool ZMark::HandshakeFlush(ZMark* domain)
 
 bool ZMark::Flush()
 {
-    return HandshakeFlush(this);
+    return HandshakeFlush(this) || !stripes.IsEmpty();
 }
 
 // ZGC zMark.cpp:998-1004: buffer processing may produce more stack work.
@@ -1024,20 +1010,22 @@ bool ZMark::FlushAllGenerations()
 bool ZMark::TryProactiveFlush(size_t workerId)
 {
     constexpr size_t proactiveFlushMax = 10;
-    if (workerId != 0 || workNProactiveFlush.load(std::memory_order_relaxed) == proactiveFlushMax) {
+    if (workerId != 0) {
+        return false;
+    }
+    if (workNProactiveFlush.load(std::memory_order_relaxed) == proactiveFlushMax) {
         return false;
     }
     workNProactiveFlush.fetch_add(1, std::memory_order_relaxed);
-    return Flush() || !stripes.IsEmpty();
+    return Flush();
 }
 
 bool ZMark::TryTerminateFlush()
 {
-    terminate.SetResurrected(false);
     workNTerminateFlush.fetch_add(1, std::memory_order_relaxed);
+    terminate.SetResurrected(false);
     if (ZVerifyMarking) { verify_worker_stacks_empty(); }
-    (void)Flush();
-    return !stripes.IsEmpty() || terminate.Resurrected();
+    return Flush() || terminate.Resurrected();
 }
 
 bool ZMark::TryEnd()
@@ -1047,9 +1035,6 @@ bool ZMark::TryEnd()
     }
     (void)Flush(ThreadLocal::GetThreadLocalData());
     // zMark.cpp:954-970: resurrected, then non-Java flush; empty stripes => complete.
-    if (!HeapMarkReady()) {
-        return stripes.IsEmpty();
-    }
     (void)HandshakeFlush(this);
     (void)FlushStacks();
     if (!stripes.IsEmpty()) {

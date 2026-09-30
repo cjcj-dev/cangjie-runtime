@@ -154,19 +154,19 @@ GC_TEST(RememberedLifecycle720, ConstructedGenerationPublishesHighestGranule)
 GC_TEST(RememberedLifecycle720, HeapPublicationReachesConstructedRemembered)
 {
     auto& heap = Heap::GetHeap();
-    const size_t last = ZAddressOffsetMax - ZGranuleSize;
-    ZPage page(ZPageType::large, PageAge::old,
-               ZVirtualMemory(static_cast<zoffset>(last), ZGranuleSize));
-    Heap::alloc_page(&page);
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags);
+    GC_EXPECT_TRUE(page != nullptr);
     ZRemsetTableIterator iter(heap.young().remembered(), false);
     ZRemsetTableEntry entry{};
     bool found = false;
     while (iter.next(&entry)) {
-        found |= entry._page == &page;
+        found |= entry._page == page;
     }
     std::fprintf(stderr, "REMEMBERED720 heap_publication_found=%d\n", found);
     GC_EXPECT_TRUE(found);
-    Heap::page_table().remove(&page);
+    Heap::free_page(page);
 }
 
 GC_TEST(RememberedLifecycle720, UnboundConstructionAbortsRegisterFoundOld)

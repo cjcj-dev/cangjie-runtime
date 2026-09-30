@@ -16,8 +16,11 @@ int main(int argc, char** argv)
         param.heapParam.heapSize = 64 * 1024;
         param.coParam.processorNum = 1;
         param.gcParam.concGCThreads = 2;
+        param.gcParam.concGCThreadsSet = true;
         param.gcParam.youngGCThreads = 2;
+        param.gcParam.youngGCThreadsSet = true;
         param.gcParam.oldGCThreads = 2;
+        param.gcParam.oldGCThreadsSet = true;
         param.gcParam.backupGCInterval = std::strtoull(argv[2], nullptr, 10);
         const int rc = InitCJRuntime(&param);
         std::printf("INIT_RC=%d\n", rc);
