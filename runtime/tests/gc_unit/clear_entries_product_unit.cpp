@@ -405,7 +405,9 @@ private:
 
 LoadHealDeliveryRuntime* LoadHealDeliveryRuntime::installed = nullptr;
 
-void ShutdownDeliveryRuntime()
+} // namespace MapleRuntime::GcUnit
+
+void MapleRuntime::GcUnit::ShutdownDeliveryRuntime()
 {
     LoadHealDeliveryRuntime::Shutdown();
 }
