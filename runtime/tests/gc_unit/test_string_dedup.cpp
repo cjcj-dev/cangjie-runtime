@@ -451,6 +451,7 @@ namespace {
 struct DedupBatch {
     size_t count = 0;
     size_t strongCount = 0;
+    bool revisitDuringGrowth = true;
     size_t installed = 0;
     size_t duplicateHits = 0;
     std::vector<NativeSlot*> strong;
@@ -466,7 +467,7 @@ void* InstallDedupBatch(void* argument)
         batch.installed += MCC_StringDedupCanonicalImpl(DedupArrayType(), array) == array;
         // Revisit older keys while the independent processor can migrate
         // buckets. A miss would install a duplicate and change slot count.
-        if (batch.count > 503 * 14 && index % 64 == 0) {
+        if (batch.revisitDuringGrowth && batch.count > 503 * 14 && index % 64 == 0) {
             auto* same = NewCycleBacking(true, 1);
             batch.duplicateHits += MCC_StringDedupCanonicalImpl(DedupArrayType(), same) != same;
         }
@@ -658,6 +659,7 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, CleanupReportStateTransitions)
     ConcurrentGCBreakpoints::AcquireControl();
     DedupBatch batch;
     batch.count = 7200;
+    batch.revisitDuringGrowth = false;
     RunDedupTask(InstallDedupBatch, &batch);
     const bool window = WaitMaintenanceWindow();
     const unsigned cleaningState = StringDedupTest::DeadState();
@@ -684,6 +686,7 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, ShrinkingOldBucketKeepsCanonicalIdentity)
     DedupBatch batch;
     batch.count = 7200;
     batch.strongCount = 3;
+    batch.revisitDuringGrowth = false;
     RunDedupTask(InstallDedupBatch, &batch);
     const bool grown = WaitDedupSize(batch.count, true);
     DedupOldCycle();

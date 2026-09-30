@@ -7,11 +7,11 @@ from pathlib import Path
 import gdb
 
 fixture = os.environ['DEDUP_MAINTENANCE_FIXTURE']
-prefix = Path(os.environ['DEDUP_MAINTENANCE_FILE'])
+maintenance_prefix = Path(os.environ['DEDUP_MAINTENANCE_FILE'])
 source = Path(os.environ['DEDUP_MAINTENANCE_SOURCE']).resolve()
 product = source.parents[2] / 'src/Heap/shared/stringdedup/stringDedup.cpp'
 line = next(index for index, text in enumerate(product.read_text().splitlines(), 1)
-            if 'while (WithTable([&] { return owner.table.CleanupStep(); }))' in text)
+            if 'while (!should_terminate()) {' in text)
 result = {'fixture': fixture, 'window': None, 'inferior_rc': None, 'error': None}
 
 
@@ -31,7 +31,7 @@ gdb.execute('set args --gtest_filter=' + fixture, to_string=True)
 class Window(gdb.Breakpoint):
     def stop(self):
         try:
-            owner = gdb.parse_and_eval('owner')
+            owner = gdb.parse_and_eval('this->owner')
             table = owner['table']
             buckets = int(table['numberOfBuckets'])
             state = int(table['deadState']['_M_i'])
@@ -43,7 +43,8 @@ class Window(gdb.Breakpoint):
                                 'thread': gdb.selected_thread().global_num,
                                 'file': str(product), 'line': line}
             print('DEDUP_MAINTENANCE_WINDOW ' + json.dumps(result['window']), flush=True)
-            Path(str(prefix) + '.ready').write_text('ready\n')
+            print('DEDUP_MAINTENANCE_PREFIX ' + str(maintenance_prefix), flush=True)
+            Path(str(maintenance_prefix) + '.ready').write_text('ready\n')
             self.enabled = False
             return True
         except Exception as exc:
@@ -52,21 +53,36 @@ class Window(gdb.Breakpoint):
 
 
 try:
-    breakpoint = Window(product.name + ':' + str(line), internal=True)
+    symbol = '_ZN12MapleRuntime11StringDedup9Processor9WithTableIZNS1_12CleanupTableEbbEUlvE0_EEbT_'
+    breakpoint = Window(symbol, internal=True)
+    if fixture.endswith('ShrinkingOldBucketKeepsCanonicalIdentity'):
+        breakpoint.enabled = False
+
+        class ArmShrink(gdb.Breakpoint):
+            calls = 0
+
+            def stop(self):
+                self.calls += 1
+                if self.calls == 2:
+                    breakpoint.enabled = True
+                    self.enabled = False
+                return False
+
+        ArmShrink('DedupOldCycle', internal=True)
     gdb.execute('run')
     if result['window'] is not None and result['error'] is None:
         deadline = time.monotonic() + 25
-        while not Path(str(prefix) + '.release').exists() and time.monotonic() < deadline:
+        while not Path(str(maintenance_prefix) + '.release').exists() and time.monotonic() < deadline:
             time.sleep(0.01)
-        if not Path(str(prefix) + '.release').exists():
+        if not Path(str(maintenance_prefix) + '.release').exists():
             raise RuntimeError('fixture did not release maintenance window')
         gdb.execute('continue -a')
 except Exception as exc:
     result['error'] = str(exc)
 finally:
-    Path(str(prefix) + '.json').write_text(json.dumps(result, indent=2) + '\n')
+    Path(str(maintenance_prefix) + '.json').write_text(json.dumps(result, indent=2) + '\n')
     for suffix in ('.ready', '.release'):
-        Path(str(prefix) + suffix).unlink(missing_ok=True)
+        Path(str(maintenance_prefix) + suffix).unlink(missing_ok=True)
 print('DEDUP_MAINTENANCE_RESULT ' + json.dumps(result), flush=True)
 gdb.execute('quit ' + ('0' if result['window'] is not None and result['error'] is None
                       and result['inferior_rc'] == 0 else '1'))
