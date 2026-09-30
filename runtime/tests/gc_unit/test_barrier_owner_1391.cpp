@@ -10,6 +10,7 @@
 
 namespace MapleRuntime {
 extern "C" BaseObject* MCC_AtomicReadReference(BaseObject* obj, RefField<true>* field, std::memory_order order);
+extern "C" ObjRef MCC_NewObject(const TypeInfo* type, MSize size);
 }
 
 using namespace MapleRuntime;
@@ -91,6 +92,7 @@ GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, ManagedOwnerAttachesPublishedMasks)
         bool resourceReady = false;
         uintptr_t loadBad = 0;
         uintptr_t storeGood = 0;
+        BaseObject* allocated = nullptr;
     } observation;
     auto task = RunCJTask([](void* input) -> void* {
         auto& output = *static_cast<Observation*>(input);
@@ -98,6 +100,16 @@ GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, ManagedOwnerAttachesPublishedMasks)
         output.resourceReady = data.storeBarrierBuffer != nullptr;
         output.loadBad = data.loadBadMask;
         output.storeGood = data.storeGoodMask;
+        alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+        auto* type = reinterpret_cast<TypeInfo*>(storage);
+        type->SetType(TypeKind::TYPE_KIND_CLASS);
+        type->SetInstanceSize(24);
+        type->SetAlign(8);
+        GCTib tib{};
+        tib.tag = SIGN_BIT;
+        type->SetGCTib(tib);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+        output.allocated = MCC_NewObject(type, 32);
         return nullptr;
     }, &observation);
     GC_EXPECT_TRUE(task != nullptr);
@@ -109,6 +121,7 @@ GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, ManagedOwnerAttachesPublishedMasks)
     GC_EXPECT_EQ(observation.loadBad, ZPointerLoadBadMask);
     GC_EXPECT_EQ(observation.storeGood, ZPointerStoreGoodMask);
     GC_EXPECT_TRUE(observation.resourceReady);
+    GC_EXPECT_TRUE(observation.allocated != nullptr);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 

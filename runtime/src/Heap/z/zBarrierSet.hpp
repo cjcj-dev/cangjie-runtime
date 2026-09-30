@@ -8,7 +8,6 @@
 #include "Heap/shared/barrierSet.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zAccessBackend.hpp"
-#include "Heap/z/zThreadLocalData.hpp"
 
 namespace MapleRuntime {
 class MArray;
