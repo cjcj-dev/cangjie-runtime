@@ -69,14 +69,9 @@
   ],
   "registration": [
     [
-      "runtime/src/Heap/z/zRootsIterator.hpp",
-      "std::array<OopStorage::ParState<true>, 4> states;",
-      "std::array<OopStorage::ParState<true>, 3> states;"
-    ],
-    [
       "runtime/src/Heap/z/zRootsIterator.cpp",
-      "{SyncWeakOopStorage(), workers},\n              {StringDedup::Instance().WeakStorage(), workers}}}",
-      "{SyncWeakOopStorage(), workers}}}"
+      "{StringDedup::Instance().WeakStorage(), workers}}}, generation(generation) {}",
+      "{[]() -> OopStorage& { static OopStorage omitted; return omitted; }(), workers}}}, generation(generation) {}"
     ]
   ],
   "strong_registration": [
