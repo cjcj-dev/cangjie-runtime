@@ -700,6 +700,13 @@ void CompleteValueRootCoverage()
 
 } // namespace
 
+namespace MapleRuntime::GcUnit {
+void ShutdownDeliveryRuntime()
+{
+    LoadHealDeliveryRuntime::Shutdown();
+}
+} // namespace MapleRuntime::GcUnit
+
 
 
 
@@ -1784,9 +1791,3 @@ GC_TEST(RelocateMiss782, AllocationFailureWaitsForWorkerPublication)
     ExerciseRelocationWait782(false);
 }
 
-namespace MapleRuntime::GcUnit {
-void ShutdownDeliveryRuntime()
-{
-    LoadHealDeliveryRuntime::Shutdown();
-}
-} // namespace MapleRuntime::GcUnit
