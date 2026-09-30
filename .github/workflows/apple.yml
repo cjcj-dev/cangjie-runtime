@@ -23,6 +23,7 @@ on:
           - all
           - package-init
           - bsd-backing-fail
+          - bsd-backing-product
           - ios-stdlib-configure
         default: all
 
@@ -303,6 +304,38 @@ jobs:
           name: install-${{ matrix.runner }}-${{ matrix.variant }}
           path: ${{ runner.temp }}/cangjie-package/${{ matrix.runner }}-${{ matrix.variant }}.tar.gz
           if-no-files-found: error
+          retention-days: 7
+
+  bsd-backing-product:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.job == 'bsd-backing-product' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native product
+        run: |
+          ulimit -c 0
+          export CANGJIE_BUILD_JOBS=$(sysctl -n hw.ncpu)
+          export GC_UNIT_GATE_SKIP=1
+          uptime
+          cd runtime
+          python3 build.py build --target native --build-type release
+      - name: Install symbol reader
+        run: brew list llvm >/dev/null 2>&1 || brew install llvm
+      - name: Exercise native product and independent cuts
+        run: |
+          ulimit -c 0
+          export PATH="$(brew --prefix llvm)/bin:$PATH"
+          python3 runtime/tests/bsd/check_backing_product.py "$RUNNER_TEMP/backing-product"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backing-product-${{ matrix.runner }}
+          path: ${{ runner.temp }}/backing-product
           retention-days: 7
 
   bsd-backing-fail:
