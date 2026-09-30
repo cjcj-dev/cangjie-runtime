@@ -47,7 +47,9 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
 #ifdef INTERPRETER_ENABLED
     interpreterCJThreadData = newMutator != nullptr ? newMutator->interpreterCJThreadData : nullptr;
 #endif
-    UpdatePollValues(this);
+    if (newMutator != nullptr) {
+        ArmThreadPoll(this);
+    }
 }
 
 ThreadLocalData* ThreadLocal::GetThreadLocalData()

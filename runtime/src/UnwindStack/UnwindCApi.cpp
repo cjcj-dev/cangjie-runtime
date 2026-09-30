@@ -138,7 +138,6 @@ extern "C" void MRT_PreRunManagedCode(Mutator* mutator, int layers, ThreadLocalD
         mutator->EnterSaferegion(false);
     }
     mutator->SetManagedContext(true);
-    UpdatePollValues(threadData);
     mutator->LeaveSaferegion();
 #ifdef _WIN64
     Runtime& runtime = Runtime::Current();
