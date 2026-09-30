@@ -30,6 +30,7 @@ export GC_UNIT_EVIDENCE_TALLY_MIRROR="${GC_UNIT_TALLY_FILE:-}"
 export GC_UNIT_EVIDENCE_OHOS_MIRROR="${GC_UNIT_OHOS_HOST_RECEIPT:-}"
 export GC_UNIT_TALLY_FILE="$GC_UNIT_OUT/gate_tally.txt"
 export GC_UNIT_OHOS_HOST_RECEIPT="$GC_UNIT_OUT/ohos_host.receipt"
+export SIGNAL_TEST_OUTPUT="$GC_UNIT_OUT/so-reentry"
 python3 "$SRC/gate_evidence.py" begin "$EVIDENCE_ROOT" "$GC_UNIT_OUT"
 exec 3>&1 4>&2
 mkfifo "$GC_UNIT_OUT/stdout.pipe" "$GC_UNIT_OUT/stderr.pipe"

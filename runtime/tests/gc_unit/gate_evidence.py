@@ -54,6 +54,8 @@ def begin(root, run):
                     shutil.copy2(source / name, run / name)
             write_json(run / 'cache-source.json', record)
         except (OSError, ValueError, KeyError):
+            for name in ('.gate_stamp', '.gate_language_identity', 'cache-source.json'):
+                (run / name).unlink(missing_ok=True)
             return
 
 
@@ -63,7 +65,9 @@ def finish(root, run, rc):
     source_file = run / 'cache-source.json'
     source = json.loads(source_file.read_text()) if source_file.is_file() else None
     receipt.update(state=status['GATE'], phase=status['PHASE'], reason=status['REASON'], gate_rc=rc,
-                   status=status, cache_source=source,
+                   status=status, cache_candidate=source,
+                   cache_source=source if any(status[name] == 'CACHE' for name in (
+                       'CPP_SUITE_SOURCE', 'FINALIZER_TRIGGER_SOURCE')) else None,
                    stage_rc={name: None if value == 'NOT_RUN' else int(value)
                              for name, value in status.items() if name.endswith('_RUNNER_RC')},
                    verified_identity={name: status[name] for name in (
@@ -93,7 +97,7 @@ def finish(root, run, rc):
         write_json(root / 'gate-cache.json', {
             'evidence_dir': str(run), 'run_id': run.name,
             'cpp_source': source['cpp_source'] if status['CPP_SUITE_SOURCE'] == 'CACHE' else str(run),
-            'language_source': source['language_source'] if status['FINALIZER_TRIGGER_SOURCE'] == 'CACHE' else str(run),
+            'language_source': source['language_source'] if source and status['FINALIZER_TRIGGER_SOURCE'] != 'FRESH' else str(run),
         })
 
 
