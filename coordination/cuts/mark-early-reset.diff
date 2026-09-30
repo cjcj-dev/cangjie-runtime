@@ -1,0 +1,18 @@
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -355,6 +355,7 @@
+ void ZGenerationYoung::collect(ZYoungType type, void* timer)
+ {
+     ZGenerationCollectionScopeYoung scope(type, timer);
++    concurrent_reset_relocation_set();
+     pause_mark_start();
+     // ZGC zGeneration.cpp:538-576: young keeps the driver lock throughout;
+     // only the old collection scope releases it (zGeneration.cpp:995).
+@@ -366,7 +367,6 @@
+     }
+     concurrent_mark_free();
+     abortpoint();
+-    concurrent_reset_relocation_set();
+     abortpoint();
+     concurrent_select_relocation_set();
+     abortpoint();

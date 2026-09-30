@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zHeap.cpp
++++ b/runtime/src/Heap/z/zHeap.cpp
+@@ -499,7 +499,7 @@
+     // Empty-page reclaim is owned by select_relocation_set (zGeneration.cpp:220-240);
+     // callers must not free a descriptor they no longer own.
+     page_table().remove(page);
+-    GetHeap().page_allocator().free_page(page);
++    // fault arm: disconnect allocator memory return
+ }
+ 
+ size_t Heap::free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages)

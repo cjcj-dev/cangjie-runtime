@@ -1,0 +1,7 @@
+--- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
++++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+@@ -151,3 +151,3 @@ bool StringDedup::Table::Resizer::Step()
+                 bucket.PopNoRelease();
+-                if (value.peek() != nullptr) table.Add(value, hash);
++                if (value.peek() != nullptr && table.numberOfBuckets >= numberOfBuckets) table.Add(value, hash);
+                 else value.release(&table.storage);

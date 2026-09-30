@@ -616,22 +616,22 @@ static ZWorkerResizeStats sample_worker_resize_stats(const ZStatCycleStats& cycl
 static ZDirectorStats sample_stats()
 {
     const uint64_t now = TimeUtil::NanoSeconds();
-    auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    auto& regions = Heap::GetHeap().page_allocator();
     ZDirectorStats stats;
     stats.mutator_alloc_rate = ZStatMutatorAllocRate::stats();
     stats.heap.soft_max_heap_size = Heap::GetHeap().soft_max_capacity();
-    stats.heap.used = Heap::GetHeap().GetAllocator().AllocatedBytes();
-    stats.heap.total_collections = Heap::GetHeap().total_collections();
-    stats.young_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young).CycleStats().Stats(now);
-    stats.old_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old).CycleStats().Stats(now);
-    stats.young_stats.workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).StatWorkers()->stats();
-    stats.old_stats.workers = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
+    stats.heap.used = Heap::GetHeap().page_allocator().GetAllocatedSize();
+    stats.heap.total_collections = ZCollectedHeap::heap()->total_collections();
+    stats.young_stats.cycle = (*ZGeneration::young()).CycleStats().Stats(now);
+    stats.old_stats.cycle = (*ZGeneration::old()).CycleStats().Stats(now);
+    stats.young_stats.workers = (*ZGeneration::young()).StatWorkers()->stats();
+    stats.old_stats.workers = (*ZGeneration::old()).StatWorkers()->stats();
     stats.young_stats.resize = sample_worker_resize_stats(stats.young_stats.cycle, stats.young_stats.workers,
         Heap::GetHeap().young().Workers());
     stats.old_stats.resize = sample_worker_resize_stats(stats.old_stats.cycle, stats.old_stats.workers,
         Heap::GetHeap().old().Workers());
-    stats.young_stats.stat_heap = Heap::GetHeap().GetZGeneration(ZGenerationId::young).StatHeap()->Stats();
-    stats.old_stats.stat_heap = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatHeap()->Stats();
+    stats.young_stats.stat_heap = (*ZGeneration::young()).StatHeap()->Stats();
+    stats.old_stats.stat_heap = (*ZGeneration::old()).StatHeap()->Stats();
     stats.young_stats.general.used = regions.used_generation(ZGenerationId::young);
     stats.old_stats.general.used = regions.used_generation(ZGenerationId::old);
     stats.old_stats.general.total_collections_at_start = Heap::GetHeap().old().total_collections_at_start();
@@ -641,10 +641,10 @@ static ZDirectorStats sample_stats()
 void ZDirector::run_thread()
 {
     while (wait_for_tick()) {
-        if (Runtime::CurrentRef() == nullptr || !Heap::GetHeap().IsGCEnabled()) {
+        const ZDirectorStats stats = sample_stats();
+        if (!ConcurrentGCThread::IsRuntimeInitialized()) {
             continue;
         }
-        const ZDirectorStats stats = sample_stats();
         if (!MapleRuntime::start_gc(stats)) {
             adjust_gc(stats);
         }

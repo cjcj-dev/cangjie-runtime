@@ -24,7 +24,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/shared/stringdedup/stringDedup.hpp"
@@ -66,9 +66,19 @@ ZCollectedHeap::ZCollectedHeap(const HeapParam& param, double garbageThreshold)
 
 ZCollectedHeap::~ZCollectedHeap() = default;
 
+// ZGC zCollectedHeap.cpp:80-92: consume construction failure at the owner.
+bool ZCollectedHeap::initialize()
+{
+    if (!_heap.is_initialized()) {
+        LOG(RTLOG_ERROR, "%s", ZInitialize::error_message());
+        return false;
+    }
+    ZInitialize::finish();
+    return true;
+}
+
 void ZCollectedHeap::initialize_gc()
 {
-    ZAbort::reset();
     ZStat::Initialize();
     ZStatMutatorAllocRate::initialize();
     const uint64_t now = TimeUtil::NanoSeconds();
@@ -123,7 +133,6 @@ uintptr_t ZCollectedHeap::allocate_new_tlab(size_t minSize, size_t requestedSize
 
 void ZCollectedHeap::collect(GCReason reason)
 {
-    if (!_heap.IsGCEnabled()) return;
     // ZGC zCollectedHeap.cpp:174-205: external causes select the generation
     // budgets here; only the driver decides how to enqueue the request.
     switch (reason) {

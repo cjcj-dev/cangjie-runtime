@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 #include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -18,7 +19,7 @@ using namespace MapleRuntime::GcUnit;
 GC_TEST(ExportRootRelease, KeepsStoreGoodNull)
 {
     GcHeapFixture fx;
-    OopStorage& storage = Heap::GetHeap().GetExportRootStorage();
+    OopStorage& storage = Heap::GetHeap().cross_vm().export_roots().RootStorage();
     NativeSlot* keep = storage.Allocate();
     NativeSlot* slot = storage.Allocate();
     GC_EXPECT_TRUE(keep != nullptr);

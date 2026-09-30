@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -15,6 +16,11 @@
 
 #include "Heap/z/zAccess.hpp"
 
+namespace MapleRuntime {
+extern "C" U64 CJ_MCC_CreateExportHandle(BaseObject*);
+extern "C" void CJ_MCC_RemoveExportedRef(U64);
+}
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -30,16 +36,16 @@ GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)
     std::vector<U64> handles;
     NativeSlot* first = nullptr;
     for (size_t index = 0; index < 130; ++index) {
-        handles.push_back(heap.RegisterExportRoot(objects[index]));
+        handles.push_back(CJ_MCC_CreateExportHandle(objects[index]));
         if (index == 0) {
-            heap.VisitAllExportRoots([&](NativeSlot& slot) {
+            heap.cross_vm().export_roots().VisitGCRoots([&](NativeSlot& slot) {
                 if (to_object(slot.GetTargetObject()) == objects[0]) { first = &slot; }
             });
         }
     }
     size_t seen = 0;
     NativeSlot* grown = nullptr;
-    heap.VisitAllExportRoots([&](NativeSlot& slot) {
+    heap.cross_vm().export_roots().VisitGCRoots([&](NativeSlot& slot) {
         for (auto& object : objects) {
             if (to_object(slot.GetTargetObject()) == object) {
                 ++seen;
@@ -51,9 +57,9 @@ GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)
                  seen, static_cast<void*>(first), static_cast<void*>(grown));
     GC_EXPECT_EQ(seen, size_t(130));
     GC_EXPECT_TRUE(first != nullptr && first == grown);
-    for (U64 handle : handles) { heap.RemoveExportObject(handle); }
+    for (U64 handle : handles) { CJ_MCC_RemoveExportedRef(handle); }
     size_t releasedSeen = 0;
-    heap.VisitAllExportRoots([&](NativeSlot& slot) {
+    heap.cross_vm().export_roots().VisitGCRoots([&](NativeSlot& slot) {
         for (auto& object : objects) {
             if (to_object(slot.GetTargetObject()) == object) { ++releasedSeen; }
         }

@@ -1,0 +1,516 @@
+{
+  "base": "9733dfc09d29eca27d19cc3937a149838b4e3322",
+  "head": "4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048",
+  "rows": [
+    {
+      "symbol": "RegionLifeId",
+      "baseline": {
+        "command": "git grep -c RegionLifeId 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.cpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.hpp:5\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.inline.hpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:5\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:4\n",
+        "count": 18
+      },
+      "candidate": {
+        "command": "git grep -c RegionLifeId 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "page_life_id",
+      "baseline": {
+        "command": "git grep -c page_life_id 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.hpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.inline.hpp:1\n",
+        "count": 4
+      },
+      "candidate": {
+        "command": "git grep -c page_life_id 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "page_life_current",
+      "baseline": {
+        "command": "git grep -c page_life_current 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n",
+        "count": 3
+      },
+      "candidate": {
+        "command": "git grep -c page_life_current 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "BumpRegionLifeId",
+      "baseline": {
+        "command": "git grep -c BumpRegionLifeId 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:2\n",
+        "count": 3
+      },
+      "candidate": {
+        "command": "git grep -c BumpRegionLifeId 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "GetRegionLifeSeq",
+      "baseline": {
+        "command": "git grep -c GetRegionLifeSeq 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n",
+        "count": 1
+      },
+      "candidate": {
+        "command": "git grep -c GetRegionLifeSeq 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "regionLifeSequence",
+      "baseline": {
+        "command": "git grep -c regionLifeSequence 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:2\n",
+        "count": 4
+      },
+      "candidate": {
+        "command": "git grep -c regionLifeSequence 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "forwarding_for_page",
+      "baseline": {
+        "command": "git grep -c forwarding_for_page 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwardingTable.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwardingTable.hpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:11\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zRelocate.cpp:1\n",
+        "count": 18
+      },
+      "candidate": {
+        "command": "git grep -c forwarding_for_page 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "generation_forwarding_table",
+      "baseline": {
+        "command": "git grep -c generation_forwarding_table 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwardingTable.cpp:3\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwardingTable.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zRelocate.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zStoreBarrierBuffer.cpp:1\n",
+        "count": 6
+      },
+      "candidate": {
+        "command": "git grep -c generation_forwarding_table 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "generation_relocate_queue",
+      "baseline": {
+        "command": "git grep -c generation_relocate_queue 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwardingTable.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwardingTable.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zRemembered.cpp:1\n",
+        "count": 6
+      },
+      "candidate": {
+        "command": "git grep -c generation_relocate_queue 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "forwarding_find",
+      "baseline": {
+        "command": "git grep -c forwarding_find 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zBarrier.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwardingTable.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwardingTable.hpp:1\n",
+        "count": 3
+      },
+      "candidate": {
+        "command": "git grep -c forwarding_find 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "_retireHook",
+      "baseline": {
+        "command": "git grep -c _retireHook 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.cpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:1\n",
+        "count": 5
+      },
+      "candidate": {
+        "command": "git grep -c _retireHook 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "safeDestroy",
+      "baseline": {
+        "command": "git grep -c safeDestroy 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:4\n",
+        "count": 7
+      },
+      "candidate": {
+        "command": "git grep -c safeDestroy 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "RetirePageMemory",
+      "baseline": {
+        "command": "git grep -c RetirePageMemory 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zObjectAllocator.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPageAllocator.cpp:3\n",
+        "count": 6
+      },
+      "candidate": {
+        "command": "git grep -c RetirePageMemory 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "WaitCopiedBeforePayloadWipe",
+      "baseline": {
+        "command": "git grep -c WaitCopiedBeforePayloadWipe 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:2\n",
+        "count": 3
+      },
+      "candidate": {
+        "command": "git grep -c WaitCopiedBeforePayloadWipe 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "ResetFlipPromotedPages",
+      "baseline": {
+        "command": "git grep -c ResetFlipPromotedPages 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zGeneration.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPageAllocator.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zRelocationSet.cpp:1\n",
+        "count": 3
+      },
+      "candidate": {
+        "command": "git grep -c ResetFlipPromotedPages 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "GetGhostRegionSize",
+      "baseline": {
+        "command": "git grep -c GetGhostRegionSize 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:1\n",
+        "count": 2
+      },
+      "candidate": {
+        "command": "git grep -c GetGhostRegionSize 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "CopyInflightWord",
+      "baseline": {
+        "command": "git grep -c CopyInflightWord 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n",
+        "count": 1
+      },
+      "candidate": {
+        "command": "git grep -c CopyInflightWord 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "PeekForwardingOwner",
+      "baseline": {
+        "command": "git grep -c PeekForwardingOwner 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n",
+        "count": 1
+      },
+      "candidate": {
+        "command": "git grep -c PeekForwardingOwner 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "DestUsable",
+      "baseline": {
+        "command": "git grep -c DestUsable 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.hpp:1\n",
+        "count": 1
+      },
+      "candidate": {
+        "command": "git grep -c DestUsable 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "IsCompacted",
+      "baseline": {
+        "command": "git grep -c IsCompacted 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:1\n",
+        "count": 2
+      },
+      "candidate": {
+        "command": "git grep -c IsCompacted 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "IsRoutingState",
+      "baseline": {
+        "command": "git grep -c IsRoutingState 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:1\n",
+        "count": 2
+      },
+      "candidate": {
+        "command": "git grep -c IsRoutingState 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "RelocateObserve",
+      "baseline": {
+        "command": "git grep -c RelocateObserve 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:1\n",
+        "count": 2
+      },
+      "candidate": {
+        "command": "git grep -c RelocateObserve 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "RetainScope",
+      "baseline": {
+        "command": "git grep -c RetainScope 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:8\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zRelocate.cpp:1\n",
+        "count": 9
+      },
+      "candidate": {
+        "command": "git grep -c RetainScope 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "InPlaceClaimScope",
+      "baseline": {
+        "command": "git grep -c InPlaceClaimScope 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zForwarding.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:7\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPageAllocator.cpp:2\n",
+        "count": 10
+      },
+      "candidate": {
+        "command": "git grep -c InPlaceClaimScope 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "fwdOwner",
+      "baseline": {
+        "command": "git grep -c fwdOwner 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:1\n",
+        "count": 2
+      },
+      "candidate": {
+        "command": "git grep -c fwdOwner 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "retiredLivemap",
+      "baseline": {
+        "command": "git grep -c retiredLivemap 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.inline.hpp:2\n",
+        "count": 4
+      },
+      "candidate": {
+        "command": "git grep -c retiredLivemap 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "ownerRegion",
+      "baseline": {
+        "command": "git grep -c ownerRegion 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:2\n",
+        "count": 2
+      },
+      "candidate": {
+        "command": "git grep -c ownerRegion 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "copyInflight",
+      "baseline": {
+        "command": "git grep -c copyInflight 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:2\n",
+        "count": 2
+      },
+      "candidate": {
+        "command": "git grep -c copyInflight 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "ghostLifeId",
+      "baseline": {
+        "command": "git grep -c ghostLifeId 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:1\n",
+        "count": 1
+      },
+      "candidate": {
+        "command": "git grep -c ghostLifeId 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "SumAllocatedByRoles",
+      "baseline": {
+        "command": "git grep -c SumAllocatedByRoles 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPageAllocator.hpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPageAllocator.inline.hpp:4\n",
+        "count": 5
+      },
+      "candidate": {
+        "command": "git grep -c SumAllocatedByRoles 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "ReclaimRetiredRegion",
+      "baseline": {
+        "command": "git grep -c ReclaimRetiredRegion 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPageAllocator.cpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPageAllocator.hpp:1\n",
+        "count": 3
+      },
+      "candidate": {
+        "command": "git grep -c ReclaimRetiredRegion 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "ReleaseRetiredRegion",
+      "baseline": {
+        "command": "git grep -c ReleaseRetiredRegion 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPageAllocator.cpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPageAllocator.hpp:1\n",
+        "count": 3
+      },
+      "candidate": {
+        "command": "git grep -c ReleaseRetiredRegion 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "ZPageRole::From",
+      "baseline": {
+        "command": "git grep -c ZPageRole::From 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 0,
+        "output": "9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zGeneration.cpp:1\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPage.hpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zPageAllocator.inline.hpp:2\n9733dfc09d29eca27d19cc3937a149838b4e3322:runtime/src/Heap/z/zRelocate.cpp:1\n",
+        "count": 6
+      },
+      "candidate": {
+        "command": "git grep -c ZPageRole::From 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    },
+    {
+      "symbol": "ZForwarding::Create",
+      "baseline": {
+        "command": "git grep -c ZForwarding::Create 9733dfc09d29eca27d19cc3937a149838b4e3322 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      },
+      "candidate": {
+        "command": "git grep -c ZForwarding::Create 4cd43656c25929f9f4c3d96ea0fca0cc0e7a0048 -- runtime/src",
+        "rc": 1,
+        "output": "",
+        "count": 0
+      }
+    }
+  ]
+}

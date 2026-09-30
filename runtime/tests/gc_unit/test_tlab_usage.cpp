@@ -133,7 +133,7 @@ GC_OTHER_VM_TEST(TLABUsage, NativeFrameDerivedScan)
 // and promote_used, not ZPage::reset()'s youngRegionBytes side counter.
 GC_OTHER_VM_TEST(TLABUsage, YoungOccupancyUsesActualExtent)
 {
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    auto& manager = Heap::GetHeap().page_allocator();
     const size_t beforeYoung = manager.used_generation(ZGenerationId::young);
     const size_t beforeOld = manager.used_generation(ZGenerationId::old);
     const size_t small = ZGranuleSize;
@@ -161,7 +161,7 @@ void* AllocateThroughCycle(void*)
     type->SetInstanceSize(256);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     const MSize objectSize = 256 + TYPEINFO_PTR_SIZE;
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    auto& manager = Heap::GetHeap().page_allocator();
     AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
     const size_t maximum = ZObjectSizeLimitSmall;
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
@@ -538,7 +538,14 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
+    param.gcParam.youngGCThreads = workers;
+    param.gcParam.youngGCThreadsSet = true;
+    param.gcParam.oldGCThreads = workers;
+    param.gcParam.oldGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    GC_EXPECT_EQ(ZYoungGCThreads, workers);
+    GC_EXPECT_EQ(ZOldGCThreads, workers);
+    GC_EXPECT_TRUE(ConcGCThreads >= workers);
     const int allocationCpu = sched_getcpu();
     GC_EXPECT_TRUE(allocationCpu >= 0 && allocationCpu < CPU_SETSIZE);
     // memAllocator.cpp:273-278 retains useful tails. Use objects that fit the
@@ -557,6 +564,7 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
            state.owner[1].load(std::memory_order_acquire) == nullptr) { std::this_thread::yield(); }
     auto& heap = Heap::GetHeap();
     heap.young().Workers()->set_active_workers(workers);
+    GC_EXPECT_EQ(heap.young().Workers()->active_workers(), workers);
     heap.young().pause_mark_start();
     const auto initialTLABSize = [] {
         size_t size = 0;

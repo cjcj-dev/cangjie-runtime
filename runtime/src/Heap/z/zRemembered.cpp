@@ -1,3 +1,4 @@
+#include "Heap/z/zAbort.inline.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -116,7 +117,7 @@ bool ZRemembered::should_scan_page(ZPage* page) const
     if (ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_relocate()) {
         return true;
     }
-    ZForwarding* forwarding = Heap::GetHeap().GetZGeneration(ZGenerationId::old).forwarding(
+    ZForwarding* forwarding = (*ZGeneration::old()).forwarding(
         untype(ZOffset::address_unsafe(page->start())));
     if (forwarding == nullptr) {
         return true;
@@ -264,12 +265,12 @@ public:
           _remset_table_iterator(remembered, true)
     {
         _mark->PrepareWork();
-        ZPage::EnableSafeDestroy();
+        Heap::GetHeap().page_allocator().enable_safe_destroy();
     }
 
     ~ZRememberedScanMarkFollowTask()
     {
-        ZPage::DisableSafeDestroy();
+        Heap::GetHeap().page_allocator().disable_safe_destroy();
         _mark->FinishWork();
         _remembered->clear_found_old_previous_set();
     }
@@ -325,7 +326,7 @@ void ZRemembered::scan_and_follow(ZMark* mark)
 {
     {
         ZRememberedScanMarkFollowTask task(this, mark);
-        ZWorkers* workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers();
+        ZWorkers* workers = (*ZGeneration::young()).Workers();
         CHECK_DETAIL(workers != nullptr, "ZRemembered::scan_and_follow requires young workers");
         workers->run(&task);
         if (ZAbort::should_abort() || !mark->TryTerminateFlush()) {

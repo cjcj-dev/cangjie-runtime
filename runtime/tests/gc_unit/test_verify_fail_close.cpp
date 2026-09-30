@@ -119,12 +119,13 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
 {
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    auto publication = forwarding_for_page(
-        fixture.region0(), reinterpret_cast<MAddress>(fixture.obj0));
+    auto publication = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1)),
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(publication->find(reinterpret_cast<MAddress>(fixture.obj0), &cursor), MAddress(0));
+    GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1), &cursor),
         reinterpret_cast<MAddress>(fixture.obj1));
-    auto owner = forwarding_for_page(fixture.region0());
+    auto owner = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     owner->verify();
     ExpectSceneAbort("Invalid number of live objects", [&] {
@@ -150,7 +151,6 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsBadLiveAccounting)
     }
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    fixture.region0()->SetRegionRole(ZPageRole::From);
     ExpectSceneAbort("Invalid number of live objects", [&] {
         fixture.region0()->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
         auto& old = Heap::GetHeap().old();
@@ -174,10 +174,9 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     }
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    auto publication = forwarding_for_page(
-        fixture.region0(), reinterpret_cast<MAddress>(fixture.obj0));
+    auto publication = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    auto owner = forwarding_for_page(fixture.region0());
+    auto owner = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
@@ -185,7 +184,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     remset.Initialize(fixture.heapStart, 2 * ZGranuleSize);
     ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner); });
     remset.Record(slot);
-    if (!Heap::GetHeap().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
+    if (!ZGeneration::old()->active_remset_is_current()) { remset.FlipForMinor(); }
     ZVerify::BeforeRelocation(owner);
 }
 
@@ -200,9 +199,8 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
     }
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    auto* owner = forwarding_for_page(fixture.region0());
+    auto* owner = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
-    fixture.region0()->SetRegionRole(ZPageRole::From);
     RememberedSet& remset = HeapTestRemset();
     remset.Initialize(fixture.heapStart, 2 * ZGranuleSize);
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
@@ -211,7 +209,7 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
     // Empty is the positive control; then place one real field in the inactive face.
     ZVerify::BeforeRelocation(owner);
     remset.Record(slot);
-    const bool currentActive = Heap::GetHeap().OldActiveRemsetIsCurrent();
+    const bool currentActive = ZGeneration::old()->active_remset_is_current();
     if (currentActive) { remset.FlipForMinor(); }
     // Preserve the rejection sample across exec. Both addresses are sampled
     // in the rejecting child, never compared across process address spaces.
@@ -263,7 +261,7 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
     }
     GcVerifyFixture fixture;
     fixture.region0()->reset(PageAge::old);
-    auto& cycle = Heap::GetHeap().GetZGeneration(Generation::Young);
+    auto& cycle = (*ZGeneration::young());
     cycle.set_phase(ZGenerationPhase::Mark);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
@@ -286,7 +284,7 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
     GcVerifyFixture fixture;
     fixture.region0()->reset(PageAge::old);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    auto& cycle = Heap::GetHeap().GetZGeneration(Generation::Young);
+    auto& cycle = (*ZGeneration::young());
     cycle.set_phase(ZGenerationPhase::MarkComplete);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
@@ -806,12 +804,14 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     ThreadLocal::SetCJThread(thread);
     auto* data = static_cast<LWTData*>(CJThreadGetArg());
     ThreadLocal::SetCJThread(previous);
+    auto* savedObject = data->obj;
     data->obj = reinterpret_cast<BaseObject*>(0x1000);
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     Heap::GetHeap().old().pause_verify();
     std::fprintf(stderr, "VERIFY_ARMED_SKIP_TARGET slot=%p value=%p\n", &data->obj, data->obj);
     GC_EXPECT_TRUE(data->obj == reinterpret_cast<BaseObject*>(0x1000));
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+    data->obj = savedObject;
 }
 
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
@@ -862,7 +862,14 @@ void CheckCarrierMarkTask(bool youngOnly, unsigned workers)
     RuntimeParam param{};
     param.coParam.processorNum = 1;
     param.heapParam.heapSize = 512 * 1024;
+    param.gcParam.youngGCThreads = workers;
+    param.gcParam.youngGCThreadsSet = true;
+    param.gcParam.oldGCThreads = workers;
+    param.gcParam.oldGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    GC_EXPECT_EQ(ZYoungGCThreads, workers);
+    GC_EXPECT_EQ(ZOldGCThreads, workers);
+    GC_EXPECT_TRUE(ConcGCThreads >= workers);
     auto& heap = Heap::GetHeap();
     auto* native = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(native != nullptr);
@@ -897,6 +904,7 @@ void CheckCarrierMarkTask(bool youngOnly, unsigned workers)
                          CJThreadRootsAreArmed(oldCarrier, ZPointerStoreGoodMask);
         auto& generation = youngOnly ? static_cast<ZGeneration&>(heap.young()) : static_cast<ZGeneration&>(heap.old());
         generation.Workers()->set_active_workers(workers);
+        GC_EXPECT_EQ(generation.Workers()->active_workers(), workers);
         if (youngOnly) { heap.young().produceYoungRoots(); }
         else { heap.old().mark_roots(); }
         const uintptr_t expectedGuard = youngOnly

@@ -1,3 +1,4 @@
+#include "Heap/z/zGeneration.inline.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -93,7 +94,8 @@ size_t BaseObject::GetSize() const
 BaseObject* BaseObject::OnFinalizerCreated()
 {
     Heap& heap = Heap::GetHeap();
-    heap.MarkNewObject(this);
+    Heap::page(reinterpret_cast<MAddress>(this))->generation()
+        ->MarkObjectIfActive<false, false, false, false>(from_object(this));
     // HotSpot sharedRuntime.cpp:1072-1075 / instanceKlass.cpp:1919-1932:
     // constructor completion registers the object before returning to the caller.
     return heap.GetFinalizerProcessor().RegisterFinalizer(this);
