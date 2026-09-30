@@ -5,6 +5,7 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "shared/barrierSet.cpp"
     "shared/memAllocator.cpp"
     "shared/threadLocalMemAllocator.cpp"
     "shared/gcArguments.cpp"

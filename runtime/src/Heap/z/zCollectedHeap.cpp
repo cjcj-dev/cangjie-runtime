@@ -54,7 +54,8 @@ void ZCollectedHeap::create(const HeapParam& param, double garbageThreshold)
 }
 
 ZCollectedHeap::ZCollectedHeap(const HeapParam& param, double garbageThreshold)
-    : _initializer(nullptr),
+    : _barrier_set(),
+      _initializer(&_barrier_set),
       _heap(param, garbageThreshold),
       _driver_minor(new ZDriverMinor()),
       _driver_major(new ZDriverMajor()),
@@ -133,7 +134,6 @@ uintptr_t ZCollectedHeap::allocate_new_tlab(size_t minSize, size_t requestedSize
 
 void ZCollectedHeap::collect(GCReason reason)
 {
-    if (!_heap.IsGCEnabled()) return;
     // ZGC zCollectedHeap.cpp:174-205: external causes select the generation
     // budgets here; only the driver decides how to enqueue the request.
     switch (reason) {

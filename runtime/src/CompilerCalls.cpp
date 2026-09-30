@@ -128,7 +128,7 @@ extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size)
         VLOG(REPORT, "Allocating object %s (%zu B) failed and throw OutOfMemoryError", klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
     }
-    ZBarrierSet::on_slowpath_allocation_exit(obj);
+    BarrierSet::barrier_set()->on_slowpath_allocation_exit(obj);
     return obj;
 }
 
@@ -151,7 +151,7 @@ extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* klass, MSize size, bool is
         VLOG(REPORT, "Allocating object %s (%zu B) failed and throw OutOfMemoryError", klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewPinnedObject return nullptr");
     }
-    ZBarrierSet::on_slowpath_allocation_exit(obj);
+    BarrierSet::barrier_set()->on_slowpath_allocation_exit(obj);
     return obj;
 }
 
@@ -164,7 +164,7 @@ extern "C" ObjRef MCC_NewFinalizer(const TypeInfo* klass, MSize size)
             klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewFinalizer return nullptr");
     }
-    ZBarrierSet::on_slowpath_allocation_exit(obj);
+    BarrierSet::barrier_set()->on_slowpath_allocation_exit(obj);
     return obj;
 }
 
@@ -182,7 +182,7 @@ extern "C" ArrayRef MCC_NewArray(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -196,7 +196,7 @@ extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -210,7 +210,7 @@ extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -224,7 +224,7 @@ extern "C" ArrayRef MCC_NewArray16(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -238,7 +238,7 @@ extern "C" ArrayRef MCC_NewArray32(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }
@@ -252,7 +252,7 @@ extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
     }
     // Only bounded arrays are allocation dominators in the AOT compiler.
     if (array->GetMArraySize() <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
-        ZBarrierSet::on_slowpath_allocation_exit(array);
+        BarrierSet::barrier_set()->on_slowpath_allocation_exit(array);
     }
     return array;
 }

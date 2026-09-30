@@ -104,6 +104,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, AddressExhaustionReturnsNull)
 GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, HarvestAddressFailureRestores)
 {
     auto& manager = InitAllocationRuntime();
+    DriverLocker driverPause;
     std::vector<ZPage*> pages;
     while (ZPage* page = Allocate(ZPageSizeSmall)) { pages.push_back(page); }
     GC_EXPECT_TRUE(pages.size() >= 8);
@@ -141,18 +142,45 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, HarvestAddressFailureRestores)
 
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace {
+struct CommitLimitScope {
+    const size_t saved = ZFailLargerCommits;
+    explicit CommitLimitScope(size_t limit) { ZFailLargerCommits = limit; }
+    ~CommitLimitScope() { ZFailLargerCommits = saved; }
+};
+struct RetainedPages {
+    std::vector<ZPage*> pages;
+    ~RetainedPages() { for (auto page : pages) { Heap::free_page(page); } }
+};
+struct PageSupply {
+    std::map<uintptr_t, uintptr_t> intervals;
+    size_t bytes = 0;
+    bool Add(ZPage* page)
+    {
+        const uintptr_t start = page->GetRegionStart();
+        const uintptr_t end = start + page->size();
+        auto next = intervals.lower_bound(start);
+        if (next != intervals.end() && next->first < end) { return false; }
+        if (next != intervals.begin() && std::prev(next)->second > start) { return false; }
+        intervals.emplace(start, end);
+        bytes += page->size();
+        return true;
+    }
+};
 void PartialCommit(bool checkMax)
 {
     auto& manager = InitAllocationRuntime();
+    DriverLocker driverPause;
     const Account before(manager);
     const size_t requested = 16 * MB;
     const size_t limit = 4 * MB;
     // Q > C_before + L makes the retry fail its nonblocking capacity claim.
     GC_EXPECT_TRUE(requested > before.capacity + limit);
     GC_EXPECT_TRUE(before.max > before.capacity + requested);
-    ZFailLargerCommits = limit;
-    ZPage* page = Allocate(requested);
-    ZFailLargerCommits = 0;
+    ZPage* page;
+    {
+        CommitLimitScope commitLimit(limit);
+        page = Allocate(requested);
+    }
     const size_t committed = manager.capacity() - before.capacity;
     const size_t beforeCleanup = before.capacity + requested;
     const size_t remaining = requested - committed;
@@ -171,23 +199,60 @@ void PartialCommit(bool checkMax)
         GC_EXPECT_EQ(manager.current_max_capacity(), manager.capacity());
     } else {
         // Only committed mappings are exposed by subsequent cache allocations.
-        std::vector<ZPage*> cached;
+        RetainedPages cached;
+        PageSupply supply;
         while (ZPage* next = Allocate(ZPageSizeSmall)) {
+            cached.pages.push_back(next);
+            const bool unique = supply.Add(next);
+            std::fprintf(stderr, "PARTIAL_PREFIX_UNIQUE_TARGET unique=%d start=%zx size=%zu\n",
+                         unique, next->GetRegionStart(), next->size());
+            GC_EXPECT_TRUE(unique);
             *reinterpret_cast<uint64_t*>(next->GetRegionStart() + 4096) = 0x1317;
-            cached.push_back(next);
         }
-        std::fprintf(stderr, "PARTIAL_PREFIX_TARGET pages=%zu bytes=%zu\n", cached.size(), cached.size() * ZPageSizeSmall);
-        GC_EXPECT_EQ(cached.size() * ZPageSizeSmall, before.cache + committed);
-        for (auto next : cached) { Heap::free_page(next); }
+        // All pages remain occupied through enumeration and mapping checks.
+        for (auto next : cached.pages) {
+            GC_EXPECT_EQ(*reinterpret_cast<uint64_t*>(next->GetRegionStart() + 4096), uint64_t{0x1317});
+        }
+        std::fprintf(stderr, "PARTIAL_PREFIX_TARGET pages=%zu bytes=%zu expected=%zu\n",
+                     cached.pages.size(), supply.bytes, before.cache + committed);
+        GC_EXPECT_EQ(supply.bytes, before.cache + committed);
     }
 }
 }
 GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, PartialCommitAccounts) { PartialCommit(true); }
 GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, PartialCommitPrefixPreserved) { PartialCommit(false); }
 
+GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, PrefixSupplyRejectsRecycledInterval)
+{
+    auto& manager = InitAllocationRuntime();
+    DriverLocker driverPause;
+    RetainedPages occupied;
+    while (ZPage* page = Allocate(ZPageSizeSmall)) { occupied.pages.push_back(page); }
+    GC_EXPECT_FALSE(occupied.pages.empty());
+    GC_EXPECT_EQ(manager.GetCachedBytes(), size_t{0});
+    PageSupply supply;
+    ZPage* first = occupied.pages.back();
+    const uintptr_t start = first->GetRegionStart();
+    const size_t size = first->size();
+    GC_EXPECT_TRUE(supply.Add(first));
+    occupied.pages.pop_back();
+    Heap::free_page(first);
+    ZPage* recycled = Allocate(ZPageSizeSmall);
+    GC_EXPECT_TRUE(recycled != nullptr);
+    occupied.pages.push_back(recycled);
+    GC_EXPECT_EQ(recycled->GetRegionStart(), start);
+    const bool accepted = supply.Add(recycled);
+    std::fprintf(stderr, "PREFIX_RECYCLE_TARGET accepted=%d cumulative=%zu unique=%zu\n",
+                 accepted, size + recycled->size(), supply.bytes);
+    GC_EXPECT_FALSE(accepted);
+    GC_EXPECT_EQ(supply.bytes, size);
+    GC_EXPECT_TRUE(size + recycled->size() > supply.bytes);
+}
+
 GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, HarvestPartialCommitAccounts)
 {
     auto& manager = InitAllocationRuntime();
+    DriverLocker driverPause;
     std::vector<ZPage*> occupied;
     for (size_t i = 0; i < 24; ++i) {
         ZPage* page = Allocate(ZPageSizeSmall);
@@ -225,6 +290,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, HarvestPartialCommitAccounts)
 GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, CommitFailureRetainsSmallPages)
 {
     auto& manager = InitAllocationRuntime();
+    DriverLocker driverPause;
     std::vector<ZPage*> retained;
     for (size_t i = 0; i < 4; ++i) {
         ZPage* page = Allocate(ZPageSizeSmall);

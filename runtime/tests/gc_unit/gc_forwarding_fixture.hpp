@@ -20,8 +20,8 @@ public:
     ZTestForwarding(size_t liveObjects, MAddress start, size_t size = ZGranuleSize)
         : _page(size == ZPageSizeSmall ? ZPageType::small : ZPageType::large, PageAge::old,
                 ZVirtualMemory(to_zoffset(start - ZAddressHeapBase), size)),
-          _allocator(ZForwarding::AttachedArray::object_size() +
-                     ZForwarding::nentries(liveObjects) * sizeof(std::atomic<uint64_t>)),
+          _allocator(((sizeof(ZForwarding) + sizeof(ZForwardingEntry) - 1) & ~(sizeof(ZForwardingEntry) - 1)) +
+                     ZForwarding::nentries(liveObjects) * sizeof(ZForwardingEntry)),
           _forwarding(nullptr)
     {
         _page.inc_live(liveObjects, liveObjects * _page.object_alignment());

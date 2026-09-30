@@ -224,7 +224,7 @@ void MutatorManager::RemoveMutator(Mutator& mutator)
         MutatorManagementWLock();
     }
     if (!mutator.IsGCDetached()) {
-        ZBarrierSet::on_thread_detach(mutator.GetGCData());
+        BarrierSet::barrier_set()->on_thread_detach(mutator.GetGCData());
         ThreadsSMRSupport::remove_thread(&mutator);
         mutator.SetGCDetached();
     }

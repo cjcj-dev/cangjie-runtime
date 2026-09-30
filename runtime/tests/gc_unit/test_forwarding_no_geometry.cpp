@@ -20,7 +20,9 @@ void InstallReceipt(GcHeapFixture& heap, MAddress from, MAddress to)
     heap.InstallPageOwner(heap.region0());
     auto publication = ZGeneration::generation((heap.region0())->generation_id())->forwarding((heap.region0())->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(publication->insert(from, to), to);
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(publication->find(from, &cursor), MAddress(0));
+    GC_EXPECT_EQ(publication->insert(from, to, &cursor), to);
 }
 }
 

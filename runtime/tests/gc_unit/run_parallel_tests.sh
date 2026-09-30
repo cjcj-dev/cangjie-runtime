@@ -14,6 +14,7 @@ OUT=$3
 RUNTIME_LIB_DIR=$4
 JOBS="${GC_UNIT_JOBS:-$(nproc)}"
 TEST_TIMEOUT="${GC_UNIT_TEST_TIMEOUT:-600}"
+CRASH_CAPTURE="$(cd "$(dirname "$0")" && pwd)/capture_segv.sh"
 FINAL_TALLY="${GC_UNIT_TALLY_FILE:-}"
 
 # This test requires at least one of its eight internal workers to steal before
@@ -179,18 +180,22 @@ run_one_test() {
   # List mode is an implementation detail of discovery. Never let an ambient
   # value turn an isolated test invocation back into another listing pass.
   unset GC_UNIT_LIST_TESTS
+  local -a command=("$elf" "--gtest_filter=$test")
+  if [[ "$kind" == main && "$test" == ZVerifyCarrier.ArmedBadRootIsSkipped ]]; then
+    command=(bash "$CRASH_CAPTURE" "${command[@]}")
+  fi
   set +e
   timeout "$TEST_TIMEOUT" env "${extra_env[@]}" \
     GC_UNIT_TALLY_FILE="$tally_file" \
     LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    "$elf" "--gtest_filter=$test" >"$log" 2>&1
+    "${command[@]}" >"$log" 2>&1
   rc=$?
   set -e
   printf '%d\n' "$rc" >"$rc_file"
   return 0
 }
 export -f run_one_test
-export MAIN_ELF PUBLICATION_ELF RUNTIME_LIB_DIR LOG_DIR RC_DIR TALLY_DIR TEST_TIMEOUT
+export MAIN_ELF PUBLICATION_ELF RUNTIME_LIB_DIR LOG_DIR RC_DIR TALLY_DIR TEST_TIMEOUT CRASH_CAPTURE
 export GC_UNIT_MAIN_ENV="${GC_UNIT_MAIN_ENV:-}"
 
 START=$(date +%s%N)

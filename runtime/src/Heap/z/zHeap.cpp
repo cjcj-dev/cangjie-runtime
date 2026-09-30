@@ -139,7 +139,6 @@ void Heap::Init()
     // Host difference: HeapParam has no min-heap-size, min reports 0.
     young().StatHeap()->AtInitialize(0, _page_allocator.GetHeapCapacity());
     old().StatHeap()->AtInitialize(0, _page_allocator.GetHeapCapacity());
-    Heap::GetHeap().EnableGC(ZArguments::gc_enabled());
     // zCollectedHeap.cpp:initialize_gc_workers creates ZWorkers with the
     // ConcGCThreads budget (zWorkers.cpp:45-65). Do not pre-create a max=1
     // pool here: that made later set_active_workers(ConcGCThreads) fail the
@@ -194,10 +193,6 @@ bool Heap::IsGcStarted() const
     return (ZDriver::minor() != nullptr && ZDriver::minor()->gc_cause() != GC_REASON_INVALID) ||
            (ZDriver::major() != nullptr && ZDriver::major()->gc_cause() != GC_REASON_INVALID);
 }
-
-bool Heap::IsGCEnabled() const { return isGCEnabled.load(); }
-
-void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
 
 size_t Heap::GetMaxCapacity() const { return _page_allocator.GetHeapCapacity(); }
 size_t Heap::soft_max_capacity() const { return _page_allocator.soft_max_capacity(); }

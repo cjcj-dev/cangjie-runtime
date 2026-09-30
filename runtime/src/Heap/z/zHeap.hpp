@@ -67,8 +67,6 @@ public:
 
 
     bool IsGcStarted() const;
-    bool IsGCEnabled() const;
-    void EnableGC(bool val);
 
     MAddress Allocate(size_t size, AllocType allocType);
 
@@ -172,7 +170,6 @@ private:
     ZTLABUsage _tlab_usage;
     // Cangjie foreign-cycle ownership has no Java/JNI counterpart.
     ZCrossVM _cross_vm;
-    std::atomic<bool> isGCEnabled { true };
     bool _initialized { false };
 
 };

@@ -102,9 +102,11 @@ set(GC_UNIT_SOURCES
     test_mark_port_203_engine.cpp
     test_exit_detach_mark_end.cpp
     test_native_thread_detach.cpp
+    test_barrier_owner_1391.cpp
     test_partial_array.cpp
     test_segmented_array_init.cpp
     test_package_init.cpp
+    test_global_gc_requests.cpp
     test_verify_roots.cpp
     test_p10_roots_iterator.cpp
     test_weak_roots.cpp
