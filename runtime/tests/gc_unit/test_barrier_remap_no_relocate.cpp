@@ -118,7 +118,9 @@ GC_TEST(BarrierRemap1327, MissingEntryStopsAtForwardContract)
     GC_EXPECT_TRUE(ZBarrier::remap_generation(input) == generation);
     ExpectContractAssertion([&] {
         generation->set_phase(ZGenerationPhase::Relocate);
-        (void)ZBarrier::make_load_good_no_relocate(input);
+        const zaddress result = ZBarrier::make_load_good_no_relocate(input);
+        std::fprintf(stderr, "REMAP_MISSING_ENTRY_RETURNED result=%#zx forwarding=%#zx entries=%zu\n",
+                     raw(result), forwarding->find(reinterpret_cast<MAddress>(heap.obj0)), EntryCount(forwarding));
     }, "Check failed: to != 0");
 #else
     std::fprintf(stderr, "REMAP_MISSING_ENTRY_NOT_RUN reason=product_assertions_disabled_or_non_linux\n");
