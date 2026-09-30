@@ -49,15 +49,28 @@ def run_arm(arm, round_index, work):
     environment.update(arm.get('env', {}))
     if round_index:
         environment.update(arm.get('round_env', {}))
+    staging = Path(arm['options']['staging'])
+    # The handoff is private to one publisher run; only the directories this
+    # call creates belong to it.
+    before = set(staging.glob('gate-handoff.*/result.json'))
     log = directory / 'publisher.stdout.log'
     start = time.monotonic()
     with log.open('w') as stdout:
         result = subprocess.run(publisher_command(arm), env=environment, stdout=stdout,
                                 stderr=subprocess.STDOUT, cwd=arm.get('cwd') or None)
-    staging = Path(arm['options']['staging'])
-    handoffs = sorted(str(path) for path in staging.glob('gate-handoff.*/result.json'))
+    handoffs = sorted(str(path) for path in set(staging.glob('gate-handoff.*/result.json')) - before)
+    runs = run_snapshot(Path(environment['GC_UNIT_OUT']))
     return {'name': name, 'round': round_index, 'rc': result.returncode,
-            'wall': time.monotonic() - start, 'handoffs': handoffs, 'log': str(log)}
+            'wall': time.monotonic() - start, 'handoffs': handoffs, 'log': str(log),
+            'runs': {str(run): snapshot for run, snapshot in runs.items()}}
+
+
+def run_snapshot(unit):
+    """Every invocation-owned run directory this arm's output root holds."""
+    runs = {}
+    for run in sorted((unit / 'gate-runs').glob('run.*')):
+        runs[run] = inventory(run)
+    return runs
 
 
 def arm_state(arm, result, errors):
@@ -70,7 +83,7 @@ def arm_state(arm, result, errors):
     root = published_lib(result['log'])
     if root is None:
         errors.append('PUBLICATION_UNREADABLE ' + name + ' round=' + str(round_index))
-        return None, None
+        return None
     published_status = root / 'gc_unit_gate.status'
     runtime_so = Path(arm['options']['runtime'])
     staged_status = runtime_so.parent / 'gc_unit_gate.status'
@@ -78,7 +91,7 @@ def arm_state(arm, result, errors):
         errors.append('STATUS_MIRROR_MISSING ' + name + ' round=' + str(round_index) +
                       ' published=' + str(published_status.is_file()) +
                       ' staged=' + str(staged_status.is_file()))
-        return None, None
+        return None
     published = read_status(published_status)
     staged = read_status(staged_status)
     if published != staged:
@@ -114,7 +127,7 @@ def arm_state(arm, result, errors):
           ' rc=' + str(result['rc']) + ' run=' + evidence.name + ' config=' + config +
           ' runtime_sha256=' + published['RUNTIME_SHA256'] +
           ' handoff=' + str(result['handoffs']), flush=True)
-    return evidence, published
+    return evidence
 
 
 def main():
@@ -140,15 +153,15 @@ def main():
             if len(owners) != 1:
                 errors.append('HANDOFF_SHARED ' + handoff + ' owners=' + str(owners))
         current = {}
+        for result in results:
+            current.update({Path(run): snapshot for run, snapshot in result['runs'].items()})
         for arm, result in zip(arms, results):
             expected = arm.get('expected_rc', [0] * rounds)[round_index]
             if result['rc'] != expected:
                 errors.append('PUBLISH_RC ' + result['name'] + ' round=' + str(round_index) +
                               ' actual=' + str(result['rc']) + ' expected=' + str(expected))
-            evidence, published = arm_state(arm, result, errors)
-            if evidence is not None:
-                current[evidence] = inventory(evidence)
-        for evidence, before in history.items():
+            arm_state(arm, result, errors)
+        for evidence, before in sorted(history.items()):
             changed = sorted(name for name, digest in before.items()
                              if current.get(evidence, {}).get(name) != digest)
             print('PUBLISH_HISTORY_ASSERT after_round=' + str(round_index) +
