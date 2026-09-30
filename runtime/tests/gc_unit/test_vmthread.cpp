@@ -54,8 +54,6 @@ GC_RUNTIME_OTHER_VM_TEST(VMThread1308, PauseAndSynchronousCompletion)
     parameters.gcParam.staticGCThreads = true;
     GC_EXPECT_EQ(InitCJRuntime(&parameters), E_OK);
     auto& heap = Heap::GetHeap();
-    InitializeGenerationWorkers(heap.young(), 1);
-    InitializeGenerationWorkers(heap.old(), 1);
     const auto before = heap.total_collections();
     heap.young().pause_mark_start();
     const auto after = heap.total_collections();

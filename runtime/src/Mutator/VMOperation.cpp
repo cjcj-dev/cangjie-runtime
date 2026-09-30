@@ -103,9 +103,33 @@ void VMThread::inner_execute(VMOperation* operation)
     auto& manager = MutatorManager::Instance();
     const bool endSafepoint = operation->evaluate_at_safepoint() && !manager.WorldStopped();
     if (endSafepoint) { manager.StopTheWorld(); }
-    operation->evaluate();
+    evaluate_operation(operation);
     if (endSafepoint) { manager.StartTheWorld(); }
     currentOperation = previous;
+}
+
+void VMThread::evaluate_operation(VMOperation* operation)
+{
+    operation->evaluate();
+}
+
+VMOperation* VMThread::wait_for_operation()
+{
+    std::unique_lock<std::mutex> guard(lock);
+    condition.wait(guard, [this] { return nextOperation != nullptr || shouldTerminate; });
+    return shouldTerminate ? nullptr : nextOperation;
+}
+
+void VMThread::loop()
+{
+    for (;;) {
+        VMOperation* operation = wait_for_operation();
+        if (operation == nullptr) { return; }
+        inner_execute(operation);
+        std::lock_guard<std::mutex> guard(lock);
+        nextOperation = nullptr;
+        condition.notify_all();
+    }
 }
 
 void VMThread::run()
@@ -117,21 +141,7 @@ void VMThread::run()
         running = true;
         condition.notify_all();
     }
-    for (;;) {
-        VMOperation* operation;
-        {
-            std::unique_lock<std::mutex> guard(lock);
-            condition.wait(guard, [this] { return nextOperation != nullptr || shouldTerminate; });
-            if (shouldTerminate) { break; }
-            operation = nextOperation;
-        }
-        inner_execute(operation);
-        {
-            std::lock_guard<std::mutex> guard(lock);
-            nextOperation = nullptr;
-            condition.notify_all();
-        }
-    }
+    loop();
     currentOperation = &haltOperation;
     MutatorManager::Instance().StopTheWorld();
     {

@@ -40,6 +40,9 @@ private:
     VMThread();
     static VMThread& instance();
     void run();
+    void loop();
+    VMOperation* wait_for_operation();
+    void evaluate_operation(VMOperation* operation);
     void inner_execute(VMOperation* operation);
     void wait_until_executed(VMOperation* operation);
     bool set_next_operation(VMOperation* operation);
