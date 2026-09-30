@@ -44,7 +44,7 @@ int main(int argc, char** argv)
     MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.young(), 1);
     fixture.PrepareOldSource();
     if (referent) { fixture.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS); }
-    p16_forwarding = forwarding_for_page(fixture.region0());
+    p16_forwarding = ZGeneration::generation((fixture.region0())->generation_id())->forwarding((fixture.region0())->GetRegionStart());
     p16_young = &heap.young();
     p16_remset_mask = ZPointerRememberedMask;
     const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
@@ -73,7 +73,7 @@ int main(int argc, char** argv)
         auto& allocator = *heap.object_allocator().allocator(PageAge::old);
         ZPerCPUIterator<ZPage*> slots(&allocator.sharedSmallPage);
         for (ZPage** slot; slots.next(&slot);) { __atomic_store_n(slot, fixture.region1(), __ATOMIC_RELEASE); }
-        destination = Heap::GetHeap().relocate_or_remap_object(fixture.obj0, ZGenerationId::old);
+        destination = ZGeneration::old()->relocate_or_remap_object(fixture.obj0);
         if (destination == nullptr || destination == fixture.obj0) { return 80; }
     }
     p16_destination_field = reinterpret_cast<volatile uintptr_t*>(

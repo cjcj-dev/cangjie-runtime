@@ -79,9 +79,6 @@
 
 
 namespace MapleRuntime {
-MAddress Heap::heapStartAddr = 0;
-MAddress Heap::heapCurrentEnd = 0;
-std::vector<HeapSlotAddressRange> Heap::heapReservations;
 Heap* Heap::_heap = nullptr;
 
 class ScopedFileHandler {
@@ -104,26 +101,37 @@ Heap::Heap(const HeapParam& param, double garbageThreshold)
       _young(&_page_table, &_old.forwarding_table(), &_page_allocator)
 {
     _heap = this;
+    if (!_page_allocator.is_initialized()) {
+        return;
+    }
+    // ZGC zHeap.cpp:78-83: prime only after allocator construction succeeds.
+    // HeapParam has no InitialHeapSize; retain its bounded 8 MB initial cache.
+    const size_t initialHeapSize = std::min(4 * ZGranuleSize, _page_allocator.GetHeapCapacity());
+    if (!_page_allocator.PrimeCache(initialHeapSize)) {
+        ZInitialize::error("Failed to allocate initial heap");
+        return;
+    }
     RunType::InitRunTypeMap();
-    _allocation_adapter.reset(new RegionSpace());
-    exportRootsTable = new ExportRootTable();
-    staticRootTable = new StaticRootTable();
     ZStat::NotifyHeapConstructed();
+    _initialized = true;
 }
 
 Heap::~Heap()
 {
-    delete exportRootsTable;
-    exportRootsTable = nullptr;
-    delete staticRootTable;
-    staticRootTable = nullptr;
 }
 
-
-
-
-
-MAddress Heap::Allocate(size_t size, AllocType allocType) { return _allocation_adapter->Allocate(size, allocType); }
+// ZGC zHeap.inline.hpp:82-90: the facade directly enters the object allocator.
+MAddress Heap::Allocate(size_t size, AllocType allocType)
+{
+    (void)allocType;
+    const MAddress addr = _object_allocator.alloc(RoundUp<size_t>(size, 8));
+    if (UNLIKELY(addr == 0)) {
+        if (IsGcThread()) { return 0; }
+        _page_allocator.DumpRegionStats("region statistics when gc ends");
+        ExceptionManager::OutOfMemory();
+    }
+    return addr;
+}
 
 void Heap::Init()
 {
@@ -137,7 +145,6 @@ void Heap::Init()
     // pool here: that made later set_active_workers(ConcGCThreads) fail the
     // WorkerThreads 1-max check (workerThread.cpp:148).
     ZCollectedHeap::heap()->initialize_gc();
-    _initialized = true;
 }
 
 void Heap::Fini()
@@ -149,49 +156,6 @@ void Heap::Fini()
 
 
 void Heap::RequestGC(GCReason reason) { ZCollectedHeap::heap()->collect(reason); }
-
-void Heap::ResolveCycleRef() { cross_vm().ResolveCycleRef(); }
-
-void Heap::MarkObjectIfActive(BaseObject* object)
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    ZBarrier::Mark<false, false, true, false>(from_object(object));
-}
-
-void Heap::MarkYoungObjectIfActive(BaseObject* object)
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    GetZGeneration(ZGenerationId::young)
-        .MarkObjectIfActive<false, false, true, false>(from_object(object));
-}
-
-void Heap::MarkNewObject(BaseObject* obj)
-{
-    // Registration follows object initialization (BaseObject::RegisterFinalizer).
-    // ZMark::AnyThread / DontFollow: publish mark-only work for this current object.
-    ZGeneration& cycle = GetZGeneration(ObjectGeneration(obj));
-    cycle.MarkObjectIfActive<false, false, false, false>(from_object(obj));
-}
-
-BaseObject* Heap::make_load_good(RefField<>& ref)
-{
-    return to_object(ZBarrier::make_load_good(ref.GetFieldValue()));
-}
-
-void Heap::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)
-{
-    ZGeneration& cycle = GetZGeneration(generation);
-    const ZGenerationPhase before = cycle.GcPhase();
-    if (generation == ZGenerationId::old &&
-        value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
-        Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(Heap::GetHeap().young().Sequence());
-    }
-    cycle.set_phase(value);
-}
 
 Generation Heap::ObjectGeneration(BaseObject* object) const
 {
@@ -218,12 +182,6 @@ bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
 
 
 
-
-BaseObject* Heap::relocate_or_remap_object(BaseObject* object, ZGenerationId generation)
-{
-    return GetZGeneration(generation).relocate_or_remap_object(object);
-}
-
 bool Heap::IsSurvivedObject(const BaseObject* obj) const
 {
     return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
@@ -240,10 +198,6 @@ bool Heap::IsGcStarted() const
 bool Heap::IsGCEnabled() const { return isGCEnabled.load(); }
 
 void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
-
-OopStorage& Heap::GetExportRootStorage() { return exportRootsTable->RootStorage(); }
-
-RegionSpace& Heap::GetAllocator() { return *_allocation_adapter; }
 
 size_t Heap::GetMaxCapacity() const { return _page_allocator.GetHeapCapacity(); }
 size_t Heap::soft_max_capacity() const { return _page_allocator.soft_max_capacity(); }
@@ -274,24 +228,6 @@ Heap& Heap::GetHeap()
 ZRemembered& Heap::remembered()
 {
     return *ZGeneration::young()->remembered();
-}
-
-void Heap::RegisterStaticRoots(Uptr addr, U32 size)
-{
-    staticRootTable->RegisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
-}
-
-void Heap::UnregisterStaticRoots(Uptr addr, U32 size)
-{
-    staticRootTable->UnregisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
-}
-
-void Heap::VisitStaticRoots(const NativeSlotVisitor& visitor)
-{
-    staticRootTable->VisitRoots(visitor);
-#ifdef INTERPRETER_ENABLED
-    VisitInterpreterGlobalRoots(&visitor);
-#endif
 }
 
 #if defined(_WIN64)
@@ -379,54 +315,6 @@ FinalizerProcessor& Heap::GetFinalizerProcessor() { return ZCollectedHeap::heap(
 
 void Heap::StopGCWork() { ZCollectedHeap::stop(); }
 
-
-
-void Heap::VisitAllExportRoots(const NativeSlotVisitor &visitor)
-{
-    exportRootsTable->VisitGCRoots(visitor);
-}
-
-BaseObject* Heap::GetExportObject(U64 id)
-{
-    return exportRootsTable->GetExportRoot(id);
-}
-
-U64 Heap::RegisterExportRoot(BaseObject *obj)
-{
-    if (!IsHeapAddress(obj)) {
-        return std::numeric_limits<U64>::max();
-    }
-    return exportRootsTable->RegisterExportRoot(obj);
-}
-
-void Heap::RemoveExportObject(U64 id)
-{
-    exportRootsTable->RemoveExportRoot(id);
-}
-
-void Heap::CrossAccessBarrier(I64 id)
-{
-    BaseObject* recordObj = GetExportObject(id);
-    if (recordObj == nullptr) {
-        return;
-    }
-    // GetExportObject loads the native slot through its colored load barrier.
-    // Preserve that current identity, including an in-place destination whose
-    // address is also another object's from-key (ZUncoloredRoot::make_load_good,
-    // zUncoloredRoot.inline.hpp:62-69). Page ownership cannot reclassify it.
-    cross_vm().ResurrectExportObject(recordObj);
-    SetExportObjActiveState(id, true);
-}
-
-void Heap::SetExportObjActiveState(U64 id, bool state)
-{
-    exportRootsTable->SetActiveState(id, state);
-}
-
-bool Heap::CheckExportObjState(U64 id, BaseObject *exportObj)
-{
-    return exportRootsTable->CheckActiveState(id, exportObj);
-}
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
@@ -520,21 +408,20 @@ void Heap::free_page(ZPage* page)
 
 size_t Heap::free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages)
 {
-    (void)id;
-    size_t freed = 0;
     if (pages == nullptr) {
         return 0;
     }
+    size_t freed = 0;
+    // ZGC zHeap.cpp:283-295: remove every page table entry first, then hand
+    // the whole batch to the allocator.
     for (int i = 0; i < pages->length(); ++i) {
         ZPage* page = pages->at(i);
-        if (page == nullptr) {
-            continue;
-        }
         // #710: select_relocation_set owns candidacy; freeing clears the role.
         page->SetRegionRole(ZPageRole::None);
+        page_table().remove(page);
         freed += page->size();
-        free_page(page);
     }
+    GetHeap().page_allocator().free_pages(id, pages);
     return freed;
 }
 
@@ -616,8 +503,8 @@ void Heap::DumpRoots(LogType logType)
         // DumpRoots is called while the root owner retains the target for inspection.
         auto obj = to_object(safe(value));
         DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
-              Heap::GetHeap().GetAllocator().IsHeapAddress(reinterpret_cast<MAddress>(obj)),
-              Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(obj)));
+              Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj)),
+              Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj)));
     };
 
     DLOG(logType, "stack roots");
@@ -637,8 +524,8 @@ void Heap::DumpRoots(LogType logType)
             return;
         }
         DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
-              Heap::GetHeap().GetAllocator().IsHeapAddress(reinterpret_cast<MAddress>(obj)),
-              Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(obj)));
+              Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj)),
+              Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj)));
     };
 
     DLOG(logType, "static fields");

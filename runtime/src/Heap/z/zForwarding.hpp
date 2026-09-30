@@ -50,8 +50,6 @@ class BaseObject;
 // Central garbage identification algorithm.
 
 
-using RegionLifeId = uint64_t;
-
 class ZLiveMap;
 class ZRelocateQueue;
 
@@ -80,22 +78,6 @@ public:
     static uint32_t nentries(const ZPage* page);
     static ZForwarding* alloc(ZForwardingAllocator* allocator, ZPage* page, PageAge to_age);
 
-    static ZForwarding* alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
-                              ZPage* page, RegionLifeId pageLifeId = 0,
-                              ForwardingAllocator* arena = nullptr);
-
-    // Standalone storage for focused forwarding tests. Product objects use the set arena.
-    static ZForwarding* Create(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize = 0)
-    {
-        return alloc(liveObjects, start, heapBase, regionSize, nullptr);
-    }
-
-    void Destroy()
-    {
-        this->~ZForwarding();
-        AttachedArray::free(this);
-    }
-
     MAddress start() const;
     size_t size() const;
     size_t regionSize() const { return _size; }
@@ -104,15 +86,8 @@ public:
     PageAge to_age() const { return _to_age; }
     bool is_promotion() const { return _from_age != PageAge::old && _to_age == PageAge::old; }
     ZPage* page() const;
-    RegionLifeId page_life_id() const { return _page_life_id; }
     void verify() const;
     size_t length() const { return _entries.length(); }
-
-    // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
-    // Record the to-region start+regionLifeSeq at insert; consume rejects when
-    // InitZPage has bumped that seq (ZPage.h:InitZPage).
-    static bool DestUsable(MAddress to);
-
 
     bool covers(MAddress addr) const { return _size != 0 && addr >= _start && addr < _start + _size; }
 
@@ -213,7 +188,7 @@ public:
 private:
     // zForwarding.inline.hpp:59-76
     ZForwarding(ZPage* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
-                RegionLifeId pageLifeId, PageAge from_age, PageAge to_age, size_t object_alignment_shift);
+                PageAge from_age, PageAge to_age, size_t object_alignment_shift);
 
     const MAddress _start;
     const size_t _size;
@@ -223,9 +198,6 @@ private:
     ZPage* const _page;
     const PageAge _from_age;
     const PageAge _to_age;
-    const RegionLifeId _page_life_id;
-    // Monotonic per-region-span generation. Written before the table pointer is
-    // published, then immutable for the table's lifetime.
     std::atomic<bool> _claimed;
     std::atomic<bool> _in_place;
     MAddress _in_place_top_at_start;
