@@ -1081,6 +1081,10 @@ void RunRelocateLiveness(bool worker, bool marked)
     } else {
         result = generation.relocate().relocate_object(owner, source);
     }
+    const MAddress published = owner->find(reinterpret_cast<MAddress>(source));
+    std::fprintf(stderr, "FORWARD_MAPPING_TARGET executed=1 worker=%d published=%#zx result=%p\n",
+                 worker, published, result);
+    GC_EXPECT_EQ(published, reinterpret_cast<MAddress>(result));
     GC_EXPECT_TRUE(result != nullptr && result != source);
     const PageAge resultAge = Heap::page(reinterpret_cast<uintptr_t>(result))->age();
     std::fprintf(stderr, "RELOCATION_AGE_TARGET worker=%d actual=%u expected=%u\n",
@@ -1089,10 +1093,6 @@ void RunRelocateLiveness(bool worker, bool marked)
     const uint64_t payload = *reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(result) + 8);
     std::fprintf(stderr, "FORWARD_COPY_TARGET executed=1 worker=%d payload=%#zx\n", worker, size_t(payload));
     GC_EXPECT_EQ(payload, 0x869u);
-    const MAddress published = owner->find(reinterpret_cast<MAddress>(source));
-    std::fprintf(stderr, "FORWARD_MAPPING_TARGET executed=1 worker=%d published=%#zx result=%p\n",
-                 worker, published, result);
-    GC_EXPECT_EQ(published, reinterpret_cast<MAddress>(result));
     std::fprintf(stderr, "RELOCATE_LIVE_RESULT worker=%d marked=%d source=%p result=%p payload=0x869\n",
                  worker, marked, source, result);
 }
