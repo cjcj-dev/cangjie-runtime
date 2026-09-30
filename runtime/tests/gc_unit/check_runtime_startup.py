@@ -82,7 +82,11 @@ def observe():
 
     class Starter(gdb.Breakpoint):
         def stop(self):
-            StarterCompleted(gdb.newest_frame(), internal=True)
+            if mode in ("ordered", "published", "notify"):
+                starter_exit.condition = "$_thread == %d" % gdb.selected_thread().global_num
+                starter_exit.enabled = True
+            else:
+                StarterCompleted(gdb.newest_frame(), internal=True)
             state["starter_parked"] = True
             return mode in ("ordered", "published", "notify")
 
@@ -118,6 +122,18 @@ def observe():
     Publish("NotifyRuntimeSchedulerReady", internal=True)
     Bind("CJ_ScheduleSetToCurrentThread", internal=True)
     mode = os.environ["STARTUP_MODE"]
+    if mode in ("ordered", "published", "notify"):
+        gdb.execute("catch syscall exit")
+        starter_exit = gdb.breakpoints()[-1]
+        starter_exit.enabled = False
+
+        def starter_exiting(event):
+            if isinstance(event, gdb.BreakpointEvent) and starter_exit in event.breakpoints:
+                state["starter_returned"] = True
+                target("INIT_COMPLETES", False,
+                       "starter_exit_syscall_before_ready=%d ready=%d" % (not ready(), ready()))
+
+        gdb.events.stop.connect(starter_exiting)
     Starter("StartCJRuntime", internal=True)
     if mode == "isolation":
         GlobalNotify("*_ZNSt18condition_variable10notify_allEv", internal=True)
@@ -153,6 +169,8 @@ def observe():
         if state["starter_returned"] or not state["gated"]:
             gdb.execute("kill")
             gdb.execute("quit 1")
+        starter_exit.delete()
+        gdb.events.stop.disconnect(starter_exiting)
         schedule_gate.delete()
         gdb.execute("set scheduler-locking on")
         mutex_rc = int(gdb.parse_and_eval("(int)pthread_mutex_unlock((void*)&g_mtx)"))
