@@ -37,6 +37,7 @@ def population(address):
     return sum(sizes)
 
 
+sts_only = os.environ.get('MARK_FLUSH_STS') == '1'
 mode = os.environ.get('MARK_FLUSH_INPUT', 'partial')
 if mode not in ('partial', 'stripes', 'empty'):
     raise RuntimeError('unknown flush input: ' + mode)
@@ -164,10 +165,31 @@ try:
         if Path(product).resolve() != expected:
             raise RuntimeError('unexpected product identity')
         result['product'] = str(expected)
+        if sts_only:
+            # Freeze peers only across the worker's entry -> synchronous wait
+            # boundary so the product global-count delta identifies this worker.
+            result['sts_before'] = int(gdb.parse_and_eval(
+                'MapleRuntime::SuspendibleThreadSet::nthreads'))
+            result['worker_stack'] = command('bt')
+            command('set scheduler-locking on')
         handshake = gdb.Breakpoint('MapleRuntime::ZMark::HandshakeFlush(MapleRuntime::ZMark*)', temporary=True)
         command('continue')
         if handshake.is_valid():
             raise RuntimeError('proactive handshake not reached')
+        if sts_only:
+            execute = gdb.Breakpoint('MapleRuntime::Handshake::execute(MapleRuntime::HandshakeClosure*)',
+                                     temporary=True, internal=True)
+            command('continue')
+            if execute.is_valid():
+                raise RuntimeError('synchronous handshake entry not reached')
+            result['sts_during'] = int(gdb.parse_and_eval(
+                'MapleRuntime::SuspendibleThreadSet::nthreads'))
+            result['handshake_stack'] = command('bt')
+            result['passed'] = (result['sts_before'] > 0 and
+                                result['sts_during'] == result['sts_before'] - 1)
+            print('ASSERT_PROACTIVE_WORKER_OUTSIDE_STS ' + json.dumps(result, sort_keys=True), flush=True)
+            Path(os.environ['MARK_FLUSH_RESULT']).write_text(json.dumps(result) + '\n')
+            command('quit ' + ('0' if result['passed'] else '1'))
         mark = gdb.parse_and_eval('domain')
         worker = gdb.selected_thread()
         frame = gdb.newest_frame()
