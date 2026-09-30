@@ -108,9 +108,6 @@ struct CJThread *ProcessorGlobalRead(void *schedule, bool batch)
     unsigned int processorNum = ((struct Schedule *)schedule)->schdProcessor.processorNum;
 
     schdCJThread = &((struct Schedule *)schedule)->schdCJThread;
-    if (schdCJThread->num == 0) {
-        return nullptr;
-    }
     runDulink = &schdCJThread->runq;
     pthread_mutex_lock(&(schdCJThread->mutex));
 
