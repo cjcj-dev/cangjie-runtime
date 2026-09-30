@@ -397,6 +397,12 @@ void* SelectRealLivePages(void* context)
                 result.previousMembers += forwarding->covers(starts[i]) && forwarding->find(starts[i]) != 0;
             }
         }
+        // Resolve the exported roots through the product load barrier before
+        // the next cycle. The saved from-addresses above remain unchanged:
+        // those addresses, not root repair, are the lifetime observation.
+        for (size_t i = 0; i < result.roots; ++i) {
+            (void)Heap::GetHeap().GetExportObject(roots[i]);
+        }
         // A concurrent caller of the existing public static-root iterator
         // owns its normal table lock. Concurrent mark must visit that table;
         // holding this lock fixes the observation window after mark-start and

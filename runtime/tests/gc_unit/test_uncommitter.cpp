@@ -504,7 +504,6 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, CancelStartsNewCacheWatermarkHistory)
         {
             ScopedObjectAccess participation;
             std::lock_guard<std::mutex> owner(regions.pageAllocatorMutex);
-            std::lock_guard<std::mutex> cacheOwner(partition.cacheMutex);
             if (canceledAt == 0 && worker.CycleIsActive() && !worker.CycleIsFinished()) {
                 // A cache valley followed by return must be forgotten on cancel.
                 const size_t high = partition.cache.min_size_watermark();
