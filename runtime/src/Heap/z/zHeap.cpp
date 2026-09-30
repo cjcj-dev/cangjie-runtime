@@ -152,14 +152,6 @@ void Heap::RequestGC(GCReason reason) { ZCollectedHeap::heap()->collect(reason);
 
 void Heap::ResolveCycleRef() { cross_vm().ResolveCycleRef(); }
 
-void Heap::MarkObjectIfActive(BaseObject* object)
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    ZBarrier::Mark<false, false, true, false>(from_object(object));
-}
-
 void Heap::MarkYoungObjectIfActive(BaseObject* object)
 {
     if (!Heap::IsHeapAddress(object)) {
@@ -180,17 +172,6 @@ void Heap::MarkNewObject(BaseObject* obj)
 BaseObject* Heap::make_load_good(RefField<>& ref)
 {
     return to_object(ZBarrier::make_load_good(ref.GetFieldValue()));
-}
-
-void Heap::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)
-{
-    ZGeneration& cycle = GetZGeneration(generation);
-    const ZGenerationPhase before = cycle.GcPhase();
-    if (generation == ZGenerationId::old &&
-        value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
-        Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(Heap::GetHeap().young().Sequence());
-    }
-    cycle.set_phase(value);
 }
 
 Generation Heap::ObjectGeneration(BaseObject* object) const

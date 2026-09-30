@@ -81,42 +81,6 @@ bool ZBarrier::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObj
     return false;
 }
 
-bool ZBarrier::TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef)
-{
-    BaseObject* oldRef = nullptr;
-    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef);
-}
-
-bool ZBarrier::CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
-                                          bool allowNull)
-{
-    BaseObject* object = to_object(target);
-    if (object != nullptr) {
-        CHECK_DETAIL(Heap::IsHeapAddress(object),
-                     "resolved heal target must be a heap address target=%p", object);
-    }
-    zpointer desired = is_null(target) ? zpointer::null : RefField<>(ZAddress::store_good(target)).GetFieldValue();
-    if (expected == raw(desired)) {
-        return true;
-    }
-    const zpointer observed = to_zpointer(expected);
-    auto loadGood = [](zpointer value) {
-        RefField<> probe(value);
-        return is_null(probe.GetTargetObject()) || ZPointer::is_load_good(probe.GetFieldValue());
-    };
-    if (loadGood(observed)) {
-        return true;
-    }
-    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
-                        reinterpret_cast<volatile zpointer*>(&field), observed, desired,
-                        allowNull);
-    const bool healed = true;
-    if (healed) {
-        return true;
-    }
-    return true;
-}
-
 BaseObject* ZBarrier::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
 {
     RefField<> oldField(field);
@@ -181,7 +145,7 @@ zaddress ZBarrier::heap_store_slow_path(volatile zpointer* p, zaddress addr, zpo
 {
     StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(heal);
     if (buffer != nullptr) {
-        buffer->add(reinterpret_cast<MAddress>(p), prev);
+        buffer->add(p, prev);
     } else {
         mark_and_remember(p, addr);
     }
@@ -197,7 +161,7 @@ zaddress ZBarrier::no_keep_alive_heap_store_slow_path(volatile zpointer* p, zadd
 zaddress ZBarrier::native_store_slow_path(zaddress addr)
 {
     if (!is_null(addr)) {
-        Heap::GetHeap().MarkObjectIfActive(to_object(addr));
+        ZBarrier::Mark<false, false, true, false>(addr);
     }
     return addr;
 }
@@ -414,19 +378,6 @@ void ZBarrier::verify_on_weak(volatile zpointer* referent_addr)
 zpointer ZBarrier::ColorLoadGood(zaddress address, zpointer previous)
 {
     return ZAddress::load_good(address, previous);
-}
-
-// barrier for atomic operation.
-void ZBarrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref, zpointer prev)
-{
-    (void)obj;
-    (void)ref;
-    StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false);
-    if (buffer != nullptr) {
-        buffer->add(fieldAddress, prev);
-        return;
-    }
-    mark_and_remember(reinterpret_cast<volatile zpointer*>(fieldAddress), make_load_good(prev));
 }
 
 bool ZBarrier::clean_barrier_on_phantom_oop_field(volatile zpointer* p)

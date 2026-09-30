@@ -184,7 +184,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     remset.Initialize(fixture.heapStart, 2 * ZGranuleSize);
     ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner); });
     remset.Record(slot);
-    if (!Heap::GetHeap().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
+    if (!ZGeneration::old()->active_remset_is_current()) { remset.FlipForMinor(); }
     ZVerify::BeforeRelocation(owner);
 }
 
@@ -210,7 +210,7 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
     // Empty is the positive control; then place one real field in the inactive face.
     ZVerify::BeforeRelocation(owner);
     remset.Record(slot);
-    const bool currentActive = Heap::GetHeap().OldActiveRemsetIsCurrent();
+    const bool currentActive = ZGeneration::old()->active_remset_is_current();
     if (currentActive) { remset.FlipForMinor(); }
     // Preserve the rejection sample across exec. Both addresses are sampled
     // in the rejecting child, never compared across process address spaces.

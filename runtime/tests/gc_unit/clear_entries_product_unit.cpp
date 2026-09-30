@@ -131,11 +131,6 @@ public:
         return ZGeneration::generation(forwarding->generation_id())->relocate().relocate_object(forwarding_for_page(forwarding), from);
     }
 
-    static bool TryUpdateRefField(Heap& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
-    {
-        return ZBarrier::TryUpdateRefField(obj, field, newRef);
-    }
-
     static BaseObject* ProductRelocateOrRemap(
         Heap& collector, BaseObject* from, ZGenerationId generation)
     {
@@ -429,8 +424,8 @@ void PinOwnerGeneration(ZPage* region, Generation gen)
 
 void PublishGenerationMarkComplete(Generation gen)
 {
-    Heap::GetHeap().PublishGenerationPhase(
-        gen == Generation::Old ? ZGenerationId::old : ZGenerationId::young, ZGenerationPhase::MarkComplete);
+    Heap::GetHeap().GetZGeneration(
+        gen == Generation::Old ? ZGenerationId::old : ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
 }
 
 ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)

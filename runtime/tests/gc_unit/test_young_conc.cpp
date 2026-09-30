@@ -351,7 +351,7 @@ GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
     StoreBarrierBuffer buffer;
     const MAddress slot = reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE;
     const zpointer previous = RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue();
-    buffer.add(slot, previous);
+    buffer.add(reinterpret_cast<volatile zpointer*>(slot), previous);
     GC_EXPECT_EQ(markFixture.YoungPending(), 0u);
     GC_EXPECT_EQ(buffer.Pending(), 1u);
     buffer.Flush();

@@ -281,7 +281,6 @@ static void WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<fal
         return;
     }
     if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
-        VLOG(REPORT, "found and writing a global struct ref field");
         NativeAccess<>::oop_store(&(NativeSlotAt(static_cast<void*>(plainField))), plainRef); // Global field is root storage.
         return;
     }

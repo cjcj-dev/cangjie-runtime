@@ -384,10 +384,6 @@ public:
     void StopStalledAllocations();
     void HandleAllocStallingForOld(bool clearedAllSoftRefs);
     size_t AllocationStallsNow() const;
-    // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
-    static void RememberPromotedObject(BaseObject* object);
-    // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
-    void RememberFlipPromotedPages(ZWorkers& workers);
     void ResetFlipPromotedPages();
     void promote_used(const ZPage* from, const ZPage* to);
     void safe_destroy_page(ZPage* page);

@@ -387,7 +387,7 @@ inline void ZBarrier::remember(volatile zpointer* p)
 inline void ZBarrier::mark_and_remember(volatile zpointer* p, zaddress addr)
 {
     if (!is_null(addr)) {
-        Heap::GetHeap().MarkObjectIfActive(to_object(addr));
+        ZBarrier::Mark<false, false, true, false>(addr);
     }
     remember(p);
 }
