@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-fixture="$(mktemp -d /tmp/gc-unit-gate-contract.XXXXXX)"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/gc-unit-gate-contract.XXXXXX")"
 trap 'rm -rf "$fixture"' EXIT
 
 # The parent gate supplies its own compiler, runtime, status, mode, and skip
@@ -13,7 +13,7 @@ trap 'rm -rf "$fixture"' EXIT
 unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
   GCV2_RUNTIME_OUTPUT_ROOT MRT_TESTABLE_INTERNALS \
   GC_UNIT_GATE_LANGUAGE_TESTS GC_UNIT_GATE_SKIP GC_UNIT_GATE_STATUS \
-  GC_UNIT_OUT GC_UNIT_TALLY_FILE GC_UNIT_FILTER \
+  GC_UNIT_OUT GC_UNIT_TALLY_FILE GC_UNIT_FILTER GC_UNIT_GATE_RESULT \
   MRT_GC_UNIT_OHOS_HOST GC_UNIT_OHOS_HOST_TEST_ELF \
   GC_UNIT_OHOS_HOST_RECEIPT GC_UNIT_OHOS_HEADER_ROOT_TOKEN
 # Synthetic gate arms likewise supply their own header root. The copied-pair
@@ -24,13 +24,19 @@ mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/runti
   "$fixture/lib" "$fixture/bin" \
   "$fixture/sdk/bin"
 cp "$ROOT/runtime/tests/gc_unit/gate_gc_unit.sh" "$fixture/runtime/tests/gc_unit/"
+cp "$ROOT/runtime/tests/gc_unit/gate_evidence.py" "$fixture/runtime/tests/gc_unit/"
 cp "$ROOT/runtime/build/resolve_runtime_output.sh" "$fixture/runtime/build/"
 cp "$ROOT/runtime/build/resolve_runtime_headers.py" "$fixture/runtime/build/"
 cp "$ROOT/runtime/tests/gc_unit/product_test_configuration.py" "$fixture/runtime/tests/gc_unit/"
+cp "$ROOT/runtime/tests/gc_unit/testable_product_hooks.py" "$fixture/runtime/tests/gc_unit/"
+for source in Heap/z/zGlobals.cpp Heap/z/zMarkStack.cpp Heap/z/zStat.cpp Mutator/ThreadSMR.cpp; do
+  mkdir -p "$fixture/runtime/src/$(dirname "$source")"
+  cp "$ROOT/runtime/src/$source" "$fixture/runtime/src/$source"
+done
 
 # Synthetic products still carry the real parser's hash-bound compile recipe.
 write_product_recipe() {
-  python3 - "$1" "$2" "$3" <<'PYRECIPE'
+  python3 - "$1" "$2" "$3" "${4:-0}" <<'PYRECIPE'
 import hashlib, json, sys
 from pathlib import Path
 output, library = map(Path, sys.argv[1:3])
@@ -38,6 +44,8 @@ output.mkdir(parents=True, exist_ok=True)
 arguments = ['clang++']
 if sys.argv[3] == '1':
     arguments += ['-DMRT_GC_UNIT_OHOS_HOST=1']
+if sys.argv[4] == '1':
+    arguments += ['-DMRT_TESTABLE_INTERNALS=1']
 recipe = dict(products={name: hashlib.sha256((library / name).read_bytes()).hexdigest()
                         for name in ('libcangjie-runtime.so', 'libboundscheck.so')},
               commands=[dict(file='/runtime/src/Heap/z/zGeneration.cpp', arguments=arguments)])
@@ -239,11 +247,83 @@ set -e
 testable_hook_missing_reason=$(sed -n 's/^REASON=//p' "$fixture/testable-hook-missing.status")
 printf 'TESTABLE=1 missing hook: rc=%s reason=%s\n' "$testable_hook_missing_rc" "$testable_hook_missing_reason"
 [[ "$testable_hook_missing_rc" -eq 2 && "$testable_hook_missing_reason" == STARTED ]]
-grep -q 'TESTABLE_INTERNALS=1 but product SO lacks segmented-array test hooks' "$fixture/testable-hook-missing.log"
+grep -q 'TESTABLE_INTERNALS=1 but product SO lacks current test hooks' "$fixture/testable-hook-missing.log"
+
+if [[ -n "${GC_UNIT_CONTRACT_PRODUCT_SO:-}" ]]; then
+  hook_pids=()
+  hook_start=$SECONDS
+  for arm in candidate cut restored; do
+    (
+    library="$fixture/$arm-lib"
+    output="$fixture/$arm-output"
+    mkdir -p "$library"
+    cp "$fixture/lib/libboundscheck.so" "$library/"
+    cp "$GC_UNIT_CONTRACT_PRODUCT_SO" "$library/libcangjie-runtime.so"
+    if [[ "$arm" == cut ]]; then
+      symbol=$(PATH=/usr/bin:/bin nm --defined-only "$library/libcangjie-runtime.so" |
+        awk '$3 ~ /ZFailLargerCommits/ { print $3 }')
+      [[ -n "$symbol" && "$symbol" != *$'\n'* ]]
+      objcopy --strip-symbol="$symbol" "$library/libcangjie-runtime.so"
+    fi
+    write_product_recipe "$output" "$library" 0 1
+    set +e
+    PATH=/usr/bin:/bin CJC=/nonexistent MRT_TESTABLE_INTERNALS=1 \
+      GC_UNIT_GATE_TRACE="$fixture/$arm.trace" GC_UNIT_OUT="$fixture/$arm-out" \
+      GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_GATE_LANGUAGE_TESTS=defer \
+      GCV2_RUNTIME_LIB_DIR="$library" GCV2_RUNTIME_OUTPUT_ROOT="$output" \
+      GC_UNIT_GATE_STATUS="$fixture/$arm.status" \
+      bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/$arm.log" 2>&1
+    hook_arm_rc=$?
+    set -e
+    digest=$(sha256sum "$library/libcangjie-runtime.so" | awk '{print $1}')
+    printf 'REAL_HOOK_ARM=%s rc=%s sha256=%s\n' "$arm" "$hook_arm_rc" "$digest"
+    grep -q '^TESTABLE_PRODUCT_HOOK_TARGETS=5$' "$fixture/$arm.log"
+    if [[ "$arm" == cut ]]; then
+      [[ "$hook_arm_rc" == 2 ]]
+      [[ $(/usr/bin/grep -c '^TESTABLE_PRODUCT_HOOK_MISSING=' "$fixture/$arm.log") == 1 ]]
+      grep -qx 'TESTABLE_PRODUCT_HOOK_MISSING=ZFailLargerCommits' "$fixture/$arm.log"
+      [[ ! -f "$fixture/$arm.trace" ]]
+    else
+      [[ "$hook_arm_rc" == 0 ]]
+      [[ "$(cat "$fixture/$arm.trace")" == CPP_SUITE ]]
+    fi
+    if [[ -n "${GC_UNIT_CONTRACT_EVIDENCE:-}" ]]; then
+      mkdir -p "$GC_UNIT_CONTRACT_EVIDENCE"
+      cp "$fixture/$arm.log" "$fixture/$arm.status" "$GC_UNIT_CONTRACT_EVIDENCE/"
+    fi
+    ) &
+    hook_pids+=("$!")
+  done
+  for hook_pid in "${hook_pids[@]}"; do
+    wait "$hook_pid"
+  done
+  printf 'REAL_HOOK_ARMS=3 wall=%s\n' "$((SECONDS-hook_start))"
+fi
+
+cp "$fixture/runtime/src/Heap/z/zGlobals.cpp" "$fixture/zGlobals.cpp.saved"
+sed '/^size_t ZFailLargerCommits =/d' "$fixture/zGlobals.cpp.saved" >"$fixture/runtime/src/Heap/z/zGlobals.cpp"
+set +e
+python3 "$fixture/runtime/tests/gc_unit/testable_product_hooks.py" --source "$fixture/runtime/src" \
+  >"$fixture/shrunk-targets.log" 2>&1
+shrunk_targets_rc=$?
+set -e
+[[ "$shrunk_targets_rc" == 2 ]]
+grep -q 'target set shrank: expected at least 5, found 4' "$fixture/shrunk-targets.log"
+printf 'SHRUNK_TARGETS_RC=%s\n' "$shrunk_targets_rc"
+cp "$fixture/zGlobals.cpp.saved" "$fixture/runtime/src/Heap/z/zGlobals.cpp"
 
 # Mode matrix: defer must execute only C++, only must execute only the language
 # entries, and the unset/default mode must retain the combined behavior.
-printf '#!/usr/bin/env bash\necho "00000000 T _ZNK12MapleRuntime13RegionManager25PendingStalledAllocationsEv@@CANGJIE"\n' >"$fixture/bin/nm"
+printf '#!/usr/bin/env bash\n' >"$fixture/bin/nm"
+python3 "$ROOT/runtime/tests/gc_unit/testable_product_hooks.py" --source "$ROOT/runtime/src" |
+  sed -n 's/^TESTABLE_PRODUCT_HOOK_TARGET=\([^ ]*\) .*/\1/p' |
+  while read -r hook; do
+    if [[ "$hook" == *::* ]]; then
+      printf 'echo "00000000 T MapleRuntime::%s()@@CANGJIE"\n' "$hook"
+    else
+      printf 'echo "00000000 B MapleRuntime::%s@@CANGJIE"\n' "$hook"
+    fi
+  done >>"$fixture/bin/nm"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fixture/sdk/bin/cjc"
 chmod +x "$fixture/sdk/bin/cjc"
 mkdir -p "$fixture/sdk/third_party/llvm/bin" "$fixture/sdk/lib/linux_x86_64_cjnative"
@@ -295,7 +375,11 @@ for source in fresh cache; do
   out="$fixture/no-cjc-$source-out"
   mkdir -p "$out"
   if [[ "$source" == cache ]]; then
-    touch "$out/.gate_stamp"
+    PATH="$fixture/bin:$PATH" CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+      GC_UNIT_GATE_TRACE="$fixture/no-cjc-seed.trace" \
+      GC_UNIT_OUT="$out" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+      GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/no-cjc-seed.status" \
+      bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/no-cjc-seed.log" 2>&1
   fi
   set +e
   PATH="$fixture/bin:$PATH" CJC="$fixture/missing-cjc" GC_UNIT_GATE_TRACE="$fixture/no-cjc-$source.trace" \

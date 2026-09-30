@@ -21,6 +21,7 @@
 #include "gc_unittest.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zHeuristics.hpp"
+#include "Heap/z/zRootsIterator.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Mutator/ThreadLocal.h"
@@ -80,14 +81,14 @@ GC_OTHER_VM_TEST(MarkTermination1329, MediumLiveBytesUsePageAlignment)
     const size_t alignment = fx.region0()->object_alignment();
     const size_t expected = AlignUp(size, alignment);
     fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + expected);
-    const U64 root = heap.RegisterExportRoot(fx.obj0);
+    const U64 root = heap.cross_vm().export_roots().RegisterExportRoot(fx.obj0);
     StartOld(heap);
     heap.old().concurrent_mark();
     const size_t actual = fx.region0()->live_bytes();
     std::fprintf(stderr, "MARK1329_LIVE_TARGET executed=1 size=%zu alignment=%zu actual=%zu expected=%zu\n",
                  size, alignment, actual, expected);
     GC_EXPECT_TRUE(size != expected && actual == expected);
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
 }
 
 // The old pool's persistent worker receives a young mark through the product

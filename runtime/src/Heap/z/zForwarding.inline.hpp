@@ -69,29 +69,7 @@ inline size_t ZForwarding::nentries(size_t objectCountUpperBound)
 }
 
 namespace MapleRuntime {
-inline ZForwarding* ZForwarding::alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
-                              ZPage* page, RegionLifeId pageLifeId ,
-                              ForwardingAllocator* arena )
-    {
-        const size_t n = nentries(liveObjects);
-        if (n == 0) {
-            return nullptr;
-        }
-        size_t size;
-        if (!AttachedArray::allocation_size(n, &size)) {
-            return nullptr;
-        }
-        void* const addr = arena ? arena->allocate(size) : AttachedArray::alloc(n);
-        if (addr == nullptr) {
-            return nullptr;
-        }
-        if (arena) {
-            AttachedArray::initialize(addr, n);
-        }
-        auto* forwarding = ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId,
-            PageAge::old, PageAge::old, kAlignShift);
-        return forwarding;
-    }
+
 }
 
 namespace MapleRuntime {
@@ -240,7 +218,7 @@ inline
 
 namespace MapleRuntime {
 inline ZForwarding::ZForwarding(ZPage* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
-                RegionLifeId pageLifeId, PageAge from_age, PageAge to_age, size_t object_alignment_shift)
+                PageAge from_age, PageAge to_age, size_t object_alignment_shift)
         : _start(start),
           _size(regionSize),
           _heapBase(heapBase),
@@ -249,7 +227,6 @@ inline ZForwarding::ZForwarding(ZPage* page, MAddress start, MAddress heapBase, 
           _page(page),
           _from_age(from_age),
           _to_age(to_age),
-          _page_life_id(pageLifeId),
           _claimed(false),
           _in_place(false),
           _in_place_top_at_start(0),

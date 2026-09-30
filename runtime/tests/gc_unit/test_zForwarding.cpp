@@ -1,3 +1,5 @@
+#include "zunittest.hpp"
+#include "gc_forwarding_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -91,10 +93,11 @@ static void find_every_other(ForwardingEntries* forwarding)
 
 static void test(void (*function)(ForwardingEntries*), uint32_t size)
 {
-    ForwardingEntries* forwarding = ForwardingEntries::Create(size, 0, 0);
+    ZTestForwarding forwardingStorage(size, ZAddressHeapBase, ZGranuleSize);
+    ForwardingEntries* forwarding = forwardingStorage.get();
     GC_EXPECT_TRUE(forwarding != nullptr);
     (*function)(forwarding);
-    forwarding->Destroy();
+
 }
 
 static void test(void (*function)(ForwardingEntries*))
@@ -134,14 +137,15 @@ GC_TEST(ZForwardingEntries, find_every_other)
 
 GC_TEST(ZForwardingEntries, survives_without_geometry)
 {
-    ForwardingEntries* tab = ForwardingEntries::Create(4, 0x1000, 0);
+    ZTestForwarding tabStorage(4, (ZAddressHeapBase + ZGranuleSize), ZGranuleSize);
+    ForwardingEntries* tab = tabStorage.get();
     GC_EXPECT_TRUE(tab != nullptr);
-    const MAddress from = 0x1000 + 16;
-    const MAddress to = 0x2000 + 32;
+    const MAddress from = (ZAddressHeapBase + ZGranuleSize) + 16;
+    const MAddress to = (ZAddressHeapBase + 0x2000) + 32;
     GC_EXPECT_EQ(tab->insert(from, to), to);
     GC_EXPECT_EQ(tab->find(from), to);
-    GC_EXPECT_EQ(tab->find(0x1000 + 24), static_cast<MAddress>(0));
-    tab->Destroy();
+    GC_EXPECT_EQ(tab->find((ZAddressHeapBase + ZGranuleSize) + 24), static_cast<MAddress>(0));
+
 }
 
 // 18 bits of from_index at 8-byte alignment addresses exactly 2 MB, the size of a ZGC small page.
@@ -159,16 +163,17 @@ GC_TEST(ZForwardingEntries, survives_without_geometry)
 // D7-a: from_index 23 bits covers a 64 MiB region. 3 MiB used to overflow 18 bits.
 GC_TEST(ZForwardingEntries, LargeFromIndexRoundTrip)
 {
-    constexpr MAddress kStart = 0x1000;
+    const MAddress kStart = (ZAddressHeapBase + ZGranuleSize);
     constexpr size_t kAlign = size_t(1) << 3;
-    ForwardingEntries* tab = ForwardingEntries::Create(8, kStart, 0);
+    ZTestForwarding tabStorage(8, kStart, ZGranuleSize);
+    ForwardingEntries* tab = tabStorage.get();
     GC_EXPECT_TRUE(tab != nullptr);
     const MAddress from = kStart + ((size_t(3) << 20) / kAlign) * kAlign;
     GC_EXPECT_TRUE(((from - kStart) >> 3) > ForwardingEntry::kMaxFromIndex);
-    const MAddress dest = 0x9000;
+    const MAddress dest = (ZAddressHeapBase + 0x9000);
     GC_EXPECT_EQ(tab->insert(from, dest), MAddress(0));
     GC_EXPECT_EQ(tab->find(from), MAddress(0));
-    tab->Destroy();
+
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -202,11 +207,13 @@ GC_TEST(ZForwardingEntries, LargeFromIndexRoundTrip)
 // two starts, and the question "does this pointer belong to the region being cleared".
 GC_TEST(ZForwardingEntries, TableKnowsWhichRegionItWasBuiltFor)
 {
-    constexpr MAddress kRegionA = 0x10000;
-    constexpr MAddress kRegionB = 0x20000;
+    const MAddress kRegionA = (ZAddressHeapBase + 16 * ZGranuleSize);
+    const MAddress kRegionB = (ZAddressHeapBase + 32 * ZGranuleSize);
 
-    ForwardingEntries* a = ForwardingEntries::Create(4, kRegionA, 0);
-    ForwardingEntries* b = ForwardingEntries::Create(4, kRegionB, 0);
+    ZTestForwarding aStorage(4, kRegionA, ZGranuleSize);
+    ForwardingEntries* a = aStorage.get();
+    ZTestForwarding bStorage(4, kRegionB, ZGranuleSize);
+    ForwardingEntries* b = bStorage.get();
     GC_EXPECT_TRUE(a != nullptr && b != nullptr);
 
     // Ownership is a comparison against a recorded address, not a convention about which slot the
@@ -220,27 +227,23 @@ GC_TEST(ZForwardingEntries, TableKnowsWhichRegionItWasBuiltFor)
     GC_EXPECT_TRUE(!(a->start() == kRegionB));
     GC_EXPECT_TRUE(b->start() == kRegionB);
 
-    a->Destroy();
-    b->Destroy();
+
 }
 
 // e57ae807: reused-region empty-table miss still needs the retired generation.
 // covers() is the predicate FindRetiredTo uses to pick the right unlinked table.
 GC_TEST(ZForwardingEntries, CoversRecordsRegionSpan)
 {
-    constexpr MAddress kStart = 0x10000;
-    constexpr size_t kSize = 0x1000;
-    ForwardingEntries* tab = ForwardingEntries::Create(4, kStart, 0, kSize);
+    const MAddress kStart = (ZAddressHeapBase + 16 * ZGranuleSize);
+    const size_t kSize = ZGranuleSize;
+    ZTestForwarding tabStorage(4, kStart, kSize);
+    ForwardingEntries* tab = tabStorage.get();
     GC_EXPECT_TRUE(tab != nullptr);
     GC_EXPECT_TRUE(tab->covers(kStart));
     GC_EXPECT_TRUE(tab->covers(kStart + kSize - 8));
     GC_EXPECT_FALSE(tab->covers(kStart + kSize));
     GC_EXPECT_FALSE(tab->covers(kStart - 8));
-    ForwardingEntries* bare = ForwardingEntries::Create(4, kStart, 0);
-    GC_EXPECT_TRUE(bare != nullptr);
-    GC_EXPECT_FALSE(bare->covers(kStart));
-    tab->Destroy();
-    bare->Destroy();
+
 }
 
 GC_TEST(ZForwardingEntries, CapacityArithmeticDoesNotWrap)
@@ -262,10 +265,13 @@ GC_TEST(ZForwardingEntries, CapacityArithmeticDoesNotWrap)
 
 GC_TEST(ZForwardingEntries, ConcurrentSameKeyReturnsInitializedWinner)
 {
-    constexpr MAddress from = 0x1000;
-    alignas(8) uint64_t targets[2] = {0, 0};
+    const MAddress from = (ZAddressHeapBase + ZGranuleSize);
+    ZTestAllocatedMemory targetMemory(ZGranuleSize);
+    auto* targets = static_cast<uint64_t*>(targetMemory.base());
+    targets[0] = targets[1] = 0;
     const MAddress heapBase = reinterpret_cast<MAddress>(targets);
-    auto* table = ZForwarding::Create(2, from, heapBase);
+    ZTestForwarding tableStorage(2, from, ZGranuleSize);
+    auto* table = tableStorage.get();
     GC_EXPECT_TRUE(table != nullptr);
     std::atomic<unsigned> arrived{0};
     MAddress returned[2] = {0, 0};
@@ -293,12 +299,13 @@ GC_TEST(ZForwardingEntries, ConcurrentSameKeyReturnsInitializedWinner)
     GC_EXPECT_EQ(observed[0], observed[1]);
     GC_EXPECT_EQ(observed[0], returned[0] == heapBase ? uint64_t(0x12340000) : uint64_t(0x12340001));
     GC_EXPECT_EQ(table->find(from), returned[0]);
-    table->Destroy();
+
 }
 
 GC_TEST(ZForwardingEntries, CollisionPreservesIdentityAndOtherKey)
 {
-    auto* table = ZForwarding::Create(2, 0x1000, 0);
+    ZTestForwarding tableStorage(2, (ZAddressHeapBase + ZGranuleSize), ZGranuleSize);
+    auto* table = tableStorage.get();
     GC_EXPECT_TRUE(table != nullptr);
     const uintptr_t first = 0;
     uintptr_t collision = 1;
@@ -306,12 +313,12 @@ GC_TEST(ZForwardingEntries, CollisionPreservesIdentityAndOtherKey)
            (ZHash::uint32_to_uint32(first) & (table->length() - 1))) {
         ++collision;
     }
-    const MAddress other = 0x1000 + (collision << ZForwarding::kAlignShift);
-    GC_EXPECT_EQ(table->insert(MAddress(0x1000), MAddress(0x1000)), MAddress(0x1000));
-    GC_EXPECT_EQ(table->insert(other, MAddress(0x3000)), MAddress(0x3000));
-    GC_EXPECT_EQ(table->find(MAddress(0x1000)), MAddress(0x1000));
-    GC_EXPECT_EQ(table->find(other), MAddress(0x3000));
-    table->Destroy();
+    const MAddress other = (ZAddressHeapBase + ZGranuleSize) + (collision << ZForwarding::kAlignShift);
+    GC_EXPECT_EQ(table->insert(MAddress((ZAddressHeapBase + ZGranuleSize)), MAddress((ZAddressHeapBase + ZGranuleSize))), MAddress((ZAddressHeapBase + ZGranuleSize)));
+    GC_EXPECT_EQ(table->insert(other, MAddress((ZAddressHeapBase + 0x3000))), MAddress((ZAddressHeapBase + 0x3000)));
+    GC_EXPECT_EQ(table->find(MAddress((ZAddressHeapBase + ZGranuleSize))), MAddress((ZAddressHeapBase + ZGranuleSize)));
+    GC_EXPECT_EQ(table->find(other), MAddress((ZAddressHeapBase + 0x3000)));
+
 }
 
 // ZForwardingEntry encodes bounded offsets (zForwardingEntry.hpp:65-78).
@@ -324,60 +331,64 @@ GC_TEST(ZForwardingEntries, WidthBoundaryRoundTrip)
     std::fprintf(stderr, "P1_WIDTH target_assertion executed=1 matched=%d from=%zu to=%zu\n",
                  roundTrip, entry.from_index(), entry.to_offset());
     GC_EXPECT_TRUE(roundTrip);
-    auto* table = ZForwarding::Create(2, 0x1000, 0);
+    ZTestForwarding tableStorage(2, (ZAddressHeapBase + ZGranuleSize), ZGranuleSize);
+    auto* table = tableStorage.get();
     GC_EXPECT_TRUE(table != nullptr);
-    const MAddress lastAligned = ForwardingEntry::kMaxToOffset & ~MAddress(7);
+    const MAddress lastAligned = ZAddressHeapBase + (ForwardingEntry::kMaxToOffset & ~MAddress(7));
     const MAddress previousAligned = lastAligned - 8;
-    GC_EXPECT_EQ(table->insert(MAddress(0x1000), lastAligned), lastAligned);
-    GC_EXPECT_EQ(table->insert(MAddress(0x1008), previousAligned), previousAligned);
-    GC_EXPECT_EQ(table->find(MAddress(0x1000)), lastAligned);
-    GC_EXPECT_EQ(table->find(MAddress(0x1008)), previousAligned);
-    table->Destroy();
+    GC_EXPECT_EQ(table->insert(MAddress((ZAddressHeapBase + ZGranuleSize)), lastAligned), lastAligned);
+    GC_EXPECT_EQ(table->insert(MAddress((ZAddressHeapBase + ZGranuleSize + 8)), previousAligned), previousAligned);
+    GC_EXPECT_EQ(table->find(MAddress((ZAddressHeapBase + ZGranuleSize))), lastAligned);
+    GC_EXPECT_EQ(table->find(MAddress((ZAddressHeapBase + ZGranuleSize + 8))), previousAligned);
+
 }
 
 // ZForwardingTest::find_full, test/hotspot/gtest/gc/z/test_zForwarding.cpp:139-163.
 // Check every stored key, including collision chains in a fully populated array.
 GC_TEST(ZForwardingEntries, ZgcFindFull)
 {
-    constexpr MAddress start = 0x1000;
-    auto* table = ForwardingEntries::Create(8, start, 0);
+    const MAddress start = (ZAddressHeapBase + ZGranuleSize);
+    ZTestForwarding tableStorage(8, start, ZGranuleSize);
+    auto* table = tableStorage.get();
     GC_EXPECT_TRUE(table != nullptr);
     for (size_t i = 0; i < table->length(); ++i) {
-        GC_EXPECT_EQ(table->insert(start + i * 8, 0x9000 + i * 8), 0x9000 + i * 8);
+        GC_EXPECT_EQ(table->insert(start + i * 8, (ZAddressHeapBase + 0x9000) + i * 8), (ZAddressHeapBase + 0x9000) + i * 8);
     }
     for (size_t i = 0; i < table->length(); ++i) {
-        GC_EXPECT_EQ(table->find(start + i * 8), 0x9000 + i * 8);
+        GC_EXPECT_EQ(table->find(start + i * 8), (ZAddressHeapBase + 0x9000) + i * 8);
     }
-    table->Destroy();
+
 }
 
 // ZForwardingTest::find_every_other, test_zForwarding.cpp:165-205.
 GC_TEST(ZForwardingEntries, ZgcFindEveryOther)
 {
-    constexpr MAddress start = 0x1000;
-    auto* table = ForwardingEntries::Create(8, start, 0);
+    const MAddress start = (ZAddressHeapBase + ZGranuleSize);
+    ZTestForwarding tableStorage(8, start, ZGranuleSize);
+    auto* table = tableStorage.get();
     GC_EXPECT_TRUE(table != nullptr);
     const size_t count = table->length() / 2;
     for (size_t i = 0; i < count; ++i) {
-        GC_EXPECT_EQ(table->insert(start + i * 16, 0x9000 + i * 8), 0x9000 + i * 8);
+        GC_EXPECT_EQ(table->insert(start + i * 16, (ZAddressHeapBase + 0x9000) + i * 8), (ZAddressHeapBase + 0x9000) + i * 8);
     }
     for (size_t i = 0; i < count; ++i) {
-        GC_EXPECT_EQ(table->find(start + i * 16), 0x9000 + i * 8);
+        GC_EXPECT_EQ(table->find(start + i * 16), (ZAddressHeapBase + 0x9000) + i * 8);
         GC_EXPECT_EQ(table->find(start + i * 16 + 8), MAddress(0));
     }
-    table->Destroy();
+
 }
 
 GC_TEST(ZForwardingEntries, MaximumRepresentableIndexRoundTrip)
 {
-    constexpr MAddress start = 0x1000;
-    auto* table = ForwardingEntries::Create(2, start, 0);
+    const MAddress start = (ZAddressHeapBase + ZGranuleSize);
+    ZTestForwarding tableStorage(2, start, ZGranuleSize);
+    auto* table = tableStorage.get();
     GC_EXPECT_TRUE(table != nullptr);
     const MAddress from = start + ForwardingEntry::kMaxFromIndex * 8;
-    GC_EXPECT_EQ(table->insert(from, 0x9000), MAddress(0x9000));
-    GC_EXPECT_EQ(table->find(from), MAddress(0x9000));
+    GC_EXPECT_EQ(table->insert(from, (ZAddressHeapBase + 0x9000)), MAddress((ZAddressHeapBase + 0x9000)));
+    GC_EXPECT_EQ(table->find(from), MAddress((ZAddressHeapBase + 0x9000)));
     GC_EXPECT_EQ(table->find(start), MAddress(0));
-    table->Destroy();
+
 }
 
 #include "Heap/z/zPage.inline.hpp"

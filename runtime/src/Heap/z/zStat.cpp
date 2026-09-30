@@ -15,7 +15,7 @@
 #include "Base/LogFile.h"
 #include "CangjieRuntime.h"
 #include "os/LoadAverage.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -1315,7 +1315,7 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     }
     ZStatDurationSample(sampler, endNs - startNs);
     // zStat.cpp:719-741 — the one-shot per-collection report.
-    ZGeneration& generation = Heap::GetHeap().GetZGeneration(id);
+    ZGeneration& generation = (*ZGeneration::generation(static_cast<ZGenerationId>(id)));
     generation.StatHeap()->PrintStalls();
     ZStatLoad::Print();
     ZStatMMU::Print();

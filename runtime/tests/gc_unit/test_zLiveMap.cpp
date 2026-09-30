@@ -384,7 +384,7 @@ GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
         visited.clear();
         originalPage->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
         GC_EXPECT_EQ(visited.size(), 0u);
-        ZPage::RetireDescriptor(originalPage);
+        Heap::GetHeap().page_allocator().safe_destroy_page(originalPage);
     }
 }
 
@@ -417,7 +417,8 @@ GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
     for (auto role : {ZPageType::large,
                       ZPageType::small,
                       ZPageType::large}) {
-        ZPage::RetirePage(region, [] {});
+        Heap::page_table().remove(region);
+        Heap::GetHeap().page_allocator().safe_destroy_page(region);
         region = ZPage::InitRegion(ZPage::GranuleIndex(fx.heapStart), (1) * ZGranuleSize, role);
         PublishAllocatedPage(region);
         const uint32_t actual = ZLiveMapTest::segment_size(region->livemap());

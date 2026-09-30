@@ -1,5 +1,4 @@
 #include "Heap/z/zInitialize.hpp"
-#include "Mutator/ThreadLocal.h"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zCPU.hpp"
 #include "Heap/z/zDriver.hpp"
@@ -12,18 +11,15 @@
 #include <cstdio>
 #include <cstring>
 namespace MapleRuntime {
-char ZInitialize::error_message[ErrorMessageLength] = {};
+char ZInitialize::_error_message[ErrorMessageLength] = {};
 bool ZInitialize::had_error_flag = false;
 bool ZInitialize::finished = false;
 
 ZInitializer::ZInitializer(ZBarrierSet* barrier_set) { ZInitialize::initialize(barrier_set); }
 
-void ZInitialize::initialize() { initialize(nullptr); }
-
 void ZInitialize::initialize(ZBarrierSet*)
 {
     ZGlobalsPointers::initialize();
-    ThreadLocal::InitializeCleaner();
     ZCPU::initialize();
     ZStatValue::initialize();
     ZThreadLocalAllocBuffer::initialize();
@@ -34,11 +30,9 @@ void ZInitialize::initialize(ZBarrierSet*)
 
 void ZInitialize::register_error(bool debug, const char* error_msg)
 {
-    if (finished) {
-        return;
-    }
+    CHECK_DETAIL(!finished, "Only register errors during initialization");
     if (!had_error_flag) {
-        std::strncpy(error_message, error_msg, ErrorMessageLength - 1);
+        std::strncpy(_error_message, error_msg, ErrorMessageLength - 1);
         had_error_flag = true;
     }
     (void)debug;
@@ -55,7 +49,20 @@ void ZInitialize::error(const char* msg_format, ...)
     register_error(false, buf);
 }
 
-void ZInitialize::finish() { finished = true; }
+void ZInitialize::finish()
+{
+    CHECK_DETAIL(!finished, "Only finish initialization once");
+    finished = true;
+}
+
+const char* ZInitialize::error_message()
+{
+    MRT_ASSERT(had_error(), "Should have registered an error");
+    if (had_error()) {
+        return _error_message;
+    }
+    return "Unknown error, check error GC logs";
+}
 
 bool ZInitialize::had_error() { return had_error_flag; }
 }
