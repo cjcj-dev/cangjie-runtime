@@ -9,6 +9,8 @@
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zInitialize.hpp"
 #include <sys/wait.h>
+#include <sys/resource.h>
+#include "Heap/z/z_globals.hpp"
 #include <csignal>
 #include <cstring>
 #include <string>
@@ -306,7 +308,9 @@ OFFICIAL_HEAP_UNIT(SingleLetter, "20M", 0)
 
 // ZGC zCollectedHeap.cpp:80-92: a failed backing constructor propagates
 // through the heap state to the initialization owner, before GC starts.
-GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, BackingFailureReachesInitializationOwner)
+namespace {
+enum class InitFailure { Backing, Virtual, Prime };
+void CheckInitializationFailure(InitFailure failure)
 {
     int output[2];
     GC_EXPECT_EQ(pipe(output), 0);
@@ -318,9 +322,17 @@ GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, BackingFailureReachesInitializationOwner
         dup2(output[1], STDOUT_FILENO);
         close(output[1]);
         // /dev/null is a file, so it cannot supply a heap backing directory.
-        setenv("cjAllocateHeapAt", "/dev/null", 1);
-        setenv("cjHeapSize", "64MB", 1);
+        if (failure == InitFailure::Backing) { setenv("cjAllocateHeapAt", "/dev/null", 1); }
+        else { unsetenv("cjAllocateHeapAt"); }
+        setenv("cjHeapSize", failure == InitFailure::Virtual ? "1TB" : "64MB", 1);
         if (CJ_ScheduleManagerInit() != 0) { _exit(91); }
+        if (failure == InitFailure::Virtual) {
+            const rlimit limit{1ULL << 30, 1ULL << 30};
+            if (setrlimit(RLIMIT_AS, &limit) != 0) { _exit(93); }
+        }
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (failure == InitFailure::Prime) { MapleRuntime::ZFailLargerCommits = 1; }
+#endif
         CJ_MRT_CjRuntimeInit();
         _exit(92);
     }
@@ -338,14 +350,35 @@ GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, BackingFailureReachesInitializationOwner
     // Match the owner's fatal diagnostic after its failed admission, not the
     // backing producer's earlier log. Disconnecting first-error storage must
     // fail this assertion even if that earlier log still contains the text.
+    const char* expected = failure == InitFailure::Backing ? "Failed to create heap backing file" :
+        failure == InitFailure::Virtual ? "Failed to reserve" : "Failed to allocate initial heap";
     const bool originalError = ownerRejected &&
-        diagnostic.find("Failed to create heap backing file", ownerPosition) != std::string::npos;
+        diagnostic.find(expected, ownerPosition) != std::string::npos;
     // Print before the combined target assertion: a wrong earlier failure
     // must never conceal whether the owner consumed the construction result.
     std::fprintf(stderr, "INIT1310_TARGET owner_rejected=%d original_error=%d status=%d\n%s",
                  ownerRejected, originalError, status, diagnostic.c_str());
     GC_EXPECT_TRUE(ownerRejected && originalError && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
+
+} // namespace
+
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, BackingFailureReachesInitializationOwner)
+{
+    CheckInitializationFailure(InitFailure::Backing);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, VirtualFailureReachesInitializationOwner)
+{
+    CheckInitializationFailure(InitFailure::Virtual);
+}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, PrimeFailureReachesInitializationOwner)
+{
+    CheckInitializationFailure(InitFailure::Prime);
+}
+#endif
 
 namespace {
 void CheckInitializationFinished(bool lateError)

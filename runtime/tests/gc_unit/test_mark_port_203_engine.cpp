@@ -27,6 +27,7 @@
 #include "gc_unittest.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "gc_heap_fixture.hpp"
+#include "marking_smr_test.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 
 using namespace MapleRuntime;
@@ -725,7 +726,7 @@ GC_TEST(MarkPublish1144, ListPreservesEmptyPayload)
 }
 
 namespace {
-void CheckLateNativeRoot(bool abortRequested)
+void CheckLateNativeRoot(bool abortRequested, bool checkFree = false)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
@@ -752,8 +753,23 @@ void CheckLateNativeRoot(bool abortRequested)
     std::fprintf(stderr, "REMSET1310_TARGET abort=%d marked=%d live=%llu expected=%zu\n",
                  abortRequested, marked, static_cast<unsigned long long>(live), expected);
     GC_EXPECT_TRUE(abortRequested ? (!marked && live == 0) : (marked && live == expected));
+    if (checkFree) {
+        WorkerFixture observer(0);
+        const size_t pending = MarkingSMRTest::pending_count(young.Mark().Smr());
+        ZAbort::abort();
+        young.concurrent_mark_free();
+        const size_t remaining = MarkingSMRTest::pending_count(young.Mark().Smr());
+        std::fprintf(stderr, "MARKFREE1310_TARGET before=%zu after=%zu abort=%d\n",
+                     pending, remaining, ZAbort::should_abort());
+        GC_EXPECT_TRUE(pending > 0 && remaining == 0 && ZAbort::should_abort());
+    }
     young.StopWorkers();
 }
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, YoungMarkFreeReclaimsAfterAbort)
+{
+    CheckLateNativeRoot(false, true);
 }
 
 GC_OTHER_VM_TEST(Lifecycle1310, LateNativeRootFollowed)
