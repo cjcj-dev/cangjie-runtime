@@ -1,0 +1,4 @@
+head configure=0 build=0 wall=17
+clear configure=0 build=0 wall=17
+ordinary configure=0 build=0 wall=17
+restored configure=0 build=0 wall=15

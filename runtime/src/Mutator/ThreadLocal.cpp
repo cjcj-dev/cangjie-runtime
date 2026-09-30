@@ -142,7 +142,7 @@ void CleanThreadLocalData::AddToList(ThreadLocalData* tls)
     auto& list = TheList();
     std::lock_guard<std::mutex> lock(list.mutex);
     if (registered) { return; }
-    ZBarrierSet::on_thread_attach(nativeData, nullptr, tls, nullptr);
+    ZBarrierSet::on_thread_attach(nativeData, nullptr, tls);
     // Bootstrap may run before colors are published; retry on the next attach.
     if (nativeData.storeGoodMask == 0) { return; }
     nativeTLS = tls;

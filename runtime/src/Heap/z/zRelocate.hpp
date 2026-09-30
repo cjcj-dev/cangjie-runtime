@@ -28,35 +28,6 @@ class ScopedStopTheWorld;
 // ZRelocateQueue (zRelocate.hpp:39-77; zRelocate.cpp:57-307).
 class ZRelocateQueue {
 public:
-    enum class State : uint8_t { QUEUED, CLAIMED, COMPLETED };
-
-    struct EnqueueResult {
-        ZForwarding* forwarding;
-        bool inserted;
-        bool accepted;
-        ZForwarding* request;
-        State state() const
-        {
-            if (forwarding == nullptr) {
-                return State::QUEUED;
-            }
-            if (forwarding->is_done()) {
-                return State::COMPLETED;
-            }
-            return forwarding->claimed().load(std::memory_order_acquire) ? State::CLAIMED : State::QUEUED;
-        }
-    };
-
-    struct Selection {
-        ZForwarding* forwarding;
-        void* ordinary;
-        bool workersDone{ false };
-
-        bool is_request() const { return forwarding != nullptr; }
-        void* owner() const { return forwarding != nullptr ? forwarding->page() : nullptr; }
-        explicit operator bool() const { return forwarding != nullptr || ordinary != nullptr; }
-    };
-
     void activate(uint32_t nworkers);
     void deactivate();
     bool is_active() const;
@@ -68,27 +39,6 @@ public:
     void synchronize();
     void desynchronize();
     void clear();
-
-    void BeginWorkers(size_t workers) { activate(static_cast<uint32_t>(workers)); }
-    EnqueueResult Add(void* owner, MAddress from);
-    EnqueueResult Add(ZForwarding* forwarding);
-    void Wait(ZForwarding* forwarding);
-    size_t Complete(ZForwarding* forwarding);
-    ZForwarding* PruneAndClaim();
-    Selection SelectBeforeOrdinary(const std::function<void*()>& claimOrdinary)
-    {
-        ZForwarding* forwarding = PruneAndClaim();
-        if (forwarding != nullptr) {
-            return Selection{ forwarding, nullptr, false };
-        }
-        return Selection{ nullptr, claimOrdinary(), false };
-    }
-    Selection SynchronizePoll();
-    bool IsActive() const { return is_active(); }
-    size_t PendingCount() const;
-    size_t SynchronizedWorkerCount() const;
-    uint64_t CompletionCount() const { return completionCount.load(std::memory_order_relaxed); }
-
 
 private:
     bool needs_attention() const;
@@ -105,9 +55,8 @@ private:
     uint32_t nworkers{ 0 };
     uint32_t nsynchronized{ 0 };
     bool synchronizeFlag{ false };
-    std::atomic<bool> isActive{ false };
+    std::atomic<bool> _is_active{ false };
     std::atomic<int> needsAttention{ 0 };
-    std::atomic<uint64_t> completionCount{ 0 };
 };
 
 class ZWorkers;
@@ -190,7 +139,7 @@ public:
     ZPerWorker<ZRelocationTargets>* medium_targets() { return &mediumTargets; }
     ZRelocationTargets* shared_medium_targets() { return &sharedMediumTargets; }
     ZRelocateQueue* queue() { return &relocateQueue; }
-    bool is_queue_active() const { return relocateQueue.IsActive(); }
+    bool is_queue_active() const { return relocateQueue.is_active(); }
     static PageAge compute_to_age(PageAge fromAge);
     static void flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages);
     static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,

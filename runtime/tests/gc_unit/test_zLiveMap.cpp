@@ -7,7 +7,7 @@
 // Port of OpenJDK test/hotspot/gtest/gc/z/test_zLiveMap.cpp onto ZLiveMap
 // (zLiveMap.hpp:35-101), plus the page-level consumers of the livemap
 // (zPage.inline.hpp:223-331) exercised through the product SO:
-// ZMark::MarkEntryObject -> ZPage::mark_object / inc_live,
+// ZMark::Drain / MarkAndFollow -> ZPage::mark_object / inc_live,
 // ZPage::CloneForPromotion, ZLiveMap::reset / reset_segment.
 
 #include <atomic>
@@ -17,6 +17,7 @@
 
 // gc_heap_fixture.hpp first: its access-unlocking window must see zPage.hpp.
 #include "gc_heap_fixture.hpp"
+#include "mark_consumer_fixture.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zMark.hpp"
@@ -246,7 +247,7 @@ GC_TEST(ZLiveMapTest, concurrent_first_mark_resets_once)
 
 // ---- page consumers (zPage.inline.hpp:223-331) through the product SO ----
 
-// ZMark::MarkEntryObject (product SO) -> ZPage::mark_object + inc_live.
+// ZMark::Drain / MarkAndFollow (product SO) -> ZPage::mark_object + inc_live.
 // The page's live bytes are what ZRelocationSetSelector consumes
 // (zRelocationSetSelector.cpp: liveBytes = is_marked() ? live_bytes() : 0).
 GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
@@ -257,8 +258,11 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_FALSE(region->is_marked());
     GC_EXPECT_FALSE(region->is_object_live(from_object(fx.obj0)));
 
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr)); // false = newly marked
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    } // first consumer visit
     GC_EXPECT_TRUE(region->is_marked());
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
@@ -267,8 +271,11 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
     GC_EXPECT_FALSE(region->IsKnownEmpty());
 
-    GC_EXPECT_TRUE(ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr)); // already marked: no second claim
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    } // duplicate consumer visit
     GC_EXPECT_EQ(region->live_objects(), 1u);
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 
@@ -277,14 +284,17 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_FALSE(fx.region1()->is_object_live(from_object(fx.obj1)));
 }
 
-// ZMark::MarkEntryObject (product SO) -> mark_object(finalizable = true):
+// ZMark::Drain / MarkAndFollow (product SO) -> mark_object(finalizable = true):
 // the object is live but not strongly live (zPage.inline.hpp:254-260).
 GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
 {
     GcHeapFixture fx;
     ZPage* region = fx.region0();
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), nullptr));
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true));
+        consumer.context.Cache().Flush();
+    }
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_FALSE(region->is_object_strongly_live(from_object(fx.obj0)));
     GC_EXPECT_TRUE(region->is_object_marked(from_object(fx.obj0), true));
@@ -293,8 +303,11 @@ GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 
     // The strong mark completes the pair without another live claim.
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr));
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
     GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
     GC_EXPECT_FALSE(RegionSpace::IsResurrectedObject(fx.obj0));
     GC_EXPECT_EQ(region->live_objects(), 1u);
@@ -452,18 +465,23 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
     BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
     if (initiallyFinalizable) {
-        GC_EXPECT_FALSE(ZMark::MarkEntryObject(object,
-            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, true), nullptr));
+        {
+            MarkConsumerFixture consumer;
+            consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, true));
+            consumer.context.Cache().Flush();
+        }
     }
     std::atomic<unsigned> ready{0};
-    bool already[2] = {true, true};
-    auto mark = [&](unsigned worker) {
+    auto mark = [&](unsigned) {
         ready.fetch_add(1, std::memory_order_release);
         while (ready.load(std::memory_order_acquire) != 2) {
             std::this_thread::yield();
         }
-        already[worker] = ZMark::MarkEntryObject(object,
-            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), nullptr);
+        {
+            MarkConsumerFixture consumer;
+            consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false));
+            consumer.context.Cache().Flush();
+        }
     };
 
     std::thread first(mark, 0);
@@ -471,14 +489,13 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
     first.join();
     second.join();
 
-    const unsigned claims = unsigned(!already[0]) + unsigned(!already[1]);
+
     const uint32_t liveObjects = region->live_objects();
     const size_t liveBytes = region->live_bytes();
     const bool live = region->is_object_live(from_object(object));
     const bool strong = region->is_object_strongly_live(from_object(object));
-    std::fprintf(stderr, "P02_SAME_OBJECT large=%d upgrade=%d claims=%u objects=%u bytes=%zu live=%d strong=%d\n",
-                 large, initiallyFinalizable, claims, liveObjects, liveBytes, live, strong);
-    GC_EXPECT_EQ(claims, 1u);
+    std::fprintf(stderr, "P02_SAME_OBJECT large=%d upgrade=%d objects=%u bytes=%zu live=%d strong=%d\n",
+                 large, initiallyFinalizable, liveObjects, liveBytes, live, strong);
     GC_EXPECT_EQ(liveObjects, 1u);
     GC_EXPECT_EQ(liveBytes, object->GetSize());
     GC_EXPECT_TRUE(live);
@@ -523,25 +540,35 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     region->SetRegionAllocPtr(start + 1024 + seed->GetSize());
     // Initialize both old segments through real marks at different starts, so
     // both target bits are known clear before the controlled next-cycle reset.
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(warmFirst,
-        MarkStackEntry(untype(ZAddress::offset(from_object(warmFirst))), true, true, false, false), nullptr));
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(warmOther,
-        MarkStackEntry(untype(ZAddress::offset(from_object(warmOther))), true, true, false, false), nullptr));
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(warmFirst))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(warmOther))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(seed,
-        MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false), nullptr));
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
 
     std::atomic<unsigned> ready{0};
-    bool firstAlready = true;
-    bool otherAlready = true;
-    auto mark = [&](BaseObject* object, bool& already) {
+    auto mark = [&](BaseObject* object) {
         ready.fetch_add(1, std::memory_order_release);
         while (ready.load(std::memory_order_acquire) != 2) { std::this_thread::yield(); }
-        already = ZMark::MarkEntryObject(object,
-            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), nullptr);
+        {
+            MarkConsumerFixture consumer;
+            consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false));
+            consumer.context.Cache().Flush();
+        }
     };
-    std::thread first([&] { mark(firstObject, firstAlready); });
-    std::thread other([&] { mark(otherObject, otherAlready); });
+    std::thread first([&] { mark(firstObject); });
+    std::thread other([&] { mark(otherObject); });
     other.join();
     const bool liveBefore = region->is_object_live(from_object(otherObject));
     first.join();
@@ -550,19 +577,20 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     const bool firstLive = region->is_object_live(from_object(firstObject));
     const uint32_t objects = region->live_objects();
     std::fprintf(stderr, "P02_SEGMENT_PRESERVATION units=%u separate_word=%d "
-                 "other_new=%d live_before=%d live_after=%d first_live=%d objects=%u\n",
-                 units, separateWord, !otherAlready, liveBefore,
+                 "live_before=%d live_after=%d first_live=%d objects=%u\n",
+                 units, separateWord, liveBefore,
                  liveAfter, firstLive, objects);
     // Target invariant first; existence/geometry cannot mask this assertion.
     GC_EXPECT_TRUE(liveAfter);
     GC_EXPECT_TRUE(liveBefore);
     GC_EXPECT_TRUE(firstLive);
-    GC_EXPECT_FALSE(firstAlready);
-    GC_EXPECT_FALSE(otherAlready);
     GC_EXPECT_EQ(objects, 3u);
     GC_EXPECT_EQ(region->live_bytes(), 3 * firstObject->GetSize());
-    GC_EXPECT_TRUE(ZMark::MarkEntryObject(otherObject,
-        MarkStackEntry(untype(ZAddress::offset(from_object(otherObject))), true, true, false, false), nullptr));
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(otherObject))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
     GC_EXPECT_EQ(region->live_objects(), 3u);
     std::vector<BaseObject*> visited;
     region->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
@@ -597,16 +625,21 @@ GC_TEST(ZLiveMapPage, reset_publication_preserves_peer_mark)
     BaseObject* other = fx.PlaceObject(region->GetRegionStart() + 256);
     BaseObject* seed = fx.PlaceObject(region->GetRegionStart() + 512);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(seed) + seed->GetSize());
-    GC_EXPECT_FALSE(ZMark::MarkEntryObject(seed,
-        MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false), nullptr));
+    {
+        MarkConsumerFixture consumer;
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false));
+        consumer.context.Cache().Flush();
+    }
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     std::atomic<unsigned> ready{0};
-    bool already[2] = {true, true};
-    auto mark = [&](unsigned worker, BaseObject* object) {
+    auto mark = [&](unsigned, BaseObject* object) {
         ready.fetch_add(1, std::memory_order_release);
         while (ready.load(std::memory_order_acquire) != 2) { std::this_thread::yield(); }
-        already[worker] = ZMark::MarkEntryObject(object,
-            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), nullptr);
+        {
+            MarkConsumerFixture consumer;
+            consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false));
+            consumer.context.Cache().Flush();
+        }
     };
     std::thread first([&] { mark(0, fx.obj0); });
     std::thread peer([&] { mark(1, other); });
@@ -614,14 +647,12 @@ GC_TEST(ZLiveMapPage, reset_publication_preserves_peer_mark)
     peer.join();
     const bool peerLive = region->is_object_live(from_object(other));
     const uint32_t objects = region->live_objects();
-    std::fprintf(stderr, "P02_RESET_PUBLICATION peer_live=%d objects=%u claims=%u\n",
-                 peerLive, objects, unsigned(!already[0]) + unsigned(!already[1]));
+    std::fprintf(stderr, "P02_RESET_PUBLICATION peer_live=%d objects=%u\n",
+                 peerLive, objects);
     GC_EXPECT_TRUE(peerLive);
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_EQ(objects, 2u);
     GC_EXPECT_EQ(region->live_bytes(), 2 * fx.obj0->GetSize());
-    GC_EXPECT_FALSE(already[0]);
-    GC_EXPECT_FALSE(already[1]);
     GC_EXPECT_FALSE(region->is_object_live(from_object(seed)));
 }
 #endif

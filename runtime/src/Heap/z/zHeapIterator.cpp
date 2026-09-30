@@ -234,7 +234,7 @@ void HeapIterator::push_strong_roots(const HeapIteratorContext& context)
     rootsUncolored.Apply([&](Mutator& mutator) {
         mutator.VisitMutatorRoots([&](ObjectRef& root) { mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
             uncolored.do_root(slot);
-        }); }, [](ObjectRef&) {});
+        }); });
     }, [&](CJThreadRoot& root) { carrier.do_nmethod(root); });
 }
 
