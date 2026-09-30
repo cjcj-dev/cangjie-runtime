@@ -107,10 +107,13 @@ class Freed(gdb.Breakpoint):
     def stop(self):
         if blocked_task == int(gdb.parse_and_eval("$rdi")):
             print("EVENT blocking task reached CJThreadFree", flush=True)
-            FreeReturned(gdb.newest_frame(), internal=True)
+            return_address = int(gdb.parse_and_eval("*(unsigned long*)$rsp"))
+            returned = FreeReturned("*0x%x" % return_address, internal=True)
+            returned.thread = gdb.selected_thread().num
+            print("IDENTITY CJThreadFree-return=0x%x" % return_address, flush=True)
         return False
 
-class FreeReturned(gdb.FinishBreakpoint):
+class FreeReturned(gdb.Breakpoint):
     def stop(self):
         global task_freed
         task_freed = True

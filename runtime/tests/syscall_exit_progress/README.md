@@ -39,6 +39,13 @@ the test to task progress, excluding runtime shutdown. Debugger snapshots and
 CJThreadFree observations support path and lifetime analysis, not an independent
 assertion of complete scheduler memory-model correctness.
 
+For a separate lifetime observation, prepare a directory with the same
+`blocking_task` and `lib/`, then run `python3 run.py "$RESULT_DIR" lifetime`.
+This holds the publisher before ThreadStop until the consumer has returned
+from CJThreadFree. Its return breakpoint uses the actual x86-64 call return
+address, since the runtime's switched stacks need not support GDB frame-based
+finish breakpoints. The ordinary five-case suite has no reclamation breakpoint.
+
 `cut-enqueue.diff` disconnects the baseline publication call in SyscallExit0.
 `cut-wake.diff` disconnects the candidate wake call. Each should affect only
 the two ordered no-P cases. Apply each in its own product tree, build the SO,
