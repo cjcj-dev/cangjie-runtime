@@ -21,7 +21,6 @@
 #include "Heap/z/zStat.hpp"
 #include "Base/Globals.h"
 #include "Base/Panic.h"
-#include "Base/RwLock.h"
 #include "Common/PageAllocator.h"
 #include "Mutator.h"
 #include "VMOperation.h"
@@ -97,36 +96,13 @@ public:
 
     bool TryAcquireMutatorManagementWLock()
     {
-        return mutatorManagementRWLock.TryLockWrite();
+        return mutatorManagementMutex.try_lock();
     }
 
     bool TryAcquireMutatorManagementRLock()
     {
-        // Writer-preference: defer to a pending writer so a non-blocking reader does
-        // not help starve the GC's mutator-list write lock.
-        if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
-            return false;
-        }
-        if (!mutatorManagementRWLock.TryLockRead()) {
-            return false;
-        }
-        // Close the race between the pending-writer check above and TryLockRead().
-        // A reader that overlapped a writer announcement must not join the reader
-        // set and extend the writer's wait indefinitely.
-        if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
-            mutatorManagementRWLock.UnlockRead();
-            return false;
-        }
-        return true;
+        return mutatorManagementMutex.try_lock();
     }
-
-    // Announce/withdraw a pending writer so readers back off. Used by the spin-based
-    // write-lock acquisition (AcquireMutatorManagementWLock*) which does not go through
-    // MutatorManagementWLock(). A counter (not a flag) supports several writers spinning
-    // concurrently; readers wait while any writer is pending.
-    void AnnounceMgmtWriterPending() { mgmtWritersWaiting.fetch_add(1, std::memory_order_acq_rel); }
-
-    void WithdrawMgmtWriterPending() { mgmtWritersWaiting.fetch_sub(1, std::memory_order_acq_rel); }
 
     void AcquireMutatorManagementWLock();
     void AcquireMutatorManagementWLockForExit(Mutator& mutator);
@@ -251,37 +227,17 @@ public:
 
     void MutatorManagementRLock()
     {
-        // Writer-preference: block new readers while a writer is pending so the GC's
-        // mutator-list write lock cannot be starved by sustained reader churn (many
-        // cjthreads registering/unregistering under heavy parallel compilation). A
-        // reader waits here in the same state it would wait for an already-held write
-        // lock, so this adds no new stop-the-world deadlock.
-        for (;;) {
-            while (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
-                (void)sched_yield();
-            }
-            mutatorManagementRWLock.LockRead();
-            // A writer may announce itself after the check above but before LockRead
-            // increments the reader count. Back out in that case. Once a writer is
-            // pending, only the finite set of readers which completed both checks
-            // before the announcement can remain, so the writer must make progress.
-            if (mgmtWritersWaiting.load(std::memory_order_acquire) == 0) {
-                return;
-            }
-            mutatorManagementRWLock.UnlockRead();
-        }
+        mutatorManagementMutex.lock();
     }
 
-    void MutatorManagementRUnlock() { mutatorManagementRWLock.UnlockRead(); }
+    void MutatorManagementRUnlock() { mutatorManagementMutex.unlock(); }
 
     void MutatorManagementWLock()
     {
-        AnnounceMgmtWriterPending();
-        mutatorManagementRWLock.LockWrite();
-        WithdrawMgmtWriterPending();
+        mutatorManagementMutex.lock();
     }
 
-    void MutatorManagementWUnlock() { mutatorManagementRWLock.UnlockWrite(); }
+    void MutatorManagementWUnlock() { mutatorManagementMutex.unlock(); }
 
 
     bool HasNativeMutator();
@@ -304,12 +260,7 @@ public:
     private:
 
     // guard mutator set for stop-the-world/light-sync
-    RwLock mutatorManagementRWLock;
-
-    // Number of writers currently waiting for mutatorManagementRWLock. Read by the
-    // read-lock paths to implement writer-preference (see MutatorManagementRLock /
-    // TryAcquireMutatorManagementRLock), preventing GC write-lock starvation.
-    std::atomic<uint32_t> mgmtWritersWaiting{ 0 };
+    std::mutex mutatorManagementMutex;
 
     // count of mutators need to be suspended for stw/lsync.
     // this field is also used as futex wait/wakeup word for stw/lsync.

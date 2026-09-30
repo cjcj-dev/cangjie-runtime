@@ -211,7 +211,6 @@ struct ScheduleManager {
     SchdCJThreadHookFunc schdCJThreadHook[SCHD_HOOK_BUTT];
     SchdCJThreadStateHookFunc schdCJThreadStateHook[CJTHREAD_STATE_HOOK_BUTT];
     SchdDestructorHookFunc destructorFunc;
-    SchdMutatorStatusHookFunc mutatorStatusFunc;
     std::atomic<unsigned int> cjSingleModeThreadRetryTime;
 
     struct SchdfdManager *schdfdManager = nullptr;

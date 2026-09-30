@@ -84,6 +84,8 @@ void MarkFlushEndLeaveSaferegion();
 bool MarkFlushPendingForCurrentThread();
 void RegisterCurrentMarkFlushThread();
 
+struct NativeThreadIdentity {};
+
 struct CleanThreadLocalData {
     CleanThreadLocalData() noexcept;
     ~CleanThreadLocalData();
@@ -174,24 +176,10 @@ public:
         return GetThreadLocalData()->threadCache = threadCache;
     }
 
-    // When runtime is stop, we need to lock any operation which may access runtime.
-    static void ThreadLocalFini()
-    {
-        tlEnableLock.LockWrite();
-    }
-
-    static bool TryGetRdLock()
-    {
-        return tlEnableLock.TryLockRead();
-    }
-
-    static void UnlockRdLock()
-    {
-        tlEnableLock.UnlockRead();
-    }
+    static void DetachForShutdown();
+    static NativeThreadIdentity* CurrentNativeThreadIdentity();
 
 private:
-    static RwLock tlEnableLock;
 };
 } // namespace MapleRuntime
 

@@ -10,8 +10,8 @@ def main():
     elf, libdir, log = sys.argv[1:]
     so = Path(libdir).resolve() / 'libcangjie-runtime.so'
     os.environ.update(LD_LIBRARY_PATH=str(so.parent), GC_NATIVE_GDB='1',
-                      GC_UNIT_FILTER='NativeOwner1286.ShutdownUnlinksLateNative',
-                      GC_UNIT_OTHER_VM_CHILD='NativeOwner1286.ShutdownUnlinksLateNative')
+                      GC_UNIT_FILTER='NativeOwner1286.ShutdownRetainsLateNative',
+                      GC_UNIT_OTHER_VM_CHILD='NativeOwner1286.ShutdownRetainsLateNative')
     os.environ.pop('GC_UNIT_LIST_TESTS', None)
     emit('NATIVE_SHUTDOWN_IDENTITY', elf=digest(elf), so=digest(so), library=str(so))
     mi = MI(elf, log)
@@ -30,7 +30,7 @@ def main():
             raise RuntimeError('Wrong product library')
         mi.delete(ready)
         stop = mi.breakpoint('MRT_StopGCWork')
-        tls = mi.breakpoint('CangjieRuntime.cpp:274')
+        tls = mi.breakpoint('MapleRuntime::ThreadLocal::DetachForShutdown')
         mi.resume(main_thread)
         event = mi.stop()
         observed_stop = event_field(event, 'bkptno') == stop

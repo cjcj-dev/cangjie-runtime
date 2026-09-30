@@ -74,6 +74,9 @@ static int WaitForSignal()
         }
         // semaphore.inline.hpp:33-41: only the dispatcher may transition.
         ScopedEnterSaferegion blocked(false);
+        // A managed CJThread blocking in sem_wait must enter the syscall state,
+        // or it keeps the processor while parked and the tasks behind it in the
+        // run queue never start (runtime/src/CJThread/.../schedule.cpp ScheduleNew).
         SyscallEnter();
 #ifdef __APPLE__
         while (semaphore_wait(g_signalSemaphore) == KERN_ABORTED) {}
@@ -213,8 +216,7 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* context)
 
 void SignalStack::HandlerImpl(int signal)
 {
-    // The managed dispatcher owns execution. User signal delivery carries a
-    // signal number, not an interrupted stack (os.cpp:signal_thread_entry).
+    VMExit::WaitIfVMExited();
     std::vector<SignalAction> handlers;
     {
         std::lock_guard<std::mutex> lock(g_handlerMutex);
@@ -224,6 +226,15 @@ void SignalStack::HandlerImpl(int signal)
         if (it->saSignalAction == nullptr) { break; }
         sigset_t previous;
         g_linkedSignalProcmask(SIG_SETMASK, &it->scMask, &previous);
+        // os.cpp:434-441: the signal thread calls the handler in the managed
+        // state it already has; there is no transition wrapped around the call
+        // site. safepoint.cpp:524-530 also requires a walkable stack before it
+        // counts a thread as safe, which a handler holding a managed frame does
+        // not have, so a managed handler must never be entered from a
+        // saferegion. "Safe while blocked" is the blocked party's own state, not
+        // something the dispatcher grants: managed code polls and blocks through
+        // the managed blocking primitives, native code enters the native state
+        // at its own wait point (interfaceSupport.inline.hpp:186 / :172).
         bool handled = it->saSignalAction(signal, nullptr, nullptr);
         g_linkedSignalProcmask(SIG_SETMASK, &previous, nullptr);
         if (handled) { return; }
@@ -233,7 +244,6 @@ void SignalStack::HandlerImpl(int signal)
 
 void* SignalStack::DispatchSignals(void*)
 {
-    // os.cpp:371-380: a dedicated managed task, including an exit signal.
     for (;;) {
         int signal = WaitForSignal();
         if (signal == _NSIG) { return nullptr; }
@@ -241,6 +251,11 @@ void* SignalStack::DispatchSignals(void*)
     }
 }
 
+// HotSpot os.cpp:492: the signal dispatcher is a managed JavaThread created with
+// JavaThread::start_internal_daemon, not a raw OS thread. A raw pthread takes no
+// scheduler slot, so carrier CJThreads it would otherwise displace start running
+// immediately; a managed dispatcher keeps the CJThread dispatch order of the phase
+// entry points (runtime/tests/gc_unit/test_verify_fail_close.cpp:877).
 void SignalStack::StartDispatcher()
 {
     g_signalDispatcher = RunCJTask(DispatchSignals, nullptr);
@@ -251,10 +266,6 @@ void SignalStack::StopDispatcher()
 {
     if (g_signalDispatcher == nullptr) { return; }
     NotifySignal(_NSIG);
-    void* result = nullptr;
-    GetTaskRet(g_signalDispatcher, &result);
-    ReleaseHandle(g_signalDispatcher);
-    g_signalDispatcher = nullptr;
 }
 
 template <typename T>

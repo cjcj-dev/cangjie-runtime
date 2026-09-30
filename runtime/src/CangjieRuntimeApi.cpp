@@ -302,6 +302,7 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
     }
     ScheduleSetToCurrentThread(scheduler);
     lck.unlock();
+    MapleRuntime::ThreadLocal::InitializeCleaner();
 #ifndef _WIN64
     MapleRuntime::SignalStack::StartDispatcher();
 #endif
@@ -413,7 +414,6 @@ RTErrorCode FiniCJRuntime()
         MapleRuntime::SignalStack::StopDispatcher();
 #endif
         ScheduleStopOutside(scheduler);
-        MapleRuntime::CangjieRuntime::FiniAndDelete();
         return E_OK;
     }
     LOG(RTLOG_ERROR, "Cangjie runtime has been finished and don't support finish again.");

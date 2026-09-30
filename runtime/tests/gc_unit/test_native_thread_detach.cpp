@@ -228,17 +228,17 @@ extern "C" {
 std::atomic<int> native1286_shutdown_release{1};
 __attribute__((noinline)) void native1286_shutdown_ready() { std::fprintf(stderr, "NATIVE1286_SHUTDOWN_READY\n"); }
 }
-GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, ShutdownUnlinksLateNative)
+GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, ShutdownRetainsLateNative)
 {
     InitNativeRuntime();
-    std::atomic<ThreadGCData*> lateData{nullptr};
-    std::atomic<bool> exitLate{false};
-    std::thread late([&] {
+    auto* lateData = new std::atomic<ThreadGCData*>{nullptr};
+    auto* exitLate = new std::atomic<bool>{false};
+    std::thread late([lateData, exitLate] {
         ThreadLocal::InitializeCleaner();
-        lateData.store(&ThreadLocal::GetGCData(), std::memory_order_release);
-        while (!exitLate.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        lateData->store(&ThreadLocal::GetGCData(), std::memory_order_release);
+        while (!exitLate->load(std::memory_order_acquire)) { std::this_thread::yield(); }
     });
-    const bool attached = WaitNative([&] { return lateData.load() != nullptr; });
+    const bool attached = WaitNative([&] { return lateData->load() != nullptr; });
     ConcurrentGCBreakpoints::AcquireControl();
     const bool active = ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
     native1286_shutdown_release.store(std::getenv("GC_NATIVE_GDB") ? 0 : 1);
@@ -249,17 +249,17 @@ GC_RUNTIME_OTHER_VM_TEST(NativeOwner1286, ShutdownUnlinksLateNative)
     native1286_shutdown_ready();
     const int fini = FiniCJRuntime();
     release.join();
-    const bool beforeExit = ContainsNative(lateData.load());
-    exitLate.store(true, std::memory_order_release);
-    late.join();
-    const bool removed = !ContainsNative(lateData.load());
+    const bool beforeExit = ContainsNative(lateData->load());
+    exitLate->store(true, std::memory_order_release);
+    late.detach();
+    const bool retained = ContainsNative(lateData->load());
     bool nativeOnly = true;
     for (CleanThreadLocalData::Iterator it; !it.End(); it.Step()) {
         nativeOnly &= !it.Current()->nativeData.managedOwner;
     }
-    std::fprintf(stderr, "NATIVE_SHUTDOWN_LIFETIME executed=1 active=%d attached=%d fini=%d before_exit=%d removed=%d native_only=%d\n",
-                 active, attached, fini, beforeExit, removed, nativeOnly);
-    GC_EXPECT_TRUE(beforeExit && removed && nativeOnly);
+    std::fprintf(stderr, "NATIVE_SHUTDOWN_LIFETIME executed=1 active=%d attached=%d fini=%d before_exit=%d retained=%d native_only=%d\n",
+                 active, attached, fini, beforeExit, retained, nativeOnly);
+    GC_EXPECT_TRUE(beforeExit && retained && nativeOnly);
     GC_EXPECT_TRUE(active && attached && fini == E_OK);
 }
 

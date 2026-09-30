@@ -20,7 +20,6 @@
 #include <mutex>
 
 namespace MapleRuntime {
-RwLock ThreadLocal::tlEnableLock;
 MRT_EXPORT thread_local uint64_t threadLocalData[sizeof(ThreadLocalData) / sizeof(uint64_t)] = {
 #if UINTPTR_MAX == UINT64_MAX
     0, 0, 0, 0, 0, 0, ThreadLocalData::DisarmedPollWord
@@ -29,6 +28,12 @@ MRT_EXPORT thread_local uint64_t threadLocalData[sizeof(ThreadLocalData) / sizeo
 #endif
 };
 thread_local CleanThreadLocalData cleaner;
+static thread_local NativeThreadIdentity* nativeThreadIdentity = nullptr;
+
+NativeThreadIdentity* ThreadLocal::CurrentNativeThreadIdentity()
+{
+    return nativeThreadIdentity;
+}
 
 void ThreadLocalData::SetMutator(Mutator* newMutator)
 {
@@ -181,24 +186,28 @@ void CleanThreadLocalData::RemoveFromList()
 
 CleanThreadLocalData::CleanThreadLocalData()
 {
+    nativeThreadIdentity = new (std::nothrow) NativeThreadIdentity();
+    CHECK_DETAIL(nativeThreadIdentity != nullptr, "native thread identity allocation failed");
     // Add a side effect to make sure the constructor wont be optimized out.
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
+void ThreadLocal::DetachForShutdown()
+{
+    MutatorManager::Instance().UnregisterMarkFlushThread(GetThreadLocalData());
+    cleaner.RemoveFromList();
+}
+
 CleanThreadLocalData::~CleanThreadLocalData()
 {
+    VMExit::WaitIfVMExited();
+    if (VMExit::HasExited()) {
+        return;
+    }
     ThreadLocalData* local = ThreadLocal::GetThreadLocalData();
     void* cache = local->threadCache;
     local->threadCache = nullptr;
 
-    if (!ThreadLocal::TryGetRdLock()) {
-        // ScheduleExitMode's SCHD_STOP has stopped GC before ThreadLocalFini.
-        // Native list readers still need their grace period before TLS dies.
-        RemoveFromList();
-        local->gcData = nullptr;
-        local->nativeGCData = nullptr;
-        return;
-    }
     if (Runtime::CurrentRef() != nullptr) {
         if (!local->isCJProcessor && local->foreignCJThread != nullptr) {
             MRT_StopSubScheduler(local->schedule);
@@ -217,7 +226,8 @@ CleanThreadLocalData::~CleanThreadLocalData()
     if (cache != nullptr) {
         delete reinterpret_cast<ThreadCache*>(cache);
     }
-    ThreadLocal::UnlockRdLock();
+    delete nativeThreadIdentity;
+    nativeThreadIdentity = nullptr;
 }
 
 extern "C" void MCC_CheckThreadLocalDataOffset()

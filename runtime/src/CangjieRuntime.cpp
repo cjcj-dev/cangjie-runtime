@@ -118,17 +118,12 @@ void CangjieRuntime::CreateAndInit(const RuntimeParam& runtimeParam)
     ConcurrentGCThread::NotifyRuntimeInitialized();
 }
 
-void CangjieRuntime::FiniAndDelete()
+void CangjieRuntime::Terminate()
 {
-    ScopedEntryTrace trace("CJRT_FiniAndDelete");
-    if (Runtime::runtime == nullptr) {
-        LOG(RTLOG_ERROR, "Fini called but Cangjie runtime is not running");
-        return;
-    }
-    auto cjRuntime = reinterpret_cast<CangjieRuntime*>(Runtime::runtime);
-    Runtime::runtime = nullptr;
-    cjRuntime->Fini();
-    delete cjRuntime;
+    ThreadLocal::DetachForShutdown();
+    static VMHalt halt;
+    MutatorManager::Instance().StopTheWorld(&halt);
+    VMExit::SetVMExited();
 }
 
 CangjieRuntime::CangjieRuntime(const RuntimeParam& runtimeParam) : param(runtimeParam) {}
@@ -269,31 +264,6 @@ inline void CheckAndFini(T*& module)
     module = nullptr;
 }
 
-void CangjieRuntime::Fini()
-{
-    // To avoid foreign thread access finalized runtime.
-    ThreadLocal::ThreadLocalFini();
-    // since there might be failure during initialization,
-    // here we need to check and call fini.
-#ifdef _WIN64
-    CheckAndFini<WinModuleManager>(winModuleManager);
-#endif
-    CheckAndFini<ObjectManager>(objectManager);
-    CheckAndFini<HeapManager>(heapManager);
-    CheckAndFini<ExceptionManager>(exceptionManager);
-    CheckAndFini<StackManager>(stackManager);
-    loaderManager->Fini();
-    typeInfoManager->Fini();
-    CheckAndFini<MutatorManager>(mutatorManager);
-    CheckAndFini<ConcurrencyModel>(concurrencyModel);
-#if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
-    CheckAndFini<SignalManager>(signalManager);
-#endif
-    CheckAndFini<LogManager>(logManager);
-    PagePool::Instance().Fini();
-
-    LOG(RTLOG_INFO, "Cangjie runtime shutdown.");
-}
 
 bool CangjieRuntime::FiniSubScheduler(void* scheduler)
 {

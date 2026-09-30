@@ -1,4 +1,12 @@
 # runtime/tests inventory.
+signal_shutdown.cpp                      manual     build_signal_shutdown.sh builds against product SO; native and single-p modes exercise real FiniCJRuntime
+shutdown_owner_identity.cpp              manual     build_signal_shutdown.sh; real FiniCJRuntime on a host pthread followed by a new pthread on the same explicit stack
+check_shutdown_owner_identity.py         manual     GDB observes equal pthread IDs and product rejection before new foreign scheduler creation
+check_shutdown_blocking.py               manual     Shared Linux task-state, futex wait and CPU-tick observation for terminal native reentry
+check_mutator_lock_scope.sh              manual     Retained source-order checks require unlocking before managed-entry safepoint processing
+signal_shutdown_managed.cj               manual     Compile with stained std as dylib; signal-shutdown loads it to obtain real @C callback
+build_signal_shutdown.sh                 manual     Product runtime/boundscheck directory and output directory; builds one shutdown test ELF
+check_signal_shutdown.py                 manual     Product SO, signal-shutdown ELF and gdb; observes pending exit, terminal state and retained runtime after Fini returns
 #
 # Why this file exists: as of 8f13560c this directory held 21 items and exactly one
 # of them ran. Seven probes had runner scripts that nothing invoked, five files had
@@ -34,7 +42,6 @@ test_zAddress.cpp                manual     harness for run_colour_predicates_un
 run_colour_encoding_unit.sh               manual     host C++14 runner for low-48 admission, checked geometry, and slot-word encoding classification
 colour_encoding_unit.cpp                  manual     pure ColourEncoding contract table; no product component is recompiled into the test ELF
 
-run_mutator_lock_liveness_probe.sh        manual     source-text structural check; awk-parses source order
 run_epoch_handshake_protocol_probe.sh     manual     g++ only + cpuset; old/new PROTOCOL_FIXED arms
 run_threadlocal_init_race_probe.sh        manual     g++ -fsanitize=thread + cpuset
 run_typeinfo_reuse_probe.sh               manual     built runtime SO; dlopen/dlclose address-reuse positive/negative arms plus measured registeredTypeInfos RSS
@@ -47,7 +54,6 @@ test_runtime_output_product.py            manual     real runtime configure/buil
 test_resolve_runtime_output.sh             manual     shell fixture; configuration manifest selection, product hashes, and mismatched-identity negative arm
 run_string_dedup_product.sh               manual     rebuilt std.core module + product SO + runtime SO; full/range, detach, unequal, and 32-way concurrent request arms
 
-mutator_lock_liveness_harness.cpp         manual     harness for run_mutator_lock_liveness_probe.sh
 epoch_handshake_protocol_harness.cpp      manual     harness for run_epoch_handshake_protocol_probe.sh
 threadlocal_init_race_harness.cpp         manual     harness for run_threadlocal_init_race_probe.sh
 typeinfo_reuse_harness.cpp                manual     harness for run_typeinfo_reuse_probe.sh

@@ -35,6 +35,9 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "CpuProfiler/CpuProfiler.h"
+#ifndef _WIN64
+#include "Signal/SignalStack.h"
+#endif
 namespace MapleRuntime {
 #ifdef __cplusplus
 extern "C" {
@@ -354,8 +357,10 @@ void* StartMainTask(void* arg, unsigned int len)
         LOG(RTLOG_FATAL, "Finish cj runtime failed for %d\n", rtCode);
     }
     MutatorManager::Instance().TransitMutatorToExit();
+#ifndef _WIN64
+    SignalStack::StopDispatcher();
+#endif
     ScheduleStop(scheduler);
-    CangjieRuntime::FiniAndDelete();
 #ifdef __OHOS__
     TRACE_FINISH_ASYNC(TRACE_CJTHREAD_EXIT, CJThreadId());
 #elif defined(__ANDROID__)
@@ -433,6 +438,7 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
 
 bool MRT_NewForeignCJThread()
 {
+    VMExit::WaitIfVMExited();
     if (ThreadLocal::IsCJProcessor() || ThreadLocal::GetMutator() != nullptr) {
         return false;
     }
@@ -490,6 +496,7 @@ bool MRT_NewForeignCJThread()
 
 bool MRT_EndForeignCJThread()
 {
+    VMExit::WaitIfVMExited();
     if (ThreadLocal::IsCJProcessor()) {
         return false;
     }

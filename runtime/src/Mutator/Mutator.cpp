@@ -231,9 +231,7 @@ void Mutator::HandleSuspensionRequest()
         } else if (HasPreemptRequest()) {
             SuspendForPreempt();
         } else if (HasSuspensionRequest(SUSPENSION_FOR_EXIT)) {
-            while (true) {
-                sleep(INT_MAX);
-            }
+            VMExit::WaitIfVMExited();
         }
         MarkFlushBeginLeaveSaferegion();
         SetInSaferegion(SAFE_REGION_FALSE);
