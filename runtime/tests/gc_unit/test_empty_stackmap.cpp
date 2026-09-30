@@ -14,6 +14,7 @@
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "gc_unittest.hpp"
+#include "metadata_code_fixture.hpp"
 #if defined(__linux__)
 #include <sys/wait.h>
 #include <unistd.h>
@@ -34,11 +35,13 @@ public:
     void SetGCThreshold(uint64_t) override {}
 };
 struct Metadata {
-    int32_t slot = 0;
-    uint32_t code[4] = {};
+    const uint32_t* code = nullptr;
     int32_t descriptor[8] = {};
     alignas(Uptr) uint8_t stackmap[64] = {};
 };
+extern "C" { Metadata emptyStackmapMetadata; }
+GC_METADATA_CODE(emptyStackmapCode, emptyStackmapMetadata, Metadata, descriptor, 1)
+
 enum class Entry { HEAD, PROLOGUE, EH, RETURN, CALLER_SP, PROFILE, PROFILE_EMPTY };
 
 void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, const char* message,
@@ -53,10 +56,8 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
         if (dup2(output[1], STDERR_FILENO) < 0) { _exit(126); }
         close(output[1]);
         signal(SIGABRT, SIG_DFL);
-        static Metadata image;
-        if (descriptorPresent) {
-            image.slot = reinterpret_cast<char*>(image.descriptor) - reinterpret_cast<char*>(&image.slot);
-        }
+        auto& image = emptyStackmapMetadata;
+        image.code = emptyStackmapCodePC(0, descriptorPresent);
         if (stackmapPresent) {
             image.descriptor[0] = reinterpret_cast<char*>(image.stackmap) - reinterpret_cast<char*>(image.descriptor);
         }
@@ -162,6 +163,26 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
     GC_EXPECT_TRUE(target);
 }
 }
+GC_TEST(ManagedMetadata, DataAddressIsNotCode)
+{
+    struct DataPC {
+        int32_t prefix;
+        uint32_t pc[4];
+        int32_t descriptor[8];
+    };
+    static DataPC data {};
+    data.prefix = reinterpret_cast<char*>(data.descriptor) - reinterpret_cast<char*>(&data.prefix);
+    const Uptr pc = reinterpret_cast<Uptr>(data.pc);
+    ElfUnloadQuiescence::LinkImage(pc);
+    ElfUnloadQuiescence::ReadScope reader;
+    const bool registeredData = ElfUnloadQuiescence::IsLinkedAddress(pc);
+    const bool code = ElfUnloadQuiescence::IsLinkedAddress(pc, true);
+    const auto descriptor = MFuncDesc::GetFuncDesc(pc);
+    std::fprintf(stderr, "METADATA_DATA_PC_TARGET registered=%d code=%d descriptor=%p executed=1\n",
+                 registeredData, code, descriptor);
+    GC_EXPECT_TRUE(registeredData && !code && descriptor == nullptr);
+}
+
 GC_TEST(ManagedMetadata, HeadAbsentDescriptor) { CheckMetadata(Entry::HEAD, false, false, "managed frame missing funcdesc"); }
 GC_TEST(ManagedMetadata, HeadAbsentStackMap) { CheckMetadata(Entry::HEAD, true, false, "managed frame missing stackmap"); }
 GC_TEST(ManagedMetadata, HeadPresent) { CheckMetadata(Entry::HEAD, true, true, nullptr); }

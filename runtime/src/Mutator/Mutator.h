@@ -178,7 +178,7 @@ public:
     // interfaceSupport.inline.hpp:213-220: publish the active state with a
     // fence, then release any in-flight lock before processing requests.
     template<class Preprocess>
-    __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess, bool nativeReturn = false)
+    __attribute__((always_inline)) inline void PublishActiveState(Preprocess& preprocess)
     {
         for (;;) {
             MarkFlushBeginLeaveSaferegion();
@@ -192,21 +192,13 @@ public:
             preprocess();
             ArmThreadPoll(ThreadLocal::GetThreadLocalData());
         }
-        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
-        if (nativeReturn) {
-            // sharedRuntime_x86_64.cpp:2480 / macroAssembler_x86.cpp:2590:
-            // test the saved native-return boundary before requests can disarm
-            // the poll. A pending watermark alone is not a slow-path reason.
-            const uintptr_t poll = tls->GetPollWord();
-            const MachineFrame& top = uwContext.frameInfo.mFrame;
-            const uintptr_t boundary = IsManagedContext() && top.GetIP() != nullptr ?
-                reinterpret_cast<uintptr_t>(top.GetFA()) : 0;
-            if (UNLIKELY((poll & ThreadLocalData::PollBit) != 0 || boundary > poll)) {
-                CheckSpecialConditionForNativeTransition();
-            }
-        } else {
-            ProcessSafepointIfRequested(tls);
-        }
+    }
+
+    template<class Preprocess>
+    __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess)
+    {
+        PublishActiveState(preprocess);
+        ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
     }
 
     __attribute__((always_inline)) inline void DoLeaveSaferegion()
@@ -226,7 +218,17 @@ public:
     {
         if (!InSaferegion()) { return false; }
         auto preprocess = [] {};
-        DoLeaveSaferegion(preprocess, true);
+        PublishActiveState(preprocess);
+        // sharedRuntime_x86_64.cpp:2480 / macroAssembler_x86.cpp:2590:
+        // this poll belongs to native return, before requests can disarm it.
+        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+        const uintptr_t poll = tls->GetPollWord();
+        const MachineFrame& top = uwContext.frameInfo.mFrame;
+        const uintptr_t boundary = IsManagedContext() && top.GetIP() != nullptr ?
+            reinterpret_cast<uintptr_t>(top.GetFA()) : 0;
+        if (UNLIKELY((poll & ThreadLocalData::PollBit) != 0 || boundary > poll)) {
+            CheckSpecialConditionForNativeTransition();
+        }
         return true;
     }
     void CheckSpecialConditionForNativeTransition();
