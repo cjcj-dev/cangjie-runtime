@@ -345,6 +345,7 @@ MAIN_SOURCES=(
   "$SRC/test_zForwarding.cpp"
   "$SRC/test_z_forwarding_table.cpp"
   "$SRC/test_relocation_request_queue.cpp"
+  "$SRC/test_barrier_remap_no_relocate.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
   "$SRC/test_allocation_transaction.cpp"
   "$SRC/test_worker_origins.cpp"
