@@ -553,32 +553,6 @@ void RegionManager::free_page(ZPage* page)
     ReturnRetiredPageMemory(memory);
 }
 
-void RegionManager::ReclaimRegion(ZPage* region)
-{
-    // zPageAllocator.cpp:2263,2280: per-generation used, region-granular.
-    NoteUsedGenerationDelta(region->GetOwnerGeneration(), -static_cast<ssize_t>(region->GetRegionSize()));
-    ZPage::RetirePage(region, [this, region] { ReclaimRetiredRegion(region); });
-}
-
-void RegionManager::ReclaimRetiredRegion(ZPage* region)
-{
-    // convert "I traced the paths" into a machine check, but none of the designs proved the
-    // caller enumeration and five of the six ReclaimRegion callers have already detached the
-    // region, so an abort here would trade an unproven assumption for a hard stop. Count and
-    // name it instead, under the default-off account gate; a non-zero funnel_held is the
-    // signal that the enumeration was wrong.
-    size_t num = region->GetRegionSize();
-    size_t unitIndex = region->granule_index();
-    DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-        region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
-
-    {
-        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_DIRTY);
-    }
-    region->RetirePageMemory();
-    ReturnPageMemory(VirtualMemoryOf(unitIndex, num));
-}
-
 // ZGC zPageAllocator.cpp:426-440: capture generation epochs at request construction.
 ZPageAllocation::ZPageAllocation(size_t size, uint8_t role, PageAge age, ZAllocationFlags flags)
     : size(size), youngSeqnum(ZGeneration::young()->seqnum()), oldSeqnum(ZGeneration::old()->seqnum()),
@@ -733,33 +707,6 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     TrackUsedPeakLocked();
     return true;
 }
-
-size_t RegionManager::ReleaseRegion(ZPage* region)
-{
-    const size_t size = region->GetRegionSize();
-    NoteUsedGenerationDelta(region->GetOwnerGeneration(), -static_cast<ssize_t>(size));
-    ZPage::RetirePage(region, [this, region] { ReleaseRetiredRegion(region); });
-    return size;
-}
-
-void RegionManager::ReleaseRetiredRegion(ZPage* region)
-{
-    // routedest: census only, see ReclaimRegion.
-
-    size_t num = region->GetRegionSize();
-    size_t unitIndex = region->granule_index();
-    DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-        region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
-
-    {
-        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RELEASE_REGION);
-    }
-    region->RetirePageMemory();
-    // ZPageAllocator::free_page (zPageAllocator.cpp:2083-2165): freed memory
-    // enters the mapped cache; only ZUncommitter uncommits.
-    ReturnPageMemory(VirtualMemoryOf(unitIndex, num));
-}
-
 
 void RegionManager::PromoteAllRegions()
 {

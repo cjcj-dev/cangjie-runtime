@@ -220,7 +220,7 @@ void HeapIterator::push_strong_roots(const HeapIteratorContext& context)
     rootsUncolored.ApplyThreads([&](Mutator& mutator) {
         mutator.VisitMutatorRoots([&](ObjectRef& root) { mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
             uncolored.do_root(slot);
-        }); }, [](ObjectRef&) {});
+        }); });
     });
 }
 

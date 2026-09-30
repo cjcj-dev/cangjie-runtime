@@ -438,8 +438,6 @@ public:
     size_t GetYoungAllocatedSize() const;
 
 
-    void ReclaimRegion(ZPage* region);
-    size_t ReleaseRegion(ZPage* region);
 
 
 
@@ -513,8 +511,6 @@ public:
 private:
     // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the
     // page table no longer publishes the old descriptor.
-    void ReclaimRetiredRegion(ZPage* region);
-    void ReleaseRetiredRegion(ZPage* region);
     void ReturnRetiredPageMemory(const ZVirtualMemory& memory);
 
 

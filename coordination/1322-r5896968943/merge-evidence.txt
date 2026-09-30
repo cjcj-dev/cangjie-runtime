@@ -1,0 +1,103 @@
+$ git rev-parse HEAD cjcjdev/main
+92621232d6c524431c40d68b536c66a691478e08
+6f75e652e7025a50235670e9f9e00a8e2c6f10ed
+rc=0
+$ git diff --check
+rc=0
+$ git diff --name-only cjcjdev/main...HEAD -- runtime
+runtime/src/CompilerCalls.cpp
+runtime/src/Heap/z/zDriver.cpp
+runtime/src/Heap/z/zHeap.hpp
+runtime/src/Heap/z/zServiceability.cpp
+runtime/src/Heap/z/zServiceability.hpp
+runtime/src/Heap/z/zStat.cpp
+runtime/src/Heap/z/zStat.hpp
+runtime/tests/gc_unit/gc_totals.cj
+runtime/tests/gc_unit/run_gc_totals.sh
+rc=0
+$ git grep -n <<<<<<< HEAD -- runtime
+rc=1
+$ git grep -c OopStorage cjcjdev/main -- runtime/src
+cjcjdev/main:runtime/src/Common/CMakeLists.txt:1
+cjcjdev/main:runtime/src/Common/OopStorage.cpp:20
+cjcjdev/main:runtime/src/Common/OopStorage.h:11
+cjcjdev/main:runtime/src/Common/WeakHandle.cpp:3
+cjcjdev/main:runtime/src/Common/WeakHandle.h:3
+cjcjdev/main:runtime/src/Heap/z/zGeneration.cpp:1
+cjcjdev/main:runtime/src/Heap/z/zHeap.cpp:2
+cjcjdev/main:runtime/src/Heap/z/zHeap.hpp:2
+cjcjdev/main:runtime/src/Heap/z/zMark.cpp:2
+cjcjdev/main:runtime/src/Heap/z/zReferenceProcessor.hpp:5
+cjcjdev/main:runtime/src/Heap/z/zRootsIterator.cpp:6
+cjcjdev/main:runtime/src/Heap/z/zRootsIterator.hpp:17
+cjcjdev/main:runtime/src/Mutator/Mutator.h:1
+cjcjdev/main:runtime/src/Sync/Sync.cpp:2
+cjcjdev/main:runtime/src/Sync/Sync.h:2
+rc=0
+$ git grep -c OopStorage HEAD -- runtime/src
+HEAD:runtime/src/Common/CMakeLists.txt:1
+HEAD:runtime/src/Common/OopStorage.cpp:20
+HEAD:runtime/src/Common/OopStorage.h:11
+HEAD:runtime/src/Common/WeakHandle.cpp:3
+HEAD:runtime/src/Common/WeakHandle.h:3
+HEAD:runtime/src/Heap/z/zGeneration.cpp:1
+HEAD:runtime/src/Heap/z/zHeap.cpp:2
+HEAD:runtime/src/Heap/z/zHeap.hpp:2
+HEAD:runtime/src/Heap/z/zMark.cpp:2
+HEAD:runtime/src/Heap/z/zReferenceProcessor.hpp:5
+HEAD:runtime/src/Heap/z/zRootsIterator.cpp:6
+HEAD:runtime/src/Heap/z/zRootsIterator.hpp:17
+HEAD:runtime/src/Mutator/Mutator.h:1
+HEAD:runtime/src/Sync/Sync.cpp:2
+HEAD:runtime/src/Sync/Sync.h:2
+rc=0
+$ git grep -c ZUncoloredRoot cjcjdev/main -- runtime/src
+cjcjdev/main:runtime/src/CompilerCalls.cpp:1
+cjcjdev/main:runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:5
+cjcjdev/main:runtime/src/Heap/z/zCrossVM.cpp:3
+cjcjdev/main:runtime/src/Heap/z/zHeap.cpp:1
+cjcjdev/main:runtime/src/Heap/z/zMark.cpp:3
+cjcjdev/main:runtime/src/Heap/z/zStackWatermark.cpp:2
+cjcjdev/main:runtime/src/Heap/z/zStackWatermark.hpp:2
+cjcjdev/main:runtime/src/Heap/z/zUncoloredRoot.cpp:2
+cjcjdev/main:runtime/src/Heap/z/zUncoloredRoot.hpp:12
+cjcjdev/main:runtime/src/Heap/z/zUncoloredRoot.inline.hpp:28
+cjcjdev/main:runtime/src/Mutator/Mutator.cpp:1
+cjcjdev/main:runtime/src/ObjectModel/RefField.h:1
+cjcjdev/main:runtime/src/UnwindStack/StackFrameCursor.h:1
+rc=0
+$ git grep -c ZUncoloredRoot HEAD -- runtime/src
+HEAD:runtime/src/CompilerCalls.cpp:1
+HEAD:runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:5
+HEAD:runtime/src/Heap/z/zCrossVM.cpp:3
+HEAD:runtime/src/Heap/z/zHeap.cpp:1
+HEAD:runtime/src/Heap/z/zMark.cpp:3
+HEAD:runtime/src/Heap/z/zStackWatermark.cpp:2
+HEAD:runtime/src/Heap/z/zStackWatermark.hpp:2
+HEAD:runtime/src/Heap/z/zUncoloredRoot.cpp:2
+HEAD:runtime/src/Heap/z/zUncoloredRoot.hpp:12
+HEAD:runtime/src/Heap/z/zUncoloredRoot.inline.hpp:28
+HEAD:runtime/src/Mutator/Mutator.cpp:1
+HEAD:runtime/src/ObjectModel/RefField.h:1
+HEAD:runtime/src/UnwindStack/StackFrameCursor.h:1
+rc=0
+$ git grep -c ZStackWatermark cjcjdev/main -- runtime/src
+cjcjdev/main:runtime/src/Heap/z/zStackWatermark.cpp:10
+cjcjdev/main:runtime/src/Heap/z/zStackWatermark.hpp:2
+cjcjdev/main:runtime/src/Mutator/Mutator.h:4
+rc=0
+$ git grep -c ZStackWatermark HEAD -- runtime/src
+HEAD:runtime/src/Heap/z/zStackWatermark.cpp:10
+HEAD:runtime/src/Heap/z/zStackWatermark.hpp:2
+HEAD:runtime/src/Mutator/Mutator.h:4
+rc=0
+$ git grep -c ZReferenceProcessor cjcjdev/main -- runtime/src
+cjcjdev/main:runtime/src/Heap/z/zMark.cpp:1
+cjcjdev/main:runtime/src/Heap/z/zReferenceProcessor.cpp:4
+cjcjdev/main:runtime/src/Heap/z/zReferenceProcessor.hpp:1
+rc=0
+$ git grep -c ZReferenceProcessor HEAD -- runtime/src
+HEAD:runtime/src/Heap/z/zMark.cpp:1
+HEAD:runtime/src/Heap/z/zReferenceProcessor.cpp:4
+HEAD:runtime/src/Heap/z/zReferenceProcessor.hpp:1
+rc=0

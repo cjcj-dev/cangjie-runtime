@@ -1,0 +1,182 @@
+{
+  "ZBreakpoint": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "ZBreakpoint",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/concurrentGCBreakpoints.hpp:1\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zBreakpoint.cpp:7\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zBreakpoint.hpp:1\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zDriver.cpp:3\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zGeneration.cpp:3\n",
+      "count": 15
+    },
+    "HEAD": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "ZBreakpoint",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "HEAD:runtime/src/Heap/z/concurrentGCBreakpoints.hpp:1\nHEAD:runtime/src/Heap/z/zBreakpoint.cpp:7\nHEAD:runtime/src/Heap/z/zBreakpoint.hpp:1\nHEAD:runtime/src/Heap/z/zDriver.cpp:3\nHEAD:runtime/src/Heap/z/zGeneration.cpp:3\n",
+      "count": 15
+    }
+  },
+  "ZStatCycle": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "ZStatCycle",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zDirector.cpp:2\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zGeneration.hpp:2\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zStat.cpp:5\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zStat.hpp:5\n",
+      "count": 14
+    },
+    "HEAD": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "ZStatCycle",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "HEAD:runtime/src/Heap/z/zDirector.cpp:2\nHEAD:runtime/src/Heap/z/zGeneration.hpp:2\nHEAD:runtime/src/Heap/z/zStat.cpp:5\nHEAD:runtime/src/Heap/z/zStat.hpp:5\n",
+      "count": 14
+    }
+  },
+  "flush_and_free": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "flush_and_free",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": "",
+      "count": 0
+    },
+    "HEAD": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "flush_and_free",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": "",
+      "count": 0
+    }
+  },
+  "ZStackWatermarkProcessOopClosure": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "ZStackWatermarkProcessOopClosure",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": "",
+      "count": 0
+    },
+    "HEAD": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "ZStackWatermarkProcessOopClosure",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "output": "",
+      "count": 0
+    }
+  },
+  "StackWatermarkProcessOopClosure": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "StackWatermarkProcessOopClosure",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zMark.cpp:2\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zStackWatermark.cpp:5\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zStackWatermark.hpp:2\n",
+      "count": 9
+    },
+    "HEAD": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "StackWatermarkProcessOopClosure",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "HEAD:runtime/src/Heap/z/zMark.cpp:2\nHEAD:runtime/src/Heap/z/zStackWatermark.cpp:5\nHEAD:runtime/src/Heap/z/zStackWatermark.hpp:2\n",
+      "count": 9
+    }
+  },
+  "mark_young": {
+    "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "mark_young",
+        "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "b4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zAddress.hpp:1\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zAddress.inline.hpp:1\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zBarrier.cpp:1\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zBarrier.hpp:1\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zBarrier.inline.hpp:4\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zUncoloredRoot.hpp:2\nb4dd9a5a7484f2773c1c4a80ae2d6c2f6145ce56:runtime/src/Heap/z/zUncoloredRoot.inline.hpp:4\n",
+      "count": 14
+    },
+    "HEAD": {
+      "cmd": [
+        "git",
+        "grep",
+        "-c",
+        "mark_young",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "output": "HEAD:runtime/src/Heap/z/zAddress.hpp:1\nHEAD:runtime/src/Heap/z/zAddress.inline.hpp:1\nHEAD:runtime/src/Heap/z/zBarrier.cpp:1\nHEAD:runtime/src/Heap/z/zBarrier.hpp:1\nHEAD:runtime/src/Heap/z/zBarrier.inline.hpp:4\nHEAD:runtime/src/Heap/z/zUncoloredRoot.hpp:2\nHEAD:runtime/src/Heap/z/zUncoloredRoot.inline.hpp:4\n",
+      "count": 14
+    }
+  }
+}

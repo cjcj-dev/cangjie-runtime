@@ -4,7 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC zPhysicalMemoryManager.cpp:48-393; NMT is a HotSpot service.
+// ZGC zPhysicalMemoryManager.cpp:48-393; zNMT.cpp:38-65.
+// Native memory tracking has no host consumer, so no registration is carried.
 // ZFailLargerCommits is available in the testable develop configuration.
 #include "Heap/z/zPhysicalMemoryManager.hpp"
 
