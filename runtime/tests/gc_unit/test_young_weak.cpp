@@ -460,6 +460,12 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     WeakClosureTestRuntime runtime(mutatorManager);
     Fixture fx;
     fx.region0()->reset(PageAge::old);
+    if (runtimeEntry) {
+        // SelectionCycleFixture allocates its first page as eden. Its directed
+        // old-page input must also own an old remembered set (zPage.cpp:64-72).
+        // reset(age) alone only changes age/epoch; promotion allocates this set.
+        fx.region0()->remset_alloc();
+    }
     WeakGraph graph(fx, fx.region0());
 
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());

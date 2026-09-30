@@ -109,3 +109,14 @@ P1_NEW_REGISTRATION output and status bit 512. Allocation liveness, TLAB retire,
 RequestGC, actual completed field, next-cycle and page-age checks unchanged.
 The registration-does-not-publish invariant moves to #1394 / #754 acceptance.
 HotSpot instanceKlass.cpp:1919-1932 registers legitimate finalizable instances.
+
+Remaining full-suite failures exposed two separate causes:
+- Major full-cycle SelectionCycleFixture supplied an eden page changed to old
+  with reset only. Complete that fixture input with remset_alloc before any
+  reference link store; ZPage constructor/promotion allocates old remembered
+  sets (zPage.cpp:64-72). Product target assertions unchanged.
+- Export ownership traversal bypassed Reference iteration policy using the
+  physical GCTib directly. With all four fields described, its strong tagging
+  healed a dead weak referent to mark-good. Route the ownership closure through
+  ZIterator DO_FIELDS_EXCEPT_REFERENT (zHeapIterator.cpp:222,433). The existing
+  ExportMajorRootUsesWeakDiscoveryPolicy cleared-address assertion exposed it.
