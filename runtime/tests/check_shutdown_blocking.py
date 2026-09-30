@@ -33,7 +33,9 @@ def observe_blocking(debugger, thread, output):
         dict(tid=int(native[1]), before=before, after=after, passed=passed)) + '\n')
     emit('TERMINAL_BLOCKING_TARGET_EXECUTED', passed=passed, tid=int(native[1]),
          before=before, after=after)
-    debugger.cmd('-exec-interrupt --thread ' + thread)
+    info = debugger.cmd('-thread-info ' + thread)
+    if 'state="stopped"' not in info:
+        debugger.cmd('-exec-interrupt --thread ' + thread)
     event = debugger.stop()
     if event_field(event, 'thread-id') != thread:
         raise RuntimeError('Blocking observation rendezvous failed: ' + event)

@@ -32,7 +32,7 @@ def main():
         if owner != reused or fini != 0 or str(library) not in maps:
             raise RuntimeError('Owner identity precondition failed')
         emit('OWNER_REUSE_PRECONDITION', owner=owner, reused=reused, equal=True, fini=fini)
-        blocked = debugger.breakpoint('MapleRuntime::MutatorManager::MutatorManagementRLock', thread=current)
+        blocked = debugger.breakpoint('MapleRuntime::VMExit::WaitIfVMExited', thread=current)
         created = debugger.breakpoint('MapleRuntime::CangjieRuntime::CreateSubSchedulerAndInit', thread=current)
         debugger.delete(ready)
         debugger.resume(current)
@@ -42,13 +42,16 @@ def main():
         owner_token = debugger.number('MapleRuntime::VMExit::shutdownThread', current)
         current_token = debugger.number('MapleRuntime::nativeThreadIdentity', current)
         waiting = False
+        new_owner_creation = event_field(event, 'bkptno') == created
         if stopped:
             debugger.delete(blocked)
             waiting = observe_blocking(debugger, current, output)
+            frames = debugger.cmd('-stack-list-frames --thread ' + current)
+            new_owner_creation = 'CreateSubSchedulerAndInit' in frames
         passed = stopped and waiting and terminal == 1 and owner_token != 0 and current_token == 0
         emit('OWNER_REUSE_TARGET_EXECUTED', passed=passed, terminal=terminal,
              owner_token=owner_token, current_token=current_token, lock_wait=waiting,
-             new_owner_creation=event_field(event, 'bkptno') == created)
+             new_owner_creation=new_owner_creation)
         Path(output + '.json').write_text(json.dumps(dict(passed=passed, owner=owner,
                                                         reused=reused, terminal=terminal)) + '\n')
         debugger.expression('shutdownOwnerObservationDone = 1', current)
