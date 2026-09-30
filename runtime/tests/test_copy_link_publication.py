@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--arm', choices=['baseline', 'candidate', 'cut', 'restored'], required=True)
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--source', type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument('--pinroot', action='store_true')
     args = parser.parse_args()
     source = args.source.resolve()
     evidence = args.evidence.resolve()
@@ -31,10 +32,28 @@ def main():
     def snapshot():
         return {str(p.relative_to(source)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
     before = snapshot()
+    fixture = source / 'tests/gc_unit/test_pinroot.cpp'
+    fixture_original = fixture.read_text() if args.pinroot else None
+    if args.pinroot:
+        assert args.arm in ('candidate', 'cut', 'restored')
+        assert args.profile in ('default', 'testable')
+        assert os.uname().machine == 'aarch64'
+        if args.arm == 'cut':
+            needle = 'var(0); var(0); var(1); var(2);'
+            assert fixture_original.count(needle) == 1
+            fixture.write_text(fixture_original.replace(needle, 'var(0); var(0); var(1); var(3);'))
+            (evidence / 'cut.diff').write_text(''.join(difflib.unified_diff(
+                fixture_original.splitlines(True), fixture.read_text().splitlines(True),
+                fromfile='a/runtime/tests/gc_unit/test_pinroot.cpp',
+                tofile='b/runtime/tests/gc_unit/test_pinroot.cpp')))
+        (evidence / 'pinroot-arm.txt').write_text(args.arm + '\n')
+        args.arm = 'candidate'
     (evidence / 'source-before.sha256').write_text(json.dumps(before, indent=2))
     try:
         exercise(args, source, evidence)
     finally:
+        if fixture_original is not None:
+            fixture.write_text(fixture_original)
         after = snapshot()
         (evidence / 'source-after.sha256').write_text(json.dumps(after, indent=2))
         result = subprocess.run(['git', '-C', str(source), 'diff', '--exit-code', '--'] +
@@ -65,12 +84,13 @@ def exercise(args, source, evidence):
     maps = ' '.join(f'-f{kind}-prefix-map={source}=/usr/src/cangjie-runtime'
                     for kind in ('file', 'debug', 'macro'))
     env.update(CFLAGS=maps, CXXFLAGS=maps, ASMFLAGS=maps)
+    launcher = 'sccache' if args.pinroot else 'ccache'
     command = ['cmake', '-S', source, '-B', build, '-DCMAKE_BUILD_TYPE=Release',
                '-DCOPYGC_FLAG=1', '-DDOPRA_FLAG=1', '-DRUNTIME_TRACE_FLAG=1',
                '-DCJ_SDK_VERSION=0.0.1', '-DDISABLE_VERSION_CHECK=1',
                '-DCMAKE_C_COMPILER=clang', '-DCMAKE_CXX_COMPILER=clang++', '-DCMAKE_AR_PATH=ar',
-               '-DCMAKE_C_COMPILER_LAUNCHER=ccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache',
-               '-DCMAKE_ASM_COMPILER_LAUNCHER=ccache',
+               '-DCMAKE_C_COMPILER_LAUNCHER=' + launcher, '-DCMAKE_CXX_COMPILER_LAUNCHER=' + launcher,
+               '-DCMAKE_ASM_COMPILER_LAUNCHER=' + launcher,
                '-DMRT_TESTABLE_INTERNALS=' + ('OFF' if args.profile == 'default' else 'ON'),
                '-DMRT_GC_UNIT_TESTS=' + ('ON' if args.profile == 'gcunit' else 'OFF')]
     assert run('configure', command, env) == 0
@@ -207,6 +227,31 @@ def exercise(args, source, evidence):
             runner.write_text(original)
         elf = evidence / 'standalone/cj_gc_unit'
         link_log = evidence / 'standalone.log'
+    if args.pinroot:
+        expected = set(suite + '.' + name for suite, name in re.findall(
+            r'GC_COMPONENT_OTHER_VM_TEST\((SafepointHandshakeOrder|SretWatermark|RelocateStartFrameRoot), (\w+)\)',
+            (source / 'tests/gc_unit/test_pinroot.cpp').read_text()))
+        outcomes = {}
+        standalone = evidence / 'standalone'
+        for row in (standalone / 'test-manifest.tsv').read_text().splitlines():
+            kind, test, index = row.split('\t')
+            if test not in expected:
+                continue
+            log = (standalone / 'test-logs' / (index + '-' + kind + '.log')).read_text()
+            target_rc = int((standalone / 'test-rc' / (index + '-' + kind + '.rc')).read_text())
+            outcomes[test] = {'rc': target_rc, 'log': log}
+        (evidence / 'pinroot-results.json').write_text(json.dumps(outcomes, indent=2))
+        assert set(outcomes) == expected, 'all fixture tests must execute'
+        failed = {test for test, result in outcomes.items() if result['rc'] != 0}
+        arm = (evidence / 'pinroot-arm.txt').read_text().strip()
+        wanted = {'SretWatermark.UsesIncomingRegisterPointerMap'} if arm == 'cut' else set()
+        assert failed == wanted, (failed, wanted)
+        for test, result in outcomes.items():
+            assert '[  RUN   ] ' + test in result['log'], test
+            if test in failed:
+                assert 'SRET_COVER_ASSERT_EXECUTED pointer=1 register=1 covered=0' in result['log'], result
+        print('PINROOT_FIXTURE_RESULTS arm=' + arm + ' tests=' + str(len(outcomes)) +
+              ' failed=' + str(sorted(failed)), flush=True)
     if args.arm == 'cut':
         log = link_log.read_text()
         assert rc != 0 and 'undefined reference' in log and 'MRT_CopyDisjointWords' in log
