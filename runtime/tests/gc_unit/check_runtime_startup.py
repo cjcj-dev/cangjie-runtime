@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Observe the real API startup handshake using gdb, without product hooks."""
+
+import os
+import sys
+
+
+def observe():
+    import gdb
+
+    state = {"bound": 0, "ready": 0, "failed": False, "injected": False,
+             "starter_returned": False, "main": None, "destroyed": False,
+             "gated": False}
+
+    def target(name, condition, detail):
+        state["failed"] |= not condition
+        print("STARTUP_TARGET %s verdict=%s %s" %
+              (name, "PASS" if condition else "FAIL", detail), flush=True)
+
+    def ready():
+        return bool(gdb.parse_and_eval("g_runtimeInited._M_base._M_i"))
+
+    class Published(gdb.FinishBreakpoint):
+        def stop(self):
+            state["ready"] += 1
+            target("READY_PUBLICATION", ready(), "ready=%d" % ready())
+            return False
+
+    class Publish(gdb.Breakpoint):
+        def stop(self):
+            running = int(gdb.parse_and_eval("*(int*)scheduler"))
+            target("RUNNING_BEFORE_READY", running == 1 and not ready(),
+                   "schedule_state=%d ready=%d" % (running, ready()))
+            Published(gdb.newest_frame(), internal=True)
+            return False
+
+    class Bind(gdb.Breakpoint):
+        def stop(self):
+            state["bound"] += 1
+            target("CONSUMER_READY", ready() and state["ready"] == 1,
+                   "ready=%d publications=%d" % (ready(), state["ready"]))
+            return mode == "ordered" and not ready()
+
+    class Fail(gdb.Breakpoint):
+        def stop(self):
+            state["injected"] = True
+            target("FAILURE_NOT_READY", not ready(), "ready=%d" % ready())
+            return True
+
+    class StarterCompleted(gdb.FinishBreakpoint):
+        def stop(self):
+            state["starter_returned"] = True
+            target("FAILURE_TERMINATES" if mode == "failure" else "INIT_COMPLETES",
+                   False, "starter_returned_before_ready=%d" % (not ready()))
+            return True
+
+    class Starter(gdb.Breakpoint):
+        def stop(self):
+            StarterCompleted(gdb.newest_frame(), internal=True)
+            return False
+
+    class InitGate(gdb.Breakpoint):
+        def stop(self):
+            state["main"] = gdb.selected_thread()
+            gdb.execute("set scheduler-locking on")
+            return False
+
+    class DestroyGate(gdb.Breakpoint):
+        def stop(self):
+            if gdb.selected_thread() != state["main"]:
+                return False
+            state["destroyed"] = True
+            return True
+
+    class ScheduleGate(gdb.Breakpoint):
+        def stop(self):
+            state["gated"] = True
+            return True
+
+    gdb.execute("set pagination off")
+    gdb.execute("set confirm off")
+    gdb.execute("set breakpoint pending on")
+    gdb.execute("set follow-fork-mode child")
+    gdb.execute("set detach-on-fork on")
+    gdb.execute("handle SIGUSR1 nostop noprint pass")
+    gdb.execute("handle SIGUSR2 nostop noprint pass")
+    gdb.execute("start")
+    if "i386:x86-64" not in gdb.newest_frame().architecture().name():
+        print("STARTUP_RESULT NOT_RUN supported envelope is Linux x86-64", flush=True)
+        gdb.execute("quit 2")
+    Publish("NotifyRuntimeSchedulerReady", internal=True)
+    Bind("CJ_ScheduleSetToCurrentThread", internal=True)
+    mode = os.environ["STARTUP_MODE"]
+    Starter("StartCJRuntime", internal=True)
+    if mode == "failure":
+        Fail("CJ_SchmonStart", internal=True)
+    elif mode == "ordered":
+        InitGate("InitCJRuntime", internal=True)
+        destroy_gate = DestroyGate("pthread_attr_destroy", internal=True)
+        schedule_gate = ScheduleGate("CJ_ScheduleStart", internal=True)
+    gdb.execute("continue")
+    if mode == "ordered":
+        if not state["destroyed"]:
+            target("ORDERING_GATE", False, "pthread_attr_destroy_not_reached")
+            gdb.execute("quit 1")
+        destroy_gate.delete()
+        gdb.execute("finish")
+        starters = [thread for thread in gdb.selected_inferior().threads()
+                    if thread != state["main"]]
+        target("ORDERING_GATE", len(starters) == 1,
+               "starter_threads=%d" % len(starters))
+        if len(starters) != 1:
+            gdb.execute("quit 2")
+        starters[0].switch()
+        gdb.execute("continue")
+        if state["starter_returned"] or not state["gated"]:
+            gdb.execute("kill")
+            gdb.execute("quit 1")
+        schedule_gate.delete()
+        state["main"].switch()
+        gdb.execute("catch syscall futex")
+        wait_gate = gdb.breakpoints()[-1]
+        gdb.execute("continue")
+        trace = gdb.execute("bt", to_string=True)
+        target("CONSUMER_WAITS_FOR_READY", not ready() and state["bound"] == 0
+               and "condition_variable" in trace and "InitCJRuntime" in trace,
+               "ready=%d bindings=%d\n%s" % (ready(), state["bound"], trace))
+        wait_gate.delete()
+        if state["failed"]:
+            gdb.execute("kill")
+            gdb.execute("quit 1")
+        gdb.execute("set scheduler-locking off")
+        gdb.execute("continue")
+    if mode == "failure" and state["injected"]:
+        gdb.execute("return (int)11")
+        gdb.execute("continue")
+        if state["starter_returned"]:
+            gdb.execute("kill")
+            gdb.execute("quit 1")
+        signal = str(gdb.parse_and_eval("$_siginfo.si_signo"))
+        target("FAILURE_TERMINATES", signal == "6" and state["bound"] == 0
+               and state["ready"] == 0,
+               "signal=%s bindings=%d publications=%d" %
+               (signal, state["bound"], state["ready"]))
+        gdb.execute("kill")
+    elif mode in ("success", "ordered"):
+        if state["starter_returned"]:
+            gdb.execute("kill")
+            gdb.execute("quit 1")
+        inferior_rc = int(gdb.parse_and_eval("$_exitcode"))
+        target("INIT_COMPLETES", inferior_rc == 0 and state["bound"] > 0
+               and state["ready"] == 1,
+               "inferior_rc=%d bindings=%d publications=%d" %
+               (inferior_rc, state["bound"], state["ready"]))
+    else:
+        target("INJECTION_REACHED", False, "injected=0")
+    gdb.execute("quit %d" % (1 if state["failed"] else 0))
+
+
+def main():
+    import argparse
+    import hashlib
+    import pathlib
+    import subprocess
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("elf", type=pathlib.Path)
+    parser.add_argument("library_dir", type=pathlib.Path)
+    parser.add_argument("--mode", choices=("success", "failure", "ordered"), required=True)
+    args = parser.parse_args()
+    for artifact in (args.elf, args.library_dir / "libcangjie-runtime.so",
+                     args.library_dir / "libboundscheck.so"):
+        with artifact.open("rb") as stream:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        print("STARTUP_IDENTITY %s %s" % (digest.hexdigest(), artifact), flush=True)
+    environment = os.environ.copy()
+    environment["STARTUP_MODE"] = args.mode
+    environment["LD_LIBRARY_PATH"] = str(args.library_dir.resolve())
+    command = ["gdb", "-q", "-nx", "-batch", "-ex",
+               "source " + str(pathlib.Path(__file__).resolve()), "--args",
+               str(args.elf.resolve()), "--gtest_filter=PrecleanWithoutShutdown.WhiteBox"]
+    try:
+        result = subprocess.run(command, env=environment, timeout=45,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True)
+        print(result.stdout, end="", flush=True)
+        if args.mode == "failure" and result.returncode == 0:
+            diagnostic = "Failed to start runtime scheduler: 11" in result.stdout
+            print("STARTUP_TARGET FAILURE_DIAGNOSTIC verdict=%s error=11" %
+                  ("PASS" if diagnostic else "FAIL"), flush=True)
+            return 0 if diagnostic else 1
+        return result.returncode
+    except subprocess.TimeoutExpired:
+        print("STARTUP_RESULT NOT_RUN debugger deadline exceeded", flush=True)
+        return 124
+
+
+if "gdb" in sys.modules:
+    try:
+        observe()
+    except Exception as error:
+        import gdb
+
+        print("STARTUP_RESULT NOT_RUN %s" % error, flush=True)
+        gdb.execute("quit 2")
+elif __name__ == "__main__":
+    sys.exit(main())

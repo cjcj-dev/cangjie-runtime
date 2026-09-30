@@ -3,6 +3,6 @@
 
 #include "schedule.h"
 
-extern "C" void NotifyRuntimeSchedulerReady(ScheduleHandle scheduler);
+extern "C" __attribute__((visibility("hidden"))) void NotifyRuntimeSchedulerReady(ScheduleHandle scheduler);
 
 #endif
