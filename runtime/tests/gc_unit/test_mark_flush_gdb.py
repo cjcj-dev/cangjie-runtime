@@ -171,6 +171,15 @@ try:
             result['sts_before'] = int(gdb.parse_and_eval(
                 'MapleRuntime::SuspendibleThreadSet::nthreads'))
             result['worker_stack'] = command('bt')
+            joined = result['sts_before'] > 0
+            print('ASSERT_PROACTIVE_WORKER_JOINED ' + json.dumps(
+                {'passed': joined, 'nthreads': result['sts_before']}), flush=True)
+            if not joined:
+                # The independent Joiner control must not enter a Leaver
+                # without membership. It does not certify the flush fix.
+                result['passed'] = False
+                Path(os.environ['MARK_FLUSH_RESULT']).write_text(json.dumps(result) + '\n')
+                command('quit 1')
             command('set scheduler-locking on')
         handshake = gdb.Breakpoint('MapleRuntime::ZMark::HandshakeFlush(MapleRuntime::ZMark*)', temporary=True)
         command('continue')
