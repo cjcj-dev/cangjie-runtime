@@ -373,6 +373,7 @@
 #define ScheduleTryExit                         CJ_ScheduleTryExit
 #define ScheduleClean                           CJ_ScheduleClean
 #define ScheduleGlobalWrite                     CJ_ScheduleGlobalWrite
+#define ScheduleGlobalQueueCount                CJ_ScheduleGlobalQueueCount
 #define ScheduleAnyCJThread                     CJ_ScheduleAnyCJThread
 #define ScheduleCJThreadCount                   CJ_ScheduleCJThreadCount
 #define ScheduleCJThreadCountPublic             CJ_ScheduleCJThreadCountPublic

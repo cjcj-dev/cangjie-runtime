@@ -1,0 +1,147 @@
+name: ARM unit ELF and product refs
+on:
+  workflow_dispatch:
+    inputs:
+      elf_ref:
+        description: Ref containing the test sources
+        required: true
+        type: string
+      product_ref:
+        description: Ref containing the runtime sources
+        required: true
+        type: string
+      filter:
+        description: Colon-separated exact Suite.Test names
+        required: true
+        type: string
+  push:
+    branches: ['sym/arm-unit-*']
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      SCCACHE_DIR: ${{ github.workspace }}/sccache
+      GC_UNIT_GATE_SKIP: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve refs
+        id: refs
+        env:
+          ELF_REF: ${{ inputs.elf_ref }}
+          PRODUCT_REF: ${{ inputs.product_ref }}
+          TEST_FILTER: ${{ inputs.filter }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            ELF_REF=$(jq -er '.elf_ref | strings | select(length > 0)' .github/arm-unit-params.json)
+            PRODUCT_REF=$(jq -er '.product_ref | strings | select(length > 0)' .github/arm-unit-params.json)
+            TEST_FILTER=$(jq -er '.filter | strings | select(length > 0)' .github/arm-unit-params.json)
+          fi
+          for value in "$ELF_REF" "$PRODUCT_REF" "$TEST_FILTER"; do
+            test -n "$value"
+            test "$(printf '%s' "$value" | wc -l)" = 0
+          done
+          printf 'elf_ref=%s\nproduct_ref=%s\nfilter=%s\n' "$ELF_REF" "$PRODUCT_REF" "$TEST_FILTER" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.refs.outputs.elf_ref }}
+          path: elf-source
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.refs.outputs.product_ref }}
+          path: product-source
+      - name: Install native tools
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build libssl-dev libffi-dev gdb
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: arm-unit-${{ runner.os }}-${{ github.sha }}
+          restore-keys: arm-unit-${{ runner.os }}-
+      - name: Build and execute real standalone entry
+        env:
+          TEST_FILTER: ${{ steps.refs.outputs.filter }}
+        run: |
+          ulimit -c 0
+          mkdir -p evidence compiler-bin
+          uptime > evidence/uptime-before.log
+          git -C elf-source rev-parse HEAD > evidence/elf-ref.log
+          git -C product-source rev-parse HEAD > evidence/product-ref.log
+          printf '#!/bin/sh\nexec sccache /usr/bin/clang++ "$@"\n' > compiler-bin/clang++
+          chmod +x compiler-bin/clang++
+          export CXX="$PWD/compiler-bin/clang++"
+          build_ref() {
+            local arm=$1 start=$SECONDS
+            cmake -S "$arm-source/runtime" -B "$arm-build" -DCMAKE_BUILD_TYPE=Release \
+              -DCOPYGC_FLAG=1 -DDOPRA_FLAG=1 -DRUNTIME_TRACE_FLAG=1 -DCJ_SDK_VERSION=0.0.1 \
+              -DDISABLE_VERSION_CHECK=1 -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+              -DCMAKE_AR_PATH=ar -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+              -DCMAKE_ASM_COMPILER_LAUNCHER=sccache -DMRT_TESTABLE_INTERNALS=OFF -DMRT_GC_UNIT_TESTS=OFF \
+              > "evidence/$arm-configure.log" 2>&1 && \
+              cmake --build "$arm-build" --target cangjie-runtime -j"$(nproc)" > "evidence/$arm-build.log" 2>&1
+            local result=$?
+            printf 'rc=%s wall=%s jobs=%s\n' "$result" "$((SECONDS-start))" "$(nproc)" > "evidence/$arm-build-result.log"
+            return "$result"
+          }
+          build_ref elf & elf_pid=$!
+          build_ref product & product_pid=$!
+          wait "$elf_pid"
+          wait "$product_pid"
+          elf_root=$(sed -n 's/^OUTPUT_TEMP_PATH:INTERNAL=//p' elf-build/CMakeCache.txt)
+          product_root=$(sed -n 's/^OUTPUT_TEMP_PATH:INTERNAL=//p' product-build/CMakeCache.txt)
+          elf_lib=$(dirname "$(find "$elf_root/lib" -name libcangjie-runtime.so -type f -print -quit)")
+          product_lib=$(dirname "$(find "$product_root/lib" -name libcangjie-runtime.so -type f -print -quit)")
+          sha256sum "$elf_lib/libcangjie-runtime.so" "$product_lib/libcangjie-runtime.so" "$product_lib/libboundscheck.so" > evidence/products.sha256
+          nm --defined-only "$product_lib/libcangjie-runtime.so" | c++filt > evidence/product-symbols.log
+          set +e
+          GCV2_RUNTIME_LIB_DIR="$elf_lib" GCV2_RUNTIME_OUTPUT_ROOT="$elf_root" GC_UNIT_OUT="$PWD/evidence/standalone" \
+            bash elf-source/runtime/tests/gc_unit/run_standalone.sh > evidence/standalone.log 2>&1
+          standalone_rc=$?
+          printf '%s\n' "$standalone_rc" > evidence/standalone.rc
+          if [ ! -x evidence/standalone/cj_gc_unit ]; then exit "$standalone_rc"; fi
+          sha256sum evidence/standalone/cj_gc_unit evidence/standalone/cj_gc_forwarding_publication_unit > evidence/elf.sha256
+          nm --defined-only evidence/standalone/cj_gc_unit | c++filt > evidence/elf-defined.log
+          nm -u evidence/standalone/cj_gc_unit | c++filt > evidence/elf-imports.log
+          IFS=: read -r -a selected_tests <<< "$TEST_FILTER"
+          target_rc=0
+          for index in "${!selected_tests[@]}"; do
+            selected_elf=''
+            matches=0
+            for kind in main publication; do
+              if grep -Fxq -- "${selected_tests[$index]}" "evidence/standalone/test-lists/$kind.txt"; then
+                matches=$((matches+1))
+                if [ "$kind" = main ]; then selected_elf=evidence/standalone/cj_gc_unit; else selected_elf=evidence/standalone/cj_gc_forwarding_publication_unit; fi
+              fi
+            done
+            if [ "$matches" -ne 1 ]; then
+              printf 'Expected one registered ELF for %s, got %s\n' "${selected_tests[$index]}" "$matches" > "evidence/target-$index.log"
+              printf '2\n' > "evidence/target-$index.rc"
+              target_rc=1
+              continue
+            fi
+            printf '%s\n' "$selected_elf" > "evidence/target-$index-elf.log"
+            nm --defined-only "$selected_elf" | c++filt > "evidence/target-$index-defined.log"
+            nm -u "$selected_elf" | c++filt > "evidence/target-$index-imports.log"
+            LD_LIBRARY_PATH="$product_lib" "$selected_elf" "--gtest_filter=${selected_tests[$index]}" > "evidence/target-$index.log" 2>&1
+            result=$?
+            printf '%s\n' "$result" > "evidence/target-$index.rc"
+            if [ "$result" -ne 0 ]; then target_rc=1; fi
+          done
+          cat evidence/target-*.log > evidence/target.log
+          printf '%s\n' "$target_rc" > evidence/target.rc
+          cat evidence/target.log
+          uptime > evidence/uptime-after.log
+          exit "$target_rc"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm-unit-${{ github.run_id }}
+          path: |
+            evidence/**/*.log
+            evidence/**/*.rc
+            evidence/**/*.sha256
+            evidence/standalone/test-lists/*.txt
+          retention-days: 7

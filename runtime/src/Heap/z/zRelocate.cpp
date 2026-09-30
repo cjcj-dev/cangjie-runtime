@@ -434,14 +434,15 @@ public:
         if (inPlace) { owner->in_place_relocation_finish(); }
         if (owner->from_age() == PageAge::old) { owner->relocated_remembered_fields_after_relocate(); }
         owner->release_page();
-        ZPage* source = owner->detach_page();
         if (inPlace) {
+            ZPage* source = owner->detach_page();
             clear_remset_before_in_place_reuse(source);
             const uint32_t partition = source->partition_id();
             ZPage* target = targets->get(partition, owner->to_age());
             target->ResetCensusBoundary();
             allocator->share_target_page(target, partition);
         } else {
+            ZPage* source = owner->detach_page();
             Heap::free_page(source);
         }
     }

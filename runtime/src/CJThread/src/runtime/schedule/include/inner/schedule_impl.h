@@ -304,6 +304,7 @@ MRT_INLINE static struct Processor *ProcessorGetWithCheck(void)
  * @retval 0 or error code
  */
 int ScheduleGlobalWrite(struct CJThread *cjthreadList[], unsigned int num);
+__attribute__((visibility("hidden"))) unsigned long long ScheduleGlobalQueueCount(struct Schedule *schedule);
 
 /**
  * @brief Obtain the address of the array registered in the processor.
