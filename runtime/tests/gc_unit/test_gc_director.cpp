@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 #include "gc_worker_fixture.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "gc_generation_test.hpp"
@@ -140,7 +141,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductWarmupStopsAfterThreeCycles)
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     {
         ScopedObjectAccess access;
-        heap.RegisterExportRoot(MObject::NewPinnedObject(type, size));
+        heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(type, size));
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (heap.old().CycleStats().Stats(TimeUtil::NanoSeconds()).warmupCycles < 3 &&
@@ -171,9 +172,9 @@ GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
 {
     // zGeneration.cpp:600,637: the total lives on the heap; a major start
     // snapshots it on ZGenerationOld (zGeneration.cpp:1248,1526).
-    const uint32_t prior = Heap::GetHeap().total_collections();
-    Heap::GetHeap().increment_total_collections();
-    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 1);
+    const uint32_t prior = ZCollectedHeap::heap()->total_collections();
+    ZCollectedHeap::heap()->increment_total_collections();
+    GC_EXPECT_EQ(ZCollectedHeap::heap()->total_collections(), prior + 1);
     ZStatCycle young;
     ZStatCycle old;
     young.Initialize(0);
@@ -186,14 +187,14 @@ GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
     old.AtStart(2);
     old.AtEnd(3, &oldWorkers, true, true);
     // Cycle/worker accounting does not move the collection count.
-    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 1);
+    GC_EXPECT_EQ(ZCollectedHeap::heap()->total_collections(), prior + 1);
 
-    Heap::GetHeap().increment_total_collections();
-    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 2);
-    Heap::GetHeap().increment_total_collections();
-    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 3);
-    Heap::GetHeap().increment_total_collections();
-    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 4);
+    ZCollectedHeap::heap()->increment_total_collections();
+    GC_EXPECT_EQ(ZCollectedHeap::heap()->total_collections(), prior + 2);
+    ZCollectedHeap::heap()->increment_total_collections();
+    GC_EXPECT_EQ(ZCollectedHeap::heap()->total_collections(), prior + 3);
+    ZCollectedHeap::heap()->increment_total_collections();
+    GC_EXPECT_EQ(ZCollectedHeap::heap()->total_collections(), prior + 4);
 }
 
 GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
@@ -280,14 +281,14 @@ void* CollectWithTenuringFlags(void* context)
     type->SetType(TypeKind::TYPE_KIND_CLASS);
     type->SetInstanceSize(4096 - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
-    const U64 root = Heap::GetHeap().RegisterExportRoot(MCC_NewObject(type, 4096));
+    const U64 root = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(MCC_NewObject(type, 4096));
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
     auto& result = *static_cast<TenuringCollectionResult*>(context);
     if (result.full) { Heap::GetHeap().RequestGC(GC_REASON_USER); }
     result.threshold = Heap::GetHeap().young().tenuring_threshold();
-    auto* survivor = Heap::GetHeap().GetExportObject(root);
+    auto* survivor = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(root);
     result.survivorAge = Heap::page(reinterpret_cast<uintptr_t>(survivor))->age();
-    Heap::GetHeap().RemoveExportObject(root);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(root);
     Mutator::GetMutator()->SetManagedContext(true);
     return nullptr;
 }
@@ -532,7 +533,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     {
         ScopedObjectAccess access;
-        heap.RegisterExportRoot(MObject::NewPinnedObject(type, firstSize));
+        heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(type, firstSize));
     }
     std::fprintf(stderr, "CAUSE_FIRST_ALLOCATION_READY scenario=%s\n", scenario);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
@@ -550,7 +551,7 @@ GC_RUNTIME_OTHER_VM_TEST(GcDirector, ProductCauseScenario)
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(secondStorage), sizeof(secondStorage));
         {
             ScopedObjectAccess access;
-            heap.RegisterExportRoot(MObject::NewPinnedObject(secondType, nextSize));
+            heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(secondType, nextSize));
         }
         std::fprintf(stderr, "CAUSE_SECOND_ALLOCATION_READY scenario=%s\n", scenario);
     }
@@ -869,7 +870,7 @@ void* CollectForGenerationState(void* context)
         const auto address = heap.object_allocator().alloc_for_relocation(size, PageAge::old);
         auto* object = reinterpret_cast<BaseObject*>(address);
         object->SetClassInfo(type);
-        if (i % (ZPageSizeSmall / size) == 0) roots.push_back(heap.RegisterExportRoot(object));
+        if (i % (ZPageSizeSmall / size) == 0) roots.push_back(heap.cross_vm().export_roots().RegisterExportRoot(object));
     }
     mutator->SetManagedContext(false);
     result.youngBefore = heap.young().seqnum();
@@ -878,7 +879,7 @@ void* CollectForGenerationState(void* context)
     heap.RequestGC(GC_REASON_USER);
     result.youngAfter = heap.young().seqnum();
     result.oldAfter = heap.old().seqnum();
-    for (U64 root : roots) heap.RemoveExportObject(root);
+    for (U64 root : roots) heap.cross_vm().export_roots().RemoveExportRoot(root);
     mutator->SetManagedContext(true);
     return nullptr;
 }
@@ -1317,13 +1318,13 @@ void CheckCollectionLog(const char* target)
     U64 root;
     {
         ScopedObjectAccess access;
-        root = heap.RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
+        root = heap.cross_vm().export_roots().RegisterExportRoot(MObject::NewPinnedObject(type, 2 * sizeof(void*)));
     }
     before[1] = heap.GetUsedPageSize();
     heap.RequestGC(GC_REASON_USER);
     after[1] = heap.GetUsedPageSize();
     const std::string text = capture.Finish();
-    heap.RemoveExportObject(root);
+    heap.cross_vm().export_roots().RemoveExportRoot(root);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     std::istringstream lines(text);
     std::string line;

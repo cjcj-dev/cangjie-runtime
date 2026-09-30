@@ -34,6 +34,7 @@
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #undef private
+#include "Heap/z/zGeneration.inline.hpp"
 
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zMark.hpp"
@@ -112,7 +113,7 @@ GC_TEST(StoreBuf, EntryCarriesPairedPrevAndInstallColour)
     const MAddress slot = SlotAt(fx, 8);
     const zpointer prev = RefField<>(fx.obj0, ::g_cjStoreGoodMask).GetFieldValue();
 
-    buf.add(slot, prev);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), prev);
 
     const StoreBarrierEntry& entry = buf.buffer[buf.Current()];
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(entry.p), slot);
@@ -138,8 +139,8 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     field.StoreColoured(prev);
 
     Heap& heap = Heap::GetHeap();
-    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    const ZGenerationPhase phaseBefore = (*ZGeneration::old()).GcPhase();
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
     InstalledMutatorScope mutatorScope(mutator);
@@ -168,7 +169,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     }
     buf.Flush();
     DrainPublishedMarkObjects(retired);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    (*ZGeneration::old()).set_phase(phaseBefore);
     GC_EXPECT_EQ(retired.size(), 1u);
 }
 
@@ -265,8 +266,8 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     field.StoreColoured(StoreBadPointer(fx.obj0));
 
     Heap& heap = Heap::GetHeap();
-    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    const ZGenerationPhase phaseBefore = (*ZGeneration::old()).GcPhase();
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -282,7 +283,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     mutator.FlushStoreBarrierBuffer();
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
     DrainPublishedMarkObjects(retired);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    (*ZGeneration::old()).set_phase(phaseBefore);
     size_t oldCount = 0;
     size_t newCount = 0;
     for (BaseObject* object : retired) {
@@ -383,8 +384,8 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     const zpointer newWord = StoreGoodPointer(newReferent);
 
     Heap& heap = Heap::GetHeap();
-    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    const ZGenerationPhase phaseBefore = (*ZGeneration::old()).GcPhase();
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -402,7 +403,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
     mutator.FlushStoreBarrierBuffer();
     DrainPublishedMarkObjects(retired);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    (*ZGeneration::old()).set_phase(phaseBefore);
     size_t oldReceipts = 0;
     size_t newReceipts = 0;
     for (BaseObject* object : retired) {
@@ -441,8 +442,8 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     field.StoreColoured(StoreBadPointer(fx.obj0));
 
     Heap& heap = Heap::GetHeap();
-    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    const ZGenerationPhase phaseBefore = (*ZGeneration::old()).GcPhase();
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
     ThreadLocal::GetThreadLocalData()->buffer = &alloc;
@@ -461,7 +462,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     mutator.FlushStoreBarrierBuffer(true);
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
 
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    (*ZGeneration::old()).set_phase(phaseBefore);
 }
 
 GC_TEST(StoreBuf, NonNullPrevPublishesMarkBeforeRememberingSlot)
@@ -479,7 +480,7 @@ GC_TEST(StoreBuf, NonNullPrevPublishesMarkBeforeRememberingSlot)
     const zpointer prev = RefField<>(fx.obj0, ::g_cjStoreGoodMask).GetFieldValue();
 #if defined(MRT_GC_UNIT_TESTS)
     #endif
-    buf.add(slot, prev);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), prev);
     buf.Flush();
     DrainPublishedMarkObjects(retired);
 
@@ -500,7 +501,7 @@ GC_TEST(StoreBuf, NullPrevOnlyRemembersSlot)
     retired.clear();
 
     const MAddress slot = SlotAt(fx, 8);
-    buf.add(slot, zpointer::null);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), zpointer::null);
     buf.Flush();
     DrainPublishedMarkObjects(retired);
 
@@ -519,8 +520,8 @@ GC_TEST(StoreBuf, NullAndPreMarkPreviousAreNormalSkips)
     HeapSlotAt<>(slot).StoreColoured(zpointer::null);
     const uintptr_t saved = ::g_cjStoreGoodMask;
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
-    buf.add(slot, previous);
-    buf.add(SlotAt(fx, 9), zpointer::null);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), previous);
+    buf.add(reinterpret_cast<volatile zpointer*>(SlotAt(fx, 9)), zpointer::null);
     ::g_cjStoreGoodMask ^= ZPointerMarkedOldMask;
     buf.Flush();
     ::g_cjStoreGoodMask = saved;
@@ -549,7 +550,7 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
     const MAddress slot = SlotAt(fx, 8);
 #if defined(MRT_GC_UNIT_TESTS)
     #endif
-    buf.add(slot, previous);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), previous);
     buf.Flush();
     DrainPublishedMarkObjects(retired);
 
@@ -578,7 +579,7 @@ GC_TEST(StoreBuf, YoungSlotExcludedFromOldPhaseSnapshot)
     const uintptr_t saved = ::g_cjStoreGoodMask;
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
     fx.region0()->reset(PageAge::eden);
-    buf.add(slot, previous);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), previous);
     ::g_cjStoreGoodMask ^= ZPointerMarkedYoungMask;
     buf.Flush();
     ::g_cjStoreGoodMask = saved;
@@ -605,7 +606,7 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
     const MAddress slot = reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE;
     const uintptr_t colour = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer prev = RefField<>(fx.obj0, colour).GetFieldValue();
-    buf.add(slot, prev);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), prev);
     buf.Flush();
     DrainPublishedMarkObjects(retired);
 
@@ -625,10 +626,10 @@ GC_TEST(StoreBuf, AddConsumesPreviousPhaseBeforeCurrentEntry)
     HeapSlotAt<>(slot).StoreColoured(zpointer::null);
     const uintptr_t saved = ::g_cjStoreGoodMask;
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
-    buf.add(slot, previous);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), previous);
     ::g_cjStoreGoodMask ^= ZPointerMarkedOldMask;
     const MAddress currentSlot = SlotAt(fx, 9);
-    buf.add(currentSlot, RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue());
+    buf.add(reinterpret_cast<volatile zpointer*>(currentSlot), RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue());
     GC_EXPECT_EQ(buf.Pending(), 2u);
     buf.Flush();
     ::g_cjStoreGoodMask = saved;
@@ -651,7 +652,7 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
 
     const uintptr_t before = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer prev = RefField<>(fx.obj0, before).GetFieldValue();
-    buf.add(SlotAt(fx, 12), prev);
+    buf.add(reinterpret_cast<volatile zpointer*>(SlotAt(fx, 12)), prev);
     // Publish the next old-mark epoch before this thread drains.  The pending
     // entry belongs to the install-time epoch and must not enter the new SATB.
     ::g_cjStoreGoodMask = before ^ ZPointerMarkedOldMask;
@@ -676,7 +677,7 @@ GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
 
     const uintptr_t before = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer prev = RefField<>(fx.obj0, before).GetFieldValue();
-    buf.add(SlotAt(fx, 13), prev);
+    buf.add(reinterpret_cast<volatile zpointer*>(SlotAt(fx, 13)), prev);
     // A young-mark publication does not change the old-mark epoch that owns
     // this entry, so its SATB half must still be retired after the flip.
     ::g_cjStoreGoodMask = before ^ ZPointerMarkedYoungMask;
@@ -696,7 +697,7 @@ GC_TEST(StoreBuf, UnflushedPendingInvisibleToDrain)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
-    buf.add(slot, zpointer::null);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), zpointer::null);
     GC_EXPECT_EQ(buf.Pending(), 1u);
     std::unordered_set<MAddress> lost;
     rs.DrainForMinor(lost);
@@ -712,7 +713,7 @@ GC_TEST(StoreBuf, FlushBeforeRelocateSnapshotPublishesPending)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
-    buf.add(slot, zpointer::null);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), zpointer::null);
     RememberedSet& heapRs = HeapTestRemset();
     GC_EXPECT_TRUE(!heapRs.Contains(slot));
     buf.Flush();
@@ -727,7 +728,7 @@ GC_TEST(StoreBuf, MarkEndSnapshotLeavesCurrentForNextMinor)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 11);
-    buf.add(slot, zpointer::null);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), zpointer::null);
     buf.Flush();
     GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
@@ -741,7 +742,7 @@ GC_TEST(StoreBuf, FlushBeforeMinorDoesNotLoseEdges)
     StoreBarrierBuffer buf;
     const size_t n = 7;
     for (size_t i = 0; i < n; ++i) {
-        buf.add(SlotAt(fx, i + 8), zpointer::null);
+        buf.add(reinterpret_cast<volatile zpointer*>(SlotAt(fx, i + 8)), zpointer::null);
     }
     buf.Flush();
     RememberedSet& heapRs = HeapTestRemset();
@@ -758,7 +759,7 @@ GC_TEST(StoreBuf, ThreadExitFlushRedeems)
     rs.Initialize(fx.heapStart, 2 * ZGranuleSize);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 9);
-    buf.add(slot, zpointer::null);
+    buf.add(reinterpret_cast<volatile zpointer*>(slot), zpointer::null);
     buf.Flush();
     GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
@@ -1564,3 +1565,67 @@ GC_TEST(Remember1273, MissingPageDoesNotReturnSilently)
     GC_EXPECT_TRUE(rejected);
 }
 #endif
+
+// ZGC zStoreBarrierBuffer.cpp:162-221: enter through the compiler ABI and
+// observe the real TLS buffer's phase consumer, including both mark faces.
+static void CheckPhaseRemset1313(bool flipped)
+{
+    GcHeapFixture fx;
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    auto& young = *ZGeneration::young();
+    auto& old = *ZGeneration::old();
+    young.set_phase(flipped ? ZGenerationPhase::Mark : ZGenerationPhase::MarkComplete);
+    old.set_phase(ZGenerationPhase::MarkComplete);
+    Mutator mutator;
+    InstalledMutatorScope installed(mutator);
+    auto& buffer = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    buffer.clear();
+    buffer.Initialize(ZPointerStoreGoodMask);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj1));
+    auto* p = reinterpret_cast<volatile zpointer*>(&field);
+    CJ_MCC_StoreBarrierOnHeapField(p);
+    const size_t pending = buffer.Pending();
+    if (flipped) { buffer.lastProcessedColor ^= ZPointerMarkedYoungMask; }
+    buffer.on_new_phase();
+    const bool remembered = young.is_remembered(p);
+    std::fprintf(stderr, "PHASE1313_TARGET flipped=%d pending=%zu remembered=%d target_assertion=executed\n",
+        flipped, pending, remembered);
+    GC_EXPECT_TRUE(remembered);
+    GC_EXPECT_EQ(pending, 1u);
+}
+GC_TEST(Remset1313, BufferCurrent) { CheckPhaseRemset1313(false); }
+GC_TEST(Remset1313, BufferFlippedControl) { CheckPhaseRemset1313(true); }
+
+static void CheckPhaseMark1313(bool active)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::old);
+    MarkPublicationFixture marking;
+    auto& old = *ZGeneration::old();
+    if (!active) { old.set_phase(ZGenerationPhase::MarkComplete); }
+    Mutator mutator;
+    InstalledMutatorScope installed(mutator);
+    auto& buffer = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    buffer.clear();
+    buffer.Initialize(ZPointerStoreGoodMask);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj1));
+    CJ_MCC_StoreBarrierOnHeapField(reinterpret_cast<volatile zpointer*>(&field));
+    const size_t pending = buffer.Pending();
+    field.StoreColoured(StoreGoodPointer(nullptr));
+    buffer.on_new_phase();
+    ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), old.Mark());
+    old.Mark().MarkFollow();
+    const bool live = fx.region1()->is_live_bit_set(from_object(fx.obj1));
+    std::fprintf(stderr, "SATB1313_TARGET active=%d pending=%zu live=%d target_assertion=executed\n",
+        active, pending, live);
+    GC_EXPECT_EQ(live, active);
+    GC_EXPECT_EQ(pending, 1u);
+}
+GC_OTHER_VM_TEST(Remset1313, BufferOldMark) { CheckPhaseMark1313(true); }
+GC_OTHER_VM_TEST(Remset1313, BufferOutsideOldMarkControl) { CheckPhaseMark1313(false); }

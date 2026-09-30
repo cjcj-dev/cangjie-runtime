@@ -7,7 +7,10 @@
 #include "Base/Log.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zInitialize.hpp"
 #include <sys/wait.h>
+#include <sys/resource.h>
+#include "Heap/z/z_globals.hpp"
 #include <csignal>
 #include <cstring>
 #include <string>
@@ -302,3 +305,132 @@ OFFICIAL_HEAP_UNIT(Invalid, "20XB", 0)
 OFFICIAL_HEAP_UNIT(MixedCase, "20mB", 20UL * 1024 * 1024)
 OFFICIAL_HEAP_UNIT(SingleLetter, "20M", 0)
 #undef OFFICIAL_HEAP_UNIT
+
+// ZGC zCollectedHeap.cpp:80-92: a failed backing constructor propagates
+// through the heap state to the initialization owner, before GC starts.
+namespace {
+enum class InitFailure { Backing, Virtual, Prime };
+void CheckInitializationFailure(InitFailure failure)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        dup2(output[1], STDERR_FILENO);
+        dup2(output[1], STDOUT_FILENO);
+        close(output[1]);
+        // /dev/null is a file, so it cannot supply a heap backing directory.
+        if (failure == InitFailure::Backing) { setenv("cjAllocateHeapAt", "/dev/null", 1); }
+        else { unsetenv("cjAllocateHeapAt"); }
+        setenv("cjHeapSize", failure == InitFailure::Virtual ? "8GB" : "64MB", 1);
+        if (CJ_ScheduleManagerInit() != 0) { _exit(91); }
+        if (failure == InitFailure::Virtual) {
+            // Keep runtime worker arenas out of this reservation-failure case.
+            setenv("cjParallelGCThreads", "1", 1);
+            // Runtime bootstrap first reserves a native PagePool equal to
+            // the 8 GB heap (CangjieRuntime.cpp:160). Leave that room, then
+            // constrain the actual heap reservation below its 8 GB minimum.
+            const rlimit limit{12ULL << 30, 12ULL << 30};
+            if (setrlimit(RLIMIT_AS, &limit) != 0) { _exit(93); }
+        }
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (failure == InitFailure::Prime) { MapleRuntime::ZFailLargerCommits = 1; }
+#endif
+        CJ_MRT_CjRuntimeInit();
+        _exit(92);
+    }
+    close(output[1]);
+    std::string diagnostic;
+    char chunk[1024];
+    for (ssize_t count; (count = read(output[0], chunk, sizeof(chunk))) > 0;) {
+        diagnostic.append(chunk, static_cast<size_t>(count));
+    }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const size_t ownerPosition = diagnostic.find("Check failed: ZCollectedHeap::heap()->initialize()");
+    const bool ownerRejected = ownerPosition != std::string::npos;
+    // Match the owner's fatal diagnostic after its failed admission, not the
+    // backing producer's earlier log. Disconnecting first-error storage must
+    // fail this assertion even if that earlier log still contains the text.
+    const char* expected = failure == InitFailure::Backing ? "Failed to create heap backing file" :
+        failure == InitFailure::Virtual ? "Failed to reserve" : "Failed to allocate initial heap";
+    const bool originalError = ownerRejected &&
+        diagnostic.find(expected, ownerPosition) != std::string::npos;
+    // Print before the combined target assertion: a wrong earlier failure
+    // must never conceal whether the owner consumed the construction result.
+    std::fprintf(stderr, "INIT1310_TARGET owner_rejected=%d original_error=%d status=%d\n%s",
+                 ownerRejected, originalError, status, diagnostic.c_str());
+    GC_EXPECT_TRUE(ownerRejected && originalError && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+} // namespace
+
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, BackingFailureReachesInitializationOwner)
+{
+    CheckInitializationFailure(InitFailure::Backing);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, VirtualFailureReachesInitializationOwner)
+{
+    CheckInitializationFailure(InitFailure::Virtual);
+}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, PrimeFailureReachesInitializationOwner)
+{
+    CheckInitializationFailure(InitFailure::Prime);
+}
+#endif
+
+namespace {
+void CheckInitializationFinished(bool lateError)
+{
+    using namespace MapleRuntime;
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        dup2(output[1], STDERR_FILENO);
+        dup2(output[1], STDOUT_FILENO);
+        close(output[1]);
+        unsetenv("cjAllocateHeapAt");
+        setenv("cjHeapSize", "64MB", 1);
+        if (CJ_ScheduleManagerInit() != 0) { _exit(91); }
+        CJ_MRT_CjRuntimeInit();
+        std::fprintf(stderr, "INIT1310_PRODUCT_INITIALIZED\n");
+        if (lateError) { ZInitialize::error("late initialization error"); }
+        else { ZInitialize::finish(); }
+        _exit(92);
+    }
+    close(output[1]);
+    std::string diagnostic;
+    char chunk[1024];
+    for (ssize_t count; (count = read(output[0], chunk, sizeof(chunk))) > 0;) {
+        diagnostic.append(chunk, static_cast<size_t>(count));
+    }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool initialized = diagnostic.find("INIT1310_PRODUCT_INITIALIZED") != std::string::npos;
+    const char* expected = lateError ? "Only register errors during initialization" : "Only finish initialization once";
+    const bool rejected = diagnostic.find(expected) != std::string::npos;
+    std::fprintf(stderr, "INIT1310_FINISH_TARGET initialized=%d rejected=%d late_error=%d status=%d\n%s",
+                 initialized, rejected, lateError, status, diagnostic.c_str());
+    GC_EXPECT_TRUE(initialized && rejected && WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+}
+
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, OwnerFinishesInitializationOnce)
+{
+    CheckInitializationFinished(false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(Lifecycle1310, FinishedOwnerRejectsLateError)
+{
+    CheckInitializationFinished(true);
+}

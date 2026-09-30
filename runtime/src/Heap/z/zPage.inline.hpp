@@ -19,17 +19,6 @@
 
 namespace MapleRuntime {
 
-inline bool ZPage::IsCompacted() const
-    {
-        auto owner = forwarding_for_page(const_cast<ZPage*>(this));
-        return owner && owner->is_done() && owner->in_place();
-    }
-
-inline bool ZPage::IsRoutingState()
-    {
-        auto owner = forwarding_for_page(this);
-        return owner && owner->is_claimed() && !owner->is_done();
-    }
 
 inline ZLiveMap& ZPage::livemap()
 {
@@ -40,7 +29,6 @@ inline const ZLiveMap& ZPage::livemap() const
 {
     return _livemap;
 }
-
 
 
 inline void ZPage::StampCensusBoundary()
@@ -384,33 +372,6 @@ inline ALWAYS_INLINE size_t ZPage::GetAddressOffset(MAddress address) const
         return (address - GetRegionStart());
     }
 
-inline void ZPage::RetirePage(ZPage* region, std::function<void()> retire)
-    {
-        CHECK(ZPageTable::heap_table().get(region->GetRegionStart()) == region);
-        ZPageTable::heap_table().remove(region);
-        // zPageAllocator.cpp:2248-2250 safe_destroy_page: deferred while any
-        // page iterator is active, immediate otherwise. The retire hook runs
-        // from ~ZPage when the deferred delete lands.
-        region->_retireHook = std::move(retire);
-        safeDestroy.schedule_delete(region);
-    }
-
-inline void ZPage::RetireDescriptor(ZPage* page)
-    {
-        CHECK(page != nullptr);
-        CHECK(ZPageTable::heap_table().get(page->GetRegionStart()) != page);
-        safeDestroy.schedule_delete(page);
-    }
-
-inline void ZPage::EnableSafeDestroy()
-    {
-        safeDestroy.enable_deferred_delete();
-    }
-
-inline void ZPage::DisableSafeDestroy()
-    {
-        safeDestroy.disable_deferred_delete();
-    }
 
 inline void ZPage::InitializeSegments(uintptr_t metadataEnd, const std::vector<ZVirtualMemory>& ranges)
     {
@@ -448,17 +409,6 @@ inline bool ZPage::ContainsReservedRange(uintptr_t start, size_t size)
         return false;
     }
 
-inline void ZPage::VisitPageOwners(const std::function<void(ZPage*)>& visitor)
-    {
-        // zPageTable.cpp:83-98: the iterator's lifetime brackets safe destroy,
-        // including nested iteration and exceptional callback exits.
-        SafeDestroyScope iteration;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        ZPage* page = nullptr;
-        while (iter.next(&page)) {
-            visitor(page);
-        }
-    }
 
 inline MAddress ZPage::GranuleAddress(size_t idx)
     {
@@ -476,6 +426,7 @@ inline ZPage* ZPage::InitRegion(size_t granuleIndex, size_t pageSize, ZPageType 
         return region;
     }
 
+
 inline bool ZPage::IsEmpty() const
     {
         MRT_ASSERT(IsSmallRegion(), "wrong region type");
@@ -486,45 +437,12 @@ inline size_t ZPage::GetRegionSize() const { return size(); }
 
 inline size_t ZPage::GetRegionSizeForDetachCheck() const { return size(); }
 
-inline size_t ZPage::GetGhostRegionSize() const
-    {
-        // The old extent follows the forwarding incarnation. If no carrier is
-        // installed (idle/test setup), the only valid extent is the page's
-        // current own size.
-        ZForwarding* carrier = GetFromPageCarrier();
-        return carrier == nullptr ? GetRegionSize() : carrier->size();
-    }
 
 inline size_t ZPage::GetAvailableSize() const
     {
         MRT_ASSERT(IsSmallRegion(), "wrong region type");
         return GetRegionEnd() - GetRegionAllocPtr();
     }
-
-inline void ZPage::RetirePageMemory()
-    {
-        InitZPage(GetRegionSize(), ZPageType::small, PageAge::old, false);
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 inline void ZPage::SetInGhostRegion(uint8_t flag)
@@ -547,7 +465,6 @@ inline uint8_t ZPage::GetYoungAge() const
     {
         return _age == PageAge::old ? uint8_t{0} : static_cast<uint8_t>(untype(_age));
     }
-
 
 
 // ZPage::is_allocating / is_relocatable (zPage.inline.hpp:180-186).
@@ -597,51 +514,12 @@ inline bool ZPage::IsSafeKnownYoungEmpty()
     }
 
 
-
-
-
-
-
-
-
-
-
-inline void ZPage::BumpRegionLifeId()
-    {
-        RegionLifeId old = _scratch.regionLifeId.load(std::memory_order_relaxed);
-        for (;;) {
-            if (UNLIKELY(old == std::numeric_limits<RegionLifeId>::max())) {
-                LOG(RTLOG_FATAL,
-                    "[LIFECLOCK][REGION_LIFE_ID_OVERFLOW] region=%p life=%llu; wraparound is forbidden",
-                    this, static_cast<unsigned long long>(old));
-                return;
-            }
-            if (_scratch.regionLifeId.compare_exchange_weak(old, old + 1, std::memory_order_release,
-                                                            std::memory_order_relaxed)) {
-                return;
-            }
-        }
-    }
-
 inline void ZPage::InitZPage(size_t pageSize, ZPageType uClass, PageAge age, bool live)
     {
         CHECK(ContainsReservedRange(GetRegionStart(), pageSize));
         CHECK(ZPageTable::heap_table().get(GetRegionStart()) == nullptr);
         CHECK_DETAIL(GetRegionRole() == ZPageRole::None, "reinitializing a region still carrying a role");
 
-        // Invalidate every old-life carrier before clearing any of its payload.
-        // Readers either retain the old page (detachgate) or observe this bump and
-        // reject the old incarnation; there is no wraparound fallback.
-        BumpRegionLifeId();
-        {
-            uint8_t cur = __atomic_load_n(&_scratch.regionLifeSequence, __ATOMIC_RELAXED);
-            uint8_t next = static_cast<uint8_t>((cur + 1) & 0x7f);
-            __atomic_store_n(&_scratch.regionLifeSequence, next, __ATOMIC_RELEASE);
-        }
-        // Retire the forwarding owner before detaching its compact table.
-        _scratch.fwdOwner.store(nullptr, std::memory_order_release);
-        delete _scratch.retiredLivemap;
-        _scratch.retiredLivemap = nullptr;
         _top = to_zoffset_end(start());
         reset(age);
         if (age == PageAge::old && !_remembered_set.is_initialized()) {
@@ -672,24 +550,6 @@ inline ZGenerationId ZPage::generation_id() const
     return _generation_id;
 }
 
-inline unsigned ZPage::RelocateObserve() const
-{
-    auto owner = forwarding_for_page(const_cast<ZPage*>(this));
-    if (!owner) {
-        return 0;
-    }
-    unsigned v = 1;
-    if (owner->is_claimed()) {
-        v |= 2;
-    }
-    if (owner->is_done()) {
-        v |= 4;
-    }
-    if (owner->in_place()) {
-        v |= 8;
-    }
-    return v;
-}
 
 inline std::atomic<uint64_t>& ZPage::EnrolBeforeFlip()
 {

@@ -443,9 +443,9 @@ GC_TEST(DefectRegress, GcCountExportReadsCollectionStarts)
     // young mark start increments. The test links the product SO, so producer
     // and consumer share storage by construction.
     const uint32_t before = static_cast<uint32_t>(MCC_GetGCCount());
-    Heap::GetHeap().increment_total_collections();
+    ZCollectedHeap::heap()->increment_total_collections();
     GC_EXPECT_EQ(MCC_GetGCCount(), static_cast<uint32_t>(before + 1));
-    Heap::GetHeap().increment_total_collections();
+    ZCollectedHeap::heap()->increment_total_collections();
     GC_EXPECT_EQ(MCC_GetGCCount(), static_cast<uint32_t>(before + 2));
 }
 
