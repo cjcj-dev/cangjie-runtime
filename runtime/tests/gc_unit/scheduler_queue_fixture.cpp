@@ -1,6 +1,8 @@
 #include "Cangjie.h"
 #include <array>
 #include <cstdio>
+#include <chrono>
+#include <thread>
 
 extern "C" int CJ_CJThreadResched(void);
 
@@ -37,5 +39,6 @@ int main()
         }
         ReleaseHandle(tasks[index]);
     }
+    std::this_thread::sleep_for(std::chrono::seconds(6));
     return FiniCJRuntime() == E_OK ? 0 : 4;
 }
