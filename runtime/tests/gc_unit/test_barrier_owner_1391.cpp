@@ -8,6 +8,8 @@
 #include "ObjectModel/RefField.inline.h"
 #include "ObjectModel/MObject.h"
 #include <thread>
+#include <condition_variable>
+#include <mutex>
 
 namespace MapleRuntime {
 extern "C" BaseObject* MCC_AtomicReadReference(BaseObject* obj, RefField<true>* field, std::memory_order order);
@@ -169,4 +171,38 @@ GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, CompilerAtomicReadsPublishedBackend)
     GC_EXPECT_TRUE(result == nullptr);
     GC_EXPECT_EQ(storage, static_cast<uintptr_t>(ZPointerStoreGoodMask));
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+// Observe the cleaner through thread exit, including the stopped-runtime arm.
+// Resource release and hook identities are checked externally at product entry
+// and return addresses; the test never calls a lifecycle hook itself.
+GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, NativeExitAfterRuntimeStop)
+{
+    InitializeBarrierRuntime();
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool ready = false;
+    bool release = false;
+    bool resourceReady = false;
+    std::thread native([&] {
+        ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+        resourceReady = ThreadLocal::GetGCData().storeBarrierBuffer != nullptr;
+        std::unique_lock<std::mutex> lock(mutex);
+        ready = true;
+        condition.notify_one();
+        condition.wait(lock, [&] { return release; });
+    });
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        condition.wait(lock, [&] { return ready; });
+    }
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        release = true;
+    }
+    condition.notify_one();
+    native.join();
+    std::fprintf(stderr, "BARRIER1391_STOPPED_EXIT_TARGET resource=%d joined=1\n", resourceReady);
+    GC_EXPECT_TRUE(resourceReady);
 }
