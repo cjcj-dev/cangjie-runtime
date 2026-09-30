@@ -1,4 +1,7 @@
 #include "gc_heap_fixture.hpp"
+#include "b09_runtime_fixture.hpp"
+#include "Heap/z/zWorkers.hpp"
+#include "Mutator/ThreadLocal.h"
 #include <csignal>
 #include <cstdio>
 #include <sys/wait.h>
@@ -300,76 +303,124 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 
 #endif // MRT_TESTABLE_INTERNALS
 
+// ZGC zRelocate.cpp:652-731,801-815,1289-1307: use the relocation
+// phase to derive destination fields from real source remembered bits.
+// Each state is an input on a separate source page; no test supplies a
+// destination field to the product register consumer.
+struct Remembered1314Relocation {
+    B09RuntimeFixture runtime;
+    ZForwarding* owners[2]{};
+    MAddress objects[2]{};
+
+    Remembered1314Relocation()
+    {
+        CreateStandaloneHeap(16);
+        ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+        ZStat::Initialize();
+        auto& old = Heap::GetHeap().old();
+        old.InitializeWorkers(1);
+        old.Workers()->set_active_workers(1);
+        GenerationSequenceFixture::Advance(old);
+        GenerationSequenceFixture::Advance(Heap::GetHeap().young());
+        Heap::GetHeap().young().set_phase(ZGenerationPhase::Mark);
+        alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+        auto* type = reinterpret_cast<TypeInfo*>(storage);
+        type->SetType(TypeKind::TYPE_KIND_CLASS);
+        type->SetFlagHasRefField();
+        type->SetInstanceSize(sizeof(uintptr_t));
+        type->SetAlign(8);
+        GCTib tib{};
+        tib.tag = SIGN_BIT | 1;
+        type->SetGCTib(tib);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+        ZAllocationFlags flags;
+        flags.set_non_blocking();
+        ZPage* pages[2];
+        ZRelocationSetSelector selector(0.0);
+        for (size_t i = 0; i < 2; ++i) {
+            pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags);
+            GC_EXPECT_TRUE(pages[i] != nullptr);
+            objects[i] = pages[i]->alloc_object(16);
+            auto* object = reinterpret_cast<BaseObject*>(objects[i]);
+            object->SetClassInfo(type);
+            HeapSlotAt<>(objects[i] + TYPEINFO_PTR_SIZE).StoreColoured(StoreGoodPointer(nullptr));
+            GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], object));
+            pages[i]->remember(reinterpret_cast<volatile zpointer*>(objects[i] + TYPEINFO_PTR_SIZE));
+            ZPageTest::MakeRelocatable(*pages[i]);
+            selector.register_live_page(pages[i]);
+        }
+        selector.select();
+        old.relocation_set().install(&selector);
+        ZRelocationSetIterator installed(&old.relocation_set());
+        for (ZForwarding* owner; installed.next(&owner);) { old.forwarding_table().insert(owner); }
+        for (size_t i = 0; i < 2; ++i) {
+            owners[i] = forwarding_for_page(pages[i]);
+            GC_EXPECT_TRUE(owners[i] != nullptr);
+        }
+    }
+
+    void relocate()
+    {
+        auto& old = Heap::GetHeap().old();
+        {
+            ScopedStopTheWorld pause("Remembered1314 old relocate start", false);
+            old.relocate_start();
+        }
+        old.relocate().relocate(&old.relocation_set());
+    }
+
+    MAddress field(size_t i) const
+    {
+        // Read the actual product forwarding result, not a fixture destination.
+        return owners[i]->find(objects[i]) + TYPEINFO_PTR_SIZE;
+    }
+};
+
 // ZGC zForwarding.inline.hpp:306-325: none appends, reject is a legal
 // no-op, while accept means relocation has finished and cannot register.
-GC_TEST(Remembered1314, RegisterNoneAndReject)
+GC_COMPONENT_OTHER_VM_TEST(Remembered1314, RegisterNoneAndReject)
 {
-    GcHeapFixture heap;
-    Heap::GetHeap().young().set_phase(ZGenerationPhase::Mark);
-    Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(ZGeneration::young()->seqnum());
-    auto* fwd = ZForwarding::alloc(1, heap.heapStart, heap.heapStart, ZGranuleSize, heap.region0());
-    auto* source = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE);
-    heap.region0()->remember(source);
-    const MAddress field = reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE;
-    ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, heap.obj1);
+    Remembered1314Relocation fixture;
+    auto* fwd = fixture.owners[0];
+    auto* rejectedFwd = fixture.owners[1];
+    rejectedFwd->relocated_remembered_fields_notify_concurrent_scan_of();
+    fixture.relocate();
+    const MAddress field = fixture.field(0);
     const bool stored = fwd->relocated_remembered_fields_published_contains(field);
+    const bool rejected = !rejectedFwd->relocated_remembered_fields_published_contains(fixture.field(1));
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
-    BaseObject* later = heap.PlaceObject(heap.heapStart + ZGranuleSize + 128);
-    ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, later);
-    const bool rejected = !fwd->relocated_remembered_fields_published_contains(
-        reinterpret_cast<MAddress>(later) + TYPEINFO_PTR_SIZE);
     fwd->relocated_remembered_fields_publish();
     const bool cleared = !fwd->relocated_remembered_fields_published_contains(field);
-    fwd->Destroy();
-    std::fprintf(stderr, "REGISTER1314_LEGAL calls=2 stored=%d rejected=%d cleared=%d\n", stored, rejected, cleared);
+    std::fprintf(stderr, "REGISTER1314_LEGAL calls=2 stored=%d rejected=%d cleared=%d target_assertion=executed\n",
+                 stored, rejected, cleared);
     GC_EXPECT_TRUE(stored);
     GC_EXPECT_TRUE(rejected);
     GC_EXPECT_TRUE(cleared);
 }
 
-// ZGC zForwarding.cpp:338-356: the retained scanner owns the published
-// array after the CAS and clears it before returning; reject is repeatable.
-GC_TEST(Remembered1314, NotifyPublishedClearsFields)
+// ZGC zForwarding.cpp:338-356: the scanner owns the published array
+// after the CAS and clears it before returning; reject is repeatable.
+GC_COMPONENT_OTHER_VM_TEST(Remembered1314, NotifyPublishedClearsFields)
 {
-    GcHeapFixture heap;
-    Heap::GetHeap().young().set_phase(ZGenerationPhase::Mark);
-    Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(ZGeneration::young()->seqnum());
-    auto* fwd = ZForwarding::alloc(1, heap.heapStart, heap.heapStart, ZGranuleSize, heap.region0());
-    auto* source = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE);
-    heap.region0()->remember(source);
-    GC_EXPECT_TRUE(fwd->retain_page(&generation_relocate_queue(Generation::Old)));
-    ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, heap.obj1);
-    const MAddress field = reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE;
-    fwd->relocated_remembered_fields_publish();
+    Remembered1314Relocation fixture;
+    auto* fwd = fixture.owners[0];
+    fixture.relocate();
+    const MAddress field = fixture.field(0);
     const bool stored = fwd->relocated_remembered_fields_published_contains(field);
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
     const bool rejected = fwd->relocated_remembered_fields_is_concurrently_scanned();
     const bool cleared = !fwd->relocated_remembered_fields_published_contains(field);
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
-    fwd->release_page();
-    fwd->release_page();
-    fwd->mark_done();
-    fwd->Destroy();
-    std::fprintf(stderr, "NOTIFY1314_TARGET precondition_stored=%d rejected=%d cleared=%d calls=2\n",
+    std::fprintf(stderr, "NOTIFY1314_TARGET precondition_stored=%d rejected=%d cleared=%d calls=2 target_assertion=executed\n",
                  stored, rejected, cleared);
     GC_EXPECT_TRUE(cleared);
     GC_EXPECT_TRUE(rejected);
     GC_EXPECT_TRUE(stored);
 }
 
-GC_TEST(Remembered1314, RegisterAcceptFails)
+GC_COMPONENT_OTHER_VM_TEST(Remembered1314, RegisterAcceptFails)
 {
-    GcHeapFixture heap;
-    auto* fwd = ZForwarding::alloc(1, heap.heapStart, heap.heapStart, ZGranuleSize, heap.region0());
-    fwd->relocated_remembered_fields_after_relocate();
-    GcHeapFixture::AdvanceGeneration(Generation::Young);
-    fwd->release_page();
-    fwd->mark_done();
-    fwd->relocated_remembered_fields_apply_to_published([](MAddress) {});
-    Heap::GetHeap().young().set_phase(ZGenerationPhase::Mark);
-    Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(ZGeneration::young()->seqnum());
-    auto* source = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE);
-    heap.region0()->remember(source);
     int diagnostic[2];
     GC_EXPECT_EQ(pipe(diagnostic), 0);
     const pid_t child = fork();
@@ -377,9 +428,14 @@ GC_TEST(Remembered1314, RegisterAcceptFails)
         close(diagnostic[0]);
         dup2(diagnostic[1], STDERR_FILENO);
         close(diagnostic[1]);
-        // The real product relocation consumer computes the destination field
-        // from the source bitmap, then calls its inline register implementation.
-        ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, heap.obj1);
+        Remembered1314Relocation fixture;
+        auto* fwd = fixture.owners[0];
+        fwd->relocated_remembered_fields_after_relocate();
+        // Advance the protocol epoch without flipping away the source bits.
+        GenerationSequenceFixture::Advance(Heap::GetHeap().young());
+        fwd->relocated_remembered_fields_apply_to_published([](MAddress) {});
+        // The real relocation phase must reject registration in accept state.
+        fixture.relocate();
         _exit(0);
     }
     close(diagnostic[1]);
@@ -393,9 +449,8 @@ GC_TEST(Remembered1314, RegisterAcceptFails)
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     const bool target = message.find("Unexpected relocated remembered fields register state") != std::string::npos;
     const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT && target;
-    std::fprintf(stderr, "REGISTER1314_ACCEPT_TARGET rejected=%d status=%d target_diagnostic=%d calls=1\n",
+    std::fprintf(stderr, "REGISTER1314_ACCEPT_TARGET rejected=%d status=%d target_diagnostic=%d calls=1 target_assertion=executed\n",
                  rejected, status, target);
-    fwd->Destroy();
     GC_EXPECT_TRUE(rejected);
 }
 
