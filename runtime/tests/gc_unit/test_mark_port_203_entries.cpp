@@ -175,14 +175,8 @@ public:
         runtime = this;
         manager.Init();
         concurrency.Init(ConcurrencyParam{1024, 64, 1});
-        VMThread::create();
     }
-    ~MarkPortRuntime() override
-    {
-        Heap::GetHeap().StopGCWork();
-        VMThread::wait_for_vm_thread_exit();
-        runtime = nullptr;
-    }
+    ~MarkPortRuntime() override { runtime = nullptr; }
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
     void SetGCThreshold(uint64_t) override {}
 private:
