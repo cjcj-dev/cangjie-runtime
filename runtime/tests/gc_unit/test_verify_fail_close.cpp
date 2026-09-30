@@ -787,12 +787,14 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     ThreadLocal::SetCJThread(thread);
     auto* data = static_cast<LWTData*>(CJThreadGetArg());
     ThreadLocal::SetCJThread(previous);
+    auto* savedObject = data->obj;
     data->obj = reinterpret_cast<BaseObject*>(0x1000);
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
     Heap::GetHeap().old().pause_verify();
     std::fprintf(stderr, "VERIFY_ARMED_SKIP_TARGET slot=%p value=%p\n", &data->obj, data->obj);
     GC_EXPECT_TRUE(data->obj == reinterpret_cast<BaseObject*>(0x1000));
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+    data->obj = savedObject;
 }
 
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
