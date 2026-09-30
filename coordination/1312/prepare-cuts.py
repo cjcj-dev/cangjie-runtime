@@ -16,10 +16,8 @@ spec={
  'compiler': [('runtime/src/CompilerCalls.cpp','    return StringDedup::Instance().Canonical(arrayInfo, candidate);','    return candidate; // Controlled cut: omit canonical consumer.')],
  'registration': [('runtime/src/Heap/z/zRootsIterator.hpp','std::array<OopStorage::ParState<true>, 4> states;', 'std::array<OopStorage::ParState<true>, 3> states;'),('runtime/src/Heap/z/zRootsIterator.cpp','{SyncWeakOopStorage(), workers},\n              {StringDedup::Instance().WeakStorage(), workers}}}', '{SyncWeakOopStorage(), workers}}}')],
  'strong_registration': [
- ('runtime/src/Heap/z/zRootsIterator.hpp', 'std::array<OopStorage::ParState<true>, 1> states;', 'std::array<OopStorage::ParState<true>, 2> states;'),
- ('runtime/src/Heap/z/zRootsIterator.hpp', 'std::array<OopStorage::ParState<true>, 4> states;', 'std::array<OopStorage::ParState<true>, 3> states;'),
- ('runtime/src/Heap/z/zRootsIterator.cpp', 'StrongRootStorage(), workers}}}', 'StrongRootStorage(), workers}, {StringDedup::Instance().WeakStorage(), workers}}}'),
- ('runtime/src/Heap/z/zRootsIterator.cpp', '{SyncWeakOopStorage(), workers},\n              {StringDedup::Instance().WeakStorage(), workers}}}', '{SyncWeakOopStorage(), workers}}}')],
+ ('runtime/src/Heap/z/zRootsIterator.cpp', 'Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers', 'StringDedup::Instance().WeakStorage(), workers'),
+ ('runtime/src/Heap/z/zRootsIterator.cpp', '{StringDedup::Instance().WeakStorage(), workers}}}, generation(generation) {}', '{Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers}}}, generation(generation) {}')],
  'restored':[]}
 for name, edits in spec.items():
  texts={}
