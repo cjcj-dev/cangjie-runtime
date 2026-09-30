@@ -641,7 +641,7 @@ static ZDirectorStats sample_stats()
 void ZDirector::run_thread()
 {
     while (wait_for_tick()) {
-        if (Runtime::CurrentRef() == nullptr || !Heap::GetHeap().IsGCEnabled()) {
+        if (!ConcurrentGCThread::IsRuntimeInitialized()) {
             continue;
         }
         const ZDirectorStats stats = sample_stats();
