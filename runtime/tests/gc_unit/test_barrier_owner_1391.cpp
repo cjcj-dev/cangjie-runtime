@@ -126,6 +126,39 @@ GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, ManagedOwnerAttachesPublishedMasks)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
+GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, CreateDoesNotResetWatermark)
+{
+    InitializeBarrierRuntime();
+    Mutator mutator;
+    const ZStackWatermark& watermark = mutator.GetStackWatermark();
+    const ThreadGCData& data = mutator.GetGCData();
+    std::fprintf(stderr, "BARRIER1391_WATERMARK_TARGET head=%lx epoch=%lx buffer=%p owner=%p\n",
+                 watermark.prev_head_color(), watermark.GetEpoch(), data.storeBarrierBuffer,
+                 BarrierSet::barrier_set());
+    GC_EXPECT_TRUE(data.storeBarrierBuffer != nullptr);
+    GC_EXPECT_EQ(watermark.prev_head_color(), static_cast<uintptr_t>(0));
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, DestroyNullsPairedBuffer)
+{
+    InitializeBarrierRuntime();
+    Mutator mutator;
+    ThreadGCData& data = mutator.GetGCData();
+    StoreBarrierBuffer* created = data.storeBarrierBuffer;
+    BarrierSet* published = BarrierSet::barrier_set();
+    std::fprintf(stderr, "BARRIER1391_DESTROY_TARGET created=%p published=%p\n", created, published);
+    GC_EXPECT_TRUE(created != nullptr);
+    GC_EXPECT_TRUE(published != nullptr);
+    published->on_thread_destroy(data);
+    std::fprintf(stderr, "BARRIER1391_DESTROY_AFTER buffer=%p\n", data.storeBarrierBuffer);
+    GC_EXPECT_TRUE(data.storeBarrierBuffer == nullptr);
+    published->on_thread_create(data);
+    GC_EXPECT_TRUE(data.storeBarrierBuffer != nullptr);
+    GC_EXPECT_TRUE(data.storeBarrierBuffer != created);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
 GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, CompilerAtomicReadsPublishedBackend)
 {
     InitializeBarrierRuntime();
