@@ -152,7 +152,6 @@ void MutatorManager::BindMutator(Mutator& mutator) const
     ThreadLocalData* tlData = ThreadLocal::GetThreadLocalData();
     tlData->SetMutator(&mutator);
     MutatorManager::Instance().RegisterMarkFlushThread(tlData);
-    UpdatePollValues(tlData);
 }
 
 void MutatorManager::UnbindMutator(Mutator& mutator) const
