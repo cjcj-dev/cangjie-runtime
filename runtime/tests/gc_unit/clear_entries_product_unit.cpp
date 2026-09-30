@@ -405,12 +405,6 @@ private:
 
 LoadHealDeliveryRuntime* LoadHealDeliveryRuntime::installed = nullptr;
 
-namespace MapleRuntime::GcUnit {
-void ShutdownDeliveryRuntime()
-{
-    LoadHealDeliveryRuntime::Shutdown();
-}
-} // namespace MapleRuntime::GcUnit
 
 void EnsureDeliveryRuntime()
 {
@@ -1789,3 +1783,10 @@ GC_TEST(RelocateMiss782, AllocationFailureWaitsForWorkerPublication)
 {
     ExerciseRelocationWait782(false);
 }
+
+namespace MapleRuntime::GcUnit {
+void ShutdownDeliveryRuntime()
+{
+    LoadHealDeliveryRuntime::Shutdown();
+}
+} // namespace MapleRuntime::GcUnit
