@@ -42,7 +42,7 @@ invoke_native:
 .size invoke_native,.-invoke_native
 )");
 static uintptr_t initial, expected;
-static bool passed, armed;
+static bool passed, armed, contextSaved;
 static uint32_t savedState;
 class ObserveHandshake final: public HandshakeClosure {
 public:
@@ -56,6 +56,10 @@ extern "C" void native_arm()
  auto& owner=*Mutator::GetMutator();
  owner.GetUnwindContext().anchorFA=reinterpret_cast<uint32_t*>(native_anchor);
  auto* stub=reinterpret_cast<uintptr_t*>(owner.GetUnwindContext().frameInfo.mFrame.GetFA());
+ contextSaved=stub != nullptr && owner.GetUnwindContext().frameInfo.mFrame.GetIP()==&unwindPCForC2NStub;
+ // A missing producer result reaches the target assertion after returning;
+ // it must not turn into an earlier invalid frame access or assertion.
+ if (!contextSaved) { return; }
  auto* fp=reinterpret_cast<uintptr_t*>(stub[0]);
  for (unsigned i=0;i<2;++i) fp=reinterpret_cast<uintptr_t*>(fp[0]);
  // Initial processing covers three barriers; before_unwind advances the
@@ -73,9 +77,9 @@ extern "C" void native_observe()
  auto& owner=*Mutator::GetMutator();
  auto& watermark=owner.GetStackWatermark();
  auto frontier=watermark.last_processed_raw();
- passed=armed ? initial!=0 && frontier>initial && frontier==expected && !owner.InSaferegion()
-              : frontier==0 && watermark.PackedState()==savedState && !watermark.processing_started() && !owner.InSaferegion();
- std::fprintf(stderr,"NATIVE_FRAME_PAIR_TARGET armed=%d initial=%p frontier=%p expected=%p lazy=%d active=%d pass=%d executed=1\n",armed,(void*)initial,(void*)frontier,(void*)expected,!watermark.processing_started(),!owner.InSaferegion(),passed);
+ passed=contextSaved && (armed ? initial!=0 && frontier>initial && frontier==expected && !owner.InSaferegion()
+              : frontier==0 && watermark.PackedState()==savedState && !watermark.processing_started() && !owner.InSaferegion());
+ std::fprintf(stderr,"NATIVE_FRAME_PAIR_TARGET armed=%d saved=%d initial=%p frontier=%p expected=%p lazy=%d active=%d pass=%d executed=1\n",armed,contextSaved,(void*)initial,(void*)frontier,(void*)expected,!watermark.processing_started(),!owner.InSaferegion(),passed);
  // End the experiment before return-poll processing changes its result.
  watermark.Reset();
  owner.SetManagedContext(false);
