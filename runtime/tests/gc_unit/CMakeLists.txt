@@ -290,6 +290,7 @@ add_test(NAME cj_gc_clear_entries_unit COMMAND cj_gc_clear_entries_unit)
 
 add_executable(cj_gc_uncommit_unit
     gc_unit_main.cpp
+    gc_worker_fixture.cpp
     gc_cycle_sequence_fixture.cpp
     test_string_dedup.cpp
     test_concurrent_gc_breakpoints.cpp
