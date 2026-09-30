@@ -8,14 +8,10 @@ from pathlib import Path
 
 def targets(root):
     hooks = {}
-    for relative in (
-        'Heap/z/zGlobals.cpp',
-        'Heap/z/zMarkStack.cpp',
-        'Heap/z/zStat.cpp',
-        'Mutator/ThreadSMR.cpp',
-    ):
+    for source in sorted(root.rglob('*.cpp')):
+        relative = source.relative_to(root)
         guarded = []
-        for number, line in enumerate((root / relative).read_text().splitlines(), 1):
+        for number, line in enumerate(source.read_text().splitlines(), 1):
             directive = re.match(r'\s*#\s*(if|ifdef|ifndef|else|elif|endif)\b(.*)', line)
             if directive:
                 kind, expression = directive.groups()
@@ -28,7 +24,7 @@ def targets(root):
                 continue
             if not any(guarded):
                 continue
-            function = re.match(r'^[\w:*<> ]+\s+(\w+::\w+)\(', line)
+            function = re.match(r'^[\w:*&<> ]+\s+(\w+::\w+)\(', line)
             variable = re.match(r'^size_t\s+(\w+)\s*=', line)
             if function or variable:
                 name = (function or variable).group(1)
@@ -55,7 +51,8 @@ def main():
         symbols = subprocess.run(['c++filt'], input=symbols, check=True,
                                  text=True, capture_output=True).stdout
         missing = [name for name in hooks
-                   if not re.search(r'\bMapleRuntime::' + re.escape(name) + r'(?:\(|(?:@@?\S+)?$)',
+                   if not re.search(r'\bMapleRuntime::' + re.escape(name) +
+                                    (r'\(' if '::' in name else r'(?:@@?\S+)?$'),
                                     symbols, re.MULTILINE)]
         for name in missing:
             print(f'TESTABLE_PRODUCT_HOOK_MISSING={name}', file=sys.stderr)
