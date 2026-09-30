@@ -6,6 +6,8 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "gc_heap_fixture.hpp"
+#include "gc_worker_fixture.hpp"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/VMOperation.h"
 #include <atomic>
@@ -74,7 +76,10 @@ GC_RUNTIME_TEST(VMThread1308, PauseRunsOnTheVMThread)
 {
     CreateStandaloneHeap(8);
     VMThreadContainerRuntime container;
+    GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
+    InitializeGenerationWorkers(heap.young(), 1);
+    YoungTypeSetter type(heap.young(), ZYoungType::minor);
     const auto before = heap.total_collections();
     heap.young().pause_mark_start();
     const auto after = heap.total_collections();
