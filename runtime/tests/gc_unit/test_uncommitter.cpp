@@ -322,7 +322,15 @@ static void ExercisePartitionWorker(bool enabled)
     GC_EXPECT_TRUE(after >= UncommitterTestAccess::Partition().minCapacity);
     if (enabled) {
         GC_EXPECT_TRUE(after < before);
-        GC_EXPECT_TRUE(observed - start >= Uncommitter::DelayNs());
+        constexpr uint64_t nanosPerMilli = 1000000;
+        const uint64_t delayMillis = Uncommitter::DelayNs() / nanosPerMilli;
+        GC_EXPECT_TRUE(delayMillis > 0);
+        const uint64_t minimumWait = (delayMillis - 1) * nanosPerMilli;
+        std::fprintf(stderr, "TARGET_UNCOMMIT_WAIT_ASSERT elapsed=%llu minimum=%llu delay-ms=%llu\n",
+                     static_cast<unsigned long long>(observed - start),
+                     static_cast<unsigned long long>(minimumWait),
+                     static_cast<unsigned long long>(delayMillis));
+        GC_EXPECT_TRUE(observed - start >= minimumWait);
         GC_EXPECT_TRUE(after >= UncommitterTestAccess::Partition().minCapacity);
     } else {
         GC_EXPECT_EQ(after, before);
