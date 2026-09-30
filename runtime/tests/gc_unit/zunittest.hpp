@@ -265,47 +265,5 @@ private:
     uintptr_t _start;
 };
 
-// A RegionManager over the two memory managers, the way RegionSpace::Init
-// builds the product heap (ZPageAllocator's constructor shape): managers for
-// `units` of max capacity, the per-unit metadata over the reserved span,
-// RegionManager::Initialize. Restores ZAddressOffsetMax and the backing
-// limits on teardown so fixtures can be rebuilt in one process.
-class ZTestRegionHeap {
-public:
-  ZTestRegionHeap(size_t units, RegionManager& manager, const HeapParam& params, double garbageThreshold)
-    : _offsetMax(ZAddressOffsetMax) {
-    EnsureZAddressDomain();
-    const size_t maxCapacity = units * ZGranuleSize;
-    _virtual.reset(new ZVirtualMemoryManager(maxCapacity));
-    GC_EXPECT_TRUE(_virtual->is_initialized());
-    _physical.reset(new ZPhysicalMemoryManager(maxCapacity));
-    GC_EXPECT_TRUE(_physical->is_initialized());
-    const std::vector<ZPage::ReservedSegment> segments = RegionManager::ReservedSegments(*_virtual);
-    _metadataSize = RegionManager::GetMetadataSize();
-    _metadata = mmap(nullptr, _metadataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    GC_EXPECT_TRUE(_metadata != MAP_FAILED);
-    manager.Initialize(units * ZGranuleSize, reinterpret_cast<uintptr_t>(_metadata), *_virtual, *_physical, params, garbageThreshold);
-  }
-
-  ~ZTestRegionHeap() {
-    _physical.reset();
-    _virtual.reset();
-    if (_metadata != nullptr && _metadata != MAP_FAILED) {
-      (void)munmap(_metadata, _metadataSize);
-    }
-  }
-
-  ZVirtualMemoryManager& virtualMemory() { return *_virtual; }
-  ZPhysicalMemoryManager& physicalMemory() { return *_physical; }
-  uintptr_t metadata() const { return reinterpret_cast<uintptr_t>(_metadata); }
-
-private:
-  ZTest::ZBackingLimitSetter _backingLimits;
-  ZAddressOffsetMaxSetter _offsetMax;
-  std::unique_ptr<ZVirtualMemoryManager> _virtual;
-  std::unique_ptr<ZPhysicalMemoryManager> _physical;
-  void* _metadata{ nullptr };
-  size_t _metadataSize{ 0 };
-};
 
 } // namespace MapleRuntime
