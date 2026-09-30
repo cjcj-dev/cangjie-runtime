@@ -143,7 +143,13 @@ void VMThread::run()
     }
     loop();
     currentOperation = &haltOperation;
-    MutatorManager::Instance().StopTheWorld();
+    // vmThread.cpp:189-190: the VM thread leaves at a safepoint, so it never
+    // observes a resumed world. The standalone unit harness tears the process
+    // down without a Runtime, and the product path (CangjieRuntime::FiniAndDelete)
+    // always holds one when this runs.
+    if (Runtime::CurrentRef() != nullptr) {
+        MutatorManager::Instance().StopTheWorld();
+    }
     {
         std::lock_guard<std::mutex> guard(lock);
         running = false;

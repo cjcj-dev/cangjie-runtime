@@ -6,6 +6,7 @@
 
 
 #include "Mutator/ThreadLocal.h"
+#include "Mutator/VMOperation.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -31,12 +32,14 @@ void MapleRuntime::GcUnit::CreateStandaloneHeap(size_t units)
         OS::InitializeProcessorCount();
         ParallelGCThreads = ZHeuristics::nparallel_workers();
         ZCollectedHeap::create(params, 0.5);
+        // HotSpot threads.cpp:635-655: the VM thread is created after the heap
+        // and the managers exist, so GC services may be released.
+        MapleRuntime::VMThread::create();
     }
     // ZGC nonJavaThread.cpp:82 attaches only after the heap exists. Listing
     // tests has no GC producer and must not create or attach one.
     ThreadLocal::InitializeCleaner();
 }
-
 int main(int argc, char** argv)
 {
     // Standalone fixtures create worker pools without GCThread::Init. Set the
@@ -70,6 +73,9 @@ int main(int argc, char** argv)
     // Stop only an existing heap; listing/filtering must not construct one.
     if (MapleRuntime::Heap::heap() != nullptr) {
         MapleRuntime::Heap::GetHeap().StopGCWork();
+        // java.cpp:477 -> universe.cpp:1399 orders VM thread termination after
+        // GC work stops; no submitter remains by this point.
+        MapleRuntime::VMThread::wait_for_vm_thread_exit();
     }
     return MapleRuntime::GcUnit::CompleteTestRun(result);
 }
