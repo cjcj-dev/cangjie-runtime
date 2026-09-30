@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -261,7 +262,7 @@ struct LoadHealDeliveryTestAccess {
         // Full GC/phase production is separately covered by the managed P2 test.
         RelocationReceiptTest::BindCollector(&collector);
         auto& young = Heap::GetHeap().young();
-        if (young.Workers() == nullptr) young.InitializeWorkers(1);
+        if (young.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 1);
         Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
         Heap::GetHeap().young().Mark().Start();
         GC_EXPECT_TRUE(Heap::GetHeap().young().Mark().Stripes().IsEmpty());
@@ -969,7 +970,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         RelocationReceiptTest::ParkFrom(manager, state.region);
         auto& old = Heap::GetHeap().old();
-        if (old.Workers() == nullptr) old.InitializeWorkers(1);
+        if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
         old.Workers()->set_active_workers(1);
         old.Workers()->set_active();
         ZRelocate::StartRelocationTasks(old.id());
@@ -1254,8 +1255,8 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     // The thread must predate the relocation color flip: its raw roots still
     // name the from-page, so its saved load-good mask must describe that epoch.
     if (!oldPending) LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).InitializeWorkers(2);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).InitializeWorkers(2);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::young), 2);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::old), 2);
     // This fixture invokes the old body without the driver's young prelude.
     // Supply the product mark-start sequence event before publishing old roots.
     auto& oldCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
@@ -1329,8 +1330,8 @@ void CheckMajorCurrentRemset(unsigned workers)
     auto& heap = Heap::GetHeap();
     auto& young = heap.young();
     auto& old = heap.old();
-    young.InitializeWorkers(workers);
-    old.InitializeWorkers(workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(old, workers);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     ZPage* source = ResetDeliveryUnit(fx, 5);
     source->reset(PageAge::eden);
@@ -1705,7 +1706,7 @@ void ExerciseRelocationWait782(bool claimedPage)
     // Give the worker ordinary allocation space only after observing the
     // request. Both the table entry and completion are produced by relocate().
     destination->SetRegionAllocPtr(destination->GetRegionStart());
-    if (generation.Workers() == nullptr) generation.InitializeWorkers(2);
+    if (generation.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 2);
     generation.Workers()->set_active_workers(2);
     generation.Workers()->set_active();
     ZRelocate::StartRelocationTasks(generation.id());

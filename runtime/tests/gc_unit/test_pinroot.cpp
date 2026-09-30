@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
@@ -49,7 +50,7 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, boo
     auto& manager = heap.page_allocator();
     ZGeneration& generation = promote ? static_cast<ZGeneration&>(heap.young())
                                      : static_cast<ZGeneration&>(heap.old());
-    generation.InitializeWorkers(workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, workers);
     generation.Workers()->set_active_workers(workers);
     GenerationSequenceFixture::Advance(generation);
     if (promote) { ZGenerationTest::SetTenuringThreshold(heap.young(), 1); }
@@ -197,7 +198,7 @@ static void CheckInPlaceRemset()
     auto& manager = heap.page_allocator();
     ZGeneration& generation = promote ? static_cast<ZGeneration&>(heap.young())
                                      : static_cast<ZGeneration&>(heap.old());
-    generation.InitializeWorkers(workers);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, workers);
     generation.Workers()->set_active_workers(workers);
     {
         ScopedStopTheWorld pause("old relocate start", false);
@@ -432,11 +433,11 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     auto& generation = heap.old();
     GenerationSequenceFixture::Advance(generation);
     if (heap.young().Workers() == nullptr) {
-        heap.young().InitializeWorkers(1);
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.young(), 1);
     }
     heap.young().Workers()->set_active_workers(1);
     if (generation.Workers() == nullptr) {
-        generation.InitializeWorkers(1);
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
     }
     generation.Workers()->set_active_workers(1);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
@@ -886,11 +887,11 @@ static void CheckGrowCopiesHealedFrameRoot()
     auto& generation = heap.old();
     GenerationSequenceFixture::Advance(generation);
     if (heap.young().Workers() == nullptr) {
-        heap.young().InitializeWorkers(1);
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.young(), 1);
     }
     heap.young().Workers()->set_active_workers(1);
     if (generation.Workers() == nullptr) {
-        generation.InitializeWorkers(1);
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
     }
     generation.Workers()->set_active_workers(1);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
@@ -1007,7 +1008,7 @@ void RunRelocateLiveness(bool worker, bool marked)
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
     auto& generation = heap.old();
-    generation.InitializeWorkers(1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
     generation.Workers()->set_active_workers(1);
     GenerationSequenceFixture::Advance(generation);
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
@@ -1117,7 +1118,7 @@ static void CheckRelocationRemsetOwnership(bool worker)
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
     auto& young = heap.young();
-    young.InitializeWorkers(1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 1);
     young.Workers()->set_active_workers(1);
     GenerationSequenceFixture::Advance(young);
     ZGenerationTest::SetTenuringThreshold(young, 1);
@@ -1204,7 +1205,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
     auto& generation = heap.old();
-    generation.InitializeWorkers(1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
     generation.Workers()->set_active_workers(1);
     GenerationSequenceFixture::Advance(generation);
     const size_t size = ZObjectSizeLimitSmall + ZObjectAlignmentMedium;

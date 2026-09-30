@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 #define MRT_USE_CJTHREAD_RENAME 1
 #include "gc_heap_fixture.hpp"
 #include "gc_generation_test.hpp"
@@ -51,7 +52,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
         auto& cycle = heap.GetZGeneration(gen);
         if (cycle.Workers() == nullptr) {
-            cycle.InitializeWorkers(1);
+            MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, 1);
         } else {
             cycle.Workers()->set_active_workers(1);
         }
@@ -154,7 +155,7 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
         auto& cycle = heap.GetZGeneration(gen);
         if (cycle.Workers() == nullptr) {
-            cycle.InitializeWorkers(1);
+            MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, 1);
         } else {
             cycle.Workers()->set_active_workers(1);
         }

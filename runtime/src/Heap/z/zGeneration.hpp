@@ -95,7 +95,7 @@ public:
     // computed after this object exists here, so the set is built when the
     // driver starts; StopWorkers is the matching end of that lifetime (see
     // ~WorkerThreads for why a destroy path exists at all).
-    void InitializeWorkers(uint32_t capacity);
+    void InitializeWorkers();
     void StopWorkers();
     void set_active_workers(uint32_t nworkers);
     ZWorkers* Workers() const { return workers.get(); }
@@ -215,7 +215,6 @@ private:
     void flip_relocate_start();
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint32_t _tenuring_threshold = 0;
-    WorkStack youngWorkStack;
     ZRemembered _remembered;
 };
 
