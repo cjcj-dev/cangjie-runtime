@@ -508,12 +508,7 @@ BaseObject* FinalizerProcessor::RegisterFinalizer(BaseObject* object)
         Mutator* mutator = Mutator::GetMutator();
         HandleMark mark(*mutator);
         Handle handle(mutator, object);
-        // instanceKlass.cpp:1929 calls Universe::finalizer_register_method only after
-        // java.base published it. An unpublished bridge must not invoke a null method;
-        // the object stays unregistered and the caller observes that.
-        if (!methodsReady.load(std::memory_order_acquire)) {
-            return handle();
-        }
+        CHECK_DETAIL(methodsReady.load(std::memory_order_acquire), "core Reference methods are not published");
         InvokeManaged(registerMethod, handle());
         result = handle();
     }
