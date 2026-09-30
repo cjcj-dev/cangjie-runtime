@@ -1,3 +1,4 @@
+#define MRT_USE_CJTHREAD_RENAME 1
 #include "gc_worker_fixture.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -27,6 +28,11 @@
 #include "ObjectModel/RefField.inline.h"
 
 #include "Heap/z/zAccess.hpp"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zHeapIterator.hpp"
+#include "Heap/z/zWorkers.hpp"
+#include "TypeInfoManager.h"
+#include "Concurrency/ConcurrencyModel.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -403,6 +409,8 @@ enum class VerifyFieldCase {
     WeakYoungUnmarked,
     WeakYoungMarked,
     WeakNonLiveOld,
+    ReferentSkippedAtMark,
+    ReferentCheckedAfterWeak,
 };
 
 void RunVerifyFieldCycle(VerifyFieldCase mode)
@@ -439,7 +447,7 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
     if (root == nullptr) { _exit(123); }
     root->StoreColoured(StoreGoodPointer(holder));
     (void)native->EnterSaferegion(false);
-    const bool afterWeak = mode >= VerifyFieldCase::WeakUnmarked;
+    const bool afterWeak = mode >= VerifyFieldCase::WeakUnmarked && mode != VerifyFieldCase::ReferentSkippedAtMark;
     ConcurrentGCBreakpoints::AcquireControl();
     const char* point = afterWeak ? "AFTER CONCURRENT REFERENCE PROCESSING STARTED" :
                                    "BEFORE MARKING COMPLETED";
@@ -473,6 +481,10 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
         case VerifyFieldCase::OldRootUnmarked:
             root->StoreColoured(to_zpointer(raw(root->GetFieldValue()) ^ ZPointerMarkedOldMask));
             break;
+        case VerifyFieldCase::ReferentSkippedAtMark:
+        case VerifyFieldCase::ReferentCheckedAfterWeak:
+            holderType->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+            [[fallthrough]];
         case VerifyFieldCase::OldInvalidTarget: {
             const MAddress top = targetPage->GetRegionAllocPtr();
             if (Heap::is_in(top) || top >= targetPage->GetRegionEnd()) { _exit(130); }
@@ -522,6 +534,13 @@ void RunVerifyFieldCycle(VerifyFieldCase mode)
         }
     }
     field.StoreColoured(to_zpointer(value));
+    if (mode == VerifyFieldCase::ReferentSkippedAtMark) {
+        GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER CONCURRENT REFERENCE PROCESSING STARTED"));
+        std::fprintf(stderr, "VERIFY_REFERENT_SKIP_TARGET slot=%p word=%#zx phase=%u\n",
+                     &field, raw(field.GetFieldValue()), unsigned(heap.old().phase()));
+        GC_EXPECT_EQ(raw(field.GetFieldValue()), value);
+        field.StoreColoured(zpointer::null);
+    }
     if (mode == VerifyFieldCase::OldRootUnmarked) {
         // Stop before the later weak-pause root check can mask a disconnected
         // mark-end consumer with the same diagnostic.
@@ -615,3 +634,275 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerify, WeakFieldRejectsNonLiveOldTarget)
     CheckVerifyFieldCase(VerifyFieldCase::WeakNonLiveOld,
         "ZVerify.WeakFieldRejectsNonLiveOldTarget", "Non-live old oop");
 }
+
+// ZGC zVerify.cpp:343-361: a disarmed carrier is checked by the root closure.
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, RejectsDisarmedBadRootAtVMOperation)
+{
+    if (!ZVerifyRoots) {
+        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
+        RunInOtherVm("ZVerifyCarrier.RejectsDisarmedBadRootAtVMOperation");
+        return;
+    }
+    ExpectSceneAbort("Bad object 0x1000 found at", [&] {
+        RuntimeParam param{};
+        param.coParam.processorNum = 1;
+        param.heapParam.heapSize = 32 * 1024;
+        if (InitCJRuntime(&param) != E_OK) { _exit(121); }
+        auto* thread = MCC_NewCJThread(nullptr, nullptr,
+            Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
+        if (thread == nullptr || CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask)) { _exit(122); }
+        auto* previous = CJThreadGetHandle();
+        ThreadLocal::SetCJThread(thread);
+        auto* data = static_cast<LWTData*>(CJThreadGetArg());
+        ThreadLocal::SetCJThread(previous);
+        data->obj = reinterpret_cast<BaseObject*>(0x1000);
+        std::fprintf(stderr, "VERIFY_CARRIER_INPUT slot=%p value=%p armed=0\n", &data->obj, data->obj);
+        DriverLocker lock;
+        YoungTypeSetter type(Heap::GetHeap().young(), ZYoungType::minor);
+        Heap::GetHeap().young().pause_mark_start();
+    });
+}
+
+// The collector's old-verification VM operation must not process armed carriers.
+namespace {
+// Real carriers can be scheduled during runtime shutdown. Supply a valid
+// empty task body while preserving the observed object slots.
+void CarrierTaskBody() {}
+
+void CheckCarrierWalk(bool heapWalk)
+{
+    RuntimeParam param{};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 32 * 1024;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    Mutator* native = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(native != nullptr);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uintptr_t));
+    BaseObject* object;
+    void* thread;
+    {
+        ScopedObjectAccess access;
+        object = MObject::NewPinnedObject(type, 2 * sizeof(uintptr_t));
+        GC_EXPECT_TRUE(object != nullptr);
+        thread = MCC_NewCJThread(reinterpret_cast<void*>(CarrierTaskBody), object,
+            Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
+    }
+    GC_EXPECT_TRUE(thread != nullptr);
+    auto& heap = Heap::GetHeap();
+    const uintptr_t savedGuard = ZPointerStoreGoodMask;
+    {
+        DriverLocker lock;
+        YoungTypeSetter typeSetter(heap.young(), ZYoungType::minor);
+        heap.young().pause_mark_start();
+    }
+    const bool armedBefore = CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask);
+    ZPage* page = Heap::page(reinterpret_cast<MAddress>(object));
+    const bool markedBefore = page->is_object_marked_live(from_object(object));
+    GC_EXPECT_TRUE(armedBefore);
+    GC_EXPECT_FALSE(CJThreadRootsAreArmed(thread, savedGuard));
+    GC_EXPECT_FALSE(markedBefore);
+    bool found = false;
+    if (heapWalk) {
+        // Heap inspection is a VM operation executed by the GC thread. Keep
+        // allocation on the registered native mutator, then enter that role.
+        const ThreadType savedType = ThreadLocal::GetThreadType();
+        ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+        {
+            ScopedStopTheWorld stw("carrier graph", false);
+            HeapIterator(false).Iterate([&](BaseObject* visited) { found |= visited == object; });
+        }
+        ThreadLocal::SetThreadType(savedType);
+    } else {
+        heap.old().pause_verify();
+    }
+    const bool armedAfter = CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask);
+    const bool markedAfter = page->is_object_marked_live(from_object(object));
+    std::fprintf(stderr, "VERIFY_CARRIER_STATE_TARGET object=%p armed=%d/%d marked=%d/%d\n",
+                 object, armedBefore, armedAfter, markedBefore, markedAfter);
+    if (heapWalk) {
+        std::fprintf(stderr, "HEAP_CARRIER_TARGET found=%d armed=%d marked=%d\n", found, armedAfter, markedAfter);
+        GC_EXPECT_TRUE(found);
+        GC_EXPECT_FALSE(armedAfter);
+        // ZGC zUncoloredRoot.inline.hpp:75-78 enqueues keep-alive marking;
+        // it does not promise that a mark worker has already set the bitmap.
+    } else {
+        const bool sameGuard = !CJThreadRootsAreArmed(thread, savedGuard);
+        std::fprintf(stderr, "VERIFY_CARRIER_GUARD_TARGET saved=%#zx unchanged=%d\n", savedGuard, sameGuard);
+        GC_EXPECT_TRUE(sameGuard);
+        GC_EXPECT_EQ(armedBefore, armedAfter);
+        GC_EXPECT_EQ(markedBefore, markedAfter);
+    }
+    // Positive control for the bitmap observation: real mark workers must
+    // change the very same object's bit after the observation-only check.
+    {
+        DriverLocker lock;
+        heap.young().Workers()->set_active_workers(1);
+        heap.young().Workers()->set_active();
+        ThreadLocal::FlushCurrentThreadMarkStacks();
+        heap.young().concurrent_mark();
+        heap.young().Workers()->set_inactive();
+    }
+    const bool markedControl = page->is_object_marked_live(from_object(object));
+    std::fprintf(stderr, "VERIFY_CARRIER_MARK_CONTROL object=%p before=%d after=%d\n",
+                 object, markedBefore, markedControl);
+    GC_EXPECT_TRUE(markedControl);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+} // namespace
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedGroupAndMarkBitsRemainUnchanged)
+{
+    if (!ZVerifyRoots) {
+        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
+        RunInOtherVm("ZVerifyCarrier.ArmedGroupAndMarkBitsRemainUnchanged");
+        return;
+    }
+    CheckCarrierWalk(false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, HeapWalkEntersBarrierAndVisitsCarrier)
+{
+    CheckCarrierWalk(true);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
+{
+    if (!ZVerifyRoots) {
+        GC_EXPECT_EQ(setenv("ZVerifyRoots", "1", 1), 0);
+        RunInOtherVm("ZVerifyCarrier.ArmedBadRootIsSkipped");
+        return;
+    }
+    RuntimeParam param{};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 32 * 1024;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    auto* thread = MCC_NewCJThread(nullptr, nullptr,
+        Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
+    GC_EXPECT_TRUE(thread != nullptr);
+    {
+        DriverLocker lock;
+        YoungTypeSetter typeSetter(Heap::GetHeap().young(), ZYoungType::minor);
+        Heap::GetHeap().young().pause_mark_start();
+    }
+    auto* previous = CJThreadGetHandle();
+    ThreadLocal::SetCJThread(thread);
+    auto* data = static_cast<LWTData*>(CJThreadGetArg());
+    ThreadLocal::SetCJThread(previous);
+    data->obj = reinterpret_cast<BaseObject*>(0x1000);
+    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+    Heap::GetHeap().old().pause_verify();
+    std::fprintf(stderr, "VERIFY_ARMED_SKIP_TARGET slot=%p value=%p\n", &data->obj, data->obj);
+    GC_EXPECT_TRUE(data->obj == reinterpret_cast<BaseObject*>(0x1000));
+    GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+}
+
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::ReferentSkippedAtMark,
+                        "ZVerifyReferent.MarkVerificationSkipsReferent", nullptr);
+}
+GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, WeakVerificationChecksReferent)
+{
+    CheckVerifyFieldCase(VerifyFieldCase::ReferentCheckedAfterWeak,
+                        "ZVerifyReferent.WeakVerificationChecksReferent", "Non-live old oop");
+}
+
+GC_OTHER_VM_TEST(ZVerifyReferent, RelocationChecksSourceReferent)
+{
+    if (!ZVerifyRemembered) {
+        GC_EXPECT_EQ(setenv("ZVerifyRemembered", "1", 1), 0);
+        RunInOtherVm("ZVerifyReferent.RelocationChecksSourceReferent");
+        return;
+    }
+    GcVerifyFixture fixture;
+    fixture.PrepareOldSource();
+    fixture.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
+    HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
+    RememberedSet& remset = HeapTestRemset();
+    remset.Initialize(fixture.heapStart, 2 * ZGranuleSize);
+    std::fprintf(stderr, "VERIFY_SOURCE_REFERENT_INPUT slot=%#zx value=%#zx\n", slot,
+                 raw(HeapSlotAt<>(slot).GetFieldValue()));
+    ExpectSceneAbort(" in source ", [&] {
+        auto& old = Heap::GetHeap().old();
+        if (old.Workers() == nullptr) { MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1); }
+        old.Workers()->set_active_workers(1);
+        old.Workers()->set_active();
+        ZRelocate::StartRelocationTasks(old.id());
+        old.relocate().relocate(&old.relocation_set());
+        old.Workers()->set_inactive();
+    });
+}
+
+
+namespace {
+void CheckCarrierMarkTask(bool youngOnly, unsigned workers)
+{
+    RuntimeParam param{};
+    param.coParam.processorNum = 1;
+    param.heapParam.heapSize = 512 * 1024;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    auto& heap = Heap::GetHeap();
+    auto* native = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(native != nullptr);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uint64_t));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    BaseObject* young;
+    BaseObject* old;
+    void* youngCarrier;
+    void* oldCarrier;
+    {
+        ScopedObjectAccess access;
+        young = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(16, PageAge::eden));
+        old = reinterpret_cast<BaseObject*>(heap.object_allocator().alloc_for_relocation(16, PageAge::old));
+        young->SetClassInfo(type);
+        old->SetClassInfo(type);
+        auto* scheduler = Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
+        youngCarrier = MCC_NewCJThread(reinterpret_cast<void*>(CarrierTaskBody), young, scheduler);
+        oldCarrier = MCC_NewCJThread(reinterpret_cast<void*>(CarrierTaskBody), old, scheduler);
+    }
+    GC_EXPECT_TRUE(youngCarrier != nullptr && oldCarrier != nullptr);
+    const uintptr_t savedGuard = ZPointerStoreGoodMask;
+    size_t youngPublished = 0, oldPublished = 0, local = 0;
+    bool guardMatches = false, initiallyArmed = false;
+    {
+        DriverLocker lock;
+        YoungTypeSetter typeSetter(heap.young(), ZYoungType::major_partial_roots);
+        heap.young().pause_mark_start();
+        initiallyArmed = CJThreadRootsAreArmed(youngCarrier, ZPointerStoreGoodMask) &&
+                         CJThreadRootsAreArmed(oldCarrier, ZPointerStoreGoodMask);
+        auto& generation = youngOnly ? static_cast<ZGeneration&>(heap.young()) : static_cast<ZGeneration&>(heap.old());
+        generation.Workers()->set_active_workers(workers);
+        if (youngOnly) { heap.young().produceYoungRoots(); }
+        else { heap.old().mark_roots(); }
+        const uintptr_t expectedGuard = youngOnly
+            ? ZPointerLoadGoodMask | ZPointerMarkedYoung | (savedGuard & ZPointerMarkedOldMask) | ZPointerRemembered
+            : ZPointerStoreGoodMask;
+        guardMatches = !CJThreadRootsAreArmed(youngCarrier, expectedGuard) &&
+                       !CJThreadRootsAreArmed(oldCarrier, expectedGuard);
+        generation.Workers()->threads_do([&](WorkerThread* worker) {
+            if (worker->gc_data() != nullptr) {
+                local += worker->gc_data()->markStacks[0].Population();
+                local += worker->gc_data()->markStacks[1].Population();
+            }
+        });
+        youngPublished = heap.young().Mark().Stripes().Population();
+        oldPublished = heap.old().Mark().Stripes().Population();
+        std::fprintf(stderr, "CARRIER_ROOT_TASK_TARGET executed=1 young_only=%d workers=%u slots=%p/%p armed_before=%d guard_matches=%d young_published=%zu old_published=%zu local=%zu\n",
+                     youngOnly, workers, young, old, initiallyArmed, guardMatches, youngPublished, oldPublished, local);
+    }
+    GC_EXPECT_TRUE(initiallyArmed && guardMatches && local == 0 && youngPublished > 0 &&
+                   (youngOnly ? oldPublished == 0 : oldPublished > 0));
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, YoungCarrierPublishesOnlyYoung) { CheckCarrierMarkTask(true, 1); }
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, YoungCarrierParallelDispatch) { CheckCarrierMarkTask(true, 3); }
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, OldCarrierPublishesBothGenerations) { CheckCarrierMarkTask(false, 1); }
+GC_RUNTIME_OTHER_VM_TEST(ZRootTask, OldCarrierParallelDispatch) { CheckCarrierMarkTask(false, 3); }

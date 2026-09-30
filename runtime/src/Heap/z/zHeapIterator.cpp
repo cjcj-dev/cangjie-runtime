@@ -1,5 +1,6 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 #include "Heap/z/zAccess.hpp"
+#include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zMark.hpp"
@@ -209,19 +210,32 @@ void HeapIterator::UncoloredRootOopClosure::do_root(ObjectRef& root)
     iter.mark_visit_and_push(context, to_object(safe(root.LoadPlain())));
 }
 
+namespace {
+class ZHeapIteratorNMethodClosure {
+    const RootVisitor& closure;
+public:
+    explicit ZHeapIteratorNMethodClosure(const RootVisitor& closure) : closure(closure) {}
+    void do_nmethod(CJThreadRoot& root)
+    {
+        // ZGC zHeapIterator.cpp:369-372: entry barrier precedes oop iteration.
+        root.entry_barrier();
+        root.oops_do(closure);
+    }
+};
+} // namespace
+
 void HeapIterator::push_strong_roots(const HeapIteratorContext& context)
 {
     ColoredRootOopClosure<false> colored(*this, context);
     rootsColored.Apply([&](NativeSlot& root) { colored.do_root(root); });
     UncoloredRootOopClosure uncolored(*this, context);
-    rootsUncolored.Apply([&] {
-        ZMark::VisitStrongPlainRoots([&](ObjectRef& root) { uncolored.do_root(root); }, {});
-    });
-    rootsUncolored.ApplyThreads([&](Mutator& mutator) {
+    RootVisitor plain = [&](ObjectRef& root) { uncolored.do_root(root); };
+    ZHeapIteratorNMethodClosure carrier(plain);
+    rootsUncolored.Apply([&](Mutator& mutator) {
         mutator.VisitMutatorRoots([&](ObjectRef& root) { mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
             uncolored.do_root(slot);
         }); });
-    });
+    }, [&](CJThreadRoot& root) { carrier.do_nmethod(root); });
 }
 
 void HeapIterator::push_weak_roots(const HeapIteratorContext& context)

@@ -119,7 +119,6 @@ public:
     void mark_flush(ThreadGCData& data);
     bool FlushGCDataMarkProducers(ThreadGCData& data);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
-    bool IsGhostFromObject(BaseObject* obj) const;
     ZGenerationYoung& young() { return *ZGeneration::young(); }
     const ZGenerationYoung& young() const { return *ZGeneration::young(); }
     ZGenerationOld& old() { return *ZGeneration::old(); }
