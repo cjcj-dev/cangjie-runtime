@@ -874,7 +874,7 @@ struct ReadPendingMarkNodeTask : public ZTask {
     {}
     void work() override
     {
-        pending.fetch_add(static_cast<uint32_t>(smr.pending_count()), std::memory_order_relaxed);
+        pending.fetch_add(static_cast<uint32_t>(MarkingSMRTest::pending_count(smr)), std::memory_order_relaxed);
     }
 };
 
