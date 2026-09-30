@@ -318,7 +318,7 @@ struct Remembered1314Relocation {
         ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
         ZStat::Initialize();
         auto& old = Heap::GetHeap().old();
-        old.InitializeWorkers(1);
+        old.InitializeWorkers();
         old.Workers()->set_active_workers(1);
         GenerationSequenceFixture::Advance(old);
         GenerationSequenceFixture::Advance(Heap::GetHeap().young());

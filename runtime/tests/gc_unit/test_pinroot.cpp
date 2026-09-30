@@ -1291,7 +1291,7 @@ static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = fa
     ZStat::Initialize();
     auto& heap = Heap::GetHeap();
     auto& young = heap.young();
-    young.InitializeWorkers(1);
+    young.InitializeWorkers();
     young.Workers()->set_active_workers(1);
     GenerationSequenceFixture::Advance(young);
     ZGenerationTest::SetTenuringThreshold(young, 1);
@@ -1407,7 +1407,7 @@ GC_COMPONENT_OTHER_VM_TEST(Remset1313, OldRelocateStartParity)
     ZStat::Initialize();
     auto& old = Heap::GetHeap().old();
     auto& young = Heap::GetHeap().young();
-    old.InitializeWorkers(1);
+    old.InitializeWorkers();
     old.Workers()->set_active_workers(1);
     GenerationSequenceFixture::Advance(young);
     GenerationSequenceFixture::Advance(young);
