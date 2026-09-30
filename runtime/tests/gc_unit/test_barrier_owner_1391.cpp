@@ -6,6 +6,7 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/RefField.inline.h"
+#include "ObjectModel/MObject.h"
 #include <thread>
 
 namespace MapleRuntime {
