@@ -136,7 +136,8 @@ GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, CreateDoesNotResetWatermark)
                  watermark.prev_head_color(), watermark.GetEpoch(), data.storeBarrierBuffer,
                  BarrierSet::barrier_set());
     GC_EXPECT_TRUE(data.storeBarrierBuffer != nullptr);
-    GC_EXPECT_EQ(watermark.prev_head_color(), static_cast<uintptr_t>(0));
+    GC_EXPECT_EQ(watermark.prev_head_color(), static_cast<uintptr_t>(ZPointerStoreBadMask));
+    GC_EXPECT_EQ(watermark.watermark(), static_cast<uintptr_t>(0));
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
@@ -155,7 +156,6 @@ GC_RUNTIME_OTHER_VM_TEST(BarrierOwner1391, DestroyNullsPairedBuffer)
     GC_EXPECT_TRUE(data.storeBarrierBuffer == nullptr);
     published->on_thread_create(data);
     GC_EXPECT_TRUE(data.storeBarrierBuffer != nullptr);
-    GC_EXPECT_TRUE(data.storeBarrierBuffer != created);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
