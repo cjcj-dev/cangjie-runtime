@@ -860,7 +860,14 @@ void CheckCarrierMarkTask(bool youngOnly, unsigned workers)
     RuntimeParam param{};
     param.coParam.processorNum = 1;
     param.heapParam.heapSize = 512 * 1024;
+    param.gcParam.youngGCThreads = workers;
+    param.gcParam.youngGCThreadsSet = true;
+    param.gcParam.oldGCThreads = workers;
+    param.gcParam.oldGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    GC_EXPECT_EQ(ZYoungGCThreads, workers);
+    GC_EXPECT_EQ(ZOldGCThreads, workers);
+    GC_EXPECT_TRUE(ConcGCThreads >= workers);
     auto& heap = Heap::GetHeap();
     auto* native = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(native != nullptr);
@@ -895,6 +902,7 @@ void CheckCarrierMarkTask(bool youngOnly, unsigned workers)
                          CJThreadRootsAreArmed(oldCarrier, ZPointerStoreGoodMask);
         auto& generation = youngOnly ? static_cast<ZGeneration&>(heap.young()) : static_cast<ZGeneration&>(heap.old());
         generation.Workers()->set_active_workers(workers);
+        GC_EXPECT_EQ(generation.Workers()->active_workers(), workers);
         if (youngOnly) { heap.young().produceYoungRoots(); }
         else { heap.old().mark_roots(); }
         const uintptr_t expectedGuard = youngOnly

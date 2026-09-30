@@ -147,7 +147,6 @@ ZGeneration::ZGeneration(ZGenerationId generation)
       _relocation_set(this),
       _relocate(std::make_unique<ZRelocate>(this))
 {
-    ZJNICritical::initialize();
 }
 
 ZGeneration::~ZGeneration()
