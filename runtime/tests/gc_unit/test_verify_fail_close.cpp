@@ -828,7 +828,7 @@ GC_OTHER_VM_TEST(ZVerifyReferent, RelocationChecksSourceReferent)
                  raw(HeapSlotAt<>(slot).GetFieldValue()));
     ExpectSceneAbort(" in source ", [&] {
         auto& old = Heap::GetHeap().old();
-        if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
+        if (old.Workers() == nullptr) { MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1); }
         old.Workers()->set_active_workers(1);
         old.Workers()->set_active();
         ZRelocate::StartRelocationTasks(old.id());
