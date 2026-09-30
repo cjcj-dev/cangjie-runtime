@@ -904,8 +904,11 @@ void CheckStoreAccessor(StoreEntry entry, bool weak, bool weakHolder, bool refle
     fx.region0()->reset(PageAge::old);
     fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
+    U32 referenceOffsets[4] = {0, 8, 16, 24};
     if (weakHolder) {
         fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+        fx.typeInfo->SetFieldNum(4);
+        fx.typeInfo->SetOffsets(referenceOffsets);
     }
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreBadPointer(fx.obj0));
@@ -1433,7 +1436,10 @@ extern "C" void MCC_WriteRefField_Strong(BaseObject*, BaseObject*, HeapSlot<>*);
 GC_TEST(AccessBarrier976, UnknownWeakStoreResolvesAtFieldOffset)
 {
     GcHeapFixture fx;
+    U32 referenceOffsets[4] = {0, 8, 16, 24};
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    fx.typeInfo->SetFieldNum(4);
+    fx.typeInfo->SetOffsets(referenceOffsets);
     fx.region0()->reset(PageAge::old);
     fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
@@ -1455,7 +1461,10 @@ GC_TEST(AccessBarrier976, UnknownWeakStoreResolvesAtFieldOffset)
 GC_TEST(AccessBarrier976, KnownStrongStoreIgnoresWeakHolderControl)
 {
     GcHeapFixture fx;
+    U32 referenceOffsets[4] = {0, 8, 16, 24};
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    fx.typeInfo->SetFieldNum(4);
+    fx.typeInfo->SetOffsets(referenceOffsets);
     fx.region0()->reset(PageAge::old);
     fx.region1()->reset(PageAge::eden);
     MarkPublicationFixture marking;
@@ -1468,6 +1477,31 @@ GC_TEST(AccessBarrier976, KnownStrongStoreIgnoresWeakHolderControl)
     field.StoreColoured(StoreBadPointer(fx.obj1));
     MCC_WriteRefField_Strong(nullptr, fx.obj0, &field);
     std::fprintf(stderr, "ACCESS976_STRONG_ASSERT pending=%zu raw=%zx\n",
+        static_cast<size_t>(buffer.Pending()), raw(field.GetFieldValue()));
+    GC_EXPECT_EQ(buffer.Pending(), 1u);
+    GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(nullptr));
+    buffer.Flush();
+}
+
+GC_TEST(AccessBarrier976, UnknownFinalStoreIsStrong)
+{
+    GcHeapFixture fx;
+    U32 referenceOffsets[4] = {0, 8, 16, 24};
+    fx.typeInfo->SetType(TypeKind::TYPE_KIND_FINALREF_CLASS);
+    fx.typeInfo->SetFieldNum(4);
+    fx.typeInfo->SetOffsets(referenceOffsets);
+    fx.region0()->reset(PageAge::old);
+    fx.region1()->reset(PageAge::eden);
+    MarkPublicationFixture marking;
+    Mutator mutator;
+    InstalledMutatorScope installed(mutator);
+    auto& buffer = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    buffer.clear();
+    buffer.Initialize(ZPointerStoreGoodMask);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreBadPointer(fx.obj1));
+    MCC_WriteRefField(nullptr, fx.obj0, &field);
+    std::fprintf(stderr, "REFERENCE1356_FINAL_STRENGTH pending=%zu raw=%zx\n",
         static_cast<size_t>(buffer.Pending()), raw(field.GetFieldValue()));
     GC_EXPECT_EQ(buffer.Pending(), 1u);
     GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(nullptr));

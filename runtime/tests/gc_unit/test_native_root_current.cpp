@@ -36,7 +36,6 @@
 #if defined(MRT_TESTABLE_INTERNALS)
 #include "gc_generation_test.hpp"
 #include "gc_product_access_test.hpp"
-#include "finalizer_processor_test.hpp"
 
 namespace MapleRuntime {
 class RelocationReceiptTest {
@@ -605,7 +604,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     fixture.region0()->reset(PageAge::old);
     // Seed the real scheduling input through its existing fixture operation.
     // The root task and marker below are the product TraceHeap implementation.
-    GC_EXPECT_TRUE(FinalizerProcessorTest::Queue(Heap::GetHeap().GetFinalizerProcessor(), fixture.obj0));
+    GC_EXPECT_TRUE(heap.GetFinalizerProcessor().SwapPendingList(fixture.obj0) == nullptr);
     RelocationReceiptTest::NativeRootTrace(collector);
     const bool marked = fixture.region0()->is_object_strongly_live(from_object(fixture.obj0));
     std::fprintf(stderr, "ROOT_STORAGE_STRONG_TARGET executed=1 object=%p marked=%u\n",
@@ -629,10 +628,9 @@ void CheckRootStorageSegments(unsigned family)
     fixture.region0()->reset(PageAge::eden);
     auto& finalizers = heap.GetFinalizerProcessor();
     // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
-    constexpr size_t count = 24 * sizeof(uintptr_t) * CHAR_BIT;
+    const size_t count = family == 0 ? 1 : 24 * sizeof(uintptr_t) * CHAR_BIT;
     for (size_t i = 0; i < count; ++i) {
-        if (family == 0) { GC_EXPECT_TRUE(FinalizerProcessorTest::Queue(finalizers, fixture.obj0)); }
-        else if (family == 1) { finalizers.RegisterFinalizer(fixture.obj0); }
+        if (family == 0) { GC_EXPECT_TRUE(finalizers.SwapPendingList(fixture.obj0) == nullptr); }
         else { (void)heap.RegisterExportRoot(fixture.obj0); }
     }
     std::unordered_map<NativeSlot*, uintptr_t> before;
@@ -640,7 +638,6 @@ void CheckRootStorageSegments(unsigned family)
         before.emplace(&slot, raw(slot.GetFieldValue()));
     };
     if (family == 0) { finalizers.VisitGCRoots(remember); }
-    else if (family == 1) { finalizers.VisitFinalizers(remember); }
     else { heap.VisitAllExportRoots(remember); }
     // ZGC zMark.cpp:877: the young root task consumes ALL colored root
     // storages. Its barrier recolors each slot after mark-start flips the
@@ -660,7 +657,6 @@ void CheckRootStorageSegments(unsigned family)
         valuesValid &= to_object(slot.GetTargetObject()) == fixture.obj0;
     };
     if (family == 0) { finalizers.VisitGCRoots(observe); }
-    else if (family == 1) { finalizers.VisitFinalizers(observe); }
     else { heap.VisitAllExportRoots(observe); }
     const bool covered = before.size() == count && remaining == count;
     std::fprintf(stderr,
@@ -669,8 +665,7 @@ void CheckRootStorageSegments(unsigned family)
     GC_EXPECT_TRUE(covered && valuesValid && transitioned == count);
 }
 }
-GC_OTHER_VM_TEST(RootStorageSegments, Strong) { CheckRootStorageSegments(0); }
-GC_OTHER_VM_TEST(RootStorageSegments, WeakFinalizer) { CheckRootStorageSegments(1); }
+GC_OTHER_VM_TEST(RootStorageSegments, PendingRoot) { CheckRootStorageSegments(0); }
 GC_OTHER_VM_TEST(RootStorageSegments, Export) { CheckRootStorageSegments(2); }
 #endif
 

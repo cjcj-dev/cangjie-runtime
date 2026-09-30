@@ -8,6 +8,8 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "ObjectModel/RefField.inline.h"
+#include "reference_layout_fixture.hpp"
+#include "Heap/z/zResurrection.hpp"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 extern "C" int CJ_ScheduleManagerInit();
@@ -49,7 +51,9 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(targetTypeStorage), sizeof(targetTypeStorage));
     fx.obj1->SetClassInfo(targetType);
-    if (!strong) fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    ReferenceLayoutFixture weakLayout;
+    ReferenceLayoutFixture finalLayout(true);
+    if (!strong) { weakLayout.Place(reinterpret_cast<MAddress>(fx.obj0), fx.obj1); }
     auto& referent = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(StoreGoodPointer(fx.obj1));
     HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE)
@@ -59,8 +63,12 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     heap.old().InitializeWorkers(workers);
     heap.old().set_phase(ZGenerationPhase::Relocate);
     U64 handle = 0;
-    if (finalizable) heap.GetFinalizerProcessor().RegisterFinalizer(fx.obj0);
-    else handle = heap.RegisterExportRoot(cycle ? fx.obj1 : fx.obj0);
+    BaseObject* finalReference = nullptr;
+    if (finalizable) {
+        finalReference = finalLayout.Place(fx.heapStart + 128, fx.obj0);
+        fx.region0()->SetRegionAllocPtr(fx.heapStart + 192);
+        handle = heap.RegisterExportRoot(finalReference);
+    } else { handle = heap.RegisterExportRoot(cycle ? fx.obj1 : fx.obj0); }
     if (young) {
         if (oldReferent) {
             // ZPage::is_object_strongly_live treats allocating pages as live.
@@ -84,14 +92,16 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     const bool targetLive = fx.region1()->is_object_live(from_object(fx.obj1));
     auto& processor = heap.GetFinalizerProcessor().GetReferenceProcessor();
     const size_t discovered = processor.Discovered(ReferenceType::WEAK);
-    processor.ProcessReferences([](BaseObject*) { return false; });
-    processor.EnqueueReferences([](BaseObject*) { return true; });
+    ZResurrection::block();
+    processor.process_references();
+    processor.enqueue_references();
+    BaseObject* pending = heap.GetFinalizerProcessor().SwapPendingList(nullptr);
+    ZResurrection::unblock();
     const bool cleared = referent.GetTargetObject() == zaddress::null;
     if (handle != 0) heap.RemoveExportObject(handle);
+    const bool finalCarrier = !finalizable || (pending == finalReference && MReference::next(finalReference) == finalReference);
     if (finalizable) {
-        heap.GetFinalizerProcessor().VisitNativePointers([](NativeSlot& root) {
-            root.StoreColoured(zpointer::null);
-        });
+        std::fprintf(stderr, "MARK1036_FINAL_CARRIER result=%d\n", finalCarrier);
     }
     std::fprintf(stderr,
         "MARK1036_TARGET finalizable=%d strong=%d young=%d workers=%zu old_referent=%d cycle=%d discovered=%zu target_live=%d target_strong=%d cleared=%d\n",
@@ -100,6 +110,7 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
         (strong || young || cycle) ? (targetStrong && targetLive && !cleared && discovered == 0) :
         finalizable ? (!targetStrong && targetLive && !cleared && discovered == 0) :
                       (!targetStrong && !targetLive && cleared && discovered == 1));
+    GC_EXPECT_TRUE(finalCarrier);
 }
 }
 

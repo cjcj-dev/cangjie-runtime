@@ -122,7 +122,8 @@ void* AllocateAtExit(void* opaque)
     BaseObject* result = nullptr;
     switch (input.entry) {
         case 0: result = MCC_NewObject(objectType, 24); break;
-        case 1: result = MCC_NewFinalizer(objectType, 24); break;
+        // #1394: finalizable instances use the ordinary allocation entry.
+        case 1: result = MCC_NewObject(objectType, 24); break;
         case 2: result = MCC_NewPinnedObject(objectType, 24, false); break;
         case 3: result = MCC_NewArray(arrayType, 2); break;
         case 4: result = MCC_NewObjArray(arrayType, 2); break;

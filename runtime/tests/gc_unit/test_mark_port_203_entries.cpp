@@ -7,6 +7,7 @@
 #include <string>
 #include <unistd.h>
 #include "gc_heap_fixture.hpp"
+#include "reference_layout_fixture.hpp"
 #include "mark_consumer_fixture.hpp"
 #include "zunittest.hpp"
 #include "gc_unittest.hpp"
@@ -297,10 +298,14 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     slots[tail2].StoreColoured(StoreGoodPointer(children[2]));
     slots[referenceSlots - 1].StoreColoured(StoreGoodPointer(children[3]));
     BaseObject* finalizerRoot = nullptr;
+    ReferenceLayoutFixture finalLayout(true);
+    BaseObject* finalReference = nullptr;
     if (finalizable) {
         finalizerRoot = fx.PlaceObject(next);
         HeapSlotAt<>(next + TYPEINFO_PTR_SIZE).StoreColoured(StoreGoodPointer(array));
         next += finalizerRoot->GetSize();
+        finalReference = finalLayout.Place(next, finalizerRoot);
+        next += finalReference->GetSize();
     }
     fx.region1()->SetRegionAllocPtr(next);
     GC_EXPECT_TRUE(next <= fx.region1()->GetRegionEnd());
@@ -319,7 +324,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     std::vector<NativeSlot*> roots(rootCount);
     U64 handle = 0;
     if (finalizable) {
-        Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizer(finalizerRoot);
+        handle = Heap::GetHeap().RegisterExportRoot(finalReference);
     } else if (!markOnly && duplicateRootOrder == 0 && commonRoot) {
         for (size_t i = 0; i < rootCount; ++i) {
             rootSlots[i].StoreColoured(StoreGoodPointer(array));
@@ -344,13 +349,11 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     // ZMark::follow_work (zMark.cpp:412-415): a duplicate mark returns before
     // follow. The LIFO mark-only entry wins when it was published last.
     const size_t expectedChildren = (markOnly || duplicateRootOrder < 0) ? 0 : childrenCount;
-    const size_t expectedObjects = expectedChildren + 1 + (finalizable ? 1 : 0);
+    const size_t expectedObjects = expectedChildren + 1 + (finalizable ? 2 : 0);
     const size_t expectedBytes = arrayBytes + expectedChildren * children[0]->GetSize() +
-        (finalizable ? finalizerRoot->GetSize() : 0);
+        (finalizable ? finalizerRoot->GetSize() + finalReference->GetSize() : 0);
     if (finalizable) {
-        Heap::GetHeap().GetFinalizerProcessor().VisitNativePointers([](NativeSlot& root) {
-            root.StoreColoured(StoreGoodPointer(nullptr));
-        });
+        Heap::GetHeap().RemoveExportObject(handle);
     } else if (!markOnly && duplicateRootOrder == 0 && commonRoot) {
         Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
     } else if (!markOnly && duplicateRootOrder == 0) {

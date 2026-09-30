@@ -622,8 +622,8 @@ echo "STALL_SUITE=PRODUCT_BOTH_CONFIGURATIONS"
 # satisfy its consumers, then require the executable to import those methods.
 REFERENCE_PROCESSOR_CONSUMERS=(
   'MapleRuntime::ReferenceProcessor::discover_reference('
-  'MapleRuntime::ReferenceProcessor::ProcessReferences('
-  'MapleRuntime::ReferenceProcessor::EnqueueReferences('
+  'MapleRuntime::ReferenceProcessor::process_references('
+  'MapleRuntime::ReferenceProcessor::enqueue_references('
 )
 REFERENCE_PROCESSOR_FULL="$OUT/cj_gc_unit.full-defined.txt"
 REFERENCE_PROCESSOR_UNDEFINED="$OUT/cj_gc_unit.undefined.txt"
