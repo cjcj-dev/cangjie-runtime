@@ -35,7 +35,7 @@ namespace { BaseObject* brokenObject = nullptr; }
 // ZGC zVerify.cpp:63-110.
 void z_verify_safepoints_are_blocked()
 {
-    if (ThreadLocal::GetThreadType() == ThreadType::GC_THREAD) { return; }
+    if (ThreadLocal::GetThreadType() == ThreadType::GC_THREAD || VMThread::is_VM_thread()) { return; }
     Mutator* const mutator = ThreadLocal::GetMutator();
     DCHECK(MutatorManager::Instance().WorldStopped() ||
            (mutator != nullptr && !mutator->InSaferegion()));

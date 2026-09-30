@@ -114,6 +114,7 @@ void CangjieRuntime::CreateAndInit(const RuntimeParam& runtimeParam)
     CHECK_DETAIL(cjRuntime != nullptr, "new CangjieRuntime failed");
     Runtime::runtime = cjRuntime;
     cjRuntime->Init();
+    VMThread::create();
     g_initialized.store(true, std::memory_order_release);
     ConcurrentGCThread::NotifyRuntimeInitialized();
 }
@@ -272,6 +273,7 @@ inline void CheckAndFini(T*& module)
 
 void CangjieRuntime::Fini()
 {
+    VMThread::wait_for_vm_thread_exit();
     // To avoid foreign thread access finalized runtime.
     ThreadLocal::ThreadLocalFini();
     // since there might be failure during initialization,
