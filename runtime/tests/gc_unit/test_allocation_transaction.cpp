@@ -104,6 +104,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, AddressExhaustionReturnsNull)
 GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, HarvestAddressFailureRestores)
 {
     auto& manager = InitAllocationRuntime();
+    DriverLocker driverPause;
     std::vector<ZPage*> pages;
     while (ZPage* page = Allocate(ZPageSizeSmall)) { pages.push_back(page); }
     GC_EXPECT_TRUE(pages.size() >= 8);
@@ -188,6 +189,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, PartialCommitPrefixPreserved) { 
 GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, HarvestPartialCommitAccounts)
 {
     auto& manager = InitAllocationRuntime();
+    DriverLocker driverPause;
     std::vector<ZPage*> occupied;
     for (size_t i = 0; i < 24; ++i) {
         ZPage* page = Allocate(ZPageSizeSmall);
@@ -225,6 +227,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, HarvestPartialCommitAccounts)
 GC_RUNTIME_OTHER_VM_TEST(AllocationTransaction, CommitFailureRetainsSmallPages)
 {
     auto& manager = InitAllocationRuntime();
+    DriverLocker driverPause;
     std::vector<ZPage*> retained;
     for (size_t i = 0; i < 4; ++i) {
         ZPage* page = Allocate(ZPageSizeSmall);
