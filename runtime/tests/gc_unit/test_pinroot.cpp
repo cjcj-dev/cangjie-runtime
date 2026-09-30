@@ -692,6 +692,12 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     }
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
+    // threads.cpp:935-942: the VM thread is terminated only after the other
+    // threads are gone. End this mutator the way a normal thread end does --
+    // leave the state it entered, then leave the manager -- so the stand-in
+    // destructor can drain the world. Teardown only; the sequence above is the
+    // one under test.
+    (void)parked->DoLeaveSaferegion();
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     CangjieRuntime::stackGrowConfig = savedGrow;
 #else
@@ -986,6 +992,12 @@ static void CheckGrowCopiesHealedFrameRoot()
     GC_EXPECT_TRUE(g_growCopy.done || g_growCopy.watermark == 0);
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
+    // threads.cpp:935-942: the VM thread is terminated only after the other
+    // threads are gone. End this mutator the way a normal thread end does --
+    // leave the state it entered, then leave the manager -- so the stand-in
+    // destructor can drain the world. Teardown only; the sequence above is the
+    // one under test.
+    (void)parked->DoLeaveSaferegion();
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 #else
