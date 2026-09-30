@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zDriver.cpp
++++ b/runtime/src/Heap/z/zDriver.cpp
+@@ -112,7 +112,7 @@
+         DriverLocker locker;
+         ZBreakpoint::AtBeforeGC();
+         abortpoint();
+-        gc(request);
++        /* cut: major collection dispatch */
+         abortpoint();
+         _port.ack();
+         handle_alloc_stalls();

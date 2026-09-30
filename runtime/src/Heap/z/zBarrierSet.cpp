@@ -52,9 +52,8 @@ ValuePayload::ValuePayload(MAddress address, size_t size, std::vector<size_t> of
     this->offsets.erase(std::unique(this->offsets.begin(), this->offsets.end()), this->offsets.end());
 }
 
-void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData*, zaddress_unsafe* root)
+void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData*)
 {
-    data.invisibleRoot = root;
     const auto masks = ThreadGCData::PublishedMasks();
     // Native bootstrap may precede heap/color initialization. A later binding
     // retries attachment before this owner can produce managed references.

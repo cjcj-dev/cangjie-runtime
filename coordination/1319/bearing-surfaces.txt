@@ -1,0 +1,45 @@
+runtime/src/Heap/z/zBarrierSet.cpp:55:void ZBarrierSet::on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData*)
+runtime/src/Heap/z/zBarrierSet.hpp:17:    static void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native);
+runtime/src/Heap/z/zHeap.cpp:626:        [&rootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rootVisitor); });
+runtime/src/Heap/z/zHeapIterator.cpp:221:        mutator.VisitMutatorRoots([&](ObjectRef& root) { mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
+runtime/src/Heap/z/zObjArrayAllocator.cpp:52:    mutator->GetGCData().set_invisible_root(&mem);
+runtime/src/Heap/z/zObjArrayAllocator.cpp:105:    mutator->GetGCData().clear_invisible_root();
+runtime/src/Heap/z/zStackWatermark.cpp:399:    zaddress_unsafe* invisible = owner.GetGCData().invisible_root();
+runtime/src/Heap/z/zStackWatermark.cpp:400:    if (invisible != nullptr) { ZUncoloredRoot::process_invisible(invisible, prev_head_color()); }
+runtime/src/Heap/z/zThreadLocalData.hpp:32:    void set_invisible_root(zaddress_unsafe* root)
+runtime/src/Heap/z/zThreadLocalData.hpp:37:    void clear_invisible_root()
+runtime/src/Heap/z/zThreadLocalData.hpp:42:    zaddress_unsafe* invisible_root() const { return invisibleRoot; }
+runtime/src/Heap/z/zUncoloredRoot.hpp:25:    static void process_invisible(zaddress_unsafe* p, uintptr_t color);
+runtime/src/Heap/z/zUncoloredRoot.inline.hpp:71:inline void ZUncoloredRoot::process_invisible(zaddress_unsafe* p, uintptr_t color)
+runtime/src/Heap/z/zVerify.cpp:156:        mutator.VisitProcessedRoots([&](ObjectRef& root) {
+runtime/src/Mutator/Mutator.cpp:184:    ZBarrierSet::on_thread_attach(gcData, this, nullptr);
+runtime/src/Mutator/Mutator.cpp:279:void Mutator::VisitProcessedRoots(const RootVisitor& visitor)
+runtime/src/Mutator/Mutator.cpp:330:void Mutator::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+runtime/src/Mutator/Mutator.cpp:333:    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, young);
+runtime/src/Mutator/Mutator.cpp:336:void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+runtime/src/Mutator/Mutator.cpp:347:    StackManager::VisitHeapReferencesOnStack(
+runtime/src/Mutator/Mutator.cpp:353:void Mutator::VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+runtime/src/Mutator/Mutator.cpp:356:    VisitHeapReferencesOnStack(rootVisitor, derivedPtrVisitor, young);
+runtime/src/Mutator/Mutator.cpp:361:void Mutator::VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+runtime/src/Mutator/Mutator.cpp:366:    VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, young);
+runtime/src/Mutator/Mutator.h:333:    void VisitProcessedRoots(const RootVisitor& visitor);
+runtime/src/Mutator/Mutator.h:336:    void VisitMutatorRoots(const RootVisitor& visitor)
+runtime/src/Mutator/Mutator.h:347:    void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+runtime/src/Mutator/Mutator.h:349:    void VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+runtime/src/Mutator/Mutator.h:478:    void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+runtime/src/Mutator/Mutator.h:480:    void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+runtime/src/Mutator/ThreadLocal.cpp:145:    ZBarrierSet::on_thread_attach(nativeData, nullptr, tls);
+runtime/src/StackManager.cpp:178:void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& rootVisitor,
+runtime/src/StackManager.cpp:181:    VisitHeapReferencesOnStack(topFrame, rootVisitor, rootVisitor, derivedPtrVisitor, mutator, young);
+runtime/src/StackManager.cpp:184:void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& regRootVisitor,
+runtime/src/StackManager.cpp:192:    gcStackInfo.VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, mutator, young);
+runtime/src/StackManager.h:74:    static void VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& rootVisitor,
+runtime/src/StackManager.h:77:    static void VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& regRootVisitor,
+runtime/src/UnwindStack/GcStackInfo.cpp:25:void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+runtime/src/UnwindStack/GcStackInfo.cpp:28:    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, mutator, young);
+runtime/src/UnwindStack/GcStackInfo.cpp:31:void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
+runtime/src/UnwindStack/GcStackInfo.cpp:86:void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+runtime/src/UnwindStack/GcStackInfo.cpp:89:    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, mutator, young);
+runtime/src/UnwindStack/GcStackInfo.cpp:92:void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
+runtime/src/UnwindStack/GcStackInfo.h:35:    void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+runtime/src/UnwindStack/GcStackInfo.h:37:    void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,

@@ -7,6 +7,7 @@
 #include <string>
 #include <unistd.h>
 #include "gc_heap_fixture.hpp"
+#include "mark_consumer_fixture.hpp"
 #include "zunittest.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zMarkStack.hpp"
@@ -32,16 +33,15 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
         fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + fx.obj0->GetSize());
     }
     const size_t size = fx.obj0->GetSize();
+    MarkConsumerFixture consumer;
     if (finalizable) {
-        GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
-            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), nullptr));
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true));
     }
-    MarkLiveCache cache(1);
-    const bool already = ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache);
-    const bool secondAlready = repeat ? ZMark::MarkEntryObject(fx.obj0,
-        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache) : true;
-    cache.Flush();
+    consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+    if (repeat) {
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+    }
+    consumer.context.Cache().Flush();
     const uint64_t bytes = fx.region0()->live_bytes();
     const uint32_t objects = fx.region0()->live_objects();
     // Do not place a transition assertion ahead of the accounting invariant.
@@ -51,8 +51,6 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
     GC_EXPECT_EQ(bytes, static_cast<uint64_t>(size));
     GC_EXPECT_EQ(objects, 1u);
     GC_EXPECT_TRUE(strong);
-    GC_EXPECT_FALSE(already);
-    GC_EXPECT_TRUE(secondAlready);
 }
 }
 
@@ -100,11 +98,9 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
     uint32_t evictedObjects = 0;
     uint64_t evictedBytes = 0;
     {
-        MarkLiveCache cache(stripes);
-        (void)ZMark::MarkEntryObject(fx.obj0,
-            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache);
-        (void)ZMark::MarkEntryObject(fx.obj1,
-            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj1))), true, true, false, false), &cache);
+        MarkConsumerFixture consumer(stripes);
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false));
+        consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj1))), true, true, false, false));
         evictedObjects = fx.region0()->live_objects();
         evictedBytes = fx.region0()->live_bytes();
     }

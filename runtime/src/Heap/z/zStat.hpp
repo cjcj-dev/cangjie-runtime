@@ -144,16 +144,6 @@ void ZStatUnitBytesPerSecond(const ZStatSampler& sampler, const ZStatSamplerHist
 void ZStatUnitCount(const ZStatSampler& sampler, const ZStatSamplerHistory& history);
 void ZStatUnitOpsPerSecond(const ZStatSampler& sampler, const ZStatSamplerHistory& history);
 
-// zStat.hpp:124-141, zStat.cpp:133-152: tracer routing point. Cangjie events
-// are not wired yet (issue #626 D4: infra difference A); every
-// ZStatSample/ZStatInc passes through these stubs so the routing points exist.
-class ZTracer {
-public:
-    static void report_stat_sampler(const ZStatSampler& sampler, uint64_t value);
-    static void report_stat_counter(const ZStatValue& counter, uint64_t increment, uint64_t value);
-    static void report_stat_phase(const char* name, uint64_t durationNs);
-};
-
 // Identity and list membership are fixed by static construction, before startup.
 class ZStatValue {
 public:
@@ -188,8 +178,7 @@ private:
     static char* base;
 };
 
-// zStat.hpp:252-277. Sampling goes through the free ZStatSample (with the
-// ZTracer routing point), matching zStat.cpp:892-916.
+// zStat.hpp:252-277. Sampling goes through the free ZStatSample.
 class ZStatSampler : public ZStatValue {
 public:
     ZStatSampler(const char* group, const char* name, ZStatUnitPrinter printer);
@@ -250,7 +239,7 @@ private:
     ZStatUnsampledCounter* const next;
 };
 
-// zStat.cpp:892-930 — every sample/inc passes the ZTracer routing point.
+// zStat.cpp:892-930 — sampling and counter updates.
 void ZStatSample(const ZStatSampler& sampler, uint64_t value);
 void ZStatDurationSample(const ZStatSampler& sampler, uint64_t durationNs);
 void ZStatInc(const ZStatCounter& counter, uint64_t increment);
@@ -293,10 +282,8 @@ private:
 
 // zStat.hpp:212-296, zStat.cpp:597-876: phase group and generation are
 // properties of the static phase object; neither the observed name nor a
-// cycle table owns it. Host infra difference (D4=A): ConcurrentGCTimer and
-// the JFR tracers have no counterpart, so register_start/register_end carry
-// no timer parameter; the structured phase record is emitted to GCLOG from
-// the same routing point (ZTracer::report_stat_phase ≈ GcLog::Phase).
+// cycle table owns it. There is no host JFR event consumer or
+// ConcurrentGCTimer counterpart. Structured phase logging remains separate.
 class ZStatPhase {
 protected:
     const ZStatSampler sampler;
@@ -673,8 +660,6 @@ private:
     static void Set(ZCount* count, size_t encountered, size_t discovered, size_t enqueued);
 };
 
-extern std::atomic<uint64_t> g_gcTotalTimeUs;
-extern std::atomic<size_t> g_gcCollectedTotalBytes;
 
 } // namespace MapleRuntime
 #endif // MRT_ZSTAT_H
