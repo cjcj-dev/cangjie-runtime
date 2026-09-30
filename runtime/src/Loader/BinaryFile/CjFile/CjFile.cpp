@@ -164,10 +164,8 @@ void CJFile::LoadCJFileMeta()
 #else
     LoadLinuxCJFileMeta();
 #endif
-    if (Heap::GetHeap().IsGCEnabled()) {
-        if (cJFileMeta.gcFlagsTbl.withSafepoint != 1 || cJFileMeta.gcFlagsTbl.withBarrier != 1) {
-            LOG(RTLOG_FATAL, "no safepoint or barrier defined in file %s \n", GetBaseName().Str());
-        }
+    if (cJFileMeta.gcFlagsTbl.withSafepoint != 1 || cJFileMeta.gcFlagsTbl.withBarrier != 1) {
+        LOG(RTLOG_FATAL, "no safepoint or barrier defined in file %s \n", GetBaseName().Str());
     }
     if (CangjieRuntime::stackGrowConfig == StackGrowConfig::UNDEF) {
         if (cJFileMeta.gcFlagsTbl.hasStackPointerMap == 0) {

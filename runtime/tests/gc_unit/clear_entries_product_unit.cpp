@@ -550,8 +550,10 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, Heap& collector,
         // zRelocate.cpp:369: relocation to a fresh page is a disjoint copy.
         ZUtils::object_copy_disjoint(to_zaddress(reinterpret_cast<uintptr_t>(from)),
                                      to_zaddress(reinterpret_cast<uintptr_t>(to)), from->GetSize());
+        ForwardingCursor cursor;
+        GC_EXPECT_EQ(publication->find(reinterpret_cast<MAddress>(from), &cursor), MAddress(0));
         GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(from),
-                                                   reinterpret_cast<MAddress>(to)), reinterpret_cast<MAddress>(to));
+                                                   reinterpret_cast<MAddress>(to), &cursor), reinterpret_cast<MAddress>(to));
     }
     ZGeneration::generation(region->generation_id())->forwarding(region->GetRegionStart())->mark_done();
     from->SetStateCode(ObjectState::FORWARDED);
@@ -644,8 +646,10 @@ LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, Heap& collector)
     LateBackfillState state = PrepareLateBackfill(fx, collector);
     ZForwarding* publication = ZGeneration::generation((state.region)->generation_id())->forwarding((state.region)->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(state.from),
-                     reinterpret_cast<MAddress>(state.to)),
+    ForwardingCursor cursor;
+    const MAddress existing = publication->find(reinterpret_cast<MAddress>(state.from), &cursor);
+    GC_EXPECT_EQ(existing != 0 ? existing : publication->insert(reinterpret_cast<MAddress>(state.from),
+                     reinterpret_cast<MAddress>(state.to), &cursor),
                  reinterpret_cast<MAddress>(state.to));
     return state;
 }
@@ -976,8 +980,9 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         GC_EXPECT_TRUE(completed);
         GC_EXPECT_EQ(produced, reinterpret_cast<MAddress>(state.to));
         ForwardingCursor cursor = 0;
-        GC_EXPECT_TRUE(owner->find(owner->index(fromAddr), &cursor).populated());
-        owner->entries()[cursor].store(0, std::memory_order_release);
+        GC_EXPECT_TRUE(owner->find_index(owner->index(fromAddr), &cursor).populated());
+        ForwardingEntry empty;
+        __atomic_store(owner->entries() + cursor, &empty, __ATOMIC_RELEASE);
     } else if (moving) {
         state = PrepareValueRootForwarding(fx, collector);
     }
@@ -1060,10 +1065,13 @@ static void CheckForwardingWinner(bool identity)
     {
         auto publication = ZGeneration::generation((region)->generation_id())->forwarding((region)->GetRegionStart());
         GC_EXPECT_TRUE(static_cast<bool>(publication));
+        ForwardingCursor cursor;
+        GC_EXPECT_EQ(publication->find(fromAddr, &cursor), MAddress(0));
         GC_EXPECT_EQ(publication->insert(fromAddr,
-                         reinterpret_cast<MAddress>(winner)), reinterpret_cast<MAddress>(winner));
+                         reinterpret_cast<MAddress>(winner), &cursor), reinterpret_cast<MAddress>(winner));
+        GC_EXPECT_EQ(publication->find(fromAddr, &cursor), reinterpret_cast<MAddress>(winner));
         GC_EXPECT_EQ(publication->insert(fromAddr,
-                         reinterpret_cast<MAddress>(loser)), reinterpret_cast<MAddress>(winner));
+                         reinterpret_cast<MAddress>(loser), &cursor), reinterpret_cast<MAddress>(winner));
     }
     {
         ZForwarding* retained = ZGeneration::generation(region->generation_id())->forwarding(region->GetRegionStart());
@@ -1537,7 +1545,9 @@ void CheckMinorFieldColour(bool stale)
     ZForwarding* forwarding = ZGeneration::generation((fx.region0())->generation_id())->forwarding((fx.region0())->GetRegionStart());
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
     const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
-    GC_EXPECT_EQ(forwarding->insert(from, to), to);
+    ForwardingCursor cursor;
+    GC_EXPECT_EQ(forwarding->find(from, &cursor), MAddress(0));
+    GC_EXPECT_EQ(forwarding->insert(from, to, &cursor), to);
     forwarding->release_page();
     forwarding->mark_done();
     zpointer bits = ZAddress::store_good(from_object(fx.obj0));

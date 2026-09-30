@@ -55,10 +55,6 @@ inline size_t ZForwarding::nentries(size_t objectCountUpperBound)
     {
         // zForwarding.inline.hpp:44-50: power-of-two capacity, at most half full.
         // size_t arithmetic also covers counts above the old uint32_t doubling limit.
-        const size_t maxPowerOfTwo = size_t(1) << (std::numeric_limits<size_t>::digits - 1);
-        if (objectCountUpperBound > maxPowerOfTwo / 2) {
-            return 0;
-        }
         const size_t required = objectCountUpperBound == 0 ? 2 : objectCountUpperBound * 2;
         size_t capacity = 2;
         while (capacity < required) {
@@ -88,14 +84,16 @@ inline uintptr_t ZForwarding::index(MAddress from) const
 }
 
 namespace MapleRuntime {
-inline std::atomic<uint64_t>* ZForwarding::entries() const { return _entries(this); }
+inline ZForwardingEntry* ZForwarding::entries() const { return _entries(this); }
 }
 
 namespace MapleRuntime {
 inline ForwardingEntry ZForwarding::at(ForwardingCursor* cursor) const
     {
         // zForwarding.inline.hpp:207-211 load-acquire
-        return ForwardingEntry::FromRaw(entries()[*cursor].load(std::memory_order_acquire));
+        ForwardingEntry entry;
+        __atomic_load(entries() + *cursor, &entry, __ATOMIC_ACQUIRE);
+        return entry;
     }
 }
 
@@ -118,7 +116,7 @@ inline ForwardingEntry ZForwarding::next(ForwardingCursor* cursor) const
 }
 
 namespace MapleRuntime {
-inline ForwardingEntry ZForwarding::find(uintptr_t fromIndex, ForwardingCursor* cursor) const
+inline ForwardingEntry ZForwarding::find_index(uintptr_t fromIndex, ForwardingCursor* cursor) const
     {
         ForwardingEntry entry = first(fromIndex, cursor);
         while (entry.populated()) {
@@ -134,34 +132,33 @@ inline ForwardingEntry ZForwarding::find(uintptr_t fromIndex, ForwardingCursor* 
 namespace MapleRuntime {
 inline MAddress ZForwarding::find(MAddress from) const
     {
-        const uintptr_t fromIndex = index(from);
-        if (fromIndex <= ForwardingEntry::kMaxFromIndex) {
-            ForwardingCursor cursor = 0;
-            const ForwardingEntry entry = find(fromIndex, &cursor);
-            if (entry.populated()) {
-                return _heapBase + static_cast<MAddress>(entry.to_offset());
-            }
-        }
-        return 0;
+        ForwardingCursor cursor;
+        return find(from, &cursor);
     }
 }
 
 namespace MapleRuntime {
-inline size_t ZForwarding::insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed)
+inline MAddress ZForwarding::find(MAddress from, ForwardingCursor* cursor) const
+{
+    const ForwardingEntry entry = find_index(index(from), cursor);
+    return entry.populated() ? _heapBase + static_cast<MAddress>(entry.to_offset()) : 0;
+}
+}
+
+namespace MapleRuntime {
+inline size_t ZForwarding::insert_index(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor)
     {
-        const ForwardingEntry entryToInstall(fromIndex, toOffset);
+        ForwardingEntry entryToInstall(fromIndex, toOffset);
         std::atomic_thread_fence(std::memory_order_release);
         for (;;) {
-            uint64_t expected = 0;
-            if (entries()[*cursor].compare_exchange_strong(expected, entryToInstall.raw(),
-                    std::memory_order_release, std::memory_order_relaxed)) {
-                if (installed != nullptr) *installed = true;
+            ForwardingEntry expected;
+            if (__atomic_compare_exchange(entries() + *cursor, &expected, &entryToInstall,
+                    false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
                 return toOffset;
             }
             ForwardingEntry entry = at(cursor);
             while (entry.populated()) {
                 if (entry.from_index() == fromIndex) {
-                    if (installed != nullptr) *installed = false;
                     return entry.to_offset();
                 }
                 entry = next(cursor);
@@ -171,9 +168,9 @@ inline size_t ZForwarding::insert(uintptr_t fromIndex, size_t toOffset, Forwardi
 }
 
 namespace MapleRuntime {
-inline MAddress ZForwarding::insert(MAddress from, MAddress to)
+inline MAddress ZForwarding::insert(MAddress from, MAddress to, ForwardingCursor* cursor)
     {
-        return insert_receipt(from, to).address;
+        return _heapBase + static_cast<MAddress>(insert_index(index(from), static_cast<size_t>(to - _heapBase), cursor));
     }
 }
 
