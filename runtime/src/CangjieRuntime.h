@@ -28,7 +28,7 @@ enum class StackGrowConfig {
 class CangjieRuntime : private Runtime {
 public:
     static void CreateAndInit(const RuntimeParam& runtimeParam);
-    static void FiniAndDelete();
+    static void Terminate();
     void* CreateSubSchedulerAndInit(ScheduleType type = SCHEDULE_UI_THREAD);
     void* CreateSingleThreadScheduler();
     bool CheckSubSchedulerValid(void* scheduler);
@@ -75,7 +75,6 @@ protected:
 
 private:
     void Init();
-    void Fini();
 
     RuntimeParam param;
     const char** commandLineArgs = nullptr;

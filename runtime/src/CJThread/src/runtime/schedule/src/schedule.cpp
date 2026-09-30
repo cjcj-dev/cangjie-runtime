@@ -19,6 +19,7 @@
 #endif
 #include "StackManager.h"
 #include "Common/NativeAllocator.h"
+#include "CangjieRuntime.h"
 #if defined (MRT_LINUX) || defined (MRT_MACOS)
 #include "schdpoll.h"
 #endif
@@ -1025,138 +1026,6 @@ void ScheduleNonDefaultFree(ScheduleHandle scheduleHandle)
     MapleRuntime::NativeAllocator::NativeFree(schedule, sizeof(struct Schedule));
 }
 
-/* Check whether the current processor is in the FFI state. The processor is in ScheduleStop
- * and will not be scheduled again.
- */
-bool ScheduleProcessorSkipFFI(struct Processor *processor)
-{
-    SchdMutatorStatusHookFunc hookFunc;
-    struct Thread *thread;
-    struct CJThread *cjthread;
-
-    thread = processor->thread;
-
-    if (thread == nullptr) {
-        return false;
-    }
-    cjthread = static_cast<struct CJThread*>(thread->cjthread);
-
-    if (cjthread == nullptr) {
-        return false;
-    }
-
-    hookFunc = g_scheduleManager.mutatorStatusFunc;
-    if (hookFunc == nullptr || cjthread->mutator == nullptr) {
-        return false;
-    }
-    return hookFunc(cjthread->mutator);
-}
-
-void ScheduleAllNonDefaultExit(void)
-{
-    struct Schedule *schedule;
-    struct Schedule *curschdeule = ScheduleGet();
-    struct Dulink *scheduleNode;
-
-    pthread_mutex_lock(&g_scheduleManager.allScheduleListLock);
-    // Set the exit status bit for all non-default schedulers without confirming the end of
-    // thread execution.
-    DULINK_FOR_EACH_ITEM(scheduleNode, &g_scheduleManager.allScheduleList) {
-        schedule = DULINK_ENTRY(scheduleNode, struct Schedule, allScheduleDulink);
-        if (schedule == curschdeule) {
-            continue;
-        }
-        atomic_store(&schedule->state, SCHEDULE_EXITING);
-        ScheduleNonDefaultThreadExit(schedule, false);
-        // Preemption is set only for threads of the non-default scheduler. Do not change the
-        // processor state in the syscall state to exiting. Otherwise, the thread cannot exit
-        // after executing ThreadStop.
-        SchmonPreemptRunning(&(schedule->schdProcessor.processorGroup[0]));
-    }
-    // Confirm that all default scheduler threads are executed.
-    DULINK_FOR_EACH_ITEM(scheduleNode, &g_scheduleManager.allScheduleList) {
-        schedule = DULINK_ENTRY(scheduleNode, struct Schedule, allScheduleDulink);
-        if (schedule == curschdeule) {
-            continue;
-        }
-        if (schedule->scheduleType != SCHEDULE_EXCLUSIVE &&
-            pthread_self() != schedule->thread0->osThread &&
-            !ScheduleProcessorSkipFFI(&(schedule->schdProcessor.processorGroup[0]))) {
-            pthread_join(schedule->thread0->osThread, nullptr);
-            atomic_store(&schedule->schdProcessor.processorGroup[0].state, PROCESSOR_EXITING);
-        }
-        atomic_store(&schedule->state, SCHEDULE_EXITED);
-        // Because the current node is released when resources are released, the next element
-        // traversed after the current node is released should be the next node of the
-        // previous node of the current node.
-        scheduleNode = scheduleNode->prev;
-        // Releasing Non-Default Scheduler Resources
-        ScheduleNonDefaultFree(reinterpret_cast<ScheduleHandle>(schedule));
-    }
-    pthread_mutex_unlock(&g_scheduleManager.allScheduleListLock);
-}
-
-/* Preempt and stop all worker threads */
-void ScheduleProcessorExit(struct Schedule *schedule)
-{
-    unsigned int i;
-    struct Processor *processor;
-    struct Processor *curProcessor;
-    const int waitTime = SCHEDULE_PROCESSOR_EXIT_WAIT_TIME; // wait 10us
-    ProcessorState pstate = PROCESSOR_IDLE;
-
-    // If processor is NULL, the call is made outside the scheduling framework.
-    if (CJThreadGet() == nullptr) {
-        curProcessor = nullptr;
-    } else {
-        curProcessor = ProcessorGet();
-    }
-    for (i = 0; i < schedule->schdProcessor.processorNum; i++) {
-        processor = &schedule->schdProcessor.processorGroup[i];
-        if (processor == curProcessor) {
-            continue;
-        }
-        // Set the idle state to the exit state, and notify the preemption of the running state.
-        // Change the status of the processor in the syscall state to exit. When the thread
-        // finishes executing from the syscall, it searches for an idle processor. If it cannot
-        // find an idle processor, it sleeps itself.
-        pstate = processor->state;
-        if (pstate == PROCESSOR_IDLE || pstate == PROCESSOR_SYSCALL) {
-            atomic_compare_exchange_strong(&processor->state, &pstate, PROCESSOR_EXITING);
-        } else if (pstate == PROCESSOR_RUNNING) {
-            SchmonPreemptRunning(processor);
-        }
-    }
-    // Traversal check. The setting and check are divided into two cycles because preemption
-    // usually takes a period of time after the setting. If the setting is combined into one
-    // cycle, the preemption needs to be repeated for n times.
-    for (i = 0; i < schedule->schdProcessor.processorNum; i++) {
-        processor = &schedule->schdProcessor.processorGroup[i];
-        if (processor == curProcessor) {
-            continue;
-        }
-
-        while (atomic_load(&processor->state) != PROCESSOR_EXITING || processor->thread != nullptr) {
-            pstate = processor->state;
-            if (pstate == PROCESSOR_IDLE || pstate == PROCESSOR_SYSCALL) {
-                atomic_compare_exchange_strong(&processor->state, &pstate, PROCESSOR_EXITING);
-            } else if (pstate == PROCESSOR_RUNNING) {
-                SchmonPreemptRunning(processor);
-            }
-
-            // Detects that the current processor is running FFI and exits directly. If the
-            // FFI ends and is ready to leave the security zone, the stw mechanism is triggered
-            // and the thread is blocked.
-            if (ScheduleProcessorSkipFFI(processor)) {
-                break;
-            }
-            usleep(waitTime);
-        }
-    }
-    ScheduleAllNonDefaultExit();
-
-    return;
-}
 
 void ScheduleExitMode(struct Schedule *schedule, bool threadExit)
 {
@@ -1175,14 +1044,11 @@ void ScheduleExitMode(struct Schedule *schedule, bool threadExit)
         if (hookFunc != nullptr) {
             hookFunc();
         }
-        schedule->state = SCHEDULE_EXITING;
         // Ensure that the monitoring thread is stopped.
         ScheduleSchmonExit();
-        ScheduleProcessorExit(schedule);
-        // All processors enter the PROCESSOR_EXITING state in ScheduleProcessorExit. The
-        // processors in ffi are blocked in the stub of the warehouse program. At this time,
-        // the scheduling framework does not run the cjthread and can exit safely.
+        MapleRuntime::CangjieRuntime::Terminate();
         schedule->state = SCHEDULE_EXITED;
+        return;
     } else {
         // The non-default scheduling framework exits actively. The framework has gone through
         // the Schedule_WAITING phase. At this time, no cjthread is running and no cjthread
@@ -1234,9 +1100,7 @@ void ScheduleStop(ScheduleHandle scheduleHandle)
     }
     ScheduleExitMode(schedule, false);
     if (schedule->scheduleType == SCHEDULE_DEFAULT) {
-        ScheduleAllCJThreadListRemove(cjthread);
-        g_scheduleManager.defaultSchedule = nullptr;
-        ScheduleManagerDestroy();
+        return;
     } else {
         CJThreadMemFree(static_cast<struct CJThread*>(schedule->thread0->cjthread0));
         free(schedule->thread0);
@@ -1256,15 +1120,9 @@ int ScheduleStopOutside(ScheduleHandle scheduleHandle)
         return ERRNO_SCHD_INVALID;
     }
 
-    ScheduleType scheduleType = schedule->scheduleType;
     oldSchedule = ScheduleGet();
     ScheduleSet(schedule);
     ScheduleExitMode(schedule, false);
-    // This parameter is added to solve the memory leakage problem when the dlclose exits in
-    // the macro expansion scenario.
-    if (scheduleType == SCHEDULE_DEFAULT && g_scheduleManager.initFlag) {
-        FreeSchdfdManager(g_scheduleManager.schdfdManager);
-    }
     ScheduleSet(oldSchedule);
     return 0;
 }

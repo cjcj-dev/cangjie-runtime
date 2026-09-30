@@ -3,6 +3,9 @@
 #ifndef MRT_VM_OPERATION_H
 #define MRT_VM_OPERATION_H
 
+#include <atomic>
+#include <thread>
+
 namespace MapleRuntime {
 // HotSpot runtime/vmOperation.hpp: safepoint processing policy is a virtual
 // property of the operation, not a property of the safepoint caller.
@@ -20,6 +23,21 @@ public:
 private:
     friend class MutatorManager;
     static VMOperation* currentOperation;
+};
+
+class VMHalt : public VMOperation {
+public:
+    bool skip_thread_oop_barriers() const override { return true; }
+};
+
+class VMExit {
+public:
+    static void SetVMExited();
+    static void WaitIfVMExited();
+    static bool HasExited() { return vmExited.load(std::memory_order_acquire); }
+private:
+    static std::atomic<bool> vmExited;
+    static std::thread::id shutdownThread;
 };
 } // namespace MapleRuntime
 #endif

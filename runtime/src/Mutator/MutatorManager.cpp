@@ -467,9 +467,31 @@ bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
 }
 
 VMOperation* VMThread::currentOperation = nullptr;
+std::atomic<bool> VMExit::vmExited{false};
+std::thread::id VMExit::shutdownThread;
+
+void VMExit::SetVMExited()
+{
+    shutdownThread = std::this_thread::get_id();
+    vmExited.store(true, std::memory_order_release);
+    MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) {
+        if (mutator.InSaferegion()) {
+            mutator.SetSuspensionFlag(Mutator::SUSPENSION_FOR_EXIT);
+        }
+    });
+}
+
+void VMExit::WaitIfVMExited()
+{
+    if (HasExited() && std::this_thread::get_id() != shutdownThread) {
+        MutatorManager::Instance().MutatorManagementRLock();
+        LOG(RTLOG_FATAL, "VM exit thread lock unexpectedly released");
+    }
+}
 
 void MutatorManager::StopTheWorld(VMOperation* operation)
 {
+    VMExit::WaitIfVMExited();
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     bool saferegionEntered = false;
     if (!IsGcThread()) {

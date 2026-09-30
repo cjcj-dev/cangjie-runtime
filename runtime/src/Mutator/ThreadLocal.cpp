@@ -185,6 +185,11 @@ CleanThreadLocalData::CleanThreadLocalData()
 
 CleanThreadLocalData::~CleanThreadLocalData()
 {
+    VMExit::WaitIfVMExited();
+    if (VMExit::HasExited()) {
+        RemoveFromList();
+        return;
+    }
     ThreadLocalData* local = ThreadLocal::GetThreadLocalData();
     void* cache = local->threadCache;
     local->threadCache = nullptr;

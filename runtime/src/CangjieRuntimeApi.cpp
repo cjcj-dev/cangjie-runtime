@@ -413,7 +413,6 @@ RTErrorCode FiniCJRuntime()
         MapleRuntime::SignalStack::StopDispatcher();
 #endif
         ScheduleStopOutside(scheduler);
-        MapleRuntime::CangjieRuntime::FiniAndDelete();
         return E_OK;
     }
     LOG(RTLOG_ERROR, "Cangjie runtime has been finished and don't support finish again.");

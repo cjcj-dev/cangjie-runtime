@@ -27,7 +27,7 @@
 #include "Base/SysCall.h"
 #include "securec.h"
 #include "Common/ScopedObjectAccess.h"
-#include "CJThread/src/syscall/include/inner/syscall_impl.h"
+#include "Mutator/VMOperation.h"
 #ifdef __APPLE__
 #include <mach/mach.h>
 #else
@@ -49,7 +49,7 @@ static semaphore_t g_signalSemaphore;
 #else
 static sem_t g_signalSemaphore;
 #endif
-static CJThreadHandle g_signalDispatcher = nullptr;
+static bool g_signalDispatcherStarted = false;
 static std::mutex g_handlerMutex;
 
 static void NotifySignal(int signal)
@@ -74,13 +74,11 @@ static int WaitForSignal()
         }
         // semaphore.inline.hpp:33-41: only the dispatcher may transition.
         ScopedEnterSaferegion blocked(false);
-        SyscallEnter();
 #ifdef __APPLE__
         while (semaphore_wait(g_signalSemaphore) == KERN_ABORTED) {}
 #else
         while (sem_wait(&g_signalSemaphore) != 0 && errno == EINTR) {}
 #endif
-        SyscallExit();
     }
 }
 
@@ -213,8 +211,7 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* context)
 
 void SignalStack::HandlerImpl(int signal)
 {
-    // The managed dispatcher owns execution. User signal delivery carries a
-    // signal number, not an interrupted stack (os.cpp:signal_thread_entry).
+    VMExit::WaitIfVMExited();
     std::vector<SignalAction> handlers;
     {
         std::lock_guard<std::mutex> lock(g_handlerMutex);
@@ -233,7 +230,6 @@ void SignalStack::HandlerImpl(int signal)
 
 void* SignalStack::DispatchSignals(void*)
 {
-    // os.cpp:371-380: a dedicated managed task, including an exit signal.
     for (;;) {
         int signal = WaitForSignal();
         if (signal == _NSIG) { return nullptr; }
@@ -243,18 +239,20 @@ void* SignalStack::DispatchSignals(void*)
 
 void SignalStack::StartDispatcher()
 {
-    g_signalDispatcher = RunCJTask(DispatchSignals, nullptr);
-    CHECK(g_signalDispatcher != nullptr);
+    pthread_attr_t attributes;
+    CHECK(pthread_attr_init(&attributes) == 0);
+    CHECK(pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED) == 0);
+    pthread_t dispatcher;
+    const int result = pthread_create(&dispatcher, &attributes, DispatchSignals, nullptr);
+    CHECK(pthread_attr_destroy(&attributes) == 0);
+    CHECK(result == 0);
+    g_signalDispatcherStarted = true;
 }
 
 void SignalStack::StopDispatcher()
 {
-    if (g_signalDispatcher == nullptr) { return; }
+    if (!g_signalDispatcherStarted) { return; }
     NotifySignal(_NSIG);
-    void* result = nullptr;
-    GetTaskRet(g_signalDispatcher, &result);
-    ReleaseHandle(g_signalDispatcher);
-    g_signalDispatcher = nullptr;
 }
 
 template <typename T>

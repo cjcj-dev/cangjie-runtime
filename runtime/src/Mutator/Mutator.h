@@ -20,6 +20,7 @@
 #include "LoaderManager.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/Handshake.h"
+#include "Mutator/VMOperation.h"
 #include "schedule.h"
 #ifdef _WIN64
 #include "UnwindWin.h"
@@ -180,6 +181,7 @@ public:
     template<class Preprocess>
     __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess)
     {
+        VMExit::WaitIfVMExited();
         for (;;) {
             MarkFlushBeginLeaveSaferegion();
             MutatorLock();
