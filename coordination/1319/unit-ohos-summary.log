@@ -1,0 +1,14 @@
+Set cache size limit to 50.0 GB
+default rc=123 wall=10
+default/runtime/tests/gc_unit/test_zIndexDistributor.cpp:405:77: error: cannot initialize a parameter of type 'MapleRuntime::PageAge' with an rvalue of type 'bool'
+default/runtime/tests/gc_unit/test_native_root_current.cpp:789:83: error: use of undeclared identifier 'from'
+default/runtime/tests/gc_unit/test_uncommitter.cpp:487:25: error: no member named 'freeRegionManager' in 'MapleRuntime::RegionManager'
+testable rc=123 wall=10
+testable/runtime/tests/gc_unit/test_zIndexDistributor.cpp:405:77: error: cannot initialize a parameter of type 'MapleRuntime::PageAge' with an rvalue of type 'bool'
+testable/runtime/tests/gc_unit/test_native_root_current.cpp:789:83: error: use of undeclared identifier 'from'
+testable/runtime/tests/gc_unit/test_uncommitter.cpp:487:25: error: no member named 'freeRegionManager' in 'MapleRuntime::RegionManager'
+OHOS_RC=2 wall=40
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_zIndexDistributor.cpp:405:77: error: cannot initialize a parameter of type 'MapleRuntime::PageAge' with an rvalue of type 'bool'
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:487:25: error: no member named 'freeRegionManager' in 'MapleRuntime::RegionManager'
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:487:25: error: no member named 'freeRegionManager' in 'MapleRuntime::RegionManager'
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_native_root_current.cpp:789:83: error: use of undeclared identifier 'from'

@@ -32,8 +32,6 @@
 
 namespace MapleRuntime {
 
-static const ZStatCriticalPhase PFinalizer("Finalizer");
-static const ZStatCriticalPhase PFinalizerProcessorWaittingTime("finalizerProcessor waitting time");
 
 static const ZStatSubPhase ZSubPhaseConcurrentReferencesProcess("Concurrent References Process",
                                                                 ZGenerationId::old);
@@ -514,6 +512,7 @@ void FinalizerProcessor::Stop()
 FinalizerProcessor::FinalizerProcessor(ZWorkers* workers)
     : referenceProcessor(workers)
 {
+    weakStorage.register_num_dead_callback(ReportNumDead);
     started = false;
     running.store(false, std::memory_order_relaxed);
     iterationWaitTime = DEFAULT_FINALIZER_TIMEOUT_MS;
@@ -529,7 +528,6 @@ void FinalizerProcessor::Run()
     while (running.load(std::memory_order_acquire)) {
         bool hasPendingFinalizableJob = false;
         {
-            ZStatTimer zstatTimer(PFinalizerProcessorWaittingTime);
             while (running.load(std::memory_order_acquire)) {
                 hasPendingFinalizableJob = HasFinalizableJob();
                 if (hasPendingFinalizableJob) {
@@ -766,7 +764,6 @@ void FinalizerProcessor::ProcessFinalizableList()
 
 void FinalizerProcessor::ProcessFinalizables()
 {
-    ZStatTimer zstatTimer(PFinalizer);
     {
         // we leave saferegion to avoid GC visit those changing queues.
         ScopedObjectAccess soa;
@@ -816,6 +813,24 @@ void FinalizerProcessor::LogAfterProcess()
     DLOG(FINALIZE, "[FinalizerProcessor] End (%luus [%luus] [%.2f%%])", timeConsumed, timeProcessUsed, percentage);
 }
 #endif
+
+// oopStorage.hpp:174-190: only the storage owner retires cleared records.
+void FinalizerProcessor::ReportNumDead(size_t numDead)
+{
+    if (numDead == 0) {
+        return;
+    }
+    auto& owner = Heap::GetHeap().GetFinalizerProcessor();
+    std::lock_guard<std::mutex> lock(owner.listLock);
+    for (auto it = owner.finalizers.begin(); it != owner.finalizers.end();) {
+        if (NativeAccess<ON_PHANTOM_OOP_REF | AS_NO_KEEPALIVE>::oop_load(&*it) == nullptr) {
+            owner.weakStorage.Release(&*it);
+            it = owner.finalizers.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
 
 void FinalizerProcessor::RegisterFinalizer(BaseObject* obj)
 {

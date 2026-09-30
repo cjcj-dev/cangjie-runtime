@@ -1,4 +1,5 @@
 #include "gc_worker_fixture.hpp"
+#include "gc_heap_fixture.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -26,7 +27,6 @@
 #include <unistd.h>
 #include <vector>
 
-#include "gc_heap_fixture.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zCrossVM.hpp"
 #include "Concurrency/Concurrency.h"
@@ -36,7 +36,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zBarrier.hpp"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zRemembered.inline.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
@@ -133,7 +133,6 @@ public:
         Heap& collector, BaseObject* from, BaseObject* to, ZPage* forwarding)
     {
         (void)to;
-        ZPage::RetainScope lease(forwarding);
         return ZGeneration::generation(forwarding->generation_id())->relocate().relocate_object(forwarding_for_page(forwarding), from);
     }
 
@@ -165,8 +164,7 @@ public:
 
     static BaseObject* ForwardImpl(Heap& collector, BaseObject* from, ZPage* copyPage)
     {
-        ZPage::RetainScope lease(copyPage);
-        return lease.ok() ? ZGeneration::generation(copyPage->generation_id())->relocate().relocate_object(forwarding_for_page(copyPage), from) : nullptr;
+        return ZGeneration::generation(copyPage->generation_id())->relocate().relocate_object(forwarding_for_page(copyPage), from);
     }
 
     static void RemapYoungRoots(Heap& collector) { Heap::GetHeap().old().remap_young_roots(); }
@@ -567,7 +565,7 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, Heap& collector,
         GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(from),
                                                    reinterpret_cast<MAddress>(to)), reinterpret_cast<MAddress>(to));
     }
-    region->MarkForwardingDone();
+    forwarding_for_page(region)->mark_done();
     from->SetStateCode(ObjectState::FORWARDED);
     ZForwarding* table = generation_forwarding_table(generation).get(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(table != nullptr);
@@ -972,7 +970,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
     if (unresolvedGhost) {
         state = PrepareLateBackfill(fx, collector);
         state.from->SetStateCode(ObjectState::NORMAL);
-        state.region->MarkForwardingDone();
+        forwarding_for_page(state.region)->mark_done();
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
         auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         RelocationReceiptTest::ParkFrom(manager, state.region);
@@ -986,7 +984,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         auto owner = forwarding_for_page(state.region);
         const MAddress fromAddr = reinterpret_cast<MAddress>(state.from);
         const MAddress produced = owner ? owner->find(fromAddr) : 0;
-        const bool completed = owner && owner->is_done() && owner->ref_count().load() == 0;
+        const bool completed = owner && owner->is_done() && owner->_ref_count.load() == 0;
         std::fprintf(stderr, "DERIVED_PAGE_TASK produced=%zx expected=%zx done_released=%d\n",
                      produced, reinterpret_cast<MAddress>(state.to), completed);
         GC_EXPECT_TRUE(completed);
@@ -1072,7 +1070,7 @@ static void CheckForwardingWinner(bool identity)
     RelocationReceiptTest::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, fromAddr);
     GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), 0);
-    GC_EXPECT_FALSE(region->IsForwardingDone());
+    GC_EXPECT_FALSE(forwarding_for_page(region)->is_done());
     {
         auto publication = forwarding_for_page(region, fromAddr);
         GC_EXPECT_TRUE(static_cast<bool>(publication));
@@ -1082,17 +1080,15 @@ static void CheckForwardingWinner(bool identity)
                          reinterpret_cast<MAddress>(loser)), reinterpret_cast<MAddress>(winner));
     }
     {
-        ZPage::RetainScope lease(region);
-        GC_EXPECT_TRUE(lease.ok());
         GC_EXPECT_TRUE(RelocationReceiptTest::WaitRoutedTipReady(
                            collector, from, nullptr, region) == winner);
         GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), reinterpret_cast<MAddress>(winner));
     }
-    region->MarkForwardingDone();
-    GC_EXPECT_TRUE(region->IsForwardingDone());
+    forwarding_for_page(region)->mark_done();
+    GC_EXPECT_TRUE(forwarding_for_page(region)->is_done());
     GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), reinterpret_cast<MAddress>(winner));
-    region->ReleaseForwarding();
-    GC_EXPECT_FALSE(region->RetainForwarding());
+    forwarding_for_page(region)->release_page();
+    GC_EXPECT_FALSE(forwarding_for_page(region)->retain_page(ZGeneration::old()->relocate().queue()));
     GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), reinterpret_cast<MAddress>(winner));
 
         RelocationReceiptTest::BindCollector(nullptr);
@@ -1644,11 +1640,15 @@ void ExerciseRelocationWait782(bool claimedPage)
         destination->SetRegionAllocPtr(destination->GetRegionEnd());
         ZAllocationFlags flags;
         flags.set_non_blocking();
-        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags)) {
+        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags)) {
             occupied.push_back(page);
         }
     }
     ZRelocateQueue* queue = generation.relocate().queue();
+    const auto pendingCount = [&] {
+        std::lock_guard<std::mutex> guard(queue->lock);
+        return queue->queue.length();
+    };
     std::atomic<bool> returned{false};
 #if defined(__linux__)
     std::atomic<long> waiterTid{0};
@@ -1662,11 +1662,11 @@ void ExerciseRelocationWait782(bool claimedPage)
         returned.store(true, std::memory_order_release);
     });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (queue->PendingCount() == 0 && !returned.load(std::memory_order_acquire) &&
+    while (pendingCount() == 0 && !returned.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
-    const bool queued = queue->PendingCount() != 0;
+    const bool queued = pendingCount() != 0;
     const bool blocked = !returned.load(std::memory_order_acquire);
     const MAddress before = forwarding->find(reinterpret_cast<MAddress>(from));
 #if defined(__linux__)

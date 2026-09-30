@@ -14,7 +14,7 @@ class MArray;
 class ZBarrierSet {
 public:
     static void on_slowpath_allocation_exit(BaseObject* new_obj);
-    static void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native, zaddress_unsafe* root);
+    static void on_thread_attach(ThreadGCData& data, Mutator* owner, ThreadLocalData* native);
     static void on_thread_detach(ThreadGCData& data);
 
     template<DecoratorSet decorators, typename BarrierSetT = ZBarrierSet>
@@ -50,10 +50,9 @@ public:
         static void oop_arraycopy_in_heap_no_check_cast(zpointer* dst, zpointer* src, size_t length);
         static void oop_arraycopy_in_heap(zpointer* src, zpointer* dst, size_t length);
         static void value_copy_in_heap(const ValuePayload& src, const ValuePayload& dst);
-        static void oop_arraycopy_in_heap(BaseObject* srcObj, MAddress src, size_t srcSize,
-                                         BaseObject* dstObj, MAddress dst, size_t dstSize);
-        static void value_arraycopy_in_heap(BaseObject* srcObj, MAddress src, size_t srcSize,
-                                           BaseObject* dstObj, MAddress dst, size_t dstSize);
+        static void oop_arraycopy_in_heap(BaseObject* srcObj, MAddress src,
+                                         BaseObject* dstObj, MAddress dst, size_t length);
+        static void value_arraycopy_in_heap(MArray* layout, MAddress src, MAddress dst, size_t length);
         static void struct_copy_one(MArray* layout, MAddress dst, MAddress src);
         static void struct_arraycopy_in_heap_no_check_cast(MArray* layout, MAddress dst, MAddress src, size_t length);
     };

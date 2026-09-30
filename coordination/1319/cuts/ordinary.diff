@@ -1,0 +1,12 @@
+--- a/runtime/src/Mutator/Mutator.cpp
++++ b/runtime/src/Mutator/Mutator.cpp
+@@ -288,6 +288,9 @@
+ void Mutator::VisitStackRoots(const RootVisitor& func)
+ {
+     MutatorLock();
++    if (gcData.invisible_root() != nullptr) {
++        func(RootSlotAt(static_cast<void*>(gcData.invisible_root())));
++    }
+     if (!IsManagedContext()) {
+         MutatorUnlock();
+         return;

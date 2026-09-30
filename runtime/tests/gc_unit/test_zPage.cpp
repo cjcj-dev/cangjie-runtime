@@ -148,7 +148,7 @@ void* AllocateGranulePages(void* context)
     // explicitly now that heap construction primes the mapped cache.
     const size_t cached = Heap::GetHeap().page_allocator().GetCachedBytes();
     ZPage* initialCache = cached == 0 ? nullptr : Heap::alloc_page(
-        cached, ZPageType::large, false, PageAge::eden, NonBlockingAllocationFlags());
+        cached, ZPageType::large, PageAge::eden, NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(cached == 0 || initialCache != nullptr);
     auto& result = *static_cast<GranuleAllocationResult*>(context);
     alignas(TypeInfo) static unsigned char types[3][sizeof(TypeInfo)];
@@ -349,7 +349,7 @@ void* SelectRealLivePages(void* context)
         ZForwarding* forwarding = Heap::GetHeap().young().forwarding_table().get(starts[i]);
         if (forwarding != nullptr) {
             ++result.published;
-            result.completed += forwarding->is_done() && forwarding->ref_count().load() == 0 &&
+            result.completed += forwarding->is_done() && forwarding->_ref_count.load() == 0 &&
                 forwarding->find(starts[i]) != 0;
             ZPage* now = Heap::page(starts[i]);
             result.retired += now == nullptr;
@@ -396,8 +396,11 @@ void* SelectRealLivePages(void* context)
         // The retirement test leaves root cleanup to FiniCJRuntime, after its
         // assertions. A failing remap must not be consumed by cleanup first.
     }
-    result.pending = generation_relocate_queue(Generation::Old).PendingCount() +
-                     generation_relocate_queue(Generation::Young).PendingCount();
+    for (auto id : {Generation::Old, Generation::Young}) {
+        auto& queue = generation_relocate_queue(id);
+        std::lock_guard<std::mutex> guard(queue.lock);
+        result.pending += queue.queue.length();
+    }
     if (result.verifyRetirement) {
         snapshot(result.usedAfter, result.mappedAfter, result.generationAfter, result.mappedGenerationAfter);
         // Real mutator allocation must be able to consume the returned source
@@ -1571,4 +1574,20 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NestedRawAcquireDuringBlock)
     GC_EXPECT_EQ(result.emptyReleased, -2);
     GC_EXPECT_EQ(result.stackReleased, -2);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+#include "gclog_capture.hpp"
+// The reused fixture enters through RunCJTask -> MCC_AcquireRawData. The log
+// value comes from the product wait scope, not from a manually called timer.
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, JNICriticalStall)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    GcLogCapture capture;
+    ZJNICritical_BlockedNewRawAcquireAllowsStopTheWorld();
+    const std::string text = capture.Finish();
+    const std::string expected = "name=JNI_Critical_Stall kind=critical ";
+    size_t count = 0, position = 0;
+    while ((position = text.find(expected, position)) != std::string::npos) { ++count; position += expected.size(); }
+    std::fprintf(stderr, "GCLOG_TARGET jni_critical_stall_records=%zu expected=1\n", count);
+    GC_EXPECT_EQ(count, size_t{1});
 }

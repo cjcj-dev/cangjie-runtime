@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zObjArrayAllocator.cpp
++++ b/runtime/src/Heap/z/zObjArrayAllocator.cpp
+@@ -102,7 +102,7 @@
+         CHECK_DETAIL(complete, "array initialization must complete on the second pass");
+     }
+ 
+-    mutator->GetGCData().clear_invisible_root();
++    // controlled cut: omit window close
+     MArray* complete = static_cast<MArray*>(to_object(safe(mem)));
+     complete->SetInvisibleObject(false);
+     return complete;

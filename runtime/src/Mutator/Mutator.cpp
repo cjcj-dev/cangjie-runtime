@@ -19,7 +19,6 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zMark.hpp"
-#include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zStackWatermark.hpp"
 #include "ObjectModel/RefField.inline.h"
@@ -182,7 +181,7 @@ void Mutator::InitProtectStackAddr()
 void Mutator::Init()
 {
     allocBuffer.Init();
-    ZBarrierSet::on_thread_attach(gcData, this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));
+    ZBarrierSet::on_thread_attach(gcData, this, nullptr);
     observerCnt = 0;
     inManagedContext.store(true);
 #ifdef INTERPRETER_ENABLED
@@ -194,7 +193,6 @@ void Mutator::ResetMutator()
 {
     CHECK_DETAIL(nativeFrameRoots.empty(), "native frame roots are not released");
     SetManagedContext(false);
-    StorePlain(rawObject, zaddress::null);
     ReleaseAllocBuffer();
     uwContext.Reset();
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
@@ -284,25 +282,18 @@ void Mutator::VisitProcessedRoots(const RootVisitor& visitor)
     if (GetStackWatermark().GetEpoch() != epoch) { return; }
     VisitExceptionRoots(visitor);
     VisitNativeFrameRoots(visitor);
-    if (GetStackWatermark().IsDone(epoch)) { VisitStackRoots(visitor, visitor); }
+    if (GetStackWatermark().IsDone(epoch)) { VisitStackRoots(visitor); }
 }
 
-void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor)
+void Mutator::VisitStackRoots(const RootVisitor& func)
 {
     MutatorLock();
-    const RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
-    // A native/exclusive frame has no managed stack map, but its side roots are
-    // independent of stack metadata and must remain visible. In particular an
-    // incomplete large reference array can be published while a native helper
-    // owns the mutator.
     if (!IsManagedContext()) {
-        VisitRawObjects(visitedInvisibleRootVisitor);
         MutatorUnlock();
         return;
     }
     IncObserver();
     StackManager::VisitStackRoots(uwContext, func, *this);
-    VisitRawObjects(visitedInvisibleRootVisitor);
     DecObserver();
     MutatorUnlock();
 }
@@ -313,17 +304,6 @@ void Mutator::VisitExceptionRoots(const RootVisitor& func)
     RootSlot& root = RootSlotAt(&exceptionWrapper.GetExceptionRef());
 
     func(root);
-}
-
-void Mutator::VisitRawObjects(const RootVisitor& func)
-{
-    // Pairs with PublishInvisibleRoot's release store: a scanner that sees the
-    // root must also see the already-published type and array length.
-    zaddress_unsafe rootValue = rawObject.LoadPlain(std::memory_order_acquire);
-    if (!is_null(rootValue)) {
-
-        func(rawObject);
-    }
 }
 
 void Mutator::VisitNativeFrameRoots(const RootVisitor& func)
@@ -350,25 +330,22 @@ void Mutator::PopNativeFrameRootsTo(size_t mark)
 void Mutator::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                          bool young)
 {
-    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, rootVisitor, young);
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, young);
 }
 
 void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                          const DerivedPtrVisitor& derivedPtrVisitor,
-                                         const RootVisitor& rawObjectVisitor, bool young)
+                                         bool young)
 {
     MutatorLock();
-    // No managed frame means there is no stack map to visit. Side roots are
-    // stored outside the managed stack and still require relocation repair.
+    // Native frames have no managed stack map to visit.
     if (!IsManagedContext()) {
-        VisitRawObjects(rawObjectVisitor);
         MutatorUnlock();
         return;
     }
     IncObserver();
     StackManager::VisitHeapReferencesOnStack(
         uwContext, regRootVisitor, slotRootVisitor, derivedPtrVisitor, *this, young);
-    VisitRawObjects(rawObjectVisitor);
     DecObserver();
     MutatorUnlock();
 }
@@ -383,10 +360,10 @@ void Mutator::VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedP
 
 void Mutator::VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                   const DerivedPtrVisitor& derivedPtrVisitor,
-                                  const RootVisitor& exceptionRootVisitor, const RootVisitor& rawObjectVisitor,
+                                  const RootVisitor& exceptionRootVisitor,
                                   bool young)
 {
-    VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, rawObjectVisitor, young);
+    VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, young);
     VisitExceptionRoots(exceptionRootVisitor);
     VisitNativeFrameRoots(exceptionRootVisitor);
 }
@@ -726,83 +703,6 @@ void Mutator::VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor)
             pending.push_back(&RootSlotAt(static_cast<void*>(object)));
         }
     }
-}
-
-inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack)
-{
-    if (!IsHeaderedStackObject(obj)) {
-        return;
-    }
-    if (!rootSet.insert(obj).second) {
-        return;
-    }
-
-    if (obj->HasRefField()) {
-        rootStack.push(obj);
-    }
-}
-
-// Stack-map and FFI root carriers contain plain addresses and remain committed
-// until this root pass completes; no colored-value decode applies here.
-static BaseObject* PlainRootObject(zaddress_unsafe address)
-{
-    return to_object(safe(address));
-}
-
-
-
-// Eager ZUncoloredRoot::barrier (zUncoloredRoot.inline.hpp:38-59).
-// The handshake owns the actual ABI slot. Keep its observed color through
-// resolution, publish the current object, and only then restore a plain word.
-// The eager scan captures the saved thread color before the watermark installs
-// new masks; every root in that scan must keep using the captured color.
-static bool PushHeapRoot(RootSlot& root, bool young, uintptr_t color, bool follow = true)
-{
-    (void)young;
-    const zaddress_unsafe observed = root.LoadPlain();
-    BaseObject* object = PlainRootObject(observed);
-    if (!Heap::IsHeapAddress(object)) {
-        return false;
-    }
-    zaddress_unsafe* slot = reinterpret_cast<zaddress_unsafe*>(&root);
-    if (follow) {
-        ZUncoloredRoot::mark(slot, color);
-    } else {
-        ZUncoloredRoot::process_invisible(slot, color);
-    }
-    return Heap::IsHeapAddress(PlainRootObject(root.LoadPlain()));
-}
-
-static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool young, uintptr_t color)
-{
-    if (record == nullptr) {
-        return false;
-    }
-    // This is record+0 itself, not a copy of the field or its decoded value.
-    RootSlot& field = RootSlotAt(static_cast<void*>(record));
-    return PushHeapRoot(field, young, color);
-}
-
-bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
-{
-    (void)bySelf;
-    if (stackScanEpoch != 0) {
-        StackWatermarkSet::finish_processing(*this, reinterpret_cast<void*>(ZUncoloredRoot::mark));
-        return true;
-    }
-    const uintptr_t color = GetGCData().storeGoodMask;
-    RootVisitor visitor = [this, young, color](ObjectRef& root) {
-        VisitHeapRootSlots(root, [young, color](ObjectRef& slot) {
-            (void)PushHeapRoot(slot, young, color);
-        });
-    };
-    RootVisitor invisible = [this, young, color](ObjectRef& root) {
-        (void)PushHeapRoot(root, young, color, false);
-    };
-    DerivedPtrVisitor derived = MakeDerivedRootVisitor(visitor);
-    VisitHeapReferences(visitor, visitor, derived, visitor, invisible, young);
-    (void)scannedFrames;
-    return true;
 }
 
 DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor)

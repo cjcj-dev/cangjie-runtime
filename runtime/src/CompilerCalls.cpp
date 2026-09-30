@@ -377,21 +377,29 @@ extern "C" bool MCC_IsWrapperClassForAutoEnv(const TypeInfo* ti)
 extern "C" void CJ_MCC_ArrayCopyRef(const ObjectPtr dstObj, MAddress dstField, size_t dstSize, const ObjectPtr srcObj,
                                     MAddress srcField, size_t srcSize)
 {
-    if (dstSize == 0) {
+    MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
+    const size_t length = std::min(srcSize, dstSize) / sizeof(zpointer);
+    // RefArrayKlass::copy_array: establish the nonempty precondition before access barriers.
+    if (length == 0) {
         return;
     }
-    MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    HeapAccess<>::oop_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+    HeapAccess<>::oop_arraycopy(srcObj, srcField, dstObj, dstField, length);
 }
 
 extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField, size_t dstSize,
                                        const ObjectPtr srcObj, MAddress srcField, size_t srcSize)
 {
-    if (dstSize == 0) {
+    MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
+    CHECK(srcSize <= dstSize);
+    auto* layout = static_cast<MArray*>(Heap::IsHeapAddress(dstField) ? dstObj : srcObj);
+    // Headerless native payloads have no array metadata; retain their byte-sized elements.
+    const size_t stride = layout == nullptr ? 1 : layout->GetElementSize();
+    CHECK(stride != 0 && srcSize % stride == 0);
+    const size_t length = srcSize / stride;
+    if (length == 0) {
         return;
     }
-    MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+    HeapAccess<>::value_arraycopy(layout, srcField, dstField, length);
 }
 template<typename Operation>
 static auto ReferenceAccessOrder(MemoryOrder order, Operation operation)
@@ -470,9 +478,19 @@ extern "C" size_t MCC_GetNativeThreadNumber() { return ScheduleRunningOSThreadCo
 
 extern "C" size_t MCC_GetGCCount() { return Heap::GetHeap().total_collections(); }
 
-extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs.load(std::memory_order_acquire); }
+extern "C" uint64_t MCC_GetGCTimeUs()
+{
+    auto& heap = Heap::GetHeap();
+    return heap.serviceability_cycle_memory_manager(true)->gc_time_us() +
+           heap.serviceability_cycle_memory_manager(false)->gc_time_us();
+}
 
-extern "C" size_t MCC_GetGCFreedSize() { return g_gcCollectedTotalBytes.load(std::memory_order_acquire); }
+extern "C" size_t MCC_GetGCFreedSize()
+{
+    auto& heap = Heap::GetHeap();
+    return heap.serviceability_cycle_memory_manager(true)->gc_freed_size() +
+           heap.serviceability_cycle_memory_manager(false)->gc_freed_size();
+}
 
 extern "C" bool MCC_StartCpuProfiling()
 {
@@ -2232,7 +2250,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_TEMP_ENUM:
         case TypeKind::TYPE_KIND_RAWARRAY:
         case TypeKind::TYPE_KIND_FUNC: {
-            HeapAccess<>::oop_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+            CJ_MCC_ArrayCopyRef(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
             break;
         }
         case TypeKind::TYPE_KIND_UNIT:
@@ -2264,7 +2282,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
             // VArray may embed managed refs (HasRefField recurses via component flag /
             // TypeGCInfo). Unconditional memmove skips remset post-record (G-C1).
             if (componentTypeInfo->HasRefField()) {
-                HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+                CJ_MCC_ArrayCopyStruct(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
             } else {
                 CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                        reinterpret_cast<void*>(srcField), srcSize) == EOK,
@@ -2275,7 +2293,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_TUPLE:
         case TypeKind::TYPE_KIND_STRUCT:
         case TypeKind::TYPE_KIND_ENUM: {
-            HeapAccess<>::value_arraycopy(srcObj, srcField, srcSize, dstObj, dstField, dstSize);
+            CJ_MCC_ArrayCopyStruct(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
             break;
         }
         default:

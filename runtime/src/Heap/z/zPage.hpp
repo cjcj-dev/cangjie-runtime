@@ -44,7 +44,6 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zVirtualMemory.hpp"
 #include "Heap/z/zGranuleMap.hpp"
-#include "Heap/z/zPageTable.hpp"
 
 #include "Base/TimeUtils.h"
 #include "securec.h"
@@ -383,7 +382,6 @@ public:
     static ZPage* InitRegion(size_t granuleIndex, size_t pageSize, ZPageType uclass,
                                   PageAge age = PageAge::old);
 
-    static void WaitCopiedBeforePayloadWipe(ZPage* region, const char* site);
 
 
     BaseObject* GetFirstObject() const { return from_region_addr(GetRegionStart()); }
@@ -425,59 +423,6 @@ public:
     }
 
 
-    // ZForwarding::retain_page (zForwarding.cpp:86-108). Three-state: 0 refuses,
-    // <0 waits for done then refuses, >0 CAS +1.
-    bool RetainForwarding();
-
-    void ReleaseForwarding();
-
-    // ZForwarding::retain_page: the three-state count is the gate, not the list
-    // type. Mutator relocation retains the page until forwarding completes.
-    bool TryLockReadFromRegion() { return RetainForwarding(); }
-
-    void UnlockReadFromRegion() { ReleaseForwarding(); }
-
-    // RAII retain_page / release_page. ok() is false when the page is already
-    // released or claimed — the late reader must not touch from-side state.
-    class RetainScope {
-    public:
-        explicit RetainScope(ZPage* region) : RetainScope(forwarding_for_page(region)) {}
-        explicit RetainScope(ZForwarding* forwarding)
-            : owner(forwarding), region(owner ? owner->page() : nullptr),
-              retained(owner && owner->retain_page(&generation_relocate_queue((owner->from_age() == PageAge::old ? Generation::Old : Generation::Young))))
-        {
-            CHECK(!retained || owner->page_life_current());
-        }
-        ~RetainScope() { Release(); }
-        void Release()
-        {
-            if (retained) {
-                owner->release_page();
-                retained = false;
-            }
-        }
-        bool ok() const { return retained; }
-        bool covers(ZPage* page) const { return retained && region == page; }
-        ZForwarding* forwarding() const { return owner; }
-        ZForwarding* HoldForwarding() const { return owner; }
-
-        RetainScope(const RetainScope&) = delete;
-        RetainScope& operator=(const RetainScope&) = delete;
-        RetainScope(RetainScope&&) = delete;
-        RetainScope& operator=(RetainScope&&) = delete;
-
-    private:
-        ZForwarding* owner;
-        ZPage* region;
-        bool retained;
-    };
-
-    bool ClaimForwarding();
-
-    void MarkForwardingDone();
-
-    bool IsForwardingDone() const;
-
     // ZGC has no terminal kept: a page not selected this cycle is an ordinary
     // candidate next cycle (zRelocationSetSelector.cpp:114-196 rebuilds from
     // the page table; zGeneration.cpp:205-213). Drop the in-cycle publish so
@@ -492,35 +437,11 @@ public:
         return _scratch.copyInflight.load(std::memory_order_acquire);
     }
 
-    int32_t ForwardingRefCount() const;
 
-    bool ForwardingClaimed() const;
 
     void LockWriteRegion() { _scratch.rwLock.LockWrite(); }
 
     void UnlockWriteRegion() { _scratch.rwLock.UnlockWrite(); }
-
-    // zForwarding.cpp:110-181 in_place_relocation_claim_page + detach_page.
-    class InPlaceClaimScope {
-    public:
-        MRT_EXPORT InPlaceClaimScope(ZPage* region, ZForwarding::Retire site);
-
-        ~InPlaceClaimScope()
-        {
-            if (!retiring) return;
-            owner->release_page();
-            if (ZForwarding::CurrentPageWork() != owner) owner->mark_done();
-        }
-
-        InPlaceClaimScope(const InPlaceClaimScope&) = delete;
-        InPlaceClaimScope& operator=(const InPlaceClaimScope&) = delete;
-        InPlaceClaimScope(InPlaceClaimScope&&) = delete;
-        InPlaceClaimScope& operator=(InPlaceClaimScope&&) = delete;
-
-    private:
-        ZForwarding* owner;
-        bool retiring{ false };
-    };
 
     // These interfaces are used to make sure the writing operations of value in C++ Bit Field will be atomic.
 

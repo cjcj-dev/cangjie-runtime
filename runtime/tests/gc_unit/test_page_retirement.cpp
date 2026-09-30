@@ -50,7 +50,7 @@ void CheckAllocationPreservesOwnedPage(bool nonBlocking)
     MapleRuntime::GcUnit::CreateStandaloneHeap(16);
     ZStat::Initialize();
     RegionManager& manager = Heap::GetHeap().page_allocator();
-    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(owned != nullptr);
     const uintptr_t address = owned->GetRegionStart();
     // Model a page awaiting GC reclamation. Allocation must not claim it
@@ -62,7 +62,7 @@ void CheckAllocationPreservesOwnedPage(bool nonBlocking)
     if (nonBlocking) {
         flags.set_non_blocking();
     }
-    ZPage* allocated = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, PageAge::eden, flags);
+    ZPage* allocated = Heap::alloc_page(ZGranuleSize, ZPageType::large, PageAge::eden, flags);
     ZPage* current = Heap::page(address);
     const bool retained = current == owned && current->IsGarbageRegion();
     const size_t usedAfter = manager.GetAllocatedSize();
@@ -180,7 +180,7 @@ void CheckEmptyPageCycles(size_t objectSize, bool promote)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
-enum class RetirementPath { RETURN, RECLAIM, RELEASE, MARK_QUARANTINE };
+enum class RetirementPath { RETURN, FREE };
 
 int ExercisePageRetirement(RetirementPath path, bool concurrent)
 {
@@ -194,12 +194,10 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         // in heap memory) goes before the mapping.
         MapleRuntime::GcUnit::CreateStandaloneHeap(4);
         RegionManager& manager = Heap::GetHeap().page_allocator();
-        // ReleaseRetiredRegion clears the product remembered set before
-        // returning the page. Its address space must exist as after heap init.
         const auto role = ZPageType::large;
 
-        ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
-        ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         if (first == nullptr || second == nullptr) {
             return 21;
         }
@@ -216,15 +214,10 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
             switch (path) {
                 case RetirementPath::RETURN:
-                    manager.ReturnPageMemory({ index, 2 * ZGranuleSize, 0, true });
+                    manager.ReturnPageMemory(RegionManager::VirtualMemoryOf(index, 2 * ZGranuleSize));
                     break;
-                case RetirementPath::RECLAIM:
-                    manager.ReclaimRegion(first);
-                    break;
-                case RetirementPath::RELEASE:
-                    if (manager.ReleaseRegion(first) != 2 * unit) {
-                        result = 22;
-                    }
+                case RetirementPath::FREE:
+                    Heap::free_page(first);
                     break;
             }
             ++retired;
@@ -242,15 +235,17 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
                 result = 24;
             }
             (void)roleBefore;
-            // Memory stays out of the cache and committed while an iterator
-            // can still read the descriptor (ZGC free_page only after the
-            // page table iteration ends).
-            if ((manager.GetCachedBytes() / ZGranuleSize) != 0 || manager.GetCommittedCapacity() != capacity) {
+            // ZGC zPageAllocator.cpp:2253-2266: free_page caches memory
+            // immediately; only the descriptor deletion is deferred. The
+            // older ReturnPageMemory route still defers both.
+            if ((manager.GetCachedBytes() / ZGranuleSize) != (path == RetirementPath::FREE ? 2U : 0U) ||
+                manager.GetCommittedCapacity() != capacity) {
                 result = 25;
             }
             // All capacity is owned; a retired page is not available for
             // cache allocation while either iterator can still read it.
-            if (manager.TakeRegion((1) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags()) != nullptr) {
+            if (path == RetirementPath::RETURN &&
+                manager.TakeRegion((1) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags()) != nullptr) {
                 result = 26;
             }
             if (Heap::page(second->GetRegionStart()) != second) {
@@ -277,7 +272,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             // this outer callback still holds the original descriptor.
             inspectRetiredPage();
         });
-        if (retired != 1 || !first->IsFreeRegion() || first->GetRegionLifeId() == life) {
+        if (retired != 1 || Heap::page(start) != nullptr) {
             result = 28;
         }
         // Every path hands the page's memory back to the mapped cache (ZGC
@@ -285,7 +280,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         if ((manager.GetCachedBytes() / ZGranuleSize) != 2 || manager.GetCommittedCapacity() != capacity) {
             result = 30;
         }
-        ZPage* reused = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* reused = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         PublishAllocatedPage(reused);
         if (reused == nullptr || reused->GetRegionStart() != start ||
             Heap::page(end - 1) != reused) {
@@ -343,7 +338,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, ExplicitFreeWithdrawsOwnedPage)
     ZStat::Initialize();
     RegionManager& manager = Heap::GetHeap().page_allocator();
     const size_t used = manager.GetAllocatedSize();
-    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(owned != nullptr);
     const uintptr_t address = owned->GetRegionStart();
     owned->SetRegionRole(ZPageRole::Garbage);
@@ -360,19 +355,19 @@ GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableReturnWaitsForOutermostItera
     CheckPageRetirement(RetirementPath::RETURN, false);
 }
 
-GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableConcurrentReclaimPreservesDescriptor)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableConcurrentFreePreservesDescriptor)
 {
-    CheckPageRetirement(RetirementPath::RECLAIM, true);
+    CheckPageRetirement(RetirementPath::FREE, true);
 }
 
-GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableReleaseWaitsForIterator)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableFreePreservesDescriptor)
 {
-    CheckPageRetirement(RetirementPath::RELEASE, true);
+    CheckPageRetirement(RetirementPath::FREE, false);
 }
 
 
 namespace {
-void CheckMarkReclaim(bool freePage)
+void CheckMarkReclaim()
 {
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
@@ -381,8 +376,8 @@ void CheckMarkReclaim(bool freePage)
     auto& manager = heap.page_allocator();
     // Fill capacity so the following allocation can only reuse returned memory.
     const size_t size = 2 * ZGranuleSize;
-    ZPage* first = Heap::alloc_page(size, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
-    ZPage* occupied = Heap::alloc_page(size, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* first = Heap::alloc_page(size, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* occupied = Heap::alloc_page(size, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(first != nullptr && occupied != nullptr);
     const uintptr_t start = first->GetRegionStart();
     const size_t capacity = manager.GetCommittedCapacity();
@@ -391,20 +386,16 @@ void CheckMarkReclaim(bool freePage)
     heap.old().set_phase(ZGenerationPhase::Mark);
     // ZGC zPageAllocator.cpp:692-699,2253-2266: returning memory has no
     // mark-epoch holding branch. Both existing product entry paths obey it.
-    if (freePage) {
-        Heap::free_page(first);
-    } else {
-        manager.ReclaimRegion(first);
-    }
+    Heap::free_page(first);
     const size_t cachedAfter = manager.GetCachedBytes();
     const bool withdrawn = Heap::page(start) == nullptr;
-    ZPage* reused = Heap::alloc_page(size, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* reused = Heap::alloc_page(size, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     const bool sameRange = reused != nullptr && reused->GetRegionStart() == start;
     const bool stillMark = heap.old().phase() == ZGenerationPhase::Mark;
     const bool sameCapacity = manager.GetCommittedCapacity() == capacity;
     std::fprintf(stderr,
         "MARK_CACHE_TARGET path=%s before=%zu after=%zu size=%zu withdrawn=%d reused=%d mark=%d capacity_same=%d\n",
-        freePage ? "free_page" : "ReclaimRegion", cachedBefore, cachedAfter, size,
+        "free_page", cachedBefore, cachedAfter, size,
         withdrawn, sameRange, stillMark, sameCapacity);
     heap.old().set_phase(previousPhase);
     GC_EXPECT_EQ(cachedAfter, cachedBefore + size);
@@ -412,14 +403,9 @@ void CheckMarkReclaim(bool freePage)
 }
 } // namespace
 
-GC_COMPONENT_OTHER_VM_TEST(PageRetirement, MarkReclaimReturnsToMappedCache)
-{
-    CheckMarkReclaim(false);
-}
-
 GC_COMPONENT_OTHER_VM_TEST(PageRetirement, MarkFreePageReturnsToMappedCache)
 {
-    CheckMarkReclaim(true);
+    CheckMarkReclaim();
 }
 
 } // namespace MapleRuntime

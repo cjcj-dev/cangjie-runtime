@@ -8,10 +8,6 @@
 #include "ObjectModel/MArray.inline.h"
 
 #include <algorithm>
-#include <cstdlib>
-#include <cstring>
-#include <cstdio>
-#include "Heap/z/zIterator.inline.hpp"
 
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zUtils.hpp"
@@ -27,21 +23,33 @@ void ZObjArrayAllocator::yield_for_safepoint() const
 {
     ScopedEnterSaferegion yield(true);
 }
-MArray* ZObjArrayAllocator::initialize()
+static bool is_ref_containing_flat_array(TypeInfo* arrayClass)
 {
-    // Publish a complete boundary before the first yield. The invisible-root
-    // release store below makes these plain header writes visible to GC.
-    MArray* array = reinterpret_cast<MArray*>(BaseObject::SetClassInfo(address, &arrayClass));
+    TypeInfo* component = arrayClass->GetComponentTypeInfo();
+    return !component->IsRef() && component->HasRefField();
+}
+
+MArray* ZObjArrayAllocator::initialize(MAddress address) const
+{
+    // ZGC zObjArrayAllocator.cpp:46-77: all specialization decisions are here.
+    if (!doZero) {
+        return ObjArrayAllocator::initialize(address);
+    }
+    if (arraySize <= MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) {
+        return ObjArrayAllocator::initialize(address);
+    }
+    if (is_ref_containing_flat_array(&arrayClass)) {
+        return ObjArrayAllocator::initialize(address);
+    }
+    // Our compact header combines klass and state. Publish both in one release
+    // store, like ZGC's compact-header branch (zObjArrayAllocator.cpp:94-95).
+    MArray* array = reinterpret_cast<MArray*>(BaseObject::SetClassInfo(address, &arrayClass, true));
     array->SetLength(nElems);
-    // ZObjArrayAllocator marks the published header so every ZIterator skips
-    // the incomplete object array (zObjArrayAllocator.cpp:92-112,
-    // zIterator.inline.hpp:56-70). The side root controls liveness; this header
-    // bit independently controls heap iteration.
-    array->SetInvisibleObject(true);
 
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "large array initialization requires a mutator");
-    mutator->PublishInvisibleRoot(array);
+    zaddress_unsafe mem = to_zaddress_unsafe(reinterpret_cast<uintptr_t>(array));
+    mutator->GetGCData().set_invisible_root(&mem);
 
     const size_t contentOffset = MArray::GetContentOffset();
     CHECK_DETAIL(arraySize >= contentOffset, "large array size is smaller than its header");
@@ -56,25 +64,11 @@ MArray* ZObjArrayAllocator::initialize()
     const uint64_t oldSequenceBefore = heap.GetZGeneration(ZGenerationId::old).seqnum();
     const uintptr_t colorBefore = ::g_cjStoreGoodMask;
     bool seenGcSafepoint = false;
-#if defined(MRT_GC_UNIT_TESTS)
-    // Existing registered managed-segmented test mode. It only requests a real
-    // collection; allocation, root publication and clearing stay product-owned.
-    const char* gcMode = std::getenv("MRT_GC_UNIT_MANAGED_SEGMENTED");
-    const bool requestYoung = gcMode != nullptr && std::strcmp(gcMode, "young") == 0;
-    const bool requestOld = gcMode != nullptr && (std::strcmp(gcMode, "full") == 0 || std::strcmp(gcMode, "full2") == 0);
-    const size_t gcRequests = gcMode != nullptr && std::strcmp(gcMode, "full2") == 0 ? 2 : 1;
-    size_t requestedGc = 0;
-    size_t passes = 0;
-#endif
     // ZObjArrayAllocator::initialize (zObjArrayAllocator.cpp:140-200):
     // only the first pass can request a restart. Primitive payloads never do.
     auto initializeMemory = [&]() {
-#if defined(MRT_GC_UNIT_TESTS)
-        ++passes;
-#endif
-        size_t segmentIndex = 0;
-        for (size_t processed = 0; processed < contentSize; ++segmentIndex) {
-            MArray* current = static_cast<MArray*>(mutator->LoadInvisibleRoot());
+        for (size_t processed = 0; processed < contentSize;) {
+            MArray* current = static_cast<MArray*>(to_object(safe(mem)));
             CHECK_DETAIL(current != nullptr, "large array lost its invisible root");
             const size_t segment = std::min(contentSize - processed,
                                             static_cast<size_t>(MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE));
@@ -87,35 +81,7 @@ MArray* ZObjArrayAllocator::initialize()
             const uintptr_t fillValue = isRefArray ? coloredNull : 0;
             ZUtils::fill(reinterpret_cast<uintptr_t*>(start), segment / sizeof(uintptr_t), fillValue);
 
-            {
-                // Entering a saferegion is this runtime's mutator/GC handshake edge.
-                // The root stays published throughout the whole interval.
-                yield_for_safepoint();
-#if defined(MRT_GC_UNIT_TESTS)
-                if (requestedGc < gcRequests && (requestYoung || requestOld)) {
-                    ++requestedGc;
-                    ScopedEnterSaferegion testYield(true);
-                    MArray* observed = static_cast<MArray*>(mutator->LoadInvisibleRoot());
-                    CHECK(observed != nullptr && observed->IsInvisibleObject());
-                    size_t fields = 0;
-                    auto visitor = [&](RefField<>&) { ++fields; };
-                    ZBasicOopIterateClosure<decltype(visitor)> closure(visitor);
-                    ZIterator::oop_iterate_safe(observed, &closure);
-                    CHECK_DETAIL(fields == 0, "incomplete array must not expose reference fields");
-                    const ZGenerationId id = requestYoung ? ZGenerationId::young : ZGenerationId::old;
-                    const uint64_t before = heap.GetZGeneration(id).seqnum();
-                    heap.RequestGC(requestYoung ? GC_REASON_YOUNG : GC_REASON_FORCE);
-                    const uint64_t after = heap.GetZGeneration(id).seqnum();
-                    observed = static_cast<MArray*>(mutator->LoadInvisibleRoot());
-                    const bool valid = observed != nullptr && observed->IsInvisibleObject() &&
-                                       observed->GetLength() == nElems;
-                    std::fprintf(stderr, "SEGMENTED_GC_WINDOW mode=%s before=%llu after=%llu root=%d fields=%zu\n",
-                                 gcMode, (unsigned long long)before, (unsigned long long)after, valid, fields);
-                    CHECK_DETAIL(after != before && valid, "collection must complete inside the initialization window");
-                }
-#endif
-
-            }
+            yield_for_safepoint();
 
             if (isRefArray && !seenGcSafepoint &&
                 (heap.GetZGeneration(ZGenerationId::young).seqnum() != youngSequenceBefore ||
@@ -136,16 +102,8 @@ MArray* ZObjArrayAllocator::initialize()
         CHECK_DETAIL(complete, "array initialization must complete on the second pass");
     }
 
-#if defined(MRT_GC_UNIT_TESTS)
-    if (requestYoung || requestOld) {
-        const size_t expectedPasses = isRefArray ? 2 : 1;
-        std::fprintf(stderr, "SEGMENTED_PASSES_TARGET requested=%zu passes=%zu expected=%zu\n",
-                     requestedGc, passes, expectedPasses);
-        CHECK_DETAIL(requestedGc == gcRequests && passes == expectedPasses,
-                     "array restart count must be bounded independently of collection count");
-    }
-#endif
-    MArray* complete = static_cast<MArray*>(mutator->WithdrawInvisibleRoot());
+    mutator->GetGCData().clear_invisible_root();
+    MArray* complete = static_cast<MArray*>(to_object(safe(mem)));
     complete->SetInvisibleObject(false);
     return complete;
 }

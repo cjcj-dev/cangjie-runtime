@@ -27,6 +27,20 @@ struct ThreadGCData {
     MarkThreadLocalStacks markStacks[2];
     zaddress_unsafe* invisibleRoot = nullptr;
 
+    // ZGC zThreadLocalData.hpp:101-112: the slot belongs to the active
+    // allocation window, not to the mutator's permanent root storage.
+    void set_invisible_root(zaddress_unsafe* root)
+    {
+        assert(invisibleRoot == nullptr);
+        invisibleRoot = root;
+    }
+    void clear_invisible_root()
+    {
+        assert(invisibleRoot != nullptr);
+        invisibleRoot = nullptr;
+    }
+    zaddress_unsafe* invisible_root() const { return invisibleRoot; }
+
     // Stable owner kind; carrier binding never changes this identity.
     const bool managedOwner;
     explicit ThreadGCData(bool managed = false)

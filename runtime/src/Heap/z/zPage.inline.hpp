@@ -9,6 +9,7 @@
 
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zLiveMap.inline.hpp"
 #include "Heap/z/zSafeDelete.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -475,17 +476,6 @@ inline ZPage* ZPage::InitRegion(size_t granuleIndex, size_t pageSize, ZPageType 
         return region;
     }
 
-inline void ZPage::WaitCopiedBeforePayloadWipe(ZPage* region, const char* site)
-    {
-        if (region == nullptr) {
-            return;
-        }
-        (void)site;
-        ZForwarding::WaitPageDone(forwarding_for_page(region));
-    }
-
-
-
 inline bool ZPage::IsEmpty() const
     {
         MRT_ASSERT(IsSmallRegion(), "wrong region type");
@@ -530,55 +520,6 @@ inline void ZPage::RetirePageMemory()
 
 
 
-
-
-
-
-
-
-inline bool ZPage::RetainForwarding()
-    {
-        auto owner = forwarding_for_page(this);
-        return owner && owner->retain_page(&generation_relocate_queue((owner->from_age() == PageAge::old ? Generation::Old : Generation::Young)));
-    }
-
-inline void ZPage::ReleaseForwarding()
-    {
-        auto owner = forwarding_for_page(this);
-        CHECK(owner);
-        owner->release_page();
-    }
-
-inline bool ZPage::ClaimForwarding()
-    {
-        auto owner = forwarding_for_page(this);
-        return owner && owner->claim();
-    }
-
-inline void ZPage::MarkForwardingDone()
-    {
-        auto owner = forwarding_for_page(this);
-        if (owner && ZForwarding::CurrentPageWork() != owner) owner->mark_done();
-    }
-
-inline bool ZPage::IsForwardingDone() const
-    {
-        auto owner = forwarding_for_page(this);
-        return owner && owner->is_done();
-    }
-
-
-inline int32_t ZPage::ForwardingRefCount() const
-    {
-        auto owner = forwarding_for_page(this);
-        return owner ? owner->ref_count().load(std::memory_order_acquire) : 0;
-    }
-
-inline bool ZPage::ForwardingClaimed() const
-    {
-        auto owner = forwarding_for_page(this);
-        return owner && owner->claimed().load(std::memory_order_acquire);
-    }
 
 
 
@@ -699,7 +640,6 @@ inline void ZPage::InitZPage(size_t pageSize, ZPageType uClass, PageAge age, boo
         }
         // Retire the forwarding owner before detaching its compact table.
         _scratch.fwdOwner.store(nullptr, std::memory_order_release);
-        WaitCopiedBeforePayloadWipe(this, "InitZPage");
         delete _scratch.retiredLivemap;
         _scratch.retiredLivemap = nullptr;
         _top = to_zoffset_end(start());

@@ -75,14 +75,14 @@ public:
     OneUnitStallFixture()
         : manager((ZStat::Initialize(), CreateStandaloneHeap(1), Heap::GetHeap().page_allocator()))
     {
-        capacity = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        capacity = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     }
 
     void PublishCapacity()
     {
         ZPage* region = capacity;
         capacity = nullptr;
-        manager.ReclaimRegion(region);
+        Heap::free_page(region);
     }
 };
 } // namespace
@@ -93,8 +93,8 @@ GC_COMPONENT_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWai
     fixture.PublishCapacity();
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* first = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, flags);
-    ZPage* second = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, flags);
+    ZPage* first = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::eden, flags);
+    ZPage* second = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::eden, flags);
     const size_t count = (first != nullptr) + (second != nullptr);
     std::fprintf(stderr, "ALLOCATION_CAPACITY_TARGET count=%zu first=%p second=%p\n", count, first, second);
     GC_EXPECT_EQ(count, size_t{1});
@@ -109,8 +109,11 @@ GC_RUNTIME_OTHER_VM_TEST(RequestWorkers, StallAfterYoungPrelude)
     params.heapParam.heapSize = 64 * 1024;
     params.coParam.processorNum = 1;
     params.gcParam.concGCThreads = 4;
+    params.gcParam.concGCThreadsSet = true;
     params.gcParam.youngGCThreads = 2;
+    params.gcParam.youngGCThreadsSet = true;
     params.gcParam.oldGCThreads = 3;
+    params.gcParam.oldGCThreadsSet = true;
     params.gcParam.staticGCThreads = true;
     GC_EXPECT_EQ(InitCJRuntime(&params), E_OK);
     auto& heap = Heap::GetHeap();
@@ -388,7 +391,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationStall, ProductReturnedCapacityServesOnlyOneWa
     }
     ZAllocationFlags nonBlocking;
     nonBlocking.set_non_blocking();
-    ZPage* competing = Heap::alloc_page(requestedBytes, ZPageType::large, false, PageAge::eden, nonBlocking);
+    ZPage* competing = Heap::alloc_page(requestedBytes, ZPageType::large, PageAge::eden, nonBlocking);
     ConcurrentGCBreakpoints::ReleaseControl();
     deadline = std::chrono::steady_clock::now() + kHangLimit;
     while ((!done[0].load() || !done[1].load()) && std::chrono::steady_clock::now() < deadline) {
@@ -631,3 +634,20 @@ GC_OTHER_VM_TEST(FutureWait966, GCThreadPreservesHandshakeState)
     GC_EXPECT_TRUE(blockedUnchanged && unchanged);
     GC_EXPECT_EQ(request.cause(), GC_REASON_USER);
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+#include "gclog_capture.hpp"
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, AllocationStall)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    GcLogCapture capture;
+    RunProductStallWaiters();
+    const std::string text = capture.Finish();
+    size_t count = 0;
+    size_t position = 0;
+    const std::string expected = "name=Allocation_Stall kind=critical ";
+    while ((position = text.find(expected, position)) != std::string::npos) { ++count; position += expected.size(); }
+    std::fprintf(stderr, "GCLOG_TARGET allocation_stall_records=%zu expected=2\n", count);
+    GC_EXPECT_EQ(count, size_t{2});
+}
+#endif

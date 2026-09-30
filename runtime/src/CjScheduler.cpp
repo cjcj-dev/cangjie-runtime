@@ -728,9 +728,14 @@ static RuntimeParam InitRuntimeParam()
                 .gcInterval = InitTimeParameter("cjGCInterval", 0, 150 * MILLI_SECOND_TO_NANO_SECOND),
                 // Timer collections are disabled by default (ZGC z_globals.hpp:62-66).
                 .backupGCInterval = InitTimeParameter("cjBackupGCInterval", 0, 0),
+                .parallelGCThreads = InitGCWorkerCount("cjParallelGCThreads"),
                 .concGCThreads = InitGCWorkerCount("cjConcGCThreads"),
                 .youngGCThreads = InitGCWorkerCount("cjYoungGCThreads"),
                 .oldGCThreads = InitGCWorkerCount("cjOldGCThreads"),
+                .parallelGCThreadsSet = GetRuntimeConfigValue("cjParallelGCThreads") != nullptr,
+                .concGCThreadsSet = GetRuntimeConfigValue("cjConcGCThreads") != nullptr,
+                .youngGCThreadsSet = GetRuntimeConfigValue("cjYoungGCThreads") != nullptr,
+                .oldGCThreadsSet = GetRuntimeConfigValue("cjOldGCThreads") != nullptr,
                 .staticGCThreads = InitStaticGCThreads(),
                 .maxTenuringThreshold = static_cast<uint32_t>(
                     InitTenuringThreshold("cjMaxTenuringThreshold", 0, 16, 15)),

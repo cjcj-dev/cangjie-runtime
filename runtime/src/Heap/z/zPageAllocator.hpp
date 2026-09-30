@@ -6,6 +6,8 @@
 #define MRT_ALLOCATION_STALL_QUEUE_H
 
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zPageAge.hpp"
+#include "Heap/z/zVirtualMemory.inline.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include <condition_variable>
 #include <cstddef>
@@ -23,20 +25,74 @@
 
 namespace MapleRuntime {
 
-// ZVirtualMemory represented in heap granules; ownership travels with the
-// page allocation until materialization or hand-back. The partition index
-// selects the cache and virtual registry that own the complete allocation.
-struct PageMemory {
-    size_t index{ 0 };
-    size_t size{ 0 };
-    uint32_t partition{ 0 };
-    bool committed{ false };
-    // ZMemoryAllocation::partial_vmems: these extents leave the mapped cache
-    // under the allocator owner and travel with the allocation request.
-    ZArray<ZVirtualMemory> partialMappings;
-    bool virtualClaimed{ true };
-    size_t harvestedBytes{ 0 };
+// ZGC zPageAllocator.cpp:85-296. Single-partition allocation state; NUMA
+// multi-partition composition remains in A03n.
+class ZPartition;
+class ZMemoryAllocation {
+    const size_t _size;
+    ZPartition* _partition{nullptr};
+    ZVirtualMemory _satisfied_from_cache_vmem;
+    ZArray<ZVirtualMemory> _partial_vmems;
+    int _num_harvested{0};
+    size_t _harvested{0};
+    size_t _increased_capacity{0};
+    size_t _committed_capacity{0};
+    bool _commit_failed{false};
+public:
+    explicit ZMemoryAllocation(size_t size) : _size(size) {}
+    void reset_for_retry()
+    {
+        CHECK(_satisfied_from_cache_vmem.is_null());
+        _partition = nullptr;
+        _partial_vmems.clear();
+        _num_harvested = 0;
+        _harvested = 0;
+        _increased_capacity = 0;
+        _committed_capacity = 0;
+        _commit_failed = false;
+    }
+    size_t size() const { return _size; }
+    ZPartition& partition() const { CHECK(_partition != nullptr); return *_partition; }
+    void set_partition(ZPartition* partition) { CHECK(_partition == nullptr); _partition = partition; }
+    ZVirtualMemory satisfied_from_cache_vmem() const { return _satisfied_from_cache_vmem; }
+    void set_satisfied_from_cache_vmem(ZVirtualMemory vmem)
+    {
+        CHECK(_satisfied_from_cache_vmem.is_null() && _partial_vmems.is_empty());
+        CHECK(vmem.size() == size());
+        _satisfied_from_cache_vmem = vmem;
+    }
+    void set_satisfied_from_cache_vmem_fast_medium(ZVirtualMemory vmem)
+    {
+        CHECK(_satisfied_from_cache_vmem.is_null() && _partial_vmems.is_empty());
+        CHECK(ZPageSizeMediumEnabled && vmem.size() >= ZPageSizeMediumMin && vmem.size() <= ZPageSizeMediumMax);
+        CHECK((vmem.size() & (vmem.size() - 1)) == 0);
+        _satisfied_from_cache_vmem = vmem;
+    }
+    ZArray<ZVirtualMemory>* partial_vmems() { return &_partial_vmems; }
+    const ZArray<ZVirtualMemory>* partial_vmems() const { return &_partial_vmems; }
+    int num_harvested() const { return _num_harvested; }
+    size_t harvested() const { return _harvested; }
+    void set_harvested(int count, size_t size) { _num_harvested = count; _harvested = size; }
+    size_t increased_capacity() const { return _increased_capacity; }
+    void set_increased_capacity(size_t size) { _increased_capacity = size; }
+    size_t committed_capacity() const { return _committed_capacity; }
+    void set_committed_capacity(size_t size)
+    {
+        CHECK(_committed_capacity == 0);
+        _committed_capacity = size;
+        _commit_failed = size != _increased_capacity;
+    }
+    bool commit_failed() const { return _commit_failed; }
+};
 
+class ZSinglePartitionAllocation {
+    ZMemoryAllocation _allocation;
+public:
+    explicit ZSinglePartitionAllocation(size_t size) : _allocation(size) {}
+    size_t size() const { return _allocation.size(); }
+    ZMemoryAllocation* allocation() { return &_allocation; }
+    const ZMemoryAllocation* allocation() const { return &_allocation; }
+    void reset_for_retry() { _allocation.reset_for_retry(); }
 };
 
 // One object represents one blocked allocation.  It is deliberately owned by
@@ -44,18 +100,23 @@ struct PageMemory {
 // answer is published.
 class ZPageAllocation {
 public:
-    ZPageAllocation(size_t size, uint8_t role, bool physical, ZAllocationFlags flags = {});
+    ZPageAllocation(size_t size, uint8_t role, PageAge age, ZAllocationFlags flags = {});
     ZPageAllocation(const ZPageAllocation&) = delete;
     ZPageAllocation& operator=(const ZPageAllocation&) = delete;
 
-    size_t GetSize() const { return size; }
+    size_t GetSize() const
+    {
+        const ZVirtualMemory cached = singleAllocation.allocation()->satisfied_from_cache_vmem();
+        return flags.fast_medium() && !cached.is_null() ? cached.size() : size;
+    }
     uint32_t YoungSeqnum() const { return youngSeqnum; }
     uint32_t OldSeqnum() const { return oldSeqnum; }
     ZAllocationFlags Flags() const { return flags; }
     uint8_t GetRole() const { return role; }
-    bool ExpectsPhysicalMemory() const { return physical; }
-    PageMemory& Memory() { return memory; }
-    const PageMemory& Memory() const { return memory; }
+    PageAge Age() const { return age; }
+    ZSinglePartitionAllocation* single_partition_allocation() { return &singleAllocation; }
+    const ZSinglePartitionAllocation* single_partition_allocation() const { return &singleAllocation; }
+    void reset_for_retry() { singleAllocation.reset_for_retry(); }
 
     // zPageAllocator.cpp:525-531 ZPageAllocation::wait/satisfy over ZFuture<bool>.
     bool Wait();
@@ -69,9 +130,9 @@ private:
     const uint32_t youngSeqnum;
     const uint32_t oldSeqnum;
     const uint8_t role;
-    const bool physical;
+    const PageAge age;
     const ZAllocationFlags flags;
-    PageMemory memory;
+    ZSinglePartitionAllocation singleAllocation;
     // zPageAllocator.cpp:420-421 ZPageAllocation: ZFuture<bool> _stall_result
     // and the ZListNode that links it on the allocator's stalled list.
     ZFuture<bool> stallResult;
@@ -107,9 +168,7 @@ using AllocationStallRequest = ZPageAllocation;
 namespace MapleRuntime {
 class RegionManager;
 
-class FreeRegionManager;
-
-// ZGC zPageAllocator.cpp:628-637: each partition owns its cache and worker.
+// ZGC zPageAllocator.hpp:58-137: partition accounting and thin memory operations.
 class ZPartition {
 public:
     RegionManager& regionManager;
@@ -117,98 +176,35 @@ public:
     ZMappedCache cache;
     Uncommitter uncommitter;
     size_t minCapacity{0};
-    size_t capacity{0};
-    size_t claimed{0};
+    std::atomic<size_t> capacity{0};
+    std::atomic<size_t> claimed{0};
     size_t used{0};
-    size_t currentMaxCapacity{0};
+    std::atomic<size_t> currentMaxCapacity{0};
     ZPartition(uint32_t id, RegionManager& manager)
         : regionManager(manager), numaId(id), uncommitter(*this) {}
-    size_t available() const { return currentMaxCapacity - used - claimed; }
-    bool claim_capacity_fast_medium(PageMemory& memory);
-    bool prime(FreeRegionManager& allocator, size_t size);
-};
-
-// This class is and should be accessed only for region allocation. we do not rely on it to check region status.
-class FreeRegionManager {
-
-public:
-
-    explicit FreeRegionManager(RegionManager& manager) : regionManager(manager) {}
-
-    friend class Uncommitter;
-    friend class ZPartition;
-    virtual ~FreeRegionManager() = default;
-    void StartUncommitters();
-    void StopUncommitters();
-    bool PrimeCache(size_t size);
-    // ZPageAllocator(min/initial/max capacity) owns _virtual/_physical and one
-    // ZPartition per NUMA id (zPageAllocator.cpp:1201-1260); the partitions
-    // here consume the two managers the same way.
-    void Initialize(ZVirtualMemoryManager& virtualMemory,
-                    ZPhysicalMemoryManager& physicalMemory, size_t maxCapacity);
-    bool ClaimPageMemory(size_t num, PageMemory& memory, ZAllocationFlags flags = {});
-    bool PreparePageMemory(PageMemory& memory);
-
-    // zPageAllocator.cpp:1470-1515 alloc_page_inner: consume the already-owned
-    // vmem outside the allocator lock: claim_physical_for_increased_capacity →
-    // commit_and_map (cleanup_failed_commit on a partial commit) → create_page.
-    ZPage* MaterializePageMemory(PageMemory& memory, ZPageType role,
-                                     bool expectPhysicalMem, size_t& committedBytes,
-                                     PageAge age = PageAge::old);
-    // ZPartition::free_memory_alloc_failed (zPageAllocator.cpp:1079-1101).
-    // Requires the owning RegionManager page allocator lock.
-    void FreeMemoryAllocFailed(PageMemory& memory);
-
-    // ZPartition thin functions (zPageAllocator.cpp:790-920). They forward to
-    // the two managers with this partition's numa id.
-    ZVirtualMemory claim_virtual(size_t size, uint32_t partition_id);
-    size_t claim_virtual(size_t size, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_out);
-    void free_virtual(const ZVirtualMemory& vmem, uint32_t partition_id);
-    ZVirtualMemory free_and_claim_virtual_from_low_exact_or_many(size_t size, uint32_t partition_id,
-                                                                 ZArray<ZVirtualMemory>* vmems_in_out);
-    void claim_physical(const ZVirtualMemory& vmem, uint32_t partition_id);
-    void free_physical(const ZVirtualMemory& vmem, uint32_t partition_id);
-    size_t commit_physical(const ZVirtualMemory& vmem, uint32_t partition_id);
+    size_t available() const { return currentMaxCapacity.load() - used - claimed.load(); }
+    size_t increase_capacity(size_t size);
+    void decrease_capacity(size_t size, bool set_max_capacity);
+    void free_memory(const ZVirtualMemory& vmem);
+    void claim_from_cache_or_increase_capacity(ZMemoryAllocation* allocation);
+    bool claim_capacity(ZMemoryAllocation* allocation);
+    bool claim_capacity_fast_medium(ZMemoryAllocation* allocation);
+    bool prime(size_t size);
+    ZVirtualMemory claim_virtual(size_t size);
+    size_t claim_virtual(size_t size, ZArray<ZVirtualMemory>* out);
+    void free_virtual(const ZVirtualMemory& vmem);
+    ZVirtualMemory free_and_claim_virtual_from_low_exact_or_many(size_t size, ZArray<ZVirtualMemory>* out);
+    void claim_physical(const ZVirtualMemory& vmem);
+    void free_physical(const ZVirtualMemory& vmem);
+    size_t commit_physical(const ZVirtualMemory& vmem);
     size_t uncommit_physical(const ZVirtualMemory& vmem);
-    void map_virtual(const ZVirtualMemory& vmem, uint32_t partition_id);
+    void map_virtual(const ZVirtualMemory& vmem);
     void unmap_virtual(const ZVirtualMemory& vmem);
     void sort_segments_physical(const ZVirtualMemory& vmem);
-    void stash_segments(const ZArraySlice<const ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const;
-    void restore_segments(const ZVirtualMemory& vmem, const ZArray<zbacking_index>& stash);
-    void restore_segments(const ZArraySlice<const ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash);
-
-    // ZPartition::_capacity accounting (zPageAllocator.cpp:648-676). The
-    // committed capacity account lives here and nowhere else.
-    size_t increase_capacity(uint32_t partition_id, size_t size);
-    void decrease_capacity(uint32_t partition_id, size_t size, bool set_max_capacity);
-    size_t capacity() const;
-    size_t current_max_capacity() const;
-
-    // Global granule index plus byte extent <-> ZVirtualMemory.
-    static ZVirtualMemory VirtualMemoryOf(size_t index, size_t count);
-    static size_t IndexOf(const ZVirtualMemory& vmem);
-    uint32_t PartitionIdOf(const ZVirtualMemory& vmem) const { return virtualMemory->lookup_partition_id(vmem); }
-
-    void AddGarbageMemory(size_t idx, size_t num);
-
-    size_t GetCachedBytes() const;
-    // ZPartition::print_cache_on (zPageAllocator.cpp:1118-1121) for every partition.
-    void PrintCacheOn() const;
-
-private:
-
-    RegionManager& regionManager;
-
-    using Partition = ZPartition;
-    void InsertCommitted(Partition& partition, size_t index, size_t count);
-    void FreeMemory(size_t index, size_t count);
-    mutable std::mutex cacheMutex;
-    std::vector<std::unique_ptr<Partition>> partitions;
-    ZVirtualMemoryManager* virtualMemory{ nullptr };
-    ZPhysicalMemoryManager* physicalMemory{ nullptr };
-    size_t nextPartition{ 0 };
-
-
+    ZVirtualMemory prepare_harvested_and_claim_virtual(ZMemoryAllocation* allocation);
+    void commit_increased_capacity(ZMemoryAllocation* allocation, const ZVirtualMemory& vmem);
+    void map_memory(ZMemoryAllocation* allocation, const ZVirtualMemory& vmem);
+    void free_memory_alloc_failed(ZMemoryAllocation* allocation);
 };
 } // namespace MapleRuntime
 #endif // MRT_FREE_REGION_MANAGER_H
@@ -344,9 +340,9 @@ public:
     }
 
     // ZPageAllocator::capacity(): sum of ZPartition::_capacity.
-    size_t GetCommittedCapacity() const { return freeRegionManager.capacity(); }
-    void StartUncommitters() { freeRegionManager.StartUncommitters(); }
-    void StopUncommitters() { freeRegionManager.StopUncommitters(); }
+    size_t GetCommittedCapacity() const { return capacity(); }
+    void StartUncommitters();
+    void StopUncommitters();
 
     size_t GetHeapCapacity() const { return heapCapacity; }
     size_t soft_max_capacity() const;
@@ -381,18 +377,13 @@ public:
     bool StallAllocation(AllocationStallRequest& request);
     bool ClaimCapacityOrStall(AllocationStallRequest& request);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
-    void ReturnPageMemory(const PageMemory& memory);
+    void ReturnPageMemory(const ZVirtualMemory& memory);
     bool IsAllocationStalling() const;
     bool IsAllocationStallingForOld() const;
     void HandleAllocStallingForYoung();
     void StopStalledAllocations();
     void HandleAllocStallingForOld(bool clearedAllSoftRefs);
-    // zPageAllocator.cpp:1362 stats field: currently stalled mutators. Host
-    // difference: the current allocation adapter has no stalled-mutator census (#727).
-    size_t AllocationStallsNow() const
-    {
-        return 0;
-    }
+    size_t AllocationStallsNow() const;
     // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
     static void RememberPromotedObject(BaseObject* object);
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
@@ -416,7 +407,6 @@ public:
 
     void DumpRegionStats(const char* msg) const;
 
-    uintptr_t GetInactiveZone() const { return inactiveZone; }
 
 #if defined(__EULER__)
     double GetCacheRatio() const { return cacheRatio; }
@@ -428,8 +418,7 @@ public:
     ~RegionManager();
 
     // take a region with *num* units for allocation
-    ZPage* TakeRegion(size_t num, ZPageType, bool expectPhysicalMem = false,
-                           PageAge age = PageAge::old, ZAllocationFlags flags = {});
+    ZPage* TakeRegion(size_t num, ZPageType, PageAge age = PageAge::old, ZAllocationFlags flags = {});
 
 
 
@@ -447,8 +436,6 @@ public:
     size_t GetYoungAllocatedSize() const;
 
 
-    void ReclaimRegion(ZPage* region);
-    size_t ReleaseRegion(ZPage* region);
 
 
 
@@ -464,7 +451,7 @@ public:
 
     size_t GetUsedBytes() const;
 
-    size_t GetCachedBytes() const { return freeRegionManager.GetCachedBytes(); }
+    size_t GetCachedBytes() const;
     // Address space not yet backed by committed capacity (ZGC: current_max_capacity - capacity).
     size_t GetUncommittedBytes() const { return GetHeapCapacity() - GetCommittedCapacity(); }
 
@@ -522,9 +509,7 @@ public:
 private:
     // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the
     // page table no longer publishes the old descriptor.
-    void ReclaimRetiredRegion(ZPage* region);
-    void ReleaseRetiredRegion(ZPage* region);
-    void ReturnRetiredPageMemory(const PageMemory& memory);
+    void ReturnRetiredPageMemory(const ZVirtualMemory& memory);
 
 
 
@@ -534,7 +519,6 @@ private:
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
     ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, ZAllocationFlags flags);
-    void UndoSharedPage(ZPage* page);
 
     MAddress reservedStart = 0;
     MAddress reservedEnd = 0;
@@ -547,7 +531,37 @@ private:
     // only after their page/cache entries, as in ZPageAllocator.
     std::unique_ptr<ZVirtualMemoryManager> virtualMemory;
     std::unique_ptr<ZPhysicalMemoryManager> physicalMemory;
-    FreeRegionManager freeRegionManager;
+    friend class ZPartition;
+    std::vector<std::unique_ptr<ZPartition>> partitions;
+    size_t nextPartition{0}; // A03n: preferred NUMA routing is deferred.
+    void InitializePartitions(size_t maxCapacity);
+    bool PrimeCache(size_t size);
+    void PrintCacheOn() const;
+    bool claim_capacity(ZPageAllocation* allocation);
+    bool claim_capacity_fast_medium(ZPageAllocation* allocation);
+    ZPage* alloc_page_inner(ZPageAllocation* allocation);
+    ZVirtualMemory satisfied_from_cache_vmem(const ZPageAllocation* allocation) const;
+    ZVirtualMemory claim_virtual_memory(ZPageAllocation* allocation);
+    ZVirtualMemory claim_virtual_memory_single_partition(ZSinglePartitionAllocation* allocation);
+    void claim_physical_for_increased_capacity(ZMemoryAllocation* allocation, const ZVirtualMemory& vmem);
+    bool commit_and_map(ZPageAllocation* allocation, const ZVirtualMemory& vmem);
+    bool commit_and_map_single_partition(ZSinglePartitionAllocation* allocation, const ZVirtualMemory& vmem);
+    void commit(ZMemoryAllocation* allocation, const ZVirtualMemory& vmem);
+    bool commit_single_partition(ZSinglePartitionAllocation* allocation, const ZVirtualMemory& vmem);
+    void map_committed_single_partition(ZSinglePartitionAllocation* allocation, const ZVirtualMemory& vmem);
+    void cleanup_failed_commit_single_partition(ZSinglePartitionAllocation* allocation, const ZVirtualMemory& vmem);
+    void free_after_alloc_page_failed(ZPageAllocation* allocation);
+    void free_memory_alloc_failed(ZPageAllocation* allocation);
+    void free_memory_alloc_failed_single_partition(ZSinglePartitionAllocation* allocation);
+    void free_memory_alloc_failed(ZMemoryAllocation* allocation);
+    ZPage* create_page(ZPageAllocation* allocation, const ZVirtualMemory& vmem);
+    ZPageAllocatorStats StatsInner(const ZGeneration* generation) const;
+public:
+    size_t capacity() const;
+    size_t current_max_capacity() const;
+    static ZVirtualMemory VirtualMemoryOf(size_t index, size_t count);
+    static size_t IndexOf(const ZVirtualMemory& vmem);
+private:
 
     // #710: page lifecycle identity lives in ZPage's role word and the page
     // table (zPageTable.hpp:57-77); there are no page lists. The relocation
@@ -573,13 +587,11 @@ private:
     void SatisfyStalledAllocations();
     void NotifyOutOfMemory();
     void RestartGC() const;
-    size_t pageAllocatorUsed{ 0 };
+    std::atomic<size_t> pageAllocatorUsed{ 0 };
 
     uintptr_t regionHeapStart = 0; // the address of first region to allocate object
     uintptr_t regionHeapEnd = 0;
 
-    // heap space not allocated yet for even once. this value should not be decreased.
-    std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only
     size_t heapCapacity = 0;
     TLABAllocationAverage tlabAllocatingThreads;
     TLABAllocationAverage tlabRequestedFraction;

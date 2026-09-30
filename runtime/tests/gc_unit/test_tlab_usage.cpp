@@ -14,6 +14,7 @@
 #include "Cangjie.h"
 #include "Common/ScopedObjectAccess.h"
 #include "gc_heap_fixture.hpp"
+#include "mark_consumer_fixture.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/shared/collectedHeap.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
@@ -1166,7 +1167,7 @@ void TailMarkOwner(TailMarkCase& state)
 }
 
 // #826: the NW256 crash consumer chain. A slot naming the TLAB tail reaches
-// the real mark consumer ZMark::MarkEntryObject (zMark.cpp:620-634; the crash
+// the real mark consumer ZMark::MarkAndFollow (zMark.cpp:620-634; the crash
 // instruction was GetSize+0x12 reading TypeInfo+8 on a zero head). After the
 // retire above the tail is a filler with a valid header, so the same entry
 // must complete. Red arm: revert the retire coverage and the tail stays raw,
@@ -1192,11 +1193,9 @@ GC_RUNTIME_OTHER_VM_TEST(TLABTail, RetiredTailSurvivesMarkEntry)
     GC_EXPECT_TRUE(CollectedHeap::is_filler_object(tailObj));
     BaseObject* obj = reinterpret_cast<BaseObject*>(state.object.load(std::memory_order_acquire));
     // Positive control: the live object takes the same entry without faulting.
-    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(obj,
-        MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), &cache); }());
+    { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false)); consumer.context.Cache().Flush(); }
     // Target: the retired tail filler through the same consumer.
-    GC_EXPECT_FALSE([&] { MarkLiveCache cache(1); return ZMark::MarkEntryObject(tailObj,
-        MarkStackEntry(untype(ZAddress::offset(from_object(tailObj))), true, true, false, false), &cache); }());
+    { MarkConsumerFixture consumer; consumer.Consume(MarkStackEntry(untype(ZAddress::offset(from_object(tailObj))), true, true, false, false)); consumer.context.Cache().Flush(); }
     std::fprintf(stderr, "TLAB_TAIL_TARGET executed=1 tail=%#zx bound=%#zx tail_size=%zu obj_size=%zu\n",
                  tail, bound, tailObj->GetSize(), obj->GetSize());
     state.release.store(true, std::memory_order_release);

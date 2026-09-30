@@ -4,10 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC zPhysicalMemoryManager.cpp:48-393. ZNMT registration (infra I16) and
-// the ZFailLargerCommits diagnostic flag are not carried; ZUncommit /
-// ZUncommitDelay are read from the environment (infra I15).
-
+// ZGC zPhysicalMemoryManager.cpp:48-393; zNMT.cpp:38-65.
+// Native memory tracking has no host consumer, so no registration is carried.
+// ZFailLargerCommits is available in the testable develop configuration.
 #include "Heap/z/zPhysicalMemoryManager.hpp"
 
 #include <algorithm>
@@ -23,6 +22,7 @@
 #include "Heap/z/zUtils.inline.hpp"
 #include "Heap/z/zValue.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
+#include "Heap/z/z_globals.hpp"
 #include "Heap/z/zGranuleMap.inline.hpp"
 #include "Heap/z/zLargePages.inline.hpp"
 #include "Heap/z/zList.inline.hpp"
@@ -201,9 +201,21 @@ void ZPhysicalMemoryManager::free(const ZVirtualMemory& vmem, uint32_t numa_id) 
   });
 }
 
+// ZGC zPhysicalMemoryManager.cpp:217-224; develop flag is compile-time gated.
+#if defined(MRT_TESTABLE_INTERNALS)
+static size_t inject_commit_limit(const ZVirtualMemory& vmem)
+{
+    return AlignUp(std::min(ZFailLargerCommits / ZPerNUMAStorage::count(), vmem.size()), ZGranuleSize);
+}
+#endif
+
 size_t ZPhysicalMemoryManager::commit(const ZVirtualMemory& vmem, uint32_t numa_id) {
   zbacking_index* const pmem = _physical_mappings.addr(vmem.start());
+  #if defined(MRT_TESTABLE_INTERNALS)
+  const size_t size = ZFailLargerCommits > 0 ? inject_commit_limit(vmem) : vmem.size();
+#else
   const size_t size = vmem.size();
+#endif
 
   size_t total_committed = 0;
 

@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #pragma once
+#include <cstddef>
 // ZGC z_globals.hpp: keep defaults in one flag table.
 #define Z_FLAGS(product) \
     product(double, ZAllocationSpikeTolerance, 2.0) \
@@ -10,6 +11,9 @@
     product(bool, ZProactive, true) \
     product(bool, ZCollectionIntervalOnly, false)
 namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+extern size_t ZFailLargerCommits; // ZGC z_globals.hpp:122 develop flag, bytes.
+#endif
 extern bool UseDynamicNumberOfGCThreads;
 // ZGC z_globals.hpp:62-66: independent minor/major timer flags, disabled by default.
 extern double ZCollectionIntervalMinor;

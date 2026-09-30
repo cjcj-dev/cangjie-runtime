@@ -69,7 +69,7 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, boo
     MAddress starts[2];
     MAddress objects[2];
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(pageSize, medium ? ZPageType::medium : ZPageType::small, false, age, flags);
+        pages[i] = Heap::alloc_page(pageSize, medium ? ZPageType::medium : ZPageType::small, age, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         starts[i] = pages[i]->GetRegionStart();
         objects[i] = pages[i]->alloc_object(objectSize);
@@ -104,8 +104,8 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, boo
         int32_t counts[2]{};
         MAddress published[2]{};
         do {
-            counts[0] = owners[0]->ref_count().load(std::memory_order_acquire);
-            counts[1] = owners[1]->ref_count().load(std::memory_order_acquire);
+            counts[0] = owners[0]->_ref_count.load(std::memory_order_acquire);
+            counts[1] = owners[1]->_ref_count.load(std::memory_order_acquire);
             published[0] = owners[0]->find(objects[0]);
             published[1] = owners[1]->find(objects[1]);
             claimedBeforeCopy = (counts[0] < 0 || counts[1] < 0) && published[0] == 0 && published[1] == 0;
@@ -218,7 +218,7 @@ static void CheckInPlaceRemset()
     MAddress starts[2];
     MAddress objects[2];
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(pageSize, medium ? ZPageType::medium : ZPageType::small, false, age, flags);
+        pages[i] = Heap::alloc_page(pageSize, medium ? ZPageType::medium : ZPageType::small, age, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         starts[i] = pages[i]->GetRegionStart();
         objects[i] = pages[i]->alloc_object(objectSize);
@@ -290,7 +290,7 @@ static void CheckMutatorRelocation(bool stopped)
     ZPage* pages[2];
     BaseObject* objects[2][2];
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags);
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         for (size_t j = 0; j < 2; ++j) {
             objects[i][j] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
@@ -316,13 +316,13 @@ static void CheckMutatorRelocation(bool stopped)
         std::fprintf(stderr, "MUTATOR_RELOCATE_RESULT stopped=%d world_stopped=%d source=%p result=%p "
             "in_place=%d other=%zx done=%d refs=%d\n", stopped, mutators.WorldStopped(),
             objects[0][0], result, owner->in_place(), other, owner->is_done(),
-            owner->ref_count().load(std::memory_order_acquire));
+            owner->_ref_count.load(std::memory_order_acquire));
         GC_EXPECT_FALSE(owner->in_place());
         GC_EXPECT_TRUE(result != nullptr && result != objects[0][0]);
         GC_EXPECT_EQ(owner->find(reinterpret_cast<MAddress>(objects[0][0])), reinterpret_cast<MAddress>(result));
         GC_EXPECT_EQ(other, 0u);
         GC_EXPECT_FALSE(owner->is_done());
-        GC_EXPECT_EQ(owner->ref_count().load(std::memory_order_acquire), 1);
+        GC_EXPECT_EQ(owner->_ref_count.load(std::memory_order_acquire), 1);
         GC_EXPECT_EQ(*reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(result) + 8), 0x909u);
     };
     if (stopped) {
@@ -452,7 +452,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     ZPage* pages[2];
     BaseObject* objects[2][2];
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags);
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         if (inplaceSret) {
             reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24))->SetClassInfo(type);
@@ -906,7 +906,7 @@ static void CheckGrowCopiesHealedFrameRoot()
     ZPage* pages[2];
     BaseObject* objects[2][2];
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags);
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         for (size_t j = 0; j < 2; ++j) {
             objects[i][j] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
@@ -1024,7 +1024,7 @@ void RunRelocateLiveness(bool worker, bool marked)
     BaseObject* dead[2];
     ZRelocationSetSelector selector(0.0);
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags);
+        pages[i] = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         dead[i] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
         live[i] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(24));
@@ -1131,8 +1131,8 @@ static void CheckRelocationRemsetOwnership(bool worker)
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     ZAllocationFlags flags;
     flags.set_non_blocking();
-    ZPage* source = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::survivor1, flags);
-    ZPage* childPage = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::eden, flags);
+    ZPage* source = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
+    ZPage* childPage = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::eden, flags);
     GC_EXPECT_TRUE(source != nullptr && childPage != nullptr);
     auto* object = reinterpret_cast<BaseObject*>(source->alloc_object(16));
     auto* child = reinterpret_cast<BaseObject*>(childPage->alloc_object(16));
@@ -1145,7 +1145,7 @@ static void CheckRelocationRemsetOwnership(bool worker)
     ZRelocationSetSelector selector(0.0);
     selector.register_live_page(source);
     // The selector needs two sparse pages to reclaim a whole page.
-    ZPage* peer = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::survivor1, flags);
+    ZPage* peer = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
     GC_EXPECT_TRUE(peer != nullptr);
     auto* peerObject = reinterpret_cast<BaseObject*>(peer->alloc_object(16));
     peerObject->SetClassInfo(type);
@@ -1164,7 +1164,10 @@ static void CheckRelocationRemsetOwnership(bool worker)
     young.set_phase(ZGenerationPhase::Relocate);
     BaseObject* result;
     if (worker) {
+        young.Workers()->set_active();
+        ZRelocate::StartRelocationTasks(young.id());
         young.relocate().relocate(&young.relocation_set());
+        young.Workers()->set_inactive();
         result = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(object)));
     } else {
         result = to_object(ZBarrier::load_barrier_on_oop_field(&root));
@@ -1219,7 +1222,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     ZPage* pages[2];
     ZRelocationSetSelector selector(0.0);
     for (size_t i = 0; i < 2; ++i) {
-        pages[i] = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, false, PageAge::old, flags);
+        pages[i] = Heap::alloc_page(ZPageSizeMediumMax, ZPageType::medium, PageAge::old, flags);
         GC_EXPECT_TRUE(pages[i] != nullptr);
         objects[i] = reinterpret_cast<BaseObject*>(pages[i]->alloc_object(size));
         objects[i]->SetClassInfo(type);
@@ -1248,9 +1251,11 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
         result = to_object(ZBarrier::load_barrier_on_oop_field(&root));
     });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (owner->ref_count().load(std::memory_order_acquire) != 2 &&
+    while (owner->_ref_count.load(std::memory_order_acquire) != 2 &&
            std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
-    const bool retained = owner->ref_count().load(std::memory_order_acquire) == 2;
+    const bool retained = owner->_ref_count.load(std::memory_order_acquire) == 2;
+    generation.Workers()->set_active();
+    ZRelocate::StartRelocationTasks(generation.id());
     std::thread worker([&] { generation.relocate().relocate(&generation.relocation_set()); });
     const MAddress from = reinterpret_cast<MAddress>(objects[0]);
     const auto publishDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -1260,6 +1265,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     lock.unlock();
     mutator.join();
     worker.join();
+    generation.Workers()->set_inactive();
     ZPage* unused = *allocator->shared_medium_page_addr();
     const size_t allocated = unused == nullptr ? size : unused->GetRegionAllocatedSize();
     const bool published = winner != 0 && reinterpret_cast<MAddress>(result) == winner;

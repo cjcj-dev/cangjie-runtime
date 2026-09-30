@@ -23,6 +23,7 @@ set(GC_UNIT_SOURCES
     test_align.cpp
     test_used_generation.cpp
     test_zstat.cpp
+    test_gc_totals.cpp
     test_zstat_heap.cpp
     test_zserviceability.cpp
     test_trustp1_phase1.cpp
@@ -47,6 +48,8 @@ set(GC_UNIT_SOURCES
     test_young_conc.cpp
     test_alloc_buffer_handoff.cpp
     test_allocation_stall_queue.cpp
+    test_allocation_transaction.cpp
+    test_worker_origins.cpp
     test_export_root_release.cpp
     test_tlab_usage.cpp
     test_raw_null_allocation.cpp

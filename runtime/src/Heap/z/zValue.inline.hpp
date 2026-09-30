@@ -23,7 +23,6 @@ namespace MapleRuntime {
 
 template <typename T> uintptr_t ZValueStorage<T>::_end = 0;
 template <typename T> uintptr_t ZValueStorage<T>::_top = 0;
-template <typename T> uint32_t ZValueStorage<T>::_block_count = 0;
 
 template <typename S>
 uintptr_t ZValueStorage<S>::alloc(size_t size)
@@ -31,19 +30,17 @@ uintptr_t ZValueStorage<S>::alloc(size_t size)
     assert(size <= Offset && "Allocation too large");
 
     // Allocate entry in existing memory block
-    const uint32_t n = S::count() == 0 ? uint32_t{1} : S::count();
     const uintptr_t addr = (_top + S::alignment() - 1) & ~(S::alignment() - 1);
     _top = addr + size;
 
-    if (_top < _end && n == _block_count) {
+    if (_top < _end) {
         return addr;
     }
 
     const size_t block_alignment = Offset;
-    const size_t block_size = Offset * n;
+    const size_t block_size = Offset * S::count();
     _top = ZUtils::alloc_aligned_unfreeable(block_alignment, block_size);
     _end = _top + Offset;
-    _block_count = n;
 
     return alloc(size);
 }
@@ -123,7 +120,7 @@ inline uintptr_t ZValue<S, T>::value_addr(uint32_t value_id) const
 
 template <typename S, typename T>
 inline ZValue<S, T>::ZValue()
-    : _addr(S::alloc(sizeof(T))), _count(S::count())
+    : _addr(S::alloc(sizeof(T)))
 {
     ZValueIterator<S, T> iter(this);
     for (T* addr; iter.next(&addr);) {
@@ -133,7 +130,7 @@ inline ZValue<S, T>::ZValue()
 
 template <typename S, typename T>
 inline ZValue<S, T>::ZValue(const T& value)
-    : _addr(S::alloc(sizeof(T))), _count(S::count())
+    : _addr(S::alloc(sizeof(T)))
 {
     // Initialize all instances
     ZValueIterator<S, T> iter(this);
@@ -145,7 +142,7 @@ inline ZValue<S, T>::ZValue(const T& value)
 template <typename S, typename T>
 template <typename... Args>
 inline ZValue<S, T>::ZValue(ZValueIdTagType, Args&&... args)
-    : _addr(S::alloc(sizeof(T))), _count(S::count())
+    : _addr(S::alloc(sizeof(T)))
 {
     uint32_t value_id;
     ZValueIterator<S, T> iter(this);
@@ -196,7 +193,7 @@ inline void ZValue<S, T>::set_all(const T& value)
 template <typename S, typename T>
 uint32_t ZValue<S, T>::count() const
 {
-    return _count;
+    return S::count();
 }
 
 //
@@ -211,7 +208,7 @@ inline ZValueIterator<S, T>::ZValueIterator(ZValue<S, T>* value)
 template <typename S, typename T>
 inline bool ZValueIterator<S, T>::next(T** value)
 {
-    if (_value_id < _value->count()) {
+    if (_value_id < S::count()) {
         *value = _value->addr(_value_id++);
         return true;
     }
@@ -221,7 +218,7 @@ inline bool ZValueIterator<S, T>::next(T** value)
 template <typename S, typename T>
 inline bool ZValueIterator<S, T>::next(T** value, uint32_t* value_id)
 {
-    if (_value_id < _value->count()) {
+    if (_value_id < S::count()) {
         *value_id = _value_id;
         *value = _value->addr(_value_id++);
         return true;
@@ -242,7 +239,7 @@ inline ZValueConstIterator<S, T>::ZValueConstIterator(const ZValueIterator<S, T>
 template <typename S, typename T>
 inline bool ZValueConstIterator<S, T>::next(const T** value)
 {
-    if (_value_id < _value->count()) {
+    if (_value_id < S::count()) {
         *value = _value->addr(_value_id++);
         return true;
     }
