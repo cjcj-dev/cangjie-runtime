@@ -76,7 +76,7 @@ public:
     void Apply(const NativeSlotVisitor& visitor);
     void report_num_dead();
 private:
-    std::array<OopStorage::ParState<true>, 2> states;
+    std::array<OopStorage::ParState<true>, 3> states;
     ZGenerationIdOptional generation;
 };
 class StaticRootsAdapterIterator {
