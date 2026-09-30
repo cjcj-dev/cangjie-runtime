@@ -133,7 +133,6 @@ uintptr_t ZCollectedHeap::allocate_new_tlab(size_t minSize, size_t requestedSize
 
 void ZCollectedHeap::collect(GCReason reason)
 {
-    if (!_heap.IsGCEnabled()) return;
     // ZGC zCollectedHeap.cpp:174-205: external causes select the generation
     // budgets here; only the driver decides how to enqueue the request.
     switch (reason) {

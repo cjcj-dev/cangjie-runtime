@@ -90,7 +90,8 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), fx.obj1));
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, {region, fx.region1()}));
         ForwardingEntries* entries = (*ZGeneration::generation(static_cast<ZGenerationId>(region->GetOwnerGeneration()))).forwarding_table().get(region->GetRegionStart());
-    if (entries == nullptr || entries->insert(from, to) != to) {
+    ForwardingCursor cursor;
+    if (entries == nullptr || entries->find(from, &cursor) != 0 || entries->insert(from, to, &cursor) != to) {
         return false;
     }
     // Only the source is pending in this claimant fixture. The second sparse
@@ -98,7 +99,8 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     // exercising a worker with an externally claimed source.
     auto* companion = ZGeneration::generation((fx.region1())->generation_id())->forwarding((fx.region1())->GetRegionStart());
     GC_EXPECT_TRUE(companion != nullptr && companion->claim());
-    GC_EXPECT_EQ(companion->insert(to, to), to);
+    GC_EXPECT_EQ(companion->find(to, &cursor), MAddress(0));
+    GC_EXPECT_EQ(companion->insert(to, to, &cursor), to);
     companion->release_page();
     companion->mark_done();
     // The mapping is ready, but page completion belongs to the worker.
@@ -405,7 +407,9 @@ GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
     ZForwarding* const companion = ZGeneration::generation((fx.region1())->generation_id())->forwarding((fx.region1())->GetRegionStart());
     const MAddress companionTo = reinterpret_cast<MAddress>(fx.obj1);
     GC_EXPECT_TRUE(companion != nullptr && companion->claim());
-    GC_EXPECT_EQ(companion->insert(companionTo, companionTo), companionTo);
+    ForwardingCursor companionCursor;
+    GC_EXPECT_EQ(companion->find(companionTo, &companionCursor), MAddress(0));
+    GC_EXPECT_EQ(companion->insert(companionTo, companionTo, &companionCursor), companionTo);
     companion->release_page();
     companion->mark_done();
     auto& old = Heap::GetHeap().old();
