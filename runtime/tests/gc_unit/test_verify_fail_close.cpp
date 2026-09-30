@@ -777,9 +777,9 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     param.coParam.processorNum = 1;
     param.heapParam.heapSize = 32 * 1024;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    extern struct CJThread* CJThreadBuild(ScheduleHandle, const CJThreadAttr*, CJThreadFunc,
-                                         const void*, unsigned int, CJThreadCreateSource, uintptr_t);
-    extern void CJ_CJThreadFree(struct CJThread*, bool);
+    extern "C" struct CJThread* CJThreadBuild(ScheduleHandle, const CJThreadAttr*, CJThreadFunc,
+                                             const void*, unsigned int, CJThreadCreateSource, uintptr_t);
+    extern "C" void CJ_CJThreadFree(struct CJThread*, bool);
     LWTData initialData{};
     auto* thread = CJThreadBuild(
         reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
