@@ -382,7 +382,7 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, boo
         // At PC 16 the saved R13 belongs to the preceding frame, so consuming
         // the caller register map instead of its incoming snapshot is visible.
 #if defined(__aarch64__)
-        var(0); var(0); var(1); var(2);
+        var(0); var(0); var(1); var(3);
 #else
         var(0); var(0); var(4); var(3);
 #endif
