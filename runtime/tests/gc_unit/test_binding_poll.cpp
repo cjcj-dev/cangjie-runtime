@@ -4,7 +4,7 @@
 
 #include "Cangjie.h"
 #include "gc_unittest.hpp"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
