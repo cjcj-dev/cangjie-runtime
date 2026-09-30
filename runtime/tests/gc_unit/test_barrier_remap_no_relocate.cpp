@@ -108,6 +108,7 @@ GC_TEST(BarrierRemap1327, MissingEntryStopsAtForwardContract)
 {
 #if defined(__linux__) && defined(MRT_DEBUG) && MRT_DEBUG == 1 && !defined(NDEBUG)
     GcHeapFixture heap;
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(heap.region0(), heap.obj0));
     heap.InstallPageOwner(heap.region0());
     ZGeneration* generation = heap.region0()->generation();
     ZForwarding* forwarding = generation->forwarding(heap.region0()->GetRegionStart());
@@ -115,10 +116,36 @@ GC_TEST(BarrierRemap1327, MissingEntryStopsAtForwardContract)
     GC_EXPECT_EQ(forwarding->find(reinterpret_cast<MAddress>(heap.obj0)), 0U);
     const zpointer input = RemapInput(heap.obj0, generation);
     GC_EXPECT_TRUE(ZBarrier::remap_generation(input) == generation);
-    ExpectContractAssertion([&] { (void)ZBarrier::make_load_good_no_relocate(input); }, "Check failed: to != 0");
+    ExpectContractAssertion([&] {
+        generation->set_phase(ZGenerationPhase::Relocate);
+        (void)ZBarrier::make_load_good_no_relocate(input);
+    }, "Check failed: to != 0");
 #else
     std::fprintf(stderr, "REMAP_MISSING_ENTRY_NOT_RUN reason=product_assertions_disabled_or_non_linux\n");
 #endif
+}
+
+GC_TEST(BarrierRemap1327, RelocatePathPublishesNewEntry)
+{
+    GcHeapFixture heap;
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(heap.region0(), heap.obj0));
+    heap.InstallPageOwner(heap.region0());
+    ZGeneration* generation = heap.region0()->generation();
+    ZForwarding* forwarding = generation->forwarding(heap.region0()->GetRegionStart());
+    GC_EXPECT_TRUE(forwarding != nullptr);
+    GC_EXPECT_EQ(forwarding->find(reinterpret_cast<MAddress>(heap.obj0)), 0U);
+    const zpointer input = RemapInput(heap.obj0, generation);
+    GC_EXPECT_TRUE(ZBarrier::remap_generation(input) == generation);
+    const size_t before = EntryCount(forwarding);
+    const ZGenerationPhase previous = generation->phase();
+    generation->set_phase(ZGenerationPhase::Relocate);
+    const zaddress result = ZBarrier::make_load_good(input);
+    generation->set_phase(previous);
+    const size_t after = EntryCount(forwarding);
+    std::fprintf(stderr, "REMAP_RELOCATE_POSITIVE_ASSERT_EXECUTED result=%#zx source=%#zx entries=%zu/%zu\n",
+                 raw(result), reinterpret_cast<MAddress>(heap.obj0), before, after);
+    GC_EXPECT_TRUE(to_object(result) != heap.obj0 && after == before + 1);
+    GC_EXPECT_EQ(forwarding->find(reinterpret_cast<MAddress>(heap.obj0)), raw(result));
 }
 
 GC_TEST(BarrierRemap1327, PromotedFieldRequiresOldLoadGood)
