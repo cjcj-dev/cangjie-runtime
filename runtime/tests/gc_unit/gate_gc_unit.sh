@@ -19,8 +19,34 @@ elif [[ -z "$STATUS_FILE" && -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
 fi
 STATUS_FILE="${STATUS_FILE:-$ROOT/runtime/output/gc_unit_gate.status}"
 LANGUAGE_TEST_MODE="${GC_UNIT_GATE_LANGUAGE_TESTS:-all}"
+EVIDENCE_ROOT="${GC_UNIT_OUT:-$SRC/build_standalone}"
+mkdir -p "$EVIDENCE_ROOT/gate-runs"
+EVIDENCE_ROOT="$(cd "$EVIDENCE_ROOT" && pwd)"
+export GC_UNIT_OUT
+GC_UNIT_OUT="$(mktemp -d "$EVIDENCE_ROOT/gate-runs/run.XXXXXXXXXX")"
+LATEST_STATUS_FILE="$STATUS_FILE"
+STATUS_FILE="$GC_UNIT_OUT/gate.status"
+export GC_UNIT_EVIDENCE_TALLY_MIRROR="${GC_UNIT_TALLY_FILE:-}"
+export GC_UNIT_EVIDENCE_OHOS_MIRROR="${GC_UNIT_OHOS_HOST_RECEIPT:-}"
+export GC_UNIT_TALLY_FILE="$GC_UNIT_OUT/gate_tally.txt"
+export GC_UNIT_OHOS_HOST_RECEIPT="$GC_UNIT_OUT/ohos_host.receipt"
+python3 "$SRC/gate_evidence.py" begin "$EVIDENCE_ROOT" "$GC_UNIT_OUT"
+exec 3>&1 4>&2
+mkfifo "$GC_UNIT_OUT/stdout.pipe" "$GC_UNIT_OUT/stderr.pipe"
+tee "$GC_UNIT_OUT/gate.stdout.log" <"$GC_UNIT_OUT/stdout.pipe" >&3 &
+STDOUT_TEE_PID=$!
+tee "$GC_UNIT_OUT/gate.stderr.log" <"$GC_UNIT_OUT/stderr.pipe" >&4 &
+STDERR_TEE_PID=$!
+exec >"$GC_UNIT_OUT/stdout.pipe" 2>"$GC_UNIT_OUT/stderr.pipe"
 
 GATE_STATE=FAIL
+GATE_PHASE=entry
+CPP_RUNNER_RC=NOT_RUN
+OHOS_RUNNER_RC=NOT_RUN
+FINALIZER_RUNNER_RC=NOT_RUN
+PHASE_ENTRY_RUNNER_RC=NOT_RUN
+SO_REENTRY_RUNNER_RC=NOT_RUN
+SEGMENTED_RUNNER_RC=NOT_RUN
 CPP_SUITE_STATE=NOT_RUN
 CPP_SUITE_SOURCE=NOT_RUN
 LANGUAGE_TESTS_STATE=NOT_RUN
@@ -59,6 +85,15 @@ write_status() {
   tmp="$STATUS_FILE.tmp.$$"
   {
     echo "SCHEMA_VERSION=1"
+    echo "PHASE=$GATE_PHASE"
+    echo "CPP_RUNNER_RC=$CPP_RUNNER_RC"
+    echo "OHOS_RUNNER_RC=$OHOS_RUNNER_RC"
+    echo "FINALIZER_RUNNER_RC=$FINALIZER_RUNNER_RC"
+    echo "PHASE_ENTRY_RUNNER_RC=$PHASE_ENTRY_RUNNER_RC"
+    echo "SO_REENTRY_RUNNER_RC=$SO_REENTRY_RUNNER_RC"
+    echo "SEGMENTED_RUNNER_RC=$SEGMENTED_RUNNER_RC"
+    echo "RUN_ID=$(basename "$GC_UNIT_OUT")"
+    echo "EVIDENCE_DIR=$GC_UNIT_OUT"
     echo "GATE=$GATE_STATE"
     echo "LANGUAGE_TEST_MODE=$LANGUAGE_TEST_MODE"
     echo "LANGUAGE_TESTS=$LANGUAGE_TESTS_STATE"
@@ -92,15 +127,40 @@ write_status() {
     echo "REASON=$STATUS_REASON"
   } >"$tmp"
   mv -f "$tmp" "$STATUS_FILE"
+  mkdir -p "$(dirname "$LATEST_STATUS_FILE")"
+  tmp="$(mktemp "$LATEST_STATUS_FILE.tmp.XXXXXXXXXX")"
+  cp "$STATUS_FILE" "$tmp"
+  mv -f "$tmp" "$LATEST_STATUS_FILE"
 }
 
 on_exit() {
   local rc=$?
   trap - EXIT
+  set +e
   write_status
+  local evidence_rc=$?
+  exec 1>&3 2>&4
+  wait "$STDOUT_TEE_PID" || evidence_rc=1
+  wait "$STDERR_TEE_PID" || evidence_rc=1
+  rm -f "$GC_UNIT_OUT/stdout.pipe" "$GC_UNIT_OUT/stderr.pipe"
+  python3 "$SRC/gate_evidence.py" finish "$EVIDENCE_ROOT" "$GC_UNIT_OUT" "$rc" || evidence_rc=1
+  if [[ $evidence_rc -ne 0 && $rc -eq 0 ]]; then
+    rc=7
+    GATE_STATE=FAIL
+    STATUS_REASON=EVIDENCE_FAILURE
+    write_status
+    python3 "$SRC/gate_evidence.py" finish "$EVIDENCE_ROOT" "$GC_UNIT_OUT" "$rc" || true
+    echo "GC_UNIT_GATE_FAIL: evidence finalization failed" >&2
+  fi
   exit "$rc"
 }
 trap on_exit EXIT
+trap 'STATUS_REASON=SIGNAL_TERM; exit 143' TERM
+trap 'STATUS_REASON=SIGNAL_INT; exit 130' INT
+STATUS_REASON=STARTED
+GATE_STATE=STARTED
+write_status
+GATE_STATE=FAIL
 
 case "$LANGUAGE_TEST_MODE" in
   all|defer|only) ;;
@@ -117,6 +177,7 @@ esac
 # this gate; its recursion guard is intentionally scoped to that synthetic child
 # only.
 if [[ "${GC_UNIT_GATE_CONTRACT_SELFTEST:-0}" != "1" ]]; then
+  GATE_PHASE=contract
   # The fixture owns both product-shape inputs. The real post-build command
   # exports them, so merely assigning OHOS_HOST=0 still leaked TESTABLE=1 into
   # the fixture's first standalone pair and made that control arm fail early.
@@ -239,7 +300,6 @@ echo "GC_UNIT_RUNTIME_IDENTITY config=$RUNTIME_CONFIG_ID signature=$RUNTIME_CONF
 # SDK. run_standalone verifies the product receipt, product/test symbol
 # ownership, dispatch disassembly, and one exact completion token per filter.
 if [[ "$OHOS_HOST" == "1" ]]; then
-  export GC_UNIT_OUT="${GC_UNIT_OUT:-$SRC/build_ohos_host}"
   mkdir -p "$GC_UNIT_OUT"
   OHOS_RECEIPT="${GC_UNIT_OHOS_HOST_RECEIPT:-$GC_UNIT_OUT/ohos_host.receipt}"
   rm -f "$OHOS_RECEIPT"
@@ -258,9 +318,11 @@ if [[ "$OHOS_HOST" == "1" ]]; then
   OHOS_HOST_SOURCE=FRESH
   STATUS_REASON=OHOS_HOST_FAILURE
   GC_UNIT_TIMEOUT="${GC_UNIT_TIMEOUT:-600}"
+  GATE_PHASE=ohos
   set +e
   timeout "$GC_UNIT_TIMEOUT" bash "$SCRIPT" >"$GC_UNIT_OUT/ohos_host_gate.log" 2>&1
   ohos_rc=$?
+  OHOS_RUNNER_RC=$ohos_rc
   set -e
   if [[ $ohos_rc -eq 124 ]]; then
     STATUS_REASON=OHOS_HOST_TIMEOUT
@@ -322,7 +384,6 @@ elif [[ -f "$CJC_BIN" && -x "$CJC_BIN" ]]; then
   export CJC="$CJC_BIN"
 fi
 
-export GC_UNIT_OUT="${GC_UNIT_OUT:-$SRC/build_standalone}"
 
 STAMP="$GC_UNIT_OUT/.gate_stamp"
 SO="$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so"
@@ -400,6 +461,7 @@ language_identity() {
 }
 
 run_language_tests() {
+  GATE_PHASE=language
   LANGUAGE_TESTS_STATE=LANGUAGE_RUNNING
 
   # Root classification has a language-visible consequence that a C++ fixture
@@ -407,7 +469,10 @@ run_language_tests() {
   FINALIZER_STATE=FAIL
   FINALIZER_SOURCE=FRESH
   STATUS_REASON=FINALIZER_TRIGGER_FAILURE
-  if ! bash "$FINALIZER_SCRIPT"; then
+  if bash "$FINALIZER_SCRIPT"; then
+    FINALIZER_RUNNER_RC=0
+  else
+    FINALIZER_RUNNER_RC=$?
     echo "GC_UNIT_GATE_FAIL: end-to-end finalizer trigger test failed" >&2
     return 1
   fi
@@ -416,7 +481,10 @@ run_language_tests() {
   PHASE_ENTRY_STATE=FAIL
   PHASE_ENTRY_SOURCE=FRESH
   STATUS_REASON=PHASE_ENTRY_TRIGGER_FAILURE
-  if ! bash "$PHASE_ENTRY_SCRIPT"; then
+  if bash "$PHASE_ENTRY_SCRIPT"; then
+    PHASE_ENTRY_RUNNER_RC=0
+  else
+    PHASE_ENTRY_RUNNER_RC=$?
     echo "GC_UNIT_GATE_FAIL: forwarding-carrier phase entry test failed" >&2
     return 1
   fi
@@ -426,7 +494,10 @@ run_language_tests() {
     SO_REENTRY_STATE=FAIL
     SO_REENTRY_SOURCE=FRESH
     STATUS_REASON=SO_REENTRY_BOUNDED_FAILURE
-    if ! bash "$SO_REENTRY_SCRIPT"; then
+    if bash "$SO_REENTRY_SCRIPT"; then
+      SO_REENTRY_RUNNER_RC=0
+    else
+      SO_REENTRY_RUNNER_RC=$?
       echo "GC_UNIT_GATE_FAIL: bounded stack-overflow recovery test failed" >&2
       return 1
     fi
@@ -437,7 +508,10 @@ run_language_tests() {
     SEGMENTED_MANAGED_STATE=FAIL
     SEGMENTED_MANAGED_SOURCE=FRESH
     STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
-    if ! bash "$SEGMENTED_MANAGED_SCRIPT" both; then
+    if bash "$SEGMENTED_MANAGED_SCRIPT" both; then
+      SEGMENTED_RUNNER_RC=0
+    else
+      SEGMENTED_RUNNER_RC=$?
       echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
       return 1
     fi
@@ -492,7 +566,7 @@ if [[ -f "$STAMP" && "$STAMP" -nt "$SO" ]]; then
   # Every file in the suite directory, not just sources: known_failures.txt, this script and the two
   # test lists all change the verdict.  Keying the cache on *.cpp/*.h alone meant editing a waiver
   # was never re-checked -- caught by firing that arm on purpose and watching it read green.
-  newer=$(find "$SRC" -path "$GC_UNIT_OUT" -prune -o -type f -newer "$STAMP" -print -quit 2>/dev/null)
+  newer=$(find "$SRC" -path "$EVIDENCE_ROOT" -prune -o -type f -newer "$STAMP" -print -quit 2>/dev/null)
   if [[ -z "$newer" ]]; then
     CPP_SUITE_STATE=PASS
     CPP_SUITE_SOURCE=CACHE
@@ -552,9 +626,11 @@ export GC_UNIT_TALLY_FILE="$TALLY"
 # returned and the only signal was a 600s wall. 600s is far above the observed wall, so it cannot
 # fire on a slow machine.
 GC_UNIT_TIMEOUT="${GC_UNIT_TIMEOUT:-600}"
+GATE_PHASE=cpp
 set +e
 timeout "$GC_UNIT_TIMEOUT" bash "$SCRIPT" >"$OUT" 2>&1
 suite_rc=$?
+CPP_RUNNER_RC=$suite_rc
 set -e
 if [[ $suite_rc -eq 124 ]]; then
   CPP_SUITE_STATE=FAIL
