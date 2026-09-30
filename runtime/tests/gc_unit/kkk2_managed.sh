@@ -3,6 +3,9 @@
 # Target arm: stained; cjc compiler host: official/H48 runtime.
 # cjc itself always uses H48 host (0904); CANGJIE_HOME is sdkdepot colored SDK.
 # Usage: kkk2_managed.sh <runtime-sha>
+# HARNESS-FILES: runtime/tests/gc_unit/language_toolchain.py runtime/tests/gc_unit/language_toolchain.sh runtime/tests/gc_unit/language_toolchain_qualification.json runtime/tests/gc_unit/std_runtime_colour.py
+# HARNESS-FILES: runtime/tests/gc_unit/run_finalizer_trigger.sh runtime/tests/gc_unit/run_phase_entry_trigger.sh runtime/tests/gc_unit/run_segmented_array_managed.sh
+# HARNESS-FILES: runtime/tests/gc_unit/finalizer_trigger.cj runtime/tests/gc_unit/phase_entry_trigger.cj runtime/tests/gc_unit/phase_entry_major.cj runtime/tests/gc_unit/segmented_array_managed.cj runtime/tests/gc_unit/phase_entry_request.cpp runtime/tests/gc_unit/wait_phase_entry_cycle.py
 set -euo pipefail
 ulimit -c 0
 
@@ -13,15 +16,27 @@ N=${N:-3}
 SRCROOT=${SRCROOT:-$LANE/default}
 OUT=${OUT:-$LANE/managed-runs}
 # Compiler/stdlib SDK for the inline TLAB ABI (top@0/end@8).
-COLORED_SDK=${COLORED_SDK:-/root/sdkdepot/b99430a618af-1ecb811801ca}
-H48_RT=${H48_RT:-/root/sharedbuild/h48-host-runtime/35da7be2434ad72348ed27e8a0bf599ec4e91524/linux_x86_64_cjnative}
+COLORED_SDK=${COLORED_SDK:-}
+H48_RT=${H48_RT:-}
+BUILD_SDK_DEFAULT=/root/.cjv/toolchains/nightly-1.3.0-alpha.20260904010027
+export GC_UNIT_BUILD_SDK=${GC_UNIT_BUILD_SDK-$BUILD_SDK_DEFAULT}
+export GC_UNIT_LANGUAGE_SDK=${GC_UNIT_LANGUAGE_SDK-$COLORED_SDK}
 STAINED_RT=${STAINED_RT:-$SRCROOT/build/runtime-staging/lib/x86_64_Release}
-export CANGJIE_HOME=${CANGJIE_HOME:-$COLORED_SDK}
-export GC_UNIT_CJC_RUNTIME_LIB_DIR="$H48_RT"
+export CANGJIE_HOME="$GC_UNIT_LANGUAGE_SDK"
+export GC_UNIT_CJC_RUNTIME_LIB_DIR=${GC_UNIT_CJC_RUNTIME_LIB_DIR-$H48_RT}
 export HOST_RT="$H48_RT"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
+ADMISSION_UNIT="$HERE"
+export GC_UNIT_SOURCE_ROOT="$SRCROOT"
+export GC_UNIT_LANGUAGE_QUALIFICATION=${GC_UNIT_LANGUAGE_QUALIFICATION-$ADMISSION_UNIT/language_toolchain_qualification.json}
+export GC_UNIT_COLOUR_HOST_RUNTIME=${GC_UNIT_COLOUR_HOST_RUNTIME-$GC_UNIT_BUILD_SDK/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so}
+mkdir -p "$LANE/qualification"
+if [[ ! ${GC_UNIT_COLOUR_CHECKER+x} ]]; then
+  cp "$ADMISSION_UNIT/std_runtime_colour.py" "$LANE/qualification/std_runtime_colour.py"
+  export GC_UNIT_COLOUR_CHECKER="$LANE/qualification/std_runtime_colour.py"
+fi
 
 ANALYZER_TOOLS=(zstat_pillars.py)
 
@@ -52,28 +67,18 @@ sync_analyzer_tools() {
 
 sync_analyzer_tools
 
-if [[ ! -x "$CANGJIE_HOME/bin/cjc" ]]; then
-  echo "kkk2_managed FAIL: CANGJIE_HOME=$CANGJIE_HOME missing bin/cjc (pin sdkdepot first)" >&2
-  exit 2
-fi
-
 mkdir -p "$OUT"
 JSON="$OUT/kkk2_managed.json"
 echo "kkk2_managed sha=$SHA n=$N srcroot=$SRCROOT out=$OUT home=$CANGJIE_HOME"
 
-# Keep compiler status separate from the wrapper's runtime/assertion status.
-# The proxy is inherited by all three existing wrappers through their CJC input.
-export MANAGED_REAL_CJC=${CJC:-$CANGJIE_HOME/bin/cjc}
-export CJC="$OUT/cjc-record-status"
-cat > "$CJC" <<'COMPILER'
-#!/usr/bin/env bash
-set +e
-"$MANAGED_REAL_CJC" "$@"
-rc=$?
-printf '%s\n' "$rc" >> "$GC_UNIT_OUT/compile.rc"
-exit "$rc"
-COMPILER
-chmod +x "$CJC"
+export GCV2_RUNTIME_LIB_DIR="$STAINED_RT"
+source "$ADMISSION_UNIT/language_toolchain.sh"
+if ! gc_unit_language_admit >"$OUT/admission.stdout" 2>"$OUT/admission.stderr"; then
+  echo "MANAGED_NOT_RUN reason=$(cat "$OUT/admission.stderr")" >&2
+  exit 2
+fi
+printf '%s\n' "$GC_UNIT_LANGUAGE_IDENTITY" >"$OUT/toolchain.identity.json"
+echo "MANAGED_TOOLCHAIN_IDENTITY $GC_UNIT_LANGUAGE_IDENTITY"
 
 run_one() {
   local arm="$1"
@@ -104,10 +109,7 @@ run_arm() {
   local target_rt="$2"
   export GCV2_RUNTIME_LIB_DIR="$target_rt"
   echo "kkk2_managed arm=$arm compile_HOST_RT=$H48_RT target=$target_rt CANGJIE_HOME=$CANGJIE_HOME"
-  local GC_UNIT="$SRCROOT/runtime/tests/gc_unit"
-  if [[ ! -d "$GC_UNIT" ]]; then
-    GC_UNIT="$HERE"
-  fi
+  local GC_UNIT="$HERE"
   run_one "$arm" finalizer "$GC_UNIT/run_finalizer_trigger.sh" &
   local finalizer_pid=$!
   run_one "$arm" segmented "$GC_UNIT/run_segmented_array_managed.sh" &
