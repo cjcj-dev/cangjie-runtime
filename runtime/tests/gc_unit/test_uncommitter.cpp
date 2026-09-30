@@ -491,7 +491,7 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, CancelStartsNewCacheWatermarkHistory)
     const size_t target = 64 * MB;
     GC_EXPECT_TRUE(partition.capacity < partition.currentMaxCapacity);
     if (partition.capacity < target) {
-        GC_EXPECT_TRUE(partition.prime(frm, target - partition.capacity));
+        GC_EXPECT_TRUE(partition.prime(target - partition.capacity));
     }
     UncommitterTestAccess::ResetCancel();
     partition.cache.reset_min_size_watermark();
@@ -505,7 +505,6 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, CancelStartsNewCacheWatermarkHistory)
         {
             ScopedObjectAccess participation;
             std::lock_guard<std::mutex> owner(regions.pageAllocatorMutex);
-            std::lock_guard<std::mutex> cacheOwner(frm.cacheMutex);
             if (canceledAt == 0 && worker.CycleIsActive() && !worker.CycleIsFinished()) {
                 // A cache valley followed by return must be forgotten on cancel.
                 const size_t high = partition.cache.min_size_watermark();
@@ -516,7 +515,7 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, CancelStartsNewCacheWatermarkHistory)
                 expected = AlignUp(static_cast<size_t>(double(cacheAtCancel) * 0.9), ZGranuleSize);
                 // Product prime grows capacity and cancels, then inserts memory.
                 // It cannot lower the new cache watermark after cancellation.
-                if (!partition.prime(frm, ZGranuleSize)) {
+                if (!partition.prime(ZGranuleSize)) {
                     break;
                 }
                 canceledAt = worker.cancelTime;
