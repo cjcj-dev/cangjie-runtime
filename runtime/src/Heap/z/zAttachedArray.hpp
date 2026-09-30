@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <new>
-#include <limits>
+#include "Base/Log.h"
 
 namespace MapleRuntime {
 
@@ -23,11 +23,6 @@ public:
     static size_t object_size();
 
     static size_t array_size(size_t length);
-
-    // Check before multiplication/addition, including the caller's arena budget.
-    static bool allocation_size(size_t length, size_t* size);
-
-    static void initialize(void* addr, size_t length);
 
     static void* alloc(size_t length);
 

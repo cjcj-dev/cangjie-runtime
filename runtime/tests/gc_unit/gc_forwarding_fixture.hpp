@@ -21,7 +21,7 @@ public:
         : _page(size == ZPageSizeSmall ? ZPageType::small : ZPageType::large, PageAge::old,
                 ZVirtualMemory(to_zoffset(start - ZAddressHeapBase), size)),
           _allocator(ZForwarding::AttachedArray::object_size() +
-                     ZForwarding::nentries(liveObjects) * sizeof(std::atomic<uint64_t>)),
+                     ZForwarding::nentries(liveObjects) * sizeof(ZForwardingEntry)),
           _forwarding(nullptr)
     {
         _page.inc_live(liveObjects, liveObjects * _page.object_alignment());
