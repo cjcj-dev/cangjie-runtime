@@ -302,6 +302,7 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
     }
     ScheduleSetToCurrentThread(scheduler);
     lck.unlock();
+    MapleRuntime::ThreadLocal::InitializeCleaner();
 #ifndef _WIN64
     MapleRuntime::SignalStack::StartDispatcher();
 #endif
