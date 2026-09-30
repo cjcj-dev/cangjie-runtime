@@ -101,3 +101,11 @@ Merge f29281826c: preserve main WorkerBudgetFixture{2} + ZWorkers(old, stats)
 in BoundRefProc. Other conflict hunks only changed worker construction inside
 retired native-registry tests listed above; keep their authorized retirement.
 All main marking cache/termination and FollowWork lifetime changes retained.
+
+Controller 20260930T044734Z: RunMarkAllocationCase formerly passed a
+non-finalizable reference array to OnFinalizerCreated (old lines 633-646).
+Remove that call, registration-only stripe/stack population reads, bitmap read,
+P1_NEW_REGISTRATION output and status bit 512. Allocation liveness, TLAB retire,
+RequestGC, actual completed field, next-cycle and page-age checks unchanged.
+The registration-does-not-publish invariant moves to #1394 / #754 acceptance.
+HotSpot instanceKlass.cpp:1919-1932 registers legitimate finalizable instances.

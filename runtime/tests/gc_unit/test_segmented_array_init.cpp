@@ -631,18 +631,8 @@ void* RunMarkAllocationCase(void* rawExisting)
     const bool live = productLive(page, holder);
     const bool targetLive = productLive(targetPage, target);
     const bool excluded = page->IsAllocating() && !page->IsKnownYoungEmpty();
-    auto& productCollector = static_cast<Heap&>(collector);
-    ZMark* domain = Heap::GetHeap().young().MarkPtr();
-    const size_t pendingBefore = domain->Stripes().Population() + domain->Stacks().Population();
-    holder->OnFinalizerCreated();
-    const size_t pendingAfter = domain->Stripes().Population() + domain->Stacks().Population();
-    const bool noExplicitMark = !page->is_marked();
-    const bool noPublication = pendingAfter == pendingBefore;
-    std::fprintf(stderr, "P1_NEW_REGISTRATION_ASSERT_EXECUTED birth=%llu owner=%llu no_bitmap=%d "
-                 "pending_before=%zu pending_after=%zu\n",
-                 static_cast<unsigned long long>(page->BirthSequence()),
-                 static_cast<unsigned long long>(page->generation()->seqnum()), noExplicitMark,
-                 pendingBefore, pendingAfter);
+    // Registration is tested on finalizable instances at constructor return
+    // (#1394). A reference array is not a valid Finalizer.register input.
     const auto during = Heap::GetHeap().young().seqnum();
     const auto phase = Heap::GetHeap().young().phase();
     std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
@@ -674,7 +664,7 @@ void* RunMarkAllocationCase(void* rawExisting)
                  static_cast<unsigned long long>(after), resampled);
     heap.RemoveExportObject(holderRoot);
     mutator->SetManagedContext(true);
-    const uintptr_t status = (retiredTLAB ? 0 : 1024) | ((noExplicitMark && noPublication) ? 0 : 512) | (implicit ? 0 : 1) | (live ? 0 : 2) |
+    const uintptr_t status = (retiredTLAB ? 0 : 1024) | (implicit ? 0 : 1) | (live ? 0 : 2) |
         (targetLive ? 0 : 4) | (excluded ? 0 : 8) | (nextCycle ? 0 : 16) |
         (resampled ? 0 : 32) |
         (productLive(Heap::page(reinterpret_cast<uintptr_t>(completedTarget)), completedTarget) ? 0 : 128) |
