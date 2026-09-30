@@ -93,11 +93,14 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     const bool targetLive = fx.region1()->is_object_live(from_object(fx.obj1));
     auto& processor = heap.GetFinalizerProcessor().GetReferenceProcessor();
     const size_t discovered = processor.Discovered(ReferenceType::WEAK);
-    ZResurrection::block();
-    processor.process_references();
-    processor.enqueue_references();
+    if (!young) {
+        while (!heap.old().pause_mark_end()) { heap.old().concurrent_mark_continue(); }
+        // Enter the production phase: it classifies references, rendezvous,
+        // unblocks resurrection and publishes pending work in product order.
+        // Do not assemble processor/process/enqueue calls in the test.
+        heap.old().process_non_strong_references();
+    }
     BaseObject* pending = heap.GetFinalizerProcessor().SwapPendingList(nullptr);
-    ZResurrection::unblock();
     const bool cleared = referent.GetTargetObject() == zaddress::null;
     if (handle != 0) heap.RemoveExportObject(handle);
     const bool finalCarrier = !finalizable || (pending == finalReference && MReference::next(finalReference) == finalReference);

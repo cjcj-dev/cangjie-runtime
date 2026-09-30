@@ -120,3 +120,9 @@ Remaining full-suite failures exposed two separate causes:
   healed a dead weak referent to mark-good. Route the ownership closure through
   ZIterator DO_FIELDS_EXCEPT_REFERENT (zHeapIterator.cpp:222,433). The existing
   ExportMajorRootUsesWeakDiscoveryPolicy cleared-address assertion exposed it.
+
+MarkDiscovery1036 now enters ZGenerationOld::process_non_strong_references
+after the real pause_mark_end phase. The test no longer assembles processor
+processing/enqueue calls. Both FINAL producer and next-publication cuts are
+observed through the actual product phase (the standalone ReferenceProcessor
+component cases remain component coverage only).
