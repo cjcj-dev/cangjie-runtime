@@ -1,0 +1,7 @@
+--- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
++++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+@@ -340,3 +340,3 @@ void StringDedup::Table::CleanupEnd()
+     std::lock_guard<std::mutex> guard(owner.monitor);
+-    deadState.store(DeadState::wait2, std::memory_order_relaxed);
++    deadState.store(DeadState::wait1, std::memory_order_relaxed);
+ }
