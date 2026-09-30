@@ -402,7 +402,6 @@ public:
     void PreparedToRun(ThreadLocalData* tlData)
     {
         RegisterCurrentMarkFlushThread();
-        UpdatePollValues(tlData);
         DoLeaveSaferegion();
     }
 
