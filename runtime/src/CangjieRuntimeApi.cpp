@@ -418,7 +418,9 @@ RTErrorCode FiniCJRuntime()
 #ifndef _WIN64
         MapleRuntime::SignalStack::StopDispatcher();
 #endif
-        if (ScheduleStopOutside(scheduler) != 0) {
+        const int stopResult =
+        ScheduleStopOutside(scheduler);
+        if (stopResult != 0) {
             // A native call has not returned: its termination barrier still owns
             // runtime storage (HotSpot runtime/threads.cpp:996-1000).
             return E_FAILED;
