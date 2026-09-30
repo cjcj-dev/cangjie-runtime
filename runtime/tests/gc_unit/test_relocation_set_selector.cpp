@@ -1,4 +1,5 @@
 #include "gc_allocation_flags.hpp"
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -153,7 +154,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationSetSelector, GenerationSelectsAllPartitions
         page->inc_live(1, (index << (ZPageSizeSmallShift - 11)) + 8);
     }
     if (generation.Workers() == nullptr) {
-        generation.InitializeWorkers(1);
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
         generation.Workers()->set_active_workers(1);
     }
     generation.select_relocation_set(false);
@@ -228,7 +229,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationSetSelector, GenerationMediumFilterBoundari
         page->inc_live(1, page->size() - (maximumLimit >> shift) - ((i % 2) * 8));
     }
     if (generation.Workers() == nullptr) {
-        generation.InitializeWorkers(1);
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
         generation.Workers()->set_active_workers(1);
     }
     generation.select_relocation_set(false);

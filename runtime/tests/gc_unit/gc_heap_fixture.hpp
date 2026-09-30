@@ -125,7 +125,7 @@ inline bool BeginForwardingArena(Generation generation, std::initializer_list<ZP
                                                  : static_cast<ZGeneration*>(ZGeneration::old()));
     selector.select();
     if (gen.Workers() == nullptr) {
-        gen.InitializeWorkers(4);
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(gen, 4);
         gen.Workers()->set_active_workers(1);
     }
     gen.relocation_set().install(&selector);

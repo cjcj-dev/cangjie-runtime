@@ -564,7 +564,7 @@ GC_OTHER_VM_TEST(RelocateWorkers, ParallelCursorClaimsEachIndexOnce)
         pages.push_back(page);
     }
     auto& generation = *ZGeneration::old();
-    if (generation.Workers() == nullptr) generation.InitializeWorkers(1);
+    if (generation.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
     generation.Workers()->set_active_workers(1);
     ZRelocationSetSelector selector(0.0);
     for (ZPage* page : pages) {

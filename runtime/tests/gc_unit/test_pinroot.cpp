@@ -301,7 +301,7 @@ static void CheckMutatorRelocation(bool stopped)
         ZPageTest::MakeRelocatable(*pages[i]);
         selector.register_live_page(pages[i]);
     }
-    if (generation.Workers() == nullptr) generation.InitializeWorkers(1);
+    if (generation.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
     generation.Workers()->set_active_workers(1);
     selector.select();
     generation.relocation_set().install(&selector);
