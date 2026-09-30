@@ -1044,6 +1044,7 @@ void ScheduleExitMode(struct Schedule *schedule, bool threadExit)
         if (hookFunc != nullptr) {
             hookFunc();
         }
+        schedule->state = SCHEDULE_EXITING;
         // Ensure that the monitoring thread is stopped.
         ScheduleSchmonExit();
         MapleRuntime::CangjieRuntime::Terminate();

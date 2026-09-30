@@ -8,6 +8,7 @@ mkdir -p "$output"
 clang++ -std=c++17 -O0 -g -pthread -fno-rtti \
     -I"$repo/runtime/src" -I"$repo/runtime/src/Heap" -I"$repo/runtime/include" \
     -I"$repo/runtime/src/Heap/z/os/linux" -I"$lib/../../include" \
+    -I"$repo/runtime/src/CJThread/src/runtime/schedule/include" \
     -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
     "$repo/runtime/tests/signal_shutdown.cpp" \
     -L"$lib" -lcangjie-runtime -lboundscheck -ldl -o "$output/signal-shutdown"
