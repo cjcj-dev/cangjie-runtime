@@ -15,7 +15,7 @@ gdb.execute("set args " + mode)
 gdb.execute("set logging file " + root + "/gdb.log")
 gdb.execute("set logging overwrite on")
 gdb.execute("set logging enabled on")
-gdb.execute("start > " + root + "/target.log 2>&1")
+gdb.execute("start " + mode + " > " + root + "/target.log 2>&1")
 worker = None
 blocked = None
 phase = "initial"
@@ -97,7 +97,7 @@ class Release(gdb.Breakpoint):
 
 class Completed(gdb.Breakpoint):
     def stop(self):
-        if mode in ("asleep", "gap") and phase != "published":
+        if mode in ("asleep", "gap"):
             print("EVENT future completed while publisher held", flush=True)
             return True
         return False

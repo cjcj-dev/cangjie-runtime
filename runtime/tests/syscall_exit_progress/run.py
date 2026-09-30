@@ -17,13 +17,16 @@ session = pexpect.spawn("gdb", ["-q", "-x", str(pathlib.Path(__file__).with_name
                         env=environment, encoding="utf-8", timeout=30)
 session.logfile = transcript
 qualified = False
+exited = False
 result = {"mode": mode, "status": "HARNESS_ERROR", "rc": 2}
 
 
 def command(value):
+    global exited
     session.sendline(value)
     session.sendline('python print("COMMAND_FINISHED")')
     session.expect_exact("\r\nCOMMAND_FINISHED\r\n")
+    exited = exited or "exited normally]" in session.before
     return session.before
 
 
@@ -55,20 +58,24 @@ try:
     else:
         qualified = True
     try:
-        session.expect_exact("exited normally]", timeout=5)
+        if not exited:
+            session.expect_exact("exited normally]", timeout=5)
     except pexpect.TIMEOUT:
         if not qualified:
             raise
         result.update(status="FAIL", rc=1, assertion="ordinary_task_completion_after_pipe_release")
         print("ASSERT ordinary_task_completion_after_pipe_release FAIL mode=" + mode, flush=True)
     else:
+        exit_status = command("p $_exitcode")
+        if "= 0" not in exit_status:
+            raise RuntimeError("target did not exit with rc=0")
         target = (root / "target.log").read_text()
         if "ASSERT ordinary_task_completion_after_pipe_release PASS" not in target:
             raise RuntimeError("product future/result assertion absent")
         session.sendline("quit")
         session.expect(pexpect.EOF)
         log = (root / "driver.log").read_text()
-        if mode == "fast" and ("EVENT syscall-exit-slow" in log or "EVENT syscall-exit\r" not in log):
+        if mode == "fast" and ("EVENT syscall-exit-slow" in log or "EVENT syscall-exit\n" not in log):
             raise RuntimeError("fast exit branch qualification failed")
         if mode == "slow-p" and ("EVENT syscall-exit-slow" not in log or "EVENT actual-no-P-branch" in log):
             raise RuntimeError("slow-P branch qualification failed")
