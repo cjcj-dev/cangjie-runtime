@@ -14,6 +14,7 @@ def main():
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--work', type=Path, required=True)
     parser.add_argument('--lib', type=Path)
+    parser.add_argument('--gate', type=Path)
     parser.add_argument('--sdk', type=Path)
     parser.add_argument('--mode', choices=('defer', 'only', 'all'), default='defer')
     parser.add_argument('--native', action='store_true')
@@ -34,7 +35,8 @@ def main():
                    GC_UNIT_CJC_RUNTIME_LIB_DIR=str(args.sdk / 'host/compiler'))
     command = (['python3', 'build.py', 'build', '--target', 'native', '--build-type', 'release',
                 '-v', '1.3.0-alpha.06'] if args.native else
-               ['bash', str(args.runtime.resolve() / 'tests/gc_unit/gate_gc_unit.sh')])
+               ['bash', str(args.gate.resolve() if args.gate else
+                            args.runtime.resolve() / 'tests/gc_unit/gate_gc_unit.sh')])
     records = []
     errors = []
     for call in range(args.calls):
