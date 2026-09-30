@@ -5,6 +5,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent / 'gc_unit'))
 from check_native_detach import MI, digest, emit, event_field
+from check_shutdown_blocking import observe_blocking
 
 
 def main():
@@ -72,13 +73,7 @@ def main():
                 if event_field(event, 'bkptno') != lock_wait:
                     raise RuntimeError('Terminal gate did not reach retained thread lock')
                 debugger.delete(lock_wait)
-                yielding = debugger.breakpoint('sched_yield', thread=terminal_thread)
-                debugger.resume(terminal_thread)
-                event = debugger.stop()
-                frames = debugger.cmd('-stack-list-frames --thread ' + terminal_thread)
-                if event_field(event, 'bkptno') != yielding or 'LockRead' not in frames:
-                    raise RuntimeError('Terminal reentry did not wait on retained thread lock')
-                debugger.delete(yielding)
+                results['terminal_blocking'] = observe_blocking(debugger, terminal_thread, output)
             debugger.cmd('-exec-interrupt --thread ' + current)
             host_stop = debugger.stop()
             if event_field(host_stop, 'thread-id') != current:

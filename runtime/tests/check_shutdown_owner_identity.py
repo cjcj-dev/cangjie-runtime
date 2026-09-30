@@ -5,6 +5,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent / 'gc_unit'))
 from check_native_detach import MI, digest, emit, event_field
+from check_shutdown_blocking import observe_blocking
 
 
 def main():
@@ -43,11 +44,7 @@ def main():
         waiting = False
         if stopped:
             debugger.delete(blocked)
-            yielding = debugger.breakpoint('sched_yield', thread=current)
-            debugger.resume(current)
-            event = debugger.stop()
-            frames = debugger.cmd('-stack-list-frames --thread ' + current)
-            waiting = event_field(event, 'bkptno') == yielding and 'LockRead' in frames
+            waiting = observe_blocking(debugger, current, output)
         passed = stopped and waiting and terminal == 1 and owner_token != 0 and current_token == 0
         emit('OWNER_REUSE_TARGET_EXECUTED', passed=passed, terminal=terminal,
              owner_token=owner_token, current_token=current_token, lock_wait=waiting,
