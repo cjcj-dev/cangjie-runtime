@@ -14,3 +14,10 @@ gc_unit_language_environment() {
   export CANGJIE_HOME="$GC_UNIT_LANGUAGE_SDK"
   export CJC="$CJC_BIN"
 }
+
+gc_unit_language_compile() {
+  local compiler_rc=0
+  "$CJC_BIN" "$@" || compiler_rc=$?
+  printf '%s\n' "$compiler_rc" >>"${GC_UNIT_OUT:?}/compile.rc"
+  return "$compiler_rc"
+}
