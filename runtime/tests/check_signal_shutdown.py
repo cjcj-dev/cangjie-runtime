@@ -64,8 +64,8 @@ def main():
             results['terminal_reentry'] = at_gate and count == 1 and exited == 1
             emit('SHUTDOWN_TARGET_EXECUTED', target='terminal_reentry',
                  passed=results['terminal_reentry'], callback_count=count, terminal=exited)
+            debugger.delete(blocked)
             if at_gate:
-                debugger.delete(blocked)
                 lock_wait = debugger.breakpoint('MapleRuntime::MutatorManager::MutatorManagementRLock')
                 debugger.resume(terminal_thread)
                 event = debugger.stop()
