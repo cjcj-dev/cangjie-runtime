@@ -11,6 +11,7 @@
 #include "Heap/z/zStackWatermark.hpp"
 #include "gc_unittest.hpp"
 #include "Mutator/ThreadLocal.h"
+#include "Mutator/VMOperation.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Heap/z/zAddress.inline.hpp"
@@ -41,9 +42,12 @@ public:
         mutatorManager = &manager;
         manager.Init();
         manager.RegisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
+        // threads.cpp:635-655: the VM thread follows the runtime it serves.
+        VMThread::create();
     }
     ~HandshakeRuntime() override
     {
+        VMThread::wait_for_vm_thread_exit();
         manager.UnregisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
         runtime = nullptr;
     }
