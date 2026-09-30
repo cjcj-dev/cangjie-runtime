@@ -24,6 +24,7 @@
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zTask.hpp"
 #include "gc_unittest.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "gc_heap_fixture.hpp"
@@ -852,29 +853,27 @@ namespace {
 // per worker. The retirement below goes through the product free_node() path
 // and the observation is that product's own per-worker pending count, so the
 // same quantity proves whether concurrent_mark_free() reached zMark.cpp:993.
-struct RetireMarkStackNodeTask : public WorkerTask {
+struct RetireMarkStackNodeTask : public ZTask {
     MarkingSMR& smr;
     std::atomic<uint32_t> retired{0};
     explicit RetireMarkStackNodeTask(MarkingSMR& target)
-        : WorkerTask("RetireMarkStackNode"), smr(target)
+        : ZTask("RetireMarkStackNode"), smr(target)
     {}
-    void work(uint32_t workerId) override
+    void work() override
     {
-        (void)workerId;
         smr.free_node(new MarkStripeStackListNode(nullptr));
         retired.fetch_add(1u, std::memory_order_relaxed);
     }
 };
 
-struct ReadPendingMarkNodeTask : public WorkerTask {
+struct ReadPendingMarkNodeTask : public ZTask {
     MarkingSMR& smr;
     std::atomic<uint32_t> pending{0};
     explicit ReadPendingMarkNodeTask(MarkingSMR& target)
-        : WorkerTask("ReadPendingMarkNode"), smr(target)
+        : ZTask("ReadPendingMarkNode"), smr(target)
     {}
-    void work(uint32_t workerId) override
+    void work() override
     {
-        (void)workerId;
         pending.fetch_add(static_cast<uint32_t>(smr.pending_count()), std::memory_order_relaxed);
     }
 };
@@ -893,16 +892,16 @@ void CheckYoungPostFreeCleanup(bool abortRequested)
     young.set_phase(ZGenerationPhase::Mark);
     MarkingSMR& smr = young.Mark().Smr();
     RetireMarkStackNodeTask retire(smr);
-    young.Workers()->run_task(&retire);
+    young.Workers()->run_all(&retire);
     ReadPendingMarkNodeTask prepared(smr);
-    young.Workers()->run_task(&prepared);
+    young.Workers()->run_all(&prepared);
     const uint32_t before = prepared.pending.load(std::memory_order_relaxed);
     if (abortRequested) { ZAbort::abort(); }
     // #1310 removed the in-phase abort check: ZGC zGeneration.cpp:694-697 has
     // none, so concurrent_mark_free() runs mark_free() on the abort branch too.
     young.concurrent_mark_free();
     ReadPendingMarkNodeTask freed(smr);
-    young.Workers()->run_task(&freed);
+    young.Workers()->run_all(&freed);
     const uint32_t after = freed.pending.load(std::memory_order_relaxed);
     std::fprintf(stderr, "POSTFREE1310_TARGET abort=%d retired=%u before=%u after=%u\n",
                  abortRequested, retire.retired.load(std::memory_order_relaxed), before, after);
