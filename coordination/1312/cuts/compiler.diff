@@ -1,6 +1,6 @@
 --- a/runtime/src/CompilerCalls.cpp
 +++ b/runtime/src/CompilerCalls.cpp
-@@ -653,7 +653,7 @@
+@@ -663,7 +663,7 @@
  
  extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo* arrayInfo, ArrayRef candidate)
  {

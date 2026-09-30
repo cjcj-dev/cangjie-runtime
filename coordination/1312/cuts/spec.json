@@ -41,6 +41,13 @@
       "WeakHandle value; // Controlled cut: omit old buckets."
     ]
   ],
+  "growth": [
+    [
+      "runtime/src/Heap/shared/stringdedup/stringDedup.cpp",
+      "return StartResizer(growOnly, adjusted);",
+      "return false; // Controlled cut: omit requested growth."
+    ]
+  ],
   "wait2": [
     [
       "runtime/src/Heap/shared/stringdedup/stringDedup.cpp",

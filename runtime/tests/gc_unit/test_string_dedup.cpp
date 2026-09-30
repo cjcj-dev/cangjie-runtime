@@ -483,11 +483,15 @@ void RunDedupTask(void* (*entry)(void*), void* argument)
     ReleaseHandle(task);
     GC_EXPECT_EQ(rc, E_OK);
 }
-bool WaitDedupSize(size_t count)
+bool WaitDedupSize(size_t count, bool requireGrowthComplete = false)
 {
     const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < end) {
-        if (!StringDedupTest::IsCleaning() && StringDedupTest::Entries() == count &&
+        // Installed size can be reached before the asynchronous processor starts.
+        // ZGC stringDedupTable.cpp:650-720: wait2 is published after resizing.
+        if ((!requireGrowthComplete ||
+             (StringDedupTest::Buckets() > 503 && StringDedupTest::DeadState() == 2U)) &&
+            !StringDedupTest::IsCleaning() && StringDedupTest::Entries() == count &&
             StringDedup::Instance().WeakStorage().AllocationCount() == count) return true;
         std::this_thread::yield();
     }
@@ -551,7 +555,7 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, ResizeThenOldCallbacksShrink)
     DedupBatch batch;
     batch.count = 7200;
     RunDedupTask(InstallDedupBatch, &batch);
-    const bool grown = WaitDedupSize(batch.count);
+    const bool grown = WaitDedupSize(batch.count, true);
     const size_t grownBuckets = StringDedupTest::Buckets();
     const unsigned grownState = StringDedupTest::DeadState();
     DedupOldCycle();

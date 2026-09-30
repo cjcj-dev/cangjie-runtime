@@ -74,7 +74,7 @@ for arm in young phase report registration; do build_arm "$arm" & done
 wait
 for arm in resize_find wait2 blocked compiler; do build_arm "$arm" & done
 wait
-for arm in strong_registration; do build_arm "$arm" & done
+for arm in strong_registration growth; do build_arm "$arm" & done
 wait
 uptime > cuts-uptime-after.txt
 python3 "$r/summarize-cuts.py" "$r/cuts"
