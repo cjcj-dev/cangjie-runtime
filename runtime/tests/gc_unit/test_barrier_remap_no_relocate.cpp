@@ -81,7 +81,9 @@ GC_TEST(BarrierRemap1327, PublishedEntryReturnsWithoutNewCopy)
     GC_EXPECT_TRUE(ZBarrier::remap_generation(input) == generation);
     const size_t before = EntryCount(forwarding);
     const MAddress target = reinterpret_cast<MAddress>(heap.obj1);
-    GC_EXPECT_EQ(forwarding->insert(reinterpret_cast<MAddress>(heap.obj0), target), target);
+    ForwardingCursor cursor = 0;
+    forwarding->find(reinterpret_cast<MAddress>(heap.obj0), &cursor);
+    GC_EXPECT_EQ(forwarding->insert(reinterpret_cast<MAddress>(heap.obj0), target, &cursor), target);
     const size_t published = EntryCount(forwarding);
     GC_EXPECT_EQ(published, before + 1);
     const zaddress result = ZBarrier::make_load_good_no_relocate(input);
