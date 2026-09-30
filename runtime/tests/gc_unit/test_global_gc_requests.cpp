@@ -6,6 +6,8 @@
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
 #include "Loader/BinaryFile/CjFile/CjFileMeta.h"
+#include "Loader/CjFileLoader/CjFileLoader.h"
+#include "LoaderManager.h"
 
 using namespace MapleRuntime;
 extern "C" void MRT_LibraryOnLoad(uint64_t address, bool enableGC);
@@ -46,12 +48,15 @@ void ExplicitRequest(const char* config, bool enable, bool early)
     if (early) LoadRequestImage(enable, true);
     InitRequests(config, false);
     if (!early) LoadRequestImage(enable, false);
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    const auto* image = loader->GetBaseFileByMetaAddr(reinterpret_cast<Uptr>(&requestMetadata));
+    const bool registered = image != nullptr && image->IsRegistered();
     const uint32_t before = Heap::GetHeap().old().seqnum();
     CJ_MRT_ForceFullGC();
     const uint32_t after = Heap::GetHeap().old().seqnum();
-    std::fprintf(stderr, "GLOBAL_GC_EXPLICIT_TARGET executed=1 config=%s enable=%d early=%d before=%u after=%u\n",
-                 config, enable, early, before, after);
-    GC_EXPECT_TRUE(after > before);
+    std::fprintf(stderr, "GLOBAL_GC_EXPLICIT_TARGET executed=1 config=%s enable=%d early=%d registered=%d before=%u after=%u\n",
+                 config, enable, early, registered, before, after);
+    GC_EXPECT_TRUE(registered && after > before);
 }
 
 void TimerRequest(const char* config)
