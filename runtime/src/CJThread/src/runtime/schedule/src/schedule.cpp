@@ -1232,6 +1232,9 @@ bool ScheduleExitMode(struct Schedule *schedule, bool threadExit)
         if (schedule->scheduleType == SCHEDULE_DEFAULT &&
             !pthread_equal(pthread_self(), schedule->thread0->osThread) &&
             !schedule->thread0->exitBlocked) {
+            // Bootstrap can be parked too. Its wake restores the ScheduleStart
+            // context, then native TLS exit completes before this join returns.
+            SemaphorePost(&schedule->thread0->sem);
             // The single owner of bootstrap join is the external shutdown caller.
             pthread_join(schedule->thread0->osThread, nullptr);
         }
