@@ -20,6 +20,31 @@ bool shutdownReleaseCallback = false;
 bool shutdownReleaseWorker = false;
 bool shutdownHoldCallback = true;
 int shutdownExitSignal = _NSIG;
+using ShutdownManagedCallback = bool (*)(int, siginfo_t*, void*);
+ShutdownManagedCallback shutdownManagedCallback = nullptr;
+std::atomic<int> shutdownManagedStage{0};
+std::atomic<bool> shutdownNativeReturning{false};
+
+extern "C" void ShutdownInstallCallback(ShutdownManagedCallback callback)
+{
+    shutdownManagedCallback = callback;
+}
+
+extern "C" void ShutdownManagedProgress(int stage)
+{
+    shutdownManagedStage.store(stage, std::memory_order_release);
+    std::fprintf(stderr, "SHUTDOWN_MANAGED_PROGRESS stage=%d\n", stage);
+}
+
+extern "C" void ShutdownNativeBlock()
+{
+    shutdownCallbackEntered.store(true, std::memory_order_release);
+    shutdownCondition.notify_all();
+    std::unique_lock<std::mutex> lock(shutdownMutex);
+    shutdownCondition.wait(lock, [] { return shutdownReleaseCallback; });
+    shutdownNativeReturning.store(true, std::memory_order_release);
+    std::fprintf(stderr, "SHUTDOWN_NATIVE_RETURNING\n");
+}
 
 extern "C" __attribute__((noinline)) void ShutdownCheckpoint(int result)
 {
@@ -59,15 +84,18 @@ static bool WaitFor(const std::atomic<bool>& flag)
 
 int main(int argc, char** argv)
 {
-    if (argc != 2) { return 2; }
+    if (argc < 2) { return 2; }
     const bool singleProcessor = std::strcmp(argv[1], "single-p") == 0;
+    const bool managed = std::strcmp(argv[1], "managed") == 0;
     shutdownHoldCallback = !singleProcessor;
     RuntimeParam parameters{};
     parameters.heapParam.heapSize = 64 * 1024;
     parameters.coParam.processorNum = 1;
     if (InitCJRuntime(&parameters) != E_OK) { return 3; }
+    if (managed && (argc != 3 || LoadCJLibraryWithInit(argv[2]) != E_OK ||
+                    shutdownManagedCallback == nullptr)) { return 8; }
     SignalAction action{};
-    action.saSignalAction = ShutdownCallback;
+    action.saSignalAction = managed ? shutdownManagedCallback : ShutdownCallback;
     action.scFlags = SA_SIGINFO;
     sigemptyset(&action.scMask);
     CJ_MCC_AddSignalHandler(SIGUSR1, &action);
@@ -100,6 +128,10 @@ int main(int argc, char** argv)
         shutdownReleaseCallback = true;
     }
     shutdownCondition.notify_all();
+    if (managed) {
+        std::unique_lock<std::mutex> lock(shutdownMutex);
+        shutdownCondition.wait(lock, [] { return false; });
+    }
     const bool returned = WaitFor(shutdownCallbackReturned);
     std::fprintf(stderr, "SHUTDOWN_NATIVE_RETURN_TARGET returned=%d\n", returned);
     return result == E_OK && returned && inFlight == !singleProcessor ? 0 : 7;
