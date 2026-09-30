@@ -49,7 +49,10 @@ def main():
                  entered=entered, returned=returned)
         consumed = None
         if consume:
-            consumed = debugger.breakpoint('SignalStack.cpp:235')
+            # Anchor on the dispatch loop's function, not a line number: this
+            # file's line layout is not part of the arm's contract, and the exit
+            # consumer is the dispatcher re-entering the loop after WaitForSignal.
+            consumed = debugger.breakpoint('MapleRuntime::SignalStack::DispatchSignals')
         blocked = body = None
         if reentry:
             blocked = debugger.breakpoint('MapleRuntime::VMExit::WaitIfVMExited')
