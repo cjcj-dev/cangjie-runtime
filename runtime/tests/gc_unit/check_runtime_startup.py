@@ -10,7 +10,7 @@ def observe():
 
     state = {"bound": 0, "ready": 0, "failed": False, "injected": False,
              "starter_returned": False, "main": None, "destroyed": False,
-             "gated": False}
+             "gated": False, "main_handle": 0}
 
     def target(name, condition, detail):
         state["failed"] |= not condition
@@ -24,11 +24,12 @@ def observe():
         def stop(self):
             state["ready"] += 1
             target("READY_PUBLICATION", ready(), "ready=%d" % ready())
-            return False
+            return mode == "published"
 
     class Publish(gdb.Breakpoint):
         def stop(self):
             running = int(gdb.parse_and_eval("*(int*)scheduler"))
+            state["main_handle"] = int(gdb.parse_and_eval("scheduler"))
             target("RUNNING_BEFORE_READY", running == 1 and not ready(),
                    "schedule_state=%d ready=%d" % (running, ready()))
             Published(gdb.newest_frame(), internal=True)
@@ -37,9 +38,13 @@ def observe():
     class Bind(gdb.Breakpoint):
         def stop(self):
             state["bound"] += 1
-            target("CONSUMER_READY", ready() and state["ready"] == 1,
-                   "ready=%d publications=%d" % (ready(), state["ready"]))
-            return mode == "ordered" and not ready()
+            bound_handle = int(gdb.parse_and_eval("$rdi"))
+            running = int(gdb.parse_and_eval("*(int*)$rdi"))
+            target("CONSUMER_READY", ready() and running == 1
+                   and bound_handle == state["main_handle"],
+                   "ready=%d schedule_state=%d handle_match=%d observed_returns=%d" %
+                   (ready(), running, bound_handle == state["main_handle"], state["ready"]))
+            return mode == "published" or (mode in ("ordered", "notify") and not ready())
 
     class Fail(gdb.Breakpoint):
         def stop(self):
@@ -94,12 +99,12 @@ def observe():
     Starter("StartCJRuntime", internal=True)
     if mode == "failure":
         Fail("CJ_SchmonStart", internal=True)
-    elif mode == "ordered":
+    elif mode in ("ordered", "published", "notify"):
         InitGate("InitCJRuntime", internal=True)
         destroy_gate = DestroyGate("pthread_attr_destroy", internal=True)
-        schedule_gate = ScheduleGate("CJ_ScheduleStart", internal=True)
+        schedule_gate = None if mode == "published" else ScheduleGate("CJ_ScheduleStart", internal=True)
     gdb.execute("continue")
-    if mode == "ordered":
+    if mode in ("ordered", "published", "notify"):
         if not state["destroyed"]:
             target("ORDERING_GATE", False, "pthread_attr_destroy_not_reached")
             gdb.execute("quit 1")
@@ -113,19 +118,31 @@ def observe():
             gdb.execute("quit 2")
         starters[0].switch()
         gdb.execute("continue")
-        if state["starter_returned"] or not state["gated"]:
+        if state["starter_returned"] or (mode != "published" and not state["gated"]):
             gdb.execute("kill")
             gdb.execute("quit 1")
-        schedule_gate.delete()
+        if schedule_gate is not None:
+            schedule_gate.delete()
+        if mode == "notify":
+            result = int(gdb.parse_and_eval(
+                "(int)pthread_cond_broadcast((void*)&g_conditionVariable)"))
+            target("NOTIFY_WITHOUT_READY", result == 0 and not ready(),
+                   "notify_rc=%d ready=%d" % (result, ready()))
         state["main"].switch()
-        gdb.execute("catch syscall futex")
-        wait_gate = gdb.breakpoints()[-1]
+        wait_gate = None
+        if mode != "published":
+            gdb.execute("catch syscall futex")
+            wait_gate = gdb.breakpoints()[-1]
         gdb.execute("continue")
-        trace = gdb.execute("bt", to_string=True)
-        target("CONSUMER_WAITS_FOR_READY", not ready() and state["bound"] == 0
-               and "condition_variable" in trace and "InitCJRuntime" in trace,
-               "ready=%d bindings=%d\n%s" % (ready(), state["bound"], trace))
-        wait_gate.delete()
+        if mode == "published":
+            target("READY_BEFORE_WAIT", ready() and state["bound"] == 1,
+                   "ready=%d bindings=%d" % (ready(), state["bound"]))
+        else:
+            trace = gdb.execute("bt", to_string=True)
+            target("CONSUMER_WAITS_FOR_READY", not ready() and state["bound"] == 0
+                   and "condition_variable" in trace and "InitCJRuntime" in trace,
+                   "ready=%d bindings=%d\n%s" % (ready(), state["bound"], trace))
+            wait_gate.delete()
         if state["failed"]:
             gdb.execute("kill")
             gdb.execute("quit 1")
@@ -143,7 +160,7 @@ def observe():
                "signal=%s bindings=%d publications=%d" %
                (signal, state["bound"], state["ready"]))
         gdb.execute("kill")
-    elif mode in ("success", "ordered"):
+    elif mode in ("success", "ordered", "published", "notify"):
         if state["starter_returned"]:
             gdb.execute("kill")
             gdb.execute("quit 1")
@@ -166,7 +183,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("elf", type=pathlib.Path)
     parser.add_argument("library_dir", type=pathlib.Path)
-    parser.add_argument("--mode", choices=("success", "failure", "ordered"), required=True)
+    parser.add_argument("--mode", choices=("success", "failure", "ordered", "published", "notify"),
+                        required=True)
     args = parser.parse_args()
     for artifact in (args.elf, args.library_dir / "libcangjie-runtime.so",
                      args.library_dir / "libboundscheck.so"):
@@ -192,7 +210,11 @@ def main():
                   ("PASS" if diagnostic else "FAIL"), flush=True)
             return 0 if diagnostic else 1
         return result.returncode
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as error:
+        output = error.stdout or b""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        print(output, end="", flush=True)
         print("STARTUP_RESULT NOT_RUN debugger deadline exceeded", flush=True)
         return 124
 
