@@ -21,6 +21,7 @@
 #include "ExceptionManager.h"
 #include "Mutator/Mutator.h"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zHeap.hpp"
 namespace MapleRuntime {
 }
 

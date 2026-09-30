@@ -54,7 +54,8 @@ void ZCollectedHeap::create(const HeapParam& param, double garbageThreshold)
 }
 
 ZCollectedHeap::ZCollectedHeap(const HeapParam& param, double garbageThreshold)
-    : _initializer(nullptr),
+    : _barrier_set(),
+      _initializer(&_barrier_set),
       _heap(param, garbageThreshold),
       _driver_minor(new ZDriverMinor()),
       _driver_major(new ZDriverMajor()),

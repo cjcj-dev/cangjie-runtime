@@ -1,14 +1,14 @@
 #ifndef MRT_Z_ACCESS_HPP
 #define MRT_Z_ACCESS_HPP
 
-#include "Heap/z/zBarrierSet.hpp"
+#include "Heap/z/zAccessRuntimeDispatch.hpp"
 
 namespace MapleRuntime {
 // oops/access.hpp:262-306. Static storage/strength decorators select one backend.
 template<DecoratorSet decorators = DECORATORS_NONE>
 class Access {
     static constexpr DecoratorSet fixed = decorators | ((decorators & OOP_REF_MASK) ? 0 : ON_STRONG_OOP_REF);
-    using Barrier = ZBarrierSet::AccessBarrier<fixed>;
+    using Barrier = AccessInternal::RuntimeAccessBarrier<fixed>;
     using Raw = RawAccessBarrier<fixed>;
 public:
     template<typename P> static BaseObject* oop_load(P* p)

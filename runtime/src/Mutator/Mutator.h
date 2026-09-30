@@ -29,6 +29,7 @@
 #include "ObjectModel/RefField.h"
 #include "Heap/z/zStackWatermark.hpp"
 #include "Heap/z/zBarrierSet.hpp"
+#include <set>
 
 
 namespace MapleRuntime {
@@ -65,18 +66,9 @@ public:
 
     // Called when a mutator starts and finishes, respectively.
     void Init();
+    Mutator();
 
-    ~Mutator()
-    {
-        // ThreadsSMRSupport::smr_delete has already waited for list readers.
-        ReleaseAllocBuffer();
-        tid = 0;
-        stackBoundAddr = nullptr;
-
-#ifdef INTERPRETER_ENABLED
-        DestroyInterpreterPart();
-#endif
-    }
+    ~Mutator();
 
     static Mutator* NewMutator()
     {

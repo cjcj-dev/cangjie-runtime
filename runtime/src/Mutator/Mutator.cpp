@@ -181,12 +181,30 @@ void Mutator::InitProtectStackAddr()
 void Mutator::Init()
 {
     allocBuffer.Init();
-    ZBarrierSet::on_thread_attach(gcData, this, nullptr);
+    BarrierSet::barrier_set()->on_thread_attach(gcData, this, nullptr);
     observerCnt = 0;
     inManagedContext.store(true);
 #ifdef INTERPRETER_ENABLED
     InitInterpreterPart();
 #endif
+}
+
+Mutator::Mutator()
+{
+    BarrierSet* barrier_set = BarrierSet::barrier_set();
+    CHECK_DETAIL(barrier_set != nullptr, "Mutator created before barrier set");
+    barrier_set->on_thread_create(gcData);
+}
+
+Mutator::~Mutator()
+{
+    ReleaseAllocBuffer();
+    tid = 0;
+    stackBoundAddr = nullptr;
+#ifdef INTERPRETER_ENABLED
+    DestroyInterpreterPart();
+#endif
+    BarrierSet::barrier_set()->on_thread_destroy(gcData);
 }
 
 void Mutator::ResetMutator()
