@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -10,6 +11,7 @@
 // check_partial_array_visits.py also checks actual slot multiplicity (including
 // a repeated small follower whose barriers no longer change marking state).
 
+#include <atomic>
 #include <cstdint>
 #include <csignal>
 #include <cstring>
@@ -57,7 +59,7 @@ struct PartialArrayTestAccess {
     static void StartFieldMark(Heap& collector)
     {
         auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-        if (old.Workers() == nullptr) old.InitializeWorkers(1);
+        if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
         Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
         Heap::GetHeap().old().Mark().Start();
         old.set_phase(ZGenerationPhase::Mark);
@@ -168,7 +170,7 @@ std::set<size_t> OnSet(GcHeapFixture& fx, Slot* addr, size_t length)
     WorkerFixture worker;
     SuspendibleThreadSetJoiner joiner;
     auto& domain = Heap::GetHeap().old().Mark();
-    domain.PrepareWork(1);
+    domain.ResizeWorkers(1);
     auto* fields = reinterpret_cast<RefField<>*>(addr);
     std::vector<BaseObject*> objects;
     std::vector<zpointer> original;
@@ -195,7 +197,7 @@ std::set<size_t> OnSet(GcHeapFixture& fx, Slot* addr, size_t length)
         // Neither the pending product entries nor their ownership are changed.
         domain.Terminate().Reset(1);
         ZAbort::abort();
-        (void)domain.FollowWork(context, 0, true);
+        (void)domain.FollowWork(true);
         ExpectPartition(domain, addr, length, original, ++step);
         GC_EXPECT_TRUE(step <= length * 2 + 32);
     }
@@ -377,7 +379,7 @@ GC_OTHER_VM_TEST(MarkConsumer1328, CrossStripePartialStaysLocalAndOverflowed)
     GcHeapFixture fx;
     WorkerFixture worker;
     ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
-    domain.PrepareWork(4);
+    domain.ResizeWorkers(4);
     auto& stripes = domain.Stripes();
     MarkThreadLocalStacks stacks(4);
     MarkContext context(4, 0, stripes, stacks);
@@ -399,12 +401,12 @@ GC_OTHER_VM_TEST(MarkConsumer1328, CrossStripePartialStaysLocalAndOverflowed)
     const size_t localCount = local == nullptr ? 0 : local->Size();
     const size_t published = target->published.Length();
     const size_t overflowed = target->overflowed.Length();
-    std::fprintf(stderr, "PARTIAL1328_TARGET entries=1 capacity=%zu local=%zu published=%zu overflowed=%zu wake=%zu\n",
-                 capacity, localCount, published, overflowed, domain.Terminate().awakening);
+    std::fprintf(stderr, "PARTIAL1328_TARGET entries=1 capacity=%zu local=%zu published=%zu overflowed=%zu wake=%u\n",
+                 capacity, localCount, published, overflowed, domain.Terminate().awakening.load(std::memory_order_relaxed));
     if (local != nullptr) MarkStripeStack::Destroy(local);
     while (auto* stack = target->StealStack(domain.Smr(), 0)) MarkStripeStack::Destroy(stack);
     // One target verdict includes placement and wake state, before diagnostics.
-    GC_EXPECT_TRUE(localCount > 0 && published == 0 && overflowed == 1 && domain.Terminate().awakening == 0);
+    GC_EXPECT_TRUE(localCount > 0 && published == 0 && overflowed == 1 && domain.Terminate().awakening.load(std::memory_order_relaxed) == 0);
     GC_EXPECT_FALSE(drained);
 }
 
@@ -414,7 +416,7 @@ GC_TEST(MarkConsumer1328, PartialDoesNotWakeWithoutFullStack)
     WorkerFixture worker;
     SuspendibleThreadSetJoiner joiner;
     ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
-    domain.PrepareWork(4);
+    domain.ResizeWorkers(4);
     auto& stripes = domain.Stripes();
     MarkThreadLocalStacks stacks(4);
     MarkContext context(4, 0, stripes, stacks);
@@ -427,13 +429,13 @@ GC_TEST(MarkConsumer1328, PartialDoesNotWakeWithoutFullStack)
     auto* target = stripes.StripeForAddress(start + MarkPartialArray::MIN_SIZE);
     auto* local = stacks.StealLocal(stripes, target);
     const size_t count = local == nullptr ? 0 : local->Size();
-    const size_t wake = domain.Terminate().awakening;
+    const size_t wake = domain.Terminate().awakening.load(std::memory_order_relaxed);
     if (local != nullptr) MarkStripeStack::Destroy(local);
     std::fprintf(stderr, "PARTIAL1328_WAKE entries=1 local=%zu wake=%zu\n", count, wake);
     GC_EXPECT_TRUE(count > 0 && target->published.IsEmpty() && wake == 0);
     // Positive control: the same terminate state responds to a real wake.
     domain.Terminate().Wake();
-    GC_EXPECT_EQ(domain.Terminate().awakening, 1u);
+    GC_EXPECT_EQ(domain.Terminate().awakening.load(std::memory_order_relaxed), 1u);
 }
 
 GC_TEST(MarkConsumer1328, YoungDrainRejectsAllocatingOldPage)
@@ -446,7 +448,7 @@ GC_TEST(MarkConsumer1328, YoungDrainRejectsAllocatingOldPage)
         // ZGC zPage.inline.hpp:184-186: allocating, irrespective of generation.
         fx.region0()->reset(PageAge::old);
         ZMark domain(1, MarkingStacks::MarkingGeneration::YOUNG);
-        domain.PrepareWork(1);
+        domain.ResizeWorkers(1);
         MarkThreadLocalStacks stacks(1);
         MarkContext ctx(1, 0, domain.Stripes(), stacks);
         stacks.Push(domain.Stripes(), ctx.Stripe(),

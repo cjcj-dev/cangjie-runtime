@@ -93,7 +93,7 @@ GC_TEST(AllocBufferHandoff, StackRootPublishedDuringMergeIsDelivered)
 {
     GcHeapFixture fx;
     ZMark domain(64, MarkingStacks::MarkingGeneration::YOUNG);
-    domain.PrepareWork(1);
+    domain.ResizeWorkers(1);
     auto& producer = domain.Stacks();
     producer.Push(domain.Stripes(), domain.Stripes().At(0), MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, true, false), true);
     GC_EXPECT_TRUE(domain.Stripes().IsEmpty());
@@ -117,7 +117,7 @@ GC_OTHER_VM_TEST(AllocBufferHandoff, StackRootPublishDuringRetireKeepsHeapIntact
 {
     GcHeapFixture fx;
     ZMark domain(64, MarkingStacks::MarkingGeneration::YOUNG);
-    domain.PrepareWork(1);
+    domain.ResizeWorkers(1);
     AllocBuffer first;
     AllocBuffer second;
     std::atomic<unsigned> ready{0};

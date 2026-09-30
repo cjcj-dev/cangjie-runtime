@@ -291,73 +291,10 @@ void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
 
 }
 
-void ZMark::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin)
-{
-    PushYoungObject(object, workStack, origin, false);
-}
-
-void ZMark::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin,
-                                  bool finalizable)
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    CHECK_DETAIL(object->IsValidObject(), "minor root/reference %p is not a valid object origin=%s",
-                 object, origin);
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-    if (!region->IsYoungRegion()) {
-        return;
-    }
-    (void)workStack;
-    if (finalizable) {
-        const_cast<ZGeneration&>(Heap::GetHeap().GetZGeneration(ZGenerationId::young))
-            .MarkObjectIfActive<false, true, true, true>(from_object(object));
-    } else {
-        const_cast<ZGeneration&>(Heap::GetHeap().GetZGeneration(ZGenerationId::young))
-            .MarkObjectIfActive<false, true, true, false>(from_object(object));
-    }
-}
-
-// Young mark closure: address-striped follow_work (ZGC zMark.cpp:635 / zMark.cpp:94-120).
-namespace {
-constexpr size_t kMarkStripeShift = 20;
-constexpr size_t kMarkStripeMultiplier = 4;
-constexpr size_t kMarkStripeMax = 64;
-
-
-// FYS raw workStack.push_back used to skip PushYoungObject recover + StartWho.
-// Admit the same host that FYS=0 would have pushed; never enqueue an interior.
-BaseObject* AdmitYoungObject(BaseObject* object, const char* origin, const void* slot = nullptr,
-                             BaseObject* holder = nullptr)
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return nullptr;
-    }
-
-    return object;
-}
-
-} // namespace
-
-
-namespace {
-size_t MarkStripeCount(size_t workers)
-{
-    size_t target = std::max<size_t>(workers * kMarkStripeMultiplier, kMarkStripeMultiplier);
-    size_t count = 1;
-    while (count < target && count < kMarkStripeMax) {
-        count <<= 1;
-    }
-    return count;
-}
-
-} // namespace
-
-
 class ZMarkTask : public ZRestartableTask {
 public:
-    explicit ZMarkTask(ZMark* mark, bool partial = false)
-        : ZRestartableTask("ZMarkTask"), mark(mark), partial(partial)
+    explicit ZMarkTask(ZMark* mark)
+        : ZRestartableTask("ZMarkTask"), mark(mark)
     {
         mark->PrepareWork();
     }
@@ -368,68 +305,13 @@ public:
     void work() override
     {
         SuspendibleThreadSetJoiner stsJoiner;
-        mark->FollowWorkComplete(partial);
+        mark->FollowWorkComplete();
         Heap::GetHeap().mark_flush(ThreadLocal::GetGCData());
     }
 
 private:
     ZMark* const mark;
-    const bool partial;
 };
-
-void ZMark::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
-                                          std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
-                                          std::unordered_set<MAddress>& weakSlots,
-                                          const std::unordered_set<MAddress>* reachableSlotDomain)
-{
-    (void)fullYoungScan;
-    (void)reachableVec;
-    (void)reachableSlots;
-    (void)weakSlots;
-    (void)reachableSlotDomain;
-    (void)workStack;
-    const size_t dispelAtEntry = ZPage::GetTdWindowCount();
-    ZMark& domain = Heap::GetHeap().young().Mark();
-    (void)ZMark::PublishHandshakeMarkWork(workStack, &domain);
-    (void)domain.Stacks().Flush(domain.Stripes());
-    // ZGC zMark.cpp:944-952: concurrent follow includes termination flush.
-    // Mutators can publish after worker termination; only mark-end decides
-    // completion, so there is no concurrent stripes-empty assertion here.
-    domain.MarkFollow();
-    const size_t dispelAtExit = ZPage::GetTdWindowCount();
-    CHECK_DETAIL(dispelAtExit == dispelAtEntry,
-                 "T-D ghost dispel during striped mark_closure window entry=%zu exit=%zu", dispelAtEntry,
-                 dispelAtExit);
-}
-
-void ZMark::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
-                                   std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
-                                   std::unordered_set<MAddress>& weakSlots,
-                                    const std::unordered_set<MAddress>* reachableSlotDomain)
-{
-    (void)Heap::GetHeap().young().Mark().Flush(ThreadLocal::GetThreadLocalData());
-    if (workStack.empty() && Heap::GetHeap().young().Mark().Stripes().IsEmpty() &&
-        Heap::GetHeap().young().Mark().Stacks().IsEmpty()) {
-        return;
-    }
-
-    TraceYoungClosureStriped(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                             reachableSlotDomain);
-}
-
-bool ZMark::TryEndYoungMark(WorkStack& workStack)
-{
-    CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
-
-    (void)ZMark::PublishHandshakeMarkWork(workStack, &Heap::GetHeap().young().Mark());
-    const bool ended = Heap::GetHeap().young().Mark().TryEnd();
-
-    if (!ended) {
-        return false;
-    }
-    return true;
-}
-
 
 void ZMark::ProcessFinalizers()
 {
@@ -651,26 +533,27 @@ bool ZMark::Drain(MarkContext& context, size_t workerId)
     return true;
 }
 
-ZMark::Result ZMark::FollowWork(MarkContext& context, size_t workerId, bool partial)
+bool ZMark::FollowWork(bool partial)
 {
+    const uint32_t workerId = WorkerThread::worker_id();
+    MarkContext context(nworkers, workerId, stripes, Stacks());
     for (;;) {
         if (!Drain(context, workerId)) {
             terminate.Leave();
-            return Result::Aborted;
+            return false;
         }
         if (StealLocalRound(context, stripes) ||
             StealGlobalRound(context, smr, stripes, workerId)) {
             continue;
         }
         if (partial) {
-            return Result::Partial;
+            return true;
         }
         if (TryProactiveFlush(workerId)) {
             continue;
         }
         if (terminate.TryTerminate(stripes, context.NStripes())) {
-            context.Cache().Flush();
-            return Result::Completed;
+            return true;
         }
     }
 }
@@ -686,11 +569,6 @@ size_t ZMark::CalculateNStripes(size_t workers) const
     return stripes.CalculateNStripes(workers);
 }
 
-void ZMark::EnsureWorkers(size_t workers)
-{
-    CHECK_DETAIL(workers <= ConcGCThreads, "mark workers exceed per-worker storage capacity");
-}
-
 void ZMark::Start()
 {
     if (ZVerifyMarking) { verify_all_stacks_empty(); }
@@ -703,7 +581,6 @@ void ZMark::Start()
     nworkers = gcWorkers->active_workers();
     targetNStripes = CalculateNStripes(nworkers);
     stripes.SetNStripes(targetNStripes);
-    EnsureWorkers(nworkers);
     terminate.Reset(nworkers);
     // zMark.cpp:118-123: stripe count goes to the generation's mark account.
     const ZGenerationId statId =
@@ -713,45 +590,28 @@ void ZMark::Start()
 
 void ZMark::PrepareWork()
 {
-    CHECK_DETAIL(nworkers != 0, "mark domain needs a worker");
+    nworkers = gcWorkers->active_workers();
     targetNStripes = CalculateNStripes(nworkers);
     stripes.SetNStripes(targetNStripes);
-    EnsureWorkers(nworkers);
     terminate.Reset(nworkers);
     workNProactiveFlush.store(0, std::memory_order_relaxed);
     workNTerminateFlush.store(0, std::memory_order_relaxed);
-    terminate.SetResurrected(false);
 }
 
-void ZMark::PrepareWork(size_t workers)
+void ZMark::FollowWorkComplete()
 {
-    nworkers = workers;
-    PrepareWork();
-}
-
-void ZMark::FollowWorkComplete(bool partial)
-{
-    const uint32_t workerId = WorkerThread::worker_id();
-    MarkContext local(nworkers, workerId, stripes, Stacks());
-    (void)FollowWork(local, workerId, partial);
-    (void)local.Stacks().Flush(stripes);
-    local.Cache().Flush();
+    (void)FollowWork(false);
 }
 
 bool ZMark::FollowWorkPartial()
 {
-    const uint32_t workerId = WorkerThread::worker_id();
-    MarkContext local(nworkers, workerId, stripes, Stacks());
-    const Result result = FollowWork(local, workerId, true);
-    (void)local.Stacks().Flush(stripes);
-    local.Cache().Flush();
-    return result != Result::Aborted;
+    return FollowWork(true);
 }
 
-void ZMark::MarkFollow(bool partial)
+void ZMark::MarkFollow()
 {
     for (;;) {
-        ZMarkTask task(this, partial);
+        ZMarkTask task(this);
         gcWorkers->run(&task);
         if (ZAbort::should_abort() || !TryTerminateFlush()) {
             break;
@@ -787,7 +647,8 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
     }
     BaseObject* const object = to_object(address);
     if (incLive) {
-        ctx.Cache().IncLive(page, object->GetSize());
+        const size_t bytes = AlignUp(object->GetSize(), page->object_alignment());
+        ctx.Cache().IncLive(page, bytes);
     }
     if (follow) {
         if (is_array(address)) {
@@ -804,7 +665,6 @@ void ZMark::ResizeWorkers(size_t workers)
     nworkers = workers;
     targetNStripes = CalculateNStripes(workers);
     stripes.SetNStripes(targetNStripes);
-    EnsureWorkers(workers);
     terminate.Reset(workers);
 }
 
@@ -962,6 +822,15 @@ bool ZMark::TryEnd()
     (void)HandshakeFlush(this);
     (void)FlushStacks();
     if (!stripes.IsEmpty()) {
+        return false;
+    }
+    return true;
+}
+
+bool ZMark::End()
+{
+    if (!TryEnd()) {
+        ++ncontinue;
         return false;
     }
     if (ZVerifyMarking) { verify_all_stacks_empty(); }
@@ -1175,4 +1044,3 @@ void ZMark::follow_array_object(MarkContext& ctx, MArray* array, bool finalizabl
 } // namespace MapleRuntime
 
 #include "Heap/z/zMark.inline.hpp"
-

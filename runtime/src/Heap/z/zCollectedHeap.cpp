@@ -107,8 +107,8 @@ void ZCollectedHeap::initialize_gc_workers()
         _concurrent_gc_threads = static_cast<int32_t>(ConcGCThreads);
         VLOG(REPORT, "concurrent gc thread count %u, young %u, old %u",
              ConcGCThreads, ZYoungGCThreads, ZOldGCThreads);
-        _heap.young().InitializeWorkers(ZYoungGCThreads);
-        _heap.old().InitializeWorkers(ZOldGCThreads);
+        _heap.young().InitializeWorkers();
+        _heap.old().InitializeWorkers();
     }
 
 

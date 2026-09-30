@@ -497,7 +497,8 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
     std::fprintf(stderr, "P02_SAME_OBJECT large=%d upgrade=%d objects=%u bytes=%zu live=%d strong=%d\n",
                  large, initiallyFinalizable, liveObjects, liveBytes, live, strong);
     GC_EXPECT_EQ(liveObjects, 1u);
-    GC_EXPECT_EQ(liveBytes, object->GetSize());
+    // ZGC zMark.cpp:417-425: large-page live bytes include page alignment.
+    GC_EXPECT_EQ(liveBytes, AlignUp(object->GetSize(), region->object_alignment()));
     GC_EXPECT_TRUE(live);
     GC_EXPECT_TRUE(strong);
 }

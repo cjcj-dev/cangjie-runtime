@@ -306,7 +306,7 @@ public:
                 return;
             }
         }
-        _mark->FollowWorkComplete(false);
+        _mark->FollowWorkComplete();
     }
 
     void work() override
