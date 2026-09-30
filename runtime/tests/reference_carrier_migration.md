@@ -126,3 +126,9 @@ after the real pause_mark_end phase. The test no longer assembles processor
 processing/enqueue calls. Both FINAL producer and next-publication cuts are
 observed through the actual product phase (the standalone ReferenceProcessor
 component cases remain component coverage only).
+
+Merge 54ab903ecb: ZVerifyReferent's two runtime cycles reserve the four real
+reference fields and offset metadata before allocation, retaining their
+post-mark weak-kind transition and unallocated-referent assertions. Its source
+relocation case installs ReferenceLayoutFixture before live-byte accounting.
+All three original verification assertions and registration modes remain.
