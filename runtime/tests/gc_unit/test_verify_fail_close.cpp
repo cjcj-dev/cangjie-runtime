@@ -766,6 +766,10 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, HeapWalkEntersBarrierAndVisitsCarrier)
     CheckCarrierWalk(true);
 }
 
+extern "C" struct CJThread* CJThreadBuild(ScheduleHandle, const CJThreadAttr*, CJThreadFunc,
+                                         const void*, unsigned int, CJThreadCreateSource, uintptr_t);
+extern "C" void CJ_CJThreadFree(struct CJThread*, bool);
+
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
 {
     if (!ZVerifyRoots) {
@@ -775,20 +779,45 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     }
     RuntimeParam param{};
     param.coParam.processorNum = 1;
-    param.heapParam.heapSize = 32 * 1024;
+    param.heapParam.heapSize = 512 * 1024;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    auto* thread = MCC_NewCJThread(nullptr, nullptr,
-        Runtime::Current().GetConcurrencyModel().GetThreadScheduler());
+    alignas(TypeInfo) static unsigned char liveStorage[sizeof(TypeInfo)]{};
+    auto* liveType = reinterpret_cast<TypeInfo*>(liveStorage);
+    liveType->SetType(TypeKind::TYPE_KIND_CLASS);
+    liveType->SetInstanceSize(sizeof(uintptr_t));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(liveStorage), sizeof(liveStorage));
+    BaseObject* live = nullptr;
+    {
+        ScopedObjectAccess access;
+        live = MObject::NewPinnedObject(liveType, sizeof(uintptr_t));
+    }
+    GC_EXPECT_TRUE(live != nullptr);
+    LWTData initialData{};
+    initialData.obj = live;
+    auto* thread = CJThreadBuild(
+        reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
+        nullptr, [](void*, unsigned int) -> void* { return nullptr; }, &initialData, sizeof(initialData),
+        CJTHREAD_CREATE_SOURCE_DEFAULT, ZPointerStoreGoodMask);
     GC_EXPECT_TRUE(thread != nullptr);
+    auto* previous = CJThreadGetHandle();
+    ThreadLocal::SetCJThread(thread);
+    auto* data = static_cast<LWTData*>(CJThreadGetArg());
+    ThreadLocal::SetCJThread(previous);
+    auto countCarrierRoots = [&]() {
+        size_t count = 0;
+        RootVisitor visitor = [&](RootSlot& root) { count += &root == &RootSlotAt(&data->obj); };
+        Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
+        return count;
+    };
+    const size_t registeredRoots = countCarrierRoots();
+    std::fprintf(stderr, "VERIFY_ARMED_REGISTER_TARGET registered=%zu\n", registeredRoots);
+    GC_EXPECT_EQ(registeredRoots, 1u);
     {
         DriverLocker lock;
         YoungTypeSetter typeSetter(Heap::GetHeap().young(), ZYoungType::minor);
         Heap::GetHeap().young().pause_mark_start();
     }
-    auto* previous = CJThreadGetHandle();
-    ThreadLocal::SetCJThread(thread);
-    auto* data = static_cast<LWTData*>(CJThreadGetArg());
-    ThreadLocal::SetCJThread(previous);
     auto* savedObject = data->obj;
     data->obj = reinterpret_cast<BaseObject*>(0x1000);
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
@@ -796,7 +825,16 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     std::fprintf(stderr, "VERIFY_ARMED_SKIP_TARGET slot=%p value=%p\n", &data->obj, data->obj);
     GC_EXPECT_TRUE(data->obj == reinterpret_cast<BaseObject*>(0x1000));
     GC_EXPECT_TRUE(CJThreadRootsAreArmed(thread, ZPointerStoreGoodMask));
+    // Both skip assertions have completed before restoring the registered root.
+    std::fprintf(stderr, "VERIFY_ARMED_ASSERTIONS_COMPLETE value=%p\n", data->obj);
     data->obj = savedObject;
+    std::fprintf(stderr, "VERIFY_ARMED_RESTORE_TARGET restored=%d\n", data->obj == savedObject);
+    GC_EXPECT_TRUE(data->obj == savedObject);
+    CJ_CJThreadFree(thread, false);
+    const size_t remainingRoots = countCarrierRoots();
+    std::fprintf(stderr, "VERIFY_ARMED_RELEASE_TARGET remaining=%zu\n", remainingRoots);
+    GC_EXPECT_EQ(remainingRoots, 0u);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
