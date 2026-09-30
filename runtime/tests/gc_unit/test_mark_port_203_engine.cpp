@@ -848,6 +848,37 @@ GC_TEST(Remembered1314, MarkTaskPublishesOtherGeneration)
 }
 
 namespace {
+// ZGC zMark.cpp:993-997: ZMark::free() releases the mark-stack nodes retired
+// per worker. The retirement below goes through the product free_node() path
+// and the observation is that product's own per-worker pending count, so the
+// same quantity proves whether concurrent_mark_free() reached zMark.cpp:993.
+struct RetireMarkStackNodeTask : public WorkerTask {
+    MarkingSMR& smr;
+    std::atomic<uint32_t> retired{0};
+    explicit RetireMarkStackNodeTask(MarkingSMR& target)
+        : WorkerTask("RetireMarkStackNode"), smr(target)
+    {}
+    void work(uint32_t workerId) override
+    {
+        (void)workerId;
+        smr.free_node(new MarkStripeStackListNode(nullptr));
+        retired.fetch_add(1u, std::memory_order_relaxed);
+    }
+};
+
+struct ReadPendingMarkNodeTask : public WorkerTask {
+    MarkingSMR& smr;
+    std::atomic<uint32_t> pending{0};
+    explicit ReadPendingMarkNodeTask(MarkingSMR& target)
+        : WorkerTask("ReadPendingMarkNode"), smr(target)
+    {}
+    void work(uint32_t workerId) override
+    {
+        (void)workerId;
+        pending.fetch_add(static_cast<uint32_t>(smr.pending_count()), std::memory_order_relaxed);
+    }
+};
+
 void CheckYoungPostFreeCleanup(bool abortRequested)
 {
     B09RuntimeFixture runtime;
@@ -855,40 +886,32 @@ void CheckYoungPostFreeCleanup(bool abortRequested)
     WorkerFixture worker;
     auto& young = Heap::GetHeap().young();
     fixture.region0()->reset(PageAge::eden);
-    fixture.region1()->reset(PageAge::eden);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     InitializeGenerationWorkers(young, 1);
     young.Workers()->set_active();
     young.Mark().Start();
     young.set_phase(ZGenerationPhase::Mark);
-    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
-    auto* component = reinterpret_cast<TypeInfo*>(storage);
-    component->SetType(TypeKind::TYPE_KIND_UINT8);
-    component->SetInstanceSize(1);
-    fixture.typeInfo->SetType(TypeKind::TYPE_KIND_RAWARRAY);
-    fixture.typeInfo->SetComponentTypeInfo(component);
-    auto* first = reinterpret_cast<MArray*>(fixture.obj0);
-    auto* second = reinterpret_cast<MArray*>(fixture.obj1);
-    for (auto* array : {first, second}) {
-        array->SetLength(2);
-        array->SetPrimitiveElement<I8>(0, 7);
-        array->SetPrimitiveElement<I8>(1, 9);
-    }
-    StringDedup::Instance().Stop();
-    auto* installed = MCC_StringDedupCanonicalImpl(fixture.typeInfo, first);
-    auto* before = MCC_StringDedupCanonicalImpl(fixture.typeInfo, second);
-    if (abortRequested) ZAbort::abort();
-    // Restore the deleted check immediately AFTER mark_free() for the red arm.
-    // ZGC zGeneration.cpp:694-697 has no in-phase abort check. The retained
-    // String cleanup is outside this package; its observable result witnesses
-    // whether the actual removed branch skipped the phase's remaining work.
+    MarkingSMR& smr = young.Mark().Smr();
+    RetireMarkStackNodeTask retire(smr);
+    young.Workers()->run_task(&retire);
+    ReadPendingMarkNodeTask prepared(smr);
+    young.Workers()->run_task(&prepared);
+    const uint32_t before = prepared.pending.load(std::memory_order_relaxed);
+    if (abortRequested) { ZAbort::abort(); }
+    // #1310 removed the in-phase abort check: ZGC zGeneration.cpp:694-697 has
+    // none, so concurrent_mark_free() runs mark_free() on the abort branch too.
     young.concurrent_mark_free();
-    auto* after = MCC_StringDedupCanonicalImpl(fixture.typeInfo, second);
-    std::fprintf(stderr, "POSTFREE1310_TARGET abort=%d installed=%d before_first=%d after_second=%d\n",
-                 abortRequested, installed == first, before == first, after == second);
-    StringDedup::Instance().Stop();
+    ReadPendingMarkNodeTask freed(smr);
+    young.Workers()->run_task(&freed);
+    const uint32_t after = freed.pending.load(std::memory_order_relaxed);
+    std::fprintf(stderr, "POSTFREE1310_TARGET abort=%d retired=%u before=%u after=%u\n",
+                 abortRequested, retire.retired.load(std::memory_order_relaxed), before, after);
     young.StopWorkers();
-    GC_EXPECT_TRUE(installed == first && before == first && after == second);
+    // Preparation really retired nodes (positive control for the read below),
+    // and the phase released all of them on this branch.
+    GC_EXPECT_TRUE(retire.retired.load(std::memory_order_relaxed) > 0u);
+    GC_EXPECT_EQ(before, retire.retired.load(std::memory_order_relaxed));
+    GC_EXPECT_EQ(after, 0u);
 }
 }
 
