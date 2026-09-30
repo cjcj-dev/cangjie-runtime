@@ -33,7 +33,7 @@ ZForwarding* ZForwarding::alloc(ZForwardingAllocator* allocator, ZPage* page, Pa
     void* const addr = AttachedArray::alloc(allocator, nentries);
     // Retain the source page until relocation finishes (ZGC zForwarding.hpp:63).
     ZForwarding* forwarding = ::new (addr) ZForwarding(page, page->GetRegionStart(), ZAddressHeapBase,
-        page->GetRegionSize(), nentries, page->GetRegionLifeId(), page->age(), to_age,
+        page->GetRegionSize(), nentries, page->age(), to_age,
         static_cast<size_t>(page->object_alignment_shift()));
     return forwarding;
 }

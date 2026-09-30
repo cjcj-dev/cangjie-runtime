@@ -15,7 +15,9 @@
 namespace MapleRuntime {
 template <typename T>
 inline ZDeferredConstructed<T>::ZDeferredConstructed()
+#ifndef NDEBUG
     : _initialized(false)
+#endif
 {
     // Do not construct value immediately. Value is constructed at a later point
     // in time using initialize().
@@ -71,7 +73,9 @@ template <typename... Ts>
 inline void ZDeferredConstructed<T>::initialize(Ts&&... args)
 {
     assert(!_initialized && "Double initialization forbidden");
+#ifndef NDEBUG
     _initialized = true;
+#endif
     using NCVP = std::add_pointer_t<std::remove_cv_t<T>>;
     ::new (const_cast<NCVP>(get())) T(args...);
 }

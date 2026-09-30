@@ -1,3 +1,4 @@
+#include <future>
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -224,10 +225,17 @@ struct ForwardingSelectionResult {
     size_t inPlaceRetained{0};
     size_t copyCount{0};
     size_t copyLeft{0};
-    size_t copyStillFrom{0};
     size_t receipts{0};
     size_t remapReceipts{0};
     bool verifyRetirement{false};
+    bool verifyPreviousMark{false};
+    bool verifyPromotion{false};
+    bool observedMark{false};
+    size_t previousMembers{0};
+    size_t markReceipts{0};
+    size_t promotedRoots{0};
+    size_t registered{0};
+    size_t registeredDistinct{0};
     bool verifyPin{false};
     bool verifyCritical{false};
     bool collectionFinishedWhileHeld{false};
@@ -308,6 +316,7 @@ void* SelectRealLivePages(void* context)
     if (result.verifyRetirement) {
         snapshot(result.usedBefore, result.mappedBefore, result.generationBefore, result.mappedGenerationBefore);
     }
+    const int savedTenuringThreshold = ZTenuringThreshold;
     // Live objects in three real small pages force a non-empty relocation set.
     if (result.verifyCritical) {
         auto* array = static_cast<MArray*>(Heap::GetHeap().GetExportObject(roots[0]));
@@ -343,7 +352,108 @@ void* SelectRealLivePages(void* context)
         result.movedAfterRelease = reinterpret_cast<uintptr_t>(
             Heap::GetHeap().GetExportObject(roots[0])) != starts[0];
     } else {
-        Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
+        if (result.verifyPromotion) {
+            // Threshold 0 makes every selected page promote, so the install
+            // task's track_if_promoted fills the registration array. A young
+            // cycle keeps the finished set in place for the observation below.
+            ZTenuringThreshold = 0;
+            std::fprintf(stderr, "PROMOTION1315_PRECONDITION roots=%zu tenuring_threshold=0\n", result.roots);
+        }
+        Heap::GetHeap().RequestGC(result.verifyPromotion ? GC_REASON_YOUNG : GC_REASON_YOUNG);
+    }
+    if (result.verifyPromotion) {
+        // The promote-all cycle registered its relocated pages through
+        // ZRelocationSet::register_relocate_promoted; the registration array
+        // is the product's own record, read here after the collection.
+        ZArray<ZPage*>* const registeredPages = Heap::GetHeap().young().relocation_set().relocate_promoted_pages();
+        result.registered = static_cast<size_t>(registeredPages->length());
+        for (int i = 0; i < registeredPages->length(); ++i) {
+            ZPage* const candidate = registeredPages->at(i);
+            bool seen = false;
+            for (int j = 0; j < i && !seen; ++j) {
+                seen = registeredPages->at(j) == candidate;
+            }
+            result.registeredDistinct += seen ? 0 : 1;
+        }
+        std::fprintf(stderr, "PROMOTION1315_UNIQUENESS_TARGET executed=1 registered=%zu distinct=%zu\n",
+                     result.registered, result.registeredDistinct);
+        for (size_t i = 0; i < result.roots; ++i) {
+            BaseObject* root = Heap::GetHeap().GetExportObject(roots[i]);
+            ZPage* page = root == nullptr ? nullptr : Heap::page(reinterpret_cast<MAddress>(root));
+            result.promotedRoots += page != nullptr && page->generation_id() == ZGenerationId::old;
+            Heap::GetHeap().RemoveExportObject(roots[i]);
+        }
+        ZTenuringThreshold = savedTenuringThreshold;
+        std::fprintf(stderr, "PROMOTION1315_TARGET executed=1 promoted=%zu roots=%zu\n",
+                     result.promotedRoots, result.roots);
+        mutator->SetManagedContext(true);
+        return nullptr;
+    }
+    if (result.verifyPreviousMark) {
+        auto& generation = Heap::GetHeap().young();
+        ZRelocationSetIterator previous(&generation.relocation_set());
+        for (ZForwarding* forwarding; previous.next(&forwarding);) {
+            for (size_t i = 0; i < result.roots; ++i) {
+                result.previousMembers += forwarding->covers(starts[i]) && forwarding->find(starts[i]) != 0;
+            }
+        }
+        // Resolve the exported roots through the product load barrier before
+        // the next cycle. The saved from-addresses above remain unchanged:
+        // those addresses, not root repair, are the lifetime observation.
+        for (size_t i = 0; i < result.roots; ++i) {
+            (void)Heap::GetHeap().GetExportObject(roots[i]);
+        }
+        // A concurrent caller of the existing public static-root iterator
+        // owns its normal table lock. Concurrent mark must visit that table;
+        // holding this lock fixes the observation window after mark-start and
+        // before mark-end, without a product test callback or phase hook.
+        NativeSlot blockedRoot(zpointer::null);
+        NativeSlot* blockedRoots[] = {&blockedRoot};
+        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(blockedRoots), 1);
+        std::promise<void> readerEntered;
+        std::promise<void> releaseReader;
+        auto readerReady = readerEntered.get_future();
+        auto release = releaseReader.get_future();
+        std::thread rootReader([&] {
+            Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {
+                if (&slot == &blockedRoot) {
+                    readerEntered.set_value();
+                    release.wait();
+                }
+            });
+        });
+        readerReady.wait();
+        const bool wasSafe = mutator->InSaferegion();
+        if (wasSafe) { mutator->LeaveSaferegion(); }
+        const uint32_t before = generation.seqnum();
+        std::thread collector([&] { Heap::GetHeap().RequestGC(GC_REASON_YOUNG); });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (generation.seqnum() == before && std::chrono::steady_clock::now() < deadline) {
+            ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
+            std::this_thread::yield();
+        }
+        // A running mutator has returned from mark-start's real safepoint;
+        // mark-end must rendezvous with it before reset can consume this set.
+        result.observedMark = generation.is_phase_mark();
+        for (size_t i = 0; i < result.roots; ++i) {
+            ZForwarding* forwarding = generation.forwarding(starts[i]);
+            result.markReceipts += forwarding != nullptr && forwarding->find(starts[i]) != 0;
+        }
+        std::fprintf(stderr, "MARK1315_PRECONDITION previous_members=%zu roots=%zu phase_mark=%d\n",
+                     result.previousMembers, result.roots, result.observedMark);
+        std::fprintf(stderr, "MARK1315_TARGET executed=1 retained_receipts=%zu expected=%zu\n",
+                     result.markReceipts, result.previousMembers);
+        releaseReader.set_value();
+        rootReader.join();
+        mutator->EnterSaferegion(false);
+        collector.join();
+        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(blockedRoots), 1);
+        if (!wasSafe) { mutator->LeaveSaferegion(); }
+        for (size_t i = 0; i < result.roots; ++i) {
+            Heap::GetHeap().RemoveExportObject(roots[i]);
+        }
+        mutator->SetManagedContext(true);
+        return nullptr;
     }
     for (size_t i = 0; i < result.roots; ++i) {
         ZForwarding* forwarding = Heap::GetHeap().young().forwarding_table().get(starts[i]);
@@ -357,7 +467,6 @@ void* SelectRealLivePages(void* context)
                 const bool inPlace = forwarding->in_place();
                 const bool slotEmpty = now == nullptr;
                 const bool samePage = now != nullptr && now == sourcePages[i];
-                const bool stillFrom = now != nullptr && now->IsFromRegion();
                 const bool startMatches = now != nullptr && now->GetRegionStart() == sourceStarts[i];
                 const int role = slotEmpty ? -1 : static_cast<int>(now->GetRegionRole());
                 std::fprintf(stderr,
@@ -368,8 +477,7 @@ void* SelectRealLivePages(void* context)
                     result.inPlaceRetained += startMatches ? 1 : 0;
                 } else {
                     ++result.copyCount;
-                    result.copyStillFrom += stillFrom ? 1 : 0;
-                    result.copyLeft += ((slotEmpty || !samePage) && !stillFrom) ? 1 : 0;
+                    result.copyLeft += ((slotEmpty || !samePage)) ? 1 : 0;
                 }
                 // Observe the remap result before a second barrier consumes it.
                 // Otherwise a disconnected lookup fails in that barrier before
@@ -397,7 +505,7 @@ void* SelectRealLivePages(void* context)
         // assertions. A failing remap must not be consumed by cleanup first.
     }
     for (auto id : {Generation::Old, Generation::Young}) {
-        auto& queue = generation_relocate_queue(id);
+        auto& queue = (*Heap::GetHeap().GetZGeneration(id).relocate().queue());
         std::lock_guard<std::mutex> guard(queue.lock);
         result.pending += queue.queue.length();
     }
@@ -473,13 +581,11 @@ GC_RUNTIME_OTHER_VM_TEST(ZRelocationRetirement, CopiedSourceLeavesPageTable)
     std::fprintf(stderr, "SOURCE_RETIREMENT_TARGET roots=%zu selected=%zu retired=%zu remapped_payloads=%zu\n",
                  result.roots, result.published, result.retired, result.receipts);
     std::fprintf(stderr,
-                 "SOURCE_CLASS_TARGET in_place=%zu retained=%zu copy=%zu left=%zu still_from=%zu\n",
-                 result.inPlaceCount, result.inPlaceRetained, result.copyCount, result.copyLeft,
-                 result.copyStillFrom);
+                 "SOURCE_CLASS_TARGET in_place=%zu retained=%zu copy=%zu left=%zu\n",
+                 result.inPlaceCount, result.inPlaceRetained, result.copyCount, result.copyLeft);
     GC_EXPECT_TRUE(result.published > 0);
     GC_EXPECT_EQ(result.inPlaceCount + result.copyCount, result.published);
     GC_EXPECT_EQ(result.inPlaceRetained, result.inPlaceCount);
-    GC_EXPECT_EQ(result.copyStillFrom, 0u);
     GC_EXPECT_EQ(result.copyLeft, result.copyCount);
     std::fprintf(stderr, "FORWARD_RESULT_TARGET relocated=%zu remapped=%zu expected=%zu\n",
                  result.receipts, result.remapReceipts, result.published);
@@ -1573,6 +1679,48 @@ GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, NestedRawAcquireDuringBlock)
     GC_EXPECT_EQ(result.nullReleased, -2);
     GC_EXPECT_EQ(result.emptyReleased, -2);
     GC_EXPECT_EQ(result.stackReleased, -2);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+
+GC_RUNTIME_OTHER_VM_TEST(PageIdentity1315, MarkKeepsPreviousForwarding)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    result.verifyPreviousMark = true;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    // Target precedes prerequisites: absence never hides the target verdict.
+    GC_EXPECT_EQ(result.markReceipts, result.previousMembers);
+    GC_EXPECT_TRUE(result.observedMark);
+    GC_EXPECT_TRUE(result.previousMembers > 0);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(PageIdentity1315, PromoteAllRegistersUniquePages)
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ForwardingSelectionResult result;
+    result.verifyPromotion = true;
+    CJThreadHandle handle = RunCJTask(SelectRealLivePages, &result);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* taskResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(handle, &taskResult), E_OK);
+    ReleaseHandle(handle);
+    // Target: no page is registered twice (zRelocationSet.cpp:213-228).
+    GC_EXPECT_EQ(result.registered, result.registeredDistinct);
+    GC_EXPECT_EQ(result.promotedRoots, result.roots);
+    GC_EXPECT_TRUE(result.registered > 0);
+    GC_EXPECT_TRUE(result.roots > 0);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 

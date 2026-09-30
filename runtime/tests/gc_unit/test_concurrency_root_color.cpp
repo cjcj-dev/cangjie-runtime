@@ -98,7 +98,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     const MAddress forwardStart = page->GetRegionStart();
     const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.young().relocate().relocate(&heap.young().relocation_set());
-    const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = Heap::GetHeap().GetZGeneration(forwardGeneration).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
     MAddress observed = 0;
@@ -109,7 +109,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     };
     MAddress storedExpected = 0;
     if (updateThreadObject) {
-        storedExpected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(second));
+        storedExpected = Heap::GetHeap().GetZGeneration(forwardGeneration).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(second));
         auto* previous = CJThreadGetHandle();
         ThreadLocal::SetCJThread(thread);
         MCC_SetCurrentCJThreadObject(reinterpret_cast<void*>(storedExpected));
@@ -197,7 +197,7 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     const MAddress forwardStart = page->GetRegionStart();
     const Generation forwardGeneration = page->GetOwnerGeneration();
     heap.old().relocate().relocate(&heap.old().relocation_set());
-    const MAddress expected = generation_forwarding_table(forwardGeneration).get(forwardStart)->find(reinterpret_cast<MAddress>(from));
+    const MAddress expected = Heap::GetHeap().GetZGeneration(forwardGeneration).forwarding_table().get(forwardStart)->find(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(expected != 0 && expected != reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(savedColor != ZPointerLoadGoodMask);
     // The saved store-good color is from the previous epoch, so the group is armed.

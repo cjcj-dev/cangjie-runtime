@@ -73,10 +73,7 @@ public:
     {
     }
 
-    static void ParkFrom(RegionManager&, ZPage* region)
-    {
-        region->SetRegionRole(ZPageRole::From);
-    }
+
 
     static void ReleaseListOwnership(ZPage*)
     {
@@ -128,7 +125,7 @@ public:
         Heap& collector, BaseObject* from, BaseObject* to, ZPage* forwarding)
     {
         (void)to;
-        return ZGeneration::generation(forwarding->generation_id())->relocate().relocate_object(forwarding_for_page(forwarding), from);
+        return ZGeneration::generation(forwarding->generation_id())->relocate().relocate_object(ZGeneration::generation((forwarding)->generation_id())->forwarding((forwarding)->GetRegionStart()), from);
     }
 
     static BaseObject* ProductRelocateOrRemap(
@@ -154,7 +151,7 @@ public:
 
     static BaseObject* ForwardImpl(Heap& collector, BaseObject* from, ZPage* copyPage)
     {
-        return ZGeneration::generation(copyPage->generation_id())->relocate().relocate_object(forwarding_for_page(copyPage), from);
+        return ZGeneration::generation(copyPage->generation_id())->relocate().relocate_object(ZGeneration::generation((copyPage)->generation_id())->forwarding((copyPage)->GetRegionStart()), from);
     }
 
     static void RemapYoungRoots(Heap& collector) { Heap::GetHeap().old().remap_young_roots(); }
@@ -438,7 +435,8 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
         }
     }
     if (previous != nullptr && Heap::page(previous->GetRegionStart()) != nullptr) {
-        ZPage::RetirePage(previous, []() {});
+        Heap::page_table().remove(previous);
+        Heap::GetHeap().page_allocator().safe_destroy_page(previous);
     }
     ZPage* region = ZPage::InitRegion(index, (1) * ZGranuleSize, ZPageType::small);
     GC_EXPECT_TRUE(region != nullptr);
@@ -491,7 +489,7 @@ ZLiveMap* PrepareForwardable(GcHeapFixture& fx, ZPage* region, MAddress liveObje
     GC_EXPECT_TRUE(live != nullptr);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, reinterpret_cast<BaseObject*>(liveObject)));
     // The product freezes the selected set before publishing any page view.
-    if (generation_forwarding_table(generation).get(region->GetRegionStart()) == nullptr) {
+    if (Heap::GetHeap().GetZGeneration(generation).forwarding_table().get(region->GetRegionStart()) == nullptr) {
         // This fixture reserves unit 0 for a second sparse source; units 1/4/5
         // hold the tested source and units 2/3 hold its allocation destination.
         // Both pages go through the normal selector (ZGC strict savings > limit).
@@ -548,16 +546,16 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, Heap& collector,
     ZLiveMap* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
 
     if (publishMapping) {
-        const auto publication = forwarding_for_page(region, reinterpret_cast<MAddress>(from));
+        const auto publication = ZGeneration::generation((region)->generation_id())->forwarding((region)->GetRegionStart());
         // zRelocate.cpp:369: relocation to a fresh page is a disjoint copy.
         ZUtils::object_copy_disjoint(to_zaddress(reinterpret_cast<uintptr_t>(from)),
                                      to_zaddress(reinterpret_cast<uintptr_t>(to)), from->GetSize());
         GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(from),
                                                    reinterpret_cast<MAddress>(to)), reinterpret_cast<MAddress>(to));
     }
-    forwarding_for_page(region)->mark_done();
+    ZGeneration::generation(region->generation_id())->forwarding(region->GetRegionStart())->mark_done();
     from->SetStateCode(ObjectState::FORWARDED);
-    ZForwarding* table = generation_forwarding_table(generation).get(reinterpret_cast<MAddress>(from));
+    ZForwarding* table = Heap::GetHeap().GetZGeneration(generation).forwarding_table().get(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(table != nullptr);
     return LateBackfillState{ region, destination, from, to, live,
                               region->GetOwnerGeneration() };
@@ -644,8 +642,7 @@ void EmptyBothRememberedFaces(RememberedSet& remembered)
 LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, Heap& collector)
 {
     LateBackfillState state = PrepareLateBackfill(fx, collector);
-    ZForwarding* publication = forwarding_for_page(
-        state.region, reinterpret_cast<MAddress>(state.from));
+    ZForwarding* publication = ZGeneration::generation((state.region)->generation_id())->forwarding((state.region)->GetRegionStart());
     GC_EXPECT_TRUE(static_cast<bool>(publication));
     GC_EXPECT_EQ(publication->insert(reinterpret_cast<MAddress>(state.from),
                      reinterpret_cast<MAddress>(state.to)),
@@ -708,7 +705,7 @@ void ExerciseMutatorCopy(bool runtimeEntry)
     BaseObject* result = runtimeEntry
         ? RelocationReceiptTest::ProductRelocateOrRemap(collector, from, region->generation_id())
         : RelocationReceiptTest::ForwardImpl(collector, from, region);
-    const MAddress mapping = forwarding_find(Generation::Old, reinterpret_cast<MAddress>(from));
+    const MAddress mapping = ([&]() -> MAddress { auto* const f = Heap::GetHeap().GetZGeneration(Generation::Old).forwarding(reinterpret_cast<MAddress>(from)); return f != nullptr ? f->find(reinterpret_cast<MAddress>(from)) : 0; }());
     std::fprintf(stderr, "MUTATOR_COPY_ASSERT_EXECUTED runtime=%d result=%zx mapping=%zx expected=%zx\n",
                  runtimeEntry, reinterpret_cast<MAddress>(result), mapping, expected);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(result), expected);
@@ -960,10 +957,9 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
     if (unresolvedGhost) {
         state = PrepareLateBackfill(fx, collector);
         state.from->SetStateCode(ObjectState::NORMAL);
-        forwarding_for_page(state.region)->mark_done();
+        ZGeneration::generation(state.region->generation_id())->forwarding(state.region->GetRegionStart())->mark_done();
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
         auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-        RelocationReceiptTest::ParkFrom(manager, state.region);
         auto& old = Heap::GetHeap().old();
         if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
         old.Workers()->set_active_workers(1);
@@ -971,7 +967,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         ZRelocate::StartRelocationTasks(old.id());
         old.relocate().relocate(&old.relocation_set());
         old.Workers()->set_inactive();
-        auto owner = forwarding_for_page(state.region);
+        auto owner = ZGeneration::generation((state.region)->generation_id())->forwarding((state.region)->GetRegionStart());
         const MAddress fromAddr = reinterpret_cast<MAddress>(state.from);
         const MAddress produced = owner ? owner->find(fromAddr) : 0;
         const bool completed = owner && owner->is_done() && owner->_ref_count.load() == 0;
@@ -1059,10 +1055,10 @@ static void CheckForwardingWinner(bool identity)
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, fromAddr);
-    GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), 0);
-    GC_EXPECT_FALSE(forwarding_for_page(region)->is_done());
+    GC_EXPECT_EQ(([&]() -> MAddress { auto* const f = Heap::GetHeap().GetZGeneration(Generation::Old).forwarding(fromAddr); return f != nullptr ? f->find(fromAddr) : 0; }()), 0);
+    GC_EXPECT_FALSE(ZGeneration::generation(region->generation_id())->forwarding(region->GetRegionStart())->is_done());
     {
-        auto publication = forwarding_for_page(region, fromAddr);
+        auto publication = ZGeneration::generation((region)->generation_id())->forwarding((region)->GetRegionStart());
         GC_EXPECT_TRUE(static_cast<bool>(publication));
         GC_EXPECT_EQ(publication->insert(fromAddr,
                          reinterpret_cast<MAddress>(winner)), reinterpret_cast<MAddress>(winner));
@@ -1070,16 +1066,19 @@ static void CheckForwardingWinner(bool identity)
                          reinterpret_cast<MAddress>(loser)), reinterpret_cast<MAddress>(winner));
     }
     {
+        ZForwarding* retained = ZGeneration::generation(region->generation_id())->forwarding(region->GetRegionStart());
+        GC_EXPECT_TRUE(retained->retain_page(ZGeneration::generation(region->generation_id())->relocate().queue()));
         GC_EXPECT_TRUE(RelocationReceiptTest::WaitRoutedTipReady(
                            collector, from, nullptr, region) == winner);
-        GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), reinterpret_cast<MAddress>(winner));
+        GC_EXPECT_EQ(([&]() -> MAddress { auto* const f = Heap::GetHeap().GetZGeneration(Generation::Old).forwarding(fromAddr); return f != nullptr ? f->find(fromAddr) : 0; }()), reinterpret_cast<MAddress>(winner));
+        retained->release_page();
     }
-    forwarding_for_page(region)->mark_done();
-    GC_EXPECT_TRUE(forwarding_for_page(region)->is_done());
-    GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), reinterpret_cast<MAddress>(winner));
-    forwarding_for_page(region)->release_page();
-    GC_EXPECT_FALSE(forwarding_for_page(region)->retain_page(ZGeneration::old()->relocate().queue()));
-    GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), reinterpret_cast<MAddress>(winner));
+    ZGeneration::generation(region->generation_id())->forwarding(region->GetRegionStart())->mark_done();
+    GC_EXPECT_TRUE(ZGeneration::generation(region->generation_id())->forwarding(region->GetRegionStart())->is_done());
+    GC_EXPECT_EQ(([&]() -> MAddress { auto* const f = Heap::GetHeap().GetZGeneration(Generation::Old).forwarding(fromAddr); return f != nullptr ? f->find(fromAddr) : 0; }()), reinterpret_cast<MAddress>(winner));
+    ZGeneration::generation(region->generation_id())->forwarding(region->GetRegionStart())->release_page();
+    GC_EXPECT_FALSE(ZGeneration::generation(region->generation_id())->forwarding(region->GetRegionStart())->retain_page(ZGeneration::generation(region->generation_id())->relocate().queue()));
+    GC_EXPECT_EQ(([&]() -> MAddress { auto* const f = Heap::GetHeap().GetZGeneration(Generation::Old).forwarding(fromAddr); return f != nullptr ? f->find(fromAddr) : 0; }()), reinterpret_cast<MAddress>(winner));
 
         RelocationReceiptTest::BindCollector(nullptr);
 }
@@ -1180,13 +1179,11 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
         ZLiveMap* live = &region->livemap();
         auto& regionManager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-        RelocationReceiptTest::ParkFrom(regionManager, region);
         // ZGC selects a set only when packing can release a page. Two sparse
         // pages are input to the real selector; a single page is exempted.
         ZPage* second = ResetDeliveryUnit(fx, 4);
         secondOld = fx.PlaceObject(second->GetRegionStart());
         second->SetRegionAllocPtr(reinterpret_cast<MAddress>(secondOld) + secondOld->GetSize());
-        RelocationReceiptTest::ParkFrom(regionManager, second);
         forwarding = {region, region, from, dead, live, Generation::Old};
     } else {
         forwarding = PrepareLateBackfill(fx, collector, Generation::Young);
@@ -1250,8 +1247,14 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     // The thread must predate the relocation color flip: its raw roots still
     // name the from-page, so its saved load-good mask must describe that epoch.
     if (!oldPending) LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
-    MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::young), 2);
-    MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::old), 2);
+    if (ZGeneration::young()->Workers() == nullptr) {
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::young), 2);
+    }
+    ZGeneration::young()->set_active_workers(2);
+    if (ZGeneration::old()->Workers() == nullptr) {
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::old), 2);
+    }
+    ZGeneration::old()->set_active_workers(2);
     // This fixture invokes the old body without the driver's young prelude.
     // Supply the product mark-start sequence event before publishing old roots.
     auto& oldCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
@@ -1266,7 +1269,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         ZGeneration::old()->collect();
     }
     const uintptr_t expected = oldPending
-        ? forwarding_find(Generation::Old, reinterpret_cast<uintptr_t>(forwarding.from))
+        ? ([&]() -> MAddress { auto* const f = Heap::GetHeap().GetZGeneration(Generation::Old).forwarding(reinterpret_cast<uintptr_t>(forwarding.from)); return f != nullptr ? f->find(reinterpret_cast<uintptr_t>(forwarding.from)) : 0; }())
         : reinterpret_cast<uintptr_t>(forwarding.to);
     const uintptr_t before = reinterpret_cast<uintptr_t>(forwarding.from);
     if (oldPending) {
@@ -1356,7 +1359,7 @@ void CheckMajorCurrentRemset(unsigned workers)
     *field = StoreGoodPointer(from);
     heap.remembered().remember(field);
     const uintptr_t before = raw(*field);
-    ZForwarding* forwarding = forwarding_for_page(source);
+    ZForwarding* forwarding = ZGeneration::generation((source)->generation_id())->forwarding((source)->GetRegionStart());
     GC_EXPECT_TRUE(forwarding != nullptr);
     young.set_phase(ZGenerationPhase::Relocate);
     ZGlobalsPointers::flip_young_relocate_start();
@@ -1484,7 +1487,7 @@ GC_TEST(PageGeneration579, FlipAgePagesHandsRegionListSlotToPromotedPage)
     ZGeneration::young()->flip_promote(region, promoted);
     GC_EXPECT_TRUE(Heap::page(region->GetRegionStart()) == promoted);
     GC_EXPECT_TRUE(promoted->generation_id() == ZGenerationId::old);
-    ZPage::RetireDescriptor(region);
+    Heap::GetHeap().page_allocator().safe_destroy_page(region);
 }
 
 GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
@@ -1503,14 +1506,8 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
         GC_EXPECT_TRUE(current == expected);
         GC_EXPECT_TRUE(region->generation_id() == expectedId);
     }
-    const auto oldLife = region->GetRegionLifeId();
-    RegionLifeId retiredLife = oldLife;
-    ZPage::RetirePage(region, [region, &retiredLife]() {
-        region->RetirePageMemory();
-        retiredLife = region->GetRegionLifeId();
-    });
-    // The scratch life counter belongs to one descriptor, not its address.
-    GC_EXPECT_TRUE(retiredLife != oldLife);
+    Heap::page_table().remove(region);
+    Heap::GetHeap().page_allocator().safe_destroy_page(region);
     // ZPage::reset_seqnum/reset (zPage.cpp:90-112): a newly constructed page
     // snapshots the current generation, even when its address is reused.
     GcHeapFixture::AdvanceGeneration(Generation::Old);
@@ -1537,7 +1534,7 @@ void CheckMinorFieldColour(bool stale)
     fx.region1()->reset(PageAge::eden);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), fx.obj1));
     fx.InstallPageOwner(fx.region0());
-    ZForwarding* forwarding = forwarding_for_page(fx.region0());
+    ZForwarding* forwarding = ZGeneration::generation((fx.region0())->generation_id())->forwarding((fx.region0())->GetRegionStart());
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
     const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
     GC_EXPECT_EQ(forwarding->insert(from, to), to);
@@ -1617,7 +1614,7 @@ void ExerciseRelocationWait782(bool claimedPage)
     auto& generation = heap.GetZGeneration(ZGenerationId::old);
     generation.set_phase(ZGenerationPhase::Relocate);
     PrepareForwardable(fx, source, reinterpret_cast<MAddress>(from));
-    ZForwarding* forwarding = forwarding_for_page(source);
+    ZForwarding* forwarding = ZGeneration::generation((source)->generation_id())->forwarding((source)->GetRegionStart());
     GC_EXPECT_EQ(forwarding->find(reinterpret_cast<MAddress>(from)), 0U);
     DeliverySharedPageScope allocation(destination);
     std::vector<ZPage*> occupied;

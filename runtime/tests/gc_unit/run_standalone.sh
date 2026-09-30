@@ -76,7 +76,7 @@ run_ohos_host_arm() {
   if [[ -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]]; then
     echo "GC_UNIT_OHOS_HOST_HEADER_ROOT=${runtime_include_flags[0]#-I}"
     "$CXX" -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti -fexceptions \
-      -fvisibility-inlines-hidden -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
+      -fvisibility-inlines-hidden "${TEST_DEFINES[@]}" -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
       -DMRT_TESTABLE_INTERNALS=1 -include string \
       -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
       -I"$ROOT/runtime/src/Heap/z/os/linux" \
@@ -243,7 +243,10 @@ TEST_DEFINES=()
 # a deleted test hook is not a configuration interface.
 PRODUCT_CONFIGURATION=$(python3 "$SRC/product_test_configuration.py" \
   "$ROOT/runtime" "$RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT")
-read -r SO_TESTABLE SO_GC_UNIT_TESTS SO_OHOS_HOST <<<"$PRODUCT_CONFIGURATION"
+read -r SO_TESTABLE SO_GC_UNIT_TESTS SO_OHOS_HOST SO_NDEBUG <<<"$PRODUCT_CONFIGURATION"
+if [[ "$SO_NDEBUG" == 1 ]]; then
+    TEST_DEFINES+=(-DNDEBUG)
+fi
 if [[ "$SO_OHOS_HOST" == 1 ]]; then
     run_ohos_host_arm
     exit $?
@@ -385,7 +388,6 @@ MAIN_SOURCES=(
   "$SRC/test_generation_mark_free.cpp"
 
   "$SRC/test_exempt_unlock.cpp"
-  "$SRC/test_isfromreg.cpp"
   "$SRC/test_current_object_ref.cpp"
   "$SRC/test_i2_readref.cpp"
   "$SRC/test_loadfc.cpp"

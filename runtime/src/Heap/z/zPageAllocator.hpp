@@ -16,6 +16,7 @@
 #include <mutex>
 #include <vector>
 #include "Heap/z/zFuture.hpp"
+#include "Heap/z/zSafeDelete.inline.hpp"
 #include "Heap/z/zList.inline.hpp"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zArray.inline.hpp"
@@ -251,9 +252,6 @@ template<Generation G>
 class ForwardTask;
 
 
-
-
-
 // RegionManager needs to know header size and alignment in order to iterate objects linearly
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 namespace GcUnit { struct GcHeapFixture; }
@@ -308,7 +306,6 @@ class RegionManager {
     friend class ZObjectAllocator;
     friend struct PinRootTestAccess;
     friend struct IkeKeepTestAccess;
-    friend struct IsFromRegTestAccess;
 
 public:
     /* region memory layout:
@@ -334,10 +331,6 @@ public:
     // P01 reverse-metadata ABI adapter; called only before runtime allocation.
     static std::vector<ZPage::ReservedSegment> ReservedSegments(ZVirtualMemoryManager& virtualMemory);
 
-    void VisitPageOwners(const std::function<void(ZPage*)>& visitor) const
-    {
-        ZPage::VisitPageOwners(visitor);
-    }
 
     // ZPageAllocator::capacity(): sum of ZPartition::_capacity.
     size_t GetCommittedCapacity() const { return capacity(); }
@@ -363,7 +356,6 @@ public:
     RegionManager& operator=(const RegionManager&) = delete;
 
 
-
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
 
@@ -379,7 +371,6 @@ public:
     bool StallAllocation(AllocationStallRequest& request);
     bool ClaimCapacityOrStall(AllocationStallRequest& request);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
-    void ReturnPageMemory(const ZVirtualMemory& memory);
     bool IsAllocationStalling() const;
     bool IsAllocationStallingForOld() const;
     void HandleAllocStallingForYoung();
@@ -387,222 +378,3 @@ public:
     void HandleAllocStallingForOld(bool clearedAllSoftRefs);
     size_t AllocationStallsNow() const;
     void ResetFlipPromotedPages();
-    void promote_used(const ZPage* from, const ZPage* to);
-    void safe_destroy_page(ZPage* page);
-    void free_page(ZPage* page);
-    void StampCensusBoundaries();
-    void PromoteAllRegions();
-
-    // ZGeneration::select_relocation_set iterates only pages owned by that
-    // generation (zGeneration.cpp:195-221).  An old relocation pass may
-    // observe a young page in our shared list, but it must not relocate or
-    // promote it using the old mark view.
-    static constexpr bool GenerationMayRelocateYoung(Generation generation)
-    {
-        return generation == Generation::Young;
-    }
-
-
-    void DumpRegionStats(const char* msg) const;
-
-
-#if defined(__EULER__)
-    double GetCacheRatio() const { return cacheRatio; }
-#endif
-
-    uintptr_t GetRegionHeapStart() const { return regionHeapStart; }
-    uintptr_t GetRegionHeapEnd() const { return regionHeapEnd; }
-
-    ~RegionManager();
-
-    // take a region with *num* units for allocation
-    ZPage* TakeRegion(size_t num, ZPageType, PageAge age = PageAge::old, ZAllocationFlags flags = {});
-
-
-
-    // caller assures size is truely large (> region size)
-
-
-
-
-
-    void RestoreToSpaceStateWords();
-
-
-
-
-    size_t GetYoungAllocatedSize() const;
-
-
-
-
-
-
-    // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).
-
-    size_t GetUsedRegionSize() const { return GetUsedBytes(); }
-
-    size_t GetRecentAllocatedSize() const;
-    size_t GetSurvivedSize() const;
-    size_t GetFromSpaceSize() const;
-    size_t SumAllocatedByRoles(std::initializer_list<ZPageRole> roles) const;
-
-    size_t GetUsedBytes() const;
-
-    size_t GetCachedBytes() const;
-    // Address space not yet backed by committed capacity (ZGC: current_max_capacity - capacity).
-    size_t GetUncommittedBytes() const { return GetHeapCapacity() - GetCommittedCapacity(); }
-
-    size_t GetCommittedBytes() const { return GetCommittedCapacity(); }
-
-    // Diagnostic total over large pages, from the page table (no page list).
-    size_t GetLargeObjectSize() const;
-
-    size_t GetAllocatedSize() const;
-
-    // zPageAllocator.cpp:1363-1373 — snapshot feeding ZStatHeap. Stats reads;
-    // UpdateAndStats first resets the per-collection used high/low trackers
-    // (zPageAllocator.cpp:1332-1346 update_collection_stats, called at mark
-    // start). Generation is needed for the per-generation used/freed/promoted/
-    // compacted fields.
-    ZPageAllocatorStats Stats(const ZGeneration* generation) const;
-    ZPageAllocatorStats UpdateAndStats(const ZGeneration* generation);
-    void UpdateCollectionStats(ZGenerationId id);
-    void increase_used_generation(ZGenerationId id, size_t size)
-    {
-        usedPerGeneration[id == ZGenerationId::young ? 0 : 1].fetch_add(size, std::memory_order_relaxed);
-    }
-    void decrease_used_generation(ZGenerationId id, size_t size)
-    {
-        usedPerGeneration[id == ZGenerationId::young ? 0 : 1].fetch_sub(size, std::memory_order_relaxed);
-    }
-    void NoteUsedGenerationDelta(Generation generation, ssize_t delta)
-    {
-        const ZGenerationId id = generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
-        if (delta >= 0) {
-            increase_used_generation(id, static_cast<size_t>(delta));
-        } else {
-            decrease_used_generation(id, static_cast<size_t>(-delta));
-        }
-    }
-    size_t used_generation(ZGenerationId id) const
-    {
-        return usedPerGeneration[id == ZGenerationId::young ? 0 : 1].load(std::memory_order_relaxed);
-    }
-    size_t UsedGeneration(ZGenerationId id) const { return used_generation(id); }
-
-
-
-    void SetGarbageThreshold(double garbageThreshold);
-
-
-
-
-
-
-
-
-
-
-private:
-    // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the
-    // page table no longer publishes the old descriptor.
-    void ReturnRetiredPageMemory(const ZVirtualMemory& memory);
-
-
-
-
-
-
-    inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
-
-    ZPage* AllocateSharedPage(size_t size, ZPageType role, PageAge age, ZAllocationFlags flags);
-
-    MAddress reservedStart = 0;
-    MAddress reservedEnd = 0;
-    struct MetadataMapping {
-        void* base { nullptr };
-        size_t size { 0 };
-        ~MetadataMapping();
-    } metadata;
-    // Declared before the caches: backing/address resources are destroyed
-    // only after their page/cache entries, as in ZPageAllocator.
-    std::unique_ptr<ZVirtualMemoryManager> virtualMemory;
-    std::unique_ptr<ZPhysicalMemoryManager> physicalMemory;
-    friend class ZPartition;
-    std::vector<std::unique_ptr<ZPartition>> partitions;
-    size_t nextPartition{0}; // A03n: preferred NUMA routing is deferred.
-    void InitializePartitions(size_t maxCapacity);
-    void PrintCacheOn() const;
-    bool claim_capacity(ZPageAllocation* allocation);
-    bool claim_capacity_fast_medium(ZPageAllocation* allocation);
-    ZPage* alloc_page_inner(ZPageAllocation* allocation);
-    ZVirtualMemory satisfied_from_cache_vmem(const ZPageAllocation* allocation) const;
-    ZVirtualMemory claim_virtual_memory(ZPageAllocation* allocation);
-    ZVirtualMemory claim_virtual_memory_single_partition(ZSinglePartitionAllocation* allocation);
-    void claim_physical_for_increased_capacity(ZMemoryAllocation* allocation, const ZVirtualMemory& vmem);
-    bool commit_and_map(ZPageAllocation* allocation, const ZVirtualMemory& vmem);
-    bool commit_and_map_single_partition(ZSinglePartitionAllocation* allocation, const ZVirtualMemory& vmem);
-    void commit(ZMemoryAllocation* allocation, const ZVirtualMemory& vmem);
-    bool commit_single_partition(ZSinglePartitionAllocation* allocation, const ZVirtualMemory& vmem);
-    void map_committed_single_partition(ZSinglePartitionAllocation* allocation, const ZVirtualMemory& vmem);
-    void cleanup_failed_commit_single_partition(ZSinglePartitionAllocation* allocation, const ZVirtualMemory& vmem);
-    void free_after_alloc_page_failed(ZPageAllocation* allocation);
-    void free_memory_alloc_failed(ZPageAllocation* allocation);
-    void free_memory_alloc_failed_single_partition(ZSinglePartitionAllocation* allocation);
-    void free_memory_alloc_failed(ZMemoryAllocation* allocation);
-    ZPage* create_page(ZPageAllocation* allocation, const ZVirtualMemory& vmem);
-    ZPageAllocatorStats StatsInner(const ZGeneration* generation) const;
-public:
-    size_t capacity() const;
-    size_t current_max_capacity() const;
-    static ZVirtualMemory VirtualMemoryOf(size_t index, size_t count);
-    static size_t IndexOf(const ZVirtualMemory& vmem);
-private:
-
-    // #710: page lifecycle identity lives in ZPage's role word and the page
-    // table (zPageTable.hpp:57-77); there are no page lists. The relocation
-    // set (zRelocationSet.hpp) is the from-space work source.
-    // zPageAllocator.hpp:157-162 shape: per-generation used (region-granular)
-    // and per-collection used high/low, updated at the pageAllocatorUsed
-    // mutation points.
-    std::atomic<size_t> usedPerGeneration[2]{};
-    size_t collectionUsedHigh[2]{ 0, 0 };
-    size_t collectionUsedLow[2]{ 0, 0 };
-    void TrackUsedPeakLocked()
-    {
-        for (size_t i = 0; i < 2; ++i) {
-            if (pageAllocatorUsed > collectionUsedHigh[i]) { collectionUsedHigh[i] = pageAllocatorUsed; }
-            if (pageAllocatorUsed < collectionUsedLow[i]) { collectionUsedLow[i] = pageAllocatorUsed; }
-        }
-    }
-    // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
-    friend class Uncommitter;
-    mutable std::mutex pageAllocatorMutex;
-    ZList<ZPageAllocation> stalled;
-    bool stallClosed{false};
-    bool _initialized{false};
-    void SatisfyStalledAllocations();
-    void NotifyOutOfMemory();
-    void RestartGC() const;
-    std::atomic<size_t> pageAllocatorUsed{ 0 };
-
-    uintptr_t regionHeapStart = 0; // the address of first region to allocate object
-    uintptr_t regionHeapEnd = 0;
-
-    size_t heapCapacity = 0;
-    TLABAllocationAverage tlabAllocatingThreads;
-    TLABAllocationAverage tlabRequestedFraction;
-
-    double fromSpaceGarbageThreshold = 0.5; // 0.5: default garbage ratio.
-    double exemptedRegionThreshold;
-#if defined(__EULER__)
-    double cacheRatio;
-#endif
-};
-
-} // namespace MapleRuntime
-
-#include "Heap/z/zPageAllocator.inline.hpp"
-#include "Heap/z/zRelocate.hpp"
-#endif // MRT_REGION_MANAGER_H

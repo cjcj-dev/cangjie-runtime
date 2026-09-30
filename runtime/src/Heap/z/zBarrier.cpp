@@ -402,5 +402,3 @@ RefField<> ZBarrier::GetAndTryTagRefField(BaseObject* target)
 {
     // ZGC zAddress.inline.hpp:505-508: store_good consumes an uncolored address.
     return RefField<>(ZAddress::store_good_or_null(from_object(target)));
-}
-} // namespace MapleRuntime
