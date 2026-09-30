@@ -423,6 +423,17 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, boo
 }
 #endif
 
+// threads.cpp:935-942: the VM thread is terminated only after the other threads
+// are gone, so the owner leaves the mutator set before the stand-in is torn
+// down. End the mutator this body created the way a normal thread end does --
+// leave the state it entered, then leave the manager. Teardown only; the
+// sequence under test runs above it.
+static void EndOwnerMutator(Mutator* owner)
+{
+    (void)owner->DoLeaveSaferegion();
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+
 // zUncoloredRoot.inline.hpp:62-68 and zGeneration.inline.hpp:131-139: relocate-start
 // exit processing writes the to-address of a cset frame slot before concurrent relocate.
 static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPointer = true,
@@ -580,6 +591,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         std::fprintf(stderr, "K3_UNWIND_ORDER_ASSERT entry=%d original=%#zx unexposed=%#zx closure=%#zx final=%#zx forwarding=%#zx result=%d\n",
                      requestEntry, original, unexposed, closure.observed, frames[3][2], forwarding, result);
         GC_EXPECT_TRUE(result);
+        EndOwnerMutator(parked);
         return;
     }
     if (requestEntry == 4) {
@@ -590,6 +602,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         std::fprintf(stderr, "K3_ZOP_SKIP_ASSERT old=%#zx observed=%#zx forwarding=%#zx\n",
                      before, younger[2], forwarding);
         GC_EXPECT_TRUE(younger[2] == before && forwarding == 0);
+        EndOwnerMutator(parked);
         return;
     }
     if (requestEntry == 3) {
@@ -692,13 +705,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     }
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
-    // threads.cpp:935-942: the VM thread is terminated only after the other
-    // threads are gone. End this mutator the way a normal thread end does --
-    // leave the state it entered, then leave the manager -- so the stand-in
-    // destructor can drain the world. Teardown only; the sequence above is the
-    // one under test.
-    (void)parked->DoLeaveSaferegion();
-    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    EndOwnerMutator(parked);
     CangjieRuntime::stackGrowConfig = savedGrow;
 #else
     (void)owner;
@@ -992,13 +999,7 @@ static void CheckGrowCopiesHealedFrameRoot()
     GC_EXPECT_TRUE(g_growCopy.done || g_growCopy.watermark == 0);
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
-    // threads.cpp:935-942: the VM thread is terminated only after the other
-    // threads are gone. End this mutator the way a normal thread end does --
-    // leave the state it entered, then leave the manager -- so the stand-in
-    // destructor can drain the world. Teardown only; the sequence above is the
-    // one under test.
-    (void)parked->DoLeaveSaferegion();
-    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    EndOwnerMutator(parked);
 }
 #else
 static void CheckGrowCopiesHealedFrameRoot() {}
