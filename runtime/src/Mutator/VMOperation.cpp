@@ -178,6 +178,11 @@ void VMThread::run()
 void VMThread::wait_for_vm_thread_exit()
 {
     auto& vmThread = instance();
+    // vmThread.cpp:226 asserts the caller is already a terminated JavaThread,
+    // so it never counts against the world stop the VM thread performs at
+    // :189-190. The runtime stand-in's owner is a live mutator instead: it
+    // waits in a saferegion, the same protocol the submitter uses at :340-343.
+    ScopedEnterSaferegion saferegion(false);
     {
         std::unique_lock<std::mutex> guard(vmThread.lock);
         CHECK_DETAIL(vmThread.running && vmThread.nextOperation == nullptr, "VM thread must drain before shutdown");
