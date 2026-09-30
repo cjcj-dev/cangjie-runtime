@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <thread>
@@ -24,6 +25,7 @@ using ShutdownManagedCallback = bool (*)(int, siginfo_t*, void*);
 ShutdownManagedCallback shutdownManagedCallback = nullptr;
 std::atomic<int> shutdownManagedStage{0};
 std::atomic<bool> shutdownNativeReturning{false};
+int shutdownObservationDone = 0;
 
 extern "C" void ShutdownInstallCallback(ShutdownManagedCallback callback)
 {
@@ -134,5 +136,13 @@ int main(int argc, char** argv)
     }
     const bool returned = WaitFor(shutdownCallbackReturned);
     std::fprintf(stderr, "SHUTDOWN_NATIVE_RETURN_TARGET returned=%d\n", returned);
+    if (std::getenv("SHUTDOWN_OBSERVE_EXIT") != nullptr) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        while (__atomic_load_n(&shutdownObservationDone, __ATOMIC_ACQUIRE) == 0 &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        if (!shutdownObservationDone) { return 9; }
+    }
     return result == E_OK && returned && inFlight == !singleProcessor ? 0 : 7;
 }

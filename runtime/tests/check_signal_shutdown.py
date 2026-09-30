@@ -8,7 +8,10 @@ from check_native_detach import MI, digest, emit, event_field
 
 
 def main():
-    elf, libdir, output = sys.argv[1:]
+    elf, libdir, output = sys.argv[1:4]
+    consume = len(sys.argv) > 4 and sys.argv[4] == 'consume'
+    if consume:
+        os.environ['SHUTDOWN_OBSERVE_EXIT'] = '1'
     library = Path(libdir).resolve() / 'libcangjie-runtime.so'
     os.environ['LD_LIBRARY_PATH'] = str(library.parent)
     emit('SHUTDOWN_IDENTITY', elf=digest(elf), so=digest(library), library=str(library))
@@ -42,9 +45,25 @@ def main():
             emit('SHUTDOWN_TARGET_EXECUTED', target=target, passed=passed,
                  pending=pending, terminal=terminal, retained=retained,
                  entered=entered, returned=returned)
+        consumed = None
+        if consume:
+            consumed = debugger.breakpoint('SignalStack.cpp:72', condition='signal == ' + str(exit_signal))
         debugger.delete(checkpoint)
         debugger.resume(current)
         event = debugger.stop()
+        if consume:
+            if event_field(event, 'bkptno') != consumed:
+                raise RuntimeError('Exit consumer not reached: ' + event)
+            consumer_thread = event_field(event, 'thread-id')
+            remaining = debugger.number(
+                '*(int*)&MapleRuntime::g_pendingSignals[' + str(exit_signal) + ']', consumer_thread)
+            results['exit_consumed'] = remaining == 0
+            emit('SHUTDOWN_TARGET_EXECUTED', target='exit_consumed', passed=remaining == 0,
+                 pending=remaining)
+            debugger.expression('shutdownObservationDone = 1', consumer_thread)
+            debugger.delete(consumed)
+            debugger.resume(consumer_thread)
+            event = debugger.stop()
         if 'exited-normally' not in event and 'exit-code="0"' not in event:
             raise RuntimeError('Host exit failed: ' + event)
         Path(output + '.json').write_text(json.dumps(results, indent=2) + '\n')
