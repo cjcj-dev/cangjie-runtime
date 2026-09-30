@@ -343,6 +343,7 @@ MAIN_SOURCES=(
   "$SRC/test_remap_young_roots.cpp"
   "$SRC/test_zForwarding.cpp"
   "$SRC/test_z_forwarding_table.cpp"
+  "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
   "$SRC/test_allocation_transaction.cpp"
   "$SRC/test_worker_origins.cpp"
