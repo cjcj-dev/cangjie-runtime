@@ -88,8 +88,6 @@ public:
     static constexpr bool Strong = false;
     static constexpr bool Finalizable = true;
 
-    enum class Result { Completed, Partial, Aborted };
-
     explicit ZMark(size_t capacity, MarkingStacks::MarkingGeneration generation);
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
     void MarkObject(zaddress address);
@@ -124,7 +122,7 @@ public:
     void Free();
     MarkingStacks::MarkingGeneration Generation() const { return generation; }
 
-    Result FollowWork(MarkContext& context, size_t workerId, bool partial);
+    bool FollowWork(bool partial);
     bool Drain(MarkContext& context, size_t workerId);
 
 

@@ -197,7 +197,7 @@ std::set<size_t> OnSet(GcHeapFixture& fx, Slot* addr, size_t length)
         // Neither the pending product entries nor their ownership are changed.
         domain.Terminate().Reset(1);
         ZAbort::abort();
-        (void)domain.FollowWork(context, 0, true);
+        (void)domain.FollowWork(true);
         ZAbort::reset();
         ExpectPartition(domain, addr, length, original, ++step);
         GC_EXPECT_TRUE(step <= length * 2 + 32);

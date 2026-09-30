@@ -532,26 +532,27 @@ bool ZMark::Drain(MarkContext& context, size_t workerId)
     return true;
 }
 
-ZMark::Result ZMark::FollowWork(MarkContext& context, size_t workerId, bool partial)
+bool ZMark::FollowWork(bool partial)
 {
+    const uint32_t workerId = WorkerThread::worker_id();
+    MarkContext context(nworkers, workerId, stripes, Stacks());
     for (;;) {
         if (!Drain(context, workerId)) {
             terminate.Leave();
-            return Result::Aborted;
+            return false;
         }
         if (StealLocalRound(context, stripes) ||
             StealGlobalRound(context, smr, stripes, workerId)) {
             continue;
         }
         if (partial) {
-            return Result::Partial;
+            return true;
         }
         if (TryProactiveFlush(workerId)) {
             continue;
         }
         if (terminate.TryTerminate(stripes, context.NStripes())) {
-            context.Cache().Flush();
-            return Result::Completed;
+            return true;
         }
     }
 }
@@ -598,21 +599,12 @@ void ZMark::PrepareWork()
 
 void ZMark::FollowWorkComplete()
 {
-    const uint32_t workerId = WorkerThread::worker_id();
-    MarkContext local(nworkers, workerId, stripes, Stacks());
-    (void)FollowWork(local, workerId, false);
-    (void)local.Stacks().Flush(stripes);
-    local.Cache().Flush();
+    (void)FollowWork(false);
 }
 
 bool ZMark::FollowWorkPartial()
 {
-    const uint32_t workerId = WorkerThread::worker_id();
-    MarkContext local(nworkers, workerId, stripes, Stacks());
-    const Result result = FollowWork(local, workerId, true);
-    (void)local.Stacks().Flush(stripes);
-    local.Cache().Flush();
-    return result != Result::Aborted;
+    return FollowWork(true);
 }
 
 void ZMark::MarkFollow()
@@ -1051,4 +1043,3 @@ void ZMark::follow_array_object(MarkContext& ctx, MArray* array, bool finalizabl
 } // namespace MapleRuntime
 
 #include "Heap/z/zMark.inline.hpp"
-
