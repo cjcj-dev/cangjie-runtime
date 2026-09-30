@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       filter:
-        description: gtest filter
+        description: Colon-separated exact Suite.Test names
         required: true
         type: string
   push:
@@ -105,8 +105,15 @@ jobs:
           sha256sum evidence/standalone/cj_gc_unit > evidence/elf.sha256
           nm --defined-only evidence/standalone/cj_gc_unit | c++filt > evidence/elf-defined.log
           nm -u evidence/standalone/cj_gc_unit | c++filt > evidence/elf-imports.log
-          LD_LIBRARY_PATH="$product_lib" evidence/standalone/cj_gc_unit "--gtest_filter=$TEST_FILTER" > evidence/target.log 2>&1
-          target_rc=$?
+          IFS=: read -r -a selected_tests <<< "$TEST_FILTER"
+          target_rc=0
+          for index in "${!selected_tests[@]}"; do
+            LD_LIBRARY_PATH="$product_lib" evidence/standalone/cj_gc_unit "--gtest_filter=${selected_tests[$index]}" > "evidence/target-$index.log" 2>&1
+            result=$?
+            printf '%s\n' "$result" > "evidence/target-$index.rc"
+            if [ "$result" -ne 0 ]; then target_rc=1; fi
+          done
+          cat evidence/target-*.log > evidence/target.log
           printf '%s\n' "$target_rc" > evidence/target.rc
           cat evidence/target.log
           uptime > evidence/uptime-after.log
