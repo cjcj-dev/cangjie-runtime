@@ -76,7 +76,7 @@ public:
             CHECK(collector == &Heap::GetHeap());
             for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
                 auto& cycle = Heap::GetHeap().GetZGeneration(generation);
-                if (cycle.Workers() == nullptr) cycle.InitializeWorkers(2);
+                if (cycle.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, 2);
             }
             Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::MarkComplete);
             auto& remembered = HeapTestRemset();
@@ -104,7 +104,7 @@ public:
     static void PrepareMajorRoots(Heap& collector)
     {
         auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-        if (young.Workers() == nullptr) young.InitializeWorkers(1);
+        if (young.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 1);
         auto& oldCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         auto& remembered = HeapTestRemset();
         if (!remembered.IsInitialized()) {
@@ -136,7 +136,7 @@ public:
         if (!oldRootsOnly) PrepareMajorRoots(collector);
         auto& old = Heap::GetHeap().old();
         if (oldRootsOnly) {
-            if (old.Workers() == nullptr) old.InitializeWorkers(1);
+            if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
             old.mark_start();
         }
         old.concurrent_mark();
@@ -354,7 +354,7 @@ void RunYoungWeakVariant(size_t helpers)
     RelocationReceiptTest::BindCollector(&collector);
     {
         auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-        if (young.Workers() == nullptr) young.InitializeWorkers(helpers + 1);
+        if (young.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(young, helpers + 1);
         else young.Workers()->set_active_workers(helpers + 1u);
     }
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
@@ -461,7 +461,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     RelocationReceiptTest::BindCollector(&collector);
     {
         auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-        if (old.Workers() == nullptr) old.InitializeWorkers(helpers + 1);
+        if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, helpers + 1);
         else old.Workers()->set_active_workers(helpers + 1u);
     }
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
@@ -1106,7 +1106,7 @@ GC_OTHER_VM_TEST(HeapIterator, PhantomRootDoesNotKeepAliveDuringOldMark)
         HeapIterator(true).Iterate([&](BaseObject* object) { visits += object == fx.obj0; });
     }
     ThreadLocal::FlushCurrentThreadMarkStacks();
-    collector.old().Mark().MarkFollow(false);
+    collector.old().Mark().MarkFollow();
     const bool live = fx.region0()->is_object_live(from_object(fx.obj0));
     collector.RemoveExportObject(handle);
     std::fprintf(stderr, "B10_ITERATOR_RESULT visits=%zu live=%d\n", visits, live);

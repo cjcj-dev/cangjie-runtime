@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 // Phase-unit input, not a complete driver/managed workload.
@@ -39,8 +40,8 @@ int main(int argc, char** argv)
     WorkerFixture worker;
     GcVerifyFixture fixture;
     auto& heap = Heap::GetHeap();
-    heap.old().InitializeWorkers(1);
-    heap.young().InitializeWorkers(1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.old(), 1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.young(), 1);
     fixture.PrepareOldSource();
     if (referent) { fixture.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS); }
     p16_forwarding = forwarding_for_page(fixture.region0());

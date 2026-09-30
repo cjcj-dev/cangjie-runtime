@@ -1,4 +1,5 @@
 #define MRT_USE_CJTHREAD_RENAME 1
+#include "gc_worker_fixture.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -152,7 +153,7 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsBadLiveAccounting)
     ExpectSceneAbort("Invalid number of live objects", [&] {
         fixture.region0()->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
         auto& old = Heap::GetHeap().old();
-        if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
+        if (old.Workers() == nullptr) { MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1); }
         old.Workers()->set_active_workers(1);
         old.Workers()->set_active();
         ZRelocate::StartRelocationTasks(old.id());
@@ -233,7 +234,7 @@ GC_OTHER_VM_TEST(ZVerify, RelocationEntryRejectsInactiveRemset)
         rejectedTop = observed + 1;
         (void)signal(SIGABRT, RecordRejectedTop);
         auto& old = Heap::GetHeap().old();
-        if (old.Workers() == nullptr) { old.InitializeWorkers(1); }
+        if (old.Workers() == nullptr) { MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1); }
         old.Workers()->set_active_workers(1);
         old.Workers()->set_active();
         ZRelocate::StartRelocationTasks(old.id());
