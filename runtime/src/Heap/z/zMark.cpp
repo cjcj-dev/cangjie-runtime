@@ -1016,6 +1016,7 @@ bool ZMark::TryProactiveFlush(size_t workerId)
         return false;
     }
     workNProactiveFlush.fetch_add(1, std::memory_order_relaxed);
+    SuspendibleThreadSetLeaver stsLeaver;
     return Flush();
 }
 
