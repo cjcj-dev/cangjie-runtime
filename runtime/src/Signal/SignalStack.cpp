@@ -74,11 +74,16 @@ static int WaitForSignal()
         }
         // semaphore.inline.hpp:33-41: only the dispatcher may transition.
         ScopedEnterSaferegion blocked(false);
+        // A managed CJThread blocking in sem_wait must enter the syscall state,
+        // or it keeps the processor while parked and the tasks behind it in the
+        // run queue never start (runtime/src/CJThread/.../schedule.cpp ScheduleNew).
+        SyscallEnter();
 #ifdef __APPLE__
         while (semaphore_wait(g_signalSemaphore) == KERN_ABORTED) {}
 #else
         while (sem_wait(&g_signalSemaphore) != 0 && errno == EINTR) {}
 #endif
+        SyscallExit();
     }
 }
 
