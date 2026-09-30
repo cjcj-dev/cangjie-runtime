@@ -258,7 +258,6 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
         fwd->mark_done();
         size_t count = 0;
         fwd->relocated_remembered_fields_apply_to_published([&](MAddress) { ++count; });
-        fwd->Destroy();
         ZGeneration::young()->set_phase( youngPhase);
         ZGeneration::old()->set_phase( oldPhase);
         GC_EXPECT_EQ(count, marking ? 1u : 0u);
