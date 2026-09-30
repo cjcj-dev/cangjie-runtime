@@ -354,7 +354,7 @@ public:
     MAddress GetSpaceEndAddress() const { return reservedEnd; }
 
     bool is_initialized() const { return _initialized; }
-    bool prime_cache(size_t size) { return PrimeCache(size); }
+    bool PrimeCache(size_t size);
     RegionManager();
     RegionManager(const HeapParam& param, double garbageThreshold);
 
@@ -541,7 +541,6 @@ private:
     std::vector<std::unique_ptr<ZPartition>> partitions;
     size_t nextPartition{0}; // A03n: preferred NUMA routing is deferred.
     void InitializePartitions(size_t maxCapacity);
-    bool PrimeCache(size_t size);
     void PrintCacheOn() const;
     bool claim_capacity(ZPageAllocation* allocation);
     bool claim_capacity_fast_medium(ZPageAllocation* allocation);

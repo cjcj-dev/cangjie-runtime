@@ -110,7 +110,7 @@ Heap::Heap(const HeapParam& param, double garbageThreshold)
     // ZGC zHeap.cpp:78-83: prime only after allocator construction succeeds.
     // HeapParam has no InitialHeapSize; retain its bounded 8 MB initial cache.
     const size_t initialHeapSize = std::min(4 * ZGranuleSize, _page_allocator.GetHeapCapacity());
-    if (!_page_allocator.prime_cache(initialHeapSize)) {
+    if (!_page_allocator.PrimeCache(initialHeapSize)) {
         ZInitialize::error("Failed to allocate initial heap");
         return;
     }
