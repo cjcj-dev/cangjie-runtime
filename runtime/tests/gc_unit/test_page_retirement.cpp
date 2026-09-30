@@ -429,7 +429,7 @@ GC_TEST(PageRetirement1315, DescriptorSurvivesIteratorAndMemoryReturns)
 {
     using namespace MapleRuntime;
     auto& allocator = Heap::GetHeap().page_allocator();
-    ZPage* page = Heap::alloc_page(ZGranuleSize, ZPageType::small, false, PageAge::old,
+    ZPage* page = Heap::alloc_page(ZGranuleSize, ZPageType::small, PageAge::old,
                                  MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(page != nullptr);
     const MAddress start = page->GetRegionStart();
