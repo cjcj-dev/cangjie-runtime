@@ -327,7 +327,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     std::vector<NativeSlot*> roots(rootCount);
     U64 handle = 0;
     if (finalizable) {
-        handle = Heap::GetHeap().RegisterExportRoot(finalReference);
+        handle = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(finalReference);
     } else if (!markOnly && duplicateRootOrder == 0 && commonRoot) {
         for (size_t i = 0; i < rootCount; ++i) {
             rootSlots[i].StoreColoured(StoreGoodPointer(array));
@@ -356,7 +356,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     const size_t expectedBytes = arrayBytes + expectedChildren * children[0]->GetSize() +
         (finalizable ? finalizerRoot->GetSize() + finalReference->GetSize() : 0);
     if (finalizable) {
-        Heap::GetHeap().RemoveExportObject(handle);
+        Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(handle);
     } else if (!markOnly && duplicateRootOrder == 0 && commonRoot) {
         LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
     } else if (!markOnly && duplicateRootOrder == 0) {

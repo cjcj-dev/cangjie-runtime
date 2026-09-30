@@ -122,3 +122,6 @@ signal_fatal_watermark_gdb.py             manual     gdb batch script used by ch
 check_signal_platform.sh                 manual     Product signal platform/order acceptance; needs one ELF from run_signal_fatal_watermark.sh, ARM_LIB_DIR and gdb; kkk2 only.
 signal_exception_gdb.py                  manual     Invoked by check_signal_platform.sh; observes first ThrowException pending state and invokes second compiler ABI entry.
 reference_carrier_product.cj               manual     candidate compiler and rebuilt std/core/ref/sync with matching runtime; real GC finalization and public synchronization regression; #1356
+reference_startup_product.cj               manual     matching Reference ABI SDK and reference_startup_dependency static package; dependency global initialization finalizer registration; #1356
+reference_startup_control.cj               manual     same SDK as startup product probe; no-finalizer collection and mutex control for core publication cut; #1356
+reference_startup_dependency              manual     static dependency package for reference_startup_product.cj; initializes collection and finalizable global before main; #1356
