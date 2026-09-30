@@ -15,6 +15,7 @@
 #include <cerrno>
 #include <sys/mman.h>
 #include "Log.h"
+#include "LogFile.h"
 #include "sys/syscall.h"
 #else
 #include "linux/futex.h"
@@ -30,6 +31,7 @@ void* ReserveMemory(size_t bytes)
     if (address == MAP_FAILED) {
         const int error = errno;
         DLOG(REPORT, "mmap failed (%s)", std::strerror(error));
+        errno = error;
         return nullptr;
     }
     return address;

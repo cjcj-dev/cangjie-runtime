@@ -15,6 +15,7 @@
 #include <mach/vm_map.h>
 
 #include "Base/Log.h"
+#include "Base/LogFile.h"
 #include "Base/SysCall.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zErrno.hpp"
