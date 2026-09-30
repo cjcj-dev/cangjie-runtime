@@ -31,12 +31,9 @@ class ZBarrier : public AllStatic {
 public:
     enum class RefSlotKind : U8 { STRONG, WEAK_REFERENT };
     static BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field);
-    static bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef);
     template<bool forward>
     static bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
                                       BaseObject*& toObj);
-    static bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
-                                         bool allowNull = false);
 
     static RefField<> GetAndTryTagRefField(BaseObject* target);
 
@@ -87,9 +84,6 @@ public:
 
 
 
-
-    static void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref,
-                            zpointer prev = zpointer::null);
 
     static bool is_load_good_or_null_fast_path(zpointer ptr);
     static bool is_mark_good_fast_path(zpointer ptr);

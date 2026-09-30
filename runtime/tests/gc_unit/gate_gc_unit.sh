@@ -300,7 +300,7 @@ fi
 # spellings (ON/1/unset) cannot change the selected product's platform.
 PRODUCT_CONFIGURATION=$(python3 "$SRC/product_test_configuration.py" \
   "$ROOT/runtime" "$GCV2_RUNTIME_LIB_DIR" "$GCV2_RUNTIME_OUTPUT_ROOT")
-read -r SO_TESTABLE SO_GC_UNIT_TESTS OHOS_HOST <<<"$PRODUCT_CONFIGURATION"
+read -r SO_TESTABLE SO_GC_UNIT_TESTS OHOS_HOST SO_NDEBUG <<<"$PRODUCT_CONFIGURATION"
 RUNTIME_SHA256=$(sha256sum "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" | awk '{print $1}')
 if [[ -f "$GCV2_RUNTIME_LIB_DIR/libboundscheck.so" ]]; then
   BOUNDSCHECK_SHA256=$(sha256sum "$GCV2_RUNTIME_LIB_DIR/libboundscheck.so" | awk '{print $1}')

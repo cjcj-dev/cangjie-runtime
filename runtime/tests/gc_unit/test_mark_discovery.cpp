@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 #include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
@@ -61,7 +62,7 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     heap.old().set_phase(ZGenerationPhase::Relocate);
     U64 handle = 0;
     if (finalizable) heap.GetFinalizerProcessor().RegisterFinalizer(fx.obj0);
-    else handle = heap.RegisterExportRoot(cycle ? fx.obj1 : fx.obj0);
+    else handle = heap.cross_vm().export_roots().RegisterExportRoot(cycle ? fx.obj1 : fx.obj0);
     if (young) {
         if (oldReferent) {
             // ZPage::is_object_strongly_live treats allocating pages as live.
@@ -88,7 +89,7 @@ void RunMarkDiscovery1036(bool finalizable, bool strong, bool young = false, siz
     processor.ProcessReferences([](BaseObject*) { return false; });
     processor.EnqueueReferences([](BaseObject*) { return true; });
     const bool cleared = referent.GetTargetObject() == zaddress::null;
-    if (handle != 0) heap.RemoveExportObject(handle);
+    if (handle != 0) heap.cross_vm().export_roots().RemoveExportRoot(handle);
     if (finalizable) {
         heap.GetFinalizerProcessor().VisitNativePointers([](NativeSlot& root) {
             root.StoreColoured(zpointer::null);

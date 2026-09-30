@@ -65,16 +65,15 @@ void ZPageTable::replace(ZPage* old_page, ZPage* new_page)
 }
 
 ZGenerationPagesIterator::ZGenerationPagesIterator(const ZPageTable* page_table, ZGenerationId id,
-                                                 ZPageAllocator* page_allocator)
+                                                 RegionManager* page_allocator)
     : _iterator(page_table), _generation_id(id), _page_allocator(page_allocator)
 {
-    (void)_page_allocator;
-    ZPage::EnableSafeDestroy();
+    _page_allocator->enable_safe_destroy();
 }
 
 ZGenerationPagesIterator::~ZGenerationPagesIterator()
 {
-    ZPage::DisableSafeDestroy();
+    _page_allocator->disable_safe_destroy();
 }
 
 bool ZGenerationPagesIterator::next(ZPage** page)
@@ -91,21 +90,21 @@ bool ZGenerationPagesIterator::next(ZPage** page)
 
 void ZGenerationPagesIterator::yield(const std::function<void()>& function)
 {
-    ZPage::DisableSafeDestroy();
+    _page_allocator->disable_safe_destroy();
     function();
-    ZPage::EnableSafeDestroy();
+    _page_allocator->enable_safe_destroy();
 }
 
 ZGenerationPagesParallelIterator::ZGenerationPagesParallelIterator(const ZPageTable* page_table, ZGenerationId id,
-                                                                   ZPageAllocator* page_allocator)
+                                                                   RegionManager* page_allocator)
     : _iterator(page_table), _generation_id(id), _page_allocator(page_allocator)
 {
-    ZPage::EnableSafeDestroy();
+    _page_allocator->enable_safe_destroy();
 }
 
 ZGenerationPagesParallelIterator::~ZGenerationPagesParallelIterator()
 {
-    ZPage::DisableSafeDestroy();
+    _page_allocator->disable_safe_destroy();
 }
 
 } // namespace MapleRuntime
