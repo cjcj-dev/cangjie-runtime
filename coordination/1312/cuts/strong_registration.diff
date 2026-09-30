@@ -1,0 +1,41 @@
+--- a/runtime/src/Heap/z/zRootsIterator.hpp
++++ b/runtime/src/Heap/z/zRootsIterator.hpp
+@@ -63,7 +63,7 @@
+         : OopStorageSetIteratorStrong(workers, ZGenerationIdOptional::none) {}
+     void Apply(const NativeSlotVisitor& visitor);
+ private:
+-    std::array<OopStorage::ParState<true>, 1> states;
++    std::array<OopStorage::ParState<true>, 2> states;
+     ZGenerationIdOptional generation;
+ };
+ class OopStorageSetIteratorWeak {
+@@ -75,7 +75,7 @@
+     void Apply(const NativeSlotVisitor& visitor);
+     void report_num_dead();
+ private:
+-    std::array<OopStorage::ParState<true>, 4> states;
++    std::array<OopStorage::ParState<true>, 3> states;
+     ZGenerationIdOptional generation;
+ };
+ class StaticRootsAdapterIterator {
+--- a/runtime/src/Heap/z/zRootsIterator.cpp
++++ b/runtime/src/Heap/z/zRootsIterator.cpp
+@@ -94,7 +94,7 @@
+ 
+ OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(unsigned workers,
+                                                          ZGenerationIdOptional generation)
+-    : states{{{Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers}}}, generation(generation)
++    : states{{{Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers}, {StringDedup::Instance().WeakStorage(), workers}}}, generation(generation)
+ {
+     (void)this->generation;
+ }
+@@ -103,8 +103,7 @@
+                                                      ZGenerationIdOptional generation)
+     : states{{{Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers},
+               {Heap::GetHeap().GetExportRootStorage(), workers},
+-              {SyncWeakOopStorage(), workers},
+-              {StringDedup::Instance().WeakStorage(), workers}}}, generation(generation) {}
++              {SyncWeakOopStorage(), workers}}}, generation(generation) {}
+ 
+ void OopStorageSetIteratorWeak::report_num_dead()
+ {

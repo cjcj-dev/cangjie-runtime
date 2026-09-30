@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 ulimit -c 0
-r=/root/sym_cangjie_runtime_1312_implement_r5899117285
+r=${1:?absolute lane directory required}
 src="$r/testable/runtime"
 lib="$r/testable/build/runtime-staging/lib/x86_64_Release"
-out="$r/focused-${1:-current}"
+out="$r/focused"
 mkdir -p "$out"
 root=$(python3 "$src/tests/gc_unit/product_test_configuration.py" "$src" "$lib" "$lib/../.." --resolve-root)
 python3 "$src/tests/gc_unit/product_test_configuration.py" "$src" "$lib" "$root" > "$out/product-config.txt"

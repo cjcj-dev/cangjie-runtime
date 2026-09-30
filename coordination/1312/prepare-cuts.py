@@ -15,6 +15,11 @@ spec={
  'blocked':[(barrier,'inline zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (ZResurrection::is_blocked()) {','inline zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (false) {'),(barrier,'inline zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (ZResurrection::is_blocked()) {','inline zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o) {\n  if (false) {')],
  'compiler': [('runtime/src/CompilerCalls.cpp','    return StringDedup::Instance().Canonical(arrayInfo, candidate);','    return candidate; // Controlled cut: omit canonical consumer.')],
  'registration': [('runtime/src/Heap/z/zRootsIterator.hpp','std::array<OopStorage::ParState<true>, 4> states;', 'std::array<OopStorage::ParState<true>, 3> states;'),('runtime/src/Heap/z/zRootsIterator.cpp','{SyncWeakOopStorage(), workers},\n              {StringDedup::Instance().WeakStorage(), workers}}}', '{SyncWeakOopStorage(), workers}}}')],
+ 'strong_registration': [
+ ('runtime/src/Heap/z/zRootsIterator.hpp', 'std::array<OopStorage::ParState<true>, 1> states;', 'std::array<OopStorage::ParState<true>, 2> states;'),
+ ('runtime/src/Heap/z/zRootsIterator.hpp', 'std::array<OopStorage::ParState<true>, 4> states;', 'std::array<OopStorage::ParState<true>, 3> states;'),
+ ('runtime/src/Heap/z/zRootsIterator.cpp', 'StrongRootStorage(), workers}}}', 'StrongRootStorage(), workers}, {StringDedup::Instance().WeakStorage(), workers}}}'),
+ ('runtime/src/Heap/z/zRootsIterator.cpp', '{SyncWeakOopStorage(), workers},\n              {StringDedup::Instance().WeakStorage(), workers}}}', '{SyncWeakOopStorage(), workers}}}')],
  'restored':[]}
 for name, edits in spec.items():
  texts={}
