@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zAccess.hpp"
 #include "Common/BaseObject.inline.h"
 #include "Heap/z/zCrossVM.hpp"

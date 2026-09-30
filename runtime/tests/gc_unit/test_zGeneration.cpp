@@ -1,11 +1,14 @@
 #include "gc_generation_test.hpp"
+#include "gc_worker_fixture.hpp"
 #include "CangjieRuntime.h"
 #include "Cangjie.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zJNICritical.hpp"
+#include "Heap/z/zMark.hpp"
+#include "b09_runtime_fixture.hpp"
 #include "gc_unittest.hpp"
 
 #include <atomic>
@@ -51,22 +54,20 @@ GC_TEST(ZGeneration, ThreeStatePhase)
     GC_EXPECT_TRUE(young->is_phase_relocate());
 }
 
-GC_TEST(ZAbort, AllStaticAbortpoint)
+GC_OTHER_VM_TEST(ZAbort, AllStaticAbortpoint)
 {
     GC_EXPECT_TRUE(!ZAbort::should_abort());
     ZAbort::abort();
     GC_EXPECT_TRUE(ZAbort::should_abort());
-    ZAbort::reset();
-    GC_EXPECT_TRUE(!ZAbort::should_abort());
+    ZAbort::abort();
+    GC_EXPECT_TRUE(ZAbort::should_abort());
 }
 
-GC_TEST(ZCollectedHeap, StopAborts)
+GC_OTHER_VM_TEST(ZCollectedHeap, StopAborts)
 {
     Heap::GetHeap();
-    ZAbort::reset();
     ZCollectedHeap::stop();
     GC_EXPECT_TRUE(ZAbort::should_abort());
-    ZAbort::reset();
 }
 
 GC_RUNTIME_OTHER_VM_TEST(ZGeneration, CollectionScopeClearsTimer)
@@ -188,4 +189,23 @@ GC_TEST(RememberedLifecycle720, UnboundConstructionAbortsRegisterFoundOld)
     std::fprintf(stderr, "REMEMBERED720 unbound_signaled=%d sig=%d\n",
                  WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : 0);
     GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+
+// ZGC zGeneration.cpp:1261-1294: mark_end publishes completion after end()
+// succeeds; the collection owner consumes abort at its phase boundary.
+GC_OTHER_VM_TEST(Lifecycle1310, OldMarkEndPublishesCompletionBeforeAbortpoint)
+{
+    B09RuntimeFixture runtime;
+    auto& old = Heap::GetHeap().old();
+    InitializeGenerationWorkers(old, 1);
+    old.Mark().Start();
+    old.Mark().PrepareWork();
+    old.set_phase(ZGeneration::Phase::Mark);
+    ZAbort::abort();
+    const bool ended = old.mark_end();
+    const bool complete = old.is_phase_mark_complete();
+    std::fprintf(stderr, "MARKEND1310_TARGET ended=%d complete=%d abort=%d\n",
+                 ended, complete, ZAbort::should_abort());
+    GC_EXPECT_TRUE(ended && complete && ZAbort::should_abort());
+    old.StopWorkers();
 }

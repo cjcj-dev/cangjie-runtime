@@ -5,7 +5,7 @@
 #include "Cangjie.h"
 #include "Common/Handle.h"
 #include "Heap/z/zCrossVM.hpp"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zForwarding.hpp"

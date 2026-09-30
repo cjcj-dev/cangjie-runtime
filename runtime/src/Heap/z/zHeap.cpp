@@ -104,11 +104,22 @@ Heap::Heap(const HeapParam& param, double garbageThreshold)
       _young(&_page_table, &_old.forwarding_table(), &_page_allocator)
 {
     _heap = this;
+    if (!_page_allocator.is_initialized()) {
+        return;
+    }
+    // ZGC zHeap.cpp:78-83: prime only after allocator construction succeeds.
+    // HeapParam has no InitialHeapSize; retain its bounded 8 MB initial cache.
+    const size_t initialHeapSize = std::min(4 * ZGranuleSize, _page_allocator.GetHeapCapacity());
+    if (!_page_allocator.PrimeCache(initialHeapSize)) {
+        ZInitialize::error("Failed to allocate initial heap");
+        return;
+    }
     RunType::InitRunTypeMap();
     _allocation_adapter.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
     ZStat::NotifyHeapConstructed();
+    _initialized = true;
 }
 
 Heap::~Heap()
@@ -137,7 +148,6 @@ void Heap::Init()
     // pool here: that made later set_active_workers(ConcGCThreads) fail the
     // WorkerThreads 1-max check (workerThread.cpp:148).
     ZCollectedHeap::heap()->initialize_gc();
-    _initialized = true;
 }
 
 void Heap::Fini()

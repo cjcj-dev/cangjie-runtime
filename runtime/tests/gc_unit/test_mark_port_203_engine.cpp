@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "Common/SuspendibleThreadSet.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zStat.hpp"
@@ -27,11 +27,15 @@
 #include "gc_unittest.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "gc_heap_fixture.hpp"
+#include "marking_smr_test.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
+#include "ObjectModel/MArray.inline.h"
 #include "Heap/z/zGeneration.inline.hpp"
 
 // The merged generation helpers expose the inline definition. Keep the phase
 // producer in the product SO so the producer cut still observes that call.
 namespace MapleRuntime {
+extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo*, ArrayRef);
 extern template void ZMark::MarkObject<false, false, false, false>(zaddress);
 }
 
@@ -49,9 +53,6 @@ MarkStackEntry ObjectEntry(BaseObject* object)
     return MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, false, false, false);
 }
 
-struct ResetAbort {
-    ~ResetAbort() { ZAbort::reset(); }
-};
 
 size_t StealOffset(MarkStripe& stripe, MarkingSMR& smr, size_t workerId)
 {
@@ -103,7 +104,7 @@ GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
     }
 }
 
-GC_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
+GC_OTHER_VM_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
@@ -120,7 +121,6 @@ GC_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
     global->Push(ObjectEntry(fx.obj1));
     stripes.At(1)->PublishStack(global, true, &domain.Terminate());
     ZAbort::abort();
-    ResetAbort reset;
     const auto result = domain.FollowWork(false);
     GC_EXPECT_TRUE(fx.region0()->is_object_strongly_live(from_object(fx.obj0)));
     GC_EXPECT_FALSE(fx.region1()->is_object_strongly_live(from_object(fx.obj1)));
@@ -224,7 +224,7 @@ GC_TEST(MarkPort203Engine, PartialReturnsBeforeTerminate)
     GC_EXPECT_TRUE(stacks.IsEmpty());
 }
 
-GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
+GC_OTHER_VM_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
@@ -249,7 +249,6 @@ GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
     stacks.Install(stripes, stripes.At(0), local);
     terminate.Leave();
     ZAbort::abort();
-    ResetAbort resetAbort;
     const auto result = domain.FollowWork(false);
     const size_t first = StealOffset(*stripes.At(0), smr, 0);
     const size_t second = StealOffset(*stripes.At(0), smr, 0);
@@ -260,7 +259,7 @@ GC_TEST(MarkPort203Engine, RebalanceImbalancePublishesLocalStack)
     GC_EXPECT_EQ(second, 81u);
 }
 
-GC_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
+GC_OTHER_VM_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
@@ -287,7 +286,6 @@ GC_TEST(MarkPort203Engine, RebalanceStripeChangePublishesLocalStack)
     local->Push(ObjectEntry(fx.obj0));
     stacks.Install(stripes, stripes.At(0), local);
     ZAbort::abort();
-    ResetAbort resetAbort;
     const auto result = domain.FollowWork(false);
     const size_t first = StealOffset(*stripes.At(0), smr, 1);
     const size_t second = StealOffset(*stripes.At(0), smr, 1);
@@ -409,16 +407,12 @@ GC_TEST(MarkPort203Engine, CrowdedRestoresNStripes)
     GC_EXPECT_EQ(stripes.NStripes(), 2u);
 }
 
-GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
+GC_OTHER_VM_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
 {
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
     ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
     domain.ResizeWorkers(1);
     GC_EXPECT_TRUE(!domain.PollStop());
-    ZAbort::abort();
-    GC_EXPECT_TRUE(domain.PollStop());
-    ZAbort::reset();
-
     ZStatWorkers statWorkers;
     MapleRuntime::GcUnit::WorkerBudgetFixture workersBudget(2);
     ZWorkers workers(ZGenerationId::young, &statWorkers);
@@ -429,11 +423,15 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
     GC_EXPECT_TRUE(!domain.PollStop());
     workers.request_resize_workers(2);
     GC_EXPECT_TRUE(domain.PollStop());
+    domain.BindWorkers(nullptr);
+    GC_EXPECT_TRUE(!domain.PollStop());
+    ZAbort::abort();
+    GC_EXPECT_TRUE(domain.PollStop());
 }
 
 // ZMark::drain/rebalance_work (zMark.cpp:468-485): stop following while
 // retaining unpublished work until the worker flushes and the phase joins.
-GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
+GC_OTHER_VM_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
 {
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
@@ -449,7 +447,6 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     }
     fx.region0()->SetRegionAllocPtr(fx.region0()->GetRegionStart() + count * 64);
     ZAbort::abort();
-    ResetAbort reset;
     const auto result = domain.FollowWork(false);
     size_t followed = 0;
     for (size_t i = 0; i < count; ++i)
@@ -697,9 +694,66 @@ GC_TEST(MarkPublish1144, ListPreservesEmptyPayload)
     MarkStripeStack::Destroy(observed);
 }
 
+namespace {
+void CheckLateNativeRoot(bool abortRequested, bool checkFree = false)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    fixture.region0()->reset(PageAge::eden);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    InitializeGenerationWorkers(young, 2);
+    young.Workers()->set_active();
+    young.Workers()->set_active_workers(1);
+    young.Mark().Start();
+    young.set_phase(ZGenerationPhase::Mark);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE).StoreColoured(zpointer::null);
+    const uint64_t before = fixture.region0()->live_bytes();
+    const size_t expected = fixture.obj0->GetSize();
+    // The product native-root producer leaves this root in the caller's
+    // local stack. The remset worker cannot consume it before the caller's
+    // terminate flush; the subsequent MarkFollow must close that work.
+    heap.MarkYoungObjectIfActive(fixture.obj0);
+    if (abortRequested) { ZAbort::abort(); }
+    young.mark_follow();
+    const uint64_t live = fixture.region0()->live_bytes() - before;
+    const bool marked = fixture.region0()->is_object_strongly_live(from_object(fixture.obj0));
+    std::fprintf(stderr, "REMSET1310_TARGET abort=%d marked=%d live=%llu expected=%zu\n",
+                 abortRequested, marked, static_cast<unsigned long long>(live), expected);
+    GC_EXPECT_TRUE(abortRequested ? (!marked && live == 0) : (marked && live == expected));
+    if (checkFree) {
+        WorkerFixture observer(0);
+        const size_t pending = MarkingSMRTest::pending_count(young.Mark().Smr());
+        ZAbort::abort();
+        young.concurrent_mark_free();
+        const size_t remaining = MarkingSMRTest::pending_count(young.Mark().Smr());
+        std::fprintf(stderr, "MARKFREE1310_TARGET before=%zu after=%zu abort=%d\n",
+                     pending, remaining, ZAbort::should_abort());
+        GC_EXPECT_TRUE(pending > 0 && remaining == 0 && ZAbort::should_abort());
+    }
+    young.StopWorkers();
+}
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, YoungMarkFreeReclaimsAfterAbort)
+{
+    CheckLateNativeRoot(false, true);
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, LateNativeRootFollowed)
+{
+    CheckLateNativeRoot(false);
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, AbortLeavesLateRootUnmarked)
+{
+    CheckLateNativeRoot(true);
+}
+
 // The registered phase entry dispatches the actual ZMarkTask to a worker.
 // An existing abort request bounds execution after the first consumed entry.
-GC_TEST(MarkConsumer1328, PhaseDispatchConsumesProducedEntry)
+GC_OTHER_VM_TEST(MarkConsumer1328, PhaseDispatchConsumesProducedEntry)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
@@ -714,7 +768,6 @@ GC_TEST(MarkConsumer1328, PhaseDispatchConsumesProducedEntry)
     domain.MarkObject<false, false, false, false>(from_object(fx.obj0));
     (void)domain.Stacks().Flush(domain.Stripes());
     ZAbort::abort();
-    ResetAbort reset;
     domain.MarkFollow();
     const bool marked = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
     const auto objects = fx.region0()->live_objects();
@@ -792,4 +845,59 @@ GC_TEST(Remembered1314, MajorRootsPublishesOtherGeneration)
 GC_TEST(Remembered1314, MarkTaskPublishesOtherGeneration)
 {
     CheckOtherGenerationPublication(false);
+}
+
+namespace {
+void CheckYoungPostFreeCleanup(bool abortRequested)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    WorkerFixture worker;
+    auto& young = Heap::GetHeap().young();
+    fixture.region0()->reset(PageAge::eden);
+    fixture.region1()->reset(PageAge::eden);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    InitializeGenerationWorkers(young, 1);
+    young.Workers()->set_active();
+    young.Mark().Start();
+    young.set_phase(ZGenerationPhase::Mark);
+    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+    auto* component = reinterpret_cast<TypeInfo*>(storage);
+    component->SetType(TypeKind::TYPE_KIND_UINT8);
+    component->SetInstanceSize(1);
+    fixture.typeInfo->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    fixture.typeInfo->SetComponentTypeInfo(component);
+    auto* first = reinterpret_cast<MArray*>(fixture.obj0);
+    auto* second = reinterpret_cast<MArray*>(fixture.obj1);
+    for (auto* array : {first, second}) {
+        array->SetLength(2);
+        array->SetPrimitiveElement<I8>(0, 7);
+        array->SetPrimitiveElement<I8>(1, 9);
+    }
+    StringDedup::Instance().Stop();
+    auto* installed = MCC_StringDedupCanonicalImpl(fixture.typeInfo, first);
+    auto* before = MCC_StringDedupCanonicalImpl(fixture.typeInfo, second);
+    if (abortRequested) ZAbort::abort();
+    // Restore the deleted check immediately AFTER mark_free() for the red arm.
+    // ZGC zGeneration.cpp:694-697 has no in-phase abort check. The retained
+    // String cleanup is outside this package; its observable result witnesses
+    // whether the actual removed branch skipped the phase's remaining work.
+    young.concurrent_mark_free();
+    auto* after = MCC_StringDedupCanonicalImpl(fixture.typeInfo, second);
+    std::fprintf(stderr, "POSTFREE1310_TARGET abort=%d installed=%d before_first=%d after_second=%d\n",
+                 abortRequested, installed == first, before == first, after == second);
+    StringDedup::Instance().Stop();
+    young.StopWorkers();
+    GC_EXPECT_TRUE(installed == first && before == first && after == second);
+}
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, YoungPostFreeCleanupAfterAbort)
+{
+    CheckYoungPostFreeCleanup(true);
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, YoungPostFreeCleanupWithoutAbort)
+{
+    CheckYoungPostFreeCleanup(false);
 }

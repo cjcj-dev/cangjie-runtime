@@ -6,7 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Cangjie.h"

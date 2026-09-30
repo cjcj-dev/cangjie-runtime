@@ -8,7 +8,7 @@
 #include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zBreakpoint.hpp"
 
 #include <algorithm>

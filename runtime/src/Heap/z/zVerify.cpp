@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
+#include "Heap/z/zAbort.inline.hpp"
 #include "Common/BaseObject.inline.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zVerify.hpp"

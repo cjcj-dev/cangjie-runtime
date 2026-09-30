@@ -68,6 +68,7 @@ public:
     Heap(const HeapParam& param, double garbageThreshold);
     ~Heap();
     ZRemembered& remembered();
+    bool is_initialized() const { return _initialized; }
     void Init();
     void Fini();
     bool IsSurvivedObject(const BaseObject*) const;

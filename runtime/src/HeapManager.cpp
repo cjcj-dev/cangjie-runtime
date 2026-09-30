@@ -29,6 +29,7 @@ void HeapManager::Init(const HeapParam& param)
     ZArguments::initialize();
     Logger::GetLogger().SetMinimumLogLevel(CangjieRuntime::GetLogParam().logLevel);
     ZCollectedHeap::create(param, CangjieRuntime::GetGCParam().garbageThreshold);
+    CHECK_DETAIL(ZCollectedHeap::heap()->initialize(), "%s", ZInitialize::error_message());
     Heap::GetHeap().Init();
 }
 
