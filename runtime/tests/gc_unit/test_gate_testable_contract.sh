@@ -466,6 +466,7 @@ for mode in all only; do
   set +e
   PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
     GC_UNIT_GATE_LANGUAGE_TESTS="$mode" GC_UNIT_OUT="$fixture/host-missing-$mode" \
+    GC_UNIT_GATE_TRACE="$fixture/host-missing-$mode.trace" \
     GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
     GC_UNIT_CJC_RUNTIME_LIB_DIR="$fixture/missing-host" \
     GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/host-missing-$mode.status" \
