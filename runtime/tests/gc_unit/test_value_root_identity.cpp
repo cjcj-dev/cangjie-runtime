@@ -157,12 +157,10 @@ void* AllocateSparseExportRoot(void* argument)
     largeType->SetInstanceSize(ZPageSizeSmall - TYPEINFO_PTR_SIZE);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(largeStorage), sizeof(largeStorage));
-    Heap::GetHeap().EnableGC(false);
     while (Heap::GetHeap().page_allocator().GetUsedBytes() + ZPageSizeSmall <= 32 * 1024 * 1024) {
         capacityRoots.emplace_back(mutator,
             static_cast<BaseObject*>(MCC_NewObject(largeType, ZPageSizeSmall)));
     }
-    Heap::GetHeap().EnableGC(true);
     std::fprintf(stderr, "VALUE_ROOT_CAPACITY used=%zu large_roots=%zu\n",
         Heap::GetHeap().page_allocator().GetUsedBytes(), capacityRoots.size());
     Heap::GetHeap().RequestGC(GC_REASON_USER);

@@ -104,6 +104,7 @@ set(GC_UNIT_SOURCES
     test_partial_array.cpp
     test_segmented_array_init.cpp
     test_package_init.cpp
+    test_global_gc_requests.cpp
     test_verify_roots.cpp
     test_p10_roots_iterator.cpp
     test_weak_roots.cpp
