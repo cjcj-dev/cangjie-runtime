@@ -13,7 +13,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace {
-void CheckBindingAfterCollection(bool managerBinding)
+void CheckBindingAfterCollection(bool managerBinding, bool managedEntry = false)
 {
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
@@ -40,10 +40,15 @@ void CheckBindingAfterCollection(bool managerBinding)
             tls->SetMutator(owner);
         }
         pending = HasPendingSafepoint(tls);
-        MRT_LeaveSaferegion();
+        if (managedEntry) {
+            MRT_PreRunManagedCode(owner, 0, tls);
+        } else {
+            MRT_LeaveSaferegion();
+        }
         after = tls->gcData->storeGoodMask;
         expected = ::g_cjStoreGoodMask;
         active = !owner->InSaferegion();
+        owner->SetManagedContext(false);
         MRT_EnterSaferegion(false);
         manager.UnbindMutator(*owner);
         manager.UnregisterMarkFlushThread(tls);
@@ -54,8 +59,8 @@ void CheckBindingAfterCollection(bool managerBinding)
     collected.store(true, std::memory_order_release);
     thread.join();
     std::fprintf(stderr,
-                 "BINDING_MASK_TARGET executed=1 manager=%d before=%#zx after=%#zx global=%#zx pending=%d active=%d\n",
-                 managerBinding, before, after, expected, pending, active);
+                 "BINDING_MASK_TARGET executed=1 manager=%d managed=%d before=%#zx after=%#zx global=%#zx pending=%d active=%d\n",
+                 managerBinding, managedEntry, before, after, expected, pending, active);
     const bool target = after == expected;
     const bool setup = before != expected && !pending && active;
     GC_EXPECT_TRUE(target);
@@ -72,4 +77,9 @@ GC_RUNTIME_OTHER_VM_TEST(BindingPoll, ManagerBindingAfterCollection)
 GC_RUNTIME_OTHER_VM_TEST(BindingPoll, CarrierBindingAfterCollection)
 {
     CheckBindingAfterCollection(false);
+}
+
+GC_RUNTIME_OTHER_VM_TEST(BindingPoll, ManagedEntryAfterCollection)
+{
+    CheckBindingAfterCollection(true, true);
 }
