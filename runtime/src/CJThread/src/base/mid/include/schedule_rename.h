@@ -367,8 +367,6 @@
 #define ScheduleNetpollExit                     CJ_ScheduleNetpollExit
 #define ScheduleAnyCJThreadRunning              CJ_ScheduleAnyCJThreadRunning
 #define ScheduleNonDefaultFree                  CJ_ScheduleNonDefaultFree
-#define ScheduleAllNonDefaultExit               CJ_ScheduleAllNonDefaultExit
-#define ScheduleProcessorExit                   CJ_ScheduleProcessorExit
 #define ScheduleExitMode                        CJ_ScheduleExitMode
 #define ScheduleStop                            CJ_ScheduleStop
 #define ScheduleStopOutside                     CJ_ScheduleStopOutside

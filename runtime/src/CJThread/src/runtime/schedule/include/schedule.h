@@ -310,11 +310,6 @@ typedef uintptr_t (*SchdCJThreadStateHookFunc)(void*);
 typedef void (*SchdDestructorHookFunc)(void *);
 
 /**
-* @brief Hook function for mutator destructor (dedicated to Cangjie GC).
-* For details about the registration, see #CJThreadGetMutatorStatusHookRegister.
-*/
-
-/**
  * @brief Callback function for accessing the global cjthread control linked list
  * (dedicated for Cangjie GC)
  * @param  void* [in] Start address of the incoming cjthread stack
