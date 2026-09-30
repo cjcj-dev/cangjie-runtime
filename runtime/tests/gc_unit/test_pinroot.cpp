@@ -563,9 +563,12 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         const uintptr_t unexposed = frames[3][2];
         // Move the anchor to the return/native boundary; the watermark's
         // iterator remains at the frontier established by the ordinary poll.
-        context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frames[2][4]));
+        // before_unwind's trigger frame and its caller must already be safe.
+        // The native caller exposure processes frame 3 from trigger frame 1.
+        const size_t trigger = requestEntry == 6 ? 1 : 2;
+        context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frames[trigger][4]));
         context.frameInfo.mFrame.SetIP(reinterpret_cast<const uint32_t*>(startIP + 16));
-        context.frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(&frames[2][0]));
+        context.frameInfo.mFrame.SetSP(reinterpret_cast<uintptr_t>(&frames[trigger][0]));
         class ReadExposedRoot final : public HandshakeClosure {
         public:
             explicit ReadExposedRoot(uintptr_t* p) : HandshakeClosure("K3-unwind-order"), p(p) {}

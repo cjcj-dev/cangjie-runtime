@@ -280,6 +280,9 @@ void StackWatermark::ensure_safe(const FrameInfo& frame)
     const uintptr_t senderSP = frame.CallerSP();
     const uintptr_t boundary = watermark();
     if (boundary != 0 && senderSP > boundary) { process_one(); }
+#if (defined(MRT_DEBUG) && (MRT_DEBUG == 1)) || defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+    assert_is_frame_safe(frame);
+#endif
 }
 
 void StackWatermark::on_safepoint() { start_processing(); }
@@ -324,13 +327,16 @@ void StackWatermark::before_unwind()
     // (javaThread.cpp:1112). A finished watermark has nothing to expose, and a
     // runtime leave has no Java frame: do not classify it.
     CHECK_DETAIL(processing_started(), "Processing should already have started");
-    if (IsDone() || !HasExposableFrame(owner)) {
+    if (!HasExposableFrame(owner)) {
         return;
     }
     StackFrameStream frames(&owner.GetUnwindContext(), StackFrameStream::WalkMode::SENDER);
     frames.Start();
     SkipWatermarkStub(frames);
     if (frames.IsDone()) { return; }
+#if (defined(MRT_DEBUG) && (MRT_DEBUG == 1)) || defined(MRT_PRODUCT_TESTABLE_INTERNALS)
+    assert_is_frame_safe(frames.Current());
+#endif
     frames.Next();
     if (!frames.IsDone()) { ensure_safe(frames.Current()); }
 }
@@ -339,7 +345,7 @@ void StackWatermark::after_unwind()
 {
     // stackWatermark.inline.hpp:109-124.
     CHECK_DETAIL(processing_started(), "Processing should already have started");
-    if (IsDone() || !HasExposableFrame(owner)) {
+    if (!HasExposableFrame(owner)) {
         return;
     }
     StackFrameStream frames(&owner.GetUnwindContext(), StackFrameStream::WalkMode::SENDER);
