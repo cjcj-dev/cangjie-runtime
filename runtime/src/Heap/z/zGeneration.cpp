@@ -1263,7 +1263,7 @@ BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object)
     if (object == nullptr || !Heap::IsHeapAddress(object)) return object;
     ZForwarding* const forwarding = _forwarding_table.get(reinterpret_cast<MAddress>(object));
     if (forwarding == nullptr) return object;
-    return _relocate->relocate_object(forwarding, object);
+    return object;
 }
 }
 
