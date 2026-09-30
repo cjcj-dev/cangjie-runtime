@@ -36,7 +36,10 @@ ptrdiff_t BaseObject::referent_offset(BaseObject* object)
 
 bool BaseObject::is_referent_field(BaseObject* obj, ptrdiff_t offset)
 {
-    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+    // javaClasses.cpp:3954-3960 rejects the field offset before reading the
+    // class. Reference._value is the first declared payload field in the core
+    // compiler ABI. A non-referent access may name a headerless value record.
+    if (offset != static_cast<ptrdiff_t>(TYPEINFO_PTR_SIZE) || obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return false;
     }
     TypeInfo* klass = obj->GetTypeInfo();
