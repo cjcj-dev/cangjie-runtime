@@ -296,7 +296,11 @@ void ReferenceProcessor::verify_pending_references()
     SuspendibleThreadSetJoiner stsJoiner;
     for (BaseObject* current = pending_list.get(); current != nullptr; current = reference_discovered(current)) {
         BaseObject* referent = to_object(ZBarrier::load_barrier_on_oop_field(reference_referent_addr(current)));
-        DCHECK(is_inactive(current, referent, MReference::reference_type(current->GetTypeInfo())));
+        const ReferenceType type = MReference::reference_type(current->GetTypeInfo());
+        DCHECK(is_inactive(current, referent, type));
+        if (type == ReferenceType::FINAL) {
+            DCHECK(ZPointer::is_marked_any_old(reference_referent(current)));
+        }
         SuspendibleThreadSet::yield();
     }
 #endif

@@ -34,9 +34,9 @@ inline bool ZIterator::is_invisible_object_array(BaseObject* object, TypeInfo* k
     return referenceArray && is_invisible_object(object);
 }
 
-inline BaseObject* OopIteratorClosureDispatch::load_referent(BaseObject* object, ReferenceType type)
+inline BaseObject* OopIteratorClosureDispatch::load_referent(BaseObject* object, TypeInfo* klass, ReferenceType type)
 {
-    auto* field = MReference::referent_addr(object);
+    auto* field = MReference::referent_addr(object, klass);
     if (type == ReferenceType::PHANTOM) {
         return HeapAccess<ON_PHANTOM_OOP_REF | AS_NO_KEEPALIVE>::oop_load(field);
     }
@@ -44,11 +44,11 @@ inline BaseObject* OopIteratorClosureDispatch::load_referent(BaseObject* object,
 }
 
 template <typename OopClosureT>
-bool OopIteratorClosureDispatch::try_discover(BaseObject* object, ReferenceType type, OopClosureT* closure)
+bool OopIteratorClosureDispatch::try_discover(BaseObject* object, TypeInfo* klass, ReferenceType type, OopClosureT* closure)
 {
     ReferenceDiscoverer* rd = closure->ref_discoverer();
     if (rd != nullptr) {
-        BaseObject* referent = load_referent(object, type);
+        BaseObject* referent = load_referent(object, klass, type);
         // ZGC uses markWord's GC mark for an invisible, initializing array.
         if (referent != nullptr && !referent->IsInvisibleObject()) {
             return rd->discover_reference(object, type);
@@ -58,55 +58,55 @@ bool OopIteratorClosureDispatch::try_discover(BaseObject* object, ReferenceType 
 }
 
 template <typename OopClosureT>
-void OopIteratorClosureDispatch::do_referent(BaseObject* object, OopClosureT* closure)
+void OopIteratorClosureDispatch::do_referent(BaseObject* object, TypeInfo* klass, OopClosureT* closure)
 {
-    closure->do_oop(MReference::referent_addr(object));
+    closure->do_oop(MReference::referent_addr(object, klass));
 }
 
 template <typename OopClosureT>
-void OopIteratorClosureDispatch::do_discovered(BaseObject* object, OopClosureT* closure)
+void OopIteratorClosureDispatch::do_discovered(BaseObject* object, TypeInfo* klass, OopClosureT* closure)
 {
-    closure->do_oop(MReference::discovered_addr(object));
+    closure->do_oop(MReference::discovered_addr(object, klass));
 }
 
 template <typename OopClosureT>
-void OopIteratorClosureDispatch::oop_oop_iterate_discovery(BaseObject* object, ReferenceType type,
+void OopIteratorClosureDispatch::oop_oop_iterate_discovery(BaseObject* object, TypeInfo* klass, ReferenceType type,
                                                          OopClosureT* closure)
 {
-    if (try_discover(object, type, closure)) {
+    if (try_discover(object, klass, type, closure)) {
         return;
     }
-    do_referent(object, closure);
-    do_discovered(object, closure);
+    do_referent(object, klass, closure);
+    do_discovered(object, klass, closure);
 }
 
 template <typename OopClosureT>
-void OopIteratorClosureDispatch::oop_oop_iterate_fields(BaseObject* object, OopClosureT* closure)
+void OopIteratorClosureDispatch::oop_oop_iterate_fields(BaseObject* object, TypeInfo* klass, OopClosureT* closure)
 {
     DCHECK(closure->ref_discoverer() == nullptr);
-    do_referent(object, closure);
-    do_discovered(object, closure);
+    do_referent(object, klass, closure);
+    do_discovered(object, klass, closure);
 }
 
 template <typename OopClosureT>
-void OopIteratorClosureDispatch::oop_oop_iterate_fields_except_referent(BaseObject* object, OopClosureT* closure)
+void OopIteratorClosureDispatch::oop_oop_iterate_fields_except_referent(BaseObject* object, TypeInfo* klass, OopClosureT* closure)
 {
     DCHECK(closure->ref_discoverer() == nullptr);
-    do_discovered(object, closure);
+    do_discovered(object, klass, closure);
 }
 
 template <typename OopClosureT>
-void OopIteratorClosureDispatch::oop_oop_iterate_ref_processing(OopClosureT* closure, BaseObject* object)
+void OopIteratorClosureDispatch::oop_oop_iterate_ref_processing(OopClosureT* closure, BaseObject* object, TypeInfo* klass)
 {
     switch (closure->reference_iteration_mode()) {
         case OopIterateClosure::DO_DISCOVERY:
-            oop_oop_iterate_discovery(object, MReference::reference_type(object->GetTypeInfo()), closure);
+            oop_oop_iterate_discovery(object, klass, MReference::reference_type(klass), closure);
             break;
         case OopIterateClosure::DO_FIELDS:
-            oop_oop_iterate_fields(object, closure);
+            oop_oop_iterate_fields(object, klass, closure);
             break;
         case OopIterateClosure::DO_FIELDS_EXCEPT_REFERENT:
-            oop_oop_iterate_fields_except_referent(object, closure);
+            oop_oop_iterate_fields_except_referent(object, klass, closure);
             break;
         default:
             LOG(RTLOG_FATAL, "invalid reference iteration mode");
@@ -130,7 +130,7 @@ void OopIteratorClosureDispatch::oop_oop_iterate(OopClosureT* closure, BaseObjec
             closure->do_oop(&field);
         }
     }, klass);
-    oop_oop_iterate_ref_processing(closure, object);
+    oop_oop_iterate_ref_processing(closure, object, klass);
 }
 
 template <typename OopClosureT>
