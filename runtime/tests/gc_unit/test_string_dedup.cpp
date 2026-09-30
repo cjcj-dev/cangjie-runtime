@@ -73,6 +73,17 @@ public:
         std::lock_guard<std::mutex> lock(dedup.tableMutex);
         return dedup.table.numberOfBuckets;
     }
+    static void ObserveOldReports(unsigned& firstState, unsigned& secondState)
+    {
+        auto& dedup = StringDedup::Instance();
+        std::lock_guard<std::mutex> lock(dedup.tableMutex);
+        ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
+        ConcurrentGCBreakpoints::RunToIdle();
+        firstState = DeadState();
+        ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED");
+        ConcurrentGCBreakpoints::RunToIdle();
+        secondState = DeadState();
+    }
 };
 }
 
@@ -440,6 +451,7 @@ namespace {
 struct DedupBatch {
     size_t count = 0;
     size_t strongCount = 0;
+    bool revisitDuringGrowth = true;
     size_t installed = 0;
     size_t duplicateHits = 0;
     std::vector<NativeSlot*> strong;
@@ -455,7 +467,7 @@ void* InstallDedupBatch(void* argument)
         batch.installed += MCC_StringDedupCanonicalImpl(DedupArrayType(), array) == array;
         // Revisit older keys while the independent processor can migrate
         // buckets. A miss would install a duplicate and change slot count.
-        if (batch.count > 503 * 14 && index % 64 == 0) {
+        if (batch.revisitDuringGrowth && batch.count > 503 * 14 && index % 64 == 0) {
             auto* same = NewCycleBacking(true, 1);
             batch.duplicateHits += MCC_StringDedupCanonicalImpl(DedupArrayType(), same) != same;
         }
@@ -580,6 +592,140 @@ GC_RUNTIME_OTHER_VM_TEST(StringDedup, ResizeThenOldCallbacksShrink)
     GC_EXPECT_EQ(grownState, 2U); // wait2 -> wait1 -> good through old reports
     GC_EXPECT_EQ(firstState, 1U);
     GC_EXPECT_TRUE(grown);
+    GC_EXPECT_EQ(finiRC, E_OK);
+}
+
+namespace {
+bool RunMaintenanceSchedule(const char* fixture)
+{
+    if (std::getenv("DEDUP_MAINTENANCE_FILE") != nullptr) return false;
+    char executable[4096]{};
+    const auto length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+    GC_EXPECT_TRUE(length > 0);
+    std::filesystem::path source = __FILE__;
+    if (source.is_relative()) {
+        auto directory = std::filesystem::path(executable).parent_path();
+        while (!directory.empty()) {
+            if (std::filesystem::is_regular_file(directory / source)) {
+                source = directory / source;
+                break;
+            }
+            const auto parent = directory.parent_path();
+            if (parent == directory) break;
+            directory = parent;
+        }
+    }
+    source = std::filesystem::absolute(source);
+    const auto scheduler = source.parent_path() / "test_string_dedup_maintenance_gdb.py";
+    GC_EXPECT_TRUE(std::filesystem::is_regular_file(scheduler));
+    const std::string prefix = std::string(executable) + ".maintenance-" + std::to_string(getpid());
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        setenv("DEDUP_MAINTENANCE_FILE", prefix.c_str(), 1);
+        setenv("DEDUP_MAINTENANCE_FIXTURE", fixture, 1);
+        setenv("DEDUP_MAINTENANCE_SOURCE", source.c_str(), 1);
+        execlp("timeout", "timeout", "90", "gdb", "-nx", "-batch", "-x", scheduler.c_str(),
+               "--args", executable, static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    int status = 0;
+    const auto waited = waitpid(child, &status, 0);
+    GC_EXPECT_TRUE(waited == child && WIFEXITED(status));
+    GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+    return true;
+}
+bool WaitMaintenanceWindow()
+{
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    const std::string prefix = std::getenv("DEDUP_MAINTENANCE_FILE");
+    while (std::chrono::steady_clock::now() < end) {
+        if (std::filesystem::exists(prefix + ".ready")) return true;
+        std::this_thread::yield();
+    }
+    return false;
+}
+void ReleaseMaintenanceWindow()
+{
+    const std::string prefix = std::getenv("DEDUP_MAINTENANCE_FILE");
+    std::ofstream(prefix + ".release") << "release\n";
+}
+struct OldBucketProbe {
+    ArrayRef found = nullptr;
+    ArrayRef expected = nullptr;
+};
+void* ProbeOldBucket(void* argument)
+{
+    auto& probe = *static_cast<OldBucketProbe*>(argument);
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    auto* candidate = NewCycleBacking(true, 1);
+    probe.found = MCC_StringDedupCanonicalImpl(DedupArrayType(), candidate);
+    mutator->SetManagedContext(true);
+    return nullptr;
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(StringDedup, CleanupReportStateTransitions)
+{
+    if (RunMaintenanceSchedule("StringDedup.CleanupReportStateTransitions")) return;
+    StartDedupRuntime();
+    ConcurrentGCBreakpoints::AcquireControl();
+    DedupBatch batch;
+    batch.count = 7200;
+    batch.revisitDuringGrowth = false;
+    RunDedupTask(InstallDedupBatch, &batch);
+    const bool window = WaitMaintenanceWindow();
+    const unsigned cleaningState = StringDedupTest::DeadState();
+    ReleaseMaintenanceWindow();
+    const bool grown = WaitDedupSize(batch.count, true);
+    const unsigned completedState = StringDedupTest::DeadState();
+    unsigned firstState = 99;
+    unsigned secondState = 99;
+    StringDedupTest::ObserveOldReports(firstState, secondState);
+    std::printf("DEDUP_STATE_TARGET window=%d grown=%d cleaning=%u completed=%u first=%u second=%u\n",
+                window, grown, cleaningState, completedState, firstState, secondState);
+    std::fflush(stdout);
+    ConcurrentGCBreakpoints::ReleaseControl();
+    const int finiRC = FiniCJRuntime();
+    GC_EXPECT_TRUE(cleaningState == 3U && completedState == 2U && firstState == 1U && secondState == 0U);
+    GC_EXPECT_TRUE(window && grown);
+    GC_EXPECT_EQ(finiRC, E_OK);
+}
+GC_RUNTIME_OTHER_VM_TEST(StringDedup, ShrinkingOldBucketKeepsCanonicalIdentity)
+{
+    if (RunMaintenanceSchedule("StringDedup.ShrinkingOldBucketKeepsCanonicalIdentity")) return;
+    StartDedupRuntime();
+    ConcurrentGCBreakpoints::AcquireControl();
+    DedupBatch batch;
+    batch.count = 7200;
+    batch.strongCount = 3;
+    batch.revisitDuringGrowth = false;
+    RunDedupTask(InstallDedupBatch, &batch);
+    const bool grown = WaitDedupSize(batch.count, true);
+    DedupOldCycle();
+    DedupOldCycle();
+    const bool window = WaitMaintenanceWindow();
+    OldBucketProbe probe;
+    probe.expected = reinterpret_cast<ArrayRef>(NativeAccess<>::oop_load(batch.strong.front()));
+    RunDedupTask(ProbeOldBucket, &probe);
+    const size_t slots = StringDedup::Instance().WeakStorage().AllocationCount();
+    std::printf("DEDUP_SHRINK_TARGET window=%d grown=%d found=%p expected=%p slots=%zu\n",
+                window, grown, probe.found, probe.expected, slots);
+    std::fflush(stdout);
+    ReleaseMaintenanceWindow();
+    const bool migrated = WaitDedupSize(batch.strongCount);
+    OldBucketProbe migratedProbe;
+    migratedProbe.expected = reinterpret_cast<ArrayRef>(NativeAccess<>::oop_load(batch.strong.front()));
+    RunDedupTask(ProbeOldBucket, &migratedProbe);
+    std::printf("DEDUP_SHRINK_MIGRATED_TARGET settled=%d found=%p expected=%p\n",
+                migrated, migratedProbe.found, migratedProbe.expected);
+    std::fflush(stdout);
+    RunDedupTask(ReleaseDedupBatch, &batch);
+    ConcurrentGCBreakpoints::ReleaseControl();
+    const int finiRC = FiniCJRuntime();
+    GC_EXPECT_TRUE(probe.found == probe.expected && migratedProbe.found == migratedProbe.expected);
+    GC_EXPECT_TRUE(window && grown);
+    GC_EXPECT_TRUE(migrated);
     GC_EXPECT_EQ(finiRC, E_OK);
 }
 

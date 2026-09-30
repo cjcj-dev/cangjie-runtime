@@ -1,0 +1,7 @@
+--- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
++++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+@@ -236,3 +236,3 @@ WeakHandle StringDedup::Table::Find(MArray* object, uint32_t hash) const
+     if (cleanupState != nullptr) {
+-        WeakHandle value = cleanupState->Find(object, hash);
++        WeakHandle value;
+         if (!value.is_empty()) return value;
