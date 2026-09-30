@@ -3,6 +3,7 @@ signal_shutdown.cpp                      manual     build_signal_shutdown.sh bui
 shutdown_owner_identity.cpp              manual     build_signal_shutdown.sh; real FiniCJRuntime on a host pthread followed by a new pthread on the same explicit stack
 check_shutdown_owner_identity.py         manual     GDB observes equal pthread IDs and product rejection before new foreign scheduler creation
 check_shutdown_blocking.py               manual     Shared Linux task-state, futex wait and CPU-tick observation for terminal native reentry
+check_mutator_lock_scope.sh              manual     Retained source-order checks require unlocking before managed-entry safepoint processing
 signal_shutdown_managed.cj               manual     Compile with stained std as dylib; signal-shutdown loads it to obtain real @C callback
 build_signal_shutdown.sh                 manual     Product runtime/boundscheck directory and output directory; builds one shutdown test ELF
 check_signal_shutdown.py                 manual     Product SO, signal-shutdown ELF and gdb; observes pending exit, terminal state and retained runtime after Fini returns
