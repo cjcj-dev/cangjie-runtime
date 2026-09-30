@@ -120,6 +120,7 @@ void CangjieRuntime::CreateAndInit(const RuntimeParam& runtimeParam)
 
 void CangjieRuntime::Terminate()
 {
+    ThreadLocal::DetachForShutdown();
     static VMHalt halt;
     MutatorManager::Instance().StopTheWorld(&halt);
     VMExit::SetVMExited();

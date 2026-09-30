@@ -175,10 +175,7 @@ public:
     }
 
     // When runtime is stop, we need to lock any operation which may access runtime.
-    static void ThreadLocalFini()
-    {
-        tlEnableLock.LockWrite();
-    }
+    static void DetachForShutdown();
 
     static bool TryGetRdLock()
     {

@@ -183,11 +183,16 @@ CleanThreadLocalData::CleanThreadLocalData()
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 
+void ThreadLocal::DetachForShutdown()
+{
+    MutatorManager::Instance().UnregisterMarkFlushThread(GetThreadLocalData());
+    cleaner.RemoveFromList();
+}
+
 CleanThreadLocalData::~CleanThreadLocalData()
 {
     VMExit::WaitIfVMExited();
     if (VMExit::HasExited()) {
-        RemoveFromList();
         return;
     }
     ThreadLocalData* local = ThreadLocal::GetThreadLocalData();
