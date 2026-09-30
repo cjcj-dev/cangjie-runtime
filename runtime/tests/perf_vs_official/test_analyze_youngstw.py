@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from analyze_youngstw import evac_ghost_regions, report_timer_ends, timed_report_lines
+from gclog_schema import SCHEMA_VERSIONS
 
 
 class AnalyzeYoungStwTest(unittest.TestCase):
@@ -54,10 +55,10 @@ class AnalyzeYoungStwTest(unittest.TestCase):
             "young.evac_prepare_next": 20000,
         })
         stderr = "\n".join(
-            f"[GCLOG] v=4 rec=phase seq=1 gc_tag=- name={name} kind=pause start_ns=0 ns={phase_ns[name]}"
+            f"[GCLOG] v={SCHEMA_VERSIONS['phase']} rec=phase seq=1 gc_tag=- name={name} kind=pause start_ns=0 ns={phase_ns[name]}"
             for name in phases
         ) + "\n" + "\n".join(
-            f"[GCLOG] v=4 rec=stw seq=1 gc_tag=- reason={reason} start_ns=0 wait_ns=0 "
+            f"[GCLOG] v={SCHEMA_VERSIONS['stw']} rec=stw seq=1 gc_tag=- reason={reason} start_ns=0 wait_ns=0 "
             f"held_ns={post_held_ns if reason == 'young_post-relocate' else 1000000}"
             for reason in ("young_collection", "young_post-relocate", "other_a", "other_b")
         ) + "\n"

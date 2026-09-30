@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 
 U64_MAX = (1 << 64) - 1
+SCHEMA_VERSIONS = {"cycle": 6, "generation": 6, "phase": 5, "stw": 5}
 TOKEN = r"[A-Za-z0-9._-]+"
 RECORD_TOKENS = re.compile(r"(?:^| )rec=([^ ]+)")
 GC_CYCLE = re.compile(
@@ -207,7 +208,7 @@ def parse_gclog(text: str) -> GcLogRecords:
             raise ValueError(f"malformed GCLOG {family} record: {line}")
         fields = list(match.groups())
         version = _u64(fields.pop(0), "v", line)
-        expected = 6 if family in ("cycle", "generation") else 5
+        expected = SCHEMA_VERSIONS[family]
         if version != expected:
             raise ValueError(f"unsupported GCLOG {family} schema v={version}; expected v={expected}")
         fields[0] = _u64(fields[0], "seq", line)

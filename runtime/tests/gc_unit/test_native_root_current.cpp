@@ -740,22 +740,17 @@ void CheckYoungThreadCompletion(bool handshakeFirst)
                      unsigned(done), published, unsigned(initiallyDone), unsigned(initiallyLive));
         GC_EXPECT_TRUE(!initiallyDone && !initiallyLive && done && published == 1);
     }
-    size_t rootResults = 0;
-    auto observe = [&](BaseObject* object) { if (object == fixture.obj0) ++rootResults; };
-    ZMark::VisitMinorRoots(observe, observe);
+    ZMark::VisitMinorRoots();
     const bool firstDone = thread->GetStackWatermark().IsDone(epoch);
     readPublished();
     const size_t firstPublished = published;
-    const size_t firstResults = rootResults;
-    ZMark::VisitMinorRoots(observe, observe);
+    ZMark::VisitMinorRoots();
     readPublished();
     const bool sameRoot = raw(root->LoadPlain()) == reinterpret_cast<uintptr_t>(fixture.obj0);
-    std::fprintf(stderr, "YOUNG_THREAD_COMPLETION_TARGET handshake=%u done=%u published=%zu first=%zu second=%zu same=%u\n",
-                 unsigned(handshakeFirst), unsigned(firstDone), published, firstResults, rootResults,
+    std::fprintf(stderr, "YOUNG_THREAD_COMPLETION_TARGET handshake=%u done=%u published=%zu first=%zu same=%u\n",
+                 unsigned(handshakeFirst), unsigned(firstDone), published, firstPublished,
                  unsigned(sameRoot));
     GC_EXPECT_TRUE(firstDone && firstPublished == 1 && published == firstPublished && sameRoot);
-    GC_EXPECT_EQ(firstResults, handshakeFirst ? size_t(0) : size_t(1));
-    GC_EXPECT_EQ(rootResults, firstResults);
     thread->PopNativeFrameRootsTo(frameMark);
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }

@@ -17,6 +17,7 @@
 #include "Common/Runtime.h"
 #include "Common/SuspendibleThreadSet.h"
 #include "Concurrency/Concurrency.h"
+#include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
@@ -94,7 +95,8 @@ void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
 
 OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(unsigned workers,
                                                          ZGenerationIdOptional generation)
-    : states{{{Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers}}}, generation(generation)
+    : states{{{Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers},
+              {Heap::GetHeap().GetExportRootStorage(), workers}}}, generation(generation)
 {
     (void)this->generation;
 }
@@ -102,7 +104,6 @@ OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(unsigned workers,
 OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(unsigned workers,
                                                      ZGenerationIdOptional generation)
     : states{{{Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers},
-              {Heap::GetHeap().GetExportRootStorage(), workers},
               {SyncWeakOopStorage(), workers}}}, generation(generation) {}
 
 void OopStorageSetIteratorWeak::report_num_dead()
@@ -173,6 +174,31 @@ void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
     statics.apply(&copy);
 }
 
+void CJThreadRootsIterator::Apply(const std::function<void(CJThreadRoot&)>& visitor)
+{
+    if (!claimed.exchange(true, std::memory_order_relaxed)) {
+        VisitCJThreadRoots(visitor);
+    }
+}
+
+void RootsIteratorStrongUncolored::Apply(const std::function<void(Mutator&)>& threadVisitor,
+                                         const std::function<void(CJThreadRoot&)>& carrierVisitor)
+{
+    auto threads = threadVisitor;
+    auto carriers = carrierVisitor;
+    javaThreads.apply(&threads);
+    carriersStrong.apply(&carriers);
+}
+
+void RootsIteratorAllUncolored::Apply(const std::function<void(Mutator&)>& threadVisitor,
+                                      const std::function<void(CJThreadRoot&)>& carrierVisitor)
+{
+    auto threads = threadVisitor;
+    auto carriers = carrierVisitor;
+    javaThreads.apply(&threads);
+    carriersAll.apply(&carriers);
+}
+
 JavaThreadsIterator::JavaThreadsIterator(ZGenerationIdOptional generation)
     : claimed(0), generation(generation)
 {
@@ -194,35 +220,18 @@ void JavaThreadsIterator::Apply(const std::function<void(Mutator&)>& visitor)
     }
 }
 
-void ZMark::VisitStrongPlainRoots(
-    const RootVisitor& visitor, const std::function<void(Mutator&)>& threadVisitor)
-{
-    if (threadVisitor) {
-        MutatorManager::Instance().VisitAllMutators(threadVisitor);
-    }
-    (void)visitor;
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots();
-}
-
 void ZMark::VisitStaticRoots(const NativeSlotVisitor& visitor)
 {
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
 
-void ZMark::MergeMutatorRoots(WorkStack& workStack)
-{
-    (void)workStack;
-    (void)Heap::GetHeap().old().Mark().Flush();
-}
-
-void ZMark::DoEnumeration(WorkStack& workStack, ValueRootList& exportOwners)
+void ZMark::DoEnumeration()
 {
     // ZGC zMark.cpp:939-942: keep the entire old root task inside the
     // suspendible set. Its barriers must not color young roots across the
     // young mark-start flip before the new mark domain is ready.
     SuspendibleThreadSetJoiner joiner;
-    EnumAllCommonRoots((*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()), exportOwners);
-    MergeMutatorRoots(workStack);
+    EnumAllCommonRoots((*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()));
 }
 
 

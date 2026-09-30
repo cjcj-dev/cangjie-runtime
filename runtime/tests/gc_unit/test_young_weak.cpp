@@ -26,6 +26,7 @@
 #include "gc_heap_fixture.hpp"
 #include "selection_cycle_fixture.hpp"
 #include "Heap/z/zCrossVM.hpp"
+#include "Sync/Sync.h"
 #include "gc_unittest.hpp"
 
 #include "Concurrency/Concurrency.h"
@@ -731,16 +732,41 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     Heap& collector = static_cast<Heap&>(Heap::GetHeap());
     RelocationReceiptTest::BindCollector(&collector);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
+    // ZGC zRootsIterator.cpp:177-198: use a weak OopStorage slot. Export
+    // handles are strong JNI-global counterparts and cannot model this input.
+    NativeSlot* handle = SyncWeakOopStorage().Allocate();
+    handle->StoreColoured(StoreGoodPointer(graph.weak));
     std::unordered_set<BaseObject*> strong;
     std::unordered_set<BaseObject*> inclusive;
     HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
     HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
-    Heap::GetHeap().RemoveExportObject(handle);
+    handle->StoreColoured(zpointer{});
+    SyncWeakOopStorage().Release(handle);
     GC_EXPECT_TRUE(strong.count(graph.weak) == 0);
     GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
+}
+
+// ZGC zRootsIterator.cpp:159-162: registered export handles have JNI-global
+// lifetime and belong to the strong storage set even for strong-only walks.
+GC_OTHER_VM_TEST(HeapIterator, ExportRootIsIncludedInStrongMode)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager manager;
+    WeakClosureTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    WeakGraph graph(fx, fx.region0());
+    RelocationReceiptTest::BindCollector(&Heap::GetHeap());
+    Heap::GetHeap().old().set_phase(ZGenerationPhase::Relocate);
+    const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
+    std::unordered_set<BaseObject*> strong;
+    HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
+    Heap::GetHeap().RemoveExportObject(handle);
+    std::fprintf(stderr, "EXPORT_STRONG_ROOT_TARGET object=%p root=%zu referent=%zu child=%zu\n",
+                 graph.weak, strong.count(graph.weak), strong.count(graph.referent), strong.count(graph.child));
+    GC_EXPECT_TRUE(strong.count(graph.weak) == 1);
+    GC_EXPECT_TRUE(strong.count(graph.referent) == 0 && strong.count(graph.child) == 0);
 }
 
 // P8-2: use only existing visitor callbacks to hold an in-flight object.
