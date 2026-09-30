@@ -9,6 +9,7 @@
 #define MRT_COLLECTOR_H
 
 #include "Heap/z/zInitialize.hpp"
+#include "Heap/z/zBarrierSet.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRuntimeWorkers.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -55,6 +56,7 @@ public:
 
 private:
     static ZCollectedHeap* _collected_heap;
+    ZBarrierSet _barrier_set;
     ZInitializer _initializer;
     Heap _heap;
     ZDriverMinor* _driver_minor;
