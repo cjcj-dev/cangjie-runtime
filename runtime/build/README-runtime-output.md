@@ -40,6 +40,17 @@ are observations and may be updated by later gate executions. The receipt is
 also mirrored beside the linker SO for the existing outer build gate; the
 product gate itself always executes against the published directory.
 
+Each gate invocation allocates `GC_UNIT_OUT/gate-runs/run.XXXXXXXXXX` before
+validation or contract tests. This directory owns native runner outputs,
+`gate.status`, captured stdout/stderr, and `invocation.json` (schema 1).
+Requested inputs and verified product identity are distinct. Interrupted
+invocations remain STARTED until exit. Root summaries and caller-selected
+status are latest-only compatibility mirrors, not history. Direct standalone
+OUT semantics do not change. `gate-cache.json` atomically references a completed
+invocation rather than a shared writable test output directory. The publisher
+supplies a unique `GC_UNIT_GATE_RESULT` handoff per call and mirrors only that
+invocation's status, including when the caller selects an external status path.
+
 CJThread configures early because runtime needs its generated headers. Both its
 nested build directory and intermediate outputs are private to the parent build
 tree. Packaging continues to install from CMake targets. Consumers must select

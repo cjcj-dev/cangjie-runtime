@@ -183,16 +183,47 @@ def publish(args):
           f'runtime_sha256={sha(lib / args.runtime.name)} '
           f'boundscheck_sha256={sha(lib / args.boundscheck.name)}', flush=True)
     if args.gate:
+        handoff_dir = Path(tempfile.mkdtemp(prefix='gate-handoff.', dir=args.staging))
+        handoff = handoff_dir / 'result.json'
         env = dict(os.environ, GCV2_RUNTIME_CONFIG=config_id,
                    GCV2_RUNTIME_LIB_DIR=str(lib), GCV2_RUNTIME_OUTPUT_ROOT=str(root),
-                   MRT_TESTABLE_INTERNALS=args.testable, MRT_GC_UNIT_OHOS_HOST=args.ohos)
+                   MRT_TESTABLE_INTERNALS=args.testable, MRT_GC_UNIT_OHOS_HOST=args.ohos,
+                   GC_UNIT_GATE_RESULT=str(handoff))
         rc = subprocess.run(['bash', str(args.gate)], cwd=args.source, env=env).returncode
         # The existing outer build gate discovers the linker SO before the
         # publication on some filesystems. Mirror only the receipt beside that
         # byte-identical staging SO; all execution above used the publication.
-        status = lib / 'gc_unit_gate.status'
-        if status.is_file():
-            shutil.copy2(status, args.runtime.parent / 'gc_unit_gate.status')
+        try:
+            result = json.loads(handoff.read_text())
+            evidence = Path(result['evidence_dir'])
+            if (result['run_id'] != evidence.name or
+                    Path(result['status']) != evidence / 'gate.status' or
+                    Path(result['invocation']) != evidence / 'invocation.json'):
+                raise ValueError('gate handoff path ownership mismatch')
+            invocation = json.loads(Path(result['invocation']).read_text())
+            if (invocation['run_id'] != result['run_id'] or
+                    invocation['requested_inputs']['GCV2_RUNTIME_CONFIG'] != config_id or
+                    invocation['gate_rc'] != rc):
+                raise ValueError('gate handoff invocation mismatch')
+            identity = invocation['verified_identity']
+            if rc == 0 and invocation['reason'] != 'EXPLICIT_SKIP':
+                if (identity is None or identity['RUNTIME_CONFIG_ID'] != config_id or
+                        identity['RUNTIME_SHA256'] != sha(lib / args.runtime.name) or
+                        identity['BOUNDSCHECK_SHA256'] != sha(lib / args.boundscheck.name)):
+                    raise ValueError('gate handoff product identity mismatch')
+            for destination in (lib / 'gc_unit_gate.status',
+                                args.runtime.parent / 'gc_unit_gate.status'):
+                descriptor, temporary = tempfile.mkstemp(prefix=destination.name + '.', dir=destination.parent)
+                os.close(descriptor)
+                try:
+                    shutil.copy2(result['status'], temporary)
+                    os.replace(temporary, destination)
+                finally:
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
+        except (OSError, ValueError, KeyError) as error:
+            print(f'RUNTIME_OUTPUT_GATE_HANDOFF_FAIL: {error}', flush=True)
+            return rc or 7
         return rc
     return 0
 
