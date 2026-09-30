@@ -22,7 +22,7 @@ rg -n 'root\.oops_do|root\.entry_barrier|VisitCJThreadRoots|CJThreadVisitRoots' 
 rg -n 'VisitGCRoots|VisitRootLists|ProcessFinalizableList' runtime/src/Heap/z/zReferenceProcessor.* runtime/src/Inspector/CjHeapData.cpp
 ```
 
-直接 obj 读有 WrapperTask :393、WrapperExecuteClosure :522、WrapperClosure :655，以及 CJThreadRoot::oops_do :58。obj 初始化/存入行是生产端，不是读；Sync.cpp 的 CJThreadGetArg 路径读取 threadObject，不能当作直接读取本槽。以下展开 oops_do 的全部消费者与调用入口。
+直接 obj 读有 WrapperTask :393、WrapperExclusiveClosure :522、WrapperOfExecuteClosure :655，以及 CJThreadRoot::oops_do :58。obj 初始化/存入行是生产端，不是读；Sync.cpp 的 CJThreadGetArg 路径读取 threadObject，不能当作直接读取本槽。以下展开 oops_do 的全部消费者与调用入口。
 
 | 消费者/分路 | 读取/调用锚（runtime/src/） | 真实发起入口 | 窗口内源码判断 |
 |---|---|---|---|
@@ -33,7 +33,7 @@ rg -n 'VisitGCRoots|VisitRootLists|ProcessFinalizableList' runtime/src/Heap/z/zR
 | old 的 young 根 remap，armed / disarmed | Heap/z/zGeneration.cpp:921-930,935-980 | old.collect :845 → concurrent_remap_young_roots :977 | armed 读三槽并 disarm。依赖完整 old collection 的后续相位；本测试不直接启动它，后台请求条件可达。 |
 | mutator 入口屏障，fast / slow | Concurrency/CJThreadModel/CJThreadModel.cpp:85-94 → :41-46,:63-73 | CjScheduler.cpp:392 | 已入队 WrapperTask 可在非 STW 区段运行。fast 不读组槽；slow 在锁内 recheck、process_weak 遍历三槽、disarm。第一次读取可能发生在此处，不能只盯住 :393。 |
 | WrapperTask 直接 obj 消费 | CjScheduler.cpp:393-394 | CJThreadNew 指定的函数，CjScheduler.cpp:421 | 本载体唯一选择的 wrapper，入口屏障后读槽并解引用 TypeInfo；首要候选，待栈证实。也不能排除武装前或恢复后消费原始 nullptr；抓栈应保留实际 future 值。 |
-| WrapperExclusiveClosure / WrapperOfExecuteClosure | CjScheduler.cpp:520-522 / :654-655 | 对应创建器 :542 / :678 | 两者也读 obj，但本载体函数是 WrapperTask，调度不将它替换为另两个函数，故不能读取本载体的该槽。 |
+| WrapperExclusiveClosure / WrapperOfExecuteClosure | CjScheduler.cpp:520-522 / :654-655 | 对应创建器 :544 / :684 | 两者也读 obj，但本载体函数是 WrapperTask，调度不将它替换为另两个函数，故不能读取本载体的该槽。 |
 | StoreCJThreadObject 的 keep-alive 全组遍历 | Concurrency/CJThreadModel/CJThreadModel.cpp:98-111 | Sync/Sync.cpp:747 以下的 MCC_SetCurrentCJThreadObject | 当前载体入口屏障+全组三槽遍历，写的是 threadObject。测试在取得地址后恢复 TLS，未调用此 setter；需该载体进入此运行路径才可能间接读 obj。 |
 | 堆迭代 full / strong+weak | Heap/z/zHeapIterator.cpp:215-223,227-250 | HeapIterator::push_roots，含 weak 的变体仍共用 strong carrier | entry_barrier 后遍历载体。本测试没有发起堆迭代；pause_verify 的 Objects（若开启）走对象页验证，不是此根迭代入口。 |
 | inspector 并发模型根 | Concurrency/CJThreadModel/CJThreadModel.cpp:204-211 | Inspector/CjHeapData.cpp:365-377（ProcessRootConcurrencyModel） | entry_barrier 后遍历载体。用例没有请求 heap dump，因此没有该入口；不能从函数名把它算作 pause_verify 的消费者。 |
