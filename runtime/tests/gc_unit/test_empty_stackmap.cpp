@@ -164,6 +164,21 @@ void CheckMetadata(Entry entry, bool descriptorPresent, bool stackmapPresent, co
     GC_EXPECT_TRUE(target);
 }
 }
+GC_TEST(ManagedMetadata, TextDescriptorIsRegistered)
+{
+    const uint32_t* pc = emptyStackmapCodePC(0, true);
+    ElfUnloadQuiescence::LinkImage(reinterpret_cast<Uptr>(pc));
+    ElfUnloadQuiescence::ReadScope reader;
+    const auto result = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(pc));
+    const bool code = ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(pc), true);
+    const bool data = ElfUnloadQuiescence::IsLinkedAddress(
+        reinterpret_cast<Uptr>(emptyStackmapMetadata.descriptor));
+    const bool owned = result == reinterpret_cast<FuncDescRef>(emptyStackmapMetadata.descriptor);
+    std::fprintf(stderr, "METADATA_TEXT_PC_TARGET code=%d data=%d owned=%d executed=1\n",
+                 code, data, owned);
+    GC_EXPECT_TRUE(code && data && owned);
+}
+
 GC_TEST(ManagedMetadata, ExecutableWithoutDescriptorIsNative)
 {
     const uint32_t* pc = emptyStackmapCodePC(0, false);
