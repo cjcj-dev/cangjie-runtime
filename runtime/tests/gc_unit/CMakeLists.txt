@@ -102,6 +102,7 @@ set(GC_UNIT_SOURCES
     test_exit_detach_mark_end.cpp
     test_native_thread_detach.cpp
     test_barrier_owner_1391.cpp
+    test_shutdown_1459.cpp
     test_partial_array.cpp
     test_segmented_array_init.cpp
     test_package_init.cpp
