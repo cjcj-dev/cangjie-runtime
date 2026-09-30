@@ -703,7 +703,7 @@ void CheckLateNativeRoot(bool abortRequested, bool checkFree = false)
     auto& young = heap.young();
     fixture.region0()->reset(PageAge::eden);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
-    young.InitializeWorkers(2);
+    InitializeGenerationWorkers(young, 2);
     young.Workers()->set_active();
     young.Workers()->set_active_workers(1);
     young.Mark().Start();
@@ -857,7 +857,7 @@ void CheckYoungPostFreeCleanup(bool abortRequested)
     fixture.region0()->reset(PageAge::eden);
     fixture.region1()->reset(PageAge::eden);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
-    young.InitializeWorkers(1);
+    InitializeGenerationWorkers(young, 1);
     young.Workers()->set_active();
     young.Mark().Start();
     young.set_phase(ZGenerationPhase::Mark);

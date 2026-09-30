@@ -1,4 +1,5 @@
 #include "gc_generation_test.hpp"
+#include "gc_worker_fixture.hpp"
 #include "CangjieRuntime.h"
 #include "Cangjie.h"
 #include "Heap/z/zAbort.inline.hpp"
@@ -196,9 +197,9 @@ GC_OTHER_VM_TEST(Lifecycle1310, OldMarkEndPublishesCompletionBeforeAbortpoint)
 {
     B09RuntimeFixture runtime;
     auto& old = Heap::GetHeap().old();
-    old.InitializeWorkers(1);
+    InitializeGenerationWorkers(old, 1);
     old.Mark().Start();
-    old.Mark().PrepareWork(1);
+    old.Mark().PrepareWork();
     old.set_phase(ZGeneration::Phase::Mark);
     ZAbort::abort();
     const bool ended = old.mark_end();
