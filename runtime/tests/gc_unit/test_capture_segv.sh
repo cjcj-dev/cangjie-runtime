@@ -53,28 +53,29 @@ cp "$OUT/main" "$OUT/publication"
 sha256sum "$OUT/main" "$OUT/publication" >"$OUT/elf.sha256"
 run_arm() {
   local arm=$1 rc
+  local -a control_env=(-u CAPTURE_CONTROL_RAISE)
+  if [[ "$arm" == signal ]]; then control_env=(CAPTURE_CONTROL_RAISE=1); fi
   set +e
-  GC_UNIT_JOBS=$(nproc) CAPTURE_CONTROL_RAISE=${2:-} \
+  env "${control_env[@]}" GC_UNIT_JOBS=$(nproc) \
     bash "$SRC/run_parallel_tests.sh" "$OUT/main" "$OUT/publication" "$OUT/$arm" "$OUT" \
     >"$OUT/$arm.log" 2>&1
   rc=$?
   set -e
   printf '%s\n' "$rc" >"$OUT/$arm.rc"
 }
-# Empty env is removed for green arms: the native fixture tests presence.
-unset CAPTURE_CONTROL_RAISE
+# Independent arm directories share only the immutable ELF pair.
+run_arm green &
+green_pid=$!
+run_arm signal &
+signal_pid=$!
+run_arm restored &
+restored_pid=$!
+wait "$green_pid" "$signal_pid" "$restored_pid"
 for arm in green restored; do
-  set +e
-  GC_UNIT_JOBS=$(nproc) bash "$SRC/run_parallel_tests.sh" \
-    "$OUT/main" "$OUT/publication" "$OUT/$arm" "$OUT" >"$OUT/$arm.log" 2>&1
-  rc=$?
-  set -e
-  echo "$rc" >"$OUT/$arm.rc"
-  [[ "$rc" -eq 0 ]]
+  [[ $(cat "$OUT/$arm.rc") -eq 0 ]]
   /usr/bin/grep -qxF '[========] 2 tests: 2 passed, 0 failed' "$OUT/$arm/parallel_tally.txt"
   /usr/bin/grep -qF 'GC_UNIT_SIGSEGV_CAPTURE_READY' "$OUT/$arm.log"
 done
-run_arm signal 1
 [[ $(cat "$OUT/signal.rc") -eq 1 ]]
 /usr/bin/grep -qxF '[========] 2 tests: 1 passed, 1 failed' "$OUT/signal/parallel_tally.txt"
 /usr/bin/grep -qF 'GC_UNIT_SIGSEGV_CAPTURE_BEGIN' "$OUT/signal.log"
