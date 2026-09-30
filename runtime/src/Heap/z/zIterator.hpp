@@ -48,6 +48,8 @@ class OopIteratorClosureDispatch {
     template <typename OopClosureT>
     static void do_referent(BaseObject* object, OopClosureT* closure);
     template <typename OopClosureT>
+    static void do_discovered(BaseObject* object, OopClosureT* closure);
+    template <typename OopClosureT>
     static void oop_oop_iterate_discovery(BaseObject* object, ReferenceType type, OopClosureT* closure);
     template <typename OopClosureT>
     static void oop_oop_iterate_fields(BaseObject* object, OopClosureT* closure);

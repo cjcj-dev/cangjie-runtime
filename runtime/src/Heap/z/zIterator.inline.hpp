@@ -9,6 +9,7 @@
 #include "Common/BaseObject.inline.h"
 #include "Heap/z/zVerify.hpp"
 #include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/MReference.h"
 
 namespace MapleRuntime {
 
@@ -35,7 +36,7 @@ inline bool ZIterator::is_invisible_object_array(BaseObject* object, TypeInfo* k
 
 inline BaseObject* OopIteratorClosureDispatch::load_referent(BaseObject* object, ReferenceType type)
 {
-    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+    auto* field = MReference::referent_addr(object);
     if (type == ReferenceType::PHANTOM) {
         return HeapAccess<ON_PHANTOM_OOP_REF | AS_NO_KEEPALIVE>::oop_load(field);
     }
@@ -59,9 +60,13 @@ bool OopIteratorClosureDispatch::try_discover(BaseObject* object, ReferenceType 
 template <typename OopClosureT>
 void OopIteratorClosureDispatch::do_referent(BaseObject* object, OopClosureT* closure)
 {
-    // Cangjie's referent is the first payload slot. ReferenceProcessor stores
-    // discovered links in native containers, not in reference-object fields.
-    closure->do_oop(&HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE));
+    closure->do_oop(MReference::referent_addr(object));
+}
+
+template <typename OopClosureT>
+void OopIteratorClosureDispatch::do_discovered(BaseObject* object, OopClosureT* closure)
+{
+    closure->do_oop(MReference::discovered_addr(object));
 }
 
 template <typename OopClosureT>
@@ -72,6 +77,7 @@ void OopIteratorClosureDispatch::oop_oop_iterate_discovery(BaseObject* object, R
         return;
     }
     do_referent(object, closure);
+    do_discovered(object, closure);
 }
 
 template <typename OopClosureT>
@@ -79,14 +85,14 @@ void OopIteratorClosureDispatch::oop_oop_iterate_fields(BaseObject* object, OopC
 {
     DCHECK(closure->ref_discoverer() == nullptr);
     do_referent(object, closure);
+    do_discovered(object, closure);
 }
 
 template <typename OopClosureT>
-void OopIteratorClosureDispatch::oop_oop_iterate_fields_except_referent(BaseObject*, OopClosureT* closure)
+void OopIteratorClosureDispatch::oop_oop_iterate_fields_except_referent(BaseObject* object, OopClosureT* closure)
 {
     DCHECK(closure->ref_discoverer() == nullptr);
-    // No discovered oop field: native discovered containers are traversed by
-    // ReferenceProcessor. The ordinary bitmap fields were visited by the VM.
+    do_discovered(object, closure);
 }
 
 template <typename OopClosureT>
@@ -94,7 +100,7 @@ void OopIteratorClosureDispatch::oop_oop_iterate_ref_processing(OopClosureT* clo
 {
     switch (closure->reference_iteration_mode()) {
         case OopIterateClosure::DO_DISCOVERY:
-            oop_oop_iterate_discovery(object, ReferenceType::WEAK, closure);
+            oop_oop_iterate_discovery(object, MReference::reference_type(object->GetTypeInfo()), closure);
             break;
         case OopIterateClosure::DO_FIELDS:
             oop_oop_iterate_fields(object, closure);
@@ -113,13 +119,14 @@ void OopIteratorClosureDispatch::oop_oop_iterate(OopClosureT* closure, BaseObjec
 {
     // Cangjie's VM field-layout dispatch uses TypeInfo/GCTib. In particular,
     // honor the caller-supplied klass rather than reloading the object header.
-    if (!klass->IsWeakRefType()) {
+    if (!klass->IsReferenceType()) {
         object->ForEachRefField([&](RefField<>& field) { closure->do_oop(&field); }, klass);
         return;
     }
-    const MAddress referent = reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE;
+    const auto* referent = MReference::referent_addr(object, klass);
+    const auto* discovered = MReference::discovered_addr(object, klass);
     object->ForEachRefField([&](RefField<>& field) {
-        if (reinterpret_cast<MAddress>(&field) != referent) {
+        if (&field != referent && &field != discovered) {
             closure->do_oop(&field);
         }
     }, klass);

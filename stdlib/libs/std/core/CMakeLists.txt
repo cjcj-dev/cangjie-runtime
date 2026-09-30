@@ -10,6 +10,8 @@ set(CANGJIE_CORE_SRCS
     native.cj
     box.cj
     object.cj
+    reference_sync.cj
+    reference.cj
     duration.cj
     sleep.cj
     option.cj

@@ -13,8 +13,10 @@ package std.sync
  */
 @Deprecated[message: "Use `public interface Condition` instead."]
 public class Monitor <: ReentrantMutex {
+    let carrier: ReferenceMonitor
     public init() {
-        var isNull = unsafe { monitorInit(this) }
+        carrier = ReferenceMonitor(getMutexCarrier())
+        let isNull = !carrier.initialize()
         if (isNull) {
             throw IllegalSynchronizationStateException("Failed to initialize monitor.")
         }
@@ -22,7 +24,8 @@ public class Monitor <: ReentrantMutex {
 
     init(mutex: Mutex) {
         super(mutex)
-        let isNull = unsafe { monitorInit(this) }
+        carrier = ReferenceMonitor(getMutexCarrier())
+        let isNull = !carrier.initialize()
         if (isNull) {
             throw IllegalSynchronizationStateException("Failed to initialize monitor.")
         }
@@ -45,7 +48,7 @@ public class Monitor <: ReentrantMutex {
         } else {
             timeout.toNanoseconds()
         }
-        return unsafe { monitorWait(this, timeoutNanos) }
+        return unsafe { carrier.wait(timeoutNanos) }
     }
 
     /**
@@ -54,7 +57,7 @@ public class Monitor <: ReentrantMutex {
      */
     public func notify(): Unit {
         checkMutexStatus()
-        unsafe { monitorNotify(this) }
+        unsafe { carrier.notify() }
     }
 
     /**
@@ -63,7 +66,7 @@ public class Monitor <: ReentrantMutex {
      */
     public func notifyAll(): Unit {
         checkMutexStatus()
-        unsafe { monitorNotifyAll(this) }
+        unsafe { carrier.notifyAll() }
     }
 }
 

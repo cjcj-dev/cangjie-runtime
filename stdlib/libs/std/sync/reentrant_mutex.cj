@@ -20,15 +20,15 @@ package std.sync
  */
 @Deprecated[message: "Use `public class Mutex` instead."]
 public open class ReentrantMutex <: Lock {
-    private let mutex: Mutex
+    private let mutex: ReferenceMutex
 
     /* @throws IllegalSynchronizationStateException if the Mutex initialization is failed.*/
     public init() {
-        this.mutex = Mutex()
+        this.mutex = Mutex().carrier
     }
 
     init(mutex: Mutex) {
-        this.mutex = mutex
+        this.mutex = mutex.carrier
     }
 
     /**
@@ -54,10 +54,15 @@ public open class ReentrantMutex <: Lock {
      * @throws IllegalSynchronizationStateException if the current thread does not hold the lock
      */
     public open func unlock(): Unit {
+        checkMutexStatus()
         mutex.unlock()
     }
 
+    func getMutexCarrier(): ReferenceMutex { mutex }
+
     func checkMutexStatus(): Unit {
-        mutex.checkMutexStatus()
+        if (!mutex.isOwned()) {
+            throw IllegalSynchronizationStateException("Cannot unlock mutex: not locked by current thread.")
+        }
     }
 }
