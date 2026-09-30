@@ -188,6 +188,17 @@ if [[ "${GC_UNIT_GATE_CONTRACT_SELFTEST:-0}" != "1" ]]; then
     exit 2
   fi
   echo "GATE_TESTABLE_CONTRACT_OK"
+  # Invocation ownership is the reason this gate allocates a private evidence
+  # directory, so its regression runs here rather than only when asked by hand.
+  # The scratch root stays outside this run's evidence directory: a fixture file
+  # is not a product artifact and must not enter the archived output manifest.
+  mkdir -p "$EVIDENCE_ROOT/selftest-tmp"
+  if ! ( cd "$SRC" && TMPDIR="$EVIDENCE_ROOT/selftest-tmp" \
+      python3 -m unittest -v test_gate_evidence ); then
+    echo "GC_UNIT_GATE_FAIL: gate invocation evidence contract failed" >&2
+    exit 2
+  fi
+  echo "GATE_INVOCATION_EVIDENCE_OK"
   if ! bash "$SRC/test_parallel_runner.sh"; then
     echo "GC_UNIT_GATE_FAIL: parallel runner contract failed" >&2
     exit 2
