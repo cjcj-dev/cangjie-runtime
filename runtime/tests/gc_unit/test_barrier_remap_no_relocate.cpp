@@ -13,7 +13,7 @@ zpointer RemapInput(BaseObject* object, ZGeneration* generation)
     const uintptr_t remap = generation->id() == ZGenerationId::young
         ? (ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask)
         : (ZPointerRemappedYoungMask & ~ZPointerRemappedOldMask);
-    return ColouredPointer(object, remap);
+    return ColouredPointer(object, ZPointer::remap_bits(remap));
 }
 
 size_t EntryCount(ZForwarding* forwarding)
@@ -154,7 +154,7 @@ GC_TEST(BarrierRemap1327, PromotedFieldRequiresOldLoadGood)
 {
 #if defined(__linux__) && !defined(NDEBUG)
     const uintptr_t remap = ZPointerRemappedMask & ~ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask;
-    volatile zpointer slot = ZAddress::color(zaddress::null, remap);
+    volatile zpointer slot = ZAddress::color(zaddress::null, ZPointer::remap_bits(remap));
     GC_EXPECT_FALSE(is_null(slot));
     ExpectContractAssertion([&] { ZBarrier::remap_young_relocated(&slot, slot); }, "ZPointer::is_old_load_good(o)");
 #else
