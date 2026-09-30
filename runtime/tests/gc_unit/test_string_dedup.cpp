@@ -658,7 +658,7 @@ GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
     GcHeapFixture::MarkStrong(page, arrays.first);
     GcHeapFixture::MarkStrong(companion, extra);
     BeginForwardingArena(Generation::Old, {page, companion});
-    auto* owner = forwarding_for_page(page);
+    auto* owner = ZGeneration::generation((page)->generation_id())->forwarding((page)->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr); // Input qualification, before starting threads.
     // A negative page lease count is the product retain_page wait condition.
     // Task ownership stays available for the real queue worker to claim.

@@ -1338,7 +1338,7 @@ static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = fa
         ZPageTest::MakeRelocatable(*peer);
     }
     young.select_relocation_set(true);
-    auto* forwarding = forwarding_for_page(source);
+    auto* forwarding = ZGeneration::generation((source)->generation_id())->forwarding((source)->GetRegionStart());
     ZGlobalsPointers::flip_young_relocate_start();
     young.set_phase(ZGenerationPhase::Relocate);
     size_t expectedFreed = young.freed();

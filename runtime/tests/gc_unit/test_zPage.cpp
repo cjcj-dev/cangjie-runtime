@@ -378,10 +378,10 @@ void* SelectRealLivePages(void* context)
         std::fprintf(stderr, "PROMOTION1315_UNIQUENESS_TARGET executed=1 registered=%zu distinct=%zu\n",
                      result.registered, result.registeredDistinct);
         for (size_t i = 0; i < result.roots; ++i) {
-            BaseObject* root = Heap::GetHeap().GetExportObject(roots[i]);
+            BaseObject* root = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(roots[i]);
             ZPage* page = root == nullptr ? nullptr : Heap::page(reinterpret_cast<MAddress>(root));
             result.promotedRoots += page != nullptr && page->generation_id() == ZGenerationId::old;
-            Heap::GetHeap().RemoveExportObject(roots[i]);
+            Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(roots[i]);
         }
         ZTenuringThreshold = savedTenuringThreshold;
         std::fprintf(stderr, "PROMOTION1315_TARGET executed=1 promoted=%zu roots=%zu\n",
@@ -401,7 +401,7 @@ void* SelectRealLivePages(void* context)
         // the next cycle. The saved from-addresses above remain unchanged:
         // those addresses, not root repair, are the lifetime observation.
         for (size_t i = 0; i < result.roots; ++i) {
-            (void)Heap::GetHeap().GetExportObject(roots[i]);
+            (void)Heap::GetHeap().cross_vm().export_roots().GetExportRoot(roots[i]);
         }
         // A concurrent caller of the existing public static-root iterator
         // owns its normal table lock. Concurrent mark must visit that table;
@@ -409,13 +409,13 @@ void* SelectRealLivePages(void* context)
         // before mark-end, without a product test callback or phase hook.
         NativeSlot blockedRoot(zpointer::null);
         NativeSlot* blockedRoots[] = {&blockedRoot};
-        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(blockedRoots), 1);
+        LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(blockedRoots), 1);
         std::promise<void> readerEntered;
         std::promise<void> releaseReader;
         auto readerReady = readerEntered.get_future();
         auto release = releaseReader.get_future();
         std::thread rootReader([&] {
-            Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {
+            LoaderManager::GetInstance()->VisitStaticRoots([&](NativeSlot& slot) {
                 if (&slot == &blockedRoot) {
                     readerEntered.set_value();
                     release.wait();
@@ -447,10 +447,10 @@ void* SelectRealLivePages(void* context)
         rootReader.join();
         mutator->EnterSaferegion(false);
         collector.join();
-        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(blockedRoots), 1);
+        LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(blockedRoots), 1);
         if (!wasSafe) { mutator->LeaveSaferegion(); }
         for (size_t i = 0; i < result.roots; ++i) {
-            Heap::GetHeap().RemoveExportObject(roots[i]);
+            Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(roots[i]);
         }
         mutator->SetManagedContext(true);
         return nullptr;

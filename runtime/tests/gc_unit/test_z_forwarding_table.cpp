@@ -1,4 +1,5 @@
 #include "gc_heap_fixture.hpp"
+#include "gc_forwarding_fixture.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Mutator/ThreadLocal.h"
@@ -362,7 +363,7 @@ struct Remembered1314Relocation {
         ZRelocationSetIterator installed(&old.relocation_set());
         for (ZForwarding* owner; installed.next(&owner);) { old.forwarding_table().insert(owner); }
         for (size_t i = 0; i < 2; ++i) {
-            owners[i] = forwarding_for_page(pages[i]);
+            owners[i] = ZGeneration::generation((pages[i])->generation_id())->forwarding((pages[i])->GetRegionStart());
             GC_EXPECT_TRUE(owners[i] != nullptr);
         }
     }

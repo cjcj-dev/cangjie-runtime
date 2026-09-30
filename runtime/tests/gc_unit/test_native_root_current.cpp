@@ -396,8 +396,8 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, YoungRelocateSkipsForeignIncompleteFrom)
     heap.young().set_phase(ZGenerationPhase::Relocate);
     ZRelocate::StartRelocationTasks(ZGenerationId::young);
     heap.young().Relocate();
-    GC_EXPECT_TRUE(forwarding_for_page(fx.region1()) != nullptr);
-    GC_EXPECT_TRUE(!forwarding_for_page(fx.region1())->is_done());
+    GC_EXPECT_TRUE(ZGeneration::generation((fx.region1())->generation_id())->forwarding((fx.region1())->GetRegionStart()) != nullptr);
+    GC_EXPECT_TRUE(!ZGeneration::generation((fx.region1())->generation_id())->forwarding((fx.region1())->GetRegionStart())->is_done());
 }
 
 GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)

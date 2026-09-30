@@ -759,7 +759,7 @@ GC_OTHER_VM_TEST(HeapIterator, ExportRootIsIncludedInStrongMode)
     WeakGraph graph(fx, fx.region0());
     RelocationReceiptTest::BindCollector(&Heap::GetHeap());
     Heap::GetHeap().old().set_phase(ZGenerationPhase::Relocate);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
+    const U64 handle = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(graph.weak);
     std::unordered_set<BaseObject*> strong;
     HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
     Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(handle);
