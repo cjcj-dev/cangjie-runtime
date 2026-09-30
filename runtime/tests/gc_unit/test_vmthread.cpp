@@ -27,16 +27,22 @@ namespace {
 // and the phase call below is the product ZGeneration pause entry.
 class VMThreadContainerRuntime final : public Runtime {
 public:
-    VMThreadContainerRuntime()
+    explicit VMThreadContainerRuntime(size_t heapUnits)
     {
+        CreateStandaloneHeap(heapUnits);
         GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
         runtime = this;
         mutatorManager = &manager;
         concurrencyModel = &concurrency;
         manager.Init();
         concurrency.Init(ConcurrencyParam{1024, 64, 1});
+        VMThread::create();
     }
-    ~VMThreadContainerRuntime() override { runtime = nullptr; }
+    ~VMThreadContainerRuntime() override
+    {
+        VMThread::wait_for_vm_thread_exit();
+        runtime = nullptr;
+    }
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
     void SetGCThreshold(uint64_t) override {}
 
@@ -74,8 +80,7 @@ public:
 
 GC_RUNTIME_TEST(VMThread1308, PauseRunsOnTheVMThread)
 {
-    CreateStandaloneHeap(8);
-    VMThreadContainerRuntime container;
+    VMThreadContainerRuntime container(8);
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     InitializeGenerationWorkers(heap.young(), 1);
@@ -91,8 +96,7 @@ GC_RUNTIME_TEST(VMThread1308, PauseRunsOnTheVMThread)
 
 GC_RUNTIME_TEST(VMThread1308, SubmitterWaitsForCompletion)
 {
-    CreateStandaloneHeap(8);
-    VMThreadContainerRuntime container;
+    VMThreadContainerRuntime container(8);
     VMBlockingOperation operation;
     std::atomic<bool> returned{false};
     std::atomic<bool> completeAtReturn{false};

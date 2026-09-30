@@ -52,12 +52,14 @@ void VMThread::create()
 {
     auto& vmThread = instance();
     std::unique_lock<std::mutex> guard(vmThread.lock);
-    // vmThread.cpp:108 keeps one VMThread for the life of the process. The
-    // standalone unit harness reaches the create site twice for bodies that
-    // also own a full CangjieRuntime, so a second call while it runs is a
-    // no-op; a terminated thread is never revived.
-    CHECK_DETAIL(!vmThread.terminated, "VM thread lifecycle");
-    if (vmThread.running) { return; }
+    // vmThread.cpp:113-115 asserts one VMThread at a time, and :148-150
+    // destroy() clears the pointer so the next runtime may create another.
+    CHECK_DETAIL(!vmThread.running, "one VM thread at a time");
+    if (vmThread.terminated) {
+        vmThread.terminated = false;
+        vmThread.shouldTerminate = false;
+        vmThread.currentOperation = nullptr;
+    }
     vmThread.thread = std::thread([&vmThread] { vmThread.run(); });
     vmThread.condition.wait(guard, [&vmThread] { return vmThread.running; });
 }
@@ -163,12 +165,8 @@ void VMThread::run()
     loop();
     currentOperation = &haltOperation;
     // vmThread.cpp:189-190: the VM thread leaves at a safepoint, so it never
-    // observes a resumed world. The standalone unit harness tears the process
-    // down without a Runtime, and the product path (CangjieRuntime::FiniAndDelete)
-    // always holds one when this runs.
-    if (Runtime::CurrentRef() != nullptr) {
-        MutatorManager::Instance().StopTheWorld();
-    }
+    // observes a resumed world.
+    MutatorManager::Instance().StopTheWorld();
     {
         std::lock_guard<std::mutex> guard(lock);
         running = false;
