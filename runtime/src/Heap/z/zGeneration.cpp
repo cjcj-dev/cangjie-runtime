@@ -1282,9 +1282,6 @@ void ZGenerationOld::PostTrace()
     // Complete their owner handoff while that authority is queryable.
     // zGeneration.cpp:1261 mark_end does not reset forwarding.
     Heap::GetHeap().cross_vm().PrepareCycleRef(discoveredExternObjects);
-    if (ZAbort::should_abort()) {
-        return;
-    }
 }
 
 }
