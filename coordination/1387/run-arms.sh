@@ -31,7 +31,8 @@ build_arm() {
         return "$rc"
     fi
     cp "$out/build/runtime-staging/lib/x86_64_Release/"*.so "$out/keep/lib/"
-    cp "$out/build/runtime-staging/runtime-build-inputs.txt" "$out/keep/"
+    publication=$(python3 "$out/runtime/tests/gc_unit/product_test_configuration.py" "$out/runtime" "$out/keep/lib" "$out/build/runtime-staging" --resolve-root) || return 3
+    cp "$publication/runtime-build-inputs.txt" "$out/keep/" || return 3
     sha256sum "$out/keep/lib/"*.so "$root/focused/dedup-unit" > "$out/artifacts.sha256"
     names='OldNoDeadControl'
     case "$arm" in
