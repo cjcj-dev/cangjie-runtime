@@ -189,11 +189,11 @@ void Mutator::Init()
 #endif
 }
 
-Mutator::Mutator()
+Mutator::Mutator() : cjthread(nullptr)
 {
-    BarrierSet* barrier_set = BarrierSet::barrier_set();
-    CHECK_DETAIL(barrier_set != nullptr, "Mutator created before barrier set");
-    barrier_set->on_thread_create(gcData);
+    if (BarrierSet* barrier_set = BarrierSet::barrier_set()) {
+        barrier_set->on_thread_create(gcData);
+    }
 }
 
 Mutator::~Mutator()
@@ -204,7 +204,11 @@ Mutator::~Mutator()
 #ifdef INTERPRETER_ENABLED
     DestroyInterpreterPart();
 #endif
-    BarrierSet::barrier_set()->on_thread_destroy(gcData);
+    if (BarrierSet* barrier_set = BarrierSet::barrier_set()) {
+        if (gcData.storeBarrierBuffer != nullptr) {
+            barrier_set->on_thread_destroy(gcData);
+        }
+    }
 }
 
 void Mutator::ResetMutator()

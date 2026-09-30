@@ -13,6 +13,7 @@
 namespace MapleRuntime {
 void ZBarrierSet::on_thread_create(ThreadGCData& data)
 {
+    if (data.storeBarrierBuffer != nullptr) { return; }
     data.storeBarrierBuffer = new StoreBarrierBuffer();
 }
 
