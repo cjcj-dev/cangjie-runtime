@@ -72,8 +72,7 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
         futures = [executor.submit(invoke, case, changes, command)
-                   for case, changes in cases for command in commands
-                   if not (case == 'missing-build' and command == 'kkk2_managed.sh')]
+                   for case, changes in cases for command in commands]
         records = [future.result() for future in futures]
     (args.out / 'results.json').write_text(json.dumps(records, indent=2, sort_keys=True))
     return int(any(not record['passed'] for record in records))
