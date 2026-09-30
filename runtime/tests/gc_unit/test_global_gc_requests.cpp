@@ -5,6 +5,7 @@
 #include <thread>
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "Loader/BinaryFile/CjFile/CjFileMeta.h"
 #include "Loader/CjFileLoader/CjFileLoader.h"
 #include "LoaderManager.h"
@@ -65,12 +66,15 @@ void TimerRequest(const char* config)
     LoadRequestImage(false, false);
     const uint32_t before = Heap::GetHeap().old().seqnum();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (Heap::GetHeap().old().seqnum() == before && std::chrono::steady_clock::now() < deadline) {
+    while ((Heap::GetHeap().old().seqnum() == before || ZDriver::major()->is_busy()) &&
+           std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
     const uint32_t after = Heap::GetHeap().old().seqnum();
-    std::fprintf(stderr, "GLOBAL_GC_DIRECTOR_TARGET executed=1 config=%s before=%u after=%u\n", config, before, after);
-    GC_EXPECT_TRUE(after > before);
+    const bool completed = !ZDriver::major()->is_busy();
+    std::fprintf(stderr, "GLOBAL_GC_DIRECTOR_TARGET executed=1 config=%s before=%u after=%u completed=%d\n",
+                 config, before, after, completed);
+    GC_EXPECT_TRUE(after > before && completed);
 }
 
 void RejectMetadata(const char* config, bool missingBarrier)
