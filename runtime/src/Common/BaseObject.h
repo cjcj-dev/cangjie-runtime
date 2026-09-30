@@ -86,7 +86,7 @@ public:
 
     void UnlockObject(const ObjectState newState) { stateWord.UnlockStateWord(newState); }
 
-    void OnFinalizerCreated();
+    BaseObject* OnFinalizerCreated();
 
     static intptr_t FieldOffset(const BaseObject* obj, const void* field)
     {

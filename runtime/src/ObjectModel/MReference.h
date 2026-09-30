@@ -33,8 +33,8 @@ public:
     {
         HeapAccess<>::oop_store(discovered_addr(object), value);
     }
-    static BaseObject* next(BaseObject* object) { return HeapAccess<>::oop_load(next_addr(object)); }
-    static void set_next(BaseObject* object, BaseObject* value) { HeapAccess<>::oop_store(next_addr(object), value); }
+    static BaseObject* next(BaseObject* object) { return HeapAccess<MO_SEQ_CST>::oop_load(next_addr(object)); }
+    static void set_next(BaseObject* object, BaseObject* value) { HeapAccess<MO_SEQ_CST>::oop_store(next_addr(object), value); }
     static ReferenceType reference_type(TypeInfo* klass)
     {
         return klass->IsFinalReferenceType() ? ReferenceType::FINAL : ReferenceType::WEAK;

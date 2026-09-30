@@ -656,8 +656,8 @@ namespace MapleRuntime {
 
 
 
-// Registered finalizers are discovered during old root marking and fixed by
-// VisitNativePointers. Only queued/running finalizables are strong mark roots.
+// FinalReference carriers are retained by the managed registration chain;
+// the published pending-chain head is a strong VM root.
 
 
 

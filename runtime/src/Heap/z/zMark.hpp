@@ -66,7 +66,6 @@ public:
     static void VisitStrongPlainRoots(const RootVisitor& visitor,
                               const std::function<void(Mutator&)>& threadVisitor);
     static void EnumAllCommonRoots(ZWorkers& workers, ValueRootList& exportOwners);
-    static void DiscoverFinalizableRoot(NativeSlot& slot);
     static void MergeMutatorRoots(WorkStack& workStack);
     static void DoEnumeration(WorkStack& workStack, ValueRootList& exportOwners);
     static void VisitStaticRoots(const NativeSlotVisitor& visitor);

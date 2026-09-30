@@ -97,6 +97,26 @@ protected open class ReferenceQueue {
         try { poll0() } finally { lock.unlock() }
     }
 
+    private func remove0(timeout: Int64): Option<Reference> {
+        if (let Some(reference) <- poll0()) { return Some(reference) }
+        var remaining = timeout
+        var start = referenceNanoTime()
+        while (true) {
+            lock.wait(remaining)
+            if (let Some(reference) <- poll0()) { return Some(reference) }
+            let end = referenceNanoTime()
+            remaining -= end - start
+            if (remaining <= 0) { return None }
+            start = end
+        }
+        None
+    }
+
+    func remove(timeout: Int64): Option<Reference> {
+        lock.lock()
+        try { remove0(timeout) } finally { lock.unlock() }
+    }
+
     func remove(): Reference {
         lock.lock()
         try {
@@ -108,3 +128,88 @@ protected open class ReferenceQueue {
         } finally { lock.unlock() }
     }
 }
+
+private let finalizerQueue = ReferenceQueue()
+private let finalizerLock = createFinalizerLock()
+private var unfinalized: Option<Finalizer> = None
+
+private func createFinalizerLock(): ReferenceMutex {
+    let lock = ReferenceMutex()
+    if (!lock.initialize()) { throw IllegalStateException("Finalizer mutex initialization failed") }
+    lock
+}
+
+class Finalizer <: FinalReference {
+    private var registrationNext: Option<Finalizer> = None
+    private var registrationPrev: Option<Finalizer> = None
+
+    init(finalizee: Object) {
+        super(finalizee, finalizerQueue)
+        finalizerLock.lock()
+        try {
+            if (let Some(previous) <- unfinalized) {
+                registrationNext = Some(previous)
+                previous.registrationPrev = Some(this)
+            }
+            unfinalized = Some(this)
+        } finally { finalizerLock.unlock() }
+    }
+
+    func runFinalizer(): Unit {
+        finalizerLock.lock()
+        try {
+            if (let Some(next) <- registrationNext) {
+                if (refEq(next, this)) { return }
+            }
+            if (let Some(first) <- unfinalized) {
+                if (refEq(first, this)) {
+                    unfinalized = registrationNext
+                } else {
+                    registrationPrev.getOrThrow().registrationNext = registrationNext
+                }
+            }
+            if (let Some(next) <- registrationNext) {
+                next.registrationPrev = registrationPrev
+            }
+            registrationPrev = None
+            registrationNext = Some(this)
+        } finally { finalizerLock.unlock() }
+        try {
+            referenceInvokeFinalize(getInactive().getOrThrow())
+        } catch (_: Exception) {
+        } catch (_: Error) {
+        } finally { clearInactive() }
+    }
+}
+
+// Retained and published by the compiler alongside the core runtime bridges.
+func registerReferenceFinalizer(finalizee: Object): Unit { Finalizer(finalizee) }
+
+func runReferenceHandler(): Unit {
+    while (referenceRuntimeRunning()) {
+        var pending = referenceWaitPending()
+        while (let Some(reference) <- pending) {
+            pending = reference._discovered
+            reference._discovered = None
+            let queue = reference._queue
+            if (!refEq(queue, referenceNullQueue)) { queue.enqueue(reference) }
+        }
+    }
+}
+
+func runReferenceFinalizers(): Unit {
+    while (referenceRuntimeRunning()) {
+        if (let Some(reference) <- finalizerQueue.remove(1_000_000_000)) {
+            (reference as Finalizer).getOrThrow().runFinalizer()
+        }
+    }
+}
+
+@Intrinsic
+func referenceInvokeFinalize(finalizee: Object): Unit
+@Intrinsic
+func referenceWaitPending(): Option<Reference>
+@Intrinsic
+func referenceRuntimeRunning(): Bool
+@Intrinsic
+func referenceNanoTime(): Int64

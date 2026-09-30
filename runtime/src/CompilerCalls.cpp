@@ -170,8 +170,7 @@ extern "C" ObjRef MCC_NewFinalizer(const TypeInfo* klass, MSize size)
 
 extern "C" ObjRef MCC_OnFinalizerCreated(ObjRef ref)
 {
-    ref->OnFinalizerCreated();
-    return ref;
+    return static_cast<ObjRef>(ref->OnFinalizerCreated());
 }
 extern "C" ArrayRef MCC_NewArray(const TypeInfo* arrayInfo, MIndex nElems)
 {

@@ -40,7 +40,7 @@ MObject* MObject::NewFinalizer(const TypeInfo* ti, MSize size)
     if (LIKELY(addr != NULL_ADDRESS)) {
         ClearMemory(addr, size);
         (void)SetClassInfo(addr, const_cast<TypeInfo*>(ti));
-        from_alloc_addr(addr)->OnFinalizerCreated();
+        addr = reinterpret_cast<MAddress>(from_alloc_addr(addr)->OnFinalizerCreated());
     } else {
         return nullptr;
     }

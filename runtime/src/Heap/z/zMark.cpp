@@ -126,22 +126,6 @@ private:
 };
 } // namespace
 
-// ZReferenceProcessor::should_discover/discover (zReferenceProcessor.cpp:174-201,
-// 239-250). Native registration owns the original referent slot, rather than a
-// Java FinalReference object. The load barrier heals remapping before discovery.
-void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
-{
-    CHECK(Heap::GetHeap().old().IsPhaseMark());
-    BaseObject* object = to_object(ZBarrier::load_barrier_on_oop_field(reinterpret_cast<volatile zpointer*>(&(slot))));
-    object = ZBarrier::ValidateCurrentValue(object);
-    if (object == nullptr) return;
-    auto* page = Heap::page(reinterpret_cast<MAddress>(object));
-    if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
-    auto& processor = Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
-    (void)processor.discover_reference(object, ReferenceType::FINAL);
-    ZBarrier::MarkFinalizableBarrierOnRoot(slot);
-}
-
 
 namespace {
 // ZMarkOopClosure (zMark.cpp:666-670). P08 owns the missing dedicated old
@@ -159,12 +143,11 @@ namespace {
 class MarkOldRootsTask final : public ZTask {
 public:
     MarkOldRootsTask(ZMark& domain,
-                     NativeSlotVisitor finalizable, std::function<void()> uncolored,
+                     std::function<void()> uncolored,
                      ValueRootList& exportOwners, unsigned workers)
         : ZTask("ZMarkOldRootsTask"), rootsColored(workers),
-          finalizerRoots(Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers),
           exportRoots(Heap::GetHeap().GetExportRootStorage(), workers),
-          finalizable(std::move(finalizable)), domain(domain), uncolored(std::move(uncolored)),
+          domain(domain), uncolored(std::move(uncolored)),
           exportOwners(exportOwners) {}
     void work() override
     {
@@ -176,7 +159,6 @@ public:
             std::lock_guard<std::mutex> lock(exportOwnersMutex);
             exportOwners.splice(exportOwners.end(), localExportOwners);
         }
-        finalizerRoots.OopsDo(finalizable);
         rootsColored.Apply([&](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
         });
@@ -191,9 +173,7 @@ public:
     }
 private:
     RootsIteratorStrongColored rootsColored;
-    OopStorage::ParState<true> finalizerRoots;
     OopStorage::ParState<true> exportRoots;
-    NativeSlotVisitor finalizable;
     RootsIteratorStrongUncolored rootsUncolored;
     MarkOopClosure coloredClosure;
     MarkThreadClosure threadClosure;
@@ -208,7 +188,7 @@ void ZMark::EnumAllCommonRoots(ZWorkers& workers, ValueRootList& exportOwners)
 {
     CHECK_DETAIL(Heap::GetHeap().old().MarkPtr() != nullptr, "old mark domain must start before roots");
     MarkOldRootsTask task(Heap::GetHeap().old().Mark(),
-                         [](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
+                         [&] {
         VisitStrongPlainRoots([&](ObjectRef& root) {
             ZUncoloredRoot::mark_object(safe(root.LoadPlain()));
         }, {});
@@ -433,7 +413,7 @@ bool ZMark::TryEndYoungMark(WorkStack& workStack)
 void ZMark::ProcessFinalizers()
 {
     FinalizerProcessor& fp = Heap::GetHeap().GetFinalizerProcessor();
-    fp.ProcessReferences([](BaseObject* obj) { return RegionSpace::IsMarkedObject<Generation::Old>(obj); });
+    fp.ProcessReferences();
 }
 
 bool ZMark::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
