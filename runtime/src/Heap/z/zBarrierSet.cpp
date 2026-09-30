@@ -11,6 +11,18 @@
 #include <algorithm>
 
 namespace MapleRuntime {
+void ZBarrierSet::on_thread_create(ThreadGCData& data)
+{
+    if (data.storeBarrierBuffer != nullptr) { return; }
+    data.storeBarrierBuffer = new StoreBarrierBuffer();
+}
+
+void ZBarrierSet::on_thread_destroy(ThreadGCData& data)
+{
+    delete data.storeBarrierBuffer;
+    data.storeBarrierBuffer = nullptr;
+}
+
 void ZBarrierSet::on_slowpath_allocation_exit(BaseObject* new_obj)
 {
     const ZPage* const page = Heap::page(reinterpret_cast<MAddress>(new_obj));

@@ -7,6 +7,7 @@
 namespace MapleRuntime {
 class ZCollectedHeapTest {
 public:
+    static BarrierSet* BarrierOwner() { return &ZCollectedHeap::heap()->_barrier_set; }
     static void SetWorkers(int32_t count) { ZCollectedHeap::heap()->_concurrent_gc_threads = count; }
 };
 class MutatorManagerTest {
