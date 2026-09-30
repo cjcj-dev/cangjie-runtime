@@ -3,13 +3,14 @@
 # Explicit fixture requests: this runner does not test automatic allocation policy.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+ROOT="${GC_UNIT_SOURCE_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+UNIT_SRC="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
-MINOR_SRC="$ROOT/runtime/tests/gc_unit/phase_entry_trigger.cj"
-MAJOR_SRC="$ROOT/runtime/tests/gc_unit/phase_entry_major.cj"
+MINOR_SRC="$UNIT_SRC/phase_entry_trigger.cj"
+MAJOR_SRC="$UNIT_SRC/phase_entry_major.cj"
 OUT="${GC_UNIT_OUT:-$ROOT/runtime/tests/gc_unit/build_standalone}"
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:?set GCV2_RUNTIME_LIB_DIR}"
-source "$(dirname "$0")/language_toolchain.sh"
+source "$UNIT_SRC/language_toolchain.sh"
 gc_unit_language_admit
 gc_unit_language_environment
 CXX_BIN="${CXX:-c++}"
@@ -49,7 +50,7 @@ if [[ "${PHASE_ENTRY_REUSE_ELFS:-0}" != 1 ]]; then
     -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
     -I"$RUNTIME_LIB_DIR/../../include" \
     -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
-    "$ROOT/runtime/tests/gc_unit/phase_entry_request.cpp" \
+    "$UNIT_SRC/phase_entry_request.cpp" \
     -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -lcangjie-runtime -lboundscheck \
     -o "$REQUEST_LIB" >"$BUILD_LOG" 2>&1
   LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR to the compiler host runtime}:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
@@ -81,7 +82,8 @@ done
 set +e
 LD_LIBRARY_PATH="$OUT:$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
-  python3 "$ROOT/runtime/tests/gc_unit/wait_phase_entry_cycle.py" "$MINOR_BIN" "$MINOR_RUN_LOG"
+  PYTHONPATH="$ROOT/runtime/tests/perf_vs_official${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 "$UNIT_SRC/wait_phase_entry_cycle.py" "$MINOR_BIN" "$MINOR_RUN_LOG"
 minor_rc=$?
 LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \

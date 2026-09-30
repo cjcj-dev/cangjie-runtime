@@ -3,8 +3,8 @@
 # classification; this program proves the language-visible ~init consequence.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-SRC="$ROOT/runtime/tests/gc_unit/finalizer_trigger.cj"
+ROOT="${GC_UNIT_SOURCE_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+SRC="$(dirname "$0")/finalizer_trigger.cj"
 OUT="${GC_UNIT_OUT:-$ROOT/runtime/tests/gc_unit/build_standalone}"
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:?set GCV2_RUNTIME_LIB_DIR}"
 source "$(dirname "$0")/language_toolchain.sh"

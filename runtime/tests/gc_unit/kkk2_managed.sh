@@ -3,6 +3,9 @@
 # Target arm: stained; cjc compiler host: official/H48 runtime.
 # cjc itself always uses H48 host (0904); CANGJIE_HOME is sdkdepot colored SDK.
 # Usage: kkk2_managed.sh <runtime-sha>
+# HARNESS-FILES: runtime/tests/gc_unit/language_toolchain.py runtime/tests/gc_unit/language_toolchain.sh runtime/tests/gc_unit/language_toolchain_qualification.json runtime/tests/gc_unit/std_runtime_colour.py
+# HARNESS-FILES: runtime/tests/gc_unit/run_finalizer_trigger.sh runtime/tests/gc_unit/run_phase_entry_trigger.sh runtime/tests/gc_unit/run_segmented_array_managed.sh
+# HARNESS-FILES: runtime/tests/gc_unit/finalizer_trigger.cj runtime/tests/gc_unit/phase_entry_trigger.cj runtime/tests/gc_unit/phase_entry_major.cj runtime/tests/gc_unit/segmented_array_managed.cj runtime/tests/gc_unit/phase_entry_request.cpp runtime/tests/gc_unit/wait_phase_entry_cycle.py
 set -euo pipefail
 ulimit -c 0
 
@@ -25,7 +28,8 @@ export HOST_RT="$H48_RT"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-ADMISSION_UNIT="$SRCROOT/runtime/tests/gc_unit"
+ADMISSION_UNIT="$HERE"
+export GC_UNIT_SOURCE_ROOT="$SRCROOT"
 export GC_UNIT_LANGUAGE_QUALIFICATION=${GC_UNIT_LANGUAGE_QUALIFICATION:-$ADMISSION_UNIT/language_toolchain_qualification.json}
 export GC_UNIT_COLOUR_HOST_RUNTIME=${GC_UNIT_COLOUR_HOST_RUNTIME:-$GC_UNIT_BUILD_SDK/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so}
 mkdir -p "$LANE/qualification"
@@ -110,10 +114,7 @@ run_arm() {
   local target_rt="$2"
   export GCV2_RUNTIME_LIB_DIR="$target_rt"
   echo "kkk2_managed arm=$arm compile_HOST_RT=$H48_RT target=$target_rt CANGJIE_HOME=$CANGJIE_HOME"
-  local GC_UNIT="$SRCROOT/runtime/tests/gc_unit"
-  if [[ ! -d "$GC_UNIT" ]]; then
-    GC_UNIT="$HERE"
-  fi
+  local GC_UNIT="$HERE"
   run_one "$arm" finalizer "$GC_UNIT/run_finalizer_trigger.sh" &
   local finalizer_pid=$!
   run_one "$arm" segmented "$GC_UNIT/run_segmented_array_managed.sh" &

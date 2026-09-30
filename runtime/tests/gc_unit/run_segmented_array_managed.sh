@@ -3,8 +3,8 @@
 # The native windows do not certify a managed-stack initialization window.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-SRC="$ROOT/runtime/tests/gc_unit/segmented_array_managed.cj"
+ROOT="${GC_UNIT_SOURCE_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)}"
+SRC="$(dirname "$0")/segmented_array_managed.cj"
 OUT="${GC_UNIT_OUT:-$ROOT/runtime/tests/gc_unit/build_standalone}"
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:?set GCV2_RUNTIME_LIB_DIR}"
 source "$(dirname "$0")/language_toolchain.sh"
