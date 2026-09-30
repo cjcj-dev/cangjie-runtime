@@ -147,5 +147,7 @@ if mode in ("asleep", "gap", "lifetime"):
     Completed("_Exit")
 if mode == "lifetime":
     Freed("*CJ_CJThreadFree")
+if mode == "ordinary":
+    gdb.execute("disable breakpoints")
 end
 continue -a &
