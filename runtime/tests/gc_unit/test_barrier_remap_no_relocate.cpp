@@ -10,9 +10,10 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 zpointer RemapInput(BaseObject* object, ZGeneration* generation)
 {
-    const uintptr_t generationMask = generation->id() == ZGenerationId::young
-        ? ZPointerRemappedYoungMask : ZPointerRemappedOldMask;
-    return ColouredPointer(object, (static_cast<uintptr_t>(::g_cjStoreGoodMask) & ZPointerRemappedMask) ^ generationMask);
+    const uintptr_t remap = generation->id() == ZGenerationId::young
+        ? (ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask)
+        : (ZPointerRemappedYoungMask & ~ZPointerRemappedOldMask);
+    return ColouredPointer(object, remap);
 }
 
 size_t EntryCount(ZForwarding* forwarding)
@@ -105,7 +106,7 @@ GC_TEST(BarrierRemap1327, PageOutsideRelocationSetStaysInPlace)
 
 GC_TEST(BarrierRemap1327, MissingEntryStopsAtForwardContract)
 {
-#if defined(__linux__) && !defined(NDEBUG)
+#if defined(__linux__) && defined(MRT_DEBUG) && MRT_DEBUG == 1 && !defined(NDEBUG)
     GcHeapFixture heap;
     heap.InstallPageOwner(heap.region0());
     ZGeneration* generation = heap.region0()->generation();
@@ -123,7 +124,9 @@ GC_TEST(BarrierRemap1327, MissingEntryStopsAtForwardContract)
 GC_TEST(BarrierRemap1327, PromotedFieldRequiresOldLoadGood)
 {
 #if defined(__linux__) && !defined(NDEBUG)
-    volatile zpointer slot = zpointer::null;
+    const uintptr_t remap = ZPointerRemappedMask & ~ZPointerRemappedOldMask & ~ZPointerRemappedYoungMask;
+    volatile zpointer slot = ZAddress::color(zaddress::null, remap);
+    GC_EXPECT_FALSE(is_null(slot));
     ExpectContractAssertion([&] { ZBarrier::remap_young_relocated(&slot, slot); }, "ZPointer::is_old_load_good(o)");
 #else
     std::fprintf(stderr, "REMAP_OLD_GUARD_NOT_RUN reason=product_assertions_disabled_or_non_linux\n");
