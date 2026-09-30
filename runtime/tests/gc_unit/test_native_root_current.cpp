@@ -108,6 +108,24 @@ void PrintNativeRootMaps()
     }
 }
 
+// See CheckRelocateStartExitRemapsFrameRoot's guard in test_pinroot.cpp for
+// the HotSpot anchor; the two bodies pair the same way.
+class OwnerMutatorScope {
+public:
+    OwnerMutatorScope() = default;
+    void attach(Mutator* newOwner) { owner = newOwner; }
+    ~OwnerMutatorScope()
+    {
+        if (owner == nullptr) { return; }
+        (void)owner->DoLeaveSaferegion();
+        MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    }
+    OwnerMutatorScope(const OwnerMutatorScope&) = delete;
+    OwnerMutatorScope& operator=(const OwnerMutatorScope&) = delete;
+private:
+    Mutator* owner = nullptr;
+};
+
 // ZMarkOldRootsTask -> ZMarkOopClosure (zMark.cpp:798-829): colored roots
 // resolve before marker publication. The relocation worker supplies the actual to;
 // no forwarding mapping or consumer argument is manufactured by this test.
@@ -116,6 +134,12 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     CreateStandaloneHeap(GcHeapFixture::kUnits);
     PrintNativeRootMaps();
     B09RuntimeFixture runtime;
+    // threads.cpp:961 exits the owner from the thread list before :987 waits
+    // for the VM thread. A body reaches that point by falling off the end, by
+    // an early return, or by unwinding from a failed GC_EXPECT (those throw),
+    // so the pairing is a scope guard, not a call on one exit path. Declared
+    // after the fixture, so it runs before the stand-in is torn down.
+    OwnerMutatorScope ownerScope;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     Heap& collector = heap;
@@ -147,6 +171,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
     } else {
         thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        ownerScope.attach(thread);
         thread->SetManagedContext(false);
         frameMark = thread->NativeFrameRootCount();
         (void)thread->EnterSaferegion(false);
@@ -231,12 +256,6 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     if (threadKind != 0) {
         if (threadKind == 3) thread->GetGCData().clear_invisible_root();
         else thread->PopNativeFrameRootsTo(frameMark);
-        // threads.cpp:935-942: the owner leaves the mutator set before the
-        // stand-in is torn down. End the mutator this body created the way a
-        // normal thread end does. Teardown only; the sequence above is the one
-        // under test.
-        (void)thread->DoLeaveSaferegion();
-        MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         return;
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
