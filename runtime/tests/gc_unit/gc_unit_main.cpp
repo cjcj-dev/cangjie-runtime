@@ -74,8 +74,11 @@ int main(int argc, char** argv)
     if (MapleRuntime::Heap::heap() != nullptr) {
         MapleRuntime::Heap::GetHeap().StopGCWork();
         // java.cpp:477 -> universe.cpp:1399 orders VM thread termination after
-        // GC work stops; no submitter remains by this point.
-        MapleRuntime::VMThread::wait_for_vm_thread_exit();
+        // GC work stops; no submitter remains by this point. Bodies that own a
+        // full CangjieRuntime already terminated it in FiniAndDelete.
+        if (MapleRuntime::VMThread::is_running()) {
+            MapleRuntime::VMThread::wait_for_vm_thread_exit();
+        }
     }
     return MapleRuntime::GcUnit::CompleteTestRun(result);
 }
