@@ -17,11 +17,12 @@ struct BoundRefProc {
     GcHeapFixture heap;
     ReferenceLayoutFixture layout;
     ZStatWorkers stats;
+    MapleRuntime::GcUnit::WorkerBudgetFixture budget{2};
     ZWorkers pool;
     ReferenceProcessor processor;
     BaseObject* reference;
     explicit BoundRefProc(bool final = false)
-        : layout(final), pool(ZGenerationId::old, 2, &stats), processor(&pool),
+        : layout(final), pool(ZGenerationId::old, &stats), processor(&pool),
           reference(layout.Place(reinterpret_cast<MAddress>(heap.obj0), heap.obj1))
     {
         ThreadLocal::SetThreadType(ThreadType::GC_THREAD);

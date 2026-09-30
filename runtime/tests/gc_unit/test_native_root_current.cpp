@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -53,7 +54,7 @@ public:
         for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = Heap::GetHeap().GetZGeneration(gen);
             if (cycle.Workers() == nullptr) {
-                cycle.InitializeWorkers(workers);
+                MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, workers);
             } else {
                 cycle.Workers()->set_active_workers(workers);
             }
@@ -84,11 +85,7 @@ public:
     static void DrainYoungRootWork(Heap& collector)
     {
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *Heap::GetHeap().young().MarkPtr());
-        WorkStack work;
-        std::vector<BaseObject*> reachable;
-        std::unordered_set<MAddress> slots;
-        std::unordered_set<MAddress> weak;
-        ZMark::TraceYoungClosure(work, false, reachable, slots, weak);
+        Heap::GetHeap().young().Mark().MarkFollow();
     }
 };
 }
@@ -183,7 +180,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {region, fx.region1()}));
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(collector);
-    if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
+    if (heap.young().Workers() == nullptr) { MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.young(), 1); }
     heap.young().Workers()->set_active_workers(1);
     ZRelocate::StartRelocationTasks(heap.young().id());
     const MAddress forwardStart = region->GetRegionStart();
@@ -305,7 +302,7 @@ void CheckSavedRootColor(bool invisible, bool twoRounds = false)
     // header. The earlier live object also makes a duplicate remap return a
     // valid but wrong object, exposing double consumption at that assertion.
     // Neither the forwarding value nor the root result is fabricated.
-    if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
+    if (heap.young().Workers() == nullptr) { MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.young(), 1); }
     heap.young().Workers()->set_active_workers(1);
     ZRelocate::StartRelocationTasks(heap.young().id());
     const MAddress forwardStart = page->GetRegionStart();
@@ -365,7 +362,7 @@ GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, RemapYoungRootsNativeFrameRoot)
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {page, fx.region1()}));
     heap.young().set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(heap);
-    if (heap.young().Workers() == nullptr) { heap.young().InitializeWorkers(1); }
+    if (heap.young().Workers() == nullptr) { MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.young(), 1); }
     heap.young().Workers()->set_active_workers(1);
     ZRelocate::StartRelocationTasks(heap.young().id());
     const MAddress forwardStart = page->GetRegionStart();

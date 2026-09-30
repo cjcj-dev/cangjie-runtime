@@ -73,18 +73,6 @@ public:
     static void ProcessFinalizers();
     static void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
                          const std::function<void(BaseObject*)>& invisibleVisitor);
-    static void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown");
-    static void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin, bool finalizable);
-    static void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
-                           std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
-                           std::unordered_set<MAddress>& weakSlots,
-                           const std::unordered_set<MAddress>* reachableSlotDomain = nullptr);
-    static void TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
-                                  std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
-                                  std::unordered_set<MAddress>& weakSlots,
-                                  const std::unordered_set<MAddress>* reachableSlotDomain = nullptr);
-    static bool TryEndYoungMark(WorkStack& workStack);
-
     static bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
     static bool FlushThreadMarkProducers(ThreadLocalData* tls);
@@ -99,18 +87,15 @@ public:
     static constexpr bool Strong = false;
     static constexpr bool Finalizable = true;
 
-    enum class Result { Completed, Partial, Aborted };
-
     explicit ZMark(size_t capacity, MarkingStacks::MarkingGeneration generation);
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
     void MarkObject(zaddress address);
     void Start();
     void PrepareWork();
-    void PrepareWork(size_t nworkers);
     void ResizeWorkers(size_t nworkers);
     void FinishWork();
-    void MarkFollow(bool partial = false);
-    void FollowWorkComplete(bool partial);
+    void MarkFollow();
+    void FollowWorkComplete();
     bool FollowWorkPartial();
     void MarkAndFollow(MarkContext& context, const MarkStackEntry& entry);
     void BindWorkers(ZWorkers* workers) { gcWorkers = workers; }
@@ -132,10 +117,11 @@ public:
     void verify_worker_stacks_empty() const;
     bool TryProactiveFlush(size_t workerId);
     bool TryEnd();
+    bool End();
     void Free();
     MarkingStacks::MarkingGeneration Generation() const { return generation; }
 
-    Result FollowWork(MarkContext& context, size_t workerId, bool partial);
+    bool FollowWork(bool partial);
     bool Drain(MarkContext& context, size_t workerId);
 
 
@@ -150,7 +136,6 @@ private:
     void follow_partial_array(MarkContext& ctx, const MarkStackEntry& entry, bool finalizable);
     void follow_array_object(MarkContext& ctx, MArray* array, bool finalizable);
     size_t CalculateNStripes(size_t nworkers) const;
-    void EnsureWorkers(size_t nworkers);
     static bool HandshakeFlush(ZMark* domain);
     static bool FlushThreadLocal(ThreadLocalData* tls, ZMark* domain);
 

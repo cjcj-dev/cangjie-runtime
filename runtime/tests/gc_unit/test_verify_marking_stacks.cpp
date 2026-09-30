@@ -56,7 +56,7 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
     const auto runScene = [](bool reject) {
         GcVerifyFixture fixture;
         auto& generation = Heap::GetHeap().old();
-        generation.InitializeWorkers(4);
+        MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 4);
         ZMark& mark = generation.Mark();
         mark.BindWorkers(generation.Workers());
         MarkStripeSet& stripes = mark.Stripes();

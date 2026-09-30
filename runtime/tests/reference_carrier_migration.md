@@ -96,3 +96,8 @@ Disposition ii: YoungWeakClosure major and MarkingStacksProduct major expect
 referent address null after cleaning, not raw bits zero. zBarrier.inline.hpp:554-560
 uses color_mark_good when healing the weak field. Inspect is_null_any and print
 the actual field bits; all reachability and cleared-address assertions remain.
+
+Merge f29281826c: preserve main WorkerBudgetFixture{2} + ZWorkers(old, stats)
+in BoundRefProc. Other conflict hunks only changed worker construction inside
+retired native-registry tests listed above; keep their authorized retirement.
+All main marking cache/termination and FollowWork lifetime changes retained.
