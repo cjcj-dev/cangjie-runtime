@@ -538,7 +538,14 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
     RuntimeParam param{};
     param.heapParam.heapSize = 512 * 1024;
     param.coParam.processorNum = 1;
+    param.gcParam.youngGCThreads = workers;
+    param.gcParam.youngGCThreadsSet = true;
+    param.gcParam.oldGCThreads = workers;
+    param.gcParam.oldGCThreadsSet = true;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    GC_EXPECT_EQ(ZYoungGCThreads, workers);
+    GC_EXPECT_EQ(ZOldGCThreads, workers);
+    GC_EXPECT_TRUE(ConcGCThreads >= workers);
     const int allocationCpu = sched_getcpu();
     GC_EXPECT_TRUE(allocationCpu >= 0 && allocationCpu < CPU_SETSIZE);
     // memAllocator.cpp:273-278 retains useful tails. Use objects that fit the
@@ -557,6 +564,7 @@ static void CheckRootPublicationPreservesLaterRefills(unsigned workers)
            state.owner[1].load(std::memory_order_acquire) == nullptr) { std::this_thread::yield(); }
     auto& heap = Heap::GetHeap();
     heap.young().Workers()->set_active_workers(workers);
+    GC_EXPECT_EQ(heap.young().Workers()->active_workers(), workers);
     heap.young().pause_mark_start();
     const auto initialTLABSize = [] {
         size_t size = 0;
