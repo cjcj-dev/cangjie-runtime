@@ -70,4 +70,7 @@ except Exception as exc:
 state['qualified'] = state['error'] is None and 1 in state['transitions'] and \
     bool(state['transitions']) and state['transitions'][-1] == 0
 print('DEDUP_QUEUE_OBSERVER ' + json.dumps(state, sort_keys=True))
-gdb.execute('quit ' + ('0' if state['qualified'] and state['inferior_rc'] == 0 else '1'))
+success = state['qualified'] and state['inferior_rc'] == 0
+if success:
+    Path(str(output) + '.receipt').write_text('qualified\n')
+gdb.execute('quit ' + ('0' if success else '1'))

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <thread>
 #include <fstream>
+#include <filesystem>
 #include <string>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -592,9 +593,25 @@ GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
         GC_EXPECT_TRUE(length > 0);
         executable[length] = '\0';
         const std::string snapshot = std::string(executable) + ".queue-observation-" + std::to_string(getpid());
-        const std::string source = __FILE__;
-        const std::string observer = source.substr(0, source.find_last_of('/')) +
-            "/test_string_dedup_queue_gdb.py";
+        std::filesystem::path source = __FILE__;
+        if (source.is_relative()) {
+            // ccache can record a source path relative to the lane root. A
+            // cut runs from its own build directory, so resolve from the ELF.
+            auto directory = std::filesystem::path(executable).parent_path();
+            while (!directory.empty()) {
+                if (std::filesystem::is_regular_file(directory / source)) {
+                    source = directory / source;
+                    break;
+                }
+                const auto parent = directory.parent_path();
+                if (parent == directory) break;
+                directory = parent;
+            }
+        }
+        source = std::filesystem::absolute(source);
+        const auto observer = source.parent_path() / "test_string_dedup_queue_gdb.py";
+        GC_EXPECT_TRUE(std::filesystem::is_regular_file(source));
+        GC_EXPECT_TRUE(std::filesystem::is_regular_file(observer));
         const pid_t child = fork();
         GC_EXPECT_TRUE(child >= 0);
         if (child == 0) {
@@ -606,9 +623,14 @@ GC_OTHER_VM_TEST(StringDedup, RelocationWaitAllowsWorkerAndStop)
         }
         int status = 0;
         const auto waited = waitpid(child, &status, 0);
+        std::ifstream receipt(snapshot + ".receipt");
+        std::string qualification;
+        receipt >> qualification;
         unlink(snapshot.c_str());
+        unlink((snapshot + ".receipt").c_str());
         GC_EXPECT_TRUE(waited == child && WIFEXITED(status));
         GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+        GC_EXPECT_TRUE(qualification == "qualified");
         return;
     }
     ByteArrays arrays;
