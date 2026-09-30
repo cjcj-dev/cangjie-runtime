@@ -98,6 +98,21 @@ GC_TEST(ZGeneration, FreedPromotedCompactedAtomics)
     young->reset_statistics();
 }
 
+GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, InitializationPublishesConditionLock)
+{
+    RuntimeParam param{};
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    ZJNICritical::block();
+    const int64_t blocked = ZJNICritical::count_snapshot();
+    ZJNICritical::unblock();
+    const int64_t unblocked = ZJNICritical::count_snapshot();
+    std::printf("ZJNI_INITIALIZATION_RESULT blocked=%lld unblocked=%lld\n",
+                static_cast<long long>(blocked), static_cast<long long>(unblocked));
+    GC_EXPECT_EQ(blocked, static_cast<int64_t>(-1));
+    GC_EXPECT_EQ(unblocked, static_cast<int64_t>(0));
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
 GC_RUNTIME_OTHER_VM_TEST(ZJNICritical, BlockWaitsWhileEntered)
 {
     RuntimeParam param{};

@@ -6,6 +6,8 @@
 
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zLock.inline.hpp"
+#include "Base/Log.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/Mutator.h"
 
@@ -13,26 +15,22 @@ namespace MapleRuntime {
 static const ZStatCriticalPhase ZCriticalPhaseJNICriticalStall("JNI Critical Stall");
 
 std::atomic<int64_t> ZJNICritical::count{ 0 };
-std::mutex ZJNICritical::lock;
-std::condition_variable ZJNICritical::attention;
-std::once_flag ZJNICritical::once;
+ZConditionLock* ZJNICritical::lock = nullptr;
 
 void ZJNICritical::initialize()
 {
-    std::call_once(once, [] {
-        count.store(0, std::memory_order_relaxed);
-    });
+    CHECK_DETAIL(count.load(std::memory_order_relaxed) == 0, "Invalid initial count");
+    lock = new ZConditionLock();
 }
 
 void ZJNICritical::block()
 {
-    initialize();
     for (;;) {
         const int64_t n = count.load(std::memory_order_acquire);
         if (n < 0) {
-            std::unique_lock<std::mutex> guard(lock);
+            ZLocker<ZConditionLock> guard(lock);
             while (count.load(std::memory_order_acquire) < 0) {
-                attention.wait(guard);
+                lock->wait();
             }
             continue;
         }
@@ -41,9 +39,9 @@ void ZJNICritical::block()
             continue;
         }
         if (n != 0) {
-            std::unique_lock<std::mutex> guard(lock);
+            ZLocker<ZConditionLock> guard(lock);
             while (count.load(std::memory_order_acquire) != -1) {
-                attention.wait(guard);
+                lock->wait();
             }
         }
         return;
@@ -52,10 +50,11 @@ void ZJNICritical::block()
 
 void ZJNICritical::unblock()
 {
-    initialize();
-    std::lock_guard<std::mutex> guard(lock);
+    const int64_t n = count.load(std::memory_order_acquire);
+    CHECK_DETAIL(n == -1, "Invalid count");
+    ZLocker<ZConditionLock> guard(lock);
     count.store(0, std::memory_order_release);
-    attention.notify_all();
+    lock->notify_all();
 }
 
 void ZJNICritical::enter_inner()
@@ -68,9 +67,9 @@ void ZJNICritical::enter_inner()
             // before taking the condition lock, so a concurrent handshake can
             // complete while this mutator waits for JNI critical to unblock.
             ScopedEnterSaferegion enterSaferegion(true);
-            std::unique_lock<std::mutex> guard(lock);
+            ZLocker<ZConditionLock> guard(lock);
             while (count.load(std::memory_order_acquire) < 0) {
-                attention.wait(guard);
+                lock->wait();
             }
             continue;
         }
@@ -84,7 +83,6 @@ void ZJNICritical::enter_inner()
 
 void ZJNICritical::enter()
 {
-    initialize();
     Mutator* thread = Mutator::GetMutator();
     // ZGC zJNICritical.cpp:132-140: only the outermost region enters globally.
     if (!thread->InCritical()) {
@@ -97,6 +95,7 @@ void ZJNICritical::exit_inner()
 {
     for (;;) {
         const int64_t n = count.load(std::memory_order_acquire);
+        CHECK_DETAIL(n != 0, "Invalid count");
         if (n > 0) {
             int64_t expected = n;
             if (!count.compare_exchange_strong(expected, n - 1, std::memory_order_acq_rel)) {
@@ -109,8 +108,8 @@ void ZJNICritical::exit_inner()
             continue;
         }
         if (n == -2) {
-            std::lock_guard<std::mutex> guard(lock);
-            attention.notify_all();
+            ZLocker<ZConditionLock> guard(lock);
+            lock->notify_all();
         }
         return;
     }
@@ -118,7 +117,6 @@ void ZJNICritical::exit_inner()
 
 void ZJNICritical::exit()
 {
-    initialize();
     Mutator* thread = Mutator::GetMutator();
     // ZGC zJNICritical.cpp:177-184: release globally after the last nested exit.
     thread->ExitCritical();
