@@ -60,6 +60,14 @@ try:
         if "futex" not in sample:
             raise RuntimeError("slow-P helper not asleep")
         session.sendline("continue -a &")
+        session.expect_exact("EVENT control branch reached slow-p")
+        command("disable breakpoints")
+        command("continue -a &")
+        qualified = True
+    elif mode == "fast":
+        session.expect_exact("EVENT control branch reached fast")
+        command("disable breakpoints")
+        command("continue -a &")
         qualified = True
     else:
         qualified = True

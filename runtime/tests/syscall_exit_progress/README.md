@@ -31,6 +31,13 @@ is a harness error. The two ordered modes require every construction event
 before the completion deadline begins. A missing event or breakpoint is a
 harness error (rc=2), not a product assertion failure (rc=1).
 
+The fast control holds monitor syscall preemption only after the ordinary task
+has started, and stops at the successful product CAS branch. The slow-P control
+stops on the actual successful allocation branch. Each then disables ordering
+breakpoints and releases all threads before awaiting completion. This avoids
+GDB breakpoint handling racing process exit. The ordinary control needs no
+ordering breakpoints.
+
 The target assertion reads the result of the product task future and the task's
 actual read result. Its five-second deadline is identical across product arms.
 Each PASS is printed by the fixture; qualified lack of completion is reported

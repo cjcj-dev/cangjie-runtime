@@ -96,6 +96,16 @@ class Release(gdb.Breakpoint):
             return True
         return False
 
+class ControlBranch(gdb.Breakpoint):
+    def stop(self):
+        print("EVENT control branch reached " + mode, flush=True)
+        return True
+
+class FastTask(gdb.Breakpoint):
+    def stop(self):
+        monitor_hold.enabled = True
+        return False
+
 class Completed(gdb.Breakpoint):
     def stop(self):
         if mode in ("asleep", "gap", "lifetime"):
@@ -124,6 +134,7 @@ address = int(gdb.parse_and_eval("&CJ_SyscallExit0"))
 instructions = gdb.selected_frame().architecture().disassemble(address, address + 512)
 allocated = False
 branch_address = None
+available_address = None
 for index, instruction in enumerate(instructions):
     assembly = instruction["asm"]
     if "call" in assembly and "CJ_ProcessorAlloc" in assembly:
@@ -131,6 +142,7 @@ for index, instruction in enumerate(instructions):
     elif allocated and re.match(r"j(e|ne|z|nz)\s", assembly):
         opcode = assembly.split()[0]
         branch_address = int(re.search(r"0x[0-9a-f]+", assembly).group(), 16) if opcode in ("je", "jz") else instructions[index + 1]["addr"]
+        available_address = instructions[index + 1]["addr"] if opcode in ("je", "jz") else int(re.search(r"0x[0-9a-f]+", assembly).group(), 16)
         break
 if branch_address is None:
     raise RuntimeError("no-P branch could not be located in this product")
@@ -149,6 +161,28 @@ if mode == "lifetime":
     Freed("*CJ_CJThreadFree")
 if mode == "ordinary":
     gdb.execute("disable breakpoints")
+if mode == "slow-p":
+    ControlBranch("*0x%x" % available_address)
+if mode == "fast":
+    monitor_hold = gdb.Breakpoint("CJ_SchmonPreemptSyscall")
+    monitor_hold.enabled = False
+    FastTask("OrdinaryBlockingTask")
+    exit_address = int(gdb.parse_and_eval("&CJ_SyscallExit"))
+    exit_instructions = gdb.selected_frame().architecture().disassemble(exit_address, exit_address + 384)
+    compared = False
+    fast_address = None
+    for index, instruction in enumerate(exit_instructions):
+        assembly = instruction["asm"]
+        if "cmpxchg" in assembly:
+            compared = True
+        elif compared and re.match(r"jn(e|z)\s", assembly):
+            fast_address = exit_instructions[index + 1]["addr"]
+            break
+    if fast_address is None:
+        raise RuntimeError("inlined fast-exit CAS branch not found")
+    print("IDENTITY fast-CAS-success=0x%x" % fast_address, flush=True)
+    gdb.execute("disassemble CJ_SyscallExit")
+    ControlBranch("*0x%x" % fast_address)
 print("EVENT controller ready", flush=True)
 end
 continue -a &
