@@ -2147,21 +2147,6 @@ int CJThreadDestructorHookRegister(SchdDestructorHookFunc func)
     return 0;
 }
 
-int CJThreadGetMutatorStatusHookRegister(SchdMutatorStatusHookFunc func)
-{
-    struct Schedule *schedule;
-
-    schedule = ScheduleGet();
-    if (schedule == nullptr) {
-        return ERRNO_SCHD_UNINITED;
-    }
-    if (schedule->state != SCHEDULE_INIT) {
-        return ERRNO_SCHD_IS_RUNNING;
-    }
-
-    g_scheduleManager.mutatorStatusFunc = func;
-    return 0;
-}
 
 int CJThreadSetMutator(void *mutator)
 {

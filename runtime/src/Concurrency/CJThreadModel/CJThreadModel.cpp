@@ -139,23 +139,6 @@ extern "C" void MRT_DestroyMutator(void* mutator)
     MutatorManager::Instance().DestroyMutator(reinterpret_cast<Mutator*>(mutator));
 }
 
-extern "C" bool MRT_CheckMutatorStatus(void* mutator)
-{
-    Mutator *curMutator = reinterpret_cast<Mutator*>(mutator);
-    auto status = curMutator->GetUnwindContext().GetUnwindContextStatus();
-    if (status == UnwindContextStatus::RISKY && curMutator->InSaferegion()) {
-        curMutator->SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_EXIT);
-
-        status = curMutator->GetUnwindContext().GetUnwindContextStatus();
-        if (status != UnwindContextStatus::RISKY || !curMutator->InSaferegion()) {
-            curMutator->ClearSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_EXIT);
-            return false;
-        }
-
-        return true;
-    }
-    return false;
-}
 
 static void RegisterCJThreadHooks()
 {
@@ -164,7 +147,6 @@ static void RegisterCJThreadHooks()
     (void)CJThreadSchdHookRegister(MRT_TransitMutatorToExit, SCHD_DESTROY_MUTATOR);
     (void)CJThreadSchdHookRegister(MRT_GetSafepointProtectedPage, SCHD_PREEMPT_REQ);
     (void)CJThreadDestructorHookRegister(MRT_DestroyMutator);
-    (void)CJThreadGetMutatorStatusHookRegister(MRT_CheckMutatorStatus);
     LogRegister(MRT_DumpLog, ENABLE_LOG(LogType::CJTHREAD), LogFile::GetLogLevel());
 }
 

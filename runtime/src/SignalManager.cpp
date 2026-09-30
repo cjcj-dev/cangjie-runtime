@@ -264,9 +264,7 @@ static void CheckSuspendState()
         return;
     }
     if (mutator->HasSuspensionRequest(Mutator::SuspensionType::SUSPENSION_FOR_EXIT)) {
-        while (true) {
-            sleep(INT_MAX);
-        }
+        VMExit::WaitIfVMExited();
     }
 }
 

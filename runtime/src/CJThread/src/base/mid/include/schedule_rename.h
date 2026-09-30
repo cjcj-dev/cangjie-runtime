@@ -234,7 +234,6 @@
 #define CJThreadStackMemFree                   CJ_CJThreadStackMemFree
 #define CJThreadStackAttrInit                  CJ_CJThreadStackAttrInit
 #define CJThreadDestructorHookRegister         CJ_CJThreadDestructorHookRegister
-#define CJThreadGetMutatorStatusHookRegister   CJ_CJThreadGetMutatorStatusHookRegister
 #define CJThreadGetMutator                     CJ_CJThreadGetMutator
 #define CJThreadSetMutator                     CJ_CJThreadSetMutator
 
@@ -368,7 +367,6 @@
 #define ScheduleNetpollExit                     CJ_ScheduleNetpollExit
 #define ScheduleAnyCJThreadRunning              CJ_ScheduleAnyCJThreadRunning
 #define ScheduleNonDefaultFree                  CJ_ScheduleNonDefaultFree
-#define ScheduleProcessorSkipFFI                CJ_ScheduleProcessorSkipFFI
 #define ScheduleAllNonDefaultExit               CJ_ScheduleAllNonDefaultExit
 #define ScheduleProcessorExit                   CJ_ScheduleProcessorExit
 #define ScheduleExitMode                        CJ_ScheduleExitMode

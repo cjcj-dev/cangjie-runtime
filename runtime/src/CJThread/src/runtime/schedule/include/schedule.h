@@ -313,7 +313,6 @@ typedef void (*SchdDestructorHookFunc)(void *);
 * @brief Hook function for mutator destructor (dedicated to Cangjie GC).
 * For details about the registration, see #CJThreadGetMutatorStatusHookRegister.
 */
-typedef bool (*SchdMutatorStatusHookFunc)(void *);
 
 /**
  * @brief Callback function for accessing the global cjthread control linked list
@@ -1207,14 +1206,6 @@ int CJThreadPreemptOffCntSub(void);
  * @retval 0 or error code
  */
 int CJThreadDestructorHookRegister(SchdDestructorHookFunc func);
-
-/**
- * @brief Register the hook function for obtaining the mutator status.
- * @par Register the hook triggered when scheduling a cjthread. This interface must be
- * invoked after ScheduleNew and before ScheduleStart.
- * @retval 0 or error code
- */
-int CJThreadGetMutatorStatusHookRegister(SchdMutatorStatusHookFunc func);
 
 /**
  * @brief Get the mutator of the current cjthread.
