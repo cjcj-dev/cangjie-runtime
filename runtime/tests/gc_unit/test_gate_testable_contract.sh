@@ -15,7 +15,9 @@ unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
   GC_UNIT_GATE_LANGUAGE_TESTS GC_UNIT_GATE_SKIP GC_UNIT_GATE_STATUS \
   GC_UNIT_OUT GC_UNIT_TALLY_FILE GC_UNIT_FILTER GC_UNIT_GATE_RESULT \
   MRT_GC_UNIT_OHOS_HOST GC_UNIT_OHOS_HOST_TEST_ELF \
-  GC_UNIT_OHOS_HOST_RECEIPT GC_UNIT_OHOS_HEADER_ROOT_TOKEN
+  GC_UNIT_OHOS_HOST_RECEIPT GC_UNIT_OHOS_HEADER_ROOT_TOKEN \
+  GC_UNIT_BUILD_SDK GC_UNIT_LANGUAGE_SDK GC_UNIT_LANGUAGE_QUALIFICATION \
+  GC_UNIT_COLOUR_CHECKER GC_UNIT_COLOUR_HOST_RUNTIME
 # Synthetic gate arms likewise supply their own header root. The copied-pair
 # integration regression exercises automatic publication lookup with real SOs.
 export GC_UNIT_CJC_RUNTIME_LIB_DIR="$fixture/lib"
@@ -382,7 +384,7 @@ set -e
 
 PATH="$fixture/bin:$PATH" MRT_GC_UNIT_OHOS_HOST=ON GC_UNIT_GATE_TRACE="$fixture/only.trace" GC_UNIT_OUT="$fixture/only-out" \
   GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_GATE_LANGUAGE_TESTS=only \
-  CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+  GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/only.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/only.log" 2>&1
 echo "LANGUAGE_ENTRY_ASSERT mode=only trace=$(paste -sd, "$fixture/only.trace")"
@@ -390,7 +392,7 @@ echo "LANGUAGE_ENTRY_ASSERT mode=only trace=$(paste -sd, "$fixture/only.trace")"
 /usr/bin/grep -qx 'LANGUAGE_TESTS=LANGUAGE_DONE' "$fixture/only.status"
 
 PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/all.trace" GC_UNIT_OUT="$fixture/all-out" \
-  GC_UNIT_GATE_CONTRACT_SELFTEST=1 CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+  GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/all.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/all.log" 2>&1
 [[ "$(cat "$fixture/all.trace")" == $'CPP_SUITE\nFINALIZER_TRIGGER\nPHASE_ENTRY_TRIGGER\nSEGMENTED_ARRAY_MANAGED' ]]
@@ -402,7 +404,7 @@ for source in fresh cache; do
   out="$fixture/no-cjc-$source-out"
   mkdir -p "$out"
   if [[ "$source" == cache ]]; then
-    PATH="$fixture/bin:$PATH" CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+    PATH="$fixture/bin:$PATH" GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
       GC_UNIT_GATE_TRACE="$fixture/no-cjc-seed.trace" \
       GC_UNIT_OUT="$out" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
       GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/no-cjc-seed.status" \
@@ -435,7 +437,7 @@ for component in cjc llc opt std; do
   printf '\n# identity change\n' >>"$fixture/sdk/$file"
   rm -f "$fixture/all.trace"
   PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/all.trace" GC_UNIT_OUT="$fixture/all-out" \
-    GC_UNIT_GATE_CONTRACT_SELFTEST=1 CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+    GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
     GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/all.status" \
     bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/all-$component.log" 2>&1
   actual=$(sed -n "s/^$key=//p" "$fixture/all.status")
@@ -451,7 +453,7 @@ for component in cjc llc opt std; do
 done
 rm -f "$fixture/all.trace"
 PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/all.trace" GC_UNIT_OUT="$fixture/all-out" \
-  GC_UNIT_GATE_CONTRACT_SELFTEST=1 CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+  GC_UNIT_GATE_CONTRACT_SELFTEST=1 GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/all.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/all-cached.log" 2>&1
 [[ ! -f "$fixture/all.trace" ]]
@@ -464,7 +466,7 @@ for mode in all only; do
   set +e
   PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
     GC_UNIT_GATE_LANGUAGE_TESTS="$mode" GC_UNIT_OUT="$fixture/host-missing-$mode" \
-    CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+    GC_UNIT_BUILD_SDK="$fixture/sdk" GC_UNIT_LANGUAGE_SDK="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
     GC_UNIT_CJC_RUNTIME_LIB_DIR="$fixture/missing-host" \
     GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/host-missing-$mode.status" \
     bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/host-missing-$mode.log" 2>&1
