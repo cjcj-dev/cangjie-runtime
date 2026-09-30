@@ -72,6 +72,13 @@ def main():
                 if event_field(event, 'bkptno') != lock_wait:
                     raise RuntimeError('Terminal gate did not reach retained thread lock')
                 debugger.delete(lock_wait)
+                yielding = debugger.breakpoint('sched_yield', thread=terminal_thread)
+                debugger.resume(terminal_thread)
+                event = debugger.stop()
+                frames = debugger.cmd('-stack-list-frames --thread ' + terminal_thread)
+                if event_field(event, 'bkptno') != yielding or 'LockRead' not in frames:
+                    raise RuntimeError('Terminal reentry did not wait on retained thread lock')
+                debugger.delete(yielding)
             debugger.cmd('-exec-interrupt --thread ' + current)
             host_stop = debugger.stop()
             if event_field(host_stop, 'thread-id') != current:

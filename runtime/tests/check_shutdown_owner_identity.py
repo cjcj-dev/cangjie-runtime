@@ -37,12 +37,20 @@ def main():
         debugger.resume(current)
         event = debugger.stop()
         stopped = event_field(event, 'bkptno') == blocked
+        waiting = False
+        if stopped:
+            debugger.delete(blocked)
+            yielding = debugger.breakpoint('sched_yield', thread=current)
+            debugger.resume(current)
+            event = debugger.stop()
+            frames = debugger.cmd('-stack-list-frames --thread ' + current)
+            waiting = event_field(event, 'bkptno') == yielding and 'LockRead' in frames
         terminal = debugger.number('*(bool*)&MapleRuntime::VMExit::vmExited', current)
         owner_token = debugger.number('MapleRuntime::VMExit::shutdownThread', current)
         current_token = debugger.number('MapleRuntime::nativeThreadIdentity', current)
-        passed = stopped and terminal == 1 and owner_token != 0 and current_token == 0
+        passed = stopped and waiting and terminal == 1 and owner_token != 0 and current_token == 0
         emit('OWNER_REUSE_TARGET_EXECUTED', passed=passed, terminal=terminal,
-             owner_token=owner_token, current_token=current_token,
+             owner_token=owner_token, current_token=current_token, lock_wait=waiting,
              new_owner_creation=event_field(event, 'bkptno') == created)
         Path(output + '.json').write_text(json.dumps(dict(passed=passed, owner=owner,
                                                         reused=reused, terminal=terminal)) + '\n')
