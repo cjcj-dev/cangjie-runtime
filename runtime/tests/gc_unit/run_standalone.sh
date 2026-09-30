@@ -310,6 +310,7 @@ PACKAGE_INIT_UNRELATED_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
+  "$SRC/test_vmthread.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zBitMap.cpp"

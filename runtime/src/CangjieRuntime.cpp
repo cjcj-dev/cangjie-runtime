@@ -127,6 +127,7 @@ void CangjieRuntime::FiniAndDelete()
         return;
     }
     auto cjRuntime = reinterpret_cast<CangjieRuntime*>(Runtime::runtime);
+    VMThread::wait_for_vm_thread_exit();
     Runtime::runtime = nullptr;
     cjRuntime->Fini();
     delete cjRuntime;
@@ -273,7 +274,6 @@ inline void CheckAndFini(T*& module)
 
 void CangjieRuntime::Fini()
 {
-    VMThread::wait_for_vm_thread_exit();
     // To avoid foreign thread access finalized runtime.
     ThreadLocal::ThreadLocalFini();
     // since there might be failure during initialization,
