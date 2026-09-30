@@ -22,6 +22,7 @@ phase = "initial"
 slow_entries = 0
 exit_entries = 0
 blocked_task = None
+task_freed = False
 
 def resume_thread(number):
     def resume():
@@ -54,7 +55,7 @@ class Slow(gdb.Breakpoint):
 class LastCheck(gdb.Breakpoint):
     def stop(self):
         global phase
-        if gdb.selected_thread().num == worker and phase == "initial" and mode in ("asleep", "gap"):
+        if gdb.selected_thread().num == worker and phase == "initial" and mode in ("asleep", "gap", "lifetime"):
             phase = "worker-held"
             print("EVENT worker held before release", flush=True)
             return True
@@ -97,7 +98,7 @@ class Release(gdb.Breakpoint):
 
 class Completed(gdb.Breakpoint):
     def stop(self):
-        if mode in ("asleep", "gap"):
+        if mode in ("asleep", "gap", "lifetime"):
             print("EVENT future completed while publisher held", flush=True)
             return True
         return False
@@ -106,6 +107,14 @@ class Freed(gdb.Breakpoint):
     def stop(self):
         if blocked_task == int(gdb.parse_and_eval("$rdi")):
             print("EVENT blocking task reached CJThreadFree", flush=True)
+            FreeReturned(gdb.newest_frame(), internal=True)
+        return False
+
+class FreeReturned(gdb.FinishBreakpoint):
+    def stop(self):
+        global task_freed
+        task_freed = True
+        print("EVENT blocking task CJThreadFree returned", flush=True)
         return False
 
 address = int(gdb.parse_and_eval("&CJ_SyscallExit0"))
@@ -131,7 +140,9 @@ LastCheck("CJ_ProcessorStopWithLastCheck")
 NoProcessor("*0x%x" % branch_address)
 Stop("CJ_ThreadStop")
 Release("ReleasePipe")
-Completed("_Exit")
-Freed("CJ_CJThreadFree")
+if mode in ("asleep", "gap", "lifetime"):
+    Completed("_Exit")
+if mode == "lifetime":
+    Freed("*CJ_CJThreadFree")
 end
 continue -a &

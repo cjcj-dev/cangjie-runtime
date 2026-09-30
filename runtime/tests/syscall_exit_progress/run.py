@@ -31,9 +31,9 @@ def command(value):
 
 
 try:
-    if mode in ("asleep", "gap"):
+    if mode in ("asleep", "gap", "lifetime"):
         session.expect_exact("EVENT empty final check complete")
-        if mode == "asleep":
+        if mode in ("asleep", "lifetime"):
             command("python gdb.execute('thread %d' % worker)")
             command("continue &")
             time.sleep(0.2)
@@ -44,6 +44,11 @@ try:
         command("python gdb.execute('thread %d' % blocked)")
         session.sendline("continue &")
         session.expect_exact("EVENT publisher reached ThreadStop")
+        if mode == "lifetime":
+            time.sleep(0.2)
+            state = command("python print('TASK_FREED_BEFORE_PUBLISHER_RESUME', task_freed)")
+            if "TASK_FREED_BEFORE_PUBLISHER_RESUME True" not in state:
+                raise RuntimeError("task reclamation did not precede publisher resume")
         command("disable breakpoints")
         command("continue -a &")
         qualified = True
@@ -63,6 +68,12 @@ try:
     except pexpect.TIMEOUT:
         if not qualified:
             raise
+        target = (root / "target.log").read_text()
+        if "ASSERT ordinary_task_completion_after_pipe_release PASS" in target:
+            raise RuntimeError("task completed but debugger did not observe process exit")
+        log = (root / "driver.log").read_text()
+        if mode == "slow-p" and ("EVENT syscall-exit-slow" not in log or "EVENT actual-no-P-branch" in log):
+            raise RuntimeError("slow-P branch qualification failed before deadline")
         result.update(status="FAIL", rc=1, assertion="ordinary_task_completion_after_pipe_release")
         print("ASSERT ordinary_task_completion_after_pipe_release FAIL mode=" + mode, flush=True)
     else:
