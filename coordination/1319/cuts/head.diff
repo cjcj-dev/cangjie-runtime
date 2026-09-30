@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zStackWatermark.cpp
++++ b/runtime/src/Heap/z/zStackWatermark.cpp
+@@ -397,7 +397,7 @@
+     owner.VisitExceptionRoots(roots);
+     owner.VisitNativeFrameRoots(roots);
+     zaddress_unsafe* invisible = owner.GetGCData().invisible_root();
+-    if (invisible != nullptr) { ZUncoloredRoot::process_invisible(invisible, prev_head_color()); }
++    (void)invisible;
+ }
+ 
+ void ZStackWatermark::start_processing_impl(void* context)

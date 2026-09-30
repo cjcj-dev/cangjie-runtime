@@ -1,3 +1,4 @@
+#include "gc_heap_fixture.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -25,7 +26,6 @@
 #include <unistd.h>
 #include <vector>
 
-#include "gc_heap_fixture.hpp"
 #include "zunittest.hpp"
 #include "Heap/z/zCrossVM.hpp"
 #include "Concurrency/Concurrency.h"
@@ -979,7 +979,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         auto owner = ZGeneration::generation((state.region)->generation_id())->forwarding((state.region)->GetRegionStart());
         const MAddress fromAddr = reinterpret_cast<MAddress>(state.from);
         const MAddress produced = owner ? owner->find(fromAddr) : 0;
-        const bool completed = owner && owner->is_done() && owner->ref_count().load() == 0;
+        const bool completed = owner && owner->is_done() && owner->_ref_count.load() == 0;
         std::fprintf(stderr, "DERIVED_PAGE_TASK produced=%zx expected=%zx done_released=%d\n",
                      produced, reinterpret_cast<MAddress>(state.to), completed);
         GC_EXPECT_TRUE(completed);
@@ -1637,6 +1637,10 @@ void ExerciseRelocationWait782(bool claimedPage)
         }
     }
     ZRelocateQueue* queue = generation.relocate().queue();
+    const auto pendingCount = [&] {
+        std::lock_guard<std::mutex> guard(queue->lock);
+        return queue->queue.length();
+    };
     std::atomic<bool> returned{false};
 #if defined(__linux__)
     std::atomic<long> waiterTid{0};
@@ -1650,11 +1654,11 @@ void ExerciseRelocationWait782(bool claimedPage)
         returned.store(true, std::memory_order_release);
     });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (queue->PendingCount() == 0 && !returned.load(std::memory_order_acquire) &&
+    while (pendingCount() == 0 && !returned.load(std::memory_order_acquire) &&
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::yield();
     }
-    const bool queued = queue->PendingCount() != 0;
+    const bool queued = pendingCount() != 0;
     const bool blocked = !returned.load(std::memory_order_acquire);
     const MAddress before = forwarding->find(reinterpret_cast<MAddress>(from));
 #if defined(__linux__)

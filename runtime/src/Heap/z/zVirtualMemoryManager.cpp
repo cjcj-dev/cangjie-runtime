@@ -4,9 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC zVirtualMemoryManager.cpp:39-358. ZNMT registration has no counterpart
-// (no native memory tracker, PLAN infra I16). ZForceDiscontiguousHeapReservations
-// is a HotSpot debug flag and is not carried.
+// ZGC zVirtualMemoryManager.cpp:39-358; zNMT.cpp:38-65.
+// Native memory tracking has no host consumer, so no registration is carried.
+// ZForceDiscontiguousHeapReservations is a HotSpot debug flag and is not carried.
 
 #include "Heap/z/zVirtualMemoryManager.inline.hpp"
 

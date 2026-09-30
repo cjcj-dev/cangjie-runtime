@@ -38,34 +38,6 @@ ZForwarding* ZForwarding::alloc(ZForwardingAllocator* allocator, ZPage* page, Pa
     return forwarding;
 }
 
-namespace {
-thread_local ZForwarding* currentPageWork = nullptr;
-}
-
-ZForwarding::PageWorkScope::PageWorkScope(ZForwarding* forwarding, bool complete)
-    : previous(currentPageWork), forwarding(forwarding), complete(complete)
-{
-    if (complete) CHECK(forwarding != nullptr && forwarding->claim());
-    currentPageWork = forwarding;
-}
-ZForwarding::PageWorkScope::~PageWorkScope()
-{
-    if (complete) {
-        if (forwarding->ref_count().load(std::memory_order_acquire) != 0) forwarding->release_page();
-        forwarding->detach_page();
-        forwarding->mark_done();
-    }
-    currentPageWork = previous;
-}
-ZForwarding* ZForwarding::CurrentPageWork() { return currentPageWork; }
-
-
-
-
-
-} // namespace MapleRuntime
-
-namespace MapleRuntime {
 bool ZForwarding::claim()
 {
     bool expected = false;
@@ -117,12 +89,12 @@ ZPage* ZForwarding::detach_page()
 
 void ZForwarding::mark_done()
 {
-    _done.store(true, std::memory_order_release);
+    _done.store(true, std::memory_order_relaxed);
 }
 
 bool ZForwarding::is_done() const
 {
-    return _done.load(std::memory_order_acquire);
+    return _done.load(std::memory_order_relaxed);
 }
 
 void ZForwarding::in_place_relocation_claim_page()
@@ -168,7 +140,11 @@ bool ZForwarding::in_place_relocation_is_below_top_at_start(MAddress offset) con
 }
 
 namespace MapleRuntime {
-ZPage* ZForwarding::page() const { return _page; }
+ZPage* ZForwarding::page() const
+{
+    DCHECK(_ref_count.load(std::memory_order_relaxed) != 0);
+    return _page;
+}
 
 
 }

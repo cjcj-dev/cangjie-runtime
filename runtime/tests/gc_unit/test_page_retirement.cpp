@@ -180,7 +180,7 @@ void CheckEmptyPageCycles(size_t objectSize, bool promote)
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
-enum class RetirementPath { RETURN, RECLAIM, RELEASE, MARK_QUARANTINE };
+enum class RetirementPath { RETURN, FREE };
 
 int ExercisePageRetirement(RetirementPath path, bool concurrent)
 {
@@ -194,8 +194,6 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         // in heap memory) goes before the mapping.
         MapleRuntime::GcUnit::CreateStandaloneHeap(4);
         RegionManager& manager = Heap::GetHeap().page_allocator();
-        // ReleaseRetiredRegion clears the product remembered set before
-        // returning the page. Its address space must exist as after heap init.
         const auto role = ZPageType::large;
 
         ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
@@ -217,10 +215,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
                 case RetirementPath::RETURN:
                     Heap::free_page(first);
                     break;
-                case RetirementPath::RECLAIM:
-                    Heap::free_page(first);
-                    break;
-                case RetirementPath::RELEASE:
+                case RetirementPath::FREE:
                     Heap::free_page(first);
                     break;
             }
@@ -359,19 +354,19 @@ GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableReturnWaitsForOutermostItera
     CheckPageRetirement(RetirementPath::RETURN, false);
 }
 
-GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableConcurrentReclaimPreservesDescriptor)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableConcurrentFreePreservesDescriptor)
 {
-    CheckPageRetirement(RetirementPath::RECLAIM, true);
+    CheckPageRetirement(RetirementPath::FREE, true);
 }
 
-GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableReleaseWaitsForIterator)
+GC_COMPONENT_OTHER_VM_TEST(PageRetirement, PageTableFreePreservesDescriptor)
 {
-    CheckPageRetirement(RetirementPath::RELEASE, true);
+    CheckPageRetirement(RetirementPath::FREE, false);
 }
 
 
 namespace {
-void CheckMarkReclaim(bool freePage)
+void CheckMarkReclaim()
 {
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
@@ -390,11 +385,7 @@ void CheckMarkReclaim(bool freePage)
     heap.old().set_phase(ZGenerationPhase::Mark);
     // ZGC zPageAllocator.cpp:692-699,2253-2266: returning memory has no
     // mark-epoch holding branch. Both existing product entry paths obey it.
-    if (freePage) {
-        Heap::free_page(first);
-    } else {
-        Heap::free_page(first);
-    }
+    Heap::free_page(first);
     const size_t cachedAfter = manager.GetCachedBytes();
     const bool withdrawn = Heap::page(start) == nullptr;
     ZPage* reused = Heap::alloc_page(size, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
@@ -403,7 +394,7 @@ void CheckMarkReclaim(bool freePage)
     const bool sameCapacity = manager.GetCommittedCapacity() == capacity;
     std::fprintf(stderr,
         "MARK_CACHE_TARGET path=%s before=%zu after=%zu size=%zu withdrawn=%d reused=%d mark=%d capacity_same=%d\n",
-        freePage ? "free_page" : "ReclaimRegion", cachedBefore, cachedAfter, size,
+        "free_page", cachedBefore, cachedAfter, size,
         withdrawn, sameRange, stillMark, sameCapacity);
     heap.old().set_phase(previousPhase);
     GC_EXPECT_EQ(cachedAfter, cachedBefore + size);
@@ -411,14 +402,9 @@ void CheckMarkReclaim(bool freePage)
 }
 } // namespace
 
-GC_COMPONENT_OTHER_VM_TEST(PageRetirement, MarkReclaimReturnsToMappedCache)
-{
-    CheckMarkReclaim(false);
-}
-
 GC_COMPONENT_OTHER_VM_TEST(PageRetirement, MarkFreePageReturnsToMappedCache)
 {
-    CheckMarkReclaim(true);
+    CheckMarkReclaim();
 }
 
 } // namespace MapleRuntime

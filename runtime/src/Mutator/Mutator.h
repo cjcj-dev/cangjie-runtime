@@ -335,14 +335,9 @@ public:
 
     void VisitMutatorRoots(const RootVisitor& visitor)
     {
-        VisitMutatorRoots(visitor, visitor);
-    }
-
-    void VisitMutatorRoots(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor)
-    {
         VisitExceptionRoots(visitor);
         VisitNativeFrameRoots(visitor);
-        VisitStackRoots(visitor, invisibleRootVisitor);
+        VisitStackRoots(visitor);
     }
 
     ObjectRef* AddNativeFrameRoot(BaseObject* obj);
@@ -353,7 +348,7 @@ public:
                              bool young = false);
     void VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                              const DerivedPtrVisitor& derivedPtrVisitor, const RootVisitor& exceptionRootVisitor,
-                             const RootVisitor& rawObjectVisitor, bool young = false);
+                             bool young = false);
 
     void DumpMutator() const
     {
@@ -399,36 +394,6 @@ public:
     uint32_t GetStackGrowFrameSize() { return stackGrowFrameSize; }
     void SetStackGrowFrameSize(uint32_t sgfs) { stackGrowFrameSize = sgfs; }
 #endif
-
-    // A newly allocated large reference array publishes its parseable header before
-    // yielding, but is not a normal object until all of its slots have been cleared.
-    // Keep liveness in this mutator-owned side slot; the orthogonal StateWord
-    // invisible bit tells heap iterators not to visit the incomplete payload.
-    // VisitRawObjects is the GC consumer of the slot.
-    void PublishInvisibleRoot(BaseObject* obj)
-    {
-        CHECK_DETAIL(obj != nullptr, "cannot publish a null invisible root");
-        CHECK_DETAIL(is_null(rawObject.LoadPlain(std::memory_order_acquire)),
-                     "nested invisible roots are not supported");
-        StorePlain(rawObject, from_object(obj), std::memory_order_release);
-    }
-
-    BaseObject* LoadInvisibleRoot() const
-    {
-        zaddress_unsafe value = rawObject.LoadPlain(std::memory_order_acquire);
-        return is_null(value) ? nullptr : to_object(safe(value));
-    }
-
-    BaseObject* WithdrawInvisibleRoot()
-    {
-        BaseObject* obj = LoadInvisibleRoot();
-        CHECK_DETAIL(obj != nullptr, "cannot withdraw an unpublished invisible root");
-        // The release store is the complete-state publication point. A root scan
-        // that no longer observes this side slot must also observe every null slot.
-        StorePlain(rawObject, zaddress::null, std::memory_order_release);
-        return obj;
-    }
-
 
     void MutatorLock() { mutatorLock.lock(); }
 
@@ -509,15 +474,14 @@ public:
 
 protected:
     // for managed stack
-    void VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor);
+    void VisitStackRoots(const RootVisitor& func);
     void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                     bool young = false);
     void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                     const DerivedPtrVisitor& derivedPtrVisitor,
-                                    const RootVisitor& rawObjectVisitor, bool young = false);
+                                    bool young = false);
     // for exception ref
     void VisitExceptionRoots(const RootVisitor& func);
-    void VisitRawObjects(const RootVisitor& func);
     void VisitNativeFrameRoots(const RootVisitor& func);
     void CreateCurrentGCInfo();
 
@@ -547,7 +511,6 @@ private:
 
     // If set implies this mutator should process suspension requests
     std::atomic<uint32_t> suspensionFlag = { 0 };
-    ObjectRef rawObject{};
     ThreadGCData gcData{true};
     int32_t jniActiveCritical = 0;
     std::deque<ObjectRef> nativeFrameRoots;

@@ -459,7 +459,7 @@ void* SelectRealLivePages(void* context)
         ZForwarding* forwarding = Heap::GetHeap().young().forwarding_table().get(starts[i]);
         if (forwarding != nullptr) {
             ++result.published;
-            result.completed += forwarding->is_done() && forwarding->ref_count().load() == 0 &&
+            result.completed += forwarding->is_done() && forwarding->_ref_count.load() == 0 &&
                 forwarding->find(starts[i]) != 0;
             ZPage* now = Heap::page(starts[i]);
             result.retired += now == nullptr;
@@ -504,8 +504,11 @@ void* SelectRealLivePages(void* context)
         // The retirement test leaves root cleanup to FiniCJRuntime, after its
         // assertions. A failing remap must not be consumed by cleanup first.
     }
-    result.pending = (*Heap::GetHeap().GetZGeneration(Generation::Old).relocate().queue()).PendingCount() +
-                     (*Heap::GetHeap().GetZGeneration(Generation::Young).relocate().queue()).PendingCount();
+    for (auto id : {Generation::Old, Generation::Young}) {
+        auto& queue = (*ZGeneration::generation(id)->relocate().queue());
+        std::lock_guard<std::mutex> guard(queue.lock);
+        result.pending += queue.queue.length();
+    }
     if (result.verifyRetirement) {
         snapshot(result.usedAfter, result.mappedAfter, result.generationAfter, result.mappedGenerationAfter);
         // Real mutator allocation must be able to consume the returned source

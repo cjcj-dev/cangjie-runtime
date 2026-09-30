@@ -145,8 +145,8 @@ void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 {
     ZWorkers& workers = *Heap::GetHeap().GetZGeneration(generation).Workers();
     auto& queue = *Heap::GetHeap().GetZGeneration(generation).relocate().queue();
-    CHECK(!queue.IsActive());
-    queue.BeginWorkers(workers.active_workers());
+    CHECK(!queue.is_active());
+    queue.activate(workers.active_workers());
 }
 
 // ZGC zRelocate.cpp:733-740.
@@ -422,7 +422,6 @@ public:
     void do_forwarding(ZForwarding* owner)
     {
         forwarding = owner;
-        ZForwarding::PageWorkScope scope(owner);
         ZPage* page = owner->page();
         ZVerify::BeforeRelocation(owner);
         iterate_objects(page);
@@ -440,7 +439,6 @@ public:
             ZPage* target = targets->get(partition, owner->to_age());
             target->ResetCensusBoundary();
             allocator->share_target_page(target, partition);
-
         } else {
             Heap::free_page(source);
         }
@@ -586,19 +584,19 @@ void ZRelocateQueue::dec_needs_attention()
 
 void ZRelocateQueue::activate(uint32_t workers)
 {
-    isActive.store(true, std::memory_order_release);
+    _is_active.store(true, std::memory_order_release);
     join(workers);
 }
 
 void ZRelocateQueue::deactivate()
 {
-    isActive.store(false, std::memory_order_release);
+    _is_active.store(false, std::memory_order_release);
     clear();
 }
 
 bool ZRelocateQueue::is_active() const
 {
-    return isActive.load(std::memory_order_acquire);
+    return _is_active.load(std::memory_order_acquire);
 }
 
 void ZRelocateQueue::join(uint32_t workers)
@@ -657,7 +655,6 @@ bool ZRelocateQueue::prune()
         if (forwarding->is_done()) {
             done = true;
             queue.delete_at(i);
-            completionCount.fetch_add(1, std::memory_order_relaxed);
         } else {
             i++;
         }
@@ -721,9 +718,15 @@ ZForwarding* ZRelocateQueue::synchronize_poll()
 
 void ZRelocateQueue::clear()
 {
+    assert(nworkers == 0 && "Invalid state");
     if (queue.is_empty()) {
         return;
     }
+    ZArrayIterator<ZForwarding*> iter(&queue);
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
+        assert(forwarding->is_done() && "All should be done");
+    }
+    assert(false && "Clear was not empty");
     queue.clear();
     dec_needs_attention();
 }
@@ -744,93 +747,6 @@ void ZRelocateQueue::desynchronize()
     synchronizeFlag = false;
     dec_needs_attention();
     attention.notify_all();
-}
-
-
-ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(ZForwarding* forwarding)
-{
-    if (forwarding == nullptr) {
-        return { nullptr, false, false, nullptr };
-    }
-    std::lock_guard<std::mutex> guard(lock);
-    if (forwarding->is_done()) {
-        return { forwarding, false, true, forwarding };
-    }
-    if (!isActive.load(std::memory_order_acquire) && !forwarding->claimed().load(std::memory_order_acquire)) {
-        return { nullptr, false, false, nullptr };
-    }
-    for (int i = 0; i < queue.length(); i++) {
-        if (queue.at(i) == forwarding) {
-            return { forwarding, false, true, forwarding };
-        }
-    }
-    queue.append(forwarding);
-    if (queue.length() == 1) {
-        inc_needs_attention();
-    }
-    attention.notify_all();
-    return { forwarding, true, true, forwarding };
-}
-
-void ZRelocateQueue::Wait(ZForwarding* forwarding)
-{
-    add_and_wait(forwarding);
-}
-
-size_t ZRelocateQueue::Complete(ZForwarding* forwarding)
-{
-    std::lock_guard<std::mutex> guard(lock);
-    (void)forwarding;
-    const bool done = prune();
-    attention.notify_all();
-    return done ? 1 : 0;
-}
-
-ZForwarding* ZRelocateQueue::PruneAndClaim()
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return prune_and_claim();
-}
-
-ZRelocateQueue::Selection ZRelocateQueue::SynchronizePoll()
-{
-    std::unique_lock<std::mutex> guard(lock);
-    if (ZForwarding* forwarding = prune_and_claim()) {
-        return { forwarding, nullptr, false };
-    }
-    CHECK_DETAIL(nworkers != 0 && nsynchronized < nworkers,
-                 "invalid relocation worker synchronization workers=%u synchronized=%u",
-                 nworkers, nsynchronized);
-    ++nsynchronized;
-    if (nsynchronized == nworkers) {
-        isActive.store(false, std::memory_order_release);
-        nworkers = 0;
-        nsynchronized = 0;
-        attention.notify_all();
-        return { nullptr, nullptr, true };
-    }
-    for (;;) {
-        attention.wait(guard);
-        if (!isActive.load(std::memory_order_acquire)) {
-            return { nullptr, nullptr, true };
-        }
-        if (ZForwarding* forwarding = prune_and_claim()) {
-            --nsynchronized;
-            return { forwarding, nullptr, false };
-        }
-    }
-}
-
-size_t ZRelocateQueue::PendingCount() const
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return static_cast<size_t>(queue.length());
-}
-
-size_t ZRelocateQueue::SynchronizedWorkerCount() const
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return nsynchronized;
 }
 
 PageAge ZRelocate::compute_to_age(PageAge fromAge)

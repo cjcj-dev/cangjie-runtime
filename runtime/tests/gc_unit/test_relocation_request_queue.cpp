@@ -4,235 +4,229 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include <atomic>
-#include <thread>
-#include "Heap/z/zRelocate.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Mutator/Handshake.h"
+#include "b09_runtime_fixture.hpp"
 #include "Mutator/Mutator.h"
-#include "Mutator/MutatorManager.h"
-#include "Common/Runtime.h"
+#include "Mutator/Handshake.h"
+#include "Heap/z/zRelocate.hpp"
+#include <atomic>
+#include <thread>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-namespace {
-struct PageQueueFixture {
-    GcHeapFixture heap;
-    ZForwarding* owner;
-    ZRelocateQueue queue;
-    PageQueueFixture()
-    {
-        auto* page = heap.region0();
-        heap.InstallPageOwner(page);
-        owner = ZGeneration::generation((page)->generation_id())->forwarding((page)->GetRegionStart());
-        GC_EXPECT_TRUE(static_cast<bool>(owner));
-    }
-    ~PageQueueFixture()
-    {
-        if (owner->ref_count().load(std::memory_order_acquire) != 0) owner->release_page();
-        owner->mark_done();
-        owner = {};
-    }
-    void Publish()
-    {
-        const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
-        auto publication = ZGeneration::generation((heap.region0())->generation_id())->forwarding((heap.region0())->GetRegionStart());
-        GC_EXPECT_TRUE(static_cast<bool>(publication));
-        GC_EXPECT_EQ(publication->insert(from,
-                     reinterpret_cast<MAddress>(heap.obj1)), reinterpret_cast<MAddress>(heap.obj1));
-    }
-    void Complete()
-    {
-        owner->mark_done();
-        (void)queue.Complete(owner);
-    }
-};
-
-// Observe the product wait predicate without registering a synthetic mutator
-// with the runtime's global thread list. The two states are the actual inputs
-// to EnsurePhaseTransition and HandshakeState::try_process respectively.
-#if defined(MRT_TESTABLE_INTERNALS)
-class PageQueueRuntime final : public Runtime {
-public:
-    explicit PageQueueRuntime(MutatorManager& manager)
-    {
-        mutatorManager = &manager;
-        runtime = this;
-    }
-    ~PageQueueRuntime() override { runtime = nullptr; }
-    RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
-    void SetGCThreshold(uint64_t) override {}
-};
-
-struct WaitContext {
-    MutatorManager manager;
-    PageQueueRuntime runtime{manager};
-    Mutator mutator;
-    Mutator* savedMutator = ThreadLocal::GetMutator();
-    ThreadType savedType = ThreadLocal::GetThreadType();
-    HandshakeState& handshake = mutator.GetHandshakeState();
-    bool entered = false;
-    bool mutatorSafe = true;
-    bool handshakeSafe = true;
-    ZForwarding* observed = nullptr;
-    static thread_local WaitContext* current;
-
-    WaitContext()
-    {
-        ThreadLocal::SetMutator(&mutator);
-        ThreadLocal::SetThreadType(ThreadType::CJ_PROCESSOR);
-        mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
-        handshake.leave_safe();
-        current = this;
-        ZRelocateQueue::SetWaitEnterHook(&Observe);
-    }
-    ~WaitContext()
-    {
-        ZRelocateQueue::SetWaitEnterHook(nullptr);
-        current = nullptr;
-        ThreadLocal::SetMutator(savedMutator);
-        ThreadLocal::SetThreadType(savedType);
-    }
-    static void Observe(ZForwarding* forwarding)
-    {
-        current->entered = true;
-        current->observed = forwarding;
-        current->mutatorSafe = ThreadLocal::GetMutator()->InSaferegion();
-        current->handshakeSafe = Handshake::Current().observed_safe();
-    }
-};
-thread_local WaitContext* WaitContext::current = nullptr;
-#endif
-}
-
-// ZRelocateQueue::add_and_wait (zRelocate.cpp:134-151), called from the
-// JRT_LEAF barrier (zBarrierSetRuntime.cpp:29): waiting preserves the context
-// that prevents reset until the final forwarding lookup has returned.
-#if defined(MRT_TESTABLE_INTERNALS)
-// A fresh VM owns this synthetic thread context; no runtime registration is needed.
-GC_OTHER_VM_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
-{
-    PageQueueFixture f;
-    f.queue.BeginWorkers(1);
-    auto request = f.queue.Add(f.owner);
-    WaitContext context;
-    bool timedOut = false;
-    f.queue.Wait(request.forwarding);
-    GC_EXPECT_TRUE(context.entered);
-    GC_EXPECT_TRUE(context.observed == f.owner);
-    GC_EXPECT_TRUE(timedOut);
-    GC_EXPECT_FALSE(context.mutatorSafe);
-    GC_EXPECT_FALSE(context.handshakeSafe);
-    GC_EXPECT_FALSE(context.mutator.InSaferegion());
-    GC_EXPECT_FALSE(context.handshake.observed_safe());
-
-    f.Publish();
-    f.owner->release_page();
-    f.Complete();
-    (void)f.queue.Wait(request.forwarding);
-    GC_EXPECT_EQ(request.forwarding->find(reinterpret_cast<MAddress>(f.heap.obj0)),
-                 reinterpret_cast<MAddress>(f.heap.obj1));
-    GC_EXPECT_FALSE(context.mutator.InSaferegion());
-    GC_EXPECT_FALSE(context.handshake.observed_safe());
-    GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
-}
-
-#endif // MRT_TESTABLE_INTERNALS
-
-// zRelocate.cpp:134-191: objects on one page share one forwarding/claim/done.
+// ZGC zRelocate.cpp:134-191. add_and_wait may enqueue the same forwarding
+// more than once; claim() selects exactly one worker, and leave() wakes waiters.
 GC_TEST(RelocationPageQueue, TwoObjectsShareOnePageClaim)
 {
-    PageQueueFixture f;
-    f.queue.BeginWorkers(1);
-    auto first = f.queue.Add(f.owner);
-    auto second = f.queue.Add(f.owner);
-    GC_EXPECT_TRUE(first.accepted && first.inserted && second.accepted && !second.inserted);
-    GC_EXPECT_TRUE(first.forwarding == second.forwarding);
-    GC_EXPECT_EQ(f.queue.PendingCount(), 1U);
-    std::atomic<unsigned> winners{ 0 };
-    std::thread a([&] { if (f.queue.PruneAndClaim()) ++winners; });
-    std::thread b([&] { if (f.queue.PruneAndClaim()) ++winners; });
-    a.join(); b.join();
-    GC_EXPECT_EQ(winners.load(), 1U);
-    GC_EXPECT_TRUE(first.forwarding == f.owner);
-    f.Complete();
-    GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
-}
-
-GC_TEST(RelocationPageQueue, EntryPublicationDoesNotCompleteThePage)
-{
-    PageQueueFixture f;
-    f.queue.BeginWorkers(1);
-    auto request = f.queue.Add(f.owner);
-    f.Publish();
-    bool timedOut = false;
-    f.queue.Wait(request.forwarding);
-    GC_EXPECT_TRUE(timedOut);
-    GC_EXPECT_FALSE(f.owner->is_done());
-    GC_EXPECT_EQ(([&]() -> MAddress { auto* const f = Heap::GetHeap().GetZGeneration(f.heap.region0()->GetOwnerGeneration()).forwarding(reinterpret_cast<MAddress>(f.heap.obj0)); return f != nullptr ? f->find(reinterpret_cast<MAddress>(f.heap.obj0)) : 0; }()),
-                 reinterpret_cast<MAddress>(f.heap.obj1));
-    f.Complete();
-    f.queue.Wait(request.forwarding);
-    GC_EXPECT_FALSE(timedOut);
-    GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
+    GcHeapFixture heap;
+    heap.InstallPageOwner(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
+    ZRelocateQueue queue;
+    queue.activate(1);
+    std::atomic<unsigned> returned{0};
+    std::thread first([&] { queue.add_and_wait(owner); ++returned; });
+    std::thread second([&] { queue.add_and_wait(owner); ++returned; });
+    ZForwarding* selected = nullptr;
+    while ((selected = queue.synchronize_poll()) == nullptr) std::this_thread::yield();
+    const bool singleClaim = selected == owner && !owner->claim();
+    owner->release_page();
+    owner->mark_done();
+    queue.leave();
+    first.join();
+    second.join();
+    queue.deactivate();
+    GC_EXPECT_TRUE(singleClaim);
+    GC_EXPECT_EQ(returned.load(), 2U);
+    GC_EXPECT_TRUE(owner->is_done());
 }
 
 GC_TEST(RelocationPageQueue, ReleasedPageStillHasItsImmutableEntry)
 {
-    PageQueueFixture f;
-    f.Publish();
-    f.owner->release_page();
-    GC_EXPECT_FALSE(f.owner->retain_page(&f.queue));
-    BaseObject* const answer = Heap::GetHeap().GetZGeneration(f.heap.region0()->GetOwnerGeneration())
-        .remap_object(f.heap.obj0);
-    GC_EXPECT_EQ(answer, f.heap.obj1);
-    GC_EXPECT_FALSE(f.owner->is_done());
+    GcHeapFixture heap;
+    heap.InstallPageOwner(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
+    const auto from = reinterpret_cast<MAddress>(heap.obj0);
+    const auto to = reinterpret_cast<MAddress>(heap.obj1);
+    GC_EXPECT_EQ(owner->insert(from, to), to);
+    owner->release_page();
+    ZRelocateQueue queue;
+    GC_EXPECT_FALSE(owner->retain_page(&queue));
+    GC_EXPECT_TRUE(Heap::GetHeap().old().remap_object(heap.obj0) == heap.obj1);
+    GC_EXPECT_FALSE(owner->is_done());
 }
 
 GC_TEST(RelocationPageQueue, DoneBeforeEnqueueNeedsNoWorker)
 {
-    PageQueueFixture f;
-    f.Complete();
-    auto request = f.queue.Add(f.owner);
-    GC_EXPECT_TRUE(request.accepted && !request.inserted);
-    bool timedOut = true;
-    f.queue.Wait(request.forwarding);
-    GC_EXPECT_FALSE(timedOut);
-    GC_EXPECT_TRUE(request.forwarding == f.owner);
+    GcHeapFixture heap;
+    heap.InstallPageOwner(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
+    owner->release_page();
+    owner->mark_done();
+    ZRelocateQueue queue;
+    queue.add_and_wait(owner);
+    GC_EXPECT_TRUE(owner->is_done());
+    GC_EXPECT_FALSE(queue.is_active());
 }
 
-GC_TEST(RelocationPageQueue, ClosedGenerationRejectsUnownedWork)
+GC_TEST(RelocationPageQueue, EntryPublicationDoesNotCompleteThePage)
 {
-    PageQueueFixture f;
-    f.queue.BeginWorkers(1);
-    GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
-    const auto rejected = f.queue.Add(f.owner);
-    GC_EXPECT_FALSE(rejected.accepted);
-    GC_EXPECT_TRUE(rejected.forwarding == nullptr);
-    GC_EXPECT_FALSE(f.owner->is_done());
-    // Positive control: a real already-claimed page retains its completion owner.
-    GC_EXPECT_TRUE(f.owner->claim());
-    const auto claimed = f.queue.Add(f.owner);
-    GC_EXPECT_TRUE(claimed.accepted);
-    f.Complete();
-    (void)f.queue.Wait(claimed.forwarding);
+    GcHeapFixture heap;
+    heap.InstallPageOwner(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
+    const auto from = reinterpret_cast<MAddress>(heap.obj0);
+    const auto to = reinterpret_cast<MAddress>(heap.obj1);
+    ZRelocateQueue queue;
+    queue.activate(1);
+    std::atomic<bool> returned{false};
+    std::thread requester([&] { queue.add_and_wait(owner); returned.store(true); });
+    while (queue.synchronize_poll() == nullptr) std::this_thread::yield();
+    const auto receipt = owner->insert(from, to);
+    const bool prematurelyDone = owner->is_done();
+    const bool prematurelyReturned = returned.load();
+    owner->release_page();
+    owner->mark_done();
+    queue.leave();
+    requester.join();
+    queue.deactivate();
+    GC_EXPECT_EQ(receipt, to);
+    GC_EXPECT_FALSE(prematurelyDone);
+    GC_EXPECT_FALSE(prematurelyReturned);
+    GC_EXPECT_EQ(owner->find(from), to);
 }
 
 GC_TEST(RelocationPageQueue, EnqueueWakesSynchronizedWorker)
 {
-    PageQueueFixture f;
-    f.queue.BeginWorkers(2);
-    ZRelocateQueue::Selection selected;
-    std::thread worker([&] { selected = f.queue.SynchronizePoll(); });
-    while (f.queue.SynchronizedWorkerCount() != 1) std::this_thread::yield();
-    const auto request = f.queue.Add(f.owner);
+    GcHeapFixture heap;
+    heap.InstallPageOwner(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
+    ZRelocateQueue queue;
+    queue.activate(1);
+    std::atomic<bool> synchronized{false};
+    std::thread synchronizer([&] { queue.synchronize(); synchronized.store(true); });
+    ZForwarding* selected = nullptr;
+    std::thread worker([&] {
+        while ((selected = queue.synchronize_poll()) == nullptr) std::this_thread::yield();
+        selected->release_page();
+        selected->mark_done();
+        queue.leave();
+    });
+    while (!synchronized.load()) std::this_thread::yield();
+    queue.add_and_wait(owner);
+    queue.desynchronize();
     worker.join();
-    GC_EXPECT_TRUE(selected.forwarding == request.forwarding);
-    GC_EXPECT_TRUE(f.owner->claimed().load(std::memory_order_acquire));
-    f.Complete();
-    std::thread first([&] { GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone); });
-    GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
-    first.join();
+    synchronizer.join();
+    queue.deactivate();
+    GC_EXPECT_TRUE(selected == owner);
+    GC_EXPECT_TRUE(owner->is_claimed() && owner->is_done());
+}
+
+// Waiting in the leaf barrier must preserve the unsafe mutator/handshake
+// context. Observe it while actually queued and after the product wait returns.
+GC_OTHER_VM_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture heap;
+    heap.InstallPageOwner(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
+    ZRelocateQueue queue;
+    queue.activate(1);
+    Mutator mutator;
+    auto& handshake = mutator.GetHandshakeState();
+    bool afterMutatorSafe = true;
+    bool afterHandshakeSafe = true;
+    std::thread requester([&] {
+        ThreadLocal::SetMutator(&mutator);
+        ThreadLocal::SetThreadType(ThreadType::CJ_PROCESSOR);
+        mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
+        handshake.leave_safe();
+        queue.add_and_wait(owner);
+        afterMutatorSafe = mutator.InSaferegion();
+        afterHandshakeSafe = handshake.observed_safe();
+        ThreadLocal::SetMutator(nullptr);
+        ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    });
+    ZForwarding* selected = nullptr;
+    while ((selected = queue.synchronize_poll()) == nullptr) std::this_thread::yield();
+    const bool waitingMutatorSafe = mutator.InSaferegion();
+    const bool waitingHandshakeSafe = handshake.observed_safe();
+    selected->release_page();
+    selected->mark_done();
+    queue.leave();
+    requester.join();
+    queue.deactivate();
+    GC_EXPECT_FALSE(waitingMutatorSafe);
+    GC_EXPECT_FALSE(waitingHandshakeSafe);
+    GC_EXPECT_FALSE(afterMutatorSafe);
+    GC_EXPECT_FALSE(afterHandshakeSafe);
+    GC_EXPECT_TRUE(owner->is_done());
+}
+
+// ZGC zRelocate.cpp:264-280: check each invalid state independently, so the
+// worker assertion cannot conceal the completion or nonempty assertions.
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS) && defined(__linux__)
+namespace {
+void ExpectClearRejection(int input, const char* diagnostic)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        dup2(output[1], STDERR_FILENO);
+        close(output[1]);
+        std::signal(SIGABRT, SIG_DFL);
+        GcHeapFixture heap;
+        heap.InstallPageOwner(heap.region0());
+        auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
+        ZRelocateQueue queue;
+        if (input == 0) {
+            queue.activate(1);
+        } else {
+            // Feed the real queue through its producer. No synthetic queue
+            // entries or product callbacks are installed by the test.
+            std::thread([&] { queue.add_and_wait(owner); }).detach();
+            while (queue.synchronize_poll() == nullptr) std::this_thread::yield();
+            if (input == 2) owner->mark_done();
+        }
+        queue.deactivate();
+        _exit(0);
+    }
+    close(output[1]);
+    std::string message;
+    char buffer[512];
+    ssize_t count;
+    while ((count = read(output[0], buffer, sizeof(buffer))) > 0) message.append(buffer, count);
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
+                          message.find(diagnostic) != std::string::npos;
+    std::fprintf(stderr, "CLEAR1316_TARGET input=%d executed=1 rejected=%d status=%d diagnostic=%s\n",
+                 input, rejected, status, message.c_str());
+    GC_EXPECT_TRUE(rejected);
+}
+}
+GC_TEST(RelocationPageQueue, ClearRejectsActiveWorkers)
+{
+    ExpectClearRejection(0, "Invalid state");
+}
+GC_TEST(RelocationPageQueue, ClearRejectsUnfinishedForwarding)
+{
+    ExpectClearRejection(1, "All should be done");
+}
+GC_TEST(RelocationPageQueue, ClearRejectsUnprunedCompletedForwarding)
+{
+    ExpectClearRejection(2, "Clear was not empty");
+}
+#endif
+
+GC_TEST(RelocationPageQueue, ClearAcceptsEmptyInactiveQueue)
+{
+    ZRelocateQueue queue;
+    queue.deactivate();
+    GC_EXPECT_FALSE(queue.is_active());
+    std::fprintf(stderr, "CLEAR1316_EMPTY executed=1\n");
 }
