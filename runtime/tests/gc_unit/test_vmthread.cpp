@@ -85,9 +85,9 @@ GC_RUNTIME_TEST(VMThread1308, PauseRunsOnTheVMThread)
     auto& heap = Heap::GetHeap();
     InitializeGenerationWorkers(heap.young(), 1);
     YoungTypeSetter type(heap.young(), ZYoungType::minor);
-    const auto before = heap.total_collections();
+    const auto before = ZCollectedHeap::heap()->total_collections();
     heap.young().pause_mark_start();
-    const auto after = heap.total_collections();
+    const auto after = ZCollectedHeap::heap()->total_collections();
     std::fprintf(stderr, "VM1308_PHASE_TARGET executed=1 before=%u after=%u vm_running=%d\n",
                  before, after, VMThread::is_running());
     // Target assertion: the product pause entered the VM thread and completed.
