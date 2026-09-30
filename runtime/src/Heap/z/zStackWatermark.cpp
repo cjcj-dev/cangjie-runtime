@@ -293,6 +293,29 @@ bool HasExposableFrame(Mutator& owner)
     const MachineFrame& top = owner.GetUnwindContext().frameInfo.mFrame;
     return top.GetFA() != nullptr && top.GetIP() != nullptr;
 }
+
+// stackWatermark.inline.hpp:86-106: one typed sender skips the runtime
+// transition frame; it is not a search for an arbitrary managed frame.
+void SkipWatermarkStub(StackFrameStream& frames)
+{
+    if (frames.IsDone()) { return; }
+    switch (frames.Current().GetFrameType()) {
+        case FrameType::SAFEPOINT:
+        case FrameType::RETURN_SAFEPOINT:
+        case FrameType::C2R_STUB:
+        case FrameType::C2N_STUB:
+        case FrameType::STACKGROW:
+        case FrameType::EXSLUSIVE:
+        case FrameType::RUNTIME:
+#ifdef INTERPRETER_ENABLED
+        case FrameType::INTERPRETER_I2N:
+#endif
+            frames.Next();
+            break;
+        default: break;
+    }
+}
+
 }
 
 void StackWatermark::before_unwind()
@@ -304,12 +327,11 @@ void StackWatermark::before_unwind()
     if (IsDone() || !HasExposableFrame(owner)) {
         return;
     }
-    StackFrameStream frames(&owner.GetUnwindContext());
+    StackFrameStream frames(&owner.GetUnwindContext(), StackFrameStream::WalkMode::SENDER);
     frames.Start();
-    while (!frames.IsDone() && frames.Current().GetFrameType() != FrameType::MANAGED) { frames.Next(); }
+    SkipWatermarkStub(frames);
     if (frames.IsDone()) { return; }
     frames.Next();
-    while (!frames.IsDone() && frames.Current().GetFrameType() != FrameType::MANAGED) { frames.Next(); }
     if (!frames.IsDone()) { ensure_safe(frames.Current()); }
 }
 
@@ -320,9 +342,9 @@ void StackWatermark::after_unwind()
     if (IsDone() || !HasExposableFrame(owner)) {
         return;
     }
-    StackFrameStream frames(&owner.GetUnwindContext());
+    StackFrameStream frames(&owner.GetUnwindContext(), StackFrameStream::WalkMode::SENDER);
     frames.Start();
-    while (!frames.IsDone() && frames.Current().GetFrameType() != FrameType::MANAGED) { frames.Next(); }
+    SkipWatermarkStub(frames);
     if (!frames.IsDone()) { ensure_safe(frames.Current()); }
 }
 

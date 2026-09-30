@@ -442,6 +442,35 @@ GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredMainCodeAndImageGeneration)
     }
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
+// Production CJFileLoader registration publishes these ranges. The friend
+// accessor only reads that production record; no fixture-built index is used.
+GC_RUNTIME_OTHER_VM_TEST(PackageInit, RegisteredAddressIndexBoundaries)
+{
+    Init();
+    const auto registered = ElfUnloadQuiescenceTest::Registered(reinterpret_cast<Uptr>(&metadata));
+    bool membership = registered != nullptr && !registered->ranges.empty();
+    bool executable = membership;
+    size_t samples = 0;
+    if (registered != nullptr) {
+        ElfUnloadQuiescence::ReadScope reader;
+        for (const auto& range : registered->ranges) {
+            for (const Uptr address : {range.start, range.start + range.size - 1}) {
+                membership &= ElfUnloadQuiescence::IsLinkedAddress(address);
+                executable &= ElfUnloadQuiescence::IsLinkedAddress(address, true) == range.executable;
+                ++samples;
+            }
+        }
+        membership &= !ElfUnloadQuiescence::IsLinkedAddress(0) &&
+            !ElfUnloadQuiescence::IsLinkedAddress(~Uptr(0));
+    }
+    std::fprintf(stderr, "IMAGE_INDEX_TARGET samples=%zu membership=%d executable=%d executed=1\n",
+                 samples, membership, executable);
+    // Target assertions precede setup accounting, so a cut cannot hide them.
+    Target("registered-address-membership", membership);
+    Target("registered-code-versus-data", executable);
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
+
 GC_RUNTIME_OTHER_VM_TEST(PackageInit, AggregateWaitsForLastUnit)
 {
     Init();

@@ -153,7 +153,7 @@ void StackFrameStream::AnalyseAndSetFrameType(UnwindContext& uwContext)
         // be directly identified by the runtime library address.
         if (isReliableN2CStub) {
             frameInfo.SetFrameType(FrameType::RUNTIME);
-        } else if (ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(mFrame.GetIP()))) {
+        } else if (ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(mFrame.GetIP()), true)) {
             frameInfo.SetFrameType(FrameType::MANAGED);
             isReliableN2CStub = false;
             frameInfo.ResolveProcInfo();
@@ -203,13 +203,13 @@ void StackFrameStream::Start()
         done = recordedFrames != nullptr ? recordedFrames->empty() : recordedFramePointers->empty();
         if (!done) {
             current.frameInfo = recordedFrames != nullptr ? (*recordedFrames)[0] : *(*recordedFramePointers)[0];
-            CheckRegisterRoots();
+            if (walkMode == WalkMode::ROOTS) { CheckRegisterRoots(); }
         }
         return;
     }
     CheckTopUnwindContextAndInit(current);
     done = current.frameInfo.mFrame.IsAnchorFrame(anchorFA);
-    if (!done) { AnalyseAndSetFrameType(current); CheckRegisterRoots(); }
+    if (!done) { AnalyseAndSetFrameType(current); if (walkMode == WalkMode::ROOTS) { CheckRegisterRoots(); } }
 }
 
 void StackFrameStream::UpdateRegisterMap(const FrameInfo& frame)
@@ -295,14 +295,14 @@ void StackFrameStream::CheckRegisterRoots() const
 void StackFrameStream::Next()
 {
     if (done) { return; }
-    UpdateRegisterMap(current.frameInfo);
+    if (walkMode == WalkMode::ROOTS) { UpdateRegisterMap(current.frameInfo); }
     if (recordedFrames != nullptr || recordedFramePointers != nullptr) {
         ++recordedIndex;
         done = recordedIndex == (recordedFrames != nullptr ? recordedFrames->size() : recordedFramePointers->size());
         if (!done) {
             current.frameInfo = recordedFrames != nullptr ? (*recordedFrames)[recordedIndex] :
                 *(*recordedFramePointers)[recordedIndex];
-            CheckRegisterRoots();
+            if (walkMode == WalkMode::ROOTS) { CheckRegisterRoots(); }
         }
         return;
     }
@@ -317,7 +317,7 @@ void StackFrameStream::Next()
     done = !advanced || caller.frameInfo.mFrame.IsAnchorFrame(anchorFA);
     caller.frameInfo.mFrame.SetSP(current.frameInfo.CallerSP());
     current = caller;
-    if (!done) { AnalyseAndSetFrameType(current); CheckRegisterRoots(); }
+    if (!done) { AnalyseAndSetFrameType(current); if (walkMode == WalkMode::ROOTS) { CheckRegisterRoots(); } }
 }
 
 void StackFrameStream::Rebase(intptr_t offset)

@@ -55,6 +55,15 @@ struct ImageInterval {
     std::shared_ptr<const ImageMap> image;
     bool executable;
 };
+std::shared_ptr<const ImageMap> FindImageInterval(const std::vector<ImageInterval>& intervals,
+                                               Uptr address, bool codeOnly)
+{
+    auto found = std::upper_bound(intervals.begin(), intervals.end(), address,
+        [](Uptr pc, const ImageInterval& interval) { return pc < interval.start; });
+    if (found == intervals.begin()) { return nullptr; }
+    --found;
+    return address <= found->last && (!codeOnly || found->executable) ? found->image : nullptr;
+}
 struct ImageDirectory {
     std::mutex mutex;
     std::vector<std::shared_ptr<const ImageMap>> images;
@@ -101,11 +110,7 @@ struct ImageDirectory {
 
     std::shared_ptr<const ImageMap> Find(Uptr address, bool codeOnly = false) const
     {
-        auto found = std::upper_bound(intervals.begin(), intervals.end(), address,
-            [](Uptr pc, const ImageInterval& interval) { return pc < interval.start; });
-        if (found == intervals.begin()) { return nullptr; }
-        --found;
-        return address <= found->last && (!codeOnly || found->executable) ? found->image : nullptr;
+        return FindImageInterval(intervals, address, codeOnly);
     }
 };
 ImageDirectory& ImageMaps()
@@ -115,7 +120,7 @@ ImageDirectory& ImageMaps()
 }
 thread_local U32 readerDepth = 0;
 thread_local bool unloadWriter = false;
-thread_local std::vector<std::shared_ptr<const ImageMap>> unloadWriterImages;
+thread_local std::vector<ImageInterval> unloadWriterIntervals;
 thread_local Uptr purgeAuthorizedImage = 0;
 thread_local const ElfUnloadQuiescence::TaskAdmissionScope* purgeAdmission = nullptr;
 } // namespace
@@ -202,12 +207,11 @@ Uptr ElfUnloadQuiescence::ResolveImageIdentity(Uptr address)
 
 bool ElfUnloadQuiescence::ImageAddressMap::Contains(Uptr address, bool codeOnly) const
 {
-    for (const auto& range : ranges) {
-        if ((!codeOnly || range.executable) && address >= range.start && address - range.start < range.size) {
-            return true;
-        }
-    }
-    return false;
+    auto found = std::upper_bound(ranges.begin(), ranges.end(), address,
+        [](Uptr pc, const Range& range) { return pc < range.start; });
+    if (found == ranges.begin()) { return false; }
+    --found;
+    return (!codeOnly || found->executable) && address - found->start < found->size;
 }
 
 std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::RegisteredImage(Uptr metadata)
@@ -229,9 +233,7 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     // The writer owns these exact generations until fini completes. They are
     // not republished into the public directory after UnlinkImage.
     if (unloadWriter) {
-        for (const auto& owned : unloadWriterImages) {
-            if (owned->Contains(address, codeOnly)) { return owned; }
-        }
+        return FindImageInterval(unloadWriterIntervals, address, codeOnly);
     }
     return nullptr;
 }
@@ -314,8 +316,8 @@ ElfUnloadQuiescence::UnloadScope::UnloadScope(Uptr imageAddress)
     {
         auto& maps = ImageMaps();
         std::lock_guard<std::mutex> lock(maps.mutex);
-        for (const auto& image : maps.images) {
-            if (image->identity == imageIdentity) { unloadWriterImages.push_back(image); }
+        for (const auto& interval : maps.intervals) {
+            if (interval.image->identity == imageIdentity) { unloadWriterIntervals.push_back(interval); }
         }
     }
     unloadWriter = true;
@@ -343,7 +345,7 @@ ElfUnloadQuiescence::UnloadScope::~UnloadScope()
     CHECK_DETAIL(synchronized, "ELF unload must drain readers before purge");
     CHECK_DETAIL(admissionOpen, "ELF unload must reopen lookup admission after purge");
     unloadWriter = false;
-    unloadWriterImages.clear();
+    unloadWriterIntervals.clear();
 }
 
 bool ElfUnloadQuiescence::SharedTaskAdmissionScope::TryAcquire(void* scope)
@@ -617,6 +619,15 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
         return 1;
     }, image.get());
 #endif
+    // Normalize LOAD overlaps once; both per-image membership and the public
+    // directory use the same disjoint interval shape and binary lookup.
+    ImageDirectory normalized;
+    normalized.images.push_back(image);
+    normalized.Rebuild();
+    image->ranges.clear();
+    for (const auto& interval : normalized.intervals) {
+        image->ranges.push_back({interval.start, interval.last - interval.start + 1, interval.executable});
+    }
     CHECK_DETAIL(image->Contains(imageAddress), "registered image must contain its metadata");
     auto& maps = ImageMaps();
     std::lock_guard<std::mutex> lock(maps.mutex);

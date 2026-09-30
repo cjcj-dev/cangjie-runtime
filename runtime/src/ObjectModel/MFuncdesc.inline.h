@@ -60,7 +60,7 @@ inline FuncDescRef MFuncDesc::GetFuncDesc(FrameAddress* fa)
 inline FuncDescRef MFuncDesc::GetFuncDesc(Uptr startPC)
 {
     ElfUnloadQuiescence::ReadScope reader;
-    if (!ElfUnloadQuiescence::IsLinkedAddress(startPC)) {
+    if (!ElfUnloadQuiescence::IsLinkedAddress(startPC, true)) {
         return nullptr;
     }
 #ifdef __APPLE__

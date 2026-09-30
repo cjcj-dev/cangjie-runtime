@@ -178,7 +178,7 @@ public:
     // interfaceSupport.inline.hpp:213-220: publish the active state with a
     // fence, then release any in-flight lock before processing requests.
     template<class Preprocess>
-    __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess)
+    __attribute__((always_inline)) inline void DoLeaveSaferegion(Preprocess& preprocess, bool nativeReturn = false)
     {
         for (;;) {
             MarkFlushBeginLeaveSaferegion();
@@ -192,7 +192,21 @@ public:
             preprocess();
             ArmThreadPoll(ThreadLocal::GetThreadLocalData());
         }
-        ProcessSafepointIfRequested(ThreadLocal::GetThreadLocalData());
+        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+        if (nativeReturn) {
+            // sharedRuntime_x86_64.cpp:2480 / macroAssembler_x86.cpp:2590:
+            // test the saved native-return boundary before requests can disarm
+            // the poll. A pending watermark alone is not a slow-path reason.
+            const uintptr_t poll = tls->GetPollWord();
+            const MachineFrame& top = uwContext.frameInfo.mFrame;
+            const uintptr_t boundary = IsManagedContext() && top.GetIP() != nullptr ?
+                reinterpret_cast<uintptr_t>(top.GetFA()) : 0;
+            if (UNLIKELY((poll & ThreadLocalData::PollBit) != 0 || boundary > poll)) {
+                CheckSpecialConditionForNativeTransition();
+            }
+        } else {
+            ProcessSafepointIfRequested(tls);
+        }
     }
 
     __attribute__((always_inline)) inline void DoLeaveSaferegion()
@@ -207,6 +221,15 @@ public:
     // If current mutator is in saferegion, leave and return true
     // If current mutator has left saferegion, return false
     __attribute__((always_inline)) inline bool LeaveSaferegion() noexcept;
+
+    inline bool LeaveNative() noexcept
+    {
+        if (!InSaferegion()) { return false; }
+        auto preprocess = [] {};
+        DoLeaveSaferegion(preprocess, true);
+        return true;
+    }
+    void CheckSpecialConditionForNativeTransition();
 
     // Called if current mutator should do corresponding task by suspensionFlag value
     void HandleSuspensionRequest();
