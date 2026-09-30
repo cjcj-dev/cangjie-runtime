@@ -423,16 +423,30 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, boo
 }
 #endif
 
-// threads.cpp:935-942: the VM thread is terminated only after the other threads
-// are gone, so the owner leaves the mutator set before the stand-in is torn
-// down. End the mutator this body created the way a normal thread end does --
-// leave the state it entered, then leave the manager. Teardown only; the
-// sequence under test runs above it.
-static void EndOwnerMutator(Mutator* owner)
-{
-    (void)owner->DoLeaveSaferegion();
-    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-}
+// threads.cpp:961 exits the calling thread from the thread list before :987
+// waits for the VM thread, so the owner has to leave the mutator set before
+// the stand-in is torn down. A body can reach that point three ways -- fall
+// off the end, take an early return, or unwind from a failed GC_EXPECT (those
+// throw, gc_unittest.hpp:87-92) -- so the pairing is a scope guard declared
+// right after the mutator it owns, not a call on one exit path. Teardown only;
+// the sequence under test runs above it.
+class OwnerMutatorScope {
+public:
+    OwnerMutatorScope() = default;
+    void attach(Mutator* newOwner) { owner = newOwner; }
+    ~OwnerMutatorScope()
+    {
+        if (owner == nullptr) { return; }
+        // Leave the state the body entered, then leave the manager: the way a
+        // normal thread end does.
+        (void)owner->DoLeaveSaferegion();
+        MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    }
+    OwnerMutatorScope(const OwnerMutatorScope&) = delete;
+    OwnerMutatorScope& operator=(const OwnerMutatorScope&) = delete;
+private:
+    Mutator* owner = nullptr;
+};
 
 // zUncoloredRoot.inline.hpp:62-68 and zGeneration.inline.hpp:131-139: relocate-start
 // exit processing writes the to-address of a cset frame slot before concurrent relocate.
@@ -521,6 +535,9 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     }
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(parked != nullptr);
+    // Declared after the fixture, so it runs before the stand-in is torn down.
+    OwnerMutatorScope ownerScope;
+    ownerScope.attach(parked);
     parked->SetManagedContext(true);
     (void)parked->EnterSaferegion(false);
     if (parked->GetGCData().storeGoodMask == 0) {
@@ -591,7 +608,6 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         std::fprintf(stderr, "K3_UNWIND_ORDER_ASSERT entry=%d original=%#zx unexposed=%#zx closure=%#zx final=%#zx forwarding=%#zx result=%d\n",
                      requestEntry, original, unexposed, closure.observed, frames[3][2], forwarding, result);
         GC_EXPECT_TRUE(result);
-        EndOwnerMutator(parked);
         return;
     }
     if (requestEntry == 4) {
@@ -602,7 +618,6 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         std::fprintf(stderr, "K3_ZOP_SKIP_ASSERT old=%#zx observed=%#zx forwarding=%#zx\n",
                      before, younger[2], forwarding);
         GC_EXPECT_TRUE(younger[2] == before && forwarding == 0);
-        EndOwnerMutator(parked);
         return;
     }
     if (requestEntry == 3) {
@@ -705,7 +720,6 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     }
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
-    EndOwnerMutator(parked);
     CangjieRuntime::stackGrowConfig = savedGrow;
 #else
     (void)owner;
@@ -949,6 +963,9 @@ static void CheckGrowCopiesHealedFrameRoot()
     GC_EXPECT_TRUE(owner != nullptr);
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(parked != nullptr);
+    // Declared after the fixture, so it runs before the stand-in is torn down.
+    OwnerMutatorScope ownerScope;
+    ownerScope.attach(parked);
     if (parked->GetGCData().storeGoodMask == 0) {
         parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
     }
@@ -999,7 +1016,6 @@ static void CheckGrowCopiesHealedFrameRoot()
     GC_EXPECT_TRUE(g_growCopy.done || g_growCopy.watermark == 0);
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
-    EndOwnerMutator(parked);
 }
 #else
 static void CheckGrowCopiesHealedFrameRoot() {}
