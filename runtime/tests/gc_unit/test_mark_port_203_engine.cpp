@@ -28,11 +28,14 @@
 #include "b09_runtime_fixture.hpp"
 #include "gc_heap_fixture.hpp"
 #include "marking_smr_test.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
+#include "ObjectModel/MArray.inline.h"
 #include "Heap/z/zGeneration.inline.hpp"
 
 // The merged generation helpers expose the inline definition. Keep the phase
 // producer in the product SO so the producer cut still observes that call.
 namespace MapleRuntime {
+extern "C" ArrayRef MCC_StringDedupCanonicalImpl(const TypeInfo*, ArrayRef);
 extern template void ZMark::MarkObject<false, false, false, false>(zaddress);
 }
 
@@ -685,7 +688,7 @@ GC_TEST(MarkPublish1144, EmptyStackRejectedForBothRoutes)
 }
 
 // ZGC zMarkStack.cpp:78: list insertion does not inspect the stack payload.
-GC_OTHER_VM_TEST(MarkPublish1144, ListPreservesEmptyPayload)
+GC_TEST(MarkPublish1144, ListPreservesEmptyPayload)
 {
     WorkerFixture worker;
     MarkingSMR smr;
@@ -849,4 +852,59 @@ GC_TEST(Remembered1314, MajorRootsPublishesOtherGeneration)
 GC_TEST(Remembered1314, MarkTaskPublishesOtherGeneration)
 {
     CheckOtherGenerationPublication(false);
+}
+
+namespace {
+void CheckYoungPostFreeCleanup(bool abortRequested)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    WorkerFixture worker;
+    auto& young = Heap::GetHeap().young();
+    fixture.region0()->reset(PageAge::eden);
+    fixture.region1()->reset(PageAge::eden);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    young.InitializeWorkers(1);
+    young.Workers()->set_active();
+    young.Mark().Start();
+    young.set_phase(ZGenerationPhase::Mark);
+    alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)]{};
+    auto* component = reinterpret_cast<TypeInfo*>(storage);
+    component->SetType(TypeKind::TYPE_KIND_UINT8);
+    component->SetInstanceSize(1);
+    fixture.typeInfo->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    fixture.typeInfo->SetComponentTypeInfo(component);
+    auto* first = reinterpret_cast<MArray*>(fixture.obj0);
+    auto* second = reinterpret_cast<MArray*>(fixture.obj1);
+    for (auto* array : {first, second}) {
+        array->SetLength(2);
+        array->SetPrimitiveElement<I8>(0, 7);
+        array->SetPrimitiveElement<I8>(1, 9);
+    }
+    StringDedup::Instance().Stop();
+    auto* installed = MCC_StringDedupCanonicalImpl(fixture.typeInfo, first);
+    auto* before = MCC_StringDedupCanonicalImpl(fixture.typeInfo, second);
+    if (abortRequested) ZAbort::abort();
+    // Restore the deleted check immediately AFTER mark_free() for the red arm.
+    // ZGC zGeneration.cpp:694-697 has no in-phase abort check. The retained
+    // String cleanup is outside this package; its observable result witnesses
+    // whether the actual removed branch skipped the phase's remaining work.
+    young.concurrent_mark_free();
+    auto* after = MCC_StringDedupCanonicalImpl(fixture.typeInfo, second);
+    std::fprintf(stderr, "POSTFREE1310_TARGET abort=%d installed=%d before_first=%d after_second=%d\n",
+                 abortRequested, installed == first, before == first, after == second);
+    StringDedup::Instance().Stop();
+    young.StopWorkers();
+    GC_EXPECT_TRUE(installed == first && before == first && after == second);
+}
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, YoungPostFreeCleanupAfterAbort)
+{
+    CheckYoungPostFreeCleanup(true);
+}
+
+GC_OTHER_VM_TEST(Lifecycle1310, YoungPostFreeCleanupWithoutAbort)
+{
+    CheckYoungPostFreeCleanup(false);
 }
