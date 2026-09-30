@@ -324,7 +324,7 @@ void CheckInitializationFailure(InitFailure failure)
         // /dev/null is a file, so it cannot supply a heap backing directory.
         if (failure == InitFailure::Backing) { setenv("cjAllocateHeapAt", "/dev/null", 1); }
         else { unsetenv("cjAllocateHeapAt"); }
-        setenv("cjHeapSize", failure == InitFailure::Virtual ? "1TB" : "64MB", 1);
+        setenv("cjHeapSize", failure == InitFailure::Virtual ? "8GB" : "64MB", 1);
         if (CJ_ScheduleManagerInit() != 0) { _exit(91); }
         if (failure == InitFailure::Virtual) {
             const rlimit limit{1ULL << 30, 1ULL << 30};
