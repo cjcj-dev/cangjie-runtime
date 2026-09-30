@@ -779,9 +779,22 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     }
     RuntimeParam param{};
     param.coParam.processorNum = 1;
-    param.heapParam.heapSize = 32 * 1024;
+    param.heapParam.heapSize = 512 * 1024;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    alignas(TypeInfo) static unsigned char liveStorage[sizeof(TypeInfo)]{};
+    auto* liveType = reinterpret_cast<TypeInfo*>(liveStorage);
+    liveType->SetType(TypeKind::TYPE_KIND_CLASS);
+    liveType->SetInstanceSize(sizeof(uintptr_t));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(liveStorage), sizeof(liveStorage));
+    BaseObject* live = nullptr;
+    {
+        ScopedObjectAccess access;
+        live = MObject::NewPinnedObject(liveType, sizeof(uintptr_t));
+    }
+    GC_EXPECT_TRUE(live != nullptr);
     LWTData initialData{};
+    initialData.obj = live;
     auto* thread = CJThreadBuild(
         reinterpret_cast<ScheduleHandle>(Runtime::Current().GetConcurrencyModel().GetThreadScheduler()),
         nullptr, [](void*, unsigned int) -> void* { return nullptr; }, &initialData, sizeof(initialData),
