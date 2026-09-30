@@ -856,23 +856,36 @@ void ScheduleNonDefaultThreadExit(struct Schedule *schedule, bool wait)
 /* Releases thread resources in the thread pool. Note: This interface needs to be invoked
  * only in schedule_try_exit, not in schedule_stop.
  */
-void ScheduleThreadsFree(struct Schedule *schedule)
+static bool ScheduleThreadSkipFFI(struct Thread *thread);
+
+bool ScheduleThreadsFree(struct Schedule *schedule)
 {
     struct ScheduleThread *schdThread = &schedule->schdThread;
     struct Dulink *node;
+    bool completed = true;
 
     // Production is closed and processors have unbound. The all-thread inventory
     // includes active carriers which never entered the free pool. Join without
     // holding either inventory lock: TLS exit may still need runtime locks.
     DULINK_FOR_EACH_ITEM(node, &schdThread->allThreadList) {
         struct Thread *thread = DULINK_ENTRY(node, struct Thread, allThreadDulink);
-        if (thread == schedule->thread0 || thread->exitBlocked) {
+        struct CJThread *cjthread = static_cast<struct CJThread*>(thread->cjthread);
+        // SyscallEnter explicitly unbinds the processor. The carrier inventory
+        // remains its owner while a native call has not returned.
+        if (cjthread != nullptr && cjthread->state == CJTHREAD_SYSCALL && ScheduleThreadSkipFFI(thread)) {
+            thread->exitBlocked = true;
+        }
+        if (thread->exitBlocked) {
+            completed = false;
+            continue;
+        }
+        if (thread == schedule->thread0) {
             continue;
         }
         SemaphorePost(&thread->sem);
         pthread_join(thread->osThread, nullptr);
     }
-
+    return completed;
 }
 
 static void ScheduleJoinedThreadsFree(struct Schedule *schedule)
@@ -1055,28 +1068,22 @@ void ScheduleNonDefaultFree(ScheduleHandle scheduleHandle)
 /* Check whether the current processor is in the FFI state. The processor is in ScheduleStop
  * and will not be scheduled again.
  */
-bool ScheduleProcessorSkipFFI(struct Processor *processor)
+static bool ScheduleThreadSkipFFI(struct Thread *thread)
 {
-    SchdMutatorStatusHookFunc hookFunc;
-    struct Thread *thread;
-    struct CJThread *cjthread;
-
-    thread = processor->thread;
-
     if (thread == nullptr) {
         return false;
     }
-    cjthread = static_cast<struct CJThread*>(thread->cjthread);
-
-    if (cjthread == nullptr) {
-        return false;
-    }
-
-    hookFunc = g_scheduleManager.mutatorStatusFunc;
-    if (hookFunc == nullptr || cjthread->mutator == nullptr) {
+    struct CJThread *cjthread = static_cast<struct CJThread*>(thread->cjthread);
+    SchdMutatorStatusHookFunc hookFunc = g_scheduleManager.mutatorStatusFunc;
+    if (cjthread == nullptr || hookFunc == nullptr || cjthread->mutator == nullptr) {
         return false;
     }
     return hookFunc(cjthread->mutator);
+}
+
+bool ScheduleProcessorSkipFFI(struct Processor *processor)
+{
+    return ScheduleThreadSkipFFI(processor->thread);
 }
 
 bool ScheduleAllNonDefaultExit(void)
@@ -1228,7 +1235,7 @@ bool ScheduleExitMode(struct Schedule *schedule, bool threadExit)
     }
 
     if (threadExit) {
-        ScheduleThreadsFree(schedule);
+        completed = ScheduleThreadsFree(schedule) && completed;
         if (schedule->scheduleType == SCHEDULE_DEFAULT &&
             !pthread_equal(pthread_self(), schedule->thread0->osThread) &&
             !schedule->thread0->exitBlocked) {

@@ -137,19 +137,13 @@ for event in counts:
         dis=gdb.execute("disassemble '"+name+"'",to_string=True)
         print("LIFECYCLE_DISASSEMBLY "+dis)
         for address in re.findall(r"(0x[0-9a-f]+)[^\n]*\sret[q]?\s*(?:\n|$)",dis): Ret(address,event)
-class StopInventory(gdb.Breakpoint):
+class CarrierEntry(gdb.Breakpoint):
     def stop(self):
-        schedule=gdb.parse_and_eval("(struct Schedule*)$rdi")
-        pool=schedule["schdThread"]
-        head=int(pool["allThreadList"].address)
-        node=int(pool["allThreadList"]["next"])
-        offset=int(gdb.parse_and_eval("(unsigned long)&((struct Thread*)0)->allThreadDulink"))
-        while node != head:
-            thread=gdb.Value(node-offset).cast(gdb.lookup_type("struct Thread").pointer()).dereference()
-            handle=int(thread["osThread"])
-            carriers[handle]=int(thread["tid"])
-            node=int(thread["allThreadDulink"]["next"])
-        print("SHUTDOWN1459_INVENTORY "+json.dumps(carriers,sort_keys=True))
+        # Linux x86-64 glibc pthread_self is the thread descriptor at FS base.
+        # The join argument below independently checks this captured identity.
+        handle=int(gdb.parse_and_eval("$fs_base"))
+        carriers[handle]=gdb.selected_thread().ptid[1]
+        print("SHUTDOWN1459_CARRIER_ENTRY "+json.dumps(dict(handle=hex(handle),tid=carriers[handle])))
         return False
 class JoinReturned(gdb.Breakpoint):
     def __init__(self,address,handle,number):
@@ -182,7 +176,8 @@ class Teardown(gdb.Breakpoint):
                 check(r["destroyed"] and (not r["attached"] or r["detached"]),"carrier_owner_paired_before_teardown",tid=tid,generation=r["generation"],owner=hex(r["owner"]))
             check(not owners or tid in tls_completed,"carrier_tls_before_teardown",tid=tid,owners=len(owners))
         return False
-StopInventory("*CJ_ScheduleStopOutside",internal=True)
+CarrierEntry("*StartCJRuntime",internal=True)
+CarrierEntry("*CJ_ThreadEntry",internal=True)
 JoinEntry("*pthread_join",internal=True)
 Teardown("*'MapleRuntime::CangjieRuntime::FiniAndDelete()'",internal=True)
 def exited(event):
