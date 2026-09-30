@@ -14,7 +14,7 @@ struct MarkConsumerFixture {
         : domain(stripes, MarkingStacks::MarkingGeneration::MAJOR), stacks(stripes),
           context(1, 0, domain.Stripes(), stacks)
     {
-        domain.PrepareWork(1);
+        domain.ResizeWorkers(1);
         domain.Stripes().SetNStripes(stripes);
     }
     void Consume(const MarkStackEntry& entry) {

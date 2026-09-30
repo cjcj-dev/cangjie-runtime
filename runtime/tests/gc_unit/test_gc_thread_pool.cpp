@@ -1,3 +1,4 @@
+#include "gc_worker_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -114,7 +115,7 @@ bool RunParallelProductEntryClosesGeneration()
 
     ZRelocateQueue& queue = (*Heap::GetHeap().GetZGeneration(Generation::Old).relocate().queue());
     auto& old = Heap::GetHeap().old();
-    if (old.Workers() == nullptr) old.InitializeWorkers(3);
+    if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 3);
     old.Workers()->set_active_workers(3);
     old.Workers()->set_active();
     ZRelocate::StartRelocationTasks(old.id());
@@ -133,7 +134,7 @@ bool RunSerialProductEntryClosesGeneration()
     ZRelocateQueue& queue = (*Heap::GetHeap().GetZGeneration(Generation::Old).relocate().queue());
     // ZRelocate uses the generation worker entry even with one participant.
     auto& old = Heap::GetHeap().old();
-    if (old.Workers() == nullptr) old.InitializeWorkers(1);
+    if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
     old.Workers()->set_active_workers(1);
     old.Workers()->set_active();
     ZRelocate::StartRelocationTasks(old.id());
@@ -176,7 +177,7 @@ bool RunYoungRuntimeProductEntry()
 #if defined(MRT_TESTABLE_INTERNALS)
     RelocationReceiptTest::BindCollector(collector);
 #endif
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::young), 1);
     ZStat::Initialize();
     RelocationReceiptTest::ForwardYoungFromRuntimeEntry(collector);
 
@@ -193,7 +194,8 @@ GC_TEST(RelocateWorkers, FixedParticipantsCompleteEachBorrowedTask)
 {
     for (uint32_t count : { 1u, 3u }) {
         ZStatWorkers statWorkers;
-        ZWorkers workers(ZGenerationId::old, count, &statWorkers);
+        MapleRuntime::GcUnit::WorkerBudgetFixture workersBudget(count);
+        ZWorkers workers(ZGenerationId::old, &statWorkers);
         class Task : public ZTask {
         public:
             explicit Task(uint32_t count) : ZTask("ZWorkersUnitVisits"), visits(count, 0), handles(count) {}
@@ -225,8 +227,10 @@ GC_TEST(RelocateWorkers, FixedParticipantsCompleteEachBorrowedTask)
 GC_TEST(RelocateWorkers, YoungAndOldOwnDistinctThreads)
 {
     ZStatWorkers youngStats, oldStats;
-    ZWorkers young(ZGenerationId::young, 1, &youngStats);
-    ZWorkers old(ZGenerationId::old, 1, &oldStats);
+    MapleRuntime::GcUnit::WorkerBudgetFixture youngBudget(1);
+    ZWorkers young(ZGenerationId::young, &youngStats);
+    MapleRuntime::GcUnit::WorkerBudgetFixture oldBudget(1);
+    ZWorkers old(ZGenerationId::old, &oldStats);
     std::vector<pthread_t> youngThreads;
     young.threads_do([&](WorkerThread* thread) { youngThreads.push_back(thread->os_thread()); });
     GC_EXPECT_EQ(youngThreads.size(), 1u);
@@ -251,7 +255,8 @@ GC_TEST(RelocateWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
     std::thread requester([&] { queue.add_and_wait(owner); });
     std::atomic<size_t> completionOwners{0};
     ZStatWorkers statWorkers;
-    ZWorkers workers(ZGenerationId::old, 3, &statWorkers);
+    MapleRuntime::GcUnit::WorkerBudgetFixture workersBudget(3);
+    ZWorkers workers(ZGenerationId::old, &statWorkers);
     class RequestTask : public ZTask {
     public:
         RequestTask(ZRelocateQueue& queue, ZForwarding* owner, std::atomic<size_t>& count)
@@ -296,7 +301,7 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     // ForwardTask polls the owning generation's workers, as the runtime entry
     // does. This component fixture must provide that existing dependency.
     auto& old = Heap::GetHeap().old();
-    if (old.Workers() == nullptr) old.InitializeWorkers(1);
+    if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
     ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
     WorkerFixture workerIdentity;
     task.work();
@@ -319,7 +324,7 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     auto& queue = (*ZGeneration::old()->relocate().queue());
     queue.activate(2);
     auto& old = Heap::GetHeap().old();
-    if (old.Workers() == nullptr) old.InitializeWorkers(1);
+    if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
     std::atomic<MAddress> answer{ 0 };
     std::thread waiter([&] {
         (void)queue.add_and_wait(owner);
@@ -405,7 +410,7 @@ GC_OTHER_VM_TEST(RelocateWorkers, ProductEntryRestartsWithRequestedWorkers)
     companion->mark_done();
     auto& old = Heap::GetHeap().old();
     auto& manager = Heap::GetHeap().page_allocator();
-    if (old.Workers() == nullptr) old.InitializeWorkers(3);
+    if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 3);
     old.Workers()->set_active_workers(1);
     old.Workers()->set_active();
     ZForwarding* const forwarding = ZGeneration::generation((fx.region0())->generation_id())->forwarding((fx.region0())->GetRegionStart());
@@ -428,7 +433,7 @@ GC_OTHER_VM_TEST(RelocateWorkers, YoungProductEntryRestartsWithRequestedWorkers)
 {
     GcHeapFixture fx;
     auto& young = Heap::GetHeap().young();
-    if (young.Workers() == nullptr) young.InitializeWorkers(3);
+    if (young.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 3);
     young.Workers()->set_active_workers(1);
     young.Workers()->set_active();
     ResizeRunningRelocation(young);
@@ -475,7 +480,7 @@ void CheckResizeBeforeRemainingForwarding(Generation id)
         GC_EXPECT_TRUE(iterator.next(&owner));
         GC_EXPECT_TRUE(owner->retain_page(queue));
     }
-    if (generation.Workers() == nullptr) generation.InitializeWorkers(3);
+    if (generation.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 3);
     auto* workers = generation.Workers();
     workers->set_active_workers(3);
     workers->set_active();
@@ -734,13 +739,13 @@ void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, boo
             occupied.push_back(page);
         }
     }
-    if (generation.Workers() == nullptr) generation.InitializeWorkers(workers);
+    if (generation.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, workers);
     generation.Workers()->set_active_workers(workers);
     generation.Workers()->set_active();
     std::thread youngStart;
     if (interleaveYoung) {
         auto& young = Heap::GetHeap().GetZGeneration(Generation::Young);
-        if (young.Workers() == nullptr) young.InitializeWorkers(1);
+        if (young.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 1);
         young.Workers()->set_active_workers(1);
         young.Workers()->set_active();
         std::vector<ZForwarding*> sources;
@@ -857,12 +862,12 @@ GC_OTHER_VM_TEST(ForwardingRetain1316, YoungScanWaitsForInPlacePublication)
     }
     heap.remembered().register_found_old(fixture.region0());
     heap.remembered().flip();
-    if (young.Workers() == nullptr) young.InitializeWorkers(1);
+    if (young.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 1);
     young.Workers()->set_active_workers(1);
     young.Workers()->set_active();
     young.Mark().Start();
     young.set_phase(ZGenerationPhase::Mark);
-    if (old.Workers() == nullptr) old.InitializeWorkers(1);
+    if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
     old.Workers()->set_active_workers(1);
     old.Workers()->set_active();
     ZRelocate::StartRelocationTasks(old.id());

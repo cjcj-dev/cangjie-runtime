@@ -96,6 +96,7 @@ set(GC_UNIT_SOURCES
     test_mark_port_203_storage.cpp
     test_mark_port_203_entries.cpp
     test_mark_discovery.cpp
+    test_mark_termination_1329.cpp
     test_mark_port_203_engine.cpp
     test_exit_detach_mark_end.cpp
     test_native_thread_detach.cpp
@@ -253,6 +254,7 @@ add_test(NAME cj_gc_cycle_saferegion_unit COMMAND cj_gc_cycle_saferegion_unit)
 # process because ForwardingTable::Initialize is deliberately one-shot and the
 # main suite already owns that process-global table.
 add_executable(cj_gc_clear_entries_unit
+    gc_worker_fixture.cpp
     gc_unit_main.cpp
     gc_cycle_sequence_fixture.cpp
     clear_entries_product_unit.cpp
