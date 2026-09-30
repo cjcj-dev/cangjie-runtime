@@ -18,7 +18,7 @@
 #include "HeapManager.inline.h"
 // module internal interfaces
 #include "MArray.h"
-#include "Heap/z/zObjArrayAllocator.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "MClass.inline.h"
 
 namespace MapleRuntime {
@@ -162,27 +162,15 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
         ExceptionManager::OutOfMemory();
         return nullptr;
     }
-    const bool useSegmentedClear = arraySize > LARGE_ARRAY_INIT_SEGMENT_SIZE &&
-        allocType == AllocType::MOVEABLE_OBJECT &&
-        (arrayClass.GetComponentTypeInfo()->IsPrimitiveType() ||
-         (elemBytes == RefField<>::GetSize() && arrayClass.GetComponentTypeInfo()->IsRef()));
-    MAddress address = HeapManager::Allocate(
-        arraySize, useSegmentedClear ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
-    if (LIKELY(address != NULL_ADDRESS)) {
-        if (UNLIKELY(useSegmentedClear)) {
-            return ZObjArrayAllocator(address, arraySize, nElems, arrayClass).initialize();
-        }
-        ClearMemory(address, arraySize);
-        MArray* newArray = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));
-        newArray->SetLength(nElems);
+    (void)allocType;
+    MArray* array = ZCollectedHeap::heap()->array_allocate(arrayClass, arraySize, nElems, true);
 #if defined(__OHOS__) && (__OHOS__ == 1)
-        if (CjAllocData::GetCjAllocData()->IsRecording()) {
-            CjAllocData::GetCjAllocData()->RecordAllocNodes(&arrayClass, arraySize);
-        }
-#endif
-        return newArray;
+    if (array != nullptr && CjAllocData::GetCjAllocData()->IsRecording()) {
+        CjAllocData::GetCjAllocData()->RecordAllocNodes(&arrayClass, arraySize);
     }
-    return nullptr;
+#endif
+    return array;
 }
+
 } // namespace MapleRuntime
 #endif // MRT_MARRAY_INLINE_H

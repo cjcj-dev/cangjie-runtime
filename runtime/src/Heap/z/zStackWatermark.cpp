@@ -396,7 +396,7 @@ void ZStackWatermark::process_head(void* context)
     };
     owner.VisitExceptionRoots(roots);
     owner.VisitNativeFrameRoots(roots);
-    zaddress_unsafe* invisible = owner.GetGCData().invisibleRoot;
+    zaddress_unsafe* invisible = owner.GetGCData().invisible_root();
     if (invisible != nullptr) { ZUncoloredRoot::process_invisible(invisible, prev_head_color()); }
 }
 

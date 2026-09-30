@@ -5,10 +5,12 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zJNICritical.hpp"
+#include "Heap/z/zStat.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
+static const ZStatCriticalPhase ZCriticalPhaseJNICriticalStall("JNI Critical Stall");
 
 std::atomic<int64_t> ZJNICritical::count{ 0 };
 std::mutex ZJNICritical::lock;
@@ -61,6 +63,7 @@ void ZJNICritical::enter_inner()
     for (;;) {
         const int64_t n = count.load(std::memory_order_acquire);
         if (n < 0) {
+            ZStatTimer timer(ZCriticalPhaseJNICriticalStall);
             // ZGC zJNICritical.cpp:108-116: publish a blockable thread state
             // before taking the condition lock, so a concurrent handshake can
             // complete while this mutator waits for JNI critical to unblock.

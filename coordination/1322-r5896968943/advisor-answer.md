@@ -1,0 +1,1 @@
+主控 0930 答复：#1309 尚未合入（OPEN），前置未满足——本条继续按自有函数（zDriver 的 serviceability tracer、zServiceability.*）开发，⛔ 碰 zStat.cpp 的 ZStatPhaseCollection::RegisterStart/RegisterEnd；#1309 合入后在同分支 merge main 接回再送审。磁盘：<20G 时保持 WIP、每 10 分钟读 df，达线再构建。

@@ -390,7 +390,7 @@ public:
         }
         std::atomic_thread_fence(std::memory_order_acquire);
         if (field.GetFieldValue(std::memory_order_acquire) != value) { return; }
-        CHECK_DETAIL(ZForwarding::young_marking(), "Missing remembered field outside young marking: %p", &field);
+        CHECK_DETAIL(ZGeneration::young()->is_phase_mark(), "Missing remembered field outside young marking: %p", &field);
         CHECK_DETAIL(forwarding->relocated_remembered_fields_published_contains(slot),
                      "Missing published remembered field %p in destination %p", &field, reinterpret_cast<BaseObject*>(to));
 
@@ -425,7 +425,7 @@ void ZVerify::AfterRelocation(ZForwarding* forwarding)
 {
     if (!ZVerifyRemembered || forwarding == nullptr) { return; }
     if (forwarding->to_age() != PageAge::old) { return; }
-    if (ZForwarding::young_marking() && forwarding->relocated_remembered_fields_is_concurrently_scanned()) { return; }
+    if (ZGeneration::young()->is_phase_mark() && forwarding->relocated_remembered_fields_is_concurrently_scanned()) { return; }
     AfterRelocationInternal(forwarding);
 }
 void ZVerify::AfterScan(ZForwarding* forwarding)

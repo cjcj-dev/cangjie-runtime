@@ -124,38 +124,21 @@ public:
 #endif
     }
 
-    // Allocation initialiser: writes the whole word, address *and* state.
-    //
-    // SetTypeInfo alone writes typeInfoLow32/typeInfoHigh16 and never touches objectState, so a
-    // fresh object laid over memory whose previous tenant was a from-version inherits that
-    // tenant's stateCode.  Nothing in the runtime notices -- GetTypeInfo() reads the two address
-    // bitfields -- but the compiler loads the header as one 64-bit word (`mov (%rbx),%rdi`), so an
-    // inherited FORWARDED (= 3, bits 48-49 per the member order below) becomes (3 << 48) inside an
-    // address and faults non-canonically: SIGSEGV si_code=128 SI_KERNEL si_addr=(nil), no CR2.
-    //
-    // Measured on cjcj::cjc --package packages/basic/src, N=5: the read barrier hands the mutator
-    //
-    // ⛔ Inheriting the bits was the first reading of that TRACE population and it is FALSIFIED:
-    // all four object-creation sites go through the static SetClassInfo(MAddress, TypeInfo*) below,
-    // so this initialiser covers them, yet the population persists.  The surviving explanation for
-    // "FORWARDED with no to-version" is that the cycle's forwarding data has already been retired,
-    // so forwarding lookup can no longer answer -- which is what ZForwarding::detach_page prevents by
-    // blocking on _ref_count == 0 (zForwarding.cpp:171-181).  That is a separate, open item.
-    //
-    // This initialiser stays regardless: writing half a word at allocation and inheriting the rest
-    // is wrong on its own terms, and OpenJDK writes the whole header --
-    // obj->set_mark(markWord::prototype()) -- so state is initialised, never inherited.
-    // kInitStateAtAlloc: compile-time arm switch.  Both arms carry identical probes so an A/B
-    // differs only in the mechanism under test (a control arm that also drops the instruments
-    // measures two things at once).
-    static constexpr bool kInitStateAtAlloc = true;
-
-    void InitTypeInfoAndState(TypeInfo* newTypeInfo)
+    // ZGC compact object headers publish klass and mark together with release.
+    void InitTypeInfoAndState(TypeInfo* newTypeInfo, bool invisible = false)
     {
-        if (kInitStateAtAlloc) {
-            objectState.SetStateBits(0); // NORMAL; must not be left at the previous tenant's value
-        }
-        SetTypeInfo(newTypeInfo);
+        ObjectState state(ObjectState::NORMAL);
+        state.SetInvisibleObject(invisible);
+#ifdef __arm__
+        const StateWord header(reinterpret_cast<uintptr_t>(newTypeInfo), state);
+#else
+        const uintptr_t address = reinterpret_cast<uintptr_t>(newTypeInfo);
+        const StateWord header(address & LOW_ADDRESS_MASK,
+                               (address >> HIGH_ADDRESS_SHIFT) & HIGH_ADDRESS_MASK, state);
+#endif
+        uint64_t bits;
+        __builtin_memcpy(&bits, &header, sizeof(bits));
+        __atomic_store_n(reinterpret_cast<uint64_t*>(this), bits, __ATOMIC_RELEASE);
     }
 
     bool IsValidStateWord() const { return GetTypeInfo() != nullptr; }

@@ -82,7 +82,7 @@ public:
     {
         ZPage* region = capacity;
         capacity = nullptr;
-        manager.ReclaimRegion(region);
+        Heap::free_page(region);
     }
 };
 } // namespace
@@ -634,3 +634,20 @@ GC_OTHER_VM_TEST(FutureWait966, GCThreadPreservesHandshakeState)
     GC_EXPECT_TRUE(blockedUnchanged && unchanged);
     GC_EXPECT_EQ(request.cause(), GC_REASON_USER);
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+#include "gclog_capture.hpp"
+GC_RUNTIME_OTHER_VM_TEST(GcLifecycleLog, AllocationStall)
+{
+    setenv("MRT_GC_LOG", "1", 1);
+    GcLogCapture capture;
+    RunProductStallWaiters();
+    const std::string text = capture.Finish();
+    size_t count = 0;
+    size_t position = 0;
+    const std::string expected = "name=Allocation_Stall kind=critical ";
+    while ((position = text.find(expected, position)) != std::string::npos) { ++count; position += expected.size(); }
+    std::fprintf(stderr, "GCLOG_TARGET allocation_stall_records=%zu expected=2\n", count);
+    GC_EXPECT_EQ(count, size_t{2});
+}
+#endif

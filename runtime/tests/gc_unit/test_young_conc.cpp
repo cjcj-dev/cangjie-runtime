@@ -65,6 +65,12 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+// The phase-dispatch test shares this executable. Keep its producer bound to
+// the existing product instantiation (ZGC zMark.inline.hpp:48-87), even when
+// the generation policy tests instantiate their inline callers below.
+namespace MapleRuntime {
+extern template void ZMark::MarkObject<false, false, false, false>(zaddress);
+}
 
 
 #if defined(MRT_TESTABLE_INTERNALS)

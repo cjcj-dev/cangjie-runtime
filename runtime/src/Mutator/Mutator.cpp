@@ -181,7 +181,7 @@ void Mutator::InitProtectStackAddr()
 void Mutator::Init()
 {
     allocBuffer.Init();
-    ZBarrierSet::on_thread_attach(gcData, this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));
+    ZBarrierSet::on_thread_attach(gcData, this, nullptr);
     observerCnt = 0;
     inManagedContext.store(true);
 #ifdef INTERPRETER_ENABLED
@@ -193,7 +193,6 @@ void Mutator::ResetMutator()
 {
     CHECK_DETAIL(nativeFrameRoots.empty(), "native frame roots are not released");
     SetManagedContext(false);
-    StorePlain(rawObject, zaddress::null);
     ReleaseAllocBuffer();
     uwContext.Reset();
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
@@ -283,25 +282,18 @@ void Mutator::VisitProcessedRoots(const RootVisitor& visitor)
     if (GetStackWatermark().GetEpoch() != epoch) { return; }
     VisitExceptionRoots(visitor);
     VisitNativeFrameRoots(visitor);
-    if (GetStackWatermark().IsDone(epoch)) { VisitStackRoots(visitor, visitor); }
+    if (GetStackWatermark().IsDone(epoch)) { VisitStackRoots(visitor); }
 }
 
-void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor)
+void Mutator::VisitStackRoots(const RootVisitor& func)
 {
     MutatorLock();
-    const RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
-    // A native/exclusive frame has no managed stack map, but its side roots are
-    // independent of stack metadata and must remain visible. In particular an
-    // incomplete large reference array can be published while a native helper
-    // owns the mutator.
     if (!IsManagedContext()) {
-        VisitRawObjects(visitedInvisibleRootVisitor);
         MutatorUnlock();
         return;
     }
     IncObserver();
     StackManager::VisitStackRoots(uwContext, func, *this);
-    VisitRawObjects(visitedInvisibleRootVisitor);
     DecObserver();
     MutatorUnlock();
 }
@@ -312,17 +304,6 @@ void Mutator::VisitExceptionRoots(const RootVisitor& func)
     RootSlot& root = RootSlotAt(&exceptionWrapper.GetExceptionRef());
 
     func(root);
-}
-
-void Mutator::VisitRawObjects(const RootVisitor& func)
-{
-    // Pairs with PublishInvisibleRoot's release store: a scanner that sees the
-    // root must also see the already-published type and array length.
-    zaddress_unsafe rootValue = rawObject.LoadPlain(std::memory_order_acquire);
-    if (!is_null(rootValue)) {
-
-        func(rawObject);
-    }
 }
 
 void Mutator::VisitNativeFrameRoots(const RootVisitor& func)
@@ -349,25 +330,22 @@ void Mutator::PopNativeFrameRootsTo(size_t mark)
 void Mutator::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                          bool young)
 {
-    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, rootVisitor, young);
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, young);
 }
 
 void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                          const DerivedPtrVisitor& derivedPtrVisitor,
-                                         const RootVisitor& rawObjectVisitor, bool young)
+                                         bool young)
 {
     MutatorLock();
-    // No managed frame means there is no stack map to visit. Side roots are
-    // stored outside the managed stack and still require relocation repair.
+    // Native frames have no managed stack map to visit.
     if (!IsManagedContext()) {
-        VisitRawObjects(rawObjectVisitor);
         MutatorUnlock();
         return;
     }
     IncObserver();
     StackManager::VisitHeapReferencesOnStack(
         uwContext, regRootVisitor, slotRootVisitor, derivedPtrVisitor, *this, young);
-    VisitRawObjects(rawObjectVisitor);
     DecObserver();
     MutatorUnlock();
 }
@@ -382,10 +360,10 @@ void Mutator::VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedP
 
 void Mutator::VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                   const DerivedPtrVisitor& derivedPtrVisitor,
-                                  const RootVisitor& exceptionRootVisitor, const RootVisitor& rawObjectVisitor,
+                                  const RootVisitor& exceptionRootVisitor,
                                   bool young)
 {
-    VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, rawObjectVisitor, young);
+    VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, young);
     VisitExceptionRoots(exceptionRootVisitor);
     VisitNativeFrameRoots(exceptionRootVisitor);
 }

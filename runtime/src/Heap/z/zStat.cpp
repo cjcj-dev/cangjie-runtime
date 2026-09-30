@@ -16,6 +16,7 @@
 #include "CangjieRuntime.h"
 #include "os/LoadAverage.h"
 #include "Heap/z/zAbort.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zPageAllocator.hpp"
@@ -332,22 +333,6 @@ bool ZStatValue::StorageReadyPublic()
     return base != nullptr;
 }
 
-void ZTracer::report_stat_sampler(const ZStatSampler& sampler, uint64_t value)
-{
-    // zStat.cpp:133-152: route to Cangjie events once they exist (#626 D4-A).
-    (void)sampler; (void)value;
-}
-
-void ZTracer::report_stat_counter(const ZStatValue& counter, uint64_t increment, uint64_t value)
-{
-    (void)counter; (void)increment; (void)value;
-}
-
-void ZTracer::report_stat_phase(const char* name, uint64_t durationNs)
-{
-    (void)name; (void)durationNs;
-}
-
 ZStatSampler* ZStatSampler::first = nullptr;
 uint32_t ZStatSampler::count = 0;
 ZStatCounter* ZStatCounter::first = nullptr;
@@ -484,7 +469,6 @@ void ZStatSample(const ZStatSampler& sampler, uint64_t value)
             break;
         }
     }
-    ZTracer::report_stat_sampler(sampler, value);
 }
 
 void ZStatDurationSample(const ZStatSampler& sampler, uint64_t durationNs)
@@ -495,7 +479,6 @@ void ZStatDurationSample(const ZStatSampler& sampler, uint64_t durationNs)
 void ZStatInc(const ZStatCounter& counter, uint64_t increment)
 {
     counter.Increment(increment);
-    ZTracer::report_stat_counter(counter, increment, 0);
 }
 
 void ZStatInc(const ZStatUnsampledCounter& counter, uint64_t increment)
@@ -1264,10 +1247,8 @@ void ZStatReferences::Print()
 }
 } // namespace MapleRuntime
 
-// zStat.cpp:597-876 — stat phases. Host infra difference (D4=A): the
-// ConcurrentGCTimer/JFR calls of ZGC's register_start/register_end have no
-// counterpart; the structured record goes to GCLOG from the same routing
-// point (ZTracer::report_stat_phase ≈ GcLog::Phase).
+// zStat.cpp:597-876 — stat phases. There is no host JFR event consumer or
+// ConcurrentGCTimer counterpart. Structured phase logging remains separate.
 namespace MapleRuntime {
 static void EmitPhaseRecord(const ZStatPhase& phase, const char* kind, uint64_t startNs, uint64_t endNs)
 {
@@ -1280,26 +1261,48 @@ ZStatPhaseCollection::ZStatPhaseCollection(const char* name, bool minor)
     : ZStatPhase(minor ? "Minor Collection" : "Major Collection", name), minor(minor)
 {}
 
-// zStat.cpp:655-687 — the abort early-exit keeps an aborted cycle out of
-// every downstream statistic.
-void ZStatPhaseCollection::RegisterStart(uint64_t startNs) const { (void)startNs; }
+// ZGC zStat.cpp:640-652: each driver owns its collection-start used value.
+void ZStatPhaseCollection::SetUsedAtStart(size_t used) const
+{
+    if (minor) { ZDriver::minor()->set_used_at_start(used); }
+    else { ZDriver::major()->set_used_at_start(used); }
+}
+
+size_t ZStatPhaseCollection::UsedAtStart() const
+{
+    return minor ? ZDriver::minor()->used_at_start() : ZDriver::major()->used_at_start();
+}
+
+void ZStatPhaseCollection::RegisterStart(uint64_t startNs) const
+{
+    (void)startNs;
+    const GCReason cause = minor ? ZDriver::minor()->gc_cause() : ZDriver::major()->gc_cause();
+    SetUsedAtStart(Heap::GetHeap().GetUsedPageSize());
+    GcLog::Collection(GcLog::CurrentSeq(), Name(), g_gcRequests[cause].name, "start");
+}
 
 void ZStatPhaseCollection::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 {
+    const GCReason cause = minor ? ZDriver::minor()->gc_cause() : ZDriver::major()->gc_cause();
     if (ZAbort::should_abort()) {
+        GcLog::Collection(GcLog::CurrentSeq(), Name(), g_gcRequests[cause].name, "abort");
         return;
     }
-    // rec=cycle is the collection-level structured record; rec=phase covers
-    // pause/concurrent/subphase/critical work (same population the retired
-    // Timer observed).
     ZStatDurationSample(sampler, endNs - startNs);
+    const size_t usedAtEnd = Heap::GetHeap().GetUsedPageSize();
+    GcLog::Collection(GcLog::CurrentSeq(), Name(), g_gcRequests[cause].name, "end",
+                      startNs, endNs - startNs, UsedAtStart(), usedAtEnd);
 }
 
 ZStatPhaseGeneration::ZStatPhaseGeneration(const char* name, ZGenerationId id)
     : ZStatPhase(id == ZGenerationId::old ? "Old Generation" : "Young Generation", name), id(id)
 {}
 
-void ZStatPhaseGeneration::RegisterStart(uint64_t startNs) const { (void)startNs; }
+void ZStatPhaseGeneration::RegisterStart(uint64_t startNs) const
+{
+    (void)startNs;
+    GcLog::Generation(GcLog::CurrentSeq(), Name(), "start");
+}
 
 // zStat.cpp:711-759 — the per-collection report is printed once from here;
 // the stalls/Load/Mark/References/relocation/heap units are added as those
@@ -1307,6 +1310,7 @@ void ZStatPhaseGeneration::RegisterStart(uint64_t startNs) const { (void)startNs
 void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 {
     if (ZAbort::should_abort()) {
+        GcLog::Generation(GcLog::CurrentSeq(), Name(), "abort");
         return;
     }
     ZStatDurationSample(sampler, endNs - startNs);
@@ -1326,7 +1330,7 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     }
     generation.StatHeap()->Print(&generation);
     // zStat.cpp:737-741 — closing used-before/after line.
-    GcLog::Generation(GcLog::CurrentSeq(), Name(), startNs, endNs - startNs,
+    GcLog::Generation(GcLog::CurrentSeq(), Name(), "end", startNs, endNs - startNs,
                       generation.StatHeap()->UsedAtCollectionStart(), generation.StatHeap()->UsedAtCollectionEnd());
     LOG(RTLOG_INFO, "%s %zuM->%zuM %.3fs", Name(), generation.StatHeap()->UsedAtCollectionStart() / MB,
         generation.StatHeap()->UsedAtCollectionEnd() / MB, (endNs - startNs) / 1e9);
@@ -1381,8 +1385,7 @@ ZStatSubPhase::ZStatSubPhase(const char* name, ZGenerationId id)
 
 void ZStatSubPhase::RegisterStart(uint64_t startNs) const { (void)startNs; }
 
-// zStat.cpp:826-846 — ZTracer::report_thread_phase routes here; on this host
-// the thread-phase datum is the GCLOG phase record.
+// zStat.cpp:826-846 — subphase statistics and structured phase logging.
 void ZStatSubPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 {
     if (ZAbort::should_abort()) {
@@ -1408,11 +1411,6 @@ void ZStatCriticalPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 {
     ZStatDurationSample(sampler, endNs - startNs);
     ZStatInc(counter, 1);
-    EmitPhaseRecord(*this, "conc", startNs, endNs);
+    EmitPhaseRecord(*this, "critical", startNs, endNs);
 }
 } // namespace MapleRuntime
-
-namespace MapleRuntime {
-std::atomic<uint64_t> g_gcTotalTimeUs{ 0 };
-std::atomic<size_t> g_gcCollectedTotalBytes{ 0 };
-}
