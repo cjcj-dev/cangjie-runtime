@@ -333,22 +333,6 @@ bool ZStatValue::StorageReadyPublic()
     return base != nullptr;
 }
 
-void ZTracer::report_stat_sampler(const ZStatSampler& sampler, uint64_t value)
-{
-    // zStat.cpp:133-152: route to Cangjie events once they exist (#626 D4-A).
-    (void)sampler; (void)value;
-}
-
-void ZTracer::report_stat_counter(const ZStatValue& counter, uint64_t increment, uint64_t value)
-{
-    (void)counter; (void)increment; (void)value;
-}
-
-void ZTracer::report_stat_phase(const char* name, uint64_t durationNs)
-{
-    (void)name; (void)durationNs;
-}
-
 ZStatSampler* ZStatSampler::first = nullptr;
 uint32_t ZStatSampler::count = 0;
 ZStatCounter* ZStatCounter::first = nullptr;
@@ -485,7 +469,6 @@ void ZStatSample(const ZStatSampler& sampler, uint64_t value)
             break;
         }
     }
-    ZTracer::report_stat_sampler(sampler, value);
 }
 
 void ZStatDurationSample(const ZStatSampler& sampler, uint64_t durationNs)
@@ -496,7 +479,6 @@ void ZStatDurationSample(const ZStatSampler& sampler, uint64_t durationNs)
 void ZStatInc(const ZStatCounter& counter, uint64_t increment)
 {
     counter.Increment(increment);
-    ZTracer::report_stat_counter(counter, increment, 0);
 }
 
 void ZStatInc(const ZStatUnsampledCounter& counter, uint64_t increment)
@@ -1265,10 +1247,8 @@ void ZStatReferences::Print()
 }
 } // namespace MapleRuntime
 
-// zStat.cpp:597-876 — stat phases. Host infra difference (D4=A): the
-// ConcurrentGCTimer/JFR calls of ZGC's register_start/register_end have no
-// counterpart; the structured record goes to GCLOG from the same routing
-// point (ZTracer::report_stat_phase ≈ GcLog::Phase).
+// zStat.cpp:597-876 — stat phases. There is no host JFR event consumer or
+// ConcurrentGCTimer counterpart. Structured phase logging remains separate.
 namespace MapleRuntime {
 static void EmitPhaseRecord(const ZStatPhase& phase, const char* kind, uint64_t startNs, uint64_t endNs)
 {
@@ -1405,8 +1385,7 @@ ZStatSubPhase::ZStatSubPhase(const char* name, ZGenerationId id)
 
 void ZStatSubPhase::RegisterStart(uint64_t startNs) const { (void)startNs; }
 
-// zStat.cpp:826-846 — ZTracer::report_thread_phase routes here; on this host
-// the thread-phase datum is the GCLOG phase record.
+// zStat.cpp:826-846 — subphase statistics and structured phase logging.
 void ZStatSubPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 {
     if (ZAbort::should_abort()) {
