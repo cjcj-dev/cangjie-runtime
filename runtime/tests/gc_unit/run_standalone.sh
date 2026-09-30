@@ -259,6 +259,7 @@ if [[ "$SO_GC_UNIT_TESTS" == 1 ]]; then
 else
   echo "GC_UNIT_PRODUCT_CONFIGURATION=DEFAULT"
 fi
+nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
 if [[ "$SO_TESTABLE" == "1" ]]; then
   python3 "$SRC/testable_product_hooks.py" --source "$ROOT/runtime/src" \
     --so "$RUNTIME_LIB_DIR/libcangjie-runtime.so"
