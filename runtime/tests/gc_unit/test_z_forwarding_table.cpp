@@ -1,3 +1,4 @@
+#include "gc_heap_fixture.hpp"
 #include "gc_forwarding_fixture.hpp"
 #include <csignal>
 #include <cstdio>
