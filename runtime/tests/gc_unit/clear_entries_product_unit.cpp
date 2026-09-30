@@ -981,7 +981,8 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         GC_EXPECT_EQ(produced, reinterpret_cast<MAddress>(state.to));
         ForwardingCursor cursor = 0;
         GC_EXPECT_TRUE(owner->find_index(owner->index(fromAddr), &cursor).populated());
-        owner->entries()[cursor].store(0, std::memory_order_release);
+        ForwardingEntry empty;
+        __atomic_store(owner->entries() + cursor, &empty, __ATOMIC_RELEASE);
     } else if (moving) {
         state = PrepareValueRootForwarding(fx, collector);
     }
