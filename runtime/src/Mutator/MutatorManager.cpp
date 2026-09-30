@@ -354,12 +354,6 @@ void MutatorManager::AcquireMutatorManagementWLockForExit(Mutator& mutator)
 
 void MutatorManager::AcquireMutatorManagementWLock()
 {
-    // Announce the pending writer so readers back off (writer-preference), then spin on
-    // the non-blocking write-lock acquisition. Without this, sustained mutator-list
-    // reader churn (many cjthreads registering/unregistering under heavy parallel
-    // compilation) keeps the lock count above zero and starves this acquisition until
-    // the watchdog below fires a false-positive "deadlock".
-    AnnounceMgmtWriterPending();
     uint64_t start = TimeUtil::NanoSeconds();
     bool acquired = TryAcquireMutatorManagementWLock();
     while (!acquired) {
@@ -370,12 +364,10 @@ void MutatorManager::AcquireMutatorManagementWLock()
             LOG(RTLOG_FATAL, "Wait mutator list lock timeout");
         }
     }
-    WithdrawMgmtWriterPending();
 }
 
 bool MutatorManager::AcquireMutatorManagementWLockForCpuProfile()
 {
-    AnnounceMgmtWriterPending();
     uint64_t start = TimeUtil::NanoSeconds();
     bool acquired = TryAcquireMutatorManagementWLock();
     while (!acquired) {
@@ -389,7 +381,6 @@ bool MutatorManager::AcquireMutatorManagementWLockForCpuProfile()
             break;
         }
     }
-    WithdrawMgmtWriterPending();
     return acquired;
 }
 
