@@ -51,7 +51,12 @@ void VMThread::create()
 {
     auto& vmThread = instance();
     std::unique_lock<std::mutex> guard(vmThread.lock);
-    CHECK_DETAIL(!vmThread.running && !vmThread.terminated, "VM thread lifecycle");
+    // vmThread.cpp:108 keeps one VMThread for the life of the process. The
+    // standalone unit harness reaches the create site twice for bodies that
+    // also own a full CangjieRuntime, so a second call while it runs is a
+    // no-op; a terminated thread is never revived.
+    CHECK_DETAIL(!vmThread.terminated, "VM thread lifecycle");
+    if (vmThread.running) { return; }
     vmThread.thread = std::thread([&vmThread] { vmThread.run(); });
     vmThread.condition.wait(guard, [&vmThread] { return vmThread.running; });
 }
