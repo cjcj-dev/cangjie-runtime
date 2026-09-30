@@ -434,6 +434,17 @@ static void EndOwnerMutator(Mutator* owner)
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
 }
 
+class ScopedOwnerMutator final {
+public:
+    explicit ScopedOwnerMutator(Mutator* owner) : owner(owner) {}
+    ~ScopedOwnerMutator() { EndOwnerMutator(owner); }
+    ScopedOwnerMutator(const ScopedOwnerMutator&) = delete;
+    ScopedOwnerMutator& operator=(const ScopedOwnerMutator&) = delete;
+
+private:
+    Mutator* owner;
+};
+
 // zUncoloredRoot.inline.hpp:62-68 and zGeneration.inline.hpp:131-139: relocate-start
 // exit processing writes the to-address of a cset frame slot before concurrent relocate.
 static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPointer = true,
@@ -520,6 +531,7 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         }
     }
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    ScopedOwnerMutator ownerScope(parked);
     GC_EXPECT_TRUE(parked != nullptr);
     parked->SetManagedContext(true);
     (void)parked->EnterSaferegion(false);
@@ -591,7 +603,6 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         std::fprintf(stderr, "K3_UNWIND_ORDER_ASSERT entry=%d original=%#zx unexposed=%#zx closure=%#zx final=%#zx forwarding=%#zx result=%d\n",
                      requestEntry, original, unexposed, closure.observed, frames[3][2], forwarding, result);
         GC_EXPECT_TRUE(result);
-        EndOwnerMutator(parked);
         return;
     }
     if (requestEntry == 4) {
@@ -602,7 +613,6 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         std::fprintf(stderr, "K3_ZOP_SKIP_ASSERT old=%#zx observed=%#zx forwarding=%#zx\n",
                      before, younger[2], forwarding);
         GC_EXPECT_TRUE(younger[2] == before && forwarding == 0);
-        EndOwnerMutator(parked);
         return;
     }
     if (requestEntry == 3) {
@@ -705,7 +715,6 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     }
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
-    EndOwnerMutator(parked);
     CangjieRuntime::stackGrowConfig = savedGrow;
 #else
     (void)owner;
@@ -948,6 +957,7 @@ static void CheckGrowCopiesHealedFrameRoot()
     ZForwarding* owner = forwarding_for_page(pages[0]);
     GC_EXPECT_TRUE(owner != nullptr);
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    ScopedOwnerMutator ownerScope(parked);
     GC_EXPECT_TRUE(parked != nullptr);
     if (parked->GetGCData().storeGoodMask == 0) {
         parked->GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
@@ -999,7 +1009,6 @@ static void CheckGrowCopiesHealedFrameRoot()
     GC_EXPECT_TRUE(g_growCopy.done || g_growCopy.watermark == 0);
     (void)parked->EnterSaferegion(false);
     heap.young().pause_mark_start();
-    EndOwnerMutator(parked);
 }
 #else
 static void CheckGrowCopiesHealedFrameRoot() {}
