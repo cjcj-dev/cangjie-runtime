@@ -7,8 +7,15 @@ carriers={}
 joined=set()
 tls_completed=set()
 teardown_seen=False
+bootstrap_tid=0
+held_tid=0
+held_thread=0
+joiner_thread=0
+hold_target=os.environ.get("SHUTDOWN1459_HOLD_TARGET", "")
 published=0
 selected=gdb.execute("show environment GC_UNIT_OTHER_VM_CHILD",to_string=True).split(" = ",1)[1].strip().replace(".", "_")
+blocked_mode="UnreturnedNativeCallRetainsStorage" in selected
+blocked_result_seen=False
 counts={"create":0,"attach":0,"detach":0,"destroy":0}
 def check(condition, label, **values):
     print("LIFECYCLE_TARGET " + json.dumps(dict(label=label,ok=bool(condition),**values),sort_keys=True))
@@ -112,6 +119,14 @@ class DestructorEntry(gdb.Breakpoint):
             caller_returns.add(return_address)
             OwnerCallerRet(hex(return_address))
         print("LIFECYCLE_DESTRUCTOR_ENTRY "+json.dumps(dict(data=hex(data),buffer=hex(buffer(data)),stack=stack())))
+        global held_tid,held_thread
+        tid=gdb.selected_thread().ptid[1]
+        target=(hold_target=="bootstrap" and tid==bootstrap_tid) or (hold_target=="worker" and tid!=bootstrap_tid and tid in carriers.values())
+        if self.field[0]=="CleanThreadLocalData" and target and not held_tid:
+            held_tid=tid
+            held_thread=gdb.selected_thread().num
+            print("EVENT TLS_HELD tid=%d buffer=%s" % (tid,hex(buffer(data))),flush=True)
+            return True
         return False
 class DestructorRet(gdb.Breakpoint):
     def __init__(self,address): super().__init__("*"+address,internal=True)
@@ -138,11 +153,16 @@ for event in counts:
         print("LIFECYCLE_DISASSEMBLY "+dis)
         for address in re.findall(r"(0x[0-9a-f]+)[^\n]*\sret[q]?\s*(?:\n|$)",dis): Ret(address,event)
 class CarrierEntry(gdb.Breakpoint):
+    def __init__(self,name,bootstrap=False):
+        super().__init__(name,internal=True)
+        self.bootstrap=bootstrap
     def stop(self):
+        global bootstrap_tid
         # Linux x86-64 glibc pthread_self is the thread descriptor at FS base.
         # The join argument below independently checks this captured identity.
         handle=int(gdb.parse_and_eval("$fs_base"))
         carriers[handle]=gdb.selected_thread().ptid[1]
+        if self.bootstrap: bootstrap_tid=carriers[handle]
         print("SHUTDOWN1459_CARRIER_ENTRY "+json.dumps(dict(handle=hex(handle),tid=carriers[handle])))
         return False
 class JoinReturned(gdb.Breakpoint):
@@ -163,32 +183,81 @@ class JoinEntry(gdb.Breakpoint):
     def stop(self):
         handle=int(gdb.parse_and_eval("$rdi"))
         if handle in carriers:
+            if blocked_mode:
+                blocked_tid=int(gdb.parse_and_eval("*(long*)&shutdown1459BlockedTid"))
+                if carriers[handle]==blocked_tid:
+                    sample=open("/proc/%d/task/%d/syscall"%(gdb.selected_inferior().pid,blocked_tid)).read()
+                    check(not sample.startswith("0 "),"unreturned_native_must_not_join",tid=blocked_tid,syscall=sample.strip())
+                    if sample.startswith("0 "):
+                        print("EVENT BLOCKED_JOIN_RED",flush=True)
+                        return True
+            global joiner_thread
+            if held_tid and carriers[handle]==held_tid:
+                joiner_thread=gdb.selected_thread().num
+                print("EVENT JOIN_WITH_HELD tid=%d" % held_tid,flush=True)
             JoinReturned(ptr(int(gdb.parse_and_eval("$rsp"))),handle,gdb.selected_thread().num)
         return False
 class Teardown(gdb.Breakpoint):
     def stop(self):
         global teardown_seen
         teardown_seen=True
+        if blocked_mode:
+            check(False,"unreturned_native_storage_retained")
+            print("EVENT BLOCKED_TEARDOWN_RED",flush=True)
+            return True
         for handle,tid in carriers.items():
             owners=[r for r in records.values() if r["tid"]==tid]
             check(tid in joined,"carrier_join_before_teardown",tid=tid)
             for r in owners:
                 check(r["destroyed"] and (not r["attached"] or r["detached"]),"carrier_owner_paired_before_teardown",tid=tid,generation=r["generation"],owner=hex(r["owner"]))
             check(not owners or tid in tls_completed,"carrier_tls_before_teardown",tid=tid,owners=len(owners))
+        if held_tid and held_tid not in tls_completed:
+            print("EVENT TEARDOWN_WITH_HELD tid=%d" % held_tid,flush=True)
+            return True
         return False
-CarrierEntry("*StartCJRuntime",internal=True)
-CarrierEntry("*CJ_ThreadEntry",internal=True)
+CarrierEntry("*StartCJRuntime",bootstrap=True)
+CarrierEntry("*CJ_ThreadEntry")
 JoinEntry("*pthread_join",internal=True)
 Teardown("*'MapleRuntime::CangjieRuntime::FiniAndDelete()'",internal=True)
+class FiniReturned(gdb.Breakpoint):
+    def stop(self):
+        global blocked_result_seen
+        if blocked_mode:
+            blocked_result_seen=True
+            tid=int(gdb.parse_and_eval("*(long*)&shutdown1459BlockedTid"))
+            sample=open("/proc/%d/task/%d/syscall"%(gdb.selected_inferior().pid,tid)).read()
+            runtime=int(gdb.parse_and_eval("MapleRuntime::Runtime::runtime"))
+            owners=[r for r in records.values() if r["tid"]==tid]
+            check(int(gdb.parse_and_eval("$rax"))!=0 and runtime!=0,"unreturned_native_storage_retained",tid=tid,runtime=hex(runtime))
+            check(sample.startswith("0 ") and tid not in joined,"unreturned_native_not_joined",tid=tid,syscall=sample.strip())
+            check(bool(owners) and all(not r["destroyed"] for r in owners),"unreturned_native_not_destroyed",tid=tid,owners=len(owners))
+            for carrier_tid in carriers.values():
+                if carrier_tid!=tid:
+                    check(carrier_tid in joined,"completed_native_joined_with_blocker",tid=carrier_tid)
+        return False
+for address in re.findall(r"(0x[0-9a-f]+)[^\n]*\sret[q]?\s*(?:\n|$)",gdb.execute("disassemble FiniCJRuntime",to_string=True)):
+    FiniReturned("*"+address,internal=True)
+class ConsumerReturn(gdb.Breakpoint):
+    def stop(self):
+        caller=gdb.newest_frame().older()
+        check(False,"native_exit_context_restored",caller=caller.name() if caller else None)
+        print("EVENT CONSUMER_RESTORE_RED",flush=True)
+        return True
+# In the valid product the restoration transfers control; it never returns to
+# ProcessorSchedule/ThreadSleep. A removed context set introduces a real ret.
+for address in re.findall(r"(0x[0-9a-f]+)[^\n]*\sret[q]?\s*(?:\n|$)",gdb.execute("disassemble CJ_ProcessorThreadExit",to_string=True)):
+    ConsumerReturn("*"+address,internal=True)
 def exited(event):
     for data,r in records.items():
-        if r["target"]:
+        if r["target"] and not blocked_mode:
             check(r["destroyed"],"exit_resource_paired",data=hex(data),buffer=hex(r["buffer"]),create_stack=r["stack"])
         else:
             print("LIFECYCLE_OBSERVED "+json.dumps(dict(data=hex(data),destroyed=r["destroyed"],target=False,create_stack=r["stack"])))
     check(all(counts[x]>0 for x in counts),"all_lifecycle_events",counts=counts)
-    check(teardown_seen and bool(carriers),"shutdown_observer_executed",carriers=len(carriers),teardown=teardown_seen)
+    check((blocked_result_seen if blocked_mode else teardown_seen) and bool(carriers),"shutdown_observer_executed",carriers=len(carriers),teardown=teardown_seen,blocked_result=blocked_result_seen)
     check(bool(tls_completed),"actual_tls_return_executed",n=len(tls_completed))
     check(getattr(event,"exit_code",None)==0,"inferior_exit",rc=getattr(event,"exit_code",None))
     print("LIFECYCLE_SUMMARY "+json.dumps(dict(counts=counts,failures=failures,records=len(records),target_records=sum(r["target"] for r in records.values()),destructor_results=selected_destructor_results)))
 gdb.events.exited.connect(exited)
+
+print("EVENT controller ready",flush=True)

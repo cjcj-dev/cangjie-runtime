@@ -191,6 +191,7 @@ struct Thread *ThreadCreate(void *schedule)
     newThread->boundCJThread = nullptr;
     newThread->nextProcessor = nullptr;
     newThread->cjthread0 = cjthread0;
+    newThread->cjthread = nullptr;
     SemaphoreInit(&newThread->sem, 0, 0);
 
     // Invoke the interface of the operating system to create a os thread
