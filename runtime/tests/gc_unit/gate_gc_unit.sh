@@ -78,6 +78,8 @@ STD_SHA256=unrecorded
 STD_CORE_SHA256=unrecorded
 CJC_RUNTIME_SHA256=unrecorded
 RUNTIME_COMMIT=unrecorded
+GC_UNIT_LANGUAGE_IDENTITY=unrecorded
+LANGUAGE_ADMISSION_REASON=LANGUAGE_NOT_ADMITTED
 
 write_status() {
   local status_dir tmp
@@ -118,6 +120,8 @@ write_status() {
     echo "RUNTIME_SHA256=$RUNTIME_SHA256"
     echo "BOUNDSCHECK_SHA256=$BOUNDSCHECK_SHA256"
     echo "LANGUAGE_SDK=$LANGUAGE_SDK"
+    echo "BUILD_SDK=${GC_UNIT_BUILD_SDK:-unrecorded}"
+    echo "TOOLCHAIN_IDENTITY=$GC_UNIT_LANGUAGE_IDENTITY"
     echo "CJC_SHA256=$CJC_SHA256"
     echo "LLC_SHA256=$LLC_SHA256"
     echo "OPT_SHA256=$OPT_SHA256"
@@ -375,25 +379,21 @@ fi
 # Resolve cjc before the stamp fast path.  Otherwise a stamp from an earlier
 # compiler-equipped build could turn today's missing compiler into a cached
 # PASS instead of a missing-compiler failure.
-CJC_BIN="${CJC:-${CANGJIE_HOME:-}/bin/cjc}"
 FINALIZER_CAN_RUN=0
-if [[ "$LANGUAGE_TEST_MODE" == "only" ]]; then
-  if [[ -z "${CANGJIE_HOME:-}" || ! -x "$CANGJIE_HOME/bin/cjc" ]]; then
-    STATUS_REASON=LANGUAGE_SDK_MISSING
-    echo "GC_UNIT_GATE_FAIL: only mode requires CANGJIE_HOME with an executable bin/cjc" >&2
-    exit 2
+source "$SRC/language_toolchain.sh"
+if [[ "$LANGUAGE_TEST_MODE" != "defer" ]]; then
+  if gc_unit_language_admit 2>"$GC_UNIT_OUT/language_admission.log"; then
+    FINALIZER_CAN_RUN=1
+    LANGUAGE_SDK="$GC_UNIT_LANGUAGE_SDK"
+    echo "GC_UNIT_LANGUAGE_IDENTITY $GC_UNIT_LANGUAGE_IDENTITY"
+  else
+    LANGUAGE_ADMISSION_REASON=$(cat "$GC_UNIT_OUT/language_admission.log")
+    echo "$LANGUAGE_ADMISSION_REASON" >&2
+    if [[ "$LANGUAGE_TEST_MODE" == "only" ]]; then
+      STATUS_REASON="$LANGUAGE_ADMISSION_REASON"
+      exit 2
+    fi
   fi
-  if [[ -n "${CJC:-}" && "$(readlink -f "$CJC")" != "$(readlink -f "$CANGJIE_HOME/bin/cjc")" ]]; then
-    STATUS_REASON=LANGUAGE_SDK_MISMATCH
-    echo "GC_UNIT_GATE_FAIL: only mode requires CJC to be CANGJIE_HOME/bin/cjc" >&2
-    exit 2
-  fi
-  CJC_BIN="$CANGJIE_HOME/bin/cjc"
-  FINALIZER_CAN_RUN=1
-  export CJC="$CJC_BIN"
-elif [[ -f "$CJC_BIN" && -x "$CJC_BIN" ]]; then
-  FINALIZER_CAN_RUN=1
-  export CJC="$CJC_BIN"
 fi
 
 
@@ -427,43 +427,8 @@ fi
 # The SDK is also a cache input: --static-std embeds archives into every
 # managed executable. Hash every installed std archive, not just std.core.
 LANGUAGE_IDENTITY_FILE="$GC_UNIT_OUT/.gate_language_identity"
-if [[ "$LANGUAGE_TEST_MODE" != "defer" && $FINALIZER_CAN_RUN -eq 1 ]]; then
-  if [[ -z "${CANGJIE_HOME:-}" || ! -x "$CANGJIE_HOME/bin/cjc" ]]; then
-    STATUS_REASON=LANGUAGE_SDK_MISSING
-    echo "GC_UNIT_GATE_FAIL: language tests require CANGJIE_HOME/bin/cjc" >&2
-    exit 2
-  fi
-  LANGUAGE_SDK=$(readlink -f "$CANGJIE_HOME")
-  if [[ "$(readlink -f "$CJC_BIN")" != "$(readlink -f "$LANGUAGE_SDK/bin/cjc")" ]]; then
-    STATUS_REASON=LANGUAGE_SDK_MISMATCH
-    echo "GC_UNIT_GATE_FAIL: CJC must belong to CANGJIE_HOME" >&2
-    exit 2
-  fi
-  for component in third_party/llvm/bin/llc third_party/llvm/bin/opt \
-      lib/linux_x86_64_cjnative/libcangjie-std-core.a; do
-    if [[ ! -f "$LANGUAGE_SDK/$component" ]]; then
-      STATUS_REASON=LANGUAGE_SDK_INCOMPLETE
-      echo "GC_UNIT_GATE_FAIL: missing SDK component $component" >&2
-      exit 2
-    fi
-  done
-  if [[ ! -f "${GC_UNIT_CJC_RUNTIME_LIB_DIR:-}/libcangjie-runtime.so" ]]; then
-    STATUS_REASON=LANGUAGE_HOST_RUNTIME_MISSING
-    echo "GC_UNIT_GATE_FAIL: GC_UNIT_CJC_RUNTIME_LIB_DIR must select the compiler host runtime" >&2
-    exit 2
-  fi
-  CJC_RUNTIME_SHA256=$(sha256sum "$GC_UNIT_CJC_RUNTIME_LIB_DIR/libcangjie-runtime.so" | awk '{print $1}')
-  RUNTIME_COMMIT=$(strings "$SO" | sed -n 's/^CJRT-COMMIT://p' | sort -u | paste -sd, -)
-  STD_CORE_SHA256=$(sha256sum "$LANGUAGE_SDK/lib/linux_x86_64_cjnative/libcangjie-std-core.a" | awk '{print $1}')
-  CJC_SHA256=$(sha256sum "$CJC_BIN" | awk '{print $1}')
-  LLC_SHA256=$(sha256sum "$LANGUAGE_SDK/third_party/llvm/bin/llc" | awk '{print $1}')
-  OPT_SHA256=$(sha256sum "$LANGUAGE_SDK/third_party/llvm/bin/opt" | awk '{print $1}')
-  STD_SHA256=$(cd "$LANGUAGE_SDK" && find -L lib/linux_x86_64_cjnative -maxdepth 1 \
-    -name 'libcangjie-std-*.a' -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
-  echo "GC_UNIT_LANGUAGE_IDENTITY sdk=$LANGUAGE_SDK cjc=$CJC_SHA256 llc=$LLC_SHA256 opt=$OPT_SHA256 std=$STD_SHA256"
-fi
 language_identity() {
-  printf '%s\n' "$LANGUAGE_SDK" "$CJC_SHA256" "$LLC_SHA256" "$OPT_SHA256" "$STD_SHA256" "$RUNTIME_SHA256" "$BOUNDSCHECK_SHA256" "$CJC_RUNTIME_SHA256" "$RUNTIME_COMMIT"
+  printf '%s\n' "$GC_UNIT_LANGUAGE_IDENTITY"
 }
 
 run_language_tests() {
@@ -475,7 +440,7 @@ run_language_tests() {
   FINALIZER_STATE=FAIL
   FINALIZER_SOURCE=FRESH
   STATUS_REASON=FINALIZER_TRIGGER_FAILURE
-  if ! bash "$FINALIZER_SCRIPT"; then
+  if ! (gc_unit_language_environment; bash "$FINALIZER_SCRIPT"); then
     FINALIZER_RUNNER_RC=${PIPESTATUS[0]}
     echo "GC_UNIT_GATE_FAIL: end-to-end finalizer trigger test failed" >&2
     return 1
@@ -486,7 +451,7 @@ run_language_tests() {
   PHASE_ENTRY_STATE=FAIL
   PHASE_ENTRY_SOURCE=FRESH
   STATUS_REASON=PHASE_ENTRY_TRIGGER_FAILURE
-  if ! bash "$PHASE_ENTRY_SCRIPT"; then
+  if ! (gc_unit_language_environment; bash "$PHASE_ENTRY_SCRIPT"); then
     PHASE_ENTRY_RUNNER_RC=${PIPESTATUS[0]}
     echo "GC_UNIT_GATE_FAIL: forwarding-carrier phase entry test failed" >&2
     return 1
@@ -511,7 +476,7 @@ run_language_tests() {
     SEGMENTED_MANAGED_STATE=FAIL
     SEGMENTED_MANAGED_SOURCE=FRESH
     STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
-    if ! bash "$SEGMENTED_MANAGED_SCRIPT" both; then
+    if ! (gc_unit_language_environment; bash "$SEGMENTED_MANAGED_SCRIPT" both); then
       SEGMENTED_RUNNER_RC=${PIPESTATUS[0]}
       echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
       return 1
@@ -580,8 +545,8 @@ if [[ -f "$STAMP" && "$STAMP" -nt "$SO" ]]; then
       exit 0
     fi
     if [[ $FINALIZER_CAN_RUN -eq 0 ]]; then
-      STATUS_REASON=NO_CJC
-      echo "GC_UNIT_GATE_FAIL reason=NO_CJC cpp_suite=PASS(cache) status=$STATUS_FILE" >&2
+      STATUS_REASON="$LANGUAGE_ADMISSION_REASON"
+      echo "GC_UNIT_GATE_FAIL reason=$STATUS_REASON cpp_suite=PASS(cache) status=$STATUS_FILE" >&2
       exit 2
     fi
     if [[ ! -f "$LANGUAGE_IDENTITY_FILE" ]] || ! cmp -s <(language_identity) "$LANGUAGE_IDENTITY_FILE"; then
@@ -737,8 +702,8 @@ if [[ "$LANGUAGE_TEST_MODE" == "defer" ]]; then
 fi
 
 if [[ $FINALIZER_CAN_RUN -eq 0 ]]; then
-  STATUS_REASON=NO_CJC
-  echo "GC_UNIT_GATE_FAIL reason=NO_CJC cpp_suite=PASS(fresh) status=$STATUS_FILE" >&2
+  STATUS_REASON="$LANGUAGE_ADMISSION_REASON"
+  echo "GC_UNIT_GATE_FAIL reason=$STATUS_REASON cpp_suite=PASS(fresh) status=$STATUS_FILE" >&2
   exit 2
 fi
 
