@@ -42,6 +42,8 @@ int GetPid();
 #endif
 
 #if defined(__APPLE__)
+void* ReserveMemory(size_t bytes);
+
 // VM user tags (240-255) for application-specific anonymous mappings on Darwin.
 // Tagged regions appear as "VM: Memory Tag <n>" in vmmap and xctrace.
 constexpr int CANGJIE_HEAP_VM_TAG = 246;
