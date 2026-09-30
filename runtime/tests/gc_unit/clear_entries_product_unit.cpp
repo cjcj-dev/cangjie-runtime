@@ -35,7 +35,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zBarrier.hpp"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zRemembered.inline.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
@@ -1632,7 +1632,7 @@ void ExerciseRelocationWait782(bool claimedPage)
         destination->SetRegionAllocPtr(destination->GetRegionEnd());
         ZAllocationFlags flags;
         flags.set_non_blocking();
-        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, false, PageAge::old, flags)) {
+        while (ZPage* page = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::old, flags)) {
             occupied.push_back(page);
         }
     }

@@ -18,6 +18,7 @@ from gclog_schema import parse_gclog
 
 text = log_path.read_text(encoding="utf-8", errors="replace")
 records = parse_gclog(text)
+records.generations = [r for r in records.generations if r.event == "end"]
 errors = []
 if not records.generations:
     errors.append("generation=0")

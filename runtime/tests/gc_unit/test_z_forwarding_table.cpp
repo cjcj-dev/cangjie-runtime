@@ -1,4 +1,8 @@
 #include "gc_forwarding_fixture.hpp"
+#include <csignal>
+#include <cstdio>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <future>
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -303,3 +307,145 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 }
 
 #endif // MRT_TESTABLE_INTERNALS
+
+// ZGC zForwarding.inline.hpp:306-325: none appends, reject is a legal
+// no-op, while accept means relocation has finished and cannot register.
+GC_TEST(Remembered1314, RegisterNoneAndReject)
+{
+    GcHeapFixture heap;
+    Heap::GetHeap().young().set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(ZGeneration::young()->seqnum());
+    auto* fwd = ZForwarding::alloc(1, heap.heapStart, heap.heapStart, ZGranuleSize, heap.region0());
+    auto* source = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE);
+    heap.region0()->remember(source);
+    const MAddress field = reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE;
+    ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, heap.obj1);
+    const bool stored = fwd->relocated_remembered_fields_published_contains(field);
+    fwd->relocated_remembered_fields_notify_concurrent_scan_of();
+    BaseObject* later = heap.PlaceObject(heap.heapStart + ZGranuleSize + 128);
+    ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, later);
+    const bool rejected = !fwd->relocated_remembered_fields_published_contains(
+        reinterpret_cast<MAddress>(later) + TYPEINFO_PTR_SIZE);
+    fwd->relocated_remembered_fields_publish();
+    const bool cleared = !fwd->relocated_remembered_fields_published_contains(field);
+    fwd->Destroy();
+    std::fprintf(stderr, "REGISTER1314_LEGAL calls=2 stored=%d rejected=%d cleared=%d\n", stored, rejected, cleared);
+    GC_EXPECT_TRUE(stored);
+    GC_EXPECT_TRUE(rejected);
+    GC_EXPECT_TRUE(cleared);
+}
+
+// ZGC zForwarding.cpp:338-356: the retained scanner owns the published
+// array after the CAS and clears it before returning; reject is repeatable.
+GC_TEST(Remembered1314, NotifyPublishedClearsFields)
+{
+    GcHeapFixture heap;
+    Heap::GetHeap().young().set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(ZGeneration::young()->seqnum());
+    auto* fwd = ZForwarding::alloc(1, heap.heapStart, heap.heapStart, ZGranuleSize, heap.region0());
+    auto* source = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE);
+    heap.region0()->remember(source);
+    GC_EXPECT_TRUE(fwd->retain_page(&generation_relocate_queue(Generation::Old)));
+    ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, heap.obj1);
+    const MAddress field = reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE;
+    fwd->relocated_remembered_fields_publish();
+    const bool stored = fwd->relocated_remembered_fields_published_contains(field);
+    fwd->relocated_remembered_fields_notify_concurrent_scan_of();
+    const bool rejected = fwd->relocated_remembered_fields_is_concurrently_scanned();
+    const bool cleared = !fwd->relocated_remembered_fields_published_contains(field);
+    fwd->relocated_remembered_fields_notify_concurrent_scan_of();
+    fwd->release_page();
+    fwd->release_page();
+    fwd->mark_done();
+    fwd->Destroy();
+    std::fprintf(stderr, "NOTIFY1314_TARGET precondition_stored=%d rejected=%d cleared=%d calls=2\n",
+                 stored, rejected, cleared);
+    GC_EXPECT_TRUE(cleared);
+    GC_EXPECT_TRUE(rejected);
+    GC_EXPECT_TRUE(stored);
+}
+
+GC_TEST(Remembered1314, RegisterAcceptFails)
+{
+    GcHeapFixture heap;
+    auto* fwd = ZForwarding::alloc(1, heap.heapStart, heap.heapStart, ZGranuleSize, heap.region0());
+    fwd->relocated_remembered_fields_after_relocate();
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    fwd->release_page();
+    fwd->mark_done();
+    fwd->relocated_remembered_fields_apply_to_published([](MAddress) {});
+    Heap::GetHeap().young().set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(ZGeneration::young()->seqnum());
+    auto* source = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(heap.obj0) + TYPEINFO_PTR_SIZE);
+    heap.region0()->remember(source);
+    int diagnostic[2];
+    GC_EXPECT_EQ(pipe(diagnostic), 0);
+    const pid_t child = fork();
+    if (child == 0) {
+        close(diagnostic[0]);
+        dup2(diagnostic[1], STDERR_FILENO);
+        close(diagnostic[1]);
+        // The real product relocation consumer computes the destination field
+        // from the source bitmap, then calls its inline register implementation.
+        ZRelocate::UpdateRemsetForFields(fwd, heap.obj0, heap.obj1);
+        _exit(0);
+    }
+    close(diagnostic[1]);
+    std::string message;
+    char buffer[1024];
+    ssize_t length;
+    while ((length = read(diagnostic[0], buffer, sizeof(buffer))) > 0) { message.append(buffer, length); }
+    close(diagnostic[0]);
+    int status = 0;
+    GC_EXPECT_TRUE(child > 0);
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool target = message.find("Unexpected relocated remembered fields register state") != std::string::npos;
+    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT && target;
+    std::fprintf(stderr, "REGISTER1314_ACCEPT_TARGET rejected=%d status=%d target_diagnostic=%d calls=1\n",
+                 rejected, status, target);
+    fwd->Destroy();
+    GC_EXPECT_TRUE(rejected);
+}
+
+GC_TEST(Remembered1314, ThreeThreadOwnership)
+{
+    GcHeapFixture heap;
+    auto& young = Heap::GetHeap().young();
+    young.set_phase(ZGenerationPhase::Mark);
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
+    // The scanner retains before OC starts; apply is only allowed after both
+    // owners release. No array access is protected by a test-side mutex.
+    GC_EXPECT_TRUE(fwd->retain_page(&generation_relocate_queue(Generation::Old)));
+    std::atomic<bool> start{false}, notified{false}, relocated{false};
+    size_t applied = 0;
+    std::thread oc([&] {
+        while (!start.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        for (size_t i = 0; i != 128; ++i) {
+            fwd->relocated_remembered_fields_register(heap.heapStart + i * sizeof(void*));
+        }
+        fwd->relocated_remembered_fields_after_relocate();
+        fwd->release_page();
+        fwd->mark_done();
+        relocated.store(true, std::memory_order_release);
+    });
+    std::thread ycNotify([&] {
+        start.store(true, std::memory_order_release);
+        fwd->relocated_remembered_fields_notify_concurrent_scan_of();
+        fwd->release_page();
+        notified.store(true, std::memory_order_release);
+    });
+    std::thread ycApply([&] {
+        while (!notified.load(std::memory_order_acquire) || !relocated.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        fwd->relocated_remembered_fields_apply_to_published([&](MAddress) { ++applied; });
+    });
+    oc.join();
+    ycNotify.join();
+    ycApply.join();
+    const bool rejected = fwd->relocated_remembered_fields_is_concurrently_scanned();
+    fwd->Destroy();
+    std::fprintf(stderr, "REGISTER1314_OWNERSHIP threads=3 calls=128 applied=%zu rejected=%d\n", applied, rejected);
+    GC_EXPECT_EQ(applied, size_t{0});
+    GC_EXPECT_TRUE(rejected);
+}

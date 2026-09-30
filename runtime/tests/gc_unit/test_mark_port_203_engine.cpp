@@ -27,6 +27,7 @@
 #include "gc_unittest.hpp"
 #include "b09_runtime_fixture.hpp"
 #include "gc_heap_fixture.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -727,4 +728,73 @@ GC_TEST(MarkPublish1144, ListPreservesEmptyPayload)
     GC_EXPECT_TRUE(observed == stack);
     GC_EXPECT_TRUE(observed->IsEmpty());
     MarkStripeStack::Destroy(observed);
+}
+
+// ZGC zRemembered.cpp:546-554. The remembered old holder reaches a young
+// object whose field reaches an unmarked old object during major roots.
+// test_remembered_flush_gdb.py also observes the worker before termination.
+namespace {
+void CheckOtherGenerationPublication(bool remembered)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    auto& old = heap.old();
+    fixture.region1()->reset(PageAge::eden);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    BaseObject* oldTarget = fixture.PlaceObject(fixture.heapStart + 128);
+    fixture.region0()->SetRegionAllocPtr(fixture.heapStart + 192);
+    auto* root = reinterpret_cast<volatile zpointer*>(
+        reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
+    *root = StoreGoodPointer(fixture.obj1);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj1) + TYPEINFO_PTR_SIZE)
+        .StoreColoured(StoreGoodPointer(oldTarget));
+    HeapSlotAt<>(reinterpret_cast<MAddress>(oldTarget) + TYPEINFO_PTR_SIZE)
+        .StoreColoured(zpointer::null);
+    young.InitializeWorkers(1);
+    old.InitializeWorkers(1);
+    young.Mark().Start();
+    old.Mark().Start();
+    young.set_phase(ZGenerationPhase::Mark);
+    old.set_phase(ZGenerationPhase::Mark);
+    YoungTypeSetter majorRoots(young, ZYoungType::major_full_roots);
+    RestoreMarkFlips restore;
+    ZGlobalsPointers::flip_young_mark_start();
+    ZGlobalsPointers::flip_old_mark_start();
+    restore.young = restore.old = true;
+    fixture.region0()->remember(root);
+    heap.remembered().register_found_old(fixture.region0());
+    heap.remembered().flip();
+    if (remembered) {
+        heap.remembered().scan_and_follow(&young.Mark());
+    } else {
+        young.MarkObject<false, false, true, false>(from_object(fixture.obj1));
+        young.Mark().MarkFollow();
+    }
+    bool localEmpty = true;
+    young.Workers()->threads_do([&](WorkerThread* worker) {
+        localEmpty &= worker->gc_data()->markStacks[1].IsEmpty();
+    });
+    const bool published = !old.Mark().Stripes().IsEmpty();
+    std::fprintf(stderr, "REMEMBERED1314_TARGET local_empty=%d old_published=%d\n", localEmpty, published);
+    // Cleanup after recording the state, including when the cut leaves work local.
+    young.Workers()->threads_do([&](WorkerThread* worker) { old.Mark().Flush(*worker->gc_data()); });
+    old.Mark().MarkFollow();
+    young.StopWorkers();
+    old.StopWorkers();
+    GC_EXPECT_TRUE(localEmpty);
+    GC_EXPECT_TRUE(published);
+}
+
+} // namespace
+
+GC_TEST(Remembered1314, MajorRootsPublishesOtherGeneration)
+{
+    CheckOtherGenerationPublication(true);
+}
+
+GC_TEST(Remembered1314, MarkTaskPublishesOtherGeneration)
+{
+    CheckOtherGenerationPublication(false);
 }

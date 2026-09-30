@@ -42,7 +42,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Common/SuspendibleThreadSet.h"
-#include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -86,6 +86,7 @@
 
 
 namespace MapleRuntime {
+static const ZStatCriticalPhase ZCriticalPhaseRelocationStall("Relocation Stall");
 
 // ZGC zRelocate.cpp:1051-1078: claim each thread once across the workers.
 class ZRelocateStoreBufferInstallBasePointersThreadClosure {
@@ -321,7 +322,7 @@ static ZPage* AllocateRelocationTarget(ZForwarding* forwarding)
     flags.set_non_blocking();
     flags.set_gc_relocation();
     ZPage* source = forwarding->page();
-    return Heap::alloc_page(forwarding->size(), source->type(), false, forwarding->to_age(), flags);
+    return Heap::alloc_page(forwarding->size(), source->type(), forwarding->to_age(), flags);
 }
 
 static void RetireRelocationTarget(ZGeneration* generation, ZPage* page)
@@ -630,6 +631,7 @@ void ZRelocateQueue::leave()
 
 void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
 {
+    ZStatTimer timer(ZCriticalPhaseRelocationStall);
     std::unique_lock<std::mutex> guard(lock);
     if (forwarding->is_done()) {
         return;

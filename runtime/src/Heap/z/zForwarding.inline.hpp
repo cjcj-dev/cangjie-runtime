@@ -181,11 +181,11 @@ namespace MapleRuntime {
 inline void ZForwarding::relocated_remembered_fields_register(MAddress field)
     {
         const ZPublishState state = _relocated_remembered_fields_state.load(std::memory_order_relaxed);
-        if (state == ZPublishState::reject) {
+        if (state == ZPublishState::none) {
+            _relocated_remembered_fields_array.push_back(field);
             return;
         }
-        std::lock_guard<std::mutex> lock(_relocated_fields_lock);
-        _relocated_remembered_fields_array.push_back(field);
+        CHECK_DETAIL(state == ZPublishState::reject, "Unexpected relocated remembered fields register state");
     }
 }
 
@@ -203,7 +203,6 @@ inline
     {
         const ZPublishState state = _relocated_remembered_fields_state.load(std::memory_order_acquire);
         if (state == ZPublishState::published) {
-            std::lock_guard<std::mutex> lock(_relocated_fields_lock);
             for (MAddress field : _relocated_remembered_fields_array) {
                 function(field);
             }

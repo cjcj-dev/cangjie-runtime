@@ -50,7 +50,7 @@ void CheckAllocationPreservesOwnedPage(bool nonBlocking)
     MapleRuntime::GcUnit::CreateStandaloneHeap(16);
     ZStat::Initialize();
     RegionManager& manager = Heap::GetHeap().page_allocator();
-    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(owned != nullptr);
     const uintptr_t address = owned->GetRegionStart();
     // Model a page awaiting GC reclamation. Allocation must not claim it
@@ -62,7 +62,7 @@ void CheckAllocationPreservesOwnedPage(bool nonBlocking)
     if (nonBlocking) {
         flags.set_non_blocking();
     }
-    ZPage* allocated = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, PageAge::eden, flags);
+    ZPage* allocated = Heap::alloc_page(ZGranuleSize, ZPageType::large, PageAge::eden, flags);
     ZPage* current = Heap::page(address);
     const bool retained = current == owned && current->IsGarbageRegion();
     const size_t usedAfter = manager.GetAllocatedSize();
@@ -198,8 +198,8 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         // returning the page. Its address space must exist as after heap init.
         const auto role = ZPageType::large;
 
-        ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
-        ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* first = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* second = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         if (first == nullptr || second == nullptr) {
             return 21;
         }
@@ -245,7 +245,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             }
             // ZGC zPageAllocator.cpp:2253-2267 returns memory immediately,
             // independently of descriptor deferral. Reuse must be possible.
-            ZPage* during = manager.TakeRegion(unit, role, false, PageAge::old,
+            ZPage* during = manager.TakeRegion(unit, role, PageAge::old,
                 MapleRuntime::GcUnit::NonBlockingAllocationFlags());
             if (during == nullptr) {
                 result = 26;
@@ -284,7 +284,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         if ((manager.GetCachedBytes() / ZGranuleSize) != 2 || manager.GetCommittedCapacity() != capacity) {
             result = 30;
         }
-        ZPage* reused = manager.TakeRegion((2) * ZGranuleSize, role, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+        ZPage* reused = manager.TakeRegion((2) * ZGranuleSize, role, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
         PublishAllocatedPage(reused);
         if (reused == nullptr || reused->GetRegionStart() != start ||
             Heap::page(end - 1) != reused) {
@@ -342,7 +342,7 @@ GC_RUNTIME_OTHER_VM_TEST(AllocationOwnership904, ExplicitFreeWithdrawsOwnedPage)
     ZStat::Initialize();
     RegionManager& manager = Heap::GetHeap().page_allocator();
     const size_t used = manager.GetAllocatedSize();
-    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* owned = Heap::alloc_page(ZGranuleSize, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(owned != nullptr);
     const uintptr_t address = owned->GetRegionStart();
     owned->SetRegionRole(ZPageRole::Garbage);
@@ -380,8 +380,8 @@ void CheckMarkReclaim(bool freePage)
     auto& manager = heap.page_allocator();
     // Fill capacity so the following allocation can only reuse returned memory.
     const size_t size = 2 * ZGranuleSize;
-    ZPage* first = Heap::alloc_page(size, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
-    ZPage* occupied = Heap::alloc_page(size, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* first = Heap::alloc_page(size, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* occupied = Heap::alloc_page(size, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     GC_EXPECT_TRUE(first != nullptr && occupied != nullptr);
     const uintptr_t start = first->GetRegionStart();
     const size_t capacity = manager.GetCommittedCapacity();
@@ -397,7 +397,7 @@ void CheckMarkReclaim(bool freePage)
     }
     const size_t cachedAfter = manager.GetCachedBytes();
     const bool withdrawn = Heap::page(start) == nullptr;
-    ZPage* reused = Heap::alloc_page(size, ZPageType::large, false, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
+    ZPage* reused = Heap::alloc_page(size, ZPageType::large, PageAge::eden, MapleRuntime::GcUnit::NonBlockingAllocationFlags());
     const bool sameRange = reused != nullptr && reused->GetRegionStart() == start;
     const bool stillMark = heap.old().phase() == ZGenerationPhase::Mark;
     const bool sameCapacity = manager.GetCommittedCapacity() == capacity;

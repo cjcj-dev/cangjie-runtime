@@ -45,10 +45,12 @@ inline void EnsureZAddressDomain() {
   }
 }
 
-// ZGC zHeap.cpp:253-257: pages enter the table only from ZHeap::alloc_page.
+// Synthetic page fixtures publish their page-table entries directly.
+// Product allocation tests use Heap::alloc_page(size, type, age, flags).
 inline void PublishAllocatedPage(ZPage* page)
 {
-    Heap::alloc_page(page);
+    Heap::page_table().insert(page);
+    Heap::GetHeap().account_alloc_page(page);
 }
 
 // Isolated page/forwarding tables for synthetic pages. Remembered stays the
@@ -232,7 +234,7 @@ private:
 class ZTestAllocatedMemory {
 public:
     explicit ZTestAllocatedMemory(size_t size)
-        : _owner(Heap::GetHeap().page_allocator().TakeRegion(size, ZPageType::large, false, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags())),
+        : _owner(Heap::GetHeap().page_allocator().TakeRegion(size, ZPageType::large, PageAge::old, MapleRuntime::GcUnit::NonBlockingAllocationFlags())),
           _size(size)
     {
         GC_EXPECT_TRUE(_owner != nullptr);

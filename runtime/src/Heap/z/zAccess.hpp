@@ -69,17 +69,16 @@ public:
         if constexpr (decorators & AS_RAW) { Raw::value_copy(src, dst); }
         else { Barrier::value_copy_in_heap(src, dst); }
     }
-    static void oop_arraycopy(BaseObject* srcObj, MAddress src, size_t srcSize,
-                              BaseObject* dstObj, MAddress dst, size_t dstSize)
+    static void oop_arraycopy(BaseObject* srcObj, MAddress src,
+                              BaseObject* dstObj, MAddress dst, size_t length)
     {
-        if constexpr (decorators & AS_RAW) { Raw::oop_arraycopy(srcObj, src, srcSize, dstObj, dst, dstSize); }
-        else { Barrier::oop_arraycopy_in_heap(srcObj, src, srcSize, dstObj, dst, dstSize); }
+        if constexpr (decorators & AS_RAW) { Raw::oop_arraycopy(srcObj, src, dstObj, dst, length); }
+        else { Barrier::oop_arraycopy_in_heap(srcObj, src, dstObj, dst, length); }
     }
-    static void value_arraycopy(BaseObject* srcObj, MAddress src, size_t srcSize,
-                                BaseObject* dstObj, MAddress dst, size_t dstSize)
+    static void value_arraycopy(MArray* layout, MAddress src, MAddress dst, size_t length)
     {
-        if constexpr (decorators & AS_RAW) { Raw::value_arraycopy(srcObj, src, srcSize, dstObj, dst, dstSize); }
-        else { Barrier::value_arraycopy_in_heap(srcObj, src, srcSize, dstObj, dst, dstSize); }
+        if constexpr (decorators & AS_RAW) { Raw::value_arraycopy(layout, src, dst, length); }
+        else { Barrier::value_arraycopy_in_heap(layout, src, dst, length); }
     }
     static void oop_arraycopy(zpointer* src, zpointer* dst, size_t length)
     {

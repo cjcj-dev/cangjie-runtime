@@ -2,20 +2,14 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #pragma once
-#include "Common/TypeDef.h"
+#include "Heap/shared/memAllocator.hpp"
 namespace MapleRuntime {
-class TypeInfo;
-class MArray;
-class ZObjArrayAllocator {
+class ZObjArrayAllocator : public ObjArrayAllocator {
 public:
-    ZObjArrayAllocator(MAddress address, MSize size, MIndex length, TypeInfo& klass)
-        : address(address), arraySize(size), nElems(length), arrayClass(klass) {}
-    MArray* initialize();
+    ZObjArrayAllocator(TypeInfo& klass, MSize size, MIndex length, bool doZero)
+        : ObjArrayAllocator(klass, size, length, doZero) {}
 private:
+    MArray* initialize(MAddress address) const override;
     void yield_for_safepoint() const;
-    MAddress address;
-    MSize arraySize;
-    MIndex nElems;
-    TypeInfo& arrayClass;
 };
 }

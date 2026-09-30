@@ -61,8 +61,11 @@ try:
         raise RuntimeError('Fixture did not stop before InitCJRuntime')
     cmd('set var params.gcParam.backupGCInterval=1')
     cmd('set var params.gcParam.concGCThreads=2')
+    cmd('set var params.gcParam.concGCThreadsSet=true')
     cmd('set var params.gcParam.youngGCThreads=2')
+    cmd('set var params.gcParam.youngGCThreadsSet=true')
     cmd('set var params.gcParam.oldGCThreads=2')
+    cmd('set var params.gcParam.oldGCThreadsSet=true')
     product = gdb.solib_name(int(val('(void*)&_ZN12MapleRuntime9ZDirector10run_threadEv')))
     if Path(product).resolve() != Path(os.environ['GCV2_RUNTIME_LIB_DIR'], 'libcangjie-runtime.so').resolve():
         raise RuntimeError('Product identity mismatch')

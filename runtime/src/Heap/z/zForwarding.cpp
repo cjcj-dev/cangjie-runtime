@@ -176,7 +176,6 @@ ZPage* ZForwarding::page() const { return _page; }
 namespace MapleRuntime {
 bool ZForwarding::relocated_remembered_fields_published_contains(MAddress field)
     {
-        std::lock_guard<std::mutex> lock(_relocated_fields_lock);
         for (MAddress entry : _relocated_remembered_fields_array) {
             if (entry == field) { return true; }
         }
@@ -188,7 +187,7 @@ namespace MapleRuntime {
 void ZForwarding::relocated_remembered_fields_after_relocate()
     {
         _relocated_remembered_fields_publish_young_seqnum = ZGeneration::young()->seqnum();
-        if (young_marking()) {
+        if (ZGeneration::young()->is_phase_mark()) {
             relocated_remembered_fields_publish();
         }
     }
@@ -198,11 +197,12 @@ namespace MapleRuntime {
 void ZForwarding::relocated_remembered_fields_publish()
     {
         ZPublishState expected = ZPublishState::none;
-        if (!_relocated_remembered_fields_state.compare_exchange_strong(
+        if (_relocated_remembered_fields_state.compare_exchange_strong(
                 expected, ZPublishState::published, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-            std::lock_guard<std::mutex> lock(_relocated_fields_lock);
-            _relocated_remembered_fields_array.clear();
+            return;
         }
+        CHECK_DETAIL(expected == ZPublishState::reject, "Unexpected relocated remembered fields publish state");
+        _relocated_remembered_fields_array.clear();
     }
 }
 
@@ -216,12 +216,13 @@ void ZForwarding::relocated_remembered_fields_notify_concurrent_scan_of()
         }
         if (expected == ZPublishState::published) {
             ZPublishState published = ZPublishState::published;
-            if (_relocated_remembered_fields_state.compare_exchange_strong(
-                    published, ZPublishState::reject, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                std::lock_guard<std::mutex> lock(_relocated_fields_lock);
-                _relocated_remembered_fields_array.clear();
-            }
+            _relocated_remembered_fields_state.compare_exchange_strong(
+                published, ZPublishState::reject, std::memory_order_acq_rel, std::memory_order_relaxed);
+            CHECK_DETAIL(published == ZPublishState::published, "Unexpected relocated remembered fields notify state");
+            _relocated_remembered_fields_array.clear();
+            return;
         }
+        CHECK_DETAIL(expected == ZPublishState::reject, "Unexpected relocated remembered fields notify state");
     }
 }
 

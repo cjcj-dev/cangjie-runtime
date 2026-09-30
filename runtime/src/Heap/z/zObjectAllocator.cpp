@@ -99,7 +99,7 @@ ZObjectAllocator::PerAge::PerAge(PageAge pageAge)
 ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
                                              PageAge age, ZAllocationFlags flags)
 {
-    ZPage* page = Heap::alloc_page(size, role, false, age, flags);
+    ZPage* page = Heap::alloc_page(size, role, age, flags);
     if (page == nullptr) { return nullptr; }
     page->reset(age);
     // zObjectAllocator.cpp:40-45: the shared page is a per-CPU/per-age
@@ -114,18 +114,6 @@ ZPage* RegionManager::AllocateSharedPage(size_t size, ZPageType role,
     return page;
 }
 
-// ZObjectAllocator::PerAge::undo_alloc_page: this unpublished candidate was
-// never used by a caller. Undo its page charge, not a TLAB's ownership.
-void RegionManager::UndoSharedPage(ZPage* page)
-{
-    page->SetRegionRole(ZPageRole::None);
-
-    Heap::GetHeap().account_undo_alloc_page(page);
-    // ZHeap::undo_alloc_page: remove the unused page-table entry and return
-    // the extent without suspending a caller holding an unpublished object.
-    Heap::free_page(page);
-}
-
 // ZGC zObjectAllocator.cpp:56-64.
 ZPage* ZObjectAllocator::PerAge::alloc_page(ZPageType type, size_t size, ZAllocationFlags flags)
 {
@@ -134,7 +122,7 @@ ZPage* ZObjectAllocator::PerAge::alloc_page(ZPageType type, size_t size, ZAlloca
 
 void ZObjectAllocator::PerAge::undo_alloc_page(ZPage* page)
 {
-    Heap::GetHeap().page_allocator().UndoSharedPage(page);
+    Heap::GetHeap().undo_alloc_page(page);
 }
 
 // ZGC zObjectAllocator.cpp:66-110: reserve the object before publishing its page.
@@ -339,7 +327,6 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
 
 namespace MapleRuntime {
 RegionManager::RegionManager()
-        : freeRegionManager(*this)
     {
         tlabAllocatingThreads.Sample(1);
         tlabRequestedFraction.Sample(0.1);

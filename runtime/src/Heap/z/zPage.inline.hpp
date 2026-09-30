@@ -9,6 +9,7 @@
 
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zLiveMap.inline.hpp"
 #include "Heap/z/zSafeDelete.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
