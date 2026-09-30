@@ -764,8 +764,11 @@ int ScheduleStart(void)
     g_tryExit = false;
     CJThreadContextGet(&ThreadGet()->context);
     // The judgment is used when the schedule_try_exit interface is invoked.
-    if (g_tryExit || (schedule->scheduleType != SCHEDULE_DEFAULT &&
-                      (schedule->state == SCHEDULE_EXITING || schedule->state == SCHEDULE_EXITED))) {
+    if (g_tryExit || schedule->state == SCHEDULE_EXITING || schedule->state == SCHEDULE_EXITED) {
+        // This is the bootstrap carrier's native return tail, matching ThreadEntry.
+        if (!g_tryExit && schedule->scheduleType == SCHEDULE_DEFAULT) {
+            ProcessorRelease();
+        }
         return 0;
     }
     // consider delete it because trace start is later than schedule start.
@@ -855,19 +858,39 @@ void ScheduleNonDefaultThreadExit(struct Schedule *schedule, bool wait)
  */
 void ScheduleThreadsFree(struct Schedule *schedule)
 {
-    struct ScheduleThread *schdThread;
-    struct Thread *thread;
+    struct ScheduleThread *schdThread = &schedule->schdThread;
+    struct Dulink *node;
 
-    schdThread = &schedule->schdThread;
-    while (!DulinkIsEmpty(&schdThread->threadHead)) {
-        thread = DULINK_ENTRY(schdThread->threadHead.next, struct Thread, link2schd);
-        DulinkRemove(&thread->link2schd);
-        // Wakes up the thread. The thread checks the exit flag and exits.
+    // Production is closed and processors have unbound. The all-thread inventory
+    // includes active carriers which never entered the free pool. Join without
+    // holding either inventory lock: TLS exit may still need runtime locks.
+    DULINK_FOR_EACH_ITEM(node, &schdThread->allThreadList) {
+        struct Thread *thread = DULINK_ENTRY(node, struct Thread, allThreadDulink);
+        if (thread == schedule->thread0 || thread->exitBlocked) {
+            continue;
+        }
         SemaphorePost(&thread->sem);
         pthread_join(thread->osThread, nullptr);
+    }
+
+}
+
+static void ScheduleJoinedThreadsFree(struct Schedule *schedule)
+{
+    struct Dulink *node = schedule->schdThread.allThreadList.next;
+    while (node != &schedule->schdThread.allThreadList) {
+        struct Thread *thread = DULINK_ENTRY(node, struct Thread, allThreadDulink);
+        node = node->next;
+        if (thread == schedule->thread0) {
+            continue;
+        }
+        DulinkRemove(&thread->allThreadDulink);
+        DulinkRemove(&thread->link2schd);
+        SemaphoreDestroy(&thread->sem);
         CJThreadMemFree(static_cast<struct CJThread*>(thread->cjthread0));
         free(thread);
     }
+    schedule->schdThread.freeNum = 0;
 }
 
 void ScheduleProcessorFree(struct Schedule *schedule)
@@ -1055,9 +1078,10 @@ bool ScheduleProcessorSkipFFI(struct Processor *processor)
     return hookFunc(cjthread->mutator);
 }
 
-void ScheduleAllNonDefaultExit(void)
+bool ScheduleAllNonDefaultExit(void)
 {
     struct Schedule *schedule;
+    bool completed = true;
     struct Schedule *curschdeule = ScheduleGet();
     struct Dulink *scheduleNode;
 
@@ -1082,9 +1106,13 @@ void ScheduleAllNonDefaultExit(void)
         if (schedule == curschdeule) {
             continue;
         }
+        if (ScheduleProcessorSkipFFI(&(schedule->schdProcessor.processorGroup[0]))) {
+            // Native-return termination barrier retains this scheduler's closure.
+            completed = false;
+            continue;
+        }
         if (schedule->scheduleType != SCHEDULE_EXCLUSIVE &&
-            pthread_self() != schedule->thread0->osThread &&
-            !ScheduleProcessorSkipFFI(&(schedule->schdProcessor.processorGroup[0]))) {
+            pthread_self() != schedule->thread0->osThread) {
             pthread_join(schedule->thread0->osThread, nullptr);
             atomic_store(&schedule->schdProcessor.processorGroup[0].state, PROCESSOR_EXITING);
         }
@@ -1097,14 +1125,16 @@ void ScheduleAllNonDefaultExit(void)
         ScheduleNonDefaultFree(reinterpret_cast<ScheduleHandle>(schedule));
     }
     pthread_mutex_unlock(&g_scheduleManager.allScheduleListLock);
+    return completed;
 }
 
 /* Preempt and stop all worker threads */
-void ScheduleProcessorExit(struct Schedule *schedule)
+bool ScheduleProcessorExit(struct Schedule *schedule)
 {
     unsigned int i;
     struct Processor *processor;
     struct Processor *curProcessor;
+    bool completed = true;
     const int waitTime = SCHEDULE_PROCESSOR_EXIT_WAIT_TIME; // wait 10us
     ProcessorState pstate = PROCESSOR_IDLE;
 
@@ -1151,19 +1181,20 @@ void ScheduleProcessorExit(struct Schedule *schedule)
             // FFI ends and is ready to leave the security zone, the stw mechanism is triggered
             // and the thread is blocked.
             if (ScheduleProcessorSkipFFI(processor)) {
+                processor->thread->exitBlocked = true;
+                completed = false;
                 break;
             }
             usleep(waitTime);
         }
     }
-    ScheduleAllNonDefaultExit();
-
-    return;
+    return ScheduleAllNonDefaultExit() && completed;
 }
 
-void ScheduleExitMode(struct Schedule *schedule, bool threadExit)
+bool ScheduleExitMode(struct Schedule *schedule, bool threadExit)
 {
     SchdCJThreadHookFunc hookFunc;
+    bool completed = true;
 
     // Set state to exit state
     schedule->schdThread.threadExit = threadExit;
@@ -1181,7 +1212,7 @@ void ScheduleExitMode(struct Schedule *schedule, bool threadExit)
         schedule->state = SCHEDULE_EXITING;
         // Ensure that the monitoring thread is stopped.
         ScheduleSchmonExit();
-        ScheduleProcessorExit(schedule);
+        completed = ScheduleProcessorExit(schedule);
         // All processors enter the PROCESSOR_EXITING state in ScheduleProcessorExit. The
         // processors in ffi are blocked in the stub of the warehouse program. At this time,
         // the scheduling framework does not run the cjthread and can exit safely.
@@ -1194,6 +1225,21 @@ void ScheduleExitMode(struct Schedule *schedule, bool threadExit)
         ScheduleNonDefaultThreadExit(schedule, true);
     }
 
+    if (threadExit) {
+        ScheduleThreadsFree(schedule);
+        if (schedule->scheduleType == SCHEDULE_DEFAULT &&
+            !pthread_equal(pthread_self(), schedule->thread0->osThread) &&
+            !schedule->thread0->exitBlocked) {
+            // The single owner of bootstrap join is the external shutdown caller.
+            pthread_join(schedule->thread0->osThread, nullptr);
+        }
+    }
+    if (!completed) {
+        // HotSpot threads.cpp:996-1000: native calls stop at their return barrier.
+        // Their TLS still references runtime and scheduler storage; retain it all.
+        return false;
+    }
+
     ScheduleListRemove(schedule);
 
     // The network module exits after the processor stops. Otherwise, the processor is still
@@ -1203,15 +1249,15 @@ void ScheduleExitMode(struct Schedule *schedule, bool threadExit)
     // Release global and local cjthreads
     ScheduleCJThreadFree(schedule);
 
-    /*  */
     if (threadExit) {
-        ScheduleThreadsFree(schedule);
+        ScheduleJoinedThreadsFree(schedule);
     }
 
     // No other worker thread is running except the current thread. If thread_exit == false,
     // the function will not be executed. Releases processor resources and auxiliary resources,\
     // including timers.
     ScheduleProcessorFree(schedule);
+    return true;
 }
 
 /* Stops the current scheduling framework. Note: This interface suspends the thread without
@@ -1259,10 +1305,19 @@ int ScheduleStopOutside(ScheduleHandle scheduleHandle)
         return ERRNO_SCHD_INVALID;
     }
 
+    if (schedule->thread0 != nullptr && pthread_equal(pthread_self(), schedule->thread0->osThread)) {
+        return ERRNO_SCHD_EXIT_FAILED;
+    }
+    if (CJThreadGet() != nullptr && CJThreadGet()->schedule == schedule) {
+        return ERRNO_SCHD_EXIT_FAILED;
+    }
     ScheduleType scheduleType = schedule->scheduleType;
     oldSchedule = ScheduleGet();
     ScheduleSet(schedule);
-    ScheduleExitMode(schedule, false);
+    if (!ScheduleExitMode(schedule, true)) {
+        ScheduleSet(oldSchedule);
+        return ERRNO_SCHD_EXIT_FAILED;
+    }
     // This parameter is added to solve the memory leakage problem when the dlclose exits in
     // the macro expansion scenario.
     if (scheduleType == SCHEDULE_DEFAULT && g_scheduleManager.initFlag) {

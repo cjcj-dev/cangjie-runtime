@@ -187,6 +187,7 @@ struct Thread *ThreadCreate(void *schedule)
     // Initialize thread-related fields.
     DulinkInit(&newThread->link2schd);
     newThread->state = THREAD_INIT;
+    newThread->exitBlocked = false;
     newThread->boundCJThread = nullptr;
     newThread->nextProcessor = nullptr;
     newThread->cjthread0 = cjthread0;
