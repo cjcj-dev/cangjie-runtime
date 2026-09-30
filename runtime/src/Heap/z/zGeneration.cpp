@@ -454,9 +454,6 @@ void ZGenerationYoung::concurrent_mark_free()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentMarkFreeYoung);
     mark_free();
-    if (ZAbort::should_abort()) {
-        return;
-    }
 
 }
 
@@ -795,11 +792,6 @@ bool ZGenerationOld::mark_end()
     // Preserve export ownership discovery after the ordinary root closure,
     // while the mark-end pause excludes new mutator publication.
     Heap::GetHeap().cross_vm().ProcessExportRoots(discoveredExternObjects);
-    // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
-    // to the phase owner before verification or publishing mark completion.
-    if (ZAbort::should_abort()) {
-        return false;
-    }
 
     set_phase(ZGeneration::Phase::MarkComplete);
     // zGeneration.cpp:1275-1278: old mark-end sample.
