@@ -19,6 +19,7 @@
 #include <unistd.h>
 using namespace MapleRuntime;
 extern "C" void native_chain(int);
+extern "C" uint32_t unwindPCForC2NStub;
 extern "C" uintptr_t native_anchor;
 uintptr_t native_anchor;
 extern "C" void invoke_native(ThreadLocalData*, int);
