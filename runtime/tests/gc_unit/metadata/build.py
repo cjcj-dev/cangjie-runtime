@@ -130,6 +130,19 @@ else:
         save()
         raise SystemExit(rc)
     if args.mode == "capability":
+        libs = list((build / "runtime-staging").rglob("*cangjie-runtime.dylib"))
+        assert len(libs) == 1, libs
+        testbuild = out / "code-shape-build"
+        checked(["cmake", "-S", tree / "tests/gc_unit/metadata", "-B", testbuild, "-G", "Ninja",
+                 "-DCMAKE_CXX_COMPILER=clang++", "-DCMAKE_ASM_COMPILER=clang",
+                 "-DGCV2_RUNTIME_LIB_DIR=" + str(libs[0].parent), "-DPRODUCT_BUILD=" + str(build)],
+                "code-shape-configure")
+        checked(["cmake", "--build", testbuild, "--target", "metadata-code-shape",
+                 "--parallel", str(os.cpu_count())], "code-shape-build")
+        record["code_shape_elf"] = digest(testbuild / "metadata-code-shape")
+        record["code_shape_runtime"] = digest(libs[0])
+        checked([testbuild / "metadata-code-shape"], "code-shape-run")
+        record["code_shape"] = "PASS: real Mach-O text/data and function map"
         record["capability_products"] = {str(p.relative_to(build)): digest(p)
             for p in (build / "runtime-staging").rglob("*.dylib")}
         record["behavior"] = "NOT_RUN: PAC metadata ABI/fixtures not supplied; build capability only"
@@ -156,6 +169,10 @@ else:
                  "-DCMAKE_CXX_COMPILER_LAUNCHER=sccache", "-DCMAKE_ASM_COMPILER_LAUNCHER=sccache",
                  "-DGCV2_RUNTIME_LIB_DIR=" + str(libdir), "-DPRODUCT_BUILD=" + str(build)], "test-configure")
         checked(["cmake", "--build", testbuild, "--parallel", str(os.cpu_count())], "test-build")
+        if not windows:
+            record["code_shape_elf"] = digest(testbuild / "metadata-code-shape")
+            checked([testbuild / "metadata-code-shape"], "code-shape-run")
+            record["code_shape"] = "PASS: real ELF text/data"
         bundle.mkdir()
         exe = testbuild / ("metadata.exe" if windows else "metadata")
         shutil.copy2(exe, bundle / exe.name)

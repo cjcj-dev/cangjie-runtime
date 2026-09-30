@@ -373,9 +373,20 @@ void CheckUnstartedExposure(bool returning)
         owner.GetUnwindContext().frameInfo.mFrame.SetIP(&unwindPCForReturnSafepointHandlerStub);
         *ZPointerStoreGoodMaskLowOrderBitsAddr = StackWatermark::epoch_id() ^ 1;
         tls->SetPollWord(ThreadLocalData::DisarmedPollWord);
-        if (returning) { HandleReturnSafepoint(tls); }
-        else { MRT_LeaveNative(); }
-        _exit(0);
+        if (returning) {
+            HandleReturnSafepoint(tls);
+            _exit(0);
+        }
+        // macroAssembler_x86.cpp:2590-2597: a disarmed native return has
+        // no watermark slow path merely because the epoch is not started.
+        const uint32_t state = owner.GetStackWatermark().PackedState();
+        const bool transitioned = MRT_LeaveNative();
+        const bool unchanged = owner.GetStackWatermark().PackedState() == state &&
+            !owner.GetStackWatermark().processing_started();
+        const bool fast = transitioned && unchanged && !owner.InSaferegion();
+        std::fprintf(stderr, "K3_NATIVE_FAST_EPOCH_TARGET transitioned=%d unchanged=%d active=%d pass=%d\n",
+                     transitioned, unchanged, !owner.InSaferegion(), fast);
+        _exit(fast ? 0 : 1);
     }
     close(output[1]);
     std::string transcript;
@@ -389,7 +400,9 @@ void CheckUnstartedExposure(bool returning)
         transcript.find("Processing should already have started") != std::string::npos;
     std::fprintf(stderr, "K3_UNSTARTED_EXPOSURE_ASSERT returning=%d status=%d rejected=%d\n%s",
                  returning, status, rejected, transcript.c_str());
-    GC_EXPECT_TRUE(rejected);
+    const bool keptLazyEpoch = WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+        transcript.find("K3_NATIVE_FAST_EPOCH_TARGET transitioned=1 unchanged=1 active=1 pass=1") != std::string::npos;
+    GC_EXPECT_TRUE(returning ? rejected : keptLazyEpoch);
 }
 }
 
@@ -398,7 +411,7 @@ GC_COMPONENT_TEST(SafepointHandshakeOrder, ReturnRejectsUnstartedEpoch)
     CheckUnstartedExposure(true);
 }
 
-GC_COMPONENT_TEST(SafepointHandshakeOrder, NativeRejectsUnstartedEpoch)
+GC_COMPONENT_TEST(SafepointHandshakeOrder, NativeFastReturnKeepsUnstartedEpoch)
 {
     CheckUnstartedExposure(false);
 }
