@@ -327,6 +327,8 @@ void CheckInitializationFailure(InitFailure failure)
         setenv("cjHeapSize", failure == InitFailure::Virtual ? "8GB" : "64MB", 1);
         if (CJ_ScheduleManagerInit() != 0) { _exit(91); }
         if (failure == InitFailure::Virtual) {
+            // Keep runtime worker arenas out of this reservation-failure case.
+            setenv("cjParallelGCThreads", "1", 1);
             // Runtime bootstrap first reserves a native PagePool equal to
             // the 8 GB heap (CangjieRuntime.cpp:160). Leave that room, then
             // constrain the actual heap reservation below its 8 GB minimum.
