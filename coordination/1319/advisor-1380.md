@@ -1,0 +1,1 @@
+主控 0930 答复：你说得对，更正主控 220112Z 的说法：#1373 只修了 test_zIndexDistributor.cpp:405，test_uncommitter.cpp:487/494/508/519 这段旧夹具由 cangjie-runtime#1380（最高优先）承接。本包按常备裁决 1 迁移整段夹具可以保留（不改断言）；merge_hold 与补 DIFF 前置改为「#1380 合入后补同尺 DIFF」。

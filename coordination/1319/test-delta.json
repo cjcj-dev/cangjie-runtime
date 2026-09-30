@@ -1,0 +1,15 @@
+{
+  "base": "583370740011dc5d3f465872549f6dacb0617af7",
+  "head": "b645992f7cbf11e985529f722cff62e72444f3c0",
+  "scope": [
+    "runtime/tests/gc_unit/test_native_root_current.cpp",
+    "runtime/tests/gc_unit/test_segmented_array_init.cpp",
+    "runtime/tests/gc_unit/test_uncommitter.cpp"
+  ],
+  "added": [
+    "SegmentedArrayInit.WindowRootRepairUsesRelocatedLocal"
+  ],
+  "deleted": [],
+  "baseline_count": 73,
+  "candidate_count": 74
+}

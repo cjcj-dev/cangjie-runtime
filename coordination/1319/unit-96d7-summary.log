@@ -1,0 +1,16 @@
+Set cache size limit to 50.0 GB
+default rc=123 wall=2
+default/runtime/tests/gc_unit/test_uncommitter.cpp:494:45: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+default/runtime/tests/gc_unit/test_uncommitter.cpp:508:56: error: no member named 'cacheMutex' in 'MapleRuntime::RegionManager'
+default/runtime/tests/gc_unit/test_uncommitter.cpp:519:43: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+testable rc=123 wall=2
+testable/runtime/tests/gc_unit/test_uncommitter.cpp:494:45: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+testable/runtime/tests/gc_unit/test_uncommitter.cpp:508:56: error: no member named 'cacheMutex' in 'MapleRuntime::RegionManager'
+testable/runtime/tests/gc_unit/test_uncommitter.cpp:519:43: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+OHOS_RC=2 wall=22
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:494:45: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:508:56: error: no member named 'cacheMutex' in 'MapleRuntime::RegionManager'
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:519:43: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:494:45: error: too many arguments to function call, expected single argument 'size', have 2 arguments
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:508:56: error: no member named 'cacheMutex' in 'MapleRuntime::RegionManager'
+/root/sym_cangjie_runtime_1319_implement_r5899659797/ohos-build.log:../../../testable/runtime/tests/gc_unit/test_uncommitter.cpp:519:43: error: too many arguments to function call, expected single argument 'size', have 2 arguments
