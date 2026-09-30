@@ -7,6 +7,7 @@
 
 #include "RuntimeConfig.h"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zFuture.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
@@ -537,7 +538,7 @@ void RegionManager::promote_used(const ZPage* from, const ZPage* to)
 
 void RegionManager::safe_destroy_page(ZPage* page)
 {
-    ZPage::RetireDescriptor(page);
+    _safe_destroy.schedule_delete(page);
 }
 
 void RegionManager::free_page(ZPage* page)
@@ -546,11 +547,55 @@ void RegionManager::free_page(ZPage* page)
     // the descriptor. Forwarding remains owned by the relocation set.
     const ZGenerationId id = page->generation_id();
     const size_t size = page->size();
-    const ZVirtualMemory memory = VirtualMemoryOf(page->granule_index(), size);
-    safe_destroy_page(page);
+    ZArray<ZVirtualMemory> vmems;
+    prepare_memory_for_free(page, &vmems);
     decrease_used_generation(id, size);
-    ReturnRetiredPageMemory(memory);
+    free_memory(&vmems);
 }
+
+// ZGC zPageAllocator.cpp:2269-2284: every page is prepared and accounted in
+// the loop; the extracted vmems are returned once after it.
+void RegionManager::free_pages(ZGenerationId id, const ZArray<ZPage*>* pages)
+{
+    ZArray<ZVirtualMemory> vmems;
+    for (int i = 0; i < pages->length(); ++i) {
+        ZPage* const page = pages->at(i);
+        CHECK(page->generation_id() == id);
+        const size_t size = page->size();
+        prepare_memory_for_free(page, &vmems);
+        decrease_used_generation(id, size);
+    }
+    free_memory(&vmems);
+}
+
+void RegionManager::enable_safe_destroy() const
+{
+    _safe_destroy.enable_deferred_delete();
+}
+
+void RegionManager::disable_safe_destroy() const
+{
+    _safe_destroy.disable_deferred_delete();
+}
+
+void RegionManager::prepare_memory_for_free(ZPage* page, ZArray<ZVirtualMemory>* vmems)
+{
+    const ZVirtualMemory vmem = page->virtual_memory();
+    safe_destroy_page(page);
+    vmems->push(vmem);
+}
+
+void RegionManager::VisitPageOwners(const std::function<void(ZPage*)>& visitor) const
+{
+    for (ZGenerationId id : {ZGenerationId::young, ZGenerationId::old}) {
+        ZGenerationPagesIterator iter(&ZPageTable::heap_table(), id, const_cast<RegionManager*>(this));
+        for (ZPage* page; iter.next(&page);) {
+            visitor(page);
+        }
+    }
+}
+
+
 
 // ZGC zPageAllocator.cpp:426-440: capture generation epochs at request construction.
 ZPageAllocation::ZPageAllocation(size_t size, uint8_t role, PageAge age, ZAllocationFlags flags)
@@ -593,27 +638,19 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request)
     return satisfied;
 }
 
-void RegionManager::ReturnPageMemory(const ZVirtualMemory& memory)
-{
-    ZPage* region = Heap::page(untype(ZOffset::address_unsafe(memory.start())));
-    if (region != nullptr) {
-        CHECK(region->granule_index() == IndexOf(memory) && region->GetRegionSize() == memory.size());
-        ZPage::RetirePage(region, [this, region, memory] {
-            region->RetirePageMemory();
-            ReturnRetiredPageMemory(memory);
-        });
-        return;
-    }
-    ReturnRetiredPageMemory(memory);
-}
 
-void RegionManager::ReturnRetiredPageMemory(const ZVirtualMemory& memory)
+
+// ZGC zPageAllocator.cpp:2149-2165: memory is returned under the allocator
+// lock, independently of when safe_destroy consumes the descriptor.
+void RegionManager::free_memory(ZArray<ZVirtualMemory>* vmems)
 {
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
-    partitions.at(virtualMemory->lookup_partition_id(memory))->free_memory(memory);
-    CHECK(pageAllocatorUsed >= memory.size());
-    pageAllocatorUsed -= memory.size();
-    TrackUsedPeakLocked();
+    for (const ZVirtualMemory vmem : *vmems) {
+        partitions.at(virtualMemory->lookup_partition_id(vmem))->free_memory(vmem);
+        CHECK(pageAllocatorUsed >= vmem.size());
+        pageAllocatorUsed -= vmem.size();
+        TrackUsedPeakLocked();
+    }
     SatisfyStalledAllocations();
 }
 
@@ -707,6 +744,8 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     return true;
 }
 
+
+
 void RegionManager::PromoteAllRegions()
 {
     VisitPageOwners([&](ZPage* region) {
@@ -773,8 +812,8 @@ void RegionManager::DumpRegionStats(const char* msg) const
          GetHeapCapacity(), GetCommittedCapacity(), GetAllocatedSize(),
          used_generation(ZGenerationId::young), used_generation(ZGenerationId::old));
     if (Heap::heap() != nullptr) {
-        const ZPageAllocatorStats young = Stats(&Heap::GetHeap().GetZGeneration(ZGenerationId::young));
-        const ZPageAllocatorStats old = Stats(&Heap::GetHeap().GetZGeneration(ZGenerationId::old));
+        const ZPageAllocatorStats young = Stats(&(*ZGeneration::young()));
+        const ZPageAllocatorStats old = Stats(&(*ZGeneration::old()));
         VLOG(REPORT,
              "stats young used=%zu used_generation=%zu used_high=%zu used_low=%zu freed=%zu promoted=%zu compacted=%zu stalls=%zu",
              young.used(), young.used_generation(), young.used_high(), young.used_low(),
@@ -847,9 +886,10 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
     // virtual memory manager reserves ZVirtualToPhysicalRatio times the max
     // capacity, the physical memory manager creates the backing file.
     virtualMemory.reset(new ZVirtualMemoryManager(maxCapacity));
-    CHECK_DETAIL(virtualMemory->is_initialized(), "failed to reserve %zu bytes of heap address space", maxCapacity);
     physicalMemory.reset(new ZPhysicalMemoryManager(maxCapacity));
-    CHECK_DETAIL(physicalMemory->is_initialized(), "failed to create heap backing for %zu bytes", maxCapacity);
+    if (!virtualMemory->is_initialized() || !physicalMemory->is_initialized()) {
+        return;
+    }
     physicalMemory->warn_commit_limits(maxCapacity);
     physicalMemory->try_enable_uncommit(0, maxCapacity);
 
@@ -883,12 +923,6 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
     CHECK(IsRepresentableLow48Range(metadataAddress, metadata.size));
     Initialize(alignedHeapSize, metadataAddress, *virtualMemory, *physicalMemory, vmHeapParam,
                              garbageThreshold);
-    // ZHeap::ZHeap, zHeap.cpp:77-82: prime after allocator initialization.
-    // HeapParam has no InitialHeapSize; use four granules (8 MB), bounded
-    // by the configured maximum heap for small heaps.
-    constexpr size_t initialHeapSize = 4 * ZGranuleSize;
-    CHECK_DETAIL(PrimeCache(std::min(initialHeapSize, maxCapacity)),
-                 "failed to allocate initial heap");
 #if defined(MRT_DUMP_ADDRESS)
     VLOG(REPORT, "region metadata@%zx, heap @[0x%zx+%zu, 0x%zx)", metadataAddress, reservedStart, reservedEnd - reservedStart,
          reservedEnd);
@@ -897,8 +931,9 @@ RegionManager::RegionManager(const HeapParam& vmHeapParam, double garbageThresho
     for (const auto& segment : segments) {
         heapReservations.push_back({ segment.start, segment.End() });
     }
-    Heap::OnHeapCreated(reservedStart, heapReservations);
-    Heap::OnHeapExtended(reservedEnd);
+    ZAddress::OnHeapCreated(reservedStart, heapReservations);
+    ZAddress::OnHeapExtended(reservedEnd);
+    _initialized = true;
 }
 
 
@@ -950,24 +985,10 @@ ZPageAllocatorStats RegionManager::UpdateAndStats(const ZGeneration* generation)
 size_t RegionManager::GetAllocatedSize() const
 {
         // zPageAllocator.cpp:1311 ZPageAllocator::used: page-granular committed
-        // counter maintained at TakeRegion/ReturnPageMemory/reclaim, not a
+        // counter maintained at allocation and free_page, not a
         // list sum. Pages count as used until free_page.
         return pageAllocatorUsed;
     }
 
-
-size_t RegionManager::GetLargeObjectSize() const
-{
-    size_t bytes = 0;
-    ZPage::SafeDestroyScope scope;
-    ZPageTableIterator iter(&ZPageTable::heap_table());
-    for (ZPage* region; iter.next(&region);) {
-        const ZPageRole role = region->GetRegionRole();
-        if (role == ZPageRole::OldLarge || role == ZPageRole::RecentLarge) {
-            bytes += region->GetRegionSize();
-        }
-    }
-    return bytes;
-}
 
 }

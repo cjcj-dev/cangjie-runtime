@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
++++ b/runtime/src/Heap/shared/stringdedup/stringDedup.cpp
+@@ -275,7 +275,7 @@
+             table.deadState.store(DeadState::good, std::memory_order_release);
+             break;
+         case DeadState::wait2:
+-            table.deadState.store(DeadState::wait1, std::memory_order_release);
++            table.deadState.store(DeadState::wait2, std::memory_order_release);
+             break;
+         case DeadState::cleaning:
+             break;

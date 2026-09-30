@@ -1,0 +1,124 @@
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:135:        ZPage::RetainScope lease(forwarding);
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:167:        ZPage::RetainScope lease(copyPage);
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:569:    region->MarkForwardingDone();
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:974:        state.region->MarkForwardingDone();
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:1074:    GC_EXPECT_FALSE(region->IsForwardingDone());
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:1084:        ZPage::RetainScope lease(region);
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:1090:    region->MarkForwardingDone();
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:1091:    GC_EXPECT_TRUE(region->IsForwardingDone());
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:1093:    region->ReleaseForwarding();
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:1094:    GC_EXPECT_FALSE(region->RetainForwarding());
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:1519:    const auto oldLife = region->GetRegionLifeId();
+runtime/tests/gc_unit/clear_entries_product_unit.cpp:1523:        retiredLife = region->GetRegionLifeId();
+runtime/tests/gc_unit/test_zForwarding.cpp:97:    forwarding->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:144:    tab->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:171:    tab->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:223:    a->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:224:    b->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:242:    tab->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:243:    bare->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:268:    auto* table = ZForwarding::Create(2, from, heapBase);
+runtime/tests/gc_unit/test_zForwarding.cpp:296:    table->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:301:    auto* table = ZForwarding::Create(2, 0x1000, 0);
+runtime/tests/gc_unit/test_zForwarding.cpp:314:    table->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:327:    auto* table = ZForwarding::Create(2, 0x1000, 0);
+runtime/tests/gc_unit/test_zForwarding.cpp:335:    table->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:351:    table->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:368:    table->Destroy();
+runtime/tests/gc_unit/test_zForwarding.cpp:380:    table->Destroy();
+runtime/tests/gc_unit/test_page_retirement.cpp:197:        // ReleaseRetiredRegion clears the product remembered set before
+runtime/tests/gc_unit/test_page_retirement.cpp:210:        const auto life = first->GetRegionLifeId();
+runtime/tests/gc_unit/test_page_retirement.cpp:241:            if (first->GetRegionEnd() != end || first->GetRegionLifeId() != life) {
+runtime/tests/gc_unit/test_page_retirement.cpp:280:        if (retired != 1 || !first->IsFreeRegion() || first->GetRegionLifeId() == life) {
+runtime/tests/gc_unit/test_forwarding_no_geometry.cpp:48:        ZPage::RetainScope lease(page);
+runtime/tests/gc_unit/test_native_root_current.cpp:393:    GC_EXPECT_TRUE(!fx.region1()->IsForwardingDone());
+runtime/tests/gc_unit/test_native_root_current.cpp:399:    GC_EXPECT_TRUE(!fx.region1()->IsForwardingDone());
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:46:    ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:58:    fwd->Destroy();
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:107:    ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, 0x1000);
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:125:    fwd->Destroy();
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:155:    fwd->Destroy();
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:171:    ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:187:    fwd->Destroy();
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:195:    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:208:    fwd->Destroy();
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:214:    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:226:    fwd->Destroy();
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:240:        auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:247:        fwd->Destroy();
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:260:    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZGranuleSize);
+runtime/tests/gc_unit/test_z_forwarding_table.cpp:290:    fwd->Destroy();
+runtime/tests/gc_unit/test_gc_thread_pool.cpp:75:        region->MarkForwardingDone();
+runtime/src/Heap/z/zPageAllocator.inline.hpp:49:        ZPage::SafeDestroyScope scope;
+runtime/src/Heap/z/zPageAllocator.hpp:527:    void ReclaimRetiredRegion(ZPage* region);
+runtime/src/Heap/z/zPageAllocator.hpp:528:    void ReleaseRetiredRegion(ZPage* region);
+runtime/src/Heap/z/zPage.hpp:149:    unsigned RelocateObserve() const;
+runtime/src/Heap/z/zPage.hpp:210:    RegionLifeId GetRegionLifeId() const
+runtime/src/Heap/z/zPage.hpp:215:    bool IsCompacted() const;
+runtime/src/Heap/z/zPage.hpp:217:    bool IsRoutingState();
+runtime/src/Heap/z/zPage.hpp:242:    ZForwarding* GetFromPageCarrier() const;
+runtime/src/Heap/z/zPage.hpp:346:    static void EnableSafeDestroy();
+runtime/src/Heap/z/zPage.hpp:347:    static void DisableSafeDestroy();
+runtime/src/Heap/z/zPage.hpp:351:    class SafeDestroyScope {
+runtime/src/Heap/z/zPage.hpp:353:        SafeDestroyScope() { EnableSafeDestroy(); }
+runtime/src/Heap/z/zPage.hpp:354:        ~SafeDestroyScope() { DisableSafeDestroy(); }
+runtime/src/Heap/z/zPage.hpp:356:        SafeDestroyScope(const SafeDestroyScope&) = delete;
+runtime/src/Heap/z/zPage.hpp:357:        SafeDestroyScope& operator=(const SafeDestroyScope&) = delete;
+runtime/src/Heap/z/zPage.hpp:430:    bool RetainForwarding();
+runtime/src/Heap/z/zPage.hpp:432:    void ReleaseForwarding();
+runtime/src/Heap/z/zPage.hpp:436:    bool TryLockReadFromRegion() { return RetainForwarding(); }
+runtime/src/Heap/z/zPage.hpp:438:    void UnlockReadFromRegion() { ReleaseForwarding(); }
+runtime/src/Heap/z/zPage.hpp:442:    class RetainScope {
+runtime/src/Heap/z/zPage.hpp:444:        explicit RetainScope(ZPage* region) : RetainScope(forwarding_for_page(region)) {}
+runtime/src/Heap/z/zPage.hpp:445:        explicit RetainScope(ZForwarding* forwarding)
+runtime/src/Heap/z/zPage.hpp:451:        ~RetainScope() { Release(); }
+runtime/src/Heap/z/zPage.hpp:464:        RetainScope(const RetainScope&) = delete;
+runtime/src/Heap/z/zPage.hpp:465:        RetainScope& operator=(const RetainScope&) = delete;
+runtime/src/Heap/z/zPage.hpp:466:        RetainScope(RetainScope&&) = delete;
+runtime/src/Heap/z/zPage.hpp:467:        RetainScope& operator=(RetainScope&&) = delete;
+runtime/src/Heap/z/zPage.hpp:475:    bool ClaimForwarding();
+runtime/src/Heap/z/zPage.hpp:477:    void MarkForwardingDone();
+runtime/src/Heap/z/zPage.hpp:479:    bool IsForwardingDone() const;
+runtime/src/Heap/z/zPage.hpp:495:    int32_t ForwardingRefCount() const;
+runtime/src/Heap/z/zPage.hpp:497:    bool ForwardingClaimed() const;
+runtime/src/Heap/z/zPage.hpp:504:    class InPlaceClaimScope {
+runtime/src/Heap/z/zPage.hpp:506:        MRT_EXPORT InPlaceClaimScope(ZPage* region, ZForwarding::Retire site);
+runtime/src/Heap/z/zPage.hpp:508:        ~InPlaceClaimScope()
+runtime/src/Heap/z/zPage.hpp:515:        InPlaceClaimScope(const InPlaceClaimScope&) = delete;
+runtime/src/Heap/z/zPage.hpp:516:        InPlaceClaimScope& operator=(const InPlaceClaimScope&) = delete;
+runtime/src/Heap/z/zPage.hpp:517:        InPlaceClaimScope(InPlaceClaimScope&&) = delete;
+runtime/src/Heap/z/zPage.hpp:518:        InPlaceClaimScope& operator=(InPlaceClaimScope&&) = delete;
+runtime/src/Heap/z/zPageTable.cpp:90:    ZPage::EnableSafeDestroy();
+runtime/src/Heap/z/zPageTable.cpp:95:    ZPage::DisableSafeDestroy();
+runtime/src/Heap/z/zPageTable.cpp:112:    ZPage::DisableSafeDestroy();
+runtime/src/Heap/z/zPageTable.cpp:114:    ZPage::EnableSafeDestroy();
+runtime/src/Heap/z/zPageTable.cpp:121:    ZPage::EnableSafeDestroy();
+runtime/src/Heap/z/zPageTable.cpp:126:    ZPage::DisableSafeDestroy();
+runtime/src/Heap/z/zPage.inline.hpp:21:inline bool ZPage::IsCompacted() const
+runtime/src/Heap/z/zPage.inline.hpp:27:inline bool ZPage::IsRoutingState()
+runtime/src/Heap/z/zPage.inline.hpp:404:inline void ZPage::EnableSafeDestroy()
+runtime/src/Heap/z/zPage.inline.hpp:409:inline void ZPage::DisableSafeDestroy()
+runtime/src/Heap/z/zPage.inline.hpp:454:        SafeDestroyScope iteration;
+runtime/src/Heap/z/zPage.inline.hpp:504:        ZForwarding* carrier = GetFromPageCarrier();
+runtime/src/Heap/z/zPage.inline.hpp:539:inline bool ZPage::RetainForwarding()
+runtime/src/Heap/z/zPage.inline.hpp:545:inline void ZPage::ReleaseForwarding()
+runtime/src/Heap/z/zPage.inline.hpp:552:inline bool ZPage::ClaimForwarding()
+runtime/src/Heap/z/zPage.inline.hpp:558:inline void ZPage::MarkForwardingDone()
+runtime/src/Heap/z/zPage.inline.hpp:564:inline bool ZPage::IsForwardingDone() const
+runtime/src/Heap/z/zPage.inline.hpp:571:inline int32_t ZPage::ForwardingRefCount() const
+runtime/src/Heap/z/zPage.inline.hpp:577:inline bool ZPage::ForwardingClaimed() const
+runtime/src/Heap/z/zPage.inline.hpp:735:inline unsigned ZPage::RelocateObserve() const
+runtime/src/Heap/z/zRemembered.cpp:267:        ZPage::EnableSafeDestroy();
+runtime/src/Heap/z/zRemembered.cpp:272:        ZPage::DisableSafeDestroy();
+runtime/src/Heap/z/zRelocate.cpp:952:    ZPage::RetainScope lease{forwarding};
+runtime/src/Heap/z/zPageAllocator.cpp:633:    ZPage::RetirePage(region, [this, region] { ReclaimRetiredRegion(region); });
+runtime/src/Heap/z/zPageAllocator.cpp:636:void RegionManager::ReclaimRetiredRegion(ZPage* region)
+runtime/src/Heap/z/zPageAllocator.cpp:649:        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_DIRTY);
+runtime/src/Heap/z/zPageAllocator.cpp:830:    ZPage::RetirePage(region, [this, region] { ReleaseRetiredRegion(region); });
+runtime/src/Heap/z/zPageAllocator.cpp:834:void RegionManager::ReleaseRetiredRegion(ZPage* region)
+runtime/src/Heap/z/zPageAllocator.cpp:844:        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RELEASE_REGION);
+runtime/src/Heap/z/zPageAllocator.cpp:1090:    ZPage::SafeDestroyScope scope;
+runtime/src/Heap/z/zPage.cpp:320:ZForwarding* ZPage::GetFromPageCarrier() const
+runtime/src/Heap/z/zForwarding.cpp:36:        page->GetRegionSize(), nentries, page->GetRegionLifeId(), page->age(), to_age,
+runtime/src/Heap/z/zForwarding.cpp:62:ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwarding::Retire site)
+runtime/src/Heap/z/zForwarding.cpp:203:    return _page != nullptr && _page->GetRegionLifeId() == _page_life_id;

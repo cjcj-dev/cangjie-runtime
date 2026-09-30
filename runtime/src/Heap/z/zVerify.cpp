@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
+#include "Heap/z/zAbort.inline.hpp"
 #include "Common/BaseObject.inline.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zVerify.hpp"
@@ -355,7 +356,7 @@ public:
         if (IntentionallyUnremembered(field.GetFieldValue())) { return; }
         if (kBufferStoreBarriers && bufferedStores.count(slot) != 0) { return; }
         if (forwarding->find(from) != 0) { return; }
-        CHECK_DETAIL(Heap::GetHeap().OldActiveRemsetIsCurrent()
+        CHECK_DETAIL(ZGeneration::old()->active_remset_is_current()
                          ? page->is_remembered(reinterpret_cast<volatile zpointer*>(slot))
                          : page->was_remembered(reinterpret_cast<volatile zpointer*>(slot)),
                      "Missing remembered field %p in source %p", &field, reinterpret_cast<BaseObject*>(from));
@@ -401,7 +402,7 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
 {
     if (!ZVerifyRemembered || forwarding == nullptr || forwarding->from_age() != PageAge::old) { return; }
     ZPage* page = forwarding->page();
-    if (Heap::GetHeap().OldActiveRemsetIsCurrent()) { page->verify_remset_cleared_previous(); }
+    if (ZGeneration::old()->active_remset_is_current()) { page->verify_remset_cleared_previous(); }
     else { page->verify_remset_cleared_current(); }
     ZVerifyRemsetBeforeOopClosure closure(forwarding);
     page->object_iterate([&](BaseObject* object) {

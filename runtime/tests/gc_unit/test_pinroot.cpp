@@ -8,6 +8,7 @@
 #include "Heap/z/zHeuristics.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zStackWatermark.hpp"
 #include "Heap/z/zAddress.hpp"
@@ -91,7 +92,7 @@ static void CheckInPlaceTargets(bool medium, bool promote, uint32_t workers, boo
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owners[2] = {forwarding_for_page(pages[0]), forwarding_for_page(pages[1])};
+    ZForwarding* owners[2] = {ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart()), ZGeneration::generation((pages[1])->generation_id())->forwarding((pages[1])->GetRegionStart())};
     GC_EXPECT_TRUE(owners[0] != nullptr && owners[1] != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
     if (retain) {
@@ -206,7 +207,10 @@ static void CheckInPlaceRemset()
                                      : static_cast<ZGeneration&>(heap.old());
     MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, workers);
     generation.Workers()->set_active_workers(workers);
-    generation.RecordYoungSequenceAtRelocateStart(heap.young().Sequence());
+    {
+        ScopedStopTheWorld pause("old relocate start", false);
+        heap.old().relocate_start();
+    }
     GenerationSequenceFixture::Advance(generation);
     if (promote) { ZGenerationTest::SetTenuringThreshold(heap.young(), 1); }
 
@@ -241,7 +245,7 @@ static void CheckInPlaceRemset()
     pages[0]->remember(reinterpret_cast<volatile zpointer*>(objects[0]+8));
     GC_EXPECT_FALSE(pages[0]->is_remset_cleared_current());
     GC_EXPECT_TRUE(pages[0]->is_remset_cleared_previous());
-    GC_EXPECT_TRUE(heap.OldActiveRemsetIsCurrent());
+    GC_EXPECT_TRUE(ZGeneration::old()->active_remset_is_current());
     ZRelocationSetSelector selector(0.0);
     for (ZPage* page : pages) {
         ZPageTest::MakeRelocatable(*page);
@@ -251,10 +255,9 @@ static void CheckInPlaceRemset()
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owners[2] = {forwarding_for_page(pages[0]), forwarding_for_page(pages[1])};
+    ZForwarding* owners[2] = {ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart()), ZGeneration::generation((pages[1])->generation_id())->forwarding((pages[1])->GetRegionStart())};
     GC_EXPECT_TRUE(owners[0] != nullptr && owners[1] != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
-    ZRelocate::StartRelocationTasks(generation.id());
     generation.relocate().relocate(&generation.relocation_set());
     std::fprintf(stderr, "REMSET_RESULT current_clear=%d previous_clear=%d done=%d\n",
         pages[0]->is_remset_cleared_current(), pages[0]->is_remset_cleared_previous(), owners[0]->is_done());
@@ -307,11 +310,13 @@ static void CheckMutatorRelocation(bool stopped)
         ZPageTest::MakeRelocatable(*pages[i]);
         selector.register_live_page(pages[i]);
     }
+    if (generation.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(generation, 1);
+    generation.Workers()->set_active_workers(1);
     selector.select();
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owner = forwarding_for_page(pages[0]);
+    ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
     auto relocate = [&] {
@@ -348,8 +353,11 @@ GC_COMPONENT_OTHER_VM_TEST(RelocationTargets, RunningWorldCopiesOnlyRequestedObj
     CheckMutatorRelocation(false);
 }
 
-#if defined(__x86_64__) && defined(__linux__)
+#if (defined(__x86_64__) || defined(__aarch64__)) && defined(__linux__)
 namespace {
+struct FrameRootInput : FrameInfo {
+    using FrameInfo::START_PC_OFFSET_IN_STACK;
+};
 struct FrameRootMapImage {
     int32_t descriptorOffset;
     uint32_t pc[4];
@@ -384,11 +392,19 @@ void InitializeFrameRootMap(bool sret = false, bool registerPointer = false, boo
         // R13 saved at fp-24; the entry PC has no incoming register pointer.
         // At PC 16 the saved R13 belongs to the preceding frame, so consuming
         // the caller register map instead of its incoming snapshot is visible.
+#if defined(__aarch64__)
+        var(0); var(0); var(1); var(2);
+#else
         var(0); var(0); var(4); var(3);
+#endif
         var(2); var(0); var(1); var(0); var(0); var(1); var(0); var(0);
         put(0, 32); put(1, 1); put(0, 1);
         put(16, 32); put(1, 1); put(1, 1);
+#if defined(__aarch64__)
+        var(1); var(20); put(1u << 19, 20);
+#else
         var(1); var(16); put(1u << 13, 16);
+#endif
         var(1); var(8); var(1); put(0xf0, 8); put(1, 1);
         var(0); var(0); var(0);
         return;
@@ -500,30 +516,37 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owner = forwarding_for_page(pages[0]);
+    ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
-#if defined(__x86_64__) && defined(__linux__)
+#if (defined(__x86_64__) || defined(__aarch64__)) && defined(__linux__)
     const auto savedGrow = CangjieRuntime::stackGrowConfig;
     if (sret) { CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_ON; }
     InitializeFrameRootMap(sret, registerPointer, ((requestEntry >= 5 && requestEntry <= 7) || requestEntry == 9));
     const uintptr_t startIP = reinterpret_cast<uintptr_t>(frameRootMapImage.pc);
+    const uintptr_t frameStartIP = startIP + FrameRootInput::START_PC_OFFSET_IN_STACK;
     uintptr_t younger[8] = {};
     uintptr_t caller[8] = {};
     younger[2] = reinterpret_cast<uintptr_t>(objects[0][0]);
-    younger[3] = startIP + 9;
+    younger[3] = frameStartIP;
     younger[4] = reinterpret_cast<uintptr_t>(&caller[4]);
     younger[5] = startIP + 16;
-    caller[3] = startIP + 9;
+    caller[3] = frameStartIP;
     uintptr_t frames[12][8] = {};
     if (sret || ((requestEntry >= 5 && requestEntry <= 7) || requestEntry == 9)) {
         for (size_t i = 0; i < 12; ++i) {
-            frames[i][3] = startIP + 9;
+            frames[i][3] = frameStartIP;
             frames[i][4] = i + 1 < 12 ? reinterpret_cast<uintptr_t>(&frames[i + 1][4]) : 0;
             frames[i][5] = startIP + 16;
         }
         if (hasPointer && sret) {
             frames[0][1] = reinterpret_cast<uintptr_t>(&frames[6][2]);
             frames[6][1] = reinterpret_cast<uintptr_t>(&frames[8][2]);
+#if defined(__aarch64__)
+            if (registerPointer) {
+                frames[0][6] = frames[0][1];
+                frames[6][6] = frames[6][1];
+            }
+#endif
         }
         if (inplaceSret) { frames[0][2] = reinterpret_cast<uintptr_t>(objects[0][1]); }
         if (sret) {
@@ -585,7 +608,11 @@ static void CheckRelocateStartExitRemapsFrameRoot(bool sret = false, bool hasPoi
         } closure(&frames[3][2]);
         HandshakeOperation operation(&closure, parked);
         parked->GetHandshakeState().add_operation(&operation);
+#if defined(__aarch64__)
+        alignas(16) uintptr_t returnStub[16 + MRT_AARCH64_STUB_FRAME_BYTES / sizeof(uintptr_t)] {};
+#else
         alignas(16) uintptr_t returnStub[32] {};
+#endif
         if (requestEntry == 5) {
             returnStub[16] = reinterpret_cast<uintptr_t>(&frames[2][4]);
             returnStub[17] = startIP + 16;
@@ -959,7 +986,7 @@ static void CheckGrowCopiesHealedFrameRoot()
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owner = forwarding_for_page(pages[0]);
+    ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(parked != nullptr);
@@ -1081,7 +1108,7 @@ void RunRelocateLiveness(bool worker, bool marked)
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owner = forwarding_for_page(pages[0]);
+    ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
     generation.set_phase(ZGenerationPhase::Relocate);
     BaseObject* source = marked ? live[0] : dead[0];
@@ -1196,7 +1223,7 @@ static void CheckRelocationRemsetOwnership(bool worker)
     young.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&young.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { young.forwarding_table().insert(owner); }
-    auto* forwarding = forwarding_for_page(source);
+    auto* forwarding = ZGeneration::generation((source)->generation_id())->forwarding((source)->GetRegionStart());
     GC_EXPECT_TRUE(forwarding != nullptr && forwarding->to_age() == PageAge::old);
     zpointer root = StoreGoodPointer(object);
     ZGlobalsPointers::flip_young_relocate_start();
@@ -1274,7 +1301,7 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     generation.relocation_set().install(&selector);
     ZRelocationSetIterator installed(&generation.relocation_set());
     for (ZForwarding* owner; installed.next(&owner);) { generation.forwarding_table().insert(owner); }
-    ZForwarding* owner = forwarding_for_page(pages[0]);
+    ZForwarding* owner = ZGeneration::generation((pages[0])->generation_id())->forwarding((pages[0])->GetRegionStart());
     GC_EXPECT_TRUE(owner != nullptr);
     zpointer root = StoreGoodPointer(objects[0]);
     ZGlobalsPointers::flip_old_relocate_start();
@@ -1314,4 +1341,154 @@ GC_COMPONENT_OTHER_VM_TEST(RelocateInner958, WorkerWinnerUndoesMutatorAllocation
     // Keep the result assertion independent of the scheduling preconditions.
     GC_EXPECT_EQ(allocated, 0u);
     GC_EXPECT_TRUE(retained && published && copied && unused != nullptr);
+}
+
+extern "C" void CJ_MCC_StoreBarrierOnHeapField(volatile zpointer*);
+
+static void CheckPromotionRemset1313(bool flip, int referent, bool buffered = false, bool phase = false)
+{
+    std::unique_ptr<B09RuntimeFixture> runtime;
+    if (buffered) { runtime = std::make_unique<B09RuntimeFixture>(); }
+    CreateStandaloneHeap(16);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& heap = Heap::GetHeap();
+    auto& young = heap.young();
+    young.InitializeWorkers();
+    young.Workers()->set_active_workers(1);
+    GenerationSequenceFixture::Advance(young);
+    ZGenerationTest::SetTenuringThreshold(young, 1);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetFlagHasRefField();
+    type->SetInstanceSize(sizeof(uintptr_t));
+    type->SetAlign(8);
+    GCTib tib{};
+    tib.tag = SIGN_BIT | 1;
+    type->SetGCTib(tib);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
+    ZAllocationFlags flags;
+    flags.set_non_blocking();
+    ZPage* source = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
+    ZPage* childPage = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, referent == 1 ? PageAge::old : PageAge::eden, flags);
+    GC_EXPECT_TRUE(source != nullptr && childPage != nullptr);
+    auto* object = reinterpret_cast<BaseObject*>(source->alloc_object(16));
+    auto* child = reinterpret_cast<BaseObject*>(childPage->alloc_object(16));
+    object->SetClassInfo(type);
+    child->SetClassInfo(type);
+    HeapSlotAt<>(reinterpret_cast<MAddress>(child) + 8).StoreColoured(StoreGoodPointer(nullptr));
+    HeapSlotAt<>(reinterpret_cast<MAddress>(object) + 8).StoreColoured(StoreGoodPointer(referent == 2 ? nullptr : child));
+    Mutator* mutator = nullptr;
+    if (buffered) {
+        mutator = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+        auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + 8);
+        field.StoreColoured(to_zpointer(raw(StoreGoodPointer(nullptr)) ^ ZPointerMarkedOldMask));
+        CJ_MCC_StoreBarrierOnHeapField(reinterpret_cast<volatile zpointer*>(&field));
+        field.StoreColoured(StoreGoodPointer(nullptr));
+    }
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(source, object));
+    ZPageTest::MakeRelocatable(*source);
+    if (!flip) {
+        ZPage* peer = Heap::alloc_page(ZPageSizeSmall, ZPageType::small, PageAge::survivor1, flags);
+        GC_EXPECT_TRUE(peer != nullptr);
+        auto* peerObject = reinterpret_cast<BaseObject*>(peer->alloc_object(16));
+        peerObject->SetClassInfo(type);
+        HeapSlotAt<>(reinterpret_cast<MAddress>(peerObject) + 8).StoreColoured(StoreGoodPointer(nullptr));
+        GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(peer, peerObject));
+        ZPageTest::MakeRelocatable(*peer);
+    }
+    young.select_relocation_set(true);
+    auto* forwarding = ZGeneration::generation((source)->generation_id())->forwarding((source)->GetRegionStart());
+    ZGlobalsPointers::flip_young_relocate_start();
+    young.set_phase(ZGenerationPhase::Relocate);
+    size_t expectedFreed = young.freed();
+    ZRelocationSetIterator selected(&young.relocation_set());
+    for (ZForwarding* owner; selected.next(&owner);) { expectedFreed += owner->size(); }
+    ZRelocate::StartRelocationTasks(young.id());
+    if (phase) {
+        young.concurrent_relocate();
+        const size_t actualFreed = young.freed();
+        std::fprintf(stderr, "FREED1313_TARGET flip=%d actual=%zu expected=%zu target_assertion=executed\n",
+                     flip, actualFreed, expectedFreed);
+        GC_EXPECT_EQ(actualFreed, expectedFreed);
+    } else {
+        young.relocate().relocate(&young.relocation_set());
+    }
+    BaseObject* result = flip ? object : (forwarding == nullptr ? nullptr :
+        reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(object))));
+    if (result == nullptr) {
+        std::fprintf(stderr, "PROMOTION1313_PRECONDITION no relocation result flip=%d\n", flip);
+        result = object;
+    }
+    auto* target = Heap::page(reinterpret_cast<MAddress>(result));
+    auto* field = reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(result) + 8);
+    if (buffered) {
+        auto& buffer = *mutator->GetGCData().storeBarrierBuffer;
+        const size_t pending = buffer.Pending();
+        const bool installed = pending == 1 && untype(buffer.basePointers[buffer.Current()]) == reinterpret_cast<uintptr_t>(object);
+        const bool relocatedSlot = StoreBarrierBuffer::is_in(reinterpret_cast<MAddress>(field));
+        std::fprintf(stderr, "BUFFER_REMAP1313_TARGET pending=%zu installed=%d relocated_slot=%d target_assertion=executed\n",
+            pending, installed, relocatedSlot);
+        GC_EXPECT_TRUE(installed && relocatedSlot);
+        buffer.on_new_phase();
+        MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    }
+    const bool remembered = target->is_remembered(field);
+    const bool old = target->age() == PageAge::old;
+    std::fprintf(stderr, "PROMOTION1313_TARGET flip=%d referent=%d old=%d moved=%d remembered=%d expected=%d target_assertion=executed\n",
+        flip, referent, old, result != object, remembered, referent == 0 || buffered);
+    GC_EXPECT_EQ(remembered, referent == 0 || buffered);
+    GC_EXPECT_TRUE(old);
+    GC_EXPECT_EQ(result == object, flip);
+}
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, RelocateYoung) { CheckPromotionRemset1313(false, 0); }
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, RelocateOldControl) { CheckPromotionRemset1313(false, 1); }
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, RelocateNullControl) { CheckPromotionRemset1313(false, 2); }
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipYoung) { CheckPromotionRemset1313(true, 0); }
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipOldControl) { CheckPromotionRemset1313(true, 1); }
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, FlipNullControl) { CheckPromotionRemset1313(true, 2); }
+
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, BufferedSlotRelocates) { CheckPromotionRemset1313(false, 2, true); }
+
+// ZGC zGeneration.cpp:850-853,933-940; zRelocate.cpp:1010.
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, PhaseRelocateFreed)
+{
+    CheckPromotionRemset1313(false, 0, false, true);
+}
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, PhaseFlipFreedControl)
+{
+    CheckPromotionRemset1313(true, 0, false, true);
+}
+
+// The old start captures parity once; later young starts only change the reader.
+GC_COMPONENT_OTHER_VM_TEST(Remset1313, OldRelocateStartParity)
+{
+    B09RuntimeFixture runtime;
+    CreateStandaloneHeap(8);
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    ZStat::Initialize();
+    auto& old = Heap::GetHeap().old();
+    auto& young = Heap::GetHeap().young();
+    old.InitializeWorkers();
+    old.Workers()->set_active_workers(1);
+    GenerationSequenceFixture::Advance(young);
+    GenerationSequenceFixture::Advance(young);
+    old.set_phase(ZGenerationPhase::MarkComplete);
+    {
+        ScopedStopTheWorld pause("old relocate parity", false);
+        old.relocate_start();
+    }
+    const bool phase = old.GcPhase() == ZGenerationPhase::Relocate;
+    const bool queue = old.relocate().queue()->is_active();
+    const bool initial = old.active_remset_is_current();
+    GenerationSequenceFixture::Advance(young);
+    const bool flipped = old.active_remset_is_current();
+    GenerationSequenceFixture::Advance(young);
+    const bool restored = old.active_remset_is_current();
+    std::fprintf(stderr, "PARITY1313_TARGET phase=%d queue=%d initial=%d flipped=%d restored=%d target_assertion=executed\n",
+                 phase, queue, initial, flipped, restored);
+    GC_EXPECT_TRUE(initial && !flipped && restored);
+    GC_EXPECT_TRUE(phase && queue);
+    old.concurrent_relocate();
 }

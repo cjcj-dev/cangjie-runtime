@@ -11,10 +11,9 @@
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.inline.h"
-#include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAbort.inline.hpp"
 #include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zMark.hpp"
 
@@ -173,26 +172,16 @@ double ZGeneration::FragmentationLimit() const
 
 
 
-// ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
-// young sequence once for the whole old relocation, not once per forwarding.
-void ZGeneration::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
+bool ZGenerationOld::active_remset_is_current() const
 {
-    CHECK(_id == ZGenerationId::old);
-    youngSequenceAtRelocateStart.store(youngSequence, std::memory_order_release);
+    ASSERT(_young_seqnum_at_reloc_start != 0);
+    const uint32_t seqnum = ZGeneration::young()->Sequence();
+    const uint32_t seqnumDiff = seqnum - _young_seqnum_at_reloc_start;
+    return (seqnumDiff & 1U) == 0;
 }
-
-bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
-{
-    CHECK(_id == ZGenerationId::old);
-    // zGeneration.inline.hpp:174-182: each young mark start flips the faces.
-    return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
-}
-
-
 
 
 // ZGeneration::mark_object, zGeneration.inline.hpp:119-123.
-
 
 
 class VM_ZOperation : public VMOperation {
@@ -244,7 +233,7 @@ public:
     bool do_operation() override
     {
         ZStatTimerYoung timer(ZPhasePauseMarkStartYoung);
-        Heap::GetHeap().increment_total_collections();
+        ZCollectedHeap::heap()->increment_total_collections();
         ZGeneration::young()->mark_start();
         return true;
     }
@@ -258,7 +247,7 @@ public:
     bool do_operation() override
     {
         ZStatTimerYoung timer(ZPhasePauseMarkStartYoungAndOld);
-        Heap::GetHeap().increment_total_collections();
+        ZCollectedHeap::heap()->increment_total_collections();
         ZGeneration::young()->mark_start();
         ZGeneration::old()->mark_start();
         return true;
@@ -306,14 +295,7 @@ public:
     bool do_operation() override
     {
         ZStatTimerOld timer(ZPhasePauseRelocateStartOld);
-        ZGlobalsPointers::flip_old_relocate_start();
-        ZVerify::OnColorFlip();
-        ZGeneration::old()->set_phase(ZGeneration::Phase::Relocate);
-        ZGeneration::old()->RecordYoungSequenceAtRelocateStart(ZGeneration::young()->Sequence());
-        ZGeneration::old()->StatHeap()->AtRelocateStart(
-            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(
-                ZGeneration::old()));
-        ZRelocate::StartRelocationTasks(ZGenerationId::old);
+        ZGeneration::old()->relocate_start();
         return true;
     }
     bool block_jni_critical() const override { return true; }
@@ -331,14 +313,13 @@ public:
 };
 
 
-
 void ZGeneration::at_collection_start(void* timer)
 {
     set_gc_timer(timer);
     CycleStats().AtStart(TimeUtil::NanoSeconds());
     // zGeneration.cpp:380-385: the heap account opens at collection start.
     statHeap.AtCollectionStart(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+        Heap::GetHeap().page_allocator().Stats(this));
     Workers()->set_active();
 }
 
@@ -413,13 +394,12 @@ bool ZGenerationYoung::pause_mark_end()
 
 void ZGenerationYoung::mark_start()
 {
-    uint64_t start = TimeUtil::NanoSeconds();
     CHECK(_id == ZGenerationId::young);
     ZGlobalsPointers::flip_young_mark_start();
     ZVerify::OnColorFlip();
 
-    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    auto& manager = space.GetRegionManager();
+    auto& space = Heap::GetHeap().page_allocator();
+    auto& manager = space;
     {
         Heap::GetHeap().reset_tlab_used();
         Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
@@ -430,15 +410,14 @@ void ZGenerationYoung::mark_start()
     Mark().BindWorkers(Workers());
     Mark().Start();
     {
-        Heap::GetHeap().remembered().flip();
+        _remembered.flip();
     }
 
     // zGeneration.cpp:880-885: mark-start sample (also resets the
     // collection's used high/low trackers, zPageAllocator.cpp:1332-1346).
     statHeap.AtMarkStart(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
+        Heap::GetHeap().page_allocator().UpdateAndStats(this));
 
-    youngStartNs = start;
 }
 
 void ZGenerationYoung::produceYoungRoots()
@@ -471,7 +450,7 @@ bool ZGenerationYoung::mark_end()
         Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
         // zGeneration.cpp:906-911: mark-end sample.
         statHeap.AtMarkEnd(
-            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+            Heap::GetHeap().page_allocator().Stats(this));
         return true;
     }
 
@@ -494,24 +473,13 @@ void ZGenerationYoung::concurrent_mark_free()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentMarkFreeYoung);
     mark_free();
-    if (ZAbort::should_abort()) {
-        return;
-    }
-    // Cangjie String values use an explicitly populated dedup table. Clean its
-    // weak entries here; ZGC processes weak OopStorage entries through
-    // ZWeakRootsProcessor (zWeakRootsProcessor.cpp:55-74).
-    StringDedup::Instance().Clean([this](BaseObject* object) {
-        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-        return !region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Young>(object);
-    });
+
 }
 
 void ZGenerationYoung::concurrent_reset_relocation_set()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentResetRelocationSetYoung);
     reset_relocation_set();
-    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().ResetFlipPromotedPages();
 }
 
 void ZGenerationYoung::concurrent_select_relocation_set()
@@ -541,35 +509,14 @@ void ZGenerationYoung::relocate_start()
     flip_relocate_start();
     set_phase(Phase::Relocate);
     StatHeap()->AtRelocateStart(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+        Heap::GetHeap().page_allocator().Stats(this));
     ZRelocate::StartRelocationTasks(ZGenerationId::young);
 }
 
 void ZGenerationYoung::concurrent_relocate()
 {
     ZStatTimerYoung timer(ZPhaseConcurrentRelocateYoung);
-    // ZGC zGeneration.cpp:575-580: after relocate-start every selected page
-    // must finish relocation, including when shutdown requests an abort.
-    RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    size_t allocatedBefore = space.AllocatedBytes();
-    EvacuateYoungRegions();
-    size_t allocatedAfter = space.AllocatedBytes();
-    const size_t reclaimedBytes =
-        allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
-    ZGeneration::young()->increase_freed(reclaimedBytes);
-
-    {
-        Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Young);
-    }
-    ++minorTotalRuns;
-    uint64_t pauseUs = (TimeUtil::NanoSeconds() - youngStartNs) / NS_PER_US;
-    VLOG(REPORT,
-         "[GCV2Minor] run=%zu liveBytes=%zu "
-         "reclaimedBytes=%zu pause=%zu us",
-         minorTotalRuns,
-         statHeap.LiveAtMarkEnd(), reclaimedBytes,
-         pauseUs);
-    statHeap.AtRelocateEnd(space.GetRegionManager().Stats(this), should_record_stats());
+    Relocate();
 }
 
 } // namespace MapleRuntime
@@ -581,7 +528,6 @@ void ZGenerationYoung::concurrent_relocate()
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -619,10 +565,6 @@ void ZGenerationOld::process_non_strong_references()
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
     ZMark::ProcessFinalizers();
     Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();
-    StringDedup::Instance().Clean([this](BaseObject* object) {
-        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-        return region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Old>(object);
-    });
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
     ZRendezvousHandshakeClosure rendezvous;
     Handshake::execute(&rendezvous);
@@ -652,7 +594,6 @@ void ZGenerationOld::process_non_strong_references()
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -671,15 +612,8 @@ void ZGenerationOld::process_non_strong_references()
 namespace MapleRuntime {
 
 
-
-
-
-
-
 // Registered finalizers are discovered during old root marking and fixed by
 // VisitNativePointers. Only queued/running finalizables are strong mark roots.
-
-
 
 
 } // namespace MapleRuntime
@@ -691,7 +625,6 @@ namespace MapleRuntime {
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -847,7 +780,7 @@ bool ZGenerationOld::uses_clear_all_soft_reference_policy() const
 void ZGenerationOld::mark_start()
 {
     // zGeneration.cpp:1248
-    _total_collections_at_start = Heap::GetHeap().total_collections();
+    _total_collections_at_start = ZCollectedHeap::heap()->total_collections();
     CHECK(_id == ZGenerationId::old);
     ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();
@@ -862,7 +795,7 @@ void ZGenerationOld::mark_start()
     Mark().Start();
     // zGeneration.cpp:1238-1242: old mark-start sample.
     statHeap.AtMarkStart(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
+        Heap::GetHeap().page_allocator().UpdateAndStats(this));
 }
 
 bool ZGenerationOld::mark_end()
@@ -878,16 +811,11 @@ bool ZGenerationOld::mark_end()
     // Preserve export ownership discovery after the ordinary root closure,
     // while the mark-end pause excludes new mutator publication.
     Heap::GetHeap().cross_vm().ProcessExportRoots(discoveredExternObjects);
-    // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
-    // to the phase owner before verification or publishing mark completion.
-    if (ZAbort::should_abort()) {
-        return false;
-    }
 
     set_phase(ZGeneration::Phase::MarkComplete);
     // zGeneration.cpp:1275-1278: old mark-end sample.
     statHeap.AtMarkEnd(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
+        Heap::GetHeap().page_allocator().Stats(this));
     ZVerify::AfterMark();
     ZResurrection::block();
 
@@ -1072,6 +1000,23 @@ void ZGenerationOld::concurrent_remap_young_roots()
     remap_young_roots();
 }
 
+void ZGenerationOld::flip_relocate_start()
+{
+    ZGlobalsPointers::flip_old_relocate_start();
+    ZVerify::OnColorFlip();
+}
+
+void ZGenerationOld::relocate_start()
+{
+    ASSERT(MutatorManager::Instance().WorldStopped());
+    flip_relocate_start();
+    set_phase(Phase::Relocate);
+    StatHeap()->AtRelocateStart(
+        Heap::GetHeap().page_allocator().Stats(this));
+    _young_seqnum_at_reloc_start = ZGeneration::young()->Sequence();
+    ZRelocate::StartRelocationTasks(ZGenerationId::old);
+}
+
 void ZGenerationOld::pause_relocate_start()
 {
     VM_ZRelocateStartOld op;
@@ -1081,10 +1026,15 @@ void ZGenerationOld::pause_relocate_start()
 void ZGenerationOld::concurrent_relocate()
 {
     ZStatTimerOld timer(ZPhaseConcurrentRelocateOld);
+    Relocate();
+}
+
+void ZGenerationOld::Relocate()
+{
     relocate().relocate(&relocation_set());
     Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
     statHeap.AtRelocateEnd(
-        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this),
+        Heap::GetHeap().page_allocator().Stats(this),
         should_record_stats());
 }
 
@@ -1184,7 +1134,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
     ZRelocationSetSelector selector(FragmentationLimit());
     const ZGenerationId id = _id == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old;
     {
-        ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, nullptr);
+        ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, &Heap::GetHeap().page_allocator());
         for (ZPage* page; pt_iter.next(&page);) {
             if (!page->is_relocatable()) {
                 continue;
@@ -1218,7 +1168,6 @@ void ZGeneration::select_relocation_set(bool promote_all)
     }
     ZRelocationSetIterator rs_iter(&_relocation_set);
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
-        forwarding->page()->SetRegionRole(ZPageRole::From);
         _forwarding_table.insert(forwarding);
     }
     // ZGC zGeneration.cpp:268-269: publish after installing the set/table.
@@ -1260,10 +1209,6 @@ namespace MapleRuntime {
 namespace MapleRuntime {
 
 
-
-
-
-
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
@@ -1287,25 +1232,13 @@ BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object)
 }
 
 namespace MapleRuntime {
-void ZGenerationYoung::EvacuateYoungRegions()
+void ZGenerationYoung::Relocate()
 {
-    RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    ZWorkers& workers = *Workers();
-    {
-        VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start flip=1");
-        relocate().relocate(&relocation_set());
-    }
-
-    // zRelocate.cpp:1289-1306: finish relocation before walking flip-promoted pages.
-    // Keep forwarding entries available until every field has been remapped.
-    {
-        manager.RememberFlipPromotedPages(workers);
-
-    }
-    {
-        // zGeneration.cpp:563: keep this set until the next young mark-end reset.
-        // zRelocate.cpp:1289-1310: completeness is workers()->run(relocation_set).
-    }
+    relocate().relocate(&relocation_set());
+    Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Young);
+    statHeap.AtRelocateEnd(
+        Heap::GetHeap().page_allocator().Stats(this),
+        should_record_stats());
 }
 }
 
@@ -1317,7 +1250,6 @@ void ZGenerationYoung::EvacuateYoungRegions()
 
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 
 #include <array>
@@ -1353,9 +1285,22 @@ void ZGenerationYoung::EvacuateYoungRegions()
 #include "Heap/z/zRelocate.hpp"
 
 
-
 namespace MapleRuntime {
 // ZGC zGeneration.cpp:287-293.
 void ZGeneration::synchronize_relocation() { relocate().synchronize(); }
 void ZGeneration::desynchronize_relocation() { relocate().desynchronize(); }
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+static const ZStatSubPhase PPostTrace("PostTrace", ZGenerationId::old);
+
+void ZGenerationOld::PostTrace()
+{
+    ZStatTimerOld zstatTimer(PPostTrace);
+    // Value-only cycle roots still depend on the preceding relocation receipts.
+    // Complete their owner handoff while that authority is queryable.
+    // zGeneration.cpp:1261 mark_end does not reset forwarding.
+    Heap::GetHeap().cross_vm().PrepareCycleRef(discoveredExternObjects);
+}
+
+}

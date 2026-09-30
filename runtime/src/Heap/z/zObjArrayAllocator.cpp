@@ -59,9 +59,8 @@ MArray* ZObjArrayAllocator::initialize(MAddress address) const
     const bool isRefArray = arrayClass.GetComponentTypeInfo()->IsRef();
     // zObjArrayAllocator.cpp:132-141: a safepoint may change either
     // generation sequence before its collection has completed.
-    Heap& heap = Heap::GetHeap();
-    const uint64_t youngSequenceBefore = heap.GetZGeneration(ZGenerationId::young).seqnum();
-    const uint64_t oldSequenceBefore = heap.GetZGeneration(ZGenerationId::old).seqnum();
+    const uint64_t youngSequenceBefore = (*ZGeneration::young()).seqnum();
+    const uint64_t oldSequenceBefore = (*ZGeneration::old()).seqnum();
     const uintptr_t colorBefore = ::g_cjStoreGoodMask;
     bool seenGcSafepoint = false;
     // ZObjArrayAllocator::initialize (zObjArrayAllocator.cpp:140-200):
@@ -84,8 +83,8 @@ MArray* ZObjArrayAllocator::initialize(MAddress address) const
             yield_for_safepoint();
 
             if (isRefArray && !seenGcSafepoint &&
-                (heap.GetZGeneration(ZGenerationId::young).seqnum() != youngSequenceBefore ||
-                 heap.GetZGeneration(ZGenerationId::old).seqnum() != oldSequenceBefore ||
+                ((*ZGeneration::young()).seqnum() != youngSequenceBefore ||
+                 (*ZGeneration::old()).seqnum() != oldSequenceBefore ||
                  static_cast<uintptr_t>(::g_cjStoreGoodMask) != colorBefore)) {
                 seenGcSafepoint = true;
                 return false;

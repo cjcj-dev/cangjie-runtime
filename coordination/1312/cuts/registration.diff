@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRootsIterator.cpp
++++ b/runtime/src/Heap/z/zRootsIterator.cpp
+@@ -104,7 +104,7 @@
+     : states{{{Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers},
+               {Heap::GetHeap().GetExportRootStorage(), workers},
+               {SyncWeakOopStorage(), workers},
+-              {StringDedup::Instance().WeakStorage(), workers}}}, generation(generation) {}
++              {[]() -> OopStorage& { static OopStorage omitted; return omitted; }(), workers}}}, generation(generation) {}
+ 
+ void OopStorageSetIteratorWeak::report_num_dead()
+ {

@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zWeakRootsProcessor.cpp
++++ b/runtime/src/Heap/z/zWeakRootsProcessor.cpp
+@@ -29,7 +29,7 @@
+ 
+     ~ZProcessWeakRootsTask() override
+     {
+-        rootsWeakColored.report_num_dead();
++        // Controlled cut: omit owner notification.
+     }
+ 
+     void work() override
