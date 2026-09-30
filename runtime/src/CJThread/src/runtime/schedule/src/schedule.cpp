@@ -14,6 +14,7 @@
 #include "securec.h"
 #include "basetime.h"
 #include "Base/Log.h"
+#include "RuntimeStartup.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -757,6 +758,8 @@ int ScheduleStart(void)
     }
 
     schedule->state = SCHEDULE_RUNNING;
+
+    NotifyRuntimeSchedulerReady(schedule);
 
     g_tryExit = false;
     CJThreadContextGet(&ThreadGet()->context);
