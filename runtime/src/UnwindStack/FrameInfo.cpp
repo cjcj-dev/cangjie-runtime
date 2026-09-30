@@ -36,15 +36,29 @@ void SigAppend(char* buf, size_t cap, const char* fmt, ...)
 uintptr_t FrameInfo::CallerSP() const
 {
     const uintptr_t fp = reinterpret_cast<uintptr_t>(mFrame.GetFA());
-#if defined(__x86_64__) && !defined(_WIN64)
+#if defined(__x86_64__)
+#ifdef _WIN64
+    // UnwindWin.cpp:181-191: C2N consumes the two native-call ABI slots
+    // in addition to the saved frame head.
+    if (GetFrameType() == FrameType::C2N_STUB) { return fp + sizeof(FrameAddress) + 16; }
+#endif
     return fp + sizeof(FrameAddress);
-#elif defined(__aarch64__) && !defined(__APPLE__)
+#elif defined(__aarch64__)
     switch (GetFrameType()) {
         case FrameType::RETURN_SAFEPOINT:
         case FrameType::SAFEPOINT:
         case FrameType::STACKGROW: return fp + MRT_AARCH64_STUB_FRAME_BYTES;
         case FrameType::C2R_STUB: return fp + 8 * 14;
         case FrameType::C2N_STUB: return fp + 8 * 32;
+        case FrameType::EXSLUSIVE: return fp + 16 * 16;
+#ifdef INTERPRETER_ENABLED
+        case FrameType::INTERPRETER_I2N:
+#ifdef __APPLE__
+            return fp + 8 * 26;
+#else
+            return fp + 8 * 24;
+#endif
+#endif
         case FrameType::MANAGED: {
             ElfUnloadQuiescence::ReadScope reader;
             FuncDescRef desc = MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(GetStartProc()));
@@ -57,9 +71,20 @@ uintptr_t FrameInfo::CallerSP() const
         }
         default: return 0;
     }
+#elif defined(__arm__)
+    // arm_linux stubs place the frame head at the bottom of their saved
+    // area. Managed frames retain the two-word FrameAddress head.
+    switch (GetFrameType()) {
+        case FrameType::SAFEPOINT:
+        case FrameType::RETURN_SAFEPOINT:
+        case FrameType::C2R_STUB: return fp + 4 * 12;
+        case FrameType::C2N_STUB: return fp + 4 * 30;
+        case FrameType::EXSLUSIVE: return fp + 144;
+        case FrameType::MANAGED: return fp + sizeof(FrameAddress);
+        default: return 0;
+    }
 #else
-    // No return poll ABI has been supplied for these compiler targets.
-    return 0;
+#error Unsupported native-return frame layout
 #endif
 }
 
