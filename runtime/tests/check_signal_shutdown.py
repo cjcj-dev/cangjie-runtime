@@ -72,9 +72,14 @@ def main():
                 if event_field(event, 'bkptno') != lock_wait:
                     raise RuntimeError('Terminal gate did not reach retained thread lock')
                 debugger.delete(lock_wait)
-            debugger.expression('shutdownObservationDone = 1', terminal_thread)
+            debugger.cmd('-exec-interrupt --thread ' + current)
+            host_stop = debugger.stop()
+            if event_field(host_stop, 'thread-id') != current:
+                raise RuntimeError('Host observation rendezvous failed')
             debugger.delete(body)
             debugger.resume(terminal_thread)
+            debugger.expression('shutdownObservationDone = 1', current)
+            debugger.resume(current)
             event = debugger.stop()
         if consume:
             if event_field(event, 'bkptno') != consumed:
@@ -85,9 +90,14 @@ def main():
             results['exit_consumed'] = remaining == 0
             emit('SHUTDOWN_TARGET_EXECUTED', target='exit_consumed', passed=remaining == 0,
                  pending=remaining)
-            debugger.expression('shutdownObservationDone = 1', consumer_thread)
+            debugger.cmd('-exec-interrupt --thread ' + current)
+            host_stop = debugger.stop()
+            if event_field(host_stop, 'thread-id') != current:
+                raise RuntimeError('Host observation rendezvous failed')
             debugger.delete(consumed)
             debugger.resume(consumer_thread)
+            debugger.expression('shutdownObservationDone = 1', current)
+            debugger.resume(current)
             event = debugger.stop()
         if 'exited-normally' not in event and 'exit-code="0"' not in event:
             raise RuntimeError('Host exit failed: ' + event)
