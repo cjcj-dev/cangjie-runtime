@@ -250,8 +250,10 @@ Uptr ElfUnloadQuiescence::FindFunctionDescriptor(Uptr startPC)
 {
     // CodeCache::find_blob selects the owning heap, then delegates its lookup.
     AssertReaderActive();
-    const auto image = RegisteredImageForAddress(startPC);
-    return image != nullptr ? image->FindFunctionDescriptor(startPC) : 0;
+    const auto image = RegisteredImageForAddress(startPC, true);
+    if (image == nullptr) { return 0; }
+    const Uptr descriptor = image->FindFunctionDescriptor(startPC);
+    return image->Contains(descriptor) ? descriptor : 0;
 }
 #endif
 
