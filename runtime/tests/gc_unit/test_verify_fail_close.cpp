@@ -816,6 +816,7 @@ GC_RUNTIME_OTHER_VM_TEST(ZVerifyCarrier, ArmedBadRootIsSkipped)
     const size_t remainingRoots = countCarrierRoots();
     std::fprintf(stderr, "VERIFY_ARMED_RELEASE_TARGET remaining=%zu\n", remainingRoots);
     GC_EXPECT_EQ(remainingRoots, 0u);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
 GC_RUNTIME_OTHER_VM_TEST(ZVerifyReferent, MarkVerificationSkipsReferent)
