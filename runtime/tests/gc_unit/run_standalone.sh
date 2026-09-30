@@ -260,13 +260,10 @@ else
   echo "GC_UNIT_PRODUCT_CONFIGURATION=DEFAULT"
 fi
 nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
-if /usr/bin/grep -Eq 'PendingStalledAllocations' \
-    "$OUT/runtime-dynamic-symbols.txt"; then
-  STALL_PRODUCT_OBSERVE=1
-else
-  STALL_PRODUCT_OBSERVE=0
+if [[ "$SO_TESTABLE" == "1" ]]; then
+  python3 "$SRC/testable_product_hooks.py" --source "$ROOT/runtime/src" \
+    --so "$RUNTIME_LIB_DIR/libcangjie-runtime.so"
 fi
-echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
 
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 TESTABLE_FLAGS=()
