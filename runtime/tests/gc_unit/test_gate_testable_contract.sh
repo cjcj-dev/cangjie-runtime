@@ -24,6 +24,33 @@ mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/runti
   "$fixture/lib" "$fixture/bin" \
   "$fixture/sdk/bin"
 cp "$ROOT/runtime/tests/gc_unit/gate_gc_unit.sh" "$fixture/runtime/tests/gc_unit/"
+cp "$ROOT/runtime/tests/gc_unit/language_toolchain.sh" "$fixture/runtime/tests/gc_unit/"
+cat >"$fixture/runtime/tests/gc_unit/language_toolchain.py" <<'PYADMISSION'
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+sdk = Path(os.environ.get('GC_UNIT_LANGUAGE_SDK', '/nonexistent'))
+host = Path(os.environ['GC_UNIT_CJC_RUNTIME_LIB_DIR'])
+if not (sdk / 'bin/cjc').is_file():
+    reason = 'LANGUAGE_SDK_MISSING' if os.environ.get('GC_UNIT_GATE_LANGUAGE_TESTS') == 'only' else 'NO_CJC'
+    print(reason, file=sys.stderr)
+    sys.exit(2)
+if not (host / 'libcangjie-runtime.so').is_file():
+    print('LANGUAGE_HOST_RUNTIME_MISSING', file=sys.stderr)
+    sys.exit(2)
+std = digest(sdk / 'lib/linux_x86_64_cjnative/libcangjie-std-core.a')
+print(json.dumps(dict(language=dict(cjc=digest(sdk / 'bin/cjc'),
+                                   llc=digest(sdk / 'third_party/llvm/bin/llc'),
+                                   opt=digest(sdk / 'third_party/llvm/bin/opt'),
+                                   std=std, std_core=std),
+                      compiler_host=digest(host / 'libcangjie-runtime.so')), sort_keys=True))
+PYADMISSION
 cp "$ROOT/runtime/tests/gc_unit/gate_evidence.py" "$fixture/runtime/tests/gc_unit/"
 cp "$ROOT/runtime/build/resolve_runtime_output.sh" "$fixture/runtime/build/"
 cp "$ROOT/runtime/build/resolve_runtime_headers.py" "$fixture/runtime/build/"
