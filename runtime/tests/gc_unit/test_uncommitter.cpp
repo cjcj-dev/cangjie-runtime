@@ -484,8 +484,7 @@ GC_RUNTIME_OTHER_VM_TEST(Uncommitter, CancelStartsNewCacheWatermarkHistory)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MRT_CjRuntimeInit();
     auto& regions = Heap::GetHeap().GetAllocator().GetRegionManager();
-    auto& frm = regions;
-    frm.StopUncommitters();
+    regions.StopUncommitters();
     auto& partition = UncommitterTestAccess::Partition();
     auto& worker = partition.uncommitter;
     const size_t target = 64 * MB;
