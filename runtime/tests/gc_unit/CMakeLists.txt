@@ -59,6 +59,7 @@ set(GC_UNIT_SOURCES
     test_native_root_current.cpp
     test_concurrency_root_color.cpp
     test_relocation_set_selector.cpp
+    test_relocation_request_queue.cpp
     test_store_barrier_buffer.cpp
     test_old_to_young_1102.cpp
     test_barrier_old_atomic.cpp
