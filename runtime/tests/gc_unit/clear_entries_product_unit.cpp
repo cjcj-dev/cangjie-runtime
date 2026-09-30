@@ -84,7 +84,7 @@ public:
         if (collector == nullptr) return;
         CHECK(collector == &Heap::GetHeap());
         for (ZGenerationId generation : {ZGenerationId::young, ZGenerationId::old}) {
-            auto& cycle = Heap::GetHeap().GetZGeneration(generation);
+            auto& cycle = (*ZGeneration::generation(static_cast<ZGenerationId>(generation)));
             if (cycle.Sequence() != 0) continue;
             if (generation == ZGenerationId::young) {
                 alignas(8) uint64_t storage[16] {};
@@ -131,18 +131,18 @@ public:
     static BaseObject* ProductRelocateOrRemap(
         Heap& collector, BaseObject* from, ZGenerationId generation)
     {
-        using ProductFn = BaseObject* (*)(Heap*, BaseObject*, ZGenerationId);
+        using ProductFn = BaseObject* (*)(ZGeneration*, BaseObject*);
         void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
         GC_EXPECT_TRUE(handle != nullptr);
         void* symbol = handle == nullptr ? nullptr : dlsym(
             handle,
-            "_ZN12MapleRuntime4Heap24relocate_or_remap_objectEPNS_10BaseObjectENS_13ZGenerationIdE");
+            "_ZN12MapleRuntime11ZGeneration24relocate_or_remap_objectEPNS_10BaseObjectE");
         GC_EXPECT_TRUE(symbol != nullptr);
         Dl_info info {};
         GC_EXPECT_TRUE(symbol != nullptr && dladdr(symbol, &info) != 0 && info.dli_fname != nullptr &&
                        std::strstr(info.dli_fname, "libcangjie-runtime.so") != nullptr);
         BaseObject* result = symbol == nullptr ? nullptr :
-            reinterpret_cast<ProductFn>(symbol)(&Heap::GetHeap(), from, generation);
+            reinterpret_cast<ProductFn>(symbol)(ZGeneration::generation(generation), from);
         if (handle != nullptr) {
             (void)dlclose(handle);
         }
@@ -454,7 +454,7 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
 class DeliverySharedPageScope {
 public:
     explicit DeliverySharedPageScope(ZPage* page)
-        : manager(static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager())
+        : manager(Heap::GetHeap().page_allocator())
     {
         // zObjectAllocator.hpp:41 ZPerCPU<ZPage*>: every CPU slot names the page.
         auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::old);
@@ -518,7 +518,7 @@ void DestroyAfterGhostCleared(ZPage* region, const char* why)
     PublishGenerationMarkComplete(Generation::Young);
     PublishGenerationMarkComplete(Generation::Old);
     (void)why;
-    Heap::GetHeap().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
+    (*ZGeneration::generation(static_cast<ZGenerationId>(region->GetOwnerGeneration()))).reset_relocation_set();
 }
 
 struct LateBackfillState {
@@ -566,7 +566,7 @@ void CleanupLateBackfill(GcHeapFixture& fx, LateBackfillState& state)
     // The scenario has consumed its receipt. Normalize the planted header
     // before asking product retirement to prove no source still needs it.
     state.from->SetStateCode(ObjectState::NORMAL);
-    Heap::GetHeap().GetZGeneration(state.region->GetOwnerGeneration()).reset_relocation_set();
+    (*ZGeneration::generation(static_cast<ZGenerationId>(state.region->GetOwnerGeneration()))).reset_relocation_set();
     (void)fx;
 }
 
@@ -597,7 +597,7 @@ PartialCompactState PreparePartialCompact(GcHeapFixture& fx, Heap& collector, bo
 
 void CleanupPartialCompact(GcHeapFixture& fx, PartialCompactState& state)
 {
-    Heap::GetHeap().GetZGeneration(state.region->GetOwnerGeneration()).reset_relocation_set();
+    (*ZGeneration::generation(static_cast<ZGenerationId>(state.region->GetOwnerGeneration()))).reset_relocation_set();
     (void)fx;
 }
 
@@ -667,8 +667,8 @@ void CompleteValueRootCoverage()
 {
     PublishGenerationMarkComplete(Generation::Young);
     PublishGenerationMarkComplete(Generation::Old);
-    Heap::GetHeap().GetZGeneration(Generation::Young).reset_relocation_set();
-    Heap::GetHeap().GetZGeneration(Generation::Old).reset_relocation_set();
+    (*ZGeneration::young()).reset_relocation_set();
+    (*ZGeneration::old()).reset_relocation_set();
 }
 
 } // namespace
@@ -698,7 +698,7 @@ void ExerciseMutatorCopy(bool runtimeEntry)
     const MAddress expected = destination->GetRegionStart();
     destination->SetRegionAllocPtr(expected);
     Heap& collector = Heap::GetHeap();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     DeliverySharedPageScope allocation(destination);
@@ -715,9 +715,9 @@ void ExerciseMutatorCopy(bool runtimeEntry)
     // forwarding entry asserted above is the whole receipt. The header must
     // stay clear; a resurrection of the deleted SetStateCode turns this red.
     GC_EXPECT_FALSE(from->IsForwarded());
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::BindCollector(nullptr);
-    Heap::GetHeap().GetZGeneration(Generation::Old).reset_relocation_set();
+    (*ZGeneration::old()).reset_relocation_set();
     }
 }
 
@@ -958,7 +958,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         state = PrepareLateBackfill(fx, collector);
         state.from->SetStateCode(ObjectState::NORMAL);
         ZGeneration::generation(state.region->generation_id())->forwarding(state.region->GetRegionStart())->mark_done();
-        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+        (*ZGeneration::old()).set_phase(ZGenerationPhase::Relocate);
         auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         auto& old = Heap::GetHeap().old();
         if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
@@ -981,7 +981,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
     } else if (moving) {
         state = PrepareValueRootForwarding(fx, collector);
     }
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Relocate);
     const bool usesState = moving || unresolvedGhost;
     const uintptr_t base = reinterpret_cast<uintptr_t>(usesState ? state.from : fx.obj0);
     const uintptr_t expected = reinterpret_cast<uintptr_t>(moving ? state.to : fx.obj0);
@@ -1001,7 +1001,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
             });
         std::fprintf(stderr, "DERIVED_BASE_FAILCLOSED status=%d\n%s", aborted.status, aborted.output.c_str());
         if (usesState) { CleanupLateBackfill(fx, state); }
-        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+        (*ZGeneration::old()).set_phase(ZGenerationPhase::Relocate);
         RelocationReceiptTest::BindCollector(nullptr);
         std::fprintf(stderr, "DERIVED_BASE_TARGET target_assertion executed=1 matched=%d\n",
                      aborted.output.find("should be forwarded from=") !=
@@ -1016,7 +1016,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
     const bool baseCorrect = frame[0] == expected;
     const bool derivedCorrect = frame[1] == expected + 8;
     if (usesState) { CleanupLateBackfill(fx, state); }
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::BindCollector(nullptr);
     GC_EXPECT_TRUE(derivedCorrect);
     GC_EXPECT_TRUE(baseCorrect);
@@ -1052,7 +1052,7 @@ static void CheckForwardingWinner(bool identity)
     BaseObject* winner = identity ? from : fx.obj1;
     BaseObject* loser = identity ? fx.obj1 : from;
     Heap& collector = Heap::GetHeap();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+    (*ZGeneration::old()).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, fromAddr);
     GC_EXPECT_EQ(([&]() -> MAddress { auto* const f = Heap::GetHeap().GetZGeneration(Generation::Old).forwarding(fromAddr); return f != nullptr ? f->find(fromAddr) : 0; }()), 0);
@@ -1178,7 +1178,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         BaseObject* from = fx.PlaceObject(region->GetRegionStart() + dead->GetSize());
         region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
         ZLiveMap* live = &region->livemap();
-        auto& regionManager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+        auto& regionManager = Heap::GetHeap().page_allocator();
         // ZGC selects a set only when packing can release a page. Two sparse
         // pages are input to the real selector; a single page is exempted.
         ZPage* second = ResetDeliveryUnit(fx, 4);
@@ -1257,7 +1257,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     ZGeneration::old()->set_active_workers(2);
     // This fixture invokes the old body without the driver's young prelude.
     // Supply the product mark-start sequence event before publishing old roots.
-    auto& oldCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+    auto& oldCycle = (*ZGeneration::old());
     // Enter the actual old mark-start producer; a bare ZMark::Start only
     // initializes stacks and does not publish the generation's Mark phase.
     {
@@ -1611,7 +1611,7 @@ void ExerciseRelocationWait782(bool claimedPage)
     destination->SetRegionAllocPtr(destination->GetRegionStart());
     Heap& heap = Heap::GetHeap();
     RelocationReceiptTest::BindCollector(&heap);
-    auto& generation = heap.GetZGeneration(ZGenerationId::old);
+    auto& generation = (*ZGeneration::old());
     generation.set_phase(ZGenerationPhase::Relocate);
     PrepareForwardable(fx, source, reinterpret_cast<MAddress>(from));
     ZForwarding* forwarding = ZGeneration::generation((source)->generation_id())->forwarding((source)->GetRegionStart());

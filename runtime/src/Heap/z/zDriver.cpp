@@ -307,7 +307,7 @@ static bool ShouldClearAllSoftReferences(GCReason reason)
         default:
             CHECK(false);
     }
-    const auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    const auto& manager = Heap::GetHeap().page_allocator();
     return manager.IsAllocationStallingForOld();
 }
 
@@ -330,7 +330,7 @@ static bool ShouldPrecleanYoung(GCReason reason)
             CHECK(false);
     }
     // ZGC zDriver.cpp:294-299: requests that have seen young but not old.
-    const auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    const auto& manager = Heap::GetHeap().page_allocator();
     if (manager.IsAllocationStallingForOld()) {
         return true;
     }

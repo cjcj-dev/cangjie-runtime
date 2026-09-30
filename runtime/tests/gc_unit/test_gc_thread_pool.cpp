@@ -45,7 +45,7 @@ public:
     }
     static void ForwardYoungFromRuntimeEntry(Heap& collector)
     {
-        auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+        auto& young = (*ZGeneration::young());
         ZRelocate::StartRelocationTasks(young.id());
         young.relocate().relocate(&young.relocation_set());
     }
@@ -168,8 +168,8 @@ bool RunYoungRuntimeProductEntry()
     }
     MutatorManager mutatorManager;
     YoungForwardTestRuntime runtime(mutatorManager);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RegionManager& manager = space.GetRegionManager();
+    RegionManager& space = Heap::GetHeap().page_allocator();
+    RegionManager& manager = space;
 
     ZRelocateQueue& queue = (*Heap::GetHeap().GetZGeneration(Generation::Young).relocate().queue());
 
@@ -177,7 +177,7 @@ bool RunYoungRuntimeProductEntry()
 #if defined(MRT_TESTABLE_INTERNALS)
     RelocationReceiptTest::BindCollector(collector);
 #endif
-    MapleRuntime::GcUnit::InitializeGenerationWorkers(Heap::GetHeap().GetZGeneration(ZGenerationId::young), 1);
+    MapleRuntime::GcUnit::InitializeGenerationWorkers((*ZGeneration::young()), 1);
     ZStat::Initialize();
     RelocationReceiptTest::ForwardYoungFromRuntimeEntry(collector);
 
@@ -302,7 +302,7 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     // does. This component fixture must provide that existing dependency.
     auto& old = Heap::GetHeap().old();
     if (old.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(old, 1);
-    ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
+    ForwardTask<Generation::Old> task(manager, &(*ZGeneration::old()).relocation_set());
     WorkerFixture workerIdentity;
     task.work();
     GC_EXPECT_FALSE(owner->is_done());
@@ -332,7 +332,7 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     });
     bool pending = false;
     {
-        ForwardTask<Generation::Old> task(manager, &Heap::GetHeap().GetZGeneration(Generation::Old).relocation_set());
+        ForwardTask<Generation::Old> task(manager, &(*ZGeneration::old()).relocation_set());
         std::thread worker([&] { WorkerFixture workerIdentity; task.work(); });
         // ZGC zRelocate.cpp:1211: an ordinary worker leaves when its iterator
         // is exhausted; task destruction deactivates after all work joins.
@@ -472,7 +472,7 @@ void CheckResizeBeforeRemainingForwarding(Generation id)
         GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(pages[i], object));
     }
     GC_EXPECT_TRUE(BeginForwardingArena(id, {pages[0], pages[1], pages[2], pages[3]}));
-    auto& generation = Heap::GetHeap().GetZGeneration(id);
+    auto& generation = (*ZGeneration::generation(static_cast<ZGenerationId>(id)));
     auto* queue = generation.relocate().queue();
     ZForwarding* owners[4] = {};
     ZRelocationSetIterator iterator(&generation.relocation_set());
@@ -717,7 +717,7 @@ void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, boo
     CreateStandaloneHeap(64);
     ZHeuristics::set_medium_page_size();
     GcHeapFixture fx;
-    auto& generation = Heap::GetHeap().GetZGeneration(id);
+    auto& generation = (*ZGeneration::generation(static_cast<ZGenerationId>(id)));
     const PageAge age = id == Generation::Old ? PageAge::old : PageAge::survivor1;
     const size_t size = type == ZPageType::small ? ZPageSizeSmall : ZPageSizeMediumMin;
     GC_EXPECT_TRUE(size != 0);
@@ -744,7 +744,7 @@ void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, boo
     generation.Workers()->set_active();
     std::thread youngStart;
     if (interleaveYoung) {
-        auto& young = Heap::GetHeap().GetZGeneration(Generation::Young);
+        auto& young = (*ZGeneration::young());
         if (young.Workers() == nullptr) MapleRuntime::GcUnit::InitializeGenerationWorkers(young, 1);
         young.Workers()->set_active_workers(1);
         young.Workers()->set_active();
@@ -770,7 +770,7 @@ void RunRelocationEndCounts(Generation id, ZPageType type, uint32_t workers, boo
     ZRelocate::StartRelocationTasks(generation.id());
     generation.relocate().relocate(&generation.relocation_set());
     if (interleaveYoung) {
-        auto& young = Heap::GetHeap().GetZGeneration(Generation::Young);
+        auto& young = (*ZGeneration::young());
         young.relocate().relocate(&young.relocation_set());
         young.Workers()->set_inactive();
     }

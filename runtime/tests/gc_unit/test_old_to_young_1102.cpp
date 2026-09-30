@@ -42,7 +42,7 @@ GC_TEST(OldToYoung1102, YoungMarkPhaseFlushRemembersOldToYoungSlot)
     buffer.add(reinterpret_cast<volatile zpointer*>(slot), field.GetFieldValue());
     buffer.lastProcessedColor = ::g_cjStoreGoodMask ^ ZPointerMarkedYoungMask;
 
-    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+    auto& old = (*ZGeneration::old());
     const auto phaseBefore = old.GcPhase();
     old.set_phase(ZGenerationPhase::MarkComplete);
     buffer.on_new_phase();

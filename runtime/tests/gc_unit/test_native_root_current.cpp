@@ -53,7 +53,7 @@ public:
         CHECK(&collector == &Heap::GetHeap());
         ZCollectedHeapTest::SetWorkers(workers);
         for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
-            auto& cycle = Heap::GetHeap().GetZGeneration(gen);
+            auto& cycle = (*ZGeneration::generation(static_cast<ZGenerationId>(gen)));
             if (cycle.Workers() == nullptr) {
                 MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, workers);
             } else {
@@ -65,7 +65,7 @@ public:
     static void FlipNativeRootYoung(Heap& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
     static void NativeRootMajorPrelude(Heap& collector)
     {
-        auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+        auto& young = (*ZGeneration::young());
         ZGeneration::young()->collect(ZYoungType::major_partial_roots);
     }
     static void NativeRootTrace(Heap& collector)
@@ -144,7 +144,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     zaddress_unsafe invisibleMem = to_zaddress_unsafe(reinterpret_cast<uintptr_t>(from));
     alignas(16) uintptr_t stackStorage[8] {};
     if (threadKind == 0) {
-        heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
+        LoaderManager::GetInstance()->RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
     } else {
         thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
         thread->SetManagedContext(false);
@@ -179,7 +179,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     fx.region1()->SetRegionAllocPtr(reinterpret_cast<MAddress>(companion) + companion->GetSize());
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region1(), companion));
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, {region, fx.region1()}));
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
+    (*ZGeneration::young()).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTest::FlipNativeRootYoung(collector);
     if (heap.young().Workers() == nullptr) { MapleRuntime::GcUnit::InitializeGenerationWorkers(heap.young(), 1); }
     heap.young().Workers()->set_active_workers(1);
@@ -234,7 +234,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         return;
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
-    Heap::GetHeap().GetZGeneration(Generation::Young).reset_relocation_set();
+    (*ZGeneration::young()).reset_relocation_set();
     // The preceding major prelude already started this old mark cycle.
     // Continue its root task without a second mark-color flip.
     heap.old().concurrent_mark();
@@ -242,7 +242,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         !region->is_object_strongly_live(from_object(from));
     std::fprintf(stderr, "native_root_after_reset executed=1 marked=%u slot=%#zx expected=%p\n",
                  unsigned(oldMarkedCurrent), raw(slot.GetFieldValue()), to);
-    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
+    LoaderManager::GetInstance()->UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
     // The product's final mark and healed root are the result; receipt events are gone.
     GC_EXPECT_TRUE(to_object(slot.GetTargetObject()) == to);
     GC_EXPECT_TRUE(oldMarkedCurrent);
@@ -398,3 +398,401 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, YoungRelocateSkipsForeignIncompleteFrom)
     heap.young().Relocate();
     GC_EXPECT_TRUE(forwarding_for_page(fx.region1()) != nullptr);
     GC_EXPECT_TRUE(!forwarding_for_page(fx.region1())->is_done());
+}
+
+GC_OTHER_VM_TEST(ThreadRootCurrent, OrdinaryRootRoutesByTargetGeneration)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    fx.region0()->reset(PageAge::eden);
+    fx.region1()->reset(PageAge::old);
+    MarkPublicationFixture marking;
+    size_t young = 0;
+    size_t old = 0;
+    // Real native-frame producers feed the product root phase. The old scan
+    // context must not select the domain for either current target.
+    Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    thread->SetManagedContext(false);
+    (void)thread->EnterSaferegion(false);
+    const size_t rootMark = thread->NativeFrameRootCount();
+    (void)thread->AddNativeFrameRoot(fx.obj0);
+    (void)thread->AddNativeFrameRoot(fx.obj1);
+    ZGlobalsPointers::flip_young_mark_start();
+    StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
+    const bool scanned = thread->GetStackWatermark().IsDone();
+    marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
+        GC_EXPECT_TRUE(object == fx.obj0);
+        GC_EXPECT_TRUE(follow);
+        ++young;
+    });
+    marking.DrainOld([&](BaseObject* object, bool follow) {
+        GC_EXPECT_TRUE(object == fx.obj1);
+        GC_EXPECT_TRUE(follow);
+        ++old;
+    });
+    bool youngCurrent = false;
+    bool oldCurrent = false;
+    thread->VisitMutatorRoots([&](ObjectRef& root) {
+        youngCurrent |= to_object(safe(root.LoadPlain())) == fx.obj0;
+        oldCurrent |= to_object(safe(root.LoadPlain())) == fx.obj1;
+    });
+    const bool slotsCurrent = youngCurrent && oldCurrent;
+    thread->PopNativeFrameRootsTo(rootMark);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    std::fprintf(stderr, "ROOT_TARGET_GEN_ASSERT executed=1 scanned=%u current=%u young=%zu old=%zu\n",
+                 unsigned(scanned), unsigned(slotsCurrent), young, old);
+    GC_EXPECT_TRUE(scanned && slotsCurrent);
+    GC_EXPECT_EQ(young, 1u);
+    GC_EXPECT_EQ(old, 1u);
+}
+
+GC_COMPONENT_OTHER_VM_TEST(NativeRootCurrent, MinorPublication) { CheckNativeRoot(true); }
+GC_COMPONENT_OTHER_VM_TEST(NativeRootCurrent, MajorSeed) { CheckNativeRoot(false); }
+GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    Heap& collector = heap;
+    RelocationReceiptTest::BindNativeRootFixture(collector);
+    BaseObject* held = fx.obj0;
+
+    Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(parked != nullptr);
+    parked->SetManagedContext(false);
+    (void)parked->EnterSaferegion(false);
+    const size_t frameMark = parked->NativeFrameRootCount();
+    ObjectRef* root = parked->AddNativeFrameRoot(held);
+    GC_EXPECT_TRUE(root != nullptr);
+    GC_EXPECT_TRUE(parked->InSaferegion());
+
+    // zGeneration.cpp:1212-1237, zMark.cpp:797-834: mark-start establishes
+    // the color/sequence before workers consume roots, then follow marks objects.
+    {
+        ScopedStopTheWorld stw("p10-root-mark-start", false);
+        heap.old().mark_start();
+    }
+    heap.old().concurrent_mark();
+
+    const bool watermarkDone = parked->GetStackWatermark().IsDone(StackWatermark::epoch_id());
+    const bool live = fx.region0()->is_object_strongly_live(from_object(held));
+    std::fprintf(stderr, "P10_OLD_MARK_THREAD_ASSERT_EXECUTED live=%u done=%u epoch=%u\n",
+                 unsigned(live), unsigned(watermarkDone), StackWatermark::epoch_id());
+    GC_EXPECT_TRUE(live);
+    GC_EXPECT_TRUE(watermarkDone);
+
+    parked->PopNativeFrameRootsTo(frameMark);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+
+
+// ZGC zGeneration.cpp:855-883 and zMark.cpp:853-891: mark-start
+// publishes a new epoch; the concurrent root task consumes parked stacks.
+GC_OTHER_VM_TEST(YoungMarkStart, ParkedRootDeferredToConcurrentMark)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    RelocationReceiptTest::BindNativeRootFixture(heap);
+    fx.region0()->reset(PageAge::eden);
+    fx.obj0 = fx.PlaceObject(fx.region0()->GetRegionStart() + 64);
+    fx.region0()->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + 64);
+    Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    parked->SetManagedContext(false);
+    (void)parked->EnterSaferegion(false);
+    const size_t frameMark = parked->NativeFrameRootCount();
+    parked->AddNativeFrameRoot(fx.obj0);
+
+    heap.young().pause_mark_start();
+    const uint32_t epoch = StackWatermark::epoch_id();
+    const bool doneAtStart = parked->GetStackWatermark().IsDone(epoch);
+    const bool liveAtStart = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
+    heap.young().concurrent_mark();
+    const bool doneAfterRoots = parked->GetStackWatermark().IsDone(epoch);
+    const bool liveAfterRoots = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
+    parked->PopNativeFrameRootsTo(frameMark);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    std::fprintf(stderr, "YOUNG_ROOT_PHASE_ASSERT executed=1 start_done=%u start_live=%u concurrent_done=%u concurrent_live=%u\n",
+                 unsigned(doneAtStart), unsigned(liveAtStart), unsigned(doneAfterRoots), unsigned(liveAfterRoots));
+    GC_EXPECT_FALSE(doneAtStart);
+    GC_EXPECT_FALSE(liveAtStart);
+    GC_EXPECT_TRUE(liveAfterRoots);
+    GC_EXPECT_TRUE(doneAfterRoots);
+}
+
+GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
+{
+    PrintNativeRootMaps();
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    Heap& collector = heap;
+    RelocationReceiptTest::BindNativeRootFixture(collector);
+    NativeSlot slot(zpointer::null);
+    NativeAccess<>::oop_store(&(slot), fx.obj0);
+    GC_EXPECT_TRUE(NativeAccess<>::oop_load(&(slot)) == fx.obj0);
+    NativeAccess<>::oop_store(&(slot), nullptr);
+    GC_EXPECT_TRUE(NativeAccess<>::oop_load(&(slot)) == nullptr);
+    std::fprintf(stderr, "native_root_boundary executed=1 colored=1 null=1\n");
+}
+
+GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    Heap& collector = heap;
+    RelocationReceiptTest::BindNativeRootFixture(collector);
+    fx.region0()->reset(PageAge::eden);
+    {
+        ScopedStopTheWorld stopped("native-root young mark-start");
+        Heap::GetHeap().young().mark_start();
+    }
+    Heap::GetHeap().young().Mark().verify_all_stacks_empty();
+    // Load-good, but the previous young/old mark epochs: the root must take
+    // ZBarrier's mark-young slow path even though no remapping is needed.
+    NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
+    const size_t before = RelocationReceiptTest::PendingYoungRootWork(collector);
+    ZBarrier::MarkYoungGoodBarrierOnOopField(root);
+    const bool marked = fx.region0()->is_object_strongly_live(from_object(fx.obj0));
+    const size_t first = RelocationReceiptTest::PendingYoungRootWork(collector);
+    std::fprintf(stderr, "B19_YOUNG_MARK_BEFORE_HEAL executed=1 marked=%u before=%zu after=%zu word=%#lx\n",
+                 unsigned(marked), before, first, raw(root.GetFieldValue()));
+    GC_EXPECT_TRUE(marked);
+    GC_EXPECT_EQ(first, before + 1);
+    GC_EXPECT_TRUE(ZPointer::is_marked_young(to_zpointer(raw(root.GetFieldValue()))));
+    // The same physical, now young-good slot must not publish another follow.
+    ZBarrier::MarkYoungGoodBarrierOnOopField(root);
+    GC_EXPECT_EQ(RelocationReceiptTest::PendingYoungRootWork(collector), first);
+    RelocationReceiptTest::DrainYoungRootWork(collector);
+    GC_EXPECT_EQ(RelocationReceiptTest::PendingYoungRootWork(collector), size_t(0));
+}
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, C1StackFieldHistoricalColor) { CheckNativeRoot(false, 1); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, C2ObjectRefHistoricalColor) { CheckNativeRoot(false, 2); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, C3InvisibleHistoricalColor) { CheckNativeRoot(false, 3); }
+GC_COMPONENT_OTHER_VM_TEST(ThreadRootCurrent, C4HeaderlessHistoricalColor) { CheckNativeRoot(false, 4); }
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& heap = Heap::GetHeap();
+    Heap& collector = heap;
+    RelocationReceiptTest::BindNativeRootFixture(collector);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    fixture.region0()->reset(PageAge::old);
+    // Seed the real scheduling input through its existing fixture operation.
+    // The root task and marker below are the product TraceHeap implementation.
+    GC_EXPECT_TRUE(FinalizerProcessorTest::Queue(Heap::GetHeap().GetFinalizerProcessor(), fixture.obj0));
+    RelocationReceiptTest::NativeRootTrace(collector);
+    const bool marked = fixture.region0()->is_object_strongly_live(from_object(fixture.obj0));
+    std::fprintf(stderr, "ROOT_STORAGE_STRONG_TARGET executed=1 object=%p marked=%u\n",
+                 fixture.obj0, unsigned(marked));
+    // Both observations are read before either target assertion can fail.
+    GC_EXPECT_TRUE(marked);
+}
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+void CheckRootStorageSegments(unsigned family)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& heap = Heap::GetHeap();
+    Heap& collector = heap;
+    RelocationReceiptTest::BindNativeRootFixture(collector, 2);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    fixture.region0()->reset(PageAge::eden);
+    auto& finalizers = heap.GetFinalizerProcessor();
+    // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
+    constexpr size_t count = 24 * sizeof(uintptr_t) * CHAR_BIT;
+    for (size_t i = 0; i < count; ++i) {
+        if (family == 0) { GC_EXPECT_TRUE(FinalizerProcessorTest::Queue(finalizers, fixture.obj0)); }
+        else if (family == 1) { finalizers.RegisterFinalizer(fixture.obj0); }
+        else { (void)heap.cross_vm().export_roots().RegisterExportRoot(fixture.obj0); }
+    }
+    std::unordered_map<NativeSlot*, uintptr_t> before;
+    const NativeSlotVisitor remember = [&](NativeSlot& slot) {
+        before.emplace(&slot, raw(slot.GetFieldValue()));
+    };
+    if (family == 0) { finalizers.VisitGCRoots(remember); }
+    else if (family == 1) { finalizers.VisitFinalizers(remember); }
+    else { heap.cross_vm().export_roots().VisitGCRoots(remember); }
+    // ZGC zMark.cpp:877: the young root task consumes ALL colored root
+    // storages. Its barrier recolors each slot after mark-start flips the
+    // young mark bit. Read the stored word directly; an oop load would heal
+    // it and hide a skipped task. Allocation-page implicit liveness cannot
+    // satisfy this per-slot transition.
+    RelocationReceiptTest::NativeRootMajorPrelude(collector);
+    size_t remaining = 0;
+    size_t transitioned = 0;
+    bool valuesValid = true;
+    const NativeSlotVisitor observe = [&](NativeSlot& slot) {
+        const auto it = before.find(&slot);
+        if (it == before.end()) { return; }
+        ++remaining;
+        const zpointer value = slot.GetFieldValue();
+        transitioned += raw(value) != it->second && ZPointer::is_marked_young(value);
+        valuesValid &= to_object(slot.GetTargetObject()) == fixture.obj0;
+    };
+    if (family == 0) { finalizers.VisitGCRoots(observe); }
+    else if (family == 1) { finalizers.VisitFinalizers(observe); }
+    else { heap.cross_vm().export_roots().VisitGCRoots(observe); }
+    const bool covered = before.size() == count && remaining == count;
+    std::fprintf(stderr,
+        "ROOT_SEGMENT_TARGET executed=1 family=%u slots=%zu remaining=%zu transitioned=%zu values_valid=%u\n",
+        family, before.size(), remaining, transitioned, unsigned(valuesValid));
+    GC_EXPECT_TRUE(covered && valuesValid && transitioned == count);
+}
+}
+GC_OTHER_VM_TEST(RootStorageSegments, Strong) { CheckRootStorageSegments(0); }
+GC_OTHER_VM_TEST(RootStorageSegments, WeakFinalizer) { CheckRootStorageSegments(1); }
+GC_OTHER_VM_TEST(RootStorageSegments, Export) { CheckRootStorageSegments(2); }
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& heap = Heap::GetHeap();
+    Heap& collector = heap;
+    RelocationReceiptTest::BindNativeRootFixture(collector);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    fixture.region0()->reset(PageAge::eden);
+    std::vector<U64> original;
+    for (size_t i = 0; i < sizeof(uintptr_t) * CHAR_BIT; ++i) {
+        original.push_back(heap.cross_vm().export_roots().RegisterExportRoot(fixture.obj0));
+    }
+    auto& storage = heap.cross_vm().export_roots().RootStorage();
+    const size_t before = OopStorageTest::BlockCount(storage);
+    RelocationReceiptTest::NativeRootMajorPrelude(collector);
+    const size_t afterScan = OopStorageTest::BlockCount(storage);
+    const U64 added = heap.cross_vm().export_roots().RegisterExportRoot(fixture.obj0);
+    const size_t grown = OopStorageTest::BlockCount(storage);
+    for (U64 handle : original) { heap.cross_vm().export_roots().RemoveExportRoot(handle); }
+    const size_t after = OopStorageTest::BlockCount(storage);
+    const size_t remaining = storage.AllocationCount();
+    std::fprintf(stderr,
+        "ROOT_LIFETIME_TARGET executed=1 before=%zu after_scan=%zu grown=%zu after=%zu remaining=%zu\n",
+        before, afterScan, grown, after, remaining);
+    heap.cross_vm().export_roots().RemoveExportRoot(added);
+    GC_EXPECT_TRUE(afterScan == before && grown >= before && remaining >= 1);
+}
+#endif
+
+// ZGC zMark.cpp:703-708: callers finish every thread; the watermark owns
+// completion. Exercise the exported product root phase and handshake entries.
+namespace {
+void CheckYoungThreadCompletion(bool handshakeFirst)
+{
+    using namespace MapleRuntime;
+    using namespace MapleRuntime::GcUnit;
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    fixture.region0()->reset(PageAge::eden);
+    Mutator* thread = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    thread->SetManagedContext(false);
+    (void)thread->EnterSaferegion(false);
+    const size_t frameMark = thread->NativeFrameRootCount();
+    ObjectRef* root = thread->AddNativeFrameRoot(fixture.obj0);
+    // A new watermark is current and done (ZGC stackWatermark.cpp:162).
+    // Start the phase after attachment so this thread actually needs processing.
+    MarkPublicationFixture marking;
+    ZGlobalsPointers::flip_young_mark_start();
+    const uint64_t epoch = StackWatermark::epoch_id();
+    const bool initiallyDone = thread->GetStackWatermark().IsDone(epoch);
+    const bool initiallyLive = fixture.region0()->is_object_strongly_live(from_object(fixture.obj0));
+    size_t published = 0;
+    auto readPublished = [&] {
+        marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
+            GC_EXPECT_TRUE(object == fixture.obj0 && follow);
+            ++published;
+        });
+    };
+    if (handshakeFirst) {
+        StackWatermarkSet::finish_processing(*thread, reinterpret_cast<void*>(ZUncoloredRoot::mark));
+        const bool done = thread->GetStackWatermark().IsDone(epoch);
+        readPublished();
+        std::fprintf(stderr, "YOUNG_HANDSHAKE_TARGET done=%u published=%zu initially_done=%u initially_live=%u\n",
+                     unsigned(done), published, unsigned(initiallyDone), unsigned(initiallyLive));
+        GC_EXPECT_TRUE(!initiallyDone && !initiallyLive && done && published == 1);
+    }
+    ZMark::VisitMinorRoots();
+    const bool firstDone = thread->GetStackWatermark().IsDone(epoch);
+    readPublished();
+    const size_t firstPublished = published;
+    ZMark::VisitMinorRoots();
+    readPublished();
+    const bool sameRoot = raw(root->LoadPlain()) == reinterpret_cast<uintptr_t>(fixture.obj0);
+    std::fprintf(stderr, "YOUNG_THREAD_COMPLETION_TARGET handshake=%u done=%u published=%zu first=%zu same=%u\n",
+                 unsigned(handshakeFirst), unsigned(firstDone), published, firstPublished,
+                 unsigned(sameRoot));
+    GC_EXPECT_TRUE(firstDone && firstPublished == 1 && published == firstPublished && sameRoot);
+    thread->PopNativeFrameRootsTo(frameMark);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+}
+GC_OTHER_VM_TEST(YoungThreadRoots, UnfinishedThreadCompletesOnce) { CheckYoungThreadCompletion(false); }
+GC_OTHER_VM_TEST(YoungThreadRoots, HandshakeCompletedThreadIsIdempotent) { CheckYoungThreadCompletion(true); }
+
+// Product-runtime coverage: allocation and root registration are the producers;
+// the young GC phase dispatches the closure and produces the observed livemap.
+namespace {
+void CheckUncoloredRootRuntime(bool nullRoot)
+{
+    using namespace MapleRuntime;
+    RuntimeParam param{};
+    param.heapParam.heapSize = 512 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    auto& manager = MutatorManager::Instance();
+    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    mutator->SetManagedContext(false);
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)]{};
+    auto* type = reinterpret_cast<TypeInfo*>(storage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uintptr_t));
+    BaseObject* object = nullptr;
+    const size_t roots = mutator->NativeFrameRootCount();
+    RootSlot* slot;
+    {
+        ScopedObjectAccess access;
+        if (!nullRoot) { object = MObject::NewObject(type, 2 * sizeof(uintptr_t), AllocType::MOVEABLE_OBJECT); }
+        slot = mutator->AddNativeFrameRoot(object);
+    }
+    bool live = nullRoot;
+    bool done;
+    bool plain;
+    {
+        DriverLocker locker;
+        auto& young = Heap::GetHeap().young();
+        YoungTypeSetter collection(young, ZYoungType::minor);
+        ScopedEnterSaferegion safe(false);
+        young.pause_mark_start();
+        young.concurrent_mark();
+        done = mutator->GetStackWatermark().IsDone(StackWatermark::epoch_id());
+        plain = raw(slot->LoadPlain()) == reinterpret_cast<uintptr_t>(object);
+        if (!nullRoot) { live = Heap::page(reinterpret_cast<uintptr_t>(object))->is_object_strongly_live(from_object(object)); }
+        std::fprintf(stderr, "UNC_ROOT_TARGET executed=1 null=%u live=%u done=%u plain=%u\n",
+                     unsigned(nullRoot), unsigned(live), unsigned(done), unsigned(plain));
+        young.Workers()->set_inactive();
+    }
+    mutator->PopNativeFrameRootsTo(roots);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    GC_EXPECT_TRUE(live);
+    GC_EXPECT_TRUE(done && plain);
+}
+}
+GC_RUNTIME_OTHER_VM_TEST(UncoloredRootRuntime, NativeRootMarked) { CheckUncoloredRootRuntime(false); }
+GC_RUNTIME_OTHER_VM_TEST(UncoloredRootRuntime, NullRootCompletes) { CheckUncoloredRootRuntime(true); }

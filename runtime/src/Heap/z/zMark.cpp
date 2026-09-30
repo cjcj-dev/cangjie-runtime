@@ -11,6 +11,7 @@
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/z/zRootsIterator.hpp"
 
 #include <array>
 #include <atomic>
@@ -236,7 +237,7 @@ void ZMark::VisitMinorRoots()
 {
     MarkYoungRootsTask task(Heap::GetHeap().young().Workers()->active_workers());
     SuspendibleThreadSetJoiner joiner;
-    (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).run(&task);
+    (*(*ZGeneration::young()).Workers()).run(&task);
 
 }
 
@@ -534,7 +535,7 @@ void ZMark::Start()
     // zMark.cpp:118-123: stripe count goes to the generation's mark account.
     const ZGenerationId statId =
         generation == MarkingStacks::MarkingGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
-    Heap::GetHeap().GetZGeneration(statId).StatMark()->AtMarkStart(targetNStripes);
+    (*ZGeneration::generation(static_cast<ZGenerationId>(statId))).StatMark()->AtMarkStart(targetNStripes);
 }
 
 void ZMark::PrepareWork()
@@ -786,7 +787,7 @@ bool ZMark::End()
     // zMark.cpp:983-987: completed mark publishes its flush/continue counters.
     const ZGenerationId statId =
         generation == MarkingStacks::MarkingGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
-    Heap::GetHeap().GetZGeneration(statId).StatMark()->AtMarkEnd(nproactiveflush, nterminateflush,
+    (*ZGeneration::generation(static_cast<ZGenerationId>(statId))).StatMark()->AtMarkEnd(nproactiveflush, nterminateflush,
                                                                  ntrycomplete, ncontinue);
     return true;
 }

@@ -50,7 +50,7 @@ void CheckSavedColor(bool updateThreadObject, bool remap = false, bool noReturn 
     auto& heap = Heap::GetHeap();
     ZCollectedHeapTest::SetWorkers(1);
     for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
-        auto& cycle = heap.GetZGeneration(gen);
+        auto& cycle = (*ZGeneration::generation(static_cast<ZGenerationId>(gen)));
         if (cycle.Workers() == nullptr) {
             MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, 1);
         } else {
@@ -153,7 +153,7 @@ void CheckOldRootRead(bool healBeforeRead, bool revisitAfterRead = false)
     auto& heap = Heap::GetHeap();
     ZCollectedHeapTest::SetWorkers(1);
     for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
-        auto& cycle = heap.GetZGeneration(gen);
+        auto& cycle = (*ZGeneration::generation(static_cast<ZGenerationId>(gen)));
         if (cycle.Workers() == nullptr) {
             MapleRuntime::GcUnit::InitializeGenerationWorkers(cycle, 1);
         } else {
