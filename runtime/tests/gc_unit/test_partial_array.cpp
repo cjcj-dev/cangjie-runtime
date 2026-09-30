@@ -1,5 +1,4 @@
 #include "gc_worker_fixture.hpp"
-#include "Heap/z/zMarkTerminate.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -12,6 +11,7 @@
 // check_partial_array_visits.py also checks actual slot multiplicity (including
 // a repeated small follower whose barriers no longer change marking state).
 
+#include <atomic>
 #include <cstdint>
 #include <csignal>
 #include <cstring>
@@ -403,12 +403,12 @@ GC_TEST(MarkConsumer1328, CrossStripePartialStaysLocalAndOverflowed)
     const size_t localCount = local == nullptr ? 0 : local->Size();
     const size_t published = target->published.Length();
     const size_t overflowed = target->overflowed.Length();
-    std::fprintf(stderr, "PARTIAL1328_TARGET entries=1 capacity=%zu local=%zu published=%zu overflowed=%zu wake=%zu\n",
-                 capacity, localCount, published, overflowed, domain.Terminate().awakening);
+    std::fprintf(stderr, "PARTIAL1328_TARGET entries=1 capacity=%zu local=%zu published=%zu overflowed=%zu wake=%u\n",
+                 capacity, localCount, published, overflowed, domain.Terminate().awakening.load(std::memory_order_relaxed));
     if (local != nullptr) MarkStripeStack::Destroy(local);
     while (auto* stack = target->StealStack(domain.Smr(), 0)) MarkStripeStack::Destroy(stack);
     // One target verdict includes placement and wake state, before diagnostics.
-    GC_EXPECT_TRUE(localCount > 0 && published == 0 && overflowed == 1 && domain.Terminate().awakening == 0);
+    GC_EXPECT_TRUE(localCount > 0 && published == 0 && overflowed == 1 && domain.Terminate().awakening.load(std::memory_order_relaxed) == 0);
     GC_EXPECT_FALSE(drained);
 }
 
@@ -431,13 +431,13 @@ GC_TEST(MarkConsumer1328, PartialDoesNotWakeWithoutFullStack)
     auto* target = stripes.StripeForAddress(start + MarkPartialArray::MIN_SIZE);
     auto* local = stacks.StealLocal(stripes, target);
     const size_t count = local == nullptr ? 0 : local->Size();
-    const size_t wake = domain.Terminate().awakening;
+    const size_t wake = domain.Terminate().awakening.load(std::memory_order_relaxed);
     if (local != nullptr) MarkStripeStack::Destroy(local);
     std::fprintf(stderr, "PARTIAL1328_WAKE entries=1 local=%zu wake=%zu\n", count, wake);
     GC_EXPECT_TRUE(count > 0 && target->published.IsEmpty() && wake == 0);
     // Positive control: the same terminate state responds to a real wake.
     domain.Terminate().Wake();
-    GC_EXPECT_EQ(domain.Terminate().awakening, 1u);
+    GC_EXPECT_EQ(domain.Terminate().awakening.load(std::memory_order_relaxed), 1u);
 }
 
 GC_TEST(MarkConsumer1328, YoungDrainRejectsAllocatingOldPage)
