@@ -585,12 +585,6 @@ void CJFileLoader::RecordTypeInfo(TypeInfo* ti)
 
 void CJFileLoader::ClearLoadedFiles()
 {
-    // CangjieRuntime clears Runtime::runtime before module finalization, so a
-    // shutdown cleanup cannot create ScopedStopTheWorld or query
-    // MutatorManager::Instance(). Both runtime exits retire their entry mutator
-    // and stop the scheduler before FiniAndDelete, so no active image frame can
-    // be created or remain here. Close task admission for the complete cleanup
-    // and prove the remaining pending side explicitly for every image.
     CHECK_DETAIL(Runtime::CurrentRef() == nullptr,
                  "ELF shutdown cleanup requires a stopped runtime");
     ElfUnloadQuiescence::TaskAdmissionScope shutdownAdmission;
