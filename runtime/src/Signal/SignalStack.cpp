@@ -27,7 +27,7 @@
 #include "Base/SysCall.h"
 #include "securec.h"
 #include "Common/ScopedObjectAccess.h"
-#include "Mutator/VMOperation.h"
+#include "CJThread/src/syscall/include/inner/syscall_impl.h"
 #ifdef __APPLE__
 #include <mach/mach.h>
 #else
@@ -49,7 +49,7 @@ static semaphore_t g_signalSemaphore;
 #else
 static sem_t g_signalSemaphore;
 #endif
-static bool g_signalDispatcherStarted = false;
+static CJThreadHandle g_signalDispatcher = nullptr;
 static std::mutex g_handlerMutex;
 
 static void NotifySignal(int signal)
@@ -237,21 +237,20 @@ void* SignalStack::DispatchSignals(void*)
     }
 }
 
+// HotSpot os.cpp:492: the signal dispatcher is a managed JavaThread created with
+// JavaThread::start_internal_daemon, not a raw OS thread. A raw pthread takes no
+// scheduler slot, so carrier CJThreads it would otherwise displace start running
+// immediately; a managed dispatcher keeps the CJThread dispatch order of the phase
+// entry points (runtime/tests/gc_unit/test_verify_fail_close.cpp:877).
 void SignalStack::StartDispatcher()
 {
-    pthread_attr_t attributes;
-    CHECK(pthread_attr_init(&attributes) == 0);
-    CHECK(pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED) == 0);
-    pthread_t dispatcher;
-    const int result = pthread_create(&dispatcher, &attributes, DispatchSignals, nullptr);
-    CHECK(pthread_attr_destroy(&attributes) == 0);
-    CHECK(result == 0);
-    g_signalDispatcherStarted = true;
+    g_signalDispatcher = RunCJTask(DispatchSignals, nullptr);
+    CHECK(g_signalDispatcher != nullptr);
 }
 
 void SignalStack::StopDispatcher()
 {
-    if (!g_signalDispatcherStarted) { return; }
+    if (g_signalDispatcher == nullptr) { return; }
     NotifySignal(_NSIG);
 }
 
