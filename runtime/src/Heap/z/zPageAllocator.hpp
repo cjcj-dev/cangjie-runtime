@@ -16,6 +16,7 @@
 #include <mutex>
 #include <vector>
 #include "Heap/z/zFuture.hpp"
+#include "Heap/z/zSafeDelete.inline.hpp"
 #include "Heap/z/zList.inline.hpp"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zArray.inline.hpp"
@@ -251,9 +252,6 @@ template<Generation G>
 class ForwardTask;
 
 
-
-
-
 // RegionManager needs to know header size and alignment in order to iterate objects linearly
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 namespace GcUnit { struct GcHeapFixture; }
@@ -308,7 +306,6 @@ class RegionManager {
     friend class ZObjectAllocator;
     friend struct PinRootTestAccess;
     friend struct IkeKeepTestAccess;
-    friend struct IsFromRegTestAccess;
 
 public:
     /* region memory layout:
@@ -334,10 +331,6 @@ public:
     // P01 reverse-metadata ABI adapter; called only before runtime allocation.
     static std::vector<ZPage::ReservedSegment> ReservedSegments(ZVirtualMemoryManager& virtualMemory);
 
-    void VisitPageOwners(const std::function<void(ZPage*)>& visitor) const
-    {
-        ZPage::VisitPageOwners(visitor);
-    }
 
     // ZPageAllocator::capacity(): sum of ZPartition::_capacity.
     size_t GetCommittedCapacity() const { return capacity(); }
@@ -353,13 +346,14 @@ public:
     MAddress GetSpaceStartAddress() const { return reservedStart; }
     MAddress GetSpaceEndAddress() const { return reservedEnd; }
 
+    bool is_initialized() const { return _initialized; }
+    bool PrimeCache(size_t size);
     RegionManager();
     RegionManager(const HeapParam& param, double garbageThreshold);
 
     RegionManager(const RegionManager&) = delete;
 
     RegionManager& operator=(const RegionManager&) = delete;
-
 
 
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
@@ -377,21 +371,19 @@ public:
     bool StallAllocation(AllocationStallRequest& request);
     bool ClaimCapacityOrStall(AllocationStallRequest& request);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
-    void ReturnPageMemory(const ZVirtualMemory& memory);
     bool IsAllocationStalling() const;
     bool IsAllocationStallingForOld() const;
     void HandleAllocStallingForYoung();
     void StopStalledAllocations();
     void HandleAllocStallingForOld(bool clearedAllSoftRefs);
     size_t AllocationStallsNow() const;
-    // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
-    static void RememberPromotedObject(BaseObject* object);
-    // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
-    void RememberFlipPromotedPages(ZWorkers& workers);
-    void ResetFlipPromotedPages();
     void promote_used(const ZPage* from, const ZPage* to);
     void safe_destroy_page(ZPage* page);
+    void enable_safe_destroy() const;
+    void disable_safe_destroy() const;
+    void VisitPageOwners(const std::function<void(ZPage*)>& visitor) const;
     void free_page(ZPage* page);
+    void free_pages(ZGenerationId id, const ZArray<ZPage*>* pages);
     void StampCensusBoundaries();
     void PromoteAllRegions();
 
@@ -421,21 +413,13 @@ public:
     ZPage* TakeRegion(size_t num, ZPageType, PageAge age = PageAge::old, ZAllocationFlags flags = {});
 
 
-
     // caller assures size is truely large (> region size)
-
-
-
 
 
     void RestoreToSpaceStateWords();
 
 
-
-
     size_t GetYoungAllocatedSize() const;
-
-
 
 
 
@@ -444,10 +428,6 @@ public:
 
     size_t GetUsedRegionSize() const { return GetUsedBytes(); }
 
-    size_t GetRecentAllocatedSize() const;
-    size_t GetSurvivedSize() const;
-    size_t GetFromSpaceSize() const;
-    size_t SumAllocatedByRoles(std::initializer_list<ZPageRole> roles) const;
 
     size_t GetUsedBytes() const;
 
@@ -458,7 +438,6 @@ public:
     size_t GetCommittedBytes() const { return GetCommittedCapacity(); }
 
     // Diagnostic total over large pages, from the page table (no page list).
-    size_t GetLargeObjectSize() const;
 
     size_t GetAllocatedSize() const;
 
@@ -494,26 +473,15 @@ public:
     size_t UsedGeneration(ZGenerationId id) const { return used_generation(id); }
 
 
-
     void SetGarbageThreshold(double garbageThreshold);
 
 
-
-
-
-
-
-
-
-
 private:
+    mutable ZSafeDelete<ZPage> _safe_destroy;
+    void prepare_memory_for_free(ZPage* page, ZArray<ZVirtualMemory>* vmems);
+    void free_memory(ZArray<ZVirtualMemory>* vmems);
     // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the
     // page table no longer publishes the old descriptor.
-    void ReturnRetiredPageMemory(const ZVirtualMemory& memory);
-
-
-
-
 
 
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
@@ -535,7 +503,6 @@ private:
     std::vector<std::unique_ptr<ZPartition>> partitions;
     size_t nextPartition{0}; // A03n: preferred NUMA routing is deferred.
     void InitializePartitions(size_t maxCapacity);
-    bool PrimeCache(size_t size);
     void PrintCacheOn() const;
     bool claim_capacity(ZPageAllocation* allocation);
     bool claim_capacity_fast_medium(ZPageAllocation* allocation);
@@ -584,6 +551,7 @@ private:
     mutable std::mutex pageAllocatorMutex;
     ZList<ZPageAllocation> stalled;
     bool stallClosed{false};
+    bool _initialized{false};
     void SatisfyStalledAllocations();
     void NotifyOutOfMemory();
     void RestartGC() const;

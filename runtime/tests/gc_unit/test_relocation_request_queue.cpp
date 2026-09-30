@@ -22,7 +22,7 @@ GC_TEST(RelocationPageQueue, TwoObjectsShareOnePageClaim)
 {
     GcHeapFixture heap;
     heap.InstallPageOwner(heap.region0());
-    auto* owner = forwarding_for_page(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
     ZRelocateQueue queue;
     queue.activate(1);
     std::atomic<unsigned> returned{0};
@@ -46,14 +46,14 @@ GC_TEST(RelocationPageQueue, ReleasedPageStillHasItsImmutableEntry)
 {
     GcHeapFixture heap;
     heap.InstallPageOwner(heap.region0());
-    auto* owner = forwarding_for_page(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
     const auto from = reinterpret_cast<MAddress>(heap.obj0);
     const auto to = reinterpret_cast<MAddress>(heap.obj1);
     GC_EXPECT_EQ(owner->insert(from, to), to);
     owner->release_page();
     ZRelocateQueue queue;
     GC_EXPECT_FALSE(owner->retain_page(&queue));
-    GC_EXPECT_TRUE(Heap::GetHeap().old().remap_object(heap.obj0) == heap.obj1);
+    GC_EXPECT_TRUE(ZGeneration::generation(heap.region0()->generation_id())->remap_object(heap.obj0) == heap.obj1);
     GC_EXPECT_FALSE(owner->is_done());
 }
 
@@ -61,7 +61,7 @@ GC_TEST(RelocationPageQueue, DoneBeforeEnqueueNeedsNoWorker)
 {
     GcHeapFixture heap;
     heap.InstallPageOwner(heap.region0());
-    auto* owner = forwarding_for_page(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
     owner->release_page();
     owner->mark_done();
     ZRelocateQueue queue;
@@ -74,7 +74,7 @@ GC_TEST(RelocationPageQueue, EntryPublicationDoesNotCompleteThePage)
 {
     GcHeapFixture heap;
     heap.InstallPageOwner(heap.region0());
-    auto* owner = forwarding_for_page(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
     const auto from = reinterpret_cast<MAddress>(heap.obj0);
     const auto to = reinterpret_cast<MAddress>(heap.obj1);
     ZRelocateQueue queue;
@@ -100,7 +100,7 @@ GC_TEST(RelocationPageQueue, EnqueueWakesSynchronizedWorker)
 {
     GcHeapFixture heap;
     heap.InstallPageOwner(heap.region0());
-    auto* owner = forwarding_for_page(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
     ZRelocateQueue queue;
     queue.activate(1);
     std::atomic<bool> synchronized{false};
@@ -129,7 +129,7 @@ GC_OTHER_VM_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
     B09RuntimeFixture runtime;
     GcHeapFixture heap;
     heap.InstallPageOwner(heap.region0());
-    auto* owner = forwarding_for_page(heap.region0());
+    auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
     ZRelocateQueue queue;
     queue.activate(1);
     Mutator mutator;
@@ -180,7 +180,7 @@ void ExpectClearRejection(int input, const char* diagnostic)
         std::signal(SIGABRT, SIG_DFL);
         GcHeapFixture heap;
         heap.InstallPageOwner(heap.region0());
-        auto* owner = forwarding_for_page(heap.region0());
+        auto* owner = ZGeneration::generation(heap.region0()->generation_id())->forwarding(heap.region0()->GetRegionStart());
         ZRelocateQueue queue;
         if (input == 0) {
             queue.activate(1);

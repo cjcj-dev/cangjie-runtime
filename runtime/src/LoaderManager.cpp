@@ -13,6 +13,7 @@
 #include "Interpreter/Options.h"
 #include "Loader/ILoader.h"
 #include "LoaderManager.h"
+#include "Interpreter/InterpreterSpecific.h"
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
@@ -342,3 +343,71 @@ void LoaderManager::RegisterLoadFunc()
 
 void LoaderManager::PreInitializePackage(Uptr address) { loader->TryThrowException(address); };
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+void LoaderManager::RegisterStaticRoots(Uptr addr, U32 size)
+{
+    _static_roots.RegisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
+}
+
+void LoaderManager::UnregisterStaticRoots(Uptr addr, U32 size)
+{
+    _static_roots.UnregisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
+}
+
+void LoaderManager::VisitStaticRoots(const NativeSlotVisitor& visitor)
+{
+    _static_roots.VisitRoots(visitor);
+#ifdef INTERPRETER_ENABLED
+    VisitInterpreterGlobalRoots(&visitor);
+#endif
+}
+
+}
+
+namespace MapleRuntime {
+void StaticRootTable::RegisterRoots(StaticRootArray* addr, U32 size)
+{
+    std::lock_guard<std::mutex> lock(gcRootsLock);
+    // L741: map::insert keeps first value; must not inflate totalRootsCount on dup key.
+    auto result = gcRootsBuckets.insert(std::pair<StaticRootArray*, U32>(addr, size));
+    if (!result.second) {
+        LOG(RTLOG_ERROR,
+            "StaticRootTable::RegisterRoots duplicate key %p size %u (kept size %u); totalRootsCount not increased",
+            addr, size, result.first->second);
+        return;
+    }
+    totalRootsCount += size;
+}
+
+void StaticRootTable::UnregisterRoots(StaticRootArray* addr, U32 size)
+{
+    std::lock_guard<std::mutex> lock(gcRootsLock);
+    auto iter = gcRootsBuckets.find(addr);
+    if (iter == gcRootsBuckets.end()) {
+        LOG(RTLOG_ERROR, "StaticRootTable::UnregisterRoots missing key %p size %u", addr, size);
+        return;
+    }
+    if (iter->second != size) {
+        LOG(RTLOG_ERROR,
+            "StaticRootTable::UnregisterRoots size mismatch key %p caller %u registered %u; using registered",
+            addr, size, iter->second);
+        totalRootsCount -= iter->second;
+    } else {
+        totalRootsCount -= size;
+    }
+    gcRootsBuckets.erase(iter);
+}
+
+void StaticRootTable::VisitRoots(const NativeSlotVisitor& visitor)
+{
+    std::lock_guard<std::mutex> lock(gcRootsLock);
+    for (auto iter = gcRootsBuckets.begin(); iter != gcRootsBuckets.end(); iter++) {
+        U32 gcRootsSize = iter->second;
+        StaticRootArray* array = iter->first;
+        for (USize i = 0; i < gcRootsSize; i++) {
+            visitor(*array->content[i]);
+        }
+    }
+}
+}

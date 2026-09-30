@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 // ZGC zCollectedHeap.cpp:153-155 and zRelocationSetSelector.inline.hpp:75-114.
@@ -64,7 +65,7 @@ int main(int argc, char** argv)
             ++allocated;
             auto* page = Heap::page(reinterpret_cast<uintptr_t>(obj));
             if (pages.insert(page->GetRegionStart()).second && !empty) {
-                roots.push_back(heap.RegisterExportRoot(obj));
+                roots.push_back(heap.cross_vm().export_roots().RegisterExportRoot(obj));
                 original.push_back(reinterpret_cast<uintptr_t>(obj));
             }
             if (census) {
@@ -89,10 +90,10 @@ int main(int argc, char** argv)
     {
         ScopedObjectAccess access;
         for (size_t i = 0; i < roots.size(); ++i) {
-            BaseObject* obj = heap.GetExportObject(roots[i]);
+            BaseObject* obj = heap.cross_vm().export_roots().GetExportRoot(roots[i]);
             valid += obj != nullptr && obj->GetTypeInfo() == type;
             moved += reinterpret_cast<uintptr_t>(obj) != original[i];
-            heap.RemoveExportObject(roots[i]);
+            heap.cross_vm().export_roots().RemoveExportRoot(roots[i]);
         }
         for (uintptr_t page : pages) { reclaimed += Heap::page(page) == nullptr; }
     }

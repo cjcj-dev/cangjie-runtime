@@ -43,36 +43,6 @@ inline __attribute__((visibility("hidden"))) size_t RegionManager::GetMetadataSi
         return ZGranuleSize;
     }
 
-inline size_t RegionManager::SumAllocatedByRoles(std::initializer_list<ZPageRole> roles) const
-    {
-        size_t bytes = 0;
-        ZPage::SafeDestroyScope scope;
-        ZPageTableIterator iter(&ZPageTable::heap_table());
-        for (ZPage* region; iter.next(&region);) {
-            for (ZPageRole role : roles) {
-                if (region->GetRegionRole() == role) {
-                    bytes += region->GetRegionSize();
-                    break;
-                }
-            }
-        }
-        return bytes;
-    }
-
-inline size_t RegionManager::GetRecentAllocatedSize() const
-    {
-        return SumAllocatedByRoles({ ZPageRole::RecentFull, ZPageRole::RecentLarge });
-    }
-
-inline size_t RegionManager::GetSurvivedSize() const
-    {
-        return SumAllocatedByRoles({ ZPageRole::From, ZPageRole::OldLarge });
-    }
-
-inline size_t RegionManager::GetFromSpaceSize() const
-    {
-        return SumAllocatedByRoles({ ZPageRole::From });
-    }
 
 inline size_t RegionManager::GetUsedBytes() const
     {
@@ -80,7 +50,6 @@ inline size_t RegionManager::GetUsedBytes() const
         // counter, not a list sum.
         return pageAllocatorUsed;
     }
-
 
 
 } // namespace MapleRuntime
@@ -139,16 +108,6 @@ private:
     ZRelocateMediumAllocator mediumAllocator;
 
 };
-
-
-
-
-
-
-
-
-
-
 
 
 } // namespace MapleRuntime

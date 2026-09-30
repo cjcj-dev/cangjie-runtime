@@ -1,3 +1,4 @@
+#include "Heap/z/zRootsIterator.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include <array>
@@ -50,7 +51,7 @@ extern "C" int p1MarkStartExercise()
     type->SetInstanceSize(sizeof(uint64_t));
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(object);
+    const U64 handle = Heap::GetHeap().cross_vm().export_roots().RegisterExportRoot(object);
     ZPage* page = Heap::page(reinterpret_cast<MAddress>(object));
     Expect(page->IsAllocating(), "real_allocation_has_current_birth");
     std::printf("P1_ALLOCATED page=%p birth=%llu owner_sequence=%llu\n", page,
@@ -63,11 +64,11 @@ extern "C" int p1MarkStartExercise()
                                                const ZMark* domain) {
         const size_t index = generation == ZGenerationId::young ? 0 : 1;
         auto& before = state[index];
-        const auto& generationState = Heap::GetHeap().GetZGeneration(generation);
+        const auto& generationState = (*ZGeneration::generation(static_cast<ZGenerationId>(generation)));
         const uintptr_t mask = index == 0 ? ZPointerMarkedYoungMask : ZPointerMarkedOldMask;
         const uintptr_t color = ::g_cjMarkBadMask & mask;
         const unsigned face = ZGenerationRootTestAccess::RemsetFace();
-        const unsigned workers = Heap::GetHeap().GetZGeneration(generation).Workers()->ActiveWorkers();
+        const unsigned workers = (*ZGeneration::generation(static_cast<ZGenerationId>(generation))).Workers()->ActiveWorkers();
         std::printf("P1_PRODUCT_STATE gen=%zu point=%u seq=%llu phase=%u color=%zx face=%u domain=%p domain_workers=%zu workers=%u\n",
                     index, static_cast<unsigned>(point), static_cast<unsigned long long>(generationState.seqnum()),
                     static_cast<unsigned>(generationState.phase()), color, face, domain,
@@ -110,13 +111,13 @@ extern "C" int p1MarkStartExercise()
             std::fflush(stdout);
         }
     };
-    const auto youngBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::young).seqnum();
-    const auto oldBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).seqnum();
+    const auto youngBefore = (*ZGeneration::young()).seqnum();
+    const auto oldBefore = (*ZGeneration::old()).seqnum();
     Heap::GetHeap().RequestGC(GC_REASON_USER);
-    const auto oldAfterMajor = Heap::GetHeap().GetZGeneration(ZGenerationId::old).seqnum();
+    const auto oldAfterMajor = (*ZGeneration::old()).seqnum();
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG);
-    const auto youngAfter = Heap::GetHeap().GetZGeneration(ZGenerationId::young).seqnum();
-    const auto oldAfter = Heap::GetHeap().GetZGeneration(ZGenerationId::old).seqnum();
+    const auto youngAfter = (*ZGeneration::young()).seqnum();
+    const auto oldAfter = (*ZGeneration::old()).seqnum();
     ZGeneration::testMarkStartState = nullptr;
     Expect(oldAfterMajor > oldBefore, "major_request_started_old");
     Expect(oldAfter == oldAfterMajor, "minor_preserves_old_identity");
@@ -126,9 +127,9 @@ extern "C" int p1MarkStartExercise()
            "old_sequence_delta_matches_real_starts");
     Expect(state[0].starts == state[0].completes && state[1].starts == state[1].completes,
            "every_started_generation_completed");
-    auto* current = Heap::GetHeap().GetExportObject(handle);
+    auto* current = Heap::GetHeap().cross_vm().export_roots().GetExportRoot(handle);
     Expect(current != nullptr && Heap::IsHeapAddress(current), "export_root_survives_both_requests");
-    Heap::GetHeap().RemoveExportObject(handle);
+    Heap::GetHeap().cross_vm().export_roots().RemoveExportRoot(handle);
     std::printf("P1_MARK_START_RESULT failures=%u young_starts=%zu old_starts=%zu\n",
                 failures, state[0].starts, state[1].starts);
     return static_cast<int>(failures);

@@ -50,27 +50,6 @@ public:
 
     static constexpr size_t ALLOC_ALIGN = 8;
     static constexpr size_t HEADER_SIZE = 0;
-    RegionSpace() = default;
-    bool IsHeapAddress(MAddress addr) const { return is_heap_address(addr); }
-    ~RegionSpace() = default;
-
-    MAddress Allocate(size_t size, AllocType allocType);
-
-    RegionManager& GetRegionManager() const noexcept;
-
-    size_t AllocatedBytes() const { return GetRegionManager().GetAllocatedSize(); }
-
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    bool IsHeapObject(MAddress addr) const;
-#endif
-
-    void DumpRegionStats(const char* msg) const
-    {
-        GetRegionManager().DumpRegionStats(msg);
-    }
-
-
-
     // ZPage::mark_object + inc_live (zMark.cpp:405-425) for a caller without a
     // ZMarkCache: the first live claim is accounted on the page directly.
     template<Generation G>
@@ -104,10 +83,6 @@ public:
         return regionInfo->is_object_live(addr) && !regionInfo->is_object_strongly_live(addr);
     }
 
-
-private:
-    MAddress TryAllocateOnce(size_t allocSize, AllocType allocType);
-    MAddress AllocateOutsideTLAB(size_t allocSize, AllocType allocType);
 
 };
 } // namespace MapleRuntime
