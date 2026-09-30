@@ -226,8 +226,8 @@ void SchmonCJThreadPoolClean(unsigned long long now)
         schedule = DULINK_ENTRY(scheduleNode, struct Schedule, allScheduleDulink);
         // Obtain some cjthreads from the global queue and release them.
         gfreelist = &schedule->schdCJThread.gfreelist;
+        schdCJThreadNum = ScheduleGlobalQueueCount(schedule);
         pthread_mutex_lock(&gfreelist->gfreeLock);
-        schdCJThreadNum = schedule->schdCJThread.num;
 
         // If the number of cjthreads in the global free list is greater than twice the
         // number of cjthreads to be run, clear the global resource pool.

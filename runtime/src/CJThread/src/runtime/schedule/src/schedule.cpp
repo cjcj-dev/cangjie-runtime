@@ -1363,6 +1363,14 @@ int ScheduleGlobalWrite(struct CJThread *cjthreadList[], unsigned int num)
     return 0;
 }
 
+unsigned long long ScheduleGlobalQueueCount(struct Schedule *schedule)
+{
+    pthread_mutex_lock(&schedule->schdCJThread.mutex);
+    unsigned long long num = schedule->schdCJThread.num;
+    pthread_mutex_unlock(&schedule->schdCJThread.mutex);
+    return num;
+}
+
 /* Check whether there are any cjthreads waiting to run in the schedule. */
 bool ScheduleAnyCJThread(ScheduleHandle scheduleHandle)
 {
@@ -1384,7 +1392,7 @@ bool ScheduleAnyCJThread(ScheduleHandle scheduleHandle)
     if (atomic_load(&schedule->lastCJThread) != static_cast<struct CJThread *>(nullptr)) {
         return true;
     }
-    return schedule->schdCJThread.num != 0;
+    return ScheduleGlobalQueueCount(schedule) != 0;
 }
 
 unsigned long long ScheduleCJThreadCount(void)
